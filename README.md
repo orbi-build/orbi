@@ -22,7 +22,7 @@ systemctl --user list-timers muyan-pilot.timer
 
 ## 任务派发与状态
 
-`muyan_pilot.py` 是最小 CLI，用于手工派活和查看队列。GitHub Issue 与标签是唯一状态存储，不引入数据库或 Web UI：
+`muyan_pilot.py` 是最小 CLI，用于手工派活和日常查看。GitHub Issue 与标签是唯一状态存储，不引入数据库或 Web UI：
 
 ```bash
 # 在第一个配置的 source repo 创建 Issue 并自动添加 ai-ready
@@ -31,11 +31,30 @@ python3 muyan_pilot.py add "任务标题" --body "任务描述" --config muyan-p
 # 派发到指定 source repo（必须在配置 source_repos 中）
 python3 muyan_pilot.py add "任务标题" --repo xqliu/muyan-ceo --config muyan-pilot.toml
 
-# 查看每个 source repo 的当前任务（ai-in-progress）、待办（ai-ready）和最近结果（ai-pr-opened / ai-blocked）
+# 一条命令完成日常查看（systemd、当前任务、ready 队列、最近结果、排查入口）
 python3 muyan_pilot.py status --config muyan-pilot.toml
 ```
 
-`add` 成功后打印新 Issue 的 URL 和 `ai-ready` 标签；`status` 只读，不修改任何标签。命令失败立即报错，不做回退。
+`status` 只读，不修改任何标签，显示：
+
+- 每个 source repo：`current`（ai-in-progress）、`ready` 队列（ai-ready，最多 10 条）、`result`（最近一条 ai-pr-opened / ai-blocked）；
+- `systemd`：`muyan-pilot.timer` / `muyan-pilot.service` 状态和下一次触发时间（systemd 不可用时标记 unavailable）；
+- `current run`：磁盘上的 pilot worktree、branch、stage（由 `plan.md` / `test.log` / `verify.md` 推导）、Pi session 目录和最新 session 文件；
+- `troubleshooting`：journalctl 排查命令和最新 Pi session 文件路径。
+
+Runner 在关键节点回写简短结构化 comment，Issue 历史可以还原任务阶段链：
+
+```text
+Muyan Pilot started
+Muyan Pilot plan ready
+Muyan Pilot tests/verify
+Muyan Pilot pr_opened
+Muyan Pilot opened PR: <url>
+```
+
+失败时回写 `Muyan Pilot failed: <原因>` 并添加 `ai-blocked`。完整 Pi session 和日志保存在本地（worktree 的 `.pi-session/`、journal），不把 token 或完整原始 prompt 贴到 GitHub。
+
+`add` 成功后打印新 Issue 的 URL 和 `ai-ready` 标签。命令失败立即报错，不做回退。
 
 前置条件：
 

@@ -350,31 +350,73 @@ def test_verify_pr_rejects_pr_without_url(monkeypatch, tmp_path):
         runner.verify_pr(tmp_path, "muyan-pilot/issue-4")
 
 
-def test_process_issue_success(monkeypatch, tmp_path):
+def test_process_issue_success_posts_stage_chain(monkeypatch, tmp_path):
     calls = []
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "plan.md").write_text("plan", encoding="utf-8")
+    (worktree / "test.log").write_text("log", encoding="utf-8")
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
-    monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
+    monkeypatch.setattr(runner, "stage_comment", lambda stage, repo, number: calls.append(("stage", stage, repo, number)))
+    monkeypatch.setattr(runner, "create_worktree", lambda *args: worktree)
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     monkeypatch.setattr(runner, "verify_pr", lambda *args: "https://github.com/muyantech/muyan-pilot/pull/4")
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
     issue = {"number": 4, "title": "Fix", "body": "Body"}
     config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md"}
-    assert runner.process_issue(issue, config, "xqliu/muyan-ceo") == "https://github.com/muyantech/muyan-pilot/pull/4"
-    assert calls[0] == ("edit", (4,), {"repo": "xqliu/muyan-ceo", "add": "ai-in-progress"})
-    assert calls[1][0] == "edit"
-    assert calls[1][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-pr-opened", "remove": "ai-in-progress"}
-    assert calls[2][0] == "comment"
+    assert runner.process_issue(issue, config, "xqliu/muyan-pilot") == "https://github.com/muyantech/muyan-pilot/pull/4"
+    assert calls[0] == ("edit", (4,), {"repo": "xqliu/muyan-pilot", "add": "ai-in-progress"})
+    assert calls[1] == ("stage", "started", "xqliu/muyan-pilot", 4)
+    assert calls[2] == ("stage", "plan_ready", "xqliu/muyan-pilot", 4)
+    assert calls[3] == ("stage", "tests/verify", "xqliu/muyan-pilot", 4)
+    assert calls[4] == ("stage", "pr_opened", "xqliu/muyan-pilot", 4)
+    assert calls[5] == ("edit", (4,), {"repo": "xqliu/muyan-pilot", "add": "ai-pr-opened", "remove": "ai-in-progress"})
+    assert calls[6] == ("comment", (4,), {"repo": "xqliu/muyan-pilot", "body": "Muyan Pilot opened PR: https://github.com/muyantech/muyan-pilot/pull/4"})
+
+
+def test_process_issue_posts_tests_verify_from_verify_md_only(monkeypatch, tmp_path):
+    calls = []
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "plan.md").write_text("plan", encoding="utf-8")
+    (worktree / "verify.md").write_text("verify", encoding="utf-8")
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
+    monkeypatch.setattr(runner, "stage_comment", lambda stage, repo, number: calls.append(("stage", stage, repo, number)))
+    monkeypatch.setattr(runner, "create_worktree", lambda *args: worktree)
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    monkeypatch.setattr(runner, "verify_pr", lambda *args: "https://github.com/muyantech/muyan-pilot/pull/4")
+    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
+    runner.process_issue({"number": 4, "title": "Fix", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md"}, "xqliu/muyan-pilot")
+    stages = [call[1] for call in calls if call[0] == "stage"]
+    assert stages == ["started", "plan_ready", "tests/verify", "pr_opened"]
+
+
+def test_process_issue_skips_stage_comments_without_artifacts(monkeypatch, tmp_path):
+    calls = []
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
+    monkeypatch.setattr(runner, "stage_comment", lambda stage, repo, number: calls.append(("stage", stage, repo, number)))
+    monkeypatch.setattr(runner, "create_worktree", lambda *args: worktree)
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    monkeypatch.setattr(runner, "verify_pr", lambda *args: "https://github.com/muyantech/muyan-pilot/pull/4")
+    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
+    runner.process_issue({"number": 4, "title": "Fix", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md"}, "xqliu/muyan-pilot")
+    stages = [call[1] for call in calls if call[0] == "stage"]
+    assert stages == ["started", "pr_opened"]
 
 
 def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
+    monkeypatch.setattr(runner, "stage_comment", lambda stage, repo, number: calls.append(("stage", stage, repo, number)))
     monkeypatch.setattr(runner, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
     with pytest.raises(RuntimeError, match="git failed"):
-        runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md"}, "xqliu/muyan-ceo")
-    assert calls[1][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-blocked", "remove": "ai-in-progress"}
-    assert calls[2][0] == "comment"
+        runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md"}, "xqliu/muyan-pilot")
+    assert calls[1] == ("stage", "started", "xqliu/muyan-pilot", 8)
+    assert calls[2] == ("edit", (8,), {"repo": "xqliu/muyan-pilot", "add": "ai-blocked", "remove": "ai-in-progress"})
+    assert calls[3] == ("comment", (8,), {"repo": "xqliu/muyan-pilot", "body": "Muyan Pilot failed: git failed"})
 
 
 def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypatch, tmp_path, caplog):
@@ -386,9 +428,10 @@ def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypat
             raise RuntimeError("github report failed")
 
     monkeypatch.setattr(runner, "edit_issue", edit)
+    monkeypatch.setattr(runner, "stage_comment", lambda stage, repo, number: None)
     monkeypatch.setattr(runner, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
     with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="git failed"):
-        runner.process_issue({"number": 13, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md"}, "xqliu/muyan-ceo")
+        runner.process_issue({"number": 13, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md"}, "xqliu/muyan-pilot")
     assert "failure reporting failed" in caplog.text
 
 
@@ -432,3 +475,69 @@ def test_main_requires_prompt_file(monkeypatch, tmp_path):
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     with pytest.raises(FileNotFoundError):
         runner.main(["--config", str(config)])
+
+
+def test_stage_comment_posts_fixed_short_body(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    runner.stage_comment("plan_ready", "xqliu/muyan-pilot", 18)
+    assert calls == [
+        ((18,), {"repo": "xqliu/muyan-pilot", "body": "Muyan Pilot plan ready"}),
+    ]
+
+
+def test_stage_comment_rejects_unknown_stage():
+    with pytest.raises(ValueError, match="unknown stage"):
+        runner.stage_comment("nope", "xqliu/muyan-pilot", 1)
+
+
+def test_latest_session_file_returns_newest_jsonl(tmp_path):
+    (tmp_path / "2026-08-25T01-23-26-000Z_a.jsonl").write_text("", encoding="utf-8")
+    (tmp_path / "2026-08-25T01-24-00-000Z_b.jsonl").write_text("", encoding="utf-8")
+    assert runner.latest_session_file(tmp_path) == str(
+        tmp_path / "2026-08-25T01-24-00-000Z_b.jsonl",
+    )
+
+
+def test_latest_session_file_marks_empty_dir(tmp_path):
+    assert runner.latest_session_file(tmp_path) == "-"
+
+
+def test_latest_session_file_marks_missing_dir(tmp_path):
+    assert runner.latest_session_file(tmp_path / "nope") == "-"
+
+
+def test_run_pi_logs_session_file_after_success(monkeypatch, tmp_path, caplog):
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("SYSTEM", encoding="utf-8")
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir()
+    (session_dir / "2026-08-25T01-23-26-000Z_a.jsonl").write_text("{}", encoding="utf-8")
+    (session_dir / "2026-08-25T01-24-00-000Z_b.jsonl").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(runner, "run_command", lambda *args, **kwargs: "done")
+    config = {
+        "prompt": prompt, "source_repos": ["owner/repo"],
+        "workspace_root": tmp_path, "context_files": [], "skills": [],
+    }
+    with caplog.at_level("INFO"):
+        runner.run_pi({"number": 4, "title": "t", "body": "b"}, tmp_path, config, "owner/repo")
+    assert (
+        "pi_session_file=" + str(session_dir / "2026-08-25T01-24-00-000Z_b.jsonl")
+        in caplog.text
+    )
+
+
+def test_run_pi_marks_missing_session_dir(monkeypatch, tmp_path, caplog):
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("SYSTEM", encoding="utf-8")
+    monkeypatch.setattr(runner, "run_command", lambda *args, **kwargs: "done")
+    config = {
+        "prompt": prompt, "source_repos": ["owner/repo"],
+        "workspace_root": tmp_path, "context_files": [], "skills": [],
+    }
+    with caplog.at_level("INFO"):
+        runner.run_pi({"number": 4, "title": "t", "body": "b"}, tmp_path, config, "owner/repo")
+    assert "pi_session_file=-" in caplog.text
