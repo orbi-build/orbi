@@ -220,26 +220,31 @@ def test_edit_issue_allows_no_label_change(monkeypatch):
 def test_create_worktree_rejects_existing_path(monkeypatch, tmp_path):
     existing = tmp_path / "issue-3"
     existing.mkdir()
-    monkeypatch.setattr(runner, "worktree_path", lambda number: existing)
+    monkeypatch.setattr(runner, "worktree_path", lambda repo, number: existing)
     with pytest.raises(RuntimeError, match="worktree path already exists"):
-        runner.create_worktree(tmp_path, 3)
+        runner.create_worktree(tmp_path, "owner/repo", 3)
 
 
 def test_create_worktree_runs_git_add(monkeypatch, tmp_path):
     path = tmp_path / "issue-3"
-    monkeypatch.setattr(runner, "worktree_path", lambda number: path)
+    monkeypatch.setattr(runner, "worktree_path", lambda repo, number: path)
     calls = []
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)))
-    assert runner.create_worktree(tmp_path, 3) == path
+    assert runner.create_worktree(tmp_path, "owner/repo", 3) == path
     assert calls == [(
-        ["git", "worktree", "add", "-b", "muyan-pilot/issue-3", str(path), "HEAD"],
+        ["git", "worktree", "add", "-b", "muyan-pilot/owner-repo-issue-3", str(path), "HEAD"],
         {"cwd": tmp_path},
     )]
 
 
 def test_worktree_path_uses_temp_directory(monkeypatch):
     monkeypatch.setattr(runner.tempfile, "gettempdir", lambda: "/tmp")
-    assert runner.worktree_path(3) == Path("/tmp/muyan-pilot-issue-3")
+    assert runner.worktree_path("owner/repo", 3) == Path("/tmp/muyan-pilot-owner-repo-issue-3")
+
+
+def test_task_branch_includes_source_repo_to_avoid_same_number_collision():
+    assert runner.task_branch("owner/pilot", 1) == "muyan-pilot/owner-pilot-issue-1"
+    assert runner.task_branch("owner/pilot", 1) != runner.task_branch("owner/ceo", 1)
 
 
 def test_comment_issue_runs_gh_comment(monkeypatch):

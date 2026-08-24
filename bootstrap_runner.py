@@ -144,15 +144,20 @@ def comment_issue(number: int, *, repo: str, body: str) -> None:
                  "--body", body])
 
 
-def worktree_path(number: int) -> Path:
-    return Path(tempfile.gettempdir()) / f"muyan-pilot-issue-{number}"
+def task_branch(source_repo: str, number: int) -> str:
+    return f"muyan-pilot/{source_repo.replace('/', '-')}-issue-{number}"
 
 
-def create_worktree(repo_dir: Path, number: int) -> Path:
-    path = worktree_path(number)
+def worktree_path(source_repo: str, number: int) -> Path:
+    slug = source_repo.replace("/", "-")
+    return Path(tempfile.gettempdir()) / f"muyan-pilot-{slug}-issue-{number}"
+
+
+def create_worktree(repo_dir: Path, source_repo: str, number: int) -> Path:
+    path = worktree_path(source_repo, number)
     if path.exists():
         raise RuntimeError(f"worktree path already exists: {path}")
-    branch = f"muyan-pilot/issue-{number}"
+    branch = task_branch(source_repo, number)
     run_command([
         "git", "worktree", "add", "-b", branch, str(path), "HEAD",
     ], cwd=repo_dir)
@@ -219,10 +224,10 @@ def verify_pr(worktree: Path, branch: str) -> str:
 
 def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     number = int(issue["number"])
-    branch = f"muyan-pilot/issue-{number}"
+    branch = task_branch(source_repo, number)
     edit_issue(number, repo=source_repo, add="ai-in-progress")
     try:
-        worktree = create_worktree(config["repo_dir"], number)
+        worktree = create_worktree(config["repo_dir"], source_repo, number)
         run_pi(issue, worktree, config, source_repo, timeout=config["timeout"])
         pr_url = verify_pr(worktree, branch)
         edit_issue(
