@@ -104,7 +104,7 @@ def test_run_command_returns_stdout(monkeypatch, tmp_path):
     assert runner.run_command(["git", "status"], cwd=tmp_path) == "output"
     runner.subprocess.run.assert_called_once_with(
         ["git", "status"], cwd=tmp_path, capture_output=True,
-        text=True, check=True,
+        text=True, check=True, timeout=None,
     )
 
 
@@ -144,6 +144,15 @@ def test_run_command_logs_spawn_error_and_reraises(tmp_path, caplog):
         with caplog.at_level("ERROR"), pytest.raises(FileNotFoundError):
             runner.run_command(["pi"], cwd=tmp_path)
     assert "command_spawn_failed error=pi" in caplog.text
+
+
+def test_run_command_logs_optional_timeout_and_reraises(tmp_path, caplog):
+    error = subprocess.TimeoutExpired(["command"], 7, output="partial", stderr="wait")
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(runner.subprocess, "run", Mock(side_effect=error))
+        with caplog.at_level("ERROR"), pytest.raises(subprocess.TimeoutExpired):
+            runner.run_command(["command"], cwd=tmp_path, timeout=7)
+    assert "command_timeout timeout=7 stdout=partial stderr=wait" in caplog.text
 
 
 def test_pick_issue_uses_github_queue(monkeypatch):
@@ -284,6 +293,7 @@ def test_run_pi_loads_configured_prompt_and_invokes_pi(monkeypatch, tmp_path):
     assert str(tmp_path / "skill.md") in command[7]
     assert command[8] == "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: " + str(tmp_path) + "\nComplete the delivery process in the system prompt."
     assert kwargs["cwd"] == tmp_path
+    assert kwargs["timeout"] is None
     assert kwargs["log_stdout"] is True
     assert kwargs["log_command"][-2:] == ["<redacted>", "<issue-context-redacted>"]
 
