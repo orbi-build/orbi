@@ -1,5 +1,6 @@
 import json
 import subprocess
+import tempfile
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -225,17 +226,15 @@ def test_edit_issue_allows_no_label_change(monkeypatch):
     assert calls == [["gh", "issue", "edit", "3", "--repo", "xqliu/muyan-ceo"]]
 
 
-def test_create_worktree_rejects_existing_path(monkeypatch, tmp_path):
-    existing = tmp_path / "issue-3"
-    existing.mkdir()
-    monkeypatch.setattr(runner, "worktree_path", lambda repo, number: existing)
+def test_create_worktree_rejects_existing_path(tmp_path):
+    existing = tmp_path / ".worktrees" / "muyan-pilot-owner-repo-issue-3"
+    existing.mkdir(parents=True)
     with pytest.raises(RuntimeError, match="worktree path already exists"):
         runner.create_worktree(tmp_path, "owner/repo", 3)
 
 
 def test_create_worktree_runs_git_add(monkeypatch, tmp_path):
-    path = tmp_path / "issue-3"
-    monkeypatch.setattr(runner, "worktree_path", lambda repo, number: path)
+    path = tmp_path / ".worktrees" / "muyan-pilot-owner-repo-issue-3"
     calls = []
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)))
     assert runner.create_worktree(tmp_path, "owner/repo", 3) == path
@@ -245,9 +244,20 @@ def test_create_worktree_runs_git_add(monkeypatch, tmp_path):
     )]
 
 
-def test_worktree_path_uses_temp_directory(monkeypatch):
-    monkeypatch.setattr(runner.tempfile, "gettempdir", lambda: "/tmp")
-    assert runner.worktree_path("owner/repo", 3) == Path("/tmp/muyan-pilot-owner-repo-issue-3")
+def test_worktree_path_lives_inside_repo_worktrees():
+    repo_dir = Path("/srv/muyan/muyan-pilot")
+    path = runner.worktree_path(repo_dir, "owner/repo", 3)
+    assert path == repo_dir / ".worktrees" / "muyan-pilot-owner-repo-issue-3"
+    assert Path(tempfile.gettempdir()) not in path.parents
+
+
+def test_worktree_path_keeps_source_repo_in_name_to_avoid_same_number_collision():
+    repo_dir = Path("/srv/muyan/muyan-pilot")
+    pilot = runner.worktree_path(repo_dir, "xqliu/muyan-pilot", 14)
+    ceo = runner.worktree_path(repo_dir, "xqliu/muyan-ceo", 14)
+    assert pilot == repo_dir / ".worktrees" / "muyan-pilot-xqliu-muyan-pilot-issue-14"
+    assert ceo == repo_dir / ".worktrees" / "muyan-pilot-xqliu-muyan-ceo-issue-14"
+    assert pilot != ceo
 
 
 def test_task_branch_includes_source_repo_to_avoid_same_number_collision():

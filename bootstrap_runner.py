@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import subprocess
-import tempfile
 import tomllib
 from pathlib import Path
 
@@ -155,13 +154,14 @@ def task_branch(source_repo: str, number: int) -> str:
     return f"muyan-pilot/{source_repo.replace('/', '-')}-issue-{number}"
 
 
-def worktree_path(source_repo: str, number: int) -> Path:
+def worktree_path(repo_dir: Path, source_repo: str, number: int) -> Path:
+    """Task worktrees live in the configured repo's .worktrees/ directory."""
     slug = source_repo.replace("/", "-")
-    return Path(tempfile.gettempdir()) / f"muyan-pilot-{slug}-issue-{number}"
+    return repo_dir / ".worktrees" / f"muyan-pilot-{slug}-issue-{number}"
 
 
 def create_worktree(repo_dir: Path, source_repo: str, number: int) -> Path:
-    path = worktree_path(source_repo, number)
+    path = worktree_path(repo_dir, source_repo, number)
     if path.exists():
         raise RuntimeError(f"worktree path already exists: {path}")
     branch = task_branch(source_repo, number)
