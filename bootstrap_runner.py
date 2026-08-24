@@ -103,11 +103,17 @@ def run_command(command: list[str], *, cwd: Path | None = None,
     return result.stdout.strip()
 
 
-def parse_issue_list(raw: str) -> dict | None:
-    """Return the first issue from gh's JSON array, or None when idle."""
+def parse_issue_array(raw: str) -> list[dict]:
+    """Return the issue array from gh's JSON output."""
     issues = json.loads(raw)
     if not isinstance(issues, list):
         raise ValueError("issue list must be a JSON array")
+    return issues
+
+
+def parse_issue_list(raw: str) -> dict | None:
+    """Return the first issue from gh's JSON array, or None when idle."""
+    issues = parse_issue_array(raw)
     return issues[0] if issues else None
 
 

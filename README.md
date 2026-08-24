@@ -20,6 +20,23 @@ systemctl --user list-timers muyan-pilot.timer
 
 手工命令只用于首次验证或立即执行一个 tick，不是日常调度方式。
 
+## 任务派发与状态
+
+`muyan_pilot.py` 是最小 CLI，用于手工派活和查看队列。GitHub Issue 与标签是唯一状态存储，不引入数据库或 Web UI：
+
+```bash
+# 在第一个配置的 source repo 创建 Issue 并自动添加 ai-ready
+python3 muyan_pilot.py add "任务标题" --body "任务描述" --config muyan-pilot.toml
+
+# 派发到指定 source repo（必须在配置 source_repos 中）
+python3 muyan_pilot.py add "任务标题" --repo xqliu/muyan-ceo --config muyan-pilot.toml
+
+# 查看每个 source repo 的当前任务（ai-in-progress）、待办（ai-ready）和最近结果（ai-pr-opened / ai-blocked）
+python3 muyan_pilot.py status --config muyan-pilot.toml
+```
+
+`add` 成功后打印新 Issue 的 URL 和 `ai-ready` 标签；`status` 只读，不修改任何标签。命令失败立即报错，不做回退。
+
 前置条件：
 
 - `gh auth status` 成功；

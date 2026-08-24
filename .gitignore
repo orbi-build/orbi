@@ -3,4 +3,5 @@ __pycache__/
 .coverage
 htmlcov/
 .muyan-pilot/
+.pi-session/
 muyan-pilot.toml
