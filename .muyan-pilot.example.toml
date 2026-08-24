@@ -1,0 +1,16 @@
+# Copy this file to muyan-pilot.toml and edit it for your machine.
+source_repos = [
+  "OWNER/PILOT-REPO",
+  "OWNER/BACKLOG-REPO",
+]
+
+repo_dir = "."
+workspace_root = ".."
+prompt = "prompt.md"
+timeout = 1800
+
+# Optional Pi skills. Paths may be absolute, use ~, or be relative to this file.
+skills = []
+
+# Optional Markdown context files injected into the prompt as paths.
+context_files = []

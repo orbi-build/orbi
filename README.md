@@ -27,16 +27,11 @@ systemctl --user list-timers muyan-pilot.timer
 - 配置文件存在且包含 `source_repos`；
 - 配置中的 repo、workspace、prompt 和 context 路径正确。
 
-配置使用 TOML，由人维护，AI 通过 PR 修改：
+配置使用 TOML，由人维护，AI 通过 PR 修改。开源仓库只提交 example，真实配置不提交：
 
 ```toml
-source_repos = ["owner/pilot", "owner/backlog"]
-repo_dir = "."
-workspace_root = ".."
-prompt = "prompt.md"
-timeout = 1800
-skills = []
-context_files = []
+cp .muyan-pilot.example.toml muyan-pilot.toml
+# 编辑 muyan-pilot.toml
 ```
 
 Runner 每次处理一个 Issue 后退出，由 systemd timer 再次触发；不在 Python 内实现 daemon，不引入数据库、队列、重试或复杂恢复。
