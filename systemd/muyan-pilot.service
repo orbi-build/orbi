@@ -8,6 +8,8 @@ Type=simple
 WorkingDirectory=%h/Documents/muyan/muyan-pilot
 Environment="PATH=%h/.npm-global/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="MUYAN_PILOT_CONFIG=%h/Documents/muyan/muyan-pilot/muyan-pilot.toml"
+# Deployment adapter only: disable systemd's default startup kill limit.
+TimeoutStartSec=infinity
 ExecStart=/usr/bin/python3 %h/Documents/muyan/muyan-pilot/bootstrap_runner.py
 StandardOutput=journal
 StandardError=journal
