@@ -17,7 +17,6 @@ import tomllib
 from pathlib import Path
 
 
-COMMAND_TIMEOUT = 1800
 LOGGER = logging.getLogger("muyan_pilot.bootstrap")
 
 
@@ -40,7 +39,6 @@ def load_config(path: Path) -> dict:
         "repo_dir": _config_path(data.get("repo_dir", "."), base),
         "workspace_root": _config_path(data.get("workspace_root", ".."), base),
         "prompt": _config_path(data.get("prompt", "prompt.md"), base),
-        "timeout": int(data.get("timeout", COMMAND_TIMEOUT)),
         "skills": [_config_path(item, base) for item in data.get("skills", [])],
         "context_files": [
             _config_path(item, base) for item in data.get("context_files", [])
@@ -64,7 +62,6 @@ def validate_config(config: dict) -> None:
 
 
 def run_command(command: list[str], *, cwd: Path | None = None,
-                timeout: int = COMMAND_TIMEOUT,
                 log_command: list[str] | None = None,
                 log_stdout: bool = False) -> str:
     """Run one external command; log context and fail fast on any error."""
@@ -79,19 +76,11 @@ def run_command(command: list[str], *, cwd: Path | None = None,
             capture_output=True,
             text=True,
             check=True,
-            timeout=timeout,
         )
     except subprocess.CalledProcessError as exc:
         LOGGER.error(
             "command_failed returncode=%s stdout=%s stderr=%s",
             exc.returncode, (exc.stdout or "").rstrip(),
-            (exc.stderr or "").rstrip(),
-        )
-        raise
-    except subprocess.TimeoutExpired as exc:
-        LOGGER.error(
-            "command_timeout timeout=%s stdout=%s stderr=%s",
-            timeout, (exc.stdout or "").rstrip(),
             (exc.stderr or "").rstrip(),
         )
         raise
@@ -167,8 +156,7 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int) -> Path:
     return path
 
 
-def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str, *,
-           timeout: int = COMMAND_TIMEOUT) -> str:
+def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str) -> str:
     system_prompt = render_prompt(
         config["prompt"].read_text(encoding="utf-8"),
         {
@@ -200,7 +188,6 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str, *,
     return run_command(
         command,
         cwd=worktree,
-        timeout=timeout,
         log_stdout=True,
         log_command=[
             "pi", "--print", "--session-dir", str(worktree / ".pi-session"),
@@ -236,7 +223,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     edit_issue(number, repo=source_repo, add="ai-in-progress")
     try:
         worktree = create_worktree(config["repo_dir"], source_repo, number)
-        run_pi(issue, worktree, config, source_repo, timeout=config["timeout"])
+        run_pi(issue, worktree, config, source_repo)
         pr_url = verify_pr(worktree, branch)
         edit_issue(
             number, repo=source_repo, add="ai-pr-opened",

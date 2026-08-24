@@ -7,8 +7,6 @@ source_repos = [
 repo_dir = "."
 workspace_root = ".."
 prompt = "prompt.md"
-timeout = 1800
-
 # Optional Pi skills. Paths may be absolute, use ~, or be relative to this file.
 skills = []
 
