@@ -1,0 +1,19 @@
+source_repos = [
+  "xqliu/muyan-pilot",
+  "xqliu/muyan-ceo",
+]
+
+repo_dir = "."
+workspace_root = ".."
+prompt = "prompt.md"
+timeout = 1800
+
+skills = [
+  "~/.agents/skills/tdd-dev/SKILL.md",
+  "~/Documents/agent-skills/skills/code-review/SKILL.md",
+  "~/Documents/agent-skills/skills/review-fix-loop/SKILL.md",
+]
+
+context_files = [
+  "../muyan-ceo/MUYAN-PILOT-CONTEXT.md",
+]
