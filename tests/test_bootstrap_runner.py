@@ -25,7 +25,7 @@ def test_parse_issue_list_rejects_non_list():
 def test_load_config_resolves_relative_paths_and_values(tmp_path):
     config_path = tmp_path / "muyan-pilot.toml"
     config_path.write_text(
-        """source_repos = [\"owner/pilot\", \"owner/backlog\"]\nrepo_dir = \"repo\"\nworkspace_root = \"..\"\nprompt = \"prompt.md\"\ntimeout = 42\nskills = [\"skill.md\"]\ncontext_files = [\"context.md\"]\n""",
+        """source_repos = [\"owner/pilot\", \"owner/backlog\"]\nrepo_dir = \"repo\"\nworkspace_root = \"..\"\nprompt = \"prompt.md\"\nskills = [\"skill.md\"]\ncontext_files = [\"context.md\"]\n""",
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
@@ -33,14 +33,13 @@ def test_load_config_resolves_relative_paths_and_values(tmp_path):
     assert config["repo_dir"] == (tmp_path / "repo").resolve()
     assert config["workspace_root"] == tmp_path.parent.resolve()
     assert config["prompt"] == (tmp_path / "prompt.md").resolve()
-    assert config["timeout"] == 42
     assert config["skills"] == [(tmp_path / "skill.md").resolve()]
     assert config["context_files"] == [(tmp_path / "context.md").resolve()]
 
 
 def test_load_config_requires_source_repos(tmp_path):
     config_path = tmp_path / "muyan-pilot.toml"
-    config_path.write_text("timeout = 42\n", encoding="utf-8")
+    config_path.write_text("prompt = \"prompt.md\"\n", encoding="utf-8")
     with pytest.raises(ValueError, match="source_repos must be a non-empty list"):
         runner.load_config(config_path)
 
@@ -105,7 +104,7 @@ def test_run_command_returns_stdout(monkeypatch, tmp_path):
     assert runner.run_command(["git", "status"], cwd=tmp_path) == "output"
     runner.subprocess.run.assert_called_once_with(
         ["git", "status"], cwd=tmp_path, capture_output=True,
-        text=True, check=True, timeout=runner.COMMAND_TIMEOUT,
+        text=True, check=True,
     )
 
 
@@ -136,15 +135,6 @@ def test_run_command_logs_called_process_error_and_reraises(tmp_path, caplog):
         with caplog.at_level("ERROR"), pytest.raises(subprocess.CalledProcessError):
             runner.run_command(["gh", "issue", "list"], cwd=tmp_path)
     assert "command_failed returncode=2 stdout=out stderr=bad" in caplog.text
-
-
-def test_run_command_logs_timeout_and_reraises(tmp_path, caplog):
-    error = subprocess.TimeoutExpired(["pi"], 4, output="partial", stderr="wait")
-    with pytest.MonkeyPatch.context() as monkeypatch:
-        monkeypatch.setattr(runner.subprocess, "run", Mock(side_effect=error))
-        with caplog.at_level("ERROR"), pytest.raises(subprocess.TimeoutExpired):
-            runner.run_command(["pi"], cwd=tmp_path, timeout=4)
-    assert "command_timeout timeout=4 stdout=partial stderr=wait" in caplog.text
 
 
 def test_run_command_logs_spawn_error_and_reraises(tmp_path, caplog):
@@ -283,7 +273,7 @@ def test_run_pi_loads_configured_prompt_and_invokes_pi(monkeypatch, tmp_path):
         "context_files": [tmp_path / "context.md"],
         "skills": [tmp_path / "skill.md"],
     }
-    assert runner.run_pi(issue, tmp_path, config, "owner/repo", timeout=99) == "done"
+    assert runner.run_pi(issue, tmp_path, config, "owner/repo") == "done"
     command, kwargs = calls[0]
     assert command[:4] == ["pi", "--skill", str(tmp_path / "skill.md"), "--print"]
     assert "owner/repo" in command[7]
@@ -294,7 +284,6 @@ def test_run_pi_loads_configured_prompt_and_invokes_pi(monkeypatch, tmp_path):
     assert str(tmp_path / "skill.md") in command[7]
     assert command[8] == "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: " + str(tmp_path) + "\nComplete the delivery process in the system prompt."
     assert kwargs["cwd"] == tmp_path
-    assert kwargs["timeout"] == 99
     assert kwargs["log_stdout"] is True
     assert kwargs["log_command"][-2:] == ["<redacted>", "<issue-context-redacted>"]
 
@@ -359,7 +348,7 @@ def test_process_issue_success(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "verify_pr", lambda *args: "https://github.com/muyantech/muyan-pilot/pull/4")
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
     issue = {"number": 4, "title": "Fix", "body": "Body"}
-    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "timeout": 10}
+    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md"}
     assert runner.process_issue(issue, config, "xqliu/muyan-ceo") == "https://github.com/muyantech/muyan-pilot/pull/4"
     assert calls[0] == ("edit", (4,), {"repo": "xqliu/muyan-ceo", "add": "ai-in-progress"})
     assert calls[1][0] == "edit"
@@ -373,7 +362,7 @@ def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path)
     monkeypatch.setattr(runner, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
     with pytest.raises(RuntimeError, match="git failed"):
-        runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "timeout": 10}, "xqliu/muyan-ceo")
+        runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md"}, "xqliu/muyan-ceo")
     assert calls[1][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-blocked", "remove": "ai-in-progress"}
     assert calls[2][0] == "comment"
 
@@ -389,7 +378,7 @@ def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypat
     monkeypatch.setattr(runner, "edit_issue", edit)
     monkeypatch.setattr(runner, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
     with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="git failed"):
-        runner.process_issue({"number": 13, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "timeout": 10}, "xqliu/muyan-ceo")
+        runner.process_issue({"number": 13, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md"}, "xqliu/muyan-ceo")
     assert "failure reporting failed" in caplog.text
 
 
