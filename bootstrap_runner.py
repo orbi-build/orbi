@@ -13,11 +13,22 @@ import logging
 import os
 import subprocess
 import tempfile
+import time
 import tomllib
 from pathlib import Path
 
+from pi_session import (
+    PHASE_PR,
+    parse_session_events,
+    session_file_for,
+)
+
 
 LOGGER = logging.getLogger("muyan_pilot.bootstrap")
+
+# Live activity polling defaults (seconds).
+POLL_INTERVAL = 1.0
+STALL_TIMEOUT = 300.0
 
 
 def _config_path(value: str, base: Path) -> Path:
@@ -171,8 +182,89 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int) -> Path:
     return path
 
 
+def watch_pi_session(process, *, worktree: Path, issue: dict, source_repo: str,
+                     branch: str, started: float, command: list[str],
+                     poll_interval: float = POLL_INTERVAL,
+                     stall_timeout: float = STALL_TIMEOUT,
+                     timeout: int | None = None,
+                     on_phase=None) -> int:
+    """Poll the Pi session JSONL and log live activity until Pi exits.
+
+    Every poll re-reads the session file and logs each new event once
+    (phase, timestamp, sanitized summary). Warns when no new event arrives
+    within `stall_timeout` seconds and always logs a final scene line
+    (return code, last activity, session file) so a failed or stalled run
+    can be located from the journal alone. Returns the process return code.
+    """
+    number = issue["number"]
+    seen = 0
+    last_activity_at = started
+    last_activity = None
+
+    def log_new_events(session_file: Path | None) -> None:
+        nonlocal seen, last_activity_at, last_activity
+        if session_file is None:
+            return
+        for event in parse_session_events(session_file)[seen:]:
+            seen += 1
+            last_activity_at = time.time()
+            last_activity = (event["phase"], event["summary"], event["timestamp"])
+            LOGGER.info(
+                "pi_activity issue=%s source_repo=%s branch=%s worktree=%s "
+                "session=%s phase=%s at=%s summary=%s",
+                number, source_repo, branch, worktree, session_file.name,
+                event["phase"], event["timestamp"], event["summary"],
+            )
+            if on_phase is not None:
+                on_phase(event)
+
+    while True:
+        now = time.time()
+        if timeout is not None and now - started >= timeout:
+            process.kill()
+            process.wait()
+            LOGGER.error("pi_timeout issue=%s timeout=%s", number, timeout)
+            raise subprocess.TimeoutExpired(command, timeout)
+        session_file = session_file_for(worktree, started)
+        log_new_events(session_file)
+        idle_for = now - last_activity_at
+        if idle_for >= stall_timeout:
+            LOGGER.warning(
+                "pi_stalled issue=%s idle_seconds=%s last_activity=%s "
+                "last_summary=%s last_at=%s session=%s",
+                number, int(idle_for),
+                last_activity[0] if last_activity else "none",
+                last_activity[1] if last_activity else "-",
+                last_activity[2] if last_activity else "-",
+                session_file.name if session_file else "-",
+            )
+            last_activity_at = now
+        returncode = process.poll()
+        if returncode is not None:
+            session_file = session_file_for(worktree, started)
+            log_new_events(session_file)
+            LOGGER.info(
+                "pi_finished issue=%s source_repo=%s branch=%s worktree=%s "
+                "session=%s returncode=%s last_activity=%s last_summary=%s last_at=%s",
+                number, source_repo, branch, worktree,
+                session_file.name if session_file else "-",
+                returncode,
+                last_activity[0] if last_activity else "none",
+                last_activity[1] if last_activity else "-",
+                last_activity[2] if last_activity else "-",
+            )
+            return returncode
+        time.sleep(poll_interval)
+
+
 def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
-           timeout: int | None = None) -> str:
+           timeout: int | None = None, on_phase=None) -> str:
+    """Run one Pi session in the worktree, streaming live activity to the log.
+
+    Pi stdout is not captured into the journal until the process exits; the
+    live view comes from the session JSONL via watch_pi_session. A nonzero
+    exit still raises CalledProcessError, exactly like run_command did.
+    """
     system_prompt = render_prompt(
         config["prompt"].read_text(encoding="utf-8"),
         {
@@ -197,20 +289,34 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         "pi", *skill_args, "--print", "--session-dir",
         str(worktree / ".pi-session"), "--system-prompt", system_prompt, context,
     ]
+    branch = task_branch(source_repo, issue["number"])
     LOGGER.info(
-        "pi_session=%s issue=%s source_repo=%s",
-        worktree / ".pi-session", issue["number"], source_repo,
+        "pi_session=%s issue=%s source_repo=%s branch=%s worktree=%s",
+        worktree / ".pi-session", issue["number"], source_repo, branch, worktree,
     )
-    return run_command(
-        command,
-        cwd=worktree,
-        timeout=timeout,
-        log_stdout=True,
-        log_command=[
-            "pi", "--print", "--session-dir", str(worktree / ".pi-session"),
-            "--system-prompt", "<redacted>", "<issue-context-redacted>",
-        ],
+    started = time.time()
+    process = subprocess.Popen(
+        command, cwd=worktree,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
+    try:
+        returncode = watch_pi_session(
+            process, worktree=worktree, issue=issue, source_repo=source_repo,
+            branch=branch, started=started, command=command, timeout=timeout,
+            on_phase=on_phase,
+        )
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
+    output = process.stdout.read() if process.stdout else ""
+    if returncode != 0:
+        LOGGER.error(
+            "pi_failed issue=%s returncode=%s stdout=%s",
+            issue["number"], returncode, (output or "").strip()[-2000:],
+        )
+        raise subprocess.CalledProcessError(returncode, command, output=output)
+    return (output or "").strip()
 
 
 def verify_pr(worktree: Path, branch: str) -> str:
@@ -238,9 +344,27 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     number = int(issue["number"])
     branch = task_branch(source_repo, number)
     edit_issue(number, repo=source_repo, add="ai-in-progress")
+    milestone_commented = False
+
+    def on_milestone(event: dict) -> None:
+        nonlocal milestone_commented
+        if milestone_commented or event["phase"] != PHASE_PR:
+            return
+        milestone_commented = True
+        try:
+            comment_issue(
+                number, repo=source_repo,
+                body=(
+                    f"Muyan Pilot: key phase `{event['phase']}` reached "
+                    f"({event['summary']}) at {event['timestamp']}."
+                ),
+            )
+        except Exception:
+            LOGGER.exception("issue=%s milestone comment failed", number)
+
     try:
         worktree = create_worktree(config["repo_dir"], source_repo, number)
-        run_pi(issue, worktree, config, source_repo)
+        run_pi(issue, worktree, config, source_repo, on_phase=on_milestone)
         pr_url = verify_pr(worktree, branch)
         edit_issue(
             number, repo=source_repo, add="ai-pr-opened",

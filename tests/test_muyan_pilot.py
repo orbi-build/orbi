@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -195,11 +196,16 @@ def test_status_report_lists_sources_current_ready_and_result(monkeypatch):
     monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: fake_lookup(repo, "current"))
     monkeypatch.setattr(muyan_pilot, "ready_issue", lambda repo: fake_lookup(repo, "ready"))
     monkeypatch.setattr(muyan_pilot, "recent_result", lambda repo: fake_lookup(repo, "result"))
+    monkeypatch.setattr(
+        muyan_pilot, "live_status",
+        lambda repo, issue: "live: phase=test at=t summary=pytest session=s.jsonl",
+    )
     report = muyan_pilot.status_report({"source_repos": ["xqliu/muyan-pilot"]})
     assert "source: xqliu/muyan-pilot" in report
     assert "current: #3 now u3" in report
     assert "ready: #11 next u11" in report
     assert "result: #2 done u2" in report
+    assert "live: phase=test at=t summary=pytest session=s.jsonl" in report
 
 
 def test_status_report_marks_empty_lookups(monkeypatch):
@@ -210,6 +216,54 @@ def test_status_report_marks_empty_lookups(monkeypatch):
     assert "current: -" in report
     assert "ready: -" in report
     assert "result: -" in report
+    assert "live:" not in report
+
+
+def test_live_status_reports_missing_worktree(monkeypatch):
+    monkeypatch.setattr(
+        muyan_pilot, "worktree_path",
+        lambda repo, number: Path("/tmp/does-not-exist-wt"),
+    )
+    assert muyan_pilot.live_status("owner/repo", {"number": 3}) == "live: worktree missing"
+
+
+def test_live_status_reports_no_session_file_yet(monkeypatch, tmp_path):
+    monkeypatch.setattr(muyan_pilot, "worktree_path", lambda repo, number: tmp_path)
+    assert muyan_pilot.live_status("owner/repo", {"number": 3}) == "live: no session file yet"
+
+
+def test_live_status_shows_phase_summary_and_session(monkeypatch, tmp_path):
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir()
+    session_file = session_dir / "2026-08-24T17-55-32-139Z_sess.jsonl"
+    session_file.write_text(
+        json.dumps({"type": "session", "version": 3, "id": "sess-1",
+                    "timestamp": "2026-08-24T17:55:32.139Z", "cwd": str(tmp_path)})
+        + "\n"
+        + json.dumps({"type": "message", "id": "m1", "parentId": None,
+                      "timestamp": "2026-08-24T17:56:01.728Z",
+                      "message": {"role": "assistant", "content": [
+                          {"type": "toolCall", "id": "c1", "name": "bash",
+                           "arguments": {"command": "pytest tests/ -q"}},
+                      ]}}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(muyan_pilot, "worktree_path", lambda repo, number: tmp_path)
+    line = muyan_pilot.live_status("owner/repo", {"number": 3})
+    assert line == (
+        "live: phase=test at=2026-08-24T17:56:01.728Z "
+        "summary=pytest tests/ -q session=2026-08-24T17-55-32-139Z_sess.jsonl"
+    )
+
+
+def test_live_status_reports_session_without_events(monkeypatch, tmp_path):
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir()
+    (session_dir / "broken.jsonl").write_text("not json\n", encoding="utf-8")
+    monkeypatch.setattr(muyan_pilot, "worktree_path", lambda repo, number: tmp_path)
+    assert muyan_pilot.live_status("owner/repo", {"number": 3}) == (
+        "live: session=broken.jsonl (no events yet)"
+    )
 
 
 def test_main_add_dispatches_to_selected_source_repo(monkeypatch, tmp_path, capsys):

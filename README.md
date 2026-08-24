@@ -37,6 +37,32 @@ python3 muyan_pilot.py status --config muyan-pilot.toml
 
 `add` 成功后打印新 Issue 的 URL 和 `ai-ready` 标签；`status` 只读，不修改任何标签。命令失败立即报错，不做回退。
 
+## 运行中的实时活动
+
+Runner 启动 Pi 后不再缓冲 stdout，而是每秒轮询 worktree 里的 Pi session JSONL（`<worktree>/.pi-session/*.jsonl`），把每个新事件写入 journal（systemd 日志）：
+
+```text
+pi_activity issue=24 source_repo=xqliu/muyan-pilot branch=muyan-pilot/xqliu-muyan-pilot-issue-24 worktree=/tmp/... session=2026-....jsonl phase=test at=2026-08-24T17:56:01.728Z summary=pytest tests/ -q
+```
+
+- `phase` 是关键阶段：`test`、`verify`、`commit`、`push`、`pr`、`issue_comment`、`worktree`、`branch`、`setup`、`ui_test`、`read`、`edit`、`search`、`command`、`reply`、`thinking`、`tool_result`、`session_start`、`session_end`；
+- `summary` 是脱敏后的工具调用摘要（bash 命令首行、文件路径或搜索模式），不记录完整 prompt、Issue body、工具输出、推理内容或 token；
+- 超过 300 秒没有新事件时写 `pi_stalled` 警告（含最后活动阶段、时间和 session 文件）；
+- Pi 进程退出时写 `pi_finished` 现场行（returncode、最后活动、session 文件）；非零退出仍按原样抛出 `CalledProcessError`，fail-fast 不变；
+- 首次进入 `pr` 阶段时向 Issue 回写一条关键阶段 comment（失败不影响主流程）。
+
+`status` 对 `ai-in-progress` 的 Issue 额外显示一行实时现场（来自该 worktree 的 session 文件）：
+
+```text
+source: xqliu/muyan-pilot
+  current: #24 Stream live Pi activity ... https://github.com/xqliu/muyan-pilot/issues/24
+  live: phase=test at=2026-08-24T17:56:01.728Z summary=pytest tests/ -q session=2026-....jsonl
+  ready: -
+  result: -
+```
+
+完整 session 保存在本地 `<worktree>/.pi-session/`，不上传、不打印。
+
 前置条件：
 
 - `gh auth status` 成功；

@@ -2,8 +2,10 @@
 """Muyan Pilot task dispatch and status CLI.
 
 `add` creates an Issue in a configured source repo and labels it `ai-ready`.
-`status` reports the current in-progress Issue, the next ready Issue, and the
-most recent result (`ai-pr-opened` / `ai-blocked`) per source repo.
+`status` reports the current in-progress Issue (including its live Pi session
+activity: phase, last activity time and a sanitized summary), the next ready
+Issue, and the most recent result (`ai-pr-opened` / `ai-blocked`) per source
+repo.
 
 GitHub Issues and labels are the only state store. There is no database,
 queue, or web UI. Command failures are logged and raised by the reused
@@ -22,7 +24,9 @@ from bootstrap_runner import (
     parse_issue_array,
     run_command,
     validate_config,
+    worktree_path,
 )
+from pi_session import newest_session_file, summarize_session_file
 
 LOGGER = logging.getLogger("muyan_pilot.cli")
 
@@ -95,17 +99,37 @@ def format_issue(issue: dict) -> str:
     return f"#{issue['number']} {issue['title']} {issue['url']}"
 
 
+def live_status(repo: str, issue: dict) -> str:
+    """One-line live scene for an in-progress Issue from its Pi session."""
+    worktree = worktree_path(repo, int(issue["number"]))
+    if not worktree.is_dir():
+        return "live: worktree missing"
+    session_file = newest_session_file(worktree)
+    if session_file is None:
+        return "live: no session file yet"
+    _, activity = summarize_session_file(session_file)
+    if activity is None:
+        return f"live: session={session_file.name} (no events yet)"
+    phase, summary, at = activity
+    return (
+        f"live: phase={phase} at={at} summary={summary} "
+        f"session={session_file.name}"
+    )
+
+
 def status_report(config: dict) -> str:
     lines = []
     for repo in config["source_repos"]:
         lines.append(f"source: {repo}")
-        for name, lookup in (
-            ("current", current_issue),
-            ("ready", ready_issue),
-            ("result", recent_result),
+        current = current_issue(repo)
+        for name, issue in (
+            ("current", current),
+            ("ready", ready_issue(repo)),
+            ("result", recent_result(repo)),
         ):
-            issue = lookup(repo)
             lines.append(f"  {name}: {format_issue(issue) if issue else '-'}")
+        if current is not None:
+            lines.append(f"  {live_status(repo, current)}")
     return "\n".join(lines)
 
 
@@ -129,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     subparsers.add_parser(
         "status", parents=[common],
-        help="show current Issue, ready queue and recent result",
+        help="show current Issue (with live Pi activity), ready queue and recent result",
     )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
