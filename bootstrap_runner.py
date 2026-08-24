@@ -151,6 +151,23 @@ def comment_issue(number: int, *, repo: str, body: str) -> None:
                  "--body", body])
 
 
+def git_commit(worktree: Path) -> str:
+    """Return the short HEAD commit of the worktree."""
+    return run_command(["git", "rev-parse", "--short", "HEAD"], cwd=worktree)
+
+
+def stage_comment(stage: str, repo: str, number: int, details: list[str]) -> None:
+    """Post one structured stage comment built from runner events only.
+
+    The body never contains the raw Pi session, prompts, tokens, or command
+    output; details are short key/value lines chosen by the caller.
+    """
+    body = "Muyan Pilot " + stage
+    if details:
+        body += "\n" + "\n".join(details)
+    comment_issue(number, repo=repo, body=body)
+
+
 def task_branch(source_repo: str, number: int) -> str:
     return f"muyan-pilot/{source_repo.replace('/', '-')}-issue-{number}"
 
@@ -238,10 +255,27 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     number = int(issue["number"])
     branch = task_branch(source_repo, number)
     edit_issue(number, repo=source_repo, add="ai-in-progress")
+    stage = "claim"
     try:
+        stage_comment("started", source_repo, number, [
+            f"source repo: {source_repo}",
+            f"branch: {branch}",
+            f"worktree: {worktree_path(source_repo, number)}",
+        ])
+        stage = "worktree"
         worktree = create_worktree(config["repo_dir"], source_repo, number)
+        stage = "pi"
         run_pi(issue, worktree, config, source_repo)
+        if (worktree / "plan.md").is_file():
+            stage_comment("plan_ready", source_repo, number, [])
+        if (worktree / "test.log").is_file() or (worktree / "verify.md").is_file():
+            stage_comment("tests_verify", source_repo, number, [])
+        stage = "verify_pr"
         pr_url = verify_pr(worktree, branch)
+        stage_comment("pr_opened", source_repo, number, [
+            f"commit: {git_commit(worktree)}",
+            f"pr: {pr_url}",
+        ])
         edit_issue(
             number, repo=source_repo, add="ai-pr-opened",
             remove="ai-in-progress",
@@ -252,16 +286,18 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         )
         return pr_url
     except Exception as exc:
-        LOGGER.exception("issue=%s failed", number)
+        LOGGER.exception("issue=%s failed stage=%s", number, stage)
         try:
             edit_issue(
                 number, repo=source_repo, add="ai-blocked",
                 remove="ai-in-progress",
             )
-            comment_issue(
-                number, repo=source_repo,
-                body=f"Muyan Pilot failed: {exc}",
-            )
+            stage_comment("failed", source_repo, number, [
+                f"stage: {stage}",
+                f"error: {exc}",
+                "next action: inspect the journal log and the worktree, fix the "
+                "blocker, then remove ai-blocked and re-add ai-ready to retry",
+            ])
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
         raise

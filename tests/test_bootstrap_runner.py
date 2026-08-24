@@ -265,6 +265,54 @@ def test_comment_issue_runs_gh_comment(monkeypatch):
     ]]
 
 
+def test_git_commit_returns_short_head(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "abc1234",
+    )
+    assert runner.git_commit(tmp_path) == "abc1234"
+    assert calls == [(
+        ["git", "rev-parse", "--short", "HEAD"], {"cwd": tmp_path},
+    )]
+
+
+def test_stage_comment_posts_stage_header_and_details(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda number, **kwargs: calls.append((number, kwargs)),
+    )
+    runner.stage_comment(
+        "started", "xqliu/muyan-pilot", 15,
+        ["source repo: xqliu/muyan-pilot",
+         "branch: muyan-pilot/xqliu-muyan-pilot-issue-15",
+         "worktree: /tmp/wt"],
+    )
+    assert calls == [(
+        15,
+        {
+            "repo": "xqliu/muyan-pilot",
+            "body": (
+                "Muyan Pilot started\n"
+                "source repo: xqliu/muyan-pilot\n"
+                "branch: muyan-pilot/xqliu-muyan-pilot-issue-15\n"
+                "worktree: /tmp/wt"
+            ),
+        },
+    )]
+
+
+def test_stage_comment_without_details_posts_header_only(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda number, **kwargs: calls.append((number, kwargs)),
+    )
+    runner.stage_comment("pr_opened", "xqliu/muyan-pilot", 15, [])
+    assert calls == [(15, {"repo": "xqliu/muyan-pilot", "body": "Muyan Pilot pr_opened"})]
+
+
 def test_run_pi_loads_configured_prompt_and_invokes_pi(monkeypatch, tmp_path):
     prompt_path = tmp_path / "prompt.md"
     prompt_path.write_text(
@@ -350,31 +398,98 @@ def test_verify_pr_rejects_pr_without_url(monkeypatch, tmp_path):
         runner.verify_pr(tmp_path, "muyan-pilot/issue-4")
 
 
-def test_process_issue_success(monkeypatch, tmp_path):
+def test_process_issue_success_posts_stage_chain(monkeypatch, tmp_path):
     calls = []
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    (worktree / "plan.md").write_text("plan", encoding="utf-8")
+    (worktree / "test.log").write_text("log", encoding="utf-8")
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
-    monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
+    monkeypatch.setattr(runner, "stage_comment", lambda *args: calls.append(("stage", args)))
+    monkeypatch.setattr(runner, "create_worktree", lambda *args: worktree)
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     monkeypatch.setattr(runner, "verify_pr", lambda *args: "https://github.com/muyantech/muyan-pilot/pull/4")
+    monkeypatch.setattr(runner, "git_commit", lambda worktree: "abc1234")
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
     issue = {"number": 4, "title": "Fix", "body": "Body"}
     config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md"}
     assert runner.process_issue(issue, config, "xqliu/muyan-ceo") == "https://github.com/muyantech/muyan-pilot/pull/4"
     assert calls[0] == ("edit", (4,), {"repo": "xqliu/muyan-ceo", "add": "ai-in-progress"})
-    assert calls[1][0] == "edit"
-    assert calls[1][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-pr-opened", "remove": "ai-in-progress"}
-    assert calls[2][0] == "comment"
+    assert calls[1] == ("stage", (
+        "started", "xqliu/muyan-ceo", 4,
+        ["source repo: xqliu/muyan-ceo",
+         "branch: muyan-pilot/xqliu-muyan-ceo-issue-4",
+         "worktree: " + str(runner.worktree_path("xqliu/muyan-ceo", 4))],
+    ))
+    assert calls[2] == ("stage", ("plan_ready", "xqliu/muyan-ceo", 4, []))
+    assert calls[3] == ("stage", ("tests_verify", "xqliu/muyan-ceo", 4, []))
+    assert calls[4] == ("stage", (
+        "pr_opened", "xqliu/muyan-ceo", 4,
+        ["commit: abc1234",
+         "pr: https://github.com/muyantech/muyan-pilot/pull/4"],
+    ))
+    assert calls[5] == ("edit", (4,), {"repo": "xqliu/muyan-ceo", "add": "ai-pr-opened", "remove": "ai-in-progress"})
+    assert calls[6] == ("comment", (4,), {"repo": "xqliu/muyan-ceo", "body": "Muyan Pilot opened PR: https://github.com/muyantech/muyan-pilot/pull/4"})
 
 
-def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path):
+def test_process_issue_success_skips_missing_stage_artifacts(monkeypatch, tmp_path):
+    calls = []
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
+    monkeypatch.setattr(runner, "stage_comment", lambda *args: calls.append(("stage", args)))
+    monkeypatch.setattr(runner, "create_worktree", lambda *args: worktree)
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    monkeypatch.setattr(runner, "verify_pr", lambda *args: "https://github.com/muyantech/muyan-pilot/pull/4")
+    monkeypatch.setattr(runner, "git_commit", lambda worktree: "abc1234")
+    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
+    issue = {"number": 4, "title": "Fix", "body": "Body"}
+    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md"}
+    runner.process_issue(issue, config, "xqliu/muyan-ceo")
+    stages = [call[1][0] for call in calls if call[0] == "stage"]
+    assert stages == ["started", "pr_opened"]
+
+
+def test_process_issue_failure_posts_failed_comment(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
-    monkeypatch.setattr(runner, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
+    monkeypatch.setattr(runner, "stage_comment", lambda *args: calls.append(("stage", args)))
+    monkeypatch.setattr(runner, "create_worktree", Mock(side_effect=RuntimeError("git worktree add failed")))
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
-    with pytest.raises(RuntimeError, match="git failed"):
+    with pytest.raises(RuntimeError, match="git worktree add failed"):
         runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md"}, "xqliu/muyan-ceo")
-    assert calls[1][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-blocked", "remove": "ai-in-progress"}
-    assert calls[2][0] == "comment"
+    assert calls[0] == ("edit", (8,), {"repo": "xqliu/muyan-ceo", "add": "ai-in-progress"})
+    assert calls[1][0] == "stage"
+    assert calls[1][1][0] == "started"
+    assert calls[2] == ("edit", (8,), {"repo": "xqliu/muyan-ceo", "add": "ai-blocked", "remove": "ai-in-progress"})
+    assert calls[3] == ("stage", (
+        "failed", "xqliu/muyan-ceo", 8,
+        ["stage: worktree",
+         "error: git worktree add failed",
+         "next action: inspect the journal log and the worktree, fix the "
+         "blocker, then remove ai-blocked and re-add ai-ready to retry"],
+    ))
+
+
+def test_process_issue_command_failure_posts_failed_comment(monkeypatch, tmp_path):
+    calls = []
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    error = subprocess.CalledProcessError(1, ["gh", "pr", "list"], stderr="no token")
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
+    monkeypatch.setattr(runner, "stage_comment", lambda *args: calls.append(("stage", args)))
+    monkeypatch.setattr(runner, "create_worktree", lambda *args: worktree)
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    monkeypatch.setattr(runner, "verify_pr", Mock(side_effect=error))
+    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.process_issue({"number": 9, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md"}, "xqliu/muyan-ceo")
+    assert calls[2] == ("edit", (9,), {"repo": "xqliu/muyan-ceo", "add": "ai-blocked", "remove": "ai-in-progress"})
+    failed = calls[3]
+    assert failed[0] == "stage"
+    assert failed[1][0] == "failed"
+    assert failed[1][3][0] == "stage: verify_pr"
+    assert "no token" not in failed[1][3][1]
 
 
 def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypatch, tmp_path, caplog):
@@ -386,6 +501,7 @@ def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypat
             raise RuntimeError("github report failed")
 
     monkeypatch.setattr(runner, "edit_issue", edit)
+    monkeypatch.setattr(runner, "stage_comment", lambda *args: None)
     monkeypatch.setattr(runner, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
     with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="git failed"):
         runner.process_issue({"number": 13, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md"}, "xqliu/muyan-ceo")

@@ -52,3 +52,23 @@ cp .muyan-pilot.example.toml muyan-pilot.toml
 ```
 
 Runner 每次处理一个 Issue 后退出，由 systemd timer 再次触发；不在 Python 内实现 daemon，不引入数据库、队列、重试或复杂恢复。没有人为的任务时长上限；命令错误立即失败，真正卡死时通过 systemd/journal 排查并人工停止。
+
+## Issue 交付链 comment
+
+Runner 在关键节点向 source Issue 回写简短结构化 comment（只来自 Runner 自己的结构化事件，不含完整 Pi session、prompt、token 或命令输出），Issue 历史可以还原任务链：
+
+```text
+Muyan Pilot started          # 领取后：source repo、branch、worktree
+Muyan Pilot plan_ready       # worktree 出现 plan.md 后
+Muyan Pilot tests_verify     # worktree 出现 test.log / verify.md 后
+Muyan Pilot pr_opened        # 成功后：commit、PR URL
+Muyan Pilot opened PR: <url>
+```
+
+失败时添加 `ai-blocked` 并回写：
+
+```text
+Muyan Pilot failed           # 失败阶段、错误摘要、下一步人工动作
+```
+
+完整 Pi session 和日志保留在本地（worktree 的 `.pi-session/`、journal），不回写 GitHub。comment 或标签回写失败不会掩盖原始错误：原始异常继续抛出，上报失败只记日志。
