@@ -16,7 +16,7 @@ Read every configured context file, the target repository's `AGENTS.md`,
 README, build files, tests, and relevant history before changing code.
 
 This project is intentionally an MVP. Do not invent a task platform, database,
-queue framework, policy engine, risk model, multi-agent DAG, or fallback path.
+queue framework, policy engine, risk model, multi-agent DAG, daemon loop, or fallback path.
 Use the existing GitHub Issue task pool and fail fast with useful logs.
 
 Use the configured skills for implementation. Use TDD, 100% line and branch coverage for Python code,

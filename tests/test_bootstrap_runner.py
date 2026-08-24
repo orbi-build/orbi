@@ -118,6 +118,15 @@ def test_run_command_logs_stderr(monkeypatch, tmp_path, caplog):
     assert "stderr=warning" in caplog.text
 
 
+def test_run_command_can_log_success_stdout(monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(
+        runner.subprocess, "run", Mock(return_value=Mock(stdout="agent output\n", stderr="")),
+    )
+    with caplog.at_level("INFO"):
+        assert runner.run_command(["pi"], cwd=tmp_path, log_stdout=True) == "agent output"
+    assert "stdout=agent output" in caplog.text
+
+
 def test_run_command_logs_called_process_error_and_reraises(tmp_path, caplog):
     error = subprocess.CalledProcessError(
         2, ["gh", "issue", "list"], output="out", stderr="bad",
@@ -286,6 +295,7 @@ def test_run_pi_loads_configured_prompt_and_invokes_pi(monkeypatch, tmp_path):
     assert command[8] == "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: " + str(tmp_path) + "\nComplete the delivery process in the system prompt."
     assert kwargs["cwd"] == tmp_path
     assert kwargs["timeout"] == 99
+    assert kwargs["log_stdout"] is True
     assert kwargs["log_command"][-2:] == ["<redacted>", "<issue-context-redacted>"]
 
 
