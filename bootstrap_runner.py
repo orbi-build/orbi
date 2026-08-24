@@ -62,6 +62,7 @@ def validate_config(config: dict) -> None:
 
 
 def run_command(command: list[str], *, cwd: Path | None = None,
+                timeout: int | None = None,
                 log_command: list[str] | None = None,
                 log_stdout: bool = False) -> str:
     """Run one external command; log context and fail fast on any error."""
@@ -76,11 +77,19 @@ def run_command(command: list[str], *, cwd: Path | None = None,
             capture_output=True,
             text=True,
             check=True,
+            timeout=timeout,
         )
     except subprocess.CalledProcessError as exc:
         LOGGER.error(
             "command_failed returncode=%s stdout=%s stderr=%s",
             exc.returncode, (exc.stdout or "").rstrip(),
+            (exc.stderr or "").rstrip(),
+        )
+        raise
+    except subprocess.TimeoutExpired as exc:
+        LOGGER.error(
+            "command_timeout timeout=%s stdout=%s stderr=%s",
+            timeout, (exc.stdout or "").rstrip(),
             (exc.stderr or "").rstrip(),
         )
         raise
@@ -156,7 +165,8 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int) -> Path:
     return path
 
 
-def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str) -> str:
+def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
+           timeout: int | None = None) -> str:
     system_prompt = render_prompt(
         config["prompt"].read_text(encoding="utf-8"),
         {
@@ -188,6 +198,7 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str) -> str:
     return run_command(
         command,
         cwd=worktree,
+        timeout=timeout,
         log_stdout=True,
         log_command=[
             "pi", "--print", "--session-dir", str(worktree / ".pi-session"),
