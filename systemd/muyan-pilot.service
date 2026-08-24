@@ -1,0 +1,14 @@
+[Unit]
+Description=Muyan Pilot — process one ready GitHub Issue
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Documents/muyan/muyan-pilot
+Environment="PATH=%h/.npm-global/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="MUYAN_PILOT_CONFIG=%h/Documents/muyan/muyan-pilot/muyan-pilot.toml"
+TimeoutStartSec=1800
+ExecStart=/usr/bin/python3 %h/Documents/muyan/muyan-pilot/bootstrap_runner.py
+StandardOutput=journal
+StandardError=journal

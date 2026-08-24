@@ -65,7 +65,8 @@ def validate_config(config: dict) -> None:
 
 def run_command(command: list[str], *, cwd: Path | None = None,
                 timeout: int = COMMAND_TIMEOUT,
-                log_command: list[str] | None = None) -> str:
+                log_command: list[str] | None = None,
+                log_stdout: bool = False) -> str:
     """Run one external command; log context and fail fast on any error."""
     LOGGER.info(
         "command=%s cwd=%s",
@@ -99,6 +100,8 @@ def run_command(command: list[str], *, cwd: Path | None = None,
         raise
     if result.stderr:
         LOGGER.info("stderr=%s", result.stderr.rstrip())
+    if log_stdout and result.stdout:
+        LOGGER.info("stdout=%s", result.stdout.rstrip())
     return result.stdout.strip()
 
 
@@ -190,10 +193,15 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str, *,
         "pi", *skill_args, "--print", "--session-dir",
         str(worktree / ".pi-session"), "--system-prompt", system_prompt, context,
     ]
+    LOGGER.info(
+        "pi_session=%s issue=%s source_repo=%s",
+        worktree / ".pi-session", issue["number"], source_repo,
+    )
     return run_command(
         command,
         cwd=worktree,
         timeout=timeout,
+        log_stdout=True,
         log_command=[
             "pi", "--print", "--session-dir", str(worktree / ".pi-session"),
             "--system-prompt", "<redacted>", "<issue-context-redacted>",

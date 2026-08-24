@@ -8,6 +8,18 @@
 /usr/bin/python3 bootstrap_runner.py --config muyan-pilot.toml
 ```
 
+正常运行使用 systemd user timer，每 5 分钟自动执行一次：
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/muyan-pilot.service systemd/muyan-pilot.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now muyan-pilot.timer
+systemctl --user list-timers muyan-pilot.timer
+```
+
+手工命令只用于首次验证或立即执行一个 tick，不是日常调度方式。
+
 前置条件：
 
 - `gh auth status` 成功；
@@ -27,4 +39,4 @@ skills = []
 context_files = []
 ```
 
-bootstrap 是一次处理一个 Issue 的临时入口。它成功后由 Pi 自己开发持续 daemon；不在这里提前加入队列、数据库、重试或复杂恢复。
+Runner 每次处理一个 Issue 后退出，由 systemd timer 再次触发；不在 Python 内实现 daemon，不引入数据库、队列、重试或复杂恢复。
