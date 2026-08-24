@@ -19,6 +19,20 @@ from pathlib import Path
 
 LOGGER = logging.getLogger("muyan_pilot.bootstrap")
 
+# Worktree artifacts written by Pi; they define the task stage chain.
+PLAN_FILE = "plan.md"
+TEST_LOG_FILE = "test.log"
+VERIFY_FILE = "verify.md"
+
+# Fixed short bodies so Issue comments reconstruct the stage chain without
+# leaking tokens or raw prompts to GitHub.
+STAGE_COMMENTS = {
+    "started": "Muyan Pilot started",
+    "plan_ready": "Muyan Pilot plan ready",
+    "tests/verify": "Muyan Pilot tests/verify",
+    "pr_opened": "Muyan Pilot pr_opened",
+}
+
 
 def _config_path(value: str, base: Path) -> Path:
     path = Path(os.path.expandvars(os.path.expanduser(value)))
@@ -151,6 +165,21 @@ def comment_issue(number: int, *, repo: str, body: str) -> None:
                  "--body", body])
 
 
+def stage_comment(stage: str, repo: str, number: int) -> None:
+    """Post one short structured stage comment on the Issue."""
+    try:
+        body = STAGE_COMMENTS[stage]
+    except KeyError:
+        raise ValueError(f"unknown stage: {stage}") from None
+    comment_issue(number, repo=repo, body=body)
+
+
+def latest_session_file(session_dir: Path) -> str:
+    """Return the newest Pi session file in the dir, or '-' when none."""
+    files = sorted(session_dir.glob("*.jsonl")) if session_dir.is_dir() else []
+    return str(files[-1]) if files else "-"
+
+
 def task_branch(source_repo: str, number: int) -> str:
     return f"muyan-pilot/{source_repo.replace('/', '-')}-issue-{number}"
 
@@ -193,24 +222,27 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         "Complete the delivery process in the system prompt."
     )
     skill_args = [item for skill in config["skills"] for item in ("--skill", str(skill))]
+    session_dir = worktree / ".pi-session"
     command = [
         "pi", *skill_args, "--print", "--session-dir",
-        str(worktree / ".pi-session"), "--system-prompt", system_prompt, context,
+        str(session_dir), "--system-prompt", system_prompt, context,
     ]
     LOGGER.info(
         "pi_session=%s issue=%s source_repo=%s",
-        worktree / ".pi-session", issue["number"], source_repo,
+        session_dir, issue["number"], source_repo,
     )
-    return run_command(
+    output = run_command(
         command,
         cwd=worktree,
         timeout=timeout,
         log_stdout=True,
         log_command=[
-            "pi", "--print", "--session-dir", str(worktree / ".pi-session"),
+            "pi", "--print", "--session-dir", str(session_dir),
             "--system-prompt", "<redacted>", "<issue-context-redacted>",
         ],
     )
+    LOGGER.info("pi_session_file=%s", latest_session_file(session_dir))
+    return output
 
 
 def verify_pr(worktree: Path, branch: str) -> str:
@@ -238,10 +270,16 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     number = int(issue["number"])
     branch = task_branch(source_repo, number)
     edit_issue(number, repo=source_repo, add="ai-in-progress")
+    stage_comment("started", source_repo, number)
     try:
         worktree = create_worktree(config["repo_dir"], source_repo, number)
         run_pi(issue, worktree, config, source_repo)
+        if (worktree / PLAN_FILE).is_file():
+            stage_comment("plan_ready", source_repo, number)
+        if (worktree / TEST_LOG_FILE).is_file() or (worktree / VERIFY_FILE).is_file():
+            stage_comment("tests/verify", source_repo, number)
         pr_url = verify_pr(worktree, branch)
+        stage_comment("pr_opened", source_repo, number)
         edit_issue(
             number, repo=source_repo, add="ai-pr-opened",
             remove="ai-in-progress",
