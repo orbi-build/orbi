@@ -2,7 +2,7 @@
 Description=Muyan Pilot — poll both GitHub Issue sources
 
 [Timer]
-OnCalendar=*-*-* 01..06:00/5:00
+OnCalendar=*-*-* 01..06:00/15:00
 AccuracySec=30s
 Persistent=false
 Unit=muyan-pilot.service
