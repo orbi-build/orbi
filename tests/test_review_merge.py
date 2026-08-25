@@ -14,6 +14,7 @@ from unittest.mock import Mock
 import pytest
 
 import bootstrap_runner as runner
+from tests.test_progress_wiring import make_fake_gh
 
 
 # ---------------------------------------------------------------------------
@@ -636,6 +637,7 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
         runner, "comment_issue",
         lambda *a, **k: calls.append(("comment", k.get("body"))),
     )
+    make_fake_gh(monkeypatch)
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4,
@@ -681,6 +683,7 @@ def test_review_and_merge_keeps_merged_when_checkout_sync_fails(
         runner, "comment_issue",
         lambda *a, **k: calls.append(("comment", k.get("body"))),
     )
+    make_fake_gh(monkeypatch)
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4,
@@ -719,6 +722,7 @@ def test_review_and_merge_findings_labels_fix_needed_and_comments(
         runner, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
     )
+    make_fake_gh(monkeypatch)
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4,
@@ -762,6 +766,7 @@ def test_review_and_merge_behind_base_labels_fix_needed(monkeypatch, tmp_path):
         runner, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
     )
+    make_fake_gh(monkeypatch)
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4,
@@ -800,6 +805,7 @@ def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
         runner, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
     )
+    make_fake_gh(monkeypatch)
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4,
@@ -824,6 +830,7 @@ def test_review_and_merge_reraises_non_fixable_gate_error(monkeypatch, tmp_path)
         ),
     )
     with pytest.raises(RuntimeError, match="head moved since review"):
+        make_fake_gh(monkeypatch)
         runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
             "owner/repo", 4,
@@ -837,6 +844,7 @@ def test_review_and_merge_missing_verdict_raises(monkeypatch, tmp_path):
         runner, "run_review", lambda *a, **k: "review without a verdict",
     )
     with pytest.raises(ValueError, match="no REVIEW_VERDICT"):
+        make_fake_gh(monkeypatch)
         runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
             "owner/repo", 4,
@@ -855,6 +863,7 @@ def test_review_and_merge_exhausted_rounds_raises(monkeypatch, tmp_path, caplog)
         RuntimeError,
         match=f"exhausted after {runner.MAX_REVIEW_ROUNDS} rounds",
     ):
+        make_fake_gh(monkeypatch)
         runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
             "owner/repo", 4,

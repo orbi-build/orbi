@@ -30,6 +30,28 @@ follow it before changing code.
 - Command errors fail fast: log the command, return code, stdout and stderr,
   then raise. Never swallow an error or add a fallback path.
 
+## Automatic observability
+
+- Normal operation publishes progress automatically: no human status
+  command, no polling, no supervision. `muyan_pilot.py status` is a debug
+  attachment only — never part of the normal workflow or acceptance
+  evidence.
+- Journal: while a session runs, the journal gets a heartbeat at most every
+  30 seconds and an immediate event on phase/action change. Every line
+  carries issue, run id, role (implement/review/fix/merge), phase, elapsed,
+  last activity, last action, session and branch. No model/session activity
+  for 5 minutes logs an idle warning; the first new activity after it logs
+  a resumed event.
+- GitHub: exactly one progress comment per run, carrying a hidden run
+  marker. It is PATCHed in place (at most every 30 seconds or on progress
+  change) and never replaced by new heartbeat comments. Milestones (started,
+  plan ready, tests passed/failed, review findings, fix pushed, PR opened,
+  merged, blocked) are short standalone comments so GitHub Mobile pushes a
+  notification. After a process restart the same comment is found by the
+  run marker and kept — no database. On success the comment becomes the
+  final delivery summary (PR, tests, review evidence); on failure it becomes
+  the blocked scene with the next-step reason.
+
 ## Base freshness
 
 - Every task worktree is created from the frozen `origin/<base_branch>` SHA

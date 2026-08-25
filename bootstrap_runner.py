@@ -10,6 +10,15 @@ findings exist, re-checks the merge gate against the latest remote base, and
 merges via `gh pr merge --match-head-commit`. Pi never pushes the protected
 branch; the Runner is the only merge actor. Any command failure is logged and
 raised. There is no fallback, queue, daemon, or multi-agent framework.
+
+Throughout the whole lifecycle the Runner publishes live progress
+automatically (Issue #18): one per-run GitHub progress comment carrying a
+hidden run marker is PATCHed in place on every activity change and at most
+every 30 seconds while any Pi session (implementer, reviewer or fixer)
+runs, and short milestone comments (started, plan ready, tests
+passed/failed, review findings, fix pushed, PR opened, merged, blocked)
+notify GitHub Mobile. No human command, poll or status check is part of
+the normal workflow.
 """
 from __future__ import annotations
 
@@ -23,9 +32,10 @@ import subprocess
 import time
 import tomllib
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
-from pilot_slots import acquire_slot, slot_dir_for
+from pilot_slots import acquire_slot, slot_dir_for, slot_occupancy
 from pi_activity import (
     SessionWatcher,
     activity_snapshot,
@@ -33,7 +43,9 @@ from pi_activity import (
     format_end_scene,
     format_run_scene,
     quote_value,
+    sanitize,
 )
+from progress import ProgressPublisher, format_elapsed, progress_body
 
 
 LOGGER = logging.getLogger("muyan_pilot.bootstrap")
@@ -47,6 +59,16 @@ MAX_REVIEW_ROUNDS = 5
 # gets either an `activity` line (something changed) or a `heartbeat` line
 # (nothing changed; the idle time is carried on the line itself).
 PI_POLL_INTERVAL = 15.0
+# Automatic observability (Issue #18): the GitHub progress comment is
+# PATCHed on every activity change and at most every 30 seconds while a
+# Pi session runs, so a mobile user sees live progress without any
+# command. The journal cadence is the poll interval above.
+PI_HEARTBEAT_SECONDS = 30.0
+# Idle warning (Issue #18): no model/session activity for 5 minutes
+# (and the model is not expected to reply next) logs one `pi_idle`
+# warning; the first new session event after it logs `pi_resumed`.
+# A slow active model (model_wait, Issue #40) is never reported idle.
+PI_IDLE_WARN_SECONDS = 300.0
 
 # The bootstrap runner streams every Pi session of a run through the same
 # live activity pipeline (Issue #24/#40); implement/review/fix share the
@@ -250,6 +272,45 @@ def pick_issue(repo: str) -> dict | None:
         "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
         f"-label:{FIX_NEEDED_LABEL} -label:{MERGED_LABEL} "
         f"-label:{BLOCKED_LABEL}",
+        "--json", "number,title,body", "--limit", "1",
+    ])
+    return parse_issue_list(raw)
+
+
+def pick_in_progress_issue(
+    repo: str, slot_dir: Path, max_concurrency: int,
+) -> dict | None:
+    """Return one in-flight Issue a killed runner left behind.
+
+    A SIGKILLed runner leaves the task worktree and the `ai-in-progress`
+    claim label behind (the failure path never ran); the Issue keeps
+    `ai-ready` too (a claim never removes it). The ready scan excludes
+    `ai-in-progress`, so without this scan the run is never resumed and
+    the Issue is stuck forever — the Issue #18 acceptance "restart finds
+    the same progress comment by run marker" would be unreachable in the
+    production flow. `process_issue`'s resume block (newest worktree's
+    run id) then reuses the run instead of starting a second one. Every
+    other delivery state is excluded: those Issues are owned by the
+    resumable-PR scan (`ai-fix-needed`) or are terminal.
+
+    The scan runs only when no OTHER runner is live: a slot held by
+    another process proves a live runner is working (on this or another
+    Issue), so the `ai-in-progress` label is in flight, not orphaned —
+    resuming it here would start a second Pi for a run that is alive
+    (Issue #39 slot semantics: the flock lock is the source of truth).
+    This runner's own slot is excluded: `main` took it before the claim
+    scan and holds it for the whole delivery.
+    """
+    mine = os.getpid()
+    for _, holder in slot_occupancy(slot_dir, max_concurrency):
+        if holder is not None and holder != mine:
+            return None
+    raw = run_command([
+        "gh", "issue", "list", "--repo", repo, "--state", "open",
+        "--search",
+        "label:ai-ready label:ai-in-progress "
+        f"-label:{PR_OPENED_LABEL} -label:{FIX_NEEDED_LABEL} "
+        f"-label:{MERGED_LABEL} -label:{BLOCKED_LABEL}",
         "--json", "number,title,body", "--limit", "1",
     ])
     return parse_issue_list(raw)
@@ -511,19 +572,32 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
     raise error
 
 
-def pick_next_delivery(repos: list[str]) -> tuple[str, dict, dict | None] | None:
-    """Scan sources in order: resumable PRs first, then ready Issues.
+def pick_next_delivery(
+    repos: list[str], slot_dir: Path, max_concurrency: int,
+) -> tuple[str, dict, dict | None] | None:
+    """Scan sources in order: resumable PRs, in-flight restarts, ready.
 
     Returns `(source_repo, issue, scene)` where `scene` is None for a
-    fresh claim. Resuming an open PR keeps the single concurrency slot
-    occupied by the same run (implement → review → fix → merge), so a
-    second Pi is never started for a run that already has a PR.
+    fresh claim or a restart resume. Resuming an open PR keeps the
+    single concurrency slot occupied by the same run (implement →
+    review → fix → merge), so a second Pi is never started for a run
+    that already has a PR. An in-flight Issue (a killed runner left
+    `ai-in-progress` behind, Issue #18) is recovered before the ready
+    scan: `process_issue`'s resume block reuses the newest worktree's
+    run id, so the same progress comment is kept instead of a second
+    run being started on an Issue that is already in flight.
     """
     for repo in repos:
         selected = pick_resumable_delivery(repo)
         if selected is not None:
             issue, scene = selected
             return repo, issue, scene
+    for repo in repos:
+        issue = pick_in_progress_issue(
+            repo, slot_dir, max_concurrency,
+        )
+        if issue is not None:
+            return repo, issue, None
     for repo in repos:
         issue = pick_issue(repo)
         if issue is not None:
@@ -592,15 +666,55 @@ def worktree_path(repo_dir: Path, source_repo: str, number: int,
 
 def create_worktree(repo_dir: Path, source_repo: str, number: int,
                     run_id: str, base_sha: str) -> Path:
-    """Create the task worktree from the frozen base SHA, never HEAD."""
+    """Create the task worktree from the frozen base SHA, never HEAD.
+
+    An existing path is reused: only a resumed run (same run id after a
+    process restart) reaches that state, and its worktree is the scene
+    the run continues in (Issue #18).
+    """
     path = worktree_path(repo_dir, source_repo, number, run_id)
     if path.exists():
-        raise RuntimeError(f"worktree path already exists: {path}")
+        return path
     branch = task_branch(source_repo, number, run_id)
     run_command([
         "git", "worktree", "add", "-b", branch, str(path), base_sha,
     ], cwd=repo_dir)
     return path
+
+
+def latest_run_id(repo_dir: Path, source_repo: str, number: int) -> str | None:
+    """Return the run id of the newest task worktree for the issue.
+
+    The worktree directory name carries the run id — the only state
+    needed to resume the same GitHub progress comment (hidden run
+    marker) instead of creating a second one (Issue #18).
+    """
+    slug = source_repo.replace("/", "-")
+    pattern = f".worktrees/muyan-pilot-{slug}-issue-{number}-*"
+    candidates = [
+        path for path in repo_dir.glob(pattern) if path.is_dir()
+    ]
+    if not candidates:
+        return None
+    newest = max(candidates, key=lambda path: path.stat().st_mtime)
+    return newest.name.rsplit("-", 1)[-1]
+
+
+def has_in_progress_label(number: int, repo: str) -> bool:
+    """True when the Issue still carries `ai-in-progress`.
+
+    The label is added at claim time and removed only by the success or
+    failure path, so it is the marker of a run that is (or was, when
+    the runner died) in flight — as opposed to the preserved worktrees
+    of completed runs (Issue #18).
+    """
+    raw = run_command([
+        "gh", "issue", "list", "--repo", repo, "--state", "all",
+        "--search", f"label:{IN_PROGRESS_LABEL}",
+        "--json", "number", "--limit", "50",
+    ])
+    issues = parse_issue_array(raw)
+    return any(int(issue.get("number", -1)) == number for issue in issues)
 
 
 def _drain_stream(stream, chunks: list[bytes]) -> None:
@@ -653,12 +767,14 @@ def stream_pi(
     cwd: Path,
     timeout: int | None = None,
     poll_interval: float = PI_POLL_INTERVAL,
+    idle_warn_seconds: float = PI_IDLE_WARN_SECONDS,
     run_id: str,
     issue: int,
     source_repo: str,
     branch: str,
     role: str = ROLE_IMPLEMENT,
     log_command: list[str] | None = None,
+    progress: Callable[[dict], None] | None = None,
 ) -> str:
     """Run Pi and stream concise live activity into the journal (Issue #40).
 
@@ -675,6 +791,20 @@ def stream_pi(
     the PR and commit are known. The session JSONL stays in the worktree
     as the complete local record; the full prompt and Issue body are
     never logged.
+
+    `progress` (Issue #18) is invoked on EVERY poll — an activity change
+    or a heartbeat — with the current activity state, while the Pi
+    process is still running: the caller renders the live GitHub
+    progress comment and PATCHes the same run-marker comment in place,
+    so mobile users never see a static starting comment for the whole
+    run. A callback error is logged and never interrupts the task
+    (observability is best-effort, the delivery is not).
+
+    Idle warning (Issue #18): when no model/session event arrives for
+    `idle_warn_seconds` (default 5 minutes) and the state is NOT
+    model_wait, ONE `pi_idle` WARNING carries `stale_seconds`; the
+    first new session event after it logs `pi_resumed`. A slow active
+    model (model_wait) is never reported idle (Issue #40).
     """
     # The raw pi command embeds the full prompt and Issue body; only the
     # redacted form may ever reach the journal or an exception message.
@@ -716,6 +846,9 @@ def stream_pi(
     # that carry the state, so a slow model never looks idle and no
     # warning is ever escalated from a slow response.
     last_model_wait = activity["model_wait"]
+    # Idle warning state (Issue #18): at most one `pi_idle` warning per
+    # stall; the first new session event after it logs `pi_resumed`.
+    idle_warned = False
     try:
         while True:
             if deadline is not None and time.monotonic() >= deadline:
@@ -733,6 +866,14 @@ def stream_pi(
                     else:
                         stderr_chunks.append(data)
             activity = watcher.poll()
+            if progress is not None:
+                try:
+                    progress(activity)
+                except Exception:
+                    LOGGER.exception(
+                        "progress_publish_failed run=%s issue=%s role=%s",
+                        run_id, issue_ref, role,
+                    )
             visible = (
                 activity["phase"], activity["action"], activity["result"],
             )
@@ -763,6 +904,30 @@ def stream_pi(
                     "model_wait" if activity["model_wait"] else "resumed",
                 )
                 last_model_wait = activity["model_wait"]
+            # Idle warning (Issue #18): a stalled session (no model/
+            # session event for `idle_warn_seconds`, and the model is
+            # not expected to reply next) logs ONE `pi_idle` warning
+            # with the stale time; the first new session event after it
+            # logs `pi_resumed`. A slow active model (model_wait) never
+            # warns (Issue #40).
+            if idle_warned and activity["changed"]:
+                LOGGER.info(
+                    "pi_resumed run=%s issue=%s role=%s phase=%s",
+                    run_id, issue_ref, role, activity["phase"],
+                )
+                idle_warned = False
+            elif (
+                not activity["model_wait"]
+                and not idle_warned
+                and activity["stale_seconds"] >= idle_warn_seconds
+            ):
+                LOGGER.warning(
+                    "pi_idle run=%s issue=%s role=%s phase=%s "
+                    "stale_seconds=%s",
+                    run_id, issue_ref, role, activity["phase"],
+                    format_duration(activity["stale_seconds"]),
+                )
+                idle_warned = True
             if process.poll() is not None:
                 break
     finally:
@@ -804,7 +969,8 @@ def stream_pi(
 
 def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
            *, timeout: int | None = None, branch: str | None = None,
-           pr_url: str | None = None) -> str:
+           pr_url: str | None = None,
+           progress: Callable[[dict], None] | None = None) -> str:
     system_prompt = render_prompt(
         config["prompt"].read_text(encoding="utf-8"),
         {
@@ -856,6 +1022,7 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         issue=int(issue["number"]),
         source_repo=source_repo,
         branch=branch,
+        progress=progress,
     )
 
 
@@ -1056,7 +1223,8 @@ def _agent_skill_args(config: dict) -> list[str]:
 
 def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
                issue: int, branch: str, round: int,
-               timeout: int | None = None) -> str:
+               timeout: int | None = None,
+               progress: Callable[[dict], None] | None = None) -> str:
     """Run one independent, read-only review session for a frozen PR.
 
     The review streams live activity through the same pipeline as the
@@ -1101,6 +1269,7 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
         source_repo=source_repo,
         branch=branch,
         role=ROLE_REVIEW,
+        progress=progress,
     )
 
 
@@ -1307,8 +1476,22 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         )
     round = rounds + 1
     pr = freeze_pr(worktree, branch, base_branch)
+    publisher = ProgressPublisher(
+        number, source_repo, config["run_id"], run_command=run_command,
+    )
+    started = time.monotonic()
+    publisher.ensure(_progress_body(_progress_state(
+        issue=number, run_id=config["run_id"], role=ROLE_REVIEW,
+        branch=branch, worktree=worktree, started=started,
+        pr_url=pr["url"], review_round=round,
+    )))
     output = run_review(
         worktree, pr, config, source_repo, number, branch, round,
+        progress=LiveProgressThrottle(
+            publisher, issue=number, run_id=config["run_id"],
+            role=ROLE_REVIEW, branch=branch, worktree=worktree,
+            started=started, pr_url=pr["url"], review_round=round,
+        ),
     )
     verdict = parse_review_verdict(output)
     LOGGER.info(
@@ -1326,6 +1509,21 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         )
         comment_issue(number, repo=source_repo, body=body)
         comment_pr(pr["number"], body=body)
+        publisher.milestone(
+            f"review findings: round {round}, {verdict['blockers']} "
+            f"blocker(s), {verdict['majors']} major(s) for "
+            f"PR #{pr['number']}"
+        )
+        publisher.finish(_progress_body(_progress_state(
+            issue=number, run_id=config["run_id"], role=ROLE_REVIEW,
+            branch=branch, worktree=worktree, started=started,
+            pr_url=pr["url"], review_round=round,
+        ), outcome=(
+            "**Muyan Pilot review findings**\n\n"
+            f"round {round}: {verdict['blockers']} blocker(s), "
+            f"{verdict['majors']} major(s); the fix loop repairs the "
+            "same PR automatically"
+        )))
         edit_issue(
             number, repo=source_repo, add=FIX_NEEDED_LABEL,
             remove=PR_OPENED_LABEL,
@@ -1358,6 +1556,20 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         )
         return False
     confirmed = confirm_merged(worktree, merged, base_branch)
+    publisher.milestone(
+        f"merged: {merged['url']} "
+        f"(merge_commit={confirmed['merge_commit']} review_rounds={round})"
+    )
+    publisher.finish(_progress_body(_progress_state(
+        issue=number, run_id=config["run_id"], role=ROLE_REVIEW,
+        branch=branch, worktree=worktree, started=started,
+        pr_url=merged["url"], review_round=round,
+    ), outcome=(
+        "**Muyan Pilot delivered**\n\n"
+        f"PR {merged['url']} merged "
+        f"(merge_commit={confirmed['merge_commit']} "
+        f"review_rounds={round})"
+    )))
     # The GitHub merge already landed. Record ai-merged before touching
     # the local systemd checkout: a checkout that cannot fast-forward is
     # runner ops, not a failed delivery (must not become ai-blocked).
@@ -1404,13 +1616,270 @@ def _pr_head_repo(pr: dict) -> str:
     return f"{login}/{name}"
 
 
+
+
+# pytest's final summary line: `1 failed, 155 passed in 4.43s` (the
+# counts and the `in <seconds>` part are optional; the line is NOT
+# wrapped in `=` section padding).
+_Pytest_SUMMARY_RE = re.compile(
+    r"^\d+ (?:failed|passed|error|errors|skipped|xfailed|xpassed"
+    r"|deselected)(?:, \d+ \w+)*(?: in [\d.]+s)?$")
+
+
+def _is_section_header(line: str) -> bool:
+    """True for pytest section headers like `=== FAILURES ===`.
+
+    A header is `=`-delimited at both ends (padding may be absent on
+    one side for short titles) and its title carries no digits; the
+    real summary line (`1 failed, 155 passed in 4.43s`, bare or
+    `=`-padded) and the `FAILED`/`ERROR` evidence lines never match.
+    """
+    if not line.startswith("="):
+        return False
+    core = line.strip("=").strip()
+    return core == "" or not any(ch.isdigit() for ch in core)
+
+
+# A pytest summary line reports an outcome only when its FIRST count
+# category is failed/passed/error(s): pytest orders the counts
+# failed, passed, skipped, errors, xfailed, xpassed, deselected, so a
+# run that collected tests always leads with failed or passed (or a
+# collection error). `no tests ran in 0.01s` matches no summary regex
+# at all; `3 deselected in 0.02s` / `2 skipped in 0.01s` match but
+# carry no outcome — reporting them as a pass is a false notification
+# (review round 3, PR #42).
+_OUTCOME_FIRST_RE = re.compile(
+    r"^\d+ (?:failed|passed|error|errors)\b",
+)
+_NO_TESTS_RE = re.compile(r"no tests (?:ran|collected)")
+
+
+def _is_no_result(line: str) -> bool:
+    """True for pytest lines that verified nothing (no tests ran)."""
+    if _NO_TESTS_RE.search(line):
+        return True
+    stripped = line.strip("=").strip()
+    return bool(_Pytest_SUMMARY_RE.match(stripped)) \
+        and not _OUTCOME_FIRST_RE.match(stripped)
+
+
+def read_test_result(worktree: Path) -> str | None:
+    """Summarize the worktree's `test.log`, or None when it does not exist.
+
+    Prefers the pytest summary line (`1 failed, 155 passed in 4.43s`):
+    the LAST one with an outcome when the log holds several runs (TDD
+    red, then green), so the progress comment and the `tests
+    passed/failed` milestone report the most recent run that actually
+    collected tests. Section headers (`=== FAILURES ===`) are never
+    reported: the fallback takes the first `FAILED`/`ERROR` evidence
+    line or the last non-empty line instead, and a log holding nothing
+    but headers yields None (no result info to report). Lines that
+    verified nothing (`no tests ran`, `N deselected`, `N skipped`) are
+    never reported either: a run that collected no tests is no result,
+    and posting `tests passed` for it is a false notification (review
+    round 3, PR #42).
+    """
+    path = worktree / "test.log"
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in reversed(lines):
+        # The summary line is bare in pytest 9; some runners wrap it in
+        # `=` padding, so the stripped form is matched as well.
+        stripped = line.strip("=").strip()
+        if _Pytest_SUMMARY_RE.match(line) \
+                or _Pytest_SUMMARY_RE.match(stripped):
+            if _is_no_result(line):
+                # No tests collected in this run: keep looking for an
+                # earlier run that did (or report nothing at all).
+                continue
+            return sanitize(stripped)
+    for line in lines:
+        if _is_section_header(line) or _is_no_result(line):
+            continue
+        if line.startswith(("FAILED", "ERROR")) or "passed" in line:
+            return sanitize(line)
+    last = lines[-1] if lines else None
+    if last is not None and (_is_section_header(last)
+                             or _is_no_result(last)):
+        return None
+    return sanitize(last) if last is not None else None
+
+
+def delivery_head_advanced(worktree: Path, base_sha: str) -> bool:
+    """True when the task branch has commits beyond the frozen base."""
+    head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
+    return head != base_sha
+
+
+def _progress_state(*, issue: int, run_id: str, role: str, branch: str,
+                    worktree: Path, started: float, pr_url: str | None,
+                    review_round: int,
+                    activity: dict | None = None) -> dict:
+    """Collect the current run state for the GitHub progress comment.
+
+    `activity` is the live state from the `stream_pi` watcher while a Pi
+    session runs (fresh and already read); without it the newest session
+    file is full-scanned. Activity snapshotting is best-effort
+    observability: a read failure is logged and reported as "no session
+    yet", it never blocks the task.
+    """
+    if activity is None:
+        try:
+            activity = activity_snapshot(worktree / ".pi-session")
+        except Exception:
+            LOGGER.exception("issue=%s activity snapshot failed", issue)
+            activity = None
+    return {
+        "run_id": run_id,
+        "issue": issue,
+        "role": role,
+        "phase": (activity or {}).get("phase") or "starting",
+        "elapsed": format_elapsed(time.monotonic() - started),
+        "last_activity": (activity or {}).get("last_activity"),
+        "last_action": (activity or {}).get("action"),
+        "tests": read_test_result(worktree),
+        "review_round": review_round,
+        "branch": branch,
+        "pr": pr_url,
+        "session": (activity or {}).get("session_id"),
+    }
+
+
+def _progress_body(state: dict, *, outcome: str | None = None) -> str:
+    """Render the progress body, optionally with a final outcome header."""
+    body = progress_body(state)
+    if outcome is None:
+        return body
+    return f"{outcome}\n\n{body}"
+
+
+def _publish_plan_milestone(publisher: ProgressPublisher, worktree: Path) -> None:
+    """Post the `plan ready` milestone once the worktree has a plan.md."""
+    if (worktree / "plan.md").is_file():
+        publisher.milestone("plan ready")
+
+
+def _publish_test_milestone(publisher: ProgressPublisher,
+                            worktree: Path) -> None:
+    """Post `tests passed` / `tests failed` from the worktree's test.log.
+
+    The failure check is case-insensitive: pytest evidence lines carry
+    uppercase markers (`FAILED`, `FAILURES`) that a lowercase-only check
+    would misreport as a pass (review round 2, PR #42).
+    """
+    result = read_test_result(worktree)
+    if result is None:
+        return
+    lowered = result.lower()
+    if "fail" in lowered or "error" in lowered:
+        publisher.milestone(f"tests failed: {result}")
+    else:
+        publisher.milestone(f"tests passed: {result}")
+
+
+def _failure_detail(exc: BaseException) -> str:
+    """One-line failure description; keeps subprocess stderr visible."""
+    detail = str(exc)
+    stderr = getattr(exc, "stderr", None)
+    if isinstance(stderr, str) and stderr.strip() and stderr.strip() not in detail:
+        detail = f"{detail} stderr={stderr.strip()}"
+    return detail
+
+
+def _live_progress(publisher: ProgressPublisher, *, issue: int, run_id: str,
+                   role: str, branch: str, worktree: Path, started: float,
+                   pr_url: str | None, review_round: int,
+                   activity: dict | None = None) -> None:
+    """One live GitHub progress update while a Pi session is running.
+
+    Called from the `stream_pi` poll loop (every activity change or
+    heartbeat, Issue #18): the same run-marker comment is PATCHed in
+    place at most every `PI_HEARTBEAT_SECONDS` or when the visible
+    activity changed. `activity` is the watcher state of that poll, so
+    the live comment shows the session exactly as the journal reports
+    it. The publisher already knows the comment id after `ensure`, so a
+    callback before it would fail fast here — and the wiring always
+    ensures first.
+    """
+    state = _progress_state(
+        issue=issue, run_id=run_id, role=role, branch=branch,
+        worktree=worktree, started=started, pr_url=pr_url,
+        review_round=review_round, activity=activity,
+    )
+    publisher.patch(_progress_body(state))
+
+
+class LiveProgressThrottle:
+    """Throttle live GitHub PATCHes to change-driven or <=30-second cadence.
+
+    The `stream_pi` poll loop fires on every poll (15 s default); PATCHing
+    GitHub on every poll would double the traffic for no visible gain.
+    The throttle passes an update through when the visible activity
+    (phase, action, result, model_wait) changed since the last PATCH or
+    when at least `PI_HEARTBEAT_SECONDS` passed since it.
+    """
+
+    def __init__(self, publisher: ProgressPublisher, *, issue: int,
+                 run_id: str, role: str, branch: str, worktree: Path,
+                 started: float, pr_url: str | None,
+                 review_round: int) -> None:
+        def publish(activity: dict) -> None:
+            _live_progress(
+                publisher, issue=issue, run_id=run_id, role=role,
+                branch=branch, worktree=worktree, started=started,
+                pr_url=pr_url, review_round=review_round,
+                activity=activity,
+            )
+
+        self._publish = publish
+        self._last_visible: tuple | None = None
+        self._last_patch = 0.0
+
+    def __call__(self, activity: dict) -> None:
+        visible = (
+            activity["phase"], activity["action"], activity["result"],
+            activity["model_wait"],
+        )
+        now = time.monotonic()
+        if visible == self._last_visible and \
+                now - self._last_patch < PI_HEARTBEAT_SECONDS:
+            return
+        self._last_visible = visible
+        self._last_patch = now
+        self._publish(activity)
+
+
 def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     number = int(issue["number"])
     base_branch = config["base_branch"]
-    # The run id is generated once per attempt, before any other step is
-    # logged, so every journal line of the attempt carries it (Issue #41).
+    # The run id is generated once per attempt and bound BEFORE any
+    # other step is logged, so every journal line of the attempt
+    # carries it — including the claim-time lines of the restart resume
+    # scan below (Issue #41; review round 3, PR #42).
     run_id = new_run_id()
     set_run_id(run_id)
+    # Restart resume (Issue #18): a killed runner leaves the task
+    # worktree and the `ai-in-progress` label behind. Only in that state
+    # the newest worktree's run id is reused, so the same hidden-marker
+    # progress comment is found and kept instead of a second one.
+    # Completed runs keep their worktrees as evidence but lose the
+    # label, so re-claiming an issue always starts a fresh run.
+    if has_in_progress_label(number, source_repo):
+        existing_run_id = latest_run_id(
+            config["repo_dir"], source_repo, number,
+        )
+        if existing_run_id is not None:
+            run_id = existing_run_id
+            # The attempt continues the dead run: re-bind the reused
+            # id so every later line (including resuming_run) carries
+            # it.
+            set_run_id(run_id)
+            LOGGER.info(
+                "issue=%s resuming_run run_id=%s",
+                number, run_id,
+            )
     base_sha = freeze_base(config["repo_dir"], base_branch)
     branch = task_branch(source_repo, number, run_id)
     run_info = (
@@ -1420,6 +1889,9 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         "issue=%s %s", number, run_info,
     )
     edit_issue(number, repo=source_repo, add=IN_PROGRESS_LABEL)
+    publisher = ProgressPublisher(
+        number, source_repo, run_id, run_command=run_command,
+    )
     worktree: Path | None = None
     started = time.monotonic()
     try:
@@ -1431,11 +1903,33 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             number, repo=source_repo,
             body=started_pi_comment_body(run_id, run_info, branch, worktree),
         )
-        run_pi(issue, worktree, config, source_repo, branch=branch)
+        publisher.ensure(_progress_body(_progress_state(
+            issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
+            branch=branch, worktree=worktree, started=started,
+            pr_url=None, review_round=0,
+        )))
+        publisher.milestone(
+            f"started: {run_info} branch={branch} worktree={worktree}"
+        )
+        run_pi(
+            issue, worktree, config, source_repo, branch=branch,
+            progress=LiveProgressThrottle(
+                publisher, issue=number, run_id=run_id,
+                role=ROLE_IMPLEMENT, branch=branch, worktree=worktree,
+                started=started, pr_url=None, review_round=0,
+            ),
+        )
+        _publish_plan_milestone(publisher, worktree)
+        _publish_test_milestone(publisher, worktree)
         pr_url = verify_pr(worktree, branch, base_branch, run_id)
         commit = run_command(
             ["git", "rev-parse", "HEAD"], cwd=worktree,
         )
+        # No `fix pushed` milestone on a fresh claim: the implementer
+        # always commits the delivery on top of the frozen base, so the
+        # head always advanced — the PR opened milestone below announces
+        # the delivery. `fix pushed` is the fixer's milestone
+        # (resume_delivery), where it marks a real fix on an opened PR.
         edit_issue(
             number, repo=source_repo, add=PR_OPENED_LABEL,
             remove=IN_PROGRESS_LABEL,
@@ -1444,6 +1938,12 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             number, repo=source_repo,
             body=opened_pr_comment_body(run_id, run_info, pr_url),
         )
+        publisher.milestone(f"PR opened: {pr_url} ({run_info})")
+        publisher.finish(_progress_body(_progress_state(
+            issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
+            branch=branch, worktree=worktree, started=started,
+            pr_url=pr_url, review_round=0,
+        ), outcome="**Muyan Pilot delivered**"))
         LOGGER.info(
             "run_end %s",
             format_end_scene(
@@ -1480,13 +1980,32 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
                 number, repo=source_repo, add=BLOCKED_LABEL,
                 remove=IN_PROGRESS_LABEL,
             )
+            detail = _failure_detail(exc)
             body = (
                 f"{run_marker(run_id)}\n"
-                f"Muyan Pilot failed: {exc} ({run_info})"
+                f"Muyan Pilot failed: {detail} ({run_info})"
             )
             if scene:
                 body += f" {scene}"
             comment_issue(number, repo=source_repo, body=body)
+            # The blocked milestone is posted even when the worktree was
+            # never created or the progress comment was never ensured:
+            # the mobile notification of the terminal failure must not
+            # depend on local state.
+            publisher.milestone(
+                f"blocked: {sanitize(detail)} ({run_info})"
+            )
+            if worktree is not None and publisher.comment_id is not None:
+                publisher.finish(_progress_body(_progress_state(
+                    issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
+                    branch=branch, worktree=worktree, started=started,
+                    pr_url=None, review_round=0,
+                ), outcome=(
+                    "**Muyan Pilot blocked**\n\n"
+                    f"failure: {detail}\n"
+                    "next step: fix the failure above and re-run "
+                    "this Issue (a new run id is created automatically)"
+                )))
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
         raise
@@ -1521,6 +2040,10 @@ def resume_delivery(issue: dict, scene: dict, config: dict,
     base_branch = scene["base_branch"]
     pr_url = scene["pr_url"]
     set_run_id(run_id)
+    started = time.monotonic()
+    publisher = ProgressPublisher(
+        number, source_repo, run_id, run_command=run_command,
+    )
     scene_info = (
         f"base_branch={base_branch} base_sha={scene['base_sha']} "
         f"run_id={run_id} branch={branch} worktree={worktree} "
@@ -1552,9 +2075,19 @@ def resume_delivery(issue: dict, scene: dict, config: dict,
         )
         merge_latest_base(worktree, base_branch)
         config = {**config, "base_sha": scene["base_sha"], "run_id": run_id}
+        publisher.ensure(_progress_body(_progress_state(
+            issue=number, run_id=run_id, role=ROLE_FIX,
+            branch=branch, worktree=worktree, started=started,
+            pr_url=verified_url, review_round=0,
+        )))
         run_pi(
             issue, worktree, config, source_repo,
             branch=branch, pr_url=verified_url,
+            progress=LiveProgressThrottle(
+                publisher, issue=number, run_id=run_id,
+                role=ROLE_FIX, branch=branch, worktree=worktree,
+                started=started, pr_url=verified_url, review_round=0,
+            ),
         )
         # Re-verify the SAME PR after the fixer pushed: the verified URL
         # must still exactly equal the recovered original PR URL.
@@ -1579,6 +2112,16 @@ def resume_delivery(issue: dict, scene: dict, config: dict,
                 f"Muyan Pilot fixed PR: {verified_url} ({scene_info})"
             ),
         )
+        publisher.milestone(f"fix pushed: {verified_url} ({scene_info})")
+        publisher.finish(_progress_body(_progress_state(
+            issue=number, run_id=run_id, role=ROLE_FIX,
+            branch=branch, worktree=worktree, started=started,
+            pr_url=verified_url, review_round=0,
+        ), outcome=(
+            "**Muyan Pilot fix pushed**\n\n"
+            "the same PR is awaiting review again; the independent "
+            "review and merge happen automatically"
+        )))
     except Exception as exc:
         LOGGER.exception("issue=%s resume failed", number)
         activity_scene = ""
@@ -1604,13 +2147,33 @@ def resume_delivery(issue: dict, scene: dict, config: dict,
                 number, repo=source_repo, add=BLOCKED_LABEL,
                 remove=FIX_NEEDED_LABEL,
             )
+            detail = _failure_detail(exc)
             body = (
                 f"{run_marker(run_id)}\n"
-                f"Muyan Pilot failed: {exc} ({scene_info})"
+                f"Muyan Pilot failed: {detail} ({scene_info})"
             )
             if activity_scene:
                 body += f" {activity_scene}"
             comment_issue(number, repo=source_repo, body=body)
+            # The blocked milestone is posted even when the progress
+            # comment was never created (a failure before `ensure`):
+            # the mobile notification of the terminal failure must not
+            # depend on it.
+            publisher.milestone(
+                f"blocked: {sanitize(detail)} ({scene_info})"
+            )
+            if publisher.comment_id is not None:
+                publisher.finish(_progress_body(_progress_state(
+                    issue=number, run_id=run_id, role=ROLE_FIX,
+                    branch=branch, worktree=worktree,
+                    started=started, pr_url=pr_url,
+                    review_round=0,
+                ), outcome=(
+                    "**Muyan Pilot blocked**\n\n"
+                    f"failure: {detail}\n"
+                    "next step: fix the failure above and resume this "
+                    "same PR (branch, worktree and PR are preserved)"
+                )))
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
         raise
@@ -1659,6 +2222,43 @@ def issue_labels(number: int, repo: str) -> list[str]:
         if isinstance(label, dict) and isinstance(label.get("name"), str):
             names.append(label["name"])
     return names
+
+
+def _finish_blocked_progress(
+    number: int, run_id: str | None, source_repo: str,
+    worktree: Path | None, branch: str | None, pr_url: str,
+    detail: str, next_step: str,
+    role: str = ROLE_FIX, review_round: int = 0,
+) -> None:
+    """Finish the tracked progress comment with the blocked scene.
+
+    The contract (Issue #18): on failure the progress comment becomes
+    the blocked scene with the next-step reason — the same terminal
+    body the `process_issue` and `resume_delivery` failure paths write.
+    `ensure` finds the run's existing progress comment by its hidden
+    marker (PATCHing it in place) or creates it when the run never
+    reached one; either way the blocked scene is the final state.
+    `role` and `review_round` are the actual role and completed review
+    rounds of the blocked run (review round 2, PR #42): the caller
+    derives them from the Issue's delivery label and trusted
+    review-round comments, so the terminal comment never shows a stale
+    hardcoded `fix`/`0`.
+    """
+    if run_id is None:
+        return
+    publisher = ProgressPublisher(
+        number, source_repo, run_id, run_command=run_command,
+    )
+    publisher.ensure(_progress_body(_progress_state(
+        issue=number, run_id=run_id, role=role,
+        branch=branch or "-", worktree=worktree or Path("-"),
+        started=time.monotonic(), pr_url=pr_url,
+        review_round=review_round,
+    ), outcome=(
+        "**Muyan Pilot blocked**\n\n"
+        f"failure: {detail}\n"
+        f"next step: {next_step}"
+    )))
 
 
 def wait_for_delivery(pr_url: str, issue: dict, config: dict,
@@ -1732,6 +2332,39 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
             if marker:
                 body = f"{marker}\n{body}"
             comment_issue(number, repo=source_repo, body=body)
+            if run_id:
+                ProgressPublisher(
+                    number, source_repo, run_id,
+                    run_command=run_command,
+                ).milestone(
+                    f"blocked: PR {pr_url} was closed without a merge; "
+                    "the delivery is terminally failed"
+                )
+                # The blocked scene carries the actual role and the
+                # completed review rounds (review round 2, PR #42):
+                # the delivery label says which role was in flight
+                # (ai-fix-needed -> fix, otherwise the awaiting-review
+                # review), and the trusted review-round comments bound
+                # the round count (GitHub is the only state store).
+                blocked_role = (
+                    ROLE_FIX if FIX_NEEDED_LABEL in
+                    issue_labels(number, source_repo)
+                    else ROLE_REVIEW
+                )
+                blocked_round = review_rounds_so_far(
+                    issue_comments(number, repo=source_repo),
+                )
+                # The tracked progress comment becomes the blocked scene
+                # (Issue #18): the same terminal body the other failure
+                # paths write, with the next-step reason.
+                _finish_blocked_progress(
+                    number, run_id, source_repo, None, None, pr_url,
+                    f"PR {pr_url} was closed without a merge; the "
+                    "delivery is terminally failed",
+                    "investigate why the PR was closed and re-open the "
+                    "delivery or start a fresh run on the Issue",
+                    role=blocked_role, review_round=blocked_round,
+                )
             return
         labels = issue_labels(number, source_repo)
         if FIX_NEEDED_LABEL in labels and BLOCKED_LABEL not in labels:
@@ -1758,6 +2391,8 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
             # worktree, missing/malformed verdict, exhausted rounds)
             # is a real failure: the Issue is marked `ai-blocked` so
             # it is never stranded in awaiting review without an owner.
+            worktree = None
+            branch = None
             try:
                 scene = resume_scene(
                     issue_comments(number, repo=source_repo),
@@ -1791,6 +2426,32 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 if marker:
                     body = f"{marker}\n{body}"
                 comment_issue(number, repo=source_repo, body=body)
+                if run_id:
+                    ProgressPublisher(
+                        number, source_repo, run_id,
+                        run_command=run_command,
+                    ).milestone(
+                        f"blocked: the independent review of PR {pr_url} "
+                        f"failed: {exc}"
+                    )
+                    # The blocked scene carries the actual role and the
+                    # completed review rounds (review round 2, PR #42):
+                    # the failure happened during the independent
+                    # review, and the trusted review-round comments
+                    # bound the round count (GitHub is the only state
+                    # store).
+                    _finish_blocked_progress(
+                        number, run_id, source_repo, worktree, branch,
+                        pr_url,
+                        f"the independent review of PR {pr_url} failed: "
+                        f"{exc}",
+                        "fix the review failure above and resume the "
+                        "delivery of this same PR",
+                        role=ROLE_REVIEW,
+                        review_round=review_rounds_so_far(
+                            issue_comments(number, repo=source_repo),
+                        ),
+                    )
                 return
             if merged:
                 LOGGER.info(
@@ -1833,7 +2494,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     try:
-        selected = pick_next_delivery(config["source_repos"])
+        selected = pick_next_delivery(
+            config["source_repos"], config["slot_dir"],
+            config["max_concurrency"],
+        )
         if selected is None:
             LOGGER.info(
                 "source_repos=%s outcome=no_ready_issue",

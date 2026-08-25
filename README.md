@@ -39,15 +39,25 @@ python3 muyan_pilot.py status --config muyan-pilot.toml
 
 `add` 成功后打印新 Issue 的 URL 和 `ai-ready` 标签；`status` 只读，不修改任何标签。命令失败立即报错，不做回退。
 
-## 实时进展
+## 自动可观测（正常运行不需要执行任何命令）
 
-Pi 长时间运行时，Runner 不再只留下启动命令和最终结果。`bootstrap_runner.py` 运行 Pi 期间每 15 秒读取任务 worktree 里的 Pi session JSONL（`.pi-session/*.jsonl`），把简短活动写入 journal（systemd 日志）。完整不变现场（branch / worktree / session 文件）只在 run 开始和失败时各记录一次，运行中只输出短的变化字段，避免每 15–30 秒重复整段上下文：
+正常运行完全自动化：人不需要执行 status 命令、不需要轮询进程、不需要督工。
+任务进入 GitHub Issue 池后，Runner 自己完成领取 → plan → implement → test →
+verify → independent review → fix → merge，并主动发布过程和最终结果。
+`muyan_pilot.py status` 只保留为开发/故障排查附件，不是产品入口，也不能作为
+自动可观测性的验收证据。
+
+### journal（本地，systemd）
+
+Pi 长时间运行时，Runner 不再只留下启动命令和最终结果。`bootstrap_runner.py` 运行 Pi 期间每 15 秒读取任务 worktree 里的 Pi session JSONL（`.pi-session/*.jsonl`），把简短活动写入 journal（systemd 日志）；已经打开 `journalctl -f` 时内容持续自动刷新。完整不变现场（branch / worktree / session 文件）只在 run 开始和失败时各记录一次，运行中只输出短的变化字段，避免每 15–30 秒重复整段上下文：
 
 - `run_start run=... issue=owner/repo#n role=implement branch=... worktree=... session=... session_file=... phase=... last_activity=... action=... result=...`——run 开始时记录一次完整现场；
 - `activity run=... issue=... role=... phase=... action="..." result=... state=-|model_wait idle=...s`——phase/action/result 变化时输出（tool_result 只更新 result，不覆盖真实动作）；
 - `heartbeat run=... issue=... role=... phase=... state=-|model_wait elapsed=...m idle=...s`——没有变化时按轮询间隔输出，idle 直接写在行上；
 - `model_wait run=... issue=... role=... phase=... state=model_wait`——最近一条 session 事件是 tool result（模型正在等待响应）时输出一次；等待期间只按轮询间隔输出带 `state=model_wait` 的 heartbeat，不升级 WARNING（慢模型不等于卡死）；
 - `resumed run=... issue=... role=... phase=... state=resumed`——下一条 session 事件到达时输出一次。
+- `pi_idle run=... issue=... role=... phase=... stale_seconds=...`——超过 5 分钟（`PI_IDLE_WARN_SECONDS=300`）没有 model/session 活动且不在 `model_wait` 时输出一次 WARNING；卡住的 session 不会每个 heartbeat 重复告警，`model_wait` 期间永不告警（慢模型不等于卡死）；
+- `pi_resumed run=... issue=... role=... phase=...`——idle 告警后第一条新 session 事件到达时输出一次（恢复后输出 resumed）。
 - `run_failed run=... issue=... role=... branch=... worktree=... session=... session_file=... phase=... ... reason=pi_exit_N|timeout_...s`——进程异常退出或超时时先记录完整现场再抛出错误；
 - `run_end run=... issue=... role=... result=pr_opened elapsed=...m pr=... commit=...`——验收通过后记录结果和完整排查入口。
 
@@ -63,10 +73,36 @@ journalctl --user -u muyan-pilot.service -f
 # Aug 25 14:41:40 host muyan-pilot[123]: INFO [e07383c2] heartbeat run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=test state=model_wait elapsed=11m idle=11m
 # Aug 25 14:42:19 host muyan-pilot[123]: INFO [e07383c2] activity run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=test action="assistant text" result=- state=- idle=0s
 # Aug 25 14:42:19 host muyan-pilot[123]: INFO [e07383c2] resumed run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=test state=resumed
+# Aug 25 16:02:10 host muyan-pilot[123]: WARNING [e07383c2] pi_idle run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=pr stale_seconds=5m
+# Aug 25 16:03:05 host muyan-pilot[123]: INFO [e07383c2] pi_resumed run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=pr
 # Aug 25 15:12:40 host muyan-pilot[123]: INFO [e07383c2] run_end run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement result=pr_opened elapsed=42m pr=https://github.com/xqliu/muyan-pilot/pull/19 commit=0123456789abcdef0123456789abcdef01234567
 ```
 
-`muyan_pilot.py status` 同时展示当前（`ai-in-progress`）任务的实时状态：
+每行都带 issue、run id、role（implement / review / fix / merge）、phase、
+elapsed、last activity、last action、session、branch。implementer、reviewer、
+fixer 三种 Pi session 用同一个机制观测，role 由 Runner 在启动 session 时传入。
+
+### GitHub（手机，自动更新）
+
+领取任务后，Runner 在 source Issue 上创建一条带隐藏 run marker
+（`<!-- muyan-pilot:run=<run_id> -->`）的进度评论，之后只 PATCH 同一条
+评论（进度变化时立即，且间隔不超过 30 秒），不新增 heartbeat 垃圾评论。
+**Pi 运行期间就是活的**：implementer、reviewer、fixer 三种 session 的每次
+活动变化/心跳都会渲染当前状态并 PATCH 同一条评论（不是等 Pi 退出后才
+回写），手机用户看到的始终是进行中的进展，而不是一条静态的 starting
+评论。评论始终显示：当前阶段、role、已运行时间、最近活动时间、最近动作、
+测试状态、review/fix round、branch、PR/merge 状态。进程重启后按 run marker
+找回同一条评论继续更新，不需要数据库。
+
+关键 milestone 单独发布简短评论（`Muyan Pilot: ...`），让 GitHub Mobile
+主动推送通知：started、plan ready、tests passed/failed、review findings、
+fix pushed、PR opened、merged、blocked。完成后进度评论更新为最终交付摘要
+（PR、测试、审查证据）；真正失败时更新为 blocked 现场和下一步原因，同时
+Issue 标记 `ai-blocked`。
+
+### 调试附件
+
+`muyan_pilot.py status` 只读展示当前（`ai-in-progress`）任务的实时状态（仅供开发/故障排查）：
 
 ```bash
 python3 muyan_pilot.py status --config muyan-pilot.toml
@@ -85,7 +121,7 @@ python3 muyan_pilot.py status --config muyan-pilot.toml
 
 顶部的 `capacity` / `slots` 是当前机器的并发容量（`max_concurrency`）与已占用 slot（含持有者 PID），见下一节。
 
-journal 和 `status` 只暴露脱敏摘要：完整 prompt、Issue body 和 token 不会写入日志（命令日志固定为 `<redacted>`，工具摘要截断到 200 字符并屏蔽常见 token 形状）。关键阶段继续回写 GitHub Issue 评论：Pi 启动（含 branch 和 worktree）、PR 创建、失败现场（含完整 run 现场）。session JSONL 完整保留在 worktree 中，作为本地完整记录。
+journal、`status` 和 GitHub 进度评论只暴露脱敏摘要：完整 prompt、Issue body 和 token 不会写入日志或评论（命令日志固定为 `<redacted>`，工具摘要截断到 200 字符并屏蔽常见 token 形状）。关键阶段继续回写 GitHub Issue 评论：Pi 启动（含 branch 和 worktree）、PR 创建、失败现场（含完整 run 现场）。session JSONL 完整保留在 worktree 中，作为本地完整记录。
 
 前置条件：
 
@@ -146,6 +182,10 @@ grep -r e07383c2 /home/xqianliu/Documents/muyan/muyan-pilot/.worktrees/
 ## 任务 base 与 worktree
 
 每次领取任务前，Runner 在配置 repo 中执行 `git fetch origin <base_branch>`，并冻结 `origin/<base_branch>` 的精确 SHA（`base_branch` 在 TOML 中配置，默认 `main`）。任务 worktree 和 feature branch 都从该 SHA 创建，绝不使用主工作区当前 HEAD；branch 和目录名都带唯一 run 标识（例如 `.worktrees/muyan-pilot-xqliu-muyan-pilot-issue-14-a1b2c3d4`），同一个 Issue 返工时会生成新的独立 run，旧现场原样保留。base branch、base SHA 和 run 标识会写入 Issue 评论和 `status` 输出。
+
+### 重启恢复（kill 后自动续跑）
+
+Runner 被 SIGKILL 时无法执行任何清理：任务 worktree 和 `ai-in-progress` 领取标签会留在 GitHub 上（Issue 仍带 `ai-ready`）。下一个 tick 的领取扫描在 ready 队列之前先扫描 `ai-ready`+`ai-in-progress`（且未处于其他交付状态）的 open Issue——**仅当没有其他 Runner 活着时**（其他 slot 被占用证明有活着的 Runner 在处理，此时 `ai-in-progress` 是“进行中”而不是“孤儿”，绝不为活着的 run 启动第二个 Pi；flock 锁是唯一事实源）。找到后走 `process_issue` 的恢复分支：复用最新 worktree 的 run id（branch、worktree、进度评论都由它驱动），按隐藏 run marker 找回同一条进度评论继续 PATCH，不新建 run、不新建 worktree、不新建评论。已完成 run 的 worktree 保留为证据但标签已移除，重新领取永远新 run。
 
 Pi 创建 PR 前必须重新 fetch：若 `origin/<base_branch>` 已前进，需合入最新 base、手工解决冲突、重跑完整测试与 review 后再推送。Runner 在验收时用 `git merge-base --is-ancestor origin/<base_branch> HEAD` 验证最新远端 base 是交付 HEAD 的祖先；不满足则 fail fast，不接受 PR。不自动解决冲突，不 force push，不 merge 或 push 保护分支。
 

@@ -144,12 +144,14 @@ def install_fake_gh(monkeypatch, comments: list[str],
     restart. Pass ``served_comments`` to serve a fixed comment history
     (e.g. public comments) instead of the captured one.
     """
+    comment_ids: list[int] = []
     real_run = runner.run_command
 
     def fake_run(command, **kwargs):
         if command[:1] == ["gh"]:
             if command[1] == "issue":
                 if command[2] == "comment":
+                    comment_ids.append(len(comments) + 1)
                     comments.append(command[-1])
                     return ""
                 if command[2] == "edit":
@@ -163,8 +165,11 @@ def install_fake_gh(monkeypatch, comments: list[str],
                         return json.dumps({"comments": served_comments})
                     return json.dumps({
                         "comments": [
-                            {"body": body, "authorAssociation": "OWNER"}
-                            for body in comments
+                            {"id": comment_id, "body": body,
+                             "authorAssociation": "OWNER"}
+                            for comment_id, body in zip(
+                                comment_ids, comments,
+                            )
                         ],
                     })
                 if command[2] == "list":
@@ -180,6 +185,32 @@ def install_fake_gh(monkeypatch, comments: list[str],
                         }])
                     return "[]"
                 return ""
+            if command[1] == "api":
+                # The progress publisher (Issue #18) keeps the single
+                # per-run comment via gh api: list (GET), create (POST),
+                # update (PATCH). Comments are tracked by id like the
+                # real API, so a PATCH updates the exact comment;
+                # `comments` stays the chronological body history.
+                if "--method" in command:
+                    method = command[command.index("--method") + 1]
+                    body = command[command.index("--field") + 1][
+                        len("body="):]
+                    if method == "POST":
+                        comment_id = len(comments) + 1
+                        comment_ids.append(comment_id)
+                        comments.append(body)
+                        return json.dumps(
+                            {"id": comment_id, "body": body},
+                        )
+                    if method == "PATCH":
+                        comment_id = int(command[2].rsplit("/", 1)[1])
+                        index = comment_ids.index(comment_id)
+                        comments[index] = body
+                        return ""
+                return json.dumps([
+                    {"id": comment_id, "body": body}
+                    for comment_id, body in zip(comment_ids, comments)
+                ])
             if command[1] == "pr":
                 branch = command[command.index("--head") + 1]
                 run_id = branch.rsplit("-", 1)[1]
@@ -273,6 +304,18 @@ def test_fake_gh_answers_other_commands_and_rejects_unknown(monkeypatch):
         runner.run_command(["gh", "release", "list"])
 
 
+def test_fake_gh_ignores_unknown_api_methods(monkeypatch):
+    # The runner only POSTs and PATCHes comments via gh api; any other
+    # method answers with the comment list (no crash).
+    comments: list[str] = []
+    install_fake_gh(monkeypatch, comments)
+    raw = runner.run_command(
+        ["gh", "api", "repos/owner/repo/issues/45/comments",
+         "--method", "DELETE", "--field", "body=x"],
+    )
+    assert json.loads(raw) == []
+
+
 def test_e2e_base_advances_and_resume_fixes_the_same_pr(
     clone, tmp_path, monkeypatch, caplog,
 ):
@@ -290,8 +333,11 @@ def test_e2e_base_advances_and_resume_fixes_the_same_pr(
     branch = f"muyan-pilot/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-{run_id}"
     worktree = worktree_for(clone, run_id)
     assert worktree.is_dir()
+    # The started Pi scene comment is posted first; the live progress
+    # comment (gh api) and the milestones follow, the opened PR scene
+    # comment comes before its milestone.
     started = comments[0]
-    opened = comments[1]
+    opened = comments[4]
     assert "Muyan Pilot started Pi:" in started
     assert f"Muyan Pilot opened PR: {PR_URL}" in opened
     assert f"run_id={run_id}" in opened
@@ -352,18 +398,28 @@ def test_e2e_base_advances_and_resume_fixes_the_same_pr(
     assert prs[0]["headRefOid"] == head
 
     # The fix progress comment reuses the same marker and run_id.
-    fixed = comments[-1]
+    # The fixer publishes on the SAME run: the fixed-PR scene comment
+    # plus the fix pushed milestone (the progress comment is PATCHed in
+    # place, never re-posted).
+    fixed = comments[-2]
     assert f"Muyan Pilot fixed PR: {PR_URL}" in fixed
     assert f"<!-- muyan-pilot:run={run_id} -->" in fixed
     assert f"run_id={run_id}" in fixed
     assert "Muyan Pilot opened PR" not in fixed
+    fix_milestone = comments[-1]
+    assert "Muyan Pilot: fix pushed" in fix_milestone
+    assert f"<!-- muyan-pilot:run={run_id} -->" in fix_milestone
 
     # Every journal line of the resumed attempt carries the same run id.
     for message in caplog.messages:
         assert message.startswith(f"[{run_id}]"), message
 
-    # One PR, one branch, one worktree, one run id: nothing was recreated.
-    assert len(comments) == 3
+    # One PR, one branch, one worktree, one run id: nothing was
+    # recreated. Six comments from the first delivery (started Pi,
+    # progress, started milestone, plan ready milestone, opened PR,
+    # PR opened milestone) plus two from the fixer (fixed PR, fix
+    # pushed milestone).
+    assert len(comments) == 8
     assert git(worktree, "branch", "--show-current") == branch
     assert worktree.is_dir()
 
@@ -545,9 +601,15 @@ def test_e2e_fixer_failure_keeps_pr_and_marks_blocked(
     # never force-pushed).
     assert worktree.is_dir()
     assert git(worktree, "branch", "--show-current") == branch
-    failure = comments[-1]
+    # The failure report and the blocked milestone are the last two
+    # comments (the progress comment is PATCHed in place, never
+    # re-posted).
+    failure = comments[-2]
     assert "Muyan Pilot failed:" in failure
     assert "returned non-zero exit status 3" in failure
     assert f"<!-- muyan-pilot:run={run_id} -->" in failure
     assert f"run_id={run_id}" in failure
     assert "Muyan Pilot fixed PR" not in failure
+    blocked = comments[-1]
+    assert "Muyan Pilot: blocked" in blocked
+    assert f"run_id={run_id}" in blocked

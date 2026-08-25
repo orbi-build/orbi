@@ -103,28 +103,87 @@ def _reset_run_id(monkeypatch):
 def install_fake_pi(monkeypatch, tmp_path: Path, script: str) -> None:
     """Put a fake ``pi`` executable first on PATH for the runner's Popen."""
     bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
+    bin_dir.mkdir(exist_ok=True)
     fake = bin_dir / "pi"
     fake.write_text(script, encoding="utf-8")
     fake.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
 
-def install_fake_gh(monkeypatch, comments: list[str]) -> None:
+def install_fake_gh(monkeypatch, comments: list[str],
+                    labels: dict[int, list[str]] | None = None) -> None:
     """Answer the runner's ``gh`` calls; capture every Issue comment.
 
     ``gh pr list`` answers with the local HEAD as ``headRefOid`` and a PR
     body carrying the marker of the run id embedded in the task branch —
     the same value the real delivery agent is told to use.
+
+    ``labels`` (when given) tracks the Issue's labels: the runner's
+    label edits are applied to it, and the restart-resume scan
+    (``gh issue list --search label:ai-in-progress``) answers from it,
+    like the real GitHub state (Issue #18).
     """
+    comment_ids: list[int] = []
     real_run = runner.run_command
 
     def fake_run(command, **kwargs):
         if command[:1] == ["gh"]:
             if command[1] == "issue":
                 if command[2] == "comment":
+                    comment_ids.append(len(comments) + 1)
                     comments.append(command[-1])
-                return ""
+                    return ""
+                if command[2] == "edit":
+                    if labels is not None:
+                        number = int(command[3])
+                        current = labels.setdefault(number, [])
+                        if "--add-label" in command:
+                            label = command[command.index("--add-label") + 1]
+                            if label not in current:
+                                current.append(label)
+                        if "--remove-label" in command:
+                            label = command[command.index("--remove-label") + 1]
+                            if label in current:
+                                current.remove(label)
+                    return ""
+                if command[2] == "list":
+                    # The restart-resume scan (Issue #18): answer from
+                    # the tracked labels, like the real GitHub state.
+                    if "label:ai-in-progress" in " ".join(command):
+                        if labels is not None:
+                            return json.dumps([
+                                {"number": number}
+                                for number in labels
+                                if "ai-in-progress" in labels[number]
+                            ])
+                        return "[]"
+                    return "[]"
+            if command[1] == "api":
+                # The progress publisher (Issue #18) keeps the single
+                # per-run comment via gh api: list (GET), create (POST),
+                # update (PATCH). Comments are tracked by id like the
+                # real API, so a PATCH updates the exact comment;
+                # `comments` stays the chronological body history.
+                if "--method" in command:
+                    method = command[command.index("--method") + 1]
+                    body = command[command.index("--field") + 1][
+                        len("body="):]
+                    if method == "POST":
+                        comment_id = len(comments) + 1
+                        comment_ids.append(comment_id)
+                        comments.append(body)
+                        return json.dumps(
+                            {"id": comment_id, "body": body},
+                        )
+                    if method == "PATCH":
+                        comment_id = int(command[2].rsplit("/", 1)[1])
+                        index = comment_ids.index(comment_id)
+                        comments[index] = body
+                        return ""
+                return json.dumps([
+                    {"id": comment_id, "body": body}
+                    for comment_id, body in zip(comment_ids, comments)
+                ])
             if command[1] == "pr":
                 branch = command[command.index("--head") + 1]
                 run_id = branch.rsplit("-", 1)[1]
@@ -192,6 +251,18 @@ def test_fake_gh_rejects_unexpected_command(monkeypatch, tmp_path):
         runner.run_command(["gh", "release", "list"])
 
 
+def test_fake_gh_ignores_unknown_api_methods(monkeypatch):
+    # The runner only POSTs and PATCHes comments via gh api; any other
+    # method answers with the comment list (no crash).
+    comments: list[str] = []
+    install_fake_gh(monkeypatch, comments)
+    raw = runner.run_command(
+        ["gh", "api", "repos/owner/repo/issues/41/comments",
+         "--method", "DELETE", "--field", "body=x"],
+    )
+    assert json.loads(raw) == []
+
+
 def test_e2e_one_run_id_carries_every_event_of_the_attempt(
     clone, tmp_path, monkeypatch, caplog,
 ):
@@ -211,8 +282,10 @@ def test_e2e_one_run_id_carries_every_event_of_the_attempt(
     for message in caplog.messages:
         assert message.startswith(f"[{run_id}]"), message
 
-    # 2. Every Issue comment carries the visible field and the hidden marker.
-    assert len(comments) == 2
+    # 2. Every Issue comment carries the visible field and the hidden
+    # marker: the live progress comment, the started / plan ready / PR
+    # opened milestones and the two scene comments.
+    assert len(comments) == 6
     for body in comments:
         assert f"run_id={run_id}" in body
         assert f"<!-- muyan-pilot:run={run_id} -->" in body
@@ -253,14 +326,16 @@ def test_e2e_retry_of_same_issue_gets_new_run_id_and_keeps_old_scene(
     assert "a1b2c3d4" in (first / "plan.md").read_text(encoding="utf-8")
     assert "b2c3d4e5" in (second / "plan.md").read_text(encoding="utf-8")
 
-    # Comments are not confused: each attempt carries exactly its own id.
-    assert len(comments) == 4
+    # Comments are not confused: each attempt carries exactly its own
+    # id (six comments per attempt: started Pi, progress, started
+    # milestone, plan ready milestone, opened PR, PR opened milestone).
+    assert len(comments) == 12
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in comments[0]
     assert "b2c3d4e5" not in comments[0]
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in comments[1]
-    assert "<!-- muyan-pilot:run=b2c3d4e5 -->" in comments[2]
-    assert "a1b2c3d4" not in comments[2]
-    assert "<!-- muyan-pilot:run=b2c3d4e5 -->" in comments[3]
+    assert "<!-- muyan-pilot:run=b2c3d4e5 -->" in comments[6]
+    assert "a1b2c3d4" not in comments[6]
+    assert "<!-- muyan-pilot:run=b2c3d4e5 -->" in comments[7]
 
     # The journal timeline splits cleanly into the two runs.
     first_lines = [
@@ -285,13 +360,19 @@ def test_e2e_failed_attempt_marks_blocked_with_same_run_id(
     with pytest.raises(subprocess.CalledProcessError):
         runner.process_issue(issue(), config_for(clone, tmp_path), REPO)
 
-    # The failure report carries the same run id as the start comment.
-    assert len(comments) == 2
-    start, failure = comments
+    # The failure report carries the same run id as the start comment
+    # (progress + started milestone + started Pi + failure + blocked
+    # milestone).
+    assert len(comments) == 5
+    start = [c for c in comments if "Muyan Pilot started Pi:" in c][0]
+    failure = [c for c in comments if "Muyan Pilot failed:" in c][0]
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in start
     assert "Muyan Pilot failed:" in failure
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failure
     assert "run_id=a1b2c3d4" in failure
+    blocked = [c for c in comments if "Muyan Pilot: blocked" in c]
+    assert blocked
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked[0]
 
     # Every journal line of the failed attempt carries the same run id.
     for message in caplog.messages:
@@ -301,3 +382,141 @@ def test_e2e_failed_attempt_marks_blocked_with_same_run_id(
     worktree = worktree_for(clone, "a1b2c3d4")
     assert worktree.is_dir()
     assert (worktree / ".pi-session").is_dir()
+
+
+def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
+    clone, tmp_path, monkeypatch, caplog,
+):
+    """Restart resume (Issue #18): the runner is killed with the task
+    worktree and the `ai-in-progress` label behind (the failure path
+    never ran, so no label edit reached GitHub). The next claim reuses
+    the newest worktree's run id — the same branch, the same worktree
+    and the SAME progress comment (found by its hidden run marker) —
+    instead of creating a second run."""
+    comments: list[str] = []
+    labels: dict[int, list[str]] = {ISSUE_NUMBER: ["ai-ready"]}
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI_FAILING)
+    install_fake_gh(monkeypatch, comments, labels)
+    caplog.set_level("INFO")
+    config = config_for(clone, tmp_path)
+
+    # ---- First attempt: the runner is killed after the claim (the
+    # `ai-in-progress` edit reached GitHub) but before the failure path
+    # could remove the label.
+    real_edit_issue = runner.edit_issue
+
+    def claiming_edit(number, **kwargs):
+        # Only the claim edit reaches GitHub before the kill; the
+        # failure path's label removal never happens.
+        if kwargs.get("add") == "ai-in-progress" \
+                and kwargs.get("remove") is None:
+            real_edit_issue(number, **kwargs)
+
+    monkeypatch.setattr(runner, "edit_issue", claiming_edit)
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.process_issue(issue(), config, REPO)
+    first_worktree = worktree_for(clone, "a1b2c3d4")
+    assert first_worktree.is_dir()
+    # The kill left the label behind: the fake state still carries it.
+    assert "ai-in-progress" in labels[ISSUE_NUMBER]
+    first_progress = [
+        body for body in comments if "**Muyan Pilot progress**" in body
+    ]
+    assert len(first_progress) == 1
+
+    # ---- Restart: the next claim resumes the same run, and the
+    # implementer (now healthy) delivers.
+    caplog.clear()
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
+    monkeypatch.setattr(runner, "edit_issue", real_edit_issue)
+    monkeypatch.setattr(runner, "new_run_id", lambda: "b2c3d4e5")
+    pr_url = runner.process_issue(issue(), config, REPO)
+
+    # The reused run id drives the branch and the worktree: no second
+    # worktree, the first one is the scene the run continues in.
+    assert pr_url == PR_URL
+    assert runner.current_run_id() == "a1b2c3d4"
+    assert not worktree_for(clone, "b2c3d4e5").exists()
+    assert git(
+        first_worktree, "branch", "--show-current",
+    ) == f"muyan-pilot/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-a1b2c3d4"
+
+    # Exactly ONE progress comment: the restarted run PATCHed the
+    # existing one (found by its run marker), never a second one.
+    progress_bodies = [
+        body for body in comments if "**Muyan Pilot progress**" in body
+    ]
+    assert len(progress_bodies) == 1, (
+        f"restart must not create a second progress comment: {comments}"
+    )
+    assert "Muyan Pilot delivered" in progress_bodies[0]
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in progress_bodies[0]
+    assert "b2c3d4e5" not in progress_bodies[0]
+
+    # The delivery finished: the in-progress label is gone.
+    assert "ai-in-progress" not in labels[ISSUE_NUMBER]
+    assert "ai-pr-opened" in labels[ISSUE_NUMBER]
+
+
+def test_fake_gh_tracks_labels_for_the_resume_scan(monkeypatch, tmp_path):
+    """The fake gh applies the runner's label edits and answers the
+    restart-resume scan from the tracked state, like the real GitHub
+    state (Issue #18)."""
+    comments: list[str] = []
+    labels: dict[int, list[str]] = {ISSUE_NUMBER: ["ai-ready"]}
+    install_fake_gh(monkeypatch, comments, labels)
+
+    def scan() -> list[dict]:
+        return json.loads(runner.run_command([
+            "gh", "issue", "list", "--repo", REPO, "--state", "all",
+            "--search", "label:ai-in-progress",
+            "--json", "number", "--limit", "50",
+        ]))
+
+    # The claim adds `ai-in-progress`; the scan sees it.
+    runner.run_command([
+        "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
+        "--add-label", "ai-in-progress",
+    ])
+    assert labels[ISSUE_NUMBER] == ["ai-ready", "ai-in-progress"]
+    assert scan() == [{"number": ISSUE_NUMBER}]
+
+    # A re-add of the same label is a no-op (idempotent edits).
+    runner.run_command([
+        "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
+        "--add-label", "ai-in-progress",
+    ])
+    assert labels[ISSUE_NUMBER].count("ai-in-progress") == 1
+
+    # The delivery removes it; the scan no longer sees it.
+    runner.run_command([
+        "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
+        "--add-label", "ai-pr-opened",
+        "--remove-label", "ai-in-progress",
+    ])
+    assert labels[ISSUE_NUMBER] == ["ai-ready", "ai-pr-opened"]
+    assert scan() == []
+
+    # A remove-only edit without the label is a no-op (idempotent).
+    runner.run_command([
+        "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
+        "--remove-label", "ai-in-progress",
+    ])
+    assert labels[ISSUE_NUMBER] == ["ai-ready", "ai-pr-opened"]
+
+    # Without tracked labels the scan answers empty (fresh-claim fakes).
+    install_fake_gh(monkeypatch, comments)
+    assert scan() == []
+
+    # A non-resume `issue list` scan (the ready queue) answers empty
+    # regardless of the tracked state.
+    assert json.loads(runner.run_command([
+        "gh", "issue", "list", "--repo", REPO, "--state", "open",
+        "--search", "label:ai-ready", "--json", "number",
+    ])) == []
+
+    # An `issue` subcommand that is neither comment, edit nor list is
+    # rejected (like every other unexpected gh command).
+    with pytest.raises(AssertionError, match="unexpected gh command"):
+        runner.run_command(["gh", "issue", "create", "--repo", REPO])

@@ -7,12 +7,14 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
 import bootstrap_runner as runner
+from tests.test_progress_wiring import make_fake_gh
 
 
 def test_parse_issue_list_returns_first_issue():
@@ -223,6 +225,143 @@ def test_pick_issue_uses_github_queue(monkeypatch):
     ]]
 
 
+def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
+    """A killed runner leaves `ai-ready`+`ai-in-progress` behind (Issue
+    #18): the claim scan must recover such in-flight Issues, so the
+    restart resume (run id / worktree / progress comment reuse) is
+    reachable in the production flow — the ready scan alone excludes
+    `ai-in-progress` and would strand the run forever."""
+    issue = {"number": 18, "title": "task", "body": "body"}
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return json.dumps([issue])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    # No slot dir yet: every slot is free, so the scan runs.
+    assert runner.pick_in_progress_issue(
+        "xqliu/muyan-pilot", tmp_path / "slots", 1,
+    ) == issue
+    assert calls == [[
+        "gh", "issue", "list", "--repo", "xqliu/muyan-pilot",
+        "--state", "open", "--search",
+        "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
+        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked",
+        "--json", "number,title,body", "--limit", "1",
+    ]]
+
+
+def test_pick_in_progress_issue_returns_none_when_idle(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(
+        runner, "run_command", lambda command, **kwargs: "[]",
+    )
+    assert runner.pick_in_progress_issue(
+        "xqliu/muyan-pilot", tmp_path / "slots", 1,
+    ) is None
+
+
+def test_pick_in_progress_issue_skips_when_another_runner_is_live(
+    monkeypatch, tmp_path,
+):
+    """A slot held by ANOTHER process proves a live runner is working
+    (Issue #39 slot semantics): the `ai-in-progress` label is in
+    flight, not orphaned, so no second Pi may be started for it. This
+    runner's own slot (its own PID) does not block the scan."""
+    gh_calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: gh_calls.append(command) or "[]",
+    )
+    monkeypatch.setattr(runner, "slot_occupancy",
+                        lambda slot_dir, capacity: [(1, 4242)])
+    assert runner.pick_in_progress_issue(
+        "xqliu/muyan-pilot", tmp_path / "slots", 1,
+    ) is None
+    assert gh_calls == [], "no gh traffic while another runner is live"
+    # Own PID: the scan still runs (this runner holds its own slot).
+    monkeypatch.setattr(runner, "slot_occupancy",
+                        lambda slot_dir, capacity: [(1, os.getpid())])
+    assert runner.pick_in_progress_issue(
+        "xqliu/muyan-pilot", tmp_path / "slots", 1,
+    ) is None
+    assert len(gh_calls) == 1
+
+
+def test_pick_next_delivery_recovers_in_flight_issue_before_ready(
+    monkeypatch, tmp_path,
+):
+    """Claim order (Issue #18): resumable PRs first, then in-flight
+    restarts (killed runner, `ai-in-progress` left behind), then ready
+    Issues — a dead run is resumed, never skipped by the ready scan."""
+    in_flight = {"number": 2, "title": "in flight", "body": ""}
+    ready = {"number": 3, "title": "ready", "body": ""}
+    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda repo: None)
+    monkeypatch.setattr(
+        runner, "pick_in_progress_issue",
+        lambda repo, slot_dir, max_concurrency: (
+            in_flight if repo == "r1" else None
+        ),
+    )
+    monkeypatch.setattr(runner, "pick_issue", lambda repo: ready)
+    assert runner.pick_next_delivery(
+        ["r1", "r2"], tmp_path / "slots", 1,
+    ) == ("r1", in_flight, None)
+
+
+def test_pick_next_delivery_keeps_resumable_delivery_first(
+    monkeypatch, tmp_path,
+):
+    """An `ai-fix-needed` PR resume always beats an in-flight restart:
+    the PR already exists and must not be re-implemented."""
+    in_flight = {"number": 2, "title": "in flight", "body": ""}
+    resumable = {"number": 5, "title": "fix needed", "body": ""}
+    scene = {"run_id": "a1b2c3d4"}
+    monkeypatch.setattr(
+        runner, "pick_resumable_delivery",
+        lambda repo: (resumable, scene) if repo == "r2" else None,
+    )
+    monkeypatch.setattr(
+        runner, "pick_in_progress_issue",
+        lambda repo, slot_dir, max_concurrency: in_flight,
+    )
+    monkeypatch.setattr(runner, "pick_issue", lambda repo: in_flight)
+    assert runner.pick_next_delivery(
+        ["r1", "r2"], tmp_path / "slots", 1,
+    ) == ("r2", resumable, scene)
+
+
+def test_pick_next_delivery_falls_through_to_ready_when_no_in_flight(
+    monkeypatch, tmp_path,
+):
+    ready = {"number": 3, "title": "ready", "body": ""}
+    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda repo: None)
+    monkeypatch.setattr(
+        runner, "pick_in_progress_issue",
+        lambda repo, slot_dir, max_concurrency: None,
+    )
+    monkeypatch.setattr(runner, "pick_issue", lambda repo: ready)
+    assert runner.pick_next_delivery(
+        ["r1"], tmp_path / "slots", 1,
+    ) == ("r1", ready, None)
+
+
+def test_pick_next_delivery_returns_none_when_all_scans_empty(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda repo: None)
+    monkeypatch.setattr(
+        runner, "pick_in_progress_issue",
+        lambda repo, slot_dir, max_concurrency: None,
+    )
+    monkeypatch.setattr(runner, "pick_issue", lambda repo: None)
+    assert runner.pick_next_delivery(
+        ["r1"], tmp_path / "slots", 1,
+    ) is None
+
+
 def test_pick_next_issue_returns_first_ready_source(monkeypatch):
     issue = {"number": 1, "title": "pilot", "body": ""}
     calls = []
@@ -369,11 +508,23 @@ def test_freeze_base_fails_fast_when_remote_base_is_missing(monkeypatch, tmp_pat
         runner.freeze_base(tmp_path, "main")
 
 
-def test_create_worktree_rejects_existing_path(tmp_path):
+def test_create_worktree_reuses_existing_path_for_a_resumed_run(
+    monkeypatch, tmp_path,
+):
+    """Only a resumed run (same run id after a process restart) reaches
+    an existing worktree path; it is the scene the run continues in
+    (Issue #18), so it is reused, never recreated."""
     existing = tmp_path / ".worktrees" / "muyan-pilot-owner-repo-issue-3-run1"
     existing.mkdir(parents=True)
-    with pytest.raises(RuntimeError, match="worktree path already exists"):
-        runner.create_worktree(tmp_path, "owner/repo", 3, "run1", "abc123def456")
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append(command),
+    )
+    assert runner.create_worktree(
+        tmp_path, "owner/repo", 3, "run1", "abc123def456",
+    ) == existing
+    assert calls == [], "a resumed worktree must never be recreated"
 
 
 def test_create_worktree_adds_branch_from_frozen_base_sha(monkeypatch, tmp_path):
@@ -385,6 +536,367 @@ def test_create_worktree_adds_branch_from_frozen_base_sha(monkeypatch, tmp_path)
         ["git", "worktree", "add", "-b", "muyan-pilot/owner-repo-issue-3-run1", str(path), "abc123def456"],
         {"cwd": tmp_path},
     )]
+
+
+def test_latest_run_id_returns_none_without_task_worktrees(tmp_path):
+    assert runner.latest_run_id(tmp_path, "owner/repo", 3) is None
+    # Unrelated directories are not task worktrees.
+    (tmp_path / ".worktrees").mkdir()
+    (tmp_path / ".worktrees" / "other").mkdir()
+    assert runner.latest_run_id(tmp_path, "owner/repo", 3) is None
+
+
+def test_latest_run_id_returns_the_run_id_of_the_newest_worktree(tmp_path):
+    slug = "owner-repo"
+    first = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-3-old11111"
+    second = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-3-new22222"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    # The newest by mtime wins, even when it was created first by name.
+    os.utime(first, (200, 200))
+    os.utime(second, (100, 100))
+    assert runner.latest_run_id(tmp_path, "owner/repo", 3) == "old11111"
+    os.utime(second, (300, 300))
+    assert runner.latest_run_id(tmp_path, "owner/repo", 3) == "new22222"
+    # A worktree of another issue (or another source repo) never counts.
+    other_issue = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-4-ffff0000"
+    other_repo = tmp_path / ".worktrees" / f"muyan-pilot-other-repo-issue-3-ffff1111"
+    other_issue.mkdir()
+    other_repo.mkdir()
+    os.utime(other_issue, (400, 400))
+    os.utime(other_repo, (400, 400))
+    assert runner.latest_run_id(tmp_path, "owner/repo", 3) == "new22222"
+
+
+def test_has_in_progress_label_checks_the_issue_label(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return json.dumps([{"number": 4}])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.has_in_progress_label(4, "owner/repo") is True
+    assert calls == [[
+        "gh", "issue", "list", "--repo", "owner/repo", "--state", "all",
+        "--search", "label:ai-in-progress",
+        "--json", "number", "--limit", "50",
+    ]]
+
+
+def test_has_in_progress_label_is_false_without_the_label(monkeypatch):
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([{"number": 5}]),
+    )
+    assert runner.has_in_progress_label(4, "owner/repo") is False
+
+
+def test_has_in_progress_label_fails_fast_on_malformed_output(monkeypatch):
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "{}")
+    with pytest.raises(ValueError, match="issue list must be a JSON array"):
+        runner.has_in_progress_label(4, "owner/repo")
+
+
+def test_process_issue_resumes_existing_run_and_same_progress_comment(
+    monkeypatch, tmp_path,
+):
+    """Restart resume (Issue #18): the runner died with the task worktree
+    and the `ai-in-progress` label behind. The re-claim reuses the
+    newest worktree's run id, so the same hidden-marker progress comment
+    is found by its marker and PATCHed — never a second one."""
+    calls = []
+    existing_comment = {
+        "id": 77,
+        "body": (
+            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+            "**Muyan Pilot progress**\n\nstale state from the dead run"
+        ),
+    }
+    gh_calls, posted = make_fake_gh(
+        monkeypatch, comments=[existing_comment], in_progress=True,
+    )
+    branch = "muyan-pilot/xqliu-muyan-ceo-issue-4-a1b2c3d4"
+    head = "0123456789abcdef0123456789abcdef01234567"
+
+    def fake_run(command, **kwargs):
+        gh_calls.append(command)
+        if command[:2] == ["gh", "api"]:
+            if "--method" not in command:
+                # The existing progress comment of the dead run.
+                return json.dumps([existing_comment])
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            # The Issue still carries `ai-in-progress` (the runner died).
+            return json.dumps([{"number": 4}])
+        if command[:2] == ["gh", "issue"]:
+            return ""
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps([{
+                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
+                "baseRefName": "main",
+                "headRefName": branch,
+                "headRefOid": head,
+                "headRepository": {"name": "muyan-pilot"},
+                "headRepositoryOwner": {"login": "muyantech"},
+                "body": "<!-- muyan-pilot:run=a1b2c3d4 -->\n\nPlan",
+            }])
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return branch
+        if command[:2] == ["git", "rev-parse"]:
+            return head
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: calls.append(("edit", args, kwargs)),
+    )
+    monkeypatch.setattr(
+        runner, "freeze_base",
+        lambda repo_dir, base_branch: "abc123def456",
+    )
+    # The fresh id would be different: the resume must override it with
+    # the newest worktree's run id.
+    monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
+    monkeypatch.setattr(
+        runner, "latest_run_id", lambda repo_dir, source_repo, number:
+        "a1b2c3d4",
+    )
+    monkeypatch.setattr(
+        runner, "create_worktree",
+        lambda *args: tmp_path / "wt",
+    )
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    issue = {"number": 4, "title": "Fix", "body": "Body"}
+    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+              "base_branch": "main"}
+    assert runner.process_issue(
+        issue, config, "xqliu/muyan-ceo",
+    ) == "https://github.com/muyantech/muyan-pilot/pull/4"
+    # The reused run id drives the branch and the scene comments.
+    assert calls[0] == ("edit", (4,), {"repo": "xqliu/muyan-ceo",
+                                       "add": "ai-in-progress"})
+    scene_comments = [
+        call for call in gh_calls
+        if call[:2] == ["gh", "issue"] and "comment" in call
+    ]
+    for call in scene_comments:
+        assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in call[-1]
+        assert "ffffeeee" not in call[-1]
+    # No new progress comment: the restarted run PATCHed the existing
+    # one (id 77) found by its run marker.
+    progress_posts = [
+        body for body in posted if "**Muyan Pilot progress**" in body
+    ]
+    assert progress_posts == [], (
+        f"restart must not create a second progress comment: {posted}"
+    )
+    patches = [
+        command for command in gh_calls
+        if command[:2] == ["gh", "api"]
+        and command[2] == "repos/xqliu/muyan-ceo/issues/4/comments/77"
+        and "PATCH" in command
+    ]
+    assert patches, "the existing progress comment was not updated"
+    last_body = patches[-1][patches[-1].index("--field") + 1][len("body="):]
+    assert "Muyan Pilot delivered" in last_body
+    assert "- branch: muyan-pilot/xqliu-muyan-ceo-issue-4-a1b2c3d4" in last_body
+
+
+def test_process_issue_binds_run_id_before_the_resume_scan(
+    monkeypatch, tmp_path, caplog,
+):
+    """Run correlation (Issue #41): EVERY journal line of the attempt
+    carries the `[run_id]` prefix — including the claim-time lines of a
+    restart resume (the `ai-in-progress` label scan and `resuming_run`),
+    which run before the resume decision (review round 3, PR #42)."""
+    gh_calls, posted = make_fake_gh(monkeypatch, in_progress=True)
+    head = "0123456789abcdef0123456789abcdef01234567"
+    branch = "muyan-pilot/xqliu-muyan-ceo-issue-4-a1b2c3d4"
+
+    def fake_run(command, **kwargs):
+        gh_calls.append(command)
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([{"number": 4}])
+        if command[:2] == ["gh", "issue"]:
+            return ""
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps([{
+                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
+                "baseRefName": "main",
+                "headRefName": branch,
+                "headRefOid": head,
+                "headRepository": {"name": "muyan-pilot"},
+                "headRepositoryOwner": {"login": "muyantech"},
+                "body": "<!-- muyan-pilot:run=a1b2c3d4 -->\n\nPlan",
+            }])
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return branch
+        if command[:2] == ["git", "rev-parse"]:
+            return head
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123",
+    )
+    # The fresh id differs from the reused one: both are valid run ids
+    # of this attempt (generated, then replaced by the resumed run).
+    monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
+    monkeypatch.setattr(
+        runner, "latest_run_id", lambda repo_dir, source_repo, number:
+        "a1b2c3d4",
+    )
+    monkeypatch.setattr(
+        runner, "create_worktree", lambda *args: tmp_path / "wt",
+    )
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    with caplog.at_level("INFO"):
+        runner.process_issue(
+            {"number": 4, "title": "Fix", "body": "Body"},
+            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+             "base_branch": "main"},
+            "xqliu/muyan-ceo",
+        )
+    # No unprefixed line: the claim-time gh scan and resuming_run are
+    # part of the attempt's timeline.
+    for message in caplog.messages:
+        assert message.startswith("[ffffeeee]") \
+            or message.startswith("[a1b2c3d4]"), message
+    # The resume decision itself is logged under the REUSED run id.
+    resuming = [m for m in caplog.messages if "resuming_run" in m]
+    assert len(resuming) == 1
+    assert resuming[0].startswith("[a1b2c3d4]")
+
+
+def test_process_issue_starts_fresh_run_when_the_label_is_gone(
+    monkeypatch, tmp_path,
+):
+    """A completed run keeps its worktree as evidence but loses the
+    `ai-in-progress` label: re-claiming the Issue must start a fresh
+    run, even when old worktrees exist (Issue #18)."""
+    gh_calls, posted = make_fake_gh(monkeypatch)  # in_progress=False
+    head = "0123456789abcdef0123456789abcdef01234567"
+
+    def fake_run(command, **kwargs):
+        gh_calls.append(command)
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            # No `ai-in-progress` label: the previous run finished.
+            return "[]"
+        if command[:2] == ["gh", "issue"]:
+            return ""
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps([{
+                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
+                "baseRefName": "main",
+                "headRefName": "muyan-pilot/xqliu-muyan-ceo-issue-4-ffffeeee",
+                "headRefOid": head,
+                "headRepository": {"name": "muyan-pilot"},
+                "headRepositoryOwner": {"login": "muyantech"},
+                "body": "<!-- muyan-pilot:run=ffffeeee -->\n\nPlan",
+            }])
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return "muyan-pilot/xqliu-muyan-ceo-issue-4-ffffeeee"
+        if command[:2] == ["git", "rev-parse"]:
+            return head
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
+    latest_calls = []
+    monkeypatch.setattr(
+        runner, "latest_run_id",
+        lambda repo_dir, source_repo, number: latest_calls.append(1) or "a1b2c3d4",
+    )
+    monkeypatch.setattr(
+        runner, "create_worktree", lambda *args: tmp_path / "wt",
+    )
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    runner.process_issue(
+        {"number": 4, "title": "Fix", "body": "Body"},
+        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+         "base_branch": "main"},
+        "xqliu/muyan-ceo",
+    )
+    # The fresh run id is used and the old worktree's run id is never
+    # consulted (the label is the gate).
+    assert latest_calls == []
+    progress_posts = [
+        body for body in posted if "**Muyan Pilot progress**" in body
+    ]
+    assert len(progress_posts) == 1
+    assert "- run_id=ffffeeee" in progress_posts[0]
+
+
+def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
+    monkeypatch, tmp_path, caplog,
+):
+    """The label survived a kill but the worktree is gone (e.g. cleaned
+    up): there is nothing to resume, so the run starts fresh — the
+    `ai-in-progress` label alone never resurrects a run id."""
+    gh_calls, posted = make_fake_gh(monkeypatch, in_progress=True)
+    head = "0123456789abcdef0123456789abcdef01234567"
+
+    def fake_run(command, **kwargs):
+        gh_calls.append(command)
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([{"number": 4}])
+        if command[:2] == ["gh", "issue"]:
+            return ""
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps([{
+                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
+                "baseRefName": "main",
+                "headRefName": "muyan-pilot/xqliu-muyan-ceo-issue-4-ffffeeee",
+                "headRefOid": head,
+                "headRepository": {"name": "muyan-pilot"},
+                "headRepositoryOwner": {"login": "muyantech"},
+                "body": "<!-- muyan-pilot:run=ffffeeee -->\n\nPlan",
+            }])
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return "muyan-pilot/xqliu-muyan-ceo-issue-4-ffffeeee"
+        if command[:2] == ["git", "rev-parse"]:
+            return head
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
+    # The label is on, but no task worktree survived the kill.
+    monkeypatch.setattr(runner, "latest_run_id", lambda *a: None)
+    monkeypatch.setattr(
+        runner, "create_worktree", lambda *args: tmp_path / "wt",
+    )
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    with caplog.at_level("INFO"):
+        runner.process_issue(
+            {"number": 4, "title": "Fix", "body": "Body"},
+            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+             "base_branch": "main"},
+            "xqliu/muyan-ceo",
+        )
+    # No resume happened: the fresh run id drives the delivery.
+    assert "resuming_run" not in caplog.text
+    progress_posts = [
+        body for body in posted if "**Muyan Pilot progress**" in body
+    ]
+    assert len(progress_posts) == 1
+    assert "- run_id=ffffeeee" in progress_posts[0]
 
 
 def test_worktree_path_lives_inside_repo_worktrees_and_includes_run_id():
@@ -853,37 +1365,102 @@ def test_verify_pr_skips_latest_base_check_when_not_required(
 
 def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_path):
     calls = []
+    gh_calls, posted = make_fake_gh(monkeypatch)
+    branch = "muyan-pilot/xqliu-muyan-ceo-issue-4-a1b2c3d4"
+    head = "0123456789abcdef0123456789abcdef01234567"
+
+    def fake_run(command, **kwargs):
+        gh_calls.append(command)
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            # Restart-resume scan (Issue #18): fresh claim, no label.
+            return "[]"
+        if command[:2] == ["gh", "issue"]:
+            # Scene comments (started Pi / opened PR) go through
+            # comment_issue -> run_command; record them like the others.
+            return ""
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps([{
+                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
+                "baseRefName": "main",
+                "headRefName": branch,
+                "headRefOid": head,
+                "headRepository": {"name": "muyan-pilot"},
+                "headRepositoryOwner": {"login": "muyantech"},
+                "body": "<!-- muyan-pilot:run=a1b2c3d4 -->\n\nPlan",
+            }])
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return branch
+        if command[:2] == ["git", "rev-parse"]:
+            return head
+        # git fetch / git merge-base: no output needed.
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
-    monkeypatch.setattr(runner, "verify_pr", lambda *args, **kwargs: "https://github.com/muyantech/muyan-pilot/pull/4")
-    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "0123456789abcdef0123456789abcdef01234567")
     issue = {"number": 4, "title": "Fix", "body": "Body"}
     config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}
     assert runner.process_issue(issue, config, "xqliu/muyan-ceo") == "https://github.com/muyantech/muyan-pilot/pull/4"
     assert calls[0] == ("edit", (4,), {"repo": "xqliu/muyan-ceo", "add": "ai-in-progress"})
-    start = calls[1]
-    assert start[0] == "comment"
-    assert "Muyan Pilot started Pi:" in start[2]["body"]
-    assert "base_branch=main" in start[2]["body"]
-    assert "base_sha=abc123def456" in start[2]["body"]
-    assert "run_id=a1b2c3d4" in start[2]["body"]
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in start[2]["body"]
-    assert "branch=muyan-pilot/xqliu-muyan-ceo-issue-4-a1b2c3d4" in start[2]["body"]
-    assert "worktree=" + str(tmp_path / "wt") in start[2]["body"]
-    assert calls[2][0] == "edit"
-    assert calls[2][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-pr-opened", "remove": "ai-in-progress"}
-    comment = calls[3]
-    assert comment[0] == "comment"
-    body = comment[2]["body"]
-    assert "Muyan Pilot opened PR: https://github.com/muyantech/muyan-pilot/pull/4" in body
-    assert "base_branch=main" in body
-    assert "base_sha=abc123def456" in body
-    assert "run_id=a1b2c3d4" in body
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in body
+    # The run state is published automatically: exactly one progress
+    # comment (hidden run marker) plus the started / PR opened milestones.
+    progress_posts = [
+        body for body in posted
+        if "**Muyan Pilot progress**" in body
+    ]
+    assert len(progress_posts) == 1
+    assert "- branch: muyan-pilot/xqliu-muyan-ceo-issue-4-a1b2c3d4" in progress_posts[0]
+    # The PR URL is only known after verify_pr: the initial POST shows
+    # `- PR: -`, the final delivery PATCH carries the URL.
+    assert "- PR: -" in progress_posts[0]
+    assert any("Muyan Pilot: started" in body for body in posted)
+    started = [body for body in posted if "Muyan Pilot: started" in body][0]
+    assert "base_branch=main" in started
+    assert "base_sha=abc123def456" in started
+    assert "run_id=a1b2c3d4" in started
+    assert "branch=muyan-pilot/xqliu-muyan-ceo-issue-4-a1b2c3d4" in started
+    assert "worktree=" + str(tmp_path / "wt") in started
+    pr_opened = [body for body in posted if "Muyan Pilot: PR opened" in body]
+    assert pr_opened
+    assert "https://github.com/muyantech/muyan-pilot/pull/4" in pr_opened[0]
+    assert "run_id=a1b2c3d4" in pr_opened[0]
+    # The scene comments (started Pi / opened PR) still carry the run scene.
+    scene_comments = [
+        call for call in gh_calls
+        if call[:2] == ["gh", "issue"] and "comment" in call
+    ]
+    assert len(scene_comments) == 2
+    start_body = scene_comments[0][-1]
+    assert "Muyan Pilot started Pi:" in start_body
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in start_body
+    opened_body = scene_comments[1][-1]
+    assert "Muyan Pilot opened PR: https://github.com/muyantech/muyan-pilot/pull/4" in opened_body
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in opened_body
+    # The final delivery summary PATCHed the same progress comment.
+    patches = [
+        command for command in gh_calls
+        if command[:2] == ["gh", "api"] and "PATCH" in command
+    ]
+    assert patches
+    last_body = patches[-1][patches[-1].index("--field") + 1][len("body="):]
+    assert "Muyan Pilot delivered" in last_body
+
+
+def _gh_api(command, posted):
+    """Answer the progress publisher's `gh api` traffic (shared fake)."""
+    if "--method" not in command:
+        return json.dumps([])
+    method = command[command.index("--method") + 1]
+    if method == "POST":
+        body = command[command.index("--field") + 1]
+        posted.append(body[len("body="):])
+        return json.dumps({"id": 77, "body": body[len("body="):]})
+    return ""
 
 
 def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, caplog):
@@ -894,10 +1471,17 @@ def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, c
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     monkeypatch.setattr(runner, "verify_pr", lambda *args, **kwargs: "https://github.com/muyantech/muyan-pilot/pull/4")
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        runner, "run_command",
-        lambda command, **kwargs: "0123456789abcdef0123456789abcdef01234567",
-    )
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            # Restart-resume scan (Issue #18): fresh claim, no label.
+            return "[]"
+        return "0123456789abcdef0123456789abcdef01234567"
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
     with caplog.at_level("INFO"):
         runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
@@ -919,13 +1503,33 @@ def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path)
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
-    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
     monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: None)
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            # Restart-resume scan (Issue #18): fresh claim, no label.
+            return "[]"
+        calls.append(("comment", (), {"body": command[-1]}))
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="git failed"):
         runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo")
     assert calls[1][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-blocked", "remove": "ai-in-progress"}
     assert calls[2][0] == "comment"
     failure_body = calls[2][2]["body"]
+    # The failure is also published as the blocked milestone (Issue
+    # #18). The worktree was never created, so no progress comment
+    # exists to PATCH: the milestone alone carries the notification.
+    assert any("Muyan Pilot: blocked" in body for body in posted)
+    blocked = [
+        body for body in posted if "Muyan Pilot: blocked" in body
+    ][0]
+    assert "git failed" in blocked
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked
     assert "Muyan Pilot failed: git failed" in failure_body
     assert "base_branch=main" in failure_body
     assert "base_sha=abc123def456" in failure_body
@@ -936,18 +1540,35 @@ def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path)
 def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypatch, tmp_path, caplog):
     edit_calls = []
 
-    def edit(*args, **kwargs):
-        edit_calls.append(kwargs)
-        if len(edit_calls) == 2:
-            raise RuntimeError("github report failed")
-
-    monkeypatch.setattr(runner, "edit_issue", edit)
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
+    gh_calls, posted = make_fake_gh(monkeypatch)
+    comments = []
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            # The blocked milestone POST is the only gh api traffic of
+            # this scenario (the worktree was never created, so no
+            # progress comment was ensured): it fails, the failure
+            # report is broken, the original failure must still be
+            # re-raised.
+            raise RuntimeError("github report failed")
+        if command[:3] == ["gh", "issue", "list"]:
+            # Restart-resume scan (Issue #18): fresh claim, no label.
+            return "[]"
+        comments.append(command[-1])
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="git failed"):
         runner.process_issue({"number": 13, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo")
     assert "failure reporting failed" in caplog.text
+    # The failure comment was published before the milestone POST failed.
+    assert any("Muyan Pilot failed: git failed" in body
+               for body in comments)
+    assert posted == []
 
 
 def _write_prompts(tmp_path):
@@ -956,7 +1577,10 @@ def _write_prompts(tmp_path):
 
 
 def test_main_returns_zero_when_queue_empty(monkeypatch, tmp_path):
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: None)
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: None,
+    )
     _write_prompts(tmp_path)
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
@@ -970,7 +1594,12 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: ("xqliu/muyan-pilot", issue, None))
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: (
+            "xqliu/muyan-pilot", issue, None
+        ),
+    )
     monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: calls.append((args, kwargs)) or "https://github.com/x/y/pull/12")
     monkeypatch.setattr(
         runner, "wait_for_delivery",
@@ -991,7 +1620,12 @@ def test_main_accepts_repeated_source_repo(monkeypatch, tmp_path):
     issue = {"number": 14, "title": "task"}
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"xqliu/muyan-pilot\", \"xqliu/muyan-ceo\"]\n", encoding="utf-8")
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: seen.append(repos) or (repos[0], issue, None))
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: (
+            seen.append(repos) or (repos[0], issue, None)
+        ),
+    )
     monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: "https://github.com/x/y/pull/14")
     monkeypatch.setattr(runner, "wait_for_delivery", lambda *a, **k: None)
     assert runner.main([
@@ -1019,8 +1653,19 @@ def test_process_issue_failure_without_session_still_carries_scene(
         runner, "run_pi",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("pi died")),
     )
-    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
     monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: None)
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            # Restart-resume scan (Issue #18): fresh claim, no label.
+            return "[]"
+        calls.append(("comment", (), {"body": command[-1]}))
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="pi died"):
         runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo")
     failure_body = calls[-1][2]["body"]
@@ -1044,7 +1689,18 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
             subprocess.CalledProcessError(1, ["pi"], stderr="boom"),
         ),
     )
-    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            # Restart-resume scan (Issue #18): fresh claim, no label.
+            return "[]"
+        calls.append(("comment", (), {"body": command[-1]}))
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
     monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: {
         "session_id": "sess-9",
         "session_file": str(tmp_path / "wt" / ".pi-session" / "s.jsonl"),
@@ -1077,7 +1733,18 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
         runner, "run_pi",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("git failed")),
     )
-    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            # Restart-resume scan (Issue #18): fresh claim, no label.
+            return "[]"
+        calls.append(("comment", (), {"body": command[-1]}))
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
     monkeypatch.setattr(
         runner, "activity_snapshot",
         lambda session_dir: (_ for _ in ()).throw(OSError("disk error")),
@@ -1113,16 +1780,29 @@ def make_fake_pi(tmp_path: Path, *, session_records: list[tuple[float, dict]],
     return [sys.executable, "-c", script]
 
 
+def fresh_timestamp(offset: float = 0.0) -> str:
+    """A session timestamp at (real) now + offset.
+
+    The watcher computes `stale_seconds` against the real clock, so the
+    fake session records must carry fresh timestamps: a fixed 2026 date
+    would look years stale and trip the 5-minute idle warning (Issue
+    #18) in every stream_pi test.
+    """
+    return (
+        datetime.now(timezone.utc) + timedelta(seconds=offset)
+    ).isoformat()
+
+
 def fake_session_records():
     return [
         (0.0, {"type": "session", "id": "sess-1",
-               "timestamp": "2026-08-25T02:00:00Z", "cwd": "/w"}),
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
         (0.1, {"type": "message", "id": "u1",
-               "timestamp": "2026-08-25T02:00:00Z",
+               "timestamp": fresh_timestamp(),
                "message": {"role": "user", "content": [
                    {"type": "text", "text": "SECRET ISSUE BODY"}]}}),
         (0.2, {"type": "message", "id": "a1",
-               "timestamp": "2026-08-25T02:00:01Z",
+               "timestamp": fresh_timestamp(1),
                "message": {"role": "assistant", "content": [
                    {"type": "toolCall", "id": "t1", "name": "bash",
                     "arguments": {"command": "pytest tests/"}}]}}),
@@ -1249,7 +1929,7 @@ def test_stream_pi_activity_keeps_action_after_tool_result(tmp_path, caplog):
     """A tool result updates result only; the action line is not repeated."""
     records = fake_session_records() + [
         (0.5, {"type": "message", "id": "r1",
-               "timestamp": "2026-08-25T02:00:02Z",
+               "timestamp": fresh_timestamp(2),
                "message": {"role": "toolResult", "toolCallId": "t1",
                            "toolName": "bash",
                            "content": [{"type": "text", "text": "ok"}]}}),
@@ -1409,12 +2089,12 @@ def test_stream_pi_model_wait_then_resumed_no_warning_spam(
     agent)."""
     records = fake_session_records() + [
         (0.5, {"type": "message", "id": "r1",
-               "timestamp": "2026-08-25T02:00:02Z",
+               "timestamp": fresh_timestamp(2),
                "message": {"role": "toolResult", "toolCallId": "t1",
                            "toolName": "bash",
                            "content": [{"type": "text", "text": "ok"}]}}),
         (1.2, {"type": "message", "id": "a2",
-               "timestamp": "2026-08-25T02:00:03Z",
+               "timestamp": fresh_timestamp(3),
                "message": {"role": "assistant", "content": [
                    {"type": "text", "text": "done"}]}}),
     ]
@@ -1468,7 +2148,7 @@ def test_stream_pi_no_model_wait_after_assistant_text(tmp_path, caplog):
     # the transition.
     records = fake_session_records() + [
         (0.4, {"type": "message", "id": "a2",
-               "timestamp": "2026-08-25T02:00:02Z",
+               "timestamp": fresh_timestamp(2),
                "message": {"role": "assistant", "content": [
                    {"type": "text", "text": "done"}]}}),
     ]
@@ -1484,6 +2164,113 @@ def test_stream_pi_no_model_wait_after_assistant_text(tmp_path, caplog):
         )
     assert " model_wait " not in caplog.text
     assert " resumed " not in caplog.text
+
+
+def test_stream_pi_idle_warn_default_is_five_minutes():
+    # The Issue #18 contract: no model/session activity for 5 minutes
+    # logs an idle warning.
+    assert runner.PI_IDLE_WARN_SECONDS == 300.0
+
+
+def test_stream_pi_logs_idle_warning_once_when_session_stalls(
+    tmp_path, caplog,
+):
+    """Issue #18 acceptance: a stalled session (no model/session
+    activity past the threshold, not waiting on the model) logs ONE
+    `pi_idle` WARNING carrying `stale_seconds` — never a warning per
+    heartbeat."""
+    command = make_fake_pi(tmp_path, session_records=[], sleep=1.2)
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.5,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    idles = [line for line in lines if " pi_idle " in line]
+    assert len(idles) == 1, f"exactly one idle warning: {lines}"
+    idle = idles[0]
+    assert "run=run1" in idle
+    assert "issue=xqliu/muyan-pilot#24" in idle
+    assert "role=implement" in idle
+    assert "phase=starting" in idle
+    assert "stale_seconds=" in idle
+    # The warning is a WARNING (visible in journalctl without -p info).
+    assert any(
+        record.levelno == logging.WARNING
+        and " pi_idle " in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_stream_pi_logs_pi_resumed_after_idle_warning(tmp_path, caplog):
+    """The first new session event after an idle warning logs
+    `pi_resumed` (Issue #18: 恢复后输出 resumed)."""
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.8, {"type": "message", "id": "a1",
+               "timestamp": fresh_timestamp(1),
+               "message": {"role": "assistant", "content": [
+                   {"type": "text", "text": "back"}]}}),
+    ]
+    command = make_fake_pi(
+        tmp_path, session_records=records, stdout="ok",
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.4,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    idles = [line for line in lines if " pi_idle " in line]
+    resumed = [line for line in lines if " pi_resumed " in line]
+    assert len(idles) == 1
+    assert len(resumed) == 1
+    # resumed comes after the warning and carries the run context.
+    assert lines.index(resumed[0]) > lines.index(idles[0])
+    assert "run=run1" in resumed[0]
+    assert "issue=xqliu/muyan-pilot#24" in resumed[0]
+    assert "role=implement" in resumed[0]
+    assert "phase=starting" in resumed[0]
+
+
+def test_stream_pi_no_idle_warning_during_model_wait(tmp_path, caplog):
+    """Issue #40 semantics: while the newest session event is a tool
+    result the model is expected to reply next — a long silence is a
+    slow model, never an idle warning (no warning spam)."""
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.0, {"type": "message", "id": "a1",
+               "timestamp": fresh_timestamp(),
+               "message": {"role": "assistant", "content": [
+                   {"type": "toolCall", "id": "t1", "name": "bash",
+                    "arguments": {"command": "pytest tests/"}}]}}),
+        (0.1, {"type": "message", "id": "r1",
+               "timestamp": fresh_timestamp(1),
+               "message": {"role": "toolResult", "toolCallId": "t1",
+                           "toolName": "bash",
+                           "content": [{"type": "text", "text": "ok"}]}}),
+    ]
+    command = make_fake_pi(
+        tmp_path, session_records=records, sleep=1.2,
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.5,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    assert " pi_idle " not in caplog.text
+    # The silence is visible as the model_wait state instead.
+    waits = [line for line in caplog.text.splitlines()
+             if " model_wait " in line]
+    assert len(waits) == 1
 
 
 def test_stream_pi_resumed_run_follows_new_session_file(tmp_path, caplog):
@@ -1504,9 +2291,9 @@ def test_stream_pi_resumed_run_follows_new_session_file(tmp_path, caplog):
         tmp_path,
         session_records=[
             (0.0, {"type": "session", "id": "new-session",
-                   "timestamp": "2026-08-25T03:00:00Z", "cwd": "/w"}),
+                   "timestamp": fresh_timestamp(), "cwd": "/w"}),
             (0.1, {"type": "message", "id": "a1",
-                   "timestamp": "2026-08-25T03:00:01Z",
+                   "timestamp": fresh_timestamp(1),
                    "message": {"role": "assistant", "content": [
                        {"type": "toolCall", "id": "t1", "name": "bash",
                         "arguments": {"command": "pytest tests/"}}]}}),
@@ -1591,6 +2378,227 @@ def test_stream_pi_times_out_and_kills_process(tmp_path, caplog):
     assert "issue=xqliu/muyan-pilot#24" in failures[0]
 
 
+# --- live GitHub progress while Pi runs (Issue #18, review Major fix) ------
+
+
+def test_stream_pi_invokes_progress_callback_while_child_is_running(
+    tmp_path,
+):
+    """The review Major fix: the progress callback (which PATCHes the
+    GitHub comment) must fire WHILE the Pi child is still running — on
+    activity changes and on heartbeats — not only after it exits."""
+    command = make_fake_pi(
+        tmp_path,
+        session_records=fake_session_records(),
+        stdout="final answer",
+        sleep=1.2,
+    )
+    seen = []
+
+    def progress(activity):
+        seen.append({
+            "phase": activity["phase"],
+            "action": activity["action"],
+            "result": activity["result"],
+        })
+
+    result = runner.stream_pi(
+        command, cwd=tmp_path, poll_interval=0.1,
+        run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+        branch="b", progress=progress,
+    )
+    assert result == "final answer"
+    # The callback fired many times during the run (polls at 0.1 s while
+    # the child sleeps 1.2 s after the last session record)...
+    assert len(seen) >= 4
+    # ...and it saw the activity change (starting -> test) live, before
+    # the child exited: the tool call is visible in an early snapshot,
+    # not only in a final state.
+    phases = [entry["phase"] for entry in seen]
+    assert phases[0] == "starting"
+    assert "test" in phases
+    assert phases.index("test") < len(phases) - 1
+    test_entries = [entry for entry in seen if entry["phase"] == "test"]
+    assert any(
+        entry["action"] == "bash pytest tests/"
+        for entry in test_entries
+    )
+
+
+def test_stream_pi_live_progress_patches_github_before_child_exits(
+    tmp_path,
+):
+    """End-to-end shape of the fix: a publisher-style callback PATCHes
+    the run-marker comment while the child is still running, so a mobile
+    user never sees a static starting comment for the whole run."""
+    command = make_fake_pi(
+        tmp_path,
+        session_records=fake_session_records(),
+        stdout="done",
+        sleep=1.2,
+    )
+    patches = []
+
+    class FakePublisher:
+        comment_id = 77
+
+        def patch(self, body):
+            patches.append(body)
+
+    publisher = FakePublisher()
+    throttle = runner.LiveProgressThrottle(
+        publisher, issue=24, run_id="run1", role="implement",
+        branch="b", worktree=tmp_path, started=time.monotonic(),
+        pr_url=None, review_round=0,
+    )
+    result = runner.stream_pi(
+        command, cwd=tmp_path, poll_interval=0.1,
+        run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+        branch="b", progress=throttle,
+    )
+    assert result == "done"
+    # At least one PATCH happened while the child was still running
+    # (all of them did: the callback only exists inside the poll loop).
+    assert len(patches) >= 2
+    # The live comment carries the run marker and the live phase.
+    assert all(
+        body.startswith("<!-- muyan-pilot:run=run1 -->")
+        for body in patches
+    )
+    assert any("- phase: test" in body for body in patches)
+    assert any("- last action: bash pytest tests/" in body for body in patches)
+
+
+def test_stream_pi_progress_callback_error_never_interrupts_run(
+    tmp_path, caplog,
+):
+    """Observability is best-effort: a failing progress callback (e.g. a
+    transient gh failure) is logged and never interrupts the delivery."""
+    command = make_fake_pi(
+        tmp_path, session_records=fake_session_records(),
+        stdout="final answer",
+    )
+
+    def boom(activity):
+        raise RuntimeError("gh api failed")
+
+    with caplog.at_level("ERROR"):
+        result = runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b", progress=boom,
+        )
+    assert result == "final answer"
+    assert "progress_publish_failed" in caplog.text
+    assert "run=run1" in caplog.text
+    assert "role=implement" in caplog.text
+
+
+def test_live_progress_throttle_patches_on_change_and_cadence():
+    """The throttle passes an update through on a visible activity change
+    and at most every PI_HEARTBEAT_SECONDS (30 s) otherwise."""
+    calls = []
+
+    class FakePublisher:
+        comment_id = 1
+
+        def patch(self, body):
+            calls.append(body)
+
+    publisher = FakePublisher()
+    throttle = runner.LiveProgressThrottle(
+        publisher, issue=1, run_id="run1", role="implement",
+        branch="b", worktree=Path("/w"), started=time.monotonic(),
+        pr_url=None, review_round=0,
+    )
+    first = {
+        "phase": "starting", "action": None, "result": None,
+        "model_wait": False, "session_id": None,
+        "last_activity": None, "stale_seconds": 0.0,
+        "session_file": None, "events": 0, "changed": False,
+    }
+    throttle(first)
+    assert len(calls) == 1  # the first update always passes
+    # Unchanged activity within the cadence: suppressed.
+    throttle(first)
+    assert len(calls) == 1
+    # A visible change: passed immediately.
+    changed = dict(first, phase="test", action="bash pytest tests/")
+    throttle(changed)
+    assert len(calls) == 2
+    # Unchanged again within the cadence: suppressed...
+    throttle(changed)
+    assert len(calls) == 2
+    # ...until the 30 s cadence elapses: passed as a heartbeat update.
+    throttle._last_patch -= runner.PI_HEARTBEAT_SECONDS + 1
+    throttle(changed)
+    assert len(calls) == 3
+    # The rendered body carries the live state.
+    assert "- phase: test" in calls[-1]
+    assert "- last action: bash pytest tests/" in calls[-1]
+
+
+def test_run_pi_passes_progress_callback_to_stream_pi(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_stream(command, **kwargs):
+        seen.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(runner, "stream_pi", fake_stream)
+    monkeypatch.setattr(runner, "render_prompt", lambda template, values: "sp")
+    (tmp_path / "prompt.md").write_text("p", encoding="utf-8")
+    callback = lambda activity: None  # noqa: E731
+    runner.run_pi(
+        {"number": 4, "title": "Fix", "body": "b"}, tmp_path,
+        {
+            "prompt": tmp_path / "prompt.md",
+            "source_repos": ["owner/repo"],
+            "workspace_root": tmp_path,
+            "base_branch": "main",
+            "base_sha": "abc123",
+            "run_id": "a1b2c3d4",
+            "skills": [],
+            "context_files": [],
+        },
+        "owner/repo", branch="b", pr_url="https://x/pull/4",
+        progress=callback,
+    )
+    assert seen["progress"] is callback
+    assert seen["run_id"] == "a1b2c3d4"
+    assert seen["branch"] == "b"
+
+
+def test_run_review_passes_progress_callback_to_stream_pi(
+    monkeypatch, tmp_path,
+):
+    seen = {}
+
+    def fake_stream(command, **kwargs):
+        seen.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(runner, "stream_pi", fake_stream)
+    monkeypatch.setattr(runner, "render_prompt", lambda template, values: "sp")
+    (tmp_path / "prompt_review.md").write_text("p", encoding="utf-8")
+    callback = lambda activity: None  # noqa: E731
+    runner.run_review(
+        tmp_path,
+        {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"},
+        {
+            "prompt_review": tmp_path / "prompt_review.md",
+            "source_repos": ["owner/repo"],
+            "base_branch": "main",
+            "run_id": "a1b2c3d4",
+            "skills": [],
+        },
+        "owner/repo", 4, "branch", 1, progress=callback,
+    )
+    assert seen["progress"] is callback
+    assert seen["role"] == "review"
+
+
 # --- max_concurrency config (Issue #39) --------------------------------------
 
 
@@ -1656,14 +2664,14 @@ def test_main_capacity_full_does_not_pick_issue_or_call_pi(
     held = pilot_slots.acquire_slot(slot_dir, 1, os.getpid())
     assert held is not None
 
-    def fail_if_called(repos):
+    def fail_if_called(repos, slot_dir, max_concurrency):
         raise AssertionError("pick_next_delivery must not run when capacity is full")
 
     monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
     monkeypatch.setattr(runner, "process_issue", fail_if_called)
     # The guard itself must fail loudly if it is ever reached.
     with pytest.raises(AssertionError, match="must not run when capacity is full"):
-        fail_if_called(["owner/repo"])
+        fail_if_called(["owner/repo"], Path("slots"), 1)
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
     assert "capacity_full" in caplog.text
@@ -1687,9 +2695,10 @@ def test_main_holds_slot_while_processing_issue(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     seen = {}
 
-    def fake_pick(repos):
-        slot_dir = tmp_path / ".muyan-pilot" / "slots"
-        seen["occupancy"] = pilot_slots.slot_occupancy(slot_dir, 1)
+    def fake_pick(repos, slot_dir, max_concurrency):
+        seen["occupancy"] = pilot_slots.slot_occupancy(
+            tmp_path / ".muyan-pilot" / "slots", 1,
+        )
         return ("owner/repo", issue, None)
 
     monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
@@ -1706,7 +2715,10 @@ def test_main_reacquires_slot_after_previous_release(monkeypatch, tmp_path):
     config = tmp_path / "muyan-pilot.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     _write_prompts(tmp_path)
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: None)
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: None,
+    )
 
     assert runner.main(["--config", str(config)]) == 0
     slot_dir = tmp_path / ".muyan-pilot" / "slots"
@@ -1770,6 +2782,117 @@ def test_pr_state_fails_fast_on_non_object_json(monkeypatch):
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(ValueError, match="pr view must be a JSON object"):
         runner.pr_state(PR_URL)
+
+
+def test_finish_blocked_progress_is_a_noop_without_run_id(monkeypatch):
+    """Without a bound run id there is no tracked comment to update
+    (the failure comment simply carries no marker)."""
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append(command) or "[]",
+    )
+    runner._finish_blocked_progress(
+        39, None, "owner/repo", None, None, "https://x/pull/46",
+        "failure", "next step",
+    )
+    assert calls == []
+
+
+def test_finish_blocked_progress_creates_the_comment_when_missing(
+    monkeypatch,
+):
+    """A run that never reached a progress comment (the runner died
+    before `ensure`) still ends with the blocked scene: the comment is
+    created with it."""
+    api_calls = []
+
+    def fake_run(command, **kwargs):
+        api_calls.append(command)
+        if "--method" not in command:
+            return "[]"
+        # Only the progress comment POST reaches the api here.
+        assert command[command.index("--method") + 1] == "POST"
+        body = command[command.index("--field") + 1]
+        return json.dumps({"id": 78, "body": body[len("body="):],
+                           "url": "https://x/78"})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    runner._finish_blocked_progress(
+        39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
+        "the failure", "the next step",
+    )
+    posts = [
+        command for command in api_calls
+        if "--method" in command and "POST" in command
+    ]
+    assert len(posts) == 1
+    body = posts[0][posts[0].index("--field") + 1][len("body="):]
+    assert "Muyan Pilot blocked" in body
+    assert "the failure" in body
+    assert "the next step" in body
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in body
+
+
+def test_finish_blocked_progress_carries_the_actual_role_and_round(
+    monkeypatch,
+):
+    """The blocked scene must show the role and the review/fix round the
+    run was actually in, not the hardcoded `fix`/`0` (review round 2,
+    PR #42)."""
+    api_calls = []
+
+    def fake_run(command, **kwargs):
+        api_calls.append(command)
+        if "--method" not in command:
+            return "[]"
+        assert command[command.index("--method") + 1] == "POST"
+        body = command[command.index("--field") + 1]
+        return json.dumps({"id": 78, "body": body[len("body="):],
+                           "url": "https://x/78"})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    runner._finish_blocked_progress(
+        39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
+        "the failure", "the next step",
+        role=runner.ROLE_REVIEW, review_round=2,
+    )
+    posts = [
+        command for command in api_calls
+        if "--method" in command and "POST" in command
+    ]
+    assert len(posts) == 1
+    body = posts[0][posts[0].index("--field") + 1][len("body="):]
+    assert "- role: review" in body
+    assert "- review/fix round: 2" in body
+
+
+def test_finish_blocked_progress_defaults_to_fix_round_zero(monkeypatch):
+    """Without explicit role/round the legacy default (fix/0) is kept,
+    so existing callers stay unchanged."""
+    api_calls = []
+
+    def fake_run(command, **kwargs):
+        api_calls.append(command)
+        if "--method" not in command:
+            return "[]"
+        body = command[command.index("--field") + 1]
+        return json.dumps({"id": 78, "body": body[len("body="):],
+                           "url": "https://x/78"})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    runner._finish_blocked_progress(
+        39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
+        "the failure", "the next step",
+    )
+    posts = [
+        command for command in api_calls
+        if "--method" in command and "POST" in command
+    ]
+    assert len(posts) == 1
+    body = posts[0][posts[0].index("--field") + 1][len("body="):]
+    assert "- role: fix" in body
+    assert "- review/fix round: 0" in body
 
 
 def test_wait_for_delivery_returns_when_pr_merged(monkeypatch, caplog):
@@ -1897,23 +3020,54 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
     marked ai-blocked with a failure comment, and the wait returns so
     the slot is released (the Issue is never stranded awaiting review).
     """
+    api_calls: list = []
+    existing = {
+        "id": 77,
+        "body": (
+            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+            "**Muyan Pilot progress**\n\nawaiting review"
+        ),
+    }
+
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and command[2] == "view":
+        if command[:2] == ["gh", "pr"]:
             return json.dumps({"state": "OPEN"})
-        if command[:2] == ["gh", "issue"] and command[2] == "view":
-            if command[-1] == "comments":
-                # No trusted `Muyan Pilot opened PR:` comment: the scene
-                # cannot be recovered.
-                return json.dumps({"comments": [
-                    {"body": "public comment", "authorAssociation": "NONE"},
-                ]})
-            return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
-        raise AssertionError(f"unexpected command: {command}")
+        if command[:2] == ["gh", "api"]:
+            api_calls.append(command)
+            if "--method" not in command:
+                # The run's live progress comment exists.
+                return json.dumps([existing])
+            method = command[command.index("--method") + 1]
+            if method == "POST":
+                body = command[command.index("--field") + 1]
+                return json.dumps({"id": 78, "body": body[len("body="):],
+                                   "url": "https://x/78"})
+            return ""
+        if command[-1] == "comments":
+            # No trusted `Muyan Pilot opened PR:` comment: the scene
+            # cannot be recovered. The trusted review-round comments
+            # still count for the blocked scene's round field (review
+            # round 2, PR #42).
+            return json.dumps({"comments": [
+                {"body": "public comment", "authorAssociation": "NONE"},
+                {
+                    "body": (
+                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                        "Muyan Pilot review round 1 for PR #46: clean"
+                    ),
+                    "authorAssociation": "OWNER",
+                },
+                {
+                    "body": (
+                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                        "Muyan Pilot review round 2 for PR #46: findings"
+                    ),
+                    "authorAssociation": "OWNER",
+                },
+            ]})
+        return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    # The fake rejects anything that is not a pr/issue view.
-    with pytest.raises(AssertionError, match="unexpected command"):
-        fake_run(["gh", "release", "list"])
     edits: list = []
     comments: list = []
     monkeypatch.setattr(
@@ -1940,6 +3094,39 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
     assert "the independent review of" in body
     assert f"<!-- muyan-pilot:run=a1b2c3d4 -->" in body
     assert "delivery_review_failed" in caplog.text
+    # The terminal failure also posts the blocked milestone (Issue #18)
+    # AND the tracked progress comment becomes the blocked scene.
+    posted_bodies = [
+        command[command.index("--field") + 1][len("body="):]
+        for command in api_calls
+        if "--method" in command and "POST" in command
+    ]
+    assert any("Muyan Pilot: blocked" in body for body in posted_bodies)
+    assert any(
+        ("the independent review of" in body for body in posted_bodies),
+    )
+    # No second progress comment: the tracked one (id 77) is PATCHed
+    # into the blocked scene in place.
+    assert not any(
+        "**Muyan Pilot progress**" in body for body in posted_bodies
+    )
+    patches = [
+        command for command in api_calls
+        if command[:2] == ["gh", "api"]
+        and command[2] == "repos/owner/repo/issues/39/comments/77"
+        and "PATCH" in command
+    ]
+    assert patches, "the tracked progress comment was not updated"
+    blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
+    assert "Muyan Pilot blocked" in blocked
+    assert "the independent review of" in blocked
+    assert "next step:" in blocked
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked
+    # The blocked scene carries the actual role (the failure happened
+    # during the independent review) and the completed review rounds
+    # (review round 2, PR #42) — not the hardcoded fix/0.
+    assert "- role: review" in blocked
+    assert "- review/fix round: 2" in blocked
 
 
 def test_wait_for_delivery_runs_same_pr_fix_when_fix_needed(
@@ -2085,7 +3272,52 @@ def test_issue_labels_returns_names_and_fails_fast(monkeypatch):
 def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
     monkeypatch, caplog,
 ):
-    fake_pr_view(monkeypatch, "CLOSED")
+    api_calls: list = []
+    existing = {
+        "id": 77,
+        "body": (
+            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+            "**Muyan Pilot progress**\n\nawaiting review"
+        ),
+    }
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps({"state": "CLOSED"})
+        if command[:2] == ["gh", "issue"]:
+            # The blocked scene derives the role from the delivery label
+            # and the round from the trusted review-round comments
+            # (review round 2, PR #42): no more hardcoded fix/0.
+            if command[-1] == "labels":
+                return json.dumps({"labels": [{"name": "ai-fix-needed"}]})
+            return json.dumps({"comments": [
+                {
+                    "body": (
+                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                        "Muyan Pilot review round 1 for PR #46: clean"
+                    ),
+                    "authorAssociation": "OWNER",
+                },
+                {
+                    "body": (
+                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                        "Muyan Pilot review round 2 for PR #46: findings"
+                    ),
+                    "authorAssociation": "OWNER",
+                },
+            ]})
+        api_calls.append(command)
+        if "--method" not in command:
+            # The run's live progress comment exists.
+            return json.dumps([existing])
+        method = command[command.index("--method") + 1]
+        if method == "POST":
+            body = command[command.index("--field") + 1]
+            return json.dumps({"id": 78, "body": body[len("body="):],
+                               "url": "https://x/78"})
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
     edits: list = []
     comments: list = []
     monkeypatch.setattr(
@@ -2112,6 +3344,39 @@ def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
     assert f"<!-- muyan-pilot:run=a1b2c3d4 -->" in body
     assert f"pr={PR_URL}" in caplog.text
     assert "delivery_closed_unmerged" in caplog.text
+    # The terminal failure also posts the blocked milestone (Issue #18)
+    # AND the tracked progress comment becomes the blocked scene.
+    posted_bodies = [
+        command[command.index("--field") + 1][len("body="):]
+        for command in api_calls
+        if "--method" in command and "POST" in command
+    ]
+    assert any("Muyan Pilot: blocked" in body for body in posted_bodies)
+    assert any(
+        ("closed without a merge" in body for body in posted_bodies),
+    )
+    # No second progress comment: the tracked one (id 77) is PATCHed
+    # into the blocked scene in place.
+    assert not any(
+        "**Muyan Pilot progress**" in body for body in posted_bodies
+    )
+    patches = [
+        command for command in api_calls
+        if command[:2] == ["gh", "api"]
+        and command[2] == "repos/owner/repo/issues/39/comments/77"
+        and "PATCH" in command
+    ]
+    assert patches, "the tracked progress comment was not updated"
+    blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
+    assert "Muyan Pilot blocked" in blocked
+    assert "closed without a merge" in blocked
+    assert "next step:" in blocked
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked
+    # The blocked scene carries the actual role (the delivery label was
+    # ai-fix-needed) and the completed review rounds (review round 2,
+    # PR #42) — not the hardcoded fix/0.
+    assert "- role: fix" in blocked
+    assert "- review/fix round: 2" in blocked
 
 
 def test_wait_for_delivery_review_failure_without_bound_run_id(
@@ -2218,7 +3483,12 @@ def test_main_holds_slot_through_delivery_wait(monkeypatch, tmp_path):
     config = tmp_path / "muyan-pilot.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     _write_prompts(tmp_path)
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: ("owner/repo", issue, None))
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: (
+            "owner/repo", issue, None
+        ),
+    )
     monkeypatch.setattr(runner, "process_issue", lambda *a, **k: PR_URL)
 
     started = threading.Event()

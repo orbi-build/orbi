@@ -6,8 +6,8 @@ criteria:
 
 - a task worktree is created from the latest ``origin/<base>`` even when the
   main worktree is checked out on a side branch;
-- a retry of the same Issue gets a new independent branch/worktree instead of
-  "worktree path already exists";
+- a retry of the same Issue gets a new independent branch/worktree (a new
+  run id), and only a resumed run reuses its existing worktree;
 - ``verify_pr`` rejects a delivery that does not contain the latest remote
   base and accepts one that does.
 """
