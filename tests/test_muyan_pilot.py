@@ -119,16 +119,11 @@ def test_ready_issue_returns_first_ready_issue(monkeypatch):
 
 def test_ready_issue_excludes_in_progress_issues(monkeypatch):
     ready = {"number": 12, "title": "next", "url": "u12"}
-    in_progress = {"number": 3, "title": "now", "url": "u3"}
     calls = []
 
     def fake_list(repo, label, state="open", search=None):
         calls.append(search)
-        if search == "label:ai-ready -label:ai-in-progress":
-            return [ready]
-        if search == "label:ai-in-progress":
-            return [in_progress]
-        return []
+        return [ready] if search == "label:ai-ready -label:ai-in-progress" else []
 
     monkeypatch.setattr(muyan_pilot, "list_labeled_issues", fake_list)
     assert muyan_pilot.ready_issue("xqliu/muyan-pilot") == ready
@@ -147,11 +142,7 @@ def test_recent_result_returns_newest_pr_opened_or_blocked_issue(monkeypatch):
 
     def fake_list(repo, label, state="open"):
         calls.append((label, state))
-        if label == "ai-pr-opened":
-            return [pr_opened]
-        if label == "ai-blocked":
-            return [blocked]
-        return []
+        return [pr_opened] if label == "ai-pr-opened" else [blocked]
 
     monkeypatch.setattr(muyan_pilot, "list_labeled_issues", fake_list)
     assert muyan_pilot.recent_result("xqliu/muyan-pilot") == blocked
@@ -163,11 +154,7 @@ def test_recent_result_prefers_pr_opened_when_newer(monkeypatch):
     blocked = {"number": 5, "title": "stuck", "url": "u5", "state": "OPEN"}
 
     def fake_list(repo, label, state="open"):
-        if label == "ai-pr-opened":
-            return [pr_opened]
-        if label == "ai-blocked":
-            return [blocked]
-        return []
+        return [pr_opened] if label == "ai-pr-opened" else [blocked]
 
     monkeypatch.setattr(muyan_pilot, "list_labeled_issues", fake_list)
     assert muyan_pilot.recent_result("xqliu/muyan-pilot") == pr_opened
