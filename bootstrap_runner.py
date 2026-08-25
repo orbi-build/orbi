@@ -48,6 +48,14 @@ IN_PROGRESS_LABEL = "ai-in-progress"
 PR_OPENED_LABEL = "ai-pr-opened"
 BLOCKED_LABEL = "ai-blocked"
 
+# Only comments posted by a repo maintainer are trusted to carry the
+# recovery scene: a public comment (authorAssociation=NONE) must never
+# steer the runner into an arbitrary local worktree, branch or PR
+# (Issue #45 review, BLOCKER). A missing association is never trusted.
+TRUSTED_COMMENT_ASSOCIATIONS = frozenset({
+    "OWNER", "MAINTAINER", "MEMBER", "COLLABORATOR",
+})
+
 
 class RunIdFilter(logging.Filter):
     """Prefix every log message with the current `[run_id]`, if bound."""
@@ -220,12 +228,21 @@ def comment_issue(number: int, *, repo: str, body: str) -> None:
 
 
 def issue_comments(number: int, *, repo: str) -> list[dict]:
-    """Return the Issue's comment history (oldest first) from GitHub."""
+    """Return the Issue's comment history (oldest first) from GitHub.
+
+    ``gh issue view --json comments`` returns a top-level object with a
+    ``comments`` array; each comment carries the author and the
+    ``authorAssociation`` of the viewer, which is how the runner tells
+    its own trusted comments apart from public ones (Issue #45).
+    """
     raw = run_command([
         "gh", "issue", "view", str(number), "--repo", repo,
         "--json", "comments",
     ])
-    comments = json.loads(raw)
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("issue view must be a JSON object")
+    comments = data.get("comments")
     if not isinstance(comments, list):
         raise ValueError("issue comments must be a JSON array")
     return comments
@@ -273,17 +290,19 @@ def started_pi_comment_body(run_id: str, run_info: str, branch: str,
     )
 
 
-def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
-                           branch: str, worktree: Path) -> str:
-    """The PR-opened comment records the full recoverable run scene.
+def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str) -> str:
+    """The PR-opened comment records the recoverable run scene.
 
     It is the single source the next tick parses to resume this run on
-    the same branch, worktree and PR (Issue #45).
+    the same branch, worktree and PR (Issue #45). The runner is the only
+    writer of this comment, so the scene carries only what the runner
+    cannot derive itself: run_id, base and PR URL. Branch and worktree
+    are derived from the configured repo_dir, source_repo, Issue number
+    and run_id — a comment must never be able to name a local path.
     """
     return (
         f"{run_marker(run_id)}\n"
-        f"Muyan Pilot opened PR: {pr_url} ({run_info} branch={branch} "
-        f"worktree={worktree})"
+        f"Muyan Pilot opened PR: {pr_url} ({run_info})"
     )
 
 
@@ -295,7 +314,10 @@ def parse_pr_comment(body: str) -> dict | None:
 
     Returns None when the body is not an opened-PR comment. Fails fast
     when the comment is malformed: resuming must recover the exact run
-    (run id, branch, worktree, base, PR URL), never a guess (Issue #45).
+    (run id, base, PR URL), never a guess (Issue #45). Branch and
+    worktree are not parsed: the runner derives them from its own
+    config, the Issue number and the run id, so a comment can never
+    name an arbitrary local path.
     """
     if not isinstance(body, str) or OPENED_PR_PREFIX not in body:
         return None
@@ -311,8 +333,6 @@ def parse_pr_comment(body: str) -> dict | None:
         "base_branch": fields.get("base_branch", ""),
         "base_sha": fields.get("base_sha", ""),
         "run_id": fields.get("run_id", ""),
-        "branch": fields.get("branch", ""),
-        "worktree": fields.get("worktree", ""),
     }
     for key, value in scene.items():
         if not value:
@@ -321,21 +341,31 @@ def parse_pr_comment(body: str) -> dict | None:
     return scene
 
 
-def resume_scene(comments: list[dict]) -> dict:
-    """Return the scene of the latest opened-PR comment of one Issue.
+def _comment_is_trusted(comment: object) -> bool:
+    """True only when the comment carries a trusted maintainer association."""
+    if not isinstance(comment, dict):
+        return False
+    return comment.get("authorAssociation") in TRUSTED_COMMENT_ASSOCIATIONS
 
-    Fails fast when no comment carries the scene: such an Issue cannot be
+
+def resume_scene(comments: list[dict]) -> dict:
+    """Return the scene of the latest trusted opened-PR comment of one Issue.
+
+    Only comments posted by a trusted maintainer (OWNER, MAINTAINER,
+    MEMBER or COLLABORATOR) are considered: a public comment can never
+    become the recovery scene (Issue #45 review, BLOCKER). Fails fast
+    when no trusted comment carries the scene: such an Issue cannot be
     resumed and must not be guessed at.
     """
     for comment in reversed(comments):
-        if not isinstance(comment, dict):
+        if not _comment_is_trusted(comment):
             continue
         scene = parse_pr_comment(comment.get("body"))
         if scene is not None:
             return scene
     raise ValueError(
-        "no 'Muyan Pilot opened PR' comment with a run scene; the Issue "
-        "cannot be resumed"
+        "no 'Muyan Pilot opened PR' comment from a trusted author; the "
+        "Issue cannot be resumed"
     )
 
 
@@ -637,7 +667,21 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
 
 
 def verify_pr(worktree: Path, branch: str, base_branch: str,
-              run_id: str) -> str:
+              run_id: str, *, pr_repo: str | None = None,
+              expected_url: str | None = None,
+              require_latest_base: bool = True) -> str:
+    """Verify that exactly one open PR of the task branch is the delivery.
+
+    Checks, in order: current branch, latest remote base ancestry (unless
+    `require_latest_base` is False — the resume pre-validation runs
+    before the base merge, when being behind is the expected state),
+    exactly one open PR for the head branch, PR base, PR head == local
+    HEAD, and the run marker in the PR body. When `pr_repo` is given
+    (resume path), the PR's head repo must be that repo; when
+    `expected_url` is given, the verified PR URL must exactly equal the
+    recovered original PR URL (Issue #45 review: the resume must keep
+    the same PR number).
+    """
     current_branch = run_command(
         ["git", "branch", "--show-current"], cwd=worktree,
     )
@@ -645,33 +689,38 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
         raise RuntimeError(
             f"Pi changed branch: expected={branch} actual={current_branch}"
         )
-    # Re-fetch before judging: the delivery must contain the latest remote
-    # base, otherwise it is behind and the PR is rejected (fail fast).
-    run_command(
-        ["git", "fetch", "origin", base_branch], cwd=worktree,
-    )
-    try:
+    if require_latest_base:
+        # Re-fetch before judging: the delivery must contain the latest
+        # remote base, otherwise it is behind and the PR is rejected
+        # (fail fast).
         run_command(
-            ["git", "merge-base", "--is-ancestor",
-             f"origin/{base_branch}", "HEAD"],
-            cwd=worktree,
+            ["git", "fetch", "origin", base_branch], cwd=worktree,
         )
-    except subprocess.CalledProcessError:
-        LOGGER.error(
-            "delivery_behind_base base_branch=%s branch=%s",
-            base_branch, branch,
-        )
-        raise RuntimeError(
-            f"delivery HEAD is behind latest remote base "
-            f"origin/{base_branch}; merge the latest base, rerun full tests "
-            "and review, then retry"
-        ) from None
+        try:
+            run_command(
+                ["git", "merge-base", "--is-ancestor",
+                 f"origin/{base_branch}", "HEAD"],
+                cwd=worktree,
+            )
+        except subprocess.CalledProcessError:
+            LOGGER.error(
+                "delivery_behind_base base_branch=%s branch=%s",
+                base_branch, branch,
+            )
+            raise RuntimeError(
+                f"delivery HEAD is behind latest remote base "
+                f"origin/{base_branch}; merge the latest base, rerun full "
+                "tests and review, then retry"
+            ) from None
     local_head = run_command(
         ["git", "rev-parse", "HEAD"], cwd=worktree,
     )
     raw = run_command([
         "gh", "pr", "list", "--state", "open", "--head", branch,
-        "--json", "url,baseRefName,headRefOid,body", "--limit", "2",
+        "--json",
+        "url,baseRefName,headRefName,headRefOid,"
+        "headRepository,headRepositoryOwner,body",
+        "--limit", "2",
     ], cwd=worktree)
     prs = json.loads(raw)
     if not isinstance(prs, list) or len(prs) != 1:
@@ -679,6 +728,17 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
     url = prs[0].get("url")
     if not url:
         raise RuntimeError("open PR has no URL")
+    if pr_repo is not None:
+        head_repo = _pr_head_repo(prs[0])
+        if head_repo != pr_repo:
+            LOGGER.error(
+                "pr_repo_mismatch expected=%s actual=%s branch=%s",
+                pr_repo, head_repo, branch,
+            )
+            raise RuntimeError(
+                f"PR head repo is {head_repo}, expected {pr_repo}; the "
+                "resume must keep the PR of the configured source repo"
+            )
     base_ref = prs[0].get("baseRefName")
     if base_ref != base_branch:
         LOGGER.error(
@@ -709,7 +769,30 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
             f"PR body is missing the stable run marker {marker}; the PR "
             "must carry the machine-readable run id of this attempt"
         )
+    if expected_url is not None and url != expected_url:
+        LOGGER.error(
+            "pr_url_mismatch expected=%s actual=%s branch=%s",
+            expected_url, url, branch,
+        )
+        raise RuntimeError(
+            f"PR URL {url} is not the recovered original PR "
+            f"{expected_url}; the resume must keep the same PR number"
+        )
     return url
+
+
+def _pr_head_repo(pr: dict) -> str:
+    """Return `owner/name` of the PR head repo, or '<missing>' if absent."""
+    owner = pr.get("headRepositoryOwner")
+    repo = pr.get("headRepository")
+    if not isinstance(owner, dict) or not isinstance(repo, dict):
+        return "<missing>"
+    login = owner.get("login")
+    name = repo.get("name")
+    if not isinstance(login, str) or not login \
+            or not isinstance(name, str) or not name:
+        return "<missing>"
+    return f"{login}/{name}"
 
 
 def process_issue(issue: dict, config: dict, source_repo: str) -> str:
@@ -746,9 +829,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         )
         comment_issue(
             number, repo=source_repo,
-            body=opened_pr_comment_body(
-                run_id, run_info, pr_url, branch, worktree,
-            ),
+            body=opened_pr_comment_body(run_id, run_info, pr_url),
         )
         return pr_url
     except Exception as exc:
@@ -782,19 +863,28 @@ def resume_delivery(issue: dict, scene: dict, config: dict,
                     source_repo: str) -> str:
     """Resume the fix loop of an opened PR on the same run (Issue #45).
 
-    The scene (run id, branch, worktree, base, PR URL) is recovered from
-    the Issue's `Muyan Pilot opened PR:` comment, so a restart of the
-    runner or the service resumes from GitHub state alone. The latest
-    remote base is merged into the ORIGINAL branch (conflicts stay staged
-    for the fixer), Pi fixes the PR in the ORIGINAL worktree, and the
-    SAME PR is re-verified. Any failure marks the Issue `ai-blocked` and
-    preserves the PR, branch and worktree: the run is never re-claimed,
-    the PR is never closed or replaced.
+    The scene (run id, base, PR URL) is recovered from the Issue's
+    trusted `Muyan Pilot opened PR:` comment, so a restart of the runner
+    or the service resumes from GitHub state alone. Branch and worktree
+    are DERIVED from the configured repo_dir, source_repo, Issue number
+    and run id — never read from the comment — so no comment can steer
+    the runner into an arbitrary local path. Before any git or Pi
+    mutation the configured base and the open PR (repo, head branch,
+    base, run marker, exact URL) are validated; the latest remote base is
+    then merged into the ORIGINAL branch (conflicts stay staged for the
+    fixer), Pi fixes the PR in the ORIGINAL worktree, and the SAME PR is
+    re-verified: the returned URL is the one verify_pr verified, which
+    must exactly equal the recovered original PR URL. Any failure marks
+    the Issue `ai-blocked` and preserves the PR, branch and worktree: the
+    run is never re-claimed, the PR is never closed or replaced.
     """
     number = int(issue["number"])
     run_id = validate_run_id(scene["run_id"])
-    branch = scene["branch"]
-    worktree = Path(scene["worktree"])
+    # Derive the expected branch and worktree from the runner's own
+    # config and the run id (the values the first run used when it
+    # created them); a comment can never name an arbitrary local path.
+    branch = task_branch(source_repo, number, run_id)
+    worktree = worktree_path(config["repo_dir"], source_repo, number, run_id)
     base_branch = scene["base_branch"]
     pr_url = scene["pr_url"]
     set_run_id(run_id)
@@ -805,23 +895,48 @@ def resume_delivery(issue: dict, scene: dict, config: dict,
     )
     LOGGER.info("issue=%s resuming opened PR %s", number, scene_info)
     try:
+        # Validate the configured base before any git/Pi mutation: a
+        # scene frozen on another base branch is never merged.
+        if base_branch != config["base_branch"]:
+            raise RuntimeError(
+                f"base branch mismatch: scene has {base_branch}, config "
+                f"has {config['base_branch']}; the resume must use the "
+                "configured base branch"
+            )
         if not worktree.is_dir():
             raise RuntimeError(f"worktree missing: {worktree}")
+        # Validate the open PR before any git/Pi mutation: exactly one
+        # open PR of the derived branch, in the configured source repo,
+        # on the configured base, carrying the run marker, and with the
+        # exact URL of the recovered original PR (same PR number). The
+        # latest-base check is deferred to the post-fix verification:
+        # being behind the base is the expected state the resume exists
+        # to fix (merge_latest_base runs next).
+        verified_url = verify_pr(
+            worktree, branch, base_branch, run_id,
+            pr_repo=source_repo, expected_url=pr_url,
+            require_latest_base=False,
+        )
         merge_latest_base(worktree, base_branch)
         config = {**config, "base_sha": scene["base_sha"], "run_id": run_id}
         run_pi(
             issue, worktree, config, source_repo,
-            branch=branch, pr_url=pr_url,
+            branch=branch, pr_url=verified_url,
         )
-        verify_pr(worktree, branch, base_branch, run_id)
+        # Re-verify the SAME PR after the fixer pushed: the verified URL
+        # must still exactly equal the recovered original PR URL.
+        verified_url = verify_pr(
+            worktree, branch, base_branch, run_id,
+            pr_repo=source_repo, expected_url=pr_url,
+        )
         comment_issue(
             number, repo=source_repo,
             body=(
                 f"{run_marker(run_id)}\n"
-                f"Muyan Pilot fixed PR: {pr_url} ({scene_info})"
+                f"Muyan Pilot fixed PR: {verified_url} ({scene_info})"
             ),
         )
-        return pr_url
+        return verified_url
     except Exception as exc:
         LOGGER.exception("issue=%s resume failed", number)
         activity_scene = ""

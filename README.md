@@ -120,7 +120,7 @@ Pi 创建 PR 前必须重新 fetch：若 `origin/<base_branch>` 已前进，需�
 
 PR 创建后任务没有结束：Issue 进入可恢复的 review/fix 状态（标签 `ai-pr-opened`），Review finding、base 前进或 merge conflict 都是可修复状态，不等于任务失败，也不重新进入 ready 队列。
 
-- 每个 tick 先按顺序扫描 source repos 中 `ai-pr-opened`（且未 `ai-blocked`）的 open Issue；找到时，Runner 从该 Issue 最新的 `Muyan Pilot opened PR:` 评论恢复完整 run 现场（`run_id`、branch、worktree、base_branch、base_sha、PR URL），在**原 worktree、原 branch、同一 PR** 上继续修复，而不是领取新 Issue。评论缺少完整现场时 fail fast 并标记 `ai-blocked`，不做猜测。
+- 每个 tick 先按顺序扫描 source repos 中 `ai-pr-opened`（且未 `ai-blocked`）的 open Issue；找到时，Runner 只信任由维护者（OWNER/MAINTAINER/MEMBER/COLLABORATOR）发布的最新 `Muyan Pilot opened PR:` 评论（公开评论永远不可信），从中恢复 run 现场（`run_id`、base_branch、base_sha、PR URL），branch 和 worktree 由配置的 repo、Issue 编号和 run_id **推导**（绝不从评论读取，评论无法指定任意本地路径），在**原 worktree、原 branch、同一 PR** 上继续修复，而不是领取新 Issue。评论缺少完整现场时 fail fast 并标记 `ai-blocked`，不做猜测。任何 git/Pi 变更前，Runner 先校验配置的 base 和 open PR（head repo、head branch、base、run marker、精确 URL）。
 - 恢复后先重新 fetch：若最新远端 base 不是 worktree HEAD 的祖先，Runner 在原 branch 上执行普通 `git merge origin/<base>`；出现冲突时冲突原样保留交给 Fixer（Pi）解决，Runner 不自动解决、不 `--abort`、不 force push、不 push 保护分支。
 - Fixer 在原 worktree 中解决冲突和 review finding，重跑完整测试、100% 覆盖率、验证和完整 review 后，只 push 原 task branch；PR 头分支前进，**PR number 保持不变**，Runner 重新验收同一个 PR 并写 `Muyan Pilot fixed PR:` 进度评论（同一 run marker 和 `run_id=` 字段）。
 - 恢复、merge、fix 或验收任一步失败：Issue 标记 `ai-blocked`（移除 `ai-pr-opened`），评论写明具体失败和完整现场；PR、branch、worktree 原样保留，不删除、不关闭、不重建。

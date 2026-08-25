@@ -28,15 +28,17 @@ def _reset_run_id(monkeypatch):
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
 
 
-def opened_pr_comment(run_id=FAKE_RUN_ID, branch=FAKE_BRANCH,
-                      worktree=FAKE_WORKTREE,
+def opened_pr_comment(run_id=FAKE_RUN_ID,
                       base_branch="main", base_sha="abc123def456",
                       pr_url=FAKE_PR_URL) -> str:
+    # The runner is the only writer of this comment. It carries the run
+    # scene (run_id, base, PR URL); branch and worktree are derived by
+    # the runner from its own config and the run id, never parsed from a
+    # comment (a public comment must not be able to name a local path).
     return (
         f"<!-- muyan-pilot:run={run_id} -->\n"
         f"Muyan Pilot opened PR: {pr_url} "
-        f"(base_branch={base_branch} base_sha={base_sha} run_id={run_id} "
-        f"branch={branch} worktree={worktree})"
+        f"(base_branch={base_branch} base_sha={base_sha} run_id={run_id})"
     )
 
 
@@ -47,12 +49,22 @@ def test_parse_pr_comment_returns_scene_for_opened_pr_comment():
     scene = runner.parse_pr_comment(opened_pr_comment())
     assert scene == {
         "run_id": FAKE_RUN_ID,
-        "branch": FAKE_BRANCH,
-        "worktree": FAKE_WORKTREE,
         "base_branch": "main",
         "base_sha": "abc123def456",
         "pr_url": FAKE_PR_URL,
     }
+
+
+def test_parse_pr_comment_ignores_legacy_branch_and_worktree_fields():
+    # Comments written before the scene was trimmed still parse; the
+    # extra fields are simply not part of the recovered scene.
+    body = opened_pr_comment().replace(
+        ")", f" branch={FAKE_BRANCH} worktree={FAKE_WORKTREE})", 1,
+    )
+    scene = runner.parse_pr_comment(body)
+    assert scene["run_id"] == FAKE_RUN_ID
+    assert "branch" not in scene
+    assert "worktree" not in scene
 
 
 def test_parse_pr_comment_returns_none_for_started_comment():
@@ -82,11 +94,10 @@ def test_parse_pr_comment_fails_fast_when_a_field_is_missing():
         "base_branch": "(base_branch=",
         "base_sha": " base_sha=",
         "run_id": " run_id=",
-        "branch": " branch=",
-        "worktree": " worktree=",
+        "pr_url": FAKE_PR_URL,
     }
     for field, needle in needles.items():
-        body = opened_pr_comment().replace(needle, needle[:-1] + "_", 1)
+        body = opened_pr_comment().replace(needle, "", 1)
         with pytest.raises(ValueError, match=f"missing {field}"):
             runner.parse_pr_comment(body)
 
@@ -103,11 +114,17 @@ def test_parse_pr_comment_fails_fast_on_empty_field_value():
         runner.parse_pr_comment(body)
 
 
-def test_resume_scene_returns_latest_opened_pr_scene():
+def comment(body: str, association: str | None = "OWNER") -> dict:
+    if association is None:
+        return {"body": body}
+    return {"body": body, "authorAssociation": association}
+
+
+def test_resume_scene_returns_latest_trusted_opened_pr_scene():
     comments = [
-        {"body": opened_pr_comment(base_sha="oldsha123456")},
-        {"body": "unrelated human comment"},
-        {"body": opened_pr_comment(base_sha="newsha123456")},
+        comment(opened_pr_comment(base_sha="oldsha123456")),
+        comment("unrelated human comment"),
+        comment(opened_pr_comment(base_sha="newsha123456")),
     ]
     scene = runner.resume_scene(comments)
     assert scene["base_sha"] == "newsha123456"
@@ -115,7 +132,7 @@ def test_resume_scene_returns_latest_opened_pr_scene():
 
 
 def test_resume_scene_fails_fast_when_no_opened_pr_comment_exists():
-    comments = [{"body": "no PR here"}]
+    comments = [comment("no PR here")]
     with pytest.raises(ValueError, match="no 'Muyan Pilot opened PR' comment"):
         runner.resume_scene(comments)
 
@@ -123,14 +140,89 @@ def test_resume_scene_fails_fast_when_no_opened_pr_comment_exists():
 def test_resume_scene_skips_non_dict_comments():
     # The non-dict entry is hit first when scanning newest-first.
     comments = [
-        {"body": opened_pr_comment()},
+        comment(opened_pr_comment()),
         "not a dict",
     ]
     scene = runner.resume_scene(comments)
     assert scene["run_id"] == FAKE_RUN_ID
 
 
-def test_issue_comments_rejects_non_array_payload(monkeypatch):
+# ------------------------------------------------- trusted comments (F1)
+
+
+def test_resume_scene_ignores_public_comment_with_scene():
+    """A public comment (authorAssociation=NONE) must never steer the
+    runner into an arbitrary local worktree/branch/PR, even when it is
+    the only and newest scene comment."""
+    comments = [
+        comment(opened_pr_comment(), association="NONE"),
+    ]
+    with pytest.raises(ValueError, match="no 'Muyan Pilot opened PR' comment"):
+        runner.resume_scene(comments)
+
+
+def test_resume_scene_ignores_public_comment_even_when_newest():
+    """The latest comment is public; the older trusted comment wins."""
+    comments = [
+        comment(opened_pr_comment(base_sha="trusted123456")),
+        comment(opened_pr_comment(base_sha="attacker12345"),
+                association="NONE"),
+    ]
+    scene = runner.resume_scene(comments)
+    assert scene["base_sha"] == "trusted123456"
+
+
+def test_resume_scene_ignores_comment_without_association():
+    # A missing association is never trusted: only a positive trusted
+    # value (OWNER/MAINTAINER/MEMBER/COLLABORATOR) passes.
+    comments = [comment(opened_pr_comment(), association=None)]
+    with pytest.raises(ValueError, match="no 'Muyan Pilot opened PR' comment"):
+        runner.resume_scene(comments)
+
+
+@pytest.mark.parametrize("association", [
+    "OWNER", "MAINTAINER", "MEMBER", "COLLABORATOR",
+])
+def test_resume_scene_accepts_every_trusted_association(association):
+    comments = [comment(opened_pr_comment(), association=association)]
+    scene = runner.resume_scene(comments)
+    assert scene["run_id"] == FAKE_RUN_ID
+
+
+def test_resume_scene_skips_non_dict_trusted_comment():
+    # A non-dict entry cannot carry an association, so it is skipped.
+    comments = ["not a dict", comment(opened_pr_comment())]
+    scene = runner.resume_scene(comments)
+    assert scene["run_id"] == FAKE_RUN_ID
+
+
+def test_issue_comments_returns_comments_from_production_shape(monkeypatch):
+    """Real `gh issue view --json comments` returns a top-level object
+    with a `.comments` array (verified against the production CLI)."""
+    payload = json.dumps({
+        "comments": [
+            {"body": "first", "authorAssociation": "NONE"},
+            {"body": "second", "authorAssociation": "OWNER"},
+        ],
+    })
+    monkeypatch.setattr(runner, "run_command", lambda *a, **k: payload)
+    comments = runner.issue_comments(9, repo="owner/repo")
+    assert comments == [
+        {"body": "first", "authorAssociation": "NONE"},
+        {"body": "second", "authorAssociation": "OWNER"},
+    ]
+
+
+def test_issue_comments_rejects_top_level_array_payload(monkeypatch):
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda *a, **k: json.dumps([{"body": "first"}]),
+    )
+    with pytest.raises(ValueError, match="issue view must be a JSON object"):
+        runner.issue_comments(9, repo="owner/repo")
+
+
+def test_issue_comments_rejects_payload_without_comments_array(monkeypatch):
     monkeypatch.setattr(runner, "run_command", lambda *a, **k: "{}")
     with pytest.raises(ValueError, match="issue comments must be a JSON array"):
         runner.issue_comments(9, repo="owner/repo")
@@ -167,8 +259,17 @@ def test_parse_pr_comment_ignores_field_part_without_key():
 # ---------------------------------------------------------------- pick
 
 
-def gh_comments_payload(comments: list[str]) -> str:
-    return json.dumps([{"body": body} for body in comments])
+def gh_comments_payload(comments: list[str],
+                        association: str = "OWNER") -> str:
+    # The production shape of `gh issue view --json comments`: a
+    # top-level object with a `.comments` array; each comment carries
+    # the author association of the viewer.
+    return json.dumps({
+        "comments": [
+            {"body": body, "authorAssociation": association}
+            for body in comments
+        ],
+    })
 
 
 def issue_payload(state: str = "OPEN") -> str:
@@ -490,51 +591,106 @@ def test_run_pi_fresh_context_has_no_existing_pr(monkeypatch, tmp_path):
 # ---------------------------------------------------------- resume_delivery
 
 
-def scene_for(worktree: str = FAKE_WORKTREE) -> dict:
+def scene_for() -> dict:
+    # The scene recovered from the trusted `Muyan Pilot opened PR:`
+    # comment. Branch and worktree are NOT part of it: the runner
+    # derives them from its own config, the Issue number and the run id.
     return {
         "run_id": FAKE_RUN_ID,
-        "branch": FAKE_BRANCH,
-        "worktree": worktree,
         "base_branch": "main",
         "base_sha": "abc123def456",
         "pr_url": FAKE_PR_URL,
     }
 
 
+def config_for_resume(repo_dir: Path) -> dict:
+    return {
+        "repo_dir": repo_dir,
+        "base_branch": "main",
+        "source_repos": ["owner/repo"],
+    }
+
+
+def fake_verify_pr_for_resume(calls: list):
+    """`verify_pr` fake that records the call and returns the scene URL."""
+    def fake_verify(worktree, branch, base_branch, run_id, **kwargs):
+        calls.append(("verify", (worktree, branch, base_branch, run_id),
+                      kwargs))
+        return FAKE_PR_URL
+    return fake_verify
+
+
+def derived_worktree(tmp_path: Path) -> Path:
+    """The worktree the runner derives for Issue 9 / FAKE_RUN_ID."""
+    path = runner.worktree_path(tmp_path, "owner/repo", 9, FAKE_RUN_ID)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def test_resume_delivery_success_keeps_same_run_branch_and_pr(
     monkeypatch, tmp_path, caplog,
 ):
     calls = []
-    worktree = tmp_path / "wt"
-    worktree.mkdir()
+    worktree = derived_worktree(tmp_path)
     monkeypatch.setattr(runner, "merge_latest_base",
                         lambda wt, base: calls.append(("merge", wt, base)) or True)
     monkeypatch.setattr(runner, "run_pi",
                         lambda *args, **kwargs: calls.append(("run_pi", args, kwargs)) or "ok")
-    monkeypatch.setattr(runner, "verify_pr",
-                        lambda *args, **kwargs: calls.append(("verify", args, kwargs)) or FAKE_PR_URL)
+    monkeypatch.setattr(
+        runner, "verify_pr",
+        fake_verify_pr_for_resume(calls),
+    )
     monkeypatch.setattr(runner, "comment_issue",
                         lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
     caplog.set_level("INFO")
 
     result = runner.resume_delivery(
         {"number": 9, "title": "ship", "body": ""},
-        scene_for(str(worktree)),
-        {"repo_dir": tmp_path, "base_branch": "main"},
+        scene_for(),
+        config_for_resume(tmp_path),
         "owner/repo",
     )
 
     assert result == FAKE_PR_URL
     # The ORIGINAL run id is re-bound for the whole resumed attempt.
     assert runner.current_run_id() == FAKE_RUN_ID
-    assert calls[0] == ("merge", worktree, "main")
-    run_pi_args = calls[1]
+    # Branch and worktree are DERIVED from the configured repo_dir,
+    # source_repo, Issue number and run id — never read from the comment.
+    derived_branch = runner.task_branch("owner/repo", 9, FAKE_RUN_ID)
+    expected_worktree = runner.worktree_path(
+        tmp_path, "owner/repo", 9, FAKE_RUN_ID,
+    )
+    assert derived_branch == FAKE_BRANCH
+    assert expected_worktree == worktree
+    # Order: pre-verify → merge → fixer → post-verify → comment.
+    assert calls[1] == ("merge", expected_worktree, "main")
+    run_pi_args = calls[2]
     assert run_pi_args[0] == "run_pi"
-    assert run_pi_args[1][1] == worktree
-    assert run_pi_args[2]["branch"] == FAKE_BRANCH
+    assert run_pi_args[1][1] == expected_worktree
+    assert run_pi_args[2]["branch"] == derived_branch
     assert run_pi_args[2]["pr_url"] == FAKE_PR_URL
-    assert calls[2] == ("verify", (worktree, FAKE_BRANCH, "main", FAKE_RUN_ID), {})
-    comment = calls[3]
+    # The PR is verified twice: before any git/Pi mutation (F1, without
+    # the latest-base check — being behind is the state the resume fixes)
+    # and after the fixer pushed (F3, with the full check). Both times it
+    # must be the recovered original PR, in the configured source repo.
+    verify_calls = [call for call in calls if call[0] == "verify"]
+    assert len(verify_calls) == 2
+    for verify_call in verify_calls:
+        assert verify_call[1] == (expected_worktree, derived_branch, "main",
+                                  FAKE_RUN_ID)
+    assert verify_calls[0][2] == {
+        "pr_repo": "owner/repo", "expected_url": FAKE_PR_URL,
+        "require_latest_base": False,
+    }
+    assert verify_calls[1][2] == {
+        "pr_repo": "owner/repo", "expected_url": FAKE_PR_URL,
+    }
+    # The pre-mutation verify ran before the merge and the fixer...
+    assert calls.index(verify_calls[0]) < calls.index(
+        ("merge", expected_worktree, "main"))
+    # ...and the fixer ran between the two verifies.
+    assert calls.index(verify_calls[1]) > calls.index(run_pi_args)
+    comment = calls[-1]
     assert comment[0] == "comment"
     body = comment[2]["body"]
     assert f"Muyan Pilot fixed PR: {FAKE_PR_URL}" in body
@@ -545,37 +701,52 @@ def test_resume_delivery_success_keeps_same_run_branch_and_pr(
         assert message.startswith(f"[{FAKE_RUN_ID}]"), message
 
 
-def test_resume_delivery_skips_merge_when_base_branch_differs(
-    monkeypatch, tmp_path,
+def test_resume_delivery_fails_fast_when_scene_base_differs_from_config(
+    monkeypatch, tmp_path, caplog,
 ):
-    """A scene frozen on another base branch is never merged into main."""
+    """A scene frozen on another base branch is never merged: the
+    configured base must match before any git/Pi mutation."""
     calls = []
-    worktree = tmp_path / "wt"
-    worktree.mkdir()
     monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
     monkeypatch.setattr(runner, "merge_latest_base",
                         lambda wt, base: calls.append(("merge", wt, base)) or True)
     monkeypatch.setattr(runner, "run_pi", lambda *a, **k: "ok")
     monkeypatch.setattr(runner, "verify_pr", lambda *a, **k: FAKE_PR_URL)
+    monkeypatch.setattr(runner, "edit_issue",
+                        lambda *a, **k: calls.append(("edit", a, k)))
     monkeypatch.setattr(runner, "comment_issue",
                         lambda *a, **k: calls.append(("comment", a, k)))
+    monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: None)
+    caplog.set_level("ERROR")
 
-    scene = scene_for(str(worktree))
+    scene = scene_for()
     scene["base_branch"] = "develop"
-    runner.resume_delivery(
-        {"number": 9, "title": "ship", "body": ""},
-        scene,
-        {"repo_dir": tmp_path, "base_branch": "main"},
-        "owner/repo",
-    )
-    assert ("merge", worktree, "main") not in calls
+    with pytest.raises(RuntimeError, match="base branch mismatch"):
+        runner.resume_delivery(
+            {"number": 9, "title": "ship", "body": ""},
+            scene,
+            config_for_resume(tmp_path),
+            "owner/repo",
+        )
+    # No merge, no fixer, no verify: the mismatch failed fast before any
+    # mutation, and the Issue is marked ai-blocked with the reason.
+    assert not any(call[0] == "merge" for call in calls)
+    assert calls[0] == ("edit", (9,), {
+        "repo": "owner/repo", "add": "ai-blocked", "remove": "ai-pr-opened",
+    })
+    assert "base branch mismatch" in calls[1][2]["body"]
+    assert "issue=9 resume failed" in caplog.text
 
 
 def test_resume_delivery_fails_fast_when_worktree_missing(
     monkeypatch, tmp_path, caplog,
 ):
+    """The derived worktree (from config + issue number + run id) must
+    exist locally; a comment can no longer point at an arbitrary path."""
     calls = []
     monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
+    monkeypatch.setattr(runner, "merge_latest_base",
+                        lambda wt, base: calls.append(("merge", wt, base)) or True)
     monkeypatch.setattr(runner, "edit_issue",
                         lambda *a, **k: calls.append(("edit", a, k)))
     monkeypatch.setattr(runner, "comment_issue",
@@ -585,8 +756,8 @@ def test_resume_delivery_fails_fast_when_worktree_missing(
     with pytest.raises(RuntimeError, match="worktree missing"):
         runner.resume_delivery(
             {"number": 9, "title": "ship", "body": ""},
-            scene_for(str(tmp_path / "no-such-worktree")),
-            {"repo_dir": tmp_path, "base_branch": "main"},
+            scene_for(),
+            config_for_resume(tmp_path),
             "owner/repo",
         )
 
@@ -601,17 +772,130 @@ def test_resume_delivery_fails_fast_when_worktree_missing(
     assert f"run_id={FAKE_RUN_ID}" in failure_body
     assert "pr_url=" + FAKE_PR_URL in failure_body
     # The merge was never attempted and no fixer was started.
+    assert not any(call[0] == "merge" for call in calls)
     assert not any(call[0] == "comment" and "fixed PR" in call[2]["body"]
                    for call in calls)
     assert "issue=9 resume failed" in caplog.text
+
+
+def _resume_pr_validation_failure_test(monkeypatch, tmp_path, caplog,
+                                        error: str):
+    """Shared shape: the open-PR pre-validation (verify_pr) fails fast
+    before any merge or fixer starts, and the Issue is marked
+    ai-blocked with the concrete reason."""
+    calls = []
+    worktree = derived_worktree(tmp_path)
+    monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
+
+    def fake_verify(worktree_, branch, base_branch, run_id, **kwargs):
+        calls.append(("verify", (worktree_, branch, base_branch, run_id),
+                      kwargs))
+        raise RuntimeError(error)
+
+    monkeypatch.setattr(runner, "merge_latest_base",
+                        lambda wt, base: calls.append(("merge", wt, base)) or True)
+    monkeypatch.setattr(runner, "run_pi",
+                        lambda *a, **k: calls.append(("run_pi", a, k)) or "ok")
+    monkeypatch.setattr(runner, "verify_pr", fake_verify)
+    monkeypatch.setattr(runner, "edit_issue",
+                        lambda *a, **k: calls.append(("edit", a, k)))
+    monkeypatch.setattr(runner, "comment_issue",
+                        lambda *a, **k: calls.append(("comment", a, k)))
+    monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: None)
+    caplog.set_level("ERROR")
+
+    with pytest.raises(RuntimeError, match=error):
+        runner.resume_delivery(
+            {"number": 9, "title": "ship", "body": ""},
+            scene_for(),
+            config_for_resume(tmp_path),
+            "owner/repo",
+        )
+    # The PR pre-validation ran with the derived branch/worktree and the
+    # configured source repo + recovered original PR URL (without the
+    # latest-base check: the pre-validation runs before the base merge)...
+    verify_calls = [call for call in calls if call[0] == "verify"]
+    assert verify_calls == [
+        ("verify", (worktree, FAKE_BRANCH, "main", FAKE_RUN_ID),
+         {"pr_repo": "owner/repo", "expected_url": FAKE_PR_URL,
+          "require_latest_base": False}),
+    ]
+    # ...and it failed before any git mutation or fixer start.
+    assert not any(call[0] == "merge" for call in calls)
+    assert not any(call[0] == "run_pi" for call in calls)
+    # The Issue is marked ai-blocked with the concrete reason.
+    assert calls[-2][0] == "edit"
+    assert calls[-2][1] == (9,)
+    assert calls[-2][2] == {
+        "repo": "owner/repo", "add": "ai-blocked",
+        "remove": "ai-pr-opened",
+    }
+    assert error in calls[-1][2]["body"]
+    assert "issue=9 resume failed" in caplog.text
+    # The worktree is preserved, never deleted.
+    assert worktree.is_dir()
+
+
+def test_resume_delivery_fails_fast_when_pr_is_in_another_repo(
+    monkeypatch, tmp_path, caplog,
+):
+    _resume_pr_validation_failure_test(
+        monkeypatch, tmp_path, caplog,
+        error="PR head repo is other/repo, expected owner/repo",
+    )
+
+
+def test_resume_delivery_fails_fast_when_no_open_pr_exists(
+    monkeypatch, tmp_path, caplog,
+):
+    _resume_pr_validation_failure_test(
+        monkeypatch, tmp_path, caplog,
+        error="expected exactly one open PR for the task branch",
+    )
+
+
+def test_resume_delivery_fails_fast_when_pr_url_differs_from_scene(
+    monkeypatch, tmp_path, caplog,
+):
+    """The verified PR URL must exactly equal the recovered original PR
+    URL (finding 3): a different PR for the same branch is rejected."""
+    _resume_pr_validation_failure_test(
+        monkeypatch, tmp_path, caplog,
+        error=("PR URL https://github.com/owner/repo/pull/99 is not the "
+               "recovered original PR "
+               "https://github.com/owner/repo/pull/9"),
+    )
+
+
+def test_resume_delivery_success_returns_verified_pr_url(
+    monkeypatch, tmp_path,
+):
+    """The returned URL is the one verify_pr verified (pre- and
+    post-fix), not a blind copy of the scene URL (finding 3)."""
+    calls = []
+    derived_worktree(tmp_path)
+    monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
+    monkeypatch.setattr(runner, "merge_latest_base", lambda wt, base: True)
+    monkeypatch.setattr(runner, "run_pi", lambda *a, **k: "ok")
+    monkeypatch.setattr(runner, "verify_pr",
+                        lambda *a, **k: calls.append("verified") or FAKE_PR_URL)
+    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
+
+    result = runner.resume_delivery(
+        {"number": 9, "title": "ship", "body": ""},
+        scene_for(),
+        config_for_resume(tmp_path),
+        "owner/repo",
+    )
+    assert result == FAKE_PR_URL
+    assert calls == ["verified", "verified"]
 
 
 def test_resume_delivery_marks_blocked_and_reraises_when_fixer_fails(
     monkeypatch, tmp_path, caplog,
 ):
     calls = []
-    worktree = tmp_path / "wt"
-    worktree.mkdir()
+    worktree = derived_worktree(tmp_path)
     (worktree / ".pi-session").mkdir()
     monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
     monkeypatch.setattr(runner, "merge_latest_base", lambda wt, base: True)
@@ -632,8 +916,8 @@ def test_resume_delivery_marks_blocked_and_reraises_when_fixer_fails(
     with pytest.raises(subprocess.CalledProcessError):
         runner.resume_delivery(
             {"number": 9, "title": "ship", "body": ""},
-            scene_for(str(worktree)),
-            {"repo_dir": tmp_path, "base_branch": "main"},
+            scene_for(),
+            config_for_resume(tmp_path),
             "owner/repo",
         )
 
@@ -648,6 +932,10 @@ def test_resume_delivery_marks_blocked_and_reraises_when_fixer_fails(
     assert "pr_url=" + FAKE_PR_URL in failure_body
     assert f"branch={FAKE_BRANCH}" in failure_body
     assert f"worktree={worktree}" in failure_body
+    # The worktree is the derived one (config + issue + run id).
+    assert worktree == runner.worktree_path(
+        tmp_path, "owner/repo", 9, FAKE_RUN_ID,
+    )
     # No success comment was posted.
     assert not any(
         call[0] == "comment" and "fixed PR" in call[2]["body"]
@@ -666,10 +954,10 @@ def test_resume_delivery_preserves_original_error_when_reporting_fails(
         edit_calls.append(kwargs)
         raise RuntimeError("github report failed")
 
-    worktree = tmp_path / "wt"
-    worktree.mkdir()
+    worktree = derived_worktree(tmp_path)
     monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
     monkeypatch.setattr(runner, "merge_latest_base", lambda wt, base: True)
+    monkeypatch.setattr(runner, "verify_pr", lambda *a, **k: FAKE_PR_URL)
     monkeypatch.setattr(
         runner, "run_pi",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("git failed")),
@@ -682,8 +970,8 @@ def test_resume_delivery_preserves_original_error_when_reporting_fails(
     ):
         runner.resume_delivery(
             {"number": 9, "title": "ship", "body": ""},
-            scene_for(str(worktree)),
-            {"repo_dir": tmp_path, "base_branch": "main"},
+            scene_for(),
+            config_for_resume(tmp_path),
             "owner/repo",
         )
     assert "failure reporting failed" in caplog.text
@@ -693,10 +981,10 @@ def test_resume_delivery_failure_comment_includes_session_scene(
     monkeypatch, tmp_path,
 ):
     calls = []
-    worktree = tmp_path / "wt"
-    worktree.mkdir()
+    worktree = derived_worktree(tmp_path)
     monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
     monkeypatch.setattr(runner, "merge_latest_base", lambda wt, base: True)
+    monkeypatch.setattr(runner, "verify_pr", lambda *a, **k: FAKE_PR_URL)
     monkeypatch.setattr(
         runner, "run_pi",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("git failed")),
@@ -715,8 +1003,8 @@ def test_resume_delivery_failure_comment_includes_session_scene(
     with pytest.raises(RuntimeError, match="git failed"):
         runner.resume_delivery(
             {"number": 9, "title": "ship", "body": ""},
-            scene_for(str(worktree)),
-            {"repo_dir": tmp_path, "base_branch": "main"},
+            scene_for(),
+            config_for_resume(tmp_path),
             "owner/repo",
         )
     failure_body = calls[-1][2]["body"]
@@ -730,10 +1018,10 @@ def test_resume_delivery_scene_lookup_failure_is_isolated(
     monkeypatch, tmp_path, caplog,
 ):
     calls = []
-    worktree = tmp_path / "wt"
-    worktree.mkdir()
+    worktree = derived_worktree(tmp_path)
     monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
     monkeypatch.setattr(runner, "merge_latest_base", lambda wt, base: True)
+    monkeypatch.setattr(runner, "verify_pr", lambda *a, **k: FAKE_PR_URL)
     monkeypatch.setattr(
         runner, "run_pi",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("git failed")),
@@ -749,8 +1037,8 @@ def test_resume_delivery_scene_lookup_failure_is_isolated(
     with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="git failed"):
         runner.resume_delivery(
             {"number": 9, "title": "ship", "body": ""},
-            scene_for(str(worktree)),
-            {"repo_dir": tmp_path, "base_branch": "main"},
+            scene_for(),
+            config_for_resume(tmp_path),
             "owner/repo",
         )
     assert "activity scene failed" in caplog.text

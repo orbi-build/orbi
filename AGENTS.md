@@ -50,10 +50,16 @@ follow it before changing code.
   merge conflict is a fixable state, never a reason to close the PR,
   re-claim the Issue, or open a replacement PR.
 - The next tick resumes the same run on the same feature branch,
-  worktree and PR number. The resume scene (run id, branch, worktree,
-  base, PR URL) is recovered from the latest `Muyan Pilot opened PR:`
-  comment of the Issue; a scene missing any field fails fast and is
-  marked `ai-blocked`, never guessed.
+  worktree and PR number. The resume scene (run id, base, PR URL) is
+  recovered from the latest `Muyan Pilot opened PR:` comment posted by
+  a trusted maintainer (OWNER/MAINTAINER/MEMBER/COLLABORATOR; a public
+  comment is never trusted). Branch and worktree are derived from the
+  configured repo_dir, source repo, Issue number and run id — never
+  read from a comment, so no comment can steer the runner into an
+  arbitrary local path. A scene missing any field fails fast and is
+  marked `ai-blocked`, never guessed. Before any git/Pi mutation the
+  configured base and the open PR (head repo, head branch, base, run
+  marker, exact URL) are validated.
 - When the latest remote base is not an ancestor of the delivery HEAD,
   the runner performs a plain `git merge origin/<base>` on the original
   branch and hands any conflict to the fixer; no auto conflict
