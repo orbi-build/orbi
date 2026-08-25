@@ -417,6 +417,14 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
         return PR_URL
 
     monkeypatch.setattr(runner, "process_issue", fake_process)
+    # The delivery wait (slot held until merge, Issue #39) is out of
+    # scope here: this test proves the awaiting-review tick starts no
+    # fixer, so the wait is stubbed.
+    waits = []
+    monkeypatch.setattr(
+        runner, "wait_for_delivery",
+        lambda *args, **kwargs: waits.append((args, kwargs)),
+    )
     prompt = write_prompt(tmp_path)
     config_path = tmp_path / "muyan-pilot.toml"
     config_path.write_text(
@@ -428,6 +436,8 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
     )
     assert runner.main(["--config", str(config_path)]) == 0
     assert [c["number"] for c in claims] == [99]
+    # The claimed ready Issue's delivery is the one that is waited on.
+    assert waits[0][0][0] == PR_URL
     # No fixer ran: the delivery HEAD is unchanged and no label edit or
     # comment touched the delivery Issue during the awaiting-review tick.
     assert git(worktree, "rev-parse", "HEAD") == head_before

@@ -898,7 +898,7 @@ def test_resume_delivery_success_keeps_same_run_branch_and_pr(
     )
     assert derived_branch == FAKE_BRANCH
     assert expected_worktree == worktree
-    # Order: pre-verify → merge → fixer → post-verify → comment.
+    # Order: pre-verify → merge → fixer → post-verify → edit → comment.
     assert calls[1] == ("merge", expected_worktree, "main")
     run_pi_args = calls[2]
     assert run_pi_args[0] == "run_pi"
@@ -926,18 +926,19 @@ def test_resume_delivery_success_keeps_same_run_branch_and_pr(
         ("merge", expected_worktree, "main"))
     # ...and the fixer ran between the two verifies.
     assert calls.index(verify_calls[1]) > calls.index(run_pi_args)
-    comment = calls[-2]
+    # The state transition comes before the progress comment: an
+    # observer never sees a "fixed PR" comment on an Issue that is
+    # still fix-needed (a crash in between re-runs the idempotent
+    # fixer; the comment is a record, the label is the state).
+    assert calls[-2] == ("edit", (9,), {
+        "repo": "owner/repo", "add": "ai-pr-opened", "remove": "ai-fix-needed",
+    })
+    comment = calls[-1]
     assert comment[0] == "comment"
     body = comment[2]["body"]
     assert f"Muyan Pilot fixed PR: {FAKE_PR_URL}" in body
     assert f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->" in body
     assert f"run_id={FAKE_RUN_ID}" in body
-    # The fix-needed state is consumed: the Issue returns to awaiting
-    # review (`ai-pr-opened`), so the next tick does not re-run the
-    # Fixer (round-5 review, Major 1).
-    assert calls[-1] == ("edit", (9,), {
-        "repo": "owner/repo", "add": "ai-pr-opened", "remove": "ai-fix-needed",
-    })
     # Every journal line of the resumed attempt carries the same run id.
     for message in caplog.messages:
         assert message.startswith(f"[{FAKE_RUN_ID}]"), message

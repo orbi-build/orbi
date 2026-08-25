@@ -29,6 +29,7 @@ from bootstrap_runner import (
     run_command,
     validate_config,
 )
+from pilot_slots import slot_occupancy
 from pi_activity import activity_snapshot
 
 LOGGER = logging.getLogger("muyan_pilot.cli")
@@ -148,8 +149,24 @@ def live_activity_lines(repo_dir: Path, source_repo: str,
     ]
 
 
+def slot_lines(state_dir: Path, capacity: int) -> list[str]:
+    """Return the status lines for the configured concurrency capacity."""
+    occupancy = slot_occupancy(state_dir, capacity)
+    taken = sum(1 for _, pid in occupancy if pid is not None)
+    lines = [f"slots: {taken}/{capacity}"]
+    lines.extend(
+        f"  slot-{index}: pid={pid}"
+        for index, pid in occupancy
+        if pid is not None
+    )
+    return lines
+
+
 def status_report(config: dict) -> str:
-    lines = []
+    lines = [
+        f"capacity: {config['max_concurrency']}",
+        *slot_lines(config["slot_dir"], config["max_concurrency"]),
+    ]
     for repo in config["source_repos"]:
         lines.append(f"source: {repo}")
         base_sha = freeze_base(config["repo_dir"], config["base_branch"])

@@ -19,6 +19,7 @@ import tomllib
 import uuid
 from pathlib import Path
 
+from pilot_slots import acquire_slot, slot_dir_for
 from pi_activity import (
     SessionWatcher,
     activity_snapshot,
@@ -120,9 +121,20 @@ def load_config(path: Path) -> dict:
     base_branch = data.get("base_branch", "main")
     if not isinstance(base_branch, str) or not base_branch:
         raise ValueError("base_branch must be a non-empty string")
+    # Concurrency cap (Issue #39): the local machine can only serve a
+    # limited number of concurrent tasks, so the default is 1. Any other
+    # value must be a positive integer; fail fast on anything else.
+    max_concurrency = data.get("max_concurrency", 1)
+    if (
+        isinstance(max_concurrency, bool)
+        or not isinstance(max_concurrency, int)
+        or max_concurrency < 1
+    ):
+        raise ValueError("max_concurrency must be a positive integer")
+    repo_dir = _config_path(data.get("repo_dir", "."), base)
     return {
         "source_repos": source_repos,
-        "repo_dir": _config_path(data.get("repo_dir", "."), base),
+        "repo_dir": repo_dir,
         "workspace_root": _config_path(data.get("workspace_root", ".."), base),
         "prompt": _config_path(data.get("prompt", "prompt.md"), base),
         "skills": [_config_path(item, base) for item in data.get("skills", [])],
@@ -130,6 +142,8 @@ def load_config(path: Path) -> dict:
             _config_path(item, base) for item in data.get("context_files", [])
         ],
         "base_branch": base_branch,
+        "max_concurrency": max_concurrency,
+        "slot_dir": slot_dir_for(repo_dir),
     }
 
 
@@ -1105,6 +1119,16 @@ def resume_delivery(issue: dict, scene: dict, config: dict,
             worktree, branch, base_branch, run_id,
             pr_repo=source_repo, expected_url=pr_url,
         )
+        # The state transition comes first: the Issue leaves the
+        # fix-needed state before the progress comment is recorded, so
+        # an observer never sees a "fixed PR" comment on an Issue that
+        # is still fix-needed (a crash in between re-runs the fixer,
+        # which is idempotent; the comment is a record, the label is
+        # the state).
+        edit_issue(
+            number, repo=source_repo, add=PR_OPENED_LABEL,
+            remove=FIX_NEEDED_LABEL,
+        )
         comment_issue(
             number, repo=source_repo,
             body=(
@@ -1147,14 +1171,136 @@ def resume_delivery(issue: dict, scene: dict, config: dict,
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
         raise
-    # The fix succeeded: consume the fix-needed state and return the
-    # Issue to awaiting review, so the next tick does not re-run the
-    # Fixer (a clean PR is simply waiting for review now).
-    edit_issue(
-        number, repo=source_repo, add=PR_OPENED_LABEL,
-        remove=FIX_NEEDED_LABEL,
-    )
+    # The fix succeeded: the Issue is back in awaiting review (the
+    # transition happened before the progress comment), so the next
+    # tick does not re-run the Fixer (a clean PR is simply waiting for
+    # review now).
     return verified_url
+
+
+def pr_state(pr_url: str) -> str:
+    """Return the GitHub state of one PR: `OPEN`, `MERGED` or `CLOSED`.
+
+    The delivery-wait loop (Issue #39) uses it to tell a delivery that is
+    still awaiting review from one that is done: only `MERGED` or
+    `CLOSED` ends the slot hold. Anything else is a corrupted state and
+    fails fast.
+    """
+    number = pr_url.rstrip("/").rsplit("/", 1)[-1]
+    raw = run_command([
+        "gh", "pr", "view", number, "--json", "state",
+    ])
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("pr view must be a JSON object")
+    state = data.get("state")
+    if state not in ("OPEN", "MERGED", "CLOSED"):
+        raise ValueError(f"unexpected PR state: {state!r}")
+    return state
+
+
+def issue_labels(number: int, repo: str) -> list[str]:
+    """Return the current label names of one Issue."""
+    raw = run_command([
+        "gh", "issue", "view", str(number), "--repo", repo,
+        "--json", "labels",
+    ])
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("issue view must be a JSON object")
+    labels = data.get("labels")
+    if not isinstance(labels, list):
+        raise ValueError("issue labels must be a JSON array")
+    names: list[str] = []
+    for label in labels:
+        if isinstance(label, dict) and isinstance(label.get("name"), str):
+            names.append(label["name"])
+    return names
+
+
+def wait_for_delivery(pr_url: str, issue: dict, config: dict,
+                      source_repo: str, poll_interval: float = PI_POLL_INTERVAL) -> None:
+    """Own the delivery lifecycle: hold the slot until merge or failure.
+
+    The slot is acquired by `main` before the claim and must stay
+    occupied through implement -> review -> fix -> merge (Issue #39): a
+    delivery whose PR is open still needs the machine, and no other
+    Runner may start a second Pi while it is held. The Runner is the
+    owner of that lifecycle, so it re-checks the delivery every
+    `poll_interval` seconds (the same cadence as the idle timer and the
+    Pi activity poll):
+
+    - PR `MERGED` -> terminal: the delivery is done, the slot is
+      released by the caller and the next tick may claim new work;
+    - PR `CLOSED` without merge -> terminal failure: the Issue is
+      marked `ai-blocked` (removing `ai-pr-opened`/`ai-fix-needed`) with
+      a failure comment carrying the run marker, then the slot is
+      released by the caller;
+    - Issue in the explicit `ai-fix-needed` state (a review finding or
+      a base conflict) -> the Runner runs the SAME-PR fix (Issue #45)
+      itself, on the same run, in the same worktree, while still holding
+      the slot; the fix returns the Issue to `ai-pr-opened` and the
+      wait continues. A new Runner can never take the slot to fix this
+      delivery while it is held, so the fix must happen here;
+    - otherwise -> keep holding the slot and re-check.
+
+    There is no timeout: systemd owns the run lifecycle and kills the
+    service on stop, which releases the slot via the kernel (flock on
+    the open descriptor). No polling shim, no daemon loop, no queue.
+    """
+    number = int(issue["number"])
+    run_id = current_run_id()
+    marker = run_marker(run_id) if run_id else ""
+    LOGGER.info(
+        "issue=%s delivery_awaiting pr=%s; holding the slot until the "
+        "PR is merged or terminally failed",
+        number, pr_url,
+    )
+    while True:
+        state = pr_state(pr_url)
+        if state == "MERGED":
+            LOGGER.info(
+                "issue=%s delivery_merged pr=%s; releasing the slot",
+                number, pr_url,
+            )
+            return
+        if state == "CLOSED":
+            LOGGER.info(
+                "issue=%s delivery_closed_unmerged pr=%s; marking the "
+                "Issue ai-blocked and releasing the slot",
+                number, pr_url,
+            )
+            edit_issue(
+                number, repo=source_repo, add=BLOCKED_LABEL,
+                remove=PR_OPENED_LABEL,
+            )
+            body = (
+                f"Muyan Pilot failed: PR {pr_url} was closed without "
+                "a merge; the delivery is terminally failed"
+            )
+            if marker:
+                body = f"{marker}\n{body}"
+            comment_issue(number, repo=source_repo, body=body)
+            return
+        labels = issue_labels(number, source_repo)
+        if FIX_NEEDED_LABEL in labels and BLOCKED_LABEL not in labels:
+            # The review found a problem (or the base advanced): fix the
+            # SAME PR on the SAME run while still holding the slot.
+            LOGGER.info(
+                "issue=%s delivery_fix_needed pr=%s; resuming the fix "
+                "loop of the same PR",
+                number, pr_url,
+            )
+            scene = resume_scene(issue_comments(number, repo=source_repo))
+            fix_issue = dict(issue)
+            fix_issue["body"] = issue_body(number, repo=source_repo)
+            resume_delivery(fix_issue, scene, config, source_repo)
+            continue  # the fix returned the Issue to awaiting review
+        LOGGER.info(
+            "issue=%s delivery_awaiting pr=%s state=%s",
+            number, pr_url, state,
+        )
+        time.sleep(poll_interval)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1168,17 +1314,41 @@ def main(argv: list[str] | None = None) -> int:
 
     config = load_config(args.config)
     validate_config(config)
-    selected = pick_next_delivery(config["source_repos"])
-    if selected is None:
-        LOGGER.info("source_repos=%s outcome=no_ready_issue", config["source_repos"])
+    # Concurrency cap (Issue #39): take one slot BEFORE claiming anything.
+    # The slot is held for the whole delivery lifecycle (implement ->
+    # review -> fix -> merge) and released only after the delivery is
+    # merged or terminally failed — or when this process exits for any
+    # reason, which the kernel handles (flock on an open descriptor).
+    slot = acquire_slot(
+        config["slot_dir"], config["max_concurrency"], os.getpid(),
+    )
+    if slot is None:
+        LOGGER.info(
+            "capacity_full max_concurrency=%s slot_dir=%s",
+            config["max_concurrency"], config["slot_dir"],
+        )
         return 0
-    source_repo, issue, scene = selected
-    if scene is not None:
-        # An open PR is a recoverable review/fix state: resume the same
-        # run on the same branch, worktree and PR (Issue #45).
-        resume_delivery(issue, scene, config, source_repo)
-    else:
-        process_issue(issue, config, source_repo)
+    try:
+        selected = pick_next_delivery(config["source_repos"])
+        if selected is None:
+            LOGGER.info(
+                "source_repos=%s outcome=no_ready_issue",
+                config["source_repos"],
+            )
+            return 0
+        source_repo, issue, scene = selected
+        if scene is not None:
+            # An open PR is a recoverable review/fix state: resume the
+            # same run on the same branch, worktree and PR (Issue #45).
+            pr_url = resume_delivery(issue, scene, config, source_repo)
+        else:
+            pr_url = process_issue(issue, config, source_repo)
+        # The delivery is not done when the PR is open: hold the slot
+        # through review -> fix -> merge and release it only after the
+        # PR is merged or terminally failed (Issue #39).
+        wait_for_delivery(pr_url, issue, config, source_repo)
+    finally:
+        slot.release()
     return 0
 
 

@@ -945,13 +945,23 @@ def test_main_returns_zero_when_queue_empty(monkeypatch, tmp_path):
 def test_main_processes_one_issue(monkeypatch, tmp_path):
     issue = {"number": 12, "title": "task", "body": "body"}
     calls = []
+    waits = []
     (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
     monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: ("xqliu/muyan-pilot", issue, None))
     monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: calls.append((args, kwargs)) or "https://github.com/x/y/pull/12")
+    monkeypatch.setattr(
+        runner, "wait_for_delivery",
+        lambda *args, **kwargs: waits.append((args, kwargs)),
+    )
     assert runner.main(["--config", str(config)]) == 0
     assert calls[0][0][0] == issue
+    # The slot is held through the delivery wait (implement -> review ->
+    # fix -> merge), not released when the PR opens (Issue #39).
+    assert waits[0][0][:2] == (
+        "https://github.com/x/y/pull/12", issue,
+    )
 
 
 def test_main_accepts_repeated_source_repo(monkeypatch, tmp_path):
@@ -963,6 +973,7 @@ def test_main_accepts_repeated_source_repo(monkeypatch, tmp_path):
     config.write_text("source_repos = [\"xqliu/muyan-pilot\", \"xqliu/muyan-ceo\"]\n", encoding="utf-8")
     monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: seen.append(repos) or (repos[0], issue, None))
     monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: "https://github.com/x/y/pull/14")
+    monkeypatch.setattr(runner, "wait_for_delivery", lambda *a, **k: None)
     assert runner.main([
         "--config", str(config),
     ]) == 0
@@ -1558,3 +1569,438 @@ def test_stream_pi_times_out_and_kills_process(tmp_path, caplog):
     assert len(failures) == 1
     assert "reason=timeout_0.5s" in failures[0]
     assert "issue=xqliu/muyan-pilot#24" in failures[0]
+
+
+# --- max_concurrency config (Issue #39) --------------------------------------
+
+
+def test_load_config_defaults_max_concurrency_to_one(tmp_path):
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    config = runner.load_config(config_path)
+    assert config["max_concurrency"] == 1
+
+
+def test_load_config_reads_explicit_max_concurrency(tmp_path):
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nmax_concurrency = 2\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["max_concurrency"] == 2
+
+
+def test_load_config_derives_slot_dir_from_repo_dir(tmp_path):
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["slot_dir"] == (tmp_path / "repo").resolve() / ".muyan-pilot" / "slots"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["0", "-1", "1.5", '"1"', "true", "false"],
+)
+def test_load_config_rejects_invalid_max_concurrency(tmp_path, value):
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        f'source_repos = ["owner/repo"]\nmax_concurrency = {value}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="max_concurrency must be a positive integer"):
+        runner.load_config(config_path)
+
+
+# --- main() slot acquisition (Issue #39) --------------------------------------
+
+
+def test_main_capacity_full_does_not_pick_issue_or_call_pi(
+    monkeypatch, tmp_path, caplog,
+):
+    """A full slot stops the runner before any claim or Pi invocation."""
+    import pilot_slots
+
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nmax_concurrency = 1\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    # The single slot is already HELD (lock) by this live process: a
+    # file on disk alone is not a held slot (flock is the token).
+    slot_dir = tmp_path / ".muyan-pilot" / "slots"
+    held = pilot_slots.acquire_slot(slot_dir, 1, os.getpid())
+    assert held is not None
+
+    def fail_if_called(repos):
+        raise AssertionError("pick_next_delivery must not run when capacity is full")
+
+    monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
+    monkeypatch.setattr(runner, "process_issue", fail_if_called)
+    # The guard itself must fail loudly if it is ever reached.
+    with pytest.raises(AssertionError, match="must not run when capacity is full"):
+        fail_if_called(["owner/repo"])
+    with caplog.at_level("INFO"):
+        assert runner.main(["--config", str(config)]) == 0
+    assert "capacity_full" in caplog.text
+    assert "max_concurrency=1" in caplog.text
+    assert "slot_dir=" in caplog.text
+    # The pre-existing holder keeps its slot (no claim, no label change,
+    # no Pi).
+    assert (
+        pilot_slots.slot_occupancy(slot_dir, 1) == [(1, os.getpid())]
+    )
+    held.release()
+
+
+def test_main_holds_slot_while_processing_issue(monkeypatch, tmp_path):
+    """The slot is acquired before the pick and held for the whole task."""
+    import pilot_slots
+
+    issue = {"number": 12, "title": "task", "body": "body"}
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    seen = {}
+
+    def fake_pick(repos):
+        slot_dir = tmp_path / ".muyan-pilot" / "slots"
+        seen["occupancy"] = pilot_slots.slot_occupancy(slot_dir, 1)
+        return ("owner/repo", issue, None)
+
+    monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
+    monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: "https://x/y/pull/12")
+    monkeypatch.setattr(runner, "wait_for_delivery", lambda *a, **k: None)
+    assert runner.main(["--config", str(config)]) == 0
+    assert seen["occupancy"] == [(1, os.getpid())]
+
+
+def test_main_reacquires_slot_after_previous_release(monkeypatch, tmp_path):
+    """After the holder releases (process exit), the next run takes the slot."""
+    import pilot_slots
+
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: None)
+
+    assert runner.main(["--config", str(config)]) == 0
+    slot_dir = tmp_path / ".muyan-pilot" / "slots"
+    # The slot file exists and was released when main() returned ...
+    assert (slot_dir / "slot-1").exists()
+    assert pilot_slots.slot_occupancy(slot_dir, 1) == [(1, None)]
+    # ... so the next run takes the slot again.
+    assert runner.main(["--config", str(config)]) == 0
+    assert (slot_dir / "slot-1").read_text(encoding="utf-8").strip() == str(os.getpid())
+
+
+# --- delivery lifecycle: slot held until merge or terminal failure ----------
+
+PR_URL = "https://github.com/owner/repo/pull/46"
+
+
+def fake_pr_view(monkeypatch, state: str) -> tuple[list, object]:
+    """Answer `gh pr view <n> --json state`.
+
+    Returns the command log and the fake itself (so a test can prove
+    the fake rejects unexpected commands).
+    """
+    seen: list = []
+
+    def fake_run(command, **kwargs):
+        if command[:1] == ["gh"] and command[1] == "pr" \
+                and command[2] == "view":
+            seen.append(command)
+            assert command[3] == "46"
+            assert command[4:] == ["--json", "state"]
+            return json.dumps({"state": state})
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    return seen, fake_run
+
+
+def test_pr_state_returns_open_merged_or_closed(monkeypatch):
+    for state in ("OPEN", "MERGED", "CLOSED"):
+        fake_pr_view(monkeypatch, state)
+        assert runner.pr_state(PR_URL) == state
+
+
+def test_fake_pr_view_rejects_unexpected_commands(monkeypatch):
+    seen, fake_run = fake_pr_view(monkeypatch, "OPEN")
+    assert seen == []
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "pr", "list"])
+
+
+def test_pr_state_fails_fast_on_unexpected_state(monkeypatch):
+    fake_pr_view(monkeypatch, "WEIRD")
+    with pytest.raises(ValueError, match="unexpected PR state"):
+        runner.pr_state(PR_URL)
+
+
+def test_pr_state_fails_fast_on_non_object_json(monkeypatch):
+    def fake_run(command, **kwargs):
+        return json.dumps(["OPEN"])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(ValueError, match="pr view must be a JSON object"):
+        runner.pr_state(PR_URL)
+
+
+def test_wait_for_delivery_returns_when_pr_merged(monkeypatch, caplog):
+    seen, _ = fake_pr_view(monkeypatch, "MERGED")
+    issue = {"number": 39, "title": "task", "body": ""}
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    caplog.set_level("INFO")
+    runner.wait_for_delivery(PR_URL, issue, {}, "owner/repo")
+    assert len(seen) == 1
+    assert "delivery_merged" in caplog.text
+    assert f"pr={PR_URL}" in caplog.text
+
+
+def test_wait_for_delivery_keeps_waiting_while_pr_open(monkeypatch):
+    states = ["OPEN", "OPEN", "MERGED"]
+    calls = {"pr": 0, "labels": 0}
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"] and command[2] == "view":
+            calls["pr"] += 1
+            return json.dumps({"state": states[calls["pr"] - 1]})
+        if command[:2] == ["gh", "issue"] and command[2] == "view":
+            calls["labels"] += 1
+            return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner.time, "sleep", lambda s: None)
+    issue = {"number": 39, "title": "task", "body": ""}
+    runner.wait_for_delivery(PR_URL, issue, {}, "owner/repo")
+    # Two OPEN polls (PR state + labels each) before the MERGED poll.
+    assert calls == {"pr": 3, "labels": 2}
+    # The fake rejects anything that is not a pr/issue view.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "pr", "list"])
+
+
+def test_wait_for_delivery_runs_same_pr_fix_when_fix_needed(
+    monkeypatch, caplog,
+):
+    """While holding the slot, a fix-needed delivery is fixed by the SAME
+    runner on the SAME run (Issue #39 + #45): the fix returns the Issue
+    to awaiting review and the wait continues."""
+    states = ["OPEN", "OPEN", "MERGED"]
+    pr_view_calls = {"n": 0}
+    labels_calls = {"n": 0}
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"] and command[2] == "view":
+            pr_view_calls["n"] += 1
+            return json.dumps({
+                "state": states[pr_view_calls["n"] - 1],
+            })
+        if command[:2] == ["gh", "issue"] and command[2] == "view":
+            if command[-1] == "labels":
+                labels_calls["n"] += 1
+                # First poll: fix needed; after the fix: awaiting review.
+                if labels_calls["n"] == 1:
+                    return json.dumps({
+                        "labels": [{"name": "ai-fix-needed"}],
+                    })
+                return json.dumps({
+                    "labels": [{"name": "ai-pr-opened"}],
+                })
+            if command[-1] == "body":
+                return json.dumps({"body": "original task body"})
+            return json.dumps({"comments": [
+                {
+                    "body": (
+                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                        "Muyan Pilot opened PR: "
+                        f"{PR_URL} (base_branch=main "
+                        "base_sha=abc123def456 run_id=a1b2c3d4)"
+                    ),
+                    "authorAssociation": "OWNER",
+                },
+            ]})
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner.time, "sleep", lambda s: None)
+    # The fake rejects anything that is not a pr/issue view.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "list"])
+    fixes = []
+    monkeypatch.setattr(
+        runner, "resume_delivery",
+        lambda *args, **kwargs: fixes.append((args, kwargs)) or PR_URL,
+    )
+    issue = {"number": 39, "title": "task", "body": "stale body"}
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    caplog.set_level("INFO")
+    runner.wait_for_delivery(PR_URL, issue, {}, "owner/repo")
+    assert len(fixes) == 1
+    fixed_issue, scene, cfg, repo = fixes[0][0]
+    assert fixed_issue["number"] == 39
+    assert fixed_issue["body"] == "original task body"
+    assert scene["run_id"] == "a1b2c3d4"
+    assert scene["pr_url"] == PR_URL
+    assert repo == "owner/repo"
+    assert "delivery_fix_needed" in caplog.text
+
+
+def test_wait_for_delivery_propagates_fix_failure(monkeypatch):
+    """A failed same-PR fix raises: the Issue is already ai-blocked by
+    resume_delivery, and the slot is released by the caller (main)."""
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps({"state": "OPEN"})
+        if command[-1] == "labels":
+            return json.dumps({"labels": [{"name": "ai-fix-needed"}]})
+        return json.dumps({"comments": [
+            {
+                "body": (
+                    "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                    "Muyan Pilot opened PR: "
+                    f"{PR_URL} (base_branch=main "
+                    "base_sha=abc123def456 run_id=a1b2c3d4)"
+                ),
+                "authorAssociation": "OWNER",
+            },
+        ]})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+
+    def failing_resume(*args, **kwargs):
+        raise RuntimeError("fix failed")
+
+    monkeypatch.setattr(runner, "resume_delivery", failing_resume)
+    with pytest.raises(RuntimeError, match="fix failed"):
+        runner.wait_for_delivery(
+            PR_URL, {"number": 39, "title": "t", "body": ""}, {},
+            "owner/repo",
+        )
+
+
+def test_issue_labels_returns_names_and_fails_fast(monkeypatch):
+    def fake_run(command, **kwargs):
+        assert command[:3] == ["gh", "issue", "view"]
+        assert command[-2:] == ["--json", "labels"]
+        # Corrupted entries (non-dict, missing name) are skipped; only
+        # well-formed names are returned.
+        return json.dumps({"labels": [
+            {"name": "ai-ready"}, "garbage",
+            {"name": "ai-fix-needed"}, {"other": 1},
+        ]})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.issue_labels(39, "owner/repo") == [
+        "ai-ready", "ai-fix-needed",
+    ]
+
+    def bad_run(command, **kwargs):
+        return json.dumps({"labels": "nope"})
+
+    monkeypatch.setattr(runner, "run_command", bad_run)
+    with pytest.raises(ValueError, match="issue labels must be a JSON array"):
+        runner.issue_labels(39, "owner/repo")
+
+    def bad_run2(command, **kwargs):
+        return json.dumps(["ai-ready"])
+
+    monkeypatch.setattr(runner, "run_command", bad_run2)
+    with pytest.raises(ValueError, match="issue view must be a JSON object"):
+        runner.issue_labels(39, "owner/repo")
+
+
+def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
+    monkeypatch, caplog,
+):
+    fake_pr_view(monkeypatch, "CLOSED")
+    edits: list = []
+    comments: list = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: edits.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *args, **kwargs: comments.append((args, kwargs)),
+    )
+    issue = {"number": 39, "title": "task", "body": ""}
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    caplog.set_level("INFO")
+    runner.wait_for_delivery(PR_URL, issue, {}, "owner/repo")
+    # The Issue is marked ai-blocked (removing ai-pr-opened) ...
+    assert edits[0][1] == {
+        "repo": "owner/repo",
+        "add": "ai-blocked",
+        "remove": "ai-pr-opened",
+    }
+    # ... with a failure comment carrying the run marker and run_id.
+    body = comments[0][1]["body"]
+    assert "Muyan Pilot failed:" in body
+    assert f"<!-- muyan-pilot:run=a1b2c3d4 -->" in body
+    assert f"pr={PR_URL}" in caplog.text
+    assert "delivery_closed_unmerged" in caplog.text
+
+
+def test_wait_for_delivery_logs_awaiting_without_bound_run_id(monkeypatch, caplog):
+    """When no run id is bound the wait still works: the failure comment
+    simply carries no marker."""
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    fake_pr_view(monkeypatch, "CLOSED")
+    comments: list = []
+    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *args, **kwargs: comments.append((args, kwargs)),
+    )
+    caplog.set_level("INFO")
+    runner.wait_for_delivery(
+        PR_URL, {"number": 39, "title": "t", "body": ""}, {}, "owner/repo",
+    )
+    assert "Muyan Pilot failed:" in comments[0][1]["body"]
+    assert "muyan-pilot:run=" not in comments[0][1]["body"]
+
+
+def test_main_holds_slot_through_delivery_wait(monkeypatch, tmp_path):
+    """The slot stays occupied while the delivery awaits review: a second
+    concurrent runner must see capacity_full until the PR is merged."""
+    import pilot_slots
+
+    issue = {"number": 12, "title": "task", "body": "body"}
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: ("owner/repo", issue, None))
+    monkeypatch.setattr(runner, "process_issue", lambda *a, **k: PR_URL)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_wait(pr_url, iss, cfg, repo):
+        started.set()
+        assert release.wait(timeout=10), "wait must hold the slot"
+
+    monkeypatch.setattr(runner, "wait_for_delivery", fake_wait)
+
+    def run_main():
+        return runner.main(["--config", str(config)])
+
+    thread = threading.Thread(target=run_main)
+    thread.start()
+    assert started.wait(timeout=10)
+    # While the delivery awaits review, the slot is still held: a second
+    # take (another runner) is denied.
+    slot_dir = tmp_path / ".muyan-pilot" / "slots"
+    assert pilot_slots.acquire_slot(slot_dir, 1, os.getpid()) is None
+    assert pilot_slots.slot_occupancy(slot_dir, 1) == [(1, os.getpid())]
+    release.set()
+    thread.join(timeout=10)
+    # After the wait ends, the slot is released.
+    assert pilot_slots.slot_occupancy(slot_dir, 1) == [(1, None)]
