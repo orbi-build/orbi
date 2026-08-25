@@ -365,6 +365,140 @@ def test_watcher_starts_following_session_file_when_it_appears(tmp_path):
     assert state["session_id"] == "sess-1"
 
 
+# --------------------------------------------- known_files (Issue #45 F3)
+
+def test_watcher_known_files_ignores_pre_existing_session_and_follows_new(
+    tmp_path,
+):
+    """Regression (Issue #45 round-5 review, Major 3): a resumed Fixer
+    starts a NEW JSONL in the existing .pi-session directory. With
+    `known_files` (the files that existed before Popen) the watcher must
+    NOT bind to the old implementer session; it follows the new file
+    created by the current invocation."""
+    old = tmp_path / "old.jsonl"
+    write_records(old, [
+        {"type": "session", "id": "old-session",
+         "timestamp": "2026-01-01T00:00:00Z", "cwd": "/w"},
+        ASSISTANT_TOOL_CALL,
+    ])
+    watcher = pi_activity.SessionWatcher(
+        tmp_path, now=lambda: 1_000_000.0, known_files={old},
+    )
+    # First poll: the pre-existing file is known, so nothing is bound.
+    state = watcher.poll()
+    assert state["session_file"] is None
+    assert state["session_id"] is None
+    assert state["events"] == 0
+    # The current Pi process creates its new session file.
+    new = tmp_path / "new.jsonl"
+    write_records(new, [
+        {"type": "session", "id": "fixer-session",
+         "timestamp": "2026-01-01T01:00:00Z", "cwd": "/w"},
+        {
+            "type": "message", "id": "a90",
+            "timestamp": "2026-01-01T01:00:02Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "toolCall", "id": "t90", "name": "bash",
+                     "arguments": {"command": "git merge origin/main"}},
+                ],
+            },
+        },
+    ])
+    state = watcher.poll()
+    assert state["session_file"] == str(new)
+    assert state["session_id"] == "fixer-session"
+    assert state["events"] == 2
+    assert state["phase"] == "base"
+    assert state["changed"] is True
+    # The old session's records never leak into the resumed activity.
+    assert "pytest" not in (state["last"] or "")
+
+
+def test_watcher_known_files_switches_to_newer_file_and_resets_state(
+    tmp_path,
+):
+    """If a newer session file appears while an unknown file is already
+    bound, the watcher switches to it and resets its state (offset,
+    events, session id, phase, last activity)."""
+    first = tmp_path / "first.jsonl"
+    write_records(first, [
+        {"type": "session", "id": "sess-first",
+         "timestamp": "2026-01-01T00:00:00Z", "cwd": "/w"},
+        ASSISTANT_TOOL_CALL,
+    ])
+    watcher = pi_activity.SessionWatcher(
+        tmp_path, now=lambda: 1_000_000.0, known_files=set(),
+    )
+    state = watcher.poll()
+    assert state["session_file"] == str(first)
+    assert state["session_id"] == "sess-first"
+    assert state["events"] == 2
+    # A second Pi invocation (same worktree) creates a newer file.
+    second = tmp_path / "second.jsonl"
+    write_records(second, [
+        {"type": "session", "id": "sess-second",
+         "timestamp": "2026-01-01T02:00:00Z", "cwd": "/w"},
+    ])
+    state = watcher.poll()
+    assert state["session_file"] == str(second)
+    assert state["session_id"] == "sess-second"
+    # The state was reset: the old file's events/phase/last are gone...
+    assert state["events"] == 1
+    assert state["phase"] == "starting"
+    assert state["last"] is None
+    assert state["last_activity"] is None
+    # ...and the new file is read from the start (its records counted).
+    assert state["changed"] is True
+
+
+def test_watcher_known_files_keeps_binding_to_same_new_file(tmp_path):
+    """Once bound to the new file, a later poll keeps following it (no
+    re-switch, no re-read) as long as no newer file appears."""
+    new = tmp_path / "new.jsonl"
+    write_records(new, [SESSION_RECORD])
+    watcher = pi_activity.SessionWatcher(
+        tmp_path, now=lambda: 1_000_000.0, known_files=set(),
+    )
+    assert watcher.poll()["session_file"] == str(new)
+    again = watcher.poll()
+    assert again["session_file"] == str(new)
+    assert again["changed"] is False
+    assert again["events"] == 1
+
+
+def test_watcher_without_known_files_keeps_legacy_bind_once(tmp_path):
+    """`known_files=None` (the default, used by `activity_snapshot`) keeps
+    the original bind-once semantics: the newest pre-existing file is
+    bound immediately and never switched."""
+    old = tmp_path / "old.jsonl"
+    write_records(old, [SESSION_RECORD])
+    watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
+    state = watcher.poll()
+    assert state["session_file"] == str(old)
+    assert state["session_id"] == "sess-1"
+    new = tmp_path / "new.jsonl"
+    write_records(new, [{"type": "session", "id": "sess-new",
+                         "timestamp": "2026-01-01T00:00:00Z"}])
+    again = watcher.poll()
+    assert again["session_file"] == str(old)
+    assert again["session_id"] == "sess-1"
+
+
+def test_watcher_known_files_ignores_newer_known_file(tmp_path):
+    """A file that was already present before Popen is never bound, even
+    when it is the newest file in the directory."""
+    old = tmp_path / "old.jsonl"
+    write_records(old, [SESSION_RECORD])
+    watcher = pi_activity.SessionWatcher(
+        tmp_path, now=lambda: 1_000_000.0, known_files={old},
+    )
+    state = watcher.poll()
+    assert state["session_file"] is None
+    assert state["events"] == 0
+
+
 def test_watcher_stale_seconds_from_last_activity(tmp_path):
     session = tmp_path / "s.jsonl"
     write_records(session, [SESSION_RECORD, ASSISTANT_TOOL_CALL])

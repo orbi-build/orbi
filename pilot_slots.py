@@ -1,41 +1,53 @@
 """Cross-process concurrency slots for Muyan Pilot (Issue #39).
 
-The local machine can only serve a limited number of concurrent Pilot tasks,
-so the configured ``max_concurrency`` is enforced with one slot file per
-allowed task under ``<repo_dir>/.muyan-pilot/slots/``:
+The local machine can only serve a limited number of concurrent Pilot
+tasks, so the configured ``max_concurrency`` is enforced with one slot
+file per allowed task under ``<repo_dir>/.muyan-pilot/slots/``.
 
-- Take: ``os.open(O_CREAT|O_EXCL)`` is atomic across processes, so at most
-  one Runner ever wins a given slot. No in-process counter, no GitHub label
-  and no distributed lock — just one file per slot.
-- Holder: the slot file carries the PID of the process that holds it.
-- Release: the holder removes the file on normal exit (``atexit``) and on
-  SIGTERM/SIGINT (signal handlers re-raise the default action afterwards).
-- Stale: a SIGKILLed process cannot run handlers, so a slot whose holder PID
-  no longer runs is stale and the next Runner takes it back. A slot file is
-  created empty and filled with the holder PID in the same microsecond; a
-  fresh empty file is live (the writer is still running), but an empty file
-  older than ``EMPTY_SLOT_STALE_SECONDS`` is stale, so even a holder killed
-  in that window can never occupy a slot forever. A killed runner therefore
-  never deadlocks the machine.
+Each slot file is a plain file whose exclusive ``flock(2)`` lock is the
+ownership token:
+
+- Take: open the slot file (created if missing), write the holder PID as
+  observational metadata, then try ``flock(fd, LOCK_EX | LOCK_NB)``. The
+  kernel grants the lock to at most one process at a time, so at most one
+  Runner ever owns a given slot. No in-process counter, no GitHub label,
+  no distributed lock, no stale-PID or age heuristic.
+- Holder: the lock is owned by the open file descriptor, not by the PID.
+  A live holder can never lose its slot based on elapsed time or a
+  missing write — even if it pauses arbitrarily long before or after
+  taking the lock.
+- Release: closing the descriptor releases the lock, and the kernel
+  releases it when the process exits for ANY reason (normal exit,
+  SIGTERM, SIGKILL). There is no atexit hook, no signal handler and no
+  unlink protocol: a dead holder can never keep a slot, so an abnormal
+  exit never deadlocks the machine.
 
 No database, queue, daemon, or fallback.
 """
 from __future__ import annotations
 
-import atexit
+import fcntl
 import os
-import signal
-import time
 from pathlib import Path
 
 SLOT_DIRNAME = ".muyan-pilot/slots"
 
-# A slot file is created empty and filled with the holder PID in the same
-# microsecond; if the holder dies in that window the file stays empty. An
-# empty file is live while it is fresh (the writer is still running) and
-# stale once it is older than this, so an orphaned empty file can never
-# occupy a slot forever.
-EMPTY_SLOT_STALE_SECONDS = 30.0
+
+class Slot:
+    """One held slot: the open descriptor owns the exclusive flock lock."""
+
+    def __init__(self, path: Path, fd: int):
+        self.path = path
+        self.fd = fd
+
+    def release(self) -> None:
+        """Release the slot; closing the descriptor releases the lock."""
+        if self.fd >= 0:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.fd = -1
 
 
 def slot_dir_for(repo_dir: Path) -> Path:
@@ -48,105 +60,77 @@ def slot_path(state_dir: Path, index: int) -> Path:
     return state_dir / f"slot-{index}"
 
 
-def acquire_slot(state_dir: Path, capacity: int, pid: int) -> Path | None:
-    """Atomically take one free slot, or return None when all are live.
+def acquire_slot(state_dir: Path, capacity: int, pid: int) -> Slot | None:
+    """Take one free slot, or return None when all are already held.
 
-    ``capacity`` is the configured ``max_concurrency``. Each slot index is
-    tried in order: a missing slot is created with O_EXCL (the atomic
-    cross-process take) and filled with the holder PID; a slot whose holder
-    is dead is unlinked and retried; a live slot is skipped.
+    ``capacity`` is the configured ``max_concurrency``. Each slot index
+    is tried in order: the slot file is created if missing and the
+    exclusive ``flock`` is attempted non-blocking. The kernel makes the
+    take mutually exclusive across processes — a slot whose lock is held
+    by another live process is skipped, and no heuristic can ever grant
+    the same slot to two live holders.
     """
     state_dir = Path(state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
     for index in range(1, capacity + 1):
         path = slot_path(state_dir, index)
-        while True:
-            try:
-                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-            except FileExistsError:
-                if not _slot_is_stale(path):
-                    break  # live slot: try the next index
-                try:
-                    path.unlink()
-                except FileNotFoundError:
-                    pass  # another runner freed it first
-                continue  # retry this index: the slot is (or was) free
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(str(pid))
-            return path
+        try:
+            fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+        except OSError:
+            return None  # slot dir unusable: fail closed, never exceed capacity
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # The lock is held: record the holder PID as observational
+            # metadata (the lock, not the PID, is the ownership token).
+            os.ftruncate(fd, 0)
+            os.write(fd, f"{pid}\n".encode("ascii"))
+        except (BlockingIOError, PermissionError):
+            os.close(fd)
+            continue  # held by another live process: try the next index
+        except OSError:
+            os.close(fd)
+            return None
+        return Slot(path, fd)
     return None
 
 
-def release_slot(path: Path) -> None:
-    """Remove one slot file; a missing file is not an error."""
-    try:
-        Path(path).unlink()
-    except FileNotFoundError:
-        pass
-
-
-def hold_slot(path: Path) -> None:
-    """Keep a slot until this process exits, however it exits.
-
-    Normal exit releases it via atexit; SIGTERM (systemd stop) and SIGINT
-    release it via signal handlers that then restore the default action and
-    re-raise the signal, so the process still dies the standard way.
-    """
-    atexit.register(release_slot, path)
-    signal.signal(signal.SIGTERM, _make_signal_handler(path))
-    signal.signal(signal.SIGINT, _make_signal_handler(path))
-
-
-def _make_signal_handler(path: Path):
-    def handler(signum: int, frame) -> None:
-        release_slot(path)
-        signal.signal(signum, signal.SIG_DFL)
-        os.kill(os.getpid(), signum)
-
-    return handler
-
-
 def slot_occupancy(state_dir: Path, capacity: int) -> list[tuple[int, int | None]]:
-    """Return ``(index, holder_pid)`` per slot; None when the slot is free."""
+    """Return ``(index, holder_pid)`` per slot; None when the slot is free.
+
+    Occupancy is probed with a non-blocking ``flock`` on the slot file:
+    the lock itself is the source of truth, so a probe that succeeds
+    proves the slot is free (the probe unlocks immediately) and a probe
+    that fails proves a live process holds it. The PID is read from the
+    file only as observational metadata for `status`.
+    """
     state_dir = Path(state_dir)
     occupancy: list[tuple[int, int | None]] = []
     for index in range(1, capacity + 1):
         path = slot_path(state_dir, index)
+        if not path.is_file():
+            occupancy.append((index, None))
+            continue
         try:
-            raw = path.read_text(encoding="utf-8").strip()
+            fd = os.open(path, os.O_RDWR)
         except OSError:
             occupancy.append((index, None))
             continue
-        occupancy.append((index, int(raw)) if raw.isdigit() else (index, None))
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (BlockingIOError, PermissionError):
+                occupancy.append((index, _read_pid(path)))
+                continue
+            occupancy.append((index, None))
+        finally:
+            os.close(fd)
     return occupancy
 
 
-def _slot_is_stale(path: Path) -> bool:
-    """True when the slot's holder is gone and the slot can be taken back."""
-    path = Path(path)
+def _read_pid(path: Path) -> int | None:
+    """Return the observational holder PID from one slot file, if present."""
     try:
         raw = path.read_text(encoding="utf-8").strip()
     except OSError:
-        return False  # unreadable: assume a live holder, never steal
-    if not raw:
-        try:
-            age = time.time() - path.stat().st_mtime
-        except OSError:
-            return True  # file vanished: the next take will create it
-        return age > EMPTY_SLOT_STALE_SECONDS
-    if not raw.isdigit():
-        return True  # corrupted content: no live holder can own it
-    return _pid_is_dead(int(raw))
-
-
-def _pid_is_dead(pid: int) -> bool:
-    """True when no process with this PID is running."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    except OverflowError:
-        return True  # pid beyond C int range: can never exist
-    except PermissionError:
-        return False  # a process we cannot signal is still alive
-    return False
+        return None
+    return int(raw) if raw.isdigit() else None

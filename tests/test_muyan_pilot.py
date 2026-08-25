@@ -144,11 +144,35 @@ def test_recent_result_returns_newest_pr_opened_or_blocked_issue(monkeypatch):
 
     def fake_list(repo, label, state="open"):
         calls.append((label, state))
-        return [pr_opened] if label == "ai-pr-opened" else [blocked]
+        if label == "ai-pr-opened":
+            return [pr_opened]
+        if label == "ai-fix-needed":
+            return []
+        return [blocked]
 
     monkeypatch.setattr(muyan_pilot, "list_labeled_issues", fake_list)
     assert muyan_pilot.recent_result("xqliu/muyan-pilot") == blocked
-    assert calls == [("ai-pr-opened", "all"), ("ai-blocked", "all")]
+    assert calls == [
+        ("ai-pr-opened", "all"), ("ai-fix-needed", "all"), ("ai-blocked", "all"),
+    ]
+
+
+def test_recent_result_includes_fix_needed_issue(monkeypatch):
+    """`ai-fix-needed` is a result state too: a delivery waiting for the
+    Fixer shows up in the status report (Issue #45 round-5 review,
+    Major 1)."""
+    fix_needed = {"number": 7, "title": "fixing", "url": "u7", "state": "OPEN"}
+    blocked = {"number": 5, "title": "stuck", "url": "u5", "state": "OPEN"}
+
+    def fake_list(repo, label, state="open"):
+        if label == "ai-fix-needed":
+            return [fix_needed]
+        if label == "ai-blocked":
+            return [blocked]
+        return []
+
+    monkeypatch.setattr(muyan_pilot, "list_labeled_issues", fake_list)
+    assert muyan_pilot.recent_result("xqliu/muyan-pilot") == fix_needed
 
 
 def test_recent_result_prefers_pr_opened_when_newer(monkeypatch):
@@ -156,7 +180,11 @@ def test_recent_result_prefers_pr_opened_when_newer(monkeypatch):
     blocked = {"number": 5, "title": "stuck", "url": "u5", "state": "OPEN"}
 
     def fake_list(repo, label, state="open"):
-        return [pr_opened] if label == "ai-pr-opened" else [blocked]
+        if label == "ai-pr-opened":
+            return [pr_opened]
+        if label == "ai-fix-needed":
+            return []
+        return [blocked]
 
     monkeypatch.setattr(muyan_pilot, "list_labeled_issues", fake_list)
     assert muyan_pilot.recent_result("xqliu/muyan-pilot") == pr_opened
@@ -457,9 +485,13 @@ def test_status_report_shows_capacity_and_free_slots(monkeypatch, tmp_path):
 
 
 def test_status_report_shows_occupied_slots_with_pids(monkeypatch, tmp_path):
+    import pilot_slots
+
     slot_dir = tmp_path / ".muyan-pilot" / "slots"
-    slot_dir.mkdir(parents=True)
-    (slot_dir / "slot-1").write_text(str(os.getpid()), encoding="utf-8")
+    # A slot is occupied only while its flock lock is held: hold it in
+    # this process for the duration of the report.
+    held = pilot_slots.acquire_slot(slot_dir, 1, os.getpid())
+    assert held is not None
     monkeypatch.setattr(
         muyan_pilot, "freeze_base",
         lambda repo_dir, base_branch: "abc123def456",
@@ -479,6 +511,33 @@ def test_status_report_shows_occupied_slots_with_pids(monkeypatch, tmp_path):
     assert "slots: 1/2" in report
     assert f"slot-1: pid={os.getpid()}" in report
     assert "slot-2" not in report
+    held.release()
+
+
+def test_status_report_shows_free_slot_when_file_exists_without_lock(
+    monkeypatch, tmp_path,
+):
+    """The lock, not the file, is the token: a leftover slot file from a
+    dead process is reported as free."""
+    slot_dir = tmp_path / ".muyan-pilot" / "slots"
+    slot_dir.mkdir(parents=True)
+    (slot_dir / "slot-1").write_text("4242\n", encoding="utf-8")
+    monkeypatch.setattr(
+        muyan_pilot, "freeze_base",
+        lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "recent_result", lambda repo: None)
+    config = {
+        "source_repos": ["xqliu/muyan-pilot"],
+        "repo_dir": tmp_path,
+        "base_branch": "main",
+        "max_concurrency": 1,
+        "slot_dir": slot_dir,
+    }
+    report = muyan_pilot.status_report(config)
+    assert "slots: 0/1" in report
 
 
 def test_slot_lines_ignores_corrupted_slot_file(tmp_path):

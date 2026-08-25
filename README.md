@@ -33,7 +33,7 @@ python3 muyan_pilot.py add "任务标题" --body "任务描述" --config muyan-p
 # 派发到指定 source repo（必须在配置 source_repos 中）
 python3 muyan_pilot.py add "任务标题" --repo xqliu/muyan-ceo --config muyan-pilot.toml
 
-# 查看每个 source repo 的当前任务（ai-in-progress）、待办（ai-ready）和最近结果（ai-pr-opened / ai-blocked）
+# 查看每个 source repo 的当前任务（ai-in-progress）、待办（ai-ready）和最近结果（ai-pr-opened / ai-fix-needed / ai-blocked）
 python3 muyan_pilot.py status --config muyan-pilot.toml
 ```
 
@@ -82,17 +82,17 @@ cp .muyan-pilot.example.toml muyan-pilot.toml
 # 编辑 muyan-pilot.toml
 ```
 
-Runner 每次处理一个 Issue 后退出，由 systemd timer 再次触发；不在 Python 内实现 daemon，不引入数据库、队列、重试或复杂恢复。没有人为的任务时长上限；命令错误立即失败，真正卡死时通过 systemd/journal 排查并人工停止。并发上限见下一节 `max_concurrency`：拿不到 slot 的 Runner 记录 `capacity_full` 后正常退出，不领取 Issue。
+Runner 每次处理一个 delivery：领取（或恢复）一个 Issue 后，在整个 implement → review → fix → merge 期间持有并发 slot，PR 合并或终态失败后退出，由 systemd timer 再次触发；不在 Python 内实现 daemon，不引入数据库、队列、重试或复杂恢复。没有人为的任务时长上限；命令错误立即失败，真正卡死时通过 systemd/journal 排查并人工停止。并发上限见下一节 `max_concurrency`：拿不到 slot 的 Runner 记录 `capacity_full` 后正常退出，不领取 Issue。
 
 ## 并发限制（max_concurrency）
 
-本机允许的 Pilot 并发任务数由 `muyan-pilot.toml` 的 `max_concurrency` 配置：必须是正整数，缺失时默认 1（本地 AI/GPU 只能稳定服务一个任务）；非整数、布尔值、0 或负数启动即 fail fast。slot 状态在 `<repo_dir>/.muyan-pilot/slots/slot-N`（N = 1..max_concurrency），每个 slot 文件由 `O_EXCL` 原子创建、内容写持有者 PID——跨进程互斥，不依赖进程内计数或 GitHub `ai-in-progress` 标签，多个 systemd/manual Runner 同时启动也不会突破限制。
+本机允许的 Pilot 并发任务数由 `muyan-pilot.toml` 的 `max_concurrency` 配置：必须是正整数，缺失时默认 1（本地 AI/GPU 只能稳定服务一个任务）；非整数、布尔值、0 或负数启动即 fail fast。slot 状态在 `<repo_dir>/.muyan-pilot/slots/slot-N`（N = 1..max_concurrency）：每个 slot 文件是一个普通的锁目标，**文件上的排他 `flock(2)` 锁就是所有权**——内核保证同一时刻至多一个进程持有某个 slot 的锁。持有者 PID 只作为 `status` 展示的观察性元数据写入文件，不是所有权依据；没有 stale PID/超时回收启发式，没有 atexit/信号清理协议。
 
-- 并发额度按完整任务生命周期计算：Runner 在领取 Issue 之前取得 slot，implement → review → fix → PR 期间始终占用，进程退出时释放；
-- 同一任务内部 implement/review/fix 在同一个 Pi session 内串行执行，共用同一个 slot，任意时刻最多一个 Pi 子进程；
+- 并发额度按完整任务生命周期计算：Runner 在领取 Issue 之前取得 slot，implement → review → fix → merge 期间始终占用；PR 打开后任务没有结束，Runner 持有 slot 轮询 PR 状态（15 秒一次，与空闲 timer 同频）：PR `MERGED` 或终态失败（PR 未合并被关闭 → Issue 标记 `ai-blocked`）才释放 slot 退出；期间 Issue 进入 `ai-fix-needed`（review finding 或 base 冲突）时，由**同一个持有 slot 的 Runner** 在同一 run 上修复同一个 PR（见下节），不会为同一个 run 启动第二个 Pi，也不会让新 Runner 插队领取新 Issue；
+- 同一任务内部 implement/review/fix 串行执行，共用同一个 slot，任意时刻最多一个 Pi 子进程；
 - 达到 `max_concurrency` 时，新 Runner 不领取 Issue、不修改标签、不调用 Pi，记录结构化日志 `capacity_full max_concurrency=... slot_dir=...` 后正常退出（退出码 0），等 systemd timer 下次触发；
-- slot 在进程正常结束（atexit）和 SIGTERM/SIGINT（systemd stop / Ctrl+C）时自动删除；被 SIGKILL 的进程无法运行清理，但其 slot 文件的 PID 已不在运行，下一个 Runner 会把它当作 stale slot 重新领取——异常退出不会造成永久锁死；
-- `muyan_pilot.py status` 显示配置容量和当前已占用 slot（`capacity: N`、`slots: k/N`、`slot-N: pid=...`）；
+- slot 锁由打开的文件描述符持有：进程正常结束、SIGTERM/SIGINT（systemd stop / Ctrl+C）或被 SIGKILL 时，内核自动释放锁——活着的持有者永远不会因为时间或 PID 检查丢失 slot，死掉的持有者永远不会占住 slot，异常退出不会造成永久锁死；slot 文件本身保留（它是锁目标，不是令牌），`status` 按锁的实际状态报告占用；
+- `muyan_pilot.py status` 显示配置容量和当前已占用 slot（`capacity: N`、`slots: k/N`、`slot-N: pid=...`）；占用判定用非阻塞 `flock` 探测（探测成功即空闲并立即解锁），PID 仅用于展示；
 - 直接在 Pilot 外手工运行的任意 `pi` 命令不属于该配置控制范围：`max_concurrency` 只约束 Runner 领取任务时启动的 Pi，手工 `pi` 不受 slot 管理，也不会释放或占用任何 slot。
 
 ## 全链路 run_id（correlation ID）
@@ -131,3 +131,22 @@ grep -r e07383c2 /home/xqianliu/Documents/muyan/muyan-pilot/.worktrees/
 Pi 创建 PR 前必须重新 fetch：若 `origin/<base_branch>` 已前进，需合入最新 base、手工解决冲突、重跑完整测试与 review 后再推送。Runner 在验收时用 `git merge-base --is-ancestor origin/<base_branch> HEAD` 验证最新远端 base 是交付 HEAD 的祖先；不满足则 fail fast，不接受 PR。不自动解决冲突，不 force push，不 merge 或 push 保护分支。
 
 `.worktrees/` 已加入 `.gitignore`，不会进入版本库。
+
+## PR 创建后的 review/fix 循环（Issue #45）
+
+PR 创建后任务没有结束：Issue 进入可恢复的 review/fix 状态。`ai-pr-opened` 表示**等待 review**（干净 PR 不会被送进 Fixer）；只有显式的 `ai-fix-needed` 状态（Review finding 或 base 前进/冲突）才会触发 Fixer。Review finding、base 前进或 merge conflict 都是可修复状态，不等于任务失败，也不重新进入 ready 队列。
+
+- 每个 tick 先按顺序扫描 source repos 中 `ai-fix-needed`（且未 `ai-blocked`）的 open Issue；找到时，Runner 只信任由维护者（OWNER/MAINTAINER/MEMBER/COLLABORATOR）发布的最新 `Muyan Pilot opened PR:` 评论（公开评论永远不可信），从中恢复 run 现场（`run_id`、base_branch、base_sha、PR URL），branch 和 worktree 由配置的 repo、Issue 编号和 run_id **推导**（绝不从评论读取，评论无法指定任意本地路径），在**原 worktree、原 branch、同一 PR** 上继续修复，而不是领取新 Issue。现场无法恢复（评论缺少完整现场、无可信评论）时 fail fast：Issue 标记 `ai-blocked` 并写明具体原因，本 tick 停止，不做猜测，也不让新任务插队。任何 git/Pi 变更前，Runner 先校验配置的 base 和 open PR（head repo、head branch、base、run marker、精确 URL）。
+- 恢复后先重新 fetch：若最新远端 base 不是 worktree HEAD 的祖先，Runner 在原 branch 上执行普通 `git merge origin/<base>`；出现冲突时冲突原样保留交给 Fixer（Pi）解决，Runner 不自动解决、不 `--abort`、不 force push、不 push 保护分支。
+- Fixer 在原 worktree 中解决冲突和 review finding，重跑完整测试、100% 覆盖率、验证和完整 review 后，只 push 原 task branch；PR 头分支前进，**PR number 保持不变**，Runner 重新验收同一个 PR 并写 `Muyan Pilot fixed PR:` 进度评论（同一 run marker 和 `run_id=` 字段）。
+- 修复成功：Runner 重新验收同一个 PR 后，Issue 从 `ai-fix-needed` 回到 `ai-pr-opened`（等待 review），`ai-fix-needed` 被消费，后续 tick 不会重复启动 Fixer。
+- 恢复、merge、fix 或验收任一步失败：Issue 标记 `ai-blocked`（移除 `ai-fix-needed`），评论写明具体失败和完整现场；PR、branch、worktree 原样保留，不删除、不关闭、不重建。
+- Runner/服务重启后，仅凭 Issue 标签、评论 marker、PR head、branch 和 worktree 即可恢复该 fix loop；implement/review/fix/merge 串行占用同一个并发 slot，不会为同一个 run 启动第二个 Pi。
+
+状态语义：
+
+```text
+ai-in-progress → PR opened (ai-pr-opened) → review
+  → fix-needed / base-conflict (ai-fix-needed) → fix same PR
+  → full re-review (ai-pr-opened) → merge (人工)
+```

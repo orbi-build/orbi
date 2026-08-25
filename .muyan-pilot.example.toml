@@ -12,8 +12,11 @@ prompt = "prompt.md"
 base_branch = "main"
 # Maximum concurrent Pilot tasks on this machine. Must be a positive integer;
 # missing means 1. The local AI/GPU can only serve one stable task, so keep
-# the default. A Runner that cannot take a slot logs capacity_full and exits
-# without claiming an Issue.
+# the default. A slot (flock on <repo_dir>/.muyan-pilot/slots/slot-N) is
+# taken before any claim and held for the whole delivery lifecycle
+# (implement -> review -> fix -> merge); the kernel releases it when the
+# Runner exits, however it exits. A Runner that cannot take a slot logs
+# capacity_full and exits without claiming an Issue.
 max_concurrency = 1
 # Optional Pi skills. Paths may be absolute, use ~, or be relative to this file.
 skills = []
