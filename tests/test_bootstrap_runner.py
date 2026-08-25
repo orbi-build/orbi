@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -222,6 +223,143 @@ def test_pick_issue_uses_github_queue(monkeypatch):
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked",
         "--json", "number,title,body", "--limit", "1",
     ]]
+
+
+def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
+    """A killed runner leaves `ai-ready`+`ai-in-progress` behind (Issue
+    #18): the claim scan must recover such in-flight Issues, so the
+    restart resume (run id / worktree / progress comment reuse) is
+    reachable in the production flow — the ready scan alone excludes
+    `ai-in-progress` and would strand the run forever."""
+    issue = {"number": 18, "title": "task", "body": "body"}
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return json.dumps([issue])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    # No slot dir yet: every slot is free, so the scan runs.
+    assert runner.pick_in_progress_issue(
+        "xqliu/muyan-pilot", tmp_path / "slots", 1,
+    ) == issue
+    assert calls == [[
+        "gh", "issue", "list", "--repo", "xqliu/muyan-pilot",
+        "--state", "open", "--search",
+        "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
+        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked",
+        "--json", "number,title,body", "--limit", "1",
+    ]]
+
+
+def test_pick_in_progress_issue_returns_none_when_idle(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(
+        runner, "run_command", lambda command, **kwargs: "[]",
+    )
+    assert runner.pick_in_progress_issue(
+        "xqliu/muyan-pilot", tmp_path / "slots", 1,
+    ) is None
+
+
+def test_pick_in_progress_issue_skips_when_another_runner_is_live(
+    monkeypatch, tmp_path,
+):
+    """A slot held by ANOTHER process proves a live runner is working
+    (Issue #39 slot semantics): the `ai-in-progress` label is in
+    flight, not orphaned, so no second Pi may be started for it. This
+    runner's own slot (its own PID) does not block the scan."""
+    gh_calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: gh_calls.append(command) or "[]",
+    )
+    monkeypatch.setattr(runner, "slot_occupancy",
+                        lambda slot_dir, capacity: [(1, 4242)])
+    assert runner.pick_in_progress_issue(
+        "xqliu/muyan-pilot", tmp_path / "slots", 1,
+    ) is None
+    assert gh_calls == [], "no gh traffic while another runner is live"
+    # Own PID: the scan still runs (this runner holds its own slot).
+    monkeypatch.setattr(runner, "slot_occupancy",
+                        lambda slot_dir, capacity: [(1, os.getpid())])
+    assert runner.pick_in_progress_issue(
+        "xqliu/muyan-pilot", tmp_path / "slots", 1,
+    ) is None
+    assert len(gh_calls) == 1
+
+
+def test_pick_next_delivery_recovers_in_flight_issue_before_ready(
+    monkeypatch, tmp_path,
+):
+    """Claim order (Issue #18): resumable PRs first, then in-flight
+    restarts (killed runner, `ai-in-progress` left behind), then ready
+    Issues — a dead run is resumed, never skipped by the ready scan."""
+    in_flight = {"number": 2, "title": "in flight", "body": ""}
+    ready = {"number": 3, "title": "ready", "body": ""}
+    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda repo: None)
+    monkeypatch.setattr(
+        runner, "pick_in_progress_issue",
+        lambda repo, slot_dir, max_concurrency: (
+            in_flight if repo == "r1" else None
+        ),
+    )
+    monkeypatch.setattr(runner, "pick_issue", lambda repo: ready)
+    assert runner.pick_next_delivery(
+        ["r1", "r2"], tmp_path / "slots", 1,
+    ) == ("r1", in_flight, None)
+
+
+def test_pick_next_delivery_keeps_resumable_delivery_first(
+    monkeypatch, tmp_path,
+):
+    """An `ai-fix-needed` PR resume always beats an in-flight restart:
+    the PR already exists and must not be re-implemented."""
+    in_flight = {"number": 2, "title": "in flight", "body": ""}
+    resumable = {"number": 5, "title": "fix needed", "body": ""}
+    scene = {"run_id": "a1b2c3d4"}
+    monkeypatch.setattr(
+        runner, "pick_resumable_delivery",
+        lambda repo: (resumable, scene) if repo == "r2" else None,
+    )
+    monkeypatch.setattr(
+        runner, "pick_in_progress_issue",
+        lambda repo, slot_dir, max_concurrency: in_flight,
+    )
+    monkeypatch.setattr(runner, "pick_issue", lambda repo: in_flight)
+    assert runner.pick_next_delivery(
+        ["r1", "r2"], tmp_path / "slots", 1,
+    ) == ("r2", resumable, scene)
+
+
+def test_pick_next_delivery_falls_through_to_ready_when_no_in_flight(
+    monkeypatch, tmp_path,
+):
+    ready = {"number": 3, "title": "ready", "body": ""}
+    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda repo: None)
+    monkeypatch.setattr(
+        runner, "pick_in_progress_issue",
+        lambda repo, slot_dir, max_concurrency: None,
+    )
+    monkeypatch.setattr(runner, "pick_issue", lambda repo: ready)
+    assert runner.pick_next_delivery(
+        ["r1"], tmp_path / "slots", 1,
+    ) == ("r1", ready, None)
+
+
+def test_pick_next_delivery_returns_none_when_all_scans_empty(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda repo: None)
+    monkeypatch.setattr(
+        runner, "pick_in_progress_issue",
+        lambda repo, slot_dir, max_concurrency: None,
+    )
+    monkeypatch.setattr(runner, "pick_issue", lambda repo: None)
+    assert runner.pick_next_delivery(
+        ["r1"], tmp_path / "slots", 1,
+    ) is None
 
 
 def test_pick_next_issue_returns_first_ready_source(monkeypatch):
@@ -564,6 +702,75 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     last_body = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Muyan Pilot delivered" in last_body
     assert "- branch: muyan-pilot/xqliu-muyan-ceo-issue-4-a1b2c3d4" in last_body
+
+
+def test_process_issue_binds_run_id_before_the_resume_scan(
+    monkeypatch, tmp_path, caplog,
+):
+    """Run correlation (Issue #41): EVERY journal line of the attempt
+    carries the `[run_id]` prefix — including the claim-time lines of a
+    restart resume (the `ai-in-progress` label scan and `resuming_run`),
+    which run before the resume decision (review round 3, PR #42)."""
+    gh_calls, posted = make_fake_gh(monkeypatch, in_progress=True)
+    head = "0123456789abcdef0123456789abcdef01234567"
+    branch = "muyan-pilot/xqliu-muyan-ceo-issue-4-a1b2c3d4"
+
+    def fake_run(command, **kwargs):
+        gh_calls.append(command)
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([{"number": 4}])
+        if command[:2] == ["gh", "issue"]:
+            return ""
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps([{
+                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
+                "baseRefName": "main",
+                "headRefName": branch,
+                "headRefOid": head,
+                "headRepository": {"name": "muyan-pilot"},
+                "headRepositoryOwner": {"login": "muyantech"},
+                "body": "<!-- muyan-pilot:run=a1b2c3d4 -->\n\nPlan",
+            }])
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return branch
+        if command[:2] == ["git", "rev-parse"]:
+            return head
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123",
+    )
+    # The fresh id differs from the reused one: both are valid run ids
+    # of this attempt (generated, then replaced by the resumed run).
+    monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
+    monkeypatch.setattr(
+        runner, "latest_run_id", lambda repo_dir, source_repo, number:
+        "a1b2c3d4",
+    )
+    monkeypatch.setattr(
+        runner, "create_worktree", lambda *args: tmp_path / "wt",
+    )
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    with caplog.at_level("INFO"):
+        runner.process_issue(
+            {"number": 4, "title": "Fix", "body": "Body"},
+            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+             "base_branch": "main"},
+            "xqliu/muyan-ceo",
+        )
+    # No unprefixed line: the claim-time gh scan and resuming_run are
+    # part of the attempt's timeline.
+    for message in caplog.messages:
+        assert message.startswith("[ffffeeee]") \
+            or message.startswith("[a1b2c3d4]"), message
+    # The resume decision itself is logged under the REUSED run id.
+    resuming = [m for m in caplog.messages if "resuming_run" in m]
+    assert len(resuming) == 1
+    assert resuming[0].startswith("[a1b2c3d4]")
 
 
 def test_process_issue_starts_fresh_run_when_the_label_is_gone(
@@ -1370,7 +1577,10 @@ def _write_prompts(tmp_path):
 
 
 def test_main_returns_zero_when_queue_empty(monkeypatch, tmp_path):
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: None)
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: None,
+    )
     _write_prompts(tmp_path)
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
@@ -1384,7 +1594,12 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: ("xqliu/muyan-pilot", issue, None))
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: (
+            "xqliu/muyan-pilot", issue, None
+        ),
+    )
     monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: calls.append((args, kwargs)) or "https://github.com/x/y/pull/12")
     monkeypatch.setattr(
         runner, "wait_for_delivery",
@@ -1405,7 +1620,12 @@ def test_main_accepts_repeated_source_repo(monkeypatch, tmp_path):
     issue = {"number": 14, "title": "task"}
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"xqliu/muyan-pilot\", \"xqliu/muyan-ceo\"]\n", encoding="utf-8")
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: seen.append(repos) or (repos[0], issue, None))
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: (
+            seen.append(repos) or (repos[0], issue, None)
+        ),
+    )
     monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: "https://github.com/x/y/pull/14")
     monkeypatch.setattr(runner, "wait_for_delivery", lambda *a, **k: None)
     assert runner.main([
@@ -1560,16 +1780,29 @@ def make_fake_pi(tmp_path: Path, *, session_records: list[tuple[float, dict]],
     return [sys.executable, "-c", script]
 
 
+def fresh_timestamp(offset: float = 0.0) -> str:
+    """A session timestamp at (real) now + offset.
+
+    The watcher computes `stale_seconds` against the real clock, so the
+    fake session records must carry fresh timestamps: a fixed 2026 date
+    would look years stale and trip the 5-minute idle warning (Issue
+    #18) in every stream_pi test.
+    """
+    return (
+        datetime.now(timezone.utc) + timedelta(seconds=offset)
+    ).isoformat()
+
+
 def fake_session_records():
     return [
         (0.0, {"type": "session", "id": "sess-1",
-               "timestamp": "2026-08-25T02:00:00Z", "cwd": "/w"}),
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
         (0.1, {"type": "message", "id": "u1",
-               "timestamp": "2026-08-25T02:00:00Z",
+               "timestamp": fresh_timestamp(),
                "message": {"role": "user", "content": [
                    {"type": "text", "text": "SECRET ISSUE BODY"}]}}),
         (0.2, {"type": "message", "id": "a1",
-               "timestamp": "2026-08-25T02:00:01Z",
+               "timestamp": fresh_timestamp(1),
                "message": {"role": "assistant", "content": [
                    {"type": "toolCall", "id": "t1", "name": "bash",
                     "arguments": {"command": "pytest tests/"}}]}}),
@@ -1696,7 +1929,7 @@ def test_stream_pi_activity_keeps_action_after_tool_result(tmp_path, caplog):
     """A tool result updates result only; the action line is not repeated."""
     records = fake_session_records() + [
         (0.5, {"type": "message", "id": "r1",
-               "timestamp": "2026-08-25T02:00:02Z",
+               "timestamp": fresh_timestamp(2),
                "message": {"role": "toolResult", "toolCallId": "t1",
                            "toolName": "bash",
                            "content": [{"type": "text", "text": "ok"}]}}),
@@ -1856,12 +2089,12 @@ def test_stream_pi_model_wait_then_resumed_no_warning_spam(
     agent)."""
     records = fake_session_records() + [
         (0.5, {"type": "message", "id": "r1",
-               "timestamp": "2026-08-25T02:00:02Z",
+               "timestamp": fresh_timestamp(2),
                "message": {"role": "toolResult", "toolCallId": "t1",
                            "toolName": "bash",
                            "content": [{"type": "text", "text": "ok"}]}}),
         (1.2, {"type": "message", "id": "a2",
-               "timestamp": "2026-08-25T02:00:03Z",
+               "timestamp": fresh_timestamp(3),
                "message": {"role": "assistant", "content": [
                    {"type": "text", "text": "done"}]}}),
     ]
@@ -1915,7 +2148,7 @@ def test_stream_pi_no_model_wait_after_assistant_text(tmp_path, caplog):
     # the transition.
     records = fake_session_records() + [
         (0.4, {"type": "message", "id": "a2",
-               "timestamp": "2026-08-25T02:00:02Z",
+               "timestamp": fresh_timestamp(2),
                "message": {"role": "assistant", "content": [
                    {"type": "text", "text": "done"}]}}),
     ]
@@ -1931,6 +2164,113 @@ def test_stream_pi_no_model_wait_after_assistant_text(tmp_path, caplog):
         )
     assert " model_wait " not in caplog.text
     assert " resumed " not in caplog.text
+
+
+def test_stream_pi_idle_warn_default_is_five_minutes():
+    # The Issue #18 contract: no model/session activity for 5 minutes
+    # logs an idle warning.
+    assert runner.PI_IDLE_WARN_SECONDS == 300.0
+
+
+def test_stream_pi_logs_idle_warning_once_when_session_stalls(
+    tmp_path, caplog,
+):
+    """Issue #18 acceptance: a stalled session (no model/session
+    activity past the threshold, not waiting on the model) logs ONE
+    `pi_idle` WARNING carrying `stale_seconds` — never a warning per
+    heartbeat."""
+    command = make_fake_pi(tmp_path, session_records=[], sleep=1.2)
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.5,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    idles = [line for line in lines if " pi_idle " in line]
+    assert len(idles) == 1, f"exactly one idle warning: {lines}"
+    idle = idles[0]
+    assert "run=run1" in idle
+    assert "issue=xqliu/muyan-pilot#24" in idle
+    assert "role=implement" in idle
+    assert "phase=starting" in idle
+    assert "stale_seconds=" in idle
+    # The warning is a WARNING (visible in journalctl without -p info).
+    assert any(
+        record.levelno == logging.WARNING
+        and " pi_idle " in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_stream_pi_logs_pi_resumed_after_idle_warning(tmp_path, caplog):
+    """The first new session event after an idle warning logs
+    `pi_resumed` (Issue #18: 恢复后输出 resumed)."""
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.8, {"type": "message", "id": "a1",
+               "timestamp": fresh_timestamp(1),
+               "message": {"role": "assistant", "content": [
+                   {"type": "text", "text": "back"}]}}),
+    ]
+    command = make_fake_pi(
+        tmp_path, session_records=records, stdout="ok",
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.4,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    idles = [line for line in lines if " pi_idle " in line]
+    resumed = [line for line in lines if " pi_resumed " in line]
+    assert len(idles) == 1
+    assert len(resumed) == 1
+    # resumed comes after the warning and carries the run context.
+    assert lines.index(resumed[0]) > lines.index(idles[0])
+    assert "run=run1" in resumed[0]
+    assert "issue=xqliu/muyan-pilot#24" in resumed[0]
+    assert "role=implement" in resumed[0]
+    assert "phase=starting" in resumed[0]
+
+
+def test_stream_pi_no_idle_warning_during_model_wait(tmp_path, caplog):
+    """Issue #40 semantics: while the newest session event is a tool
+    result the model is expected to reply next — a long silence is a
+    slow model, never an idle warning (no warning spam)."""
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.0, {"type": "message", "id": "a1",
+               "timestamp": fresh_timestamp(),
+               "message": {"role": "assistant", "content": [
+                   {"type": "toolCall", "id": "t1", "name": "bash",
+                    "arguments": {"command": "pytest tests/"}}]}}),
+        (0.1, {"type": "message", "id": "r1",
+               "timestamp": fresh_timestamp(1),
+               "message": {"role": "toolResult", "toolCallId": "t1",
+                           "toolName": "bash",
+                           "content": [{"type": "text", "text": "ok"}]}}),
+    ]
+    command = make_fake_pi(
+        tmp_path, session_records=records, sleep=1.2,
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.5,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    assert " pi_idle " not in caplog.text
+    # The silence is visible as the model_wait state instead.
+    waits = [line for line in caplog.text.splitlines()
+             if " model_wait " in line]
+    assert len(waits) == 1
 
 
 def test_stream_pi_resumed_run_follows_new_session_file(tmp_path, caplog):
@@ -1951,9 +2291,9 @@ def test_stream_pi_resumed_run_follows_new_session_file(tmp_path, caplog):
         tmp_path,
         session_records=[
             (0.0, {"type": "session", "id": "new-session",
-                   "timestamp": "2026-08-25T03:00:00Z", "cwd": "/w"}),
+                   "timestamp": fresh_timestamp(), "cwd": "/w"}),
             (0.1, {"type": "message", "id": "a1",
-                   "timestamp": "2026-08-25T03:00:01Z",
+                   "timestamp": fresh_timestamp(1),
                    "message": {"role": "assistant", "content": [
                        {"type": "toolCall", "id": "t1", "name": "bash",
                         "arguments": {"command": "pytest tests/"}}]}}),
@@ -2324,14 +2664,14 @@ def test_main_capacity_full_does_not_pick_issue_or_call_pi(
     held = pilot_slots.acquire_slot(slot_dir, 1, os.getpid())
     assert held is not None
 
-    def fail_if_called(repos):
+    def fail_if_called(repos, slot_dir, max_concurrency):
         raise AssertionError("pick_next_delivery must not run when capacity is full")
 
     monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
     monkeypatch.setattr(runner, "process_issue", fail_if_called)
     # The guard itself must fail loudly if it is ever reached.
     with pytest.raises(AssertionError, match="must not run when capacity is full"):
-        fail_if_called(["owner/repo"])
+        fail_if_called(["owner/repo"], Path("slots"), 1)
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
     assert "capacity_full" in caplog.text
@@ -2355,9 +2695,10 @@ def test_main_holds_slot_while_processing_issue(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     seen = {}
 
-    def fake_pick(repos):
-        slot_dir = tmp_path / ".muyan-pilot" / "slots"
-        seen["occupancy"] = pilot_slots.slot_occupancy(slot_dir, 1)
+    def fake_pick(repos, slot_dir, max_concurrency):
+        seen["occupancy"] = pilot_slots.slot_occupancy(
+            tmp_path / ".muyan-pilot" / "slots", 1,
+        )
         return ("owner/repo", issue, None)
 
     monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
@@ -2374,7 +2715,10 @@ def test_main_reacquires_slot_after_previous_release(monkeypatch, tmp_path):
     config = tmp_path / "muyan-pilot.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     _write_prompts(tmp_path)
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: None)
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: None,
+    )
 
     assert runner.main(["--config", str(config)]) == 0
     slot_dir = tmp_path / ".muyan-pilot" / "slots"
@@ -3139,7 +3483,12 @@ def test_main_holds_slot_through_delivery_wait(monkeypatch, tmp_path):
     config = tmp_path / "muyan-pilot.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     _write_prompts(tmp_path)
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: ("owner/repo", issue, None))
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: (
+            "owner/repo", issue, None
+        ),
+    )
     monkeypatch.setattr(runner, "process_issue", lambda *a, **k: PR_URL)
 
     started = threading.Event()

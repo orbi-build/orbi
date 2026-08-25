@@ -688,11 +688,121 @@ def test_killed_runner_slot_is_released_by_the_kernel(clone, tmp_path):
     # The slot file survives the kill (it is the lock target) ...
     assert slot_files(clone), "killed process must leave its slot file"
     # ... but the lock is gone: the next runner takes the slot back
-    # (not capacity_full) and, with no ready Issue left, exits cleanly
-    # via no_ready_issue.
+    # (not capacity_full). The dead run's failure path is simulated
+    # (label cleanup: ai-in-progress removed, ai-blocked added), so no
+    # scan — resumable, in-flight or ready — can pick the Issue up and
+    # the runner exits cleanly via no_ready_issue. (The no-cleanup
+    # scene, where the claim label is left behind, is the restart
+    # resume covered by
+    # test_killed_runner_is_resumed_by_the_next_claim_scan.)
+    state_now = read_state(state)
+    labels = state_now["issues"]["7"]["labels"]
+    labels.remove("ai-in-progress")
+    labels.append("ai-blocked")
+    state_now["issues"]["7"]["labels"] = labels
+    atomic_write_json(state, state_now)
     second = start_runner(config, bin_dir, state, pi_log)
     out, err = second.communicate(timeout=120)
     assert second.returncode == 0, err
     assert "capacity_full" not in err
     assert "no_ready_issue" in err
+    assert slots_held(clone) == [(1, None)], "slot must be released on exit"
+
+
+def test_killed_runner_is_resumed_by_the_next_claim_scan(clone, tmp_path):
+    """Issue #18 acceptance (review round 3, PR #42): a SIGKILLed runner
+    leaves the task worktree AND the `ai-in-progress` claim label behind
+    (the failure path never ran). The NEXT runner must recover the
+    in-flight Issue through the real claim scan (a fresh main() tick —
+    no direct process_issue call): it reuses the same run id, the same
+    worktree and PATCHes the same progress comment (found by its hidden
+    run marker) instead of creating a second run — never
+    no_ready_issue."""
+    bin_dir = install_fakes(tmp_path)
+    state = tmp_path / "gh-state.json"
+    write_state(state, {"7": ["ai-ready"]})
+    pi_log = tmp_path / "pi.log"
+    config = write_config(clone, tmp_path, 1)
+
+    first = start_runner(config, bin_dir, state, pi_log)
+    wait_for(
+        lambda: len(pi_invocations(pi_log)) == 1,
+        what="first runner to call Pi",
+    )
+    first.kill()  # SIGKILL: no cleanup can run
+    first.wait(timeout=10)
+
+    # The kill left the claim label behind (the failure path never ran).
+    snap = read_state(state)
+    assert "ai-in-progress" in snap["issues"]["7"]["labels"]
+    assert "ai-ready" in snap["issues"]["7"]["labels"]
+    # The dead run's task worktree survives; its name carries the run id.
+    worktrees = sorted(
+        (clone / ".worktrees").glob("muyan-pilot-owner-repo-issue-7-*"),
+    )
+    assert len(worktrees) == 1
+    dead_worktree = worktrees[0]
+    dead_run_id = dead_worktree.name.rsplit("-", 1)[-1]
+    # The dead run's progress comment (hidden run marker) exists.
+    progress_bodies = [
+        c["body"] for c in snap["comments"]
+        if "**Muyan Pilot progress**" in c["body"]
+    ]
+    assert len(progress_bodies) == 1
+    assert f"<!-- muyan-pilot:run={dead_run_id} -->" in progress_bodies[0]
+
+    # The NEXT runner (a fresh main() tick) resumes the SAME run through
+    # the claim scan and delivers: the PR opens ...
+    second = start_runner(config, bin_dir, state, pi_log)
+    wait_for(
+        lambda: "ai-pr-opened" in
+        read_state(state)["issues"]["7"]["labels"],
+        timeout=120,
+        what="second runner to resume the in-flight issue and open the PR",
+    )
+    snap = read_state(state)
+    # ... on the SAME worktree (no second worktree for the Issue) ...
+    worktrees = sorted(
+        (clone / ".worktrees").glob("muyan-pilot-owner-repo-issue-7-*"),
+    )
+    assert [path.name for path in worktrees] == [dead_worktree.name]
+    # ... re-running Pi in it (one more invocation, same run) ...
+    assert len(pi_invocations(pi_log)) == 2
+    # ... and keeping the SAME progress comment (one, never two) under
+    # the original run marker.
+    progress_bodies = [
+        c["body"] for c in snap["comments"]
+        if "**Muyan Pilot progress**" in c["body"]
+    ]
+    assert len(progress_bodies) == 1, (
+        f"restart must not create a second progress comment: "
+        f"{snap['comments']}"
+    )
+    assert f"<!-- muyan-pilot:run={dead_run_id} -->" in progress_bodies[0]
+    # The delivery finished: the in-progress label is gone.
+    assert "ai-in-progress" not in snap["issues"]["7"]["labels"]
+    assert "ai-pr-opened" in snap["issues"]["7"]["labels"]
+    # The resumed run completes the full lifecycle (review -> fix ->
+    # re-review -> auto-merge in the fake world) and exits cleanly.
+    wait_for(
+        lambda: "ai-merged" in read_state(state)["issues"]["7"]["labels"],
+        timeout=180,
+        what="resumed run to review, fix and merge",
+    )
+    # The final delivery summary PATCHed the SAME progress comment (the
+    # summary lands after the ai-pr-opened transition, so it is checked
+    # here, once the delivery is terminal).
+    snap = read_state(state)
+    progress_bodies = [
+        c["body"] for c in snap["comments"]
+        if "**Muyan Pilot progress**" in c["body"]
+    ]
+    assert len(progress_bodies) == 1
+    assert f"<!-- muyan-pilot:run={dead_run_id} -->" in progress_bodies[0]
+    assert "Muyan Pilot delivered" in progress_bodies[0]
+    out, err = second.communicate(timeout=120)
+    assert second.returncode == 0, err
+    assert "no_ready_issue" not in err
+    assert "capacity_full" not in err
+    assert "delivery_auto_merged" in err
     assert slots_held(clone) == [(1, None)], "slot must be released on exit"

@@ -35,7 +35,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from pilot_slots import acquire_slot, slot_dir_for
+from pilot_slots import acquire_slot, slot_dir_for, slot_occupancy
 from pi_activity import (
     SessionWatcher,
     activity_snapshot,
@@ -64,6 +64,11 @@ PI_POLL_INTERVAL = 15.0
 # Pi session runs, so a mobile user sees live progress without any
 # command. The journal cadence is the poll interval above.
 PI_HEARTBEAT_SECONDS = 30.0
+# Idle warning (Issue #18): no model/session activity for 5 minutes
+# (and the model is not expected to reply next) logs one `pi_idle`
+# warning; the first new session event after it logs `pi_resumed`.
+# A slow active model (model_wait, Issue #40) is never reported idle.
+PI_IDLE_WARN_SECONDS = 300.0
 
 # The bootstrap runner streams every Pi session of a run through the same
 # live activity pipeline (Issue #24/#40); implement/review/fix share the
@@ -267,6 +272,45 @@ def pick_issue(repo: str) -> dict | None:
         "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
         f"-label:{FIX_NEEDED_LABEL} -label:{MERGED_LABEL} "
         f"-label:{BLOCKED_LABEL}",
+        "--json", "number,title,body", "--limit", "1",
+    ])
+    return parse_issue_list(raw)
+
+
+def pick_in_progress_issue(
+    repo: str, slot_dir: Path, max_concurrency: int,
+) -> dict | None:
+    """Return one in-flight Issue a killed runner left behind.
+
+    A SIGKILLed runner leaves the task worktree and the `ai-in-progress`
+    claim label behind (the failure path never ran); the Issue keeps
+    `ai-ready` too (a claim never removes it). The ready scan excludes
+    `ai-in-progress`, so without this scan the run is never resumed and
+    the Issue is stuck forever — the Issue #18 acceptance "restart finds
+    the same progress comment by run marker" would be unreachable in the
+    production flow. `process_issue`'s resume block (newest worktree's
+    run id) then reuses the run instead of starting a second one. Every
+    other delivery state is excluded: those Issues are owned by the
+    resumable-PR scan (`ai-fix-needed`) or are terminal.
+
+    The scan runs only when no OTHER runner is live: a slot held by
+    another process proves a live runner is working (on this or another
+    Issue), so the `ai-in-progress` label is in flight, not orphaned —
+    resuming it here would start a second Pi for a run that is alive
+    (Issue #39 slot semantics: the flock lock is the source of truth).
+    This runner's own slot is excluded: `main` took it before the claim
+    scan and holds it for the whole delivery.
+    """
+    mine = os.getpid()
+    for _, holder in slot_occupancy(slot_dir, max_concurrency):
+        if holder is not None and holder != mine:
+            return None
+    raw = run_command([
+        "gh", "issue", "list", "--repo", repo, "--state", "open",
+        "--search",
+        "label:ai-ready label:ai-in-progress "
+        f"-label:{PR_OPENED_LABEL} -label:{FIX_NEEDED_LABEL} "
+        f"-label:{MERGED_LABEL} -label:{BLOCKED_LABEL}",
         "--json", "number,title,body", "--limit", "1",
     ])
     return parse_issue_list(raw)
@@ -528,19 +572,32 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
     raise error
 
 
-def pick_next_delivery(repos: list[str]) -> tuple[str, dict, dict | None] | None:
-    """Scan sources in order: resumable PRs first, then ready Issues.
+def pick_next_delivery(
+    repos: list[str], slot_dir: Path, max_concurrency: int,
+) -> tuple[str, dict, dict | None] | None:
+    """Scan sources in order: resumable PRs, in-flight restarts, ready.
 
     Returns `(source_repo, issue, scene)` where `scene` is None for a
-    fresh claim. Resuming an open PR keeps the single concurrency slot
-    occupied by the same run (implement → review → fix → merge), so a
-    second Pi is never started for a run that already has a PR.
+    fresh claim or a restart resume. Resuming an open PR keeps the
+    single concurrency slot occupied by the same run (implement →
+    review → fix → merge), so a second Pi is never started for a run
+    that already has a PR. An in-flight Issue (a killed runner left
+    `ai-in-progress` behind, Issue #18) is recovered before the ready
+    scan: `process_issue`'s resume block reuses the newest worktree's
+    run id, so the same progress comment is kept instead of a second
+    run being started on an Issue that is already in flight.
     """
     for repo in repos:
         selected = pick_resumable_delivery(repo)
         if selected is not None:
             issue, scene = selected
             return repo, issue, scene
+    for repo in repos:
+        issue = pick_in_progress_issue(
+            repo, slot_dir, max_concurrency,
+        )
+        if issue is not None:
+            return repo, issue, None
     for repo in repos:
         issue = pick_issue(repo)
         if issue is not None:
@@ -710,6 +767,7 @@ def stream_pi(
     cwd: Path,
     timeout: int | None = None,
     poll_interval: float = PI_POLL_INTERVAL,
+    idle_warn_seconds: float = PI_IDLE_WARN_SECONDS,
     run_id: str,
     issue: int,
     source_repo: str,
@@ -741,6 +799,12 @@ def stream_pi(
     so mobile users never see a static starting comment for the whole
     run. A callback error is logged and never interrupts the task
     (observability is best-effort, the delivery is not).
+
+    Idle warning (Issue #18): when no model/session event arrives for
+    `idle_warn_seconds` (default 5 minutes) and the state is NOT
+    model_wait, ONE `pi_idle` WARNING carries `stale_seconds`; the
+    first new session event after it logs `pi_resumed`. A slow active
+    model (model_wait) is never reported idle (Issue #40).
     """
     # The raw pi command embeds the full prompt and Issue body; only the
     # redacted form may ever reach the journal or an exception message.
@@ -782,6 +846,9 @@ def stream_pi(
     # that carry the state, so a slow model never looks idle and no
     # warning is ever escalated from a slow response.
     last_model_wait = activity["model_wait"]
+    # Idle warning state (Issue #18): at most one `pi_idle` warning per
+    # stall; the first new session event after it logs `pi_resumed`.
+    idle_warned = False
     try:
         while True:
             if deadline is not None and time.monotonic() >= deadline:
@@ -837,6 +904,30 @@ def stream_pi(
                     "model_wait" if activity["model_wait"] else "resumed",
                 )
                 last_model_wait = activity["model_wait"]
+            # Idle warning (Issue #18): a stalled session (no model/
+            # session event for `idle_warn_seconds`, and the model is
+            # not expected to reply next) logs ONE `pi_idle` warning
+            # with the stale time; the first new session event after it
+            # logs `pi_resumed`. A slow active model (model_wait) never
+            # warns (Issue #40).
+            if idle_warned and activity["changed"]:
+                LOGGER.info(
+                    "pi_resumed run=%s issue=%s role=%s phase=%s",
+                    run_id, issue_ref, role, activity["phase"],
+                )
+                idle_warned = False
+            elif (
+                not activity["model_wait"]
+                and not idle_warned
+                and activity["stale_seconds"] >= idle_warn_seconds
+            ):
+                LOGGER.warning(
+                    "pi_idle run=%s issue=%s role=%s phase=%s "
+                    "stale_seconds=%s",
+                    run_id, issue_ref, role, activity["phase"],
+                    format_duration(activity["stale_seconds"]),
+                )
+                idle_warned = True
             if process.poll() is not None:
                 break
     finally:
@@ -1549,16 +1640,44 @@ def _is_section_header(line: str) -> bool:
     return core == "" or not any(ch.isdigit() for ch in core)
 
 
+# A pytest summary line reports an outcome only when its FIRST count
+# category is failed/passed/error(s): pytest orders the counts
+# failed, passed, skipped, errors, xfailed, xpassed, deselected, so a
+# run that collected tests always leads with failed or passed (or a
+# collection error). `no tests ran in 0.01s` matches no summary regex
+# at all; `3 deselected in 0.02s` / `2 skipped in 0.01s` match but
+# carry no outcome — reporting them as a pass is a false notification
+# (review round 3, PR #42).
+_OUTCOME_FIRST_RE = re.compile(
+    r"^\d+ (?:failed|passed|error|errors)\b",
+)
+_NO_TESTS_RE = re.compile(r"no tests (?:ran|collected)")
+
+
+def _is_no_result(line: str) -> bool:
+    """True for pytest lines that verified nothing (no tests ran)."""
+    if _NO_TESTS_RE.search(line):
+        return True
+    stripped = line.strip("=").strip()
+    return bool(_Pytest_SUMMARY_RE.match(stripped)) \
+        and not _OUTCOME_FIRST_RE.match(stripped)
+
+
 def read_test_result(worktree: Path) -> str | None:
     """Summarize the worktree's `test.log`, or None when it does not exist.
 
     Prefers the pytest summary line (`1 failed, 155 passed in 4.43s`):
-    the LAST one when the log holds several runs (TDD red, then green),
-    so the progress comment and the `tests passed/failed` milestone
-    report the most recent run. Section headers (`=== FAILURES ===`) are
-    never reported: the fallback takes the first `FAILED`/`ERROR`
-    evidence line or the last non-empty line instead, and a log holding
-    nothing but headers yields None (no result info to report).
+    the LAST one with an outcome when the log holds several runs (TDD
+    red, then green), so the progress comment and the `tests
+    passed/failed` milestone report the most recent run that actually
+    collected tests. Section headers (`=== FAILURES ===`) are never
+    reported: the fallback takes the first `FAILED`/`ERROR` evidence
+    line or the last non-empty line instead, and a log holding nothing
+    but headers yields None (no result info to report). Lines that
+    verified nothing (`no tests ran`, `N deselected`, `N skipped`) are
+    never reported either: a run that collected no tests is no result,
+    and posting `tests passed` for it is a false notification (review
+    round 3, PR #42).
     """
     path = worktree / "test.log"
     if not path.is_file():
@@ -1571,14 +1690,19 @@ def read_test_result(worktree: Path) -> str | None:
         stripped = line.strip("=").strip()
         if _Pytest_SUMMARY_RE.match(line) \
                 or _Pytest_SUMMARY_RE.match(stripped):
+            if _is_no_result(line):
+                # No tests collected in this run: keep looking for an
+                # earlier run that did (or report nothing at all).
+                continue
             return sanitize(stripped)
     for line in lines:
-        if _is_section_header(line):
+        if _is_section_header(line) or _is_no_result(line):
             continue
         if line.startswith(("FAILED", "ERROR")) or "passed" in line:
             return sanitize(line)
     last = lines[-1] if lines else None
-    if last is not None and _is_section_header(last):
+    if last is not None and (_is_section_header(last)
+                             or _is_no_result(last)):
         return None
     return sanitize(last) if last is not None else None
 
@@ -1730,9 +1854,12 @@ class LiveProgressThrottle:
 def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     number = int(issue["number"])
     base_branch = config["base_branch"]
-    # The run id is generated once per attempt, before any other step is
-    # logged, so every journal line of the attempt carries it (Issue #41).
+    # The run id is generated once per attempt and bound BEFORE any
+    # other step is logged, so every journal line of the attempt
+    # carries it — including the claim-time lines of the restart resume
+    # scan below (Issue #41; review round 3, PR #42).
     run_id = new_run_id()
+    set_run_id(run_id)
     # Restart resume (Issue #18): a killed runner leaves the task
     # worktree and the `ai-in-progress` label behind. Only in that state
     # the newest worktree's run id is reused, so the same hidden-marker
@@ -1744,12 +1871,15 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             config["repo_dir"], source_repo, number,
         )
         if existing_run_id is not None:
+            run_id = existing_run_id
+            # The attempt continues the dead run: re-bind the reused
+            # id so every later line (including resuming_run) carries
+            # it.
+            set_run_id(run_id)
             LOGGER.info(
                 "issue=%s resuming_run run_id=%s",
-                number, existing_run_id,
+                number, run_id,
             )
-            run_id = existing_run_id
-    set_run_id(run_id)
     base_sha = freeze_base(config["repo_dir"], base_branch)
     branch = task_branch(source_repo, number, run_id)
     run_info = (
@@ -2364,7 +2494,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     try:
-        selected = pick_next_delivery(config["source_repos"])
+        selected = pick_next_delivery(
+            config["source_repos"], config["slot_dir"],
+            config["max_concurrency"],
+        )
         if selected is None:
             LOGGER.info(
                 "source_repos=%s outcome=no_ready_issue",

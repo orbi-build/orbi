@@ -208,6 +208,63 @@ def test_read_test_result_is_none_when_the_log_holds_only_headers(
     assert runner.read_test_result(tmp_path) is None
 
 
+def test_read_test_result_is_none_when_no_tests_ran(tmp_path):
+    """A pytest run that collected no tests verified nothing: reporting
+    it as a pass is a false mobile notification (review round 3, PR
+    #42)."""
+    (tmp_path / "test.log").write_text(
+        "collected 0 items\nno tests ran in 0.01s\n",
+        encoding="utf-8",
+    )
+    assert runner.read_test_result(tmp_path) is None
+
+
+def test_read_test_result_is_none_when_no_tests_collected(tmp_path):
+    """The collect-only variant of the no-tests message is no result
+    either."""
+    (tmp_path / "test.log").write_text(
+        "no tests collected in 0.00s\n", encoding="utf-8",
+    )
+    assert runner.read_test_result(tmp_path) is None
+
+
+def test_read_test_result_is_none_for_deselected_only_summary(tmp_path):
+    """A summary whose counts carry no outcome (`N deselected`) is no
+    result either (review round 3, PR #42)."""
+    (tmp_path / "test.log").write_text(
+        "3 deselected in 0.02s\n", encoding="utf-8",
+    )
+    assert runner.read_test_result(tmp_path) is None
+
+
+def test_read_test_result_is_none_for_skipped_only_summary(tmp_path):
+    (tmp_path / "test.log").write_text(
+        "2 skipped in 0.01s\n", encoding="utf-8",
+    )
+    assert runner.read_test_result(tmp_path) is None
+
+
+def test_read_test_result_prefers_last_run_with_an_outcome(tmp_path):
+    """A multi-run log whose LAST run collected no tests reports the
+    last run that actually collected tests (review round 3, PR #42)."""
+    (tmp_path / "test.log").write_text(
+        "1 failed, 1 passed in 0.03s\n"
+        "--- second run (empty selection) ---\n"
+        "no tests ran in 0.01s\n",
+        encoding="utf-8",
+    )
+    assert runner.read_test_result(tmp_path) == "1 failed, 1 passed in 0.03s"
+
+
+def test_read_test_result_reports_error_summary(tmp_path):
+    """A collection error IS an outcome (pytest exits non-zero): it is
+    reported, so the milestone check can post `tests failed`."""
+    (tmp_path / "test.log").write_text(
+        "1 error in 0.01s\n", encoding="utf-8",
+    )
+    assert runner.read_test_result(tmp_path) == "1 error in 0.01s"
+
+
 def test_delivery_head_advanced_detects_new_commits(monkeypatch, tmp_path):
     monkeypatch.setattr(
         runner, "run_command",
@@ -312,6 +369,28 @@ def test_publish_test_milestone_detects_failure_case_insensitively(
     assert posted == [
         "tests failed: FAILED tests/test_b.py::test_b_fails - assert 1 == 2",
     ]
+
+
+def test_publish_test_milestone_posts_nothing_when_no_tests_ran(
+    tmp_path,
+):
+    """A run that collected no tests must not post a `tests passed`
+    milestone: no result, no notification (review round 3, PR #42)."""
+    posted = []
+    publisher = Mock()
+    publisher.milestone = Mock(side_effect=lambda text: posted.append(text))
+    (tmp_path / "test.log").write_text(
+        "collected 0 items\nno tests ran in 0.01s\n",
+        encoding="utf-8",
+    )
+    runner._publish_test_milestone(publisher, tmp_path)
+    assert posted == []
+    posted.clear()
+    (tmp_path / "test.log").write_text(
+        "3 deselected in 0.02s\n", encoding="utf-8",
+    )
+    runner._publish_test_milestone(publisher, tmp_path)
+    assert posted == []
 
 
 # --- process_issue wiring -----------------------------------------------------

@@ -574,7 +574,9 @@ def test_pick_resumable_delivery_scene_failure_preserves_error_when_reporting_fa
     ]) == ""
 
 
-def test_pick_next_delivery_stops_when_scene_is_malformed(monkeypatch):
+def test_pick_next_delivery_stops_when_scene_is_malformed(
+    monkeypatch, tmp_path,
+):
     """A malformed scene re-raises: the tick stops and no fresh task
     starts ahead of the broken delivery (round-5 review, Major 2)."""
     def broken(repo):
@@ -587,12 +589,16 @@ def test_pick_next_delivery_stops_when_scene_is_malformed(monkeypatch):
         lambda repo: calls.append(("ready", repo)) or {"number": 10},
     )
     with pytest.raises(ValueError, match="no 'Muyan Pilot opened PR' comment"):
-        runner.pick_next_delivery(["owner/repo"])
+        runner.pick_next_delivery(
+            ["owner/repo"], tmp_path / "slots", 1,
+        )
     # The ready queue was never consulted: no fresh claim started.
     assert calls == []
 
 
-def test_pick_next_delivery_prefers_resumable_delivery_over_ready(monkeypatch):
+def test_pick_next_delivery_prefers_resumable_delivery_over_ready(
+    monkeypatch, tmp_path,
+):
     resumable = {"number": 9, "title": "ship"}
     ready = {"number": 10, "title": "new"}
     calls = []
@@ -604,12 +610,16 @@ def test_pick_next_delivery_prefers_resumable_delivery_over_ready(monkeypatch):
         runner, "pick_issue",
         lambda repo: calls.append(("ready", repo)) or ready,
     )
-    result = runner.pick_next_delivery(["owner/repo"])
+    result = runner.pick_next_delivery(
+        ["owner/repo"], tmp_path / "slots", 1,
+    )
     assert result == ("owner/repo", resumable, {"run_id": FAKE_RUN_ID})
     assert calls == [("resume", "owner/repo")]
 
 
-def test_pick_next_delivery_falls_back_to_ready_when_no_resumable(monkeypatch):
+def test_pick_next_delivery_falls_back_to_ready_when_no_resumable(
+    monkeypatch, tmp_path,
+):
     ready = {"number": 10, "title": "new"}
     calls = []
     monkeypatch.setattr(
@@ -617,15 +627,27 @@ def test_pick_next_delivery_falls_back_to_ready_when_no_resumable(monkeypatch):
         lambda repo: calls.append(("resume", repo)) or None,
     )
     monkeypatch.setattr(
+        runner, "pick_in_progress_issue",
+        lambda repo, slot_dir, max_concurrency: (
+            calls.append(("in_progress", repo)) or None
+        ),
+    )
+    monkeypatch.setattr(
         runner, "pick_issue",
         lambda repo: calls.append(("ready", repo)) or ready,
     )
-    result = runner.pick_next_delivery(["owner/repo"])
+    result = runner.pick_next_delivery(
+        ["owner/repo"], tmp_path / "slots", 1,
+    )
     assert result == ("owner/repo", ready, None)
-    assert calls == [("resume", "owner/repo"), ("ready", "owner/repo")]
+    assert calls == [
+        ("resume", "owner/repo"),
+        ("in_progress", "owner/repo"),
+        ("ready", "owner/repo"),
+    ]
 
 
-def test_pick_next_delivery_scans_sources_in_order(monkeypatch):
+def test_pick_next_delivery_scans_sources_in_order(monkeypatch, tmp_path):
     resumable = {"number": 9, "title": "ship"}
     scene = {"run_id": FAKE_RUN_ID}
     ready = {"number": 10, "title": "new"}
@@ -640,17 +662,27 @@ def test_pick_next_delivery_scans_sources_in_order(monkeypatch):
         runner, "pick_issue",
         lambda repo: calls.append(("ready", repo)) or ready,
     )
-    result = runner.pick_next_delivery(["owner/first", "owner/second"])
+    result = runner.pick_next_delivery(
+        ["owner/first", "owner/second"], tmp_path / "slots", 1,
+    )
     assert result == ("owner/second", resumable, scene)
     assert calls == [
         ("resume", "owner/first"), ("resume", "owner/second"),
     ]
 
 
-def test_pick_next_delivery_returns_none_when_nothing_to_do(monkeypatch):
+def test_pick_next_delivery_returns_none_when_nothing_to_do(
+    monkeypatch, tmp_path,
+):
     monkeypatch.setattr(runner, "pick_resumable_delivery", lambda repo: None)
+    monkeypatch.setattr(
+        runner, "pick_in_progress_issue",
+        lambda repo, slot_dir, max_concurrency: None,
+    )
     monkeypatch.setattr(runner, "pick_issue", lambda repo: None)
-    assert runner.pick_next_delivery(["owner/repo"]) is None
+    assert runner.pick_next_delivery(
+        ["owner/repo"], tmp_path / "slots", 1,
+    ) is None
 
 
 # ---------------------------------------------------------------- merge
@@ -1352,7 +1384,9 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos: ("owner/repo", issue, scene),
+        lambda repos, slot_dir, max_concurrency: (
+            "owner/repo", issue, scene
+        ),
     )
     monkeypatch.setattr(
         runner, "resume_delivery",
@@ -1380,7 +1414,9 @@ def test_main_still_claims_new_issue_when_no_resumable(monkeypatch, tmp_path):
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos: ("owner/repo", issue, None),
+        lambda repos, slot_dir, max_concurrency: (
+            "owner/repo", issue, None
+        ),
     )
     monkeypatch.setattr(
         runner, "process_issue",

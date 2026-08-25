@@ -56,6 +56,8 @@ Pi 长时间运行时，Runner 不再只留下启动命令和最终结果。`boo
 - `heartbeat run=... issue=... role=... phase=... state=-|model_wait elapsed=...m idle=...s`——没有变化时按轮询间隔输出，idle 直接写在行上；
 - `model_wait run=... issue=... role=... phase=... state=model_wait`——最近一条 session 事件是 tool result（模型正在等待响应）时输出一次；等待期间只按轮询间隔输出带 `state=model_wait` 的 heartbeat，不升级 WARNING（慢模型不等于卡死）；
 - `resumed run=... issue=... role=... phase=... state=resumed`——下一条 session 事件到达时输出一次。
+- `pi_idle run=... issue=... role=... phase=... stale_seconds=...`——超过 5 分钟（`PI_IDLE_WARN_SECONDS=300`）没有 model/session 活动且不在 `model_wait` 时输出一次 WARNING；卡住的 session 不会每个 heartbeat 重复告警，`model_wait` 期间永不告警（慢模型不等于卡死）；
+- `pi_resumed run=... issue=... role=... phase=...`——idle 告警后第一条新 session 事件到达时输出一次（恢复后输出 resumed）。
 - `run_failed run=... issue=... role=... branch=... worktree=... session=... session_file=... phase=... ... reason=pi_exit_N|timeout_...s`——进程异常退出或超时时先记录完整现场再抛出错误；
 - `run_end run=... issue=... role=... result=pr_opened elapsed=...m pr=... commit=...`——验收通过后记录结果和完整排查入口。
 
@@ -71,6 +73,8 @@ journalctl --user -u muyan-pilot.service -f
 # Aug 25 14:41:40 host muyan-pilot[123]: INFO [e07383c2] heartbeat run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=test state=model_wait elapsed=11m idle=11m
 # Aug 25 14:42:19 host muyan-pilot[123]: INFO [e07383c2] activity run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=test action="assistant text" result=- state=- idle=0s
 # Aug 25 14:42:19 host muyan-pilot[123]: INFO [e07383c2] resumed run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=test state=resumed
+# Aug 25 16:02:10 host muyan-pilot[123]: WARNING [e07383c2] pi_idle run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=pr stale_seconds=5m
+# Aug 25 16:03:05 host muyan-pilot[123]: INFO [e07383c2] pi_resumed run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=pr
 # Aug 25 15:12:40 host muyan-pilot[123]: INFO [e07383c2] run_end run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement result=pr_opened elapsed=42m pr=https://github.com/xqliu/muyan-pilot/pull/19 commit=0123456789abcdef0123456789abcdef01234567
 ```
 
@@ -178,6 +182,10 @@ grep -r e07383c2 /home/xqianliu/Documents/muyan/muyan-pilot/.worktrees/
 ## 任务 base 与 worktree
 
 每次领取任务前，Runner 在配置 repo 中执行 `git fetch origin <base_branch>`，并冻结 `origin/<base_branch>` 的精确 SHA（`base_branch` 在 TOML 中配置，默认 `main`）。任务 worktree 和 feature branch 都从该 SHA 创建，绝不使用主工作区当前 HEAD；branch 和目录名都带唯一 run 标识（例如 `.worktrees/muyan-pilot-xqliu-muyan-pilot-issue-14-a1b2c3d4`），同一个 Issue 返工时会生成新的独立 run，旧现场原样保留。base branch、base SHA 和 run 标识会写入 Issue 评论和 `status` 输出。
+
+### 重启恢复（kill 后自动续跑）
+
+Runner 被 SIGKILL 时无法执行任何清理：任务 worktree 和 `ai-in-progress` 领取标签会留在 GitHub 上（Issue 仍带 `ai-ready`）。下一个 tick 的领取扫描在 ready 队列之前先扫描 `ai-ready`+`ai-in-progress`（且未处于其他交付状态）的 open Issue——**仅当没有其他 Runner 活着时**（其他 slot 被占用证明有活着的 Runner 在处理，此时 `ai-in-progress` 是“进行中”而不是“孤儿”，绝不为活着的 run 启动第二个 Pi；flock 锁是唯一事实源）。找到后走 `process_issue` 的恢复分支：复用最新 worktree 的 run id（branch、worktree、进度评论都由它驱动），按隐藏 run marker 找回同一条进度评论继续 PATCH，不新建 run、不新建 worktree、不新建评论。已完成 run 的 worktree 保留为证据但标签已移除，重新领取永远新 run。
 
 Pi 创建 PR 前必须重新 fetch：若 `origin/<base_branch>` 已前进，需合入最新 base、手工解决冲突、重跑完整测试与 review 后再推送。Runner 在验收时用 `git merge-base --is-ancestor origin/<base_branch> HEAD` 验证最新远端 base 是交付 HEAD 的祖先；不满足则 fail fast，不接受 PR。不自动解决冲突，不 force push，不 merge 或 push 保护分支。
 
