@@ -264,6 +264,64 @@ def test_new_run_id_is_unique_short_hex():
     assert first != second
 
 
+def test_validate_run_id_accepts_eight_hex_chars():
+    assert runner.validate_run_id("e07383c2") == "e07383c2"
+
+
+def test_validate_run_id_rejects_wrong_length_or_chars():
+    for bad in ("run1", "", "a1b2c3d", "a1b2c3d4e", "A1B2C3D4", "g1b2c3d4"):
+        with pytest.raises(ValueError, match="invalid run id"):
+            runner.validate_run_id(bad)
+
+
+def test_validate_run_id_rejects_non_string():
+    with pytest.raises(ValueError, match="invalid run id"):
+        runner.validate_run_id(None)
+
+
+def test_run_marker_is_stable_machine_readable_comment():
+    assert runner.run_marker("e07383c2") == "<!-- muyan-pilot:run=e07383c2 -->"
+
+
+def test_run_marker_rejects_missing_or_invalid_run_id():
+    for bad in ("", "run1", None):
+        with pytest.raises(ValueError, match="invalid run id"):
+            runner.run_marker(bad)
+
+
+def test_set_run_id_binds_the_attempt_and_current_run_id_reads_it(monkeypatch):
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    assert runner.current_run_id() is None
+    runner.set_run_id("e07383c2")
+    assert runner.current_run_id() == "e07383c2"
+
+
+def test_set_run_id_fails_fast_on_invalid_run_id(monkeypatch):
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    with pytest.raises(ValueError, match="invalid run id"):
+        runner.set_run_id("run1")
+    assert runner.current_run_id() is None
+
+
+def test_run_id_filter_prefixes_messages_when_run_is_bound(caplog):
+    runner.set_run_id("e07383c2")
+    try:
+        with caplog.at_level("INFO"):
+            runner.LOGGER.info("hello %s", "world")
+        assert caplog.messages[-1] == "[e07383c2] hello world"
+    finally:
+        runner._CURRENT_RUN_ID = None
+
+
+def test_run_id_filter_leaves_messages_untouched_without_bound_run(
+    monkeypatch, caplog,
+):
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    with caplog.at_level("INFO"):
+        runner.LOGGER.info("hello")
+    assert caplog.messages[-1] == "hello"
+
+
 def test_freeze_base_fetches_remote_and_returns_exact_sha(monkeypatch, tmp_path):
     calls = []
 
@@ -438,16 +496,17 @@ def test_run_pi_redacts_prompt_and_issue_from_command_log(monkeypatch, tmp_path)
 def test_verify_pr_rejects_wrong_branch(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "other-branch")
     with pytest.raises(RuntimeError, match="Pi changed branch"):
-        runner.verify_pr(tmp_path, "muyan-pilot/issue-4", "main")
+        runner.verify_pr(tmp_path, "muyan-pilot/issue-4", "main", "e07383c2")
 
 
 FAKE_HEAD_SHA = "0123456789abcdef0123456789abcdef01234567"
+FAKE_RUN_ID = "e07383c2"
 
 
 def fake_verify_run(command, **kwargs):
     """Complete fake for verify_pr: git commands answered, gh returns a PR."""
     if command[:3] == ["git", "branch", "--show-current"]:
-        return "muyan-pilot/issue-4-run1"
+        return f"muyan-pilot/issue-4-{FAKE_RUN_ID}"
     if command[:3] == ["git", "fetch", "origin"]:
         return ""
     if command[:3] == ["git", "merge-base", "--is-ancestor"]:
@@ -459,6 +518,7 @@ def fake_verify_run(command, **kwargs):
             "url": "https://github.com/muyantech/muyan-pilot/pull/4",
             "baseRefName": "main",
             "headRefOid": FAKE_HEAD_SHA,
+            "body": f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\nPlan",
         }])
     raise AssertionError(f"unexpected command: {command}")
 
@@ -473,7 +533,7 @@ def test_verify_pr_rejects_delivery_behind_latest_remote_base(monkeypatch, tmp_p
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="behind latest remote base",
     ):
-        runner.verify_pr(tmp_path, "muyan-pilot/issue-4-run1", "main")
+        runner.verify_pr(tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID)
     assert "base_branch=main" in caplog.text
 
 
@@ -484,20 +544,20 @@ def test_fake_verify_run_rejects_unexpected_command():
 
 def test_verify_pr_rejects_missing_pr(monkeypatch, tmp_path):
     outputs = iter([
-        "muyan-pilot/issue-4-run1", "", "", FAKE_HEAD_SHA, "[]",
+        f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA, "[]",
     ])
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="exactly one open PR"):
-        runner.verify_pr(tmp_path, "muyan-pilot/issue-4-run1", "main")
+        runner.verify_pr(tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID)
 
 
 def test_verify_pr_rejects_non_array(monkeypatch, tmp_path):
     outputs = iter([
-        "muyan-pilot/issue-4-run1", "", "", FAKE_HEAD_SHA, "{}",
+        f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA, "{}",
     ])
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="exactly one open PR"):
-        runner.verify_pr(tmp_path, "muyan-pilot/issue-4-run1", "main")
+        runner.verify_pr(tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID)
 
 
 def test_verify_pr_returns_url_when_delivery_contains_latest_base(monkeypatch, tmp_path):
@@ -508,20 +568,20 @@ def test_verify_pr_returns_url_when_delivery_contains_latest_base(monkeypatch, t
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    assert runner.verify_pr(tmp_path, "muyan-pilot/issue-4-run1", "main") == (
-        "https://github.com/muyantech/muyan-pilot/pull/4"
-    )
+    assert runner.verify_pr(
+        tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+    ) == "https://github.com/muyantech/muyan-pilot/pull/4"
     assert ["git", "fetch", "origin", "main"] in calls
     assert ["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"] in calls
 
 
 def test_verify_pr_rejects_pr_without_url(monkeypatch, tmp_path):
     outputs = iter([
-        "muyan-pilot/issue-4-run1", "", "", FAKE_HEAD_SHA, "[{}]",
+        f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA, "[{}]",
     ])
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="open PR has no URL"):
-        runner.verify_pr(tmp_path, "muyan-pilot/issue-4-run1", "main")
+        runner.verify_pr(tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID)
 
 
 def test_verify_pr_rejects_pr_based_on_wrong_branch(monkeypatch, tmp_path):
@@ -538,7 +598,7 @@ def test_verify_pr_rejects_pr_based_on_wrong_branch(monkeypatch, tmp_path):
     with pytest.raises(
         RuntimeError, match="PR base is develop, expected main",
     ):
-        runner.verify_pr(tmp_path, "muyan-pilot/issue-4-run1", "main")
+        runner.verify_pr(tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID)
 
 
 def test_verify_pr_rejects_stale_remote_pr_head(monkeypatch, tmp_path):
@@ -555,10 +615,46 @@ def test_verify_pr_rejects_stale_remote_pr_head(monkeypatch, tmp_path):
     with pytest.raises(
         RuntimeError, match="PR head deadbeef.* is not local HEAD 01234567",
     ):
-        runner.verify_pr(tmp_path, "muyan-pilot/issue-4-run1", "main")
+        runner.verify_pr(tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID)
 
 
-def test_verify_pr_queries_base_and_head_and_accepts_matching_pr(
+def test_verify_pr_rejects_pr_body_without_run_marker(monkeypatch, tmp_path, caplog):
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps([{
+                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
+                "baseRefName": "main",
+                "headRefOid": FAKE_HEAD_SHA,
+                "body": "no run marker here",
+            }])
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("ERROR"), pytest.raises(
+        RuntimeError, match="missing the stable run marker",
+    ):
+        runner.verify_pr(tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID)
+    assert "pr_run_marker_missing" in caplog.text
+
+
+def test_verify_pr_rejects_pr_body_missing_field(monkeypatch, tmp_path):
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps([{
+                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
+                "baseRefName": "main",
+                "headRefOid": FAKE_HEAD_SHA,
+            }])
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(
+        RuntimeError, match="missing the stable run marker",
+    ):
+        runner.verify_pr(tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID)
+
+
+def test_verify_pr_queries_base_head_and_accepts_matching_pr(
     monkeypatch, tmp_path,
 ):
     calls = []
@@ -568,14 +664,14 @@ def test_verify_pr_queries_base_and_head_and_accepts_matching_pr(
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    assert runner.verify_pr(tmp_path, "muyan-pilot/issue-4-run1", "main") == (
-        "https://github.com/muyantech/muyan-pilot/pull/4"
-    )
+    assert runner.verify_pr(
+        tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+    ) == "https://github.com/muyantech/muyan-pilot/pull/4"
     assert ["git", "rev-parse", "HEAD"] in calls
     assert [
         "gh", "pr", "list", "--state", "open", "--head",
-        "muyan-pilot/issue-4-run1", "--json", "url,baseRefName,headRefOid",
-        "--limit", "2",
+        f"muyan-pilot/issue-4-{FAKE_RUN_ID}",
+        "--json", "url,baseRefName,headRefOid,body", "--limit", "2",
     ] in calls
 
 
@@ -583,7 +679,7 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     calls = []
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    monkeypatch.setattr(runner, "new_run_id", lambda: "run1")
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     monkeypatch.setattr(runner, "verify_pr", lambda *args, **kwargs: "https://github.com/muyantech/muyan-pilot/pull/4")
@@ -597,8 +693,9 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     assert "Muyan Pilot started Pi:" in start[2]["body"]
     assert "base_branch=main" in start[2]["body"]
     assert "base_sha=abc123def456" in start[2]["body"]
-    assert "run_id=run1" in start[2]["body"]
-    assert "branch=muyan-pilot/xqliu-muyan-ceo-issue-4-run1" in start[2]["body"]
+    assert "run_id=a1b2c3d4" in start[2]["body"]
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in start[2]["body"]
+    assert "branch=muyan-pilot/xqliu-muyan-ceo-issue-4-a1b2c3d4" in start[2]["body"]
     assert "worktree=" + str(tmp_path / "wt") in start[2]["body"]
     assert calls[2][0] == "edit"
     assert calls[2][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-pr-opened", "remove": "ai-in-progress"}
@@ -608,14 +705,15 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     assert "Muyan Pilot opened PR: https://github.com/muyantech/muyan-pilot/pull/4" in body
     assert "base_branch=main" in body
     assert "base_sha=abc123def456" in body
-    assert "run_id=run1" in body in body
+    assert "run_id=a1b2c3d4" in body
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in body
 
 
 def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    monkeypatch.setattr(runner, "new_run_id", lambda: "run1")
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
     with pytest.raises(RuntimeError, match="git failed"):
@@ -626,7 +724,8 @@ def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path)
     assert "Muyan Pilot failed: git failed" in failure_body
     assert "base_branch=main" in failure_body
     assert "base_sha=abc123def456" in failure_body
-    assert "run_id=run1" in failure_body
+    assert "run_id=a1b2c3d4" in failure_body
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failure_body
 
 
 def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypatch, tmp_path, caplog):
@@ -639,7 +738,7 @@ def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypat
 
     monkeypatch.setattr(runner, "edit_issue", edit)
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    monkeypatch.setattr(runner, "new_run_id", lambda: "run1")
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
     with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="git failed"):
         runner.process_issue({"number": 13, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo")
@@ -692,7 +791,7 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     calls = []
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    monkeypatch.setattr(runner, "new_run_id", lambda: "run1")
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
     monkeypatch.setattr(
         runner, "run_pi",
@@ -722,7 +821,7 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
     calls = []
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    monkeypatch.setattr(runner, "new_run_id", lambda: "run1")
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
     monkeypatch.setattr(
         runner, "run_pi",
