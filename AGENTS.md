@@ -43,6 +43,19 @@ follow it before changing code.
   base. No auto conflict resolution, no force push, no merge or push of the
   protected branch.
 
+## Run correlation
+
+- One task attempt generates one run_id (8 hex chars) and reuses it for
+  every later step of the attempt; a retry generates a new one. No new id
+  system is introduced: no trace_id, no log_id, no second UUID, no
+  tracing backend.
+- Every journal line of the attempt starts with `[run_id]`, so one grep
+  reconstructs the full timeline; every Issue/PR comment and the PR body
+  carry the stable marker `<!-- muyan-pilot:run=<run_id> -->` plus the
+  visible `run_id=` field; branch, worktree, Pi session dir and run
+  artifacts carry it in their paths. A run-scoped event without a valid
+  run_id fails fast.
+
 ## Git
 
 - Work on the task feature branch.
