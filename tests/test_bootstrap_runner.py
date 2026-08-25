@@ -14,6 +14,7 @@ from unittest.mock import Mock
 import pytest
 
 import bootstrap_runner as runner
+import pi_activity
 from tests.test_progress_wiring import make_fake_gh
 
 
@@ -1898,7 +1899,10 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     # activity line; unchanged polls must not repeat it (Issue #40).
     assert len(activities) == 1
     line = activities[0]
-    assert "run=run1" in line
+    # No redundant `run=` field on the high-frequency lines (Issue #57);
+    # the `[run_id]` prefix is the run-id carrier (bound-run tests and
+    # the e2e suite cover the prefix itself).
+    assert "run=run1" not in line
     assert "issue=xqliu/muyan-pilot#24" in line
     assert "role=implement" in line
     assert "phase=test" in line
@@ -1913,7 +1917,7 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     # The idle tail produced heartbeats at the poll interval.
     assert len(heartbeats) >= 1
     for line in heartbeats:
-        assert "run=run1" in line
+        assert "run=run1" not in line
         assert "role=implement" in line
         assert "phase=starting" in line or "phase=test" in line
         assert "elapsed=" in line
@@ -1923,6 +1927,127 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     # The legacy verbose line is gone.
     assert "pi_activity" not in caplog.text
     assert "pi_idle" not in caplog.text
+
+
+def test_stream_pi_high_frequency_lines_carry_run_id_exactly_once(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #57: the `[run_id]` prefix (Issue #41) is the single
+    run-id carrier on the high-frequency lines; the redundant `run=`
+    field is gone, so the 8-hex id appears exactly once per line and a
+    single grep still reconstructs the whole timeline. The run is
+    bound like in the real journal (`process_issue` binds it before
+    starting Pi)."""
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    records = fake_session_records() + [
+        (0.5, {"type": "message", "id": "r1",
+               "timestamp": fresh_timestamp(2),
+               "message": {"role": "toolResult", "toolCallId": "t1",
+                           "toolName": "bash",
+                           "content": [{"type": "text", "text": "ok"}]}}),
+        (1.2, {"type": "message", "id": "a2",
+               "timestamp": fresh_timestamp(3),
+               "message": {"role": "assistant", "content": [
+                   {"type": "text", "text": "done"}]}}),
+    ]
+    command = make_fake_pi(
+        tmp_path, session_records=records, stdout="final answer",
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="a1b2c3d4", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    kinds = (
+        "activity", "heartbeat", "model_wait", "resumed",
+        "pi_idle", "pi_resumed",
+    )
+    high_freq = [
+        message for message in caplog.messages
+        if any(f" {kind} " in message for kind in kinds)
+    ]
+    # The record set produces every high-frequency kind except the idle
+    # pair (activity + heartbeats, one model_wait, one resumed).
+    assert any(" activity " in m for m in high_freq)
+    assert any(" heartbeat " in m for m in high_freq)
+    assert any(" model_wait " in m for m in high_freq)
+    assert any(" resumed " in m for m in high_freq)
+    for message in high_freq:
+        assert "run=" not in message, message
+        assert message.startswith("[a1b2c3d4]"), message
+        assert message.count("a1b2c3d4") == 1, message
+
+
+def test_stream_pi_idle_lines_carry_run_id_exactly_once(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #57: `pi_idle` / `pi_resumed` repeat the same rule as the
+    other high-frequency lines: prefix only, no `run=` field."""
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    # a1 is 4s stale when it is polled, so the idle warning fires;
+    # a2 arrives later with a fresh timestamp, so the resume does not
+    # re-trigger the warning.
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(-5), "cwd": "/w"}),
+        (0.1, {"type": "message", "id": "a1",
+               "timestamp": fresh_timestamp(-4),
+               "message": {"role": "assistant", "content": [
+                   {"type": "text", "text": "one"}]}}),
+        (1.0, {"type": "message", "id": "a2",
+               "timestamp": fresh_timestamp(1.0),
+               "message": {"role": "assistant", "content": [
+                   {"type": "text", "text": "two"}]}}),
+    ]
+    command = make_fake_pi(
+        tmp_path, session_records=records, stdout="ok",
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.5,
+            run_id="a1b2c3d4", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    idles = [m for m in caplog.messages if " pi_idle " in m]
+    resumed = [m for m in caplog.messages if " pi_resumed " in m]
+    assert len(idles) == 1
+    assert len(resumed) == 1
+    for message in idles + resumed:
+        assert "run=" not in message, message
+        assert message.startswith("[a1b2c3d4]"), message
+        assert message.count("a1b2c3d4") == 1, message
+
+
+def test_stream_pi_scene_lines_keep_run_field_for_parse_scene(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #57: the low-frequency scene lines (run_start / run_failed)
+    keep `run=` so `pi_activity.parse_scene` still returns the run id
+    from the lines that need to be parsed. The run is bound like in
+    the real journal."""
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    command = make_fake_pi(
+        tmp_path, session_records=fake_session_records(),
+        stderr="pi exploded", exit_code=3,
+    )
+    with caplog.at_level("INFO"), pytest.raises(
+        subprocess.CalledProcessError,
+    ):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="a1b2c3d4", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    starts = [m for m in caplog.messages if " run_start " in m]
+    failures = [m for m in caplog.messages if " run_failed " in m]
+    assert len(starts) == 1 and len(failures) == 1
+    for message in starts + failures:
+        assert "run=a1b2c3d4" in message, message
+        fields = pi_activity.parse_scene(message)
+        assert fields["run"] == "a1b2c3d4"
+        assert fields["issue"] == "xqliu/muyan-pilot#24"
 
 
 def test_stream_pi_activity_keeps_action_after_tool_result(tmp_path, caplog):
@@ -2114,7 +2239,9 @@ def test_stream_pi_model_wait_then_resumed_no_warning_spam(
     assert len(waits) == 1
     assert len(resumed) == 1
     wait = waits[0]
-    assert "run=run1" in wait
+    # The transition lines carry no redundant `run=` field (Issue #57);
+    # the `[run_id]` prefix is the run-id carrier.
+    assert "run=run1" not in wait
     assert "issue=xqliu/muyan-pilot#24" in wait
     assert "role=implement" in wait
     assert "phase=test" in wait
@@ -2123,7 +2250,7 @@ def test_stream_pi_model_wait_then_resumed_no_warning_spam(
     assert "branch=" not in wait
     assert f"worktree={tmp_path}" not in wait
     resume = resumed[0]
-    assert "run=run1" in resume
+    assert "run=run1" not in resume
     assert "state=resumed" in resume
     assert "phase=test" in resume
     # While waiting, the heartbeats carry the model_wait state and the
@@ -2191,7 +2318,9 @@ def test_stream_pi_logs_idle_warning_once_when_session_stalls(
     idles = [line for line in lines if " pi_idle " in line]
     assert len(idles) == 1, f"exactly one idle warning: {lines}"
     idle = idles[0]
-    assert "run=run1" in idle
+    # No redundant `run=` field (Issue #57); the `[run_id]` prefix is
+    # the run-id carrier.
+    assert "run=run1" not in idle
     assert "issue=xqliu/muyan-pilot#24" in idle
     assert "role=implement" in idle
     assert "phase=starting" in idle
@@ -2230,9 +2359,10 @@ def test_stream_pi_logs_pi_resumed_after_idle_warning(tmp_path, caplog):
     resumed = [line for line in lines if " pi_resumed " in line]
     assert len(idles) == 1
     assert len(resumed) == 1
-    # resumed comes after the warning and carries the run context.
+    # resumed comes after the warning and carries no redundant `run=`
+    # field (Issue #57).
     assert lines.index(resumed[0]) > lines.index(idles[0])
-    assert "run=run1" in resumed[0]
+    assert "run=run1" not in resumed[0]
     assert "issue=xqliu/muyan-pilot#24" in resumed[0]
     assert "role=implement" in resumed[0]
     assert "phase=starting" in resumed[0]
