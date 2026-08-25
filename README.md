@@ -51,6 +51,9 @@ Pi 长时间运行时，Runner 不再只留下启动命令和最终结果。`boo
 
 ```bash
 python3 muyan_pilot.py status --config muyan-pilot.toml
+# capacity: 1
+# slots: 1/1
+#   slot-1: pid=4321
 # source: xqliu/muyan-pilot
 #   base: main abc123def456
 #   current: #24 Stream live Pi activity ... https://github.com/xqliu/muyan-pilot/issues/24
@@ -60,6 +63,8 @@ python3 muyan_pilot.py status --config muyan-pilot.toml
 #   ready: -
 #   result: -
 ```
+
+顶部的 `capacity` / `slots` 是当前机器的并发容量（`max_concurrency`）与已占用 slot（含持有者 PID），见下一节。
 
 journal 和 `status` 只暴露脱敏摘要：完整 prompt、Issue body 和 token 不会写入日志（命令日志固定为 `<redacted>`，工具摘要截断到 200 字符并屏蔽常见 token 形状）。关键阶段继续回写 GitHub Issue 评论：Pi 启动（含 branch 和 worktree）、PR 创建、失败现场。
 
@@ -77,7 +82,18 @@ cp .muyan-pilot.example.toml muyan-pilot.toml
 # 编辑 muyan-pilot.toml
 ```
 
-Runner 每次处理一个 Issue 后退出，由 systemd timer 再次触发；不在 Python 内实现 daemon，不引入数据库、队列、重试或复杂恢复。没有人为的任务时长上限；命令错误立即失败，真正卡死时通过 systemd/journal 排查并人工停止。
+Runner 每次处理一个 Issue 后退出，由 systemd timer 再次触发；不在 Python 内实现 daemon，不引入数据库、队列、重试或复杂恢复。没有人为的任务时长上限；命令错误立即失败，真正卡死时通过 systemd/journal 排查并人工停止。并发上限见下一节 `max_concurrency`：拿不到 slot 的 Runner 记录 `capacity_full` 后正常退出，不领取 Issue。
+
+## 并发限制（max_concurrency）
+
+本机允许的 Pilot 并发任务数由 `muyan-pilot.toml` 的 `max_concurrency` 配置：必须是正整数，缺失时默认 1（本地 AI/GPU 只能稳定服务一个任务）；非整数、布尔值、0 或负数启动即 fail fast。slot 状态在 `<repo_dir>/.muyan-pilot/slots/slot-N`（N = 1..max_concurrency），每个 slot 文件由 `O_EXCL` 原子创建、内容写持有者 PID——跨进程互斥，不依赖进程内计数或 GitHub `ai-in-progress` 标签，多个 systemd/manual Runner 同时启动也不会突破限制。
+
+- 并发额度按完整任务生命周期计算：Runner 在领取 Issue 之前取得 slot，implement → review → fix → PR 期间始终占用，进程退出时释放；
+- 同一任务内部 implement/review/fix 在同一个 Pi session 内串行执行，共用同一个 slot，任意时刻最多一个 Pi 子进程；
+- 达到 `max_concurrency` 时，新 Runner 不领取 Issue、不修改标签、不调用 Pi，记录结构化日志 `capacity_full max_concurrency=... slot_dir=...` 后正常退出（退出码 0），等 systemd timer 下次触发；
+- slot 在进程正常结束（atexit）和 SIGTERM/SIGINT（systemd stop / Ctrl+C）时自动删除；被 SIGKILL 的进程无法运行清理，但其 slot 文件的 PID 已不在运行，下一个 Runner 会把它当作 stale slot 重新领取——异常退出不会造成永久锁死；
+- `muyan_pilot.py status` 显示配置容量和当前已占用 slot（`capacity: N`、`slots: k/N`、`slot-N: pid=...`）；
+- 直接在 Pilot 外手工运行的任意 `pi` 命令不属于该配置控制范围：`max_concurrency` 只约束 Runner 领取任务时启动的 Pi，手工 `pi` 不受 slot 管理，也不会释放或占用任何 slot。
 
 ## 全链路 run_id（correlation ID）
 

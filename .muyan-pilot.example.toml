@@ -10,6 +10,11 @@ prompt = "prompt.md"
 # Delivery base branch: every task worktree is created from the latest
 # origin/<base_branch> (fetched and frozen at claim time). Default: "main".
 base_branch = "main"
+# Maximum concurrent Pilot tasks on this machine. Must be a positive integer;
+# missing means 1. The local AI/GPU can only serve one stable task, so keep
+# the default. A Runner that cannot take a slot logs capacity_full and exits
+# without claiming an Issue.
+max_concurrency = 1
 # Optional Pi skills. Paths may be absolute, use ~, or be relative to this file.
 skills = []
 

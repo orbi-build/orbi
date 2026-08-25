@@ -189,6 +189,8 @@ def test_status_report_lists_sources_current_ready_and_result(monkeypatch):
         "source_repos": ["xqliu/muyan-pilot"],
         "repo_dir": Path("/srv/muyan/muyan-pilot"),
         "base_branch": "main",
+        "max_concurrency": 1,
+        "slot_dir": Path("/srv/muyan/muyan-pilot/.muyan-pilot/slots"),
     })
     assert "source: xqliu/muyan-pilot" in report
     assert "base: main abc123def456" in report
@@ -210,6 +212,8 @@ def test_status_report_freezes_base_from_configured_repo_dir(monkeypatch):
         "source_repos": ["xqliu/muyan-pilot"],
         "repo_dir": Path("/srv/muyan/muyan-pilot"),
         "base_branch": "develop",
+        "max_concurrency": 1,
+        "slot_dir": Path("/srv/muyan/muyan-pilot/.muyan-pilot/slots"),
     })
     assert calls == [(Path("/srv/muyan/muyan-pilot"), "develop")]
 
@@ -223,6 +227,8 @@ def test_status_report_marks_empty_lookups(monkeypatch):
         "source_repos": ["xqliu/muyan-pilot"],
         "repo_dir": Path("/srv/muyan/muyan-pilot"),
         "base_branch": "main",
+        "max_concurrency": 1,
+        "slot_dir": Path("/srv/muyan/muyan-pilot/.muyan-pilot/slots"),
     })
     assert "base: main abc123def456" in report
     assert "current: -" in report
@@ -400,6 +406,8 @@ def test_status_report_includes_live_lines_for_current_issue(monkeypatch, tmp_pa
         "source_repos": ["xqliu/muyan-pilot"],
         "repo_dir": tmp_path,
         "base_branch": "main",
+        "max_concurrency": 1,
+        "slot_dir": tmp_path / ".muyan-pilot" / "slots",
     })
     assert "current: #3 now u3" in report
     assert "    live: phase=starting last_activity=- last=-" in report
@@ -417,6 +425,65 @@ def test_status_report_has_no_live_lines_without_current_issue(monkeypatch, tmp_
         "source_repos": ["xqliu/muyan-pilot"],
         "repo_dir": tmp_path,
         "base_branch": "main",
+        "max_concurrency": 1,
+        "slot_dir": tmp_path / ".muyan-pilot" / "slots",
     })
     assert "live:" not in report
     assert "current: -" in report
+
+
+# --- capacity and slot status (Issue #39) ------------------------------------
+
+
+def test_status_report_shows_capacity_and_free_slots(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        muyan_pilot, "freeze_base",
+        lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "recent_result", lambda repo: None)
+    config = {
+        "source_repos": ["xqliu/muyan-pilot"],
+        "repo_dir": tmp_path,
+        "base_branch": "main",
+        "max_concurrency": 2,
+        "slot_dir": tmp_path / ".muyan-pilot" / "slots",
+    }
+    report = muyan_pilot.status_report(config)
+    assert "capacity: 2" in report
+    assert "slots: 0/2" in report
+    assert "slot-1" not in report
+
+
+def test_status_report_shows_occupied_slots_with_pids(monkeypatch, tmp_path):
+    slot_dir = tmp_path / ".muyan-pilot" / "slots"
+    slot_dir.mkdir(parents=True)
+    (slot_dir / "slot-1").write_text(str(os.getpid()), encoding="utf-8")
+    monkeypatch.setattr(
+        muyan_pilot, "freeze_base",
+        lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "recent_result", lambda repo: None)
+    config = {
+        "source_repos": ["xqliu/muyan-pilot"],
+        "repo_dir": tmp_path,
+        "base_branch": "main",
+        "max_concurrency": 2,
+        "slot_dir": slot_dir,
+    }
+    report = muyan_pilot.status_report(config)
+    assert "capacity: 2" in report
+    assert "slots: 1/2" in report
+    assert f"slot-1: pid={os.getpid()}" in report
+    assert "slot-2" not in report
+
+
+def test_slot_lines_ignores_corrupted_slot_file(tmp_path):
+    slot_dir = tmp_path / "slots"
+    slot_dir.mkdir()
+    (slot_dir / "slot-1").write_text("garbage", encoding="utf-8")
+    lines = muyan_pilot.slot_lines(slot_dir, 1)
+    assert lines == ["slots: 0/1"]

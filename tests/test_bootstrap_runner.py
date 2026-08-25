@@ -1024,3 +1024,121 @@ def test_stream_pi_times_out_and_kills_process(tmp_path, caplog):
     assert "sleep" not in str(excinfo.value)
     assert "pi_timeout timeout=0.5" in caplog.text
     assert "issue=24" in caplog.text
+
+
+# --- max_concurrency config (Issue #39) --------------------------------------
+
+
+def test_load_config_defaults_max_concurrency_to_one(tmp_path):
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    config = runner.load_config(config_path)
+    assert config["max_concurrency"] == 1
+
+
+def test_load_config_reads_explicit_max_concurrency(tmp_path):
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nmax_concurrency = 2\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["max_concurrency"] == 2
+
+
+def test_load_config_derives_slot_dir_from_repo_dir(tmp_path):
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["slot_dir"] == (tmp_path / "repo").resolve() / ".muyan-pilot" / "slots"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["0", "-1", "1.5", '"1"', "true", "false"],
+)
+def test_load_config_rejects_invalid_max_concurrency(tmp_path, value):
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        f'source_repos = ["owner/repo"]\nmax_concurrency = {value}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="max_concurrency must be a positive integer"):
+        runner.load_config(config_path)
+
+
+# --- main() slot acquisition (Issue #39) --------------------------------------
+
+
+def test_main_capacity_full_does_not_pick_issue_or_call_pi(
+    monkeypatch, tmp_path, caplog,
+):
+    """A full slot stops the runner before any claim or Pi invocation."""
+    import pilot_slots
+
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nmax_concurrency = 1\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    # The single slot is already held by this (live) process.
+    slot_dir = tmp_path / ".muyan-pilot" / "slots"
+    slot_dir.mkdir(parents=True)
+    (slot_dir / "slot-1").write_text(str(os.getpid()), encoding="utf-8")
+
+    def fail_if_called(repos):
+        raise AssertionError("pick_next_issue must not run when capacity is full")
+
+    monkeypatch.setattr(runner, "pick_next_issue", fail_if_called)
+    monkeypatch.setattr(runner, "process_issue", fail_if_called)
+    # The guard itself must fail loudly if it is ever reached.
+    with pytest.raises(AssertionError, match="must not run when capacity is full"):
+        fail_if_called(["owner/repo"])
+    with caplog.at_level("INFO"):
+        assert runner.main(["--config", str(config)]) == 0
+    assert "capacity_full" in caplog.text
+    assert "max_concurrency=1" in caplog.text
+    assert "slot_dir=" in caplog.text
+    # The pre-existing slot is untouched (no claim, no label change, no Pi).
+    assert (slot_dir / "slot-1").read_text(encoding="utf-8") == str(os.getpid())
+
+
+def test_main_holds_slot_while_processing_issue(monkeypatch, tmp_path):
+    """The slot is acquired before the pick and held for the whole task."""
+    issue = {"number": 12, "title": "task", "body": "body"}
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    seen = {}
+
+    def fake_pick(repos):
+        slots = sorted((tmp_path / ".muyan-pilot" / "slots").glob("slot-*"))
+        seen["slots"] = slots
+        return ("owner/repo", issue)
+
+    monkeypatch.setattr(runner, "pick_next_issue", fake_pick)
+    monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: "https://x/y/pull/12")
+    assert runner.main(["--config", str(config)]) == 0
+    assert len(seen["slots"]) == 1
+    assert seen["slots"][0].read_text(encoding="utf-8") == str(os.getpid())
+
+
+def test_main_reacquires_slot_after_previous_release(monkeypatch, tmp_path):
+    """After the holder releases (process exit), the next run takes the slot."""
+    import pilot_slots
+
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    monkeypatch.setattr(runner, "pick_next_issue", lambda repos: None)
+
+    assert runner.main(["--config", str(config)]) == 0
+    slot_dir = tmp_path / ".muyan-pilot" / "slots"
+    assert (slot_dir / "slot-1").exists()  # held while this process lives
+    pilot_slots.release_slot(slot_dir / "slot-1")  # simulate process exit
+    assert runner.main(["--config", str(config)]) == 0
+    assert (slot_dir / "slot-1").read_text(encoding="utf-8") == str(os.getpid())

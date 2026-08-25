@@ -19,6 +19,7 @@ import tomllib
 import uuid
 from pathlib import Path
 
+from pilot_slots import acquire_slot, hold_slot, slot_dir_for
 from pi_activity import (
     SessionWatcher,
     activity_snapshot,
@@ -94,9 +95,20 @@ def load_config(path: Path) -> dict:
     base_branch = data.get("base_branch", "main")
     if not isinstance(base_branch, str) or not base_branch:
         raise ValueError("base_branch must be a non-empty string")
+    # Concurrency cap (Issue #39): the local machine can only serve a
+    # limited number of concurrent tasks, so the default is 1. Any other
+    # value must be a positive integer; fail fast on anything else.
+    max_concurrency = data.get("max_concurrency", 1)
+    if (
+        isinstance(max_concurrency, bool)
+        or not isinstance(max_concurrency, int)
+        or max_concurrency < 1
+    ):
+        raise ValueError("max_concurrency must be a positive integer")
+    repo_dir = _config_path(data.get("repo_dir", "."), base)
     return {
         "source_repos": source_repos,
-        "repo_dir": _config_path(data.get("repo_dir", "."), base),
+        "repo_dir": repo_dir,
         "workspace_root": _config_path(data.get("workspace_root", ".."), base),
         "prompt": _config_path(data.get("prompt", "prompt.md"), base),
         "skills": [_config_path(item, base) for item in data.get("skills", [])],
@@ -104,6 +116,8 @@ def load_config(path: Path) -> dict:
             _config_path(item, base) for item in data.get("context_files", [])
         ],
         "base_branch": base_branch,
+        "max_concurrency": max_concurrency,
+        "slot_dir": slot_dir_for(repo_dir),
     }
 
 
@@ -573,6 +587,19 @@ def main(argv: list[str] | None = None) -> int:
 
     config = load_config(args.config)
     validate_config(config)
+    # Concurrency cap (Issue #39): take one slot BEFORE claiming anything.
+    # The slot is held for the whole task lifecycle (implement -> review ->
+    # fix -> PR) and released when this process exits, however it exits.
+    slot = acquire_slot(
+        config["slot_dir"], config["max_concurrency"], os.getpid(),
+    )
+    if slot is None:
+        LOGGER.info(
+            "capacity_full max_concurrency=%s slot_dir=%s",
+            config["max_concurrency"], config["slot_dir"],
+        )
+        return 0
+    hold_slot(slot)
     selected = pick_next_issue(config["source_repos"])
     if selected is None:
         LOGGER.info("source_repos=%s outcome=no_ready_issue", config["source_repos"])
