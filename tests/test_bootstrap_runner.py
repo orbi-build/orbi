@@ -1,7 +1,11 @@
 import json
+import os
 import re
 import subprocess
+import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -376,40 +380,66 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
         encoding="utf-8",
     )
     calls = []
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "done")
+    monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: calls.append((command, kwargs)) or "done")
     issue = {"number": 4, "title": "Fix title", "body": "Fix body"}
     config = {
         "prompt": prompt_path,
         "source_repos": ["owner/repo"],
         "workspace_root": tmp_path,
-        "context_files": [tmp_path / "context.md"],
-        "skills": [tmp_path / "skill.md"],
+        "context_files": ["context.md"],
+        "skills": ["skill.md"],
         "base_branch": "main",
         "base_sha": "abc123def456",
         "run_id": "run1",
     }
     assert runner.run_pi(issue, tmp_path, config, "owner/repo") == "done"
     command, kwargs = calls[0]
-    assert command[:4] == ["pi", "--skill", str(tmp_path / "skill.md"), "--print"]
+    assert command[:4] == ["pi", "--skill", "skill.md", "--print"]
     assert "owner/repo" in command[7]
     assert " 4 " in command[7]
     assert "Fix title" in command[7]
     assert "Fix body" in command[7]
-    assert str(tmp_path / "context.md") in command[7]
-    assert str(tmp_path / "skill.md") in command[7]
+    assert "context.md" in command[7]
+    assert "skill.md" in command[7]
     assert command[7].endswith("main abc123def456 run1")
     assert command[8] == "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: " + str(tmp_path) + "\nComplete the delivery process in the system prompt."
     assert kwargs["cwd"] == tmp_path
     assert kwargs["timeout"] is None
-    assert kwargs["log_stdout"] is True
+    assert kwargs["issue"] == 4
+    assert kwargs["source_repo"] == "owner/repo"
+    assert kwargs["branch"] is None
     assert kwargs["log_command"][-2:] == ["<redacted>", "<issue-context-redacted>"]
+
+
+def test_run_pi_passes_task_branch_to_stream_pi(monkeypatch, tmp_path):
+    prompt_path = tmp_path / "prompt.md"
+    prompt_path.write_text("SYSTEM", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: calls.append(kwargs) or "done")
+    issue = {"number": 5, "title": "t", "body": "b"}
+    config = {
+        "prompt": prompt_path,
+        "source_repos": ["owner/repo"],
+        "workspace_root": tmp_path,
+        "context_files": [],
+        "skills": [],
+        "base_branch": "main",
+        "base_sha": "abc123def456",
+        "run_id": "run1",
+    }
+    runner.run_pi(
+        issue, tmp_path, config, "owner/repo",
+        timeout=7, branch="muyan-pilot/owner-repo-issue-5-run1",
+    )
+    assert calls[0]["branch"] == "muyan-pilot/owner-repo-issue-5-run1"
+    assert calls[0]["timeout"] == 7
 
 
 def test_run_pi_redacts_prompt_and_issue_from_command_log(monkeypatch, tmp_path):
     prompt_path = tmp_path / "prompt.md"
     prompt_path.write_text("PRIVATE SYSTEM {{ISSUE_BODY}}", encoding="utf-8")
     calls = []
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "done")
+    monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: calls.append((command, kwargs)) or "done")
     runner.run_pi(
         {"number": 5, "title": "secret", "body": "token"}, tmp_path,
         {"prompt": prompt_path, "source_repos": ["owner/repo"], "workspace_root": tmp_path, "context_files": [], "skills": [], "base_branch": "main", "base_sha": "abc123def456", "run_id": "run1"},
@@ -418,7 +448,11 @@ def test_run_pi_redacts_prompt_and_issue_from_command_log(monkeypatch, tmp_path)
     command, kwargs = calls[0]
     assert "PRIVATE SYSTEM" in command[5]
     assert "token" in command[5]
-    assert kwargs["log_command"][-2:] == ["<redacted>", "<issue-context-redacted>"]
+    assert kwargs["log_command"] == [
+        "pi", "--print", "--session-dir",
+        str(tmp_path / ".pi-session"),
+        "--system-prompt", "<redacted>", "<issue-context-redacted>",
+    ]
 
 
 def test_verify_pr_rejects_wrong_branch(monkeypatch, tmp_path):
@@ -600,15 +634,21 @@ def test_process_issue_success_reviews_merges_and_records_result(
     assert review_calls[0][0][:3] == (tmp_path / "wt", "muyan-pilot/xqliu-muyan-ceo-issue-4-run1", "main")
     assert review_calls[0][0][4] == "xqliu/muyan-ceo"
     assert review_calls[0][0][5] == 4
-    # calls[1] is the "opened PR" comment (review starting).
-    assert calls[1][0] == "comment"
-    assert "Muyan Pilot opened PR: https://github.com/muyan-pilot/pull/4" in calls[1][2]["body"]
+    # calls[1] is the "started Pi" comment (Issue #24 activity scene).
+    start = calls[1]
+    assert start[0] == "comment"
+    assert "Muyan Pilot started Pi:" in start[2]["body"]
+    assert "branch=muyan-pilot/xqliu-muyan-ceo-issue-4-run1" in start[2]["body"]
+    assert "worktree=" + str(tmp_path / "wt") in start[2]["body"]
+    # calls[2] is the "opened PR" comment (review starting).
+    assert calls[2][0] == "comment"
+    assert "Muyan Pilot opened PR: https://github.com/muyan-pilot/pull/4" in calls[2][2]["body"]
     # Final label is ai-merged (the PR was merged in the same tick).
-    assert calls[2][0] == "edit"
-    assert calls[2][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-merged", "remove": "ai-in-progress"}
-    # calls[3] is the merged-result comment.
-    assert calls[3][0] == "comment"
-    merged_body = calls[3][2]["body"]
+    assert calls[3][0] == "edit"
+    assert calls[3][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-merged", "remove": "ai-in-progress"}
+    # calls[4] is the merged-result comment.
+    assert calls[4][0] == "comment"
+    merged_body = calls[4][2]["body"]
     assert "Muyan Pilot merged PR: https://github.com/muyan-pilot/pull/4" in merged_body
     assert "merge_commit=m1" in merged_body
     assert "review_rounds=2" in merged_body
@@ -696,3 +736,242 @@ def test_main_requires_prompt_file(monkeypatch, tmp_path):
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     with pytest.raises(FileNotFoundError):
         runner.main(["--config", str(config)])
+
+
+def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
+    monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(runner, "new_run_id", lambda: "run1")
+    monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
+    monkeypatch.setattr(
+        runner, "run_pi",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(1, ["pi"], stderr="boom"),
+        ),
+    )
+    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
+    monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: {
+        "session_id": "sess-9",
+        "session_file": str(tmp_path / "wt" / ".pi-session" / "s.jsonl"),
+        "phase": "test",
+        "last_activity": "2026-08-25T02:30:00Z",
+        "last": "bash pytest tests/",
+    })
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo")
+    failure_body = calls[-1][2]["body"]
+    assert "Muyan Pilot failed:" in failure_body
+    assert "session=sess-9" in failure_body
+    assert "phase=test" in failure_body
+    assert "last_activity=2026-08-25T02:30:00Z" in failure_body
+    assert "last=bash pytest tests/" in failure_body
+
+
+def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, caplog):
+    calls = []
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
+    monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(runner, "new_run_id", lambda: "run1")
+    monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
+    monkeypatch.setattr(
+        runner, "run_pi",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("git failed")),
+    )
+    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
+    monkeypatch.setattr(
+        runner, "activity_snapshot",
+        lambda session_dir: (_ for _ in ()).throw(OSError("disk error")),
+    )
+    with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="git failed"):
+        runner.process_issue({"number": 9, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo")
+    assert "activity scene failed" in caplog.text
+    failure_body = calls[-1][2]["body"]
+    assert "Muyan Pilot failed: git failed" in failure_body
+    assert "session=" not in failure_body
+
+
+def make_fake_pi(tmp_path: Path, *, session_records: list[tuple[float, dict]],
+                 stdout: str = "", stderr: str = "", exit_code: int = 0,
+                 sleep: float = 0.0) -> list[str]:
+    """Build a command that mimics pi: appends session records over time."""
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir()
+    records_literal = repr(session_records)
+    script = (
+        "import json, sys, time\n"
+        f"session = {str(session_dir / 'sess.jsonl')!r}\n"
+        f"records = {records_literal}\n"
+        "for delay, record in records:\n"
+        "    time.sleep(delay)\n"
+        "    with open(session, 'a') as handle:\n"
+        "        handle.write(json.dumps(record) + '\\n')\n"
+        f"time.sleep({sleep!r})\n"
+        f"sys.stdout.write({stdout!r})\n"
+        f"sys.stderr.write({stderr!r})\n"
+        f"sys.exit({exit_code!r})\n"
+    )
+    return [sys.executable, "-c", script]
+
+
+def fake_session_records():
+    return [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": "2026-08-25T02:00:00Z", "cwd": "/w"}),
+        (0.1, {"type": "message", "id": "u1",
+               "timestamp": "2026-08-25T02:00:00Z",
+               "message": {"role": "user", "content": [
+                   {"type": "text", "text": "SECRET ISSUE BODY"}]}}),
+        (0.2, {"type": "message", "id": "a1",
+               "timestamp": "2026-08-25T02:00:01Z",
+               "message": {"role": "assistant", "content": [
+                   {"type": "toolCall", "id": "t1", "name": "bash",
+                    "arguments": {"command": "pytest tests/"}}]}}),
+    ]
+
+
+def test_stream_pi_logs_live_activity_and_returns_stdout(tmp_path, caplog):
+    command = make_fake_pi(
+        tmp_path, session_records=fake_session_records(),
+        stdout="final answer",
+    )
+    with caplog.at_level("INFO"):
+        result = runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1, idle_warn_seconds=3600,
+            issue=24, source_repo="xqliu/muyan-pilot",
+            branch="muyan-pilot/xqliu-muyan-pilot-issue-24-run1",
+        )
+    assert result == "final answer"
+    # Without an explicit log_command the raw command is never logged.
+    assert "command=<redacted>" in caplog.text
+    assert "pi_activity issue=24 source_repo=xqliu/muyan-pilot" in caplog.text
+    assert "branch=muyan-pilot/xqliu-muyan-pilot-issue-24-run1" in caplog.text
+    assert f"worktree={tmp_path}" in caplog.text
+    assert "session=sess-1" in caplog.text
+    assert "phase=test" in caplog.text
+    assert "last=bash pytest tests/" in caplog.text
+    assert "stdout=final answer" in caplog.text
+    # The user message (full prompt / Issue body) never reaches the journal.
+    assert "SECRET ISSUE BODY" not in caplog.text
+
+
+def test_stream_pi_logs_command_redacted_and_stderr(tmp_path, caplog):
+    command = make_fake_pi(
+        tmp_path, session_records=[],
+        stdout="ok", stderr="warning line",
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1, idle_warn_seconds=3600,
+            log_command=["pi", "--print", "<redacted>"],
+        )
+    assert "command=pi --print <redacted>" in caplog.text
+    assert "stderr=warning line" in caplog.text
+
+
+def test_stream_pi_logs_failure_scene_and_reraises(tmp_path, caplog):
+    command = make_fake_pi(
+        tmp_path, session_records=fake_session_records(),
+        stderr="pi exploded", exit_code=3,
+    )
+    with caplog.at_level("ERROR"), pytest.raises(
+        subprocess.CalledProcessError,
+    ) as excinfo:
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1, idle_warn_seconds=3600,
+            issue=24, source_repo="xqliu/muyan-pilot", branch="b",
+        )
+    assert excinfo.value.returncode == 3
+    assert "pi exploded" in (excinfo.value.stderr or "")
+    # The exception must not carry the raw command (prompt / Issue body).
+    assert "SECRET ISSUE BODY" not in str(excinfo.value)
+    assert "pi_failed returncode=3" in caplog.text
+    assert "session=sess-1" in caplog.text
+    assert "phase=test" in caplog.text
+    # The session JSONL stays in the worktree as the local record.
+    session_files = list((tmp_path / ".pi-session").glob("*.jsonl"))
+    assert len(session_files) == 1
+    assert len(session_files[0].read_text(encoding="utf-8").splitlines()) == 3
+
+
+def test_stream_pi_warns_when_session_is_idle(tmp_path, caplog):
+    command = make_fake_pi(
+        tmp_path, session_records=fake_session_records(),
+        sleep=1.0,
+    )
+    with caplog.at_level("WARNING"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1, idle_warn_seconds=0.5,
+            issue=24, source_repo="xqliu/muyan-pilot", branch="b",
+        )
+    assert "pi_idle" in caplog.text
+    assert "stale_seconds=" in caplog.text
+    assert "session=sess-1" in caplog.text
+
+
+def test_stream_pi_warns_when_no_session_file_appears(tmp_path, caplog):
+    command = make_fake_pi(tmp_path, session_records=[], sleep=1.0)
+    with caplog.at_level("WARNING"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1, idle_warn_seconds=0.5,
+            issue=24, source_repo="xqliu/muyan-pilot", branch="b",
+        )
+    assert "pi_idle" in caplog.text
+    assert "session=-" in caplog.text
+    assert "session_file=-" in caplog.text
+
+
+def test_stream_pi_drains_pipe_data_written_after_exit(
+    monkeypatch, tmp_path, caplog,
+):
+    """Data left in the pipes after the process exits is drained and kept."""
+
+    class FakeProcess:
+        def __init__(self, command, **kwargs):
+            self._out_r, self._out_w = os.pipe()
+            self._err_r, self._err_w = os.pipe()
+            self.stdout = os.fdopen(self._out_r, "rb")
+            self.stderr = os.fdopen(self._err_r, "rb")
+            self._out_writer = os.fdopen(self._out_w, "wb")
+            self._err_writer = os.fdopen(self._err_w, "wb")
+            self.returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+    def fake_popen(command, **kwargs):
+        process = FakeProcess(command, **kwargs)
+
+        def writer():
+            time.sleep(0.3)
+            process._out_writer.write(b"late stdout data")
+            process._err_writer.write(b"late stderr data")
+            process._out_writer.close()
+            process._err_writer.close()
+
+        threading.Thread(target=writer, daemon=True).start()
+        return process
+
+    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+    with caplog.at_level("INFO"):
+        result = runner.stream_pi(
+            ["fake"], cwd=tmp_path, poll_interval=0.1, idle_warn_seconds=3600,
+        )
+    assert result == "late stdout data"
+    assert "stderr=late stderr data" in caplog.text
+
+
+def test_stream_pi_times_out_and_kills_process(tmp_path, caplog):
+    command = make_fake_pi(tmp_path, session_records=[], sleep=10.0)
+    with caplog.at_level("ERROR"), pytest.raises(
+        subprocess.TimeoutExpired,
+    ) as excinfo:
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1, timeout=0.5,
+            issue=24, source_repo="xqliu/muyan-pilot", branch="b",
+        )
+    assert excinfo.value.timeout == 0.5
+    # The exception must not carry the raw command (prompt / Issue body).
+    assert "sleep" not in str(excinfo.value)
+    assert "pi_timeout timeout=0.5" in caplog.text
+    assert "issue=24" in caplog.text

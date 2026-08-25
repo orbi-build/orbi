@@ -17,10 +17,18 @@ import argparse
 import json
 import logging
 import os
+import select
 import subprocess
+import time
 import tomllib
 import uuid
 from pathlib import Path
+
+from pi_activity import (
+    SessionWatcher,
+    activity_snapshot,
+    format_activity_scene,
+)
 
 
 LOGGER = logging.getLogger("muyan_pilot.bootstrap")
@@ -29,6 +37,12 @@ LOGGER = logging.getLogger("muyan_pilot.bootstrap")
 # bounded size of the review/fix loop (see review-fix-loop skill: max 5 rounds).
 VERDICT_MARKER = "REVIEW_VERDICT"
 MAX_REVIEW_ROUNDS = 5
+
+# Live activity polling while Pi runs (Issue #24). The journal gets one
+# activity line per poll with new events, and an idle warning when the
+# session stays silent for this long.
+PI_POLL_INTERVAL = 15.0
+PI_IDLE_WARN_SECONDS = 300.0
 
 
 def _config_path(value: str, base: Path) -> Path:
@@ -217,8 +231,122 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
     return path
 
 
+def _drain_stream(stream, chunks: list[bytes]) -> None:
+    """Read a pipe to EOF, appending chunks (process must be finished)."""
+    while True:
+        data = os.read(stream.fileno(), 65536)
+        if not data:
+            return
+        chunks.append(data)
+
+
+def _decode_chunks(chunks: list[bytes]) -> str:
+    return b"".join(chunks).decode("utf-8", "replace")
+
+
+def _log_pi_activity(activity: dict, context: str,
+                     idle_warn_seconds: float) -> None:
+    """Log new session activity, or an idle warning with the full scene."""
+    scene = format_activity_scene(activity)
+    if activity["changed"]:
+        LOGGER.info("pi_activity %s %s", context, scene)
+        return
+    if activity["stale_seconds"] >= idle_warn_seconds:
+        LOGGER.warning(
+            "pi_idle %s %s stale_seconds=%.0f",
+            context, scene, activity["stale_seconds"],
+        )
+
+
+def stream_pi(
+    command: list[str],
+    *,
+    cwd: Path,
+    timeout: int | None = None,
+    poll_interval: float = PI_POLL_INTERVAL,
+    idle_warn_seconds: float = PI_IDLE_WARN_SECONDS,
+    log_command: list[str] | None = None,
+    issue: int | None = None,
+    source_repo: str | None = None,
+    branch: str | None = None,
+) -> str:
+    """Run Pi and stream its live session activity into the journal.
+
+    Every poll, the newest Pi session JSONL activity is logged with the task
+    context (issue, source repo, branch, worktree): phase, last activity
+    time and a sanitized tool summary. When no new event arrives for
+    `idle_warn_seconds`, a warning with the full scene is logged. On a
+    non-zero exit the scene is logged before the error is raised. The
+    session JSONL stays in the worktree as the complete local record; the
+    full prompt and Issue body are never logged.
+    """
+    # The raw pi command embeds the full prompt and Issue body; only the
+    # redacted form may ever reach the journal or an exception message.
+    safe_command = log_command or ["<redacted>"]
+    LOGGER.info("command=%s cwd=%s", " ".join(safe_command), cwd)
+    watcher = SessionWatcher(cwd / ".pi-session")
+    context = (
+        f"issue={issue} source_repo={source_repo} branch={branch} "
+        f"worktree={cwd}"
+    )
+    process = subprocess.Popen(
+        command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    deadline = None if timeout is None else time.monotonic() + timeout
+    activity = watcher.poll()
+    timed_out = False
+    try:
+        while True:
+            if deadline is not None and time.monotonic() >= deadline:
+                process.kill()
+                timed_out = True
+                break
+            ready, _, _ = select.select(
+                [process.stdout, process.stderr], [], [], poll_interval,
+            )
+            for stream in ready:
+                data = os.read(stream.fileno(), 65536)
+                if data:
+                    if stream is process.stdout:
+                        stdout_chunks.append(data)
+                    else:
+                        stderr_chunks.append(data)
+            activity = watcher.poll()
+            _log_pi_activity(activity, context, idle_warn_seconds)
+            if process.poll() is not None:
+                break
+    finally:
+        _drain_stream(process.stdout, stdout_chunks)
+        _drain_stream(process.stderr, stderr_chunks)
+    stdout = _decode_chunks(stdout_chunks)
+    stderr = _decode_chunks(stderr_chunks)
+    if timed_out:
+        LOGGER.error(
+            "pi_timeout timeout=%s %s %s",
+            timeout, context, format_activity_scene(activity),
+        )
+        raise subprocess.TimeoutExpired(
+            safe_command, timeout, output=stdout, stderr=stderr,
+        )
+    if process.returncode != 0:
+        LOGGER.error(
+            "pi_failed returncode=%s %s %s",
+            process.returncode, context, format_activity_scene(activity),
+        )
+        raise subprocess.CalledProcessError(
+            process.returncode, safe_command, output=stdout, stderr=stderr,
+        )
+    if stderr:
+        LOGGER.info("stderr=%s", stderr.rstrip())
+    LOGGER.info("stdout=%s", stdout.rstrip())
+    return stdout.strip()
+
+
 def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
-           timeout: int | None = None) -> str:
+           timeout: int | None = None,
+           branch: str | None = None) -> str:
     system_prompt = render_prompt(
         config["prompt"].read_text(encoding="utf-8"),
         {
@@ -250,15 +378,17 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         "pi_session=%s issue=%s source_repo=%s",
         worktree / ".pi-session", issue["number"], source_repo,
     )
-    return run_command(
+    return stream_pi(
         command,
         cwd=worktree,
         timeout=timeout,
-        log_stdout=True,
         log_command=[
             "pi", "--print", "--session-dir", str(worktree / ".pi-session"),
             "--system-prompt", "<redacted>", "<issue-context-redacted>",
         ],
+        issue=int(issue["number"]),
+        source_repo=source_repo,
+        branch=branch,
     )
 
 
@@ -671,12 +801,20 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         "issue=%s %s", number, run_info,
     )
     edit_issue(number, repo=source_repo, add="ai-in-progress")
+    worktree: Path | None = None
     try:
         worktree = create_worktree(
             config["repo_dir"], source_repo, number, run_id, base_sha,
         )
         config = {**config, "base_sha": base_sha, "run_id": run_id}
-        run_pi(issue, worktree, config, source_repo)
+        comment_issue(
+            number, repo=source_repo,
+            body=(
+                f"Muyan Pilot started Pi: {run_info} branch={branch} "
+                f"worktree={worktree}"
+            ),
+        )
+        run_pi(issue, worktree, config, source_repo, branch=branch)
         pr_url = verify_pr(worktree, branch, base_branch)
         comment_issue(
             number, repo=source_repo,
@@ -702,15 +840,23 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         return merged_pr["url"]
     except Exception as exc:
         LOGGER.exception("issue=%s failed", number)
+        scene = ""
+        if worktree is not None:
+            try:
+                scene = format_activity_scene(
+                    activity_snapshot(worktree / ".pi-session"),
+                )
+            except Exception:
+                LOGGER.exception("issue=%s activity scene failed", number)
         try:
             edit_issue(
                 number, repo=source_repo, add="ai-blocked",
                 remove="ai-in-progress",
             )
-            comment_issue(
-                number, repo=source_repo,
-                body=f"Muyan Pilot failed: {exc} ({run_info})",
-            )
+            body = f"Muyan Pilot failed: {exc} ({run_info})"
+            if scene:
+                body += f" {scene}"
+            comment_issue(number, repo=source_repo, body=body)
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
         raise

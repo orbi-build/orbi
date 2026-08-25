@@ -39,6 +39,30 @@ python3 muyan_pilot.py status --config muyan-pilot.toml
 
 `add` 成功后打印新 Issue 的 URL 和 `ai-ready` 标签；`status` 只读，不修改任何标签。命令失败立即报错，不做回退。
 
+## 实时进展
+
+Pi 长时间运行时，Runner 不再只留下启动命令和最终结果。`bootstrap_runner.py` 运行 Pi 期间每 15 秒读取任务 worktree 里的 Pi session JSONL（`.pi-session/*.jsonl`），把最近活动写入 journal（systemd 日志）：
+
+- `pi_activity issue=... source_repo=... branch=... worktree=... session=... session_file=... events=... phase=... last_activity=... last=...`——有新事件时记录当前阶段（test / pr / push / commit / base / worktree / ui / bash 或工具名）、最近活动时间和脱敏后的工具/命令摘要；
+- `pi_idle ... stale_seconds=...`——超过 5 分钟没有新事件时告警，带完整现场（找不到 session 文件时同样告警）；
+- `pi_failed returncode=... ...`——进程异常退出时先记录现场再抛出错误；session JSONL 完整保留在 worktree 中，作为本地完整记录。
+
+`muyan_pilot.py status` 同时展示当前（`ai-in-progress`）任务的实时状态：
+
+```bash
+python3 muyan_pilot.py status --config muyan-pilot.toml
+# source: xqliu/muyan-pilot
+#   base: main abc123def456
+#   current: #24 Stream live Pi activity ... https://github.com/xqliu/muyan-pilot/issues/24
+#     live: phase=test last_activity=2026-08-25T02:30:00Z last=bash pytest tests/
+#     session: .../.worktrees/muyan-pilot-xqliu-muyan-pilot-issue-24-<run-id>/.pi-session/<session>.jsonl
+#     worktree: .../.worktrees/muyan-pilot-xqliu-muyan-pilot-issue-24-<run-id>
+#   ready: -
+#   result: -
+```
+
+journal 和 `status` 只暴露脱敏摘要：完整 prompt、Issue body 和 token 不会写入日志（命令日志固定为 `<redacted>`，工具摘要截断到 200 字符并屏蔽常见 token 形状）。关键阶段继续回写 GitHub Issue 评论：Pi 启动（含 branch 和 worktree）、PR 创建、失败现场。
+
 前置条件：
 
 - `gh auth status` 成功；
