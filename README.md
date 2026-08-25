@@ -8,7 +8,7 @@
 /usr/bin/python3 bootstrap_runner.py --config muyan-pilot.toml
 ```
 
-正常运行使用 systemd user timer，每 5 分钟自动执行一次：
+正常运行使用 systemd user timer，每 15 分钟自动执行一次：
 
 ```bash
 mkdir -p ~/.config/systemd/user
