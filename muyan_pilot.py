@@ -2,8 +2,10 @@
 """Muyan Pilot task dispatch and status CLI.
 
 `add` creates an Issue in a configured source repo and labels it `ai-ready`.
-`status` reports the current in-progress Issue, the next ready Issue, and the
-most recent result (`ai-pr-opened` / `ai-blocked`) per source repo.
+`status` reports the current in-progress Issue (with its live Pi activity:
+phase, last activity time, sanitized last tool summary, session file and
+worktree), the next ready Issue, and the most recent result
+(`ai-pr-opened` / `ai-blocked`) per source repo.
 
 GitHub Issues and labels are the only state store. There is no database,
 queue, or web UI. Command failures are logged and raised by the reused
@@ -24,6 +26,7 @@ from bootstrap_runner import (
     run_command,
     validate_config,
 )
+from pi_activity import activity_snapshot
 
 LOGGER = logging.getLogger("muyan_pilot.cli")
 
@@ -96,14 +99,55 @@ def format_issue(issue: dict) -> str:
     return f"#{issue['number']} {issue['title']} {issue['url']}"
 
 
+def latest_task_worktree(repo_dir: Path, source_repo: str,
+                         number: int) -> Path | None:
+    """Return the newest task worktree for an Issue, or None."""
+    slug = source_repo.replace("/", "-")
+    pattern = f".worktrees/muyan-pilot-{slug}-issue-{number}-*"
+    candidates = [
+        path for path in repo_dir.glob(pattern) if path.is_dir()
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def live_activity_lines(repo_dir: Path, source_repo: str,
+                        issue: dict) -> list[str]:
+    """Return the live Pi activity lines for an in-progress Issue."""
+    worktree = latest_task_worktree(repo_dir, source_repo, int(issue["number"]))
+    if worktree is None:
+        return ["    live: no task worktree found"]
+    snapshot = activity_snapshot(worktree / ".pi-session")
+    if snapshot is None:
+        return [
+            "    live: no pi session yet",
+            f"    worktree: {worktree}",
+        ]
+    return [
+        (
+            f"    live: phase={snapshot['phase']} "
+            f"last_activity={snapshot['last_activity'] or '-'} "
+            f"last={snapshot['last'] or '-'}"
+        ),
+        f"    session: {snapshot['session_file']}",
+        f"    worktree: {worktree}",
+    ]
+
+
 def status_report(config: dict) -> str:
     lines = []
     for repo in config["source_repos"]:
         lines.append(f"source: {repo}")
         base_sha = freeze_base(config["repo_dir"], config["base_branch"])
         lines.append(f"  base: {config['base_branch']} {base_sha}")
+        current = current_issue(repo)
+        lines.append(f"  current: {format_issue(current) if current else '-'}")
+        if current is not None:
+            lines.extend(
+                live_activity_lines(config["repo_dir"], repo, current),
+            )
         for name, lookup in (
-            ("current", current_issue),
             ("ready", ready_issue),
             ("result", recent_result),
         ):
@@ -132,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     subparsers.add_parser(
         "status", parents=[common],
-        help="show current Issue, ready queue and recent result",
+        help="show current Issue (with live Pi activity), ready queue and recent result",
     )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
