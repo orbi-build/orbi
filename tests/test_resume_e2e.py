@@ -168,7 +168,10 @@ def install_fake_gh(monkeypatch, comments: list[str],
                         ],
                     })
                 if command[2] == "list":
-                    if "label:ai-pr-opened" in " ".join(command):
+                    # Only the explicit `ai-fix-needed` state is scanned
+                    # for Fixer work; `ai-pr-opened` means awaiting
+                    # review (Issue #45 round-5 review, Major 1).
+                    if "label:ai-fix-needed" in " ".join(command):
                         return json.dumps([{
                             "number": ISSUE_NUMBER,
                             "title": "Continue fixing the same PR",
@@ -362,13 +365,94 @@ def test_e2e_base_advances_and_resume_fixes_the_same_pr(
     assert worktree.is_dir()
 
 
+def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
+    clone, tmp_path, monkeypatch, caplog,
+):
+    """Round-5 review (Major 1): a clean PR that is simply awaiting
+    review (`ai-pr-opened`, no `ai-fix-needed`, no finding, no base
+    conflict) must NOT be sent to the Fixer. The tick falls through to
+    the ready queue and starts no Pi for the delivery."""
+    comments: list[str] = []
+    edits: list[list[str]] = []
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
+    install_fake_gh(monkeypatch, comments, edits)
+    caplog.set_level("INFO")
+    config = config_for(clone, tmp_path)
+
+    # First delivery: PR A is opened; the Issue is now awaiting review.
+    pr_url = runner.process_issue(issue(), config, REPO)
+    assert pr_url == PR_URL
+    run_id = runner.current_run_id()
+    worktree = worktree_for(clone, run_id)
+    head_before = git(worktree, "rev-parse", "HEAD")
+    edits_before = len(edits)
+    comments_before = len(comments)
+
+    # The next tick: the fake gh answers the `ai-fix-needed` scan with
+    # an EMPTY queue (the Issue is only `ai-pr-opened`), so the runner
+    # must fall through to the ready queue and start no fixer.
+    def fake_run(command, **kwargs):
+        if command[:1] == ["gh"] and command[1] == "issue" \
+                and command[2] == "list":
+            search = " ".join(command)
+            # The ready search also carries `-label:ai-fix-needed`, so
+            # the ready queue is recognized first, and the fix-needed
+            # scan (empty here: the Issue is only `ai-pr-opened`) after.
+            if "label:ai-ready" in search:
+                return json.dumps([{
+                    "number": 99, "title": "next ready task",
+                    "body": "body",
+                }])
+            if "label:ai-fix-needed" in search:
+                return "[]"
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    # `process_issue` is the fresh-claim path: it must be the one that
+    # gets the ready Issue, and the resumed delivery count stays zero.
+    claims = []
+
+    def fake_process(iss, cfg, repo):
+        claims.append(iss)
+        return PR_URL
+
+    monkeypatch.setattr(runner, "process_issue", fake_process)
+    prompt = write_prompt(tmp_path)
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        f'source_repos = ["{REPO}"]\n'
+        f'repo_dir = "{clone}"\n'
+        f'workspace_root = "{tmp_path}"\n'
+        f'prompt = "{prompt}"\n',
+        encoding="utf-8",
+    )
+    assert runner.main(["--config", str(config_path)]) == 0
+    assert [c["number"] for c in claims] == [99]
+    # No fixer ran: the delivery HEAD is unchanged and no label edit or
+    # comment touched the delivery Issue during the awaiting-review tick.
+    assert git(worktree, "rev-parse", "HEAD") == head_before
+    assert len(edits) == edits_before
+    assert len(comments) == comments_before
+    assert not any("fixed PR" in c for c in comments)
+    # The awaiting-review fake rejects anything but the two list scans.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "pr", "list"])
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run([
+            "gh", "issue", "list", "--repo", REPO, "--state", "open",
+            "--search", "label:ai-blocked", "--json", "number",
+        ])
+
+
 def test_e2e_public_comment_scene_is_never_resumed(
     clone, tmp_path, monkeypatch,
 ):
     """BLOCKER (F1): a public comment (authorAssociation=NONE) that
     carries a perfectly formatted scene — pointing at an arbitrary local
-    worktree and branch — must not become the recovery scene. The
-    runner skips the Issue instead of touching any git state."""
+    worktree and branch — must never become the recovery scene. The
+    runner does not follow the attacker's scene: it marks the Issue
+    `ai-blocked` with the concrete reason (round-5 review, Major 2) and
+    stops the tick, without touching any git state or starting a fixer."""
     comments: list[str] = []
     edits: list[list[str]] = []
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
@@ -387,11 +471,24 @@ def test_e2e_public_comment_scene_is_never_resumed(
         }],
     )
 
-    # The Issue looks resumable (ai-pr-opened, open), but its only scene
-    # comment is public: no resume, no label change, no git work.
-    assert runner.pick_resumable_delivery(REPO) is None
-    assert comments == []
-    assert edits == []
+    # The Issue looks resumable (ai-fix-needed, open), but its only
+    # scene comment is public: no resume from it, no git work, no
+    # fixer — the Issue is marked ai-blocked instead.
+    with pytest.raises(ValueError, match="no 'Muyan Pilot opened PR' comment"):
+        runner.pick_resumable_delivery(REPO)
+    # The blocked transition happened (add ai-blocked, remove
+    # ai-fix-needed) and the failure comment names the reason...
+    assert [
+        "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
+        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
+    ] in edits
+    assert len(comments) == 1
+    assert "Muyan Pilot failed:" in comments[0]
+    assert "trusted" in comments[0]
+    # ...but the attacker's scene was never followed: no merge, no push,
+    # no worktree touched, no fixer comment.
+    assert not any("fixed PR" in c for c in comments)
+    assert not any("merge" in " ".join(e) for e in edits)
 
 
 def test_e2e_fixer_failure_keeps_pr_and_marks_blocked(
@@ -426,10 +523,10 @@ def test_e2e_fixer_failure_keeps_pr_and_marks_blocked(
     with pytest.raises(subprocess.CalledProcessError):
         runner.resume_delivery(resumed, scene, config, REPO)
 
-    # The Issue is marked ai-blocked (and ai-pr-opened removed)...
+    # The Issue is marked ai-blocked (and ai-fix-needed removed)...
     assert [
         "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
-        "--add-label", "ai-blocked", "--remove-label", "ai-pr-opened",
+        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
     ] in edits
     # ...the PR, branch and worktree are all preserved (never deleted,
     # never force-pushed).

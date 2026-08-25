@@ -200,7 +200,8 @@ def test_pick_issue_uses_github_queue(monkeypatch):
     assert calls == [[
         "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
         "--state", "open", "--search",
-        "label:ai-ready -label:ai-in-progress -label:ai-pr-opened -label:ai-blocked",
+        "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
+        "-label:ai-fix-needed -label:ai-blocked",
         "--json", "number,title,body", "--limit", "1",
     ]]
 
@@ -993,7 +994,7 @@ def make_fake_pi(tmp_path: Path, *, session_records: list[tuple[float, dict]],
                  sleep: float = 0.0) -> list[str]:
     """Build a command that mimics pi: appends session records over time."""
     session_dir = tmp_path / ".pi-session"
-    session_dir.mkdir()
+    session_dir.mkdir(exist_ok=True)
     records_literal = repr(session_records)
     script = (
         "import json, sys, time\n"
@@ -1116,6 +1117,48 @@ def test_stream_pi_warns_when_no_session_file_appears(tmp_path, caplog):
     assert "pi_idle" in caplog.text
     assert "session=-" in caplog.text
     assert "session_file=-" in caplog.text
+
+
+def test_stream_pi_resumed_run_follows_new_session_file(tmp_path, caplog):
+    """Regression (Issue #45 round-5 review, Major 3): a resumed Fixer
+    starts in the original worktree where the previous implementer's
+    session JSONL already exists. The activity journal must follow the
+    NEW session file created by the current Pi process, not the old
+    one (which would report the previous session as idle)."""
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    old = session_dir / "old-session.jsonl"
+    with old.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "type": "session", "id": "old-session",
+            "timestamp": "2026-08-25T02:00:00Z", "cwd": "/w",
+        }) + "\n")
+    command = make_fake_pi(
+        tmp_path,
+        session_records=[
+            (0.0, {"type": "session", "id": "new-session",
+                   "timestamp": "2026-08-25T03:00:00Z", "cwd": "/w"}),
+            (0.1, {"type": "message", "id": "a1",
+                   "timestamp": "2026-08-25T03:00:01Z",
+                   "message": {"role": "assistant", "content": [
+                       {"type": "toolCall", "id": "t1", "name": "bash",
+                        "arguments": {"command": "pytest tests/"}}]}}),
+        ],
+        stdout="fixed",
+    )
+    with caplog.at_level("INFO"):
+        result = runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1, idle_warn_seconds=3600,
+            issue=45, source_repo="xqliu/muyan-pilot",
+            branch="muyan-pilot/xqliu-muyan-pilot-issue-45-run1",
+        )
+    assert result == "fixed"
+    # The journal follows the NEW session created by this invocation...
+    assert "session=new-session" in caplog.text
+    assert "phase=test" in caplog.text
+    assert "last=bash pytest tests/" in caplog.text
+    # ...and never reports the pre-existing session as the live one.
+    assert "session=old-session" not in caplog.text
 
 
 def test_stream_pi_drains_pipe_data_written_after_exit(

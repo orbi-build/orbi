@@ -65,7 +65,11 @@ Your worktree was created from `{{BASE_SHA}}` (the frozen
 Resuming an existing PR (Issue #45):
 
 If the task context says `Existing PR: <url>`, this run already opened
-that PR. The PR number, run id, feature branch and worktree are fixed
+that PR, and the runner started this fixer run because the Issue is in
+the `ai-fix-needed` state (a review finding or a base conflict). After
+a successful fix the runner returns the Issue to `ai-pr-opened`
+(awaiting review) — so do the complete fix once, not a partial one.
+The PR number, run id, feature branch and worktree are fixed
 for this run:
 
 - Never close the PR, never create a new PR, never re-claim the Issue;

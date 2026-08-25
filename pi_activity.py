@@ -133,12 +133,24 @@ def phase_for(name: str, arguments: dict) -> str:
 
 
 class SessionWatcher:
-    """Follow the newest Pi session JSONL and track the latest activity."""
+    """Follow the newest Pi session JSONL and track the latest activity.
+
+    With `known_files` (the session files that existed before the
+    tracked Pi process started) the watcher never binds to a known file:
+    it follows the newest file that appears, and switches to a newer
+    file whenever one appears, resetting its state. A resumed Fixer run
+    creates a NEW JSONL in the same `.pi-session` directory, so this is
+    what makes the journal report the session of the current invocation
+    instead of the previous run's (Issue #45). `known_files=None` keeps
+    the original bind-once semantics used by full-scan snapshots.
+    """
 
     def __init__(self, session_dir: Path,
-                 now: Callable[[], float] = time.time) -> None:
+                 now: Callable[[], float] = time.time,
+                 known_files: set[Path] | None = None) -> None:
         self.session_dir = session_dir
         self._now = now
+        self._known_files = known_files
         self.session_file: Path | None = None
         self.session_id: str | None = None
         self.phase: str | None = None
@@ -152,7 +164,11 @@ class SessionWatcher:
     def poll(self) -> dict:
         """Read new session records; return the current activity state."""
         if self.session_file is None:
-            self.session_file = latest_session_file(self.session_dir)
+            self.session_file = self._next_session_file()
+        elif self._known_files is not None:
+            newest = self._next_session_file()
+            if newest is not None and newest != self.session_file:
+                self._switch_to(newest)
         changed = False
         if self.session_file is not None:
             records, self._offset = read_new_events(
@@ -162,6 +178,28 @@ class SessionWatcher:
                 self._apply(record)
             changed = bool(records)
         return self.state(changed=changed)
+
+    def _next_session_file(self) -> Path | None:
+        """The file to follow: the newest file, unless it was already
+        present before the tracked process started (then: none yet)."""
+        newest = latest_session_file(self.session_dir)
+        if newest is None:
+            return None
+        if self._known_files is not None and newest in self._known_files:
+            return None
+        return newest
+
+    def _switch_to(self, path: Path) -> None:
+        """Bind to a newer session file and reset all tracked state."""
+        self.session_file = path
+        self.session_id = None
+        self.phase = None
+        self.last_activity = None
+        self.last = None
+        self.events = 0
+        self.start_time = self._now()
+        self._offset = 0
+        self._last_activity_epoch = None
 
     def state(self, changed: bool = False) -> dict:
         """Return the activity state as a plain dict (no file access)."""

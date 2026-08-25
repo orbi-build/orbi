@@ -33,7 +33,7 @@ python3 muyan_pilot.py add "任务标题" --body "任务描述" --config muyan-p
 # 派发到指定 source repo（必须在配置 source_repos 中）
 python3 muyan_pilot.py add "任务标题" --repo xqliu/muyan-ceo --config muyan-pilot.toml
 
-# 查看每个 source repo 的当前任务（ai-in-progress）、待办（ai-ready）和最近结果（ai-pr-opened / ai-blocked）
+# 查看每个 source repo 的当前任务（ai-in-progress）、待办（ai-ready）和最近结果（ai-pr-opened / ai-fix-needed / ai-blocked）
 python3 muyan_pilot.py status --config muyan-pilot.toml
 ```
 
@@ -118,17 +118,19 @@ Pi 创建 PR 前必须重新 fetch：若 `origin/<base_branch>` 已前进，需�
 
 ## PR 创建后的 review/fix 循环（Issue #45）
 
-PR 创建后任务没有结束：Issue 进入可恢复的 review/fix 状态（标签 `ai-pr-opened`），Review finding、base 前进或 merge conflict 都是可修复状态，不等于任务失败，也不重新进入 ready 队列。
+PR 创建后任务没有结束：Issue 进入可恢复的 review/fix 状态。`ai-pr-opened` 表示**等待 review**（干净 PR 不会被送进 Fixer）；只有显式的 `ai-fix-needed` 状态（Review finding 或 base 前进/冲突）才会触发 Fixer。Review finding、base 前进或 merge conflict 都是可修复状态，不等于任务失败，也不重新进入 ready 队列。
 
-- 每个 tick 先按顺序扫描 source repos 中 `ai-pr-opened`（且未 `ai-blocked`）的 open Issue；找到时，Runner 只信任由维护者（OWNER/MAINTAINER/MEMBER/COLLABORATOR）发布的最新 `Muyan Pilot opened PR:` 评论（公开评论永远不可信），从中恢复 run 现场（`run_id`、base_branch、base_sha、PR URL），branch 和 worktree 由配置的 repo、Issue 编号和 run_id **推导**（绝不从评论读取，评论无法指定任意本地路径），在**原 worktree、原 branch、同一 PR** 上继续修复，而不是领取新 Issue。评论缺少完整现场时 fail fast 并标记 `ai-blocked`，不做猜测。任何 git/Pi 变更前，Runner 先校验配置的 base 和 open PR（head repo、head branch、base、run marker、精确 URL）。
+- 每个 tick 先按顺序扫描 source repos 中 `ai-fix-needed`（且未 `ai-blocked`）的 open Issue；找到时，Runner 只信任由维护者（OWNER/MAINTAINER/MEMBER/COLLABORATOR）发布的最新 `Muyan Pilot opened PR:` 评论（公开评论永远不可信），从中恢复 run 现场（`run_id`、base_branch、base_sha、PR URL），branch 和 worktree 由配置的 repo、Issue 编号和 run_id **推导**（绝不从评论读取，评论无法指定任意本地路径），在**原 worktree、原 branch、同一 PR** 上继续修复，而不是领取新 Issue。现场无法恢复（评论缺少完整现场、无可信评论）时 fail fast：Issue 标记 `ai-blocked` 并写明具体原因，本 tick 停止，不做猜测，也不让新任务插队。任何 git/Pi 变更前，Runner 先校验配置的 base 和 open PR（head repo、head branch、base、run marker、精确 URL）。
 - 恢复后先重新 fetch：若最新远端 base 不是 worktree HEAD 的祖先，Runner 在原 branch 上执行普通 `git merge origin/<base>`；出现冲突时冲突原样保留交给 Fixer（Pi）解决，Runner 不自动解决、不 `--abort`、不 force push、不 push 保护分支。
 - Fixer 在原 worktree 中解决冲突和 review finding，重跑完整测试、100% 覆盖率、验证和完整 review 后，只 push 原 task branch；PR 头分支前进，**PR number 保持不变**，Runner 重新验收同一个 PR 并写 `Muyan Pilot fixed PR:` 进度评论（同一 run marker 和 `run_id=` 字段）。
-- 恢复、merge、fix 或验收任一步失败：Issue 标记 `ai-blocked`（移除 `ai-pr-opened`），评论写明具体失败和完整现场；PR、branch、worktree 原样保留，不删除、不关闭、不重建。
+- 修复成功：Runner 重新验收同一个 PR 后，Issue 从 `ai-fix-needed` 回到 `ai-pr-opened`（等待 review），`ai-fix-needed` 被消费，后续 tick 不会重复启动 Fixer。
+- 恢复、merge、fix 或验收任一步失败：Issue 标记 `ai-blocked`（移除 `ai-fix-needed`），评论写明具体失败和完整现场；PR、branch、worktree 原样保留，不删除、不关闭、不重建。
 - Runner/服务重启后，仅凭 Issue 标签、评论 marker、PR head、branch 和 worktree 即可恢复该 fix loop；implement/review/fix/merge 串行占用同一个并发 slot，不会为同一个 run 启动第二个 Pi。
 
 状态语义：
 
 ```text
 ai-in-progress → PR opened (ai-pr-opened) → review
-  → fix-needed / base-conflict → fix same PR → full re-review → merge (人工)
+  → fix-needed / base-conflict (ai-fix-needed) → fix same PR
+  → full re-review (ai-pr-opened) → merge (人工)
 ```

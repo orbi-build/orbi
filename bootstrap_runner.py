@@ -41,11 +41,15 @@ PI_IDLE_WARN_SECONDS = 300.0
 RUN_ID_PATTERN = re.compile(r"^[0-9a-f]{8}$")
 _CURRENT_RUN_ID: str | None = None
 
-# GitHub labels are the only state store (Issue #45). An open PR is a
-# recoverable review/fix state: the next tick resumes that same run on the
-# same branch, worktree and PR instead of claiming a new Issue.
+# GitHub labels are the only state store (Issue #45). After a PR is
+# opened the Issue is in a recoverable review/fix state: `ai-pr-opened`
+# means awaiting review, and only the explicit `ai-fix-needed` state
+# (a review finding or a base conflict) is scanned for Fixer work. The
+# next tick resumes that same run on the same branch, worktree and PR
+# instead of claiming a new Issue.
 IN_PROGRESS_LABEL = "ai-in-progress"
 PR_OPENED_LABEL = "ai-pr-opened"
+FIX_NEEDED_LABEL = "ai-fix-needed"
 BLOCKED_LABEL = "ai-blocked"
 
 # Only comments posted by a repo maintainer are trusted to carry the
@@ -197,7 +201,8 @@ def pick_issue(repo: str) -> dict | None:
     raw = run_command([
         "gh", "issue", "list", "--repo", repo, "--state", "open",
         "--search",
-        "label:ai-ready -label:ai-in-progress -label:ai-pr-opened -label:ai-blocked",
+        "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
+        f"-label:{FIX_NEEDED_LABEL} -label:{BLOCKED_LABEL}",
         "--json", "number,title,body", "--limit", "1",
     ])
     return parse_issue_list(raw)
@@ -370,17 +375,23 @@ def resume_scene(comments: list[dict]) -> dict:
 
 
 def pick_resumable_delivery(repo: str) -> tuple[dict, dict] | None:
-    """Return the newest `ai-pr-opened` delivery and its resume scene.
+    """Return the newest `ai-fix-needed` delivery and its resume scene.
 
-    An open PR is a recoverable review/fix state, not a finished task
-    (Issue #45): the next tick resumes it on the same run instead of
-    claiming a new Issue. Issues already `ai-blocked` are excluded, as
-    are closed Issues and Issues whose comment history carries no scene.
+    Only the explicit fix-needed state is scanned (Issue #45): a review
+    finding or a base conflict moves the Issue from `ai-pr-opened`
+    (awaiting review) to `ai-fix-needed`, and the next tick resumes that
+    same run on the same branch, worktree and PR instead of claiming a
+    new Issue. A clean PR that is simply awaiting review is never sent
+    to the Fixer. Issues already `ai-blocked` are excluded, as are
+    closed Issues. A scene that cannot be recovered is an unresolvable
+    state: the Issue is marked `ai-blocked` with the concrete reason and
+    the error re-raised, so the tick stops instead of silently skipping
+    the delivery while a fresh task starts ahead of it.
     """
     raw = run_command([
         "gh", "issue", "list", "--repo", repo, "--state", "open",
         "--search",
-        f"label:{PR_OPENED_LABEL} -label:{BLOCKED_LABEL}",
+        f"label:{FIX_NEEDED_LABEL} -label:{BLOCKED_LABEL}",
         "--json", "number,title,state,url", "--limit", "1",
     ])
     issues = parse_issue_array(raw)
@@ -392,12 +403,51 @@ def pick_resumable_delivery(repo: str) -> tuple[dict, dict] | None:
     comments = issue_comments(int(issue["number"]), repo=repo)
     try:
         scene = resume_scene(comments)
-    except ValueError:
-        return None
+    except ValueError as exc:
+        block_scene_failure(issue, exc, repo, comments)
     # The fixer works from the original task, so the resumable issue
     # carries its body like a freshly claimed one.
     issue["body"] = issue_body(int(issue["number"]), repo=repo)
     return issue, scene
+
+
+def block_scene_failure(issue: dict, error: ValueError, repo: str,
+                        comments: list[dict]) -> None:
+    """Mark an `ai-fix-needed` Issue `ai-blocked` when its scene is
+    malformed, then re-raise so the tick stops (Issue #45).
+
+    The failure comment carries the run marker recovered from a trusted
+    comment when it is present — the same run id, never a new or
+    guessed one. The PR, branch and worktree stay intact.
+    """
+    number = int(issue["number"])
+    LOGGER.error(
+        "issue=%s resume scene is malformed: %s", number, error,
+    )
+    marker = ""
+    for comment in reversed(comments):
+        if not _comment_is_trusted(comment):
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        match = re.search(r"<!-- muyan-pilot:run=([0-9a-f]{8}) -->", body)
+        if match:
+            marker = run_marker(match.group(1))
+            break
+    try:
+        edit_issue(
+            number, repo=repo, add=BLOCKED_LABEL, remove=FIX_NEEDED_LABEL,
+        )
+        comment_issue(
+            number, repo=repo,
+            body=(
+                f"{marker}\n" if marker else ""
+            ) + f"Muyan Pilot failed: {error}",
+        )
+    except Exception:
+        LOGGER.exception("issue=%s failure reporting failed", number)
+    raise error
 
 
 def pick_next_delivery(repos: list[str]) -> tuple[str, dict, dict | None] | None:
@@ -545,7 +595,16 @@ def stream_pi(
     # redacted form may ever reach the journal or an exception message.
     safe_command = log_command or ["<redacted>"]
     LOGGER.info("command=%s cwd=%s", " ".join(safe_command), cwd)
-    watcher = SessionWatcher(cwd / ".pi-session")
+    session_dir = cwd / ".pi-session"
+    # Session files that already exist before this Pi process starts are
+    # never followed: a resumed run (same worktree) creates a NEW JSONL,
+    # and the journal must report the session of the current invocation,
+    # not the previous run's (Issue #45 round-5 review, Major 3).
+    known_files = (
+        {path for path in session_dir.glob("*.jsonl") if path.is_file()}
+        if session_dir.is_dir() else set()
+    )
+    watcher = SessionWatcher(session_dir, known_files=known_files)
     context = (
         f"issue={issue} source_repo={source_repo} branch={branch} "
         f"worktree={cwd}"
@@ -936,7 +995,6 @@ def resume_delivery(issue: dict, scene: dict, config: dict,
                 f"Muyan Pilot fixed PR: {verified_url} ({scene_info})"
             ),
         )
-        return verified_url
     except Exception as exc:
         LOGGER.exception("issue=%s resume failed", number)
         activity_scene = ""
@@ -949,7 +1007,7 @@ def resume_delivery(issue: dict, scene: dict, config: dict,
         try:
             edit_issue(
                 number, repo=source_repo, add=BLOCKED_LABEL,
-                remove=PR_OPENED_LABEL,
+                remove=FIX_NEEDED_LABEL,
             )
             body = (
                 f"{run_marker(run_id)}\n"
@@ -961,6 +1019,14 @@ def resume_delivery(issue: dict, scene: dict, config: dict,
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
         raise
+    # The fix succeeded: consume the fix-needed state and return the
+    # Issue to awaiting review, so the next tick does not re-run the
+    # Fixer (a clean PR is simply waiting for review now).
+    edit_issue(
+        number, repo=source_repo, add=PR_OPENED_LABEL,
+        remove=FIX_NEEDED_LABEL,
+    )
+    return verified_url
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -280,8 +280,14 @@ def issue_payload(state: str = "OPEN") -> str:
 
 
 def make_pick_fake(list_payload: str, view_payload: str | None = None,
-                   body_payload: str | None = None):
-    """Fake `gh` for the resumable scan; guard rejects anything else."""
+                   body_payload: str | None = None,
+                   edits: list[list[str]] | None = None,
+                   comments: list[str] | None = None):
+    """Fake `gh` for the resumable scan; guard rejects anything else.
+
+    `edits`/`comments` (when given) capture the label edits and comments
+    posted by the scene-failure blocked transition.
+    """
     def fake_run(command, **kwargs):
         if command[1] == "issue":
             if command[2] == "list":
@@ -290,6 +296,14 @@ def make_pick_fake(list_payload: str, view_payload: str | None = None,
                 if command[-1] == "body":
                     return body_payload or json.dumps({"body": ""})
                 return view_payload
+            if command[2] == "edit":
+                if edits is not None:
+                    edits.append(command)
+                return ""
+            if command[2] == "comment":
+                if comments is not None:
+                    comments.append(command[-1])
+                return ""
         raise AssertionError(f"unexpected command: {command}")
 
     return fake_run
@@ -300,7 +314,8 @@ def test_pick_fake_rejects_unexpected_command(monkeypatch):
     monkeypatch.setattr(runner, "run_command", fake)
     with pytest.raises(AssertionError, match="unexpected command"):
         runner.run_command(["gh", "release", "list"])
-    # An `issue` subcommand that is neither list nor view is rejected too.
+    # An `issue` subcommand that is neither list/view/edit/comment is
+    # rejected too.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake(["gh", "issue", "create", "--repo", "owner/repo"])
 
@@ -324,7 +339,7 @@ def test_pick_resumable_delivery_returns_newest_issue_with_scene(monkeypatch):
     # Newest-first list, then the full comment history of that Issue.
     assert calls[0] == [
         "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
-        "--search", "label:ai-pr-opened -label:ai-blocked",
+        "--search", "label:ai-fix-needed -label:ai-blocked",
         "--json", "number,title,state,url", "--limit", "1",
     ]
     assert calls[1] == [
@@ -333,20 +348,57 @@ def test_pick_resumable_delivery_returns_newest_issue_with_scene(monkeypatch):
     ]
 
 
+def test_pick_resumable_delivery_scans_only_fix_needed_issues(monkeypatch):
+    """`ai-pr-opened` means awaiting review: only the explicit
+    `ai-fix-needed` state (review finding or base conflict) is scanned
+    for Fixer work, so a clean PR waiting for review is never sent to
+    the Fixer (Issue #45 round-5 review, Major 1)."""
+    calls = []
+
+    def counting(command, **kwargs):
+        calls.append(command)
+        return "[]"
+
+    monkeypatch.setattr(runner, "run_command", counting)
+    assert runner.pick_resumable_delivery("owner/repo") is None
+    assert calls == [[
+        "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
+        "--search", "label:ai-fix-needed -label:ai-blocked",
+        "--json", "number,title,state,url", "--limit", "1",
+    ]]
+
+
 def test_pick_resumable_delivery_returns_none_when_queue_empty(monkeypatch):
     monkeypatch.setattr(runner, "run_command", make_pick_fake("[]"))
     assert runner.pick_resumable_delivery("owner/repo") is None
 
 
-def test_pick_resumable_delivery_skips_issue_without_pr_comment(monkeypatch):
+def test_pick_resumable_delivery_blocks_issue_without_scene_comment(
+    monkeypatch, caplog,
+):
+    """An `ai-fix-needed` Issue whose comment history carries no trusted
+    opened-PR comment at all cannot be resumed: blocked, not skipped
+    (round-5 review, Major 2)."""
+    edits: list[list[str]] = []
+    comments: list[str] = []
     monkeypatch.setattr(
         runner, "run_command",
         make_pick_fake(
             issue_payload(),
             gh_comments_payload(["only a human comment here"]),
+            edits=edits,
+            comments=comments,
         ),
     )
-    assert runner.pick_resumable_delivery("owner/repo") is None
+    caplog.set_level("ERROR")
+    with pytest.raises(ValueError, match="no 'Muyan Pilot opened PR' comment"):
+        runner.pick_resumable_delivery("owner/repo")
+    assert edits == [[
+        "gh", "issue", "edit", "9", "--repo", "owner/repo",
+        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
+    ]]
+    assert "Muyan Pilot failed:" in comments[0]
+    assert "issue=9 resume scene is malformed" in caplog.text
 
 
 def test_pick_resumable_delivery_skips_closed_issue(monkeypatch):
@@ -355,6 +407,188 @@ def test_pick_resumable_delivery_skips_closed_issue(monkeypatch):
         make_pick_fake(issue_payload(state="CLOSED")),
     )
     assert runner.pick_resumable_delivery("owner/repo") is None
+
+
+# ------------------------------------- malformed scene → ai-blocked (F2)
+
+def test_pick_resumable_delivery_blocks_issue_when_scene_is_malformed(
+    monkeypatch, caplog,
+):
+    """A trusted opened-PR comment with a missing/invalid scene field is
+    an unresolvable recovery state: the Issue is marked `ai-blocked` with
+    the concrete reason and the tick stops — it is never silently
+    skipped while a fresh task starts ahead of it (round-5 review,
+    Major 2)."""
+    calls = []
+    edits: list[list[str]] = []
+    comments: list[str] = []
+    fake = make_pick_fake(
+        issue_payload(),
+        gh_comments_payload(["Muyan Pilot opened PR: "
+                             "https://github.com/owner/repo/pull/9 "
+                             "(base_branch=main base_sha=abc123def456)"
+                             ]),
+        edits=edits,
+        comments=comments,
+    )
+
+    def counting(command, **kwargs):
+        calls.append(command)
+        return fake(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", counting)
+    caplog.set_level("ERROR")
+    with pytest.raises(ValueError, match="missing run_id"):
+        runner.pick_resumable_delivery("owner/repo")
+    # The blocked transition: add ai-blocked, remove ai-fix-needed...
+    assert edits == [[
+        "gh", "issue", "edit", "9", "--repo", "owner/repo",
+        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
+    ]]
+    # ...and a failure comment with the concrete reason...
+    body = comments[0]
+    assert "Muyan Pilot failed:" in body
+    assert "missing run_id" in body
+    # ...but no run marker: no valid run id exists, so none is guessed.
+    assert "muyan-pilot:run=" not in body
+    assert "issue=9 resume scene is malformed" in caplog.text
+
+
+def test_pick_resumable_delivery_blocks_issue_when_no_trusted_scene(
+    monkeypatch, caplog,
+):
+    """An `ai-fix-needed` Issue whose comment history carries no trusted
+    opened-PR comment cannot be resumed: blocked, not skipped."""
+    calls = []
+    edits: list[list[str]] = []
+    comments: list[str] = []
+    fake = make_pick_fake(
+        issue_payload(),
+        gh_comments_payload(["only a human comment here"]),
+        edits=edits,
+        comments=comments,
+    )
+
+    def counting(command, **kwargs):
+        calls.append(command)
+        return fake(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", counting)
+    caplog.set_level("ERROR")
+    with pytest.raises(ValueError, match="no 'Muyan Pilot opened PR' comment"):
+        runner.pick_resumable_delivery("owner/repo")
+    assert edits == [[
+        "gh", "issue", "edit", "9", "--repo", "owner/repo",
+        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
+    ]]
+    assert "Muyan Pilot failed:" in comments[0]
+    assert "issue=9 resume scene is malformed" in caplog.text
+
+
+def test_pick_resumable_delivery_scene_failure_carries_marker_when_present(
+    monkeypatch,
+):
+    """When the malformed comment still carries a valid run marker, the
+    failure comment reuses it — the same run id, never a new one."""
+    calls = []
+    comments: list[str] = []
+    fake = make_pick_fake(
+        issue_payload(),
+        gh_comments_payload([
+            f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n"
+            "Muyan Pilot opened PR: "
+            "https://github.com/owner/repo/pull/9 "
+            "(base_branch=main base_sha=abc123def456)"
+        ]),
+        comments=comments,
+    )
+
+    def counting(command, **kwargs):
+        calls.append(command)
+        return fake(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", counting)
+    with pytest.raises(ValueError, match="missing run_id"):
+        runner.pick_resumable_delivery("owner/repo")
+    assert f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->" in comments[0]
+
+
+def test_pick_resumable_delivery_scene_failure_skips_bodyless_comments(
+    monkeypatch,
+):
+    """Trusted comments without a string body are skipped while looking
+    for the run marker (never crash the recovery scan)."""
+    comments: list[str] = []
+    fake = make_pick_fake(
+        issue_payload(),
+        json.dumps({"comments": [
+            {
+                "body": (
+                    f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n"
+                    "Muyan Pilot opened PR: "
+                    "https://github.com/owner/repo/pull/9 "
+                    "(base_branch=main base_sha=abc123def456)"
+                ),
+                "authorAssociation": "OWNER",
+            },
+            {"authorAssociation": "OWNER"},
+            {"body": None, "authorAssociation": "OWNER"},
+        ]}),
+        comments=comments,
+    )
+    monkeypatch.setattr(runner, "run_command", fake)
+    with pytest.raises(ValueError, match="missing run_id"):
+        runner.pick_resumable_delivery("owner/repo")
+    assert f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->" in comments[0]
+
+
+def test_pick_resumable_delivery_scene_failure_preserves_error_when_reporting_fails(
+    monkeypatch, caplog,
+):
+    """When the blocked transition itself cannot be reported, the
+    original scene error is still re-raised (the tick still stops)."""
+
+    fake = make_pick_fake(
+        issue_payload(),
+        gh_comments_payload(["only a human comment here"]),
+    )
+
+    def fake_run(command, **kwargs):
+        if command[1] == "issue" and command[2] == "edit":
+            raise RuntimeError("github edit failed")
+        return fake(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("ERROR"), pytest.raises(
+        ValueError, match="no 'Muyan Pilot opened PR' comment",
+    ):
+        runner.pick_resumable_delivery("owner/repo")
+    assert "failure reporting failed" in caplog.text
+    # The fake's edit/comment branches are reachable without capture
+    # lists too (edits=None / comments=None): they simply do not record.
+    assert fake(["gh", "issue", "edit", "9", "--repo", "owner/repo"]) == ""
+    assert fake([
+        "gh", "issue", "comment", "9", "--repo", "owner/repo",
+        "--body", "x",
+    ]) == ""
+
+
+def test_pick_next_delivery_stops_when_scene_is_malformed(monkeypatch):
+    """A malformed scene re-raises: the tick stops and no fresh task
+    starts ahead of the broken delivery (round-5 review, Major 2)."""
+    def broken(repo):
+        raise ValueError("no 'Muyan Pilot opened PR' comment")
+
+    calls = []
+    monkeypatch.setattr(runner, "pick_resumable_delivery", broken)
+    monkeypatch.setattr(
+        runner, "pick_issue",
+        lambda repo: calls.append(("ready", repo)) or {"number": 10},
+    )
+    with pytest.raises(ValueError, match="no 'Muyan Pilot opened PR' comment"):
+        runner.pick_next_delivery(["owner/repo"])
+    # The ready queue was never consulted: no fresh claim started.
+    assert calls == []
 
 
 def test_pick_next_delivery_prefers_resumable_delivery_over_ready(monkeypatch):
@@ -642,6 +876,8 @@ def test_resume_delivery_success_keeps_same_run_branch_and_pr(
     )
     monkeypatch.setattr(runner, "comment_issue",
                         lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
+    monkeypatch.setattr(runner, "edit_issue",
+                        lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
     caplog.set_level("INFO")
 
     result = runner.resume_delivery(
@@ -690,12 +926,18 @@ def test_resume_delivery_success_keeps_same_run_branch_and_pr(
         ("merge", expected_worktree, "main"))
     # ...and the fixer ran between the two verifies.
     assert calls.index(verify_calls[1]) > calls.index(run_pi_args)
-    comment = calls[-1]
+    comment = calls[-2]
     assert comment[0] == "comment"
     body = comment[2]["body"]
     assert f"Muyan Pilot fixed PR: {FAKE_PR_URL}" in body
     assert f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->" in body
     assert f"run_id={FAKE_RUN_ID}" in body
+    # The fix-needed state is consumed: the Issue returns to awaiting
+    # review (`ai-pr-opened`), so the next tick does not re-run the
+    # Fixer (round-5 review, Major 1).
+    assert calls[-1] == ("edit", (9,), {
+        "repo": "owner/repo", "add": "ai-pr-opened", "remove": "ai-fix-needed",
+    })
     # Every journal line of the resumed attempt carries the same run id.
     for message in caplog.messages:
         assert message.startswith(f"[{FAKE_RUN_ID}]"), message
@@ -732,7 +974,7 @@ def test_resume_delivery_fails_fast_when_scene_base_differs_from_config(
     # mutation, and the Issue is marked ai-blocked with the reason.
     assert not any(call[0] == "merge" for call in calls)
     assert calls[0] == ("edit", (9,), {
-        "repo": "owner/repo", "add": "ai-blocked", "remove": "ai-pr-opened",
+        "repo": "owner/repo", "add": "ai-blocked", "remove": "ai-fix-needed",
     })
     assert "base branch mismatch" in calls[1][2]["body"]
     assert "issue=9 resume failed" in caplog.text
@@ -763,7 +1005,7 @@ def test_resume_delivery_fails_fast_when_worktree_missing(
 
     # ai-blocked with the concrete reason; PR and scene preserved.
     assert calls[0] == ("edit", (9,), {
-        "repo": "owner/repo", "add": "ai-blocked", "remove": "ai-pr-opened",
+        "repo": "owner/repo", "add": "ai-blocked", "remove": "ai-fix-needed",
     })
     failure_body = calls[1][2]["body"]
     assert "Muyan Pilot failed:" in failure_body
@@ -828,7 +1070,7 @@ def _resume_pr_validation_failure_test(monkeypatch, tmp_path, caplog,
     assert calls[-2][1] == (9,)
     assert calls[-2][2] == {
         "repo": "owner/repo", "add": "ai-blocked",
-        "remove": "ai-pr-opened",
+        "remove": "ai-fix-needed",
     }
     assert error in calls[-1][2]["body"]
     assert "issue=9 resume failed" in caplog.text
@@ -880,6 +1122,8 @@ def test_resume_delivery_success_returns_verified_pr_url(
     monkeypatch.setattr(runner, "verify_pr",
                         lambda *a, **k: calls.append("verified") or FAKE_PR_URL)
     monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "edit_issue",
+                        lambda *a, **k: calls.append("edit"))
 
     result = runner.resume_delivery(
         {"number": 9, "title": "ship", "body": ""},
@@ -888,7 +1132,7 @@ def test_resume_delivery_success_returns_verified_pr_url(
         "owner/repo",
     )
     assert result == FAKE_PR_URL
-    assert calls == ["verified", "verified"]
+    assert calls == ["verified", "verified", "edit"]
 
 
 def test_resume_delivery_marks_blocked_and_reraises_when_fixer_fails(
@@ -922,7 +1166,7 @@ def test_resume_delivery_marks_blocked_and_reraises_when_fixer_fails(
         )
 
     assert calls[0] == ("edit", (9,), {
-        "repo": "owner/repo", "add": "ai-blocked", "remove": "ai-pr-opened",
+        "repo": "owner/repo", "add": "ai-blocked", "remove": "ai-fix-needed",
     })
     failure_body = calls[1][2]["body"]
     assert "Muyan Pilot failed:" in failure_body
