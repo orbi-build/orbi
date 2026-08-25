@@ -117,7 +117,13 @@ class ProgressPublisher:
             "gh", "api", self._endpoint(),
             "--method", "POST", "--field", f"body={body}",
         ])
-        return int(raw)
+        # `gh api` replies with the full comment object, not a bare id.
+        data = json.loads(raw)
+        if not isinstance(data, dict) or not isinstance(data.get("id"), int):
+            raise ValueError(
+                "comment post response must be an object with an integer id",
+            )
+        return data["id"]
 
     def _patch_comment(self, comment_id: int, body: str) -> None:
         self._run_command([

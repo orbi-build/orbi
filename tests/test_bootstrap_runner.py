@@ -294,11 +294,14 @@ def test_freeze_base_fails_fast_when_remote_base_is_missing(monkeypatch, tmp_pat
         runner.freeze_base(tmp_path, "main")
 
 
-def test_create_worktree_rejects_existing_path(tmp_path):
+def test_create_worktree_reuses_existing_path_for_resumed_run(tmp_path):
+    # A killed runner leaves the task worktree behind; resuming the same
+    # run id must reuse it instead of failing (Issue #18 restart resume).
     existing = tmp_path / ".worktrees" / "muyan-pilot-owner-repo-issue-3-run1"
     existing.mkdir(parents=True)
-    with pytest.raises(RuntimeError, match="worktree path already exists"):
-        runner.create_worktree(tmp_path, "owner/repo", 3, "run1", "abc123def456")
+    path = runner.create_worktree(tmp_path, "owner/repo", 3, "run1",
+                                  "abc123def456")
+    assert path == existing
 
 
 def test_create_worktree_adds_branch_from_frozen_base_sha(monkeypatch, tmp_path):
@@ -340,6 +343,31 @@ def test_worktree_path_and_task_branch_differ_per_run_for_same_issue():
 def test_task_branch_includes_source_repo_to_avoid_same_number_collision():
     assert runner.task_branch("owner/pilot", 1, "run1") == "muyan-pilot/owner-pilot-issue-1-run1"
     assert runner.task_branch("owner/pilot", 1, "run1") != runner.task_branch("owner/ceo", 1, "run1")
+
+
+def test_has_in_progress_label_matches_issue_number(monkeypatch):
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps(
+            [{"number": 5}, {"number": 18}],
+        ),
+    )
+    assert runner.has_in_progress_label(18, "xqliu/muyan-pilot") is True
+    assert runner.has_in_progress_label(7, "xqliu/muyan-pilot") is False
+
+
+def test_has_in_progress_label_builds_github_query(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append(command) or "[]",
+    )
+    assert runner.has_in_progress_label(3, "xqliu/muyan-ceo") is False
+    assert calls == [[
+        "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
+        "--state", "all", "--search", "label:ai-in-progress",
+        "--json", "number", "--limit", "50",
+    ]]
 
 
 def test_comment_issue_runs_gh_comment(monkeypatch):

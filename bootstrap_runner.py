@@ -206,15 +206,55 @@ def worktree_path(repo_dir: Path, source_repo: str, number: int,
 
 def create_worktree(repo_dir: Path, source_repo: str, number: int,
                     run_id: str, base_sha: str) -> Path:
-    """Create the task worktree from the frozen base SHA, never HEAD."""
+    """Create the task worktree from the frozen base SHA, never HEAD.
+
+    An existing path is reused: only a resumed run (same run id after a
+    process restart) reaches that state, and its worktree is the scene
+    the run continues in (Issue #18).
+    """
     path = worktree_path(repo_dir, source_repo, number, run_id)
     if path.exists():
-        raise RuntimeError(f"worktree path already exists: {path}")
+        return path
     branch = task_branch(source_repo, number, run_id)
     run_command([
         "git", "worktree", "add", "-b", branch, str(path), base_sha,
     ], cwd=repo_dir)
     return path
+
+
+def latest_run_id(repo_dir: Path, source_repo: str, number: int) -> str | None:
+    """Return the run id of the newest task worktree for the issue.
+
+    The worktree directory name carries the run id — the only state
+    needed to resume the same GitHub progress comment (hidden run
+    marker) instead of creating a second one.
+    """
+    slug = source_repo.replace("/", "-")
+    pattern = f".worktrees/muyan-pilot-{slug}-issue-{number}-*"
+    candidates = [
+        path for path in repo_dir.glob(pattern) if path.is_dir()
+    ]
+    if not candidates:
+        return None
+    newest = max(candidates, key=lambda path: path.stat().st_mtime)
+    return newest.name.rsplit("-", 1)[-1]
+
+
+def has_in_progress_label(number: int, repo: str) -> bool:
+    """True when the Issue still carries `ai-in-progress`.
+
+    The label is added at claim time and removed only by the success or
+    failure path, so it is the marker of a run that is (or was, when the
+    runner died) in flight — as opposed to the preserved worktrees of
+    completed runs.
+    """
+    raw = run_command([
+        "gh", "issue", "list", "--repo", repo, "--state", "all",
+        "--search", "label:ai-in-progress",
+        "--json", "number", "--limit", "50",
+    ])
+    issues = parse_issue_array(raw)
+    return any(int(issue.get("number", -1)) == number for issue in issues)
 
 
 def _drain_stream(stream, chunks: list[bytes]) -> None:
@@ -595,6 +635,22 @@ def process_issue(issue: dict, config: dict, source_repo: str,
     base_branch = config["base_branch"]
     base_sha = freeze_base(config["repo_dir"], base_branch)
     run_id = new_run_id()
+    # Restart resume (Issue #18): a killed runner leaves the task
+    # worktree and the `ai-in-progress` label behind. Only in that state
+    # the newest worktree's run id is reused, so the same hidden-marker
+    # progress comment is found and kept instead of a second one.
+    # Completed runs keep their worktrees as evidence but lose the label,
+    # so re-claiming an issue always starts a fresh run.
+    if has_in_progress_label(number, source_repo):
+        existing_run_id = latest_run_id(
+            config["repo_dir"], source_repo, number,
+        )
+        if existing_run_id is not None:
+            LOGGER.info(
+                "issue=%s resuming_run run_id=%s",
+                number, existing_run_id,
+            )
+            run_id = existing_run_id
     branch = task_branch(source_repo, number, run_id)
     run_info = (
         f"base_branch={base_branch} base_sha={base_sha} run_id={run_id}"

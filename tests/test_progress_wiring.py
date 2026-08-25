@@ -6,6 +6,7 @@ post short milestone comments for the key events, and end with either the
 final delivery summary or the blocked scene — in the same comment.
 """
 import json
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import Mock
@@ -16,7 +17,7 @@ import bootstrap_runner as runner
 import progress
 
 
-def make_fake_gh(monkeypatch, comments=None):
+def make_fake_gh(monkeypatch, comments=None, in_progress=None):
     """Answer every gh call; return (calls, posted_bodies)."""
     calls = []
     posted = []
@@ -24,6 +25,8 @@ def make_fake_gh(monkeypatch, comments=None):
     def fake_run_command(command, **kwargs):
         calls.append(command)
         if command[:2] != ["gh", "api"]:
+            if command[:3] == ["gh", "issue", "list"]:
+                return json.dumps(in_progress or [])
             return ""
         if "--method" not in command:
             # Plain GET of the comment list.
@@ -32,7 +35,9 @@ def make_fake_gh(monkeypatch, comments=None):
         if method == "POST":
             body = command[command.index("--field") + 1]
             posted.append(body[len("body="):])
-            return "77"
+            # Real `gh api` replies with the full comment object.
+            return json.dumps({"id": 77, "body": body[len("body="):],
+                               "url": "https://x/77"})
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
@@ -375,6 +380,97 @@ def test_process_issue_skips_fix_pushed_milestone_without_new_commits(
         if body.startswith(progress.MILESTONE_PREFIX)
     ]
     assert not any("fix pushed" in body for body in milestones)
+
+
+def test_latest_run_id_returns_newest_worktree_run_id(tmp_path):
+    old = tmp_path / ".worktrees" / "muyan-pilot-xqliu-muyan-pilot-issue-18-run1"
+    new = tmp_path / ".worktrees" / "muyan-pilot-xqliu-muyan-pilot-issue-18-run2"
+    other = tmp_path / ".worktrees" / "muyan-pilot-xqliu-muyan-ceo-issue-18-run9"
+    other_issue = tmp_path / ".worktrees" / "muyan-pilot-xqliu-muyan-pilot-issue-17-run3"
+    for path in (old, new, other, other_issue):
+        path.mkdir(parents=True)
+    old_time = old.stat().st_mtime
+    os.utime(old, (old_time - 100, old_time - 100))
+    assert runner.latest_run_id(
+        tmp_path, "xqliu/muyan-pilot", 18,
+    ) == "run2"
+
+
+def test_latest_run_id_returns_none_without_worktree(tmp_path):
+    assert runner.latest_run_id(tmp_path, "xqliu/muyan-pilot", 18) is None
+
+
+def test_process_issue_resumes_existing_run_and_same_progress_comment(
+    monkeypatch, tmp_path,
+):
+    """A killed runner leaves the worktree behind; the restarted claim
+    must reuse the run id and keep updating the same progress comment."""
+    existing = {
+        "id": 77,
+        "body": "<!-- muyan-pilot:run=oldrun1 -->stale blocked scene",
+    }
+    calls, posted = make_fake_gh(
+        monkeypatch, comments=[existing],
+        in_progress=[{"number": 18, "title": "t", "url": "u"}],
+    )
+    patch_process_deps(monkeypatch, tmp_path)
+    monkeypatch.setattr(runner, "new_run_id", lambda: "freshrun")
+    (tmp_path / ".worktrees"
+     / "muyan-pilot-xqliu-muyan-pilot-issue-18-oldrun1").mkdir(parents=True)
+    runner.process_issue(make_issue(), make_config(tmp_path),
+                         "xqliu/muyan-pilot")
+    # The resumed run reuses the old run id: no second progress comment.
+    progress_posts = [
+        body for body in posted
+        if body.startswith("<!-- muyan-pilot:run=")
+    ]
+    assert progress_posts == [], (
+        f"restart must not create a second progress comment: {posted}"
+    )
+    patches = [
+        command for command in calls
+        if command[:2] == ["gh", "api"]
+        and command[2] == "repos/xqliu/muyan-pilot/issues/18/comments/77"
+        and "PATCH" in command
+    ]
+    assert patches, "existing progress comment was not updated"
+    # The resumed run's milestones carry the resumed run id.
+    started = [b for b in posted if "Muyan Pilot: started" in b]
+    assert started and "run_id=oldrun1" in started[0]
+
+
+def test_process_issue_starts_fresh_run_when_label_without_worktree(
+    monkeypatch, tmp_path,
+):
+    # The ai-in-progress label survives but the worktree was cleaned up:
+    # nothing to resume, so a fresh run id is used.
+    calls, posted = make_fake_gh(
+        monkeypatch,
+        in_progress=[{"number": 18, "title": "t", "url": "u"}],
+    )
+    patch_process_deps(monkeypatch, tmp_path)
+    monkeypatch.setattr(runner, "new_run_id", lambda: "freshrun")
+    runner.process_issue(make_issue(), make_config(tmp_path),
+                         "xqliu/muyan-pilot")
+    progress_posts = [
+        body for body in posted
+        if body.startswith("<!-- muyan-pilot:run=freshrun -->")
+    ]
+    assert len(progress_posts) == 1
+
+
+def test_process_issue_starts_fresh_run_without_leftover_worktree(
+    monkeypatch, tmp_path,
+):
+    calls, posted = make_fake_gh(monkeypatch)
+    patch_process_deps(monkeypatch, tmp_path)
+    runner.process_issue(make_issue(), make_config(tmp_path),
+                         "xqliu/muyan-pilot")
+    progress_posts = [
+        body for body in posted
+        if body.startswith("<!-- muyan-pilot:run=abc123 -->")
+    ]
+    assert len(progress_posts) == 1
 
 
 def test_process_issue_passes_role_to_pi_and_progress_comment(

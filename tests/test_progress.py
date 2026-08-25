@@ -138,19 +138,26 @@ def test_progress_body_shows_pr_url_when_present():
     assert "- review/fix round: 1" in body
 
 
-def make_publisher(run_command=None, comments=None, posted=None):
-    """Build a ProgressPublisher over a fake gh layer."""
+def make_publisher(run_command=None, comments=None, posted=None,
+                   post_response=None):
+    """Build a ProgressPublisher over a fake gh layer.
+
+    `post_response` mimics real `gh api`: a POST of a comment replies with
+    the full comment JSON object (not a bare id).
+    """
     calls = []
 
     def fake_run_command(command, **kwargs):
         calls.append(command)
         # Only the plain GET of the comment list returns the payload; POST
-        # replies with the new comment id, PATCH replies empty.
+        # replies with the new comment object, PATCH replies empty.
         if (command[:2] == ["gh", "api"] and "--method" not in command
                 and command[2].endswith("/comments")):
             return json.dumps(comments or [])
         if "--method" in command and "POST" in command:
-            return "42"
+            return post_response if post_response is not None else (
+                json.dumps({"id": 42, "body": "created", "url": "u"})
+            )
         return ""
 
     publisher = progress.ProgressPublisher(
@@ -233,6 +240,29 @@ def test_publisher_milestone_posts_short_standalone_comment():
     ]
     # A milestone never touches the tracked progress comment.
     assert publisher.comment_id is None
+
+
+def test_publisher_post_parses_full_comment_object_response():
+    # Real `gh api` replies with the full comment object, not a bare id.
+    publisher, _ = make_publisher(
+        post_response=json.dumps({
+            "id": 5405315184, "body": "x", "url": "https://x/5405315184",
+        }),
+    )
+    assert publisher.ensure("body") == 5405315184
+    assert publisher.comment_id == 5405315184
+
+
+def test_publisher_post_rejects_response_without_integer_id():
+    publisher, _ = make_publisher(post_response="{}")
+    with pytest.raises(ValueError, match="integer id"):
+        publisher.ensure("body")
+
+
+def test_publisher_post_rejects_non_json_response():
+    publisher, _ = make_publisher(post_response="not json")
+    with pytest.raises(json.JSONDecodeError):
+        publisher.ensure("body")
 
 
 def test_publisher_finish_patches_final_summary_into_tracked_comment():
