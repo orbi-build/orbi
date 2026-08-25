@@ -1,10 +1,13 @@
-"""Regression tests for the systemd scheduling files (Issue #21).
+"""Regression tests for the systemd scheduling files (Issues #21, #33).
 
-The idle polling interval is 15 minutes inside the 01:00-06:55 night window.
-The timer must not add a task duration limit, must not queue catch-up ticks,
-and the README must document the same schedule as the unit files.
+The scheduler runs 24 hours a day: the idle polling interval is 15 minutes
+across the full day (00:00, 00:15, ..., 23:45). The timer must not add a
+task duration limit, must not queue catch-up ticks, and the README must
+document the same schedule as the unit files.
 """
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -33,10 +36,37 @@ def parse_unit(path: Path) -> dict[str, dict[str, list[str]]]:
     return sections
 
 
-def test_timer_polls_ready_issues_every_15_minutes_in_night_window():
+def test_timer_polls_ready_issues_every_15_minutes_all_day():
     timer = parse_unit(TIMER_FILE)
-    assert timer["Timer"]["OnCalendar"] == ["*-*-* 01..06:00/15:00"]
-    # Triggers: 01:00, 01:15, ..., 06:45 — every tick inside 01:00-06:55.
+    on_calendar = timer["Timer"]["OnCalendar"]
+    # Triggers: 00:00, 00:15, ..., 23:45 — every tick across the full day.
+    assert on_calendar == ["*-*-* *:00/15"]
+    # Semantic guard: the hour field must be open (no night-window range such
+    # as 01..06) and the minute field must step by 15 minutes.
+    date_part, time_part = on_calendar[0].split(" ")
+    assert date_part == "*-*-*"
+    hour_field, minute_field = time_part.split(":")
+    assert hour_field == "*"
+    assert minute_field == "00/15"
+
+
+def test_timer_calendar_expression_parses_with_systemd_analyze():
+    # Acceptance: the systemd calendar must be parseable by systemd-analyze.
+    analyze = shutil.which("systemd-analyze")
+    if analyze is None:
+        pytest.skip("systemd-analyze not available on this machine")
+    on_calendar = parse_unit(TIMER_FILE)["Timer"]["OnCalendar"][0]
+    result = subprocess.run(
+        [analyze, "calendar", on_calendar],
+        capture_output=True, text=True, check=True,
+    )
+    assert "Normalized form" in result.stdout
+
+
+def test_timer_calendar_test_skips_without_systemd_analyze(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    with pytest.raises(pytest.skip.Exception):
+        test_timer_calendar_expression_parses_with_systemd_analyze()
 
 
 def test_timer_does_not_queue_catch_up_ticks_or_second_service():
@@ -66,7 +96,7 @@ def test_service_keeps_running_task_without_duration_limit():
 def test_readme_documents_same_schedule_as_timer():
     timer = parse_unit(TIMER_FILE)
     on_calendar = timer["Timer"]["OnCalendar"][0]
-    match = re.match(r"\*-\*-\* \d+\.\.\d+:\d+/(?P<minutes>\d+):\d+$", on_calendar)
+    match = re.match(r"\*-\*-\* \*:\d+/(?P<minutes>\d+)", on_calendar)
     assert match is not None, f"unexpected OnCalendar format: {on_calendar}"
     readme = README_FILE.read_text(encoding="utf-8")
     assert f"每 {match['minutes']} 分钟自动执行一次" in readme
