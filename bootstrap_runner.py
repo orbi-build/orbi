@@ -1002,6 +1002,12 @@ def parse_review_verdict(text: str) -> dict:
             raise ValueError(f"{key} must be a non-negative integer")
     if not isinstance(verdict.get("findings", []), list):
         raise ValueError("findings must be a list")
+    blockers = verdict["blockers"]
+    majors = verdict["majors"]
+    if verdict["verdict"] == "pass" and (blockers > 0 or majors > 0):
+        raise ValueError("pass verdict cannot have blockers or majors")
+    if verdict["verdict"] == "findings" and blockers == 0 and majors == 0:
+        raise ValueError("findings verdict requires blockers or majors")
     return verdict
 
 
@@ -1200,11 +1206,15 @@ def review_rounds_so_far(comments: list[dict]) -> int:
     Each round with Blocker/Major findings posts one
     `Muyan Pilot review round N for PR #...` comment, so the GitHub
     record alone bounds the loop (GitHub Issues are the only state
-    store; a runner restart never loses the count).
+    store; a runner restart never loses the count). Only trusted
+    maintainer comments count: a public comment cannot exhaust the
+    round budget or skip review (same filter as resume_scene).
     """
     rounds = 0
     for comment in comments:
-        body = comment.get("body") if isinstance(comment, dict) else None
+        if not _comment_is_trusted(comment):
+            continue
+        body = comment.get("body")
         if not isinstance(body, str):
             continue
         for line in body.splitlines():
@@ -1324,17 +1334,21 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     try:
         merged = merge_gate(worktree, pr, base_branch)
     except RuntimeError as exc:
-        if "behind latest remote base" not in str(exc):
+        message = str(exc)
+        # Behind and merge-conflict are the same fixer job: absorb
+        # origin/<base>, resolve, retest. Other gate failures
+        # (head moved, etc.) fail fast.
+        if (
+            "behind latest remote base" not in message
+            and "not mergeable" not in message
+        ):
             raise
-        # The base moved after the review: the fixer absorbs it (the
-        # same path a base conflict takes), then the next wait
-        # iteration re-reviews the updated head.
         body = (
             f"{marker}\n"
             f"Muyan Pilot review round {round} for PR #{pr['number']}: "
-            "the PR is behind the latest base; merge the latest "
-            f"origin/{base_branch} into the branch, resolve conflicts, "
-            "and rerun the full test suite"
+            "the PR is behind the latest base or has a merge conflict; "
+            f"merge the latest origin/{base_branch} into the branch, "
+            "resolve conflicts, and rerun the full test suite"
         )
         comment_issue(number, repo=source_repo, body=body)
         comment_pr(pr["number"], body=body)
@@ -1344,7 +1358,9 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         )
         return False
     confirmed = confirm_merged(worktree, merged, base_branch)
-    sync_base_checkout(config["repo_dir"], base_branch)
+    # The GitHub merge already landed. Record ai-merged before touching
+    # the local systemd checkout: a checkout that cannot fast-forward is
+    # runner ops, not a failed delivery (must not become ai-blocked).
     edit_issue(
         number, repo=source_repo, add=MERGED_LABEL,
         remove=PR_OPENED_LABEL,
@@ -1359,6 +1375,14 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             f"base_branch={base_branch} run_id={config['run_id']})"
         ),
     )
+    try:
+        sync_base_checkout(config["repo_dir"], base_branch)
+    except RuntimeError:
+        LOGGER.exception(
+            "base_checkout_sync_failed after merge pr=%s repo_dir=%s; "
+            "the delivery already landed on origin/%s",
+            merged["url"], config["repo_dir"], base_branch,
+        )
     return True
 
 

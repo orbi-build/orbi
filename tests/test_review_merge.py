@@ -113,6 +113,26 @@ def test_parse_review_verdict_rejects_non_dict_json():
         runner.parse_review_verdict("REVIEW_VERDICT [1, 2, 3]")
 
 
+def test_parse_review_verdict_rejects_pass_with_blocker_counts():
+    text = "REVIEW_VERDICT " + json.dumps({
+        "verdict": "pass", "blockers": 1, "majors": 0, "minors": 0,
+        "findings": [],
+    })
+    with pytest.raises(ValueError, match="pass verdict cannot have"):
+        runner.parse_review_verdict(text)
+
+
+def test_parse_review_verdict_rejects_findings_without_counts():
+    # A findings verdict with 0/0 would otherwise merge unreviewed work
+    # (review_has_findings only looked at counts). Fail fast instead.
+    text = "REVIEW_VERDICT " + json.dumps({
+        "verdict": "findings", "blockers": 0, "majors": 0, "minors": 0,
+        "findings": [],
+    })
+    with pytest.raises(ValueError, match="findings verdict requires"):
+        runner.parse_review_verdict(text)
+
+
 def test_review_has_findings_helper():
     assert runner.review_has_findings({
         "verdict": "findings", "blockers": 1, "majors": 0, "minors": 0,
@@ -411,32 +431,46 @@ def test_comment_pr_runs_gh_pr_comment(monkeypatch):
 # review_rounds_so_far
 # ---------------------------------------------------------------------------
 
-def _round_comment(round_no, pr_number=4):
+def _round_comment(round_no, pr_number=4, association="OWNER"):
     return {
         "body": (
             "<!-- muyan-pilot:run=run1 -->\n"
             f"Muyan Pilot review round {round_no} for PR #{pr_number}: "
             "1 blocker(s), 0 major(s). Findings: []"
         ),
+        "authorAssociation": association,
     }
 
 
 def test_review_rounds_so_far_counts_recorded_rounds():
     comments = [
-        {"body": "Muyan Pilot opened PR: https://x"},
+        {"body": "Muyan Pilot opened PR: https://x",
+         "authorAssociation": "OWNER"},
         _round_comment(1),
-        {"body": "Muyan Pilot fixed PR: https://x"},
+        {"body": "Muyan Pilot fixed PR: https://x",
+         "authorAssociation": "OWNER"},
         _round_comment(2),
-        {"body": None},
+        {"body": None, "authorAssociation": "OWNER"},
     ]
     assert runner.review_rounds_so_far(comments) == 2
 
 
 def test_review_rounds_so_far_ignores_comments_without_round_line():
     assert runner.review_rounds_so_far([
-        {"body": "Muyan Pilot started Pi: ..."},
-        {"body": "some public comment"},
+        {"body": "Muyan Pilot started Pi: ...", "authorAssociation": "OWNER"},
+        {"body": "some public comment", "authorAssociation": "OWNER"},
     ]) == 0
+
+
+def test_review_rounds_so_far_ignores_untrusted_comments():
+    # Public comments must not exhaust the 5-round budget (same trust
+    # filter as resume_scene). Five NONE round comments still count as 0.
+    untrusted = [_round_comment(i, association="NONE") for i in range(1, 6)]
+    assert runner.review_rounds_so_far(untrusted) == 0
+    trusted = [_round_comment(i, association="OWNER") for i in range(1, 6)]
+    assert runner.review_rounds_so_far(trusted) == 5
+    mixed = untrusted + [_round_comment(1, association="MEMBER")]
+    assert runner.review_rounds_so_far(mixed) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -615,6 +649,53 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     assert "merge_commit=m1" in comment
     assert "review_rounds=1" in comment
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in comment
+    # Delivery labels land before the local checkout sync: a sync
+    # failure must not rewrite a landed merge as ai-blocked.
+    assert calls.index(("edit", {"repo": "owner/repo", "add": "ai-merged",
+                                 "remove": "ai-pr-opened"})) < calls.index("sync")
+
+
+def test_review_and_merge_keeps_merged_when_checkout_sync_fails(
+        monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(
+        runner, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
+    )
+    monkeypatch.setattr(
+        runner, "confirm_merged",
+        lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
+    )
+
+    def boom(*a, **k):
+        raise RuntimeError("deployment checkout cannot fast-forward")
+
+    monkeypatch.setattr(runner, "sync_base_checkout", boom)
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *a, **k: calls.append(("edit", k)),
+    )
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *a, **k: calls.append(("comment", k.get("body"))),
+    )
+    merged = runner.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4,
+    )
+    assert merged is True
+    assert ("edit", {"repo": "owner/repo", "add": "ai-merged",
+                     "remove": "ai-pr-opened"}) in calls
+    assert any(
+        c[0] == "comment" and "Muyan Pilot merged PR:" in (c[1] or "")
+        for c in calls
+    )
+    assert not any(
+        isinstance(c, tuple) and c[0] == "edit" and c[1].get("add") == "ai-blocked"
+        for c in calls
+    )
 
 
 def test_review_and_merge_findings_labels_fix_needed_and_comments(
@@ -692,17 +773,57 @@ def test_review_and_merge_behind_base_labels_fix_needed(monkeypatch, tmp_path):
                                  "remove": "ai-pr-opened"})
 
 
-def test_review_and_merge_reraises_non_behind_gate_error(monkeypatch, tmp_path):
+def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
+    """A CONFLICTING/DIRTY PR is a fixer job, never a terminal block.
+
+    Issue #34: behind or conflict -> absorb latest main, resolve, retest,
+    re-review. ai-blocked is only for unrecoverable failures.
+    """
+    calls = []
     monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
     monkeypatch.setattr(
         runner, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            RuntimeError("PR #4 is not mergeable (mergeable=DIRTY)"),
+            RuntimeError("PR #4 is not mergeable (mergeable=CONFLICTING)"),
         ),
     )
-    with pytest.raises(RuntimeError, match="not mergeable"):
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *a, **k: calls.append(("issue", k.get("body"))),
+    )
+    monkeypatch.setattr(
+        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+    )
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *a, **k: calls.append(("edit", k)),
+    )
+    merged = runner.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4,
+    )
+    assert merged is False
+    assert "merge conflict" in calls[0][1] or "not mergeable" in calls[0][1]
+    assert calls[2] == ("edit", {"repo": "owner/repo", "add": "ai-fix-needed",
+                                 "remove": "ai-pr-opened"})
+
+
+def test_review_and_merge_reraises_non_fixable_gate_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(
+        runner, "merge_gate",
+        lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError(
+                "PR #4 head moved since review "
+                "(reviewed=h1 remote=moved); re-review before merging"
+            ),
+        ),
+    )
+    with pytest.raises(RuntimeError, match="head moved since review"):
         runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
             "owner/repo", 4,
@@ -725,7 +846,8 @@ def test_review_and_merge_missing_verdict_raises(monkeypatch, tmp_path):
 def test_review_and_merge_exhausted_rounds_raises(monkeypatch, tmp_path, caplog):
     comments = [
         {"body": f"Muyan Pilot review round {i} for PR #4: 1 blocker(s), "
-                 "0 major(s). Findings: []"}
+                 "0 major(s). Findings: []",
+         "authorAssociation": "OWNER"}
         for i in range(1, runner.MAX_REVIEW_ROUNDS + 1)
     ]
     monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: comments)
