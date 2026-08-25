@@ -125,6 +125,89 @@ def test_read_test_result_returns_none_for_blank_log(tmp_path):
     assert runner.read_test_result(tmp_path) is None
 
 
+def test_read_test_result_skips_failures_section_header(tmp_path):
+    """A pytest log with a FAILURES section must yield the real summary
+    line, not the `=== FAILURES ===` section header (review round 2, PR
+    #42): the old code returned the first `=` line, so a failed run
+    posted `tests passed: === FAILURES ===`."""
+    (tmp_path / "test.log").write_text(
+        "============================= test session starts "
+        "=============================\n"
+        "platform linux -- Python 3.12.3, pytest-9.0.3\n"
+        "collected 156 items\n"
+        "\n"
+        "tests/test_a.py .......................................... [ 26%]\n"
+        "tests/test_b.py F........................................ [ 58%]\n"
+        "\n"
+        "=================================== FAILURES "
+        "==================================\n"
+        "____________________________ test_b_fails _____________________________\n"
+        "\n"
+        "    def test_b_fails():\n"
+        ">       assert 1 == 2\n"
+        "E       assert 1 == 2\n"
+        "\n"
+        "=========================== short test summary info "
+        "===========================\n"
+        "FAILED tests/test_b.py::test_b_fails - assert 1 == 2\n"
+        "1 failed, 155 passed in 4.43s\n",
+        encoding="utf-8",
+    )
+    assert runner.read_test_result(tmp_path) == "1 failed, 155 passed in 4.43s"
+
+
+def test_read_test_result_prefers_last_summary_of_a_multi_run_log(tmp_path):
+    """A log holding several runs (TDD red, then green) reports the most
+    recent run: the last pytest summary line."""
+    (tmp_path / "test.log").write_text(
+        "1 failed, 155 passed in 4.43s\n"
+        "--- second run ---\n"
+        "156 passed in 4.43s\n",
+        encoding="utf-8",
+    )
+    assert runner.read_test_result(tmp_path) == "156 passed in 4.43s"
+
+
+def test_read_test_result_falls_back_to_failed_line_without_summary(
+    tmp_path,
+):
+    """A truncated log with a FAILURES section but no summary line must
+    not report the section header: the first `FAILED` line is the
+    failure evidence."""
+    (tmp_path / "test.log").write_text(
+        "=================================== FAILURES "
+        "==================================\n"
+        "FAILED tests/test_b.py::test_b_fails - assert 1 == 2\n",
+        encoding="utf-8",
+    )
+    assert runner.read_test_result(tmp_path) == \
+        "FAILED tests/test_b.py::test_b_fails - assert 1 == 2"
+
+
+def test_read_test_result_unwraps_padded_summary_line(tmp_path):
+    """Some runners wrap the final summary in `=` padding; the reported
+    line is the bare summary, never the padding."""
+    (tmp_path / "test.log").write_text(
+        "========================= 1 failed, 155 passed in 4.43s "
+        "=========================\n",
+        encoding="utf-8",
+    )
+    assert runner.read_test_result(tmp_path) == "1 failed, 155 passed in 4.43s"
+
+
+def test_read_test_result_is_none_when_the_log_holds_only_headers(
+    tmp_path,
+):
+    """A log holding nothing but section headers carries no result info:
+    reporting the header itself is the bug this fix removes (review
+    round 2, PR #42)."""
+    (tmp_path / "test.log").write_text(
+        "==================== FAILURES ====================\n",
+        encoding="utf-8",
+    )
+    assert runner.read_test_result(tmp_path) is None
+
+
 def test_delivery_head_advanced_detects_new_commits(monkeypatch, tmp_path):
     monkeypatch.setattr(
         runner, "run_command",
@@ -210,6 +293,25 @@ def test_publish_test_milestone_posts_passed_or_failed(tmp_path):
     )
     runner._publish_test_milestone(publisher, tmp_path)
     assert posted == ["tests failed: 1 failed, 155 passed in 4.43s"]
+
+
+def test_publish_test_milestone_detects_failure_case_insensitively(
+    tmp_path,
+):
+    """Uppercase failure markers (e.g. a `FAILURES` section line that a
+    truncated log still yields) must post `tests failed`, never
+    `tests passed` (review round 2, PR #42)."""
+    posted = []
+    publisher = Mock()
+    publisher.milestone = Mock(side_effect=lambda text: posted.append(text))
+    (tmp_path / "test.log").write_text(
+        "FAILED tests/test_b.py::test_b_fails - assert 1 == 2\n",
+        encoding="utf-8",
+    )
+    runner._publish_test_milestone(publisher, tmp_path)
+    assert posted == [
+        "tests failed: FAILED tests/test_b.py::test_b_fails - assert 1 == 2",
+    ]
 
 
 # --- process_issue wiring -----------------------------------------------------
@@ -707,6 +809,28 @@ def test_wait_for_delivery_closed_unmerged_posts_blocked_milestone(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"]:
             return json.dumps({"state": "CLOSED"})
+        if command[:2] == ["gh", "issue"]:
+            # The blocked scene derives the role from the delivery label
+            # and the round from the trusted review-round comments
+            # (review round 2, PR #42).
+            if command[-1] == "labels":
+                return json.dumps({"labels": [{"name": "ai-fix-needed"}]})
+            return json.dumps({"comments": [
+                {
+                    "body": (
+                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                        "Muyan Pilot review round 1 for PR #46: clean"
+                    ),
+                    "authorAssociation": "OWNER",
+                },
+                {
+                    "body": (
+                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                        "Muyan Pilot review round 2 for PR #46: findings"
+                    ),
+                    "authorAssociation": "OWNER",
+                },
+            ]})
         api_calls.append(command)
         if "--method" not in command:
             # The run's live progress comment exists.
@@ -752,6 +876,11 @@ def test_wait_for_delivery_closed_unmerged_posts_blocked_milestone(
     assert "closed without a merge" in blocked
     assert "next step:" in blocked
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked
+    # The blocked scene carries the actual role (delivery label was
+    # ai-fix-needed) and the completed review rounds (review round 2,
+    # PR #42) — not the hardcoded fix/0.
+    assert "- role: fix" in blocked
+    assert "- review/fix round: 2" in blocked
 
 
 def test_wait_for_delivery_review_failure_finishes_progress_comment_with_blocked_scene(
@@ -787,12 +916,29 @@ def test_wait_for_delivery_review_failure_finishes_progress_comment_with_blocked
         if command[:2] == ["gh", "issue"]:
             # The review scan: the Issue is awaiting review, and the
             # comment history carries no trusted scene, so the review
-            # fails fast.
+            # fails fast. The trusted review-round comments still count
+            # for the blocked scene's round field (review round 2,
+            # PR #42).
             if command[-1] == "labels":
                 return json.dumps({"labels": [
                     {"name": "ai-pr-opened"},
                 ]})
-            return json.dumps({"comments": []})
+            return json.dumps({"comments": [
+                {
+                    "body": (
+                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                        "Muyan Pilot review round 1 for PR #46: clean"
+                    ),
+                    "authorAssociation": "OWNER",
+                },
+                {
+                    "body": (
+                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                        "Muyan Pilot review round 2 for PR #46: findings"
+                    ),
+                    "authorAssociation": "OWNER",
+                },
+            ]})
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -828,6 +974,11 @@ def test_wait_for_delivery_review_failure_finishes_progress_comment_with_blocked
     assert "independent review" in last_body
     assert "next step:" in last_body
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in last_body
+    # The blocked scene carries the actual role (the failure happened
+    # during the independent review) and the completed review rounds
+    # (review round 2, PR #42) — not the hardcoded fix/0.
+    assert "- role: review" in last_body
+    assert "- review/fix round: 2" in last_body
     # No second progress comment was created.
     assert not any(
         "**Muyan Pilot progress**" in body for body in posted_bodies

@@ -2490,6 +2490,67 @@ def test_finish_blocked_progress_creates_the_comment_when_missing(
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in body
 
 
+def test_finish_blocked_progress_carries_the_actual_role_and_round(
+    monkeypatch,
+):
+    """The blocked scene must show the role and the review/fix round the
+    run was actually in, not the hardcoded `fix`/`0` (review round 2,
+    PR #42)."""
+    api_calls = []
+
+    def fake_run(command, **kwargs):
+        api_calls.append(command)
+        if "--method" not in command:
+            return "[]"
+        assert command[command.index("--method") + 1] == "POST"
+        body = command[command.index("--field") + 1]
+        return json.dumps({"id": 78, "body": body[len("body="):],
+                           "url": "https://x/78"})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    runner._finish_blocked_progress(
+        39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
+        "the failure", "the next step",
+        role=runner.ROLE_REVIEW, review_round=2,
+    )
+    posts = [
+        command for command in api_calls
+        if "--method" in command and "POST" in command
+    ]
+    assert len(posts) == 1
+    body = posts[0][posts[0].index("--field") + 1][len("body="):]
+    assert "- role: review" in body
+    assert "- review/fix round: 2" in body
+
+
+def test_finish_blocked_progress_defaults_to_fix_round_zero(monkeypatch):
+    """Without explicit role/round the legacy default (fix/0) is kept,
+    so existing callers stay unchanged."""
+    api_calls = []
+
+    def fake_run(command, **kwargs):
+        api_calls.append(command)
+        if "--method" not in command:
+            return "[]"
+        body = command[command.index("--field") + 1]
+        return json.dumps({"id": 78, "body": body[len("body="):],
+                           "url": "https://x/78"})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    runner._finish_blocked_progress(
+        39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
+        "the failure", "the next step",
+    )
+    posts = [
+        command for command in api_calls
+        if "--method" in command and "POST" in command
+    ]
+    assert len(posts) == 1
+    body = posts[0][posts[0].index("--field") + 1][len("body="):]
+    assert "- role: fix" in body
+    assert "- review/fix round: 0" in body
+
+
 def test_wait_for_delivery_returns_when_pr_merged(monkeypatch, caplog):
     seen, _ = fake_pr_view(monkeypatch, "MERGED")
     issue = {"number": 39, "title": "task", "body": ""}
@@ -2640,9 +2701,25 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
             return ""
         if command[-1] == "comments":
             # No trusted `Muyan Pilot opened PR:` comment: the scene
-            # cannot be recovered.
+            # cannot be recovered. The trusted review-round comments
+            # still count for the blocked scene's round field (review
+            # round 2, PR #42).
             return json.dumps({"comments": [
                 {"body": "public comment", "authorAssociation": "NONE"},
+                {
+                    "body": (
+                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                        "Muyan Pilot review round 1 for PR #46: clean"
+                    ),
+                    "authorAssociation": "OWNER",
+                },
+                {
+                    "body": (
+                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                        "Muyan Pilot review round 2 for PR #46: findings"
+                    ),
+                    "authorAssociation": "OWNER",
+                },
             ]})
         return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
 
@@ -2701,6 +2778,11 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
     assert "the independent review of" in blocked
     assert "next step:" in blocked
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked
+    # The blocked scene carries the actual role (the failure happened
+    # during the independent review) and the completed review rounds
+    # (review round 2, PR #42) — not the hardcoded fix/0.
+    assert "- role: review" in blocked
+    assert "- review/fix round: 2" in blocked
 
 
 def test_wait_for_delivery_runs_same_pr_fix_when_fix_needed(
@@ -2858,6 +2940,28 @@ def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"]:
             return json.dumps({"state": "CLOSED"})
+        if command[:2] == ["gh", "issue"]:
+            # The blocked scene derives the role from the delivery label
+            # and the round from the trusted review-round comments
+            # (review round 2, PR #42): no more hardcoded fix/0.
+            if command[-1] == "labels":
+                return json.dumps({"labels": [{"name": "ai-fix-needed"}]})
+            return json.dumps({"comments": [
+                {
+                    "body": (
+                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                        "Muyan Pilot review round 1 for PR #46: clean"
+                    ),
+                    "authorAssociation": "OWNER",
+                },
+                {
+                    "body": (
+                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                        "Muyan Pilot review round 2 for PR #46: findings"
+                    ),
+                    "authorAssociation": "OWNER",
+                },
+            ]})
         api_calls.append(command)
         if "--method" not in command:
             # The run's live progress comment exists.
@@ -2924,6 +3028,11 @@ def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
     assert "closed without a merge" in blocked
     assert "next step:" in blocked
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked
+    # The blocked scene carries the actual role (the delivery label was
+    # ai-fix-needed) and the completed review rounds (review round 2,
+    # PR #42) — not the hardcoded fix/0.
+    assert "- role: fix" in blocked
+    assert "- review/fix round: 2" in blocked
 
 
 def test_wait_for_delivery_review_failure_without_bound_run_id(

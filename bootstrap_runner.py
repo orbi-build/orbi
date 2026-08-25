@@ -1527,17 +1527,60 @@ def _pr_head_repo(pr: dict) -> str:
 
 
 
+# pytest's final summary line: `1 failed, 155 passed in 4.43s` (the
+# counts and the `in <seconds>` part are optional; the line is NOT
+# wrapped in `=` section padding).
+_Pytest_SUMMARY_RE = re.compile(
+    r"^\d+ (?:failed|passed|error|errors|skipped|xfailed|xpassed"
+    r"|deselected)(?:, \d+ \w+)*(?: in [\d.]+s)?$")
+
+
+def _is_section_header(line: str) -> bool:
+    """True for pytest section headers like `=== FAILURES ===`.
+
+    A header is `=`-delimited at both ends (padding may be absent on
+    one side for short titles) and its title carries no digits; the
+    real summary line (`1 failed, 155 passed in 4.43s`, bare or
+    `=`-padded) and the `FAILED`/`ERROR` evidence lines never match.
+    """
+    if not line.startswith("="):
+        return False
+    core = line.strip("=").strip()
+    return core == "" or not any(ch.isdigit() for ch in core)
+
+
 def read_test_result(worktree: Path) -> str | None:
-    """Summarize the worktree's `test.log`, or None when it does not exist."""
+    """Summarize the worktree's `test.log`, or None when it does not exist.
+
+    Prefers the pytest summary line (`1 failed, 155 passed in 4.43s`):
+    the LAST one when the log holds several runs (TDD red, then green),
+    so the progress comment and the `tests passed/failed` milestone
+    report the most recent run. Section headers (`=== FAILURES ===`) are
+    never reported: the fallback takes the first `FAILED`/`ERROR`
+    evidence line or the last non-empty line instead, and a log holding
+    nothing but headers yields None (no result info to report).
+    """
     path = worktree / "test.log"
     if not path.is_file():
         return None
     text = path.read_text(encoding="utf-8", errors="replace")
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith(("=", "FAILED", "ERROR")) or "passed" in line:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in reversed(lines):
+        # The summary line is bare in pytest 9; some runners wrap it in
+        # `=` padding, so the stripped form is matched as well.
+        stripped = line.strip("=").strip()
+        if _Pytest_SUMMARY_RE.match(line) \
+                or _Pytest_SUMMARY_RE.match(stripped):
+            return sanitize(stripped)
+    for line in lines:
+        if _is_section_header(line):
+            continue
+        if line.startswith(("FAILED", "ERROR")) or "passed" in line:
             return sanitize(line)
-    return sanitize(text.splitlines()[-1]) if text.strip() else None
+    last = lines[-1] if lines else None
+    if last is not None and _is_section_header(last):
+        return None
+    return sanitize(last) if last is not None else None
 
 
 def delivery_head_advanced(worktree: Path, base_sha: str) -> bool:
@@ -1596,11 +1639,17 @@ def _publish_plan_milestone(publisher: ProgressPublisher, worktree: Path) -> Non
 
 def _publish_test_milestone(publisher: ProgressPublisher,
                             worktree: Path) -> None:
-    """Post `tests passed` / `tests failed` from the worktree's test.log."""
+    """Post `tests passed` / `tests failed` from the worktree's test.log.
+
+    The failure check is case-insensitive: pytest evidence lines carry
+    uppercase markers (`FAILED`, `FAILURES`) that a lowercase-only check
+    would misreport as a pass (review round 2, PR #42).
+    """
     result = read_test_result(worktree)
     if result is None:
         return
-    if "failed" in result or "error" in result:
+    lowered = result.lower()
+    if "fail" in lowered or "error" in lowered:
         publisher.milestone(f"tests failed: {result}")
     else:
         publisher.milestone(f"tests passed: {result}")
@@ -2049,6 +2098,7 @@ def _finish_blocked_progress(
     number: int, run_id: str | None, source_repo: str,
     worktree: Path | None, branch: str | None, pr_url: str,
     detail: str, next_step: str,
+    role: str = ROLE_FIX, review_round: int = 0,
 ) -> None:
     """Finish the tracked progress comment with the blocked scene.
 
@@ -2058,6 +2108,11 @@ def _finish_blocked_progress(
     `ensure` finds the run's existing progress comment by its hidden
     marker (PATCHing it in place) or creates it when the run never
     reached one; either way the blocked scene is the final state.
+    `role` and `review_round` are the actual role and completed review
+    rounds of the blocked run (review round 2, PR #42): the caller
+    derives them from the Issue's delivery label and trusted
+    review-round comments, so the terminal comment never shows a stale
+    hardcoded `fix`/`0`.
     """
     if run_id is None:
         return
@@ -2065,9 +2120,10 @@ def _finish_blocked_progress(
         number, source_repo, run_id, run_command=run_command,
     )
     publisher.ensure(_progress_body(_progress_state(
-        issue=number, run_id=run_id, role=ROLE_FIX,
+        issue=number, run_id=run_id, role=role,
         branch=branch or "-", worktree=worktree or Path("-"),
-        started=time.monotonic(), pr_url=pr_url, review_round=0,
+        started=time.monotonic(), pr_url=pr_url,
+        review_round=review_round,
     ), outcome=(
         "**Muyan Pilot blocked**\n\n"
         f"failure: {detail}\n"
@@ -2154,6 +2210,20 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     f"blocked: PR {pr_url} was closed without a merge; "
                     "the delivery is terminally failed"
                 )
+                # The blocked scene carries the actual role and the
+                # completed review rounds (review round 2, PR #42):
+                # the delivery label says which role was in flight
+                # (ai-fix-needed -> fix, otherwise the awaiting-review
+                # review), and the trusted review-round comments bound
+                # the round count (GitHub is the only state store).
+                blocked_role = (
+                    ROLE_FIX if FIX_NEEDED_LABEL in
+                    issue_labels(number, source_repo)
+                    else ROLE_REVIEW
+                )
+                blocked_round = review_rounds_so_far(
+                    issue_comments(number, repo=source_repo),
+                )
                 # The tracked progress comment becomes the blocked scene
                 # (Issue #18): the same terminal body the other failure
                 # paths write, with the next-step reason.
@@ -2163,6 +2233,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     "delivery is terminally failed",
                     "investigate why the PR was closed and re-open the "
                     "delivery or start a fresh run on the Issue",
+                    role=blocked_role, review_round=blocked_round,
                 )
             return
         labels = issue_labels(number, source_repo)
@@ -2233,10 +2304,12 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                         f"blocked: the independent review of PR {pr_url} "
                         f"failed: {exc}"
                     )
-                    # The tracked progress comment becomes the blocked
-                    # scene (Issue #18): the same terminal body the
-                    # other failure paths write, with the next-step
-                    # reason.
+                    # The blocked scene carries the actual role and the
+                    # completed review rounds (review round 2, PR #42):
+                    # the failure happened during the independent
+                    # review, and the trusted review-round comments
+                    # bound the round count (GitHub is the only state
+                    # store).
                     _finish_blocked_progress(
                         number, run_id, source_repo, worktree, branch,
                         pr_url,
@@ -2244,6 +2317,10 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                         f"{exc}",
                         "fix the review failure above and resume the "
                         "delivery of this same PR",
+                        role=ROLE_REVIEW,
+                        review_round=review_rounds_so_far(
+                            issue_comments(number, repo=source_repo),
+                        ),
                     )
                 return
             if merged:
