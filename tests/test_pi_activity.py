@@ -261,10 +261,12 @@ def test_watcher_tracks_session_activity_and_phase(tmp_path):
     assert state["events"] == 5
     assert state["phase"] == "test"
     assert state["last_activity"] == "2026-01-01T00:00:03Z"
-    assert state["last"] == "tool_result bash"
+    # The tool result reports the outcome without hiding the real action.
+    assert state["action"] == "bash pytest tests/"
+    assert state["result"] == "ok"
     assert state["changed"] is True
     # The user message (full prompt / Issue body) is never summarized.
-    assert "SECRET ISSUE BODY" not in state["last"]
+    assert "SECRET ISSUE BODY" not in (state["action"] or "")
     # Second poll: no new records, not changed.
     again = watcher.poll()
     assert again["changed"] is False
@@ -292,15 +294,77 @@ def test_watcher_phase_follows_latest_tool_call(tmp_path):
     watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
     state = watcher.poll()
     assert state["phase"] == "pr"
-    assert state["last"] == "bash gh pr create --fill"
+    assert state["action"] == "bash gh pr create --fill"
 
 
-def test_watcher_marks_tool_result_errors(tmp_path):
+def test_watcher_tool_result_error_keeps_action_and_sets_result(tmp_path):
+    session = tmp_path / "s.jsonl"
+    write_records(session, [
+        SESSION_RECORD,
+        {
+            "type": "message", "id": "a0",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "toolCall", "id": "t0", "name": "bash",
+                     "arguments": {"command": "gh pr create --fill"}},
+                ],
+            },
+        },
+        TOOL_RESULT_ERROR,
+    ])
+    watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
+    state = watcher.poll()
+    # The error is visible via result; the real action is not overwritten.
+    assert state["action"] == "bash gh pr create --fill"
+    assert state["result"] == "error"
+
+
+def test_watcher_new_tool_call_clears_stale_result(tmp_path):
+    session = tmp_path / "s.jsonl"
+    write_records(session, [
+        SESSION_RECORD,
+        {
+            "type": "message", "id": "a0",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "toolCall", "id": "t0", "name": "bash",
+                     "arguments": {"command": "pytest tests/"}},
+                ],
+            },
+        },
+        TOOL_RESULT,
+        {
+            "type": "message", "id": "a1",
+            "timestamp": "2026-01-01T00:00:04Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "toolCall", "id": "t1", "name": "edit",
+                     "arguments": {"path": "progress.py"}},
+                ],
+            },
+        },
+    ])
+    watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
+    state = watcher.poll()
+    # The new call is pending: the previous result must not be shown as if
+    # it described the new action.
+    assert state["action"] == "edit progress.py"
+    assert state["result"] is None
+    assert state["phase"] == "edit"
+
+
+def test_watcher_tool_result_without_call_keeps_action_none(tmp_path):
     session = tmp_path / "s.jsonl"
     write_records(session, [SESSION_RECORD, TOOL_RESULT_ERROR])
     watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
     state = watcher.poll()
-    assert state["last"] == "tool_result bash (error)"
+    assert state["action"] is None
+    assert state["result"] == "error"
 
 
 def test_watcher_keeps_phase_for_non_bash_tool_results(tmp_path):
@@ -330,7 +394,8 @@ def test_watcher_keeps_phase_for_non_bash_tool_results(tmp_path):
     watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
     state = watcher.poll()
     assert state["phase"] == "read"
-    assert state["last"] == "tool_result read"
+    assert state["action"] == "read /a.md"
+    assert state["result"] == "ok"
 
 
 def test_watcher_reports_assistant_text_as_activity(tmp_path):
@@ -338,7 +403,8 @@ def test_watcher_reports_assistant_text_as_activity(tmp_path):
     write_records(session, [SESSION_RECORD, ASSISTANT_TEXT])
     watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
     state = watcher.poll()
-    assert state["last"] == "assistant text"
+    assert state["action"] == "assistant text"
+    assert state["result"] is None
     assert state["phase"] == "starting"
 
 
@@ -413,7 +479,7 @@ def test_watcher_known_files_ignores_pre_existing_session_and_follows_new(
     assert state["phase"] == "base"
     assert state["changed"] is True
     # The old session's records never leak into the resumed activity.
-    assert "pytest" not in (state["last"] or "")
+    assert "pytest" not in (state["action"] or "")
 
 
 def test_watcher_known_files_switches_to_newer_file_and_resets_state(
@@ -444,10 +510,12 @@ def test_watcher_known_files_switches_to_newer_file_and_resets_state(
     state = watcher.poll()
     assert state["session_file"] == str(second)
     assert state["session_id"] == "sess-second"
-    # The state was reset: the old file's events/phase/last are gone...
+    # The state was reset: the old file's events/phase/action/result are
+    # gone...
     assert state["events"] == 1
     assert state["phase"] == "starting"
-    assert state["last"] is None
+    assert state["action"] is None
+    assert state["result"] is None
     assert state["last_activity"] is None
     # ...and the new file is read from the start (its records counted).
     assert state["changed"] is True
@@ -518,7 +586,8 @@ def test_watcher_stale_seconds_from_start_without_activity(tmp_path):
     state = watcher.poll()
     assert state["stale_seconds"] == pytest.approx(50.0)
     assert state["phase"] == "starting"
-    assert state["last"] is None
+    assert state["action"] is None
+    assert state["result"] is None
 
 
 def test_watcher_clamps_negative_stale_to_zero(tmp_path):
@@ -529,6 +598,57 @@ def test_watcher_clamps_negative_stale_to_zero(tmp_path):
         tmp_path, now=lambda: last_epoch - 10.0,
     )
     assert watcher.poll()["stale_seconds"] == 0.0
+
+
+def test_watcher_state_reports_model_wait_after_tool_result(tmp_path):
+    """After a tool result the model is expected to reply: state reports
+    `model_wait` so the journal can distinguish a slow active model from a
+    stalled agent (Issue #40)."""
+    session = tmp_path / "s.jsonl"
+    write_records(session, [SESSION_RECORD, ASSISTANT_TOOL_CALL, TOOL_RESULT])
+    watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
+    state = watcher.poll()
+    assert state["model_wait"] is True
+
+
+def test_watcher_state_no_model_wait_after_assistant_text(tmp_path):
+    # An assistant text is not a pending model request: no model_wait.
+    session = tmp_path / "s.jsonl"
+    write_records(session, [SESSION_RECORD, ASSISTANT_TEXT])
+    watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
+    assert watcher.poll()["model_wait"] is False
+
+
+def test_watcher_state_no_model_wait_after_tool_call(tmp_path):
+    # After a tool call the tool is running, not the model: no model_wait.
+    session = tmp_path / "s.jsonl"
+    write_records(session, [SESSION_RECORD, ASSISTANT_TOOL_CALL])
+    watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
+    assert watcher.poll()["model_wait"] is False
+
+
+def test_watcher_state_no_model_wait_without_session(tmp_path):
+    watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
+    assert watcher.poll()["model_wait"] is False
+
+
+def test_watcher_switch_reset_clears_model_wait(tmp_path):
+    # Switching to a newer session file resets the model_wait flag with the
+    # rest of the tracked state.
+    first = tmp_path / "first.jsonl"
+    write_records(first, [SESSION_RECORD, ASSISTANT_TOOL_CALL, TOOL_RESULT])
+    watcher = pi_activity.SessionWatcher(
+        tmp_path, now=lambda: 1_000_000.0, known_files=set(),
+    )
+    assert watcher.poll()["model_wait"] is True
+    second = tmp_path / "second.jsonl"
+    write_records(second, [{
+        "type": "session", "id": "sess-second",
+        "timestamp": "2026-01-01T02:00:00Z", "cwd": "/w",
+    }])
+    state = watcher.poll()
+    assert state["session_id"] == "sess-second"
+    assert state["model_wait"] is False
 
 
 def test_watcher_ignores_empty_session_id(tmp_path):
@@ -554,7 +674,8 @@ def test_watcher_ignores_assistant_content_that_is_not_a_list(tmp_path):
     ])
     watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
     state = watcher.poll()
-    assert state["last"] is None
+    assert state["action"] is None
+    assert state["result"] is None
     assert state["phase"] == "starting"
 
 
@@ -571,7 +692,8 @@ def test_watcher_ignores_records_without_message_object(tmp_path):
     watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
     state = watcher.poll()
     assert state["events"] == 4
-    assert state["last"] is None
+    assert state["action"] is None
+    assert state["result"] is None
     assert state["phase"] == "starting"
 
 
@@ -596,7 +718,7 @@ def test_watcher_handles_malformed_tool_call_items(tmp_path):
     ])
     watcher = pi_activity.SessionWatcher(tmp_path, now=lambda: 1_000_000.0)
     state = watcher.poll()
-    assert state["last"] == "tool"
+    assert state["action"] == "tool"
     assert state["phase"] == "tool"
 
 
@@ -617,6 +739,7 @@ def test_watcher_handles_missing_or_invalid_timestamps(tmp_path):
     watcher.start_time = 999_900.0
     state = watcher.poll()
     assert state["last_activity"] is None
+    assert state["action"] == "assistant text"
     # No usable activity epoch: stale falls back to the start time.
     assert state["stale_seconds"] == pytest.approx(100.0)
 
@@ -630,36 +753,173 @@ def test_activity_snapshot_scans_newest_session_file(tmp_path):
     snapshot = pi_activity.activity_snapshot(tmp_path)
     assert snapshot["session_id"] == "sess-1"
     assert snapshot["phase"] == "test"
-    assert snapshot["last"] == "bash pytest tests/"
+    assert snapshot["action"] == "bash pytest tests/"
+    assert snapshot["result"] is None
     assert snapshot["changed"] is False
 
 
-def test_format_activity_scene_returns_empty_string_for_none():
-    assert pi_activity.format_activity_scene(None) == ""
+def test_format_duration_uses_seconds_minutes_and_hours():
+    assert pi_activity.format_duration(0) == "0s"
+    assert pi_activity.format_duration(0.5) == "0.5s"
+    assert pi_activity.format_duration(59) == "59s"
+    assert pi_activity.format_duration(60) == "1m"
+    assert pi_activity.format_duration(840) == "14m"
+    assert pi_activity.format_duration(3600) == "1h0m"
+    assert pi_activity.format_duration(15300) == "4h15m"
 
 
-def test_format_activity_scene_formats_key_value_fields():
+def test_quote_value_quotes_only_values_with_spaces():
+    assert pi_activity.quote_value("test") == "test"
+    assert pi_activity.quote_value("bash pytest tests/") == (
+        '"bash pytest tests/"'
+    )
+
+
+def test_quote_value_escapes_embedded_quotes():
+    assert pi_activity.quote_value('git commit -m "feat: x"') == (
+        '"git commit -m \\"feat: x\\""'
+    )
+    assert pi_activity.quote_value('a"b') == '"a\\"b"'
+
+
+def test_format_run_scene_is_the_full_scene_logged_once():
     snapshot = {
         "session_id": "sess-1",
-        "session_file": "/w/.pi-session/s.jsonl",
+        "session_file": "/w/.pi-session/sess-1.jsonl",
         "phase": "test",
         "last_activity": "2026-01-01T00:00:02Z",
-        "last": "bash pytest tests/",
+        "action": "bash pytest tests/",
+        "result": "ok",
     }
-    assert pi_activity.format_activity_scene(snapshot) == (
-        "session=sess-1 session_file=/w/.pi-session/s.jsonl phase=test "
-        "last_activity=2026-01-01T00:00:02Z last=bash pytest tests/"
+    scene = pi_activity.format_run_scene(
+        snapshot, run_id="e07383c2",
+        issue="xqliu/muyan-pilot#18", role="implement",
+        branch="muyan-pilot/xqliu-muyan-pilot-issue-18-e07383c2",
+        worktree="/w",
+    )
+    assert scene == (
+        "run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement "
+        "branch=muyan-pilot/xqliu-muyan-pilot-issue-18-e07383c2 worktree=/w "
+        "session=sess-1 session_file=/w/.pi-session/sess-1.jsonl phase=test "
+        "last_activity=2026-01-01T00:00:02Z action=\"bash pytest tests/\" "
+        "result=ok"
     )
 
 
-def test_format_activity_scene_marks_missing_fields():
-    assert pi_activity.format_activity_scene({
-        "session_id": None,
-        "session_file": None,
-        "phase": "starting",
-        "last_activity": None,
-        "last": None,
-    }) == (
-        "session=- session_file=- phase=starting "
-        "last_activity=- last=-"
+def test_format_run_scene_marks_missing_fields():
+    scene = pi_activity.format_run_scene(
+        {
+            "session_id": None,
+            "session_file": None,
+            "phase": "starting",
+            "last_activity": None,
+            "action": None,
+            "result": None,
+        },
+        run_id="run1", issue="owner/repo#1", role="implement",
+        branch="b", worktree="/w",
     )
+    assert scene == (
+        "run=run1 issue=owner/repo#1 role=implement branch=b worktree=/w "
+        "session=- session_file=- phase=starting last_activity=- "
+        "action=- result=-"
+    )
+
+
+def test_format_end_scene_carries_result_and_pr_entry():
+    scene = pi_activity.format_end_scene(
+        run_id="e07383c2", issue="xqliu/muyan-pilot#18", role="implement",
+        result="pr_opened", elapsed=2520,
+        pr="https://github.com/xqliu/muyan-pilot/pull/40",
+        commit="0123456789abcdef0123456789abcdef01234567",
+    )
+    assert scene == (
+        "run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement "
+        "result=pr_opened elapsed=42m "
+        "pr=https://github.com/xqliu/muyan-pilot/pull/40 "
+        "commit=0123456789abcdef0123456789abcdef01234567"
+    )
+
+
+def test_parse_scene_handles_quoted_values_and_equals_inside_values():
+    scene = (
+        'run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=test '
+        'action="git commit -m \'a=b c\'" result=ok idle=6s'
+    )
+    fields = pi_activity.parse_scene(scene)
+    assert fields["run"] == "e07383c2"
+    assert fields["issue"] == "xqliu/muyan-pilot#18"
+    assert fields["action"] == "git commit -m 'a=b c'"
+    assert fields["result"] == "ok"
+    assert fields["idle"] == "6s"
+
+
+def test_parse_scene_skips_line_kind_prefix():
+    # Journal lines start with the line kind (activity / heartbeat /
+    # run_start / run_failed / run_end) before the key=value fields.
+    fields = pi_activity.parse_scene(
+        'activity run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement '
+        'phase=test action="bash pytest tests/" result=ok idle=6s'
+    )
+    assert fields["run"] == "e07383c2"
+    assert fields["action"] == "bash pytest tests/"
+    assert fields["idle"] == "6s"
+
+
+def test_parse_scene_marks_missing_values_and_ignores_garbage():
+    fields = pi_activity.parse_scene("run=a-1 phase= idle= x=1")
+    assert fields["run"] == "a-1"
+    assert fields["phase"] is None
+    assert fields["idle"] is None
+    assert fields["x"] == "1"
+    assert pi_activity.parse_scene("no key here at all") == {}
+
+
+def test_parse_scene_stops_at_trailing_whitespace():
+    assert pi_activity.parse_scene("run=a-1 ") == {"run": "a-1"}
+
+
+def test_parse_scene_keeps_rest_of_line_for_unterminated_quote():
+    fields = pi_activity.parse_scene('run=a-1 action="unclosed value')
+    assert fields["run"] == "a-1"
+    assert fields["action"] == "unclosed value"
+
+
+def test_parse_scene_unescapes_embedded_quotes():
+    fields = pi_activity.parse_scene(
+        'action="git commit -m \\"feat: x\\"" phase=commit'
+    )
+    assert fields["action"] == 'git commit -m "feat: x"'
+    assert fields["phase"] == "commit"
+
+
+def test_parse_scene_round_trips_escaped_quotes():
+    value = 'git commit -m "feat: a=b" && push'
+    field = f"action={pi_activity.quote_value(value)}"
+    assert pi_activity.parse_scene(field)["action"] == value
+
+
+def test_parse_scene_round_trips_run_scene():
+    snapshot = {
+        "session_id": "sess-1",
+        "session_file": "/w/.pi-session/sess-1.jsonl",
+        "phase": "test",
+        "last_activity": "2026-01-01T00:00:02Z",
+        "action": "bash pytest tests/",
+        "result": "ok",
+    }
+    scene = pi_activity.format_run_scene(
+        snapshot, run_id="e07383c2",
+        issue="xqliu/muyan-pilot#18", role="implement",
+        branch="muyan-pilot/xqliu-muyan-pilot-issue-18-e07383c2",
+        worktree="/w",
+    )
+    fields = pi_activity.parse_scene(scene)
+    assert fields["run"] == "e07383c2"
+    assert fields["issue"] == "xqliu/muyan-pilot#18"
+    assert fields["branch"] == (
+        "muyan-pilot/xqliu-muyan-pilot-issue-18-e07383c2"
+    )
+    assert fields["session_file"] == "/w/.pi-session/sess-1.jsonl"
+    assert fields["action"] == "bash pytest tests/"
+    assert fields["result"] == "ok"

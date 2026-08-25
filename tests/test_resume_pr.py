@@ -1243,7 +1243,8 @@ def test_resume_delivery_failure_comment_includes_session_scene(
         "session_file": str(worktree / ".pi-session" / "s.jsonl"),
         "phase": "base",
         "last_activity": "2026-08-25T02:30:00Z",
-        "last": "bash git merge origin/main",
+        "action": "bash git merge origin/main",
+        "result": None,
     })
     with pytest.raises(RuntimeError, match="git failed"):
         runner.resume_delivery(
@@ -1254,9 +1255,17 @@ def test_resume_delivery_failure_comment_includes_session_scene(
         )
     failure_body = calls[-1][2]["body"]
     assert "Muyan Pilot failed: git failed" in failure_body
+    # The failure scene is the same full run_failed scene as process_issue
+    # (Issue #40): run/issue/role/branch/worktree plus the session fields.
+    assert f"run={FAKE_RUN_ID}" in failure_body
+    assert "issue=owner/repo#9" in failure_body
+    assert "role=implement" in failure_body
+    assert f"branch={FAKE_BRANCH}" in failure_body
+    assert f"worktree={worktree}" in failure_body
     assert "session=sess-45" in failure_body
     assert "phase=base" in failure_body
-    assert "last=bash git merge origin/main" in failure_body
+    assert 'action="bash git merge origin/main"' in failure_body
+    assert "result=-" in failure_body
 
 
 def test_resume_delivery_scene_lookup_failure_is_isolated(
