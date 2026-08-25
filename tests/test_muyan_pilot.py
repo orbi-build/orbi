@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -301,3 +302,121 @@ def test_main_rejects_unknown_command(tmp_path):
 def test_main_requires_config_file(tmp_path):
     with pytest.raises(FileNotFoundError):
         muyan_pilot.main(["status", "--config", str(tmp_path / "missing.toml")])
+
+
+def test_latest_task_worktree_returns_none_when_missing(tmp_path):
+    assert muyan_pilot.latest_task_worktree(
+        tmp_path, "xqliu/muyan-pilot", 3,
+    ) is None
+
+
+def test_latest_task_worktree_returns_newest_by_mtime(tmp_path):
+    old = tmp_path / ".worktrees" / "muyan-pilot-xqliu-muyan-pilot-issue-3-run1"
+    new = tmp_path / ".worktrees" / "muyan-pilot-xqliu-muyan-pilot-issue-3-run2"
+    old.mkdir(parents=True)
+    new.mkdir(parents=True)
+    old_time = old.stat().st_mtime
+    os.utime(old, (old_time - 100, old_time - 100))
+    assert muyan_pilot.latest_task_worktree(
+        tmp_path, "xqliu/muyan-pilot", 3,
+    ) == new
+
+
+def test_latest_task_worktree_ignores_other_issues_and_repos(tmp_path):
+    other_issue = tmp_path / ".worktrees" / "muyan-pilot-xqliu-muyan-pilot-issue-4-run1"
+    other_repo = tmp_path / ".worktrees" / "muyan-pilot-xqliu-muyan-ceo-issue-3-run1"
+    other_issue.mkdir(parents=True)
+    other_repo.mkdir(parents=True)
+    assert muyan_pilot.latest_task_worktree(
+        tmp_path, "xqliu/muyan-pilot", 3,
+    ) is None
+
+
+def test_live_activity_lines_without_worktree(tmp_path):
+    lines = muyan_pilot.live_activity_lines(
+        tmp_path, "xqliu/muyan-pilot",
+        {"number": 3, "title": "task", "url": "u3"},
+    )
+    assert lines == ["    live: no task worktree found"]
+
+
+def test_live_activity_lines_with_worktree_but_no_session(tmp_path):
+    worktree = tmp_path / ".worktrees" / "muyan-pilot-xqliu-muyan-pilot-issue-3-run1"
+    worktree.mkdir(parents=True)
+    lines = muyan_pilot.live_activity_lines(
+        tmp_path, "xqliu/muyan-pilot",
+        {"number": 3, "title": "task", "url": "u3"},
+    )
+    assert lines == [
+        "    live: no pi session yet",
+        f"    worktree: {worktree}",
+    ]
+
+
+def test_live_activity_lines_with_session(tmp_path):
+    worktree = tmp_path / ".worktrees" / "muyan-pilot-xqliu-muyan-pilot-issue-3-run1"
+    session_dir = worktree / ".pi-session"
+    session_dir.mkdir(parents=True)
+    with (session_dir / "s.jsonl").open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "type": "session", "id": "sess-1",
+            "timestamp": "2026-08-25T02:00:00Z", "cwd": str(worktree),
+        }) + "\n")
+        handle.write(json.dumps({
+            "type": "message", "id": "a1",
+            "timestamp": "2026-08-25T02:00:01Z",
+            "message": {"role": "assistant", "content": [
+                {"type": "toolCall", "id": "t1", "name": "bash",
+                 "arguments": {"command": "pytest tests/"}}]},
+        }) + "\n")
+    lines = muyan_pilot.live_activity_lines(
+        tmp_path, "xqliu/muyan-pilot",
+        {"number": 3, "title": "task", "url": "u3"},
+    )
+    assert lines == [
+        "    live: phase=test last_activity=2026-08-25T02:00:01Z "
+        "last=bash pytest tests/",
+        f"    session: {session_dir / 's.jsonl'}",
+        f"    worktree: {worktree}",
+    ]
+
+
+def test_status_report_includes_live_lines_for_current_issue(monkeypatch, tmp_path):
+    current = {"number": 3, "title": "now", "url": "u3"}
+    worktree = tmp_path / ".worktrees" / "muyan-pilot-xqliu-muyan-pilot-issue-3-run1"
+    session_dir = worktree / ".pi-session"
+    session_dir.mkdir(parents=True)
+    (session_dir / "s.jsonl").write_text(
+        json.dumps({"type": "session", "id": "sess-1",
+                    "timestamp": "2026-08-25T02:00:00Z",
+                    "cwd": str(worktree)}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: current)
+    monkeypatch.setattr(muyan_pilot, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "recent_result", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    report = muyan_pilot.status_report({
+        "source_repos": ["xqliu/muyan-pilot"],
+        "repo_dir": tmp_path,
+        "base_branch": "main",
+    })
+    assert "current: #3 now u3" in report
+    assert "    live: phase=starting last_activity=- last=-" in report
+    assert f"    session: {session_dir / 's.jsonl'}" in report
+    assert f"    worktree: {worktree}" in report
+    assert "ready: -" in report
+
+
+def test_status_report_has_no_live_lines_without_current_issue(monkeypatch, tmp_path):
+    monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "recent_result", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    report = muyan_pilot.status_report({
+        "source_repos": ["xqliu/muyan-pilot"],
+        "repo_dir": tmp_path,
+        "base_branch": "main",
+    })
+    assert "live:" not in report
+    assert "current: -" in report
