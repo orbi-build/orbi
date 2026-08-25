@@ -11,6 +11,7 @@ criteria:
 - ``verify_pr`` rejects a delivery that does not contain the latest remote
   base and accepts one that does.
 """
+import json
 import subprocess
 from pathlib import Path
 
@@ -126,13 +127,38 @@ def test_verify_pr_accepts_delivery_that_contains_latest_remote_base(clone, monk
     git(clone, "checkout", "-b", "muyan-pilot/owner-repo-issue-3-run1")
     commit_file(clone, "delivery.txt", "delivery")
     # Remote main is unchanged, so the delivery contains it.
+    local_head = git(clone, "rev-parse", "HEAD")
     install_fake_gh(
         monkeypatch,
-        '[{"url":"https://github.com/owner/repo/pull/3"}]',
+        json.dumps([{
+            "url": "https://github.com/owner/repo/pull/3",
+            "baseRefName": "main",
+            "headRefOid": local_head,
+        }]),
     )
     assert runner.verify_pr(
         clone, "muyan-pilot/owner-repo-issue-3-run1", "main",
     ) == "https://github.com/owner/repo/pull/3"
+
+
+def test_verify_pr_rejects_pr_head_newer_than_local_head(clone, monkeypatch):
+    # Commit A is pushed (the PR points at it); commit B is local only.
+    git(clone, "checkout", "-b", "muyan-pilot/owner-repo-issue-3-run1")
+    commit_file(clone, "delivery-a.txt", "commit A")
+    pushed_head = git(clone, "rev-parse", "HEAD")
+    commit_file(clone, "delivery-b.txt", "commit B")
+    install_fake_gh(
+        monkeypatch,
+        json.dumps([{
+            "url": "https://github.com/owner/repo/pull/3",
+            "baseRefName": "main",
+            "headRefOid": pushed_head,
+        }]),
+    )
+    with pytest.raises(RuntimeError, match="is not local HEAD"):
+        runner.verify_pr(
+            clone, "muyan-pilot/owner-repo-issue-3-run1", "main",
+        )
 
 
 def test_git_helper_fails_fast_on_nonzero_exit(clone):

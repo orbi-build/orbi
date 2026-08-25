@@ -407,6 +407,9 @@ def test_verify_pr_rejects_wrong_branch(monkeypatch, tmp_path):
         runner.verify_pr(tmp_path, "muyan-pilot/issue-4", "main")
 
 
+FAKE_HEAD_SHA = "0123456789abcdef0123456789abcdef01234567"
+
+
 def fake_verify_run(command, **kwargs):
     """Complete fake for verify_pr: git commands answered, gh returns a PR."""
     if command[:3] == ["git", "branch", "--show-current"]:
@@ -415,8 +418,14 @@ def fake_verify_run(command, **kwargs):
         return ""
     if command[:3] == ["git", "merge-base", "--is-ancestor"]:
         return ""
+    if command[:3] == ["git", "rev-parse", "HEAD"]:
+        return FAKE_HEAD_SHA
     if command[:2] == ["gh", "pr"]:
-        return '[{"url":"https://github.com/muyantech/muyan-pilot/pull/4"}]'
+        return json.dumps([{
+            "url": "https://github.com/muyantech/muyan-pilot/pull/4",
+            "baseRefName": "main",
+            "headRefOid": FAKE_HEAD_SHA,
+        }])
     raise AssertionError(f"unexpected command: {command}")
 
 
@@ -441,7 +450,7 @@ def test_fake_verify_run_rejects_unexpected_command():
 
 def test_verify_pr_rejects_missing_pr(monkeypatch, tmp_path):
     outputs = iter([
-        "muyan-pilot/issue-4-run1", "", "", "[]",
+        "muyan-pilot/issue-4-run1", "", "", FAKE_HEAD_SHA, "[]",
     ])
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="exactly one open PR"):
@@ -450,7 +459,7 @@ def test_verify_pr_rejects_missing_pr(monkeypatch, tmp_path):
 
 def test_verify_pr_rejects_non_array(monkeypatch, tmp_path):
     outputs = iter([
-        "muyan-pilot/issue-4-run1", "", "", "{}",
+        "muyan-pilot/issue-4-run1", "", "", FAKE_HEAD_SHA, "{}",
     ])
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="exactly one open PR"):
@@ -474,11 +483,66 @@ def test_verify_pr_returns_url_when_delivery_contains_latest_base(monkeypatch, t
 
 def test_verify_pr_rejects_pr_without_url(monkeypatch, tmp_path):
     outputs = iter([
-        "muyan-pilot/issue-4-run1", "", "", "[{}]",
+        "muyan-pilot/issue-4-run1", "", "", FAKE_HEAD_SHA, "[{}]",
     ])
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="open PR has no URL"):
         runner.verify_pr(tmp_path, "muyan-pilot/issue-4-run1", "main")
+
+
+def test_verify_pr_rejects_pr_based_on_wrong_branch(monkeypatch, tmp_path):
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps([{
+                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
+                "baseRefName": "develop",
+                "headRefOid": FAKE_HEAD_SHA,
+            }])
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(
+        RuntimeError, match="PR base is develop, expected main",
+    ):
+        runner.verify_pr(tmp_path, "muyan-pilot/issue-4-run1", "main")
+
+
+def test_verify_pr_rejects_stale_remote_pr_head(monkeypatch, tmp_path):
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps([{
+                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
+                "baseRefName": "main",
+                "headRefOid": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+            }])
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(
+        RuntimeError, match="PR head deadbeef.* is not local HEAD 01234567",
+    ):
+        runner.verify_pr(tmp_path, "muyan-pilot/issue-4-run1", "main")
+
+
+def test_verify_pr_queries_base_and_head_and_accepts_matching_pr(
+    monkeypatch, tmp_path,
+):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.verify_pr(tmp_path, "muyan-pilot/issue-4-run1", "main") == (
+        "https://github.com/muyantech/muyan-pilot/pull/4"
+    )
+    assert ["git", "rev-parse", "HEAD"] in calls
+    assert [
+        "gh", "pr", "list", "--state", "open", "--head",
+        "muyan-pilot/issue-4-run1", "--json", "url,baseRefName,headRefOid",
+        "--limit", "2",
+    ] in calls
 
 
 def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_path):

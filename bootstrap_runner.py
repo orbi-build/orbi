@@ -271,9 +271,12 @@ def verify_pr(worktree: Path, branch: str, base_branch: str) -> str:
             f"origin/{base_branch}; merge the latest base, rerun full tests "
             "and review, then retry"
         ) from None
+    local_head = run_command(
+        ["git", "rev-parse", "HEAD"], cwd=worktree,
+    )
     raw = run_command([
         "gh", "pr", "list", "--state", "open", "--head", branch,
-        "--json", "url", "--limit", "2",
+        "--json", "url,baseRefName,headRefOid", "--limit", "2",
     ], cwd=worktree)
     prs = json.loads(raw)
     if not isinstance(prs, list) or len(prs) != 1:
@@ -281,6 +284,26 @@ def verify_pr(worktree: Path, branch: str, base_branch: str) -> str:
     url = prs[0].get("url")
     if not url:
         raise RuntimeError("open PR has no URL")
+    base_ref = prs[0].get("baseRefName")
+    if base_ref != base_branch:
+        LOGGER.error(
+            "pr_base_mismatch expected=%s actual=%s branch=%s",
+            base_branch, base_ref, branch,
+        )
+        raise RuntimeError(
+            f"PR base is {base_ref}, expected {base_branch}; recreate the "
+            "PR against the configured base branch"
+        )
+    head_oid = prs[0].get("headRefOid")
+    if head_oid != local_head:
+        LOGGER.error(
+            "pr_head_mismatch pr_head=%s local_head=%s branch=%s",
+            head_oid, local_head, branch,
+        )
+        raise RuntimeError(
+            f"PR head {head_oid} is not local HEAD {local_head}; the "
+            "verified commit was not pushed, push the reviewed commit and retry"
+        )
     return url
 
 
