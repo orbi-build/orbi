@@ -3,9 +3,9 @@
 
 `add` creates an Issue in a configured source repo and labels it `ai-ready`.
 `status` reports the current in-progress Issue (with its live Pi activity:
-phase, last activity time, sanitized last tool summary, session file and
-worktree), the next ready Issue, and the most recent result
-(`ai-pr-opened` / `ai-blocked`) per source repo.
+phase, last activity time, the last meaningful action, the newest tool
+call result, session file and worktree), the next ready Issue, and the
+most recent result (`ai-pr-opened` / `ai-blocked`) per source repo.
 
 GitHub Issues and labels are the only state store. There is no database,
 queue, or web UI. Command failures are logged and raised by the reused
@@ -22,6 +22,7 @@ from pathlib import Path
 from bootstrap_runner import (
     freeze_base,
     load_config,
+    log_format,
     parse_issue_array,
     run_command,
     validate_config,
@@ -128,7 +129,8 @@ def live_activity_lines(repo_dir: Path, source_repo: str,
         (
             f"    live: phase={snapshot['phase']} "
             f"last_activity={snapshot['last_activity'] or '-'} "
-            f"last={snapshot['last'] or '-'}"
+            f"action={snapshot['action'] or '-'} "
+            f"result={snapshot['result'] or '-'}"
         ),
         f"    session: {snapshot['session_file']}",
         f"    worktree: {worktree}",
@@ -179,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
         help="show current Issue (with live Pi activity), ready queue and recent result",
     )
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(level=logging.INFO, format=log_format())
 
     config = load_config(args.config)
     validate_config(config)

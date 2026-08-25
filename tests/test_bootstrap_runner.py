@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import subprocess
@@ -351,6 +352,12 @@ def test_comment_issue_runs_gh_comment(monkeypatch):
     ]]
 
 
+def test_issue_context_uses_owner_repo_number_form():
+    assert runner.issue_context("xqliu/muyan-pilot", 40) == (
+        "xqliu/muyan-pilot#40"
+    )
+
+
 def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_path):
     prompt_path = tmp_path / "prompt.md"
     prompt_path.write_text(
@@ -372,7 +379,10 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
         "base_sha": "abc123def456",
         "run_id": "run1",
     }
-    assert runner.run_pi(issue, tmp_path, config, "owner/repo") == "done"
+    assert runner.run_pi(
+        issue, tmp_path, config, "owner/repo",
+        branch="muyan-pilot/owner-repo-issue-4-run1",
+    ) == "done"
     command, kwargs = calls[0]
     assert command[:4] == ["pi", "--skill", "skill.md", "--print"]
     assert "owner/repo" in command[7]
@@ -385,9 +395,10 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
     assert command[8] == "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: " + str(tmp_path) + "\nComplete the delivery process in the system prompt."
     assert kwargs["cwd"] == tmp_path
     assert kwargs["timeout"] is None
+    assert kwargs["run_id"] == "run1"
     assert kwargs["issue"] == 4
     assert kwargs["source_repo"] == "owner/repo"
-    assert kwargs["branch"] is None
+    assert kwargs["branch"] == "muyan-pilot/owner-repo-issue-4-run1"
     assert kwargs["log_command"][-2:] == ["<redacted>", "<issue-context-redacted>"]
 
 
@@ -423,7 +434,7 @@ def test_run_pi_redacts_prompt_and_issue_from_command_log(monkeypatch, tmp_path)
     runner.run_pi(
         {"number": 5, "title": "secret", "body": "token"}, tmp_path,
         {"prompt": prompt_path, "source_repos": ["owner/repo"], "workspace_root": tmp_path, "context_files": [], "skills": [], "base_branch": "main", "base_sha": "abc123def456", "run_id": "run1"},
-        "owner/repo",
+        "owner/repo", branch="muyan-pilot/owner-repo-issue-5-run1",
     )
     command, kwargs = calls[0]
     assert "PRIVATE SYSTEM" in command[5]
@@ -588,6 +599,7 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     monkeypatch.setattr(runner, "verify_pr", lambda *args, **kwargs: "https://github.com/muyantech/muyan-pilot/pull/4")
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "0123456789abcdef0123456789abcdef01234567")
     issue = {"number": 4, "title": "Fix", "body": "Body"}
     config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}
     assert runner.process_issue(issue, config, "xqliu/muyan-ceo") == "https://github.com/muyantech/muyan-pilot/pull/4"
@@ -611,6 +623,33 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     assert "run_id=run1" in body in body
 
 
+def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(runner, "new_run_id", lambda: "run1")
+    monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    monkeypatch.setattr(runner, "verify_pr", lambda *args, **kwargs: "https://github.com/muyantech/muyan-pilot/pull/4")
+    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: "0123456789abcdef0123456789abcdef01234567",
+    )
+    with caplog.at_level("INFO"):
+        runner.process_issue(
+            {"number": 4, "title": "Fix", "body": "Body"},
+            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"},
+            "xqliu/muyan-ceo",
+        )
+    ends = [line for line in caplog.text.splitlines() if " run_end " in line]
+    assert len(ends) == 1
+    assert "run=run1" in ends[0]
+    assert "issue=xqliu/muyan-ceo#4" in ends[0]
+    assert "result=pr_opened" in ends[0]
+    assert "pr=https://github.com/muyantech/muyan-pilot/pull/4" in ends[0]
+    assert "commit=0123456789abcdef0123456789abcdef01234567" in ends[0]
+
+
 def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
@@ -618,6 +657,7 @@ def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path)
     monkeypatch.setattr(runner, "new_run_id", lambda: "run1")
     monkeypatch.setattr(runner, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
+    monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: None)
     with pytest.raises(RuntimeError, match="git failed"):
         runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo")
     assert calls[1][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-blocked", "remove": "ai-in-progress"}
@@ -688,6 +728,31 @@ def test_main_requires_prompt_file(monkeypatch, tmp_path):
         runner.main(["--config", str(config)])
 
 
+def test_process_issue_failure_without_session_still_carries_scene(
+    monkeypatch, tmp_path,
+):
+    calls = []
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
+    monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(runner, "new_run_id", lambda: "run1")
+    monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
+    monkeypatch.setattr(
+        runner, "run_pi",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("pi died")),
+    )
+    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
+    monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: None)
+    with pytest.raises(RuntimeError, match="pi died"):
+        runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo")
+    failure_body = calls[-1][2]["body"]
+    # No session file yet: the scene still carries the full debug entry
+    # (worktree, branch) with '-' session fields.
+    assert f"worktree={tmp_path / 'wt'}" in failure_body
+    assert "branch=muyan-pilot/xqliu-muyan-ceo-issue-8-run1" in failure_body
+    assert "session=-" in failure_body
+    assert "session_file=-" in failure_body
+
+
 def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
@@ -706,7 +771,8 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
         "session_file": str(tmp_path / "wt" / ".pi-session" / "s.jsonl"),
         "phase": "test",
         "last_activity": "2026-08-25T02:30:00Z",
-        "last": "bash pytest tests/",
+        "action": "bash pytest tests/",
+        "result": "ok",
     })
     with pytest.raises(subprocess.CalledProcessError):
         runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo")
@@ -715,7 +781,11 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     assert "session=sess-9" in failure_body
     assert "phase=test" in failure_body
     assert "last_activity=2026-08-25T02:30:00Z" in failure_body
-    assert "last=bash pytest tests/" in failure_body
+    assert 'action="bash pytest tests/"' in failure_body
+    assert "result=ok" in failure_body
+    # The full scene on the failure comment carries the debug entry.
+    assert f"worktree={tmp_path / 'wt'}" in failure_body
+    assert "branch=muyan-pilot/xqliu-muyan-ceo-issue-8-run1" in failure_body
 
 
 def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, caplog):
@@ -746,7 +816,7 @@ def make_fake_pi(tmp_path: Path, *, session_records: list[tuple[float, dict]],
                  sleep: float = 0.0) -> list[str]:
     """Build a command that mimics pi: appends session records over time."""
     session_dir = tmp_path / ".pi-session"
-    session_dir.mkdir()
+    session_dir.mkdir(exist_ok=True)
     records_literal = repr(session_records)
     script = (
         "import json, sys, time\n"
@@ -780,29 +850,181 @@ def fake_session_records():
     ]
 
 
-def test_stream_pi_logs_live_activity_and_returns_stdout(tmp_path, caplog):
+def test_log_format_has_no_python_timestamp():
+    # journald already provides time, host and process (Issue #40): the
+    # Python logger must not print a second timestamp.
+    formatter = logging.Formatter(runner.log_format())
+    record = logging.LogRecord(
+        "muyan_pilot.bootstrap", logging.INFO, "file", 1, "message", None, None,
+    )
+    assert formatter.format(record) == "INFO message"
+
+
+def test_stream_pi_logs_run_start_once_with_full_scene(tmp_path, caplog):
     command = make_fake_pi(
         tmp_path, session_records=fake_session_records(),
         stdout="final answer",
     )
     with caplog.at_level("INFO"):
         result = runner.stream_pi(
-            command, cwd=tmp_path, poll_interval=0.1, idle_warn_seconds=3600,
-            issue=24, source_repo="xqliu/muyan-pilot",
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
             branch="muyan-pilot/xqliu-muyan-pilot-issue-24-run1",
         )
     assert result == "final answer"
     # Without an explicit log_command the raw command is never logged.
     assert "command=<redacted>" in caplog.text
-    assert "pi_activity issue=24 source_repo=xqliu/muyan-pilot" in caplog.text
-    assert "branch=muyan-pilot/xqliu-muyan-pilot-issue-24-run1" in caplog.text
-    assert f"worktree={tmp_path}" in caplog.text
-    assert "session=sess-1" in caplog.text
-    assert "phase=test" in caplog.text
-    assert "last=bash pytest tests/" in caplog.text
-    assert "stdout=final answer" in caplog.text
+    starts = [line for line in caplog.text.splitlines()
+              if " run_start " in line]
+    assert len(starts) == 1
+    start = starts[0]
+    assert "run=run1" in start
+    assert "issue=xqliu/muyan-pilot#24" in start
+    assert "role=implement" in start
+    assert "branch=muyan-pilot/xqliu-muyan-pilot-issue-24-run1" in start
+    assert f"worktree={tmp_path}" in start
+    # The session fields are part of the scene; before Pi writes its first
+    # record they are '-' (the full entry reappears on run_failed).
+    assert "session=-" in start
+    assert "session_file=-" in start
+    assert "phase=starting" in start
     # The user message (full prompt / Issue body) never reaches the journal.
     assert "SECRET ISSUE BODY" not in caplog.text
+
+
+def test_stream_pi_run_start_carries_existing_session_file(tmp_path, caplog):
+    # When the session file already exists, run_start carries its path.
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir()
+    (session_dir / "sess.jsonl").write_text(
+        json.dumps({"type": "session", "id": "sess-1"}) + "\n",
+        encoding="utf-8",
+    )
+    command = make_fake_pi(tmp_path, session_records=[], stdout="ok")
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    starts = [line for line in caplog.text.splitlines()
+              if " run_start " in line]
+    assert len(starts) == 1
+    assert "session=sess-1" in starts[0]
+    assert f"session_file={session_dir / 'sess.jsonl'}" in starts[0]
+
+
+def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
+    command = make_fake_pi(
+        tmp_path, session_records=fake_session_records(),
+        stdout="final answer", sleep=0.3,
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    activities = [line for line in lines if " activity " in line]
+    heartbeats = [line for line in lines if " heartbeat " in line]
+    # The visible fields change once (starting -> test): exactly one
+    # activity line; unchanged polls must not repeat it (Issue #40).
+    assert len(activities) == 1
+    line = activities[0]
+    assert "run=run1" in line
+    assert "issue=xqliu/muyan-pilot#24" in line
+    assert "role=implement" in line
+    assert "phase=test" in line
+    assert 'action="bash pytest tests/"' in line
+    assert "result=-" in line  # no tool result in this fake session
+    assert "idle=" in line
+    # No full scene on activity lines (Issue #40).
+    assert "branch=" not in line
+    assert f"worktree={tmp_path}" not in line
+    assert "session_file=" not in line
+    assert "source_repo=" not in line
+    # The idle tail produced heartbeats at the poll interval.
+    assert len(heartbeats) >= 1
+    for line in heartbeats:
+        assert "run=run1" in line
+        assert "role=implement" in line
+        assert "phase=starting" in line or "phase=test" in line
+        assert "elapsed=" in line
+        assert "idle=" in line
+        assert "branch=" not in line
+        assert f"worktree={tmp_path}" not in line
+    # The legacy verbose line is gone.
+    assert "pi_activity" not in caplog.text
+    assert "pi_idle" not in caplog.text
+
+
+def test_stream_pi_activity_keeps_action_after_tool_result(tmp_path, caplog):
+    """A tool result updates result only; the action line is not repeated."""
+    records = fake_session_records() + [
+        (0.5, {"type": "message", "id": "r1",
+               "timestamp": "2026-08-25T02:00:02Z",
+               "message": {"role": "toolResult", "toolCallId": "t1",
+                           "toolName": "bash",
+                           "content": [{"type": "text", "text": "ok"}]}}),
+    ]
+    command = make_fake_pi(
+        tmp_path, session_records=records, stdout="final answer",
+        sleep=0.3,
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    activities = [line for line in lines if " activity " in line]
+    # One activity line for the tool call, one for the result=ok update;
+    # the action (the real command) is preserved on both.
+    assert len(activities) == 2
+    assert all('action="bash pytest tests/"' in line for line in activities)
+    assert "result=-" in activities[0]
+    assert "result=ok" in activities[1]
+    assert "tool_result" not in caplog.text
+
+
+def test_stream_pi_heartbeat_interval_is_stable(tmp_path, caplog):
+    """A silent session emits one heartbeat per poll interval, no activity."""
+    command = make_fake_pi(
+        tmp_path, session_records=[], sleep=1.0,
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    heartbeats = [line for line in lines if " heartbeat " in line]
+    activities = [line for line in lines if " activity " in line]
+    assert activities == []
+    # ~1s of idleness at a 0.1s interval: several heartbeats, one per poll.
+    assert len(heartbeats) >= 4
+    for line in heartbeats:
+        assert "phase=starting" in line
+        assert "session=-" not in line  # session fields are not repeated
+
+
+def test_stream_pi_success_logs_no_run_end(tmp_path, caplog):
+    # run_end is logged by process_issue once the PR and commit are known;
+    # stream_pi must not emit it (it cannot know them).
+    command = make_fake_pi(
+        tmp_path, session_records=fake_session_records(),
+        stdout="final answer",
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    assert " run_end " not in caplog.text
 
 
 def test_stream_pi_logs_command_redacted_and_stderr(tmp_path, caplog):
@@ -812,14 +1034,17 @@ def test_stream_pi_logs_command_redacted_and_stderr(tmp_path, caplog):
     )
     with caplog.at_level("INFO"):
         runner.stream_pi(
-            command, cwd=tmp_path, poll_interval=0.1, idle_warn_seconds=3600,
-            log_command=["pi", "--print", "<redacted>"],
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b", log_command=["pi", "--print", "<redacted>"],
         )
     assert "command=pi --print <redacted>" in caplog.text
     assert "stderr=warning line" in caplog.text
 
 
-def test_stream_pi_logs_failure_scene_and_reraises(tmp_path, caplog):
+def test_stream_pi_logs_run_failed_with_full_scene_and_reraises(
+    tmp_path, caplog,
+):
     command = make_fake_pi(
         tmp_path, session_records=fake_session_records(),
         stderr="pi exploded", exit_code=3,
@@ -828,47 +1053,63 @@ def test_stream_pi_logs_failure_scene_and_reraises(tmp_path, caplog):
         subprocess.CalledProcessError,
     ) as excinfo:
         runner.stream_pi(
-            command, cwd=tmp_path, poll_interval=0.1, idle_warn_seconds=3600,
-            issue=24, source_repo="xqliu/muyan-pilot", branch="b",
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
         )
     assert excinfo.value.returncode == 3
     assert "pi exploded" in (excinfo.value.stderr or "")
     # The exception must not carry the raw command (prompt / Issue body).
     assert "SECRET ISSUE BODY" not in str(excinfo.value)
-    assert "pi_failed returncode=3" in caplog.text
-    assert "session=sess-1" in caplog.text
-    assert "phase=test" in caplog.text
+    failures = [line for line in caplog.text.splitlines()
+                if " run_failed " in line]
+    assert len(failures) == 1
+    failure = failures[0]
+    assert "run=run1" in failure
+    assert "issue=xqliu/muyan-pilot#24" in failure
+    assert "role=implement" in failure
+    assert "phase=test" in failure
+    assert "reason=pi_exit_3" in failure
+    # The full scene is the debug entry again: worktree and session file.
+    assert f"worktree={tmp_path}" in failure
+    assert f"session_file={tmp_path / '.pi-session' / 'sess.jsonl'}" in failure
+    assert "session=sess-1" in failure
     # The session JSONL stays in the worktree as the local record.
     session_files = list((tmp_path / ".pi-session").glob("*.jsonl"))
     assert len(session_files) == 1
     assert len(session_files[0].read_text(encoding="utf-8").splitlines()) == 3
 
 
-def test_stream_pi_warns_when_session_is_idle(tmp_path, caplog):
+def test_stream_pi_heartbeats_when_session_is_idle(tmp_path, caplog):
     command = make_fake_pi(
         tmp_path, session_records=fake_session_records(),
         sleep=1.0,
     )
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("INFO"):
         runner.stream_pi(
-            command, cwd=tmp_path, poll_interval=0.1, idle_warn_seconds=0.5,
-            issue=24, source_repo="xqliu/muyan-pilot", branch="b",
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
         )
-    assert "pi_idle" in caplog.text
-    assert "stale_seconds=" in caplog.text
-    assert "session=sess-1" in caplog.text
+    heartbeats = [line for line in caplog.text.splitlines()
+                  if " heartbeat " in line]
+    assert len(heartbeats) >= 1
+    # Idle duration is visible on the heartbeat line itself.
+    assert any("idle=" in line for line in heartbeats)
 
 
-def test_stream_pi_warns_when_no_session_file_appears(tmp_path, caplog):
+def test_stream_pi_heartbeats_when_no_session_file_appears(tmp_path, caplog):
     command = make_fake_pi(tmp_path, session_records=[], sleep=1.0)
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("INFO"):
         runner.stream_pi(
-            command, cwd=tmp_path, poll_interval=0.1, idle_warn_seconds=0.5,
-            issue=24, source_repo="xqliu/muyan-pilot", branch="b",
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
         )
-    assert "pi_idle" in caplog.text
-    assert "session=-" in caplog.text
-    assert "session_file=-" in caplog.text
+    heartbeats = [line for line in caplog.text.splitlines()
+                  if " heartbeat " in line]
+    assert len(heartbeats) >= 1
+    assert all("phase=starting" in line for line in heartbeats)
 
 
 def test_stream_pi_drains_pipe_data_written_after_exit(
@@ -905,7 +1146,9 @@ def test_stream_pi_drains_pipe_data_written_after_exit(
     monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
     with caplog.at_level("INFO"):
         result = runner.stream_pi(
-            ["fake"], cwd=tmp_path, poll_interval=0.1, idle_warn_seconds=3600,
+            ["fake"], cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
         )
     assert result == "late stdout data"
     assert "stderr=late stderr data" in caplog.text
@@ -918,10 +1161,14 @@ def test_stream_pi_times_out_and_kills_process(tmp_path, caplog):
     ) as excinfo:
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1, timeout=0.5,
-            issue=24, source_repo="xqliu/muyan-pilot", branch="b",
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
         )
     assert excinfo.value.timeout == 0.5
     # The exception must not carry the raw command (prompt / Issue body).
     assert "sleep" not in str(excinfo.value)
-    assert "pi_timeout timeout=0.5" in caplog.text
-    assert "issue=24" in caplog.text
+    failures = [line for line in caplog.text.splitlines()
+                if " run_failed " in line]
+    assert len(failures) == 1
+    assert "reason=timeout_0.5s" in failures[0]
+    assert "issue=xqliu/muyan-pilot#24" in failures[0]
