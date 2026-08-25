@@ -403,7 +403,7 @@ def test_live_activity_lines_with_session(tmp_path):
     )
     assert lines == [
         "    live: phase=test last_activity=2026-08-25T02:00:01Z "
-        "last=bash pytest tests/",
+        "action=bash pytest tests/ result=-",
         f"    session: {session_dir / 's.jsonl'}",
         f"    worktree: {worktree}",
     ]
@@ -430,7 +430,7 @@ def test_status_report_includes_live_lines_for_current_issue(monkeypatch, tmp_pa
         "base_branch": "main",
     })
     assert "current: #3 now u3" in report
-    assert "    live: phase=starting last_activity=- last=-" in report
+    assert "    live: phase=starting last_activity=- action=- result=-" in report
     assert f"    session: {session_dir / 's.jsonl'}" in report
     assert f"    worktree: {worktree}" in report
     assert "ready: -" in report
