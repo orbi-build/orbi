@@ -49,15 +49,15 @@ Pi 长时间运行时，Runner 不再只留下启动命令和最终结果。`boo
 - `run_failed run=... issue=... role=... branch=... worktree=... session=... session_file=... phase=... ... reason=pi_exit_N|timeout_...s`——进程异常退出或超时时先记录完整现场再抛出错误；
 - `run_end run=... issue=... role=... result=pr_opened elapsed=...m pr=... commit=...`——验收通过后记录结果和完整排查入口。
 
-所有行都是稳定 `key=value`（含空格或双引号的值加双引号，内嵌双引号转义为 `\\"`，可用 `pi_activity.parse_scene` 解析），可用短 `run` id 串起整个 run；systemd journal 已提供时间、host 和进程，Python 日志不再重复打印自己的时间戳。默认 tail 示例（仅用于查看，不是产品步骤）：
+所有行都是稳定 `key=value`（含空格或双引号的值加双引号，内嵌双引号转义为 `\\"`，可用 `pi_activity.parse_scene` 解析），可用短 `run` id 串起整个 run；systemd journal 已提供时间、host 和进程，Python 日志不再重复打印自己的时间戳。每条行还会带 `[run_id]` 前缀（见下文全链路 run_id 一节）。默认 tail 示例（仅用于查看，不是产品步骤）：
 
 ```bash
 journalctl --user -u muyan-pilot.service -f
-# Aug 25 14:30:01 host muyan-pilot[123]: INFO run_start run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement branch=muyan-pilot/... worktree=/home/.../.worktrees/... session=sess-1 session_file=/home/.../.pi-session/sess-1.jsonl phase=starting last_activity=- action=- result=-
-# Aug 25 14:30:16 host muyan-pilot[123]: INFO activity run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=test action="bash pytest tests/" result=- idle=6s
-# Aug 25 14:30:31 host muyan-pilot[123]: INFO heartbeat run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=test elapsed=30s idle=15s
-# Aug 25 14:30:32 host muyan-pilot[123]: INFO activity run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=test action="bash pytest tests/" result=ok idle=0s
-# Aug 25 15:12:40 host muyan-pilot[123]: INFO run_end run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement result=pr_opened elapsed=42m pr=https://github.com/xqliu/muyan-pilot/pull/19 commit=0123456789abcdef0123456789abcdef01234567
+# Aug 25 14:30:01 host muyan-pilot[123]: INFO [e07383c2] run_start run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement branch=muyan-pilot/... worktree=/home/.../.worktrees/... session=sess-1 session_file=/home/.../.pi-session/sess-1.jsonl phase=starting last_activity=- action=- result=-
+# Aug 25 14:30:16 host muyan-pilot[123]: INFO [e07383c2] activity run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=test action="bash pytest tests/" result=- idle=6s
+# Aug 25 14:30:31 host muyan-pilot[123]: INFO [e07383c2] heartbeat run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=test elapsed=30s idle=15s
+# Aug 25 14:30:32 host muyan-pilot[123]: INFO [e07383c2] activity run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=test action="bash pytest tests/" result=ok idle=0s
+# Aug 25 15:12:40 host muyan-pilot[123]: INFO [e07383c2] run_end run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement result=pr_opened elapsed=42m pr=https://github.com/xqliu/muyan-pilot/pull/19 commit=0123456789abcdef0123456789abcdef01234567
 ```
 
 `muyan_pilot.py status` 同时展示当前（`ai-in-progress`）任务的实时状态：
@@ -91,6 +91,35 @@ cp .muyan-pilot.example.toml muyan-pilot.toml
 ```
 
 Runner 每次处理一个 Issue 后退出，由 systemd timer 再次触发；不在 Python 内实现 daemon，不引入数据库、队列、重试或复杂恢复。没有人为的任务时长上限；命令错误立即失败，真正卡死时通过 systemd/journal 排查并人工停止。
+
+## 全链路 run_id（correlation ID）
+
+每个任务 attempt 只生成一次 `run_id`（8 位 hex，例如 `e07383c2`），语义等同 trace ID：implement、review、fix、merge 全部复用同一个值；同一个 Issue retry 时生成新的 run_id，Issue number 是多个 run 的共同父标识。不创建 `trace_id`/`log_id`/另一套 UUID，不引入 tracing backend。
+
+同一个 run_id 出现在：
+
+- 该 attempt 的每条 journal 日志首字段：`[e07383c2] command=...`；
+- start / PR opened / failed 等 Issue 评论：可见字段 `run_id=e07383c2` + 隐藏 marker `<!-- muyan-pilot:run=e07383c2 -->`；
+- feature branch 与 worktree 名（例如 `.worktrees/muyan-pilot-xqliu-muyan-pilot-issue-14-a1b2c3d4`）；
+- Pi session 目录（worktree 内 `.pi-session/`）与 plan/test/verify/review 等 run artifacts 的路径；
+- 注入 Pi 的 prompt context（`Run id: ...`）；
+- PR body 的稳定 machine-readable marker `<!-- muyan-pilot:run=e07383c2 -->`——Runner 验收时校验，缺失即 fail fast，拒绝该 PR；
+- Pi 自己发出的 progress / review / fix / 最终评论（prompt 要求携带同一 marker 和 `run_id=` 字段）。
+
+查询方式（不依赖内存映射，进程重启后仍可恢复关联）：
+
+```bash
+# journal 中还原一个 run 的完整时间线
+journalctl --user -u muyan-pilot.service | grep e07383c2
+
+# GitHub 上搜索一个 run 的 progress / milestone / review / merge 记录
+gh search issues "e07383c2" --repo xqliu/muyan-pilot
+
+# 本地在 repo 中搜索 run_id 找到 worktree、session 和 run artifacts
+grep -r e07383c2 /home/xqianliu/Documents/muyan/muyan-pilot/.worktrees/
+```
+
+缺少合法 run_id 的 run-scoped 事件（绑定 run、构建 GitHub marker、PR body 校验）会 fail fast，不做回退。
 
 ## 任务 base 与 worktree
 

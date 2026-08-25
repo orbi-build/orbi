@@ -15,6 +15,20 @@ Runtime context supplied by the runner:
 - Delivery base SHA (frozen `origin/{{BASE_BRANCH}}` at claim time): `{{BASE_SHA}}`
 - Run id: `{{RUN_ID}}`
 
+Run correlation (Issue #41):
+
+`{{RUN_ID}}` is the single end-to-end correlation id for this task attempt;
+it is already part of the feature branch and worktree names. Never create
+another id (no `trace_id`, no new UUID) for this run.
+
+- The PR you create must contain the stable machine-readable marker
+  `<!-- muyan-pilot:run={{RUN_ID}} -->` in its body; the runner rejects a PR
+  without it.
+- Every Issue or PR comment you post (progress, review, fix, final) must
+  contain the same marker and the visible field `run_id={{RUN_ID}}`.
+- Keep all run artifacts (plan, test, verify, review report) inside the task
+  worktree, whose path already carries `{{RUN_ID}}`.
+
 Read every configured context file, the target repository's `AGENTS.md`,
 README, build files, tests, and relevant history before changing code.
 

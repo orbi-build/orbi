@@ -44,6 +44,14 @@ REQUIRED_ITEMS = (
     ("base-reject-behind", "rejects"),
     ("base-no-auto-resolve", "auto conflict resolution"),
     ("base-no-force-push", "force push"),
+    # 6c. Run correlation: one run_id per attempt is the single
+    #     end-to-end correlation id; every journal line and GitHub text of
+    #     the run carries it; a run-scoped event without a run id fails fast.
+    ("run-single-id", "one run_id"),
+    ("run-journal-prefix", "[run_id]"),
+    ("run-github-marker", "muyan-pilot:run="),
+    ("run-no-new-id", "no new id"),
+    ("run-fail-fast", "fails fast"),
     # 7. No database, queue, daemon loop, risk engine, or fallback.
     ("no-database", "database"),
     ("no-queue", "queue"),

@@ -11,6 +11,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import select
 import subprocess
 import time
@@ -39,6 +40,48 @@ PI_POLL_INTERVAL = 15.0
 # (Issue #40: implement/review/fix/merge share the same line format and
 # carry their role; the MVP runs one role).
 ROLE_IMPLEMENT = "implement"
+
+# Run correlation (Issue #41): one task attempt generates one run_id and
+# every journal line of the attempt starts with `[run_id]`, so a single
+# grep reconstructs the whole timeline. The filter rewrites the message in
+# place, so every handler (journal, caplog) sees the same prefixed text.
+RUN_ID_PATTERN = re.compile(r"^[0-9a-f]{8}$")
+_CURRENT_RUN_ID: str | None = None
+
+
+class RunIdFilter(logging.Filter):
+    """Prefix every log message with the current `[run_id]`, if bound."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if _CURRENT_RUN_ID is not None:
+            record.msg = f"[{_CURRENT_RUN_ID}] {record.msg}"
+        return True
+
+
+LOGGER.addFilter(RunIdFilter())
+
+
+def validate_run_id(run_id: object) -> str:
+    """Fail fast unless `run_id` is the 8-hex id of one task attempt."""
+    if not isinstance(run_id, str) or not RUN_ID_PATTERN.fullmatch(run_id):
+        raise ValueError(f"invalid run id: {run_id!r}")
+    return run_id
+
+
+def set_run_id(run_id: str) -> None:
+    """Bind one task attempt: every later journal line carries `[run_id]`."""
+    global _CURRENT_RUN_ID
+    _CURRENT_RUN_ID = validate_run_id(run_id)
+
+
+def current_run_id() -> str | None:
+    """Return the run id bound to this tick, or None before the claim."""
+    return _CURRENT_RUN_ID
+
+
+def run_marker(run_id: str) -> str:
+    """Return the stable machine-readable run marker for GitHub text."""
+    return f"<!-- muyan-pilot:run={validate_run_id(run_id)} -->"
 
 
 def _config_path(value: str, base: Path) -> Path:
@@ -434,7 +477,8 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
     )
 
 
-def verify_pr(worktree: Path, branch: str, base_branch: str) -> str:
+def verify_pr(worktree: Path, branch: str, base_branch: str,
+              run_id: str) -> str:
     current_branch = run_command(
         ["git", "branch", "--show-current"], cwd=worktree,
     )
@@ -468,7 +512,7 @@ def verify_pr(worktree: Path, branch: str, base_branch: str) -> str:
     )
     raw = run_command([
         "gh", "pr", "list", "--state", "open", "--head", branch,
-        "--json", "url,baseRefName,headRefOid", "--limit", "2",
+        "--json", "url,baseRefName,headRefOid,body", "--limit", "2",
     ], cwd=worktree)
     prs = json.loads(raw)
     if not isinstance(prs, list) or len(prs) != 1:
@@ -496,14 +540,27 @@ def verify_pr(worktree: Path, branch: str, base_branch: str) -> str:
             f"PR head {head_oid} is not local HEAD {local_head}; the "
             "verified commit was not pushed, push the reviewed commit and retry"
         )
+    marker = run_marker(run_id)
+    body = prs[0].get("body")
+    if not isinstance(body, str) or marker not in body:
+        LOGGER.error(
+            "pr_run_marker_missing expected=%s branch=%s", marker, branch,
+        )
+        raise RuntimeError(
+            f"PR body is missing the stable run marker {marker}; the PR "
+            "must carry the machine-readable run id of this attempt"
+        )
     return url
 
 
 def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     number = int(issue["number"])
     base_branch = config["base_branch"]
-    base_sha = freeze_base(config["repo_dir"], base_branch)
+    # The run id is generated once per attempt, before any other step is
+    # logged, so every journal line of the attempt carries it (Issue #41).
     run_id = new_run_id()
+    set_run_id(run_id)
+    base_sha = freeze_base(config["repo_dir"], base_branch)
     branch = task_branch(source_repo, number, run_id)
     run_info = (
         f"base_branch={base_branch} base_sha={base_sha} run_id={run_id}"
@@ -522,12 +579,13 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         comment_issue(
             number, repo=source_repo,
             body=(
+                f"{run_marker(run_id)}\n"
                 f"Muyan Pilot started Pi: {run_info} branch={branch} "
                 f"worktree={worktree}"
             ),
         )
         run_pi(issue, worktree, config, source_repo, branch=branch)
-        pr_url = verify_pr(worktree, branch, base_branch)
+        pr_url = verify_pr(worktree, branch, base_branch, run_id)
         commit = run_command(
             ["git", "rev-parse", "HEAD"], cwd=worktree,
         )
@@ -537,7 +595,10 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         )
         comment_issue(
             number, repo=source_repo,
-            body=f"Muyan Pilot opened PR: {pr_url} ({run_info})",
+            body=(
+                f"{run_marker(run_id)}\n"
+                f"Muyan Pilot opened PR: {pr_url} ({run_info})"
+            ),
         )
         LOGGER.info(
             "run_end %s",
@@ -575,7 +636,10 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
                 number, repo=source_repo, add="ai-blocked",
                 remove="ai-in-progress",
             )
-            body = f"Muyan Pilot failed: {exc} ({run_info})"
+            body = (
+                f"{run_marker(run_id)}\n"
+                f"Muyan Pilot failed: {exc} ({run_info})"
+            )
             if scene:
                 body += f" {scene}"
             comment_issue(number, repo=source_repo, body=body)

@@ -20,6 +20,7 @@ import re
 from pathlib import Path
 
 from bootstrap_runner import (
+    RunIdFilter,
     freeze_base,
     load_config,
     log_format,
@@ -30,6 +31,9 @@ from bootstrap_runner import (
 from pi_activity import activity_snapshot
 
 LOGGER = logging.getLogger("muyan_pilot.cli")
+# Same run correlation mechanism as the runner (Issue #41): when a run id is
+# bound, every journal line of this process starts with `[run_id]`.
+LOGGER.addFilter(RunIdFilter())
 
 ISSUE_URL_PATTERN = re.compile(r"/issues/(\d+)$")
 READY_LABEL = "ai-ready"
