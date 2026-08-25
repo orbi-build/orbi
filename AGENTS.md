@@ -43,6 +43,28 @@ follow it before changing code.
   base. No auto conflict resolution, no force push, no merge or push of the
   protected branch.
 
+## Review and fix loop (same PR)
+
+- After a PR is opened, the Issue is in a recoverable review/fix state
+  (`ai-pr-opened`), not done: a review finding, an advanced base, or a
+  merge conflict is a fixable state, never a reason to close the PR,
+  re-claim the Issue, or open a replacement PR.
+- The next tick resumes the same run on the same feature branch,
+  worktree and PR number. The resume scene (run id, branch, worktree,
+  base, PR URL) is recovered from the latest `Muyan Pilot opened PR:`
+  comment of the Issue; a scene missing any field fails fast and is
+  marked `ai-blocked`, never guessed.
+- When the latest remote base is not an ancestor of the delivery HEAD,
+  the runner performs a plain `git merge origin/<base>` on the original
+  branch and hands any conflict to the fixer; no auto conflict
+  resolution, no `--abort`, no force push, no push of the protected
+  branch.
+- After a fix, the full test suite, 100% line/branch coverage, the real
+  verification and the complete R1–R9 review run again before the same
+  PR is re-verified.
+- An unresolvable fix keeps the PR, branch and worktree intact and marks
+  the Issue `ai-blocked` with the concrete conflict or finding.
+
 ## Run correlation
 
 - One task attempt generates one run_id (8 hex chars) and reuses it for

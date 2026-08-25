@@ -746,7 +746,7 @@ def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypat
 
 
 def test_main_returns_zero_when_queue_empty(monkeypatch, tmp_path):
-    monkeypatch.setattr(runner, "pick_next_issue", lambda repos: None)
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: None)
     config = tmp_path / "muyan-pilot.toml"
     (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
@@ -759,7 +759,7 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
-    monkeypatch.setattr(runner, "pick_next_issue", lambda repos: ("xqliu/muyan-pilot", issue))
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: ("xqliu/muyan-pilot", issue, None))
     monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: calls.append((args, kwargs)) or "https://github.com/x/y/pull/12")
     assert runner.main(["--config", str(config)]) == 0
     assert calls[0][0][0] == issue
@@ -772,7 +772,7 @@ def test_main_accepts_repeated_source_repo(monkeypatch, tmp_path):
     issue = {"number": 14, "title": "task"}
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"xqliu/muyan-pilot\", \"xqliu/muyan-ceo\"]\n", encoding="utf-8")
-    monkeypatch.setattr(runner, "pick_next_issue", lambda repos: seen.append(repos) or (repos[0], issue))
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: seen.append(repos) or (repos[0], issue, None))
     monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: "https://github.com/x/y/pull/14")
     assert runner.main([
         "--config", str(config),

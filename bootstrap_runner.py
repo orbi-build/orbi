@@ -41,6 +41,13 @@ PI_IDLE_WARN_SECONDS = 300.0
 RUN_ID_PATTERN = re.compile(r"^[0-9a-f]{8}$")
 _CURRENT_RUN_ID: str | None = None
 
+# GitHub labels are the only state store (Issue #45). An open PR is a
+# recoverable review/fix state: the next tick resumes that same run on the
+# same branch, worktree and PR instead of claiming a new Issue.
+IN_PROGRESS_LABEL = "ai-in-progress"
+PR_OPENED_LABEL = "ai-pr-opened"
+BLOCKED_LABEL = "ai-blocked"
+
 
 class RunIdFilter(logging.Filter):
     """Prefix every log message with the current `[run_id]`, if bound."""
@@ -212,6 +219,31 @@ def comment_issue(number: int, *, repo: str, body: str) -> None:
                  "--body", body])
 
 
+def issue_comments(number: int, *, repo: str) -> list[dict]:
+    """Return the Issue's comment history (oldest first) from GitHub."""
+    raw = run_command([
+        "gh", "issue", "view", str(number), "--repo", repo,
+        "--json", "comments",
+    ])
+    comments = json.loads(raw)
+    if not isinstance(comments, list):
+        raise ValueError("issue comments must be a JSON array")
+    return comments
+
+
+def issue_body(number: int, *, repo: str) -> str:
+    """Return the Issue body; the fixer works from the original task."""
+    raw = run_command([
+        "gh", "issue", "view", str(number), "--repo", repo,
+        "--json", "body",
+    ])
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("issue view must be a JSON object")
+    body = data.get("body")
+    return body if isinstance(body, str) else ""
+
+
 def new_run_id() -> str:
     """Return a unique short run identifier for one task attempt."""
     return uuid.uuid4().hex[:8]
@@ -229,6 +261,182 @@ def task_branch(source_repo: str, number: int, run_id: str) -> str:
     return (
         f"muyan-pilot/{source_repo.replace('/', '-')}-issue-{number}-{run_id}"
     )
+
+
+def started_pi_comment_body(run_id: str, run_info: str, branch: str,
+                            worktree: Path) -> str:
+    """The start comment doubles as the recoverable run scene (Issue #45)."""
+    return (
+        f"{run_marker(run_id)}\n"
+        f"Muyan Pilot started Pi: {run_info} branch={branch} "
+        f"worktree={worktree}"
+    )
+
+
+def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
+                           branch: str, worktree: Path) -> str:
+    """The PR-opened comment records the full recoverable run scene.
+
+    It is the single source the next tick parses to resume this run on
+    the same branch, worktree and PR (Issue #45).
+    """
+    return (
+        f"{run_marker(run_id)}\n"
+        f"Muyan Pilot opened PR: {pr_url} ({run_info} branch={branch} "
+        f"worktree={worktree})"
+    )
+
+
+OPENED_PR_PREFIX = "Muyan Pilot opened PR: "
+
+
+def parse_pr_comment(body: str) -> dict | None:
+    """Parse one `Muyan Pilot opened PR:` comment into a resume scene.
+
+    Returns None when the body is not an opened-PR comment. Fails fast
+    when the comment is malformed: resuming must recover the exact run
+    (run id, branch, worktree, base, PR URL), never a guess (Issue #45).
+    """
+    if not isinstance(body, str) or OPENED_PR_PREFIX not in body:
+        return None
+    head = body.split(OPENED_PR_PREFIX, 1)[1]
+    pr_url, _, fields_part = head.partition(" (")
+    fields: dict[str, str] = {}
+    for part in fields_part.rstrip(")").split():
+        key, _, value = part.partition("=")
+        if key:
+            fields[key] = value
+    scene = {
+        "pr_url": pr_url.strip(),
+        "base_branch": fields.get("base_branch", ""),
+        "base_sha": fields.get("base_sha", ""),
+        "run_id": fields.get("run_id", ""),
+        "branch": fields.get("branch", ""),
+        "worktree": fields.get("worktree", ""),
+    }
+    for key, value in scene.items():
+        if not value:
+            raise ValueError(f"opened PR comment is missing {key}")
+    scene["run_id"] = validate_run_id(scene["run_id"])
+    return scene
+
+
+def resume_scene(comments: list[dict]) -> dict:
+    """Return the scene of the latest opened-PR comment of one Issue.
+
+    Fails fast when no comment carries the scene: such an Issue cannot be
+    resumed and must not be guessed at.
+    """
+    for comment in reversed(comments):
+        if not isinstance(comment, dict):
+            continue
+        scene = parse_pr_comment(comment.get("body"))
+        if scene is not None:
+            return scene
+    raise ValueError(
+        "no 'Muyan Pilot opened PR' comment with a run scene; the Issue "
+        "cannot be resumed"
+    )
+
+
+def pick_resumable_delivery(repo: str) -> tuple[dict, dict] | None:
+    """Return the newest `ai-pr-opened` delivery and its resume scene.
+
+    An open PR is a recoverable review/fix state, not a finished task
+    (Issue #45): the next tick resumes it on the same run instead of
+    claiming a new Issue. Issues already `ai-blocked` are excluded, as
+    are closed Issues and Issues whose comment history carries no scene.
+    """
+    raw = run_command([
+        "gh", "issue", "list", "--repo", repo, "--state", "open",
+        "--search",
+        f"label:{PR_OPENED_LABEL} -label:{BLOCKED_LABEL}",
+        "--json", "number,title,state,url", "--limit", "1",
+    ])
+    issues = parse_issue_array(raw)
+    if not issues:
+        return None
+    issue = issues[0]
+    if issue.get("state") != "OPEN":
+        return None
+    comments = issue_comments(int(issue["number"]), repo=repo)
+    try:
+        scene = resume_scene(comments)
+    except ValueError:
+        return None
+    # The fixer works from the original task, so the resumable issue
+    # carries its body like a freshly claimed one.
+    issue["body"] = issue_body(int(issue["number"]), repo=repo)
+    return issue, scene
+
+
+def pick_next_delivery(repos: list[str]) -> tuple[str, dict, dict | None] | None:
+    """Scan sources in order: resumable PRs first, then ready Issues.
+
+    Returns `(source_repo, issue, scene)` where `scene` is None for a
+    fresh claim. Resuming an open PR keeps the single concurrency slot
+    occupied by the same run (implement → review → fix → merge), so a
+    second Pi is never started for a run that already has a PR.
+    """
+    for repo in repos:
+        selected = pick_resumable_delivery(repo)
+        if selected is not None:
+            issue, scene = selected
+            return repo, issue, scene
+    for repo in repos:
+        issue = pick_issue(repo)
+        if issue is not None:
+            return repo, issue, None
+    return None
+
+
+def merge_in_progress(worktree: Path) -> bool:
+    """True when the worktree is mid-merge (conflicts staged for a commit)."""
+    try:
+        run_command(
+            ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+            cwd=worktree,
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def merge_latest_base(worktree: Path, base_branch: str) -> bool:
+    """Fetch `origin/<base>` and merge it when the delivery is behind.
+
+    Returns True when a merge was started. A conflicted merge is left
+    staged for the fixer (Pi) to resolve: the runner never auto-resolves,
+    force-pushes, or pushes the protected branch (Issue #45). A merge
+    failure that is not a conflict fails fast.
+    """
+    run_command(["git", "fetch", "origin", base_branch], cwd=worktree)
+    try:
+        run_command(
+            ["git", "merge-base", "--is-ancestor",
+             f"origin/{base_branch}", "HEAD"],
+            cwd=worktree,
+        )
+    except subprocess.CalledProcessError:
+        LOGGER.info(
+            "base_advanced base_branch=%s worktree=%s; merging into the "
+            "task branch",
+            base_branch, worktree,
+        )
+        try:
+            run_command(
+                ["git", "merge", f"origin/{base_branch}"], cwd=worktree,
+            )
+        except subprocess.CalledProcessError:
+            if not merge_in_progress(worktree):
+                raise
+            LOGGER.warning(
+                "base_merge_conflict base_branch=%s worktree=%s; the "
+                "conflict is left staged for the fixer",
+                base_branch, worktree,
+            )
+        return True
+    return False
 
 
 def worktree_path(repo_dir: Path, source_repo: str, number: int,
@@ -369,7 +577,8 @@ def stream_pi(
 
 def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
            timeout: int | None = None,
-           branch: str | None = None) -> str:
+           branch: str | None = None,
+           pr_url: str | None = None) -> str:
     system_prompt = render_prompt(
         config["prompt"].read_text(encoding="utf-8"),
         {
@@ -390,8 +599,20 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         f"Issue #{issue['number']}: {issue['title']}\n\n"
         f"Issue body:\n{issue.get('body', '')}\n\n"
         f"Worktree: {worktree}\n"
-        "Complete the delivery process in the system prompt."
     )
+    if pr_url is not None:
+        context += (
+            f"Existing PR: {pr_url}\n"
+            "This run already opened that PR. Keep the same PR number, the "
+            "same run id, branch and worktree: never close the PR, never "
+            "create a new PR, never re-claim the Issue. Fix the review "
+            "findings and/or resolve the merge conflicts left in the "
+            "worktree, rerun the full test suite with coverage and the "
+            "complete review, then commit and push ONLY the task branch "
+            "so the same PR updates. No force push, no push of the "
+            "protected branch.\n"
+        )
+    context += "Complete the delivery process in the system prompt."
     skill_args = [item for skill in config["skills"] for item in ("--skill", str(skill))]
     command = [
         "pi", *skill_args, "--print", "--session-dir",
@@ -506,7 +727,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     LOGGER.info(
         "issue=%s %s", number, run_info,
     )
-    edit_issue(number, repo=source_repo, add="ai-in-progress")
+    edit_issue(number, repo=source_repo, add=IN_PROGRESS_LABEL)
     worktree: Path | None = None
     try:
         worktree = create_worktree(
@@ -515,23 +736,18 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         config = {**config, "base_sha": base_sha, "run_id": run_id}
         comment_issue(
             number, repo=source_repo,
-            body=(
-                f"{run_marker(run_id)}\n"
-                f"Muyan Pilot started Pi: {run_info} branch={branch} "
-                f"worktree={worktree}"
-            ),
+            body=started_pi_comment_body(run_id, run_info, branch, worktree),
         )
         run_pi(issue, worktree, config, source_repo, branch=branch)
         pr_url = verify_pr(worktree, branch, base_branch, run_id)
         edit_issue(
-            number, repo=source_repo, add="ai-pr-opened",
-            remove="ai-in-progress",
+            number, repo=source_repo, add=PR_OPENED_LABEL,
+            remove=IN_PROGRESS_LABEL,
         )
         comment_issue(
             number, repo=source_repo,
-            body=(
-                f"{run_marker(run_id)}\n"
-                f"Muyan Pilot opened PR: {pr_url} ({run_info})"
+            body=opened_pr_comment_body(
+                run_id, run_info, pr_url, branch, worktree,
             ),
         )
         return pr_url
@@ -547,8 +763,8 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
                 LOGGER.exception("issue=%s activity scene failed", number)
         try:
             edit_issue(
-                number, repo=source_repo, add="ai-blocked",
-                remove="ai-in-progress",
+                number, repo=source_repo, add=BLOCKED_LABEL,
+                remove=IN_PROGRESS_LABEL,
             )
             body = (
                 f"{run_marker(run_id)}\n"
@@ -556,6 +772,76 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             )
             if scene:
                 body += f" {scene}"
+            comment_issue(number, repo=source_repo, body=body)
+        except Exception:
+            LOGGER.exception("issue=%s failure reporting failed", number)
+        raise
+
+
+def resume_delivery(issue: dict, scene: dict, config: dict,
+                    source_repo: str) -> str:
+    """Resume the fix loop of an opened PR on the same run (Issue #45).
+
+    The scene (run id, branch, worktree, base, PR URL) is recovered from
+    the Issue's `Muyan Pilot opened PR:` comment, so a restart of the
+    runner or the service resumes from GitHub state alone. The latest
+    remote base is merged into the ORIGINAL branch (conflicts stay staged
+    for the fixer), Pi fixes the PR in the ORIGINAL worktree, and the
+    SAME PR is re-verified. Any failure marks the Issue `ai-blocked` and
+    preserves the PR, branch and worktree: the run is never re-claimed,
+    the PR is never closed or replaced.
+    """
+    number = int(issue["number"])
+    run_id = validate_run_id(scene["run_id"])
+    branch = scene["branch"]
+    worktree = Path(scene["worktree"])
+    base_branch = scene["base_branch"]
+    pr_url = scene["pr_url"]
+    set_run_id(run_id)
+    scene_info = (
+        f"base_branch={base_branch} base_sha={scene['base_sha']} "
+        f"run_id={run_id} branch={branch} worktree={worktree} "
+        f"pr_url={pr_url}"
+    )
+    LOGGER.info("issue=%s resuming opened PR %s", number, scene_info)
+    try:
+        if not worktree.is_dir():
+            raise RuntimeError(f"worktree missing: {worktree}")
+        merge_latest_base(worktree, base_branch)
+        config = {**config, "base_sha": scene["base_sha"], "run_id": run_id}
+        run_pi(
+            issue, worktree, config, source_repo,
+            branch=branch, pr_url=pr_url,
+        )
+        verify_pr(worktree, branch, base_branch, run_id)
+        comment_issue(
+            number, repo=source_repo,
+            body=(
+                f"{run_marker(run_id)}\n"
+                f"Muyan Pilot fixed PR: {pr_url} ({scene_info})"
+            ),
+        )
+        return pr_url
+    except Exception as exc:
+        LOGGER.exception("issue=%s resume failed", number)
+        activity_scene = ""
+        try:
+            activity_scene = format_activity_scene(
+                activity_snapshot(worktree / ".pi-session"),
+            )
+        except Exception:
+            LOGGER.exception("issue=%s activity scene failed", number)
+        try:
+            edit_issue(
+                number, repo=source_repo, add=BLOCKED_LABEL,
+                remove=PR_OPENED_LABEL,
+            )
+            body = (
+                f"{run_marker(run_id)}\n"
+                f"Muyan Pilot failed: {exc} ({scene_info})"
+            )
+            if activity_scene:
+                body += f" {activity_scene}"
             comment_issue(number, repo=source_repo, body=body)
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
@@ -573,12 +859,17 @@ def main(argv: list[str] | None = None) -> int:
 
     config = load_config(args.config)
     validate_config(config)
-    selected = pick_next_issue(config["source_repos"])
+    selected = pick_next_delivery(config["source_repos"])
     if selected is None:
         LOGGER.info("source_repos=%s outcome=no_ready_issue", config["source_repos"])
         return 0
-    source_repo, issue = selected
-    process_issue(issue, config, source_repo)
+    source_repo, issue, scene = selected
+    if scene is not None:
+        # An open PR is a recoverable review/fix state: resume the same
+        # run on the same branch, worktree and PR (Issue #45).
+        resume_delivery(issue, scene, config, source_repo)
+    else:
+        process_issue(issue, config, source_repo)
     return 0
 
 
