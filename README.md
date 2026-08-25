@@ -52,3 +52,7 @@ cp .muyan-pilot.example.toml muyan-pilot.toml
 ```
 
 Runner 每次处理一个 Issue 后退出，由 systemd timer 再次触发；不在 Python 内实现 daemon，不引入数据库、队列、重试或复杂恢复。没有人为的任务时长上限；命令错误立即失败，真正卡死时通过 systemd/journal 排查并人工停止。
+
+## 任务 worktree
+
+每个任务的现场放在配置 repo 的 `.worktrees/` 目录下，目录名包含 source repo 与 Issue 编号（例如 `.worktrees/muyan-pilot-xqliu-muyan-pilot-issue-14`），任务完成后随项目保留，便于回看现场。`.worktrees/` 已加入 `.gitignore`，不会进入版本库。

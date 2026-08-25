@@ -4,4 +4,5 @@ __pycache__/
 htmlcov/
 .muyan-pilot/
 .pi-session/
+.worktrees/
 muyan-pilot.toml
