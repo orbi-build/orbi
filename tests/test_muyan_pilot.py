@@ -144,11 +144,35 @@ def test_recent_result_returns_newest_pr_opened_or_blocked_issue(monkeypatch):
 
     def fake_list(repo, label, state="open"):
         calls.append((label, state))
-        return [pr_opened] if label == "ai-pr-opened" else [blocked]
+        if label == "ai-pr-opened":
+            return [pr_opened]
+        if label == "ai-fix-needed":
+            return []
+        return [blocked]
 
     monkeypatch.setattr(muyan_pilot, "list_labeled_issues", fake_list)
     assert muyan_pilot.recent_result("xqliu/muyan-pilot") == blocked
-    assert calls == [("ai-pr-opened", "all"), ("ai-blocked", "all")]
+    assert calls == [
+        ("ai-pr-opened", "all"), ("ai-fix-needed", "all"), ("ai-blocked", "all"),
+    ]
+
+
+def test_recent_result_includes_fix_needed_issue(monkeypatch):
+    """`ai-fix-needed` is a result state too: a delivery waiting for the
+    Fixer shows up in the status report (Issue #45 round-5 review,
+    Major 1)."""
+    fix_needed = {"number": 7, "title": "fixing", "url": "u7", "state": "OPEN"}
+    blocked = {"number": 5, "title": "stuck", "url": "u5", "state": "OPEN"}
+
+    def fake_list(repo, label, state="open"):
+        if label == "ai-fix-needed":
+            return [fix_needed]
+        if label == "ai-blocked":
+            return [blocked]
+        return []
+
+    monkeypatch.setattr(muyan_pilot, "list_labeled_issues", fake_list)
+    assert muyan_pilot.recent_result("xqliu/muyan-pilot") == fix_needed
 
 
 def test_recent_result_prefers_pr_opened_when_newer(monkeypatch):
@@ -156,7 +180,11 @@ def test_recent_result_prefers_pr_opened_when_newer(monkeypatch):
     blocked = {"number": 5, "title": "stuck", "url": "u5", "state": "OPEN"}
 
     def fake_list(repo, label, state="open"):
-        return [pr_opened] if label == "ai-pr-opened" else [blocked]
+        if label == "ai-pr-opened":
+            return [pr_opened]
+        if label == "ai-fix-needed":
+            return []
+        return [blocked]
 
     monkeypatch.setattr(muyan_pilot, "list_labeled_issues", fake_list)
     assert muyan_pilot.recent_result("xqliu/muyan-pilot") == pr_opened

@@ -200,7 +200,8 @@ def test_pick_issue_uses_github_queue(monkeypatch):
     assert calls == [[
         "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
         "--state", "open", "--search",
-        "label:ai-ready -label:ai-in-progress -label:ai-pr-opened -label:ai-blocked",
+        "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
+        "-label:ai-fix-needed -label:ai-blocked",
         "--json", "number,title,body", "--limit", "1",
     ]]
 
@@ -503,6 +504,25 @@ FAKE_HEAD_SHA = "0123456789abcdef0123456789abcdef01234567"
 FAKE_RUN_ID = "e07383c2"
 
 
+FAKE_PR_URL = "https://github.com/muyantech/muyan-pilot/pull/4"
+FAKE_PR_REPO = "muyantech/muyan-pilot"
+
+
+def fake_verify_pr_payload(**overrides) -> str:
+    """One open PR in the production `gh pr list` shape."""
+    payload = {
+        "url": FAKE_PR_URL,
+        "baseRefName": "main",
+        "headRefName": f"muyan-pilot/issue-4-{FAKE_RUN_ID}",
+        "headRefOid": FAKE_HEAD_SHA,
+        "headRepository": {"name": "muyan-pilot"},
+        "headRepositoryOwner": {"login": "muyantech"},
+        "body": f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\nPlan",
+    }
+    payload.update(overrides)
+    return json.dumps([payload])
+
+
 def fake_verify_run(command, **kwargs):
     """Complete fake for verify_pr: git commands answered, gh returns a PR."""
     if command[:3] == ["git", "branch", "--show-current"]:
@@ -514,12 +534,7 @@ def fake_verify_run(command, **kwargs):
     if command[:3] == ["git", "rev-parse", "HEAD"]:
         return FAKE_HEAD_SHA
     if command[:2] == ["gh", "pr"]:
-        return json.dumps([{
-            "url": "https://github.com/muyantech/muyan-pilot/pull/4",
-            "baseRefName": "main",
-            "headRefOid": FAKE_HEAD_SHA,
-            "body": f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\nPlan",
-        }])
+        return fake_verify_pr_payload()
     raise AssertionError(f"unexpected command: {command}")
 
 
@@ -587,11 +602,7 @@ def test_verify_pr_rejects_pr_without_url(monkeypatch, tmp_path):
 def test_verify_pr_rejects_pr_based_on_wrong_branch(monkeypatch, tmp_path):
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"]:
-            return json.dumps([{
-                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
-                "baseRefName": "develop",
-                "headRefOid": FAKE_HEAD_SHA,
-            }])
+            return fake_verify_pr_payload(baseRefName="develop")
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -604,11 +615,9 @@ def test_verify_pr_rejects_pr_based_on_wrong_branch(monkeypatch, tmp_path):
 def test_verify_pr_rejects_stale_remote_pr_head(monkeypatch, tmp_path):
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"]:
-            return json.dumps([{
-                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
-                "baseRefName": "main",
-                "headRefOid": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-            }])
+            return fake_verify_pr_payload(
+                headRefOid="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+            )
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -621,12 +630,7 @@ def test_verify_pr_rejects_stale_remote_pr_head(monkeypatch, tmp_path):
 def test_verify_pr_rejects_pr_body_without_run_marker(monkeypatch, tmp_path, caplog):
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"]:
-            return json.dumps([{
-                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
-                "baseRefName": "main",
-                "headRefOid": FAKE_HEAD_SHA,
-                "body": "no run marker here",
-            }])
+            return fake_verify_pr_payload(body="no run marker here")
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -640,11 +644,7 @@ def test_verify_pr_rejects_pr_body_without_run_marker(monkeypatch, tmp_path, cap
 def test_verify_pr_rejects_pr_body_missing_field(monkeypatch, tmp_path):
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"]:
-            return json.dumps([{
-                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
-                "baseRefName": "main",
-                "headRefOid": FAKE_HEAD_SHA,
-            }])
+            return fake_verify_pr_payload(body=None)
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -671,8 +671,157 @@ def test_verify_pr_queries_base_head_and_accepts_matching_pr(
     assert [
         "gh", "pr", "list", "--state", "open", "--head",
         f"muyan-pilot/issue-4-{FAKE_RUN_ID}",
-        "--json", "url,baseRefName,headRefOid,body", "--limit", "2",
+        "--json", (
+            "url,baseRefName,headRefName,headRefOid,"
+            "headRepository,headRepositoryOwner,body"
+        ),
+        "--limit", "2",
     ] in calls
+
+
+# ------------------------------------------- repo + expected URL (F1, F3)
+
+
+def test_verify_pr_accepts_pr_in_expected_repo_and_url(monkeypatch, tmp_path):
+    monkeypatch.setattr(runner, "run_command", fake_verify_run)
+    assert runner.verify_pr(
+        tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+        pr_repo=FAKE_PR_REPO, expected_url=FAKE_PR_URL,
+    ) == FAKE_PR_URL
+
+
+def test_verify_pr_rejects_pr_head_in_another_repo(monkeypatch, tmp_path, caplog):
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return fake_verify_pr_payload(
+                headRepository={"name": "other"},
+                headRepositoryOwner={"login": "attacker"},
+            )
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("ERROR"), pytest.raises(
+        RuntimeError, match="PR head repo is attacker/other, expected "
+                            "muyantech/muyan-pilot",
+    ):
+        runner.verify_pr(
+            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, pr_repo=FAKE_PR_REPO,
+        )
+    assert "pr_repo_mismatch" in caplog.text
+
+
+def test_verify_pr_rejects_pr_head_repo_missing_fields(monkeypatch, tmp_path):
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return fake_verify_pr_payload(
+                headRepository=None, headRepositoryOwner=None,
+            )
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(
+        RuntimeError, match="PR head repo is <missing>, expected "
+                            "muyantech/muyan-pilot",
+    ):
+        runner.verify_pr(
+            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, pr_repo=FAKE_PR_REPO,
+        )
+
+
+def test_verify_pr_rejects_pr_head_repo_empty_fields(monkeypatch, tmp_path):
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return fake_verify_pr_payload(
+                headRepository={}, headRepositoryOwner={},
+            )
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(
+        RuntimeError, match="PR head repo is <missing>, expected "
+                            "muyantech/muyan-pilot",
+    ):
+        runner.verify_pr(
+            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, pr_repo=FAKE_PR_REPO,
+        )
+
+
+def test_verify_pr_skips_repo_check_when_pr_repo_not_given(monkeypatch,
+                                                            tmp_path):
+    """The fresh-claim path (process_issue) does not pass pr_repo: a PR
+    payload without head repo fields still passes."""
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps([{
+                "url": FAKE_PR_URL,
+                "baseRefName": "main",
+                "headRefOid": FAKE_HEAD_SHA,
+                "body": f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\nPlan",
+            }])
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.verify_pr(
+        tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+    ) == FAKE_PR_URL
+
+
+def test_verify_pr_rejects_url_different_from_expected(monkeypatch, tmp_path, caplog):
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return fake_verify_pr_payload(
+                url="https://github.com/muyantech/muyan-pilot/pull/99",
+            )
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("ERROR"), pytest.raises(
+        RuntimeError, match=(
+            "PR URL https://github.com/muyantech/muyan-pilot/pull/99 is "
+            "not the recovered original PR "
+            "https://github.com/muyantech/muyan-pilot/pull/4"
+        ),
+    ):
+        runner.verify_pr(
+            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, expected_url=FAKE_PR_URL,
+        )
+    assert "pr_url_mismatch" in caplog.text
+
+
+def test_verify_pr_skips_url_check_when_expected_url_not_given(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(runner, "run_command", fake_verify_run)
+    assert runner.verify_pr(
+        tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+    ) == FAKE_PR_URL
+
+
+def test_verify_pr_skips_latest_base_check_when_not_required(
+    monkeypatch, tmp_path,
+):
+    """The resume pre-validation runs before the base merge, when being
+    behind the latest base is the expected state: no fetch, no ancestry
+    check."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.verify_pr(
+        tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+        require_latest_base=False,
+    ) == FAKE_PR_URL
+    assert not any(c[:3] == ["git", "fetch", "origin"] for c in calls)
+    assert not any(
+        c[:3] == ["git", "merge-base", "--is-ancestor"] for c in calls
+    )
 
 
 def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_path):
@@ -746,7 +895,7 @@ def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypat
 
 
 def test_main_returns_zero_when_queue_empty(monkeypatch, tmp_path):
-    monkeypatch.setattr(runner, "pick_next_issue", lambda repos: None)
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: None)
     config = tmp_path / "muyan-pilot.toml"
     (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
@@ -759,7 +908,7 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
-    monkeypatch.setattr(runner, "pick_next_issue", lambda repos: ("xqliu/muyan-pilot", issue))
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: ("xqliu/muyan-pilot", issue, None))
     monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: calls.append((args, kwargs)) or "https://github.com/x/y/pull/12")
     assert runner.main(["--config", str(config)]) == 0
     assert calls[0][0][0] == issue
@@ -772,7 +921,7 @@ def test_main_accepts_repeated_source_repo(monkeypatch, tmp_path):
     issue = {"number": 14, "title": "task"}
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"xqliu/muyan-pilot\", \"xqliu/muyan-ceo\"]\n", encoding="utf-8")
-    monkeypatch.setattr(runner, "pick_next_issue", lambda repos: seen.append(repos) or (repos[0], issue))
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda repos: seen.append(repos) or (repos[0], issue, None))
     monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: "https://github.com/x/y/pull/14")
     assert runner.main([
         "--config", str(config),
@@ -845,7 +994,7 @@ def make_fake_pi(tmp_path: Path, *, session_records: list[tuple[float, dict]],
                  sleep: float = 0.0) -> list[str]:
     """Build a command that mimics pi: appends session records over time."""
     session_dir = tmp_path / ".pi-session"
-    session_dir.mkdir()
+    session_dir.mkdir(exist_ok=True)
     records_literal = repr(session_records)
     script = (
         "import json, sys, time\n"
@@ -968,6 +1117,48 @@ def test_stream_pi_warns_when_no_session_file_appears(tmp_path, caplog):
     assert "pi_idle" in caplog.text
     assert "session=-" in caplog.text
     assert "session_file=-" in caplog.text
+
+
+def test_stream_pi_resumed_run_follows_new_session_file(tmp_path, caplog):
+    """Regression (Issue #45 round-5 review, Major 3): a resumed Fixer
+    starts in the original worktree where the previous implementer's
+    session JSONL already exists. The activity journal must follow the
+    NEW session file created by the current Pi process, not the old
+    one (which would report the previous session as idle)."""
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    old = session_dir / "old-session.jsonl"
+    with old.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps({
+            "type": "session", "id": "old-session",
+            "timestamp": "2026-08-25T02:00:00Z", "cwd": "/w",
+        }) + "\n")
+    command = make_fake_pi(
+        tmp_path,
+        session_records=[
+            (0.0, {"type": "session", "id": "new-session",
+                   "timestamp": "2026-08-25T03:00:00Z", "cwd": "/w"}),
+            (0.1, {"type": "message", "id": "a1",
+                   "timestamp": "2026-08-25T03:00:01Z",
+                   "message": {"role": "assistant", "content": [
+                       {"type": "toolCall", "id": "t1", "name": "bash",
+                        "arguments": {"command": "pytest tests/"}}]}}),
+        ],
+        stdout="fixed",
+    )
+    with caplog.at_level("INFO"):
+        result = runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1, idle_warn_seconds=3600,
+            issue=45, source_repo="xqliu/muyan-pilot",
+            branch="muyan-pilot/xqliu-muyan-pilot-issue-45-run1",
+        )
+    assert result == "fixed"
+    # The journal follows the NEW session created by this invocation...
+    assert "session=new-session" in caplog.text
+    assert "phase=test" in caplog.text
+    assert "last=bash pytest tests/" in caplog.text
+    # ...and never reports the pre-existing session as the live one.
+    assert "session=old-session" not in caplog.text
 
 
 def test_stream_pi_drains_pipe_data_written_after_exit(
