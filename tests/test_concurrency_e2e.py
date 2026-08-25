@@ -62,12 +62,20 @@ def save():
         handle.write(json.dumps(state))
     os.replace(tmp, state_path)
 
+
+def git(*cmd):
+    return subprocess.run(
+        ["git", *cmd], capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
 def match_issue(labels, search):
     required = [t[6:] for t in search.split() if t.startswith("label:")]
     excluded = [t[7:] for t in search.split() if t.startswith("-label:")]
     return all(r in labels for r in required) and not any(
         e in labels for e in excluded
     )
+
 
 if args[:2] == ["issue", "list"]:
     search = args[args.index("--search") + 1]
@@ -120,35 +128,84 @@ elif args[:2] == ["issue", "view"]:
         print(json.dumps({"comments": comments}))
 elif args[:2] == ["pr", "list"]:
     branch = args[args.index("--head") + 1]
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        capture_output=True, text=True, check=True,
-    ).stdout.strip()
+    head = git("rev-parse", "HEAD")
     run_id = branch.rsplit("-", 1)[1]
     print(json.dumps([{
+        "number": 99,
         "url": "https://github.com/owner/repo/pull/99",
         "baseRefName": "main",
+        "baseRefOid": git("rev-parse", "origin/main"),
         "headRefName": branch,
         "headRefOid": head,
         "headRepository": {"name": "repo"},
         "headRepositoryOwner": {"login": "owner"},
         "body": f"<!-- muyan-pilot:run={run_id} -->\\n\\nPlan for {branch}",
     }]))
+elif args[:2] == ["pr", "comment"]:
+    state.setdefault("pr_comments", []).append(
+        {"pr": args[2], "body": args[args.index("--body") + 1]}
+    )
+    save()
 elif args[:2] == ["pr", "view"]:
-    print(json.dumps({"state": state.get("pr_state", "OPEN")}))
+    # The merge gate and confirm_merged read the full PR state: the
+    # head is the current HEAD of the delivery branch (the fake world
+    # has no separate PR object), and the merge is recorded when the
+    # test (or the runner via `pr merge`) marks it MERGED.
+    print(json.dumps({
+        "state": state.get("pr_state", "OPEN"),
+        "mergeable": "MERGEABLE",
+        "headRefOid": git("rev-parse", "HEAD"),
+        "mergedAt": "2026-08-25T00:00:00Z"
+        if state.get("pr_state") == "MERGED" else None,
+        "mergeCommit": (
+            {"oid": git("rev-parse", "HEAD")}
+            if state.get("pr_state") == "MERGED" else None
+        ),
+    }))
+elif args[:2] == ["pr", "merge"]:
+    # The fake GitHub merge: record the merge on the delivery branch
+    # (the delivery branch is the PR head; the real `gh pr merge`
+    # lands the head on the base). The runner then confirms via
+    # `pr view` and syncs the deployment checkout.
+    state["pr_state"] = "MERGED"
+    state["merged_head"] = git("rev-parse", "HEAD")
+    save()
 else:
     raise SystemExit(f"unexpected gh command: {args}")
 """
 
 # Fake ``pi``: records one line per invocation, then stays busy for a while
-# so concurrent runners overlap while it runs.
+# so concurrent runners overlap while it runs. The review role (system
+# prompt "INDEPENDENT REVIEW") emits a machine-readable verdict: findings
+# for the first review of a run, a clean verdict afterwards, so the
+# full review -> fix -> re-review -> merge loop is exercised.
 FAKE_PI = """#!/usr/bin/env python3
-import os, sys, time
+import json, os, sys, time
 log = os.environ.get("MUYAN_FAKE_PI_LOG")
 if log:
     with open(log, "a", encoding="utf-8") as handle:
         handle.write(f"pi {os.getpid()}\\n")
 time.sleep(1.0)
+system_prompt = sys.argv[sys.argv.index("--system-prompt") + 1]
+if "INDEPENDENT REVIEW" in system_prompt:
+    run_id = system_prompt.split("run_id=")[1].split()[0]
+    marker = os.path.join(os.getcwd(), f".muyan-pilot-review-{run_id}")
+    if os.path.exists(marker):
+        print('REVIEW_VERDICT ' + json.dumps({
+            "verdict": "pass", "blockers": 0, "majors": 0,
+            "minors": 0, "findings": [],
+        }))
+    else:
+        with open(marker, "w", encoding="utf-8") as handle:
+            handle.write("reviewed")
+        print('REVIEW_VERDICT ' + json.dumps({
+            "verdict": "findings", "blockers": 0, "majors": 1,
+            "minors": 0,
+            "findings": [
+                {"level": "Major", "location": "e2e",
+                 "note": "first review finding"}
+            ],
+        }))
 """
 
 
@@ -254,6 +311,13 @@ def write_config(
         "- Run id: `{{RUN_ID}}`\n",
         encoding="utf-8",
     )
+    # validate_config requires the review prompt to exist as well (the
+    # Runner runs the independent review itself). The review prompt
+    # carries the run_id so the fake pi can key its
+    # first-review-findings state per run.
+    (tmp_path / "prompt_review.md").write_text(
+        "INDEPENDENT REVIEW\nrun_id={{RUN_ID}}\n", encoding="utf-8",
+    )
     config = tmp_path / f"muyan-pilot-{max_concurrency}.toml"
     config.write_text(
         f'source_repos = ["{REPO}"]\n'
@@ -350,12 +414,6 @@ def slots_held(clone: Path, capacity: int = 1) -> list:
     )
 
 
-def set_labels(state_path: Path, number: str, labels: list[str]) -> None:
-    state = read_state(state_path)
-    state["issues"][number]["labels"] = list(labels)
-    atomic_write_json(state_path, state)
-
-
 def set_pr_state(state_path: Path, pr_state: str) -> None:
     state = read_state(state_path)
     state["pr_state"] = pr_state
@@ -366,9 +424,10 @@ def test_capacity_one_slot_held_through_review_fix_merge(
     clone, tmp_path,
 ):
     """The slot is held for the whole delivery lifecycle (Issue #39):
-    after the PR opens the first runner keeps it (polling the PR state),
-    the fix-needed resume reuses the same PR and the same slot, and only
-    the merge releases the slot for the next Issue."""
+    after the PR opens the first runner keeps it, runs the independent
+    review (findings -> ai-fix-needed -> same-PR fix -> re-review),
+    auto-merges the clean PR itself (Issue #34) and only then releases
+    the slot for the next Issue."""
     bin_dir = install_fakes(tmp_path)
     state = tmp_path / "gh-state.json"
     write_state(state, {"7": ["ai-ready"], "8": ["ai-ready"]})
@@ -380,10 +439,6 @@ def test_capacity_one_slot_held_through_review_fix_merge(
         lambda: "ai-pr-opened" in read_state(state)["issues"]["7"]["labels"],
         what="first runner to open the PR",
     )
-    wait_for(
-        lambda: len(pi_invocations(pi_log)) == 1,
-        what="first runner to call Pi",
-    )
 
     # The PR is open but NOT merged: the slot is still held. A second
     # concurrent runner must be denied and must not claim Issue 8.
@@ -392,77 +447,70 @@ def test_capacity_one_slot_held_through_review_fix_merge(
     assert second.returncode == 0, err
     assert "capacity_full" in err
     snap = read_state(state)
-    # Issue 7 is awaiting review (ai-in-progress was consumed by the
-    # PR-opened transition); Issue 8 is untouched.
-    assert snap["issues"]["7"]["labels"] == ["ai-ready", "ai-pr-opened"]
+    # Issue 7 is in the review/fix state (ai-in-progress was consumed by
+    # the PR-opened transition); Issue 8 is untouched.
+    assert "ai-pr-opened" in snap["issues"]["7"]["labels"]
+    assert "ai-in-progress" not in snap["issues"]["7"]["labels"]
     assert snap["issues"]["8"]["labels"] == ["ai-ready"]
-    assert len(pi_invocations(pi_log)) == 1
 
-    # The review finds a problem: the Issue moves to ai-fix-needed. The
-    # first runner is still holding the slot (the PR is still open), so
-    # the fix is done by the SAME holder: it resumes the SAME PR (same
-    # run id, same branch) instead of claiming a new Issue.
-    set_labels(state, "7", ["ai-ready", "ai-fix-needed"])
+    # The first independent review finds a problem: the Issue moves to
+    # ai-fix-needed, and the SAME holder (still holding the slot) fixes
+    # the SAME PR (same run id, same branch) instead of claiming a new
+    # Issue; the re-review passes and the runner merges the PR itself.
     wait_for(
         lambda: (
-            "ai-fix-needed" not in read_state(state)["issues"]["7"]["labels"]
-            and "ai-pr-opened" in read_state(state)["issues"]["7"]["labels"]
-            and any("Muyan Pilot fixed PR:" in c["body"]
+            "ai-merged" in read_state(state)["issues"]["7"]["labels"]
+            and any("Muyan Pilot merged PR:" in c["body"]
                     for c in read_state(state)["comments"])
         ),
-        timeout=120,
-        what="first runner to resume and fix the same PR",
+        timeout=180,
+        what="first runner to review, fix, re-review and merge",
     )
-    # The fix consumed ai-fix-needed and returned to awaiting review ...
     snap = read_state(state)
-    assert "ai-fix-needed" not in snap["issues"]["7"]["labels"]
-    assert "ai-pr-opened" in snap["issues"]["7"]["labels"]
-    # ... with exactly one Pi invocation per phase of the SAME run:
-    # implement, then fix — never a new claim of another Issue.
-    assert len(pi_invocations(pi_log)) == 2
+    assert "ai-merged" in snap["issues"]["7"]["labels"]
+    assert "ai-pr-opened" not in snap["issues"]["7"]["labels"]
+    # One Pi invocation per phase of the SAME run: implement, review,
+    # fix, re-review — never a new claim of another Issue.
+    assert len(pi_invocations(pi_log)) == 4
     assert snap["issues"]["8"]["labels"] == ["ai-ready"]
     started = [
         c for c in snap["comments"] if "Muyan Pilot started Pi:" in c["body"]
     ]
     assert [c["issue"] for c in started] == ["7"]
+    bodies = [c["body"] for c in snap["comments"]]
+    assert any("Muyan Pilot review round 1" in b for b in bodies)
+    assert any("Muyan Pilot fixed PR:" in b for b in bodies)
+    assert any("Muyan Pilot merged PR:" in b for b in bodies)
 
-    # The human merges the PR: the first runner sees it, releases the
-    # slot and exits.
-    set_pr_state(state, "MERGED")
+    # The auto-merge released the slot; the runner exited cleanly.
     out, err = first.communicate(timeout=120)
     assert first.returncode == 0, err
-    assert "delivery_merged" in err
+    assert "delivery_auto_merged" in err
     assert slots_held(clone) == [(1, None)], (
         "slot must be released after the merge"
     )
 
-    # The next runner takes the released slot and claims the NEXT issue.
-    # Issue 8's PR is a fresh delivery: back to OPEN.
+    # The next runner takes the released slot and claims the NEXT issue;
+    # issue 8's PR is a fresh delivery (back to OPEN), and the full loop
+    # runs again for it.
     set_pr_state(state, "OPEN")
     third = start_runner(config, bin_dir, state, pi_log)
     wait_for(
-        lambda: "ai-pr-opened" in read_state(state)["issues"]["8"]["labels"],
-        what="third runner to open the PR for issue 8",
+        lambda: "ai-merged" in read_state(state)["issues"]["8"]["labels"],
+        timeout=180,
+        what="third runner to deliver issue 8",
     )
-    # Issue 8 is the only ready Issue left; the merged delivery (Issue 7)
-    # is ai-pr-opened, so it is not re-claimed.
     snap = read_state(state)
-    assert "ai-pr-opened" in snap["issues"]["8"]["labels"]
+    assert "ai-merged" in snap["issues"]["8"]["labels"]
     # Two different Issues were processed; none was claimed twice.
     started = [
         c for c in snap["comments"] if "Muyan Pilot started Pi:" in c["body"]
     ]
     assert sorted(c["issue"] for c in started) == ["7", "8"]
-    # Issue 8's delivery is now awaiting review and still holds the slot.
-    assert slots_held(clone)[0][1] is not None, (
-        "issue 8's delivery still holds the slot"
-    )
-    # Merge it: the third runner exits and releases the slot.
-    set_pr_state(state, "MERGED")
     out, err = third.communicate(timeout=120)
     assert third.returncode == 0, err
     assert "capacity_full" not in err
-    assert "delivery_merged" in err
+    assert "delivery_auto_merged" in err
     assert slots_held(clone) == [(1, None)]
 
 
@@ -567,14 +615,22 @@ def test_capacity_two_allows_two_runners_and_rejects_third(clone, tmp_path):
     assert third.returncode == 0, err
     assert "capacity_full" in err
 
-    # Merge both PRs: both runners exit and release their slots.
-    set_pr_state(state, "MERGED")
+    # Both runners auto-merge their own PRs (review -> fix -> re-review
+    # -> merge, Issue #34) and release their slots.
+    wait_for(
+        lambda: "ai-merged" in read_state(state)["issues"]["7"]["labels"]
+        and "ai-merged" in read_state(state)["issues"]["8"]["labels"],
+        timeout=180,
+        what="both runners to auto-merge their PRs",
+    )
     for runner in (first, second):
         out, err = runner.communicate(timeout=120)
         assert runner.returncode == 0, err
+        assert "delivery_auto_merged" in err
     assert slots_held(clone, 2) == [(1, None), (2, None)]
-    # Exactly one Pi per Issue: two invocations, no duplicate claim.
-    assert len(pi_invocations(pi_log)) == 2
+    # One Pi per phase of each run (implement, review, fix, re-review):
+    # four invocations per Issue, no duplicate claim.
+    assert len(pi_invocations(pi_log)) == 8
     started = [
         c for c in read_state(state)["comments"]
         if "Muyan Pilot started Pi:" in c["body"]

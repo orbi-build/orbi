@@ -47,7 +47,7 @@ Work through this exact loop:
 4. Add or update tests. For UI work, use Playwright against the real running application, assert the changed flow, check browser errors, and save screenshots under the run artifacts.
 5. Run the real project tests/build/smoke checks and record the commands and results.
 6. Verify the result yourself.
-7. Commit the change, push only the current feature branch, and open exactly one draft or normal PR for this Issue.
+7. Commit the change, push only the current feature branch, and open exactly one draft or normal PR for this Issue. After the PR is open, the Runner runs an independent review/fix loop and merges it itself; you do not review, fix, or merge.
 
 Base freshness before creating the PR:
 

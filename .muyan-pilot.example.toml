@@ -7,6 +7,13 @@ source_repos = [
 repo_dir = "."
 workspace_root = ".."
 prompt = "prompt.md"
+# Implementer prompt (default prompt.md). The Runner also runs an
+# independent review session on the opened PR, then merges a clean PR
+# via `gh pr merge --match-head-commit`; the fixer reuses the
+# implementer prompt (its resume section is injected when a PR already
+# exists). The review prompt defaults to prompt_review.md in this
+# directory.
+prompt_review = "prompt_review.md"
 # Delivery base branch: every task worktree is created from the latest
 # origin/<base_branch> (fetched and frozen at claim time). Default: "main".
 base_branch = "main"

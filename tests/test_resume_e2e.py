@@ -217,6 +217,9 @@ def write_prompt(tmp_path: Path) -> Path:
         "- Run id: `{{RUN_ID}}`\n",
         encoding="utf-8",
     )
+    # validate_config requires the review prompt to exist as well (the
+    # Runner runs the independent review itself).
+    (tmp_path / "prompt_review.md").write_text("review", encoding="utf-8")
     return prompt
 
 

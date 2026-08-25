@@ -1334,7 +1334,8 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
     scene = scene_for()
     resumed = []
     processed = []
-    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    for name in ("prompt.md", "prompt_review.md"):
+        (tmp_path / name).write_text("prompt", encoding="utf-8")
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     monkeypatch.setattr(
@@ -1361,7 +1362,8 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
 def test_main_still_claims_new_issue_when_no_resumable(monkeypatch, tmp_path):
     issue = {"number": 10, "title": "new", "body": ""}
     processed = []
-    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    for name in ("prompt.md", "prompt_review.md"):
+        (tmp_path / name).write_text("prompt", encoding="utf-8")
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     monkeypatch.setattr(

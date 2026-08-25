@@ -1,6 +1,6 @@
 # Muyan Pilot
 
-最小 bootstrap：从配置文件中的 source repos 按顺序领取一个 `ai-ready` Issue，启动 Pi，在隔离 worktree 中完成开发并创建 PR。
+最小 bootstrap：从配置文件中的 source repos 按顺序领取一个 `ai-ready` Issue，启动 Pi，在隔离 worktree 中完成开发并创建 PR；随后 Runner 自动完成独立审查、修复循环和合并（见下方「自动审查、修复与合并」）。
 
 开发契约见 [AGENTS.md](AGENTS.md)：每次本地 Pi 自举开发前先读 Issue、context files、README 和相关代码，TDD、100% 覆盖率、UI 用 Playwright、失败 fail fast、不 merge、不 push 保护分支、不引入数据库/队列/daemon/fallback、不设业务任务 timeout。
 
@@ -33,7 +33,7 @@ python3 muyan_pilot.py add "任务标题" --body "任务描述" --config muyan-p
 # 派发到指定 source repo（必须在配置 source_repos 中）
 python3 muyan_pilot.py add "任务标题" --repo xqliu/muyan-ceo --config muyan-pilot.toml
 
-# 查看每个 source repo 的当前任务（ai-in-progress）、待办（ai-ready）和最近结果（ai-pr-opened / ai-fix-needed / ai-blocked）
+# 查看每个 source repo 的当前任务（ai-in-progress）、待办（ai-ready）和最近结果（ai-pr-opened / ai-fix-needed / ai-merged / ai-blocked）
 python3 muyan_pilot.py status --config muyan-pilot.toml
 ```
 
@@ -167,5 +167,19 @@ PR 创建后任务没有结束：Issue 进入可恢复的 review/fix 状态。`a
 ```text
 ai-in-progress → PR opened (ai-pr-opened) → review
   → fix-needed / base-conflict (ai-fix-needed) → fix same PR
-  → full re-review (ai-pr-opened) → merge (人工)
+  → full re-review (ai-pr-opened) → merge → ai-merged
 ```
+
+## 自动审查、修复与合并（Issue #34）
+
+Pi 不直接 push 保护分支。实现 Agent 只 push feature branch 并创建 PR；PR 打开后由 **Runner** 在持有 slot 的交付等待循环中关闭闭环：
+
+1. **冻结 PR 的 base/head SHA**（`gh pr list` 取唯一 open PR 的 `baseRefOid`/`headRefOid`）。
+2. **独立审查**：启动一个独立、只读的 Review Agent（code-review R1–R9），对精确 base/head SHA 审查需求、diff、调用链、测试与运行证据；审查会话与 implement/fix 一样通过 live activity 管道输出（journal 中 `role=review`）。审查会话必须以一行机器可读的 `REVIEW_VERDICT {"verdict":"pass|findings","blockers":N,"majors":N,"minors":N,"findings":[...]}` 结尾；读不到合法 verdict 一律 fail fast，绝不当作通过。
+3. **修复循环**：verdict 有 Blocker/Major 时，把 finding 评论到 Issue 和 PR，Issue 标记 `ai-fix-needed`；同一 feature branch/worktree 上的 Fixer（journal 中 `role=fix`）修复并 push 后回到 `ai-pr-opened`，下一轮等待重新冻结 SHA、全量回归、完整复审。审查/修复循环最多 5 轮（见 `MAX_REVIEW_ROUNDS`）；超轮仍有 Blocker/Major 则 fail fast 并标记 `ai-blocked`。
+4. **合并门禁**：重新 fetch 最新 `origin/<base>`，要求 PR head 包含最新 base、PR mergeable、远端 head 仍是被审查的 head；然后 `gh pr merge <n> --match-head-commit <head> --merge`，只有被审查的 head 能落地。落后最新 base 的 PR 不会被合并（转 `ai-fix-needed`，由 Fixer 吸收最新 base 后重试）。
+5. **确认合并并同步部署 checkout**：`gh pr view` 确认 PR `MERGED` 且 `mergeCommit` 已落在 `origin/<base>`；随后把配置 `repo_dir` 的 base checkout `git merge --ff-only origin/<base>` 并验证本地 HEAD == `origin/<base>`，下一个 systemd tick 加载的就是刚合并的新代码。Issue 因 PR 关联自动 CLOSED。
+
+成功合并后 Issue 标记 `ai-merged`（替代 `ai-pr-opened`），评论写入 PR URL、merge commit、审查轮次和 base/run 信息。下一任务只从新的 `origin/<base>` 创建。不 force push、不直接 push 保护分支、不设业务 timeout；审查 finding 不是 `ai-blocked`，而是进入同一 PR 的 fix/review 循环。
+
+两个 prompt 由配置提供（默认 `prompt.md` 实现、`prompt_review.md` 审查）；Fixer 复用 `prompt.md`（PR 已存在时注入 resume 段）。

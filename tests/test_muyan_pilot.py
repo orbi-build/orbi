@@ -8,6 +8,11 @@ import bootstrap_runner as runner
 import muyan_pilot
 
 
+def _write_prompts(tmp_path):
+    for name in ("prompt.md", "prompt_review.md"):
+        (tmp_path / name).write_text("prompt", encoding="utf-8")
+
+
 def test_issue_number_extracts_number_from_github_url():
     assert muyan_pilot.issue_number(
         "https://github.com/xqliu/muyan-pilot/issues/3"
@@ -146,14 +151,15 @@ def test_recent_result_returns_newest_pr_opened_or_blocked_issue(monkeypatch):
         calls.append((label, state))
         if label == "ai-pr-opened":
             return [pr_opened]
-        if label == "ai-fix-needed":
+        if label in ("ai-fix-needed", "ai-merged"):
             return []
         return [blocked]
 
     monkeypatch.setattr(muyan_pilot, "list_labeled_issues", fake_list)
     assert muyan_pilot.recent_result("xqliu/muyan-pilot") == blocked
     assert calls == [
-        ("ai-pr-opened", "all"), ("ai-fix-needed", "all"), ("ai-blocked", "all"),
+        ("ai-pr-opened", "all"), ("ai-fix-needed", "all"),
+        ("ai-merged", "all"), ("ai-blocked", "all"),
     ]
 
 
@@ -175,6 +181,24 @@ def test_recent_result_includes_fix_needed_issue(monkeypatch):
     assert muyan_pilot.recent_result("xqliu/muyan-pilot") == fix_needed
 
 
+def test_recent_result_includes_merged_issue(monkeypatch):
+    """`ai-merged` is the success terminal state: a delivery the Runner
+    merged itself shows up in the status result (Issue #34 round-1
+    review, Major 3)."""
+    merged = {"number": 8, "title": "shipped", "url": "u8", "state": "CLOSED"}
+    blocked = {"number": 5, "title": "stuck", "url": "u5", "state": "OPEN"}
+
+    def fake_list(repo, label, state="open"):
+        if label == "ai-merged":
+            return [merged]
+        if label == "ai-blocked":
+            return [blocked]
+        return []
+
+    monkeypatch.setattr(muyan_pilot, "list_labeled_issues", fake_list)
+    assert muyan_pilot.recent_result("xqliu/muyan-pilot") == merged
+
+
 def test_recent_result_prefers_pr_opened_when_newer(monkeypatch):
     pr_opened = {"number": 9, "title": "done", "url": "u9", "state": "OPEN"}
     blocked = {"number": 5, "title": "stuck", "url": "u5", "state": "OPEN"}
@@ -182,7 +206,7 @@ def test_recent_result_prefers_pr_opened_when_newer(monkeypatch):
     def fake_list(repo, label, state="open"):
         if label == "ai-pr-opened":
             return [pr_opened]
-        if label == "ai-fix-needed":
+        if label in ("ai-fix-needed", "ai-merged"):
             return []
         return [blocked]
 
@@ -270,7 +294,7 @@ def test_main_add_dispatches_to_selected_source_repo(monkeypatch, tmp_path, caps
         "source_repos = [\"xqliu/muyan-pilot\", \"xqliu/muyan-ceo\"]\n",
         encoding="utf-8",
     )
-    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    _write_prompts(tmp_path)
     calls = []
     monkeypatch.setattr(
         muyan_pilot, "dispatch_issue",
@@ -292,7 +316,7 @@ def test_main_add_uses_explicit_repo_override(monkeypatch, tmp_path, capsys):
         "source_repos = [\"xqliu/muyan-pilot\", \"xqliu/muyan-ceo\"]\n",
         encoding="utf-8",
     )
-    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    _write_prompts(tmp_path)
     calls = []
     monkeypatch.setattr(
         muyan_pilot, "dispatch_issue",
@@ -307,7 +331,7 @@ def test_main_add_uses_explicit_repo_override(monkeypatch, tmp_path, capsys):
 def test_main_add_rejects_repo_not_in_config(monkeypatch, tmp_path):
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"xqliu/muyan-pilot\"]\n", encoding="utf-8")
-    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    _write_prompts(tmp_path)
     with pytest.raises(SystemExit):
         muyan_pilot.main([
             "add", "T", "--repo", "other/repo", "--config", str(config),
@@ -317,7 +341,7 @@ def test_main_add_rejects_repo_not_in_config(monkeypatch, tmp_path):
 def test_main_status_prints_report(monkeypatch, tmp_path, capsys):
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"xqliu/muyan-pilot\"]\n", encoding="utf-8")
-    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    _write_prompts(tmp_path)
     monkeypatch.setattr(
         muyan_pilot, "status_report",
         lambda config: "source: xqliu/muyan-pilot\ncurrent: -",

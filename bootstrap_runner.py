@@ -3,7 +3,13 @@
 
 This is intentionally small. It claims one ready GitHub Issue, gives it to
 Pi in an isolated worktree, and accepts success only when one open PR exists.
-Any command failure is logged and raised. There is no fallback or recovery.
+After the implementer opens the PR, the Runner closes the loop itself: it
+freezes the exact PR base/head SHA, runs an independent review session, loops
+a fixer session on the same feature branch/worktree while Blocker/Major
+findings exist, re-checks the merge gate against the latest remote base, and
+merges via `gh pr merge --match-head-commit`. Pi never pushes the protected
+branch; the Runner is the only merge actor. Any command failure is logged and
+raised. There is no fallback, queue, daemon, or multi-agent framework.
 """
 from __future__ import annotations
 
@@ -32,15 +38,23 @@ from pi_activity import (
 
 LOGGER = logging.getLogger("muyan_pilot.bootstrap")
 
+# Machine-readable verdict line the reviewer session must end with, and the
+# bounded size of the review/fix loop (see review-fix-loop skill: max 5 rounds).
+VERDICT_MARKER = "REVIEW_VERDICT"
+MAX_REVIEW_ROUNDS = 5
+
 # Live activity polling while Pi runs (Issue #24): every poll the journal
 # gets either an `activity` line (something changed) or a `heartbeat` line
 # (nothing changed; the idle time is carried on the line itself).
 PI_POLL_INTERVAL = 15.0
 
-# The bootstrap runner drives a single implementation session per run
-# (Issue #40: implement/review/fix/merge share the same line format and
-# carry their role; the MVP runs one role).
+# The bootstrap runner streams every Pi session of a run through the same
+# live activity pipeline (Issue #24/#40); implement/review/fix share the
+# same line format and carry their role (Issue #41: one run_id end to
+# end, the roles are steps of the same run).
 ROLE_IMPLEMENT = "implement"
+ROLE_REVIEW = "review"
+ROLE_FIX = "fix"
 
 # Run correlation (Issue #41): one task attempt generates one run_id and
 # every journal line of the attempt starts with `[run_id]`, so a single
@@ -54,10 +68,12 @@ _CURRENT_RUN_ID: str | None = None
 # means awaiting review, and only the explicit `ai-fix-needed` state
 # (a review finding or a base conflict) is scanned for Fixer work. The
 # next tick resumes that same run on the same branch, worktree and PR
-# instead of claiming a new Issue.
+# instead of claiming a new Issue. `ai-merged` is the success terminal
+# state the Runner sets after it merges the PR itself (Issue #34).
 IN_PROGRESS_LABEL = "ai-in-progress"
 PR_OPENED_LABEL = "ai-pr-opened"
 FIX_NEEDED_LABEL = "ai-fix-needed"
+MERGED_LABEL = "ai-merged"
 BLOCKED_LABEL = "ai-blocked"
 
 # Only comments posted by a repo maintainer are trusted to carry the
@@ -137,6 +153,9 @@ def load_config(path: Path) -> dict:
         "repo_dir": repo_dir,
         "workspace_root": _config_path(data.get("workspace_root", ".."), base),
         "prompt": _config_path(data.get("prompt", "prompt.md"), base),
+        "prompt_review": _config_path(
+            data.get("prompt_review", "prompt_review.md"), base,
+        ),
         "skills": [_config_path(item, base) for item in data.get("skills", [])],
         "context_files": [
             _config_path(item, base) for item in data.get("context_files", [])
@@ -157,7 +176,10 @@ def render_prompt(template: str, values: dict[str, str]) -> str:
 def validate_config(config: dict) -> None:
     if not config["repo_dir"].is_dir():
         raise FileNotFoundError(config["repo_dir"])
-    for path in [config["prompt"], *config["skills"], *config["context_files"]]:
+    for path in [
+        config["prompt"], config["prompt_review"],
+        *config["skills"], *config["context_files"],
+    ]:
         if not path.is_file():
             raise FileNotFoundError(path)
 
@@ -219,11 +241,15 @@ def parse_issue_list(raw: str) -> dict | None:
 
 
 def pick_issue(repo: str) -> dict | None:
+    # A merged delivery keeps `ai-ready` + `ai-merged` on the (still
+    # open) Issue; `ai-merged` is the success terminal state, so it is
+    # excluded from the ready scan like every other delivery state.
     raw = run_command([
         "gh", "issue", "list", "--repo", repo, "--state", "open",
         "--search",
         "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
-        f"-label:{FIX_NEEDED_LABEL} -label:{BLOCKED_LABEL}",
+        f"-label:{FIX_NEEDED_LABEL} -label:{MERGED_LABEL} "
+        f"-label:{BLOCKED_LABEL}",
         "--json", "number,title,body", "--limit", "1",
     ])
     return parse_issue_list(raw)
@@ -631,6 +657,7 @@ def stream_pi(
     issue: int,
     source_repo: str,
     branch: str,
+    role: str = ROLE_IMPLEMENT,
     log_command: list[str] | None = None,
 ) -> str:
     """Run Pi and stream concise live activity into the journal (Issue #40).
@@ -676,7 +703,7 @@ def stream_pi(
         "run_start %s",
         format_run_scene(
             initial, run_id=run_id, issue=issue_ref,
-            role=ROLE_IMPLEMENT, branch=branch, worktree=str(cwd),
+            role=role, branch=branch, worktree=str(cwd),
         ),
     )
     stdout_chunks: list[bytes] = []
@@ -714,14 +741,14 @@ def stream_pi(
                 # heartbeat (Issue #40).
                 _log_activity(
                     activity, run_id=run_id, issue_ref=issue_ref,
-                    role=ROLE_IMPLEMENT,
+                    role=role,
                     state="model_wait" if activity["model_wait"] else None,
                 )
                 last_visible = visible
             else:
                 _log_heartbeat(
                     activity, run_id=run_id, issue_ref=issue_ref,
-                    role=ROLE_IMPLEMENT, elapsed=time.monotonic() - start,
+                    role=role, elapsed=time.monotonic() - start,
                     state="model_wait" if activity["model_wait"] else None,
                 )
             if activity["model_wait"] != last_model_wait:
@@ -731,7 +758,7 @@ def stream_pi(
                 LOGGER.info(
                     "%s run=%s issue=%s role=%s phase=%s state=%s",
                     "model_wait" if activity["model_wait"] else "resumed",
-                    run_id, issue_ref, ROLE_IMPLEMENT,
+                    run_id, issue_ref, role,
                     activity["phase"],
                     "model_wait" if activity["model_wait"] else "resumed",
                 )
@@ -749,7 +776,7 @@ def stream_pi(
             "run_failed %s reason=%s",
             format_run_scene(
                 activity, run_id=run_id, issue=issue_ref,
-                role=ROLE_IMPLEMENT, branch=branch, worktree=str(cwd),
+                role=role, branch=branch, worktree=str(cwd),
             ),
             reason,
         )
@@ -762,7 +789,7 @@ def stream_pi(
             "run_failed %s reason=%s",
             format_run_scene(
                 activity, run_id=run_id, issue=issue_ref,
-                role=ROLE_IMPLEMENT, branch=branch, worktree=str(cwd),
+                role=role, branch=branch, worktree=str(cwd),
             ),
             reason,
         )
@@ -946,6 +973,422 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
         )
     return url
 
+
+def parse_review_verdict(text: str) -> dict:
+    """Extract the last REVIEW_VERDICT JSON line from a review session.
+
+    The reviewer must end with a machine-readable verdict so the Runner can
+    decide without parsing prose. Missing or malformed verdicts fail fast; a
+    review that cannot be read as a pass is never treated as a pass.
+    """
+    payload = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(VERDICT_MARKER):
+            payload = stripped[len(VERDICT_MARKER):].strip()
+    if payload is None:
+        raise ValueError("no REVIEW_VERDICT line in review output")
+    try:
+        verdict = json.loads(payload)
+    except json.JSONDecodeError:
+        raise ValueError("malformed REVIEW_VERDICT JSON") from None
+    if not isinstance(verdict, dict):
+        raise ValueError("malformed REVIEW_VERDICT JSON")
+    if verdict.get("verdict") not in ("pass", "findings"):
+        raise ValueError("verdict must be 'pass' or 'findings'")
+    for key in ("blockers", "majors", "minors"):
+        value = verdict.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"{key} must be a non-negative integer")
+    if not isinstance(verdict.get("findings", []), list):
+        raise ValueError("findings must be a list")
+    blockers = verdict["blockers"]
+    majors = verdict["majors"]
+    if verdict["verdict"] == "pass" and (blockers > 0 or majors > 0):
+        raise ValueError("pass verdict cannot have blockers or majors")
+    if verdict["verdict"] == "findings" and blockers == 0 and majors == 0:
+        raise ValueError("findings verdict requires blockers or majors")
+    return verdict
+
+
+def review_has_findings(verdict: dict) -> bool:
+    """True when a verdict still blocks the merge gate (Blocker or Major)."""
+    return verdict["blockers"] > 0 or verdict["majors"] > 0
+
+
+def freeze_pr(worktree: Path, branch: str, base_branch: str) -> dict:
+    """Freeze the exact base/head SHA of the one open PR for a task branch."""
+    raw = run_command([
+        "gh", "pr", "list", "--state", "open", "--head", branch,
+        "--json", "number,url,baseRefName,baseRefOid,headRefName,headRefOid",
+        "--limit", "2",
+    ], cwd=worktree)
+    prs = json.loads(raw)
+    if not isinstance(prs, list) or len(prs) != 1:
+        raise RuntimeError("expected exactly one open PR for the task branch")
+    pr = prs[0]
+    base_ref = pr.get("baseRefName")
+    if base_ref != base_branch:
+        LOGGER.error(
+            "pr_base_mismatch expected=%s actual=%s branch=%s",
+            base_branch, base_ref, branch,
+        )
+        raise RuntimeError(
+            f"PR base is {base_ref}, expected {base_branch}; the merge gate "
+            "only accepts the configured protected branch"
+        )
+    return {
+        "number": pr["number"],
+        "url": pr["url"],
+        "base_ref": base_ref,
+        "base_oid": pr["baseRefOid"],
+        "head_ref": pr["headRefName"],
+        "head_oid": pr["headRefOid"],
+    }
+
+
+def _agent_skill_args(config: dict) -> list[str]:
+    return [
+        item for skill in config["skills"]
+        for item in ("--skill", str(skill))
+    ]
+
+
+def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
+               issue: int, branch: str, round: int,
+               timeout: int | None = None) -> str:
+    """Run one independent, read-only review session for a frozen PR.
+
+    The review streams live activity through the same pipeline as the
+    implementer and fixer (role=review; Issue #41: one run_id end to end,
+    the roles are steps of the same run).
+    """
+    system_prompt = render_prompt(
+        config["prompt_review"].read_text(encoding="utf-8"),
+        {
+            "SOURCE_REPO": source_repo,
+            "PR_NUMBER": str(pr["number"]),
+            "PR_URL": pr["url"],
+            "BASE_BRANCH": config["base_branch"],
+            "BASE_SHA": pr["base_oid"],
+            "HEAD_SHA": pr["head_oid"],
+            "HEAD_REF": pr["head_ref"],
+            "ROUND": str(round),
+        },
+    )
+    context = (
+        f"Independently review PR #{pr['number']} ({pr['url']}) of "
+        f"{source_repo} against base {config['base_branch']}@{pr['base_oid']} "
+        f"and head {pr['head_oid']} (round {round}). Follow code-review R1-R9 "
+        "and end with a single REVIEW_VERDICT line."
+    )
+    command = [
+        "pi", *_agent_skill_args(config), "--print", "--session-dir",
+        str(worktree / ".pi-session"), "--system-prompt", system_prompt,
+        context,
+    ]
+    return stream_pi(
+        command,
+        cwd=worktree,
+        timeout=timeout,
+        log_command=[
+            "pi", "--print", "--session-dir",
+            str(worktree / ".pi-session"),
+            "--system-prompt", "<redacted>", "<review-context-redacted>",
+        ],
+        run_id=config["run_id"],
+        issue=issue,
+        source_repo=source_repo,
+        branch=branch,
+        role=ROLE_REVIEW,
+    )
+
+
+def merge_gate(worktree: Path, pr: dict, base_branch: str) -> dict:
+    """Merge the reviewed PR only if the gate still holds against latest base.
+
+    Re-fetch the latest remote base, require the PR head to contain it, the PR
+    to be mergeable, and the remote head to still be the reviewed head. Then
+    merge with `--match-head-commit` so only that exact head can land. No force
+    push, no direct push of the protected branch.
+    """
+    run_command(["git", "fetch", "origin", base_branch], cwd=worktree)
+    try:
+        run_command(
+            ["git", "merge-base", "--is-ancestor",
+             f"origin/{base_branch}", pr["head_oid"]],
+            cwd=worktree,
+        )
+    except subprocess.CalledProcessError:
+        LOGGER.error(
+            "merge_gate_behind_base base_branch=%s pr=%s head=%s",
+            base_branch, pr["number"], pr["head_oid"],
+        )
+        raise RuntimeError(
+            f"PR #{pr['number']} head {pr['head_oid']} is behind latest "
+            f"remote base origin/{base_branch}; absorb the latest base, rerun "
+            "tests and review, then retry"
+        ) from None
+    raw = run_command([
+        "gh", "pr", "view", str(pr["number"]),
+        "--json", "state,mergeable,headRefOid",
+    ], cwd=worktree)
+    state = json.loads(raw)
+    mergeable = state.get("mergeable")
+    if mergeable != "MERGEABLE":
+        LOGGER.error(
+            "merge_gate_not_mergeable pr=%s mergeable=%s",
+            pr["number"], mergeable,
+        )
+        raise RuntimeError(
+            f"PR #{pr['number']} is not mergeable (mergeable={mergeable}); "
+            "resolve conflicts and retry"
+        )
+    remote_head = state.get("headRefOid")
+    if remote_head != pr["head_oid"]:
+        LOGGER.error(
+            "merge_gate_head_moved pr=%s reviewed=%s remote=%s",
+            pr["number"], pr["head_oid"], remote_head,
+        )
+        raise RuntimeError(
+            f"PR #{pr['number']} head moved since review "
+            f"(reviewed={pr['head_oid']} remote={remote_head}); re-review "
+            "before merging"
+        )
+    run_command([
+        "gh", "pr", "merge", str(pr["number"]),
+        "--match-head-commit", pr["head_oid"], "--merge",
+    ], cwd=worktree)
+    LOGGER.info("merged pr=%s head=%s", pr["number"], pr["head_oid"])
+    return {**pr, "merged": True}
+
+
+def confirm_merged(worktree: Path, pr: dict, base_branch: str) -> dict:
+    """Confirm the PR is MERGED and origin/<base> contains the merge commit."""
+    raw = run_command([
+        "gh", "pr", "view", str(pr["number"]),
+        "--json", "state,mergedAt,mergeCommit",
+    ], cwd=worktree)
+    state = json.loads(raw)
+    if state.get("state") != "MERGED" or not state.get("mergedAt"):
+        LOGGER.error("confirm_merged_not_merged pr=%s state=%s",
+                     pr["number"], state.get("state"))
+        raise RuntimeError(
+            f"PR #{pr['number']} is not merged (state={state.get('state')})"
+        )
+    merge_commit = (state.get("mergeCommit") or {}).get("oid")
+    if not merge_commit:
+        raise RuntimeError(
+            f"PR #{pr['number']} is merged but has no merge commit oid"
+        )
+    run_command(["git", "fetch", "origin", base_branch], cwd=worktree)
+    try:
+        run_command(
+            ["git", "merge-base", "--is-ancestor", merge_commit,
+             f"origin/{base_branch}"],
+            cwd=worktree,
+        )
+    except subprocess.CalledProcessError:
+        LOGGER.error(
+            "confirm_merged_missing_on_base pr=%s merge_commit=%s",
+            pr["number"], merge_commit,
+        )
+        raise RuntimeError(
+            f"merge commit {merge_commit} is not on origin/{base_branch}; "
+            "the merge did not land on the protected branch"
+        ) from None
+    return {"state": "MERGED", "merge_commit": merge_commit}
+
+
+def review_rounds_so_far(comments: list[dict]) -> int:
+    """Count the review rounds already recorded on the Issue.
+
+    Each round with Blocker/Major findings posts one
+    `Muyan Pilot review round N for PR #...` comment, so the GitHub
+    record alone bounds the loop (GitHub Issues are the only state
+    store; a runner restart never loses the count). Only trusted
+    maintainer comments count: a public comment cannot exhaust the
+    round budget or skip review (same filter as resume_scene).
+    """
+    rounds = 0
+    for comment in comments:
+        if not _comment_is_trusted(comment):
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        for line in body.splitlines():
+            if line.startswith("Muyan Pilot review round "):
+                rounds += 1
+                break
+    return rounds
+
+
+def sync_base_checkout(repo_dir: Path, base_branch: str) -> None:
+    """Fast-forward the configured repo_dir base checkout to origin/<base>.
+
+    systemd executes the runner from this checkout: after a merge lands
+    on origin/<base>, the next tick must load the newly merged code, so
+    the deployment checkout is synced here and verified to equal the
+    remote base. A checkout that cannot fast-forward (local drift) fails
+    fast; the merge itself already landed on GitHub.
+    """
+    run_command(["git", "fetch", "origin", base_branch], cwd=repo_dir)
+    local_head = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
+    remote_head = run_command(
+        ["git", "rev-parse", f"origin/{base_branch}"], cwd=repo_dir,
+    )
+    if local_head == remote_head:
+        return
+    try:
+        run_command(
+            ["git", "merge", "--ff-only", f"origin/{base_branch}"],
+            cwd=repo_dir,
+        )
+    except subprocess.CalledProcessError:
+        LOGGER.error(
+            "base_checkout_not_fast_forwardable repo_dir=%s base=%s "
+            "local=%s remote=%s",
+            repo_dir, base_branch, local_head, remote_head,
+        )
+        raise RuntimeError(
+            f"deployment checkout {repo_dir} cannot fast-forward to "
+            f"origin/{base_branch} (local={local_head} "
+            f"remote={remote_head}); the merged code cannot be loaded "
+            "by the next tick"
+        ) from None
+    synced = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
+    if synced != remote_head:
+        raise RuntimeError(
+            f"deployment checkout {repo_dir} is at {synced} after the "
+            f"sync, expected origin/{base_branch} at {remote_head}"
+        )
+    LOGGER.info(
+        "base_checkout_synced repo_dir=%s base=%s head=%s",
+        repo_dir, base_branch, synced,
+    )
+
+
+def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
+                              config: dict, source_repo: str,
+                              number: int) -> bool:
+    """Run one independent review round; merge when the verdict is clean.
+
+    The delivery wait loop (which holds the slot) calls this while the
+    PR is open and the Issue awaits review (`ai-pr-opened`). It freezes
+    the PR, runs the independent review (streamed, role=review), and
+    then:
+
+    - clean verdict -> merge gate (latest-base ancestor, mergeable,
+      head match, `gh pr merge --match-head-commit`), confirm the merge
+      landed on origin/<base>, sync the deployment checkout, label the
+      Issue `ai-merged`; returns True;
+    - Blocker/Major findings -> comment them to Issue and PR and label
+      the Issue `ai-fix-needed`; the #45 fix loop repairs the same PR
+      and returns the Issue to `ai-pr-opened`, where the next wait
+      iteration re-reviews; returns False;
+    - a gate failure because the head is behind the latest base ->
+      label the Issue `ai-fix-needed` with the absorb-base finding
+      (the fixer merges the latest base); returns False;
+    - missing/malformed verdict or an exhausted round budget -> raise;
+      the caller marks the Issue `ai-blocked`.
+    """
+    marker = run_marker(config["run_id"])
+    comments = issue_comments(number, repo=source_repo)
+    rounds = review_rounds_so_far(comments)
+    if rounds >= MAX_REVIEW_ROUNDS:
+        LOGGER.error(
+            "review_rounds_exhausted issue=%s rounds=%s",
+            number, rounds,
+        )
+        raise RuntimeError(
+            f"review/fix loop exhausted after {MAX_REVIEW_ROUNDS} rounds "
+            "without a clean verdict; needs human review"
+        )
+    round = rounds + 1
+    pr = freeze_pr(worktree, branch, base_branch)
+    output = run_review(
+        worktree, pr, config, source_repo, number, branch, round,
+    )
+    verdict = parse_review_verdict(output)
+    LOGGER.info(
+        "review pr=%s round=%s verdict=%s blockers=%s majors=%s",
+        pr["number"], round, verdict["verdict"], verdict["blockers"],
+        verdict["majors"],
+    )
+    if review_has_findings(verdict):
+        body = (
+            f"{marker}\n"
+            f"Muyan Pilot review round {round} for PR #{pr['number']}: "
+            f"{verdict['blockers']} blocker(s), {verdict['majors']} "
+            "major(s). Findings: "
+            + json.dumps(verdict["findings"], ensure_ascii=False)
+        )
+        comment_issue(number, repo=source_repo, body=body)
+        comment_pr(pr["number"], body=body)
+        edit_issue(
+            number, repo=source_repo, add=FIX_NEEDED_LABEL,
+            remove=PR_OPENED_LABEL,
+        )
+        return False
+    try:
+        merged = merge_gate(worktree, pr, base_branch)
+    except RuntimeError as exc:
+        message = str(exc)
+        # Behind and merge-conflict are the same fixer job: absorb
+        # origin/<base>, resolve, retest. Other gate failures
+        # (head moved, etc.) fail fast.
+        if (
+            "behind latest remote base" not in message
+            and "not mergeable" not in message
+        ):
+            raise
+        body = (
+            f"{marker}\n"
+            f"Muyan Pilot review round {round} for PR #{pr['number']}: "
+            "the PR is behind the latest base or has a merge conflict; "
+            f"merge the latest origin/{base_branch} into the branch, "
+            "resolve conflicts, and rerun the full test suite"
+        )
+        comment_issue(number, repo=source_repo, body=body)
+        comment_pr(pr["number"], body=body)
+        edit_issue(
+            number, repo=source_repo, add=FIX_NEEDED_LABEL,
+            remove=PR_OPENED_LABEL,
+        )
+        return False
+    confirmed = confirm_merged(worktree, merged, base_branch)
+    # The GitHub merge already landed. Record ai-merged before touching
+    # the local systemd checkout: a checkout that cannot fast-forward is
+    # runner ops, not a failed delivery (must not become ai-blocked).
+    edit_issue(
+        number, repo=source_repo, add=MERGED_LABEL,
+        remove=PR_OPENED_LABEL,
+    )
+    comment_issue(
+        number, repo=source_repo,
+        body=(
+            f"{marker}\n"
+            f"Muyan Pilot merged PR: {merged['url']} "
+            f"(merge_commit={confirmed['merge_commit']} "
+            f"review_rounds={round} "
+            f"base_branch={base_branch} run_id={config['run_id']})"
+        ),
+    )
+    try:
+        sync_base_checkout(config["repo_dir"], base_branch)
+    except RuntimeError:
+        LOGGER.exception(
+            "base_checkout_sync_failed after merge pr=%s repo_dir=%s; "
+            "the delivery already landed on origin/%s",
+            merged["url"], config["repo_dir"], base_branch,
+        )
+    return True
+
+
+def comment_pr(number: int, *, body: str) -> None:
+    """Comment on a PR (used to record each review round's findings)."""
+    run_command(["gh", "pr", "comment", str(number), "--body", body])
 
 def _pr_head_repo(pr: dict) -> str:
     """Return `owner/name` of the PR head repo, or '<missing>' if absent."""
@@ -1242,6 +1685,14 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
       the slot; the fix returns the Issue to `ai-pr-opened` and the
       wait continues. A new Runner can never take the slot to fix this
       delivery while it is held, so the fix must happen here;
+    - Issue awaiting review (`ai-pr-opened`) -> the Runner runs the
+      independent review of the frozen PR (Issue #34) itself, on the
+      same run, while still holding the slot: a clean verdict merges
+      the PR via the merge gate, confirms the merge, syncs the
+      deployment checkout and labels the Issue `ai-merged` (terminal,
+      the slot is released); findings label the Issue `ai-fix-needed`
+      and the fix step above repairs the same PR before the next
+      iteration re-reviews;
     - otherwise -> keep holding the slot and re-check.
 
     There is no timeout: systemd owns the run lifecycle and kills the
@@ -1296,6 +1747,59 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
             fix_issue["body"] = issue_body(number, repo=source_repo)
             resume_delivery(fix_issue, scene, config, source_repo)
             continue  # the fix returned the Issue to awaiting review
+        if (PR_OPENED_LABEL in labels and BLOCKED_LABEL not in labels
+                and MERGED_LABEL not in labels):
+            # The PR is awaiting review: run the independent review of
+            # the frozen PR on the same run (Issue #34). A clean
+            # verdict merges and returns True (terminal); findings
+            # label the Issue `ai-fix-needed` and the fix step above
+            # repairs the same PR before the next iteration re-reviews.
+            # A review that cannot run (unrecoverable scene, missing
+            # worktree, missing/malformed verdict, exhausted rounds)
+            # is a real failure: the Issue is marked `ai-blocked` so
+            # it is never stranded in awaiting review without an owner.
+            try:
+                scene = resume_scene(
+                    issue_comments(number, repo=source_repo),
+                )
+                worktree = worktree_path(
+                    config["repo_dir"], source_repo, number,
+                    scene["run_id"],
+                )
+                branch = task_branch(source_repo, number, scene["run_id"])
+                review_config = {
+                    **config,
+                    "base_sha": scene["base_sha"],
+                    "run_id": scene["run_id"],
+                }
+                merged = review_and_merge_if_clean(
+                    worktree, branch, config["base_branch"],
+                    review_config, source_repo, number,
+                )
+            except Exception as exc:
+                LOGGER.exception(
+                    "issue=%s delivery_review_failed pr=%s", number, pr_url,
+                )
+                edit_issue(
+                    number, repo=source_repo, add=BLOCKED_LABEL,
+                    remove=PR_OPENED_LABEL,
+                )
+                body = (
+                    f"Muyan Pilot failed: the independent review of "
+                    f"PR {pr_url} failed: {exc}"
+                )
+                if marker:
+                    body = f"{marker}\n{body}"
+                comment_issue(number, repo=source_repo, body=body)
+                return
+            if merged:
+                LOGGER.info(
+                    "issue=%s delivery_auto_merged pr=%s; releasing the "
+                    "slot",
+                    number, pr_url,
+                )
+                return
+            continue  # findings: the fix loop repairs, then re-review
         LOGGER.info(
             "issue=%s delivery_awaiting pr=%s state=%s",
             number, pr_url, state,
