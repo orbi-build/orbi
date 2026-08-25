@@ -23,6 +23,10 @@ from typing import Callable
 RUN_MARKER_TEMPLATE = "<!-- muyan-pilot:run={run_id} -->"
 # Standalone milestone comments share this prefix so they are recognizable.
 MILESTONE_PREFIX = "Muyan Pilot:"
+# The live progress comment carries this header; together with the run
+# marker it identifies the run's progress comment among the run's other
+# marker-carrying comments (started Pi / opened PR scenes, milestones).
+PROGRESS_HEADER = "**Muyan Pilot progress**"
 
 
 def run_marker(run_id: str) -> str:
@@ -36,6 +40,25 @@ def find_run_comment(comments: list[dict], run_id: str) -> dict | None:
     for comment in comments:
         body = comment.get("body")
         if isinstance(body, str) and marker in body:
+            return comment
+    return None
+
+
+def find_progress_comment(
+    comments: list[dict], run_id: str,
+) -> dict | None:
+    """Return this run's live progress comment, or None.
+
+    A run's marker alone is not enough: the run's other comments
+    (started Pi / opened PR scene comments, milestones) carry the same
+    marker. The progress comment is the one that also carries the
+    progress header.
+    """
+    marker = run_marker(run_id)
+    for comment in comments:
+        body = comment.get("body")
+        if (isinstance(body, str) and marker in body
+                and PROGRESS_HEADER in body):
             return comment
     return None
 
@@ -64,9 +87,13 @@ def progress_body(state: dict) -> str:
     lines = [
         run_marker(state["run_id"]),
         "",
-        "**Muyan Pilot progress**",
+        PROGRESS_HEADER,
         "",
         f"- issue: #{state['issue']}",
+        # The visible run_id field is `run_id=<id>` (key=value, Issue
+        # #41 contract), so a grep for the value finds every comment
+        # of the run.
+        f"- run_id={state['run_id']}",
         f"- role: {value('role')}",
         f"- phase: {value('phase')}",
         f"- elapsed: {value('elapsed')}",
@@ -84,12 +111,14 @@ def progress_body(state: dict) -> str:
 class ProgressPublisher:
     """Create, find and update the single per-run progress comment.
 
-    `ensure` locates the run's comment by its hidden marker (PATCHing it
-    when it exists, POSTing it when it does not) and tracks its id.
-    `patch` and `finish` update the tracked comment in place and fail fast
-    when no comment is tracked yet. `milestone` posts a short standalone
-    comment. Every call goes through `run_command` (gh api) and raises on
-    any error.
+    `ensure` locates the run's progress comment by its hidden run marker
+    plus the progress header (PATCHing it when it exists, POSTing it when
+    it does not) and tracks its id; the run's other marker-carrying
+    comments (scene comments, milestones) are never touched.
+    `patch` and `finish` update the tracked comment in place and fail
+    fast when no comment is tracked yet. `milestone` posts a short
+    standalone comment. Every call goes through `run_command` (gh api)
+    and raises on any error.
     """
 
     def __init__(self, issue: int, repo: str, run_id: str,
@@ -132,8 +161,15 @@ class ProgressPublisher:
         ])
 
     def ensure(self, body: str) -> int:
-        """Create or resume the run's progress comment; return its id."""
-        existing = find_run_comment(self._list_comments(), self.run_id)
+        """Create or resume the run's progress comment; return its id.
+
+        The run's other marker-carrying comments (scene comments,
+        milestones) are never touched: only the comment that also
+        carries the progress header is resumed (Issue #18).
+        """
+        existing = find_progress_comment(
+            self._list_comments(), self.run_id,
+        )
         if existing is not None:
             comment_id = int(existing["id"])
             self.comment_id = comment_id
@@ -149,8 +185,20 @@ class ProgressPublisher:
         self._patch_comment(self.comment_id, body)
 
     def milestone(self, text: str) -> None:
-        """Post a short standalone milestone comment (mobile notification)."""
-        self._post_comment(f"{MILESTONE_PREFIX} {text}")
+        """Post a short standalone milestone comment (mobile notification).
+
+        The milestone carries the hidden run marker and the visible
+        `run_id=` field like every other comment of the run (Issue #41:
+        one run_id end to end, every comment of the attempt carries
+        both). The visible field is appended when the text does not
+        carry it already, so the contract holds for every milestone
+        without repeating the field.
+        """
+        if f"run_id={self.run_id}" not in text:
+            text = f"{text} run_id={self.run_id}"
+        self._post_comment(
+            f"{run_marker(self.run_id)}\n{MILESTONE_PREFIX} {text}",
+        )
 
     def finish(self, body: str) -> None:
         """Replace the tracked comment with the final outcome body."""

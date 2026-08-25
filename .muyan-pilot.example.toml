@@ -7,9 +7,24 @@ source_repos = [
 repo_dir = "."
 workspace_root = ".."
 prompt = "prompt.md"
+# Implementer prompt (default prompt.md). The Runner also runs an
+# independent review session on the opened PR, then merges a clean PR
+# via `gh pr merge --match-head-commit`; the fixer reuses the
+# implementer prompt (its resume section is injected when a PR already
+# exists). The review prompt defaults to prompt_review.md in this
+# directory.
+prompt_review = "prompt_review.md"
 # Delivery base branch: every task worktree is created from the latest
 # origin/<base_branch> (fetched and frozen at claim time). Default: "main".
 base_branch = "main"
+# Maximum concurrent Pilot tasks on this machine. Must be a positive integer;
+# missing means 1. The local AI/GPU can only serve one stable task, so keep
+# the default. A slot (flock on <repo_dir>/.muyan-pilot/slots/slot-N) is
+# taken before any claim and held for the whole delivery lifecycle
+# (implement -> review -> fix -> merge); the kernel releases it when the
+# Runner exits, however it exits. A Runner that cannot take a slot logs
+# capacity_full and exits without claiming an Issue.
+max_concurrency = 1
 # Optional Pi skills. Paths may be absolute, use ~, or be relative to this file.
 skills = []
 

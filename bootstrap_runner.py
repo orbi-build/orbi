@@ -3,7 +3,22 @@
 
 This is intentionally small. It claims one ready GitHub Issue, gives it to
 Pi in an isolated worktree, and accepts success only when one open PR exists.
-Any command failure is logged and raised. There is no fallback or recovery.
+After the implementer opens the PR, the Runner closes the loop itself: it
+freezes the exact PR base/head SHA, runs an independent review session, loops
+a fixer session on the same feature branch/worktree while Blocker/Major
+findings exist, re-checks the merge gate against the latest remote base, and
+merges via `gh pr merge --match-head-commit`. Pi never pushes the protected
+branch; the Runner is the only merge actor. Any command failure is logged and
+raised. There is no fallback, queue, daemon, or multi-agent framework.
+
+Throughout the whole lifecycle the Runner publishes live progress
+automatically (Issue #18): one per-run GitHub progress comment carrying a
+hidden run marker is PATCHed in place on every activity change and at most
+every 30 seconds while any Pi session (implementer, reviewer or fixer)
+runs, and short milestone comments (started, plan ready, tests
+passed/failed, review findings, fix pushed, PR opened, merged, blocked)
+notify GitHub Mobile. No human command, poll or status check is part of
+the normal workflow.
 """
 from __future__ import annotations
 
@@ -11,17 +26,23 @@ import argparse
 import json
 import logging
 import os
+import re
 import select
 import subprocess
 import time
 import tomllib
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
+from pilot_slots import acquire_slot, slot_dir_for
 from pi_activity import (
     SessionWatcher,
     activity_snapshot,
-    format_activity_scene,
+    format_duration,
+    format_end_scene,
+    format_run_scene,
+    quote_value,
     sanitize,
 )
 from progress import ProgressPublisher, format_elapsed, progress_body
@@ -29,15 +50,91 @@ from progress import ProgressPublisher, format_elapsed, progress_body
 
 LOGGER = logging.getLogger("muyan_pilot.bootstrap")
 
-# Live activity polling while Pi runs (Issue #24). The journal gets one
-# activity line per poll with new events, and an idle warning when the
-# session stays silent for this long.
+# Machine-readable verdict line the reviewer session must end with, and the
+# bounded size of the review/fix loop (see review-fix-loop skill: max 5 rounds).
+VERDICT_MARKER = "REVIEW_VERDICT"
+MAX_REVIEW_ROUNDS = 5
+
+# Live activity polling while Pi runs (Issue #24): every poll the journal
+# gets either an `activity` line (something changed) or a `heartbeat` line
+# (nothing changed; the idle time is carried on the line itself).
 PI_POLL_INTERVAL = 15.0
-PI_IDLE_WARN_SECONDS = 300.0
-# Automatic observability (Issue #18): the journal gets a heartbeat at most
-# every 30 seconds and the GitHub progress comment is PATCHed on change or
-# at the same cadence. No human has to run a status command.
+# Automatic observability (Issue #18): the GitHub progress comment is
+# PATCHed on every activity change and at most every 30 seconds while a
+# Pi session runs, so a mobile user sees live progress without any
+# command. The journal cadence is the poll interval above.
 PI_HEARTBEAT_SECONDS = 30.0
+
+# The bootstrap runner streams every Pi session of a run through the same
+# live activity pipeline (Issue #24/#40); implement/review/fix share the
+# same line format and carry their role (Issue #41: one run_id end to
+# end, the roles are steps of the same run).
+ROLE_IMPLEMENT = "implement"
+ROLE_REVIEW = "review"
+ROLE_FIX = "fix"
+
+# Run correlation (Issue #41): one task attempt generates one run_id and
+# every journal line of the attempt starts with `[run_id]`, so a single
+# grep reconstructs the whole timeline. The filter rewrites the message in
+# place, so every handler (journal, caplog) sees the same prefixed text.
+RUN_ID_PATTERN = re.compile(r"^[0-9a-f]{8}$")
+_CURRENT_RUN_ID: str | None = None
+
+# GitHub labels are the only state store (Issue #45). After a PR is
+# opened the Issue is in a recoverable review/fix state: `ai-pr-opened`
+# means awaiting review, and only the explicit `ai-fix-needed` state
+# (a review finding or a base conflict) is scanned for Fixer work. The
+# next tick resumes that same run on the same branch, worktree and PR
+# instead of claiming a new Issue. `ai-merged` is the success terminal
+# state the Runner sets after it merges the PR itself (Issue #34).
+IN_PROGRESS_LABEL = "ai-in-progress"
+PR_OPENED_LABEL = "ai-pr-opened"
+FIX_NEEDED_LABEL = "ai-fix-needed"
+MERGED_LABEL = "ai-merged"
+BLOCKED_LABEL = "ai-blocked"
+
+# Only comments posted by a repo maintainer are trusted to carry the
+# recovery scene: a public comment (authorAssociation=NONE) must never
+# steer the runner into an arbitrary local worktree, branch or PR
+# (Issue #45 review, BLOCKER). A missing association is never trusted.
+TRUSTED_COMMENT_ASSOCIATIONS = frozenset({
+    "OWNER", "MAINTAINER", "MEMBER", "COLLABORATOR",
+})
+
+
+class RunIdFilter(logging.Filter):
+    """Prefix every log message with the current `[run_id]`, if bound."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if _CURRENT_RUN_ID is not None:
+            record.msg = f"[{_CURRENT_RUN_ID}] {record.msg}"
+        return True
+
+
+LOGGER.addFilter(RunIdFilter())
+
+
+def validate_run_id(run_id: object) -> str:
+    """Fail fast unless `run_id` is the 8-hex id of one task attempt."""
+    if not isinstance(run_id, str) or not RUN_ID_PATTERN.fullmatch(run_id):
+        raise ValueError(f"invalid run id: {run_id!r}")
+    return run_id
+
+
+def set_run_id(run_id: str) -> None:
+    """Bind one task attempt: every later journal line carries `[run_id]`."""
+    global _CURRENT_RUN_ID
+    _CURRENT_RUN_ID = validate_run_id(run_id)
+
+
+def current_run_id() -> str | None:
+    """Return the run id bound to this tick, or None before the claim."""
+    return _CURRENT_RUN_ID
+
+
+def run_marker(run_id: str) -> str:
+    """Return the stable machine-readable run marker for GitHub text."""
+    return f"<!-- muyan-pilot:run={validate_run_id(run_id)} -->"
 
 
 def _config_path(value: str, base: Path) -> Path:
@@ -57,16 +154,32 @@ def load_config(path: Path) -> dict:
     base_branch = data.get("base_branch", "main")
     if not isinstance(base_branch, str) or not base_branch:
         raise ValueError("base_branch must be a non-empty string")
+    # Concurrency cap (Issue #39): the local machine can only serve a
+    # limited number of concurrent tasks, so the default is 1. Any other
+    # value must be a positive integer; fail fast on anything else.
+    max_concurrency = data.get("max_concurrency", 1)
+    if (
+        isinstance(max_concurrency, bool)
+        or not isinstance(max_concurrency, int)
+        or max_concurrency < 1
+    ):
+        raise ValueError("max_concurrency must be a positive integer")
+    repo_dir = _config_path(data.get("repo_dir", "."), base)
     return {
         "source_repos": source_repos,
-        "repo_dir": _config_path(data.get("repo_dir", "."), base),
+        "repo_dir": repo_dir,
         "workspace_root": _config_path(data.get("workspace_root", ".."), base),
         "prompt": _config_path(data.get("prompt", "prompt.md"), base),
+        "prompt_review": _config_path(
+            data.get("prompt_review", "prompt_review.md"), base,
+        ),
         "skills": [_config_path(item, base) for item in data.get("skills", [])],
         "context_files": [
             _config_path(item, base) for item in data.get("context_files", [])
         ],
         "base_branch": base_branch,
+        "max_concurrency": max_concurrency,
+        "slot_dir": slot_dir_for(repo_dir),
     }
 
 
@@ -80,7 +193,10 @@ def render_prompt(template: str, values: dict[str, str]) -> str:
 def validate_config(config: dict) -> None:
     if not config["repo_dir"].is_dir():
         raise FileNotFoundError(config["repo_dir"])
-    for path in [config["prompt"], *config["skills"], *config["context_files"]]:
+    for path in [
+        config["prompt"], config["prompt_review"],
+        *config["skills"], *config["context_files"],
+    ]:
         if not path.is_file():
             raise FileNotFoundError(path)
 
@@ -142,10 +258,15 @@ def parse_issue_list(raw: str) -> dict | None:
 
 
 def pick_issue(repo: str) -> dict | None:
+    # A merged delivery keeps `ai-ready` + `ai-merged` on the (still
+    # open) Issue; `ai-merged` is the success terminal state, so it is
+    # excluded from the ready scan like every other delivery state.
     raw = run_command([
         "gh", "issue", "list", "--repo", repo, "--state", "open",
         "--search",
-        "label:ai-ready -label:ai-in-progress -label:ai-pr-opened -label:ai-blocked",
+        "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
+        f"-label:{FIX_NEEDED_LABEL} -label:{MERGED_LABEL} "
+        f"-label:{BLOCKED_LABEL}",
         "--json", "number,title,body", "--limit", "1",
     ])
     return parse_issue_list(raw)
@@ -175,9 +296,57 @@ def comment_issue(number: int, *, repo: str, body: str) -> None:
                  "--body", body])
 
 
+def issue_comments(number: int, *, repo: str) -> list[dict]:
+    """Return the Issue's comment history (oldest first) from GitHub.
+
+    ``gh issue view --json comments`` returns a top-level object with a
+    ``comments`` array; each comment carries the author and the
+    ``authorAssociation`` of the viewer, which is how the runner tells
+    its own trusted comments apart from public ones (Issue #45).
+    """
+    raw = run_command([
+        "gh", "issue", "view", str(number), "--repo", repo,
+        "--json", "comments",
+    ])
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("issue view must be a JSON object")
+    comments = data.get("comments")
+    if not isinstance(comments, list):
+        raise ValueError("issue comments must be a JSON array")
+    return comments
+
+
+def issue_body(number: int, *, repo: str) -> str:
+    """Return the Issue body; the fixer works from the original task."""
+    raw = run_command([
+        "gh", "issue", "view", str(number), "--repo", repo,
+        "--json", "body",
+    ])
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("issue view must be a JSON object")
+    body = data.get("body")
+    return body if isinstance(body, str) else ""
+
+
 def new_run_id() -> str:
     """Return a unique short run identifier for one task attempt."""
     return uuid.uuid4().hex[:8]
+
+
+def issue_context(source_repo: str, number: int) -> str:
+    """Issue reference used on every journal line: `owner/repo#number`."""
+    return f"{source_repo}#{number}"
+
+
+def log_format() -> str:
+    """Journal log format without a Python timestamp (Issue #40).
+
+    systemd journal already provides time, host and process on every
+    line; printing `%(asctime)s` again only duplicates information.
+    """
+    return "%(levelname)s %(message)s"
 
 
 def freeze_base(repo_dir: Path, base_branch: str) -> str:
@@ -194,6 +363,240 @@ def task_branch(source_repo: str, number: int, run_id: str) -> str:
     )
 
 
+def started_pi_comment_body(run_id: str, run_info: str, branch: str,
+                            worktree: Path) -> str:
+    """The start comment doubles as the recoverable run scene (Issue #45)."""
+    return (
+        f"{run_marker(run_id)}\n"
+        f"Muyan Pilot started Pi: {run_info} branch={branch} "
+        f"worktree={worktree}"
+    )
+
+
+def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str) -> str:
+    """The PR-opened comment records the recoverable run scene.
+
+    It is the single source the next tick parses to resume this run on
+    the same branch, worktree and PR (Issue #45). The runner is the only
+    writer of this comment, so the scene carries only what the runner
+    cannot derive itself: run_id, base and PR URL. Branch and worktree
+    are derived from the configured repo_dir, source_repo, Issue number
+    and run_id — a comment must never be able to name a local path.
+    """
+    return (
+        f"{run_marker(run_id)}\n"
+        f"Muyan Pilot opened PR: {pr_url} ({run_info})"
+    )
+
+
+OPENED_PR_PREFIX = "Muyan Pilot opened PR: "
+
+
+def parse_pr_comment(body: str) -> dict | None:
+    """Parse one `Muyan Pilot opened PR:` comment into a resume scene.
+
+    Returns None when the body is not an opened-PR comment. Fails fast
+    when the comment is malformed: resuming must recover the exact run
+    (run id, base, PR URL), never a guess (Issue #45). Branch and
+    worktree are not parsed: the runner derives them from its own
+    config, the Issue number and the run id, so a comment can never
+    name an arbitrary local path.
+    """
+    if not isinstance(body, str) or OPENED_PR_PREFIX not in body:
+        return None
+    head = body.split(OPENED_PR_PREFIX, 1)[1]
+    pr_url, _, fields_part = head.partition(" (")
+    fields: dict[str, str] = {}
+    for part in fields_part.rstrip(")").split():
+        key, _, value = part.partition("=")
+        if key:
+            fields[key] = value
+    scene = {
+        "pr_url": pr_url.strip(),
+        "base_branch": fields.get("base_branch", ""),
+        "base_sha": fields.get("base_sha", ""),
+        "run_id": fields.get("run_id", ""),
+    }
+    for key, value in scene.items():
+        if not value:
+            raise ValueError(f"opened PR comment is missing {key}")
+    scene["run_id"] = validate_run_id(scene["run_id"])
+    return scene
+
+
+def _comment_is_trusted(comment: object) -> bool:
+    """True only when the comment carries a trusted maintainer association."""
+    if not isinstance(comment, dict):
+        return False
+    return comment.get("authorAssociation") in TRUSTED_COMMENT_ASSOCIATIONS
+
+
+def resume_scene(comments: list[dict]) -> dict:
+    """Return the scene of the latest trusted opened-PR comment of one Issue.
+
+    Only comments posted by a trusted maintainer (OWNER, MAINTAINER,
+    MEMBER or COLLABORATOR) are considered: a public comment can never
+    become the recovery scene (Issue #45 review, BLOCKER). Fails fast
+    when no trusted comment carries the scene: such an Issue cannot be
+    resumed and must not be guessed at.
+    """
+    for comment in reversed(comments):
+        if not _comment_is_trusted(comment):
+            continue
+        scene = parse_pr_comment(comment.get("body"))
+        if scene is not None:
+            return scene
+    raise ValueError(
+        "no 'Muyan Pilot opened PR' comment from a trusted author; the "
+        "Issue cannot be resumed"
+    )
+
+
+def pick_resumable_delivery(repo: str) -> tuple[dict, dict] | None:
+    """Return the newest `ai-fix-needed` delivery and its resume scene.
+
+    Only the explicit fix-needed state is scanned (Issue #45): a review
+    finding or a base conflict moves the Issue from `ai-pr-opened`
+    (awaiting review) to `ai-fix-needed`, and the next tick resumes that
+    same run on the same branch, worktree and PR instead of claiming a
+    new Issue. A clean PR that is simply awaiting review is never sent
+    to the Fixer. Issues already `ai-blocked` are excluded, as are
+    closed Issues. A scene that cannot be recovered is an unresolvable
+    state: the Issue is marked `ai-blocked` with the concrete reason and
+    the error re-raised, so the tick stops instead of silently skipping
+    the delivery while a fresh task starts ahead of it.
+    """
+    raw = run_command([
+        "gh", "issue", "list", "--repo", repo, "--state", "open",
+        "--search",
+        f"label:{FIX_NEEDED_LABEL} -label:{BLOCKED_LABEL}",
+        "--json", "number,title,state,url", "--limit", "1",
+    ])
+    issues = parse_issue_array(raw)
+    if not issues:
+        return None
+    issue = issues[0]
+    if issue.get("state") != "OPEN":
+        return None
+    comments = issue_comments(int(issue["number"]), repo=repo)
+    try:
+        scene = resume_scene(comments)
+    except ValueError as exc:
+        block_scene_failure(issue, exc, repo, comments)
+    # The fixer works from the original task, so the resumable issue
+    # carries its body like a freshly claimed one.
+    issue["body"] = issue_body(int(issue["number"]), repo=repo)
+    return issue, scene
+
+
+def block_scene_failure(issue: dict, error: ValueError, repo: str,
+                        comments: list[dict]) -> None:
+    """Mark an `ai-fix-needed` Issue `ai-blocked` when its scene is
+    malformed, then re-raise so the tick stops (Issue #45).
+
+    The failure comment carries the run marker recovered from a trusted
+    comment when it is present — the same run id, never a new or
+    guessed one. The PR, branch and worktree stay intact.
+    """
+    number = int(issue["number"])
+    LOGGER.error(
+        "issue=%s resume scene is malformed: %s", number, error,
+    )
+    marker = ""
+    for comment in reversed(comments):
+        if not _comment_is_trusted(comment):
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        match = re.search(r"<!-- muyan-pilot:run=([0-9a-f]{8}) -->", body)
+        if match:
+            marker = run_marker(match.group(1))
+            break
+    try:
+        edit_issue(
+            number, repo=repo, add=BLOCKED_LABEL, remove=FIX_NEEDED_LABEL,
+        )
+        comment_issue(
+            number, repo=repo,
+            body=(
+                f"{marker}\n" if marker else ""
+            ) + f"Muyan Pilot failed: {error}",
+        )
+    except Exception:
+        LOGGER.exception("issue=%s failure reporting failed", number)
+    raise error
+
+
+def pick_next_delivery(repos: list[str]) -> tuple[str, dict, dict | None] | None:
+    """Scan sources in order: resumable PRs first, then ready Issues.
+
+    Returns `(source_repo, issue, scene)` where `scene` is None for a
+    fresh claim. Resuming an open PR keeps the single concurrency slot
+    occupied by the same run (implement → review → fix → merge), so a
+    second Pi is never started for a run that already has a PR.
+    """
+    for repo in repos:
+        selected = pick_resumable_delivery(repo)
+        if selected is not None:
+            issue, scene = selected
+            return repo, issue, scene
+    for repo in repos:
+        issue = pick_issue(repo)
+        if issue is not None:
+            return repo, issue, None
+    return None
+
+
+def merge_in_progress(worktree: Path) -> bool:
+    """True when the worktree is mid-merge (conflicts staged for a commit)."""
+    try:
+        run_command(
+            ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+            cwd=worktree,
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def merge_latest_base(worktree: Path, base_branch: str) -> bool:
+    """Fetch `origin/<base>` and merge it when the delivery is behind.
+
+    Returns True when a merge was started. A conflicted merge is left
+    staged for the fixer (Pi) to resolve: the runner never auto-resolves,
+    force-pushes, or pushes the protected branch (Issue #45). A merge
+    failure that is not a conflict fails fast.
+    """
+    run_command(["git", "fetch", "origin", base_branch], cwd=worktree)
+    try:
+        run_command(
+            ["git", "merge-base", "--is-ancestor",
+             f"origin/{base_branch}", "HEAD"],
+            cwd=worktree,
+        )
+    except subprocess.CalledProcessError:
+        LOGGER.info(
+            "base_advanced base_branch=%s worktree=%s; merging into the "
+            "task branch",
+            base_branch, worktree,
+        )
+        try:
+            run_command(
+                ["git", "merge", f"origin/{base_branch}"], cwd=worktree,
+            )
+        except subprocess.CalledProcessError:
+            if not merge_in_progress(worktree):
+                raise
+            LOGGER.warning(
+                "base_merge_conflict base_branch=%s worktree=%s; the "
+                "conflict is left staged for the fixer",
+                base_branch, worktree,
+            )
+        return True
+    return False
+
+
 def worktree_path(repo_dir: Path, source_repo: str, number: int,
                   run_id: str) -> Path:
     """Task worktrees live in the configured repo's .worktrees/ directory."""
@@ -206,55 +609,15 @@ def worktree_path(repo_dir: Path, source_repo: str, number: int,
 
 def create_worktree(repo_dir: Path, source_repo: str, number: int,
                     run_id: str, base_sha: str) -> Path:
-    """Create the task worktree from the frozen base SHA, never HEAD.
-
-    An existing path is reused: only a resumed run (same run id after a
-    process restart) reaches that state, and its worktree is the scene
-    the run continues in (Issue #18).
-    """
+    """Create the task worktree from the frozen base SHA, never HEAD."""
     path = worktree_path(repo_dir, source_repo, number, run_id)
     if path.exists():
-        return path
+        raise RuntimeError(f"worktree path already exists: {path}")
     branch = task_branch(source_repo, number, run_id)
     run_command([
         "git", "worktree", "add", "-b", branch, str(path), base_sha,
     ], cwd=repo_dir)
     return path
-
-
-def latest_run_id(repo_dir: Path, source_repo: str, number: int) -> str | None:
-    """Return the run id of the newest task worktree for the issue.
-
-    The worktree directory name carries the run id — the only state
-    needed to resume the same GitHub progress comment (hidden run
-    marker) instead of creating a second one.
-    """
-    slug = source_repo.replace("/", "-")
-    pattern = f".worktrees/muyan-pilot-{slug}-issue-{number}-*"
-    candidates = [
-        path for path in repo_dir.glob(pattern) if path.is_dir()
-    ]
-    if not candidates:
-        return None
-    newest = max(candidates, key=lambda path: path.stat().st_mtime)
-    return newest.name.rsplit("-", 1)[-1]
-
-
-def has_in_progress_label(number: int, repo: str) -> bool:
-    """True when the Issue still carries `ai-in-progress`.
-
-    The label is added at claim time and removed only by the success or
-    failure path, so it is the marker of a run that is (or was, when the
-    runner died) in flight — as opposed to the preserved worktrees of
-    completed runs.
-    """
-    raw = run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", "all",
-        "--search", "label:ai-in-progress",
-        "--json", "number", "--limit", "50",
-    ])
-    issues = parse_issue_array(raw)
-    return any(int(issue.get("number", -1)) == number for issue in issues)
 
 
 def _drain_stream(stream, chunks: list[bytes]) -> None:
@@ -270,46 +633,35 @@ def _decode_chunks(chunks: list[bytes]) -> str:
     return b"".join(chunks).decode("utf-8", "replace")
 
 
-def format_run_context(issue: int | None, run_id: str | None,
-                       role: str, source_repo: str | None,
-                       branch: str | None, worktree: Path) -> str:
-    """Format the run context carried by every journal line (Issue #18)."""
-    return (
-        f"issue={issue} run_id={run_id or '-'} role={role} "
-        f"source_repo={source_repo or '-'} branch={branch or '-'} "
-        f"worktree={worktree}"
+def _log_activity(activity: dict, *, run_id: str, issue_ref: str,
+                  role: str, state: str | None = None) -> None:
+    """Log one short activity line with the changed fields only."""
+    LOGGER.info(
+        "activity run=%s issue=%s role=%s phase=%s action=%s result=%s "
+        "state=%s idle=%s",
+        run_id, issue_ref, role, activity["phase"],
+        quote_value(activity["action"] or "-"),
+        activity["result"] or "-",
+        state or "-",
+        format_duration(activity["stale_seconds"]),
     )
 
 
-def format_elapsed_seconds(seconds: float) -> str:
-    """Format an elapsed duration as whole seconds (`45s`)."""
-    return f"{max(0, int(seconds))}s"
+def _log_heartbeat(activity: dict, *, run_id: str, issue_ref: str,
+                   role: str, elapsed: float,
+                   state: str | None = None) -> None:
+    """Log one heartbeat line when nothing changed since the last poll.
 
-
-def _log_pi_activity(activity: dict, context: str, *,
-                     idle_warn_seconds: float,
-                     idle_warned: bool) -> bool:
-    """Log activity events and idle warnings; track the idle state.
-
-    A new session event logs a `pi_event` line immediately (and a
-    `pi_resumed` line when it follows an idle warning). When no event
-    arrives for `idle_warn_seconds`, a `pi_idle` warning with the full
-    scene is logged once. Returns the updated idle-warning state.
+    `state` carries the model_wait flag while the model is expected to
+    reply next, so a slow active model is not reported as idle (Issue
+    #40).
     """
-    scene = format_activity_scene(activity)
-    if activity["changed"]:
-        if idle_warned:
-            LOGGER.info("pi_resumed %s %s", context, scene)
-        LOGGER.info("pi_event %s %s", context, scene)
-        return False
-    if activity["stale_seconds"] >= idle_warn_seconds:
-        if not idle_warned:
-            LOGGER.warning(
-                "pi_idle %s %s stale_seconds=%.0f",
-                context, scene, activity["stale_seconds"],
-            )
-            return True
-    return idle_warned
+    LOGGER.info(
+        "heartbeat run=%s issue=%s role=%s phase=%s state=%s elapsed=%s "
+        "idle=%s",
+        run_id, issue_ref, role, activity["phase"], state or "-",
+        format_duration(elapsed), format_duration(activity["stale_seconds"]),
+    )
 
 
 def stream_pi(
@@ -318,54 +670,78 @@ def stream_pi(
     cwd: Path,
     timeout: int | None = None,
     poll_interval: float = PI_POLL_INTERVAL,
-    idle_warn_seconds: float = PI_IDLE_WARN_SECONDS,
-    heartbeat_seconds: float = PI_HEARTBEAT_SECONDS,
+    run_id: str,
+    issue: int,
+    source_repo: str,
+    branch: str,
+    role: str = ROLE_IMPLEMENT,
     log_command: list[str] | None = None,
-    issue: int | None = None,
-    run_id: str | None = None,
-    role: str = "implement",
-    source_repo: str | None = None,
-    branch: str | None = None,
+    progress: Callable[[dict], None] | None = None,
 ) -> str:
-    """Run Pi and stream its live session activity into the journal.
+    """Run Pi and stream concise live activity into the journal (Issue #40).
 
-    Every poll, the newest Pi session JSONL activity is checked against the
-    run context (issue, run id, role, source repo, branch, worktree):
+    The full invariant scene (branch, worktree, session file) is logged
+    once as `run_start`. While Pi runs, only short changed fields are
+    logged: `activity` when phase/action/result change, `heartbeat` at
+    the poll interval otherwise (the idle time rides on the line). A slow
+    active model is not reported as idle: when the newest session event
+    is a tool result the state is `model_wait` (one transition line on
+    entry, one `resumed` line when the next session event arrives, and
+    only configured-interval heartbeats while waiting — no warning
+    spam). On a non-zero exit or timeout a `run_failed` line carries the
+    full scene again as the debug entry. The caller logs `run_end` once
+    the PR and commit are known. The session JSONL stays in the worktree
+    as the complete local record; the full prompt and Issue body are
+    never logged.
 
-    - a new session event logs a `pi_event` line immediately (phase, last
-      activity time, sanitized last action, session id);
-    - a `pi_heartbeat` line is logged with the same fields plus elapsed
-      time so that the gap between consecutive heartbeat/event lines never
-      exceeds `heartbeat_seconds` (the default 30 s), even while the
-      session is quiet, so an open `journalctl -f` always shows a live
-      line;
-    - when no new event arrives for `idle_warn_seconds`, a `pi_idle`
-      warning with the full scene is logged once, and the first new event
-      after it logs a `pi_resumed` line.
-
-    On a non-zero exit the scene is logged before the error is raised. The
-    session JSONL stays in the worktree as the complete local record; the
-    full prompt and Issue body are never logged.
+    `progress` (Issue #18) is invoked on EVERY poll — an activity change
+    or a heartbeat — with the current activity state, while the Pi
+    process is still running: the caller renders the live GitHub
+    progress comment and PATCHes the same run-marker comment in place,
+    so mobile users never see a static starting comment for the whole
+    run. A callback error is logged and never interrupts the task
+    (observability is best-effort, the delivery is not).
     """
     # The raw pi command embeds the full prompt and Issue body; only the
     # redacted form may ever reach the journal or an exception message.
     safe_command = log_command or ["<redacted>"]
     LOGGER.info("command=%s cwd=%s", " ".join(safe_command), cwd)
-    watcher = SessionWatcher(cwd / ".pi-session")
-    context = format_run_context(
-        issue, run_id, role, source_repo, branch, cwd,
+    issue_ref = issue_context(source_repo, issue)
+    session_dir = cwd / ".pi-session"
+    # Session files that already exist before this Pi process starts are
+    # never followed: a resumed run (same worktree) creates a NEW JSONL,
+    # and the journal must report the session of the current invocation,
+    # not the previous run's (Issue #45 round-5 review, Major 3).
+    known_files = (
+        {path for path in session_dir.glob("*.jsonl") if path.is_file()}
+        if session_dir.is_dir() else set()
     )
+    watcher = SessionWatcher(session_dir, known_files=known_files)
+    start = time.monotonic()
+    # The initial state is what run_start already reported; activity lines
+    # are only emitted when the visible fields actually change.
+    initial = watcher.poll()
+    last_visible = (initial["phase"], initial["action"], initial["result"])
     process = subprocess.Popen(
         command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    LOGGER.info(
+        "run_start %s",
+        format_run_scene(
+            initial, run_id=run_id, issue=issue_ref,
+            role=role, branch=branch, worktree=str(cwd),
+        ),
     )
     stdout_chunks: list[bytes] = []
     stderr_chunks: list[bytes] = []
     deadline = None if timeout is None else time.monotonic() + timeout
-    start_time = time.monotonic()
     activity = watcher.poll()
-    idle_warned = False
-    last_heartbeat = 0.0
     timed_out = False
+    # model_wait transitions (Issue #40): one line when the state is
+    # entered and one when it is left; unchanged polls are heartbeats
+    # that carry the state, so a slow model never looks idle and no
+    # warning is ever escalated from a slow response.
+    last_model_wait = activity["model_wait"]
     try:
         while True:
             if deadline is not None and time.monotonic() >= deadline:
@@ -383,23 +759,44 @@ def stream_pi(
                     else:
                         stderr_chunks.append(data)
             activity = watcher.poll()
-            idle_warned = _log_pi_activity(
-                activity, context,
-                idle_warn_seconds=idle_warn_seconds,
-                idle_warned=idle_warned,
+            if progress is not None:
+                try:
+                    progress(activity)
+                except Exception:
+                    LOGGER.exception(
+                        "progress_publish_failed run=%s issue=%s role=%s",
+                        run_id, issue_ref, role,
+                    )
+            visible = (
+                activity["phase"], activity["action"], activity["result"],
             )
-            elapsed = time.monotonic() - start_time
-            # The poll runs every `poll_interval`, so firing at
-            # `heartbeat_seconds - poll_interval` guarantees the gap
-            # between consecutive heartbeat/event lines stays within
-            # `heartbeat_seconds`.
-            if elapsed - last_heartbeat >= heartbeat_seconds - poll_interval:
-                last_heartbeat = elapsed
-                LOGGER.info(
-                    "pi_heartbeat %s %s elapsed=%s",
-                    context, format_activity_scene(activity),
-                    format_elapsed_seconds(elapsed),
+            if visible != last_visible:
+                # Only changed fields are repeated; an unchanged poll is a
+                # heartbeat (Issue #40).
+                _log_activity(
+                    activity, run_id=run_id, issue_ref=issue_ref,
+                    role=role,
+                    state="model_wait" if activity["model_wait"] else None,
                 )
+                last_visible = visible
+            else:
+                _log_heartbeat(
+                    activity, run_id=run_id, issue_ref=issue_ref,
+                    role=role, elapsed=time.monotonic() - start,
+                    state="model_wait" if activity["model_wait"] else None,
+                )
+            if activity["model_wait"] != last_model_wait:
+                # One transition line per state change: entering model_wait
+                # (the model is expected to reply next) or leaving it
+                # (the next session event arrived: resumed).
+                LOGGER.info(
+                    "%s run=%s issue=%s role=%s phase=%s state=%s",
+                    "model_wait" if activity["model_wait"] else "resumed",
+                    run_id, issue_ref, role,
+                    activity["phase"],
+                    "model_wait" if activity["model_wait"] else "resumed",
+                )
+                last_model_wait = activity["model_wait"]
             if process.poll() is not None:
                 break
     finally:
@@ -408,17 +805,27 @@ def stream_pi(
     stdout = _decode_chunks(stdout_chunks)
     stderr = _decode_chunks(stderr_chunks)
     if timed_out:
+        reason = f"timeout_{format_duration(timeout)}"
         LOGGER.error(
-            "pi_timeout timeout=%s %s %s",
-            timeout, context, format_activity_scene(activity),
+            "run_failed %s reason=%s",
+            format_run_scene(
+                activity, run_id=run_id, issue=issue_ref,
+                role=role, branch=branch, worktree=str(cwd),
+            ),
+            reason,
         )
         raise subprocess.TimeoutExpired(
             safe_command, timeout, output=stdout, stderr=stderr,
         )
     if process.returncode != 0:
+        reason = f"pi_exit_{process.returncode}"
         LOGGER.error(
-            "pi_failed returncode=%s %s %s",
-            process.returncode, context, format_activity_scene(activity),
+            "run_failed %s reason=%s",
+            format_run_scene(
+                activity, run_id=run_id, issue=issue_ref,
+                role=role, branch=branch, worktree=str(cwd),
+            ),
+            reason,
         )
         raise subprocess.CalledProcessError(
             process.returncode, safe_command, output=stdout, stderr=stderr,
@@ -430,9 +837,9 @@ def stream_pi(
 
 
 def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
-           timeout: int | None = None,
-           branch: str | None = None,
-           role: str = "implement") -> str:
+           *, timeout: int | None = None, branch: str | None = None,
+           pr_url: str | None = None,
+           progress: Callable[[dict], None] | None = None) -> str:
     system_prompt = render_prompt(
         config["prompt"].read_text(encoding="utf-8"),
         {
@@ -453,17 +860,25 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         f"Issue #{issue['number']}: {issue['title']}\n\n"
         f"Issue body:\n{issue.get('body', '')}\n\n"
         f"Worktree: {worktree}\n"
-        "Complete the delivery process in the system prompt."
     )
+    if pr_url is not None:
+        context += (
+            f"Existing PR: {pr_url}\n"
+            "This run already opened that PR. Keep the same PR number, the "
+            "same run id, branch and worktree: never close the PR, never "
+            "create a new PR, never re-claim the Issue. Fix the review "
+            "findings and/or resolve the merge conflicts left in the "
+            "worktree, rerun the full test suite with coverage and the "
+            "complete review, then commit and push ONLY the task branch "
+            "so the same PR updates. No force push, no push of the "
+            "protected branch.\n"
+        )
+    context += "Complete the delivery process in the system prompt."
     skill_args = [item for skill in config["skills"] for item in ("--skill", str(skill))]
     command = [
         "pi", *skill_args, "--print", "--session-dir",
         str(worktree / ".pi-session"), "--system-prompt", system_prompt, context,
     ]
-    LOGGER.info(
-        "pi_session=%s issue=%s source_repo=%s",
-        worktree / ".pi-session", issue["number"], source_repo,
-    )
     return stream_pi(
         command,
         cwd=worktree,
@@ -472,15 +887,30 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
             "pi", "--print", "--session-dir", str(worktree / ".pi-session"),
             "--system-prompt", "<redacted>", "<issue-context-redacted>",
         ],
-        issue=int(issue["number"]),
         run_id=config["run_id"],
-        role=role,
+        issue=int(issue["number"]),
         source_repo=source_repo,
         branch=branch,
+        progress=progress,
     )
 
 
-def verify_pr(worktree: Path, branch: str, base_branch: str) -> str:
+def verify_pr(worktree: Path, branch: str, base_branch: str,
+              run_id: str, *, pr_repo: str | None = None,
+              expected_url: str | None = None,
+              require_latest_base: bool = True) -> str:
+    """Verify that exactly one open PR of the task branch is the delivery.
+
+    Checks, in order: current branch, latest remote base ancestry (unless
+    `require_latest_base` is False — the resume pre-validation runs
+    before the base merge, when being behind is the expected state),
+    exactly one open PR for the head branch, PR base, PR head == local
+    HEAD, and the run marker in the PR body. When `pr_repo` is given
+    (resume path), the PR's head repo must be that repo; when
+    `expected_url` is given, the verified PR URL must exactly equal the
+    recovered original PR URL (Issue #45 review: the resume must keep
+    the same PR number).
+    """
     current_branch = run_command(
         ["git", "branch", "--show-current"], cwd=worktree,
     )
@@ -488,33 +918,38 @@ def verify_pr(worktree: Path, branch: str, base_branch: str) -> str:
         raise RuntimeError(
             f"Pi changed branch: expected={branch} actual={current_branch}"
         )
-    # Re-fetch before judging: the delivery must contain the latest remote
-    # base, otherwise it is behind and the PR is rejected (fail fast).
-    run_command(
-        ["git", "fetch", "origin", base_branch], cwd=worktree,
-    )
-    try:
+    if require_latest_base:
+        # Re-fetch before judging: the delivery must contain the latest
+        # remote base, otherwise it is behind and the PR is rejected
+        # (fail fast).
         run_command(
-            ["git", "merge-base", "--is-ancestor",
-             f"origin/{base_branch}", "HEAD"],
-            cwd=worktree,
+            ["git", "fetch", "origin", base_branch], cwd=worktree,
         )
-    except subprocess.CalledProcessError:
-        LOGGER.error(
-            "delivery_behind_base base_branch=%s branch=%s",
-            base_branch, branch,
-        )
-        raise RuntimeError(
-            f"delivery HEAD is behind latest remote base "
-            f"origin/{base_branch}; merge the latest base, rerun full tests "
-            "and review, then retry"
-        ) from None
+        try:
+            run_command(
+                ["git", "merge-base", "--is-ancestor",
+                 f"origin/{base_branch}", "HEAD"],
+                cwd=worktree,
+            )
+        except subprocess.CalledProcessError:
+            LOGGER.error(
+                "delivery_behind_base base_branch=%s branch=%s",
+                base_branch, branch,
+            )
+            raise RuntimeError(
+                f"delivery HEAD is behind latest remote base "
+                f"origin/{base_branch}; merge the latest base, rerun full "
+                "tests and review, then retry"
+            ) from None
     local_head = run_command(
         ["git", "rev-parse", "HEAD"], cwd=worktree,
     )
     raw = run_command([
         "gh", "pr", "list", "--state", "open", "--head", branch,
-        "--json", "url,baseRefName,headRefOid", "--limit", "2",
+        "--json",
+        "url,baseRefName,headRefName,headRefOid,"
+        "headRepository,headRepositoryOwner,body",
+        "--limit", "2",
     ], cwd=worktree)
     prs = json.loads(raw)
     if not isinstance(prs, list) or len(prs) != 1:
@@ -522,6 +957,17 @@ def verify_pr(worktree: Path, branch: str, base_branch: str) -> str:
     url = prs[0].get("url")
     if not url:
         raise RuntimeError("open PR has no URL")
+    if pr_repo is not None:
+        head_repo = _pr_head_repo(prs[0])
+        if head_repo != pr_repo:
+            LOGGER.error(
+                "pr_repo_mismatch expected=%s actual=%s branch=%s",
+                pr_repo, head_repo, branch,
+            )
+            raise RuntimeError(
+                f"PR head repo is {head_repo}, expected {pr_repo}; the "
+                "resume must keep the PR of the configured source repo"
+            )
     base_ref = prs[0].get("baseRefName")
     if base_ref != base_branch:
         LOGGER.error(
@@ -542,13 +988,503 @@ def verify_pr(worktree: Path, branch: str, base_branch: str) -> str:
             f"PR head {head_oid} is not local HEAD {local_head}; the "
             "verified commit was not pushed, push the reviewed commit and retry"
         )
+    marker = run_marker(run_id)
+    body = prs[0].get("body")
+    if not isinstance(body, str) or marker not in body:
+        LOGGER.error(
+            "pr_run_marker_missing expected=%s branch=%s", marker, branch,
+        )
+        raise RuntimeError(
+            f"PR body is missing the stable run marker {marker}; the PR "
+            "must carry the machine-readable run id of this attempt"
+        )
+    if expected_url is not None and url != expected_url:
+        LOGGER.error(
+            "pr_url_mismatch expected=%s actual=%s branch=%s",
+            expected_url, url, branch,
+        )
+        raise RuntimeError(
+            f"PR URL {url} is not the recovered original PR "
+            f"{expected_url}; the resume must keep the same PR number"
+        )
     return url
 
 
-def delivery_head_advanced(worktree: Path, base_sha: str) -> bool:
-    """True when the task branch has commits beyond the frozen base."""
-    head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
-    return head != base_sha
+def parse_review_verdict(text: str) -> dict:
+    """Extract the last REVIEW_VERDICT JSON line from a review session.
+
+    The reviewer must end with a machine-readable verdict so the Runner can
+    decide without parsing prose. Missing or malformed verdicts fail fast; a
+    review that cannot be read as a pass is never treated as a pass.
+    """
+    payload = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(VERDICT_MARKER):
+            payload = stripped[len(VERDICT_MARKER):].strip()
+    if payload is None:
+        raise ValueError("no REVIEW_VERDICT line in review output")
+    try:
+        verdict = json.loads(payload)
+    except json.JSONDecodeError:
+        raise ValueError("malformed REVIEW_VERDICT JSON") from None
+    if not isinstance(verdict, dict):
+        raise ValueError("malformed REVIEW_VERDICT JSON")
+    if verdict.get("verdict") not in ("pass", "findings"):
+        raise ValueError("verdict must be 'pass' or 'findings'")
+    for key in ("blockers", "majors", "minors"):
+        value = verdict.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"{key} must be a non-negative integer")
+    if not isinstance(verdict.get("findings", []), list):
+        raise ValueError("findings must be a list")
+    blockers = verdict["blockers"]
+    majors = verdict["majors"]
+    if verdict["verdict"] == "pass" and (blockers > 0 or majors > 0):
+        raise ValueError("pass verdict cannot have blockers or majors")
+    if verdict["verdict"] == "findings" and blockers == 0 and majors == 0:
+        raise ValueError("findings verdict requires blockers or majors")
+    return verdict
+
+
+def review_has_findings(verdict: dict) -> bool:
+    """True when a verdict still blocks the merge gate (Blocker or Major)."""
+    return verdict["blockers"] > 0 or verdict["majors"] > 0
+
+
+def freeze_pr(worktree: Path, branch: str, base_branch: str) -> dict:
+    """Freeze the exact base/head SHA of the one open PR for a task branch."""
+    raw = run_command([
+        "gh", "pr", "list", "--state", "open", "--head", branch,
+        "--json", "number,url,baseRefName,baseRefOid,headRefName,headRefOid",
+        "--limit", "2",
+    ], cwd=worktree)
+    prs = json.loads(raw)
+    if not isinstance(prs, list) or len(prs) != 1:
+        raise RuntimeError("expected exactly one open PR for the task branch")
+    pr = prs[0]
+    base_ref = pr.get("baseRefName")
+    if base_ref != base_branch:
+        LOGGER.error(
+            "pr_base_mismatch expected=%s actual=%s branch=%s",
+            base_branch, base_ref, branch,
+        )
+        raise RuntimeError(
+            f"PR base is {base_ref}, expected {base_branch}; the merge gate "
+            "only accepts the configured protected branch"
+        )
+    return {
+        "number": pr["number"],
+        "url": pr["url"],
+        "base_ref": base_ref,
+        "base_oid": pr["baseRefOid"],
+        "head_ref": pr["headRefName"],
+        "head_oid": pr["headRefOid"],
+    }
+
+
+def _agent_skill_args(config: dict) -> list[str]:
+    return [
+        item for skill in config["skills"]
+        for item in ("--skill", str(skill))
+    ]
+
+
+def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
+               issue: int, branch: str, round: int,
+               timeout: int | None = None,
+               progress: Callable[[dict], None] | None = None) -> str:
+    """Run one independent, read-only review session for a frozen PR.
+
+    The review streams live activity through the same pipeline as the
+    implementer and fixer (role=review; Issue #41: one run_id end to end,
+    the roles are steps of the same run).
+    """
+    system_prompt = render_prompt(
+        config["prompt_review"].read_text(encoding="utf-8"),
+        {
+            "SOURCE_REPO": source_repo,
+            "PR_NUMBER": str(pr["number"]),
+            "PR_URL": pr["url"],
+            "BASE_BRANCH": config["base_branch"],
+            "BASE_SHA": pr["base_oid"],
+            "HEAD_SHA": pr["head_oid"],
+            "HEAD_REF": pr["head_ref"],
+            "ROUND": str(round),
+        },
+    )
+    context = (
+        f"Independently review PR #{pr['number']} ({pr['url']}) of "
+        f"{source_repo} against base {config['base_branch']}@{pr['base_oid']} "
+        f"and head {pr['head_oid']} (round {round}). Follow code-review R1-R9 "
+        "and end with a single REVIEW_VERDICT line."
+    )
+    command = [
+        "pi", *_agent_skill_args(config), "--print", "--session-dir",
+        str(worktree / ".pi-session"), "--system-prompt", system_prompt,
+        context,
+    ]
+    return stream_pi(
+        command,
+        cwd=worktree,
+        timeout=timeout,
+        log_command=[
+            "pi", "--print", "--session-dir",
+            str(worktree / ".pi-session"),
+            "--system-prompt", "<redacted>", "<review-context-redacted>",
+        ],
+        run_id=config["run_id"],
+        issue=issue,
+        source_repo=source_repo,
+        branch=branch,
+        role=ROLE_REVIEW,
+        progress=progress,
+    )
+
+
+def merge_gate(worktree: Path, pr: dict, base_branch: str) -> dict:
+    """Merge the reviewed PR only if the gate still holds against latest base.
+
+    Re-fetch the latest remote base, require the PR head to contain it, the PR
+    to be mergeable, and the remote head to still be the reviewed head. Then
+    merge with `--match-head-commit` so only that exact head can land. No force
+    push, no direct push of the protected branch.
+    """
+    run_command(["git", "fetch", "origin", base_branch], cwd=worktree)
+    try:
+        run_command(
+            ["git", "merge-base", "--is-ancestor",
+             f"origin/{base_branch}", pr["head_oid"]],
+            cwd=worktree,
+        )
+    except subprocess.CalledProcessError:
+        LOGGER.error(
+            "merge_gate_behind_base base_branch=%s pr=%s head=%s",
+            base_branch, pr["number"], pr["head_oid"],
+        )
+        raise RuntimeError(
+            f"PR #{pr['number']} head {pr['head_oid']} is behind latest "
+            f"remote base origin/{base_branch}; absorb the latest base, rerun "
+            "tests and review, then retry"
+        ) from None
+    raw = run_command([
+        "gh", "pr", "view", str(pr["number"]),
+        "--json", "state,mergeable,headRefOid",
+    ], cwd=worktree)
+    state = json.loads(raw)
+    mergeable = state.get("mergeable")
+    if mergeable != "MERGEABLE":
+        LOGGER.error(
+            "merge_gate_not_mergeable pr=%s mergeable=%s",
+            pr["number"], mergeable,
+        )
+        raise RuntimeError(
+            f"PR #{pr['number']} is not mergeable (mergeable={mergeable}); "
+            "resolve conflicts and retry"
+        )
+    remote_head = state.get("headRefOid")
+    if remote_head != pr["head_oid"]:
+        LOGGER.error(
+            "merge_gate_head_moved pr=%s reviewed=%s remote=%s",
+            pr["number"], pr["head_oid"], remote_head,
+        )
+        raise RuntimeError(
+            f"PR #{pr['number']} head moved since review "
+            f"(reviewed={pr['head_oid']} remote={remote_head}); re-review "
+            "before merging"
+        )
+    run_command([
+        "gh", "pr", "merge", str(pr["number"]),
+        "--match-head-commit", pr["head_oid"], "--merge",
+    ], cwd=worktree)
+    LOGGER.info("merged pr=%s head=%s", pr["number"], pr["head_oid"])
+    return {**pr, "merged": True}
+
+
+def confirm_merged(worktree: Path, pr: dict, base_branch: str) -> dict:
+    """Confirm the PR is MERGED and origin/<base> contains the merge commit."""
+    raw = run_command([
+        "gh", "pr", "view", str(pr["number"]),
+        "--json", "state,mergedAt,mergeCommit",
+    ], cwd=worktree)
+    state = json.loads(raw)
+    if state.get("state") != "MERGED" or not state.get("mergedAt"):
+        LOGGER.error("confirm_merged_not_merged pr=%s state=%s",
+                     pr["number"], state.get("state"))
+        raise RuntimeError(
+            f"PR #{pr['number']} is not merged (state={state.get('state')})"
+        )
+    merge_commit = (state.get("mergeCommit") or {}).get("oid")
+    if not merge_commit:
+        raise RuntimeError(
+            f"PR #{pr['number']} is merged but has no merge commit oid"
+        )
+    run_command(["git", "fetch", "origin", base_branch], cwd=worktree)
+    try:
+        run_command(
+            ["git", "merge-base", "--is-ancestor", merge_commit,
+             f"origin/{base_branch}"],
+            cwd=worktree,
+        )
+    except subprocess.CalledProcessError:
+        LOGGER.error(
+            "confirm_merged_missing_on_base pr=%s merge_commit=%s",
+            pr["number"], merge_commit,
+        )
+        raise RuntimeError(
+            f"merge commit {merge_commit} is not on origin/{base_branch}; "
+            "the merge did not land on the protected branch"
+        ) from None
+    return {"state": "MERGED", "merge_commit": merge_commit}
+
+
+def review_rounds_so_far(comments: list[dict]) -> int:
+    """Count the review rounds already recorded on the Issue.
+
+    Each round with Blocker/Major findings posts one
+    `Muyan Pilot review round N for PR #...` comment, so the GitHub
+    record alone bounds the loop (GitHub Issues are the only state
+    store; a runner restart never loses the count). Only trusted
+    maintainer comments count: a public comment cannot exhaust the
+    round budget or skip review (same filter as resume_scene).
+    """
+    rounds = 0
+    for comment in comments:
+        if not _comment_is_trusted(comment):
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        for line in body.splitlines():
+            if line.startswith("Muyan Pilot review round "):
+                rounds += 1
+                break
+    return rounds
+
+
+def sync_base_checkout(repo_dir: Path, base_branch: str) -> None:
+    """Fast-forward the configured repo_dir base checkout to origin/<base>.
+
+    systemd executes the runner from this checkout: after a merge lands
+    on origin/<base>, the next tick must load the newly merged code, so
+    the deployment checkout is synced here and verified to equal the
+    remote base. A checkout that cannot fast-forward (local drift) fails
+    fast; the merge itself already landed on GitHub.
+    """
+    run_command(["git", "fetch", "origin", base_branch], cwd=repo_dir)
+    local_head = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
+    remote_head = run_command(
+        ["git", "rev-parse", f"origin/{base_branch}"], cwd=repo_dir,
+    )
+    if local_head == remote_head:
+        return
+    try:
+        run_command(
+            ["git", "merge", "--ff-only", f"origin/{base_branch}"],
+            cwd=repo_dir,
+        )
+    except subprocess.CalledProcessError:
+        LOGGER.error(
+            "base_checkout_not_fast_forwardable repo_dir=%s base=%s "
+            "local=%s remote=%s",
+            repo_dir, base_branch, local_head, remote_head,
+        )
+        raise RuntimeError(
+            f"deployment checkout {repo_dir} cannot fast-forward to "
+            f"origin/{base_branch} (local={local_head} "
+            f"remote={remote_head}); the merged code cannot be loaded "
+            "by the next tick"
+        ) from None
+    synced = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
+    if synced != remote_head:
+        raise RuntimeError(
+            f"deployment checkout {repo_dir} is at {synced} after the "
+            f"sync, expected origin/{base_branch} at {remote_head}"
+        )
+    LOGGER.info(
+        "base_checkout_synced repo_dir=%s base=%s head=%s",
+        repo_dir, base_branch, synced,
+    )
+
+
+def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
+                              config: dict, source_repo: str,
+                              number: int) -> bool:
+    """Run one independent review round; merge when the verdict is clean.
+
+    The delivery wait loop (which holds the slot) calls this while the
+    PR is open and the Issue awaits review (`ai-pr-opened`). It freezes
+    the PR, runs the independent review (streamed, role=review), and
+    then:
+
+    - clean verdict -> merge gate (latest-base ancestor, mergeable,
+      head match, `gh pr merge --match-head-commit`), confirm the merge
+      landed on origin/<base>, sync the deployment checkout, label the
+      Issue `ai-merged`; returns True;
+    - Blocker/Major findings -> comment them to Issue and PR and label
+      the Issue `ai-fix-needed`; the #45 fix loop repairs the same PR
+      and returns the Issue to `ai-pr-opened`, where the next wait
+      iteration re-reviews; returns False;
+    - a gate failure because the head is behind the latest base ->
+      label the Issue `ai-fix-needed` with the absorb-base finding
+      (the fixer merges the latest base); returns False;
+    - missing/malformed verdict or an exhausted round budget -> raise;
+      the caller marks the Issue `ai-blocked`.
+    """
+    marker = run_marker(config["run_id"])
+    comments = issue_comments(number, repo=source_repo)
+    rounds = review_rounds_so_far(comments)
+    if rounds >= MAX_REVIEW_ROUNDS:
+        LOGGER.error(
+            "review_rounds_exhausted issue=%s rounds=%s",
+            number, rounds,
+        )
+        raise RuntimeError(
+            f"review/fix loop exhausted after {MAX_REVIEW_ROUNDS} rounds "
+            "without a clean verdict; needs human review"
+        )
+    round = rounds + 1
+    pr = freeze_pr(worktree, branch, base_branch)
+    publisher = ProgressPublisher(
+        number, source_repo, config["run_id"], run_command=run_command,
+    )
+    started = time.monotonic()
+    publisher.ensure(_progress_body(_progress_state(
+        issue=number, run_id=config["run_id"], role=ROLE_REVIEW,
+        branch=branch, worktree=worktree, started=started,
+        pr_url=pr["url"], review_round=round,
+    )))
+    output = run_review(
+        worktree, pr, config, source_repo, number, branch, round,
+        progress=LiveProgressThrottle(
+            publisher, issue=number, run_id=config["run_id"],
+            role=ROLE_REVIEW, branch=branch, worktree=worktree,
+            started=started, pr_url=pr["url"], review_round=round,
+        ),
+    )
+    verdict = parse_review_verdict(output)
+    LOGGER.info(
+        "review pr=%s round=%s verdict=%s blockers=%s majors=%s",
+        pr["number"], round, verdict["verdict"], verdict["blockers"],
+        verdict["majors"],
+    )
+    if review_has_findings(verdict):
+        body = (
+            f"{marker}\n"
+            f"Muyan Pilot review round {round} for PR #{pr['number']}: "
+            f"{verdict['blockers']} blocker(s), {verdict['majors']} "
+            "major(s). Findings: "
+            + json.dumps(verdict["findings"], ensure_ascii=False)
+        )
+        comment_issue(number, repo=source_repo, body=body)
+        comment_pr(pr["number"], body=body)
+        publisher.milestone(
+            f"review findings: round {round}, {verdict['blockers']} "
+            f"blocker(s), {verdict['majors']} major(s) for "
+            f"PR #{pr['number']}"
+        )
+        publisher.finish(_progress_body(_progress_state(
+            issue=number, run_id=config["run_id"], role=ROLE_REVIEW,
+            branch=branch, worktree=worktree, started=started,
+            pr_url=pr["url"], review_round=round,
+        ), outcome=(
+            "**Muyan Pilot review findings**\n\n"
+            f"round {round}: {verdict['blockers']} blocker(s), "
+            f"{verdict['majors']} major(s); the fix loop repairs the "
+            "same PR automatically"
+        )))
+        edit_issue(
+            number, repo=source_repo, add=FIX_NEEDED_LABEL,
+            remove=PR_OPENED_LABEL,
+        )
+        return False
+    try:
+        merged = merge_gate(worktree, pr, base_branch)
+    except RuntimeError as exc:
+        message = str(exc)
+        # Behind and merge-conflict are the same fixer job: absorb
+        # origin/<base>, resolve, retest. Other gate failures
+        # (head moved, etc.) fail fast.
+        if (
+            "behind latest remote base" not in message
+            and "not mergeable" not in message
+        ):
+            raise
+        body = (
+            f"{marker}\n"
+            f"Muyan Pilot review round {round} for PR #{pr['number']}: "
+            "the PR is behind the latest base or has a merge conflict; "
+            f"merge the latest origin/{base_branch} into the branch, "
+            "resolve conflicts, and rerun the full test suite"
+        )
+        comment_issue(number, repo=source_repo, body=body)
+        comment_pr(pr["number"], body=body)
+        edit_issue(
+            number, repo=source_repo, add=FIX_NEEDED_LABEL,
+            remove=PR_OPENED_LABEL,
+        )
+        return False
+    confirmed = confirm_merged(worktree, merged, base_branch)
+    publisher.milestone(
+        f"merged: {merged['url']} "
+        f"(merge_commit={confirmed['merge_commit']} review_rounds={round})"
+    )
+    publisher.finish(_progress_body(_progress_state(
+        issue=number, run_id=config["run_id"], role=ROLE_REVIEW,
+        branch=branch, worktree=worktree, started=started,
+        pr_url=merged["url"], review_round=round,
+    ), outcome=(
+        "**Muyan Pilot delivered**\n\n"
+        f"PR {merged['url']} merged "
+        f"(merge_commit={confirmed['merge_commit']} "
+        f"review_rounds={round})"
+    )))
+    # The GitHub merge already landed. Record ai-merged before touching
+    # the local systemd checkout: a checkout that cannot fast-forward is
+    # runner ops, not a failed delivery (must not become ai-blocked).
+    edit_issue(
+        number, repo=source_repo, add=MERGED_LABEL,
+        remove=PR_OPENED_LABEL,
+    )
+    comment_issue(
+        number, repo=source_repo,
+        body=(
+            f"{marker}\n"
+            f"Muyan Pilot merged PR: {merged['url']} "
+            f"(merge_commit={confirmed['merge_commit']} "
+            f"review_rounds={round} "
+            f"base_branch={base_branch} run_id={config['run_id']})"
+        ),
+    )
+    try:
+        sync_base_checkout(config["repo_dir"], base_branch)
+    except RuntimeError:
+        LOGGER.exception(
+            "base_checkout_sync_failed after merge pr=%s repo_dir=%s; "
+            "the delivery already landed on origin/%s",
+            merged["url"], config["repo_dir"], base_branch,
+        )
+    return True
+
+
+def comment_pr(number: int, *, body: str) -> None:
+    """Comment on a PR (used to record each review round's findings)."""
+    run_command(["gh", "pr", "comment", str(number), "--body", body])
+
+def _pr_head_repo(pr: dict) -> str:
+    """Return `owner/name` of the PR head repo, or '<missing>' if absent."""
+    owner = pr.get("headRepositoryOwner")
+    repo = pr.get("headRepository")
+    if not isinstance(owner, dict) or not isinstance(repo, dict):
+        return "<missing>"
+    login = owner.get("login")
+    name = repo.get("name")
+    if not isinstance(login, str) or not login \
+            or not isinstance(name, str) or not name:
+        return "<missing>"
+    return f"{login}/{name}"
+
+
 
 
 def read_test_result(worktree: Path) -> str | None:
@@ -564,33 +1500,43 @@ def read_test_result(worktree: Path) -> str | None:
     return sanitize(text.splitlines()[-1]) if text.strip() else None
 
 
+def delivery_head_advanced(worktree: Path, base_sha: str) -> bool:
+    """True when the task branch has commits beyond the frozen base."""
+    head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
+    return head != base_sha
+
+
 def _progress_state(*, issue: int, run_id: str, role: str, branch: str,
                     worktree: Path, started: float, pr_url: str | None,
-                    review_round: int) -> dict:
+                    review_round: int,
+                    activity: dict | None = None) -> dict:
     """Collect the current run state for the GitHub progress comment.
 
-    Activity snapshotting is best-effort observability: a read failure is
-    logged and reported as "no session yet", it never blocks the task.
+    `activity` is the live state from the `stream_pi` watcher while a Pi
+    session runs (fresh and already read); without it the newest session
+    file is full-scanned. Activity snapshotting is best-effort
+    observability: a read failure is logged and reported as "no session
+    yet", it never blocks the task.
     """
-    try:
-        snapshot = activity_snapshot(worktree / ".pi-session")
-    except Exception:
-        LOGGER.exception("issue=%s activity snapshot failed", issue)
-        snapshot = None
-    tests = read_test_result(worktree)
+    if activity is None:
+        try:
+            activity = activity_snapshot(worktree / ".pi-session")
+        except Exception:
+            LOGGER.exception("issue=%s activity snapshot failed", issue)
+            activity = None
     return {
         "run_id": run_id,
         "issue": issue,
         "role": role,
-        "phase": (snapshot or {}).get("phase") or "starting",
+        "phase": (activity or {}).get("phase") or "starting",
         "elapsed": format_elapsed(time.monotonic() - started),
-        "last_activity": (snapshot or {}).get("last_activity"),
-        "last_action": (snapshot or {}).get("last"),
-        "tests": tests,
+        "last_activity": (activity or {}).get("last_activity"),
+        "last_action": (activity or {}).get("action"),
+        "tests": read_test_result(worktree),
         "review_round": review_round,
         "branch": branch,
         "pr": pr_url,
-        "session": (snapshot or {}).get("session_id"),
+        "session": (activity or {}).get("session_id"),
     }
 
 
@@ -629,28 +1575,77 @@ def _failure_detail(exc: BaseException) -> str:
     return detail
 
 
-def process_issue(issue: dict, config: dict, source_repo: str,
-                  role: str = "implement") -> str:
+def _live_progress(publisher: ProgressPublisher, *, issue: int, run_id: str,
+                   role: str, branch: str, worktree: Path, started: float,
+                   pr_url: str | None, review_round: int,
+                   activity: dict | None = None) -> None:
+    """One live GitHub progress update while a Pi session is running.
+
+    Called from the `stream_pi` poll loop (every activity change or
+    heartbeat, Issue #18): the same run-marker comment is PATCHed in
+    place at most every `PI_HEARTBEAT_SECONDS` or when the visible
+    activity changed. `activity` is the watcher state of that poll, so
+    the live comment shows the session exactly as the journal reports
+    it. The publisher already knows the comment id after `ensure`, so a
+    callback before it would fail fast here — and the wiring always
+    ensures first.
+    """
+    state = _progress_state(
+        issue=issue, run_id=run_id, role=role, branch=branch,
+        worktree=worktree, started=started, pr_url=pr_url,
+        review_round=review_round, activity=activity,
+    )
+    publisher.patch(_progress_body(state))
+
+
+class LiveProgressThrottle:
+    """Throttle live GitHub PATCHes to change-driven or <=30-second cadence.
+
+    The `stream_pi` poll loop fires on every poll (15 s default); PATCHing
+    GitHub on every poll would double the traffic for no visible gain.
+    The throttle passes an update through when the visible activity
+    (phase, action, result, model_wait) changed since the last PATCH or
+    when at least `PI_HEARTBEAT_SECONDS` passed since it.
+    """
+
+    def __init__(self, publisher: ProgressPublisher, *, issue: int,
+                 run_id: str, role: str, branch: str, worktree: Path,
+                 started: float, pr_url: str | None,
+                 review_round: int) -> None:
+        def publish(activity: dict) -> None:
+            _live_progress(
+                publisher, issue=issue, run_id=run_id, role=role,
+                branch=branch, worktree=worktree, started=started,
+                pr_url=pr_url, review_round=review_round,
+                activity=activity,
+            )
+
+        self._publish = publish
+        self._last_visible: tuple | None = None
+        self._last_patch = 0.0
+
+    def __call__(self, activity: dict) -> None:
+        visible = (
+            activity["phase"], activity["action"], activity["result"],
+            activity["model_wait"],
+        )
+        now = time.monotonic()
+        if visible == self._last_visible and \
+                now - self._last_patch < PI_HEARTBEAT_SECONDS:
+            return
+        self._last_visible = visible
+        self._last_patch = now
+        self._publish(activity)
+
+
+def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     number = int(issue["number"])
     base_branch = config["base_branch"]
-    base_sha = freeze_base(config["repo_dir"], base_branch)
+    # The run id is generated once per attempt, before any other step is
+    # logged, so every journal line of the attempt carries it (Issue #41).
     run_id = new_run_id()
-    # Restart resume (Issue #18): a killed runner leaves the task
-    # worktree and the `ai-in-progress` label behind. Only in that state
-    # the newest worktree's run id is reused, so the same hidden-marker
-    # progress comment is found and kept instead of a second one.
-    # Completed runs keep their worktrees as evidence but lose the label,
-    # so re-claiming an issue always starts a fresh run.
-    if has_in_progress_label(number, source_repo):
-        existing_run_id = latest_run_id(
-            config["repo_dir"], source_repo, number,
-        )
-        if existing_run_id is not None:
-            LOGGER.info(
-                "issue=%s resuming_run run_id=%s",
-                number, existing_run_id,
-            )
-            run_id = existing_run_id
+    set_run_id(run_id)
+    base_sha = freeze_base(config["repo_dir"], base_branch)
     branch = task_branch(source_repo, number, run_id)
     run_info = (
         f"base_branch={base_branch} base_sha={base_sha} run_id={run_id}"
@@ -658,7 +1653,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
     LOGGER.info(
         "issue=%s %s", number, run_info,
     )
-    edit_issue(number, repo=source_repo, add="ai-in-progress")
+    edit_issue(number, repo=source_repo, add=IN_PROGRESS_LABEL)
     publisher = ProgressPublisher(
         number, source_repo, run_id, run_command=run_command,
     )
@@ -669,76 +1664,491 @@ def process_issue(issue: dict, config: dict, source_repo: str,
             config["repo_dir"], source_repo, number, run_id, base_sha,
         )
         config = {**config, "base_sha": base_sha, "run_id": run_id}
-        state = _progress_state(
-            issue=number, run_id=run_id, role=role, branch=branch,
-            worktree=worktree, started=started, pr_url=None,
-            review_round=0,
+        comment_issue(
+            number, repo=source_repo,
+            body=started_pi_comment_body(run_id, run_info, branch, worktree),
         )
-        publisher.ensure(_progress_body(state))
+        publisher.ensure(_progress_body(_progress_state(
+            issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
+            branch=branch, worktree=worktree, started=started,
+            pr_url=None, review_round=0,
+        )))
         publisher.milestone(
             f"started: {run_info} branch={branch} worktree={worktree}"
         )
-        run_pi(issue, worktree, config, source_repo, branch=branch, role=role)
+        run_pi(
+            issue, worktree, config, source_repo, branch=branch,
+            progress=LiveProgressThrottle(
+                publisher, issue=number, run_id=run_id,
+                role=ROLE_IMPLEMENT, branch=branch, worktree=worktree,
+                started=started, pr_url=None, review_round=0,
+            ),
+        )
         _publish_plan_milestone(publisher, worktree)
         _publish_test_milestone(publisher, worktree)
-        pr_url = verify_pr(worktree, branch, base_branch)
-        if delivery_head_advanced(worktree, base_sha):
-            publisher.milestone(f"fix pushed: branch={branch}")
+        pr_url = verify_pr(worktree, branch, base_branch, run_id)
+        commit = run_command(
+            ["git", "rev-parse", "HEAD"], cwd=worktree,
+        )
+        # No `fix pushed` milestone on a fresh claim: the implementer
+        # always commits the delivery on top of the frozen base, so the
+        # head always advanced — the PR opened milestone below announces
+        # the delivery. `fix pushed` is the fixer's milestone
+        # (resume_delivery), where it marks a real fix on an opened PR.
         edit_issue(
-            number, repo=source_repo, add="ai-pr-opened",
-            remove="ai-in-progress",
+            number, repo=source_repo, add=PR_OPENED_LABEL,
+            remove=IN_PROGRESS_LABEL,
+        )
+        comment_issue(
+            number, repo=source_repo,
+            body=opened_pr_comment_body(run_id, run_info, pr_url),
         )
         publisher.milestone(f"PR opened: {pr_url} ({run_info})")
-        state = _progress_state(
-            issue=number, run_id=run_id, role=role, branch=branch,
-            worktree=worktree, started=started, pr_url=pr_url,
-            review_round=0,
+        publisher.finish(_progress_body(_progress_state(
+            issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
+            branch=branch, worktree=worktree, started=started,
+            pr_url=pr_url, review_round=0,
+        ), outcome="**Muyan Pilot delivered**"))
+        LOGGER.info(
+            "run_end %s",
+            format_end_scene(
+                run_id=run_id, issue=issue_context(source_repo, number),
+                role=ROLE_IMPLEMENT, result="pr_opened",
+                elapsed=time.monotonic() - started,
+                pr=pr_url, commit=commit,
+            ),
         )
-        publisher.finish(_progress_body(
-            state, outcome="**Muyan Pilot delivered**",
-        ))
         return pr_url
     except Exception as exc:
         LOGGER.exception("issue=%s failed", number)
         scene = ""
         if worktree is not None:
             try:
-                scene = format_activity_scene(
-                    activity_snapshot(worktree / ".pi-session"),
+                snapshot = activity_snapshot(worktree / ".pi-session")
+                if snapshot is None:
+                    # No session file yet: the scene still carries the full
+                    # debug entry (worktree, branch) with '-' session fields.
+                    snapshot = {
+                        "session_id": None, "session_file": None,
+                        "phase": "starting", "last_activity": None,
+                        "action": None, "result": None,
+                    }
+                scene = format_run_scene(
+                    snapshot,
+                    run_id=run_id, issue=issue_context(source_repo, number),
+                    role=ROLE_IMPLEMENT, branch=branch, worktree=str(worktree),
                 )
             except Exception:
                 LOGGER.exception("issue=%s activity scene failed", number)
         try:
             edit_issue(
-                number, repo=source_repo, add="ai-blocked",
-                remove="ai-in-progress",
+                number, repo=source_repo, add=BLOCKED_LABEL,
+                remove=IN_PROGRESS_LABEL,
             )
             detail = _failure_detail(exc)
-            body = f"Muyan Pilot failed: {detail} ({run_info})"
+            body = (
+                f"{run_marker(run_id)}\n"
+                f"Muyan Pilot failed: {detail} ({run_info})"
+            )
             if scene:
                 body += f" {scene}"
             comment_issue(number, repo=source_repo, body=body)
-            if worktree is not None:
-                state = _progress_state(
-                    issue=number, run_id=run_id, role=role,
+            # The blocked milestone is posted even when the worktree was
+            # never created or the progress comment was never ensured:
+            # the mobile notification of the terminal failure must not
+            # depend on local state.
+            publisher.milestone(
+                f"blocked: {sanitize(detail)} ({run_info})"
+            )
+            if worktree is not None and publisher.comment_id is not None:
+                publisher.finish(_progress_body(_progress_state(
+                    issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
                     branch=branch, worktree=worktree, started=started,
                     pr_url=None, review_round=0,
-                )
-                publisher.finish(_progress_body(
-                    state,
-                    outcome=(
-                        "**Muyan Pilot blocked**\n\n"
-                        f"failure: {detail}\n"
-                        f"next step: fix the failure above and re-run "
-                        "this Issue (a new run id is created automatically)"
-                    ),
-                ))
-                publisher.milestone(
-                    f"blocked: {sanitize(detail)} ({run_info})"
-                )
+                ), outcome=(
+                    "**Muyan Pilot blocked**\n\n"
+                    f"failure: {detail}\n"
+                    "next step: fix the failure above and re-run "
+                    "this Issue (a new run id is created automatically)"
+                )))
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
         raise
+
+
+def resume_delivery(issue: dict, scene: dict, config: dict,
+                    source_repo: str) -> str:
+    """Resume the fix loop of an opened PR on the same run (Issue #45).
+
+    The scene (run id, base, PR URL) is recovered from the Issue's
+    trusted `Muyan Pilot opened PR:` comment, so a restart of the runner
+    or the service resumes from GitHub state alone. Branch and worktree
+    are DERIVED from the configured repo_dir, source_repo, Issue number
+    and run id — never read from the comment — so no comment can steer
+    the runner into an arbitrary local path. Before any git or Pi
+    mutation the configured base and the open PR (repo, head branch,
+    base, run marker, exact URL) are validated; the latest remote base is
+    then merged into the ORIGINAL branch (conflicts stay staged for the
+    fixer), Pi fixes the PR in the ORIGINAL worktree, and the SAME PR is
+    re-verified: the returned URL is the one verify_pr verified, which
+    must exactly equal the recovered original PR URL. Any failure marks
+    the Issue `ai-blocked` and preserves the PR, branch and worktree: the
+    run is never re-claimed, the PR is never closed or replaced.
+    """
+    number = int(issue["number"])
+    run_id = validate_run_id(scene["run_id"])
+    # Derive the expected branch and worktree from the runner's own
+    # config and the run id (the values the first run used when it
+    # created them); a comment can never name an arbitrary local path.
+    branch = task_branch(source_repo, number, run_id)
+    worktree = worktree_path(config["repo_dir"], source_repo, number, run_id)
+    base_branch = scene["base_branch"]
+    pr_url = scene["pr_url"]
+    set_run_id(run_id)
+    started = time.monotonic()
+    publisher = ProgressPublisher(
+        number, source_repo, run_id, run_command=run_command,
+    )
+    scene_info = (
+        f"base_branch={base_branch} base_sha={scene['base_sha']} "
+        f"run_id={run_id} branch={branch} worktree={worktree} "
+        f"pr_url={pr_url}"
+    )
+    LOGGER.info("issue=%s resuming opened PR %s", number, scene_info)
+    try:
+        # Validate the configured base before any git/Pi mutation: a
+        # scene frozen on another base branch is never merged.
+        if base_branch != config["base_branch"]:
+            raise RuntimeError(
+                f"base branch mismatch: scene has {base_branch}, config "
+                f"has {config['base_branch']}; the resume must use the "
+                "configured base branch"
+            )
+        if not worktree.is_dir():
+            raise RuntimeError(f"worktree missing: {worktree}")
+        # Validate the open PR before any git/Pi mutation: exactly one
+        # open PR of the derived branch, in the configured source repo,
+        # on the configured base, carrying the run marker, and with the
+        # exact URL of the recovered original PR (same PR number). The
+        # latest-base check is deferred to the post-fix verification:
+        # being behind the base is the expected state the resume exists
+        # to fix (merge_latest_base runs next).
+        verified_url = verify_pr(
+            worktree, branch, base_branch, run_id,
+            pr_repo=source_repo, expected_url=pr_url,
+            require_latest_base=False,
+        )
+        merge_latest_base(worktree, base_branch)
+        config = {**config, "base_sha": scene["base_sha"], "run_id": run_id}
+        publisher.ensure(_progress_body(_progress_state(
+            issue=number, run_id=run_id, role=ROLE_FIX,
+            branch=branch, worktree=worktree, started=started,
+            pr_url=verified_url, review_round=0,
+        )))
+        run_pi(
+            issue, worktree, config, source_repo,
+            branch=branch, pr_url=verified_url,
+            progress=LiveProgressThrottle(
+                publisher, issue=number, run_id=run_id,
+                role=ROLE_FIX, branch=branch, worktree=worktree,
+                started=started, pr_url=verified_url, review_round=0,
+            ),
+        )
+        # Re-verify the SAME PR after the fixer pushed: the verified URL
+        # must still exactly equal the recovered original PR URL.
+        verified_url = verify_pr(
+            worktree, branch, base_branch, run_id,
+            pr_repo=source_repo, expected_url=pr_url,
+        )
+        # The state transition comes first: the Issue leaves the
+        # fix-needed state before the progress comment is recorded, so
+        # an observer never sees a "fixed PR" comment on an Issue that
+        # is still fix-needed (a crash in between re-runs the fixer,
+        # which is idempotent; the comment is a record, the label is
+        # the state).
+        edit_issue(
+            number, repo=source_repo, add=PR_OPENED_LABEL,
+            remove=FIX_NEEDED_LABEL,
+        )
+        comment_issue(
+            number, repo=source_repo,
+            body=(
+                f"{run_marker(run_id)}\n"
+                f"Muyan Pilot fixed PR: {verified_url} ({scene_info})"
+            ),
+        )
+        publisher.milestone(f"fix pushed: {verified_url} ({scene_info})")
+        publisher.finish(_progress_body(_progress_state(
+            issue=number, run_id=run_id, role=ROLE_FIX,
+            branch=branch, worktree=worktree, started=started,
+            pr_url=verified_url, review_round=0,
+        ), outcome=(
+            "**Muyan Pilot fix pushed**\n\n"
+            "the same PR is awaiting review again; the independent "
+            "review and merge happen automatically"
+        )))
+    except Exception as exc:
+        LOGGER.exception("issue=%s resume failed", number)
+        activity_scene = ""
+        try:
+            snapshot = activity_snapshot(worktree / ".pi-session")
+            if snapshot is None:
+                # No session file yet: the scene still carries the full
+                # debug entry (worktree, branch) with '-' session fields.
+                snapshot = {
+                    "session_id": None, "session_file": None,
+                    "phase": "starting", "last_activity": None,
+                    "action": None, "result": None,
+                }
+            activity_scene = format_run_scene(
+                snapshot,
+                run_id=run_id, issue=issue_context(source_repo, number),
+                role=ROLE_IMPLEMENT, branch=branch, worktree=str(worktree),
+            )
+        except Exception:
+            LOGGER.exception("issue=%s activity scene failed", number)
+        try:
+            edit_issue(
+                number, repo=source_repo, add=BLOCKED_LABEL,
+                remove=FIX_NEEDED_LABEL,
+            )
+            detail = _failure_detail(exc)
+            body = (
+                f"{run_marker(run_id)}\n"
+                f"Muyan Pilot failed: {detail} ({scene_info})"
+            )
+            if activity_scene:
+                body += f" {activity_scene}"
+            comment_issue(number, repo=source_repo, body=body)
+            # The blocked milestone is posted even when the progress
+            # comment was never created (a failure before `ensure`):
+            # the mobile notification of the terminal failure must not
+            # depend on it.
+            publisher.milestone(
+                f"blocked: {sanitize(detail)} ({scene_info})"
+            )
+            if publisher.comment_id is not None:
+                publisher.finish(_progress_body(_progress_state(
+                    issue=number, run_id=run_id, role=ROLE_FIX,
+                    branch=branch, worktree=worktree,
+                    started=started, pr_url=pr_url,
+                    review_round=0,
+                ), outcome=(
+                    "**Muyan Pilot blocked**\n\n"
+                    f"failure: {detail}\n"
+                    "next step: fix the failure above and resume this "
+                    "same PR (branch, worktree and PR are preserved)"
+                )))
+        except Exception:
+            LOGGER.exception("issue=%s failure reporting failed", number)
+        raise
+    # The fix succeeded: the Issue is back in awaiting review (the
+    # transition happened before the progress comment), so the next
+    # tick does not re-run the Fixer (a clean PR is simply waiting for
+    # review now).
+    return verified_url
+
+
+def pr_state(pr_url: str) -> str:
+    """Return the GitHub state of one PR: `OPEN`, `MERGED` or `CLOSED`.
+
+    The delivery-wait loop (Issue #39) uses it to tell a delivery that is
+    still awaiting review from one that is done: only `MERGED` or
+    `CLOSED` ends the slot hold. Anything else is a corrupted state and
+    fails fast.
+    """
+    number = pr_url.rstrip("/").rsplit("/", 1)[-1]
+    raw = run_command([
+        "gh", "pr", "view", number, "--json", "state",
+    ])
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("pr view must be a JSON object")
+    state = data.get("state")
+    if state not in ("OPEN", "MERGED", "CLOSED"):
+        raise ValueError(f"unexpected PR state: {state!r}")
+    return state
+
+
+def issue_labels(number: int, repo: str) -> list[str]:
+    """Return the current label names of one Issue."""
+    raw = run_command([
+        "gh", "issue", "view", str(number), "--repo", repo,
+        "--json", "labels",
+    ])
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("issue view must be a JSON object")
+    labels = data.get("labels")
+    if not isinstance(labels, list):
+        raise ValueError("issue labels must be a JSON array")
+    names: list[str] = []
+    for label in labels:
+        if isinstance(label, dict) and isinstance(label.get("name"), str):
+            names.append(label["name"])
+    return names
+
+
+def wait_for_delivery(pr_url: str, issue: dict, config: dict,
+                      source_repo: str, poll_interval: float = PI_POLL_INTERVAL) -> None:
+    """Own the delivery lifecycle: hold the slot until merge or failure.
+
+    The slot is acquired by `main` before the claim and must stay
+    occupied through implement -> review -> fix -> merge (Issue #39): a
+    delivery whose PR is open still needs the machine, and no other
+    Runner may start a second Pi while it is held. The Runner is the
+    owner of that lifecycle, so it re-checks the delivery every
+    `poll_interval` seconds (the same cadence as the idle timer and the
+    Pi activity poll):
+
+    - PR `MERGED` -> terminal: the delivery is done, the slot is
+      released by the caller and the next tick may claim new work;
+    - PR `CLOSED` without merge -> terminal failure: the Issue is
+      marked `ai-blocked` (removing `ai-pr-opened`/`ai-fix-needed`) with
+      a failure comment carrying the run marker, then the slot is
+      released by the caller;
+    - Issue in the explicit `ai-fix-needed` state (a review finding or
+      a base conflict) -> the Runner runs the SAME-PR fix (Issue #45)
+      itself, on the same run, in the same worktree, while still holding
+      the slot; the fix returns the Issue to `ai-pr-opened` and the
+      wait continues. A new Runner can never take the slot to fix this
+      delivery while it is held, so the fix must happen here;
+    - Issue awaiting review (`ai-pr-opened`) -> the Runner runs the
+      independent review of the frozen PR (Issue #34) itself, on the
+      same run, while still holding the slot: a clean verdict merges
+      the PR via the merge gate, confirms the merge, syncs the
+      deployment checkout and labels the Issue `ai-merged` (terminal,
+      the slot is released); findings label the Issue `ai-fix-needed`
+      and the fix step above repairs the same PR before the next
+      iteration re-reviews;
+    - otherwise -> keep holding the slot and re-check.
+
+    There is no timeout: systemd owns the run lifecycle and kills the
+    service on stop, which releases the slot via the kernel (flock on
+    the open descriptor). No polling shim, no daemon loop, no queue.
+    """
+    number = int(issue["number"])
+    run_id = current_run_id()
+    marker = run_marker(run_id) if run_id else ""
+    LOGGER.info(
+        "issue=%s delivery_awaiting pr=%s; holding the slot until the "
+        "PR is merged or terminally failed",
+        number, pr_url,
+    )
+    while True:
+        state = pr_state(pr_url)
+        if state == "MERGED":
+            LOGGER.info(
+                "issue=%s delivery_merged pr=%s; releasing the slot",
+                number, pr_url,
+            )
+            return
+        if state == "CLOSED":
+            LOGGER.info(
+                "issue=%s delivery_closed_unmerged pr=%s; marking the "
+                "Issue ai-blocked and releasing the slot",
+                number, pr_url,
+            )
+            edit_issue(
+                number, repo=source_repo, add=BLOCKED_LABEL,
+                remove=PR_OPENED_LABEL,
+            )
+            body = (
+                f"Muyan Pilot failed: PR {pr_url} was closed without "
+                "a merge; the delivery is terminally failed"
+            )
+            if marker:
+                body = f"{marker}\n{body}"
+            comment_issue(number, repo=source_repo, body=body)
+            if run_id:
+                ProgressPublisher(
+                    number, source_repo, run_id,
+                    run_command=run_command,
+                ).milestone(
+                    f"blocked: PR {pr_url} was closed without a merge; "
+                    "the delivery is terminally failed"
+                )
+            return
+        labels = issue_labels(number, source_repo)
+        if FIX_NEEDED_LABEL in labels and BLOCKED_LABEL not in labels:
+            # The review found a problem (or the base advanced): fix the
+            # SAME PR on the SAME run while still holding the slot.
+            LOGGER.info(
+                "issue=%s delivery_fix_needed pr=%s; resuming the fix "
+                "loop of the same PR",
+                number, pr_url,
+            )
+            scene = resume_scene(issue_comments(number, repo=source_repo))
+            fix_issue = dict(issue)
+            fix_issue["body"] = issue_body(number, repo=source_repo)
+            resume_delivery(fix_issue, scene, config, source_repo)
+            continue  # the fix returned the Issue to awaiting review
+        if (PR_OPENED_LABEL in labels and BLOCKED_LABEL not in labels
+                and MERGED_LABEL not in labels):
+            # The PR is awaiting review: run the independent review of
+            # the frozen PR on the same run (Issue #34). A clean
+            # verdict merges and returns True (terminal); findings
+            # label the Issue `ai-fix-needed` and the fix step above
+            # repairs the same PR before the next iteration re-reviews.
+            # A review that cannot run (unrecoverable scene, missing
+            # worktree, missing/malformed verdict, exhausted rounds)
+            # is a real failure: the Issue is marked `ai-blocked` so
+            # it is never stranded in awaiting review without an owner.
+            try:
+                scene = resume_scene(
+                    issue_comments(number, repo=source_repo),
+                )
+                worktree = worktree_path(
+                    config["repo_dir"], source_repo, number,
+                    scene["run_id"],
+                )
+                branch = task_branch(source_repo, number, scene["run_id"])
+                review_config = {
+                    **config,
+                    "base_sha": scene["base_sha"],
+                    "run_id": scene["run_id"],
+                }
+                merged = review_and_merge_if_clean(
+                    worktree, branch, config["base_branch"],
+                    review_config, source_repo, number,
+                )
+            except Exception as exc:
+                LOGGER.exception(
+                    "issue=%s delivery_review_failed pr=%s", number, pr_url,
+                )
+                edit_issue(
+                    number, repo=source_repo, add=BLOCKED_LABEL,
+                    remove=PR_OPENED_LABEL,
+                )
+                body = (
+                    f"Muyan Pilot failed: the independent review of "
+                    f"PR {pr_url} failed: {exc}"
+                )
+                if marker:
+                    body = f"{marker}\n{body}"
+                comment_issue(number, repo=source_repo, body=body)
+                if run_id:
+                    ProgressPublisher(
+                        number, source_repo, run_id,
+                        run_command=run_command,
+                    ).milestone(
+                        f"blocked: the independent review of PR {pr_url} "
+                        f"failed: {exc}"
+                    )
+                return
+            if merged:
+                LOGGER.info(
+                    "issue=%s delivery_auto_merged pr=%s; releasing the "
+                    "slot",
+                    number, pr_url,
+                )
+                return
+            continue  # findings: the fix loop repairs, then re-review
+        LOGGER.info(
+            "issue=%s delivery_awaiting pr=%s state=%s",
+            number, pr_url, state,
+        )
+        time.sleep(poll_interval)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -748,16 +2158,45 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(os.environ.get("MUYAN_PILOT_CONFIG", "muyan-pilot.toml")),
     )
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(level=logging.INFO, format=log_format())
 
     config = load_config(args.config)
     validate_config(config)
-    selected = pick_next_issue(config["source_repos"])
-    if selected is None:
-        LOGGER.info("source_repos=%s outcome=no_ready_issue", config["source_repos"])
+    # Concurrency cap (Issue #39): take one slot BEFORE claiming anything.
+    # The slot is held for the whole delivery lifecycle (implement ->
+    # review -> fix -> merge) and released only after the delivery is
+    # merged or terminally failed — or when this process exits for any
+    # reason, which the kernel handles (flock on an open descriptor).
+    slot = acquire_slot(
+        config["slot_dir"], config["max_concurrency"], os.getpid(),
+    )
+    if slot is None:
+        LOGGER.info(
+            "capacity_full max_concurrency=%s slot_dir=%s",
+            config["max_concurrency"], config["slot_dir"],
+        )
         return 0
-    source_repo, issue = selected
-    process_issue(issue, config, source_repo)
+    try:
+        selected = pick_next_delivery(config["source_repos"])
+        if selected is None:
+            LOGGER.info(
+                "source_repos=%s outcome=no_ready_issue",
+                config["source_repos"],
+            )
+            return 0
+        source_repo, issue, scene = selected
+        if scene is not None:
+            # An open PR is a recoverable review/fix state: resume the
+            # same run on the same branch, worktree and PR (Issue #45).
+            pr_url = resume_delivery(issue, scene, config, source_repo)
+        else:
+            pr_url = process_issue(issue, config, source_repo)
+        # The delivery is not done when the PR is open: hold the slot
+        # through review -> fix -> merge and release it only after the
+        # PR is merged or terminally failed (Issue #39).
+        wait_for_delivery(pr_url, issue, config, source_repo)
+    finally:
+        slot.release()
     return 0
 
 

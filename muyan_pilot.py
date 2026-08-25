@@ -3,9 +3,10 @@
 
 `add` creates an Issue in a configured source repo and labels it `ai-ready`.
 `status` reports the current in-progress Issue (with its live Pi activity:
-phase, last activity time, sanitized last tool summary, session file and
-worktree), the next ready Issue, and the most recent result
-(`ai-pr-opened` / `ai-blocked`) per source repo.
+phase, last activity time, the last meaningful action, the newest tool
+call result, session file and worktree), the next ready Issue, and the
+most recent result (`ai-pr-opened` / `ai-fix-needed` / `ai-merged` /
+`ai-blocked`) per source repo.
 
 GitHub Issues and labels are the only state store. There is no database,
 queue, or web UI. Command failures are logged and raised by the reused
@@ -20,20 +21,29 @@ import re
 from pathlib import Path
 
 from bootstrap_runner import (
+    RunIdFilter,
     freeze_base,
     load_config,
+    log_format,
     parse_issue_array,
     run_command,
     validate_config,
 )
+from pilot_slots import slot_occupancy
 from pi_activity import activity_snapshot
 
 LOGGER = logging.getLogger("muyan_pilot.cli")
+# Same run correlation mechanism as the runner (Issue #41): when a run id is
+# bound, every journal line of this process starts with `[run_id]`.
+LOGGER.addFilter(RunIdFilter())
 
 ISSUE_URL_PATTERN = re.compile(r"/issues/(\d+)$")
 READY_LABEL = "ai-ready"
 IN_PROGRESS_LABEL = "ai-in-progress"
-RESULT_LABELS = ("ai-pr-opened", "ai-blocked")
+# `ai-pr-opened` (awaiting review), `ai-fix-needed` (Fixer pending),
+# `ai-merged` (the Runner merged the PR itself, Issue #34) and
+# `ai-blocked` are all result states of an opened delivery (Issue #45).
+RESULT_LABELS = ("ai-pr-opened", "ai-fix-needed", "ai-merged", "ai-blocked")
 
 
 def issue_number(url: str) -> int:
@@ -86,7 +96,12 @@ def ready_issue(repo: str) -> dict | None:
 
 
 def recent_result(repo: str) -> dict | None:
-    """Return the newest `ai-pr-opened` or `ai-blocked` Issue, any state."""
+    """Return the newest delivery result Issue, any state.
+
+    Result states: `ai-pr-opened` (awaiting review), `ai-fix-needed`
+    (Fixer pending), `ai-merged` (success terminal, the Runner merged
+    the PR itself) and `ai-blocked` (needs human attention).
+    """
     newest = None
     for label in RESULT_LABELS:
         for issue in list_labeled_issues(repo, label, state="all"):
@@ -128,15 +143,32 @@ def live_activity_lines(repo_dir: Path, source_repo: str,
         (
             f"    live: phase={snapshot['phase']} "
             f"last_activity={snapshot['last_activity'] or '-'} "
-            f"last={snapshot['last'] or '-'}"
+            f"action={snapshot['action'] or '-'} "
+            f"result={snapshot['result'] or '-'}"
         ),
         f"    session: {snapshot['session_file']}",
         f"    worktree: {worktree}",
     ]
 
 
+def slot_lines(state_dir: Path, capacity: int) -> list[str]:
+    """Return the status lines for the configured concurrency capacity."""
+    occupancy = slot_occupancy(state_dir, capacity)
+    taken = sum(1 for _, pid in occupancy if pid is not None)
+    lines = [f"slots: {taken}/{capacity}"]
+    lines.extend(
+        f"  slot-{index}: pid={pid}"
+        for index, pid in occupancy
+        if pid is not None
+    )
+    return lines
+
+
 def status_report(config: dict) -> str:
-    lines = []
+    lines = [
+        f"capacity: {config['max_concurrency']}",
+        *slot_lines(config["slot_dir"], config["max_concurrency"]),
+    ]
     for repo in config["source_repos"]:
         lines.append(f"source: {repo}")
         base_sha = freeze_base(config["repo_dir"], config["base_branch"])
@@ -179,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         help="show current Issue (with live Pi activity), ready queue and recent result",
     )
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(level=logging.INFO, format=log_format())
 
     config = load_config(args.config)
     validate_config(config)

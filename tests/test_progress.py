@@ -182,8 +182,14 @@ def test_publisher_ensure_creates_comment_when_marker_missing():
     ]
 
 
-def test_publisher_ensure_patches_existing_comment_with_marker():
-    existing = {"id": 7, "body": "<!-- muyan-pilot:run=abc123 -->old"}
+def test_publisher_ensure_patches_existing_progress_comment():
+    existing = {
+        "id": 7,
+        "body": (
+            "<!-- muyan-pilot:run=abc123 -->\n\n"
+            "**Muyan Pilot progress**\n\n- issue: #18"
+        ),
+    }
     publisher, calls = make_publisher(comments=[
         {"id": 1, "body": "unrelated"},
         existing,
@@ -203,6 +209,42 @@ def test_publisher_ensure_patches_existing_comment_with_marker():
     ]
 
 
+def test_publisher_ensure_never_hijacks_scene_comments():
+    # The run's scene comments (started Pi / opened PR) and milestones
+    # carry the run marker too: ensure must create a fresh progress
+    # comment instead of PATCHing one of them (Issue #18).
+    scene = {"id": 3, "body": "<!-- muyan-pilot:run=abc123 -->started Pi"}
+    milestone = {
+        "id": 4,
+        "body": "<!-- muyan-pilot:run=abc123 -->Muyan Pilot: started",
+    }
+    publisher, calls = make_publisher(comments=[scene, milestone])
+    comment_id = publisher.ensure("initial body")
+    assert comment_id == 42
+    assert calls[-1] == [
+        "gh", "api", "repos/xqliu/muyan-pilot/issues/18/comments",
+        "--method", "POST", "--field", "body=initial body",
+    ]
+
+
+def test_find_progress_comment_requires_marker_and_header():
+    comments = [
+        {"id": 1, "body": "<!-- muyan-pilot:run=abc123 -->scene"},
+        {"id": 2, "body": "**Muyan Pilot progress**"},
+        {
+            "id": 3,
+            "body": (
+                "<!-- muyan-pilot:run=abc123 -->\n\n"
+                "**Muyan Pilot progress**"
+            ),
+        },
+        {"id": 4},
+    ]
+    found = progress.find_progress_comment(comments, "abc123")
+    assert found["id"] == 3
+    assert progress.find_progress_comment(comments, "other") is None
+
+
 def test_publisher_ensure_rejects_non_list_comment_payload():
     publisher, _ = make_publisher(comments="not a list")
     with pytest.raises(ValueError, match="must be a JSON array"):
@@ -211,7 +253,13 @@ def test_publisher_ensure_rejects_non_list_comment_payload():
 
 def test_publisher_patch_updates_the_tracked_comment():
     publisher, calls = make_publisher(comments=[
-        {"id": 7, "body": "<!-- muyan-pilot:run=abc123 -->old"},
+        {
+            "id": 7,
+            "body": (
+                "<!-- muyan-pilot:run=abc123 -->\n\n"
+                "**Muyan Pilot progress**"
+            ),
+        },
     ])
     publisher.ensure("old")
     publisher.patch("updated body")
@@ -235,7 +283,9 @@ def test_publisher_milestone_posts_short_standalone_comment():
         [
             "gh", "api", "repos/xqliu/muyan-pilot/issues/18/comments",
             "--method", "POST",
-            "--field", "body=Muyan Pilot: tests passed",
+            "--field",
+            "body=<!-- muyan-pilot:run=abc123 -->\n"
+            "Muyan Pilot: tests passed run_id=abc123",
         ],
     ]
     # A milestone never touches the tracked progress comment.
@@ -267,7 +317,13 @@ def test_publisher_post_rejects_non_json_response():
 
 def test_publisher_finish_patches_final_summary_into_tracked_comment():
     publisher, calls = make_publisher(comments=[
-        {"id": 7, "body": "<!-- muyan-pilot:run=abc123 -->old"},
+        {
+            "id": 7,
+            "body": (
+                "<!-- muyan-pilot:run=abc123 -->\n\n"
+                "**Muyan Pilot progress**"
+            ),
+        },
     ])
     publisher.ensure("old")
     publisher.finish("final delivery summary")
