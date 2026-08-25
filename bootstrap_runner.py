@@ -3,7 +3,13 @@
 
 This is intentionally small. It claims one ready GitHub Issue, gives it to
 Pi in an isolated worktree, and accepts success only when one open PR exists.
-Any command failure is logged and raised. There is no fallback or recovery.
+After the implementer opens the PR, the Runner closes the loop itself: it
+freezes the exact PR base/head SHA, runs an independent review session, loops
+a fixer session on the same feature branch/worktree while Blocker/Major
+findings exist, re-checks the merge gate against the latest remote base, and
+merges via `gh pr merge --match-head-commit`. Pi never pushes the protected
+branch; the Runner is the only merge actor. Any command failure is logged and
+raised. There is no fallback, queue, daemon, or multi-agent framework.
 """
 from __future__ import annotations
 
@@ -18,6 +24,11 @@ from pathlib import Path
 
 
 LOGGER = logging.getLogger("muyan_pilot.bootstrap")
+
+# Machine-readable verdict line the reviewer session must end with, and the
+# bounded size of the review/fix loop (see review-fix-loop skill: max 5 rounds).
+VERDICT_MARKER = "REVIEW_VERDICT"
+MAX_REVIEW_ROUNDS = 5
 
 
 def _config_path(value: str, base: Path) -> Path:
@@ -42,6 +53,12 @@ def load_config(path: Path) -> dict:
         "repo_dir": _config_path(data.get("repo_dir", "."), base),
         "workspace_root": _config_path(data.get("workspace_root", ".."), base),
         "prompt": _config_path(data.get("prompt", "prompt.md"), base),
+        "prompt_review": _config_path(
+            data.get("prompt_review", "prompt_review.md"), base,
+        ),
+        "prompt_fix": _config_path(
+            data.get("prompt_fix", "prompt_fix.md"), base,
+        ),
         "skills": [_config_path(item, base) for item in data.get("skills", [])],
         "context_files": [
             _config_path(item, base) for item in data.get("context_files", [])
@@ -60,7 +77,10 @@ def render_prompt(template: str, values: dict[str, str]) -> str:
 def validate_config(config: dict) -> None:
     if not config["repo_dir"].is_dir():
         raise FileNotFoundError(config["repo_dir"])
-    for path in [config["prompt"], *config["skills"], *config["context_files"]]:
+    for path in [
+        config["prompt"], config["prompt_review"], config["prompt_fix"],
+        *config["skills"], *config["context_files"],
+    ]:
         if not path.is_file():
             raise FileNotFoundError(path)
 
@@ -307,6 +327,337 @@ def verify_pr(worktree: Path, branch: str, base_branch: str) -> str:
     return url
 
 
+def parse_review_verdict(text: str) -> dict:
+    """Extract the last REVIEW_VERDICT JSON line from a review session.
+
+    The reviewer must end with a machine-readable verdict so the Runner can
+    decide without parsing prose. Missing or malformed verdicts fail fast; a
+    review that cannot be read as a pass is never treated as a pass.
+    """
+    payload = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(VERDICT_MARKER):
+            payload = stripped[len(VERDICT_MARKER):].strip()
+    if payload is None:
+        raise ValueError("no REVIEW_VERDICT line in review output")
+    try:
+        verdict = json.loads(payload)
+    except json.JSONDecodeError:
+        raise ValueError("malformed REVIEW_VERDICT JSON") from None
+    if not isinstance(verdict, dict):
+        raise ValueError("malformed REVIEW_VERDICT JSON")
+    if verdict.get("verdict") not in ("pass", "findings"):
+        raise ValueError("verdict must be 'pass' or 'findings'")
+    for key in ("blockers", "majors", "minors"):
+        value = verdict.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"{key} must be a non-negative integer")
+    if not isinstance(verdict.get("findings", []), list):
+        raise ValueError("findings must be a list")
+    return verdict
+
+
+def review_has_findings(verdict: dict) -> bool:
+    """True when a verdict still blocks the merge gate (Blocker or Major)."""
+    return verdict["blockers"] > 0 or verdict["majors"] > 0
+
+
+def freeze_pr(worktree: Path, branch: str, base_branch: str) -> dict:
+    """Freeze the exact base/head SHA of the one open PR for a task branch."""
+    raw = run_command([
+        "gh", "pr", "list", "--state", "open", "--head", branch,
+        "--json", "number,url,baseRefName,baseRefOid,headRefName,headRefOid",
+        "--limit", "2",
+    ], cwd=worktree)
+    prs = json.loads(raw)
+    if not isinstance(prs, list) or len(prs) != 1:
+        raise RuntimeError("expected exactly one open PR for the task branch")
+    pr = prs[0]
+    base_ref = pr.get("baseRefName")
+    if base_ref != base_branch:
+        LOGGER.error(
+            "pr_base_mismatch expected=%s actual=%s branch=%s",
+            base_branch, base_ref, branch,
+        )
+        raise RuntimeError(
+            f"PR base is {base_ref}, expected {base_branch}; the merge gate "
+            "only accepts the configured protected branch"
+        )
+    return {
+        "number": pr["number"],
+        "url": pr["url"],
+        "base_ref": base_ref,
+        "base_oid": pr["baseRefOid"],
+        "head_ref": pr["headRefName"],
+        "head_oid": pr["headRefOid"],
+    }
+
+
+def _agent_session_dir(worktree: Path, role: str, round: int) -> Path:
+    """Each review/fix round gets its own session dir (independent sessions)."""
+    return worktree / ".pi-session" / f"{role}-round-{round}"
+
+
+def _agent_skill_args(config: dict) -> list[str]:
+    return [
+        item for skill in config["skills"]
+        for item in ("--skill", str(skill))
+    ]
+
+
+def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
+               round: int, timeout: int | None = None) -> str:
+    """Run one independent, read-only review session for a frozen PR."""
+    system_prompt = render_prompt(
+        config["prompt_review"].read_text(encoding="utf-8"),
+        {
+            "SOURCE_REPO": source_repo,
+            "PR_NUMBER": str(pr["number"]),
+            "PR_URL": pr["url"],
+            "BASE_BRANCH": config["base_branch"],
+            "BASE_SHA": pr["base_oid"],
+            "HEAD_SHA": pr["head_oid"],
+            "HEAD_REF": pr["head_ref"],
+            "ROUND": str(round),
+        },
+    )
+    context = (
+        f"Independently review PR #{pr['number']} ({pr['url']}) of "
+        f"{source_repo} against base {config['base_branch']}@{pr['base_oid']} "
+        f"and head {pr['head_oid']} (round {round}). Follow code-review R1-R9 "
+        "and end with a single REVIEW_VERDICT line."
+    )
+    session_dir = _agent_session_dir(worktree, "review", round)
+    command = [
+        "pi", *_agent_skill_args(config), "--print", "--session-dir",
+        str(session_dir), "--system-prompt", system_prompt, context,
+    ]
+    LOGGER.info("review_session=%s pr=%s round=%s", session_dir,
+                pr["number"], round)
+    return run_command(
+        command, cwd=worktree, timeout=timeout, log_stdout=True,
+        log_command=[
+            "pi", "--print", "--session-dir", str(session_dir),
+            "--system-prompt", "<redacted>", "<issue-context-redacted>",
+        ],
+    )
+
+
+def run_fix(worktree: Path, pr: dict, config: dict, source_repo: str,
+            findings: list[dict], round: int,
+            timeout: int | None = None) -> str:
+    """Run one fixer session on the same branch/worktree to clear findings."""
+    system_prompt = render_prompt(
+        config["prompt_fix"].read_text(encoding="utf-8"),
+        {
+            "SOURCE_REPO": source_repo,
+            "PR_NUMBER": str(pr["number"]),
+            "PR_URL": pr["url"],
+            "BASE_BRANCH": config["base_branch"],
+            "HEAD_REF": pr["head_ref"],
+            "ROUND": str(round),
+        },
+    )
+    context = (
+        f"Fix the review findings for PR #{pr['number']} ({pr['url']}) of "
+        f"{source_repo} on branch {pr['head_ref']} (round {round}). "
+        "Findings: " + json.dumps(findings) +
+        ". Make the smallest fix, run the full test suite, commit and push "
+        "to the same branch. Do not merge or push the protected branch."
+    )
+    session_dir = _agent_session_dir(worktree, "fix", round)
+    command = [
+        "pi", *_agent_skill_args(config), "--print", "--session-dir",
+        str(session_dir), "--system-prompt", system_prompt, context,
+    ]
+    LOGGER.info("fix_session=%s pr=%s round=%s", session_dir, pr["number"],
+                round)
+    return run_command(
+        command, cwd=worktree, timeout=timeout, log_stdout=True,
+        log_command=[
+            "pi", "--print", "--session-dir", str(session_dir),
+            "--system-prompt", "<redacted>", "<issue-context-redacted>",
+        ],
+    )
+
+
+def merge_gate(worktree: Path, pr: dict, base_branch: str) -> dict:
+    """Merge the reviewed PR only if the gate still holds against latest base.
+
+    Re-fetch the latest remote base, require the PR head to contain it, the PR
+    to be mergeable, and the remote head to still be the reviewed head. Then
+    merge with `--match-head-commit` so only that exact head can land. No force
+    push, no direct push of the protected branch.
+    """
+    run_command(["git", "fetch", "origin", base_branch], cwd=worktree)
+    try:
+        run_command(
+            ["git", "merge-base", "--is-ancestor",
+             f"origin/{base_branch}", pr["head_oid"]],
+            cwd=worktree,
+        )
+    except subprocess.CalledProcessError:
+        LOGGER.error(
+            "merge_gate_behind_base base_branch=%s pr=%s head=%s",
+            base_branch, pr["number"], pr["head_oid"],
+        )
+        raise RuntimeError(
+            f"PR #{pr['number']} head {pr['head_oid']} is behind latest "
+            f"remote base origin/{base_branch}; absorb the latest base, rerun "
+            "tests and review, then retry"
+        ) from None
+    raw = run_command([
+        "gh", "pr", "view", str(pr["number"]),
+        "--json", "state,mergeable,headRefOid",
+    ], cwd=worktree)
+    state = json.loads(raw)
+    mergeable = state.get("mergeable")
+    if mergeable != "MERGEABLE":
+        LOGGER.error(
+            "merge_gate_not_mergeable pr=%s mergeable=%s",
+            pr["number"], mergeable,
+        )
+        raise RuntimeError(
+            f"PR #{pr['number']} is not mergeable (mergeable={mergeable}); "
+            "resolve conflicts and retry"
+        )
+    remote_head = state.get("headRefOid")
+    if remote_head != pr["head_oid"]:
+        LOGGER.error(
+            "merge_gate_head_moved pr=%s reviewed=%s remote=%s",
+            pr["number"], pr["head_oid"], remote_head,
+        )
+        raise RuntimeError(
+            f"PR #{pr['number']} head moved since review "
+            f"(reviewed={pr['head_oid']} remote={remote_head}); re-review "
+            "before merging"
+        )
+    run_command([
+        "gh", "pr", "merge", str(pr["number"]),
+        "--match-head-commit", pr["head_oid"], "--merge",
+    ], cwd=worktree)
+    LOGGER.info("merged pr=%s head=%s", pr["number"], pr["head_oid"])
+    return {**pr, "merged": True}
+
+
+def confirm_merged(worktree: Path, pr: dict, base_branch: str) -> dict:
+    """Confirm the PR is MERGED and origin/<base> contains the merge commit."""
+    raw = run_command([
+        "gh", "pr", "view", str(pr["number"]),
+        "--json", "state,mergedAt,mergeCommit",
+    ], cwd=worktree)
+    state = json.loads(raw)
+    if state.get("state") != "MERGED" or not state.get("mergedAt"):
+        LOGGER.error("confirm_merged_not_merged pr=%s state=%s",
+                     pr["number"], state.get("state"))
+        raise RuntimeError(
+            f"PR #{pr['number']} is not merged (state={state.get('state')})"
+        )
+    merge_commit = (state.get("mergeCommit") or {}).get("oid")
+    if not merge_commit:
+        raise RuntimeError(
+            f"PR #{pr['number']} is merged but has no merge commit oid"
+        )
+    run_command(["git", "fetch", "origin", base_branch], cwd=worktree)
+    try:
+        run_command(
+            ["git", "merge-base", "--is-ancestor", merge_commit,
+             f"origin/{base_branch}"],
+            cwd=worktree,
+        )
+    except subprocess.CalledProcessError:
+        LOGGER.error(
+            "confirm_merged_missing_on_base pr=%s merge_commit=%s",
+            pr["number"], merge_commit,
+        )
+        raise RuntimeError(
+            f"merge commit {merge_commit} is not on origin/{base_branch}; "
+            "the merge did not land on the protected branch"
+        ) from None
+    return {"state": "MERGED", "merge_commit": merge_commit}
+
+
+def review_fix_merge(worktree: Path, branch: str, base_branch: str,
+                     config: dict, source_repo: str, number: int,
+                     max_rounds: int = MAX_REVIEW_ROUNDS) -> dict:
+    """Independent review, bounded fix loop, merge gate, and merge confirm.
+
+    Loop: freeze the PR, run an independent review, and parse the verdict. If
+    there are Blocker/Major findings, comment them to the Issue and PR, run a
+    fixer on the same branch/worktree, and re-freeze/re-review. When the
+    verdict is clean, run the merge gate (which re-checks the latest remote
+    base) and merge, then confirm the merge landed on origin/<base>.
+    """
+    last_verdict = None
+    for round in range(1, max_rounds + 1):
+        pr = freeze_pr(worktree, branch, base_branch)
+        output = run_review(worktree, pr, config, source_repo, round)
+        verdict = parse_review_verdict(output)
+        last_verdict = verdict
+        LOGGER.info(
+            "review pr=%s round=%s verdict=%s blockers=%s majors=%s",
+            pr["number"], round, verdict["verdict"], verdict["blockers"],
+            verdict["majors"],
+        )
+        if not review_has_findings(verdict):
+            try:
+                merged = merge_gate(worktree, pr, base_branch)
+            except RuntimeError as exc:
+                if "behind latest remote base" not in str(exc):
+                    raise
+                # The base moved after the review: absorb it, resolve
+                # conflicts, rerun the suite, and re-review on the next round.
+                _comment_fix_needed(
+                    number, source_repo, pr, round,
+                    "PR is behind the latest base; merge the latest "
+                    f"origin/{base_branch} into the branch, resolve "
+                    "conflicts, and rerun the full test suite",
+                )
+                run_fix(worktree, pr, config, source_repo, [
+                    {"level": "Major", "location": "base",
+                     "note": "absorb the latest base before merging"},
+                ], round)
+                continue
+            confirmed = confirm_merged(worktree, merged, base_branch)
+            return {
+                "pr": pr, "rounds": round, "verdict": verdict,
+                "merge_commit": confirmed["merge_commit"],
+            }
+        body = (
+            f"Muyan Pilot review round {round} for PR #{pr['number']}: "
+            f"{verdict['blockers']} blocker(s), {verdict['majors']} major(s). "
+            "Findings: " + json.dumps(verdict["findings"], ensure_ascii=False)
+        )
+        comment_issue(number, repo=source_repo, body=body)
+        comment_pr(pr["number"], body=body)
+        run_fix(worktree, pr, config, source_repo, verdict["findings"], round)
+    LOGGER.error(
+        "review_fix_merge_exhausted pr_branch=%s rounds=%s last=%s",
+        branch, max_rounds, last_verdict,
+    )
+    raise RuntimeError(
+        f"review/fix loop exhausted after {max_rounds} rounds with "
+        f"{last_verdict['blockers']} blocker(s) and "
+        f"{last_verdict['majors']} major(s) remaining; needs human review"
+    )
+
+
+def _comment_fix_needed(number: int, source_repo: str, pr: dict,
+                        round: int, reason: str) -> None:
+    """Record why a fixer round is needed (behind base) on Issue and PR."""
+    body = (
+        f"Muyan Pilot review round {round} for PR #{pr['number']}: {reason}."
+    )
+    comment_issue(number, repo=source_repo, body=body)
+    comment_pr(pr["number"], body=body)
+
+
+def comment_pr(number: int, *, body: str) -> None:
+    """Comment on a PR (used to record each review round's findings)."""
+    run_command(["gh", "pr", "comment", str(number), "--body", body])
+
+
 def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     number = int(issue["number"])
     base_branch = config["base_branch"]
@@ -327,15 +678,28 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         config = {**config, "base_sha": base_sha, "run_id": run_id}
         run_pi(issue, worktree, config, source_repo)
         pr_url = verify_pr(worktree, branch, base_branch)
+        comment_issue(
+            number, repo=source_repo,
+            body=f"Muyan Pilot opened PR: {pr_url} ({run_info}); running "
+                 "independent review/fix loop, then merging",
+        )
+        result = review_fix_merge(
+            worktree, branch, base_branch, config, source_repo, number,
+        )
+        merged_pr = result["pr"]
         edit_issue(
-            number, repo=source_repo, add="ai-pr-opened",
+            number, repo=source_repo, add="ai-merged",
             remove="ai-in-progress",
         )
         comment_issue(
             number, repo=source_repo,
-            body=f"Muyan Pilot opened PR: {pr_url} ({run_info})",
+            body=(
+                f"Muyan Pilot merged PR: {merged_pr['url']} "
+                f"(merge_commit={result['merge_commit']} "
+                f"review_rounds={result['rounds']} {run_info})"
+            ),
         )
-        return pr_url
+        return merged_pr["url"]
     except Exception as exc:
         LOGGER.exception("issue=%s failed", number)
         try:

@@ -1,6 +1,6 @@
 # Muyan Pilot
 
-最小 bootstrap：从配置文件中的 source repos 按顺序领取一个 `ai-ready` Issue，启动 Pi，在隔离 worktree 中完成开发并创建 PR。
+最小 bootstrap：从配置文件中的 source repos 按顺序领取一个 `ai-ready` Issue，启动 Pi，在隔离 worktree 中完成开发并创建 PR；随后 Runner 自动完成独立审查、修复循环和合并（见下方「自动审查、修复与合并」）。
 
 开发契约见 [AGENTS.md](AGENTS.md)：每次本地 Pi 自举开发前先读 Issue、context files、README 和相关代码，TDD、100% 覆盖率、UI 用 Playwright、失败 fail fast、不 merge、不 push 保护分支、不引入数据库/队列/daemon/fallback、不设业务任务 timeout。
 
@@ -62,3 +62,17 @@ Runner 每次处理一个 Issue 后退出，由 systemd timer 再次触发；不
 Pi 创建 PR 前必须重新 fetch：若 `origin/<base_branch>` 已前进，需合入最新 base、手工解决冲突、重跑完整测试与 review 后再推送。Runner 在验收时用 `git merge-base --is-ancestor origin/<base_branch> HEAD` 验证最新远端 base 是交付 HEAD 的祖先；不满足则 fail fast，不接受 PR。不自动解决冲突，不 force push，不 merge 或 push 保护分支。
 
 `.worktrees/` 已加入 `.gitignore`，不会进入版本库。
+
+## 自动审查、修复与合并
+
+Pi 不直接 push 保护分支。实现 Agent 只 push feature branch 并创建 PR；PR 打开后由 **Runner** 关闭交付闭环：
+
+1. **冻结 PR 的 base/head SHA**（`gh pr list` 取唯一 open PR 的 `baseRefOid`/`headRefOid`）。
+2. **独立审查**：启动一个独立、只读的 Review Agent（code-review R1–R9），对精确 base/head SHA 审查需求、diff、调用链、测试与运行证据。审查会话必须以一行机器可读的 `REVIEW_VERDICT {"verdict":"pass|findings","blockers":N,"majors":N,"minors":N,"findings":[...]}` 结尾；读不到合法 verdict 一律 fail fast，绝不当作通过。
+3. **修复循环**：有 Blocker/Major 时，把 finding 评论到 Issue 和 PR，在同一 feature branch/worktree 启动 Fixer 修复并 push，然后重新冻结 SHA、全量回归、完整复审。循环最多 5 轮（见 `MAX_REVIEW_ROUNDS`）；超轮仍有 Blocker/Major 则 fail fast 并标记 `ai-blocked`。
+4. **合并门禁**：重新 fetch 最新 `origin/<base>`，要求 PR head 包含最新 base、PR mergeable、远端 head 仍是被审查的 head；然后 `gh pr merge <n> --match-head-commit <head> --merge`，只有被审查的 head 能落地。落后最新 base 的 PR 不会被合并（fail fast，等下一 tick 吸收最新 base 后重试）。
+5. **确认合并**：`gh pr view` 确认 PR `MERGED` 且 `mergeCommit` 已落在 `origin/<base>`；Issue 因 PR 关联自动 CLOSED。
+
+成功合并后 Issue 标记 `ai-merged`（替代 `ai-pr-opened`），评论写入 PR URL、merge commit、审查轮次和 base/run 信息。下一任务只从新的 `origin/<base>` 创建。不 force push、不直接 push 保护分支、不设业务 timeout；审查 finding 不是 `ai-blocked`，而是进入同一 PR 的 fix/review 循环。
+
+三个 prompt 由配置提供（默认 `prompt.md` 实现、`prompt_review.md` 审查、`prompt_fix.md` 修复）。

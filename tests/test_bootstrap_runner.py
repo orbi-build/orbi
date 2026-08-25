@@ -94,16 +94,34 @@ def test_render_prompt_replaces_context_values():
 
 def test_validate_config_accepts_existing_files(tmp_path):
     prompt = tmp_path / "prompt.md"
+    prompt_review = tmp_path / "prompt_review.md"
+    prompt_fix = tmp_path / "prompt_fix.md"
     skill = tmp_path / "skill.md"
     context = tmp_path / "context.md"
-    for path in (prompt, skill, context):
+    for path in (prompt, prompt_review, prompt_fix, skill, context):
         path.write_text("ok", encoding="utf-8")
     runner.validate_config({
         "repo_dir": tmp_path,
         "prompt": prompt,
+        "prompt_review": prompt_review,
+        "prompt_fix": prompt_fix,
         "skills": [skill],
         "context_files": [context],
     })
+
+
+def test_validate_config_requires_review_and_fix_prompts(tmp_path):
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("ok", encoding="utf-8")
+    with pytest.raises(FileNotFoundError, match="prompt_review.md"):
+        runner.validate_config({
+            "repo_dir": tmp_path,
+            "prompt": prompt,
+            "prompt_review": tmp_path / "prompt_review.md",
+            "prompt_fix": tmp_path / "prompt_fix.md",
+            "skills": [],
+            "context_files": [],
+        })
 
 
 def test_validate_config_fails_before_issue_claim_when_path_missing(tmp_path):
@@ -111,6 +129,8 @@ def test_validate_config_fails_before_issue_claim_when_path_missing(tmp_path):
         runner.validate_config({
             "repo_dir": tmp_path,
             "prompt": tmp_path / "missing.md",
+            "prompt_review": tmp_path / "prompt_review.md",
+            "prompt_fix": tmp_path / "prompt_fix.md",
             "skills": [],
             "context_files": [],
         })
@@ -545,28 +565,56 @@ def test_verify_pr_queries_base_and_head_and_accepts_matching_pr(
     ] in calls
 
 
-def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_path):
+def test_process_issue_success_reviews_merges_and_records_result(
+        monkeypatch, tmp_path,
+):
     calls = []
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     monkeypatch.setattr(runner, "new_run_id", lambda: "run1")
     monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
-    monkeypatch.setattr(runner, "verify_pr", lambda *args, **kwargs: "https://github.com/muyantech/muyan-pilot/pull/4")
+    monkeypatch.setattr(runner, "verify_pr", lambda *args, **kwargs: "https://github.com/muyan-pilot/pull/4")
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
+    review_calls = []
+    monkeypatch.setattr(
+        runner, "review_fix_merge",
+        lambda *args, **kwargs: review_calls.append((args, kwargs)) or {
+            "pr": {"number": 4, "url": "https://github.com/muyan-pilot/pull/4",
+                   "base_ref": "main", "base_oid": "b1", "head_ref": "h",
+                   "head_oid": "h1"},
+            "rounds": 2, "verdict": {"verdict": "pass", "blockers": 0,
+                                     "majors": 0, "minors": 1, "findings": []},
+            "merge_commit": "m1",
+        },
+    )
     issue = {"number": 4, "title": "Fix", "body": "Body"}
-    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}
-    assert runner.process_issue(issue, config, "xqliu/muyan-ceo") == "https://github.com/muyantech/muyan-pilot/pull/4"
+    config = {
+        "repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+        "prompt_review": tmp_path / "prompt_review.md",
+        "prompt_fix": tmp_path / "prompt_fix.md", "base_branch": "main",
+    }
+    assert runner.process_issue(issue, config, "xqliu/muyan-ceo") == "https://github.com/muyan-pilot/pull/4"
     assert calls[0] == ("edit", (4,), {"repo": "xqliu/muyan-ceo", "add": "ai-in-progress"})
-    assert calls[1][0] == "edit"
-    assert calls[1][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-pr-opened", "remove": "ai-in-progress"}
-    comment = calls[2]
-    assert comment[0] == "comment"
-    body = comment[2]["body"]
-    assert "Muyan Pilot opened PR: https://github.com/muyantech/muyan-pilot/pull/4" in body
-    assert "base_branch=main" in body
-    assert "base_sha=abc123def456" in body
-    assert "run_id=run1" in body
+    # The review/fix/merge loop runs on the task branch/worktree.
+    assert review_calls[0][0][:3] == (tmp_path / "wt", "muyan-pilot/xqliu-muyan-ceo-issue-4-run1", "main")
+    assert review_calls[0][0][4] == "xqliu/muyan-ceo"
+    assert review_calls[0][0][5] == 4
+    # calls[1] is the "opened PR" comment (review starting).
+    assert calls[1][0] == "comment"
+    assert "Muyan Pilot opened PR: https://github.com/muyan-pilot/pull/4" in calls[1][2]["body"]
+    # Final label is ai-merged (the PR was merged in the same tick).
+    assert calls[2][0] == "edit"
+    assert calls[2][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-merged", "remove": "ai-in-progress"}
+    # calls[3] is the merged-result comment.
+    assert calls[3][0] == "comment"
+    merged_body = calls[3][2]["body"]
+    assert "Muyan Pilot merged PR: https://github.com/muyan-pilot/pull/4" in merged_body
+    assert "merge_commit=m1" in merged_body
+    assert "review_rounds=2" in merged_body
+    assert "base_branch=main" in merged_body
+    assert "base_sha=abc123def456" in merged_body
+    assert "run_id=run1" in merged_body
 
 
 def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path):
@@ -604,10 +652,15 @@ def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypat
     assert "failure reporting failed" in caplog.text
 
 
+def _write_prompts(tmp_path):
+    for name in ("prompt.md", "prompt_review.md", "prompt_fix.md"):
+        (tmp_path / name).write_text("prompt", encoding="utf-8")
+
+
 def test_main_returns_zero_when_queue_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "pick_next_issue", lambda repos: None)
     config = tmp_path / "muyan-pilot.toml"
-    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    _write_prompts(tmp_path)
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     assert runner.main(["--config", str(config)]) == 0
 
@@ -615,7 +668,7 @@ def test_main_returns_zero_when_queue_empty(monkeypatch, tmp_path):
 def test_main_processes_one_issue(monkeypatch, tmp_path):
     issue = {"number": 12, "title": "task", "body": "body"}
     calls = []
-    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    _write_prompts(tmp_path)
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
     monkeypatch.setattr(runner, "pick_next_issue", lambda repos: ("xqliu/muyan-pilot", issue))
@@ -625,8 +678,7 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
 
 
 def test_main_accepts_repeated_source_repo(monkeypatch, tmp_path):
-    prompt = tmp_path / "prompt.md"
-    prompt.write_text("prompt", encoding="utf-8")
+    _write_prompts(tmp_path)
     seen = []
     issue = {"number": 14, "title": "task"}
     config = tmp_path / "muyan-pilot.toml"

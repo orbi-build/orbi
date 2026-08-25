@@ -7,6 +7,11 @@ import bootstrap_runner as runner
 import muyan_pilot
 
 
+def _write_prompts(tmp_path):
+    for name in ("prompt.md", "prompt_review.md", "prompt_fix.md"):
+        (tmp_path / name).write_text("prompt", encoding="utf-8")
+
+
 def test_issue_number_extracts_number_from_github_url():
     assert muyan_pilot.issue_number(
         "https://github.com/xqliu/muyan-pilot/issues/3"
@@ -235,7 +240,7 @@ def test_main_add_dispatches_to_selected_source_repo(monkeypatch, tmp_path, caps
         "source_repos = [\"xqliu/muyan-pilot\", \"xqliu/muyan-ceo\"]\n",
         encoding="utf-8",
     )
-    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    _write_prompts(tmp_path)
     calls = []
     monkeypatch.setattr(
         muyan_pilot, "dispatch_issue",
@@ -257,7 +262,7 @@ def test_main_add_uses_explicit_repo_override(monkeypatch, tmp_path, capsys):
         "source_repos = [\"xqliu/muyan-pilot\", \"xqliu/muyan-ceo\"]\n",
         encoding="utf-8",
     )
-    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    _write_prompts(tmp_path)
     calls = []
     monkeypatch.setattr(
         muyan_pilot, "dispatch_issue",
@@ -272,7 +277,7 @@ def test_main_add_uses_explicit_repo_override(monkeypatch, tmp_path, capsys):
 def test_main_add_rejects_repo_not_in_config(monkeypatch, tmp_path):
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"xqliu/muyan-pilot\"]\n", encoding="utf-8")
-    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    _write_prompts(tmp_path)
     with pytest.raises(SystemExit):
         muyan_pilot.main([
             "add", "T", "--repo", "other/repo", "--config", str(config),
@@ -282,7 +287,7 @@ def test_main_add_rejects_repo_not_in_config(monkeypatch, tmp_path):
 def test_main_status_prints_report(monkeypatch, tmp_path, capsys):
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"xqliu/muyan-pilot\"]\n", encoding="utf-8")
-    (tmp_path / "prompt.md").write_text("prompt", encoding="utf-8")
+    _write_prompts(tmp_path)
     monkeypatch.setattr(
         muyan_pilot, "status_report",
         lambda config: "source: xqliu/muyan-pilot\ncurrent: -",
