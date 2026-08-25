@@ -190,7 +190,7 @@ def test_freeze_pr_rejects_multiple_open_prs(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# run_review / run_fix command construction
+# run_review command construction (streamed, role=review)
 # ---------------------------------------------------------------------------
 
 def _review_config(tmp_path, prompt_name="prompt_review.md"):
@@ -199,7 +199,6 @@ def _review_config(tmp_path, prompt_name="prompt_review.md"):
                       encoding="utf-8")
     return {
         "prompt_review": prompt,
-        "prompt_fix": tmp_path / "prompt_fix.md",
         "source_repos": ["owner/repo"],
         "workspace_root": tmp_path,
         "context_files": [],
@@ -211,57 +210,40 @@ def _review_config(tmp_path, prompt_name="prompt_review.md"):
 
 
 def test_run_review_launches_independent_readonly_pi_session(monkeypatch, tmp_path):
-    (tmp_path / "prompt_fix.md").write_text("fix", encoding="utf-8")
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        runner, "stream_pi",
         lambda command, **kwargs: calls.append((command, kwargs)) or "done",
     )
     pr = {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
           "head_ref": "h", "head_oid": "h1"}
     out = runner.run_review(tmp_path, pr, _review_config(tmp_path),
-                            "owner/repo", 1)
+                            "owner/repo", 4, "muyan-pilot/owner-repo-issue-4-run1", 1)
     assert out == "done"
     command, kwargs = calls[0]
-    # Independent session dir, review skill, redacted log.
+    # Review skill, shared flat session dir (so the same live activity
+    # pipeline can follow the new JSONL), redacted log.
     assert command[0] == "pi"
     assert "--skill" in command
     assert str(tmp_path / "code-review.md") in command
     session_dir = command[command.index("--session-dir") + 1]
-    assert "review" in session_dir
-    assert "round-1" in session_dir
+    assert session_dir == str(tmp_path / ".pi-session")
     # Reviewer system prompt carries the frozen PR number and base/head SHA.
     system_prompt = command[command.index("--system-prompt") + 1]
     assert " 4 " in system_prompt
     assert "b1" in system_prompt
     assert "h1" in system_prompt
+    # The review streams through the same pipeline as implement/fix with
+    # its own role (Issue #41: one run, many roles).
     assert kwargs["cwd"] == tmp_path
-    assert kwargs["log_stdout"] is True
-    assert kwargs["log_command"][-2:] == ["<redacted>", "<issue-context-redacted>"]
-
-
-def test_run_fix_passes_findings_to_fixer(monkeypatch, tmp_path):
-    (tmp_path / "prompt_review.md").write_text("rev", encoding="utf-8")
-    (tmp_path / "prompt_fix.md").write_text("FIX PROMPT {{PR_NUMBER}}",
-                                             encoding="utf-8")
-    calls = []
-    monkeypatch.setattr(
-        runner, "run_command",
-        lambda command, **kwargs: calls.append((command, kwargs)) or "done",
-    )
-    pr = {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
-          "head_ref": "h", "head_oid": "h1"}
-    findings = [{"level": "Blocker", "location": "a.py:1", "note": "x"}]
-    runner.run_fix(tmp_path, pr, _review_config(tmp_path), "owner/repo",
-                   findings, 1)
-    command, kwargs = calls[0]
-    session_dir = command[command.index("--session-dir") + 1]
-    assert "fix" in session_dir
-    assert "round-1" in session_dir
-    # The findings are injected into the fixer context so it can act on them.
-    assert "a.py:1" in command[8]
-    assert "Blocker" in command[8]
-    assert kwargs["cwd"] == tmp_path
+    assert kwargs["role"] == runner.ROLE_REVIEW
+    assert kwargs["run_id"] == "run1"
+    assert kwargs["issue"] == 4
+    assert kwargs["branch"] == "muyan-pilot/owner-repo-issue-4-run1"
+    assert kwargs["source_repo"] == "owner/repo"
+    assert kwargs["log_command"][-2:] == [
+        "<redacted>", "<review-context-redacted>",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +408,145 @@ def test_comment_pr_runs_gh_pr_comment(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# review_fix_merge loop
+# review_rounds_so_far
+# ---------------------------------------------------------------------------
+
+def _round_comment(round_no, pr_number=4):
+    return {
+        "body": (
+            "<!-- muyan-pilot:run=run1 -->\n"
+            f"Muyan Pilot review round {round_no} for PR #{pr_number}: "
+            "1 blocker(s), 0 major(s). Findings: []"
+        ),
+    }
+
+
+def test_review_rounds_so_far_counts_recorded_rounds():
+    comments = [
+        {"body": "Muyan Pilot opened PR: https://x"},
+        _round_comment(1),
+        {"body": "Muyan Pilot fixed PR: https://x"},
+        _round_comment(2),
+        {"body": None},
+    ]
+    assert runner.review_rounds_so_far(comments) == 2
+
+
+def test_review_rounds_so_far_ignores_comments_without_round_line():
+    assert runner.review_rounds_so_far([
+        {"body": "Muyan Pilot started Pi: ..."},
+        {"body": "some public comment"},
+    ]) == 0
+
+
+# ---------------------------------------------------------------------------
+# sync_base_checkout (F1: the deployment checkout systemd executes)
+# ---------------------------------------------------------------------------
+
+def _clone_origin(origin: Path, name: str) -> Path:
+    path = origin.parent / name
+    path.mkdir()
+    runner.run_command(["git", "clone", str(origin), "."], cwd=path)
+    runner.run_command(["git", "config", "user.email", "pilot@test.local"],
+                       cwd=path)
+    runner.run_command(["git", "config", "user.name", "Pilot"], cwd=path)
+    return path
+
+
+def test_sync_base_checkout_fast_forwards_and_verifies(tmp_path):
+    # A bare origin plus the deployment checkout (repo_dir) that systemd
+    # executes from, plus an independent merge actor that advances the
+    # remote base first.
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    runner.run_command(["git", "init", "--bare", "-b", "main", "."], cwd=origin)
+    actor = _clone_origin(origin, "actor")
+    runner.run_command(["git", "commit", "--allow-empty", "-m", "base"],
+                       cwd=actor)
+    runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
+    checkout = _clone_origin(origin, "checkout")
+    # The independent merge actor lands a merge on origin/main while the
+    # deployment checkout is still on the old base.
+    runner.run_command(["git", "commit", "--allow-empty", "-m", "merged"],
+                       cwd=actor)
+    runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
+    old_head = runner.run_command(["git", "rev-parse", "HEAD"], cwd=checkout)
+
+    runner.sync_base_checkout(checkout, "main")
+
+    new_head = runner.run_command(["git", "rev-parse", "HEAD"], cwd=checkout)
+    remote = runner.run_command(
+        ["git", "rev-parse", "origin/main"], cwd=checkout,
+    )
+    assert old_head != new_head
+    assert new_head == remote
+
+
+def test_sync_base_checkout_is_a_noop_when_already_at_remote(
+        monkeypatch, tmp_path):
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    runner.run_command(["git", "init", "--bare", "-b", "main", "."], cwd=origin)
+    actor = _clone_origin(origin, "actor")
+    runner.run_command(["git", "commit", "--allow-empty", "-m", "base"],
+                       cwd=actor)
+    runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
+    checkout = _clone_origin(origin, "checkout")
+
+    calls = []
+    real = runner.run_command
+
+    def spy(command, **kwargs):
+        calls.append(command)
+        return real(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", spy)
+    runner.sync_base_checkout(checkout, "main")
+    # Only fetch + rev-parse; no merge is issued when already current.
+    assert not any(c[:2] == ["git", "merge"] for c in calls)
+
+
+def test_sync_base_checkout_fails_fast_when_not_fast_forwardable(tmp_path):
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    runner.run_command(["git", "init", "--bare", "-b", "main", "."], cwd=origin)
+    actor = _clone_origin(origin, "actor")
+    runner.run_command(["git", "commit", "--allow-empty", "-m", "base"],
+                       cwd=actor)
+    runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
+    checkout = _clone_origin(origin, "checkout")
+    # Local drift: the checkout has its own commit, the remote advanced
+    # independently -> --ff-only cannot apply.
+    runner.run_command(["git", "commit", "--allow-empty", "-m", "drift"],
+                       cwd=checkout)
+    runner.run_command(["git", "commit", "--allow-empty", "-m", "ahead"],
+                       cwd=actor)
+    runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
+
+    with pytest.raises(
+        RuntimeError, match="cannot fast-forward",
+    ):
+        runner.sync_base_checkout(checkout, "main")
+
+
+def test_sync_base_checkout_fails_fast_when_synced_head_mismatches(
+        monkeypatch, tmp_path):
+    heads = iter(["a" * 40, "b" * 40])
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["git", "rev-parse"] and command[2] == "HEAD":
+            return next(heads)
+        if command[:2] == ["git", "rev-parse"]:
+            return "c" * 40
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="after the sync"):
+        runner.sync_base_checkout(tmp_path, "main")
+
+
+# ---------------------------------------------------------------------------
+# review_and_merge_if_clean (the wait-loop review step)
 # ---------------------------------------------------------------------------
 
 def _pass_verdict_text():
@@ -448,32 +568,107 @@ def _pr():
             "head_ref": "h", "head_oid": "h1"}
 
 
-def test_review_fix_merge_passes_first_round_and_merges(monkeypatch, tmp_path):
+def _review_merge_config(tmp_path):
+    return {
+        "repo_dir": tmp_path,
+        "base_branch": "main",
+        "base_sha": "b1",
+        "run_id": "a1b2c3d4",
+    }
+
+
+def test_review_and_merge_clean_verdict_merges_and_labels_merged(
+        monkeypatch, tmp_path):
     calls = []
+    monkeypatch.setattr(
+        runner, "issue_comments", lambda *a, **k: [],
+    )
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
-    monkeypatch.setattr(runner, "merge_gate", lambda *a, **k: {**_pr(), "merged": True})
     monkeypatch.setattr(
-        runner, "confirm_merged", lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
+        runner, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
     )
-    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: calls.append("issue"))
-    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: calls.append("pr"))
-    monkeypatch.setattr(runner, "run_fix", lambda *a, **k: calls.append("fix"))
-    result = runner.review_fix_merge(tmp_path, "branch", "main", {}, "owner/repo", 4)
-    assert result["rounds"] == 1
-    assert result["merge_commit"] == "m1"
-    assert result["verdict"]["verdict"] == "pass"
-    assert calls == []  # no findings, no fix, no comments
-
-
-def test_review_fix_merge_fixes_findings_then_passes(monkeypatch, tmp_path):
-    calls = []
-    verdicts = iter([_findings_verdict_text(), _pass_verdict_text()])
-    monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
-    monkeypatch.setattr(runner, "run_review", lambda *a, **k: next(verdicts))
-    monkeypatch.setattr(runner, "merge_gate", lambda *a, **k: {**_pr(), "merged": True})
     monkeypatch.setattr(
-        runner, "confirm_merged", lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
+        runner, "confirm_merged",
+        lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
+    )
+    monkeypatch.setattr(runner, "sync_base_checkout",
+                        lambda *a, **k: calls.append("sync"))
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *a, **k: calls.append(("edit", k)),
+    )
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *a, **k: calls.append(("comment", k.get("body"))),
+    )
+    merged = runner.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4,
+    )
+    assert merged is True
+    assert "sync" in calls
+    assert ("edit", {"repo": "owner/repo", "add": "ai-merged",
+                     "remove": "ai-pr-opened"}) in calls
+    comment = [c for c in calls if c[0] == "comment"][0][1]
+    assert "Muyan Pilot merged PR: u" in comment
+    assert "merge_commit=m1" in comment
+    assert "review_rounds=1" in comment
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in comment
+
+
+def test_review_and_merge_findings_labels_fix_needed_and_comments(
+        monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(
+        runner, "run_review", lambda *a, **k: _findings_verdict_text(),
+    )
+    monkeypatch.setattr(runner, "merge_gate", lambda *a, **k:
+                        (_ for _ in ()).throw(AssertionError("no merge")))
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *a, **k: calls.append(("issue", k.get("body"))),
+    )
+    monkeypatch.setattr(
+        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+    )
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *a, **k: calls.append(("edit", k)),
+    )
+    merged = runner.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4,
+    )
+    assert merged is False
+    # The findings are recorded on Issue and PR with the run marker...
+    assert calls[0][0] == "issue"
+    assert "a.py:1" in calls[0][1]
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in calls[0][1]
+    assert "Muyan Pilot review round 1 for PR #4" in calls[0][1]
+    assert calls[1][0] == "pr"
+    assert "a.py:1" in calls[1][1]
+    # ...and the Issue moves to the explicit fix state (the #45 fix loop
+    # repairs the same PR; a clean PR is never sent to the Fixer).
+    assert calls[2] == ("edit", {"repo": "owner/repo", "add": "ai-fix-needed",
+                                 "remove": "ai-pr-opened"})
+
+
+def test_review_and_merge_behind_base_labels_fix_needed(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(
+        runner, "merge_gate",
+        lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError(
+                "PR #4 head h1 is behind latest remote base origin/main; "
+                "absorb the latest base, rerun tests and review, then retry"
+            ),
+        ),
     )
     monkeypatch.setattr(
         runner, "comment_issue",
@@ -483,53 +678,22 @@ def test_review_fix_merge_fixes_findings_then_passes(monkeypatch, tmp_path):
         runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
     monkeypatch.setattr(
-        runner, "run_fix",
-        lambda *a, **k: calls.append(("fix", a[4])),  # findings passed to fixer
+        runner, "edit_issue",
+        lambda *a, **k: calls.append(("edit", k)),
     )
-    result = runner.review_fix_merge(tmp_path, "branch", "main", {}, "owner/repo", 4)
-    assert result["rounds"] == 2
-    assert result["merge_commit"] == "m1"
-    # Round 1: findings commented to issue and PR, fixer invoked with findings.
-    assert calls[0][0] == "issue" and "a.py:1" in calls[0][1]
-    assert calls[1][0] == "pr" and "a.py:1" in calls[1][1]
-    assert calls[2][0] == "fix" and calls[2][1][0]["location"] == "a.py:1"
-
-
-def test_review_fix_merge_absorbs_behind_base_then_merges(monkeypatch, tmp_path):
-    fix_calls = []
-    gate_calls = []
-
-    def fake_merge_gate(worktree, pr, base_branch):
-        gate_calls.append(pr["head_oid"])
-        if len(gate_calls) == 1:
-            raise RuntimeError(
-                "PR #4 head h1 is behind latest remote base origin/main; "
-                "absorb the latest base, rerun tests and review, then retry"
-            )
-        return {**_pr(), "merged": True}
-
-    monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
-    monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
-    monkeypatch.setattr(runner, "merge_gate", fake_merge_gate)
-    monkeypatch.setattr(
-        runner, "confirm_merged", lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
+    merged = runner.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4,
     )
-    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
-    monkeypatch.setattr(
-        runner, "run_fix",
-        lambda *a, **k: fix_calls.append(a[4]),
-    )
-    result = runner.review_fix_merge(tmp_path, "branch", "main", {}, "owner/repo", 4)
-    # Round 1 was behind (fixer invoked to absorb the base); round 2 merged.
-    assert result["rounds"] == 2
-    assert result["merge_commit"] == "m1"
-    assert len(fix_calls) == 1
-    assert fix_calls[0][0]["location"] == "base"
-    assert gate_calls == ["h1", "h1"]
+    assert merged is False
+    # A behind head is never merged: the fixer absorbs the latest base.
+    assert "behind the latest base" in calls[0][1]
+    assert calls[2] == ("edit", {"repo": "owner/repo", "add": "ai-fix-needed",
+                                 "remove": "ai-pr-opened"})
 
 
-def test_review_fix_merge_reraises_non_behind_gate_error(monkeypatch, tmp_path):
+def test_review_and_merge_reraises_non_behind_gate_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
     monkeypatch.setattr(
@@ -539,18 +703,38 @@ def test_review_fix_merge_reraises_non_behind_gate_error(monkeypatch, tmp_path):
         ),
     )
     with pytest.raises(RuntimeError, match="not mergeable"):
-        runner.review_fix_merge(tmp_path, "branch", "main", {}, "owner/repo", 4)
+        runner.review_and_merge_if_clean(
+            tmp_path, "branch", "main", _review_merge_config(tmp_path),
+            "owner/repo", 4,
+        )
 
 
-def test_review_fix_merge_exhausts_rounds_and_fails(monkeypatch, tmp_path, caplog):
+def test_review_and_merge_missing_verdict_raises(monkeypatch, tmp_path):
+    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
-    monkeypatch.setattr(runner, "run_review", lambda *a, **k: _findings_verdict_text())
-    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "run_fix", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner, "run_review", lambda *a, **k: "review without a verdict",
+    )
+    with pytest.raises(ValueError, match="no REVIEW_VERDICT"):
+        runner.review_and_merge_if_clean(
+            tmp_path, "branch", "main", _review_merge_config(tmp_path),
+            "owner/repo", 4,
+        )
+
+
+def test_review_and_merge_exhausted_rounds_raises(monkeypatch, tmp_path, caplog):
+    comments = [
+        {"body": f"Muyan Pilot review round {i} for PR #4: 1 blocker(s), "
+                 "0 major(s). Findings: []"}
+        for i in range(1, runner.MAX_REVIEW_ROUNDS + 1)
+    ]
+    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: comments)
     with caplog.at_level("ERROR"), pytest.raises(
-        RuntimeError, match="exhausted after 2 rounds",
+        RuntimeError,
+        match=f"exhausted after {runner.MAX_REVIEW_ROUNDS} rounds",
     ):
-        runner.review_fix_merge(tmp_path, "branch", "main", {}, "owner/repo", 4,
-                                max_rounds=2)
-    assert "review_fix_merge_exhausted" in caplog.text
+        runner.review_and_merge_if_clean(
+            tmp_path, "branch", "main", _review_merge_config(tmp_path),
+            "owner/repo", 4,
+        )
+    assert "review_rounds_exhausted" in caplog.text

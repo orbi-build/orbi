@@ -9,7 +9,7 @@ import muyan_pilot
 
 
 def _write_prompts(tmp_path):
-    for name in ("prompt.md", "prompt_review.md", "prompt_fix.md"):
+    for name in ("prompt.md", "prompt_review.md"):
         (tmp_path / name).write_text("prompt", encoding="utf-8")
 
 
@@ -149,11 +149,54 @@ def test_recent_result_returns_newest_pr_opened_or_blocked_issue(monkeypatch):
 
     def fake_list(repo, label, state="open"):
         calls.append((label, state))
-        return [pr_opened] if label == "ai-pr-opened" else [blocked]
+        if label == "ai-pr-opened":
+            return [pr_opened]
+        if label in ("ai-fix-needed", "ai-merged"):
+            return []
+        return [blocked]
 
     monkeypatch.setattr(muyan_pilot, "list_labeled_issues", fake_list)
     assert muyan_pilot.recent_result("xqliu/muyan-pilot") == blocked
-    assert calls == [("ai-pr-opened", "all"), ("ai-blocked", "all")]
+    assert calls == [
+        ("ai-pr-opened", "all"), ("ai-fix-needed", "all"),
+        ("ai-merged", "all"), ("ai-blocked", "all"),
+    ]
+
+
+def test_recent_result_includes_fix_needed_issue(monkeypatch):
+    """`ai-fix-needed` is a result state too: a delivery waiting for the
+    Fixer shows up in the status report (Issue #45 round-5 review,
+    Major 1)."""
+    fix_needed = {"number": 7, "title": "fixing", "url": "u7", "state": "OPEN"}
+    blocked = {"number": 5, "title": "stuck", "url": "u5", "state": "OPEN"}
+
+    def fake_list(repo, label, state="open"):
+        if label == "ai-fix-needed":
+            return [fix_needed]
+        if label == "ai-blocked":
+            return [blocked]
+        return []
+
+    monkeypatch.setattr(muyan_pilot, "list_labeled_issues", fake_list)
+    assert muyan_pilot.recent_result("xqliu/muyan-pilot") == fix_needed
+
+
+def test_recent_result_includes_merged_issue(monkeypatch):
+    """`ai-merged` is the success terminal state: a delivery the Runner
+    merged itself shows up in the status result (Issue #34 round-1
+    review, Major 3)."""
+    merged = {"number": 8, "title": "shipped", "url": "u8", "state": "CLOSED"}
+    blocked = {"number": 5, "title": "stuck", "url": "u5", "state": "OPEN"}
+
+    def fake_list(repo, label, state="open"):
+        if label == "ai-merged":
+            return [merged]
+        if label == "ai-blocked":
+            return [blocked]
+        return []
+
+    monkeypatch.setattr(muyan_pilot, "list_labeled_issues", fake_list)
+    assert muyan_pilot.recent_result("xqliu/muyan-pilot") == merged
 
 
 def test_recent_result_prefers_pr_opened_when_newer(monkeypatch):
@@ -161,7 +204,11 @@ def test_recent_result_prefers_pr_opened_when_newer(monkeypatch):
     blocked = {"number": 5, "title": "stuck", "url": "u5", "state": "OPEN"}
 
     def fake_list(repo, label, state="open"):
-        return [pr_opened] if label == "ai-pr-opened" else [blocked]
+        if label == "ai-pr-opened":
+            return [pr_opened]
+        if label in ("ai-fix-needed", "ai-merged"):
+            return []
+        return [blocked]
 
     monkeypatch.setattr(muyan_pilot, "list_labeled_issues", fake_list)
     assert muyan_pilot.recent_result("xqliu/muyan-pilot") == pr_opened
@@ -194,6 +241,8 @@ def test_status_report_lists_sources_current_ready_and_result(monkeypatch):
         "source_repos": ["xqliu/muyan-pilot"],
         "repo_dir": Path("/srv/muyan/muyan-pilot"),
         "base_branch": "main",
+        "max_concurrency": 1,
+        "slot_dir": Path("/srv/muyan/muyan-pilot/.muyan-pilot/slots"),
     })
     assert "source: xqliu/muyan-pilot" in report
     assert "base: main abc123def456" in report
@@ -215,6 +264,8 @@ def test_status_report_freezes_base_from_configured_repo_dir(monkeypatch):
         "source_repos": ["xqliu/muyan-pilot"],
         "repo_dir": Path("/srv/muyan/muyan-pilot"),
         "base_branch": "develop",
+        "max_concurrency": 1,
+        "slot_dir": Path("/srv/muyan/muyan-pilot/.muyan-pilot/slots"),
     })
     assert calls == [(Path("/srv/muyan/muyan-pilot"), "develop")]
 
@@ -228,6 +279,8 @@ def test_status_report_marks_empty_lookups(monkeypatch):
         "source_repos": ["xqliu/muyan-pilot"],
         "repo_dir": Path("/srv/muyan/muyan-pilot"),
         "base_branch": "main",
+        "max_concurrency": 1,
+        "slot_dir": Path("/srv/muyan/muyan-pilot/.muyan-pilot/slots"),
     })
     assert "base: main abc123def456" in report
     assert "current: -" in report
@@ -380,7 +433,7 @@ def test_live_activity_lines_with_session(tmp_path):
     )
     assert lines == [
         "    live: phase=test last_activity=2026-08-25T02:00:01Z "
-        "last=bash pytest tests/",
+        "action=bash pytest tests/ result=-",
         f"    session: {session_dir / 's.jsonl'}",
         f"    worktree: {worktree}",
     ]
@@ -405,9 +458,11 @@ def test_status_report_includes_live_lines_for_current_issue(monkeypatch, tmp_pa
         "source_repos": ["xqliu/muyan-pilot"],
         "repo_dir": tmp_path,
         "base_branch": "main",
+        "max_concurrency": 1,
+        "slot_dir": tmp_path / ".muyan-pilot" / "slots",
     })
     assert "current: #3 now u3" in report
-    assert "    live: phase=starting last_activity=- last=-" in report
+    assert "    live: phase=starting last_activity=- action=- result=-" in report
     assert f"    session: {session_dir / 's.jsonl'}" in report
     assert f"    worktree: {worktree}" in report
     assert "ready: -" in report
@@ -422,6 +477,96 @@ def test_status_report_has_no_live_lines_without_current_issue(monkeypatch, tmp_
         "source_repos": ["xqliu/muyan-pilot"],
         "repo_dir": tmp_path,
         "base_branch": "main",
+        "max_concurrency": 1,
+        "slot_dir": tmp_path / ".muyan-pilot" / "slots",
     })
     assert "live:" not in report
     assert "current: -" in report
+
+
+# --- capacity and slot status (Issue #39) ------------------------------------
+
+
+def test_status_report_shows_capacity_and_free_slots(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        muyan_pilot, "freeze_base",
+        lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "recent_result", lambda repo: None)
+    config = {
+        "source_repos": ["xqliu/muyan-pilot"],
+        "repo_dir": tmp_path,
+        "base_branch": "main",
+        "max_concurrency": 2,
+        "slot_dir": tmp_path / ".muyan-pilot" / "slots",
+    }
+    report = muyan_pilot.status_report(config)
+    assert "capacity: 2" in report
+    assert "slots: 0/2" in report
+    assert "slot-1" not in report
+
+
+def test_status_report_shows_occupied_slots_with_pids(monkeypatch, tmp_path):
+    import pilot_slots
+
+    slot_dir = tmp_path / ".muyan-pilot" / "slots"
+    # A slot is occupied only while its flock lock is held: hold it in
+    # this process for the duration of the report.
+    held = pilot_slots.acquire_slot(slot_dir, 1, os.getpid())
+    assert held is not None
+    monkeypatch.setattr(
+        muyan_pilot, "freeze_base",
+        lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "recent_result", lambda repo: None)
+    config = {
+        "source_repos": ["xqliu/muyan-pilot"],
+        "repo_dir": tmp_path,
+        "base_branch": "main",
+        "max_concurrency": 2,
+        "slot_dir": slot_dir,
+    }
+    report = muyan_pilot.status_report(config)
+    assert "capacity: 2" in report
+    assert "slots: 1/2" in report
+    assert f"slot-1: pid={os.getpid()}" in report
+    assert "slot-2" not in report
+    held.release()
+
+
+def test_status_report_shows_free_slot_when_file_exists_without_lock(
+    monkeypatch, tmp_path,
+):
+    """The lock, not the file, is the token: a leftover slot file from a
+    dead process is reported as free."""
+    slot_dir = tmp_path / ".muyan-pilot" / "slots"
+    slot_dir.mkdir(parents=True)
+    (slot_dir / "slot-1").write_text("4242\n", encoding="utf-8")
+    monkeypatch.setattr(
+        muyan_pilot, "freeze_base",
+        lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "recent_result", lambda repo: None)
+    config = {
+        "source_repos": ["xqliu/muyan-pilot"],
+        "repo_dir": tmp_path,
+        "base_branch": "main",
+        "max_concurrency": 1,
+        "slot_dir": slot_dir,
+    }
+    report = muyan_pilot.status_report(config)
+    assert "slots: 0/1" in report
+
+
+def test_slot_lines_ignores_corrupted_slot_file(tmp_path):
+    slot_dir = tmp_path / "slots"
+    slot_dir.mkdir()
+    (slot_dir / "slot-1").write_text("garbage", encoding="utf-8")
+    lines = muyan_pilot.slot_lines(slot_dir, 1)
+    assert lines == ["slots: 0/1"]

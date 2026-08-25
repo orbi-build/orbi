@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
-"""Live Pi session activity tracking (Issue #24).
+"""Live Pi session activity tracking (Issues #24, #40).
 
 Pi writes its session as an append-only JSONL file under the task worktree
 (`.pi-session/*.jsonl`) while it runs. This module follows that file and
 reduces it to a small, redacted activity snapshot: session id, event count,
-current phase, last activity time, and a sanitized summary of the newest
-tool call or result.
+current phase, last activity time, the last meaningful action (the newest
+tool call or assistant statement), and the result of the newest tool call
+(`ok` / `error`). A tool result reports the outcome without overwriting the
+action that produced it.
+
+The module also formats the journal lines (Issue #40): the full invariant
+scene (branch, worktree, session file) is only ever built for the
+run_start / run_failed / run_end lines; activity and heartbeat lines carry
+short changed fields only. All lines are stable `key=value` pairs (values
+with spaces are double-quoted) so an agent can parse them without a log
+framework.
 
 Only assistant and toolResult messages are agent activity. User messages
 carry the full prompt and Issue body and are never summarized. The module
@@ -133,17 +142,33 @@ def phase_for(name: str, arguments: dict) -> str:
 
 
 class SessionWatcher:
-    """Follow the newest Pi session JSONL and track the latest activity."""
+    """Follow the newest Pi session JSONL and track the latest activity.
+
+    With `known_files` (the session files that existed before the
+    tracked Pi process started) the watcher never binds to a known file:
+    it follows the newest file that appears, and switches to a newer
+    file whenever one appears, resetting its state. A resumed Fixer run
+    creates a NEW JSONL in the same `.pi-session` directory, so this is
+    what makes the journal report the session of the current invocation
+    instead of the previous run's (Issue #45). `known_files=None` keeps
+    the original bind-once semantics used by full-scan snapshots.
+    """
 
     def __init__(self, session_dir: Path,
-                 now: Callable[[], float] = time.time) -> None:
+                 now: Callable[[], float] = time.time,
+                 known_files: set[Path] | None = None) -> None:
         self.session_dir = session_dir
         self._now = now
+        self._known_files = known_files
         self.session_file: Path | None = None
         self.session_id: str | None = None
         self.phase: str | None = None
         self.last_activity: str | None = None
-        self.last: str | None = None
+        self.action: str | None = None
+        self.result: str | None = None
+        # The role of the newest message record: a `toolResult` means the
+        # model is expected to reply next (model_wait, Issue #40).
+        self.last_role: str | None = None
         self.events = 0
         self.start_time = now()
         self._offset = 0
@@ -152,7 +177,11 @@ class SessionWatcher:
     def poll(self) -> dict:
         """Read new session records; return the current activity state."""
         if self.session_file is None:
-            self.session_file = latest_session_file(self.session_dir)
+            self.session_file = self._next_session_file()
+        elif self._known_files is not None:
+            newest = self._next_session_file()
+            if newest is not None and newest != self.session_file:
+                self._switch_to(newest)
         changed = False
         if self.session_file is not None:
             records, self._offset = read_new_events(
@@ -162,6 +191,30 @@ class SessionWatcher:
                 self._apply(record)
             changed = bool(records)
         return self.state(changed=changed)
+
+    def _next_session_file(self) -> Path | None:
+        """The file to follow: the newest file, unless it was already
+        present before the tracked process started (then: none yet)."""
+        newest = latest_session_file(self.session_dir)
+        if newest is None:
+            return None
+        if self._known_files is not None and newest in self._known_files:
+            return None
+        return newest
+
+    def _switch_to(self, path: Path) -> None:
+        """Bind to a newer session file and reset all tracked state."""
+        self.session_file = path
+        self.session_id = None
+        self.phase = None
+        self.last_activity = None
+        self.action = None
+        self.result = None
+        self.last_role = None
+        self.events = 0
+        self.start_time = self._now()
+        self._offset = 0
+        self._last_activity_epoch = None
 
     def state(self, changed: bool = False) -> dict:
         """Return the activity state as a plain dict (no file access)."""
@@ -177,7 +230,12 @@ class SessionWatcher:
             "events": self.events,
             "phase": self.phase or "starting",
             "last_activity": self.last_activity,
-            "last": self.last,
+            "action": self.action,
+            "result": self.result,
+            # True only while the newest session event is a tool result:
+            # the model is expected to reply next, so a long silence is a
+            # slow model, not a stalled agent (Issue #40).
+            "model_wait": self.last_role == "toolResult",
             "changed": changed,
             "stale_seconds": max(0.0, stale),
         }
@@ -200,6 +258,7 @@ class SessionWatcher:
             self._apply_assistant(message)
         elif role == "toolResult":
             self._apply_tool_result(message)
+        self.last_role = role
         timestamp = record.get("timestamp")
         if isinstance(timestamp, str) and timestamp:
             epoch = parse_iso_utc(timestamp)
@@ -221,17 +280,24 @@ class SessionWatcher:
                 arguments = item.get("arguments")
                 arguments = arguments if isinstance(arguments, dict) else {}
                 self.phase = phase_for(name, arguments)
-                self.last = sanitize(f"{name} {tool_args_summary(name, arguments)}").strip()
+                self.action = sanitize(
+                    f"{name} {tool_args_summary(name, arguments)}",
+                ).strip()
+                # The previous tool's result no longer describes this call.
+                self.result = None
             elif kind == "text":
-                self.last = "assistant text"
+                self.action = "assistant text"
+                self.result = None
             elif kind == "thinking":
-                self.last = "thinking"
+                self.action = "thinking"
+                self.result = None
 
     def _apply_tool_result(self, message: dict) -> None:
         name = message.get("toolName")
         name = name if isinstance(name, str) and name else "tool"
-        suffix = " (error)" if message.get("isError") else ""
-        self.last = f"tool_result {name}{suffix}"
+        # The result reports the outcome only; the action that produced it
+        # stays visible (Issue #40).
+        self.result = "error" if message.get("isError") else "ok"
         if name != "bash":
             self.phase = name
 
@@ -245,14 +311,108 @@ def activity_snapshot(session_dir: Path) -> dict | None:
     return watcher.state()
 
 
-def format_activity_scene(snapshot: dict | None) -> str:
-    """Format an activity snapshot as a `key=value` scene string."""
-    if snapshot is None:
-        return ""
+def format_duration(seconds: float) -> str:
+    """Compact human duration: `0.5s`, `6s`, `14m`, `1h5m`."""
+    if seconds <= 0:
+        return "0s"
+    if seconds < 1:
+        return f"{seconds:.1f}s"
+    total = int(seconds)
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes}m"
+    if minutes:
+        return f"{minutes}m"
+    return f"{secs}s"
+
+
+def quote_value(value: str) -> str:
+    """Double-quote a key=value field when it needs quoting.
+
+    Values containing spaces or double quotes are quoted; embedded double
+    quotes are escaped as `\\"` so the field stays parseable by
+    `parse_scene`.
+    """
+    if " " in value or '"' in value:
+        return '"' + value.replace('"', '\\"') + '"'
+    return value
+
+
+def format_run_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
+                     branch: str, worktree: str) -> str:
+    """Full invariant scene for run_start / run_failed lines.
+
+    This is the only place the full branch, worktree and session file are
+    emitted; activity/heartbeat lines must not repeat them (Issue #40).
+    """
     return (
+        f"run={run_id} issue={issue} role={role} "
+        f"branch={branch} worktree={worktree} "
         f"session={snapshot['session_id'] or '-'} "
         f"session_file={snapshot['session_file'] or '-'} "
         f"phase={snapshot['phase']} "
         f"last_activity={snapshot['last_activity'] or '-'} "
-        f"last={snapshot['last'] or '-'}"
+        f"action={quote_value(snapshot['action'] or '-')} "
+        f"result={snapshot['result'] or '-'}"
     )
+
+
+def format_end_scene(*, run_id: str, issue: str, role: str, result: str,
+                     elapsed: float, pr: str, commit: str) -> str:
+    """run_end line: the result plus the full debug entry (PR, commit)."""
+    return (
+        f"run={run_id} issue={issue} role={role} "
+        f"result={result} elapsed={format_duration(elapsed)} "
+        f"pr={pr} commit={commit}"
+    )
+
+
+def parse_scene(line: str) -> dict[str, str | None]:
+    """Parse a `key=value` scene line into a dict.
+
+    Values may be double-quoted (when they contain spaces) and may contain
+    `=`. Bare words without `=` (such as the line-kind prefix `activity`,
+    `heartbeat`, `run_start`, ...) are skipped. `key=` without a value
+    parses to None.
+    """
+    fields: dict[str, str | None] = {}
+    index = 0
+    length = len(line)
+    while index < length:
+        while index < length and line[index] == " ":
+            index += 1
+        if index >= length:
+            break
+        # Read the key up to '=' or the next space.
+        key_start = index
+        while index < length and line[index] != "=" and line[index] != " ":
+            index += 1
+        key = line[key_start:index]
+        if not key or index >= length or line[index] != "=":
+            continue  # bare word (line-kind prefix or garbage): skip it
+        index += 1  # skip '='
+        if index < length and line[index] == '"':
+            index += 1
+            start = index
+            while index < length:
+                if (line[index] == "\\"
+                        and index + 1 < length
+                        and line[index + 1] == '"'):
+                    index += 2  # escaped quote: part of the value
+                    continue
+                if line[index] == '"':
+                    break
+                index += 1
+            raw = line[start:index]
+            if index < length:  # closing quote found
+                index += 1
+            else:  # unterminated quote: keep the rest of the line
+                index = length
+            fields[key] = raw.replace('\\"', '"')
+        else:
+            start = index
+            while index < length and line[index] != " ":
+                index += 1
+            fields[key] = line[start:index] or None
+    return fields

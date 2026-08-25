@@ -172,3 +172,80 @@ def test_merge_gate_rejects_head_behind_latest_base(clone, monkeypatch, caplog):
 def test_git_helper_fails_fast_on_nonzero_exit(clone):
     with pytest.raises(AssertionError, match=r"git .* failed rc=128"):
         git(clone, "rev-parse", "no-such-ref")
+
+
+def test_deployment_checkout_fast_forwards_after_independent_merge(
+        clone, tmp_path, monkeypatch):
+    """F1: an independent merge actor advances origin/main first; the
+    deployment checkout (the repo_dir systemd executes) is a separate
+    clone that still sits on the old base, and `sync_base_checkout`
+    fast-forwards it to the new origin/main, verified by SHA."""
+    # The deployment checkout: a separate clone of the same origin, on
+    # the old base (this is what systemd loads on the next tick).
+    checkout = tmp_path / "deployment-checkout"
+    subprocess.run(
+        ["git", "clone", git(clone, "remote", "get-url", "origin"),
+         str(checkout)],
+        capture_output=True, text=True, check=True,
+    )
+    git(checkout, "config", "user.email", "deploy@test.local")
+    git(checkout, "config", "user.name", "Deploy")
+    old_head = git(checkout, "rev-parse", "HEAD")
+
+    # Delivery branch in the worktree clone; the fake `gh pr merge`
+    # (the independent merge actor) lands the merge on origin/main.
+    git(clone, "checkout", "-b", "muyan-pilot/owner-repo-issue-4-run1")
+    head_oid = commit_file(clone, "delivery.txt", "delivery")
+    pr = {"number": 4, "url": "u", "base_ref": "main",
+          "base_oid": git(clone, "rev-parse", "origin/main"),
+          "head_ref": "muyan-pilot/owner-repo-issue-4-run1",
+          "head_oid": head_oid}
+    install_fake_gh(monkeypatch, clone, make_pr(head_oid))
+    merged = runner.merge_gate(clone, pr, "main")
+    assert merged["merged"] is True
+    merge_commit = git(clone, "rev-parse", "origin/main")
+    # The remote advanced; the deployment checkout has not yet.
+    assert git(clone, "rev-parse", "origin/main") != old_head
+    assert git(checkout, "rev-parse", "HEAD") == old_head
+    real_run = runner.run_command
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"] and "view" in command:
+            return make_pr(head_oid, state="MERGED", merged_at="now",
+                           merge_commit=merge_commit)
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    confirmed = runner.confirm_merged(clone, merged, "main")
+    assert confirmed["merge_commit"] == merge_commit
+
+    # The deployment checkout now fast-forwards to the merged base.
+    runner.sync_base_checkout(checkout, "main")
+    synced = git(checkout, "rev-parse", "HEAD")
+    assert synced == merge_commit
+    git(checkout, "merge-base", "--is-ancestor", head_oid, "HEAD")
+
+
+def test_sync_base_checkout_fails_fast_on_drifted_checkout(
+        clone, tmp_path):
+    """A deployment checkout with local drift cannot fast-forward; the
+    sync fails fast (the merge already landed on GitHub)."""
+    checkout = tmp_path / "deployment-checkout"
+    subprocess.run(
+        ["git", "clone", git(clone, "remote", "get-url", "origin"),
+         str(checkout)],
+        capture_output=True, text=True, check=True,
+    )
+    git(checkout, "config", "user.email", "deploy@test.local")
+    git(checkout, "config", "user.name", "Deploy")
+    # Local drift on the checkout...
+    (checkout / "drift.txt").write_text("drift", encoding="utf-8")
+    git(checkout, "add", ".")
+    git(checkout, "commit", "-m", "drift")
+    # ...and the remote advances independently.
+    git(clone, "checkout", "main")
+    commit_file(clone, "advance.txt", "main advanced")
+    git(clone, "push", "origin", "main")
+
+    with pytest.raises(RuntimeError, match="cannot fast-forward"):
+        runner.sync_base_checkout(checkout, "main")
