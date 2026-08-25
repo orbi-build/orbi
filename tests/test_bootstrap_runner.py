@@ -695,7 +695,7 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     patches = [
         command for command in gh_calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-ceo/issues/4/comments/77"
+        and command[2] == "repos/xqliu/muyan-ceo/issues/comments/77"
         and "PATCH" in command
     ]
     assert patches, "the existing progress comment was not updated"
@@ -3113,7 +3113,7 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
     patches = [
         command for command in api_calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/owner/repo/issues/39/comments/77"
+        and command[2] == "repos/owner/repo/issues/comments/77"
         and "PATCH" in command
     ]
     assert patches, "the tracked progress comment was not updated"
@@ -3363,7 +3363,7 @@ def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
     patches = [
         command for command in api_calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/owner/repo/issues/39/comments/77"
+        and command[2] == "repos/owner/repo/issues/comments/77"
         and "PATCH" in command
     ]
     assert patches, "the tracked progress comment was not updated"
