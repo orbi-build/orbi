@@ -48,6 +48,25 @@ ROLE_IMPLEMENT = "implement"
 RUN_ID_PATTERN = re.compile(r"^[0-9a-f]{8}$")
 _CURRENT_RUN_ID: str | None = None
 
+# GitHub labels are the only state store (Issue #45). After a PR is
+# opened the Issue is in a recoverable review/fix state: `ai-pr-opened`
+# means awaiting review, and only the explicit `ai-fix-needed` state
+# (a review finding or a base conflict) is scanned for Fixer work. The
+# next tick resumes that same run on the same branch, worktree and PR
+# instead of claiming a new Issue.
+IN_PROGRESS_LABEL = "ai-in-progress"
+PR_OPENED_LABEL = "ai-pr-opened"
+FIX_NEEDED_LABEL = "ai-fix-needed"
+BLOCKED_LABEL = "ai-blocked"
+
+# Only comments posted by a repo maintainer are trusted to carry the
+# recovery scene: a public comment (authorAssociation=NONE) must never
+# steer the runner into an arbitrary local worktree, branch or PR
+# (Issue #45 review, BLOCKER). A missing association is never trusted.
+TRUSTED_COMMENT_ASSOCIATIONS = frozenset({
+    "OWNER", "MAINTAINER", "MEMBER", "COLLABORATOR",
+})
+
 
 class RunIdFilter(logging.Filter):
     """Prefix every log message with the current `[run_id]`, if bound."""
@@ -189,7 +208,8 @@ def pick_issue(repo: str) -> dict | None:
     raw = run_command([
         "gh", "issue", "list", "--repo", repo, "--state", "open",
         "--search",
-        "label:ai-ready -label:ai-in-progress -label:ai-pr-opened -label:ai-blocked",
+        "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
+        f"-label:{FIX_NEEDED_LABEL} -label:{BLOCKED_LABEL}",
         "--json", "number,title,body", "--limit", "1",
     ])
     return parse_issue_list(raw)
@@ -217,6 +237,40 @@ def edit_issue(number: int, *, repo: str, add: str | None = None,
 def comment_issue(number: int, *, repo: str, body: str) -> None:
     run_command(["gh", "issue", "comment", str(number), "--repo", repo,
                  "--body", body])
+
+
+def issue_comments(number: int, *, repo: str) -> list[dict]:
+    """Return the Issue's comment history (oldest first) from GitHub.
+
+    ``gh issue view --json comments`` returns a top-level object with a
+    ``comments`` array; each comment carries the author and the
+    ``authorAssociation`` of the viewer, which is how the runner tells
+    its own trusted comments apart from public ones (Issue #45).
+    """
+    raw = run_command([
+        "gh", "issue", "view", str(number), "--repo", repo,
+        "--json", "comments",
+    ])
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("issue view must be a JSON object")
+    comments = data.get("comments")
+    if not isinstance(comments, list):
+        raise ValueError("issue comments must be a JSON array")
+    return comments
+
+
+def issue_body(number: int, *, repo: str) -> str:
+    """Return the Issue body; the fixer works from the original task."""
+    raw = run_command([
+        "gh", "issue", "view", str(number), "--repo", repo,
+        "--json", "body",
+    ])
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("issue view must be a JSON object")
+    body = data.get("body")
+    return body if isinstance(body, str) else ""
 
 
 def new_run_id() -> str:
@@ -250,6 +304,240 @@ def task_branch(source_repo: str, number: int, run_id: str) -> str:
     return (
         f"muyan-pilot/{source_repo.replace('/', '-')}-issue-{number}-{run_id}"
     )
+
+
+def started_pi_comment_body(run_id: str, run_info: str, branch: str,
+                            worktree: Path) -> str:
+    """The start comment doubles as the recoverable run scene (Issue #45)."""
+    return (
+        f"{run_marker(run_id)}\n"
+        f"Muyan Pilot started Pi: {run_info} branch={branch} "
+        f"worktree={worktree}"
+    )
+
+
+def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str) -> str:
+    """The PR-opened comment records the recoverable run scene.
+
+    It is the single source the next tick parses to resume this run on
+    the same branch, worktree and PR (Issue #45). The runner is the only
+    writer of this comment, so the scene carries only what the runner
+    cannot derive itself: run_id, base and PR URL. Branch and worktree
+    are derived from the configured repo_dir, source_repo, Issue number
+    and run_id — a comment must never be able to name a local path.
+    """
+    return (
+        f"{run_marker(run_id)}\n"
+        f"Muyan Pilot opened PR: {pr_url} ({run_info})"
+    )
+
+
+OPENED_PR_PREFIX = "Muyan Pilot opened PR: "
+
+
+def parse_pr_comment(body: str) -> dict | None:
+    """Parse one `Muyan Pilot opened PR:` comment into a resume scene.
+
+    Returns None when the body is not an opened-PR comment. Fails fast
+    when the comment is malformed: resuming must recover the exact run
+    (run id, base, PR URL), never a guess (Issue #45). Branch and
+    worktree are not parsed: the runner derives them from its own
+    config, the Issue number and the run id, so a comment can never
+    name an arbitrary local path.
+    """
+    if not isinstance(body, str) or OPENED_PR_PREFIX not in body:
+        return None
+    head = body.split(OPENED_PR_PREFIX, 1)[1]
+    pr_url, _, fields_part = head.partition(" (")
+    fields: dict[str, str] = {}
+    for part in fields_part.rstrip(")").split():
+        key, _, value = part.partition("=")
+        if key:
+            fields[key] = value
+    scene = {
+        "pr_url": pr_url.strip(),
+        "base_branch": fields.get("base_branch", ""),
+        "base_sha": fields.get("base_sha", ""),
+        "run_id": fields.get("run_id", ""),
+    }
+    for key, value in scene.items():
+        if not value:
+            raise ValueError(f"opened PR comment is missing {key}")
+    scene["run_id"] = validate_run_id(scene["run_id"])
+    return scene
+
+
+def _comment_is_trusted(comment: object) -> bool:
+    """True only when the comment carries a trusted maintainer association."""
+    if not isinstance(comment, dict):
+        return False
+    return comment.get("authorAssociation") in TRUSTED_COMMENT_ASSOCIATIONS
+
+
+def resume_scene(comments: list[dict]) -> dict:
+    """Return the scene of the latest trusted opened-PR comment of one Issue.
+
+    Only comments posted by a trusted maintainer (OWNER, MAINTAINER,
+    MEMBER or COLLABORATOR) are considered: a public comment can never
+    become the recovery scene (Issue #45 review, BLOCKER). Fails fast
+    when no trusted comment carries the scene: such an Issue cannot be
+    resumed and must not be guessed at.
+    """
+    for comment in reversed(comments):
+        if not _comment_is_trusted(comment):
+            continue
+        scene = parse_pr_comment(comment.get("body"))
+        if scene is not None:
+            return scene
+    raise ValueError(
+        "no 'Muyan Pilot opened PR' comment from a trusted author; the "
+        "Issue cannot be resumed"
+    )
+
+
+def pick_resumable_delivery(repo: str) -> tuple[dict, dict] | None:
+    """Return the newest `ai-fix-needed` delivery and its resume scene.
+
+    Only the explicit fix-needed state is scanned (Issue #45): a review
+    finding or a base conflict moves the Issue from `ai-pr-opened`
+    (awaiting review) to `ai-fix-needed`, and the next tick resumes that
+    same run on the same branch, worktree and PR instead of claiming a
+    new Issue. A clean PR that is simply awaiting review is never sent
+    to the Fixer. Issues already `ai-blocked` are excluded, as are
+    closed Issues. A scene that cannot be recovered is an unresolvable
+    state: the Issue is marked `ai-blocked` with the concrete reason and
+    the error re-raised, so the tick stops instead of silently skipping
+    the delivery while a fresh task starts ahead of it.
+    """
+    raw = run_command([
+        "gh", "issue", "list", "--repo", repo, "--state", "open",
+        "--search",
+        f"label:{FIX_NEEDED_LABEL} -label:{BLOCKED_LABEL}",
+        "--json", "number,title,state,url", "--limit", "1",
+    ])
+    issues = parse_issue_array(raw)
+    if not issues:
+        return None
+    issue = issues[0]
+    if issue.get("state") != "OPEN":
+        return None
+    comments = issue_comments(int(issue["number"]), repo=repo)
+    try:
+        scene = resume_scene(comments)
+    except ValueError as exc:
+        block_scene_failure(issue, exc, repo, comments)
+    # The fixer works from the original task, so the resumable issue
+    # carries its body like a freshly claimed one.
+    issue["body"] = issue_body(int(issue["number"]), repo=repo)
+    return issue, scene
+
+
+def block_scene_failure(issue: dict, error: ValueError, repo: str,
+                        comments: list[dict]) -> None:
+    """Mark an `ai-fix-needed` Issue `ai-blocked` when its scene is
+    malformed, then re-raise so the tick stops (Issue #45).
+
+    The failure comment carries the run marker recovered from a trusted
+    comment when it is present — the same run id, never a new or
+    guessed one. The PR, branch and worktree stay intact.
+    """
+    number = int(issue["number"])
+    LOGGER.error(
+        "issue=%s resume scene is malformed: %s", number, error,
+    )
+    marker = ""
+    for comment in reversed(comments):
+        if not _comment_is_trusted(comment):
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        match = re.search(r"<!-- muyan-pilot:run=([0-9a-f]{8}) -->", body)
+        if match:
+            marker = run_marker(match.group(1))
+            break
+    try:
+        edit_issue(
+            number, repo=repo, add=BLOCKED_LABEL, remove=FIX_NEEDED_LABEL,
+        )
+        comment_issue(
+            number, repo=repo,
+            body=(
+                f"{marker}\n" if marker else ""
+            ) + f"Muyan Pilot failed: {error}",
+        )
+    except Exception:
+        LOGGER.exception("issue=%s failure reporting failed", number)
+    raise error
+
+
+def pick_next_delivery(repos: list[str]) -> tuple[str, dict, dict | None] | None:
+    """Scan sources in order: resumable PRs first, then ready Issues.
+
+    Returns `(source_repo, issue, scene)` where `scene` is None for a
+    fresh claim. Resuming an open PR keeps the single concurrency slot
+    occupied by the same run (implement → review → fix → merge), so a
+    second Pi is never started for a run that already has a PR.
+    """
+    for repo in repos:
+        selected = pick_resumable_delivery(repo)
+        if selected is not None:
+            issue, scene = selected
+            return repo, issue, scene
+    for repo in repos:
+        issue = pick_issue(repo)
+        if issue is not None:
+            return repo, issue, None
+    return None
+
+
+def merge_in_progress(worktree: Path) -> bool:
+    """True when the worktree is mid-merge (conflicts staged for a commit)."""
+    try:
+        run_command(
+            ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+            cwd=worktree,
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def merge_latest_base(worktree: Path, base_branch: str) -> bool:
+    """Fetch `origin/<base>` and merge it when the delivery is behind.
+
+    Returns True when a merge was started. A conflicted merge is left
+    staged for the fixer (Pi) to resolve: the runner never auto-resolves,
+    force-pushes, or pushes the protected branch (Issue #45). A merge
+    failure that is not a conflict fails fast.
+    """
+    run_command(["git", "fetch", "origin", base_branch], cwd=worktree)
+    try:
+        run_command(
+            ["git", "merge-base", "--is-ancestor",
+             f"origin/{base_branch}", "HEAD"],
+            cwd=worktree,
+        )
+    except subprocess.CalledProcessError:
+        LOGGER.info(
+            "base_advanced base_branch=%s worktree=%s; merging into the "
+            "task branch",
+            base_branch, worktree,
+        )
+        try:
+            run_command(
+                ["git", "merge", f"origin/{base_branch}"], cwd=worktree,
+            )
+        except subprocess.CalledProcessError:
+            if not merge_in_progress(worktree):
+                raise
+            LOGGER.warning(
+                "base_merge_conflict base_branch=%s worktree=%s; the "
+                "conflict is left staged for the fixer",
+                base_branch, worktree,
+            )
+        return True
+    return False
 
 
 def worktree_path(repo_dir: Path, source_repo: str, number: int,
@@ -289,24 +577,32 @@ def _decode_chunks(chunks: list[bytes]) -> str:
 
 
 def _log_activity(activity: dict, *, run_id: str, issue_ref: str,
-                  role: str) -> None:
+                  role: str, state: str | None = None) -> None:
     """Log one short activity line with the changed fields only."""
     LOGGER.info(
         "activity run=%s issue=%s role=%s phase=%s action=%s result=%s "
-        "idle=%s",
+        "state=%s idle=%s",
         run_id, issue_ref, role, activity["phase"],
         quote_value(activity["action"] or "-"),
         activity["result"] or "-",
+        state or "-",
         format_duration(activity["stale_seconds"]),
     )
 
 
 def _log_heartbeat(activity: dict, *, run_id: str, issue_ref: str,
-                   role: str, elapsed: float) -> None:
-    """Log one heartbeat line when nothing changed since the last poll."""
+                   role: str, elapsed: float,
+                   state: str | None = None) -> None:
+    """Log one heartbeat line when nothing changed since the last poll.
+
+    `state` carries the model_wait flag while the model is expected to
+    reply next, so a slow active model is not reported as idle (Issue
+    #40).
+    """
     LOGGER.info(
-        "heartbeat run=%s issue=%s role=%s phase=%s elapsed=%s idle=%s",
-        run_id, issue_ref, role, activity["phase"],
+        "heartbeat run=%s issue=%s role=%s phase=%s state=%s elapsed=%s "
+        "idle=%s",
+        run_id, issue_ref, role, activity["phase"], state or "-",
         format_duration(elapsed), format_duration(activity["stale_seconds"]),
     )
 
@@ -328,19 +624,32 @@ def stream_pi(
     The full invariant scene (branch, worktree, session file) is logged
     once as `run_start`. While Pi runs, only short changed fields are
     logged: `activity` when phase/action/result change, `heartbeat` at
-    the poll interval otherwise (the idle time rides on the line). On a
-    non-zero exit or timeout a `run_failed` line carries the full scene
-    again as the debug entry. The caller logs `run_end` once the PR and
-    commit are known. The session JSONL stays in the worktree as the
-    complete local record; the full prompt and Issue body are never
-    logged.
+    the poll interval otherwise (the idle time rides on the line). A slow
+    active model is not reported as idle: when the newest session event
+    is a tool result the state is `model_wait` (one transition line on
+    entry, one `resumed` line when the next session event arrives, and
+    only configured-interval heartbeats while waiting — no warning
+    spam). On a non-zero exit or timeout a `run_failed` line carries the
+    full scene again as the debug entry. The caller logs `run_end` once
+    the PR and commit are known. The session JSONL stays in the worktree
+    as the complete local record; the full prompt and Issue body are
+    never logged.
     """
     # The raw pi command embeds the full prompt and Issue body; only the
     # redacted form may ever reach the journal or an exception message.
     safe_command = log_command or ["<redacted>"]
     LOGGER.info("command=%s cwd=%s", " ".join(safe_command), cwd)
     issue_ref = issue_context(source_repo, issue)
-    watcher = SessionWatcher(cwd / ".pi-session")
+    session_dir = cwd / ".pi-session"
+    # Session files that already exist before this Pi process starts are
+    # never followed: a resumed run (same worktree) creates a NEW JSONL,
+    # and the journal must report the session of the current invocation,
+    # not the previous run's (Issue #45 round-5 review, Major 3).
+    known_files = (
+        {path for path in session_dir.glob("*.jsonl") if path.is_file()}
+        if session_dir.is_dir() else set()
+    )
+    watcher = SessionWatcher(session_dir, known_files=known_files)
     start = time.monotonic()
     # The initial state is what run_start already reported; activity lines
     # are only emitted when the visible fields actually change.
@@ -361,6 +670,11 @@ def stream_pi(
     deadline = None if timeout is None else time.monotonic() + timeout
     activity = watcher.poll()
     timed_out = False
+    # model_wait transitions (Issue #40): one line when the state is
+    # entered and one when it is left; unchanged polls are heartbeats
+    # that carry the state, so a slow model never looks idle and no
+    # warning is ever escalated from a slow response.
+    last_model_wait = activity["model_wait"]
     try:
         while True:
             if deadline is not None and time.monotonic() >= deadline:
@@ -387,13 +701,27 @@ def stream_pi(
                 _log_activity(
                     activity, run_id=run_id, issue_ref=issue_ref,
                     role=ROLE_IMPLEMENT,
+                    state="model_wait" if activity["model_wait"] else None,
                 )
                 last_visible = visible
             else:
                 _log_heartbeat(
                     activity, run_id=run_id, issue_ref=issue_ref,
                     role=ROLE_IMPLEMENT, elapsed=time.monotonic() - start,
+                    state="model_wait" if activity["model_wait"] else None,
                 )
+            if activity["model_wait"] != last_model_wait:
+                # One transition line per state change: entering model_wait
+                # (the model is expected to reply next) or leaving it
+                # (the next session event arrived: resumed).
+                LOGGER.info(
+                    "%s run=%s issue=%s role=%s phase=%s state=%s",
+                    "model_wait" if activity["model_wait"] else "resumed",
+                    run_id, issue_ref, ROLE_IMPLEMENT,
+                    activity["phase"],
+                    "model_wait" if activity["model_wait"] else "resumed",
+                )
+                last_model_wait = activity["model_wait"]
             if process.poll() is not None:
                 break
     finally:
@@ -434,7 +762,8 @@ def stream_pi(
 
 
 def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
-           branch: str, timeout: int | None = None) -> str:
+           *, timeout: int | None = None, branch: str | None = None,
+           pr_url: str | None = None) -> str:
     system_prompt = render_prompt(
         config["prompt"].read_text(encoding="utf-8"),
         {
@@ -455,8 +784,20 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         f"Issue #{issue['number']}: {issue['title']}\n\n"
         f"Issue body:\n{issue.get('body', '')}\n\n"
         f"Worktree: {worktree}\n"
-        "Complete the delivery process in the system prompt."
     )
+    if pr_url is not None:
+        context += (
+            f"Existing PR: {pr_url}\n"
+            "This run already opened that PR. Keep the same PR number, the "
+            "same run id, branch and worktree: never close the PR, never "
+            "create a new PR, never re-claim the Issue. Fix the review "
+            "findings and/or resolve the merge conflicts left in the "
+            "worktree, rerun the full test suite with coverage and the "
+            "complete review, then commit and push ONLY the task branch "
+            "so the same PR updates. No force push, no push of the "
+            "protected branch.\n"
+        )
+    context += "Complete the delivery process in the system prompt."
     skill_args = [item for skill in config["skills"] for item in ("--skill", str(skill))]
     command = [
         "pi", *skill_args, "--print", "--session-dir",
@@ -478,7 +819,21 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
 
 
 def verify_pr(worktree: Path, branch: str, base_branch: str,
-              run_id: str) -> str:
+              run_id: str, *, pr_repo: str | None = None,
+              expected_url: str | None = None,
+              require_latest_base: bool = True) -> str:
+    """Verify that exactly one open PR of the task branch is the delivery.
+
+    Checks, in order: current branch, latest remote base ancestry (unless
+    `require_latest_base` is False — the resume pre-validation runs
+    before the base merge, when being behind is the expected state),
+    exactly one open PR for the head branch, PR base, PR head == local
+    HEAD, and the run marker in the PR body. When `pr_repo` is given
+    (resume path), the PR's head repo must be that repo; when
+    `expected_url` is given, the verified PR URL must exactly equal the
+    recovered original PR URL (Issue #45 review: the resume must keep
+    the same PR number).
+    """
     current_branch = run_command(
         ["git", "branch", "--show-current"], cwd=worktree,
     )
@@ -486,33 +841,38 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
         raise RuntimeError(
             f"Pi changed branch: expected={branch} actual={current_branch}"
         )
-    # Re-fetch before judging: the delivery must contain the latest remote
-    # base, otherwise it is behind and the PR is rejected (fail fast).
-    run_command(
-        ["git", "fetch", "origin", base_branch], cwd=worktree,
-    )
-    try:
+    if require_latest_base:
+        # Re-fetch before judging: the delivery must contain the latest
+        # remote base, otherwise it is behind and the PR is rejected
+        # (fail fast).
         run_command(
-            ["git", "merge-base", "--is-ancestor",
-             f"origin/{base_branch}", "HEAD"],
-            cwd=worktree,
+            ["git", "fetch", "origin", base_branch], cwd=worktree,
         )
-    except subprocess.CalledProcessError:
-        LOGGER.error(
-            "delivery_behind_base base_branch=%s branch=%s",
-            base_branch, branch,
-        )
-        raise RuntimeError(
-            f"delivery HEAD is behind latest remote base "
-            f"origin/{base_branch}; merge the latest base, rerun full tests "
-            "and review, then retry"
-        ) from None
+        try:
+            run_command(
+                ["git", "merge-base", "--is-ancestor",
+                 f"origin/{base_branch}", "HEAD"],
+                cwd=worktree,
+            )
+        except subprocess.CalledProcessError:
+            LOGGER.error(
+                "delivery_behind_base base_branch=%s branch=%s",
+                base_branch, branch,
+            )
+            raise RuntimeError(
+                f"delivery HEAD is behind latest remote base "
+                f"origin/{base_branch}; merge the latest base, rerun full "
+                "tests and review, then retry"
+            ) from None
     local_head = run_command(
         ["git", "rev-parse", "HEAD"], cwd=worktree,
     )
     raw = run_command([
         "gh", "pr", "list", "--state", "open", "--head", branch,
-        "--json", "url,baseRefName,headRefOid,body", "--limit", "2",
+        "--json",
+        "url,baseRefName,headRefName,headRefOid,"
+        "headRepository,headRepositoryOwner,body",
+        "--limit", "2",
     ], cwd=worktree)
     prs = json.loads(raw)
     if not isinstance(prs, list) or len(prs) != 1:
@@ -520,6 +880,17 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
     url = prs[0].get("url")
     if not url:
         raise RuntimeError("open PR has no URL")
+    if pr_repo is not None:
+        head_repo = _pr_head_repo(prs[0])
+        if head_repo != pr_repo:
+            LOGGER.error(
+                "pr_repo_mismatch expected=%s actual=%s branch=%s",
+                pr_repo, head_repo, branch,
+            )
+            raise RuntimeError(
+                f"PR head repo is {head_repo}, expected {pr_repo}; the "
+                "resume must keep the PR of the configured source repo"
+            )
     base_ref = prs[0].get("baseRefName")
     if base_ref != base_branch:
         LOGGER.error(
@@ -550,7 +921,30 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
             f"PR body is missing the stable run marker {marker}; the PR "
             "must carry the machine-readable run id of this attempt"
         )
+    if expected_url is not None and url != expected_url:
+        LOGGER.error(
+            "pr_url_mismatch expected=%s actual=%s branch=%s",
+            expected_url, url, branch,
+        )
+        raise RuntimeError(
+            f"PR URL {url} is not the recovered original PR "
+            f"{expected_url}; the resume must keep the same PR number"
+        )
     return url
+
+
+def _pr_head_repo(pr: dict) -> str:
+    """Return `owner/name` of the PR head repo, or '<missing>' if absent."""
+    owner = pr.get("headRepositoryOwner")
+    repo = pr.get("headRepository")
+    if not isinstance(owner, dict) or not isinstance(repo, dict):
+        return "<missing>"
+    login = owner.get("login")
+    name = repo.get("name")
+    if not isinstance(login, str) or not login \
+            or not isinstance(name, str) or not name:
+        return "<missing>"
+    return f"{login}/{name}"
 
 
 def process_issue(issue: dict, config: dict, source_repo: str) -> str:
@@ -568,7 +962,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     LOGGER.info(
         "issue=%s %s", number, run_info,
     )
-    edit_issue(number, repo=source_repo, add="ai-in-progress")
+    edit_issue(number, repo=source_repo, add=IN_PROGRESS_LABEL)
     worktree: Path | None = None
     started = time.monotonic()
     try:
@@ -578,11 +972,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         config = {**config, "base_sha": base_sha, "run_id": run_id}
         comment_issue(
             number, repo=source_repo,
-            body=(
-                f"{run_marker(run_id)}\n"
-                f"Muyan Pilot started Pi: {run_info} branch={branch} "
-                f"worktree={worktree}"
-            ),
+            body=started_pi_comment_body(run_id, run_info, branch, worktree),
         )
         run_pi(issue, worktree, config, source_repo, branch=branch)
         pr_url = verify_pr(worktree, branch, base_branch, run_id)
@@ -590,15 +980,12 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             ["git", "rev-parse", "HEAD"], cwd=worktree,
         )
         edit_issue(
-            number, repo=source_repo, add="ai-pr-opened",
-            remove="ai-in-progress",
+            number, repo=source_repo, add=PR_OPENED_LABEL,
+            remove=IN_PROGRESS_LABEL,
         )
         comment_issue(
             number, repo=source_repo,
-            body=(
-                f"{run_marker(run_id)}\n"
-                f"Muyan Pilot opened PR: {pr_url} ({run_info})"
-            ),
+            body=opened_pr_comment_body(run_id, run_info, pr_url),
         )
         LOGGER.info(
             "run_end %s",
@@ -633,8 +1020,8 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
                 LOGGER.exception("issue=%s activity scene failed", number)
         try:
             edit_issue(
-                number, repo=source_repo, add="ai-blocked",
-                remove="ai-in-progress",
+                number, repo=source_repo, add=BLOCKED_LABEL,
+                remove=IN_PROGRESS_LABEL,
             )
             body = (
                 f"{run_marker(run_id)}\n"
@@ -648,6 +1035,128 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         raise
 
 
+def resume_delivery(issue: dict, scene: dict, config: dict,
+                    source_repo: str) -> str:
+    """Resume the fix loop of an opened PR on the same run (Issue #45).
+
+    The scene (run id, base, PR URL) is recovered from the Issue's
+    trusted `Muyan Pilot opened PR:` comment, so a restart of the runner
+    or the service resumes from GitHub state alone. Branch and worktree
+    are DERIVED from the configured repo_dir, source_repo, Issue number
+    and run id — never read from the comment — so no comment can steer
+    the runner into an arbitrary local path. Before any git or Pi
+    mutation the configured base and the open PR (repo, head branch,
+    base, run marker, exact URL) are validated; the latest remote base is
+    then merged into the ORIGINAL branch (conflicts stay staged for the
+    fixer), Pi fixes the PR in the ORIGINAL worktree, and the SAME PR is
+    re-verified: the returned URL is the one verify_pr verified, which
+    must exactly equal the recovered original PR URL. Any failure marks
+    the Issue `ai-blocked` and preserves the PR, branch and worktree: the
+    run is never re-claimed, the PR is never closed or replaced.
+    """
+    number = int(issue["number"])
+    run_id = validate_run_id(scene["run_id"])
+    # Derive the expected branch and worktree from the runner's own
+    # config and the run id (the values the first run used when it
+    # created them); a comment can never name an arbitrary local path.
+    branch = task_branch(source_repo, number, run_id)
+    worktree = worktree_path(config["repo_dir"], source_repo, number, run_id)
+    base_branch = scene["base_branch"]
+    pr_url = scene["pr_url"]
+    set_run_id(run_id)
+    scene_info = (
+        f"base_branch={base_branch} base_sha={scene['base_sha']} "
+        f"run_id={run_id} branch={branch} worktree={worktree} "
+        f"pr_url={pr_url}"
+    )
+    LOGGER.info("issue=%s resuming opened PR %s", number, scene_info)
+    try:
+        # Validate the configured base before any git/Pi mutation: a
+        # scene frozen on another base branch is never merged.
+        if base_branch != config["base_branch"]:
+            raise RuntimeError(
+                f"base branch mismatch: scene has {base_branch}, config "
+                f"has {config['base_branch']}; the resume must use the "
+                "configured base branch"
+            )
+        if not worktree.is_dir():
+            raise RuntimeError(f"worktree missing: {worktree}")
+        # Validate the open PR before any git/Pi mutation: exactly one
+        # open PR of the derived branch, in the configured source repo,
+        # on the configured base, carrying the run marker, and with the
+        # exact URL of the recovered original PR (same PR number). The
+        # latest-base check is deferred to the post-fix verification:
+        # being behind the base is the expected state the resume exists
+        # to fix (merge_latest_base runs next).
+        verified_url = verify_pr(
+            worktree, branch, base_branch, run_id,
+            pr_repo=source_repo, expected_url=pr_url,
+            require_latest_base=False,
+        )
+        merge_latest_base(worktree, base_branch)
+        config = {**config, "base_sha": scene["base_sha"], "run_id": run_id}
+        run_pi(
+            issue, worktree, config, source_repo,
+            branch=branch, pr_url=verified_url,
+        )
+        # Re-verify the SAME PR after the fixer pushed: the verified URL
+        # must still exactly equal the recovered original PR URL.
+        verified_url = verify_pr(
+            worktree, branch, base_branch, run_id,
+            pr_repo=source_repo, expected_url=pr_url,
+        )
+        comment_issue(
+            number, repo=source_repo,
+            body=(
+                f"{run_marker(run_id)}\n"
+                f"Muyan Pilot fixed PR: {verified_url} ({scene_info})"
+            ),
+        )
+    except Exception as exc:
+        LOGGER.exception("issue=%s resume failed", number)
+        activity_scene = ""
+        try:
+            snapshot = activity_snapshot(worktree / ".pi-session")
+            if snapshot is None:
+                # No session file yet: the scene still carries the full
+                # debug entry (worktree, branch) with '-' session fields.
+                snapshot = {
+                    "session_id": None, "session_file": None,
+                    "phase": "starting", "last_activity": None,
+                    "action": None, "result": None,
+                }
+            activity_scene = format_run_scene(
+                snapshot,
+                run_id=run_id, issue=issue_context(source_repo, number),
+                role=ROLE_IMPLEMENT, branch=branch, worktree=str(worktree),
+            )
+        except Exception:
+            LOGGER.exception("issue=%s activity scene failed", number)
+        try:
+            edit_issue(
+                number, repo=source_repo, add=BLOCKED_LABEL,
+                remove=FIX_NEEDED_LABEL,
+            )
+            body = (
+                f"{run_marker(run_id)}\n"
+                f"Muyan Pilot failed: {exc} ({scene_info})"
+            )
+            if activity_scene:
+                body += f" {activity_scene}"
+            comment_issue(number, repo=source_repo, body=body)
+        except Exception:
+            LOGGER.exception("issue=%s failure reporting failed", number)
+        raise
+    # The fix succeeded: consume the fix-needed state and return the
+    # Issue to awaiting review, so the next tick does not re-run the
+    # Fixer (a clean PR is simply waiting for review now).
+    edit_issue(
+        number, repo=source_repo, add=PR_OPENED_LABEL,
+        remove=FIX_NEEDED_LABEL,
+    )
+    return verified_url
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -659,12 +1168,17 @@ def main(argv: list[str] | None = None) -> int:
 
     config = load_config(args.config)
     validate_config(config)
-    selected = pick_next_issue(config["source_repos"])
+    selected = pick_next_delivery(config["source_repos"])
     if selected is None:
         LOGGER.info("source_repos=%s outcome=no_ready_issue", config["source_repos"])
         return 0
-    source_repo, issue = selected
-    process_issue(issue, config, source_repo)
+    source_repo, issue, scene = selected
+    if scene is not None:
+        # An open PR is a recoverable review/fix state: resume the same
+        # run on the same branch, worktree and PR (Issue #45).
+        resume_delivery(issue, scene, config, source_repo)
+    else:
+        process_issue(issue, config, source_repo)
     return 0
 
 

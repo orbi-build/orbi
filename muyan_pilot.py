@@ -5,7 +5,8 @@
 `status` reports the current in-progress Issue (with its live Pi activity:
 phase, last activity time, the last meaningful action, the newest tool
 call result, session file and worktree), the next ready Issue, and the
-most recent result (`ai-pr-opened` / `ai-blocked`) per source repo.
+most recent result (`ai-pr-opened` / `ai-fix-needed` / `ai-blocked`) per
+source repo.
 
 GitHub Issues and labels are the only state store. There is no database,
 queue, or web UI. Command failures are logged and raised by the reused
@@ -38,7 +39,9 @@ LOGGER.addFilter(RunIdFilter())
 ISSUE_URL_PATTERN = re.compile(r"/issues/(\d+)$")
 READY_LABEL = "ai-ready"
 IN_PROGRESS_LABEL = "ai-in-progress"
-RESULT_LABELS = ("ai-pr-opened", "ai-blocked")
+# `ai-pr-opened` (awaiting review), `ai-fix-needed` (Fixer pending) and
+# `ai-blocked` are all result states of an opened delivery (Issue #45).
+RESULT_LABELS = ("ai-pr-opened", "ai-fix-needed", "ai-blocked")
 
 
 def issue_number(url: str) -> int:
@@ -91,7 +94,11 @@ def ready_issue(repo: str) -> dict | None:
 
 
 def recent_result(repo: str) -> dict | None:
-    """Return the newest `ai-pr-opened` or `ai-blocked` Issue, any state."""
+    """Return the newest delivery result Issue, any state.
+
+    Result states: `ai-pr-opened` (awaiting review), `ai-fix-needed`
+    (Fixer pending) and `ai-blocked` (needs human attention).
+    """
     newest = None
     for label in RESULT_LABELS:
         for issue in list_labeled_issues(repo, label, state="all"):

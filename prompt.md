@@ -62,6 +62,30 @@ Your worktree was created from `{{BASE_SHA}}` (the frozen
 3. The runner rejects a delivery whose HEAD does not contain the latest
    remote base, so do not create the PR until the check passes.
 
+Resuming an existing PR (Issue #45):
+
+If the task context says `Existing PR: <url>`, this run already opened
+that PR, and the runner started this fixer run because the Issue is in
+the `ai-fix-needed` state (a review finding or a base conflict). After
+a successful fix the runner returns the Issue to `ai-pr-opened`
+(awaiting review) — so do the complete fix once, not a partial one.
+The PR number, run id, feature branch and worktree are fixed
+for this run:
+
+- Never close the PR, never create a new PR, never re-claim the Issue;
+  the PR keeps the same number and only its head branch moves.
+- If the worktree is mid-merge (the runner merged the latest
+  `origin/{{BASE_BRANCH}}` into the task branch and a conflict was left
+  staged), resolve the conflict manually, keep both sides' intent, then
+  complete the merge commit.
+- Fix the review findings, rerun the full test suite with 100% line and
+  branch coverage, the real verification and the complete review-fix
+  loop, then commit and push ONLY the task branch so the same PR
+  updates.
+- If the conflict or the findings cannot be resolved, stop and explain
+  the concrete blocker in the final response; the runner marks the Issue
+  `ai-blocked` and the PR, branch and worktree stay for inspection.
+
 Rules:
 
 - Do not merge.
