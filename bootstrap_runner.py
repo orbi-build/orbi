@@ -13,6 +13,7 @@ import logging
 import os
 import subprocess
 import tomllib
+import uuid
 from pathlib import Path
 
 
@@ -33,6 +34,9 @@ def load_config(path: Path) -> dict:
         raise ValueError("source_repos must be a non-empty list")
     if not all(isinstance(repo, str) and repo for repo in source_repos):
         raise ValueError("source_repos must contain non-empty strings")
+    base_branch = data.get("base_branch", "main")
+    if not isinstance(base_branch, str) or not base_branch:
+        raise ValueError("base_branch must be a non-empty string")
     return {
         "source_repos": source_repos,
         "repo_dir": _config_path(data.get("repo_dir", "."), base),
@@ -42,6 +46,7 @@ def load_config(path: Path) -> dict:
         "context_files": [
             _config_path(item, base) for item in data.get("context_files", [])
         ],
+        "base_branch": base_branch,
     }
 
 
@@ -150,23 +155,44 @@ def comment_issue(number: int, *, repo: str, body: str) -> None:
                  "--body", body])
 
 
-def task_branch(source_repo: str, number: int) -> str:
-    return f"muyan-pilot/{source_repo.replace('/', '-')}-issue-{number}"
+def new_run_id() -> str:
+    """Return a unique short run identifier for one task attempt."""
+    return uuid.uuid4().hex[:8]
 
 
-def worktree_path(repo_dir: Path, source_repo: str, number: int) -> Path:
+def freeze_base(repo_dir: Path, base_branch: str) -> str:
+    """Fetch the remote and freeze the exact SHA of origin/<base_branch>."""
+    run_command(["git", "fetch", "origin", base_branch], cwd=repo_dir)
+    return run_command(
+        ["git", "rev-parse", f"origin/{base_branch}"], cwd=repo_dir,
+    )
+
+
+def task_branch(source_repo: str, number: int, run_id: str) -> str:
+    return (
+        f"muyan-pilot/{source_repo.replace('/', '-')}-issue-{number}-{run_id}"
+    )
+
+
+def worktree_path(repo_dir: Path, source_repo: str, number: int,
+                  run_id: str) -> Path:
     """Task worktrees live in the configured repo's .worktrees/ directory."""
     slug = source_repo.replace("/", "-")
-    return repo_dir / ".worktrees" / f"muyan-pilot-{slug}-issue-{number}"
+    return (
+        repo_dir / ".worktrees"
+        / f"muyan-pilot-{slug}-issue-{number}-{run_id}"
+    )
 
 
-def create_worktree(repo_dir: Path, source_repo: str, number: int) -> Path:
-    path = worktree_path(repo_dir, source_repo, number)
+def create_worktree(repo_dir: Path, source_repo: str, number: int,
+                    run_id: str, base_sha: str) -> Path:
+    """Create the task worktree from the frozen base SHA, never HEAD."""
+    path = worktree_path(repo_dir, source_repo, number, run_id)
     if path.exists():
         raise RuntimeError(f"worktree path already exists: {path}")
-    branch = task_branch(source_repo, number)
+    branch = task_branch(source_repo, number, run_id)
     run_command([
-        "git", "worktree", "add", "-b", branch, str(path), "HEAD",
+        "git", "worktree", "add", "-b", branch, str(path), base_sha,
     ], cwd=repo_dir)
     return path
 
@@ -184,6 +210,9 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
             "WORKSPACE_ROOT": str(config["workspace_root"]),
             "CONTEXT_FILES": "\n".join(str(path) for path in config["context_files"]),
             "SKILLS": "\n".join(str(path) for path in config["skills"]),
+            "BASE_BRANCH": config["base_branch"],
+            "BASE_SHA": config["base_sha"],
+            "RUN_ID": config["run_id"],
         },
     )
     context = (
@@ -213,7 +242,7 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
     )
 
 
-def verify_pr(worktree: Path, branch: str) -> str:
+def verify_pr(worktree: Path, branch: str, base_branch: str) -> str:
     current_branch = run_command(
         ["git", "branch", "--show-current"], cwd=worktree,
     )
@@ -221,6 +250,27 @@ def verify_pr(worktree: Path, branch: str) -> str:
         raise RuntimeError(
             f"Pi changed branch: expected={branch} actual={current_branch}"
         )
+    # Re-fetch before judging: the delivery must contain the latest remote
+    # base, otherwise it is behind and the PR is rejected (fail fast).
+    run_command(
+        ["git", "fetch", "origin", base_branch], cwd=worktree,
+    )
+    try:
+        run_command(
+            ["git", "merge-base", "--is-ancestor",
+             f"origin/{base_branch}", "HEAD"],
+            cwd=worktree,
+        )
+    except subprocess.CalledProcessError:
+        LOGGER.error(
+            "delivery_behind_base base_branch=%s branch=%s",
+            base_branch, branch,
+        )
+        raise RuntimeError(
+            f"delivery HEAD is behind latest remote base "
+            f"origin/{base_branch}; merge the latest base, rerun full tests "
+            "and review, then retry"
+        ) from None
     raw = run_command([
         "gh", "pr", "list", "--state", "open", "--head", branch,
         "--json", "url", "--limit", "2",
@@ -236,19 +286,31 @@ def verify_pr(worktree: Path, branch: str) -> str:
 
 def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     number = int(issue["number"])
-    branch = task_branch(source_repo, number)
+    base_branch = config["base_branch"]
+    base_sha = freeze_base(config["repo_dir"], base_branch)
+    run_id = new_run_id()
+    branch = task_branch(source_repo, number, run_id)
+    run_info = (
+        f"base_branch={base_branch} base_sha={base_sha} run_id={run_id}"
+    )
+    LOGGER.info(
+        "issue=%s %s", number, run_info,
+    )
     edit_issue(number, repo=source_repo, add="ai-in-progress")
     try:
-        worktree = create_worktree(config["repo_dir"], source_repo, number)
+        worktree = create_worktree(
+            config["repo_dir"], source_repo, number, run_id, base_sha,
+        )
+        config = {**config, "base_sha": base_sha, "run_id": run_id}
         run_pi(issue, worktree, config, source_repo)
-        pr_url = verify_pr(worktree, branch)
+        pr_url = verify_pr(worktree, branch, base_branch)
         edit_issue(
             number, repo=source_repo, add="ai-pr-opened",
             remove="ai-in-progress",
         )
         comment_issue(
             number, repo=source_repo,
-            body=f"Muyan Pilot opened PR: {pr_url}",
+            body=f"Muyan Pilot opened PR: {pr_url} ({run_info})",
         )
         return pr_url
     except Exception as exc:
@@ -260,7 +322,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             )
             comment_issue(
                 number, repo=source_repo,
-                body=f"Muyan Pilot failed: {exc}",
+                body=f"Muyan Pilot failed: {exc} ({run_info})",
             )
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)

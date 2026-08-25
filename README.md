@@ -55,6 +55,10 @@ cp .muyan-pilot.example.toml muyan-pilot.toml
 
 Runner 每次处理一个 Issue 后退出，由 systemd timer 再次触发；不在 Python 内实现 daemon，不引入数据库、队列、重试或复杂恢复。没有人为的任务时长上限；命令错误立即失败，真正卡死时通过 systemd/journal 排查并人工停止。
 
-## 任务 worktree
+## 任务 base 与 worktree
 
-每个任务的现场放在配置 repo 的 `.worktrees/` 目录下，目录名包含 source repo 与 Issue 编号（例如 `.worktrees/muyan-pilot-xqliu-muyan-pilot-issue-14`），任务完成后随项目保留，便于回看现场。`.worktrees/` 已加入 `.gitignore`，不会进入版本库。
+每次领取任务前，Runner 在配置 repo 中执行 `git fetch origin <base_branch>`，并冻结 `origin/<base_branch>` 的精确 SHA（`base_branch` 在 TOML 中配置，默认 `main`）。任务 worktree 和 feature branch 都从该 SHA 创建，绝不使用主工作区当前 HEAD；branch 和目录名都带唯一 run 标识（例如 `.worktrees/muyan-pilot-xqliu-muyan-pilot-issue-14-a1b2c3d4`），同一个 Issue 返工时会生成新的独立 run，旧现场原样保留。base branch、base SHA 和 run 标识会写入 Issue 评论和 `status` 输出。
+
+Pi 创建 PR 前必须重新 fetch：若 `origin/<base_branch>` 已前进，需合入最新 base、手工解决冲突、重跑完整测试与 review 后再推送。Runner 在验收时用 `git merge-base --is-ancestor origin/<base_branch> HEAD` 验证最新远端 base 是交付 HEAD 的祖先；不满足则 fail fast，不接受 PR。不自动解决冲突，不 force push，不 merge 或 push 保护分支。
+
+`.worktrees/` 已加入 `.gitignore`，不会进入版本库。

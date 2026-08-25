@@ -18,6 +18,7 @@ import re
 from pathlib import Path
 
 from bootstrap_runner import (
+    freeze_base,
     load_config,
     parse_issue_array,
     run_command,
@@ -99,6 +100,8 @@ def status_report(config: dict) -> str:
     lines = []
     for repo in config["source_repos"]:
         lines.append(f"source: {repo}")
+        base_sha = freeze_base(config["repo_dir"], config["base_branch"])
+        lines.append(f"  base: {config['base_branch']} {base_sha}")
         for name, lookup in (
             ("current", current_issue),
             ("ready", ready_issue),

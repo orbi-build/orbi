@@ -33,6 +33,17 @@ REQUIRED_ITEMS = (
     ("no-protected-push", "main"),
     ("no-protected-push-master", "master"),
     ("pr-only", "PR"),
+    # 6b. Base freshness: worktrees start from the frozen origin/<base> SHA,
+    #     runs carry a unique run id, the base is re-fetched before the PR,
+    #     behind deliveries are rejected, no auto conflict resolution or
+    #     force push.
+    ("base-freshness", "base freshness"),
+    ("base-frozen-sha", "frozen"),
+    ("base-run-id", "run id"),
+    ("base-refetch", "re-fetch"),
+    ("base-reject-behind", "rejects"),
+    ("base-no-auto-resolve", "auto conflict resolution"),
+    ("base-no-force-push", "force push"),
     # 7. No database, queue, daemon loop, risk engine, or fallback.
     ("no-database", "database"),
     ("no-queue", "queue"),

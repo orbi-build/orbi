@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -182,18 +183,47 @@ def test_status_report_lists_sources_current_ready_and_result(monkeypatch):
     monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: fake_lookup(repo, "current"))
     monkeypatch.setattr(muyan_pilot, "ready_issue", lambda repo: fake_lookup(repo, "ready"))
     monkeypatch.setattr(muyan_pilot, "recent_result", lambda repo: fake_lookup(repo, "result"))
-    report = muyan_pilot.status_report({"source_repos": ["xqliu/muyan-pilot"]})
+    monkeypatch.setattr(muyan_pilot, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    report = muyan_pilot.status_report({
+        "source_repos": ["xqliu/muyan-pilot"],
+        "repo_dir": Path("/srv/muyan/muyan-pilot"),
+        "base_branch": "main",
+    })
     assert "source: xqliu/muyan-pilot" in report
+    assert "base: main abc123def456" in report
     assert "current: #3 now u3" in report
     assert "ready: #11 next u11" in report
     assert "result: #2 done u2" in report
+
+
+def test_status_report_freezes_base_from_configured_repo_dir(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        muyan_pilot, "freeze_base",
+        lambda repo_dir, base_branch: calls.append((repo_dir, base_branch)) or "abc123def456",
+    )
+    monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "ready_issue", lambda repo: None)
+    monkeypatch.setattr(muyan_pilot, "recent_result", lambda repo: None)
+    muyan_pilot.status_report({
+        "source_repos": ["xqliu/muyan-pilot"],
+        "repo_dir": Path("/srv/muyan/muyan-pilot"),
+        "base_branch": "develop",
+    })
+    assert calls == [(Path("/srv/muyan/muyan-pilot"), "develop")]
 
 
 def test_status_report_marks_empty_lookups(monkeypatch):
     monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
     monkeypatch.setattr(muyan_pilot, "ready_issue", lambda repo: None)
     monkeypatch.setattr(muyan_pilot, "recent_result", lambda repo: None)
-    report = muyan_pilot.status_report({"source_repos": ["xqliu/muyan-pilot"]})
+    monkeypatch.setattr(muyan_pilot, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    report = muyan_pilot.status_report({
+        "source_repos": ["xqliu/muyan-pilot"],
+        "repo_dir": Path("/srv/muyan/muyan-pilot"),
+        "base_branch": "main",
+    })
+    assert "base: main abc123def456" in report
     assert "current: -" in report
     assert "ready: -" in report
     assert "result: -" in report
