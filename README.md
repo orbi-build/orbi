@@ -39,15 +39,47 @@ python3 muyan_pilot.py status --config muyan-pilot.toml
 
 `add` 成功后打印新 Issue 的 URL 和 `ai-ready` 标签；`status` 只读，不修改任何标签。命令失败立即报错，不做回退。
 
-## 实时进展
+## 自动可观测（正常运行不需要执行任何命令）
 
-Pi 长时间运行时，Runner 不再只留下启动命令和最终结果。`bootstrap_runner.py` 运行 Pi 期间每 15 秒读取任务 worktree 里的 Pi session JSONL（`.pi-session/*.jsonl`），把最近活动写入 journal（systemd 日志）：
+正常运行完全自动化：人不需要执行 status 命令、不需要轮询进程、不需要督工。
+任务进入 GitHub Issue 池后，Runner 自己完成领取 → plan → implement → test →
+verify → PR，并主动发布过程和最终结果。`muyan_pilot.py status` 只保留为
+开发/故障排查附件，不是产品入口，也不能作为自动可观测性的验收证据。
 
-- `pi_activity issue=... source_repo=... branch=... worktree=... session=... session_file=... events=... phase=... last_activity=... last=...`——有新事件时记录当前阶段（test / pr / push / commit / base / worktree / ui / bash 或工具名）、最近活动时间和脱敏后的工具/命令摘要；
-- `pi_idle ... stale_seconds=...`——超过 5 分钟没有新事件时告警，带完整现场（找不到 session 文件时同样告警）；
+### journal（本地，systemd）
+
+`bootstrap_runner.py` 运行 Pi 期间每 15 秒读取任务 worktree 里的 Pi session
+JSONL（`.pi-session/*.jsonl`），把最近活动写入 journal（systemd 日志）；已经
+打开 `journalctl -f` 时内容持续自动刷新：
+
+- `pi_heartbeat issue=... run_id=... role=... source_repo=... branch=... worktree=... session=... session_file=... phase=... last_activity=... last=... elapsed=...`——心跳间隔不超过 30 秒（15 秒轮询 + 30 秒阈值保证），即使 session 安静也持续有行；
+- `pi_event ...`——session 出现新事件（阶段/动作变化）时立即记录；阶段包括 test / pr / push / commit / base / worktree / ui / bash 或工具名，last 是脱敏后的工具/命令摘要；
+- `pi_idle ... stale_seconds=...`——超过 5 分钟没有模型/session 活动时告警一次，带完整现场（找不到 session 文件时同样告警）；
+- `pi_resumed ...`——idle 告警后 session 恢复活动时立即记录；
 - `pi_failed returncode=... ...`——进程异常退出时先记录现场再抛出错误；session JSONL 完整保留在 worktree 中，作为本地完整记录。
 
-`muyan_pilot.py status` 同时展示当前（`ai-in-progress`）任务的实时状态：
+每行都带 issue、run id、role（implement / review / fix / merge）、phase、
+elapsed、last activity、last action、session、branch。implementer、reviewer、
+fixer 三种 Pi session 用同一个机制观测，role 由 Runner 在启动 session 时传入。
+
+### GitHub（手机，自动更新）
+
+领取任务后，Runner 在 source Issue 上创建一条带隐藏 run marker
+（`<!-- muyan-pilot:run=<run_id> -->`）的进度评论，之后只 PATCH 同一条
+评论（每 30 秒或进度变化时），不新增 heartbeat 垃圾评论。评论始终显示：
+当前阶段、role、已运行时间、最近活动时间、最近动作、测试状态、review/fix
+round、branch、PR/merge 状态。进程重启后按 run marker 找回同一条评论继续
+更新，不需要数据库。
+
+关键 milestone 单独发布简短评论（`Muyan Pilot: ...`），让 GitHub Mobile
+主动推送通知：started、plan ready、tests passed/failed、review findings、
+fix pushed、PR opened、merged、blocked。完成后进度评论更新为最终交付摘要
+（PR、测试、审查证据）；真正失败时更新为 blocked 现场和下一步原因，同时
+Issue 标记 `ai-blocked`。
+
+### 调试附件
+
+`muyan_pilot.py status` 只读展示当前（`ai-in-progress`）任务的实时状态（仅供开发/故障排查）：
 
 ```bash
 python3 muyan_pilot.py status --config muyan-pilot.toml
@@ -61,7 +93,7 @@ python3 muyan_pilot.py status --config muyan-pilot.toml
 #   result: -
 ```
 
-journal 和 `status` 只暴露脱敏摘要：完整 prompt、Issue body 和 token 不会写入日志（命令日志固定为 `<redacted>`，工具摘要截断到 200 字符并屏蔽常见 token 形状）。关键阶段继续回写 GitHub Issue 评论：Pi 启动（含 branch 和 worktree）、PR 创建、失败现场。
+journal、`status` 和 GitHub 进度评论只暴露脱敏摘要：完整 prompt、Issue body 和 token 不会写入日志或评论（命令日志固定为 `<redacted>`，工具摘要截断到 200 字符并屏蔽常见 token 形状）。
 
 前置条件：
 

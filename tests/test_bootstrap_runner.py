@@ -12,6 +12,7 @@ from unittest.mock import Mock
 import pytest
 
 import bootstrap_runner as runner
+from tests.test_progress_wiring import make_fake_gh
 
 
 def test_parse_issue_list_returns_first_issue():
@@ -579,7 +580,7 @@ def test_verify_pr_queries_base_and_head_and_accepts_matching_pr(
     ] in calls
 
 
-def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_path):
+def test_process_issue_success_records_base_and_run_in_progress(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
@@ -587,28 +588,42 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     monkeypatch.setattr(runner, "verify_pr", lambda *args, **kwargs: "https://github.com/muyantech/muyan-pilot/pull/4")
-    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
+    monkeypatch.setattr(runner, "delivery_head_advanced", lambda *args: False)
+    gh_calls, posted = make_fake_gh(monkeypatch)
     issue = {"number": 4, "title": "Fix", "body": "Body"}
     config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}
     assert runner.process_issue(issue, config, "xqliu/muyan-ceo") == "https://github.com/muyantech/muyan-pilot/pull/4"
     assert calls[0] == ("edit", (4,), {"repo": "xqliu/muyan-ceo", "add": "ai-in-progress"})
-    start = calls[1]
-    assert start[0] == "comment"
-    assert "Muyan Pilot started Pi:" in start[2]["body"]
-    assert "base_branch=main" in start[2]["body"]
-    assert "base_sha=abc123def456" in start[2]["body"]
-    assert "run_id=run1" in start[2]["body"]
-    assert "branch=muyan-pilot/xqliu-muyan-ceo-issue-4-run1" in start[2]["body"]
-    assert "worktree=" + str(tmp_path / "wt") in start[2]["body"]
-    assert calls[2][0] == "edit"
-    assert calls[2][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-pr-opened", "remove": "ai-in-progress"}
-    comment = calls[3]
-    assert comment[0] == "comment"
-    body = comment[2]["body"]
-    assert "Muyan Pilot opened PR: https://github.com/muyantech/muyan-pilot/pull/4" in body
-    assert "base_branch=main" in body
-    assert "base_sha=abc123def456" in body
-    assert "run_id=run1" in body in body
+    assert calls[1][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-pr-opened", "remove": "ai-in-progress"}
+    # The started milestone carries the run info, branch and worktree.
+    started = [body for body in posted if "Muyan Pilot: started" in body]
+    assert started
+    assert "base_branch=main" in started[0]
+    assert "base_sha=abc123def456" in started[0]
+    assert "run_id=run1" in started[0]
+    assert "branch=muyan-pilot/xqliu-muyan-ceo-issue-4-run1" in started[0]
+    assert "worktree=" + str(tmp_path / "wt") in started[0]
+    # The PR opened milestone carries the PR URL and run info.
+    pr_opened = [
+        body for body in posted if "Muyan Pilot: PR opened" in body
+    ]
+    assert pr_opened
+    assert "https://github.com/muyantech/muyan-pilot/pull/4" in pr_opened[0]
+    assert "base_branch=main" in pr_opened[0]
+    assert "run_id=run1" in pr_opened[0]
+    # The progress comment was created with the run marker and base info.
+    progress_posts = [
+        body for body in posted
+        if body.startswith("<!-- muyan-pilot:run=run1 -->")
+    ]
+    assert len(progress_posts) == 1
+    assert "- branch: muyan-pilot/xqliu-muyan-ceo-issue-4-run1" in progress_posts[0]
+    # No plain comment_issue calls remain: everything is published via gh api.
+    gh_post_calls = [
+        command for command in gh_calls
+        if command[:2] == ["gh", "api"] and "POST" in command
+    ]
+    assert len(gh_post_calls) == 3  # progress + started + PR opened
 
 
 def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path):
@@ -701,6 +716,7 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
         ),
     )
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
+    make_fake_gh(monkeypatch)
     monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: {
         "session_id": "sess-9",
         "session_file": str(tmp_path / "wt" / ".pi-session" / "s.jsonl"),
@@ -729,6 +745,7 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("git failed")),
     )
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(("comment", args, kwargs)))
+    make_fake_gh(monkeypatch)
     monkeypatch.setattr(
         runner, "activity_snapshot",
         lambda session_dir: (_ for _ in ()).throw(OSError("disk error")),
@@ -794,7 +811,10 @@ def test_stream_pi_logs_live_activity_and_returns_stdout(tmp_path, caplog):
     assert result == "final answer"
     # Without an explicit log_command the raw command is never logged.
     assert "command=<redacted>" in caplog.text
-    assert "pi_activity issue=24 source_repo=xqliu/muyan-pilot" in caplog.text
+    assert (
+        "pi_event issue=24 run_id=- role=implement "
+        "source_repo=xqliu/muyan-pilot"
+    ) in caplog.text
     assert "branch=muyan-pilot/xqliu-muyan-pilot-issue-24-run1" in caplog.text
     assert f"worktree={tmp_path}" in caplog.text
     assert "session=sess-1" in caplog.text

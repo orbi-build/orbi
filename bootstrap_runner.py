@@ -22,7 +22,9 @@ from pi_activity import (
     SessionWatcher,
     activity_snapshot,
     format_activity_scene,
+    sanitize,
 )
+from progress import ProgressPublisher, format_elapsed, progress_body
 
 
 LOGGER = logging.getLogger("muyan_pilot.bootstrap")
@@ -32,6 +34,10 @@ LOGGER = logging.getLogger("muyan_pilot.bootstrap")
 # session stays silent for this long.
 PI_POLL_INTERVAL = 15.0
 PI_IDLE_WARN_SECONDS = 300.0
+# Automatic observability (Issue #18): the journal gets a heartbeat at most
+# every 30 seconds and the GitHub progress comment is PATCHed on change or
+# at the same cadence. No human has to run a status command.
+PI_HEARTBEAT_SECONDS = 30.0
 
 
 def _config_path(value: str, base: Path) -> Path:
@@ -224,18 +230,46 @@ def _decode_chunks(chunks: list[bytes]) -> str:
     return b"".join(chunks).decode("utf-8", "replace")
 
 
-def _log_pi_activity(activity: dict, context: str,
-                     idle_warn_seconds: float) -> None:
-    """Log new session activity, or an idle warning with the full scene."""
+def format_run_context(issue: int | None, run_id: str | None,
+                       role: str, source_repo: str | None,
+                       branch: str | None, worktree: Path) -> str:
+    """Format the run context carried by every journal line (Issue #18)."""
+    return (
+        f"issue={issue} run_id={run_id or '-'} role={role} "
+        f"source_repo={source_repo or '-'} branch={branch or '-'} "
+        f"worktree={worktree}"
+    )
+
+
+def format_elapsed_seconds(seconds: float) -> str:
+    """Format an elapsed duration as whole seconds (`45s`)."""
+    return f"{max(0, int(seconds))}s"
+
+
+def _log_pi_activity(activity: dict, context: str, *,
+                     idle_warn_seconds: float,
+                     idle_warned: bool) -> bool:
+    """Log activity events and idle warnings; track the idle state.
+
+    A new session event logs a `pi_event` line immediately (and a
+    `pi_resumed` line when it follows an idle warning). When no event
+    arrives for `idle_warn_seconds`, a `pi_idle` warning with the full
+    scene is logged once. Returns the updated idle-warning state.
+    """
     scene = format_activity_scene(activity)
     if activity["changed"]:
-        LOGGER.info("pi_activity %s %s", context, scene)
-        return
+        if idle_warned:
+            LOGGER.info("pi_resumed %s %s", context, scene)
+        LOGGER.info("pi_event %s %s", context, scene)
+        return False
     if activity["stale_seconds"] >= idle_warn_seconds:
-        LOGGER.warning(
-            "pi_idle %s %s stale_seconds=%.0f",
-            context, scene, activity["stale_seconds"],
-        )
+        if not idle_warned:
+            LOGGER.warning(
+                "pi_idle %s %s stale_seconds=%.0f",
+                context, scene, activity["stale_seconds"],
+            )
+            return True
+    return idle_warned
 
 
 def stream_pi(
@@ -245,18 +279,31 @@ def stream_pi(
     timeout: int | None = None,
     poll_interval: float = PI_POLL_INTERVAL,
     idle_warn_seconds: float = PI_IDLE_WARN_SECONDS,
+    heartbeat_seconds: float = PI_HEARTBEAT_SECONDS,
     log_command: list[str] | None = None,
     issue: int | None = None,
+    run_id: str | None = None,
+    role: str = "implement",
     source_repo: str | None = None,
     branch: str | None = None,
 ) -> str:
     """Run Pi and stream its live session activity into the journal.
 
-    Every poll, the newest Pi session JSONL activity is logged with the task
-    context (issue, source repo, branch, worktree): phase, last activity
-    time and a sanitized tool summary. When no new event arrives for
-    `idle_warn_seconds`, a warning with the full scene is logged. On a
-    non-zero exit the scene is logged before the error is raised. The
+    Every poll, the newest Pi session JSONL activity is checked against the
+    run context (issue, run id, role, source repo, branch, worktree):
+
+    - a new session event logs a `pi_event` line immediately (phase, last
+      activity time, sanitized last action, session id);
+    - a `pi_heartbeat` line is logged with the same fields plus elapsed
+      time so that the gap between consecutive heartbeat/event lines never
+      exceeds `heartbeat_seconds` (the default 30 s), even while the
+      session is quiet, so an open `journalctl -f` always shows a live
+      line;
+    - when no new event arrives for `idle_warn_seconds`, a `pi_idle`
+      warning with the full scene is logged once, and the first new event
+      after it logs a `pi_resumed` line.
+
+    On a non-zero exit the scene is logged before the error is raised. The
     session JSONL stays in the worktree as the complete local record; the
     full prompt and Issue body are never logged.
     """
@@ -265,9 +312,8 @@ def stream_pi(
     safe_command = log_command or ["<redacted>"]
     LOGGER.info("command=%s cwd=%s", " ".join(safe_command), cwd)
     watcher = SessionWatcher(cwd / ".pi-session")
-    context = (
-        f"issue={issue} source_repo={source_repo} branch={branch} "
-        f"worktree={cwd}"
+    context = format_run_context(
+        issue, run_id, role, source_repo, branch, cwd,
     )
     process = subprocess.Popen(
         command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -275,7 +321,10 @@ def stream_pi(
     stdout_chunks: list[bytes] = []
     stderr_chunks: list[bytes] = []
     deadline = None if timeout is None else time.monotonic() + timeout
+    start_time = time.monotonic()
     activity = watcher.poll()
+    idle_warned = False
+    last_heartbeat = 0.0
     timed_out = False
     try:
         while True:
@@ -294,7 +343,23 @@ def stream_pi(
                     else:
                         stderr_chunks.append(data)
             activity = watcher.poll()
-            _log_pi_activity(activity, context, idle_warn_seconds)
+            idle_warned = _log_pi_activity(
+                activity, context,
+                idle_warn_seconds=idle_warn_seconds,
+                idle_warned=idle_warned,
+            )
+            elapsed = time.monotonic() - start_time
+            # The poll runs every `poll_interval`, so firing at
+            # `heartbeat_seconds - poll_interval` guarantees the gap
+            # between consecutive heartbeat/event lines stays within
+            # `heartbeat_seconds`.
+            if elapsed - last_heartbeat >= heartbeat_seconds - poll_interval:
+                last_heartbeat = elapsed
+                LOGGER.info(
+                    "pi_heartbeat %s %s elapsed=%s",
+                    context, format_activity_scene(activity),
+                    format_elapsed_seconds(elapsed),
+                )
             if process.poll() is not None:
                 break
     finally:
@@ -326,7 +391,8 @@ def stream_pi(
 
 def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
            timeout: int | None = None,
-           branch: str | None = None) -> str:
+           branch: str | None = None,
+           role: str = "implement") -> str:
     system_prompt = render_prompt(
         config["prompt"].read_text(encoding="utf-8"),
         {
@@ -367,6 +433,8 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
             "--system-prompt", "<redacted>", "<issue-context-redacted>",
         ],
         issue=int(issue["number"]),
+        run_id=config["run_id"],
+        role=role,
         source_repo=source_repo,
         branch=branch,
     )
@@ -437,7 +505,92 @@ def verify_pr(worktree: Path, branch: str, base_branch: str) -> str:
     return url
 
 
-def process_issue(issue: dict, config: dict, source_repo: str) -> str:
+def delivery_head_advanced(worktree: Path, base_sha: str) -> bool:
+    """True when the task branch has commits beyond the frozen base."""
+    head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
+    return head != base_sha
+
+
+def read_test_result(worktree: Path) -> str | None:
+    """Summarize the worktree's `test.log`, or None when it does not exist."""
+    path = worktree / "test.log"
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8", errors="replace")
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith(("=", "FAILED", "ERROR")) or "passed" in line:
+            return sanitize(line)
+    return sanitize(text.splitlines()[-1]) if text.strip() else None
+
+
+def _progress_state(*, issue: int, run_id: str, role: str, branch: str,
+                    worktree: Path, started: float, pr_url: str | None,
+                    review_round: int) -> dict:
+    """Collect the current run state for the GitHub progress comment.
+
+    Activity snapshotting is best-effort observability: a read failure is
+    logged and reported as "no session yet", it never blocks the task.
+    """
+    try:
+        snapshot = activity_snapshot(worktree / ".pi-session")
+    except Exception:
+        LOGGER.exception("issue=%s activity snapshot failed", issue)
+        snapshot = None
+    tests = read_test_result(worktree)
+    return {
+        "run_id": run_id,
+        "issue": issue,
+        "role": role,
+        "phase": (snapshot or {}).get("phase") or "starting",
+        "elapsed": format_elapsed(time.monotonic() - started),
+        "last_activity": (snapshot or {}).get("last_activity"),
+        "last_action": (snapshot or {}).get("last"),
+        "tests": tests,
+        "review_round": review_round,
+        "branch": branch,
+        "pr": pr_url,
+        "session": (snapshot or {}).get("session_id"),
+    }
+
+
+def _progress_body(state: dict, *, outcome: str | None = None) -> str:
+    """Render the progress body, optionally with a final outcome header."""
+    body = progress_body(state)
+    if outcome is None:
+        return body
+    return f"{outcome}\n\n{body}"
+
+
+def _publish_plan_milestone(publisher: ProgressPublisher, worktree: Path) -> None:
+    """Post the `plan ready` milestone once the worktree has a plan.md."""
+    if (worktree / "plan.md").is_file():
+        publisher.milestone("plan ready")
+
+
+def _publish_test_milestone(publisher: ProgressPublisher,
+                            worktree: Path) -> None:
+    """Post `tests passed` / `tests failed` from the worktree's test.log."""
+    result = read_test_result(worktree)
+    if result is None:
+        return
+    if "failed" in result or "error" in result:
+        publisher.milestone(f"tests failed: {result}")
+    else:
+        publisher.milestone(f"tests passed: {result}")
+
+
+def _failure_detail(exc: BaseException) -> str:
+    """One-line failure description; keeps subprocess stderr visible."""
+    detail = str(exc)
+    stderr = getattr(exc, "stderr", None)
+    if isinstance(stderr, str) and stderr.strip() and stderr.strip() not in detail:
+        detail = f"{detail} stderr={stderr.strip()}"
+    return detail
+
+
+def process_issue(issue: dict, config: dict, source_repo: str,
+                  role: str = "implement") -> str:
     number = int(issue["number"])
     base_branch = config["base_branch"]
     base_sha = freeze_base(config["repo_dir"], base_branch)
@@ -450,29 +603,44 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         "issue=%s %s", number, run_info,
     )
     edit_issue(number, repo=source_repo, add="ai-in-progress")
+    publisher = ProgressPublisher(
+        number, source_repo, run_id, run_command=run_command,
+    )
     worktree: Path | None = None
+    started = time.monotonic()
     try:
         worktree = create_worktree(
             config["repo_dir"], source_repo, number, run_id, base_sha,
         )
         config = {**config, "base_sha": base_sha, "run_id": run_id}
-        comment_issue(
-            number, repo=source_repo,
-            body=(
-                f"Muyan Pilot started Pi: {run_info} branch={branch} "
-                f"worktree={worktree}"
-            ),
+        state = _progress_state(
+            issue=number, run_id=run_id, role=role, branch=branch,
+            worktree=worktree, started=started, pr_url=None,
+            review_round=0,
         )
-        run_pi(issue, worktree, config, source_repo, branch=branch)
+        publisher.ensure(_progress_body(state))
+        publisher.milestone(
+            f"started: {run_info} branch={branch} worktree={worktree}"
+        )
+        run_pi(issue, worktree, config, source_repo, branch=branch, role=role)
+        _publish_plan_milestone(publisher, worktree)
+        _publish_test_milestone(publisher, worktree)
         pr_url = verify_pr(worktree, branch, base_branch)
+        if delivery_head_advanced(worktree, base_sha):
+            publisher.milestone(f"fix pushed: branch={branch}")
         edit_issue(
             number, repo=source_repo, add="ai-pr-opened",
             remove="ai-in-progress",
         )
-        comment_issue(
-            number, repo=source_repo,
-            body=f"Muyan Pilot opened PR: {pr_url} ({run_info})",
+        publisher.milestone(f"PR opened: {pr_url} ({run_info})")
+        state = _progress_state(
+            issue=number, run_id=run_id, role=role, branch=branch,
+            worktree=worktree, started=started, pr_url=pr_url,
+            review_round=0,
         )
+        publisher.finish(_progress_body(
+            state, outcome="**Muyan Pilot delivered**",
+        ))
         return pr_url
     except Exception as exc:
         LOGGER.exception("issue=%s failed", number)
@@ -489,10 +657,29 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
                 number, repo=source_repo, add="ai-blocked",
                 remove="ai-in-progress",
             )
-            body = f"Muyan Pilot failed: {exc} ({run_info})"
+            detail = _failure_detail(exc)
+            body = f"Muyan Pilot failed: {detail} ({run_info})"
             if scene:
                 body += f" {scene}"
             comment_issue(number, repo=source_repo, body=body)
+            if worktree is not None:
+                state = _progress_state(
+                    issue=number, run_id=run_id, role=role,
+                    branch=branch, worktree=worktree, started=started,
+                    pr_url=None, review_round=0,
+                )
+                publisher.finish(_progress_body(
+                    state,
+                    outcome=(
+                        "**Muyan Pilot blocked**\n\n"
+                        f"failure: {detail}\n"
+                        f"next step: fix the failure above and re-run "
+                        "this Issue (a new run id is created automatically)"
+                    ),
+                ))
+                publisher.milestone(
+                    f"blocked: {sanitize(detail)} ({run_info})"
+                )
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
         raise
