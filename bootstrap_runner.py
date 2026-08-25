@@ -609,15 +609,55 @@ def worktree_path(repo_dir: Path, source_repo: str, number: int,
 
 def create_worktree(repo_dir: Path, source_repo: str, number: int,
                     run_id: str, base_sha: str) -> Path:
-    """Create the task worktree from the frozen base SHA, never HEAD."""
+    """Create the task worktree from the frozen base SHA, never HEAD.
+
+    An existing path is reused: only a resumed run (same run id after a
+    process restart) reaches that state, and its worktree is the scene
+    the run continues in (Issue #18).
+    """
     path = worktree_path(repo_dir, source_repo, number, run_id)
     if path.exists():
-        raise RuntimeError(f"worktree path already exists: {path}")
+        return path
     branch = task_branch(source_repo, number, run_id)
     run_command([
         "git", "worktree", "add", "-b", branch, str(path), base_sha,
     ], cwd=repo_dir)
     return path
+
+
+def latest_run_id(repo_dir: Path, source_repo: str, number: int) -> str | None:
+    """Return the run id of the newest task worktree for the issue.
+
+    The worktree directory name carries the run id — the only state
+    needed to resume the same GitHub progress comment (hidden run
+    marker) instead of creating a second one (Issue #18).
+    """
+    slug = source_repo.replace("/", "-")
+    pattern = f".worktrees/muyan-pilot-{slug}-issue-{number}-*"
+    candidates = [
+        path for path in repo_dir.glob(pattern) if path.is_dir()
+    ]
+    if not candidates:
+        return None
+    newest = max(candidates, key=lambda path: path.stat().st_mtime)
+    return newest.name.rsplit("-", 1)[-1]
+
+
+def has_in_progress_label(number: int, repo: str) -> bool:
+    """True when the Issue still carries `ai-in-progress`.
+
+    The label is added at claim time and removed only by the success or
+    failure path, so it is the marker of a run that is (or was, when
+    the runner died) in flight — as opposed to the preserved worktrees
+    of completed runs (Issue #18).
+    """
+    raw = run_command([
+        "gh", "issue", "list", "--repo", repo, "--state", "all",
+        "--search", f"label:{IN_PROGRESS_LABEL}",
+        "--json", "number", "--limit", "50",
+    ])
+    issues = parse_issue_array(raw)
+    return any(int(issue.get("number", -1)) == number for issue in issues)
 
 
 def _drain_stream(stream, chunks: list[bytes]) -> None:
@@ -1644,6 +1684,22 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     # The run id is generated once per attempt, before any other step is
     # logged, so every journal line of the attempt carries it (Issue #41).
     run_id = new_run_id()
+    # Restart resume (Issue #18): a killed runner leaves the task
+    # worktree and the `ai-in-progress` label behind. Only in that state
+    # the newest worktree's run id is reused, so the same hidden-marker
+    # progress comment is found and kept instead of a second one.
+    # Completed runs keep their worktrees as evidence but lose the
+    # label, so re-claiming an issue always starts a fresh run.
+    if has_in_progress_label(number, source_repo):
+        existing_run_id = latest_run_id(
+            config["repo_dir"], source_repo, number,
+        )
+        if existing_run_id is not None:
+            LOGGER.info(
+                "issue=%s resuming_run run_id=%s",
+                number, existing_run_id,
+            )
+            run_id = existing_run_id
     set_run_id(run_id)
     base_sha = freeze_base(config["repo_dir"], base_branch)
     branch = task_branch(source_repo, number, run_id)
@@ -1989,6 +2045,36 @@ def issue_labels(number: int, repo: str) -> list[str]:
     return names
 
 
+def _finish_blocked_progress(
+    number: int, run_id: str | None, source_repo: str,
+    worktree: Path | None, branch: str | None, pr_url: str,
+    detail: str, next_step: str,
+) -> None:
+    """Finish the tracked progress comment with the blocked scene.
+
+    The contract (Issue #18): on failure the progress comment becomes
+    the blocked scene with the next-step reason — the same terminal
+    body the `process_issue` and `resume_delivery` failure paths write.
+    `ensure` finds the run's existing progress comment by its hidden
+    marker (PATCHing it in place) or creates it when the run never
+    reached one; either way the blocked scene is the final state.
+    """
+    if run_id is None:
+        return
+    publisher = ProgressPublisher(
+        number, source_repo, run_id, run_command=run_command,
+    )
+    publisher.ensure(_progress_body(_progress_state(
+        issue=number, run_id=run_id, role=ROLE_FIX,
+        branch=branch or "-", worktree=worktree or Path("-"),
+        started=time.monotonic(), pr_url=pr_url, review_round=0,
+    ), outcome=(
+        "**Muyan Pilot blocked**\n\n"
+        f"failure: {detail}\n"
+        f"next step: {next_step}"
+    )))
+
+
 def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                       source_repo: str, poll_interval: float = PI_POLL_INTERVAL) -> None:
     """Own the delivery lifecycle: hold the slot until merge or failure.
@@ -2068,6 +2154,16 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     f"blocked: PR {pr_url} was closed without a merge; "
                     "the delivery is terminally failed"
                 )
+                # The tracked progress comment becomes the blocked scene
+                # (Issue #18): the same terminal body the other failure
+                # paths write, with the next-step reason.
+                _finish_blocked_progress(
+                    number, run_id, source_repo, None, None, pr_url,
+                    f"PR {pr_url} was closed without a merge; the "
+                    "delivery is terminally failed",
+                    "investigate why the PR was closed and re-open the "
+                    "delivery or start a fresh run on the Issue",
+                )
             return
         labels = issue_labels(number, source_repo)
         if FIX_NEEDED_LABEL in labels and BLOCKED_LABEL not in labels:
@@ -2094,6 +2190,8 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
             # worktree, missing/malformed verdict, exhausted rounds)
             # is a real failure: the Issue is marked `ai-blocked` so
             # it is never stranded in awaiting review without an owner.
+            worktree = None
+            branch = None
             try:
                 scene = resume_scene(
                     issue_comments(number, repo=source_repo),
@@ -2134,6 +2232,18 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     ).milestone(
                         f"blocked: the independent review of PR {pr_url} "
                         f"failed: {exc}"
+                    )
+                    # The tracked progress comment becomes the blocked
+                    # scene (Issue #18): the same terminal body the
+                    # other failure paths write, with the next-step
+                    # reason.
+                    _finish_blocked_progress(
+                        number, run_id, source_repo, worktree, branch,
+                        pr_url,
+                        f"the independent review of PR {pr_url} failed: "
+                        f"{exc}",
+                        "fix the review failure above and resume the "
+                        "delivery of this same PR",
                     )
                 return
             if merged:

@@ -17,8 +17,14 @@ import bootstrap_runner as runner
 import progress
 
 
-def make_fake_gh(monkeypatch, comments=None):
-    """Answer every gh call; return (calls, posted_bodies)."""
+def make_fake_gh(monkeypatch, comments=None, in_progress=False):
+    """Answer every gh call; return (calls, posted_bodies).
+
+    `in_progress` controls the restart-resume scan (`gh issue list
+    --search label:ai-in-progress`): True when the Issue still carries
+    the label (a run is, or was when the runner died, in flight),
+    False for a fresh claim (Issue #18).
+    """
     calls = []
     posted = []
 
@@ -36,6 +42,8 @@ def make_fake_gh(monkeypatch, comments=None):
                 return json.dumps({"id": 77, "body": body[len("body="):],
                                    "url": "https://x/77"})
             return ""
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([{"number": 18}] if in_progress else [])
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
@@ -688,13 +696,27 @@ def test_wait_for_delivery_closed_unmerged_posts_blocked_milestone(
 ):
     pr_url = "https://github.com/owner/repo/pull/46"
     api_calls = []
+    existing = {
+        "id": 77,
+        "body": (
+            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+            "**Muyan Pilot progress**\n\nawaiting review"
+        ),
+    }
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"]:
             return json.dumps({"state": "CLOSED"})
-        # Only the blocked milestone POST reaches the api here.
         api_calls.append(command)
-        return json.dumps({"id": 78, "body": ""})
+        if "--method" not in command:
+            # The run's live progress comment exists.
+            return json.dumps([existing])
+        method = command[command.index("--method") + 1]
+        if method == "POST":
+            body = command[command.index("--field") + 1]
+            return json.dumps({"id": 78, "body": body[len("body="):],
+                               "url": "https://x/78"})
+        return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     monkeypatch.setattr(runner, "edit_issue", Mock())
@@ -703,11 +725,110 @@ def test_wait_for_delivery_closed_unmerged_posts_blocked_milestone(
     runner.wait_for_delivery(
         pr_url, {"number": 39, "title": "t", "body": ""}, {}, "owner/repo",
     )
-    milestones = [
-        command for command in api_calls
+    posted_bodies = [
+        command[command.index("--field") + 1][len("body="):]
+        for command in api_calls
         if "--method" in command and "POST" in command
     ]
-    assert milestones, "no blocked milestone was posted"
-    body = milestones[0][milestones[0].index("--field") + 1][len("body="):]
-    assert "Muyan Pilot: blocked" in body
-    assert "closed without a merge" in body
+    # The blocked milestone carries the mobile notification...
+    assert any("Muyan Pilot: blocked" in body for body in posted_bodies)
+    assert any(
+        ("closed without a merge" in body for body in posted_bodies),
+    )
+    # ...and the tracked progress comment becomes the blocked scene
+    # (Issue #18): the same terminal body the other failure paths write.
+    assert not any(
+        "**Muyan Pilot progress**" in body for body in posted_bodies
+    )
+    patches = [
+        command for command in api_calls
+        if command[:2] == ["gh", "api"]
+        and command[2] == "repos/owner/repo/issues/39/comments/77"
+        and "PATCH" in command
+    ]
+    assert patches, "the tracked progress comment was not updated"
+    blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
+    assert "Muyan Pilot blocked" in blocked
+    assert "closed without a merge" in blocked
+    assert "next step:" in blocked
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked
+
+
+def test_wait_for_delivery_review_failure_finishes_progress_comment_with_blocked_scene(
+    monkeypatch,
+):
+    """A review that cannot run is a terminal failure: the Issue is
+    marked `ai-blocked` AND the tracked progress comment becomes the
+    blocked scene with the next-step reason (Issue #18) — not only the
+    blocked milestone."""
+    pr_url = "https://github.com/owner/repo/pull/46"
+    api_calls = []
+    existing = {
+        "id": 77,
+        "body": (
+            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+            "**Muyan Pilot progress**\n\nawaiting review"
+        ),
+    }
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps({"state": "OPEN"})
+        if command[:2] == ["gh", "api"]:
+            api_calls.append(command)
+            if "--method" not in command:
+                return json.dumps([existing])
+            method = command[command.index("--method") + 1]
+            if method == "POST":
+                body = command[command.index("--field") + 1]
+                return json.dumps({"id": 78, "body": body[len("body="):],
+                                   "url": "https://x/78"})
+            return ""
+        if command[:2] == ["gh", "issue"]:
+            # The review scan: the Issue is awaiting review, and the
+            # comment history carries no trusted scene, so the review
+            # fails fast.
+            if command[-1] == "labels":
+                return json.dumps({"labels": [
+                    {"name": "ai-pr-opened"},
+                ]})
+            return json.dumps({"comments": []})
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    # The fake rejects anything that is not pr/api/issue traffic.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "list"])
+    monkeypatch.setattr(runner, "edit_issue", Mock())
+    monkeypatch.setattr(runner, "comment_issue", Mock())
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    runner.wait_for_delivery(
+        pr_url, {"number": 39, "title": "t", "body": ""},
+        {"repo_dir": Path("/srv/repo")}, "owner/repo",
+    )
+    posted_bodies = [
+        command[command.index("--field") + 1][len("body="):]
+        for command in api_calls
+        if "--method" in command and "POST" in command
+    ]
+    assert any("Muyan Pilot: blocked" in body for body in posted_bodies)
+    assert any(
+        "independent review" in body and "failed" in body
+        for body in posted_bodies
+    )
+    patches = [
+        command for command in api_calls
+        if command[:2] == ["gh", "api"]
+        and command[2] == "repos/owner/repo/issues/39/comments/77"
+        and "PATCH" in command
+    ]
+    assert patches, "the tracked progress comment was not updated"
+    last_body = patches[-1][patches[-1].index("--field") + 1][len("body="):]
+    assert "Muyan Pilot blocked" in last_body
+    assert "independent review" in last_body
+    assert "next step:" in last_body
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in last_body
+    # No second progress comment was created.
+    assert not any(
+        "**Muyan Pilot progress**" in body for body in posted_bodies
+    )
