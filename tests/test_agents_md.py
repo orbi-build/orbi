@@ -15,20 +15,16 @@ REQUIRED_ITEMS = (
     ("read-first", "read the GitHub Issue"),
     ("read-first-context", "context files"),
     ("read-first-readme", "README.md"),
-    # 2. TDD: test before implementation. Early catch is TDD, not a
-    #     pre-PR independent review-fix loop.
+    # 2. TDD: test before implementation; assert externals against docs.
     ("tdd", "write a failing test first"),
-    ("tdd-not-pre-pr-r1r9", "not by running a full independent r1–r9"),
-    ("tdd-docs-not-guess", "guessed url"),
+    ("tdd-docs", "official docs"),
     # 2b. Issue granularity: one runtime outcome per Issue.
     ("issue-granularity", "issue granularity"),
     ("issue-one-outcome", "one runtime outcome"),
-    ("issue-too-coarse", "too coarse"),
-    ("issue-too-fine", "too fine"),
     ("issue-pin-root-cause", "root cause is pinned"),
-    # 2c. Implement vs review: new review session after the PR; no
-    #     complete review-fix loop before the PR.
-    ("implement-no-pre-pr-loop", "do not run a complete independent review-fix loop"),
+    # 2c. Implement vs review: new review session after the PR.
+    ("implement-then-pr", "plan, tdd, tests, push one pr"),
+    ("review-after-pr", "after the pr exists"),
     ("review-new-jsonl", "new jsonl"),
     ("review-prompt-review", "prompt_review.md"),
     # 3. 100% line and branch coverage for Python code.

@@ -6,8 +6,7 @@ follow it before changing code.
 Four audiences, one file:
 
 - **Issue authors** (humans or the monitor): granularity below.
-- **Implementer Pi**: read first, TDD, one PR. No independent review
-  before the PR exists.
+- **Implementer Pi**: read first, TDD, one PR.
 - **Reviewer Pi**: a new `pi --print` after the PR, `prompt_review.md`,
   a new JSONL.
 - **Runner**: labels, base freshness, observability, the post-PR
@@ -21,45 +20,25 @@ Four audiences, one file:
 ## Issue granularity
 
 Write GitHub Issues so one Pilot implement session can finish them. One
-Issue is **one runtime outcome** (when X, should Y, actually Z), not a
-subsystem and not a philosophy.
+Issue is **one runtime outcome** (when X, should Y, actually Z).
 
-- Right size: one observable behavior, a handful of related files, tests
-  included, hundreds of lines not thousands. Title should work as a test
-  name.
-- Too coarse: "optimize review" or "GitHub observability" as a whole
-  product. Those become overnight diffs, merge conflicts, and review
-  Majors.
-- Too fine: one sentence per Issue (`prompt.md` vs `AGENTS.md` vs one
-  string in the runner). Claim/worktree/review/merge overhead exceeds
-  the change.
-- Split when two changes do not have to land together (prompt wording vs
-  `--skill` lists vs harness control flow). Do not split files that are
-  the same wording change.
-- Do not open an Issue until the root cause is pinned. A wrong-cause
-  ticket costs more than a large one.
+- Size: one observable behavior, a handful of related files, tests
+  included, hundreds of lines. Title should work as a test name.
+- Open the Issue once the root cause is pinned.
 
 ## Implement vs review
 
-- Implementer session: plan, TDD, tests, push one PR. Do not run a complete independent review-fix loop
-  or R1–R9 before the PR is open. The Runner does that after the PR exists.
-- Independent review is a **new** `pi --print` process with
-  `prompt_review.md` and a new JSONL. It does not continue the
-  implementer's chat. Sharing the worktree and the local model is
-  enough isolation; do not invent a second worktree for review.
-- `review-fix-loop` / full R1–R9 before the PR duplicates the Runner
-  review and is too expensive on the local model. Catch what tests can
-  catch in the implement session; leave judgment of the frozen diff to
-  the post-PR review session.
+- Implementer session: plan, TDD, tests, push one PR.
+- After the PR exists, the Runner starts independent review: a new
+  `pi --print` with `prompt_review.md` and a new JSONL, on the same
+  worktree.
 
 ## TDD and coverage
 
 - TDD: write a failing test first, then the smallest implementation, then
-  refactor. That is how defects are caught early: while the files are still
-  in context, not by running a full independent R1–R9 review before the PR.
-- External APIs, CLI flags, and HTTP paths are asserted against official
-  docs or one real call. Do not freeze a guessed URL or response shape as
-  a green test.
+  refactor.
+- External APIs, CLI flags, and HTTP paths are asserted against official docs
+  or one real call.
 - Python code keeps 100% line and branch coverage:
 
   ```bash
