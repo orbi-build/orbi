@@ -159,7 +159,11 @@ def follow_session_file(path: Path,
     was given and never switches to a newer file that appears mid-run
     (Issue #74). A file that disappears (worktree cleanup) stops the
     generator — fail fast, no fallback. A file that shrank is re-read
-    from the start (the same rule as the session watcher).
+    from the start (the same rule as the session watcher). Only
+    complete lines are yielded: a trailing partial line (the writer is
+    still flushing it) is left for the next read, so a record is never
+    split into fragments or dropped by the `--pretty` parser (the same
+    rule as the session watcher).
     """
     offset = 0
     while True:
@@ -173,8 +177,15 @@ def follow_session_file(path: Path,
             with path.open("r", encoding="utf-8") as handle:
                 handle.seek(offset)
                 data = handle.read(size - offset)
-            offset = size
-            for line in data.splitlines():
+            end = data.rfind("\n")
+            if end < 0:
+                # No complete line yet: the writer is still flushing
+                # the current line; re-read it on the next poll.
+                time.sleep(poll_interval)
+                continue
+            complete = data[: end + 1]
+            offset += end + 1
+            for line in complete.splitlines():
                 if line:
                     yield line
         time.sleep(poll_interval)

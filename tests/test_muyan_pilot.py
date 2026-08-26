@@ -565,6 +565,54 @@ def test_follow_session_file_skips_blank_lines(tmp_path):
     path.unlink()
 
 
+def test_follow_session_file_never_splits_a_record_being_written(
+    tmp_path,
+):
+    """Issue #74: a record the writer is still flushing (no trailing
+    newline yet) must not be yielded as fragments: only complete lines
+    are yielded, the partial tail is left for the next read (the same
+    rule as the session watcher). Without this a record written while
+    following appears as split lines in raw mode and is silently
+    dropped in `--pretty` mode (every fragment fails to parse)."""
+    path = tmp_path / "partial.jsonl"
+    path.write_text(
+        json.dumps({"type": "session", "id": "s1", "cwd": "/w"}) + "\n",
+        encoding="utf-8",
+    )
+    record = json.dumps({
+        "type": "message", "id": "a1",
+        "timestamp": "2026-08-26T00:00:00Z",
+        "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "VISIBLE-RECORD"}]},
+    })
+
+    def write_in_chunks():
+        time.sleep(0.2)
+        with path.open("a", encoding="utf-8") as handle:
+            for i in range(0, len(record), 8):
+                handle.write(record[i:i + 8])
+                handle.flush()
+                time.sleep(0.05)
+            handle.write("\n")
+        time.sleep(0.5)
+        path.unlink()
+
+    thread = threading.Thread(target=write_in_chunks)
+    thread.start()
+    lines = list(
+        muyan_pilot.follow_session_file(path, poll_interval=0.05),
+    )
+    thread.join(timeout=5)
+    # The record is yielded exactly once, complete, never as fragments.
+    assert lines.count(record) == 1
+    assert len(lines) == 2
+    assert "s1" in lines[0]
+    # Every yielded line is a complete record (the pretty path keeps it).
+    for line in lines:
+        parsed = json.loads(line)
+        assert isinstance(parsed, dict)
+
+
 def test_session_follow_without_session_file_fails_fast(tmp_path, capsys):
     (tmp_path / ".worktrees").mkdir()
     assert muyan_pilot.main([

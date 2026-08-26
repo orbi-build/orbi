@@ -270,7 +270,7 @@ ai-ready
   -> ai-pr-opened            （PR 验收通过，等待 review）
   -> review                  （独立审查会话，会话内修复）
   -> ai-fix-needed           （未修复 finding / base 冲突；同一 PR 的下一个审查会话）
-  -> ai-pr-opened            （修复后重新等待 review）
+  -> review                  （下一个审查会话；`ai-fix-needed` 保留到合并，不重新加回 `ai-pr-opened`）
   -> merge                   （clean verdict + merge 门禁）
   -> ai-merged               （成功终态；Fixes #N 自动关闭 Issue）
 ```
