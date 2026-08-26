@@ -38,6 +38,32 @@ git fetch origin main && git merge --ff-only origin/main
 
 与本地的差异：生产运行时是 Runner 机器的 `/usr/bin/python3`（3.14.6），GitHub-hosted runner 没有这个解释器，所以 workflow 用 `actions/setup-python` 固定同一 minor 版本 `3.14`，契约命令通过 PATH 上固定的 `python3` 执行（命令与本地相同，只有解释器路径不同）。
 
+## CI 失败自动建 bug Issue（Issue #106）
+
+CI 变红不是终点：`.github/workflows/ci-failure-issue.yml`（workflow 名 `CI Failure Issue`）用 `on: workflow_run` 监听 `CI` workflow 的 `completed` 事件，把失败变成可被 Muyan Pilot pickup 的 bug Issue；恢复通过后自动收口。不引入 daemon、数据库或队列，Issue 仍是唯一状态存储。
+
+**触发与分类**（`ci_failure_issue.py`，纯标准库 + `gh api`）：
+
+- 只处理 `CI`（`.github/workflows/ci.yml`）在 `pull_request` 或 `push` 到 `main` 上**已完成**的 run；其他 workflow、其他事件、push 到非 main 分支、run 未完成一律记 `ci_failure_issue_ignored` 并退出 0（无动作、无错误）。
+- run 结论 `failure` / `cancelled` / `timed_out` → 失败路径；`success` → 恢复路径；未知结论 fail fast（非零退出）。
+- 失败 job 与失败步骤来自 jobs API（`GET /actions/runs/{run_id}/jobs`，默认 `filter=latest` 即本次完成 attempt 的 job），不解析日志。
+
+**去重指纹**（稳定，跨重跑不变）：
+
+```text
+v1|<workflow path>|<job name>|<event>|<target>|<head sha>|<conclusion>
+```
+
+`target` 是 `pull:<PR 号>`（pull_request run 按 head SHA 解析 OPEN PR）或 `branch:<分支>`（push run）。run id 不进指纹：同一 commit 重跑只更新原 Issue（正文追加 run 证据行），不创建风暴；两个不同 commit/job 的失败得到两个独立 Issue。恢复按同一场景在所有失败结论下匹配（Issue 是用失败结论创建的）。
+
+**Issue 内容**：`bug` + `ai-ready` 标签（Runner 的 bug 优先扫描直接 pickup），正文含 workflow、job、event、branch/PR、commit SHA、run id、run URL、job URL、失败步骤、触发时间、指纹行与恢复规则；只写事件与 jobs API 的数据，不写任何 secret/token，完整日志看 run URL。
+
+**恢复**：同指纹的后续成功 run 给匹配的 open Issue 追加恢复 run 证据，并以 `state_reason: completed` 关闭（已验证终态）；无匹配时记 `ci_failure_issue_recovery_no_match` 退出 0。
+
+**权限与失败**：workflow 显式声明最小权限集 `actions: read` + `issues: write`；任何 `gh api` 失败、未知结论或畸形 payload 都记结构化 `ci_failure_issue_error stage=… error=…` 并非零退出——triage job 变红，绝不伪造成功。并发 triage 按被观察 run+attempt 串行化（`concurrency` 组，不取消在途任务）。
+
+**防递归**：该 workflow 只由 `CI` 的 `workflow_run` 触发，没有 `pull_request`/`push` 触发器——它创建/更新的 Issue 不会再次触发同一失败创建流程。
+
 ## 任务派发与状态
 
 `muyan_pilot.py` 是最小 CLI，用于手工派活和查看队列。GitHub Issue 与标签是唯一状态存储，不引入数据库或 Web UI：
