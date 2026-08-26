@@ -454,7 +454,7 @@ def test_process_issue_finishes_progress_comment_with_delivery_summary(
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/18/comments/77"
+        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
         and "--method" in command
         and "PATCH" in command
     ]
@@ -490,7 +490,7 @@ def test_process_issue_failure_updates_progress_comment_with_blocked_scene(
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/18/comments/77"
+        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
         and "PATCH" in command
     ]
     assert final_patches, "no PATCH of the progress comment"
@@ -527,7 +527,7 @@ def test_process_issue_resumes_existing_progress_comment_after_restart(
     patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/18/comments/77"
+        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
         and "PATCH" in command
     ]
     assert patches, "existing progress comment was not updated"
@@ -687,7 +687,7 @@ def test_resume_delivery_reuses_existing_progress_comment(monkeypatch, tmp_path)
     patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/18/comments/77"
+        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
         and "PATCH" in command
     ]
     assert patches, "existing progress comment was not updated"
@@ -715,7 +715,7 @@ def test_resume_delivery_posts_fix_pushed_milestone_and_finishes(
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/18/comments/77"
+        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
         and "PATCH" in command
     ]
     assert final_patches
@@ -750,7 +750,7 @@ def test_resume_delivery_failure_updates_progress_comment_with_blocked_scene(
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/18/comments/77"
+        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
         and "PATCH" in command
     ]
     assert final_patches
@@ -803,7 +803,7 @@ def test_review_and_merge_posts_review_findings_milestone(monkeypatch, tmp_path)
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/18/comments/77"
+        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
         and "PATCH" in command
     ]
     assert final_patches
@@ -858,7 +858,7 @@ def test_review_and_merge_posts_merged_milestone_and_final_summary(
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/18/comments/77"
+        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
         and "PATCH" in command
     ]
     assert final_patches
@@ -946,7 +946,7 @@ def test_wait_for_delivery_closed_unmerged_posts_blocked_milestone(
     patches = [
         command for command in api_calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/owner/repo/issues/39/comments/77"
+        and command[2] == "repos/owner/repo/issues/comments/77"
         and "PATCH" in command
     ]
     assert patches, "the tracked progress comment was not updated"
@@ -1044,7 +1044,7 @@ def test_wait_for_delivery_review_failure_finishes_progress_comment_with_blocked
     patches = [
         command for command in api_calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/owner/repo/issues/39/comments/77"
+        and command[2] == "repos/owner/repo/issues/comments/77"
         and "PATCH" in command
     ]
     assert patches, "the tracked progress comment was not updated"
