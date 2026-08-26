@@ -45,6 +45,24 @@ python3 muyan_pilot.py status --config muyan-pilot.toml
 
 `add` 成功后打印新 Issue 的 URL 和 `ai-ready` 标签；`status` 只读，不修改任何标签。命令失败立即报错，不做回退。
 
+## 任务依赖（blockedBy）
+
+任务之间的依赖一律用 GitHub **原生依赖关系**（`blockedBy`/`blocking`，gh 2.94+）标注；**不要**在 Issue 正文写 `Depends on #N`——正文不进入 `blockedBy`，Runner 不解析正文依赖：
+
+```bash
+# 派发新 Issue 后标注依赖（N = 新 Issue，M = 前置 Issue）
+gh issue edit N --repo xqliu/muyan-pilot --add-blocked-by M
+# 解除依赖
+gh issue edit N --repo xqliu/muyan-pilot --remove-blocked-by M
+```
+
+Runner 行为（单 slot 串行，只做“读字段-跳过-等待”，不引入 DAG、拓扑排序或多 worker 调度）：
+
+- 领取 `ai-ready` Issue 前，Runner 读取原生 `blockedBy`（`gh issue list --json blockedBy`）；
+- 存在未关闭 blocker（blocker 节点 `state=OPEN`）→ **不领取**：不加 `ai-in-progress`、不改任何标签、不建 worktree，记录结构化日志 `blocked_by issue=N repo=... blockers=M1,M2`，继续检查同 repo 后面的 ready Issue；
+- blocker 关闭后不再阻塞：GitHub 会把该关系保留在列表中（节点 `state=CLOSED`，惰性，已对真实 API 验证），Runner 只统计未关闭 blocker——无需人工操作，下一 tick 该 Issue 自然可领；
+- `blockedBy` 查询失败 → **fail open**（视为未阻塞：本 tick 不从该 repo 领取，记录 `blocked_by_check_failed`，下一 tick 重试查询），API 异常不会死锁队列。
+
 ## 自动可观测（正常运行不需要执行任何命令）
 
 正常运行完全自动化：人不需要执行 status 命令、不需要轮询进程、不需要督工。
