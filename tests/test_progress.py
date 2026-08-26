@@ -203,7 +203,7 @@ def test_publisher_ensure_patches_existing_progress_comment():
             "--paginate",
         ],
         [
-            "gh", "api", "repos/xqliu/muyan-pilot/issues/18/comments/7",
+            "gh", "api", "repos/xqliu/muyan-pilot/issues/comments/7",
             "--method", "PATCH", "--field", "body=new body",
         ],
     ]
@@ -264,8 +264,37 @@ def test_publisher_patch_updates_the_tracked_comment():
     publisher.ensure("old")
     publisher.patch("updated body")
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/muyan-pilot/issues/18/comments/7",
+        "gh", "api", "repos/xqliu/muyan-pilot/issues/comments/7",
         "--method", "PATCH", "--field", "body=updated body",
+    ]
+
+
+def test_publisher_patch_uses_the_github_update_comment_endpoint():
+    # Issue #58: the production PATCH 404s because the comment id was
+    # appended to the list/create URL (repos/{repo}/issues/{issue}/
+    # comments/{id}), which is not a GitHub REST route. Update an issue
+    # comment is PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}
+    # — no issue number.
+    publisher, calls = make_publisher(comments=[
+        {
+            "id": 7,
+            "body": (
+                "<!-- muyan-pilot:run=abc123 -->\n\n"
+                "**Muyan Pilot progress**"
+            ),
+        },
+    ])
+    publisher.ensure("old")
+    publisher.patch("updated body")
+    assert calls[-1] == [
+        "gh", "api", "repos/xqliu/muyan-pilot/issues/comments/7",
+        "--method", "PATCH", "--field", "body=updated body",
+    ]
+    # List/create keep the issue-scoped endpoint (that route is correct
+    # for GET and POST).
+    assert calls[0] == [
+        "gh", "api", "repos/xqliu/muyan-pilot/issues/18/comments",
+        "--paginate",
     ]
 
 
@@ -328,7 +357,7 @@ def test_publisher_finish_patches_final_summary_into_tracked_comment():
     publisher.ensure("old")
     publisher.finish("final delivery summary")
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/muyan-pilot/issues/18/comments/7",
+        "gh", "api", "repos/xqliu/muyan-pilot/issues/comments/7",
         "--method", "PATCH", "--field", "body=final delivery summary",
     ]
 

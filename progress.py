@@ -130,7 +130,15 @@ class ProgressPublisher:
         self.comment_id: int | None = None
 
     def _endpoint(self) -> str:
+        # List/create route (GET and POST): issue-scoped.
         return f"repos/{self.repo}/issues/{self.issue}/comments"
+
+    def _update_endpoint(self, comment_id: int) -> str:
+        # Update an issue comment: PATCH /repos/{owner}/{repo}/issues/
+        # comments/{comment_id} — no issue number. Appending the id to
+        # the list/create endpoint is not a GitHub REST route and 404s
+        # (Issue #58).
+        return f"repos/{self.repo}/issues/comments/{comment_id}"
 
     def _list_comments(self) -> list[dict]:
         raw = self._run_command([
@@ -156,7 +164,7 @@ class ProgressPublisher:
 
     def _patch_comment(self, comment_id: int, body: str) -> None:
         self._run_command([
-            "gh", "api", f"{self._endpoint()}/{comment_id}",
+            "gh", "api", self._update_endpoint(comment_id),
             "--method", "PATCH", "--field", f"body={body}",
         ])
 

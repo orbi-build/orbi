@@ -1946,16 +1946,38 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             number, repo=source_repo, add=PR_OPENED_LABEL,
             remove=IN_PROGRESS_LABEL,
         )
-        comment_issue(
-            number, repo=source_repo,
-            body=opened_pr_comment_body(run_id, run_info, pr_url),
-        )
-        publisher.milestone(f"PR opened: {pr_url} ({run_info})")
-        publisher.finish(_progress_body(_progress_state(
-            issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
-            branch=branch, worktree=worktree, started=started,
-            pr_url=pr_url, review_round=0,
-        ), outcome="**Muyan Pilot delivered**"))
+        # The delivery is complete here: the PR is verified and the
+        # Issue has left the claim state for the review/fix loop. From
+        # here on only the delivery-record publishing remains, and a
+        # failure there must NOT fail the delivery (Issue #60: the
+        # #57 delivered PATCH 404'd and the runner labeled the Issue
+        # ai-blocked, skipping the review of a valid PR). Each step is
+        # best-effort and independent — like the in-stream callback,
+        # an error is logged (`progress_publish_failed`) and the next
+        # step still runs — and the run continues into the
+        # review/merge wait loop either way.
+        for step in (
+            lambda: comment_issue(
+                number, repo=source_repo,
+                body=opened_pr_comment_body(run_id, run_info, pr_url),
+            ),
+            lambda: publisher.milestone(
+                f"PR opened: {pr_url} ({run_info})"
+            ),
+            lambda: publisher.finish(_progress_body(_progress_state(
+                issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
+                branch=branch, worktree=worktree, started=started,
+                pr_url=pr_url, review_round=0,
+            ), outcome="**Muyan Pilot delivered**")),
+        ):
+            try:
+                step()
+            except Exception:
+                LOGGER.exception(
+                    "progress_publish_failed run=%s issue=%s role=%s",
+                    run_id, issue_context(source_repo, number),
+                    ROLE_IMPLEMENT,
+                )
         LOGGER.info(
             "run_end %s",
             format_end_scene(
@@ -2117,23 +2139,42 @@ def resume_delivery(issue: dict, scene: dict, config: dict,
             number, repo=source_repo, add=PR_OPENED_LABEL,
             remove=FIX_NEEDED_LABEL,
         )
-        comment_issue(
-            number, repo=source_repo,
-            body=(
-                f"{run_marker(run_id)}\n"
-                f"Muyan Pilot fixed PR: {verified_url} ({scene_info})"
+        # The fix is delivered here: the PR is re-verified and the
+        # Issue is back in `ai-pr-opened`. From here on only the
+        # delivery-record publishing remains, and a failure there must
+        # NOT fail the delivery (Issue #60, same contract as the fresh
+        # claim): each step is best-effort and independent — an error
+        # is logged (`progress_publish_failed`) and the next step
+        # still runs — and the run continues into the review/merge
+        # wait loop either way.
+        for step in (
+            lambda: comment_issue(
+                number, repo=source_repo,
+                body=(
+                    f"{run_marker(run_id)}\n"
+                    f"Muyan Pilot fixed PR: {verified_url} ({scene_info})"
+                ),
             ),
-        )
-        publisher.milestone(f"fix pushed: {verified_url} ({scene_info})")
-        publisher.finish(_progress_body(_progress_state(
-            issue=number, run_id=run_id, role=ROLE_FIX,
-            branch=branch, worktree=worktree, started=started,
-            pr_url=verified_url, review_round=0,
-        ), outcome=(
-            "**Muyan Pilot fix pushed**\n\n"
-            "the same PR is awaiting review again; the independent "
-            "review and merge happen automatically"
-        )))
+            lambda: publisher.milestone(
+                f"fix pushed: {verified_url} ({scene_info})"
+            ),
+            lambda: publisher.finish(_progress_body(_progress_state(
+                issue=number, run_id=run_id, role=ROLE_FIX,
+                branch=branch, worktree=worktree, started=started,
+                pr_url=verified_url, review_round=0,
+            ), outcome=(
+                "**Muyan Pilot fix pushed**\n\n"
+                "the same PR is awaiting review again; the independent "
+                "review and merge happen automatically"
+            ))),
+        ):
+            try:
+                step()
+            except Exception:
+                LOGGER.exception(
+                    "progress_publish_failed run=%s issue=%s role=%s",
+                    run_id, issue_context(source_repo, number), ROLE_FIX,
+                )
     except Exception as exc:
         LOGGER.exception("issue=%s resume failed", number)
         activity_scene = ""
