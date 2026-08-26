@@ -3915,6 +3915,10 @@ def test_wait_for_delivery_keeps_waiting_while_pr_open(
     monkeypatch.setattr(runner, "run_command", fake_run)
     monkeypatch.setattr(runner.time, "sleep", lambda s: None)
     config = {"repo_dir": tmp_path, "base_branch": "main"}
+    # The derived worktree exists: a normal resume reaches the review
+    # (Issue #90 fails fast only when the directory is missing).
+    (tmp_path / ".worktrees"
+     / "muyan-pilot-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
     # Awaiting review triggers the independent review (Issue #34); the
     # mock reports findings so the wait keeps polling.
     reviews = []
@@ -3978,6 +3982,10 @@ def test_wait_for_delivery_auto_merges_on_clean_review(
         runner, "review_and_merge_if_clean",
         lambda *args, **kwargs: True,
     )
+    # The derived worktree exists: a normal resume reaches the review
+    # (Issue #90 fails fast only when the directory is missing).
+    (tmp_path / ".worktrees"
+     / "muyan-pilot-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
     issue = {"number": 39, "title": "task", "body": ""}
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
@@ -4335,6 +4343,219 @@ def test_wait_for_delivery_blocks_when_scene_base_differs_from_config(
     assert "next step:" in blocked
 
 
+def test_wait_for_delivery_blocks_when_resume_worktree_missing(
+        monkeypatch, caplog, tmp_path,
+):
+    """Issue #90: the resume derives the worktree from the repo, Issue
+    and run id (never from a comment). When that directory does not
+    exist the delivery must fail fast BEFORE any git/Pi mutation: no
+    review is started, no command is spawned against the missing
+    scene, and the Issue is marked ai-blocked ALONE with the PR and
+    branch preserved — the same terminal semantics as a malformed
+    scene (the pre-#82 `resume_delivery` fail-fast, restored)."""
+    api_calls: list = []
+    existing = {
+        "id": 77,
+        "body": (
+            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+            "**Muyan Pilot progress**\n\nawaiting review"
+        ),
+    }
+
+    def fake_run(command, **kwargs):
+        # The fake rejects anything that is not a pr/issue view or the
+        # progress API: a missing worktree must not spawn git/gh.
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps({"state": "OPEN"})
+        if command[:2] == ["gh", "api"]:
+            api_calls.append(command)
+            if "--method" not in command:
+                # The run's live progress comment exists.
+                return json.dumps([existing])
+            method = command[command.index("--method") + 1]
+            if method == "POST":
+                body = command[command.index("--field") + 1]
+                return json.dumps({"id": 78, "body": body[len("body="):],
+                                   "url": "https://x/78"})
+            return ""
+        if command[-1] == "comments":
+            # The trusted scene derives run_id=a1b2c3d4; the derived
+            # worktree does not exist under tmp_path.
+            return json.dumps({"comments": [
+                {
+                    "body": (
+                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                        "Muyan Pilot opened PR: "
+                        f"{PR_URL} (base_branch=main "
+                        "base_sha=abc123def456 run_id=a1b2c3d4)"
+                    ),
+                    "authorAssociation": "OWNER",
+                },
+            ]})
+        if command[-1] == "labels":
+            return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    # The fake rejects anything that is not a pr/issue view or the
+    # progress API.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["git", "fetch"])
+    edits: list = []
+    comments: list = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: edits.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *args, **kwargs: comments.append((args, kwargs)),
+    )
+    # The independent review must never run: the missing worktree is
+    # terminal before any git/Pi mutation.
+    reviews: list = []
+    monkeypatch.setattr(
+        runner, "review_and_merge_if_clean",
+        lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
+    )
+    issue = {"number": 39, "title": "task", "body": ""}
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    caplog.set_level("INFO")
+    runner.wait_for_delivery(
+        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        "owner/repo",
+    )
+    # No review was started and nothing was merged.
+    assert reviews == []
+    # The Issue is marked ai-blocked (removing ai-pr-opened) ...
+    assert edits[0][1] == {
+        "repo": "owner/repo",
+        "add": "ai-blocked",
+        "remove": "ai-pr-opened",
+    }
+    # ... and it is the ALONE terminal state (no other label edit).
+    assert len(edits) == 1
+    # The failure comment names the missing worktree and carries the
+    # run marker.
+    body = comments[0][1]["body"]
+    assert "Muyan Pilot failed:" in body
+    assert f"<!-- muyan-pilot:run=a1b2c3d4 -->" in body
+    assert "muyan-pilot-owner-repo-issue-39-a1b2c3d4" in body
+    assert "delivery_review_failed" in caplog.text
+    # The terminal failure also posts the blocked milestone (Issue #18)
+    # AND the tracked progress comment becomes the blocked scene.
+    posted_bodies = [
+        command[command.index("--field") + 1][len("body="):]
+        for command in api_calls
+        if "--method" in command and "POST" in command
+    ]
+    assert any("Muyan Pilot: blocked" in body for body in posted_bodies)
+    assert any(
+        "muyan-pilot-owner-repo-issue-39-a1b2c3d4" in body
+        for body in posted_bodies
+    )
+    # No second progress comment: the tracked one (id 77) is PATCHed
+    # into the blocked scene in place.
+    patches = [
+        command for command in api_calls
+        if command[:2] == ["gh", "api"]
+        and command[2] == "repos/owner/repo/issues/comments/77"
+        and "PATCH" in command
+    ]
+    assert patches, "the tracked progress comment was not updated"
+    blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
+    assert "Muyan Pilot blocked" in blocked
+    assert "muyan-pilot-owner-repo-issue-39-a1b2c3d4" in blocked
+    assert "next step:" in blocked
+
+
+def test_wait_for_delivery_blocks_when_resume_worktree_missing_while_fix_needed(
+        monkeypatch, tmp_path,
+):
+    """Issue #90 + #82: a missing resume worktree while the Issue is
+    `ai-fix-needed` (awaiting the next review session) must leave the
+    terminal state `ai-blocked` ALONE — the leftover `ai-fix-needed`
+    label is removed too — and no review is started."""
+    api_calls: list = []
+    existing = {
+        "id": 77,
+        "body": (
+            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+            "**Muyan Pilot progress**\n\nawaiting review"
+        ),
+    }
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps({"state": "OPEN"})
+        if command[:2] == ["gh", "api"]:
+            api_calls.append(command)
+            if "--method" not in command:
+                return json.dumps([existing])
+            method = command[command.index("--method") + 1]
+            if method == "POST":
+                body = command[command.index("--field") + 1]
+                return json.dumps({"id": 78, "body": body[len("body="):],
+                                   "url": "https://x/78"})
+            return ""
+        if command[-1] == "comments":
+            return json.dumps({"comments": [
+                {
+                    "body": (
+                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                        "Muyan Pilot opened PR: "
+                        f"{PR_URL} (base_branch=main "
+                        "base_sha=abc123def456 run_id=a1b2c3d4)"
+                    ),
+                    "authorAssociation": "OWNER",
+                },
+            ]})
+        # The delivery is in the `ai-fix-needed` state (awaiting the
+        # next review session).
+        return json.dumps({"labels": [{"name": "ai-fix-needed"}]})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    edits: list = []
+    comments: list = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: edits.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *args, **kwargs: comments.append((args, kwargs)),
+    )
+    reviews: list = []
+    monkeypatch.setattr(
+        runner, "review_and_merge_if_clean",
+        lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
+    )
+    issue = {"number": 39, "title": "task", "body": ""}
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    runner.wait_for_delivery(
+        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        "owner/repo",
+    )
+    # No review was started.
+    assert reviews == []
+    # The terminal state is ai-blocked ALONE: the opened-PR state
+    # labels are removed (ai-pr-opened on the first edit, the leftover
+    # ai-fix-needed on the second).
+    assert edits[0][1] == {
+        "repo": "owner/repo",
+        "add": "ai-blocked",
+        "remove": "ai-pr-opened",
+    }
+    assert edits[1][1] == {
+        "repo": "owner/repo",
+        "remove": "ai-fix-needed",
+    }
+    assert len(edits) == 2
+    body = comments[0][1]["body"]
+    assert "Muyan Pilot failed:" in body
+    assert "muyan-pilot-owner-repo-issue-39-a1b2c3d4" in body
+
+
 def test_wait_for_delivery_runs_review_when_fix_needed(
     monkeypatch, caplog, tmp_path,
 ):
@@ -4376,6 +4597,10 @@ def test_wait_for_delivery_runs_review_when_fix_needed(
     # The fake rejects anything that is not a pr/issue view.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "list"])
+    # The derived worktree exists: a normal resume reaches the review
+    # (Issue #90 fails fast only when the directory is missing).
+    (tmp_path / ".worktrees"
+     / "muyan-pilot-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
     # The independent review runs for the fix-needed state too (Issue
     # #82) and reports findings, so the wait continues to the MERGED
     # poll.
