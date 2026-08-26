@@ -1,0 +1,117 @@
+# Operations
+
+Normal operation is fully automatic: the timer triggers a tick, the tick
+does at most one thing, and progress is published to the journal and
+GitHub by itself. You never need a status command, polling, or
+supervision in the normal path — the commands below are for first
+verification, troubleshooting and recovery.
+
+## The timer
+
+`systemd/muyan-pilot.timer` fires every 15 minutes, 24 hours a day
+(`OnCalendar=*-*-* *:00/15`, `AccuracySec=30s`, `Persistent=false` — a
+missed tick is dropped, never queued). Each tick starts
+`muyan-pilot.service`, which:
+
+1. **Fast-forwards the code first** (`ExecStartPre`, outside the Python
+   process): `git fetch origin main && git merge --ff-only origin/main`.
+   A dirty checkout, a failed fetch or a non-fast-forwardable state fails
+   the preflight: the service does not start and the reason lands in the
+   systemd journal (fail fast). A currently running long task is never
+   hot-updated or killed — while the service is active, systemd ignores
+   the timer's start request, and the next real start picks up the latest
+   code.
+2. **Runs one tick**: resume an opened PR (review/fix/merge) or claim one
+   `ai-ready` Issue, then exit.
+
+```bash
+systemctl --user list-timers muyan-pilot.timer
+systemctl --user status muyan-pilot.service
+```
+
+## Logs (journal)
+
+The journal is the local record. Every line of a run starts with the run
+id prefix `[<run_id>]`, so one grep reconstructs the full timeline:
+
+```bash
+journalctl --user -u muyan-pilot.service -f
+journalctl --user -u muyan-pilot.service | grep e07383c2
+```
+
+Stable `key=value` lines you will see:
+
+- `run_start` / `run_end` — the full scene (branch, worktree, session
+  file) at start, and the result (PR URL, commit) at the end;
+- `activity` / `heartbeat` / `model_wait` / `resumed` — live Pi activity
+  while a session runs (phase, last action, elapsed, idle);
+- `pi_idle` — one WARNING when there is no model/session activity for
+  more than 5 minutes (`PI_IDLE_WARN_SECONDS=300`) and the model is not
+  expected to reply; a slow active model (`model_wait`) never warns;
+- `run_failed` — the full scene plus the reason
+  (`pi_exit_N`, `timeout_...s`, or `upstream_dead_stale_...s` when a
+  frozen `model_wait` past `PI_MODEL_WAIT_DEAD_SECONDS` (default 600 s)
+  declares the upstream model dead and the Runner kills Pi).
+
+The idle warning and the upstream-dead kill are log/health thresholds —
+they are not the 15-minute schedule and not a business task timeout.
+
+## The CLI (`muyan_pilot.py`)
+
+```bash
+# Create an Issue in a configured source repo and label it ai-ready
+python3 muyan_pilot.py add "task title" --body "task body" --config muyan-pilot.toml
+python3 muyan_pilot.py add "task title" --repo OWNER/BACKLOG-REPO --config muyan-pilot.toml
+
+# Read-only queue view: current (ai-in-progress) task with live Pi
+# activity, the next ready Issue, and the most recent result per source
+# repo (ai-pr-opened / ai-fix-needed / ai-merged / ai-blocked)
+python3 muyan_pilot.py status --config muyan-pilot.toml
+
+# Print the live Pi session JSONL path (fail fast when no session exists)
+python3 muyan_pilot.py session --config muyan-pilot.toml
+python3 muyan_pilot.py session --follow --config muyan-pilot.toml   # tail -f
+python3 muyan_pilot.py session --pretty --config muyan-pilot.toml   # one-line summaries
+```
+
+All commands accept the config via `--config` or the
+`MUYAN_PILOT_CONFIG` environment variable (default
+`muyan-pilot.toml`). `status` and `session` are debug attachments — the
+journal and GitHub remain the normal observability path.
+
+## Worktrees and base freshness
+
+Each claim freezes `origin/<base_branch>` (fetched first) and creates the
+task worktree and feature branch from that exact SHA — never from the
+main worktree's current HEAD. Branch and worktree names carry the run id
+(e.g. `.worktrees/<...>-issue-14-e07383c2`), so a retried Issue gets a
+new independent run and the old scene is preserved. `.worktrees/` is
+gitignored.
+
+Before creating the PR, the implementer re-fetches the base: if
+`origin/<base_branch>` advanced, it merges the latest base into the task
+branch, resolves conflicts manually, reruns the full test suite, and only
+then pushes. The Runner verifies with
+`git merge-base --is-ancestor origin/<base_branch> HEAD` and rejects a
+delivery whose head does not contain the latest remote base.
+
+## Failure recovery
+
+| State | What happened | What to do |
+|---|---|---|
+| `ai-blocked` | The Runner failed fast (command error, unrecoverable scene, review exhausted) | Read the Issue comment (scene + reason) and the journal. Fix the environment or the task, then either relabel the same PR path as `ai-fix-needed` (same run continues) or remove the labels and re-dispatch as a fresh `ai-ready` (new run). It is never auto-recovered. |
+| `ai-fix-needed` | The PR head is not mergeable yet (review finding or base conflict) | Nothing — the next tick starts the next review session on the same PR, which absorbs the latest base in-session. |
+| Leftover `ai-in-progress` after a kill | The Runner was SIGKILLed mid-task | The next tick's resume scan picks it up (only when no other Runner is alive): same run id, same worktree, same progress comment — no new run. |
+
+The run artifacts (plan, test log, session JSONL) stay in the task
+worktree as the local record; GitHub carries the delivery record.
+
+## Concurrency
+
+`max_concurrency` (default 1) bounds the number of concurrent deliveries
+on the machine. A slot is an exclusive `flock(2)` lock on
+`<repo_dir>/.muyan-pilot/slots/slot-N`, taken before any claim and held
+for the whole delivery lifecycle (implement → review → merge); the kernel
+releases it when the process exits, however it exits. A Runner that
+cannot take a slot logs `capacity_full` and exits without claiming an
+Issue.

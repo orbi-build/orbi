@@ -1,0 +1,40 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Muyan Pilot",
+  "theme": "mint",
+  "colors": {
+    "primary": "#1d76db"
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Getting Started",
+        "pages": [
+          "index",
+          "getting-started"
+        ]
+      },
+      {
+        "group": "Core Concepts",
+        "pages": [
+          "workflow",
+          "operations"
+        ]
+      },
+      {
+        "group": "Guides",
+        "pages": [
+          "security",
+          "testing",
+          "contributing"
+        ]
+      },
+      {
+        "group": "Optional Components",
+        "pages": [
+          "optional-kv-cache"
+        ]
+      }
+    ]
+  }
+}
