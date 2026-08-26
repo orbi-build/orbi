@@ -484,7 +484,10 @@ def test_pick_next_delivery_recovers_in_flight_issue_before_ready(
     Issues — a dead run is resumed, never skipped by the ready scan."""
     in_flight = {"number": 2, "title": "in flight", "body": ""}
     ready = {"number": 3, "title": "ready", "body": ""}
-    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda repo: None)
+    monkeypatch.setattr(
+        runner, "pick_resumable_delivery",
+        lambda repo, slot_dir, max_concurrency: None,
+    )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency: (
@@ -507,7 +510,9 @@ def test_pick_next_delivery_keeps_resumable_delivery_first(
     scene = {"run_id": "a1b2c3d4"}
     monkeypatch.setattr(
         runner, "pick_resumable_delivery",
-        lambda repo: (resumable, scene) if repo == "r2" else None,
+        lambda repo, slot_dir, max_concurrency: (
+            (resumable, scene) if repo == "r2" else None
+        ),
     )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
@@ -523,7 +528,10 @@ def test_pick_next_delivery_falls_through_to_ready_when_no_in_flight(
     monkeypatch, tmp_path,
 ):
     ready = {"number": 3, "title": "ready", "body": ""}
-    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda repo: None)
+    monkeypatch.setattr(
+        runner, "pick_resumable_delivery",
+        lambda repo, slot_dir, max_concurrency: None,
+    )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency: None,
@@ -537,7 +545,10 @@ def test_pick_next_delivery_falls_through_to_ready_when_no_in_flight(
 def test_pick_next_delivery_returns_none_when_all_scans_empty(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda repo: None)
+    monkeypatch.setattr(
+        runner, "pick_resumable_delivery",
+        lambda repo, slot_dir, max_concurrency: None,
+    )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency: None,

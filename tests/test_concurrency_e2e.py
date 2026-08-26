@@ -909,3 +909,102 @@ def test_stranded_pr_opened_delivery_is_resumed_to_review_and_merge(
     assert slots_held(clone) == [(1, None)], (
         "slot must be released after the merge"
     )
+
+
+def test_live_pr_opened_delivery_is_not_resumed_by_second_runner(
+    clone, tmp_path,
+):
+    """Issue #70 review round 1 (Major): with `max_concurrency = 2` a
+    second runner must NOT enter the delivery wait of a LIVE
+    `ai-pr-opened` delivery — a slot held by another process proves a
+    live runner is actively processing it (Issue #39 slot semantics).
+    Resuming it would start a second review Pi in the same
+    worktree/branch/run, and the second `gh pr merge
+    --match-head-commit` on the already-merged PR would fail and mark
+    the merged Issue `ai-blocked` (wrong terminal state). Instead the
+    second runner skips the resumable scan and claims the NEXT ready
+    Issue.
+
+    The fake world carries one global PR state, so the second
+    runner's own delivery (issue 8) is only asserted up to the claim:
+    the guard under test is the resumable scan, not the second
+    delivery's merge (covered by
+    test_capacity_two_allows_two_runners_and_rejects_third)."""
+    bin_dir = install_fakes(tmp_path)
+    state = tmp_path / "gh-state.json"
+    write_state(state, {"7": ["ai-ready"], "8": ["ai-ready"]})
+    pi_log = tmp_path / "pi.log"
+    config = write_config(clone, tmp_path, 2)
+
+    first = start_runner(config, bin_dir, state, pi_log)
+    wait_for(
+        lambda: "ai-pr-opened" in read_state(state)["issues"]["7"]["labels"],
+        what="first runner to open the PR for issue 7",
+    )
+    # The first runner is LIVE in the delivery wait (holding slot 1,
+    # PR open and unmerged).
+    wait_for(
+        lambda: any(
+            "Muyan Pilot opened PR:" in c["body"]
+            for c in read_state(state)["comments"]
+        ),
+        what="opened-PR scene comment to be posted",
+    )
+
+    # A second runner takes the free slot 2 while the first is live.
+    # It must skip the resumable scan (another slot is held by a live
+    # runner) and claim issue 8 instead of resuming issue 7's live
+    # delivery.
+    second = start_runner(config, bin_dir, state, pi_log)
+    # The second runner's implement comment proves it claimed issue 8
+    # (a fresh run) and not a resume of issue 7's live delivery (whose
+    # run already has its started comment).
+    wait_for(
+        lambda: any(
+            "Muyan Pilot started Pi:" in c["body"] and c["issue"] == "8"
+            for c in read_state(state)["comments"]
+        ),
+        what="second runner to claim the next ready issue",
+    )
+    snap = read_state(state)
+    # Issue 7's live delivery is untouched: still simply awaiting
+    # review — never re-resumed (no ai-fix-needed from a second
+    # review), never blocked.
+    assert "ai-pr-opened" in snap["issues"]["7"]["labels"]
+    assert "ai-fix-needed" not in snap["issues"]["7"]["labels"]
+    assert "ai-blocked" not in snap["issues"]["7"]["labels"]
+    # Issue 8 is claimed by the second runner.
+    assert "ai-in-progress" in snap["issues"]["8"]["labels"]
+    # Exactly one "started Pi" comment per Issue: issue 8's is the
+    # second runner's implement — never a second review of issue 7.
+    started = [
+        c for c in snap["comments"] if "Muyan Pilot started Pi:" in c["body"]
+    ]
+    assert sorted(c["issue"] for c in started) == ["7", "8"]
+    # The second runner never entered the delivery wait of issue 7's
+    # live PR (the finding's repro: it logged `issue=7
+    # delivery_awaiting` for the live runner's PR).
+    out, err = second.communicate(timeout=120)
+    assert second.returncode == 0, err
+    assert "issue=7 delivery_awaiting" not in err
+    # The first runner still owns issue 7's delivery and auto-merges
+    # it itself — no second merge attempt from the second runner.
+    wait_for(
+        lambda: "ai-merged" in read_state(state)["issues"]["7"]["labels"],
+        timeout=180,
+        what="first runner to review and merge issue 7",
+    )
+    out, err = first.communicate(timeout=120)
+    assert first.returncode == 0, err
+    assert "delivery_auto_merged" in err
+    snap = read_state(state)
+    assert "ai-merged" in snap["issues"]["7"]["labels"]
+    assert "ai-blocked" not in snap["issues"]["7"]["labels"]
+    # The second runner's Pi work is bounded: its implement plus at
+    # most its own review/fix of issue 8 (the fake world's single
+    # global PR state ends its wait once the first runner merges).
+    # Crucially, none of it is a second review of issue 7's live
+    # delivery: the first run always uses exactly four invocations
+    # (implement, review, fix, re-review).
+    assert 5 <= len(pi_invocations(pi_log)) <= 7
+    assert slots_held(clone, 2) == [(1, None), (2, None)]

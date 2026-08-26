@@ -556,7 +556,9 @@ def resume_scene(comments: list[dict]) -> dict:
     )
 
 
-def pick_resumable_delivery(repo: str) -> tuple[dict, dict] | None:
+def pick_resumable_delivery(
+    repo: str, slot_dir: Path, max_concurrency: int,
+) -> tuple[dict, dict] | None:
     """Return the newest opened-PR delivery and its resume scene.
 
     Both opened-PR states are scanned (Issue #70): `ai-fix-needed` (a
@@ -577,7 +579,21 @@ def pick_resumable_delivery(repo: str) -> tuple[dict, dict] | None:
     `ai-blocked` with the concrete reason and the error re-raised, so
     the tick stops instead of silently skipping the delivery while a
     fresh task starts ahead of it.
+
+    The scan runs only when no OTHER runner is live (the same guard as
+    `pick_in_progress_issue`, Issue #39 slot semantics): a slot held by
+    another process proves a live runner is working, so an opened-PR
+    delivery is in flight, not stranded — resuming it here would start
+    a second review Pi in the same worktree/branch/run, and the second
+    `gh pr merge --match-head-commit` on the already-merged PR would
+    fail and mark the merged Issue `ai-blocked` (Issue #70 review
+    round 1). This runner's own slot is excluded: `main` took it
+    before the claim scan and holds it for the whole delivery.
     """
+    mine = os.getpid()
+    for _, holder in slot_occupancy(slot_dir, max_concurrency):
+        if holder is not None and holder != mine:
+            return None
     raw = run_command([
         "gh", "issue", "list", "--repo", repo, "--state", "open",
         "--search",
@@ -661,7 +677,9 @@ def pick_next_delivery(
     run being started on an Issue that is already in flight.
     """
     for repo in repos:
-        selected = pick_resumable_delivery(repo)
+        selected = pick_resumable_delivery(
+            repo, slot_dir, max_concurrency,
+        )
         if selected is not None:
             issue, scene = selected
             return repo, issue, scene
@@ -2660,7 +2678,7 @@ def main(argv: list[str] | None = None) -> int:
             # progress failure of Issue #70) goes straight to the
             # independent review — a clean PR is never sent to the
             # Fixer (Issue #45 round-5 contract).
-            set_run_id(validate_run_id(scene["run_id"]))
+            set_run_id(scene["run_id"])
             labels = issue_labels(int(issue["number"]), source_repo)
             if FIX_NEEDED_LABEL in labels:
                 pr_url = resume_delivery(

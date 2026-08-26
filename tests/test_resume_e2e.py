@@ -359,7 +359,9 @@ def test_e2e_base_advances_and_resume_fixes_the_same_pr(
 
     # ---- Resume: the next tick recovers the scene from the Issue
     #      comments and fixes the SAME PR in the ORIGINAL worktree.
-    resumed, scene = runner.pick_resumable_delivery(REPO)
+    resumed, scene = runner.pick_resumable_delivery(
+        REPO, tmp_path / "slots", 1,
+    )
     assert scene is not None
     # The scene carries only what the runner cannot derive itself;
     # branch and worktree are derived from config + issue + run id.
@@ -566,7 +568,7 @@ def test_e2e_public_comment_scene_is_never_resumed(
     # scene comment is public: no resume from it, no git work, no
     # fixer — the Issue is marked ai-blocked instead.
     with pytest.raises(ValueError, match="no 'Muyan Pilot opened PR' comment"):
-        runner.pick_resumable_delivery(REPO)
+        runner.pick_resumable_delivery(REPO, tmp_path / "slots", 1)
     # The blocked transition happened (add ai-blocked, remove
     # ai-fix-needed) and the failure comment names the reason...
     assert [
@@ -606,7 +608,9 @@ def test_e2e_fixer_failure_keeps_pr_and_marks_blocked(
     git(clone, "commit", "-m", "main advances with a conflicting edit")
     git(clone, "push", "origin", "main")
 
-    resumed, scene = runner.pick_resumable_delivery(REPO)
+    resumed, scene = runner.pick_resumable_delivery(
+        REPO, tmp_path / "slots", 1,
+    )
     assert scene is not None
 
     # The fixer cannot resolve the conflict.
