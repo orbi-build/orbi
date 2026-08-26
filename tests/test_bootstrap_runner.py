@@ -2051,6 +2051,89 @@ def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path)
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failure_body
 
 
+def test_process_issue_upstream_dead_failure_marks_blocked(
+    monkeypatch, tmp_path,
+):
+    """Issue #75 acceptance: the upstream-dead failure of the
+    implementer session (the proxy/llama timed out, the session JSONL
+    froze in model_wait, stream_pi killed Pi and raised) flows through
+    the NORMAL failure path: the Issue is marked `ai-blocked` (removing
+    `ai-in-progress`), the `Muyan Pilot failed` comment carries the
+    upstream-dead reason and the run marker (the scene stays in the
+    Issue), and the error re-raises so the tick exits and the kernel
+    releases the slot — the next tick can then resume or claim the
+    next `ai-fix-needed`. No special handling, no fallback."""
+    calls = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(
+        runner, "create_worktree", Mock(return_value=tmp_path),
+    )
+    upstream_dead = RuntimeError(
+        "Pi is stuck in model_wait with a frozen session for 10m: "
+        "the upstream (llama/proxy) is dead; Pi was killed (Issue #75)"
+    )
+
+    def dead_run_pi(*args, **kwargs):
+        raise upstream_dead
+
+    monkeypatch.setattr(runner, "run_pi", dead_run_pi)
+    monkeypatch.setattr(
+        runner, "activity_snapshot", lambda session_dir: None,
+    )
+    posted = []
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            # Restart-resume scan (Issue #18): fresh claim, no label.
+            return "[]"
+        calls.append(("comment", (), {"body": command[-1]}))
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="upstream"):
+        runner.process_issue(
+            {"number": 75, "title": "Upstream dead", "body": ""},
+            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+             "base_branch": "main"},
+            "xqliu/muyan-pilot",
+        )
+    # The failure happened BEFORE the opened-PR transition: the
+    # terminal state removes the claim label (the edit calls are the
+    # dict entries; the `gh issue comment` traffic is tuple entries).
+    edits = [entry for entry in calls if isinstance(entry, dict)]
+    assert edits == [
+        {"repo": "xqliu/muyan-pilot", "add": "ai-in-progress"},
+        {"repo": "xqliu/muyan-pilot", "add": "ai-blocked",
+         "remove": "ai-in-progress"},
+    ]
+    comment_bodies = [
+        entry[2]["body"] for entry in calls
+        if isinstance(entry, tuple) and entry[0] == "comment"
+    ]
+    failure = [
+        body for body in comment_bodies
+        if "Muyan Pilot failed:" in body
+    ]
+    assert len(failure) == 1
+    # The upstream-dead reason and the run marker stay in the Issue.
+    assert "the upstream (llama/proxy) is dead" in failure[0]
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failure[0]
+    # The blocked milestone notification carries the same scene.
+    blocked = [body for body in posted if "Muyan Pilot: blocked" in body]
+    assert blocked
+    assert "the upstream (llama/proxy) is dead" in blocked[0]
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked[0]
+
+
 def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypatch, tmp_path, caplog):
     edit_calls = []
 

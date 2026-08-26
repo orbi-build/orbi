@@ -66,7 +66,17 @@ is **one runtime outcome** (when X, should Y, actually Z).
   carries issue, run id, role (implement/review/merge), phase, elapsed,
   last activity, last action, session and branch. No model/session activity
   for 5 minutes logs an idle warning; the first new activity after it logs
-  a resumed event.
+  a resumed event. A session frozen in `model_wait` (the newest event is a
+  tool result) past `PI_MODEL_WAIT_DEAD_SECONDS` (default 600 s) declares
+  the upstream (llama/proxy) dead — the HTTP timeout or connection drop
+  left Pi in epoll_wait and it will never exit on its own: the Runner
+  kills Pi, logs `run_failed ... reason=upstream_dead_stale_...`, and fails
+  fast through the normal failure path (the Issue is marked `ai-blocked`
+  with the scene in the Issue comment, the slot is released by the kernel
+  when the process exits, and the next tick can resume or claim the next
+  `ai-fix-needed`) (Issue #75). It never fires while events keep arriving
+  (a slow model is not a dead upstream) and it is NOT a business task
+  timeout.
 - GitHub: exactly one progress comment per run, carrying a hidden run
   marker. It is PATCHed in place (at most every 30 seconds or on progress
   change) and never replaced by new heartbeat comments. Milestones (started,
