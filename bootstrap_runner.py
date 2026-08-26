@@ -1084,7 +1084,10 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
             "ISSUE_BODY": issue.get("body", ""),
             "WORKSPACE_ROOT": str(config["workspace_root"]),
             "CONTEXT_FILES": "\n".join(str(path) for path in config["context_files"]),
-            "SKILLS": "\n".join(str(path) for path in config["skills"]),
+            "SKILLS": "\n".join(
+                str(path)
+                for path in _skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)
+            ),
             "BASE_BRANCH": config["base_branch"],
             "BASE_SHA": config["base_sha"],
             "RUN_ID": config["run_id"],
@@ -1108,9 +1111,9 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
             "protected branch.\n"
         )
     context += "Complete the delivery process in the system prompt."
-    skill_args = [item for skill in config["skills"] for item in ("--skill", str(skill))]
     command = [
-        "pi", *skill_args, "--print", "--session-dir",
+        "pi", *_skill_args(_skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)),
+        "--print", "--session-dir",
         str(worktree / ".pi-session"), "--system-prompt", system_prompt, context,
     ]
     return stream_pi(
@@ -1333,9 +1336,43 @@ def freeze_pr(worktree: Path, branch: str, base_branch: str) -> dict:
     }
 
 
-def _agent_skill_args(config: dict) -> list[str]:
+# Role-specific skill filtering (Issue #83): the review session is
+# read-only and ends with a single REVIEW_VERDICT line, so the
+# delivery-oriented skills must not be loaded there (tdd-dev would
+# steer it into the implement/test/PR flow, review-fix-loop would
+# open another fix/review round). The implementer/fixer keeps
+# tdd-dev and code-review but not review-fix-loop: the Runner itself
+# runs the independent review/fix loop once the PR is open.
+REVIEW_EXCLUDED_SKILLS = frozenset({"tdd-dev", "review-fix-loop"})
+IMPLEMENT_EXCLUDED_SKILLS = frozenset({"review-fix-loop"})
+
+
+def _skill_name(entry: str | Path) -> str:
+    """Return the skill name of one configured skill entry.
+
+    Entries point at the SKILL.md file inside the skill directory
+    (e.g. .../skills/tdd-dev/SKILL.md); the skill name is the parent
+    directory. A bare markdown entry (e.g. my-skill.md) or a skill
+    directory is named after its own stem.
+    """
+    path = Path(entry)
+    if path.name == "SKILL.md":
+        return path.parent.name
+    return path.stem
+
+
+def _skills_for(config: dict, excluded: frozenset[str]) -> list[str | Path]:
+    """Return one role's configured skills, dropping excluded names."""
     return [
-        item for skill in config["skills"]
+        skill for skill in config["skills"]
+        if _skill_name(skill) not in excluded
+    ]
+
+
+def _skill_args(skills: list[str | Path]) -> list[str]:
+    """Return the --skill command args for one role's skill list."""
+    return [
+        item for skill in skills
         for item in ("--skill", str(skill))
     ]
 
@@ -1370,7 +1407,8 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
         "and end with a single REVIEW_VERDICT line."
     )
     command = [
-        "pi", *_agent_skill_args(config), "--print", "--session-dir",
+        "pi", *_skill_args(_skills_for(config, REVIEW_EXCLUDED_SKILLS)),
+        "--print", "--session-dir",
         str(worktree / ".pi-session"), "--system-prompt", system_prompt,
         context,
     ]
