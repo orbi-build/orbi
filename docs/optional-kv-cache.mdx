@@ -11,8 +11,10 @@ works directly against any OpenAI-compatible endpoint without it.
 
 ## What it changes for the Pilot
 
-- The proxy listens on `127.0.0.1:18082` (default) and forwards to the
-  llama.cpp server (default upstream `127.0.0.1:8080`).
+- The proxy listens on `127.0.0.1:18082` when installed with the
+  committed systemd unit (the proxy's own code default port is `8081`)
+  and forwards to the llama.cpp server (default upstream
+  `127.0.0.1:8080`).
 - Point Pi's (and any other agent's) provider URL at the proxy
   (`http://127.0.0.1:18082/v1`) instead of the llama server directly.
 - The Pilot itself is unchanged: it only ever talks to the configured
@@ -46,7 +48,7 @@ The user unit carries the settings as environment variables:
 |---|---|---|
 | `PI_LLAMA_UPSTREAM` | `http://127.0.0.1:8080` | The llama.cpp server the proxy forwards to |
 | `PI_LLAMA_CACHE_HOST` | `127.0.0.1` | Bind address of the proxy |
-| `PI_LLAMA_CACHE_PORT` | `18082` | Proxy port (agents point here) |
+| `PI_LLAMA_CACHE_PORT` | `8081` (code default; the committed unit sets `18082`) | Proxy port (agents point here) |
 | `PI_LLAMA_CACHE_DIR` | `~/.llama-slot-cache` | Disk-backed KV state directory |
 | `PI_LLAMA_CACHE_MAX_GIB` | `12` | Disk cache size cap |
 | `PI_LLAMA_CACHE_WAIT_SECONDS` | `120` | Max wait for a slot restore |

@@ -336,6 +336,29 @@ def test_docs_do_not_resurrect_the_stale_five_minute_timer():
         )
 
 
+def test_docs_kv_cache_page_matches_the_upstream_port_contract():
+    """The upstream proxy's CODE default port is 8081
+    (cache_proxy.py: os.environ.get("PI_LLAMA_CACHE_PORT", "8081"));
+    18082 is the value the committed systemd unit sets (verified against
+    the upstream repo). The docs must keep the two apart: the agent-
+    facing port 18082 stays documented, but the Configuration table must
+    not claim 18082 as the env var's default."""
+    text = page_text("optional-kv-cache")
+    assert "18082" in text, (
+        "the docs must keep the unit's agent-facing port 18082"
+    )
+    row = next(
+        (line for line in text.splitlines()
+         if line.startswith("| `PI_LLAMA_CACHE_PORT`")),
+        None,
+    )
+    assert row is not None, "missing the PI_LLAMA_CACHE_PORT row"
+    default_cell = row.strip("|").split("|")[1].strip()
+    assert "18082" not in default_cell.split("(")[0], (
+        f"the docs claim 18082 as the proxy code default: {row!r}"
+    )
+
+
 def test_readme_keeps_the_docs_site_entry():
     """The root README stays the GitHub homepage and must carry the
     documentation site entry (Mintlify default subdomain for this repo,
