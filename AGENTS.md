@@ -3,6 +3,29 @@
 Development contract for this repository. Every local Pi bootstrap run must
 follow it before changing code.
 
+Four audiences, one file:
+
+- **Issue authors** (humans or the monitor): granularity below.
+- **Implementer Pi**: read first, TDD, tests, and one PR.
+- **Reviewer Pi**: a new `pi --print` after the PR, `prompt_review.md`, and a
+  new JSONL.
+- **Runner**: labels, observability, review/fix, and merge.
+
+## Issue granularity
+
+Write GitHub Issues so one Pilot implement session can finish them. One Issue
+is **one runtime outcome** (when X, should Y, actually Z).
+
+- Size: one observable behavior, a handful of related files, tests included,
+  hundreds of lines. Title should work as a test name.
+- Open the Issue once the root cause is pinned.
+
+## Implement vs review
+
+- Implementer session: plan, TDD, tests, push one PR.
+- After the PR exists, the Runner starts independent review: a new
+  `pi --print` with `prompt_review.md` and a new JSONL on the same worktree.
+
 ## Read first
 
 - Read the GitHub Issue, the configured context files, `README.md`, and the
@@ -12,6 +35,8 @@ follow it before changing code.
 
 - TDD: write a failing test first, then the smallest implementation, then
   refactor.
+- External APIs, CLI flags, and HTTP paths are asserted against official docs
+  or one real call.
 - Python code keeps 100% line and branch coverage:
 
   ```bash
@@ -71,6 +96,8 @@ follow it before changing code.
 - The runner rejects a delivery whose HEAD does not contain the latest remote
   base. No auto conflict resolution, no force push, no merge or push of the
   protected branch.
+- A delivery is acceptable only when its HEAD contains the latest remote base;
+  base updates use a plain `git merge` on the task branch.
 - The Runner's own code updates at the next service start (Issue #52):
   `muyan-pilot.service` runs `ExecStartPre` =
   `git fetch origin main && git merge --ff-only origin/main` in the main
@@ -178,7 +205,7 @@ follow it before changing code.
 - Work on the task feature branch.
 - Pi (the implementer) does not merge and does not push `main` or `master`.
   It delivers through exactly one PR linked to the Issue; the Runner is the
-  only merge actor (see below).
+  only merge actor (the Runner is the only merge actor; see below).
 - The PR description must contain `Fixes #<issue-number>` (it may be on
   the first line), pointing at the source Issue so GitHub closes the Issue
   natively when the PR merges into the default branch. The keyword works
@@ -220,5 +247,5 @@ follow it before changing code.
 
 - No database, queue, daemon loop, risk engine, or fallback. GitHub Issues
   and labels are the only state store.
-- No timeout on business tasks. systemd only schedules the tick and owns the
+- No business task timeout. systemd only schedules the tick and owns the
   run lifecycle.
