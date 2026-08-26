@@ -71,6 +71,17 @@ follow it before changing code.
 - The runner rejects a delivery whose HEAD does not contain the latest remote
   base. No auto conflict resolution, no force push, no merge or push of the
   protected branch.
+- The Runner's own code updates at the next service start (Issue #52):
+  `muyan-pilot.service` runs `ExecStartPre` =
+  `git fetch origin main && git merge --ff-only origin/main` in the main
+  checkout before `ExecStart`. A dirty checkout, a failed fetch or a
+  non-fast-forwardable state fails the preflight: the service does not
+  start and the reason lands in the systemd journal (fail fast). A
+  currently running long task is never hot-updated or killed — while the
+  service is active, systemd ignores the timer's start request, and the
+  next real start runs the latest code. No refresh service, worker,
+  dispatcher or resident process is added; the 15-minute timer is
+  unchanged.
 
 ## Task dependencies (blockedBy)
 

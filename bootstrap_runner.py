@@ -70,6 +70,17 @@ PI_HEARTBEAT_SECONDS = 30.0
 # warning; the first new session event after it logs `pi_resumed`.
 # A slow active model (model_wait, Issue #40) is never reported idle.
 PI_IDLE_WARN_SECONDS = 300.0
+# Upstream-dead detection (Issue #75): while the newest session event
+# is a tool result (model_wait) the model is expected to reply next.
+# A real (slow) model keeps producing session events; a dead upstream
+# (llama/proxy timeout, connection drop) freezes the session JSONL
+# while Pi sits in epoll_wait. Once the silence in model_wait reaches
+# this threshold the upstream is declared dead: Pi is killed and the
+# run fails fast through the normal failure path (the slot is released
+# by the kernel when the Runner exits). This is NOT a business timeout:
+# it only fires while the session file is frozen (stale seconds), never
+# while events keep arriving — a slow generation survives.
+PI_MODEL_WAIT_DEAD_SECONDS = 600.0
 
 # The bootstrap runner streams every Pi session of a run through the same
 # live activity pipeline (Issue #24/#40); implement/review share the same
@@ -301,6 +312,22 @@ def open_blocker_numbers(issue: dict) -> list[int]:
     return numbers
 
 
+# Ready scans (Issue #71): bugs are claimed before new features — if
+# the delivery loop is broken, claiming enhancements only piles up
+# unreviewed PRs. The bug scan runs first with the exact same
+# exclusions; the plain ready scan only runs when the bug scan found
+# nothing claimable. No priority numbers, no separate queue, no new
+# state machine: two `gh issue list` searches with the same blockedBy
+# semantics (Issue #54).
+READY_SCAN_EXCLUSIONS = (
+    f"-label:{IN_PROGRESS_LABEL} -label:{PR_OPENED_LABEL} "
+    f"-label:{FIX_NEEDED_LABEL} -label:{MERGED_LABEL} "
+    f"-label:{BLOCKED_LABEL}"
+)
+BUG_READY_SEARCH = f"label:ai-ready label:bug {READY_SCAN_EXCLUSIONS}"
+READY_SEARCH = f"label:ai-ready {READY_SCAN_EXCLUSIONS}"
+
+
 def pick_issue(repo: str) -> dict | None:
     # A merged delivery keeps `ai-ready` + `ai-merged` on the (still
     # open) Issue; `ai-merged` is the success terminal state, so it is
@@ -309,36 +336,36 @@ def pick_issue(repo: str) -> dict | None:
     # reads the native GitHub dependency per Issue (Issue #54): an
     # Issue with open blockers is skipped — no claim, no label change,
     # no worktree — and the next ready Issue is considered instead.
-    try:
-        raw = run_command([
-            "gh", "issue", "list", "--repo", repo, "--state", "open",
-            "--search",
-            "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
-            f"-label:{FIX_NEEDED_LABEL} -label:{MERGED_LABEL} "
-            f"-label:{BLOCKED_LABEL}",
-            "--json", "number,title,body,blockedBy", "--limit", "200",
-        ])
-        issues = parse_issue_array(raw)
-    except Exception as exc:
-        # Fail open (Issue #54): a failed blockedBy query must never
-        # deadlock the queue. This tick claims nothing from this repo
-        # and the next tick retries the query; the error is logged,
-        # never raised, and no label is touched.
-        LOGGER.error(
-            "blocked_by_check_failed repo=%s error=%s",
-            repo, exc,
-        )
-        return None
-    for issue in issues:
-        blockers = open_blocker_numbers(issue)
-        if blockers:
-            LOGGER.info(
-                "blocked_by issue=%s repo=%s blockers=%s",
-                issue.get("number"), repo,
-                ",".join(str(number) for number in blockers),
+    # Issue #71: the bug scan runs first; a bug with open blockers is
+    # skipped there and the plain ready scan still decides.
+    for search in (BUG_READY_SEARCH, READY_SEARCH):
+        try:
+            raw = run_command([
+                "gh", "issue", "list", "--repo", repo, "--state", "open",
+                "--search", search,
+                "--json", "number,title,body,blockedBy", "--limit", "200",
+            ])
+            issues = parse_issue_array(raw)
+        except Exception as exc:
+            # Fail open (Issue #54): a failed blockedBy query must
+            # never deadlock the queue. This tick claims nothing from
+            # this repo and the next tick retries the query; the error
+            # is logged, never raised, and no label is touched.
+            LOGGER.error(
+                "blocked_by_check_failed repo=%s error=%s",
+                repo, exc,
             )
-            continue
-        return issue
+            return None
+        for issue in issues:
+            blockers = open_blocker_numbers(issue)
+            if blockers:
+                LOGGER.info(
+                    "blocked_by issue=%s repo=%s blockers=%s",
+                    issue.get("number"), repo,
+                    ",".join(str(number) for number in blockers),
+                )
+                continue
+            return issue
     return None
 
 
@@ -806,6 +833,7 @@ def stream_pi(
     timeout: int | None = None,
     poll_interval: float = PI_POLL_INTERVAL,
     idle_warn_seconds: float = PI_IDLE_WARN_SECONDS,
+    model_wait_dead_seconds: float = PI_MODEL_WAIT_DEAD_SECONDS,
     run_id: str,
     issue: int,
     source_repo: str,
@@ -879,6 +907,7 @@ def stream_pi(
     deadline = None if timeout is None else time.monotonic() + timeout
     activity = watcher.poll()
     timed_out = False
+    upstream_dead = False
     # model_wait transitions (Issue #40): one line when the state is
     # entered and one when it is left; unchanged polls are heartbeats
     # that carry the state, so a slow model never looks idle and no
@@ -972,6 +1001,21 @@ def stream_pi(
                     format_duration(activity["stale_seconds"]),
                 )
                 idle_warned = True
+            # Upstream-dead detection (Issue #75): the model is
+            # expected to reply next (model_wait) but the session file
+            # has been frozen for the dead threshold — the upstream
+            # (llama/proxy) is dead and Pi will never exit on its own.
+            # Kill Pi and fail fast: the normal failure path releases
+            # the slot so the next tick can resume or claim the next
+            # Issue. Never fires while events keep arriving (a slow
+            # generation is not a dead upstream).
+            if (
+                activity["model_wait"]
+                and activity["stale_seconds"] >= model_wait_dead_seconds
+            ):
+                process.kill()
+                upstream_dead = True
+                break
             if process.poll() is not None:
                 break
     finally:
@@ -979,6 +1023,20 @@ def stream_pi(
         _drain_stream(process.stderr, stderr_chunks)
     stdout = _decode_chunks(stdout_chunks)
     stderr = _decode_chunks(stderr_chunks)
+    if upstream_dead:
+        stale = format_duration(activity["stale_seconds"])
+        LOGGER.error(
+            "run_failed %s reason=upstream_dead_stale_%s",
+            format_run_scene(
+                activity, run_id=run_id, issue=issue_ref,
+                role=role, branch=branch, worktree=str(cwd),
+            ),
+            stale,
+        )
+        raise RuntimeError(
+            f"Pi is stuck in model_wait with a frozen session for {stale}: "
+            "the upstream (llama/proxy) is dead; Pi was killed (Issue #75)"
+        )
     if timed_out:
         reason = f"timeout_{format_duration(timeout)}"
         LOGGER.error(
@@ -1917,6 +1975,29 @@ def _failure_detail(exc: BaseException) -> str:
     return detail
 
 
+def _safe_publish(*, run_id: str, issue: int, source_repo: str,
+                  role: str, action: Callable[[], None]) -> None:
+    """Run one progress-publishing step as a pure bypass (Issue #79).
+
+    The main delivery path is claim -> worktree -> Pi -> verify PR ->
+    review -> fix -> merge; the GitHub progress comment is observability
+    on the side. A publishing failure (404, rate limit, API shape
+    change) is logged as `progress_publish_failed` and never fails the
+    delivery, never marks the Issue `ai-blocked`, and never skips
+    `run_pi` / `wait_for_delivery`. This is the same semantics as the
+    in-stream live-PATCH callback; Issue #60 already applied it to the
+    post-PR record, Issue #79 extends it to the whole
+    `ProgressPublisher` path (ensure / milestone / finish).
+    """
+    try:
+        action()
+    except Exception:
+        LOGGER.exception(
+            "progress_publish_failed run=%s issue=%s role=%s",
+            run_id, issue_context(source_repo, issue), role,
+        )
+
+
 def _live_progress(publisher: ProgressPublisher, *, issue: int, run_id: str,
                    role: str, branch: str, worktree: Path, started: float,
                    pr_url: str | None, review_round: int,
@@ -2032,13 +2113,26 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             number, repo=source_repo,
             body=started_pi_comment_body(run_id, run_info, branch, worktree),
         )
-        publisher.ensure(_progress_body(_progress_state(
-            issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
-            branch=branch, worktree=worktree, started=started,
-            pr_url=None, review_round=0,
-        )))
-        publisher.milestone(
-            f"started: {run_info} branch={branch} worktree={worktree}"
+        # Issue #79: the whole ProgressPublisher path is a bypass — a
+        # failure here (404, rate limit) is logged and never skips
+        # `run_pi` or fails the delivery.
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_IMPLEMENT,
+            action=lambda: publisher.ensure(_progress_body(
+                _progress_state(
+                    issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
+                    branch=branch, worktree=worktree, started=started,
+                    pr_url=None, review_round=0,
+                ),
+            )),
+        )
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_IMPLEMENT,
+            action=lambda: publisher.milestone(
+                f"started: {run_info} branch={branch} worktree={worktree}"
+            ),
         )
         run_pi(
             issue, worktree, config, source_repo, branch=branch,
@@ -2048,8 +2142,16 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
                 started=started, pr_url=None, review_round=0,
             ),
         )
-        _publish_plan_milestone(publisher, worktree)
-        _publish_test_milestone(publisher, worktree)
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_IMPLEMENT,
+            action=lambda: _publish_plan_milestone(publisher, worktree),
+        )
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_IMPLEMENT,
+            action=lambda: _publish_test_milestone(publisher, worktree),
+        )
         pr_url = verify_pr(
             worktree, branch, base_branch, run_id, issue=number,
         )

@@ -93,6 +93,39 @@ def test_service_keeps_running_task_without_duration_limit():
     ]
 
 
+def test_service_fast_forwards_main_before_runner_starts():
+    """Issue #52: the service must fast-forward the local main checkout
+    to the latest origin/main BEFORE the Runner starts (ExecStartPre,
+    outside the Python process). A dirty checkout, a failed fetch or a
+    non-fast-forwardable state makes the preflight command fail: the
+    service does not start and the reason lands in the systemd journal
+    (fail fast). No new refresh service, worker or dispatcher: only the
+    existing service and timer exist."""
+    service = parse_unit(SERVICE_FILE)
+    section = service["Service"]
+    assert "ExecStartPre" in section
+    pre = section["ExecStartPre"][0]
+    assert "git fetch origin main" in pre
+    assert "git merge --ff-only origin/main" in pre
+    # The preflight runs in the main checkout (the unit's
+    # WorkingDirectory), before the Python Runner.
+    assert "WorkingDirectory" in section
+    systemd_files = sorted(
+        path.name for path in (REPO_ROOT / "systemd").iterdir()
+        if path.is_file()
+    )
+    assert systemd_files == ["muyan-pilot.service", "muyan-pilot.timer"]
+
+
+def test_readme_documents_code_update_at_next_runner_start():
+    """Issue #52: the README must explain that code updates take effect
+    at the next Runner start (the preflight fetch + ff-only merge), not
+    while a task is running."""
+    readme = README_FILE.read_text(encoding="utf-8")
+    assert "ExecStartPre" in readme
+    assert "git merge --ff-only origin/main" in readme
+
+
 def test_readme_documents_same_schedule_as_timer():
     timer = parse_unit(TIMER_FILE)
     on_calendar = timer["Timer"]["OnCalendar"][0]

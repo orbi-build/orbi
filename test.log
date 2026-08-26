@@ -1,0 +1,22 @@
+# test.log — Issue #80 run cd855188
+
+## Full suite + 100% line/branch coverage (contract)
+$ /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
+........................................................................ [ 98%]
+...........                                                              [100%]
+587 passed in 57.44s
+
+$ /usr/bin/python3 -m coverage report --fail-under=100 --show-missing
+tests/test_muyan_pilot.py          467      0     18      0   100%
+tests/test_pi_activity.py          417      0      2      0   100%
+tests/test_pilot_slots.py          238      0      4      0   100%
+tests/test_progress.py             130      0      4      0   100%
+tests/test_progress_wiring.py      509      0     48      0   100%
+tests/test_resume_e2e.py           315      0     62      0   100%
+tests/test_resume_pr.py            323      0     24      0   100%
+tests/test_review_merge.py         427      0     14      0   100%
+tests/test_run_id_e2e.py           246      0     44      0   100%
+tests/test_systemd_timer.py         89      0     10      0   100%
+----------------------------------------------------------------------------
+TOTAL                             7474      0   1048      0   100%
+exit=0

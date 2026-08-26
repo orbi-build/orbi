@@ -1,5 +1,7 @@
 import json
 import os
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -355,6 +357,454 @@ def test_main_status_prints_report(monkeypatch, tmp_path, capsys):
 def test_main_rejects_unknown_command(tmp_path):
     with pytest.raises(SystemExit):
         muyan_pilot.main(["deploy", "--config", str(tmp_path / "c.toml")])
+
+
+# --- session (Issue #74) ------------------------------------------------------
+
+
+def _session_config(tmp_path):
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text(
+        "source_repos = [\"xqliu/muyan-pilot\"]\nrepo_dir = \".\"\n",
+        encoding="utf-8",
+    )
+    _write_prompts(tmp_path)
+    return config
+
+
+def _write_session(tmp_path, name="sess.jsonl", records=None, run="run1"):
+    session_dir = tmp_path / ".worktrees" / \
+        f"muyan-pilot-xqliu-muyan-pilot-issue-3-{run}" / ".pi-session"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    path = session_dir / name
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in (records or [])),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_find_session_file_returns_newest_jsonl_under_worktrees(tmp_path):
+    old = _write_session(tmp_path, name="old.jsonl", run="run1")
+    new = _write_session(tmp_path, name="new.jsonl", run="run2")
+    old_time = old.stat().st_mtime
+    os.utime(old, (old_time - 100, old_time - 100))
+    assert muyan_pilot.find_session_file(tmp_path) == new
+
+
+def test_find_session_file_ignores_non_jsonl_and_missing_dir(tmp_path):
+    (tmp_path / ".worktrees").mkdir()
+    (tmp_path / ".worktrees" / "wt" / ".pi-session").mkdir(parents=True)
+    (tmp_path / ".worktrees" / "wt" / ".pi-session" / "notes.txt").write_text(
+        "nope\n", encoding="utf-8",
+    )
+    assert muyan_pilot.find_session_file(tmp_path) is None
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert muyan_pilot.find_session_file(empty) is None
+
+
+def test_session_prints_path_and_returns_zero(tmp_path, capsys):
+    path = _write_session(tmp_path, records=[
+        {"type": "session", "id": "sess-1", "cwd": "/w"},
+    ])
+    assert muyan_pilot.main([
+        "session", "--config", str(_session_config(tmp_path)),
+    ]) == 0
+    assert capsys.readouterr().out.strip() == str(path)
+
+
+def test_session_without_session_file_fails_fast_nonzero(tmp_path, capsys):
+    (tmp_path / ".worktrees").mkdir()
+    assert muyan_pilot.main([
+        "session", "--config", str(_session_config(tmp_path)),
+    ]) == 1
+    err = capsys.readouterr().err
+    assert "no pi session" in err
+    assert "no Pi is running" in err
+
+
+def test_follow_session_file_yields_new_lines(tmp_path):
+    """Issue #74: the follow generator yields the existing lines and
+    then the new lines as they are appended (tail -f semantics). It
+    follows the ONE file it was given: a newer file appearing in the
+    same directory is never picked up mid-run."""
+    path = _write_session(tmp_path, records=[
+        {"type": "session", "id": "sess-1", "cwd": "/w"},
+    ])
+    # A newer file appears while following: it must be ignored.
+    def appear_later():
+        time.sleep(0.3)
+        _write_session(tmp_path, name="later.jsonl", run="run9")
+        time.sleep(0.3)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({
+                "type": "message", "id": "a1",
+                "timestamp": "2026-08-26T00:00:00Z",
+                "message": {"role": "assistant", "content": [
+                    {"type": "text", "text": "hello"}]},
+            }) + "\n")
+        time.sleep(0.3)
+        path.unlink()
+
+    thread = threading.Thread(target=appear_later)
+    thread.start()
+    lines = list(muyan_pilot.follow_session_file(path, poll_interval=0.05))
+    thread.join(timeout=5)
+    assert len(lines) == 2
+    assert "sess-1" in lines[0]
+    assert "hello" in lines[1]
+
+
+def test_follow_session_file_stops_when_file_is_gone(tmp_path):
+    """Issue #74: the file disappearing (worktree cleanup) stops the
+    follow — fail fast, no fallback to another file. A file that is
+    gone before the first poll yields nothing."""
+    path = _write_session(tmp_path, records=[
+        {"type": "session", "id": "sess-1", "cwd": "/w"},
+    ])
+    path.unlink()
+    assert list(
+        muyan_pilot.follow_session_file(path, poll_interval=0.05),
+    ) == []
+
+
+def test_session_follow_prints_new_lines_of_the_selected_file(
+    tmp_path, capsys, monkeypatch,
+):
+    """Issue #74: `main session --follow` tails the file selected at
+    start and prints each new line as it arrives (raw JSONL by
+    default)."""
+    _write_session(tmp_path, records=[
+        {"type": "session", "id": "sess-1", "cwd": "/w"},
+    ])
+    monkeypatch.setattr(
+        muyan_pilot, "follow_session_file",
+        lambda path, poll_interval=0.5: iter([
+            json.dumps({"type": "session", "id": "sess-1", "cwd": "/w"}),
+            json.dumps({"type": "message", "id": "a1",
+                        "timestamp": "2026-08-26T00:00:00Z",
+                        "message": {"role": "assistant", "content": [
+                            {"type": "text", "text": "hello"}]}}),
+        ]),
+    )
+    assert muyan_pilot.main([
+        "session", "--follow", "--config",
+        str(_session_config(tmp_path)),
+    ]) == 0
+    out = capsys.readouterr().out
+    assert "sess-1" in out
+    assert "hello" in out
+
+
+def test_session_follow_pretty_prints_summaries(tmp_path, capsys, monkeypatch):
+    _write_session(tmp_path, records=[
+        {"type": "session", "id": "sess-1", "cwd": "/w"},
+    ])
+    monkeypatch.setattr(
+        muyan_pilot, "follow_session_file",
+        lambda path, poll_interval=0.5: iter([
+            json.dumps({"type": "message", "id": "a1",
+                        "timestamp": "2026-08-26T00:00:00Z",
+                        "message": {"role": "assistant", "content": [
+                            {"type": "text", "text": "hello"}]}}),
+        ]),
+    )
+    assert muyan_pilot.main([
+        "session", "--follow", "--pretty", "--config",
+        str(_session_config(tmp_path)),
+    ]) == 0
+    out = capsys.readouterr().out
+    assert "assistant" in out
+    assert "hello" in out
+    assert "sess.jsonl" not in out
+
+
+def test_follow_session_file_rereads_shrunk_file(tmp_path):
+    """Issue #74: a file that shrank below the read offset (truncated
+    and rewritten) is re-read from the start — the same rule as the
+    session watcher."""
+    path = _write_session(tmp_path, records=[
+        {"type": "session", "id": "s1", "cwd": "/w"},
+        {"type": "message", "id": "a1",
+         "timestamp": "2026-08-26T00:00:00Z",
+         "message": {"role": "assistant", "content": [
+             {"type": "text", "text": "one"}]}},
+    ])
+    generator = muyan_pilot.follow_session_file(path, poll_interval=0.05)
+    first = next(generator)
+    second = next(generator)
+    assert "s1" in first
+    assert "one" in second
+    # Truncate below the offset and rewrite: re-read from the start.
+    path.write_text(
+        json.dumps({"type": "session", "id": "s2", "cwd": "/w"}) + "\n",
+        encoding="utf-8",
+    )
+    third = next(generator)
+    assert "s2" in third
+    path.unlink()
+
+
+def test_follow_session_file_skips_blank_lines(tmp_path):
+    """Issue #74: blank lines between records (a writer flush leaving
+    an empty line) are skipped, not yielded."""
+    path = tmp_path / "blank.jsonl"
+    path.write_text(
+        json.dumps({"type": "session", "id": "s1", "cwd": "/w"})
+        + "\n\n"
+        + json.dumps({"type": "session", "id": "s2", "cwd": "/w"})
+        + "\n",
+        encoding="utf-8",
+    )
+    generator = muyan_pilot.follow_session_file(path, poll_interval=0.05)
+    first = next(generator)
+    second = next(generator)
+    assert "s1" in first
+    assert "s2" in second
+    path.unlink()
+
+
+def test_session_follow_without_session_file_fails_fast(tmp_path, capsys):
+    (tmp_path / ".worktrees").mkdir()
+    assert muyan_pilot.main([
+        "session", "--follow", "--config",
+        str(_session_config(tmp_path)),
+    ]) == 1
+    assert "no pi session" in capsys.readouterr().err
+
+
+def test_format_session_line_summarizes_message_roles(tmp_path):
+    line = muyan_pilot.format_session_line({
+        "type": "message", "id": "a1",
+        "timestamp": "2026-08-26T00:00:00Z",
+        "message": {"role": "assistant", "content": [
+            {"type": "toolCall", "name": "bash",
+             "arguments": {"command": "pytest tests/"}},
+        ]},
+    })
+    assert "2026-08-26T00:00:00Z" in line
+    assert "assistant" in line
+    assert "bash" in line
+    assert "pytest tests/" in line
+
+
+def test_format_session_line_summarizes_tool_result(tmp_path):
+    line = muyan_pilot.format_session_line({
+        "type": "message", "id": "r1",
+        "timestamp": "2026-08-26T00:01:00Z",
+        "message": {"role": "toolResult", "toolName": "bash",
+                    "isError": True,
+                    "content": [{"type": "text", "text": "boom"}]},
+    })
+    assert "toolResult" in line
+    assert "bash" in line
+    assert "error" in line.lower()
+
+
+def test_format_session_line_summarizes_session_record(tmp_path):
+    line = muyan_pilot.format_session_line({
+        "type": "session", "id": "sess-1",
+        "timestamp": "2026-08-26T00:00:00Z", "cwd": "/w",
+    })
+    assert "session" in line
+    assert "sess-1" in line
+
+
+def test_format_session_line_truncates_long_content(tmp_path):
+    line = muyan_pilot.format_session_line({
+        "type": "message", "id": "a1",
+        "timestamp": "2026-08-26T00:00:00Z",
+        "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "x" * 500},
+        ]},
+    })
+    assert len(line) < 300
+
+
+def test_format_session_line_tool_call_without_command_falls_back(
+    tmp_path,
+):
+    """Issue #74: a tool call without a `command` argument shows the
+    first path-like argument instead."""
+    line = muyan_pilot.format_session_line({
+        "type": "message", "id": "a1",
+        "timestamp": "2026-08-26T00:00:00Z",
+        "message": {"role": "assistant", "content": [
+            {"type": "toolCall", "name": "read",
+             "arguments": {"path": "/tmp/x.py"}},
+        ]},
+    })
+    assert "read" in line
+    assert "/tmp/x.py" in line
+
+
+def test_format_session_line_skips_non_dict_content_items(tmp_path):
+    line = muyan_pilot.format_session_line({
+        "type": "message", "id": "a1",
+        "timestamp": "2026-08-26T00:00:00Z",
+        "message": {"role": "assistant", "content": [
+            "garbage",
+            {"type": "unknown"},
+            {"type": "text"},
+            {"type": "text", "text": "ok"},
+        ]},
+    })
+    assert "ok" in line
+    assert "garbage" not in line
+
+
+def test_format_session_line_summarizes_thinking(tmp_path):
+    line = muyan_pilot.format_session_line({
+        "type": "message", "id": "a1",
+        "timestamp": "2026-08-26T00:00:00Z",
+        "message": {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "hmm"},
+        ]},
+    })
+    assert "thinking" in line
+    assert "hmm" in line
+
+
+def test_format_session_line_handles_non_list_content(tmp_path):
+    line = muyan_pilot.format_session_line({
+        "type": "message", "id": "a1",
+        "timestamp": "2026-08-26T00:00:00Z",
+        "message": {"role": "assistant", "content": "no list"},
+    })
+    assert line.endswith("assistant")
+
+
+def test_format_session_line_handles_unknown_record_kind(tmp_path):
+    line = muyan_pilot.format_session_line({
+        "type": "compaction",
+        "timestamp": "2026-08-26T00:00:00Z",
+    })
+    assert "compaction" in line
+
+
+def test_format_session_line_handles_missing_message(tmp_path):
+    line = muyan_pilot.format_session_line({
+        "type": "message",
+        "timestamp": "2026-08-26T00:00:00Z",
+    })
+    assert line.endswith("message -")
+
+
+def test_format_session_line_tool_call_without_any_known_argument(
+    tmp_path,
+):
+    """Issue #74: a tool call whose arguments carry none of the known
+    keys shows the tool name only (no guessed detail)."""
+    line = muyan_pilot.format_session_line({
+        "type": "message", "id": "a1",
+        "timestamp": "2026-08-26T00:00:00Z",
+        "message": {"role": "assistant", "content": [
+            {"type": "toolCall", "name": "mcpTool",
+             "arguments": {"other": 1}},
+        ]},
+    })
+    assert "mcpTool" in line
+    assert "other" not in line
+
+
+def test_format_session_line_tool_call_skips_empty_argument_values(
+    tmp_path,
+):
+    """Issue #74: empty argument values are skipped, the next known
+    key wins."""
+    line = muyan_pilot.format_session_line({
+        "type": "message", "id": "a1",
+        "timestamp": "2026-08-26T00:00:00Z",
+        "message": {"role": "assistant", "content": [
+            {"type": "toolCall", "name": "search",
+             "arguments": {"path": "", "query": "needle"}},
+        ]},
+    })
+    assert "needle" in line
+
+
+def test_format_session_line_thinking_without_text(tmp_path):
+    line = muyan_pilot.format_session_line({
+        "type": "message", "id": "a1",
+        "timestamp": "2026-08-26T00:00:00Z",
+        "message": {"role": "assistant", "content": [
+            {"type": "thinking"},
+        ]},
+    })
+    assert line.endswith("assistant")
+
+
+def test_session_pretty_skips_blank_and_malformed_lines(
+    tmp_path, capsys,
+):
+    """Issue #74: `--pretty` (one-shot) skips blank lines, unparseable
+    lines and non-object JSON — only real records are summarized."""
+    path = _write_session(tmp_path, records=[
+        {"type": "session", "id": "sess-1",
+         "timestamp": "2026-08-26T00:00:00Z", "cwd": "/w"},
+    ])
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("\ngarbage-not-json\n\"just a string\"\n")
+    assert muyan_pilot.main([
+        "session", "--pretty", "--config", str(_session_config(tmp_path)),
+    ]) == 0
+    out = capsys.readouterr().out
+    assert "sess-1" in out
+    assert "garbage-not-json" not in out
+    assert "just a string" not in out
+
+
+def test_session_follow_pretty_skips_malformed_lines(
+    tmp_path, capsys, monkeypatch,
+):
+    """Issue #74: `--follow --pretty` skips unparseable lines and
+    non-object JSON; valid records are summarized."""
+    _write_session(tmp_path, records=[
+        {"type": "session", "id": "sess-1", "cwd": "/w"},
+    ])
+    monkeypatch.setattr(
+        muyan_pilot, "follow_session_file",
+        lambda path, poll_interval=0.5: iter([
+            json.dumps({"type": "message", "id": "a1",
+                        "timestamp": "2026-08-26T00:00:00Z",
+                        "message": {"role": "assistant", "content": [
+                            {"type": "text", "text": "hello"}]}}),
+            "garbage-not-json",
+            "123",
+        ]),
+    )
+    assert muyan_pilot.main([
+        "session", "--follow", "--pretty", "--config",
+        str(_session_config(tmp_path)),
+    ]) == 0
+    out = capsys.readouterr().out
+    assert "hello" in out
+    assert "garbage-not-json" not in out
+    assert "123" not in out
+
+
+def test_session_pretty_prints_summaries_instead_of_raw_jsonl(
+    tmp_path, capsys,
+):
+    _write_session(tmp_path, records=[
+        {"type": "session", "id": "sess-1",
+         "timestamp": "2026-08-26T00:00:00Z", "cwd": "/w"},
+        {"type": "message", "id": "a1",
+         "timestamp": "2026-08-26T00:00:01Z",
+         "message": {"role": "assistant", "content": [
+             {"type": "text", "text": "hello"}]},
+        }],
+    )
+    assert muyan_pilot.main([
+        "session", "--pretty", "--config", str(_session_config(tmp_path)),
+    ]) == 0
+    out = capsys.readouterr().out
+    # The path is not printed in pretty mode; summaries are.
+    assert "sess-1" in out
+    assert "assistant" in out
+    assert "hello" in out
+    assert "sess.jsonl" not in out
 
 
 def test_main_requires_config_file(tmp_path):
