@@ -1068,3 +1068,267 @@ def test_slot_lines_ignores_corrupted_slot_file(tmp_path):
     (slot_dir / "slot-1").write_text("garbage", encoding="utf-8")
     lines = muyan_pilot.slot_lines(slot_dir, 1)
     assert lines == ["slots: 0/1"]
+
+
+# --- deployment consistency (Issue #103) ------------------------------------
+
+
+def _deploy_world(tmp_path, drift: bool = False) -> tuple[dict, Path]:
+    """A deployment checkout with templates plus an installed unit dir."""
+    import shutil
+
+    repo = tmp_path / "repo"
+    (repo / "systemd").mkdir(parents=True)
+    for name, body in (
+        ("muyan-pilot.service", "[Service]\nExecStart=/usr/bin/python3 bootstrap_runner.py\n"),
+        ("muyan-pilot.timer", "[Timer]\nOnCalendar=*-*-* *:00/15\n"),
+    ):
+        (repo / "systemd" / name).write_text(body, encoding="utf-8")
+    installed = tmp_path / "units"
+    installed.mkdir()
+    for name in ("muyan-pilot.service", "muyan-pilot.timer"):
+        shutil.copyfile(repo / "systemd" / name, installed / name)
+    if drift:
+        (installed / "muyan-pilot.service").write_text(
+            "[Service]\n# drift\n", encoding="utf-8",
+        )
+    config = {
+        "source_repos": ["xqliu/muyan-pilot"],
+        "repo_dir": repo,
+        "base_branch": "main",
+        "max_concurrency": 1,
+        "slot_dir": repo / ".muyan-pilot" / "slots",
+    }
+    return config, installed
+
+
+def _fake_doctor_commands(monkeypatch) -> list:
+    calls: list = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "0123456789abcdef0123456789abcdef01234567"
+        if command[:2] == ["systemctl", "--user"]:
+            assert command[2:5] == ["show", "-p", "ActiveState"]
+            return "active"
+        if command[:1] == ["journalctl"]:
+            return "line one\nline two"
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(muyan_pilot, "run_command", fake_run)
+    return calls
+
+
+def test_install_units_command_reports_commit_and_hashes(monkeypatch,
+                                                        tmp_path):
+    import systemd_deploy
+
+    config, _ = _deploy_world(tmp_path)
+    installed = tmp_path / "elsewhere"
+    captured = {}
+
+    def fake_install(repo_dir, installed_dir, *, run_command):
+        captured["repo_dir"] = repo_dir
+        captured["installed_dir"] = installed_dir
+        captured["run_command"] = run_command
+        return {
+            "commit": "0123456789abcdef0123456789abcdef01234567",
+            "installed_dir": installed,
+            "units": {
+                name: {"installed_path": installed / name,
+                       "sha256": f"hash-{name}"}
+                for name in systemd_deploy.UNIT_NAMES
+            },
+        }
+
+    monkeypatch.setattr(systemd_deploy, "install_units", fake_install)
+    report = muyan_pilot.install_units_command(config, installed)
+    assert captured["repo_dir"] == config["repo_dir"]
+    assert captured["installed_dir"] == installed
+    assert captured["run_command"] is muyan_pilot.run_command
+    lines = report.splitlines()
+    assert lines[0] == (
+        "deployed commit=0123456789abcdef0123456789abcdef01234567 "
+        f"installed_dir={installed}"
+    )
+    assert f"unit=muyan-pilot.service sha256=hash-muyan-pilot.service" in lines
+    assert f"unit=muyan-pilot.timer sha256=hash-muyan-pilot.timer" in lines
+
+
+def test_main_install_units_prints_report_and_returns_zero(
+    monkeypatch, tmp_path, capsys,
+):
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text("source_repos = [\"xqliu/muyan-pilot\"]\n",
+                      encoding="utf-8")
+    _write_prompts(tmp_path)
+    seen = {}
+
+    def fake_command(cfg, installed_dir):
+        seen["installed_dir"] = installed_dir
+        return "deployed commit=abc installed_dir=/x"
+
+    monkeypatch.setattr(muyan_pilot, "install_units_command", fake_command)
+    assert muyan_pilot.main([
+        "install-units", "--config", str(config),
+        "--installed-dir", str(tmp_path / "u"),
+    ]) == 0
+    assert seen["installed_dir"] == tmp_path / "u"
+    out = capsys.readouterr().out
+    assert "deployed commit=abc installed_dir=/x" in out
+
+
+def test_doctor_report_clean(tmp_path, monkeypatch):
+    config, installed = _deploy_world(tmp_path, drift=False)
+    calls = _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
+    report = muyan_pilot.doctor_report(config, installed)
+    lines = report.splitlines()
+    assert lines[0] == f"repo: {config['repo_dir']}"
+    assert lines[1] == "commit: 0123456789abcdef0123456789abcdef01234567"
+    assert "unit_drift: clean" in lines
+    # Both units are reported with their installed hash.
+    import systemd_deploy
+    status = systemd_deploy.unit_status(config["repo_dir"], installed)
+    for entry in status:
+        assert (
+            f"  {entry['unit']}: sha256={entry['installed_sha256']}"
+        ) in lines
+    assert "muyan-pilot.timer: active" in lines
+    assert "muyan-pilot.service: active" in lines
+    assert "slots: 0/1" in lines
+    assert "pi: none" in lines
+    assert "source: xqliu/muyan-pilot" in lines
+    assert "  current: -" in lines
+    assert "journal:" in lines
+    assert "  line one" in lines
+    assert "  line two" in lines
+    # The exact read-only commands (verified against the live machine).
+    assert [
+        "systemctl", "--user", "show", "-p", "ActiveState", "--value",
+        "muyan-pilot.timer",
+    ] in calls
+    assert [
+        "systemctl", "--user", "show", "-p", "ActiveState", "--value",
+        "muyan-pilot.service",
+    ] in calls
+    assert [
+        "journalctl", "--user", "-u", "muyan-pilot.service",
+        "-n", "20", "--no-pager",
+    ] in calls
+
+
+def test_doctor_report_drift_carries_paths_hashes_and_fix(
+    tmp_path, monkeypatch,
+):
+    config, installed = _deploy_world(tmp_path, drift=True)
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
+    import systemd_deploy
+    report = muyan_pilot.doctor_report(config, installed)
+    lines = report.splitlines()
+    assert "unit_drift: DRIFT" in lines
+    drifted = [
+        e for e in systemd_deploy.unit_status(
+            config["repo_dir"], installed,
+        ) if e["drifted"]
+    ]
+    assert len(drifted) == 1
+    entry = drifted[0]
+    assert (
+        f"  {entry['unit']}: repo={entry['repo_path']} "
+        f"installed={entry['installed_path']} "
+        f"repo_sha256={entry['repo_sha256']} "
+        f"installed_sha256={entry['installed_sha256']}"
+    ) in lines
+    assert f"  fix: {systemd_deploy.FIX_COMMAND}" in lines
+
+
+def test_doctor_report_missing_installed_unit_is_drift(tmp_path, monkeypatch):
+    config, installed = _deploy_world(tmp_path, drift=False)
+    (installed / "muyan-pilot.timer").unlink()
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
+    report = muyan_pilot.doctor_report(config, installed)
+    assert "unit_drift: DRIFT" in report
+    assert "muyan-pilot.timer" in report
+    assert "installed_sha256=-" in report
+
+
+def test_doctor_report_defaults_to_the_standard_installed_dir(
+    tmp_path, monkeypatch,
+):
+    """Without --installed-dir the report checks the standard user dir
+    (here pointed at the test world via MUYAN_PILOT_UNIT_DIR)."""
+    config, installed = _deploy_world(tmp_path, drift=False)
+    monkeypatch.setenv("MUYAN_PILOT_UNIT_DIR", str(installed))
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
+    report = muyan_pilot.doctor_report(config, None)
+    assert "unit_drift: clean" in report
+
+
+def test_doctor_report_shows_current_issue_and_session(tmp_path, monkeypatch):
+    config, installed = _deploy_world(tmp_path, drift=False)
+    _fake_doctor_commands(monkeypatch)
+    issue = {"number": 7, "title": "task",
+             "url": "https://github.com/xqliu/muyan-pilot/issues/7"}
+    monkeypatch.setattr(
+        muyan_pilot, "current_issue", lambda repo: issue,
+    )
+    session = (config["repo_dir"] / ".worktrees" / "w" / ".pi-session"
+               / "s.jsonl")
+    session.parent.mkdir(parents=True)
+    session.write_text("{}", encoding="utf-8")
+    report = muyan_pilot.doctor_report(config, installed)
+    assert "  current: #7 task https://github.com/xqliu/muyan-pilot/issues/7" in report
+    assert f"pi: {session}" in report
+
+
+def test_fake_doctor_commands_rejects_unexpected_commands(
+    tmp_path, monkeypatch,
+):
+    """The doctor fake must fail loudly on any command it does not
+    answer (no silent pass for an unexpected external call)."""
+    _deploy_world(tmp_path)
+    _fake_doctor_commands(monkeypatch)
+    with pytest.raises(AssertionError, match="unexpected command"):
+        muyan_pilot.run_command(["gh", "issue", "list"])
+
+
+def test_doctor_report_fails_fast_when_a_command_fails(tmp_path, monkeypatch):
+    import subprocess
+
+    config, installed = _deploy_world(tmp_path, drift=False)
+    monkeypatch.setattr(
+        muyan_pilot, "run_command",
+        lambda command, **kwargs: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(1, command, stderr="boom"),
+        ),
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        muyan_pilot.doctor_report(config, installed)
+
+
+def test_main_doctor_prints_report_and_returns_zero(
+    monkeypatch, tmp_path, capsys,
+):
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text("source_repos = [\"xqliu/muyan-pilot\"]\n",
+                      encoding="utf-8")
+    _write_prompts(tmp_path)
+    seen = {}
+
+    def fake_report(cfg, installed_dir):
+        seen["installed_dir"] = installed_dir
+        return "repo: /x\nunit_drift: clean"
+
+    monkeypatch.setattr(muyan_pilot, "doctor_report", fake_report)
+    assert muyan_pilot.main([
+        "doctor", "--config", str(config),
+        "--installed-dir", str(tmp_path / "u"),
+    ]) == 0
+    assert seen["installed_dir"] == tmp_path / "u"
+    out = capsys.readouterr().out
+    assert "unit_drift: clean" in out
