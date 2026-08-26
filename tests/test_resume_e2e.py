@@ -568,15 +568,26 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
 
     # The next tick: the resumable scan now also covers `ai-pr-opened`
     # (Issue #70), so the stranded delivery is found and its scene is
-    # recovered; the dispatch sends it straight to the delivery wait
-    # (independent review) — no fixer, no fresh claim (Issue #82).
-    # The only gh calls of the awaiting-review tick: the opened-PR
-    # scan (fix-needed OR pr-opened) finds the stranded delivery and
-    # the scene is recovered from the comment history — and the wait
-    # (stubbed below) takes over. The in-flight and ready scans never
-    # run (the delivery is resumed, so nothing is claimed), and the
-    # fake rejects anything else.
+    # recovered; the dispatch verifies the open PR BEFORE any git/Pi
+    # mutation (Issue #89: the pre-#82 resume check, restored — the
+    # wait receives the verified URL, never the comment string) and
+    # then sends it straight to the delivery wait (independent review)
+    # — no fixer, no fresh claim (Issue #82). The gh calls of the
+    # awaiting-review tick: the opened-PR scan (fix-needed OR
+    # pr-opened) finds the stranded delivery, the scene is recovered
+    # from the comment history, and the resume verification reads the
+    # open PR of the derived branch — and the wait (stubbed below)
+    # takes over. The in-flight and ready scans never run (the
+    # delivery is resumed, so nothing is claimed), and the fake
+    # rejects anything else.
     def fake_run(command, **kwargs):
+        if command[:1] == ["git"]:
+            # The resume verification reads the derived worktree's
+            # branch and HEAD (real git, real worktree).
+            return subprocess.run(
+                command, cwd=kwargs.get("cwd"), capture_output=True,
+                text=True, check=True,
+            ).stdout.strip()
         if command[:1] == ["gh"] and command[1] == "issue":
             if command[2] == "list":
                 search = " ".join(command)
@@ -596,6 +607,34 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
                         for i, body in enumerate(comments)
                     ],
                 })
+        if command[:2] == ["gh", "pr"] and command[2] == "list":
+            # The resume verification (Issue #89): exactly one open PR
+            # of the derived branch, in the source repo, on the
+            # configured base, carrying the run marker and the Fixes
+            # keyword, with the scene's exact URL. The verification
+            # always queries by head branch; anything else is
+            # rejected.
+            if "--head" not in command:
+                raise AssertionError(f"unexpected command: {command}")
+            branch = command[command.index("--head") + 1]
+            run_id = branch.rsplit("-", 1)[1]
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=kwargs["cwd"],
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            return json.dumps([{
+                "number": ISSUE_NUMBER,
+                "url": PR_URL,
+                "baseRefName": "main",
+                "headRefName": branch,
+                "headRefOid": head,
+                "headRepository": {"name": REPO.split("/")[1]},
+                "headRepositoryOwner": {"login": REPO.split("/")[0]},
+                "body": (
+                    f"<!-- muyan-pilot:run={run_id} -->\n\n"
+                    f"Fixes #{ISSUE_NUMBER}\n\nPlan for {branch}"
+                ),
+            }])
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -619,7 +658,8 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
     )
     assert runner.main(["--config", str(config_path)]) == 0
     # The stranded delivery's own PR is the one that is waited on
-    # (the fresh-claim path never ran: no ready Issue was claimed).
+    # (the fresh-claim path never ran: no ready Issue was claimed):
+    # the URL that the resume verification (Issue #89) verified.
     assert waits[0][0][0] == PR_URL
     assert waits[0][0][1]["number"] == ISSUE_NUMBER
     # No fixer ran: the delivery HEAD is unchanged and no label edit or

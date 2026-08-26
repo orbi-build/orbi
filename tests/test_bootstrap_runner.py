@@ -2135,7 +2135,9 @@ def test_main_routes_fix_needed_resume_to_delivery_wait(
     wait (Issue #82: the review session fixes findings in the same
     session, so there is no cold-start fixer to run). The run id from
     the scene is bound before the wait so the resumed review's journal
-    lines and comments carry it (Issue #41)."""
+    lines and comments carry it (Issue #41). Issue #89: the wait
+    receives the URL the resume verification returned, never the raw
+    comment string."""
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
     _write_prompts(tmp_path)
     config = tmp_path / "muyan-pilot.toml"
@@ -2153,13 +2155,19 @@ def test_main_routes_fix_needed_resume_to_delivery_wait(
             "owner/repo", issue, scene,
         ),
     )
+    # The resume pre-validation (Issue #89) is stubbed: the dispatch
+    # test proves the wait receives its verified URL.
+    monkeypatch.setattr(
+        runner, "verify_resumed_pr",
+        lambda *args, **kwargs: scene["pr_url"],
+    )
     waits = []
     monkeypatch.setattr(
         runner, "wait_for_delivery",
         lambda *args, **kwargs: waits.append((args, kwargs)),
     )
     assert runner.main(["--config", str(config)]) == 0
-    # No fixer: the wait runs on the scene's PR URL.
+    # No fixer: the wait runs on the verified PR URL.
     assert waits[0][0][:2] == (scene["pr_url"], issue)
     # The resumed review runs under the scene's run id.
     assert runner.current_run_id() == "a1b2c3d4"
@@ -2173,7 +2181,9 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
     the independent review of the same PR runs (Issue #45 round-5
     contract: a clean PR is never sent to a fixer). The run id from
     the scene is bound before the wait so the resumed review's journal
-    lines and comments carry it (Issue #41)."""
+    lines and comments carry it (Issue #41). Issue #89: the wait
+    receives the URL the resume verification returned, never the raw
+    comment string."""
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
     _write_prompts(tmp_path)
     config = tmp_path / "muyan-pilot.toml"
@@ -2191,13 +2201,19 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
             "owner/repo", issue, scene,
         ),
     )
+    # The resume pre-validation (Issue #89) is stubbed: the dispatch
+    # test proves the wait receives its verified URL.
+    monkeypatch.setattr(
+        runner, "verify_resumed_pr",
+        lambda *args, **kwargs: scene["pr_url"],
+    )
     waits = []
     monkeypatch.setattr(
         runner, "wait_for_delivery",
         lambda *args, **kwargs: waits.append((args, kwargs)),
     )
     assert runner.main(["--config", str(config)]) == 0
-    # No fixer for a clean PR: the wait runs on the scene's PR URL.
+    # No fixer for a clean PR: the wait runs on the verified PR URL.
     assert waits[0][0][:2] == (scene["pr_url"], issue)
     # The resumed review runs under the scene's run id.
     assert runner.current_run_id() == "a1b2c3d4"

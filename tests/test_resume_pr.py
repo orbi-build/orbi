@@ -793,9 +793,13 @@ def test_run_pi_fresh_context_has_no_existing_pr(monkeypatch, tmp_path):
 def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_path):
     """A resumable opened-PR delivery goes straight to the delivery wait
     (Issue #82: no cold-start fixer — the review session fixes findings
-    in the same session); it is never re-claimed as a new task."""
+    in the same session); it is never re-claimed as a new task.
+    Issue #89: the wait receives the URL that verify_pr VERIFIED, never
+    the raw comment string (a comment must not steer the runner into
+    the wrong PR, Issue #45)."""
     issue = {"number": 9, "title": "ship", "body": ""}
     scene = scene_for()
+    verified_url = "https://github.com/owner/repo/pull/98"
     processed = []
     waits = []
     for name in ("prompt.md", "prompt_review.md"):
@@ -812,8 +816,15 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
         runner, "process_issue",
         lambda *args, **kwargs: processed.append(args) or FAKE_PR_URL,
     )
+    # The resume pre-validation (Issue #89) is stubbed: it returns a
+    # verified URL that differs from the scene's comment string, so the
+    # test proves the wait never sees the comment string.
+    monkeypatch.setattr(
+        runner, "verify_resumed_pr",
+        lambda *a, **k: verified_url,
+    )
     # The dispatch test must not run the real delivery-wait loop (it would
-    # call `gh` against the real PR number of FAKE_PR_URL).
+    # call `gh` against the real PR number of the verified URL).
     monkeypatch.setattr(
         runner, "wait_for_delivery",
         lambda *a, **k: waits.append((a, k)) or None,
@@ -822,7 +833,9 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
     # The resumable delivery is resumed, not re-claimed as a new task.
     assert processed == []
     assert len(waits) == 1
-    assert waits[0][0][:2] == (FAKE_PR_URL, issue)
+    assert waits[0][0][:2] == (verified_url, issue)
+    # The comment string itself never reached the wait.
+    assert waits[0][0][0] != scene["pr_url"]
     # The resumed review runs under the scene's run id.
     assert runner.current_run_id() == FAKE_RUN_ID
 
@@ -851,3 +864,524 @@ def test_main_still_claims_new_issue_when_no_resumable(monkeypatch, tmp_path):
     assert len(processed) == 1
     assert processed[0][0] is issue
     assert processed[0][2] == "owner/repo"
+
+
+# --------------------------- resume PR verification (Issue #89)
+
+
+def make_resume_config(tmp_path) -> dict:
+    return {
+        "repo_dir": tmp_path,
+        "base_branch": "main",
+    }
+
+
+def make_resume_scene(pr_url: str = FAKE_PR_URL) -> dict:
+    return {
+        "run_id": FAKE_RUN_ID,
+        "base_branch": "main",
+        "base_sha": "abc123def456",
+        "pr_url": pr_url,
+    }
+
+
+def make_resume_issue() -> dict:
+    return {"number": 9, "title": "ship", "body": ""}
+
+
+def expected_resume_worktree(tmp_path) -> Path:
+    return runner.worktree_path(
+        tmp_path, "owner/repo", 9, FAKE_RUN_ID,
+    )
+
+
+def test_verify_resumed_pr_verifies_scene_pr_and_returns_verified_url(
+    monkeypatch, tmp_path,
+):
+    """Issue #89: the resume verifies the open PR BEFORE any git/Pi
+    mutation: exactly one open PR of the DERIVED branch (derived from
+    the configured repo_dir, source repo, Issue number and run id —
+    never read from the comment), in the configured source repo, on the
+    configured base, carrying the run marker and the `Fixes` keyword,
+    with the EXACT URL of the recovered scene. The latest-base check is
+    skipped (`require_latest_base=False`): being behind the base is the
+    expected state the review session absorbs in-session (Issue #82),
+    so the base merge never returns to the runner. The returned URL is
+    the one verify_pr verified, never the comment string."""
+    calls = []
+    verified_url = "https://github.com/owner/repo/pull/9"
+
+    def fake_verify_pr(worktree, branch, base_branch, run_id, *, issue,
+                       pr_repo=None, expected_url=None,
+                       require_latest_base=True):
+        calls.append({
+            "worktree": worktree, "branch": branch,
+            "base_branch": base_branch, "run_id": run_id, "issue": issue,
+            "pr_repo": pr_repo, "expected_url": expected_url,
+            "require_latest_base": require_latest_base,
+        })
+        return verified_url
+
+    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    # The derived worktree exists (a real delivery always has one).
+    expected_resume_worktree(tmp_path).mkdir(parents=True)
+    url = runner.verify_resumed_pr(
+        make_resume_scene(), make_resume_issue(),
+        make_resume_config(tmp_path), "owner/repo",
+    )
+    # The verified URL is returned, not the comment string.
+    assert url == verified_url
+    assert len(calls) == 1
+    call = calls[0]
+    # Branch and worktree are DERIVED from config + Issue + run id.
+    assert call["worktree"] == expected_resume_worktree(tmp_path)
+    assert call["branch"] == FAKE_BRANCH
+    # The configured base is verified (the scene base equals it here).
+    assert call["base_branch"] == "main"
+    assert call["run_id"] == FAKE_RUN_ID
+    assert call["issue"] == 9
+    # The resume pre-validation contract (Issue #45, pre-#82
+    # resume_delivery): head repo, exact URL, no latest-base check.
+    assert call["pr_repo"] == "owner/repo"
+    assert call["expected_url"] == FAKE_PR_URL
+    assert call["require_latest_base"] is False
+
+
+
+def make_resume_failure_fake(monkeypatch, *, progress_comments=None,
+                             labels=None):
+    """Shared `run_command` fake of the resume verification failure
+    tests (Issue #89).
+
+    Answers exactly the blocked-scene reporting: the progress API
+    (GET comment list / POST create / PATCH update), the Issue label
+    read (the leftover `ai-fix-needed` check) and the comment-history
+    read (the completed review rounds — no round comments exist yet).
+    Anything else is rejected. `progress_comments` is the GET payload
+    (an existing tracked progress comment makes the blocked scene
+    PATCH it in place; empty makes it POST a new one) and `labels`
+    the label read. Captures the gh api calls and the label edits /
+    failure comments; monkeypatches `edit_issue` / `comment_issue`
+    accordingly. Returns `(captured, fake_run)` where `captured` is
+    `{"api": [...], "edits": [...], "comments": [...]}`.
+    """
+    if progress_comments is None:
+        progress_comments = []
+    if labels is None:
+        labels = ["ai-pr-opened"]
+    captured = {"api": [], "edits": [], "comments": []}
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            captured["api"].append(command)
+            if "--method" not in command:
+                return json.dumps(progress_comments)
+            method = command[command.index("--method") + 1]
+            if method == "POST":
+                body = command[command.index("--field") + 1]
+                return json.dumps({"id": 78, "body": body[len("body="):],
+                                   "url": "https://x/78"})
+            return ""
+        if command[-1] == "labels":
+            return json.dumps({
+                "labels": [{"name": name} for name in labels],
+            })
+        if command[-1] == "comments":
+            return json.dumps({"comments": []})
+        raise AssertionError(f"unexpected command: {command}")
+
+    def fake_edit(*args, **kwargs):
+        captured["edits"].append((args, kwargs))
+
+    def fake_comment(*args, **kwargs):
+        captured["comments"].append((args, kwargs))
+
+    monkeypatch.setattr(runner, "edit_issue", fake_edit)
+    monkeypatch.setattr(runner, "comment_issue", fake_comment)
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    return captured, fake_run
+
+
+def test_resume_failure_fake_answers_blocked_scene_and_rejects_other(
+    monkeypatch,
+):
+    """Every branch of the shared fake is exercised (the repo's
+    fake-coverage convention): the GET/POST/PATCH answers, the
+    labels/comments reads and the rejection of anything else."""
+    existing = {
+        "id": 77,
+        "body": (
+            f"{run_marker_body()}\n\n"
+            "**Muyan Pilot progress**\n\nawaiting review"
+        ),
+    }
+    captured, fake_run = make_resume_failure_fake(
+        monkeypatch, progress_comments=[existing],
+        labels=["ai-pr-opened", "ai-fix-needed"],
+    )
+    # GET: the tracked progress comment exists (the blocked scene
+    # PATCHes it in place instead of POSTing a second comment).
+    assert json.loads(fake_run([
+        "gh", "api", "repos/owner/repo/issues/9/comments",
+    ])) == [existing]
+    # POST: a new comment (milestone, blocked scene without a tracked
+    # comment) answers with the full comment object.
+    posted = json.loads(fake_run([
+        "gh", "api", "repos/owner/repo/issues/9/comments",
+        "--method", "POST", "--field", "body=x",
+    ]))
+    assert posted == {"id": 78, "body": "x", "url": "https://x/78"}
+    # PATCH: the update route answers empty.
+    assert fake_run([
+        "gh", "api", "repos/owner/repo/issues/comments/77",
+        "--method", "PATCH", "--field", "body=x",
+    ]) == ""
+    # The label read carries the served labels ...
+    labels = json.loads(fake_run([
+        "gh", "issue", "view", "9", "--repo", "owner/repo",
+        "--json", "labels",
+    ]))
+    assert [item["name"] for item in labels["labels"]] == [
+        "ai-pr-opened", "ai-fix-needed",
+    ]
+    # ... and the comment-history read has no review rounds yet.
+    comments = json.loads(fake_run([
+        "gh", "issue", "view", "9", "--repo", "owner/repo",
+        "--json", "comments",
+    ]))
+    assert comments == {"comments": []}
+    # Anything else is rejected (no git, no other gh route).
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["git", "status"])
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "list"])
+    # The captures hold the api calls (the edits/comments captures are
+    # filled by the monkeypatched writers, not by the fake itself).
+    assert len(captured["api"]) == 3
+    assert captured["edits"] == []
+    assert captured["comments"] == []
+
+
+def test_verify_resumed_pr_blocks_issue_when_pr_url_mismatch(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #89 acceptance: the comment URL does not match the open PR
+    of the task branch -> fail fast, the Issue is marked `ai-blocked`
+    ALONE (the opened-PR state label is removed), a run-marked failure
+    comment names the reason, and the error is re-raised so the tick
+    stops — no review Pi is started, the wrong PR is never merged.
+    (The pre-#82 `pr_url_mismatch` resume test, restored.)"""
+    existing = {
+        "id": 77,
+        "body": (
+            f"{run_marker_body()}\n\n"
+            "**Muyan Pilot progress**\n\nawaiting review"
+        ),
+    }
+    captured, _ = make_resume_failure_fake(
+        monkeypatch, progress_comments=[existing],
+    )
+
+    def fake_verify_pr(*args, **kwargs):
+        raise RuntimeError(
+            "PR URL https://github.com/owner/repo/pull/87 is not the "
+            "recovered original PR "
+            "https://github.com/owner/repo/pull/99; the resume must "
+            "keep the same PR number"
+        )
+
+    reviews: list = []
+    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(
+        runner, "review_and_merge_if_clean",
+        lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
+    )
+    expected_resume_worktree(tmp_path).mkdir(parents=True)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    caplog.set_level("INFO")
+    with pytest.raises(RuntimeError, match="not the recovered original PR"):
+        runner.verify_resumed_pr(
+            make_resume_scene(pr_url="https://github.com/owner/repo/pull/99"),
+            make_resume_issue(), make_resume_config(tmp_path), "owner/repo",
+        )
+    # No review Pi was started and nothing was merged.
+    assert reviews == []
+    # The Issue is marked ai-blocked ALONE (ai-pr-opened removed) ...
+    assert captured["edits"] == [
+        ((9,), {"repo": "owner/repo", "add": "ai-blocked",
+                "remove": "ai-pr-opened"}),
+    ]
+    # ... with a run-marked failure comment that names the reason ...
+    assert len(captured["comments"]) == 1
+    body = captured["comments"][0][1]["body"]
+    assert "Muyan Pilot failed:" in body
+    assert run_marker_body() in body
+    assert "not the recovered original PR" in body
+    # ... and the blocked milestone.
+    posted = [
+        command[command.index("--field") + 1][len("body="):]
+        for command in captured["api"]
+        if "--method" in command and "POST" in command
+    ]
+    assert any("Muyan Pilot: blocked" in body for body in posted)
+    assert any("not the recovered original PR" in body for body in posted)
+    # The tracked progress comment becomes the blocked scene in place.
+    patches = [
+        command for command in captured["api"]
+        if command[:2] == ["gh", "api"]
+        and command[2] == "repos/owner/repo/issues/comments/77"
+        and "PATCH" in command
+    ]
+    assert patches, "the tracked progress comment was not updated"
+    blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
+    assert "Muyan Pilot blocked" in blocked
+    assert "next step:" in blocked
+    assert "resume_pr_verification_failed" in caplog.text
+
+
+def test_verify_resumed_pr_blocks_issue_when_pr_repo_mismatch(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #89 acceptance: the PR head repo is not the configured
+    source repo -> the same terminal fail-fast (the pre-#82
+    `pr_repo_mismatch` resume test, restored)."""
+    captured, _ = make_resume_failure_fake(monkeypatch)
+
+    def fake_verify_pr(*args, **kwargs):
+        raise RuntimeError(
+            "PR head repo is fork/repo, expected owner/repo; the resume "
+            "must keep the PR of the configured source repo"
+        )
+
+    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    expected_resume_worktree(tmp_path).mkdir(parents=True)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    caplog.set_level("INFO")
+    with pytest.raises(RuntimeError, match="PR head repo is fork/repo"):
+        runner.verify_resumed_pr(
+            make_resume_scene(), make_resume_issue(),
+            make_resume_config(tmp_path), "owner/repo",
+        )
+    assert captured["edits"] == [
+        ((9,), {"repo": "owner/repo", "add": "ai-blocked",
+                "remove": "ai-pr-opened"}),
+    ]
+    body = captured["comments"][0][1]["body"]
+    assert "Muyan Pilot failed:" in body
+    assert run_marker_body() in body
+    assert "fork/repo" in body
+    assert "resume_pr_verification_failed" in caplog.text
+
+
+def test_verify_resumed_pr_removes_leftover_fix_needed_label(
+    monkeypatch, tmp_path,
+):
+    """A resume that fails while the Issue awaits the next review
+    session (`ai-fix-needed`) leaves that label behind: the terminal
+    state is `ai-blocked` alone (Issue #82 routes both opened-PR
+    states into the same resume)."""
+    captured, _ = make_resume_failure_fake(
+        monkeypatch, labels=["ai-fix-needed"],
+    )
+
+    def fake_verify_pr(*args, **kwargs):
+        raise RuntimeError("expected exactly one open PR for the task branch")
+
+    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    expected_resume_worktree(tmp_path).mkdir(parents=True)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    with pytest.raises(RuntimeError, match="exactly one open PR"):
+        runner.verify_resumed_pr(
+            make_resume_scene(), make_resume_issue(),
+            make_resume_config(tmp_path), "owner/repo",
+        )
+    # The opened-PR state transition AND the leftover-label removal.
+    assert captured["edits"] == [
+        ((9,), {"repo": "owner/repo", "add": "ai-blocked",
+                "remove": "ai-pr-opened"}),
+        ((9,), {"repo": "owner/repo", "remove": "ai-fix-needed"}),
+    ]
+
+
+def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #91 (pre-verify): the scene freezes the base the PR was
+    opened against; when the configured base differs, the resume fails
+    fast BEFORE any git/gh command (no verify_pr, no fetch) and the
+    Issue is marked ai-blocked with both base values named."""
+    commands: list = []
+    captured, fake_run = make_resume_failure_fake(monkeypatch)
+
+    def counting(command, **kwargs):
+        commands.append(command)
+        return fake_run(command, **kwargs)
+
+    def fake_verify_pr(*args, **kwargs):
+        # Must never run: the base mismatch is terminal before it.
+        raise AssertionError("verify_pr must not run on a base mismatch")
+
+    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(runner, "run_command", counting)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    caplog.set_level("INFO")
+    scene = make_resume_scene()
+    scene["base_branch"] = "develop"
+    with pytest.raises(ValueError, match="differs from configured"):
+        runner.verify_resumed_pr(
+            scene, make_resume_issue(),
+            make_resume_config(tmp_path), "owner/repo",
+        )
+    # No git command ran before the terminal transition (the only gh
+    # traffic is the blocked-scene reporting: the progress API, the
+    # label read and the comment-history read of the review rounds).
+    assert all(command[0] != "git" for command in commands)
+    assert all(
+        command[:2] == ["gh", "api"]
+        or command[-1] in ("comments", "labels")
+        for command in commands
+    )
+    assert captured["edits"] == [
+        ((9,), {"repo": "owner/repo", "add": "ai-blocked",
+                "remove": "ai-pr-opened"}),
+    ]
+    body = captured["comments"][0][1]["body"]
+    assert "Muyan Pilot failed:" in body
+    assert run_marker_body() in body
+    assert "base_branch=develop" in body
+    assert "base_branch=main" in body
+    assert "resume_pr_verification_failed" in caplog.text
+    # The fake proves the contract when called directly: verify_pr
+    # must never run on a base mismatch.
+    with pytest.raises(
+        AssertionError, match="must not run on a base mismatch",
+    ):
+        fake_verify_pr()
+
+
+def test_verify_resumed_pr_fails_fast_when_worktree_missing(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #90 (pre-verify): the worktree is derived from the
+    configured repo_dir, source repo, Issue number and run id (never
+    read from a comment); a missing directory means the scene cannot
+    be resumed: fail fast BEFORE any git/gh command and mark the Issue
+    ai-blocked with the PR and branch preserved."""
+    commands: list = []
+    captured, fake_run = make_resume_failure_fake(monkeypatch)
+
+    def counting(command, **kwargs):
+        commands.append(command)
+        return fake_run(command, **kwargs)
+
+    def fake_verify_pr(*args, **kwargs):
+        raise AssertionError("verify_pr must not run on a missing worktree")
+
+    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(runner, "run_command", counting)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    caplog.set_level("INFO")
+    # The derived worktree does not exist under tmp_path.
+    assert not expected_resume_worktree(tmp_path).is_dir()
+    with pytest.raises(RuntimeError, match="worktree missing"):
+        runner.verify_resumed_pr(
+            make_resume_scene(), make_resume_issue(),
+            make_resume_config(tmp_path), "owner/repo",
+        )
+    # No git command ran against the missing worktree (the only gh
+    # traffic is the blocked-scene reporting).
+    assert all(command[0] != "git" for command in commands)
+    assert all(
+        command[:2] == ["gh", "api"]
+        or command[-1] in ("comments", "labels")
+        for command in commands
+    )
+    assert captured["edits"] == [
+        ((9,), {"repo": "owner/repo", "add": "ai-blocked",
+                "remove": "ai-pr-opened"}),
+    ]
+    body = captured["comments"][0][1]["body"]
+    assert "Muyan Pilot failed:" in body
+    assert run_marker_body() in body
+    assert str(expected_resume_worktree(tmp_path)) in body
+    # The PR and branch are preserved in the failure comment (the
+    # pre-#82 resume_delivery fail-fast scene).
+    assert FAKE_PR_URL in body
+    assert FAKE_BRANCH in body
+    assert "resume_pr_verification_failed" in caplog.text
+    # The fake proves the contract when called directly: verify_pr
+    # must never run on a missing worktree.
+    with pytest.raises(
+        AssertionError, match="must not run on a missing worktree",
+    ):
+        fake_verify_pr()
+
+
+def test_verify_resumed_pr_reraises_when_failure_reporting_fails(
+    monkeypatch, caplog, tmp_path,
+):
+    """When the blocked transition itself cannot be reported, the
+    original verification error is still re-raised (the tick still
+    stops)."""
+
+    def fake_verify_pr(*args, **kwargs):
+        raise RuntimeError("the original verification failure")
+
+    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    make_resume_failure_fake(monkeypatch)
+
+    def broken_edit(*args, **kwargs):
+        raise RuntimeError("github edit failed")
+
+    monkeypatch.setattr(runner, "edit_issue", broken_edit)
+    expected_resume_worktree(tmp_path).mkdir(parents=True)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    with caplog.at_level("ERROR"), pytest.raises(
+        RuntimeError, match="the original verification failure",
+    ):
+        runner.verify_resumed_pr(
+            make_resume_scene(), make_resume_issue(),
+            make_resume_config(tmp_path), "owner/repo",
+        )
+    assert "failure reporting failed" in caplog.text
+
+
+def test_verify_resumed_pr_without_bound_run_id_still_blocks(
+    monkeypatch, tmp_path, caplog,
+):
+    """A resume verification failure with no bound run id (the caller
+    must bind the scene's run id first; this is the defensive branch)
+    still marks the Issue ai-blocked: the failure comment and the
+    blocked scene simply carry no run marker, and the milestone /
+    progress scene are skipped (no run id to bind them to)."""
+    captured, _ = make_resume_failure_fake(monkeypatch)
+
+    def fake_verify_pr(*args, **kwargs):
+        raise RuntimeError("the verification failure")
+
+    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    expected_resume_worktree(tmp_path).mkdir(parents=True)
+    # The autouse fixture resets the run id to None; do not re-bind it.
+    assert runner.current_run_id() is None
+    caplog.set_level("INFO")
+    with pytest.raises(RuntimeError, match="the verification failure"):
+        runner.verify_resumed_pr(
+            make_resume_scene(), make_resume_issue(),
+            make_resume_config(tmp_path), "owner/repo",
+        )
+    assert captured["edits"] == [
+        ((9,), {"repo": "owner/repo", "add": "ai-blocked",
+                "remove": "ai-pr-opened"}),
+    ]
+    body = captured["comments"][0][1]["body"]
+    assert "Muyan Pilot failed:" in body
+    # No run id: no marker, no milestone, no blocked progress scene —
+    # the only gh traffic is the label read of the leftover-label
+    # check (no progress API at all).
+    assert run_marker_body() not in body
+    assert captured["api"] == []
+    assert "resume_pr_verification_failed" in caplog.text
+
+
+def run_marker_body() -> str:
+    return f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->"
