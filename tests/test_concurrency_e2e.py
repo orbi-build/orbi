@@ -25,6 +25,7 @@ executable records every invocation. These prove the acceptance criteria:
 """
 import json
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -355,6 +356,10 @@ def clone(tmp_path: Path) -> Path:
     )
     git(clone, "config", "user.email", "pilot@test.local")
     git(clone, "config", "user.name", "Pilot")
+    # The deployment checkout carries the unit templates (Issue #103):
+    # the pre-start drift check compares them against the installed
+    # units, so a synthetic clone without them could never pass it.
+    shutil.copytree(REPO_ROOT / "systemd", clone / "systemd")
     (clone / "a.txt").write_text("a", encoding="utf-8")
     git(clone, "add", ".")
     git(clone, "commit", "-m", "first")
@@ -456,14 +461,30 @@ def write_config(
 _RUNNING: list[subprocess.Popen] = []
 
 
+def install_deployed_units(unit_dir: Path) -> None:
+    """Simulate the deployed machine: the repo templates installed as
+    the user units (the idempotent install the README documents)."""
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("muyan-pilot.service", "muyan-pilot.timer"):
+        shutil.copyfile(REPO_ROOT / "systemd" / name, unit_dir / name)
+
+
 def start_runner(
     config_path: Path, bin_dir: Path,
     state_path: Path, pi_log: Path,
+    unit_dir: Path | None = None,
 ) -> subprocess.Popen:
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
     env["MUYAN_FAKE_GH_STATE"] = str(state_path)
     env["MUYAN_FAKE_PI_LOG"] = str(pi_log)
+    # The pre-start drift check (Issue #103) reads the installed units
+    # from here: a clean deployment by default (the templates as
+    # installed), or an explicit dir for the drift scenarios.
+    if unit_dir is None:
+        unit_dir = config_path.parent / "unit-dir"
+        install_deployed_units(unit_dir)
+    env["MUYAN_PILOT_UNIT_DIR"] = str(unit_dir)
     process = subprocess.Popen(
         ["/usr/bin/python3", str(RUNNER), "--config", str(config_path)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
@@ -1095,3 +1116,59 @@ def test_live_pr_opened_delivery_is_not_resumed_by_second_runner(
     # review — the review fixes in-session, Issue #82).
     assert 3 <= len(pi_invocations(pi_log)) <= 4
     assert slots_held(clone, 2) == [(1, None), (2, None)]
+
+
+def test_unit_drift_blocks_the_start_without_claiming(clone, tmp_path):
+    """Issue #103: a drifted installed unit fails the start BEFORE any
+    claim: non-zero exit, the structured `unit_drift` line in the log
+    (repo path, installed path, hashes, fix command), no slot, no
+    label change, no Pi — and once the units are synced with the
+    idempotent install the same start passes the preflight and
+    claims normally. A currently RUNNING task is never interrupted;
+    only the next start is blocked."""
+    bin_dir = install_fakes(tmp_path)
+    state = tmp_path / "gh-state.json"
+    write_state(state, {"7": ["ai-ready"]})
+    pi_log = tmp_path / "pi.log"
+    config = write_config(clone, tmp_path, 1)
+
+    # A drifted deployment: the installed timer carries one extra line.
+    unit_dir = tmp_path / "drifted-units"
+    install_deployed_units(unit_dir)
+    with (unit_dir / "muyan-pilot.timer").open(
+        "a", encoding="utf-8",
+    ) as handle:
+        handle.write("# drift\n")
+
+    runner_proc = start_runner(
+        config, bin_dir, state, pi_log, unit_dir=unit_dir,
+    )
+    out, err = runner_proc.communicate(timeout=60)
+    assert runner_proc.returncode != 0, err
+    assert "unit_drift unit=muyan-pilot.timer" in err
+    assert f"repo={clone / 'systemd' / 'muyan-pilot.timer'}" in err
+    assert f"installed={unit_dir / 'muyan-pilot.timer'}" in err
+    assert "repo_sha256=" in err
+    assert "installed_sha256=" in err
+    assert "fix=python3 muyan_pilot.py install-units" in err
+    # Nothing was claimed: no labels, no comments, no Pi, no slot.
+    snap = read_state(state)
+    assert snap["issues"]["7"]["labels"] == ["ai-ready"]
+    assert snap["comments"] == []
+    assert pi_invocations(pi_log) == []
+    assert slot_files(clone) == []
+
+    # After syncing the units (the idempotent install), the same start
+    # passes the preflight and claims normally.
+    install_deployed_units(unit_dir)
+    runner_proc = start_runner(
+        config, bin_dir, state, pi_log, unit_dir=unit_dir,
+    )
+    wait_for(
+        lambda: "ai-in-progress" in read_state(state)["issues"]["7"]["labels"],
+        what="runner to claim after the units are synced",
+    )
+    runner_proc.kill()
+    out, err = runner_proc.communicate(timeout=30)
+    assert "unit_drift clean" in err
+    assert "ai-in-progress" in read_state(state)["issues"]["7"]["labels"]

@@ -24,6 +24,8 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
+import systemd_deploy
+
 from bootstrap_runner import (
     RunIdFilter,
     freeze_base,
@@ -312,6 +314,95 @@ def slot_lines(state_dir: Path, capacity: int) -> list[str]:
     return lines
 
 
+# Deployment consistency (Issue #103): the repo templates
+# (systemd/muyan-pilot.service + .timer) are the single source of
+# truth. `install-units` deploys them idempotently (it never
+# starts/stops/restarts the service — a running Runner keeps running,
+# the new config takes effect at the next service start); `doctor`
+# is the read-only report (repo commit, unit drift, timer/service
+# state, slots, Pi session, current Issue, recent journal).
+JOURNAL_LINES = 20
+
+
+def install_units_command(config: dict, installed_dir: Path | None) -> str:
+    """Run the idempotent unit install and return the deployment report.
+
+    The report carries the deployed commit (the deployment checkout's
+    HEAD — the commit the installed templates came from) and the
+    installed sha256 of each unit (Issue #103).
+    """
+    result = systemd_deploy.install_units(
+        config["repo_dir"], installed_dir, run_command=run_command,
+    )
+    lines = [
+        (
+            f"deployed commit={result['commit']} "
+            f"installed_dir={result['installed_dir']}"
+        ),
+    ]
+    for name in systemd_deploy.UNIT_NAMES:
+        entry = result["units"][name]
+        lines.append(f"unit={name} sha256={entry['sha256']}")
+    return "\n".join(lines)
+
+
+def doctor_report(config: dict, installed_dir: Path | None) -> str:
+    """Read-only deployment and health report (Issue #103).
+
+    Checks: repo commit, unit drift (both units; the same comparison
+    the pre-start check uses), timer/service active state, Runner
+    slots, the live Pi session, the current Issue per source repo and
+    the recent journal activity. Read-only: no labels, no units, no
+    git mutation. A failed command fails fast (run_command).
+    """
+    repo_dir = config["repo_dir"]
+    if installed_dir is None:
+        installed_dir = systemd_deploy.installed_unit_dir()
+    lines = [f"repo: {repo_dir}"]
+    lines.append(
+        f"commit: {run_command(['git', 'rev-parse', 'HEAD'], cwd=repo_dir)}"
+    )
+    status = systemd_deploy.unit_status(repo_dir, installed_dir)
+    drifted = [entry for entry in status if entry["drifted"]]
+    if drifted:
+        lines.append("unit_drift: DRIFT")
+        for entry in drifted:
+            lines.append(
+                f"  {entry['unit']}: repo={entry['repo_path']} "
+                f"installed={entry['installed_path']} "
+                f"repo_sha256={entry['repo_sha256'] or '-'} "
+                f"installed_sha256={entry['installed_sha256'] or '-'}"
+            )
+        lines.append(f"  fix: {systemd_deploy.FIX_COMMAND}")
+    else:
+        lines.append("unit_drift: clean")
+        for entry in status:
+            lines.append(
+                f"  {entry['unit']}: sha256={entry['installed_sha256']}"
+            )
+    for unit in (systemd_deploy.TIMER_UNIT, systemd_deploy.SERVICE_UNIT):
+        state = run_command([
+            "systemctl", "--user", "show", "-p", "ActiveState",
+            "--value", unit,
+        ])
+        lines.append(f"{unit}: {state}")
+    lines.extend(slot_lines(config["slot_dir"], config["max_concurrency"]))
+    session = find_session_file(repo_dir)
+    lines.append(f"pi: {session if session else 'none'}")
+    for repo in config["source_repos"]:
+        lines.append(f"source: {repo}")
+        current = current_issue(repo)
+        lines.append(f"  current: {format_issue(current) if current else '-'}")
+    journal = run_command([
+        "journalctl", "--user", "-u", systemd_deploy.SERVICE_UNIT,
+        "-n", str(JOURNAL_LINES), "--no-pager",
+    ])
+    lines.append("journal:")
+    for line in journal.splitlines():
+        lines.append(f"  {line}")
+    return "\n".join(lines)
+
+
 def status_report(config: dict) -> str:
     lines = [
         f"capacity: {config['max_concurrency']}",
@@ -370,6 +461,24 @@ def main(argv: list[str] | None = None) -> int:
         "--pretty", action="store_true",
         help="print one-line summaries instead of raw JSONL",
     )
+    install_parser = subparsers.add_parser(
+        "install-units", parents=[common],
+        help="idempotently install the repo's systemd units (never "
+             "restarts a running Runner)",
+    )
+    install_parser.add_argument(
+        "--installed-dir", type=Path, default=None,
+        help="user unit directory (default: the standard user dir)",
+    )
+    doctor_parser = subparsers.add_parser(
+        "doctor", parents=[common],
+        help="read-only report: repo commit, unit drift, timer/service, "
+             "slots, Pi, current Issue, recent journal",
+    )
+    doctor_parser.add_argument(
+        "--installed-dir", type=Path, default=None,
+        help="user unit directory to check (default: the standard dir)",
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format=log_format())
 
@@ -421,6 +530,10 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(line)
             sys.stdout.flush()
+    elif args.command == "install-units":
+        print(install_units_command(config, args.installed_dir))
+    elif args.command == "doctor":
+        print(doctor_report(config, args.installed_dir))
     else:
         print(status_report(config))
     return 0

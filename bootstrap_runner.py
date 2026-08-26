@@ -47,6 +47,7 @@ from pi_activity import (
     sanitize,
 )
 from progress import ProgressPublisher, format_elapsed, progress_body
+from systemd_deploy import UnitDriftError, check_unit_drift
 
 
 LOGGER = logging.getLogger("muyan_pilot.bootstrap")
@@ -2803,6 +2804,15 @@ def main(argv: list[str] | None = None) -> int:
 
     config = load_config(args.config)
     validate_config(config)
+    # Deployment consistency (Issue #103): BEFORE any slot or claim the
+    # installed systemd units must match the repo templates (the
+    # templates the ExecStartPre-synced checkout just loaded). Drift
+    # logs a structured `unit_drift` line per unit and fails fast:
+    # this start takes no slot, claims no Issue and changes no label
+    # until the units are synced with the idempotent install command
+    # (`muyan_pilot.py install-units`). A currently RUNNING task is
+    # never interrupted — only the next start is blocked.
+    check_unit_drift(config["repo_dir"])
     # Concurrency cap (Issue #39): take one slot BEFORE claiming anything.
     # The slot is held for the whole delivery lifecycle (implement ->
     # review -> fix -> merge) and released only after the delivery is

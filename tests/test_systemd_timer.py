@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TIMER_FILE = REPO_ROOT / "systemd" / "muyan-pilot.timer"
 SERVICE_FILE = REPO_ROOT / "systemd" / "muyan-pilot.service"
 README_FILE = REPO_ROOT / "README.md"
+AGENTS_FILE = REPO_ROOT / "AGENTS.md"
 
 
 def parse_unit(path: Path) -> dict[str, dict[str, list[str]]]:
@@ -147,3 +148,91 @@ def test_parse_unit_rejects_key_before_any_section(tmp_path):
     bad.write_text("Description=orphan\n", encoding="utf-8")
     with pytest.raises(ValueError, match="unparseable unit line"):
         parse_unit(bad)
+
+
+# --- deployment consistency contract (Issue #103) ---------------------------
+
+
+def test_readme_documents_the_idempotent_install_command():
+    """Issue #103: the README must document the idempotent install
+    command (repo templates -> user systemd dir, daemon-reload,
+    enable timer, deployed commit/hash output) and the guarantee that
+    it never kills or restarts a running Runner (the new config takes
+    effect at the next service start)."""
+    readme = README_FILE.read_text(encoding="utf-8")
+    assert "muyan_pilot.py install-units" in readme
+    assert "daemon-reload" in readme
+    # The manual cp is no longer the documented install path.
+    assert "cp systemd/muyan-pilot.service" not in readme
+    # Deployed commit/hash output.
+    assert "commit" in readme
+    assert "sha256" in readme
+    # The no-kill guarantee.
+    assert "不会" in readme
+    assert "重启" in readme
+
+
+def test_readme_documents_the_unit_drift_fail_fast():
+    """Issue #103: the README must document the pre-start drift check:
+    both units are compared against the repo templates, drift logs a
+    structured `unit_drift` line (repo path, installed path, hashes,
+    fix command) and fails fast without claiming any Issue until the
+    units are synced."""
+    readme = README_FILE.read_text(encoding="utf-8")
+    assert "unit_drift" in readme
+    # Both units are covered.
+    assert "muyan-pilot.service" in readme
+    assert "muyan-pilot.timer" in readme
+    # The structured line's fields.
+    assert "repo_sha256=" in readme
+    assert "installed_sha256=" in readme
+    assert "fix=python3 muyan_pilot.py install-units" in readme
+    # No claim while drifted.
+    assert "不领取" in readme
+    # The repo templates are the single source of truth.
+    assert "唯一事实源" in readme
+
+
+def test_readme_documents_the_doctor_command():
+    """Issue #103: the README must document the read-only `doctor`
+    report: repo commit, unit drift, timer/service active state,
+    current Issue, Runner/Pi and recent journal activity."""
+    readme = README_FILE.read_text(encoding="utf-8")
+    assert "muyan_pilot.py doctor" in readme
+    assert "journal" in readme
+    # doctor is read-only.
+    assert "只读" in readme
+
+
+def test_readme_documents_the_full_deployment_sequence():
+    """Issue #103: the README must show the complete sequence from code
+    merge to the next Runner start: merge -> install units ->
+    daemon-reload -> timer next trigger -> ExecStartPre syncs
+    origin/main -> Runner starts one Issue."""
+    readme = README_FILE.read_text(encoding="utf-8")
+    sequence = readme.split("完整部署时序", 1)[-1]
+    assert "git merge 到 main" in sequence
+    assert "install units" in sequence
+    assert "daemon-reload" in sequence
+    assert "timer 下一次触发" in sequence
+    assert "ExecStartPre 同步 origin/main" in sequence
+    assert "Runner 启动并执行一个 Issue" in sequence
+
+
+def test_agents_md_documents_the_deployment_consistency_contract():
+    """Issue #103: AGENTS.md must carry the same contract: repo
+    templates as single source of truth, the idempotent install that
+    never kills/restarts a running Runner, the pre-start drift check
+    (structured `unit_drift`, fail fast, no claim), and the read-only
+    doctor."""
+    text = AGENTS_FILE.read_text(encoding="utf-8")
+    assert "single source of truth" in text
+    assert "install-units" in text
+    assert "unit_drift" in text
+    assert "daemon-reload" in text
+    assert "doctor" in text
+    # The install never touches a running Runner.
+    assert "never" in text
+    assert "restart" in text
+    # Drift blocks the start before any claim.
+    assert "no claim" in text or "no slot" in text

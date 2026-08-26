@@ -3824,6 +3824,131 @@ def test_main_reacquires_slot_after_previous_release(monkeypatch, tmp_path):
     assert (slot_dir / "slot-1").read_text(encoding="utf-8").strip() == str(os.getpid())
 
 
+# --- deployment consistency preflight (Issue #103) --------------------------
+
+
+def _drift_world(tmp_path, drift: bool) -> tuple[Path, Path]:
+    """A deployment checkout plus an installed unit dir.
+
+    With `drift` the installed timer carries one extra line; without
+    it both units match the repo templates.
+    """
+    import shutil
+
+    repo = tmp_path / "repo"
+    (repo / "systemd").mkdir(parents=True)
+    for name, body in (
+        ("muyan-pilot.service", "[Service]\nExecStart=/usr/bin/python3 bootstrap_runner.py\n"),
+        ("muyan-pilot.timer", "[Timer]\nOnCalendar=*-*-* *:00/15\n"),
+    ):
+        (repo / "systemd" / name).write_text(body, encoding="utf-8")
+    installed = tmp_path / "units"
+    installed.mkdir()
+    for name in ("muyan-pilot.service", "muyan-pilot.timer"):
+        target = installed / name
+        shutil.copyfile(repo / "systemd" / name, target)
+        if drift and name == "muyan-pilot.timer":
+            with target.open("a", encoding="utf-8") as handle:
+                handle.write("# drift\n")
+    return repo, installed
+
+
+def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
+                                                  caplog):
+    """Issue #103: a drifted installed unit fails the start BEFORE any
+    slot or claim: the structured `unit_drift` line (repo path,
+    installed path, hashes, fix command) is logged, the tick raises
+    (non-zero exit), no slot is taken and nothing is claimed — while
+    a currently RUNNING task is never interrupted (only the next
+    start is blocked)."""
+    import systemd_deploy
+
+    repo, installed = _drift_world(tmp_path, drift=True)
+    monkeypatch.setenv("MUYAN_PILOT_UNIT_DIR", str(installed))
+    # The real preflight (overrides the conftest default no-op).
+    monkeypatch.setattr(
+        runner, "check_unit_drift", systemd_deploy.check_unit_drift,
+    )
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text(
+        f'source_repos = ["owner/repo"]\nrepo_dir = "{repo}"\n',
+        encoding="utf-8",
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("pick_next_delivery must not run on unit drift")
+
+    monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
+    # The guard itself must fail loudly if it is ever reached.
+    with pytest.raises(
+        AssertionError, match="must not run on unit drift",
+    ):
+        fail_if_called()
+    with caplog.at_level("ERROR"):
+        with pytest.raises(runner.UnitDriftError, match="unit_drift"):
+            runner.main(["--config", str(config)])
+    # The structured line carries what the Issue requires.
+    assert "unit_drift unit=muyan-pilot.timer" in caplog.text
+    assert f"repo={repo / 'systemd' / 'muyan-pilot.timer'}" in caplog.text
+    assert f"installed={installed / 'muyan-pilot.timer'}" in caplog.text
+    assert "repo_sha256=" in caplog.text
+    assert "installed_sha256=" in caplog.text
+    assert "fix=python3 muyan_pilot.py install-units" in caplog.text
+    # No slot was taken and nothing was claimed.
+    assert not (repo / ".muyan-pilot" / "slots").exists()
+
+
+def test_main_unit_drift_clean_proceeds_to_claim(monkeypatch, tmp_path,
+                                                 caplog):
+    """Issue #103: matching units log `unit_drift clean` and the tick
+    proceeds to the normal claim flow (slot taken, queue scanned)."""
+    import systemd_deploy
+
+    repo, installed = _drift_world(tmp_path, drift=False)
+    monkeypatch.setenv("MUYAN_PILOT_UNIT_DIR", str(installed))
+    monkeypatch.setattr(
+        runner, "check_unit_drift", systemd_deploy.check_unit_drift,
+    )
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text(
+        f'source_repos = ["owner/repo"]\nrepo_dir = "{repo}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: None,
+    )
+    with caplog.at_level("INFO"):
+        assert runner.main(["--config", str(config)]) == 0
+    assert "unit_drift clean" in caplog.text
+    # The slot was taken AFTER the preflight passed.
+    assert (repo / ".muyan-pilot" / "slots" / "slot-1").exists()
+
+
+def test_main_preflight_receives_the_configured_repo_dir(
+    monkeypatch, tmp_path,
+):
+    """Issue #103: the preflight checks the configured repo_dir (the
+    ExecStartPre-synced deployment checkout), never a guess."""
+    seen: list[Path] = []
+
+    def fake_check(repo_dir, *args, **kwargs):
+        seen.append(Path(repo_dir))
+
+    monkeypatch.setattr(runner, "check_unit_drift", fake_check)
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: None,
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    assert seen == [tmp_path]
+
+
 # --- delivery lifecycle: slot held until merge or terminal failure ----------
 
 PR_URL = "https://github.com/owner/repo/pull/46"

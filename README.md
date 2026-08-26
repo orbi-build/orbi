@@ -17,14 +17,13 @@
 正常运行使用 systemd user timer，全天 24 小时运行，每 15 分钟自动执行一次（触发点覆盖 00:00–23:45）：
 
 ```bash
-mkdir -p ~/.config/systemd/user
-cp systemd/muyan-pilot.service systemd/muyan-pilot.timer ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now muyan-pilot.timer
+# 幂等安装用户级 service/timer（仓库模板复制到用户 systemd 目录、
+# daemon-reload、enable timer），并输出部署 commit/hash：
+python3 muyan_pilot.py install-units --config muyan-pilot.toml
 systemctl --user list-timers muyan-pilot.timer
 ```
 
-手工命令只用于首次验证或立即执行一个 tick，不是日常调度方式。
+`install-units` 是幂等的：重复执行只会把仓库模板重新复制到位并 `daemon-reload`，**不会**启动、停止或重启正在运行的 Runner（新配置从下一次 service 启动生效）。手工命令只用于首次验证或立即执行一个 tick，不是日常调度方式。
 
 ## 代码更新（Issue #52）
 
@@ -35,6 +34,32 @@ git fetch origin main && git merge --ff-only origin/main
 ```
 
 本地 main 被 fast-forward 到最新 `origin/main` 后，Runner 才用新代码启动。当前正在运行的长任务不会被热更新、不会被杀、也不会启动第二个 Runner（service active 时 systemd 忽略 timer 的 start 请求；下一次 service 真正启动时生效）。main 工作区不干净、fetch 失败或无法 fast-forward 时，preflight 命令失败，service 不启动，原因写入 systemd journal（fail fast）。不新增 refresh service、worker、dispatcher 或常驻进程；15 分钟 timer 配置保持不变。
+
+## 部署一致性（Issue #103）
+
+仓库中的 `systemd/muyan-pilot.service` 和 `systemd/muyan-pilot.timer` 是已安装 unit 的**唯一事实源**：代码和实际运行配置必须一致，漂移必须能被明确发现。
+
+**幂等安装**：`python3 muyan_pilot.py install-units` 把两个模板复制到用户 systemd 目录（`~/.config/systemd/user/`，可用 `--installed-dir` 覆盖）、执行 `systemctl --user daemon-reload`、`systemctl --user enable --now muyan-pilot.timer`，并输出部署 commit（部署 checkout 的 HEAD，即模板来源）和每个 unit 的 sha256。安装**不会**启动、停止或重启 service：当前运行中的 Runner 不被中断，新配置从下一次 service 启动生效。
+
+**启动前漂移检查**：Runner 每次启动时（`ExecStartPre` 同步完 checkout 之后、领取任何 Issue 之前）对比已安装 unit 与仓库模板（service 和 timer 都覆盖）。一致时记录 `unit_drift clean`；发现漂移时记录结构化日志并 fail fast（非零退出，不取 slot、不领取 Issue、不改任何标签），直到 unit 同步：
+
+```text
+unit_drift unit=muyan-pilot.timer repo=<repo path> installed=<installed path> repo_sha256=... installed_sha256=... fix=python3 muyan_pilot.py install-units
+```
+
+**只读诊断**：`python3 muyan_pilot.py doctor`（可用 `--installed-dir` 指定检查目录）报告 repo commit、unit drift（clean 或具体漂移 + 修复命令）、timer/service active 状态、Runner slot、Pi session、每个 source repo 的当前 Issue 和最近 journal 活动。只读：不改标签、不改 unit、不做 git 变更。
+
+**完整部署时序**（从代码合并到下一次 Runner 启动）：
+
+```text
+git merge 到 main
+  -> install units（仓库模板复制到用户 systemd 目录，幂等，不碰运行中的 Runner）
+  -> daemon-reload
+  -> timer 下一次触发
+  -> ExecStartPre 同步 origin/main（fetch + fast-forward）
+  -> 启动前 unit 漂移检查（一致才继续）
+  -> Runner 启动并执行一个 Issue
+```
 
 ## 远程 CI（GitHub Actions）
 
@@ -68,6 +93,15 @@ python3 muyan_pilot.py session --follow --config muyan-pilot.toml
 ```
 
 `session` 是排查附件（日常仍看 journal / GitHub），不是日常入口：没有 session 文件时 fail fast（退出码非零，说明没有正在跑的 Pi），不猜路径；`--pretty` 把 JSONL 打一行摘要（timestamp / role / tool|text|thinking 截断），默认仍是原始 JSONL。不开 tmux、不新包装脚本、不新增 systemd unit（Issue #74）。
+
+```bash
+# 幂等安装 systemd units（见「部署一致性」）：输出部署 commit 和每个 unit 的 sha256
+python3 muyan_pilot.py install-units --config muyan-pilot.toml
+
+# 只读部署/健康报告：repo commit、unit drift、timer/service active、
+# Runner slot、Pi session、当前 Issue、最近 journal 活动
+python3 muyan_pilot.py doctor --config muyan-pilot.toml
+```
 
 ## GitHub Issue 标签（外部状态）
 
