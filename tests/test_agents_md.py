@@ -92,3 +92,18 @@ def test_agents_md_keeps_every_required_contract_item():
         name for name, needle in REQUIRED_ITEMS if needle.lower() not in text
     ]
     assert not missing, f"AGENTS.md is missing contract items: {missing}"
+
+
+def test_agents_md_does_not_require_implementer_review_fix_loop():
+    """Issue #78: the implementer only does plan -> TDD -> tests -> push
+    one PR; the independent review runs AFTER the PR is opened (the
+    Runner's review session). The implement-phase wording must not demand
+    a complete review — the old base-freshness bullet ("rerun the full
+    tests and the complete review-fix loop, then push the task branch")
+    made the local Pi self-review for hours (#18/#34)."""
+    text = CONTRACT.read_text(encoding="utf-8").lower()
+    assert "complete review" not in text
+    # The implementer session is pinned to the delivery-only flow, and the
+    # review is explicitly positioned after the PR exists.
+    assert "plan, tdd, tests, push one pr" in text
+    assert "after the pr exists" in text
