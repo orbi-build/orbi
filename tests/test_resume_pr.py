@@ -1396,6 +1396,9 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
         runner, "process_issue",
         lambda *args, **kwargs: processed.append(args) or FAKE_PR_URL,
     )
+    # The dispatch test must not run the real delivery-wait loop (it would
+    # call `gh` against the real PR number of FAKE_PR_URL).
+    monkeypatch.setattr(runner, "wait_for_delivery", lambda *a, **k: None)
     assert runner.main(["--config", str(config)]) == 0
     # The resumable delivery is resumed, not re-claimed as a new task.
     assert len(resumed) == 1
@@ -1422,6 +1425,9 @@ def test_main_still_claims_new_issue_when_no_resumable(monkeypatch, tmp_path):
         runner, "process_issue",
         lambda *args, **kwargs: processed.append(args) or FAKE_PR_URL,
     )
+    # The dispatch test must not run the real delivery-wait loop (it would
+    # call `gh` against the real PR number of FAKE_PR_URL).
+    monkeypatch.setattr(runner, "wait_for_delivery", lambda *a, **k: None)
     assert runner.main(["--config", str(config)]) == 0
     assert len(processed) == 1
     assert processed[0][0] is issue
