@@ -730,13 +730,18 @@ def _decode_chunks(chunks: list[bytes]) -> str:
     return b"".join(chunks).decode("utf-8", "replace")
 
 
-def _log_activity(activity: dict, *, run_id: str, issue_ref: str,
+def _log_activity(activity: dict, *, issue_ref: str,
                   role: str, state: str | None = None) -> None:
-    """Log one short activity line with the changed fields only."""
+    """Log one short activity line with the changed fields only.
+
+    No `run=` field (Issue #57): the `[run_id]` prefix added by
+    `RunIdFilter` (Issue #41) is the single run-id carrier on the
+    high-frequency lines, so the id appears exactly once per line.
+    """
     LOGGER.info(
-        "activity run=%s issue=%s role=%s phase=%s action=%s result=%s "
+        "activity issue=%s role=%s phase=%s action=%s result=%s "
         "state=%s idle=%s",
-        run_id, issue_ref, role, activity["phase"],
+        issue_ref, role, activity["phase"],
         quote_value(activity["action"] or "-"),
         activity["result"] or "-",
         state or "-",
@@ -744,19 +749,20 @@ def _log_activity(activity: dict, *, run_id: str, issue_ref: str,
     )
 
 
-def _log_heartbeat(activity: dict, *, run_id: str, issue_ref: str,
+def _log_heartbeat(activity: dict, *, issue_ref: str,
                    role: str, elapsed: float,
                    state: str | None = None) -> None:
     """Log one heartbeat line when nothing changed since the last poll.
 
     `state` carries the model_wait flag while the model is expected to
     reply next, so a slow active model is not reported as idle (Issue
-    #40).
+    #40). No `run=` field (Issue #57): the `[run_id]` prefix is the
+    single run-id carrier on the high-frequency lines.
     """
     LOGGER.info(
-        "heartbeat run=%s issue=%s role=%s phase=%s state=%s elapsed=%s "
+        "heartbeat issue=%s role=%s phase=%s state=%s elapsed=%s "
         "idle=%s",
-        run_id, issue_ref, role, activity["phase"], state or "-",
+        issue_ref, role, activity["phase"], state or "-",
         format_duration(elapsed), format_duration(activity["stale_seconds"]),
     )
 
@@ -881,25 +887,27 @@ def stream_pi(
                 # Only changed fields are repeated; an unchanged poll is a
                 # heartbeat (Issue #40).
                 _log_activity(
-                    activity, run_id=run_id, issue_ref=issue_ref,
+                    activity, issue_ref=issue_ref,
                     role=role,
                     state="model_wait" if activity["model_wait"] else None,
                 )
                 last_visible = visible
             else:
                 _log_heartbeat(
-                    activity, run_id=run_id, issue_ref=issue_ref,
+                    activity, issue_ref=issue_ref,
                     role=role, elapsed=time.monotonic() - start,
                     state="model_wait" if activity["model_wait"] else None,
                 )
             if activity["model_wait"] != last_model_wait:
                 # One transition line per state change: entering model_wait
                 # (the model is expected to reply next) or leaving it
-                # (the next session event arrived: resumed).
+                # (the next session event arrived: resumed). No `run=`
+                # field: the `[run_id]` prefix carries the run id
+                # (Issue #57).
                 LOGGER.info(
-                    "%s run=%s issue=%s role=%s phase=%s state=%s",
+                    "%s issue=%s role=%s phase=%s state=%s",
                     "model_wait" if activity["model_wait"] else "resumed",
-                    run_id, issue_ref, role,
+                    issue_ref, role,
                     activity["phase"],
                     "model_wait" if activity["model_wait"] else "resumed",
                 )
@@ -911,9 +919,11 @@ def stream_pi(
             # logs `pi_resumed`. A slow active model (model_wait) never
             # warns (Issue #40).
             if idle_warned and activity["changed"]:
+                # No `run=` field: the `[run_id]` prefix carries the run
+                # id (Issue #57).
                 LOGGER.info(
-                    "pi_resumed run=%s issue=%s role=%s phase=%s",
-                    run_id, issue_ref, role, activity["phase"],
+                    "pi_resumed issue=%s role=%s phase=%s",
+                    issue_ref, role, activity["phase"],
                 )
                 idle_warned = False
             elif (
@@ -921,10 +931,12 @@ def stream_pi(
                 and not idle_warned
                 and activity["stale_seconds"] >= idle_warn_seconds
             ):
+                # No `run=` field: the `[run_id]` prefix carries the run
+                # id (Issue #57).
                 LOGGER.warning(
-                    "pi_idle run=%s issue=%s role=%s phase=%s "
+                    "pi_idle issue=%s role=%s phase=%s "
                     "stale_seconds=%s",
-                    run_id, issue_ref, role, activity["phase"],
+                    issue_ref, role, activity["phase"],
                     format_duration(activity["stale_seconds"]),
                 )
                 idle_warned = True

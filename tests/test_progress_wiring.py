@@ -667,7 +667,8 @@ def make_failing_gh(monkeypatch, is_failing, comments=None):
 def _progress_patch_of(command) -> bool:
     return (
         command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/18/comments/77"
+        # GitHub update route (Issue #58): no issue number.
+        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
         and "--method" in command
         and "PATCH" in command
     )
@@ -1015,7 +1016,8 @@ def patch_resume_deps_live(monkeypatch, tmp_path):
 def _fix_pushed_patch_of(command) -> bool:
     return (
         command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/18/comments/77"
+        # GitHub update route (Issue #58): no issue number.
+        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
         and "--method" in command
         and "PATCH" in command
     )
