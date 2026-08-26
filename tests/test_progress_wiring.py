@@ -1,10 +1,10 @@
 """Tests for the automatic GitHub progress comment wiring (Issue #18).
 
-`process_issue`, `resume_delivery` and `review_and_merge_if_clean` must
-keep exactly one live progress comment per run (hidden run marker),
-PATCH it live while any Pi session runs and at most every 30 seconds,
-post short milestone comments for the key events, and end with either
-the final delivery summary or the blocked scene — in the same comment.
+`process_issue` and `review_and_merge_if_clean` must keep exactly one
+live progress comment per run (hidden run marker), PATCH it live while
+any Pi session runs and at most every 30 seconds, post short milestone
+comments for the key events, and end with either the final delivery
+summary or the blocked scene — in the same comment.
 """
 import json
 import subprocess
@@ -637,8 +637,9 @@ def test_process_issue_never_posts_fix_pushed_on_a_fresh_claim(
     # The implementer always commits the delivery on top of the frozen
     # base, so the head always advanced: a fresh claim must not turn
     # that into a `fix pushed` milestone (the PR opened milestone
-    # announces the delivery; `fix pushed` is the fixer's milestone in
-    # resume_delivery).
+    # announces the delivery; Issue #82 removed the fixer and its
+    # `fix pushed` milestone — findings are fixed by the review
+    # session, which records its own round comments).
     calls, posted = make_fake_gh(monkeypatch)
     patch_process_deps(monkeypatch, tmp_path)
     monkeypatch.setattr(runner, "delivery_head_advanced", lambda *args: True)
@@ -880,252 +881,6 @@ def test_process_issue_publishing_failure_is_never_blocked_scene(
     )
 
 
-# --- resume_delivery wiring (the fixer stays observable) ----------------------
-
-
-def scene_for_resume():
-    return {
-        "run_id": "a1b2c3d4",
-        "base_branch": "main",
-        "base_sha": "abc123def456",
-        "pr_url": "https://github.com/xqliu/muyan-pilot/pull/40",
-    }
-
-
-def patch_resume_deps(monkeypatch, tmp_path, *, run_pi_side_effect=None):
-    worktree = runner.worktree_path(
-        tmp_path, "xqliu/muyan-pilot", 18, "a1b2c3d4",
-    )
-    worktree.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(runner, "verify_pr",
-                        lambda *args, **kwargs:
-                        "https://github.com/xqliu/muyan-pilot/pull/40")
-    monkeypatch.setattr(runner, "merge_latest_base", lambda *args: True)
-    monkeypatch.setattr(runner, "edit_issue", Mock())
-    monkeypatch.setattr(runner, "comment_issue", Mock())
-    monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: None)
-    if run_pi_side_effect is not None:
-        monkeypatch.setattr(runner, "run_pi",
-                            Mock(side_effect=run_pi_side_effect))
-    else:
-        monkeypatch.setattr(runner, "run_pi", Mock(return_value="done"))
-
-
-def test_resume_delivery_reuses_existing_progress_comment(monkeypatch, tmp_path):
-    """The fixer keeps updating the SAME progress comment created by the
-    implementer: ensure finds it by run marker + progress header (no
-    second progress comment)."""
-    existing = {
-        "id": 77,
-        "body": (
-            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
-            "**Muyan Pilot progress**\n\nstale implementer state"
-        ),
-    }
-    calls, posted = make_fake_gh(monkeypatch, comments=[existing])
-    patch_resume_deps(monkeypatch, tmp_path)
-    runner.resume_delivery(
-        make_issue(), scene_for_resume(), make_config(tmp_path),
-        "xqliu/muyan-pilot",
-    )
-    progress_posts = [
-        body for body in posted
-        if "**Muyan Pilot progress**" in body
-    ]
-    assert progress_posts == [], (
-        f"resume must not create a second progress comment: {posted}"
-    )
-    patches = [
-        command for command in calls
-        if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
-        and "PATCH" in command
-    ]
-    assert patches, "existing progress comment was not updated"
-    # The fixer state is visible in the live comment (role=fix, the PR).
-    first_body = patches[0][patches[0].index("--field") + 1][len("body="):]
-    assert "- role: fix" in first_body
-    assert "- PR: https://github.com/xqliu/muyan-pilot/pull/40" in first_body
-
-
-def test_resume_delivery_posts_fix_pushed_milestone_and_finishes(
-    monkeypatch, tmp_path,
-):
-    calls, posted = make_fake_gh(monkeypatch)
-    patch_resume_deps(monkeypatch, tmp_path)
-    runner.resume_delivery(
-        make_issue(), scene_for_resume(), make_config(tmp_path),
-        "xqliu/muyan-pilot",
-    )
-    milestones = [
-        body for body in posted
-        if any(line.startswith(progress.MILESTONE_PREFIX)
-               for line in body.splitlines())
-    ]
-    assert any("Muyan Pilot: fix pushed" in body for body in milestones)
-    final_patches = [
-        command for command in calls
-        if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
-        and "PATCH" in command
-    ]
-    assert final_patches
-    last_body = final_patches[-1][
-        final_patches[-1].index("--field") + 1
-    ][len("body="):]
-    assert "Muyan Pilot fix pushed" in last_body
-    assert "awaiting review again" in last_body
-
-
-def test_resume_delivery_failure_updates_progress_comment_with_blocked_scene(
-    monkeypatch, tmp_path,
-):
-    calls, posted = make_fake_gh(monkeypatch)
-    patch_resume_deps(
-        monkeypatch, tmp_path,
-        run_pi_side_effect=subprocess.CalledProcessError(
-            3, ["pi"], stderr="fixer exploded",
-        ),
-    )
-    with pytest.raises(subprocess.CalledProcessError):
-        runner.resume_delivery(
-            make_issue(), scene_for_resume(), make_config(tmp_path),
-            "xqliu/muyan-pilot",
-        )
-    milestones = [
-        body for body in posted
-        if any(line.startswith(progress.MILESTONE_PREFIX)
-               for line in body.splitlines())
-    ]
-    assert any("Muyan Pilot: blocked" in body for body in milestones)
-    final_patches = [
-        command for command in calls
-        if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
-        and "PATCH" in command
-    ]
-    assert final_patches
-    last_body = final_patches[-1][
-        final_patches[-1].index("--field") + 1
-    ][len("body="):]
-    assert "Muyan Pilot blocked" in last_body
-    assert "fixer exploded" in last_body
-
-
-# --- Issue #60: the fixer path keeps the same contract after the fix is
-# --- verified (no ai-blocked, no re-raise; progress_publish_failed only) ----
-
-
-def patch_resume_deps_live(monkeypatch, tmp_path):
-    """Like `patch_resume_deps`, but `comment_issue` and `edit_issue` are
-    NOT mocked: the delivery-record calls (fixed-PR scene comment,
-    `fix pushed` milestone, delivered finish) must reach the fake gh so
-    they can fail there (Issue #60). `edit_issue` is recorded."""
-    worktree = runner.worktree_path(
-        tmp_path, "xqliu/muyan-pilot", 18, "a1b2c3d4",
-    )
-    worktree.mkdir(parents=True, exist_ok=True)
-    edits = []
-    monkeypatch.setattr(runner, "verify_pr",
-                        lambda *args, **kwargs:
-                        "https://github.com/xqliu/muyan-pilot/pull/40")
-    monkeypatch.setattr(runner, "merge_latest_base", lambda *args: True)
-    monkeypatch.setattr(runner, "edit_issue", lambda number, **kwargs:
-                        edits.append(kwargs))
-    monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: None)
-    monkeypatch.setattr(runner, "run_pi", Mock(return_value="done"))
-    return edits
-
-
-def _fix_pushed_patch_of(command) -> bool:
-    return (
-        command[:2] == ["gh", "api"]
-        # GitHub update route (Issue #58): no issue number.
-        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
-        and "--method" in command
-        and "PATCH" in command
-    )
-
-
-def test_resume_delivery_fix_pushed_finish_failure_does_not_fail_delivery(
-    monkeypatch, tmp_path, caplog,
-):
-    """The fix is verified and the Issue is back in `ai-pr-opened`
-    (leaving `ai-fix-needed`) before the `fix pushed` finish() PATCH.
-    That PATCH failing must not fail the delivery: no re-raise, no
-    `ai-blocked`, the error is logged (`progress_publish_failed`) and
-    the verified PR URL is returned so the run continues into the
-    review/merge wait loop."""
-    calls, posted = make_failing_gh(monkeypatch, _fix_pushed_patch_of)
-    edits = patch_resume_deps_live(monkeypatch, tmp_path)
-    caplog.set_level("ERROR")
-
-    pr_url = runner.resume_delivery(
-        make_issue(), scene_for_resume(), make_config(tmp_path),
-        "xqliu/muyan-pilot",
-    )
-
-    assert pr_url == "https://github.com/xqliu/muyan-pilot/pull/40"
-    # The state transition happened (the Issue awaits review again)...
-    assert edits == [{
-        "repo": "xqliu/muyan-pilot", "add": "ai-pr-opened",
-        "remove": "ai-fix-needed",
-    }]
-    # ...and the delivery was NOT marked blocked.
-    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
-    # The failure is logged like the in-stream callback...
-    assert any(
-        "progress_publish_failed" in line
-        and "run=a1b2c3d4" in line
-        and "issue=xqliu/muyan-pilot#18" in line
-        and "role=fix" in line
-        for line in caplog.text.splitlines()
-    ), caplog.text
-    # ...and the fix summary was attempted (the 404'd PATCH).
-    fix_patches = [c for c in calls if _fix_pushed_patch_of(c)]
-    assert fix_patches, "the fix pushed finish was not attempted"
-    last_body = fix_patches[-1][
-        fix_patches[-1].index("--field") + 1
-    ][len("body="):]
-    assert "Muyan Pilot fix pushed" in last_body
-
-
-def test_resume_delivery_scene_comment_failure_does_not_fail_delivery(
-    monkeypatch, tmp_path, caplog,
-):
-    """The fixed-PR scene comment POST failing after the state transition
-    is the same contract: logged, not fatal; the `fix pushed` milestone
-    and the delivered finish still run (independent publishing steps)."""
-    calls, posted = make_failing_gh(
-        monkeypatch,
-        lambda command: (
-            command[:2] == ["gh", "issue"]
-            and "comment" in command
-            and "Muyan Pilot fixed PR:" in command[-1]
-        ),
-    )
-    edits = patch_resume_deps_live(monkeypatch, tmp_path)
-    caplog.set_level("ERROR")
-
-    pr_url = runner.resume_delivery(
-        make_issue(), scene_for_resume(), make_config(tmp_path),
-        "xqliu/muyan-pilot",
-    )
-
-    assert pr_url == "https://github.com/xqliu/muyan-pilot/pull/40"
-    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
-    assert any("progress_publish_failed" in line
-               for line in caplog.text.splitlines()), caplog.text
-    # The milestone and the delivered finish still ran.
-    assert any("Muyan Pilot: fix pushed" in body for body in posted)
-    fix_patches = [c for c in calls if _fix_pushed_patch_of(c)]
-    assert fix_patches, "the fix pushed finish was not attempted"
-    last_body = fix_patches[-1][
-        fix_patches[-1].index("--field") + 1
-    ][len("body="):]
-    assert "Muyan Pilot fix pushed" in last_body
-
-
 # --- review_and_merge_if_clean wiring (the reviewer stays observable) ---------
 
 
@@ -1254,9 +1009,11 @@ def test_wait_for_delivery_closed_unmerged_posts_blocked_milestone(
         if command[:2] == ["gh", "pr"]:
             return json.dumps({"state": "CLOSED"})
         if command[:2] == ["gh", "issue"]:
-            # The blocked scene derives the role from the delivery label
-            # and the round from the trusted review-round comments
-            # (review round 2, PR #42).
+            # The blocked scene derives the round from the trusted
+            # review-round comments (review round 2, PR #42); Issue
+            # #82: both opened-PR states are review states, so the
+            # role is always `review` (the label lookup only serves
+            # the leftover-label cleanup below).
             if command[-1] == "labels":
                 return json.dumps({"labels": [{"name": "ai-fix-needed"}]})
             return json.dumps({"comments": [
@@ -1320,10 +1077,10 @@ def test_wait_for_delivery_closed_unmerged_posts_blocked_milestone(
     assert "closed without a merge" in blocked
     assert "next step:" in blocked
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked
-    # The blocked scene carries the actual role (delivery label was
-    # ai-fix-needed) and the completed review rounds (review round 2,
-    # PR #42) — not the hardcoded fix/0.
-    assert "- role: fix" in blocked
+    # The blocked scene carries the actual role (Issue #82: both
+    # opened-PR states are review states, so always `review`) and the
+    # completed review rounds (review round 2, PR #42).
+    assert "- role: review" in blocked
     assert "- review/fix round: 2" in blocked
 
 

@@ -65,11 +65,19 @@ REQUIRED_ITEMS = (
     ("run-single-id", "one run_id"),
     ("run-journal-prefix", "[run_id]"),
     ("run-github-marker", "muyan-pilot:run="),
+    ("run-no-new-id", "no new id"),
     ("run-fail-fast", "fails fast"),
-    # 7. State is GitHub Issues and labels.
+    # 7. Keep the MVP scope explicit: no extra stateful infrastructure.
+    ("no-database", "database"),
+    ("no-queue", "queue"),
+    ("no-daemon", "daemon"),
+    ("no-risk-engine", "risk engine"),
+    ("no-fallback", "fallback"),
+    ("no-timeout", "no business task timeout"),
+    # 8. State is GitHub Issues and labels.
     ("state-issues", "github issues"),
     ("state-labels", "labels"),
-    # 8. systemd schedules the tick and owns the run lifecycle.
+    # 9. systemd schedules the tick and owns the run lifecycle.
     ("systemd-scope", "systemd"),
 )
 

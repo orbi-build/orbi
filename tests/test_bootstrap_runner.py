@@ -484,7 +484,10 @@ def test_pick_next_delivery_recovers_in_flight_issue_before_ready(
     Issues — a dead run is resumed, never skipped by the ready scan."""
     in_flight = {"number": 2, "title": "in flight", "body": ""}
     ready = {"number": 3, "title": "ready", "body": ""}
-    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda repo: None)
+    monkeypatch.setattr(
+        runner, "pick_resumable_delivery",
+        lambda repo, slot_dir, max_concurrency: None,
+    )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency: (
@@ -507,7 +510,9 @@ def test_pick_next_delivery_keeps_resumable_delivery_first(
     scene = {"run_id": "a1b2c3d4"}
     monkeypatch.setattr(
         runner, "pick_resumable_delivery",
-        lambda repo: (resumable, scene) if repo == "r2" else None,
+        lambda repo, slot_dir, max_concurrency: (
+            (resumable, scene) if repo == "r2" else None
+        ),
     )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
@@ -523,7 +528,10 @@ def test_pick_next_delivery_falls_through_to_ready_when_no_in_flight(
     monkeypatch, tmp_path,
 ):
     ready = {"number": 3, "title": "ready", "body": ""}
-    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda repo: None)
+    monkeypatch.setattr(
+        runner, "pick_resumable_delivery",
+        lambda repo, slot_dir, max_concurrency: None,
+    )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency: None,
@@ -537,7 +545,10 @@ def test_pick_next_delivery_falls_through_to_ready_when_no_in_flight(
 def test_pick_next_delivery_returns_none_when_all_scans_empty(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda repo: None)
+    monkeypatch.setattr(
+        runner, "pick_resumable_delivery",
+        lambda repo, slot_dir, max_concurrency: None,
+    )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency: None,
@@ -1947,6 +1958,81 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     )
 
 
+def test_main_routes_fix_needed_resume_to_delivery_wait(
+    monkeypatch, tmp_path,
+):
+    """A resumed `ai-fix-needed` delivery goes straight to the delivery
+    wait (Issue #82: the review session fixes findings in the same
+    session, so there is no cold-start fixer to run). The run id from
+    the scene is bound before the wait so the resumed review's journal
+    lines and comments carry it (Issue #41)."""
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
+    issue = {"number": 12, "title": "task", "body": "body"}
+    scene = {
+        "run_id": "a1b2c3d4",
+        "base_branch": "main",
+        "base_sha": "abc123def456",
+        "pr_url": "https://github.com/owner/repo/pull/12",
+    }
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: (
+            "owner/repo", issue, scene,
+        ),
+    )
+    waits = []
+    monkeypatch.setattr(
+        runner, "wait_for_delivery",
+        lambda *args, **kwargs: waits.append((args, kwargs)),
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    # No fixer: the wait runs on the scene's PR URL.
+    assert waits[0][0][:2] == (scene["pr_url"], issue)
+    # The resumed review runs under the scene's run id.
+    assert runner.current_run_id() == "a1b2c3d4"
+
+
+def test_main_routes_awaiting_review_resume_to_delivery_wait(
+    monkeypatch, tmp_path,
+):
+    """A resumed `ai-pr-opened` delivery (stranded by a dead runner or
+    the Issue #70 progress 404) goes straight to the delivery wait:
+    the independent review of the same PR runs (Issue #45 round-5
+    contract: a clean PR is never sent to a fixer). The run id from
+    the scene is bound before the wait so the resumed review's journal
+    lines and comments carry it (Issue #41)."""
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
+    issue = {"number": 12, "title": "task", "body": "body"}
+    scene = {
+        "run_id": "a1b2c3d4",
+        "base_branch": "main",
+        "base_sha": "abc123def456",
+        "pr_url": "https://github.com/owner/repo/pull/12",
+    }
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: (
+            "owner/repo", issue, scene,
+        ),
+    )
+    waits = []
+    monkeypatch.setattr(
+        runner, "wait_for_delivery",
+        lambda *args, **kwargs: waits.append((args, kwargs)),
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    # No fixer for a clean PR: the wait runs on the scene's PR URL.
+    assert waits[0][0][:2] == (scene["pr_url"], issue)
+    # The resumed review runs under the scene's run id.
+    assert runner.current_run_id() == "a1b2c3d4"
+
+
 def test_main_accepts_repeated_source_repo(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     seen = []
@@ -3023,7 +3109,7 @@ def test_run_pi_passes_progress_callback_to_stream_pi(monkeypatch, tmp_path):
             "skills": [],
             "context_files": [],
         },
-        "owner/repo", branch="b", pr_url="https://x/pull/4",
+        "owner/repo", branch="b",
         progress=callback,
     )
     assert seen["progress"] is callback
@@ -3059,6 +3145,150 @@ def test_run_review_passes_progress_callback_to_stream_pi(
     )
     assert seen["progress"] is callback
     assert seen["role"] == "review"
+
+
+# --- role-specific --skill lists (Issue #83) ---------------------------------
+
+
+def _skill_config(tmp_path, *names):
+    """Build a config whose skills point at <name>/SKILL.md files."""
+    skills = []
+    for name in names:
+        skill_dir = tmp_path / "skills" / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text("skill", encoding="utf-8")
+        skills.append(skill_dir / "SKILL.md")
+    return {
+        "prompt": tmp_path / "prompt.md",
+        "prompt_review": tmp_path / "prompt_review.md",
+        "source_repos": ["owner/repo"],
+        "workspace_root": tmp_path,
+        "context_files": [],
+        "skills": skills,
+        "base_branch": "main",
+        "base_sha": "abc123def456",
+        "run_id": "a1b2c3d4",
+    }
+
+
+def _command_skills(command):
+    """Return the --skill values of an assembled pi command."""
+    return [
+        value for index, item in enumerate(command)
+        if item == "--skill" and (value := command[index + 1])
+    ]
+
+
+def test_run_pi_keeps_tdd_dev_and_code_review_drops_review_fix_loop(
+    monkeypatch, tmp_path,
+):
+    """Issue #83: the implementer/fixer keeps the delivery skills
+    (tdd-dev, code-review) but not review-fix-loop — the Runner runs
+    the independent review/fix loop itself after the PR is open."""
+    (tmp_path / "prompt.md").write_text("SYSTEM", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(command) or "done",
+    )
+    config = _skill_config(
+        tmp_path, "tdd-dev", "code-review", "review-fix-loop",
+    )
+    runner.run_pi(
+        {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
+        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+    )
+    skills = _command_skills(calls[0])
+    assert any("tdd-dev" in skill for skill in skills)
+    assert any("code-review" in skill for skill in skills)
+    assert not any("review-fix-loop" in skill for skill in skills)
+
+
+def test_run_review_keeps_only_code_review(monkeypatch, tmp_path):
+    """Issue #83: the read-only review session must not load the
+    delivery-oriented skills (tdd-dev would steer it into the
+    implement/test/PR flow, review-fix-loop would open another
+    fix/review round); code-review stays."""
+    (tmp_path / "prompt_review.md").write_text("REVIEW", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(command) or "ok",
+    )
+    config = _skill_config(
+        tmp_path, "tdd-dev", "code-review", "review-fix-loop",
+    )
+    runner.run_review(
+        tmp_path,
+        {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"},
+        config, "owner/repo", 4, "branch", 1,
+    )
+    skills = _command_skills(calls[0])
+    assert not any("tdd-dev" in skill for skill in skills)
+    assert not any("review-fix-loop" in skill for skill in skills)
+    assert any("code-review" in skill for skill in skills)
+
+
+def test_run_pi_and_run_review_skill_lists_differ(monkeypatch, tmp_path):
+    """Issue #83 acceptance: the two assembled command lines carry
+    different --skill lists."""
+    (tmp_path / "prompt.md").write_text("SYSTEM", encoding="utf-8")
+    (tmp_path / "prompt_review.md").write_text("REVIEW", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(command) or "done",
+    )
+    config = _skill_config(
+        tmp_path, "tdd-dev", "code-review", "review-fix-loop",
+    )
+    runner.run_pi(
+        {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
+        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+    )
+    runner.run_review(
+        tmp_path,
+        {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"},
+        config, "owner/repo", 4, "branch", 1,
+    )
+    implement_skills = _command_skills(calls[0])
+    review_skills = _command_skills(calls[1])
+    assert implement_skills != review_skills
+
+
+def test_skill_name_of_skill_md_inside_skill_directory(tmp_path):
+    path = tmp_path / "skills" / "tdd-dev" / "SKILL.md"
+    path.parent.mkdir(parents=True)
+    assert runner._skill_name(path) == "tdd-dev"
+
+
+def test_skill_name_of_bare_markdown_entry(tmp_path):
+    path = tmp_path / "my-skill.md"
+    assert runner._skill_name(path) == "my-skill"
+
+
+def test_run_review_keeps_non_delivery_skill_names(monkeypatch, tmp_path):
+    """Only tdd-dev/review-fix-loop are excluded from the review; any
+    other configured skill (including code-review) passes through.
+    """
+    (tmp_path / "prompt_review.md").write_text("REVIEW", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(command) or "ok",
+    )
+    config = _skill_config(tmp_path, "code-review", "platform-qa")
+    runner.run_review(
+        tmp_path,
+        {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"},
+        config, "owner/repo", 4, "branch", 1,
+    )
+    skills = _command_skills(calls[0])
+    assert any("code-review" in skill for skill in skills)
+    assert any("platform-qa" in skill for skill in skills)
 
 
 # --- max_concurrency config (Issue #39) --------------------------------------
@@ -3329,9 +3559,10 @@ def test_finish_blocked_progress_carries_the_actual_role_and_round(
     assert "- review/fix round: 2" in body
 
 
-def test_finish_blocked_progress_defaults_to_fix_round_zero(monkeypatch):
-    """Without explicit role/round the legacy default (fix/0) is kept,
-    so existing callers stay unchanged."""
+def test_finish_blocked_progress_defaults_to_review_round_zero(monkeypatch):
+    """Without explicit role/round the default is the only post-PR role
+    (Issue #82: the review session fixes findings in the same session,
+    so a blocked delivery is always a review failure)."""
     api_calls = []
 
     def fake_run(command, **kwargs):
@@ -3353,7 +3584,7 @@ def test_finish_blocked_progress_defaults_to_fix_round_zero(monkeypatch):
     ]
     assert len(posts) == 1
     body = posts[0][posts[0].index("--field") + 1][len("body="):]
-    assert "- role: fix" in body
+    assert "- role: review" in body
     assert "- review/fix round: 0" in body
 
 
@@ -3591,12 +3822,114 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
     assert "- review/fix round: 2" in blocked
 
 
-def test_wait_for_delivery_runs_same_pr_fix_when_fix_needed(
+def test_wait_for_delivery_marks_blocked_when_review_fails_while_fix_needed(
+        monkeypatch, caplog, tmp_path,
+):
+    """A review failure while the Issue is `ai-fix-needed` (awaiting the
+    next review session) must leave the terminal state `ai-blocked`
+    ALONE: this PR routes both opened-PR states into the same review, so
+    the leftover `ai-fix-needed` label is removed too (Issue #82).
+    """
+    api_calls: list = []
+    existing = {
+        "id": 77,
+        "body": (
+            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+            "**Muyan Pilot progress**\n\nawaiting review"
+        ),
+    }
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps({"state": "OPEN"})
+        if command[:2] == ["gh", "api"]:
+            api_calls.append(command)
+            if "--method" not in command:
+                # The run's live progress comment exists.
+                return json.dumps([existing])
+            method = command[command.index("--method") + 1]
+            if method == "POST":
+                body = command[command.index("--field") + 1]
+                return json.dumps({"id": 78, "body": body[len("body="):],
+                                   "url": "https://x/78"})
+            return ""
+        if command[-1] == "comments":
+            # No trusted `Muyan Pilot opened PR:` comment: the scene
+            # cannot be recovered, so the review fails fast.
+            return json.dumps({"comments": [
+                {"body": "public comment", "authorAssociation": "NONE"},
+            ]})
+        # The delivery is in the `ai-fix-needed` state (awaiting the
+        # next review session).
+        return json.dumps({"labels": [{"name": "ai-fix-needed"}]})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    edits: list = []
+    comments: list = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: edits.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *args, **kwargs: comments.append((args, kwargs)),
+    )
+    issue = {"number": 39, "title": "task", "body": ""}
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    caplog.set_level("INFO")
+    runner.wait_for_delivery(
+        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        "owner/repo",
+    )
+    # The Issue is marked ai-blocked (removing ai-pr-opened) ...
+    assert edits[0][1] == {
+        "repo": "owner/repo",
+        "add": "ai-blocked",
+        "remove": "ai-pr-opened",
+    }
+    # ... and the leftover ai-fix-needed label is removed too, so the
+    # terminal state is ai-blocked alone (never
+    # ai-blocked + ai-fix-needed).
+    assert edits[1][1] == {
+        "repo": "owner/repo",
+        "remove": "ai-fix-needed",
+    }
+    assert len(edits) == 2
+    body = comments[0][1]["body"]
+    assert "the independent review of" in body
+    assert f"<!-- muyan-pilot:run=a1b2c3d4 -->" in body
+    assert "delivery_review_failed" in caplog.text
+    # The terminal failure also posts the blocked milestone AND the
+    # tracked progress comment becomes the blocked scene.
+    posted_bodies = [
+        command[command.index("--field") + 1][len("body="):]
+        for command in api_calls
+        if "--method" in command and "POST" in command
+    ]
+    assert any("Muyan Pilot: blocked" in body for body in posted_bodies)
+    assert any(
+        ("the independent review of" in body for body in posted_bodies),
+    )
+    patches = [
+        command for command in api_calls
+        if command[:2] == ["gh", "api"]
+        and command[2] == "repos/owner/repo/issues/comments/77"
+        and "PATCH" in command
+    ]
+    assert patches, "the tracked progress comment was not updated"
+    blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
+    assert "Muyan Pilot blocked" in blocked
+    assert "the independent review of" in blocked
+    assert "- role: review" in blocked
+
+
+def test_wait_for_delivery_runs_review_when_fix_needed(
     monkeypatch, caplog, tmp_path,
 ):
-    """While holding the slot, a fix-needed delivery is fixed by the SAME
-    runner on the SAME run (Issue #39 + #45): the fix returns the Issue
-    to awaiting review and the wait continues."""
+    """While holding the slot, a fix-needed delivery runs the SAME
+    independent review as an awaiting-review delivery (Issue #82: the
+    review session fixes findings in the same session — no cold-start
+    fixer): the review reports findings and the wait continues."""
     states = ["OPEN", "OPEN", "MERGED"]
     pr_view_calls = {"n": 0}
     labels_calls = {"n": 0}
@@ -3610,16 +3943,9 @@ def test_wait_for_delivery_runs_same_pr_fix_when_fix_needed(
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             if command[-1] == "labels":
                 labels_calls["n"] += 1
-                # First poll: fix needed; after the fix: awaiting review.
-                if labels_calls["n"] == 1:
-                    return json.dumps({
-                        "labels": [{"name": "ai-fix-needed"}],
-                    })
                 return json.dumps({
-                    "labels": [{"name": "ai-pr-opened"}],
+                    "labels": [{"name": "ai-fix-needed"}],
                 })
-            if command[-1] == "body":
-                return json.dumps({"body": "original task body"})
             return json.dumps({"comments": [
                 {
                     "body": (
@@ -3638,14 +3964,9 @@ def test_wait_for_delivery_runs_same_pr_fix_when_fix_needed(
     # The fake rejects anything that is not a pr/issue view.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "list"])
-    fixes = []
-    monkeypatch.setattr(
-        runner, "resume_delivery",
-        lambda *args, **kwargs: fixes.append((args, kwargs)) or PR_URL,
-    )
-    # The second OPEN poll finds the Issue awaiting review again: the
-    # independent review runs (Issue #34) and reports findings, so the
-    # wait continues to the MERGED poll.
+    # The independent review runs for the fix-needed state too (Issue
+    # #82) and reports findings, so the wait continues to the MERGED
+    # poll.
     reviews = []
     monkeypatch.setattr(
         runner, "review_and_merge_if_clean",
@@ -3656,48 +3977,17 @@ def test_wait_for_delivery_runs_same_pr_fix_when_fix_needed(
     caplog.set_level("INFO")
     config = {"repo_dir": tmp_path, "base_branch": "main"}
     runner.wait_for_delivery(PR_URL, issue, config, "owner/repo")
-    assert len(fixes) == 1
-    assert len(reviews) == 1
-    fixed_issue, scene, cfg, repo = fixes[0][0]
-    assert fixed_issue["number"] == 39
-    assert fixed_issue["body"] == "original task body"
-    assert scene["run_id"] == "a1b2c3d4"
-    assert scene["pr_url"] == PR_URL
+    # One review per OPEN+fix-needed poll (two polls before MERGED).
+    assert len(reviews) == 2
+    # No fixer: the review ran on the derived worktree/branch of the
+    # same run.
+    worktree, branch, base_branch, review_config, repo, number = reviews[0][0]
+    assert branch == "muyan-pilot/owner-repo-issue-39-a1b2c3d4"
+    assert base_branch == "main"
+    assert review_config["run_id"] == "a1b2c3d4"
+    assert review_config["base_sha"] == "abc123def456"
     assert repo == "owner/repo"
-    assert "delivery_fix_needed" in caplog.text
-
-
-def test_wait_for_delivery_propagates_fix_failure(monkeypatch):
-    """A failed same-PR fix raises: the Issue is already ai-blocked by
-    resume_delivery, and the slot is released by the caller (main)."""
-    def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"]:
-            return json.dumps({"state": "OPEN"})
-        if command[-1] == "labels":
-            return json.dumps({"labels": [{"name": "ai-fix-needed"}]})
-        return json.dumps({"comments": [
-            {
-                "body": (
-                    "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                    "Muyan Pilot opened PR: "
-                    f"{PR_URL} (base_branch=main "
-                    "base_sha=abc123def456 run_id=a1b2c3d4)"
-                ),
-                "authorAssociation": "OWNER",
-            },
-        ]})
-
-    monkeypatch.setattr(runner, "run_command", fake_run)
-
-    def failing_resume(*args, **kwargs):
-        raise RuntimeError("fix failed")
-
-    monkeypatch.setattr(runner, "resume_delivery", failing_resume)
-    with pytest.raises(RuntimeError, match="fix failed"):
-        runner.wait_for_delivery(
-            PR_URL, {"number": 39, "title": "t", "body": ""}, {},
-            "owner/repo",
-        )
+    assert number == 39
 
 
 def test_issue_labels_returns_names_and_fails_fast(monkeypatch):
@@ -3800,6 +4090,13 @@ def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
         "add": "ai-blocked",
         "remove": "ai-pr-opened",
     }
+    # ... and the leftover ai-fix-needed label (the delivery was
+    # awaiting the next review session) is removed too, so the
+    # terminal state is ai-blocked alone.
+    assert edits[1][1] == {
+        "repo": "owner/repo",
+        "remove": "ai-fix-needed",
+    }
     # ... with a failure comment carrying the run marker and run_id.
     body = comments[0][1]["body"]
     assert "Muyan Pilot failed:" in body
@@ -3834,10 +4131,10 @@ def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
     assert "closed without a merge" in blocked
     assert "next step:" in blocked
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked
-    # The blocked scene carries the actual role (the delivery label was
-    # ai-fix-needed) and the completed review rounds (review round 2,
-    # PR #42) — not the hardcoded fix/0.
-    assert "- role: fix" in blocked
+    # The blocked scene carries the actual role (Issue #82: both
+    # opened-PR states are review states, so always `review`) and the
+    # completed review rounds (review round 2, PR #42).
+    assert "- role: review" in blocked
     assert "- review/fix round: 2" in blocked
 
 
@@ -3921,7 +4218,19 @@ def test_wait_for_delivery_logs_awaiting_without_bound_run_id(monkeypatch, caplo
     """When no run id is bound the wait still works: the failure comment
     simply carries no marker."""
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
-    fake_pr_view(monkeypatch, "CLOSED")
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"] and command[2] == "view":
+            return json.dumps({"state": "CLOSED"})
+        if command[:2] == ["gh", "issue"] and command[-1] == "labels":
+            # No leftover fix-needed label: only ai-pr-opened is removed.
+            return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    # The fake rejects anything that is not a pr/issue view.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "list"])
     comments: list = []
     monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
     monkeypatch.setattr(

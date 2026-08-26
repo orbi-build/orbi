@@ -1,9 +1,11 @@
-"""Unit tests for the auto review/fix/merge orchestration (Issue #34).
+"""Unit tests for the auto review/fix/merge orchestration (Issues #34, #82).
 
 The Runner (not Pi) closes the delivery loop: after the implementer opens a PR
-it freezes the exact PR base/head SHA, runs an independent review session,
-loops a fixer session while Blocker/Major findings exist, re-checks the merge
-gate against the latest origin/main, and merges via `gh pr merge
+it freezes the exact PR base/head SHA, runs one independent review session
+that fixes Blocker/Major findings IN THE SAME SESSION (Issue #82: no
+cold-start fixer, no third review), re-freezes the head after a clean
+verdict (the reviewer may have pushed a fix), re-checks the merge gate
+against the latest origin/main, and merges via `gh pr merge
 --match-head-commit`. Pi never pushes main.
 """
 import json
@@ -655,6 +657,89 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     # failure must not rewrite a landed merge as ai-blocked.
     assert calls.index(("edit", {"repo": "owner/repo", "add": "ai-merged",
                                  "remove": "ai-pr-opened"})) < calls.index("sync")
+
+
+def test_review_and_merge_refreezes_head_after_in_session_fix(
+        monkeypatch, tmp_path, caplog):
+    """Issue #82: the review session fixes findings in the same session
+    and pushes the task branch, so the head the verdict covers is NEWER
+    than the frozen head. The PR must be RE-FROZEN before the merge
+    gate: the gate (and the `--match-head-commit` merge) run against
+    the fixed head, not the frozen one."""
+    calls = []
+    frozen = _pr()
+    fixed = {**_pr(), "head_oid": "h2"}
+    heads = iter([frozen, fixed])
+
+    def fake_freeze(*a, **k):
+        return next(heads)
+
+    monkeypatch.setattr(runner, "freeze_pr", fake_freeze)
+    monkeypatch.setattr(
+        runner, "issue_comments", lambda *a, **k: [],
+    )
+    monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
+
+    def fake_gate(worktree, pr, base_branch):
+        calls.append(("gate", pr["head_oid"]))
+        return {**pr, "merged": True}
+
+    monkeypatch.setattr(runner, "merge_gate", fake_gate)
+    monkeypatch.setattr(
+        runner, "confirm_merged",
+        lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
+    )
+    monkeypatch.setattr(runner, "sync_base_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
+    caplog.set_level("INFO")
+    make_fake_gh(monkeypatch)
+    merged = runner.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4,
+    )
+    assert merged is True
+    # The merge gate ran against the RE-FROZEN (fixed) head...
+    assert calls == [("gate", "h2")]
+    # ...and the head advance is logged for the journal.
+    assert "review_head_advanced" in caplog.text
+    assert "frozen=h1" in caplog.text
+    assert "reviewed=h2" in caplog.text
+
+
+def test_review_and_merge_clean_verdict_without_head_advance_keeps_frozen_head(
+        monkeypatch, tmp_path, caplog):
+    """Issue #82: when the review session did not push (clean PR,
+    nothing to fix), the re-freeze returns the same head and the merge
+    gate runs against it unchanged (no head-advance log)."""
+    calls = []
+    monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(
+        runner, "issue_comments", lambda *a, **k: [],
+    )
+    monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
+
+    def fake_gate(worktree, pr, base_branch):
+        calls.append(("gate", pr["head_oid"]))
+        return {**pr, "merged": True}
+
+    monkeypatch.setattr(runner, "merge_gate", fake_gate)
+    monkeypatch.setattr(
+        runner, "confirm_merged",
+        lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
+    )
+    monkeypatch.setattr(runner, "sync_base_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
+    caplog.set_level("INFO")
+    make_fake_gh(monkeypatch)
+    merged = runner.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4,
+    )
+    assert merged is True
+    assert calls == [("gate", "h1")]
+    assert "review_head_advanced" not in caplog.text
 
 
 def test_review_and_merge_keeps_merged_when_checkout_sync_fails(

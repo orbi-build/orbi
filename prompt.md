@@ -57,38 +57,16 @@ Your worktree was created from `{{BASE_SHA}}` (the frozen
 1. Run `git fetch origin {{BASE_BRANCH}}` in the worktree.
 2. If `git merge-base --is-ancestor origin/{{BASE_BRANCH}} HEAD` fails, the
    base advanced while you worked: merge `origin/{{BASE_BRANCH}}` into your
-   task branch, resolve conflicts manually, rerun the full test suite and the
-   complete review-fix loop, then push the updated task branch.
+   task branch, resolve conflicts manually, rerun the full test suite, then
+   push the updated task branch.
 3. The runner rejects a delivery whose HEAD does not contain the latest
    remote base, so do not create the PR until the check passes.
 
-Resuming an existing PR (Issue #45):
-
-If the task context says `Existing PR: <url>`, this run already opened
-that PR, and the runner started this fixer run because the Issue is in
-the `ai-fix-needed` state (a review finding or a base conflict). After
-a successful fix the runner returns the Issue to `ai-pr-opened`
-(awaiting review) — so do the complete fix once, not a partial one.
-The PR number, run id, feature branch and worktree are fixed
-for this run:
-
-- Never close the PR, never create a new PR, never re-claim the Issue;
-  the PR keeps the same number and only its head branch moves.
-- If the worktree is mid-merge (the runner merged the latest
-  `origin/{{BASE_BRANCH}}` into the task branch and a conflict was left
-  staged), resolve the conflict manually, keep both sides' intent, then
-  complete the merge commit.
-- Fix the review findings, rerun the full test suite with 100% line and
-  branch coverage, the real verification and the complete review-fix
-  loop, then commit and push ONLY the task branch so the same PR
-  updates.
-- If the PR body is missing `Fixes #{{ISSUE_NUMBER}}`, add it (for
-  example via `gh pr edit <number> --body ...`) so the merge closes the
-  source Issue natively; the re-verification rejects a PR body without
-  it.
-- If the conflict or the findings cannot be resolved, stop and explain
-  the concrete blocker in the final response; the runner marks the Issue
-  `ai-blocked` and the PR, branch and worktree stay for inspection.
+Post-PR fixes are NOT your job (Issue #82): once the PR is opened the
+runner runs the independent review session (`prompt_review.md`), which
+fixes review findings and absorbs base advances IN THE SAME SESSION on
+the same PR. The implementer is never resumed for fixes — no `Existing
+PR` context is ever injected into this prompt.
 
 Rules:
 

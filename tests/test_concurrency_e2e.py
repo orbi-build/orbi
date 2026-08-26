@@ -6,12 +6,13 @@ executable records every invocation. These prove the acceptance criteria:
 
 - with ``max_concurrency = 1`` a second concurrent runner logs
   ``capacity_full``, claims no Issue, changes no label and never calls Pi;
-- the slot is held for the whole delivery lifecycle (implement → review →
-  fix → merge): after the first runner opens the PR it KEEPS the slot
+- the slot is held for the whole delivery lifecycle (implement → review
+  → merge): after the first runner opens the PR it KEEPS the slot
   (polling the PR state), so a second concurrent runner still sees
   ``capacity_full`` and no second Issue is claimed;
-- when the Issue moves to ``ai-fix-needed`` the next runner resumes the
-  SAME PR (same run id, same slot) instead of claiming a new Issue;
+- the review session fixes findings IN THE SAME SESSION (Issue #82):
+  one review Pi per delivery (no cold-start fixer, no third review),
+  and the runner re-freezes the fixed head before the merge gate;
 - after the PR is merged the first runner exits and releases the slot,
   and the next runner claims the NEXT ready Issue (never the same one
   twice);
@@ -70,17 +71,25 @@ def git(*cmd):
 
 
 def match_issue(labels, search):
-    required = [t[6:] for t in search.split() if t.startswith("label:")]
+    # `label:a,b` is GitHub's OR within one qualifier (Issue #70 scans
+    # `ai-fix-needed` OR `ai-pr-opened`); space-separated qualifiers
+    # are AND.
+    required = [
+        t[6:].split(",")
+        for t in search.split() if t.startswith("label:")
+    ]
     excluded = [t[7:] for t in search.split() if t.startswith("-label:")]
-    return all(r in labels for r in required) and not any(
-        e in labels for e in excluded
-    )
+    return all(any(r in labels for r in group) for group in required) \
+        and not any(e in labels for e in excluded)
 
 
 if args[:2] == ["issue", "list"]:
     search = args[args.index("--search") + 1]
     out = [
-        {"number": int(num), "title": issue["title"],
+        # `--state open` only ever returns open Issues, and the real
+        # payload carries `state` (the resumable scan checks it).
+        {"number": int(num), "state": "OPEN",
+         "title": issue["title"],
          "body": issue.get("body", "")}
         for num, issue in sorted(
             state["issues"].items(), key=lambda kv: int(kv[0])
@@ -152,25 +161,54 @@ elif args[:2] == ["pr", "view"]:
     # The merge gate and confirm_merged read the full PR state: the
     # head is the current HEAD of the delivery branch (the fake world
     # has no separate PR object), and the merge is recorded when the
-    # test (or the runner via `pr merge`) marks it MERGED.
+    # test (or the runner via `pr merge`) marks it MERGED. The state
+    # is PER BRANCH: concurrent deliveries (two runners, two issues)
+    # each see their own PR state; the global `pr_state` remains the
+    # default for branches without a recorded state.
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    pr_state = state.setdefault("pr_states", {}).get(
+        branch, state.get("pr_state", "OPEN"),
+    )
     print(json.dumps({
-        "state": state.get("pr_state", "OPEN"),
+        "state": pr_state,
         "mergeable": "MERGEABLE",
         "headRefOid": git("rev-parse", "HEAD"),
         "mergedAt": "2026-08-25T00:00:00Z"
-        if state.get("pr_state") == "MERGED" else None,
+        if pr_state == "MERGED" else None,
         "mergeCommit": (
             {"oid": git("rev-parse", "HEAD")}
-            if state.get("pr_state") == "MERGED" else None
+            if pr_state == "MERGED" else None
         ),
     }))
 elif args[:2] == ["pr", "merge"]:
-    # The fake GitHub merge: record the merge on the delivery branch
-    # (the delivery branch is the PR head; the real `gh pr merge`
-    # lands the head on the base). The runner then confirms via
-    # `pr view` and syncs the deployment checkout.
-    state["pr_state"] = "MERGED"
-    state["merged_head"] = git("rev-parse", "HEAD")
+    # The fake GitHub merge: the real `gh pr merge` lands the head on
+    # the base (a merge commit when the base advanced in the meantime),
+    # so the fake merges the delivery head (the PR head is the
+    # delivery branch's HEAD) into origin/main in a throwaway clone.
+    # The runner then confirms via `pr view` and syncs the deployment
+    # checkout.
+    import tempfile
+    head = git("rev-parse", "HEAD")
+    with tempfile.TemporaryDirectory() as td:
+        subprocess.run(["git", "clone", git("remote", "get-url",
+                                             "origin"), td],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", td, "config",
+                        "user.email", "pilot@test.local"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", td, "config", "user.name", "Pilot"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", td, "fetch", "origin"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", td, "merge", "--no-ff",
+                        "-m", "Merge PR (fake)", head],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", td, "push", "origin",
+                        "HEAD:main"],
+                       check=True, capture_output=True)
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    state.setdefault("pr_states", {})[branch] = "MERGED"
+    state["merged_head"] = head
     save()
 elif args[:1] == ["api"]:
     # The progress publisher (Issue #18) keeps the single per-run
@@ -212,11 +250,15 @@ else:
 
 # Fake ``pi``: records one line per invocation, then stays busy for a while
 # so concurrent runners overlap while it runs. The review role (system
-# prompt "INDEPENDENT REVIEW") emits a machine-readable verdict: findings
-# for the first review of a run, a clean verdict afterwards, so the
-# full review -> fix -> re-review -> merge loop is exercised.
+# prompt "INDEPENDENT REVIEW") simulates the Issue #82 contract: the
+# independent review session fixes findings IN THE SAME SESSION — the
+# first review of a run finds a major issue, commits and pushes the fix
+# to the task branch (the PR head advances), and ends with a clean
+# verdict covering the fixed head (the runner re-freezes and merges it).
+# A second review of the same run (a restart inside the wait loop) is
+# simply clean.
 FAKE_PI = """#!/usr/bin/env python3
-import json, os, sys, time
+import json, os, subprocess, sys, time
 log = os.environ.get("MUYAN_FAKE_PI_LOG")
 if log:
     with open(log, "a", encoding="utf-8") as handle:
@@ -226,14 +268,11 @@ system_prompt = sys.argv[sys.argv.index("--system-prompt") + 1]
 if "INDEPENDENT REVIEW" in system_prompt:
     run_id = system_prompt.split("run_id=")[1].split()[0]
     marker = os.path.join(os.getcwd(), f".muyan-pilot-review-{run_id}")
-    if os.path.exists(marker):
-        print('REVIEW_VERDICT ' + json.dumps({
-            "verdict": "pass", "blockers": 0, "majors": 0,
-            "minors": 0, "findings": [],
-        }))
-    else:
+    first_review = not os.path.exists(marker)
+    if first_review:
         with open(marker, "w", encoding="utf-8") as handle:
             handle.write("reviewed")
+        # Initial review: one major finding...
         print('REVIEW_VERDICT ' + json.dumps({
             "verdict": "findings", "blockers": 0, "majors": 1,
             "minors": 0,
@@ -242,6 +281,52 @@ if "INDEPENDENT REVIEW" in system_prompt:
                  "note": "first review finding"}
             ],
         }))
+        # ...fixed in this same session: commit the fix (the PR head
+        # advances; the runner must re-freeze and merge the fixed head,
+        # not the frozen one). The fix content is unique per
+        # invocation: a later delivery's base already carries an
+        # earlier delivery's fix file.
+        with open(os.path.join(os.getcwd(), "review-fix.txt"), "a",
+                  encoding="utf-8") as handle:
+            handle.write(f"fixed in the review session (pid {os.getpid()} "
+                         f"at {time.time()})\\n")
+        subprocess.run(["git", "add", "review-fix.txt"], check=True)
+        subprocess.run(
+            ["git", "-c", "user.email=pilot@test.local",
+             "-c", "user.name=Pilot", "commit",
+             "-m", "fix: in-session review fix"],
+            check=True,
+        )
+    # A head behind the latest base is fixed in-session too (Issue
+    # #82), on EVERY review round: the base may advance between rounds.
+    # Absorb origin/main, resolve, retest, push.
+    subprocess.run(["git", "fetch", "origin", "main"], check=True)
+    behind = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"],
+        capture_output=True,
+    )
+    if behind.returncode != 0:
+        merge = subprocess.run(
+            ["git", "merge", "--no-ff", "-m",
+             "merge main (review session)", "origin/main"],
+            capture_output=True,
+        )
+        if merge.returncode != 0:
+            with open(os.path.join(os.getcwd(), "review-fix.txt"), "a",
+                      encoding="utf-8") as handle:
+                handle.write(f"conflict resolved (pid {os.getpid()})\\n")
+            subprocess.run(["git", "add", "."], check=True)
+            subprocess.run(
+                ["git", "-c", "user.email=pilot@test.local",
+                 "-c", "user.name=Pilot", "commit", "--no-edit"],
+                check=True,
+            )
+    subprocess.run(["git", "push", "origin", "HEAD"], check=True)
+    # Final verdict after the in-session fix: clean.
+    print('REVIEW_VERDICT ' + json.dumps({
+        "verdict": "pass", "blockers": 0, "majors": 0,
+        "minors": 0, "findings": [],
+    }))
 """
 
 
@@ -456,13 +541,14 @@ def set_pr_state(state_path: Path, pr_state: str) -> None:
     atomic_write_json(state_path, state)
 
 
-def test_capacity_one_slot_held_through_review_fix_merge(
+def test_capacity_one_slot_held_through_review_merge(
     clone, tmp_path,
 ):
     """The slot is held for the whole delivery lifecycle (Issue #39):
     after the PR opens the first runner keeps it, runs the independent
-    review (findings -> ai-fix-needed -> same-PR fix -> re-review),
-    auto-merges the clean PR itself (Issue #34) and only then releases
+    review — which fixes the finding IN THE SAME SESSION (Issue #82:
+    no cold-start fixer, no third review) — re-freezes the fixed head
+    and auto-merges the PR itself (Issue #34), and only then releases
     the slot for the next Issue."""
     bin_dir = install_fakes(tmp_path)
     state = tmp_path / "gh-state.json"
@@ -489,10 +575,10 @@ def test_capacity_one_slot_held_through_review_fix_merge(
     assert "ai-in-progress" not in snap["issues"]["7"]["labels"]
     assert snap["issues"]["8"]["labels"] == ["ai-ready"]
 
-    # The first independent review finds a problem: the Issue moves to
-    # ai-fix-needed, and the SAME holder (still holding the slot) fixes
-    # the SAME PR (same run id, same branch) instead of claiming a new
-    # Issue; the re-review passes and the runner merges the PR itself.
+    # The first independent review finds a problem and fixes it IN THE
+    # SAME SESSION (Issue #82): the fixed head is pushed, re-frozen and
+    # merged by the SAME holder (still holding the slot) instead of
+    # claiming a new Issue.
     wait_for(
         lambda: (
             "ai-merged" in read_state(state)["issues"]["7"]["labels"]
@@ -500,23 +586,28 @@ def test_capacity_one_slot_held_through_review_fix_merge(
                     for c in read_state(state)["comments"])
         ),
         timeout=180,
-        what="first runner to review, fix, re-review and merge",
+        what="first runner to review, fix in-session and merge",
     )
     snap = read_state(state)
     assert "ai-merged" in snap["issues"]["7"]["labels"]
     assert "ai-pr-opened" not in snap["issues"]["7"]["labels"]
-    # One Pi invocation per phase of the SAME run: implement, review,
-    # fix, re-review — never a new claim of another Issue.
-    assert len(pi_invocations(pi_log)) == 4
+    # One Pi invocation per phase of the SAME run: implement, review
+    # (the review fixes in-session) — never a new claim of another
+    # Issue, never a cold-start fixer.
+    assert len(pi_invocations(pi_log)) == 2
     assert snap["issues"]["8"]["labels"] == ["ai-ready"]
     started = [
         c for c in snap["comments"] if "Muyan Pilot started Pi:" in c["body"]
     ]
     assert [c["issue"] for c in started] == ["7"]
     bodies = [c["body"] for c in snap["comments"]]
-    assert any("Muyan Pilot review round 1" in b for b in bodies)
-    assert any("Muyan Pilot fixed PR:" in b for b in bodies)
     assert any("Muyan Pilot merged PR:" in b for b in bodies)
+    # The in-session fix landed on the delivery branch: origin/main
+    # carries the review fix file, so the runner merged the RE-FROZEN
+    # head (the fixed one), not the frozen head (Issue #82).
+    assert "review-fix.txt" in git(
+        clone, "ls-tree", "--name-only", "origin/main",
+    )
 
     # The auto-merge released the slot; the runner exited cleanly.
     out, err = first.communicate(timeout=120)
@@ -651,8 +742,9 @@ def test_capacity_two_allows_two_runners_and_rejects_third(clone, tmp_path):
     assert third.returncode == 0, err
     assert "capacity_full" in err
 
-    # Both runners auto-merge their own PRs (review -> fix -> re-review
-    # -> merge, Issue #34) and release their slots.
+    # Both runners auto-merge their own PRs (the review fixes in-session
+    # and the runner merges the re-frozen head, Issues #34/#82) and
+    # release their slots.
     wait_for(
         lambda: "ai-merged" in read_state(state)["issues"]["7"]["labels"]
         and "ai-merged" in read_state(state)["issues"]["8"]["labels"],
@@ -664,9 +756,13 @@ def test_capacity_two_allows_two_runners_and_rejects_third(clone, tmp_path):
         assert runner.returncode == 0, err
         assert "delivery_auto_merged" in err
     assert slots_held(clone, 2) == [(1, None), (2, None)]
-    # One Pi per phase of each run (implement, review, fix, re-review):
-    # four invocations per Issue, no duplicate claim.
-    assert len(pi_invocations(pi_log)) == 8
+    # One Pi per phase of each run (implement, review — the review
+    # fixes in-session, Issue #82): two invocations per Issue at a
+    # minimum. When the first merge advances origin/main while the
+    # second delivery's head is still behind, the second review round
+    # absorbs the base in-session (one extra invocation per affected
+    # delivery) — never a cold-start fixer, never a duplicate claim.
+    assert 4 <= len(pi_invocations(pi_log)) <= 6
     started = [
         c for c in read_state(state)["comments"]
         if "Muyan Pilot started Pi:" in c["body"]
@@ -811,3 +907,191 @@ def test_killed_runner_is_resumed_by_the_next_claim_scan(clone, tmp_path):
     assert "capacity_full" not in err
     assert "delivery_auto_merged" in err
     assert slots_held(clone) == [(1, None)], "slot must be released on exit"
+
+
+def test_stranded_pr_opened_delivery_is_resumed_to_review_and_merge(
+    clone, tmp_path,
+):
+    """Issue #70 acceptance: the runner that opened a PR can die before
+    the review starts (the progress 404 used to label the Issue
+    ai-blocked and skip the review; a killed runner leaves no owner at
+    all). The NEXT tick must resume the SAME delivery through the
+    resumable scan (`ai-pr-opened` is scanned now), run the independent
+    review on the SAME PR and auto-merge it — never re-claim the Issue,
+    never start a second run, never block it."""
+    bin_dir = install_fakes(tmp_path)
+    state = tmp_path / "gh-state.json"
+    write_state(state, {"7": ["ai-ready"]})
+    pi_log = tmp_path / "pi.log"
+    config = write_config(clone, tmp_path, 1)
+
+    first = start_runner(config, bin_dir, state, pi_log)
+    wait_for(
+        lambda: "ai-pr-opened" in read_state(state)["issues"]["7"]["labels"],
+        what="first runner to open the PR",
+    )
+    # Wait until the trusted opened-PR scene comment exists (it is the
+    # recovery source of the next tick), then kill the runner inside the
+    # delivery wait: the PR stays open and unreviewed, the Issue stays
+    # `ai-pr-opened` — a stranded delivery with no owner.
+    wait_for(
+        lambda: any(
+            "Muyan Pilot opened PR:" in c["body"]
+            for c in read_state(state)["comments"]
+        ),
+        what="opened-PR scene comment to be posted",
+    )
+    first.kill()  # SIGKILL: the delivery wait dies with the process
+    first.wait(timeout=10)
+    snap = read_state(state)
+    assert "ai-pr-opened" in snap["issues"]["7"]["labels"]
+    assert "ai-blocked" not in snap["issues"]["7"]["labels"]
+    assert "ai-fix-needed" not in snap["issues"]["7"]["labels"]
+    worktrees = sorted(
+        (clone / ".worktrees").glob("muyan-pilot-owner-repo-issue-7-*"),
+    )
+    assert len(worktrees) == 1
+    dead_run_id = worktrees[0].name.rsplit("-", 1)[-1]
+
+    # The NEXT tick (a fresh main()): the resumable scan now finds the
+    # stranded `ai-pr-opened` delivery, recovers the scene, and the
+    # dispatch sends it straight to the delivery wait (independent
+    # review) — no fixer for a clean PR, no fresh claim.
+    second = start_runner(config, bin_dir, state, pi_log)
+    wait_for(
+        lambda: "ai-merged" in read_state(state)["issues"]["7"]["labels"],
+        timeout=180,
+        what="second runner to resume the review and merge the same PR",
+    )
+    out, err = second.communicate(timeout=120)
+    assert second.returncode == 0, err
+    assert "capacity_full" not in err
+    assert "no_ready_issue" not in err
+    assert "delivery_auto_merged" in err
+
+    snap = read_state(state)
+    labels = snap["issues"]["7"]["labels"]
+    # The stranded delivery ended in the terminal success state — it
+    # was never blocked, never re-claimed.
+    assert "ai-merged" in labels
+    assert "ai-blocked" not in labels
+    assert "ai-pr-opened" not in labels
+    # Same run, same worktree: nothing was recreated.
+    worktrees = sorted(
+        (clone / ".worktrees").glob("muyan-pilot-owner-repo-issue-7-*"),
+    )
+    assert len(worktrees) == 1
+    assert worktrees[0].name.rsplit("-", 1)[-1] == dead_run_id
+    # One Pi per phase of the SAME run: implement (first runner),
+    # review (second runner — the review fixes in-session, Issue #82)
+    # — never a second implement, never a cold-start fixer.
+    assert len(pi_invocations(pi_log)) == 2
+    started = [
+        c for c in snap["comments"] if "Muyan Pilot started Pi:" in c["body"]
+    ]
+    assert [c["issue"] for c in started] == ["7"]
+    # The review actually ran on the resumed delivery.
+    bodies = [c["body"] for c in snap["comments"]]
+    assert any("Muyan Pilot merged PR:" in b for b in bodies)
+    assert slots_held(clone) == [(1, None)], (
+        "slot must be released after the merge"
+    )
+
+
+def test_live_pr_opened_delivery_is_not_resumed_by_second_runner(
+    clone, tmp_path,
+):
+    """Issue #70 review round 1 (Major): with `max_concurrency = 2` a
+    second runner must NOT enter the delivery wait of a LIVE
+    `ai-pr-opened` delivery — a slot held by another process proves a
+    live runner is actively processing it (Issue #39 slot semantics).
+    Resuming it would start a second review Pi in the same
+    worktree/branch/run, and the second `gh pr merge
+    --match-head-commit` on the already-merged PR would fail and mark
+    the merged Issue `ai-blocked` (wrong terminal state). Instead the
+    second runner skips the resumable scan and claims the NEXT ready
+    Issue.
+
+    The fake world carries one global PR state, so the second
+    runner's own delivery (issue 8) is only asserted up to the claim:
+    the guard under test is the resumable scan, not the second
+    delivery's merge (covered by
+    test_capacity_two_allows_two_runners_and_rejects_third)."""
+    bin_dir = install_fakes(tmp_path)
+    state = tmp_path / "gh-state.json"
+    write_state(state, {"7": ["ai-ready"], "8": ["ai-ready"]})
+    pi_log = tmp_path / "pi.log"
+    config = write_config(clone, tmp_path, 2)
+
+    first = start_runner(config, bin_dir, state, pi_log)
+    wait_for(
+        lambda: "ai-pr-opened" in read_state(state)["issues"]["7"]["labels"],
+        what="first runner to open the PR for issue 7",
+    )
+    # The first runner is LIVE in the delivery wait (holding slot 1,
+    # PR open and unmerged).
+    wait_for(
+        lambda: any(
+            "Muyan Pilot opened PR:" in c["body"]
+            for c in read_state(state)["comments"]
+        ),
+        what="opened-PR scene comment to be posted",
+    )
+
+    # A second runner takes the free slot 2 while the first is live.
+    # It must skip the resumable scan (another slot is held by a live
+    # runner) and claim issue 8 instead of resuming issue 7's live
+    # delivery.
+    second = start_runner(config, bin_dir, state, pi_log)
+    # The second runner's implement comment proves it claimed issue 8
+    # (a fresh run) and not a resume of issue 7's live delivery (whose
+    # run already has its started comment).
+    wait_for(
+        lambda: any(
+            "Muyan Pilot started Pi:" in c["body"] and c["issue"] == "8"
+            for c in read_state(state)["comments"]
+        ),
+        what="second runner to claim the next ready issue",
+    )
+    snap = read_state(state)
+    # Issue 7's live delivery is untouched: still simply awaiting
+    # review — never re-resumed (no ai-fix-needed from a second
+    # review), never blocked.
+    assert "ai-pr-opened" in snap["issues"]["7"]["labels"]
+    assert "ai-fix-needed" not in snap["issues"]["7"]["labels"]
+    assert "ai-blocked" not in snap["issues"]["7"]["labels"]
+    # Issue 8 is claimed by the second runner.
+    assert "ai-in-progress" in snap["issues"]["8"]["labels"]
+    # Exactly one "started Pi" comment per Issue: issue 8's is the
+    # second runner's implement — never a second review of issue 7.
+    started = [
+        c for c in snap["comments"] if "Muyan Pilot started Pi:" in c["body"]
+    ]
+    assert sorted(c["issue"] for c in started) == ["7", "8"]
+    # The second runner never entered the delivery wait of issue 7's
+    # live PR (the finding's repro: it logged `issue=7
+    # delivery_awaiting` for the live runner's PR).
+    out, err = second.communicate(timeout=120)
+    assert second.returncode == 0, err
+    assert "issue=7 delivery_awaiting" not in err
+    # The first runner still owns issue 7's delivery and auto-merges
+    # it itself — no second merge attempt from the second runner.
+    wait_for(
+        lambda: "ai-merged" in read_state(state)["issues"]["7"]["labels"],
+        timeout=180,
+        what="first runner to review and merge issue 7",
+    )
+    out, err = first.communicate(timeout=120)
+    assert first.returncode == 0, err
+    assert "delivery_auto_merged" in err
+    snap = read_state(state)
+    assert "ai-merged" in snap["issues"]["7"]["labels"]
+    assert "ai-blocked" not in snap["issues"]["7"]["labels"]
+    # The second runner's Pi work is bounded: its implement plus at
+    # most its own review of issue 8 (the fake world's single global
+    # PR state ends its wait once the first runner merges). Crucially,
+    # none of it is a second review of issue 7's live delivery: the
+    # first run always uses exactly two invocations (implement,
+    # review — the review fixes in-session, Issue #82).
+    assert 3 <= len(pi_invocations(pi_log)) <= 4
+    assert slots_held(clone, 2) == [(1, None), (2, None)]
