@@ -125,8 +125,10 @@ Pi 长时间运行时，Runner 不再只留下启动命令和最终结果。`boo
 - `resumed issue=... role=... phase=... state=resumed`——下一条 session 事件到达时输出一次。
 - `pi_idle issue=... role=... phase=... stale_seconds=...`——超过 5 分钟（`PI_IDLE_WARN_SECONDS=300`）没有 model/session 活动且不在 `model_wait` 时输出一次 WARNING；卡住的 session 不会每个 heartbeat 重复告警，`model_wait` 期间永不告警（慢模型不等于卡死）；
 - `pi_resumed issue=... role=... phase=...`——idle 告警后第一条新 session 事件到达时输出一次（恢复后输出 resumed）。
-- `run_failed run=... issue=... role=... branch=... worktree=... session=... session_file=... phase=... ... reason=pi_exit_N|timeout_...s`——进程异常退出或超时时先记录完整现场再抛出错误；
+- `run_failed run=... issue=... role=... branch=... worktree=... session=... session_file=... phase=... ... reason=pi_exit_N|timeout_...s|upstream_dead_stale_...s`——进程异常退出、超时或上游已死（Issue #75）时先记录完整现场再抛出错误；
 - `run_end run=... issue=... role=... result=pr_opened elapsed=...m pr=... commit=...`——验收通过后记录结果和完整排查入口。
+
+上游已死检测（Issue #75）：`model_wait` 期间 session JSONL 冻结超过 `PI_MODEL_WAIT_DEAD_SECONDS`（默认 600 秒）判定上游（llama/proxy）已死——HTTP 超时或连接断开后 Pi 停在 epoll_wait 永不退出：Runner 杀掉 Pi 进程，记录 `run_failed ... reason=upstream_dead_stale_...s` 后 fail fast（Issue 标记 `ai-blocked`，现场留在 journal 和 Issue 评论，slot 随进程退出由内核释放，下一拍可 resume 或领取下一个 `ai-fix-needed`）。事件持续到达时永不触发（慢模型不是死上游），它也不是业务任务 timeout。
 
 所有行都是稳定 `key=value`（含空格或双引号的值加双引号，内嵌双引号转义为 `\\"`，可用 `pi_activity.parse_scene` 解析）；systemd journal 已提供时间、host 和进程，Python 日志不再重复打印自己的时间戳。每条行都带 `[run_id]` 前缀（见下文全链路 run_id 一节），它是高频行（`activity` / `heartbeat` / `model_wait` / `resumed` / `pi_idle` / `pi_resumed`）唯一的 run id 载体：这些行不再重复 `run=` 字段，同一个 8-hex run id 在一行里只出现一次（Issue #57）。低频场景行（`run_start` / `run_failed` / `run_end`）保留 `run=` 字段，`pi_activity.parse_scene` 仍能从这些行解析出 `run`。默认 tail 示例（仅用于查看，不是产品步骤）：
 
