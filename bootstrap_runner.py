@@ -262,19 +262,79 @@ def parse_issue_list(raw: str) -> dict | None:
     return issues[0] if issues else None
 
 
+def open_blocker_numbers(issue: dict) -> list[int]:
+    """Return the numbers of the issue's OPEN native GitHub blockers.
+
+    `gh issue list --json blockedBy` (gh 2.94+) carries the native
+    dependency relation as `{"nodes": [...], "totalCount": N}`. GitHub
+    keeps a relation listed after its blocker closes (the node then
+    carries `state: "CLOSED"` and is inert — verified against the live
+    API, Issue #54), so only OPEN blockers actually block: a closed
+    blocker clears the dependency without any runner-side bookkeeping,
+    and the next tick claims the Issue. A node without an explicit
+    `state` counts as open (claiming a possibly-blocked Issue costs a
+    full run; waiting one tick does not). A missing or malformed field
+    means "no known blockers" (fail open): an API shape change must
+    never deadlock the queue.
+    """
+    blocked_by = issue.get("blockedBy")
+    if not isinstance(blocked_by, dict):
+        return []
+    nodes = blocked_by.get("nodes")
+    if not isinstance(nodes, list):
+        return []
+    numbers: list[int] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        number = node.get("number")
+        if not isinstance(number, int) or isinstance(number, bool):
+            continue
+        if node.get("state", "OPEN") != "OPEN":
+            continue
+        numbers.append(number)
+    return numbers
+
+
 def pick_issue(repo: str) -> dict | None:
     # A merged delivery keeps `ai-ready` + `ai-merged` on the (still
     # open) Issue; `ai-merged` is the success terminal state, so it is
     # excluded from the ready scan like every other delivery state.
-    raw = run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", "open",
-        "--search",
-        "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
-        f"-label:{FIX_NEEDED_LABEL} -label:{MERGED_LABEL} "
-        f"-label:{BLOCKED_LABEL}",
-        "--json", "number,title,body", "--limit", "1",
-    ])
-    return parse_issue_list(raw)
+    # The scan fetches the ready queue (not just the first Issue) and
+    # reads the native GitHub dependency per Issue (Issue #54): an
+    # Issue with open blockers is skipped — no claim, no label change,
+    # no worktree — and the next ready Issue is considered instead.
+    try:
+        raw = run_command([
+            "gh", "issue", "list", "--repo", repo, "--state", "open",
+            "--search",
+            "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
+            f"-label:{FIX_NEEDED_LABEL} -label:{MERGED_LABEL} "
+            f"-label:{BLOCKED_LABEL}",
+            "--json", "number,title,body,blockedBy", "--limit", "200",
+        ])
+        issues = parse_issue_array(raw)
+    except Exception as exc:
+        # Fail open (Issue #54): a failed blockedBy query must never
+        # deadlock the queue. This tick claims nothing from this repo
+        # and the next tick retries the query; the error is logged,
+        # never raised, and no label is touched.
+        LOGGER.error(
+            "blocked_by_check_failed repo=%s error=%s",
+            repo, exc,
+        )
+        return None
+    for issue in issues:
+        blockers = open_blocker_numbers(issue)
+        if blockers:
+            LOGGER.info(
+                "blocked_by issue=%s repo=%s blockers=%s",
+                issue.get("number"), repo,
+                ",".join(str(number) for number in blockers),
+            )
+            continue
+        return issue
+    return None
 
 
 def pick_in_progress_issue(

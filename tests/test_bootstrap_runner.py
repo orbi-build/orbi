@@ -207,7 +207,10 @@ def test_run_command_logs_optional_timeout_and_reraises(tmp_path, caplog):
 
 
 def test_pick_issue_uses_github_queue(monkeypatch):
-    issue = {"number": 9, "title": "task", "body": "body"}
+    issue = {
+        "number": 9, "title": "task", "body": "body",
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
     calls = []
 
     def fake_run(command, **kwargs):
@@ -221,8 +224,165 @@ def test_pick_issue_uses_github_queue(monkeypatch):
         "--state", "open", "--search",
         "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked",
-        "--json", "number,title,body", "--limit", "1",
+        "--json", "number,title,body,blockedBy",
+        "--limit", "200",
     ]]
+
+
+def test_open_blocker_numbers_returns_only_open_blockers():
+    # GitHub keeps a relation listed after its blocker closes (the
+    # node carries `state: "CLOSED"` and is inert — verified against
+    # the live API, Issue #54): only OPEN blockers block.
+    issue = {"blockedBy": {"nodes": [
+        {"number": 31, "state": "OPEN", "title": "a"},
+        {"number": 32, "state": "CLOSED", "title": "b"},
+    ], "totalCount": 2}}
+    assert runner.open_blocker_numbers(issue) == [31]
+
+
+def test_open_blocker_numbers_counts_missing_state_as_open():
+    # A node without an explicit state counts as open: claiming a
+    # possibly-blocked Issue costs a full run, waiting one tick does
+    # not (Issue #54).
+    issue = {"blockedBy": {"nodes": [{"number": 31}], "totalCount": 1}}
+    assert runner.open_blocker_numbers(issue) == [31]
+
+
+def test_open_blocker_numbers_fails_open_on_missing_or_malformed_field():
+    # A missing or malformed `blockedBy` field must never block the
+    # queue (Issue #54 fail open): no known blockers, not an error.
+    assert runner.open_blocker_numbers({"number": 9}) == []
+    assert runner.open_blocker_numbers({"blockedBy": "nope"}) == []
+    assert runner.open_blocker_numbers({"blockedBy": {"nodes": "nope"}}) == []
+    assert runner.open_blocker_numbers({"blockedBy": {"nodes": ["nope"]}}) == []
+    assert runner.open_blocker_numbers({"blockedBy": {"nodes": [
+        {"number": 31, "state": "OPEN"},
+        {"title": "no number", "state": "OPEN"},
+        {"number": "32", "state": "OPEN"},
+        {"number": True, "state": "OPEN"},
+    ]}}) == [31]
+
+
+def test_pick_issue_skips_blocked_issue_and_claims_next(monkeypatch, caplog):
+    """A ready Issue with open native blockers (Issue #54) is never
+    claimed: no label change, no worktree — the runner logs a
+    structured `blocked_by` line with the blocker list and moves on to
+    the next ready Issue of the same repo."""
+    blocked = {
+        "number": 54, "title": "blocked task", "body": "",
+        "blockedBy": {"nodes": [
+            {"number": 31, "title": "base"},
+            {"number": 32, "title": "retry"},
+        ], "totalCount": 2},
+    }
+    ready = {
+        "number": 55, "title": "free task", "body": "",
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([blocked, ready]),
+    )
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/muyan-pilot") == ready
+    assert "blocked_by" in caplog.text
+    assert "54" in caplog.text
+    assert "31" in caplog.text
+    assert "32" in caplog.text
+
+
+def test_pick_issue_returns_none_when_all_ready_issues_blocked(
+    monkeypatch, caplog,
+):
+    blocked_a = {
+        "number": 1, "title": "a", "body": "",
+        "blockedBy": {"nodes": [{"number": 9}], "totalCount": 1},
+    }
+    blocked_b = {
+        "number": 2, "title": "b", "body": "",
+        "blockedBy": {"nodes": [{"number": 8}], "totalCount": 1},
+    }
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([blocked_a, blocked_b]),
+    )
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/muyan-pilot") is None
+    assert caplog.text.count("blocked_by") >= 2
+
+
+def test_pick_issue_claims_issue_whose_blocker_is_closed(monkeypatch):
+    """A closed blocker no longer blocks (Issue #54): GitHub keeps the
+    relation listed with `state: "CLOSED"` (verified against the live
+    API), and the runner counts only open blockers — the next tick
+    claims the Issue without any runner-side bookkeeping."""
+    issue = {
+        "number": 54, "title": "unblocked task", "body": "",
+        "blockedBy": {"nodes": [
+            {"number": 31, "state": "CLOSED", "title": "done"},
+        ], "totalCount": 1},
+    }
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([issue]),
+    )
+    assert runner.pick_issue("xqliu/muyan-pilot") == issue
+
+
+def test_pick_issue_claims_issue_with_empty_blocked_by(monkeypatch):
+    issue = {
+        "number": 54, "title": "free task", "body": "",
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([issue]),
+    )
+    assert runner.pick_issue("xqliu/muyan-pilot") == issue
+
+
+def test_pick_issue_stays_blocked_while_any_blocker_is_open(monkeypatch):
+    blocked = {
+        "number": 54, "title": "mixed", "body": "",
+        "blockedBy": {"nodes": [
+            {"number": 31, "state": "CLOSED", "title": "done"},
+            {"number": 32, "state": "OPEN", "title": "pending"},
+        ], "totalCount": 2},
+    }
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([blocked]),
+    )
+    assert runner.pick_issue("xqliu/muyan-pilot") is None
+
+
+def test_pick_issue_fails_open_when_blocked_by_field_missing(monkeypatch):
+    # Older gh versions or a changed API shape omit the field: the
+    # Issue must still be claimable (fail open, Issue #54).
+    issue = {"number": 9, "title": "task", "body": "body"}
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([issue]),
+    )
+    assert runner.pick_issue("xqliu/muyan-pilot") == issue
+
+
+def test_pick_issue_fails_open_when_blocked_by_query_fails(
+    monkeypatch, caplog,
+):
+    """A failed blockedBy query must not deadlock the queue (Issue
+    #54 fail open): the tick claims nothing this round and the error
+    is logged, never raised — the next tick retries the query."""
+    error = subprocess.CalledProcessError(
+        1, ["gh"], output="boom", stderr="rate limited",
+    )
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: (_ for _ in ()).throw(error),
+    )
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/muyan-pilot") is None
+    assert "blocked_by_check_failed" in caplog.text
 
 
 def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
