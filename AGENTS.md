@@ -35,6 +35,8 @@ is **one runtime outcome** (when X, should Y, actually Z).
 
 - TDD: write a failing test first, then the smallest implementation, then
   refactor.
+- External APIs, CLI flags, and HTTP paths are asserted against official docs
+  or one real call.
 - Python code keeps 100% line and branch coverage:
 
   ```bash
@@ -94,6 +96,8 @@ is **one runtime outcome** (when X, should Y, actually Z).
 - The runner rejects a delivery whose HEAD does not contain the latest remote
   base. No auto conflict resolution, no force push, no merge or push of the
   protected branch.
+- A delivery is acceptable only when its HEAD contains the latest remote
+  base; base updates use a plain `git merge` on the task branch.
 
 ## Task dependencies (blockedBy)
 
@@ -190,7 +194,7 @@ is **one runtime outcome** (when X, should Y, actually Z).
 - Work on the task feature branch.
 - Pi (the implementer) does not merge and does not push `main` or `master`.
   It delivers through exactly one PR linked to the Issue; the Runner is the
-  only merge actor (see below).
+  only merge actor (the Runner is the only merge actor; see below).
 - The PR description must contain `Fixes #<issue-number>` (it may be on
   the first line), pointing at the source Issue so GitHub closes the Issue
   natively when the PR merges into the default branch. The keyword works
@@ -232,5 +236,5 @@ is **one runtime outcome** (when X, should Y, actually Z).
 
 - No database, queue, daemon loop, risk engine, or fallback. GitHub Issues
   and labels are the only state store.
-- No timeout on business tasks. systemd only schedules the tick and owns the
+- No business task timeout. systemd only schedules the tick and owns the
   run lifecycle.
