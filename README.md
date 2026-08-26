@@ -254,3 +254,7 @@ Pi 不直接 push 保护分支。实现 Agent 只 push feature branch 并创建 
 成功合并后 Issue 标记 `ai-merged`（替代 `ai-pr-opened`），评论写入 PR URL、merge commit、审查轮次和 base/run 信息。下一任务只从新的 `origin/<base>` 创建。不 force push、不直接 push 保护分支、不设业务 timeout；审查 finding 不是 `ai-blocked`，而是在同一 PR 的审查会话内修复（或交给下一个审查会话）。
 
 两个 prompt 由配置提供（默认 `prompt.md` 实现、`prompt_review.md` 审查+会话内修复）；审查 prompt 不附加 `review-fix-loop`/`tdd-dev` skill。
+
+## 许可证
+
+本项目以 [Apache License 2.0](LICENSE)（SPDX 标识 `Apache-2.0`）发布，完整文本见根目录 [LICENSE](LICENSE) 文件。
