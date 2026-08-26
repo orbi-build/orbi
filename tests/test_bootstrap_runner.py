@@ -3177,6 +3177,150 @@ def test_run_review_passes_progress_callback_to_stream_pi(
     assert seen["role"] == "review"
 
 
+# --- role-specific --skill lists (Issue #83) ---------------------------------
+
+
+def _skill_config(tmp_path, *names):
+    """Build a config whose skills point at <name>/SKILL.md files."""
+    skills = []
+    for name in names:
+        skill_dir = tmp_path / "skills" / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text("skill", encoding="utf-8")
+        skills.append(skill_dir / "SKILL.md")
+    return {
+        "prompt": tmp_path / "prompt.md",
+        "prompt_review": tmp_path / "prompt_review.md",
+        "source_repos": ["owner/repo"],
+        "workspace_root": tmp_path,
+        "context_files": [],
+        "skills": skills,
+        "base_branch": "main",
+        "base_sha": "abc123def456",
+        "run_id": "a1b2c3d4",
+    }
+
+
+def _command_skills(command):
+    """Return the --skill values of an assembled pi command."""
+    return [
+        value for index, item in enumerate(command)
+        if item == "--skill" and (value := command[index + 1])
+    ]
+
+
+def test_run_pi_keeps_tdd_dev_and_code_review_drops_review_fix_loop(
+    monkeypatch, tmp_path,
+):
+    """Issue #83: the implementer/fixer keeps the delivery skills
+    (tdd-dev, code-review) but not review-fix-loop — the Runner runs
+    the independent review/fix loop itself after the PR is open."""
+    (tmp_path / "prompt.md").write_text("SYSTEM", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(command) or "done",
+    )
+    config = _skill_config(
+        tmp_path, "tdd-dev", "code-review", "review-fix-loop",
+    )
+    runner.run_pi(
+        {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
+        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+    )
+    skills = _command_skills(calls[0])
+    assert any("tdd-dev" in skill for skill in skills)
+    assert any("code-review" in skill for skill in skills)
+    assert not any("review-fix-loop" in skill for skill in skills)
+
+
+def test_run_review_keeps_only_code_review(monkeypatch, tmp_path):
+    """Issue #83: the read-only review session must not load the
+    delivery-oriented skills (tdd-dev would steer it into the
+    implement/test/PR flow, review-fix-loop would open another
+    fix/review round); code-review stays."""
+    (tmp_path / "prompt_review.md").write_text("REVIEW", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(command) or "ok",
+    )
+    config = _skill_config(
+        tmp_path, "tdd-dev", "code-review", "review-fix-loop",
+    )
+    runner.run_review(
+        tmp_path,
+        {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"},
+        config, "owner/repo", 4, "branch", 1,
+    )
+    skills = _command_skills(calls[0])
+    assert not any("tdd-dev" in skill for skill in skills)
+    assert not any("review-fix-loop" in skill for skill in skills)
+    assert any("code-review" in skill for skill in skills)
+
+
+def test_run_pi_and_run_review_skill_lists_differ(monkeypatch, tmp_path):
+    """Issue #83 acceptance: the two assembled command lines carry
+    different --skill lists."""
+    (tmp_path / "prompt.md").write_text("SYSTEM", encoding="utf-8")
+    (tmp_path / "prompt_review.md").write_text("REVIEW", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(command) or "done",
+    )
+    config = _skill_config(
+        tmp_path, "tdd-dev", "code-review", "review-fix-loop",
+    )
+    runner.run_pi(
+        {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
+        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+    )
+    runner.run_review(
+        tmp_path,
+        {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"},
+        config, "owner/repo", 4, "branch", 1,
+    )
+    implement_skills = _command_skills(calls[0])
+    review_skills = _command_skills(calls[1])
+    assert implement_skills != review_skills
+
+
+def test_skill_name_of_skill_md_inside_skill_directory(tmp_path):
+    path = tmp_path / "skills" / "tdd-dev" / "SKILL.md"
+    path.parent.mkdir(parents=True)
+    assert runner._skill_name(path) == "tdd-dev"
+
+
+def test_skill_name_of_bare_markdown_entry(tmp_path):
+    path = tmp_path / "my-skill.md"
+    assert runner._skill_name(path) == "my-skill"
+
+
+def test_run_review_keeps_non_delivery_skill_names(monkeypatch, tmp_path):
+    """Only tdd-dev/review-fix-loop are excluded from the review; any
+    other configured skill (including code-review) passes through.
+    """
+    (tmp_path / "prompt_review.md").write_text("REVIEW", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(command) or "ok",
+    )
+    config = _skill_config(tmp_path, "code-review", "platform-qa")
+    runner.run_review(
+        tmp_path,
+        {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"},
+        config, "owner/repo", 4, "branch", 1,
+    )
+    skills = _command_skills(calls[0])
+    assert any("code-review" in skill for skill in skills)
+    assert any("platform-qa" in skill for skill in skills)
+
+
 # --- max_concurrency config (Issue #39) --------------------------------------
 
 
