@@ -806,7 +806,10 @@ def test_process_issue_scene_comment_failure_fails_delivery(
     `Muyan Pilot failed` comment, and the tick stops. The scene comment
     stays fail-fast (the resume contract is unchanged); only the
     `ProgressPublisher` steps around it (milestone, delivered finish)
-    are bypasses."""
+    are bypasses. The failure happens AFTER the opened-PR transition,
+    so the terminal state is `ai-blocked` ALONE (the README label
+    lifecycle removes `ai-pr-opened` on terminal failure) — never
+    `ai-pr-opened` + `ai-blocked`, which no scan would own."""
     calls, posted = make_failing_gh(
         monkeypatch,
         lambda command: (
@@ -829,8 +832,17 @@ def test_process_issue_scene_comment_failure_fails_delivery(
         runner.process_issue(make_issue(), make_config(tmp_path),
                              "xqliu/muyan-pilot")
 
-    # The delivery failed: the Issue is marked ai-blocked...
-    assert any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    # The delivery failed: the opened-PR transition is undone and the
+    # Issue is marked ai-blocked ALONE (the failure happened after the
+    # `ai-pr-opened` label was added, so the terminal state removes it
+    # instead of the already-removed claim label)...
+    assert edits == [{
+        "repo": "xqliu/muyan-pilot", "add": "ai-in-progress"},
+        {"repo": "xqliu/muyan-pilot", "add": "ai-pr-opened",
+         "remove": "ai-in-progress"},
+        {"repo": "xqliu/muyan-pilot", "add": "ai-blocked",
+         "remove": "ai-pr-opened"},
+    ]
     # ...with a run-marked `Muyan Pilot failed` comment naming the
     # scene-comment failure...
     comment_bodies = [

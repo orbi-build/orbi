@@ -2259,6 +2259,14 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     )
     worktree: Path | None = None
     started = time.monotonic()
+    # Issue #79: the `Muyan Pilot opened PR:` scene comment is the first
+    # delivery step AFTER the opened-PR label transition that can still
+    # fail; when it does, the failure path below must leave the Issue in
+    # the terminal state `ai-blocked` ALONE (README label lifecycle:
+    # `ai-pr-opened` is removed on terminal failure) — the same
+    # convention as every other terminal failure path (verify_resumed_pr,
+    # wait_for_delivery).
+    pr_opened = False
     try:
         worktree = create_worktree(
             config["repo_dir"], source_repo, number, run_id, base_sha,
@@ -2322,6 +2330,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             number, repo=source_repo, add=PR_OPENED_LABEL,
             remove=IN_PROGRESS_LABEL,
         )
+        pr_opened = True
         # The scene comment is NOT a bypass (Issue #79): the next
         # tick's resume (Issue #45/#89) parses it to recover run_id,
         # base and PR, so a failure here is a real delivery failure —
@@ -2384,9 +2393,17 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             except Exception:
                 LOGGER.exception("issue=%s activity scene failed", number)
         try:
+            # The claim label is removed on every failure; when the
+            # delivery already made the opened-PR transition (the
+            # scene-comment failure of Issue #79), the opened-PR label
+            # is removed too, so the terminal state is `ai-blocked`
+            # ALONE — never `ai-pr-opened` + `ai-blocked` (README label
+            # lifecycle: `ai-pr-opened` is removed on terminal failure).
             edit_issue(
                 number, repo=source_repo, add=BLOCKED_LABEL,
-                remove=IN_PROGRESS_LABEL,
+                remove=(
+                    PR_OPENED_LABEL if pr_opened else IN_PROGRESS_LABEL
+                ),
             )
             detail = _failure_detail(exc)
             body = (

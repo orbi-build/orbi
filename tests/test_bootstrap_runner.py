@@ -2054,7 +2054,10 @@ def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path)
 def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypatch, tmp_path, caplog):
     edit_calls = []
 
-    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: edit_calls.append(kwargs),
+    )
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
@@ -2087,6 +2090,16 @@ def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypat
     # No progress comment was posted (the failure report died on the
     # failure-comment POST before the bypass steps).
     assert posted == []
+    # The failure happened BEFORE the opened-PR transition (the
+    # worktree creation failed), so the terminal state removes the
+    # claim label, not the opened-PR label (Issue #79: the scene
+    # comment is the first failure after the transition; its test in
+    # test_progress_wiring pins the other branch).
+    assert edit_calls == [
+        {"repo": "xqliu/muyan-ceo", "add": "ai-in-progress"},
+        {"repo": "xqliu/muyan-ceo", "add": "ai-blocked",
+         "remove": "ai-in-progress"},
+    ]
 
 
 def _write_prompts(tmp_path):
