@@ -96,8 +96,8 @@ is **one runtime outcome** (when X, should Y, actually Z).
 - The runner rejects a delivery whose HEAD does not contain the latest remote
   base. No auto conflict resolution, no force push, no merge or push of the
   protected branch.
-- A delivery is acceptable only when its HEAD contains the latest remote
-  base; base updates use a plain `git merge` on the task branch.
+- A delivery is acceptable only when its HEAD contains the latest remote base;
+  base updates use a plain `git merge` on the task branch.
 
 ## Task dependencies (blockedBy)
 
