@@ -51,6 +51,12 @@ follow it before changing code.
   run marker and kept — no database. On success the comment becomes the
   final delivery summary (PR, tests, review evidence); on failure it becomes
   the blocked scene with the next-step reason.
+- Once the PR exists (verified and labeled `ai-pr-opened`), the delivery is
+  complete: progress-publishing failures (the delivered PATCH, the `PR
+  opened` milestone, the opened-PR scene comment) are logged as
+  `progress_publish_failed` and never fail the delivery or mark the Issue
+  `ai-blocked` — the run continues into the independent review/merge loop
+  (Issue #60).
 
 ## Base freshness
 
