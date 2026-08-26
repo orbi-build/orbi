@@ -2059,29 +2059,33 @@ def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypat
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
     gh_calls, posted = make_fake_gh(monkeypatch)
-    comments = []
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "api"]:
-            # The blocked milestone POST is the only gh api traffic of
-            # this scenario (the worktree was never created, so no
-            # progress comment was ensured): it fails, the failure
-            # report is broken, the original failure must still be
-            # re-raised.
+        if command[:2] == ["gh", "issue"] and "comment" in command:
+            # The `Muyan Pilot failed` comment POST is the only
+            # non-bypass traffic of this scenario: it fails, the
+            # failure report is broken, the original failure must
+            # still be re-raised. (Issue #79: the progress traffic —
+            # the blocked milestone POST — is bypass, so a failure
+            # there no longer breaks the failure report; see
+            # test_progress_wiring.
+            # test_process_issue_failure_path_progress_failure_keeps_
+            # blocked_transition.)
             raise RuntimeError("github report failed")
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
-        comments.append(command[-1])
-        return ""
+        raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
+    # The fake rejects anything that is not issue-comment/list traffic.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "list"])
     with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="git failed"):
         runner.process_issue({"number": 13, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo")
     assert "failure reporting failed" in caplog.text
-    # The failure comment was published before the milestone POST failed.
-    assert any("Muyan Pilot failed: git failed" in body
-               for body in comments)
+    # No progress comment was posted (the failure report died on the
+    # failure-comment POST before the bypass steps).
     assert posted == []
 
 

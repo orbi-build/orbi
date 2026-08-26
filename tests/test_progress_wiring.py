@@ -700,12 +700,12 @@ def _progress_patch_of(command) -> bool:
 
 
 def _delivery_record_of(command) -> bool:
-    """The three delivery-record calls after the PR is verified and
-    labeled: the opened-PR scene comment, the `PR opened` milestone and
-    the delivered finish() PATCH (all of them are progress publishing;
-    none of them may fail the delivery, Issue #60)."""
-    if command[:2] == ["gh", "issue"] and "comment" in command:
-        return "Muyan Pilot opened PR:" in command[-1]
+    """The two `ProgressPublisher` delivery-record calls after the PR
+    is verified and labeled: the `PR opened` milestone and the
+    delivered finish() PATCH (both are progress publishing; neither may
+    fail the delivery, Issue #60). The opened-PR scene comment is NOT
+    part of this set: it is the resume contract (Issue #45/#89) and
+    stays fail-fast (Issue #79)."""
     if command[:2] == ["gh", "api"]:
         if "--method" in command and "POST" in command:
             return "Muyan Pilot: PR opened" in command[-1]
@@ -796,18 +796,27 @@ def test_process_issue_pr_opened_milestone_failure_does_not_fail_delivery(
     assert not any("Muyan Pilot: PR opened" in body for body in posted)
 
 
-def test_process_issue_scene_comment_failure_does_not_fail_delivery(
+def test_process_issue_scene_comment_failure_fails_delivery(
     monkeypatch, tmp_path, caplog,
 ):
-    """The opened-PR scene comment POST failing after the label
-    transition is the same contract: logged, not fatal; the milestone
-    and the delivered finish still run (independent publishing steps)."""
+    """Issue #79: the `Muyan Pilot opened PR:` scene comment is NOT a
+    bypass — the next tick's resume (Issue #45/#89) parses it to recover
+    run_id, base and PR, so a failure there is a real delivery failure:
+    the error propagates, the Issue is marked `ai-blocked` with a
+    `Muyan Pilot failed` comment, and the tick stops. The scene comment
+    stays fail-fast (the resume contract is unchanged); only the
+    `ProgressPublisher` steps around it (milestone, delivered finish)
+    are bypasses."""
     calls, posted = make_failing_gh(
         monkeypatch,
         lambda command: (
             command[:2] == ["gh", "issue"]
             and "comment" in command
+            # Only the scene comment POST fails: the `Muyan Pilot
+            # failed` comment embeds the scene body in its error
+            # detail, so it must not 404 in the fake.
             and "Muyan Pilot opened PR:" in command[-1]
+            and "Muyan Pilot failed" not in command[-1]
         ),
     )
     patch_process_deps(monkeypatch, tmp_path)
@@ -816,19 +825,39 @@ def test_process_issue_scene_comment_failure_does_not_fail_delivery(
                         edits.append(kwargs))
     caplog.set_level("ERROR")
 
-    pr_url = runner.process_issue(make_issue(), make_config(tmp_path),
-                                  "xqliu/muyan-pilot")
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.process_issue(make_issue(), make_config(tmp_path),
+                             "xqliu/muyan-pilot")
 
-    assert pr_url == "https://github.com/xqliu/muyan-pilot/pull/40"
-    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
-    assert any("progress_publish_failed" in line
-               for line in caplog.text.splitlines()), caplog.text
-    # The milestone and the delivered finish still ran.
-    assert any("Muyan Pilot: PR opened" in body for body in posted)
-    assert any(_progress_patch_of(command) for command in calls)
+    # The delivery failed: the Issue is marked ai-blocked...
+    assert any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    # ...with a run-marked `Muyan Pilot failed` comment naming the
+    # scene-comment failure...
+    comment_bodies = [
+        command[-1] for command in calls
+        if command[:2] == ["gh", "issue"] and "comment" in command
+    ]
+    failed = [body for body in comment_bodies
+              if "Muyan Pilot failed" in body]
+    assert failed, comment_bodies
+    assert "Muyan Pilot opened PR:" in failed[0]
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failed[0]
+    # ...and the failure is NOT logged as a progress bypass (the scene
+    # comment is delivery, not observability).
+    assert not any("progress_publish_failed" in line
+                   for line in caplog.text.splitlines()), caplog.text
+    # The `PR opened` milestone was never posted: the scene comment is
+    # the first delivery-record step and its failure interrupts the
+    # flow before the bypass steps (a PR without a resumable scene must
+    # not be announced as delivered).
+    assert not any("Muyan Pilot: PR opened" in body for body in posted)
+    # The terminal blocked scene landed in the progress comment (the
+    # failure-path publishing, like the rest of the failure report).
+    assert any("Muyan Pilot: blocked" in body for body in posted)
     last_patch = [c for c in calls if _progress_patch_of(c)][-1]
     last_body = last_patch[last_patch.index("--field") + 1][len("body="):]
-    assert "Muyan Pilot delivered" in last_body
+    assert "Muyan Pilot blocked" in last_body
+    assert "Muyan Pilot opened PR:" in last_body
 
 
 def test_process_issue_publishing_failure_still_logs_run_end(
@@ -1007,38 +1036,93 @@ def test_process_issue_plan_test_milestone_failures_do_not_fail_delivery(
     assert any("Muyan Pilot: PR opened" in body for body in posted)
 
 
+def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #79: on a REAL delivery failure (Pi exploded), the
+    failure-path progress publishing (blocked milestone, blocked-scene
+    finish) is bypass too: a 404 there must not abort the `ai-blocked`
+    label transition, the `Muyan Pilot failed` comment, or the
+    re-raise — the progress failure only logs
+    `progress_publish_failed` (a bypass failure never decides whether
+    the delivery succeeded, Issue #79)."""
+    calls, posted = make_failing_gh(
+        monkeypatch,
+        lambda command: (
+            command[:2] == ["gh", "api"]
+            and "--method" in command
+            and (
+                # The blocked milestone POST...
+                ("POST" in command
+                 and "Muyan Pilot: blocked" in command[-1])
+                # ...and the blocked-scene finish PATCH.
+                or "PATCH" in command
+            )
+        ),
+    )
+    patch_process_deps(
+        monkeypatch, tmp_path,
+        run_pi_side_effect=subprocess.CalledProcessError(
+            3, ["pi"], stderr="pi exploded",
+        ),
+    )
+    edits = []
+    monkeypatch.setattr(runner, "edit_issue", lambda number, **kwargs:
+                        edits.append(kwargs))
+    caplog.set_level("ERROR")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.process_issue(make_issue(), make_config(tmp_path),
+                             "xqliu/muyan-pilot")
+
+    # The `ai-blocked` transition completed even though the progress
+    # publishing 404'd...
+    assert any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    # ...the `Muyan Pilot failed` comment was posted...
+    comment_bodies = [
+        command[-1] for command in calls
+        if command[:2] == ["gh", "issue"] and "comment" in command
+    ]
+    assert any("Muyan Pilot failed" in body for body in comment_bodies)
+    # ...and the progress failures were logged as bypass, not re-raised
+    # out of the failure report.
+    assert any(
+        "progress_publish_failed" in line
+        and "run=a1b2c3d4" in line
+        and "role=implement" in line
+        for line in caplog.text.splitlines()
+    ), caplog.text
+    # The failure report did not die on the first progress failure:
+    # the blocked-scene finish was still attempted after the blocked
+    # milestone 404'd (independent bypass steps), so the blocked scene
+    # PATCH was attempted...
+    attempted_patches = [
+        command for command in calls
+        if command[:2] == ["gh", "api"]
+        and "--method" in command
+        and "PATCH" in command
+    ]
+    assert attempted_patches, "the blocked-scene finish was not attempted"
+    # ...both bypass steps failed (two logged failures)...
+    assert caplog.text.count("progress_publish_failed") >= 2, caplog.text
+    # ...and the blocked milestone was never posted.
+    assert not any("Muyan Pilot: blocked" in body for body in posted)
+
+
 # --- review_and_merge_if_clean wiring (the reviewer stays observable) ---------
 
 
 def test_review_and_merge_posts_review_findings_milestone(monkeypatch, tmp_path):
-    calls, posted = make_fake_gh(monkeypatch)
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
-    monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: {
-        "number": 4, "url": "https://github.com/xqliu/muyan-pilot/pull/40",
-        "base_ref": "main", "base_oid": "b1",
-        "head_ref": "h", "head_oid": "h1",
+    findings_verdict = "REVIEW_VERDICT " + json.dumps({
+        "verdict": "findings", "blockers": 1, "majors": 0, "minors": 0,
+        "findings": [{"level": "Blocker", "location": "a.py:1",
+                      "note": "x"}],
     })
-    monkeypatch.setattr(runner, "run_review", lambda *a, **k:
-                        "REVIEW_VERDICT " + json.dumps({
-                            "verdict": "findings", "blockers": 1,
-                            "majors": 0, "minors": 0,
-                            "findings": [{"level": "Blocker",
-                                          "location": "a.py:1",
-                                          "note": "x"}],
-                        }))
-    monkeypatch.setattr(runner, "merge_gate",
-                        lambda *a, **k: (_ for _ in ()).throw(
-                            AssertionError("no merge")))
-    monkeypatch.setattr(runner, "edit_issue", Mock())
-    monkeypatch.setattr(runner, "comment_issue", Mock())
-    monkeypatch.setattr(runner, "comment_pr", Mock())
-    merged = runner.review_and_merge_if_clean(
-        tmp_path, "branch", "main",
-        {"repo_dir": tmp_path, "base_branch": "main", "base_sha": "b1",
-         "run_id": "a1b2c3d4"},
-        "xqliu/muyan-pilot", 18,
+    merged, edits, calls, posted = _run_review_and_merge(
+        monkeypatch, tmp_path, verdict=findings_verdict,
     )
     assert merged is False
+    assert any(kwargs.get("add") == "ai-fix-needed" for kwargs in edits)
     milestones = [
         body for body in posted
         if any(line.startswith(progress.MILESTONE_PREFIX)
@@ -1063,37 +1147,15 @@ def test_review_and_merge_posts_review_findings_milestone(monkeypatch, tmp_path)
 def test_review_and_merge_posts_merged_milestone_and_final_summary(
     monkeypatch, tmp_path,
 ):
-    calls, posted = make_fake_gh(monkeypatch)
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
-    monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: {
-        "number": 4, "url": "https://github.com/xqliu/muyan-pilot/pull/40",
-        "base_ref": "main", "base_oid": "b1",
-        "head_ref": "h", "head_oid": "h1",
+    pass_verdict = "REVIEW_VERDICT " + json.dumps({
+        "verdict": "pass", "blockers": 0, "majors": 0, "minors": 0,
+        "findings": [],
     })
-    monkeypatch.setattr(runner, "run_review", lambda *a, **k:
-                        "REVIEW_VERDICT " + json.dumps({
-                            "verdict": "pass", "blockers": 0, "majors": 0,
-                            "minors": 0, "findings": [],
-                        }))
-    monkeypatch.setattr(runner, "merge_gate", lambda *a, **k: {
-        "number": 4, "url": "https://github.com/xqliu/muyan-pilot/pull/40",
-        "base_ref": "main", "base_oid": "b1",
-        "head_ref": "h", "head_oid": "h1", "merged": True,
-    })
-    monkeypatch.setattr(runner, "confirm_merged",
-                        lambda *a, **k: {
-                            "state": "MERGED", "merge_commit": "m1",
-                        })
-    monkeypatch.setattr(runner, "sync_base_checkout", Mock())
-    monkeypatch.setattr(runner, "edit_issue", Mock())
-    monkeypatch.setattr(runner, "comment_issue", Mock())
-    merged = runner.review_and_merge_if_clean(
-        tmp_path, "branch", "main",
-        {"repo_dir": tmp_path, "base_branch": "main", "base_sha": "b1",
-         "run_id": "a1b2c3d4"},
-        "xqliu/muyan-pilot", 18,
+    merged, edits, calls, posted = _run_review_and_merge(
+        monkeypatch, tmp_path, verdict=pass_verdict,
     )
     assert merged is True
+    assert any(kwargs.get("add") == "ai-merged" for kwargs in edits)
     milestones = [
         body for body in posted
         if any(line.startswith(progress.MILESTONE_PREFIX)
@@ -1115,6 +1177,221 @@ def test_review_and_merge_posts_merged_milestone_and_final_summary(
     assert "merge_commit=m1" in last_body
 
 
+# --- Issue #79: the whole ProgressPublisher path is a bypass in the
+# --- review/merge step (a 404 never marks the Issue ai-blocked) ----------
+
+
+def _progress_call_of(command) -> bool:
+    """True for the `ProgressPublisher` gh traffic (issue comments API:
+    the ensure GET/POST, the milestone POST, the finish PATCH)."""
+    return command[:2] == ["gh", "api"]
+
+
+def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
+                          fail_progress=None):
+    """Run `review_and_merge_if_clean` with a fake gh that optionally
+    404s the progress calls; return (merged, edits, calls, posted).
+    The fake serves ONLY the progress API (issue comments): every
+    other command is rejected, so the test proves the review step's
+    gh traffic is progress publishing plus the mocked delivery steps."""
+    calls = []
+    posted = []
+
+    def fake_run_command(command, **kwargs):
+        calls.append(command)
+        if fail_progress is not None and fail_progress(command):
+            raise subprocess.CalledProcessError(
+                1, command, stderr="gh: Not Found (HTTP 404)",
+            )
+        if command[:2] == ["gh", "api"]:
+            if "--method" not in command:
+                return json.dumps([])
+            method = command[command.index("--method") + 1]
+            if method == "POST":
+                body = command[command.index("--field") + 1]
+                posted.append(body[len("body="):])
+                return json.dumps({"id": 77, "body": body[len("body="):],
+                                   "url": "https://x/77"})
+            return ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    # The fake rejects anything that is not progress API traffic.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run_command(["gh", "release", "list"])
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: {
+        "number": 4, "url": "https://github.com/xqliu/muyan-pilot/pull/40",
+        "base_ref": "main", "base_oid": "b1",
+        "head_ref": "h", "head_oid": "h1",
+    })
+    monkeypatch.setattr(runner, "run_review", lambda *a, **k: verdict)
+    edits = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda number, **kwargs: edits.append(kwargs),
+    )
+    monkeypatch.setattr(runner, "comment_issue", Mock())
+    monkeypatch.setattr(runner, "comment_pr", Mock())
+    if "pass" in verdict:
+        monkeypatch.setattr(runner, "merge_gate", lambda *a, **k: {
+            "number": 4, "url": "https://github.com/xqliu/muyan-pilot/pull/40",
+            "base_ref": "main", "base_oid": "b1",
+            "head_ref": "h", "head_oid": "h1", "merged": True,
+        })
+        monkeypatch.setattr(runner, "confirm_merged", lambda *a, **k: {
+            "state": "MERGED", "merge_commit": "m1",
+        })
+        monkeypatch.setattr(runner, "sync_base_checkout", Mock())
+    else:
+        # Findings: the merge gate must never be reached (the Issue
+        # moves to ai-fix-needed instead).
+        monkeypatch.setattr(runner, "merge_gate",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("no merge")))
+    merged = runner.review_and_merge_if_clean(
+        tmp_path, "branch", "main",
+        {"repo_dir": tmp_path, "base_branch": "main", "base_sha": "b1",
+         "run_id": "a1b2c3d4"},
+        "xqliu/muyan-pilot", 18,
+    )
+    return merged, edits, calls, posted
+
+
+def test_review_and_merge_ensure_failure_does_not_block_issue(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #79 acceptance: the progress comment 404s in the review
+    step (the ensure GET/POST before the review Pi). The review must
+    still run and the delivery state must still move: findings land
+    `ai-fix-needed`, a clean verdict merges and lands `ai-merged` —
+    never `ai-blocked`, and the failure is logged as
+    `progress_publish_failed` only."""
+    findings_verdict = "REVIEW_VERDICT " + json.dumps({
+        "verdict": "findings", "blockers": 1, "majors": 0, "minors": 0,
+        "findings": [{"level": "Blocker", "location": "a.py:1",
+                      "note": "x"}],
+    })
+    caplog.set_level("ERROR")
+    merged, edits, calls, posted = _run_review_and_merge(
+        monkeypatch, tmp_path, verdict=findings_verdict,
+        fail_progress=_progress_call_of,
+    )
+    assert merged is False
+    # The findings state transition happened (the next review session
+    # retries the same PR)...
+    assert any(kwargs.get("add") == "ai-fix-needed" for kwargs in edits)
+    # ...the review ran (run_review was called: the findings comment
+    # was posted to the Issue)...
+    assert runner.comment_issue.called
+    # ...and the delivery was NOT marked blocked.
+    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    # The progress failure is logged as bypass.
+    assert any(
+        "progress_publish_failed" in line
+        and "run=a1b2c3d4" in line
+        and "issue=xqliu/muyan-pilot#18" in line
+        and "role=review" in line
+        for line in caplog.text.splitlines()
+    ), caplog.text
+    # No progress comment was posted (the fake 404s all progress
+    # traffic), but the delivery-record steps still ran: the findings
+    # milestone was attempted...
+    assert posted == []
+    attempted_milestones = [
+        command for command in calls
+        if command[:2] == ["gh", "api"]
+        and "--method" in command
+        and "POST" in command
+        and "Muyan Pilot: review findings" in command[-1]
+    ]
+    assert attempted_milestones, "the findings milestone was not attempted"
+    # ...and the findings finish was attempted too (it raises
+    # `no progress comment to update` because the ensure 404'd, and
+    # that is logged as bypass as well — no PATCH can run without a
+    # tracked comment id).
+    assert caplog.text.count("progress_publish_failed") >= 2, caplog.text
+
+
+def test_review_and_merge_clean_verdict_merges_despite_progress_404(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #79: the same 404 on a clean verdict must not stop the
+    merge: the PR is merged, the Issue is labeled `ai-merged`, and the
+    progress failure is logged as `progress_publish_failed` only."""
+    pass_verdict = "REVIEW_VERDICT " + json.dumps({
+        "verdict": "pass", "blockers": 0, "majors": 0, "minors": 0,
+        "findings": [],
+    })
+    caplog.set_level("ERROR")
+    merged, edits, calls, posted = _run_review_and_merge(
+        monkeypatch, tmp_path, verdict=pass_verdict,
+        fail_progress=_progress_call_of,
+    )
+    assert merged is True
+    # The merge landed and the Issue is ai-merged...
+    assert any(kwargs.get("add") == "ai-merged" for kwargs in edits)
+    # ...the merged PR scene comment was posted (delivery record, not
+    # progress)...
+    assert runner.comment_issue.called
+    # ...and the delivery was NOT marked blocked.
+    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    # The progress failures are logged as bypass (the merged milestone
+    # and the delivered finish were both attempted and 404'd).
+    assert caplog.text.count("progress_publish_failed") >= 2, caplog.text
+    assert all(
+        "role=review" in line
+        for line in caplog.text.splitlines()
+        if "progress_publish_failed" in line
+    ), caplog.text
+    assert posted == []
+
+
+def test_review_and_merge_findings_publish_failure_does_not_block_issue(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #79: the findings-branch milestone/finish 404 AFTER the
+    review verdict is the same contract: logged, not fatal; the
+    `ai-fix-needed` transition still lands."""
+    findings_verdict = "REVIEW_VERDICT " + json.dumps({
+        "verdict": "findings", "blockers": 1, "majors": 0, "minors": 0,
+        "findings": [{"level": "Blocker", "location": "a.py:1",
+                      "note": "x"}],
+    })
+    caplog.set_level("ERROR")
+    merged, edits, calls, posted = _run_review_and_merge(
+        monkeypatch, tmp_path, verdict=findings_verdict,
+        fail_progress=lambda command: (
+            command[:2] == ["gh", "api"]
+            and "--method" in command
+            and (
+                ("POST" in command
+                 and "Muyan Pilot: review findings" in command[-1])
+                or "PATCH" in command
+            )
+        ),
+    )
+    assert merged is False
+    assert any(kwargs.get("add") == "ai-fix-needed" for kwargs in edits)
+    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    assert any("progress_publish_failed" in line
+               for line in caplog.text.splitlines()), caplog.text
+    # The ensure succeeded (only the findings milestone/finish 404'd)...
+    assert any("Muyan Pilot progress" in body for body in posted)
+    # ...the failed milestone was not posted...
+    assert not any("Muyan Pilot: review findings" in body
+                   for body in posted)
+    # ...and the findings finish was still attempted (independent
+    # bypass step).
+    attempted_patches = [
+        command for command in calls
+        if command[:2] == ["gh", "api"]
+        and "--method" in command
+        and "PATCH" in command
+    ]
+    assert attempted_patches, "the findings finish was not attempted"
+
+
 # --- wait_for_delivery terminal failures stay observable ----------------------
 
 
@@ -1123,53 +1400,19 @@ def test_wait_for_delivery_closed_unmerged_posts_blocked_milestone(
 ):
     pr_url = "https://github.com/owner/repo/pull/46"
     api_calls = []
-    existing = {
-        "id": 77,
-        "body": (
-            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
-            "**Muyan Pilot progress**\n\nawaiting review"
-        ),
-    }
-
-    def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"]:
-            return json.dumps({"state": "CLOSED"})
-        if command[:2] == ["gh", "issue"]:
-            # The blocked scene derives the round from the trusted
-            # review-round comments (review round 2, PR #42); Issue
-            # #82: both opened-PR states are review states, so the
-            # role is always `review` (the label lookup only serves
-            # the leftover-label cleanup below).
-            if command[-1] == "labels":
-                return json.dumps({"labels": [{"name": "ai-fix-needed"}]})
-            return json.dumps({"comments": [
-                {
-                    "body": (
-                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                        "Muyan Pilot review round 1 for PR #46: clean"
-                    ),
-                    "authorAssociation": "OWNER",
-                },
-                {
-                    "body": (
-                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                        "Muyan Pilot review round 2 for PR #46: findings"
-                    ),
-                    "authorAssociation": "OWNER",
-                },
-            ]})
-        api_calls.append(command)
-        if "--method" not in command:
-            # The run's live progress comment exists.
-            return json.dumps([existing])
-        method = command[command.index("--method") + 1]
-        if method == "POST":
-            body = command[command.index("--field") + 1]
-            return json.dumps({"id": 78, "body": body[len("body="):],
-                               "url": "https://x/78"})
-        return ""
-
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    posted = []
+    # The blocked scene derives the round from the trusted
+    # review-round comments (review round 2, PR #42); Issue
+    # #82: both opened-PR states are review states, so the
+    # role is always `review` (the label lookup only serves
+    # the leftover-label cleanup below).
+    _wait_delivery_fake_gh(
+        monkeypatch, pr_state="CLOSED",
+        labels=[{"name": "ai-fix-needed"}],
+        comments=_review_round_comments(),
+        fail_progress=lambda command: False,
+        api_calls=api_calls, posted=posted,
+    )
     monkeypatch.setattr(runner, "edit_issue", Mock())
     monkeypatch.setattr(runner, "comment_issue", Mock())
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
@@ -1219,59 +1462,19 @@ def test_wait_for_delivery_review_failure_finishes_progress_comment_with_blocked
     blocked milestone."""
     pr_url = "https://github.com/owner/repo/pull/46"
     api_calls = []
-    existing = {
-        "id": 77,
-        "body": (
-            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
-            "**Muyan Pilot progress**\n\nawaiting review"
-        ),
-    }
-
-    def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"]:
-            return json.dumps({"state": "OPEN"})
-        if command[:2] == ["gh", "api"]:
-            api_calls.append(command)
-            if "--method" not in command:
-                return json.dumps([existing])
-            method = command[command.index("--method") + 1]
-            if method == "POST":
-                body = command[command.index("--field") + 1]
-                return json.dumps({"id": 78, "body": body[len("body="):],
-                                   "url": "https://x/78"})
-            return ""
-        if command[:2] == ["gh", "issue"]:
-            # The review scan: the Issue is awaiting review, and the
-            # comment history carries no trusted scene, so the review
-            # fails fast. The trusted review-round comments still count
-            # for the blocked scene's round field (review round 2,
-            # PR #42).
-            if command[-1] == "labels":
-                return json.dumps({"labels": [
-                    {"name": "ai-pr-opened"},
-                ]})
-            return json.dumps({"comments": [
-                {
-                    "body": (
-                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                        "Muyan Pilot review round 1 for PR #46: clean"
-                    ),
-                    "authorAssociation": "OWNER",
-                },
-                {
-                    "body": (
-                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                        "Muyan Pilot review round 2 for PR #46: findings"
-                    ),
-                    "authorAssociation": "OWNER",
-                },
-            ]})
-        raise AssertionError(f"unexpected command: {command}")
-
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    # The fake rejects anything that is not pr/api/issue traffic.
-    with pytest.raises(AssertionError, match="unexpected command"):
-        fake_run(["gh", "release", "list"])
+    posted = []
+    # The review scan: the Issue is awaiting review, and the
+    # comment history carries no trusted scene, so the review
+    # fails fast. The trusted review-round comments still count
+    # for the blocked scene's round field (review round 2,
+    # PR #42).
+    _wait_delivery_fake_gh(
+        monkeypatch, pr_state="OPEN",
+        labels=[{"name": "ai-pr-opened"}],
+        comments=_review_round_comments(),
+        fail_progress=lambda command: False,
+        api_calls=api_calls, posted=posted,
+    )
     monkeypatch.setattr(runner, "edit_issue", Mock())
     monkeypatch.setattr(runner, "comment_issue", Mock())
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
@@ -1310,3 +1513,230 @@ def test_wait_for_delivery_review_failure_finishes_progress_comment_with_blocked
     assert not any(
         "**Muyan Pilot progress**" in body for body in posted_bodies
     )
+
+
+# --- Issue #79: the blocked-scene progress publishing in the wait loop is
+# --- bypass (a 404 never escapes the loop, the terminal bookkeeping
+# --- completes and the slot is released) -------------------------------------
+
+
+def _wait_delivery_fake_gh(monkeypatch, *, pr_state, labels, comments,
+                           fail_progress, api_calls, posted):
+    """Fake gh for `wait_for_delivery`: fixed PR state/labels/comments,
+    and a progress API that raises when `fail_progress` matches.
+    `api_calls` records every attempt (including the 404'd ones);
+    `posted` records only the bodies that were actually posted."""
+    existing = {
+        "id": 77,
+        "body": (
+            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+            "**Muyan Pilot progress**\n\nawaiting review"
+        ),
+    }
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps({"state": pr_state})
+        if command[:2] == ["gh", "issue"]:
+            if command[-1] == "labels":
+                return json.dumps({"labels": labels})
+            return json.dumps({"comments": comments})
+        api_calls.append(command)
+        if fail_progress(command):
+            raise subprocess.CalledProcessError(
+                1, command, stderr="gh: Not Found (HTTP 404)",
+            )
+        if "--method" not in command:
+            return json.dumps([existing])
+        method = command[command.index("--method") + 1]
+        if method == "POST":
+            body = command[command.index("--field") + 1]
+            posted.append(body[len("body="):])
+            return json.dumps({"id": 78, "body": body[len("body="):],
+                               "url": "https://x/78"})
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+
+
+def _review_round_comments():
+    return [
+        {
+            "body": (
+                "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                "Muyan Pilot review round 1 for PR #46: clean"
+            ),
+            "authorAssociation": "OWNER",
+        },
+        {
+            "body": (
+                "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                "Muyan Pilot review round 2 for PR #46: findings"
+            ),
+            "authorAssociation": "OWNER",
+        },
+    ]
+
+
+def _blocked_progress_failures(command) -> bool:
+    """404 the blocked-scene progress traffic: the blocked milestone
+    POST and the blocked-scene finish PATCH."""
+    return (
+        command[:2] == ["gh", "api"]
+        and "--method" in command
+        and (
+            ("POST" in command
+             and "Muyan Pilot: blocked" in command[-1])
+            or "PATCH" in command
+        )
+    )
+
+
+def test_wait_for_delivery_closed_unmerged_progress_failure_still_releases(
+    monkeypatch, caplog,
+):
+    """Issue #79: the PR is closed without a merge and the blocked-scene
+    progress publishing (milestone, blocked-scene finish) 404s. The
+    terminal bookkeeping must still complete — the Issue is marked
+    `ai-blocked` with the failure comment — and the loop RETURNS (the
+    slot is released); the progress failure is logged as
+    `progress_publish_failed` only, never re-raised."""
+    api_calls = []
+    posted = []
+    _wait_delivery_fake_gh(
+        monkeypatch, pr_state="CLOSED",
+        labels=[{"name": "ai-fix-needed"}],
+        comments=_review_round_comments(),
+        fail_progress=_blocked_progress_failures, api_calls=api_calls,
+        posted=posted,
+    )
+    edits = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda number, **kwargs: edits.append(kwargs),
+    )
+    comments = []
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda number, **kwargs: comments.append(kwargs),
+    )
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    caplog.set_level("ERROR")
+
+    # No exception: the loop completed the terminal failure and the
+    # slot is released by the caller.
+    runner.wait_for_delivery(
+        "https://github.com/owner/repo/pull/46",
+        {"number": 39, "title": "t", "body": ""}, {}, "owner/repo",
+    )
+
+    # The `ai-blocked` transition (plus the leftover-label cleanup)
+    # completed even though the progress publishing 404'd...
+    assert {
+        "repo": "owner/repo", "add": "ai-blocked",
+        "remove": "ai-pr-opened",
+    } in edits
+    assert {"repo": "owner/repo", "remove": "ai-fix-needed"} in edits
+    # ...the failure comment was posted...
+    assert any(
+        "closed without a merge" in kwargs.get("body", "")
+        for kwargs in comments
+    )
+    # ...and the progress failures were logged as bypass (the blocked
+    # milestone and the blocked-scene finish were both attempted).
+    assert caplog.text.count("progress_publish_failed") >= 2, caplog.text
+    assert all(
+        "role=review" in line
+        for line in caplog.text.splitlines()
+        if "progress_publish_failed" in line
+    ), caplog.text
+    # Nothing was posted (the fake 404s the blocked milestone POST)...
+    assert not any("Muyan Pilot: blocked" in body for body in posted)
+    # ...but the blocked milestone was attempted...
+    attempted_milestones = [
+        command for command in api_calls
+        if command[:2] == ["gh", "api"]
+        and "--method" in command
+        and "POST" in command
+        and "Muyan Pilot: blocked" in command[-1]
+    ]
+    assert attempted_milestones, "the blocked milestone was not attempted"
+    # ...and the blocked-scene finish was still attempted (independent
+    # bypass step).
+    patches = [
+        command for command in api_calls
+        if command[:2] == ["gh", "api"]
+        and command[2] == "repos/owner/repo/issues/comments/77"
+        and "PATCH" in command
+    ]
+    assert patches, "the blocked-scene finish was not attempted"
+
+
+def test_wait_for_delivery_review_failure_progress_failure_still_releases(
+    monkeypatch, caplog,
+):
+    """Issue #79: the independent review cannot run (no trusted scene)
+    and the blocked-scene progress publishing 404s. The terminal
+    bookkeeping must still complete — the Issue is marked `ai-blocked`
+    ALONE with the failure comment — and the loop RETURNS (the slot is
+    released); the progress failure is logged as
+    `progress_publish_failed` only, never re-raised."""
+    api_calls = []
+    posted = []
+    _wait_delivery_fake_gh(
+        monkeypatch, pr_state="OPEN",
+        labels=[{"name": "ai-pr-opened"}],
+        comments=_review_round_comments(),
+        fail_progress=_blocked_progress_failures, api_calls=api_calls,
+        posted=posted,
+    )
+    edits = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda number, **kwargs: edits.append(kwargs),
+    )
+    comments = []
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda number, **kwargs: comments.append(kwargs),
+    )
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    caplog.set_level("ERROR")
+
+    # No exception: the loop completed the terminal failure and the
+    # slot is released by the caller.
+    runner.wait_for_delivery(
+        "https://github.com/owner/repo/pull/46",
+        {"number": 39, "title": "t", "body": ""},
+        {"repo_dir": Path("/srv/repo")}, "owner/repo",
+    )
+
+    # The `ai-blocked` transition completed even though the progress
+    # publishing 404'd...
+    assert {
+        "repo": "owner/repo", "add": "ai-blocked",
+        "remove": "ai-pr-opened",
+    } in edits
+    # ...the failure comment was posted...
+    assert any(
+        "independent review" in kwargs.get("body", "")
+        and "failed" in kwargs.get("body", "")
+        for kwargs in comments
+    )
+    # ...and the progress failures were logged as bypass (the blocked
+    # milestone and the blocked-scene finish were both attempted).
+    assert caplog.text.count("progress_publish_failed") >= 2, caplog.text
+    assert all(
+        "role=review" in line
+        for line in caplog.text.splitlines()
+        if "progress_publish_failed" in line
+    ), caplog.text
+    # The blocked-scene finish was still attempted (independent bypass
+    # step).
+    patches = [
+        command for command in api_calls
+        if command[:2] == ["gh", "api"]
+        and command[2] == "repos/owner/repo/issues/comments/77"
+        and "PATCH" in command
+    ]
+    assert patches, "the blocked-scene finish was not attempted"
