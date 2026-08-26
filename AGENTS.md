@@ -76,12 +76,15 @@ is **one runtime outcome** (when X, should Y, actually Z).
   run marker and kept — no database. On success the comment becomes the
   final delivery summary (PR, tests, review evidence); on failure it becomes
   the blocked scene with the next-step reason.
-- Once the PR exists (verified and labeled `ai-pr-opened`), the delivery is
-  complete: progress-publishing failures (the delivered PATCH, the `PR
-  opened` milestone, the opened-PR scene comment) are logged as
-  `progress_publish_failed` and never fail the delivery or mark the Issue
-  `ai-blocked` — the run continues into the independent review/merge loop
-  (Issue #60).
+- The GitHub progress comment is a pure bypass (Issue #79): every
+  `ProgressPublisher` step (ensure / live patch / milestone / finish, in
+  the implement and review roles alike) fails as
+  `progress_publish_failed` and never fails the delivery, never marks the
+  Issue `ai-blocked`, and never skips `run_pi` / `wait_for_delivery` —
+  the journal is the record, the comment is observability (Issue #60
+  first applied this to the post-PR record). The `Muyan Pilot opened PR:`
+  scene comment is NOT a bypass: the next tick's resume parses it
+  (Issue #45/#89), so a failure there fails the delivery fail-fast.
 
 ## Base freshness
 

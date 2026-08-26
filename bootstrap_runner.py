@@ -1335,24 +1335,38 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
             if current_run_id():
                 body = f"{run_marker(current_run_id())}\n{body}"
             comment_issue(number, repo=source_repo, body=body)
-            if current_run_id():
-                ProgressPublisher(
-                    number, source_repo, current_run_id(),
-                    run_command=run_command,
-                ).milestone(
-                    f"blocked: the resume verification of "
-                    f"PR {scene['pr_url']} failed: {exc}"
+            bound_run_id = current_run_id()
+            if bound_run_id:
+                # Issue #79: the blocked-scene progress publishing is
+                # bypass — a 404 here must not abort the failure
+                # reporting (the `ai-blocked` transition and the
+                # failure comment above already completed, and the
+                # original error is re-raised below either way).
+                _safe_publish(
+                    run_id=bound_run_id, issue=number,
+                    source_repo=source_repo, role=ROLE_REVIEW,
+                    action=lambda: ProgressPublisher(
+                        number, source_repo, bound_run_id,
+                        run_command=run_command,
+                    ).milestone(
+                        f"blocked: the resume verification of "
+                        f"PR {scene['pr_url']} failed: {exc}"
+                    ),
                 )
-                _finish_blocked_progress(
-                    number, current_run_id(), source_repo, worktree,
-                    branch, scene["pr_url"],
-                    f"the resume verification of PR {scene['pr_url']} "
-                    f"failed: {exc}",
-                    "fix the resume verification failure above and "
-                    "resume the delivery of this same PR",
-                    role=ROLE_REVIEW,
-                    review_round=review_rounds_so_far(
-                        issue_comments(number, repo=source_repo),
+                _safe_publish(
+                    run_id=bound_run_id, issue=number,
+                    source_repo=source_repo, role=ROLE_REVIEW,
+                    action=lambda: _finish_blocked_progress(
+                        number, bound_run_id, source_repo, worktree,
+                        branch, scene["pr_url"],
+                        f"the resume verification of PR "
+                        f"{scene['pr_url']} failed: {exc}",
+                        "fix the resume verification failure above "
+                        "and resume the delivery of this same PR",
+                        role=ROLE_REVIEW,
+                        review_round=review_rounds_so_far(
+                            issue_comments(number, repo=source_repo),
+                        ),
                     ),
                 )
         except Exception:
@@ -1748,11 +1762,18 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         number, source_repo, config["run_id"], run_command=run_command,
     )
     started = time.monotonic()
-    publisher.ensure(_progress_body(_progress_state(
-        issue=number, run_id=config["run_id"], role=ROLE_REVIEW,
-        branch=branch, worktree=worktree, started=started,
-        pr_url=pr["url"], review_round=round,
-    )))
+    # Issue #79: ensure is a bypass — a 404 here must not stop the
+    # review (the delivery is already open and awaiting review; the
+    # journal is the record, the progress comment is observability).
+    _safe_publish(
+        run_id=config["run_id"], issue=number,
+        source_repo=source_repo, role=ROLE_REVIEW,
+        action=lambda: publisher.ensure(_progress_body(_progress_state(
+            issue=number, run_id=config["run_id"], role=ROLE_REVIEW,
+            branch=branch, worktree=worktree, started=started,
+            pr_url=pr["url"], review_round=round,
+        ))),
+    )
     output = run_review(
         worktree, pr, config, source_repo, number, branch, round,
         progress=LiveProgressThrottle(
@@ -1788,21 +1809,35 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         )
         comment_issue(number, repo=source_repo, body=body)
         comment_pr(pr["number"], body=body)
-        publisher.milestone(
-            f"review findings: round {round}, {verdict['blockers']} "
-            f"blocker(s), {verdict['majors']} major(s) for "
-            f"PR #{pr['number']}"
+        # Issue #79: the findings publishing is bypass — a 404 here
+        # must not stop the `ai-fix-needed` transition below (the next
+        # review session retries the same PR either way).
+        _safe_publish(
+            run_id=config["run_id"], issue=number,
+            source_repo=source_repo, role=ROLE_REVIEW,
+            action=lambda: publisher.milestone(
+                f"review findings: round {round}, "
+                f"{verdict['blockers']} blocker(s), "
+                f"{verdict['majors']} major(s) for PR #{pr['number']}"
+            ),
         )
-        publisher.finish(_progress_body(_progress_state(
-            issue=number, run_id=config["run_id"], role=ROLE_REVIEW,
-            branch=branch, worktree=worktree, started=started,
-            pr_url=pr["url"], review_round=round,
-        ), outcome=(
-            "**Muyan Pilot review findings**\n\n"
-            f"round {round}: {verdict['blockers']} blocker(s), "
-            f"{verdict['majors']} major(s); the next review session "
-            "retries the same PR automatically"
-        )))
+        _safe_publish(
+            run_id=config["run_id"], issue=number,
+            source_repo=source_repo, role=ROLE_REVIEW,
+            action=lambda: publisher.finish(_progress_body(
+                _progress_state(
+                    issue=number, run_id=config["run_id"],
+                    role=ROLE_REVIEW, branch=branch,
+                    worktree=worktree, started=started,
+                    pr_url=pr["url"], review_round=round,
+                ), outcome=(
+                    "**Muyan Pilot review findings**\n\n"
+                    f"round {round}: {verdict['blockers']} blocker(s), "
+                    f"{verdict['majors']} major(s); the next review "
+                    "session retries the same PR automatically"
+                ),
+            )),
+        )
         edit_issue(
             number, repo=source_repo, add=FIX_NEEDED_LABEL,
             remove=PR_OPENED_LABEL,
@@ -1848,20 +1883,35 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         )
         return False
     confirmed = confirm_merged(worktree, merged, base_branch)
-    publisher.milestone(
-        f"merged: {merged['url']} "
-        f"(merge_commit={confirmed['merge_commit']} review_rounds={round})"
+    # Issue #79: the merged publishing is bypass — the GitHub merge
+    # already landed; a 404 here must not stop the `ai-merged`
+    # transition and the merged PR scene comment below.
+    _safe_publish(
+        run_id=config["run_id"], issue=number,
+        source_repo=source_repo, role=ROLE_REVIEW,
+        action=lambda: publisher.milestone(
+            f"merged: {merged['url']} "
+            f"(merge_commit={confirmed['merge_commit']} "
+            f"review_rounds={round})"
+        ),
     )
-    publisher.finish(_progress_body(_progress_state(
-        issue=number, run_id=config["run_id"], role=ROLE_REVIEW,
-        branch=branch, worktree=worktree, started=started,
-        pr_url=merged["url"], review_round=round,
-    ), outcome=(
-        "**Muyan Pilot delivered**\n\n"
-        f"PR {merged['url']} merged "
-        f"(merge_commit={confirmed['merge_commit']} "
-        f"review_rounds={round})"
-    )))
+    _safe_publish(
+        run_id=config["run_id"], issue=number,
+        source_repo=source_repo, role=ROLE_REVIEW,
+        action=lambda: publisher.finish(_progress_body(
+            _progress_state(
+                issue=number, run_id=config["run_id"],
+                role=ROLE_REVIEW, branch=branch,
+                worktree=worktree, started=started,
+                pr_url=merged["url"], review_round=round,
+            ), outcome=(
+                "**Muyan Pilot delivered**\n\n"
+                f"PR {merged['url']} merged "
+                f"(merge_commit={confirmed['merge_commit']} "
+                f"review_rounds={round})"
+            ),
+        )),
+    )
     # The GitHub merge already landed. Record ai-merged before touching
     # the local systemd checkout: a checkout that cannot fast-forward is
     # runner ops, not a failed delivery (must not become ai-blocked).
@@ -2209,6 +2259,14 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     )
     worktree: Path | None = None
     started = time.monotonic()
+    # Issue #79: the `Muyan Pilot opened PR:` scene comment is the first
+    # delivery step AFTER the opened-PR label transition that can still
+    # fail; when it does, the failure path below must leave the Issue in
+    # the terminal state `ai-blocked` ALONE (README label lifecycle:
+    # `ai-pr-opened` is removed on terminal failure) — the same
+    # convention as every other terminal failure path (verify_resumed_pr,
+    # wait_for_delivery).
+    pr_opened = False
     try:
         worktree = create_worktree(
             config["repo_dir"], source_repo, number, run_id, base_sha,
@@ -2272,38 +2330,37 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             number, repo=source_repo, add=PR_OPENED_LABEL,
             remove=IN_PROGRESS_LABEL,
         )
-        # The delivery is complete here: the PR is verified and the
-        # Issue has left the claim state for the review/fix loop. From
-        # here on only the delivery-record publishing remains, and a
-        # failure there must NOT fail the delivery (Issue #60: the
+        pr_opened = True
+        # The scene comment is NOT a bypass (Issue #79): the next
+        # tick's resume (Issue #45/#89) parses it to recover run_id,
+        # base and PR, so a failure here is a real delivery failure —
+        # it propagates into the failure path below (ai-blocked, the
+        # `Muyan Pilot failed` comment, re-raise). The `ProgressPublisher`
+        # steps around it stay bypass: a failure there (Issue #60: the
         # #57 delivered PATCH 404'd and the runner labeled the Issue
-        # ai-blocked, skipping the review of a valid PR). Each step is
-        # best-effort and independent — like the in-stream callback,
-        # an error is logged (`progress_publish_failed`) and the next
-        # step still runs — and the run continues into the
-        # review/merge wait loop either way.
-        for step in (
-            lambda: comment_issue(
-                number, repo=source_repo,
-                body=opened_pr_comment_body(run_id, run_info, pr_url),
-            ),
-            lambda: publisher.milestone(
+        # ai-blocked, skipping the review of a valid PR) is logged as
+        # `progress_publish_failed` and the run continues into the
+        # review/merge wait loop.
+        comment_issue(
+            number, repo=source_repo,
+            body=opened_pr_comment_body(run_id, run_info, pr_url),
+        )
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_IMPLEMENT,
+            action=lambda: publisher.milestone(
                 f"PR opened: {pr_url} ({run_info})"
             ),
-            lambda: publisher.finish(_progress_body(_progress_state(
+        )
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_IMPLEMENT,
+            action=lambda: publisher.finish(_progress_body(_progress_state(
                 issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
                 branch=branch, worktree=worktree, started=started,
                 pr_url=pr_url, review_round=0,
             ), outcome="**Muyan Pilot delivered**")),
-        ):
-            try:
-                step()
-            except Exception:
-                LOGGER.exception(
-                    "progress_publish_failed run=%s issue=%s role=%s",
-                    run_id, issue_context(source_repo, number),
-                    ROLE_IMPLEMENT,
-                )
+        )
         LOGGER.info(
             "run_end %s",
             format_end_scene(
@@ -2336,9 +2393,17 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             except Exception:
                 LOGGER.exception("issue=%s activity scene failed", number)
         try:
+            # The claim label is removed on every failure; when the
+            # delivery already made the opened-PR transition (the
+            # scene-comment failure of Issue #79), the opened-PR label
+            # is removed too, so the terminal state is `ai-blocked`
+            # ALONE — never `ai-pr-opened` + `ai-blocked` (README label
+            # lifecycle: `ai-pr-opened` is removed on terminal failure).
             edit_issue(
                 number, repo=source_repo, add=BLOCKED_LABEL,
-                remove=IN_PROGRESS_LABEL,
+                remove=(
+                    PR_OPENED_LABEL if pr_opened else IN_PROGRESS_LABEL
+                ),
             )
             detail = _failure_detail(exc)
             body = (
@@ -2351,21 +2416,35 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             # The blocked milestone is posted even when the worktree was
             # never created or the progress comment was never ensured:
             # the mobile notification of the terminal failure must not
-            # depend on local state.
-            publisher.milestone(
-                f"blocked: {sanitize(detail)} ({run_info})"
+            # depend on local state. Both steps are bypass (Issue #79):
+            # a progress 404 here must not abort the `ai-blocked`
+            # transition above or the re-raise below.
+            _safe_publish(
+                run_id=run_id, issue=number, source_repo=source_repo,
+                role=ROLE_IMPLEMENT,
+                action=lambda: publisher.milestone(
+                    f"blocked: {sanitize(detail)} ({run_info})"
+                ),
             )
             if worktree is not None and publisher.comment_id is not None:
-                publisher.finish(_progress_body(_progress_state(
-                    issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
-                    branch=branch, worktree=worktree, started=started,
-                    pr_url=None, review_round=0,
-                ), outcome=(
-                    "**Muyan Pilot blocked**\n\n"
-                    f"failure: {detail}\n"
-                    "next step: fix the failure above and re-run "
-                    "this Issue (a new run id is created automatically)"
-                )))
+                _safe_publish(
+                    run_id=run_id, issue=number,
+                    source_repo=source_repo, role=ROLE_IMPLEMENT,
+                    action=lambda: publisher.finish(_progress_body(
+                        _progress_state(
+                            issue=number, run_id=run_id,
+                            role=ROLE_IMPLEMENT, branch=branch,
+                            worktree=worktree, started=started,
+                            pr_url=None, review_round=0,
+                        ), outcome=(
+                            "**Muyan Pilot blocked**\n\n"
+                            f"failure: {detail}\n"
+                            "next step: fix the failure above and "
+                            "re-run this Issue (a new run id is "
+                            "created automatically)"
+                        ),
+                    )),
+                )
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
         raise
@@ -2526,12 +2605,20 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 body = f"{marker}\n{body}"
             comment_issue(number, repo=source_repo, body=body)
             if run_id:
-                ProgressPublisher(
-                    number, source_repo, run_id,
-                    run_command=run_command,
-                ).milestone(
-                    f"blocked: PR {pr_url} was closed without a merge; "
-                    "the delivery is terminally failed"
+                # Issue #79: the blocked-scene progress publishing is
+                # bypass — a 404 here must not escape the wait loop
+                # (the terminal bookkeeping above already completed and
+                # the slot must be released).
+                _safe_publish(
+                    run_id=run_id, issue=number,
+                    source_repo=source_repo, role=ROLE_REVIEW,
+                    action=lambda: ProgressPublisher(
+                        number, source_repo, run_id,
+                        run_command=run_command,
+                    ).milestone(
+                        f"blocked: PR {pr_url} was closed without a "
+                        "merge; the delivery is terminally failed"
+                    ),
                 )
                 # The blocked scene carries the actual role and the
                 # completed review rounds (review round 2, PR #42):
@@ -2546,13 +2633,19 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 # The tracked progress comment becomes the blocked scene
                 # (Issue #18): the same terminal body the other failure
                 # paths write, with the next-step reason.
-                _finish_blocked_progress(
-                    number, run_id, source_repo, None, None, pr_url,
-                    f"PR {pr_url} was closed without a merge; the "
-                    "delivery is terminally failed",
-                    "investigate why the PR was closed and re-open the "
-                    "delivery or start a fresh run on the Issue",
-                    role=ROLE_REVIEW, review_round=blocked_round,
+                _safe_publish(
+                    run_id=run_id, issue=number,
+                    source_repo=source_repo, role=ROLE_REVIEW,
+                    action=lambda: _finish_blocked_progress(
+                        number, run_id, source_repo, None, None,
+                        pr_url,
+                        f"PR {pr_url} was closed without a merge; the "
+                        "delivery is terminally failed",
+                        "investigate why the PR was closed and re-open "
+                        "the delivery or start a fresh run on the "
+                        "Issue",
+                        role=ROLE_REVIEW, review_round=blocked_round,
+                    ),
                 )
             return
         labels = issue_labels(number, source_repo)
@@ -2646,12 +2739,20 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     body = f"{marker}\n{body}"
                 comment_issue(number, repo=source_repo, body=body)
                 if run_id:
-                    ProgressPublisher(
-                        number, source_repo, run_id,
-                        run_command=run_command,
-                    ).milestone(
-                        f"blocked: the independent review of PR {pr_url} "
-                        f"failed: {exc}"
+                    # Issue #79: the blocked-scene progress publishing
+                    # is bypass — a 404 here must not escape the wait
+                    # loop (the terminal bookkeeping above already
+                    # completed and the slot must be released).
+                    _safe_publish(
+                        run_id=run_id, issue=number,
+                        source_repo=source_repo, role=ROLE_REVIEW,
+                        action=lambda: ProgressPublisher(
+                            number, source_repo, run_id,
+                            run_command=run_command,
+                        ).milestone(
+                            f"blocked: the independent review of "
+                            f"PR {pr_url} failed: {exc}"
+                        ),
                     )
                     # The blocked scene carries the actual role and the
                     # completed review rounds (review round 2, PR #42):
@@ -2659,16 +2760,20 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     # review, and the trusted review-round comments
                     # bound the round count (GitHub is the only state
                     # store).
-                    _finish_blocked_progress(
-                        number, run_id, source_repo, worktree, branch,
-                        pr_url,
-                        f"the independent review of PR {pr_url} failed: "
-                        f"{exc}",
-                        "fix the review failure above and resume the "
-                        "delivery of this same PR",
-                        role=ROLE_REVIEW,
-                        review_round=review_rounds_so_far(
-                            issue_comments(number, repo=source_repo),
+                    _safe_publish(
+                        run_id=run_id, issue=number,
+                        source_repo=source_repo, role=ROLE_REVIEW,
+                        action=lambda: _finish_blocked_progress(
+                            number, run_id, source_repo, worktree,
+                            branch, pr_url,
+                            f"the independent review of PR {pr_url} "
+                            f"failed: {exc}",
+                            "fix the review failure above and resume "
+                            "the delivery of this same PR",
+                            role=ROLE_REVIEW,
+                            review_round=review_rounds_so_far(
+                                issue_comments(number, repo=source_repo),
+                            ),
                         ),
                     )
                 return
