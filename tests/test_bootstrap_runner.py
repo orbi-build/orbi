@@ -1958,11 +1958,14 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     )
 
 
-def test_main_routes_fix_needed_resume_to_fixer_then_wait(
+def test_main_routes_fix_needed_resume_to_delivery_wait(
     monkeypatch, tmp_path,
 ):
-    """A resumed `ai-fix-needed` delivery runs the Fixer on the same PR
-    (Issue #45) and then enters the delivery wait."""
+    """A resumed `ai-fix-needed` delivery goes straight to the delivery
+    wait (Issue #82: the review session fixes findings in the same
+    session, so there is no cold-start fixer to run). The run id from
+    the scene is bound before the wait so the resumed review's journal
+    lines and comments carry it (Issue #41)."""
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
     _write_prompts(tmp_path)
     config = tmp_path / "muyan-pilot.toml"
@@ -1979,23 +1982,6 @@ def test_main_routes_fix_needed_resume_to_fixer_then_wait(
         lambda repos, slot_dir, max_concurrency: (
             "owner/repo", issue, scene,
         ),
-    )
-
-    def fake_run(command, **kwargs):
-        # The dispatch reads the Issue's current labels to choose the
-        # fixer vs the review wait.
-        assert command[:3] == ["gh", "issue", "view"]
-        assert command[-2:] == ["--json", "labels"]
-        return json.dumps({"labels": [
-            {"name": "ai-ready"}, {"name": "ai-fix-needed"},
-        ]})
-
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    fixes = []
-    monkeypatch.setattr(
-        runner, "resume_delivery",
-        lambda *args, **kwargs: fixes.append((args, kwargs))
-        or scene["pr_url"],
     )
     waits = []
     monkeypatch.setattr(
@@ -2003,10 +1989,10 @@ def test_main_routes_fix_needed_resume_to_fixer_then_wait(
         lambda *args, **kwargs: waits.append((args, kwargs)),
     )
     assert runner.main(["--config", str(config)]) == 0
-    assert len(fixes) == 1
-    assert fixes[0][0][:2] == (issue, scene)
-    # The fixer's verified URL is the one the wait loop holds.
+    # No fixer: the wait runs on the scene's PR URL.
     assert waits[0][0][:2] == (scene["pr_url"], issue)
+    # The resumed review runs under the scene's run id.
+    assert runner.current_run_id() == "a1b2c3d4"
 
 
 def test_main_routes_awaiting_review_resume_to_delivery_wait(
@@ -2014,10 +2000,10 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
 ):
     """A resumed `ai-pr-opened` delivery (stranded by a dead runner or
     the Issue #70 progress 404) goes straight to the delivery wait:
-    the independent review of the same PR runs, and a clean PR is
-    never sent to the Fixer (Issue #45 round-5 contract). The run id
-    from the scene is bound before the wait so the resumed review's
-    journal lines and comments carry it (Issue #41)."""
+    the independent review of the same PR runs (Issue #45 round-5
+    contract: a clean PR is never sent to a fixer). The run id from
+    the scene is bound before the wait so the resumed review's journal
+    lines and comments carry it (Issue #41)."""
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
     _write_prompts(tmp_path)
     config = tmp_path / "muyan-pilot.toml"
@@ -2034,21 +2020,6 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
         lambda repos, slot_dir, max_concurrency: (
             "owner/repo", issue, scene,
         ),
-    )
-
-    def fake_run(command, **kwargs):
-        assert command[:3] == ["gh", "issue", "view"]
-        assert command[-2:] == ["--json", "labels"]
-        return json.dumps({"labels": [
-            {"name": "ai-ready"}, {"name": "ai-pr-opened"},
-        ]})
-
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    fixes = []
-    monkeypatch.setattr(
-        runner, "resume_delivery",
-        lambda *args, **kwargs: fixes.append((args, kwargs))
-        or scene["pr_url"],
     )
     waits = []
     monkeypatch.setattr(
@@ -2057,7 +2028,6 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
     )
     assert runner.main(["--config", str(config)]) == 0
     # No fixer for a clean PR: the wait runs on the scene's PR URL.
-    assert fixes == []
     assert waits[0][0][:2] == (scene["pr_url"], issue)
     # The resumed review runs under the scene's run id.
     assert runner.current_run_id() == "a1b2c3d4"
@@ -3139,7 +3109,7 @@ def test_run_pi_passes_progress_callback_to_stream_pi(monkeypatch, tmp_path):
             "skills": [],
             "context_files": [],
         },
-        "owner/repo", branch="b", pr_url="https://x/pull/4",
+        "owner/repo", branch="b",
         progress=callback,
     )
     assert seen["progress"] is callback
@@ -3589,9 +3559,10 @@ def test_finish_blocked_progress_carries_the_actual_role_and_round(
     assert "- review/fix round: 2" in body
 
 
-def test_finish_blocked_progress_defaults_to_fix_round_zero(monkeypatch):
-    """Without explicit role/round the legacy default (fix/0) is kept,
-    so existing callers stay unchanged."""
+def test_finish_blocked_progress_defaults_to_review_round_zero(monkeypatch):
+    """Without explicit role/round the default is the only post-PR role
+    (Issue #82: the review session fixes findings in the same session,
+    so a blocked delivery is always a review failure)."""
     api_calls = []
 
     def fake_run(command, **kwargs):
@@ -3613,7 +3584,7 @@ def test_finish_blocked_progress_defaults_to_fix_round_zero(monkeypatch):
     ]
     assert len(posts) == 1
     body = posts[0][posts[0].index("--field") + 1][len("body="):]
-    assert "- role: fix" in body
+    assert "- role: review" in body
     assert "- review/fix round: 0" in body
 
 
@@ -3851,12 +3822,13 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
     assert "- review/fix round: 2" in blocked
 
 
-def test_wait_for_delivery_runs_same_pr_fix_when_fix_needed(
+def test_wait_for_delivery_runs_review_when_fix_needed(
     monkeypatch, caplog, tmp_path,
 ):
-    """While holding the slot, a fix-needed delivery is fixed by the SAME
-    runner on the SAME run (Issue #39 + #45): the fix returns the Issue
-    to awaiting review and the wait continues."""
+    """While holding the slot, a fix-needed delivery runs the SAME
+    independent review as an awaiting-review delivery (Issue #82: the
+    review session fixes findings in the same session — no cold-start
+    fixer): the review reports findings and the wait continues."""
     states = ["OPEN", "OPEN", "MERGED"]
     pr_view_calls = {"n": 0}
     labels_calls = {"n": 0}
@@ -3870,16 +3842,9 @@ def test_wait_for_delivery_runs_same_pr_fix_when_fix_needed(
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             if command[-1] == "labels":
                 labels_calls["n"] += 1
-                # First poll: fix needed; after the fix: awaiting review.
-                if labels_calls["n"] == 1:
-                    return json.dumps({
-                        "labels": [{"name": "ai-fix-needed"}],
-                    })
                 return json.dumps({
-                    "labels": [{"name": "ai-pr-opened"}],
+                    "labels": [{"name": "ai-fix-needed"}],
                 })
-            if command[-1] == "body":
-                return json.dumps({"body": "original task body"})
             return json.dumps({"comments": [
                 {
                     "body": (
@@ -3898,14 +3863,9 @@ def test_wait_for_delivery_runs_same_pr_fix_when_fix_needed(
     # The fake rejects anything that is not a pr/issue view.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "list"])
-    fixes = []
-    monkeypatch.setattr(
-        runner, "resume_delivery",
-        lambda *args, **kwargs: fixes.append((args, kwargs)) or PR_URL,
-    )
-    # The second OPEN poll finds the Issue awaiting review again: the
-    # independent review runs (Issue #34) and reports findings, so the
-    # wait continues to the MERGED poll.
+    # The independent review runs for the fix-needed state too (Issue
+    # #82) and reports findings, so the wait continues to the MERGED
+    # poll.
     reviews = []
     monkeypatch.setattr(
         runner, "review_and_merge_if_clean",
@@ -3916,48 +3876,17 @@ def test_wait_for_delivery_runs_same_pr_fix_when_fix_needed(
     caplog.set_level("INFO")
     config = {"repo_dir": tmp_path, "base_branch": "main"}
     runner.wait_for_delivery(PR_URL, issue, config, "owner/repo")
-    assert len(fixes) == 1
-    assert len(reviews) == 1
-    fixed_issue, scene, cfg, repo = fixes[0][0]
-    assert fixed_issue["number"] == 39
-    assert fixed_issue["body"] == "original task body"
-    assert scene["run_id"] == "a1b2c3d4"
-    assert scene["pr_url"] == PR_URL
+    # One review per OPEN+fix-needed poll (two polls before MERGED).
+    assert len(reviews) == 2
+    # No fixer: the review ran on the derived worktree/branch of the
+    # same run.
+    worktree, branch, base_branch, review_config, repo, number = reviews[0][0]
+    assert branch == "muyan-pilot/owner-repo-issue-39-a1b2c3d4"
+    assert base_branch == "main"
+    assert review_config["run_id"] == "a1b2c3d4"
+    assert review_config["base_sha"] == "abc123def456"
     assert repo == "owner/repo"
-    assert "delivery_fix_needed" in caplog.text
-
-
-def test_wait_for_delivery_propagates_fix_failure(monkeypatch):
-    """A failed same-PR fix raises: the Issue is already ai-blocked by
-    resume_delivery, and the slot is released by the caller (main)."""
-    def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"]:
-            return json.dumps({"state": "OPEN"})
-        if command[-1] == "labels":
-            return json.dumps({"labels": [{"name": "ai-fix-needed"}]})
-        return json.dumps({"comments": [
-            {
-                "body": (
-                    "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                    "Muyan Pilot opened PR: "
-                    f"{PR_URL} (base_branch=main "
-                    "base_sha=abc123def456 run_id=a1b2c3d4)"
-                ),
-                "authorAssociation": "OWNER",
-            },
-        ]})
-
-    monkeypatch.setattr(runner, "run_command", fake_run)
-
-    def failing_resume(*args, **kwargs):
-        raise RuntimeError("fix failed")
-
-    monkeypatch.setattr(runner, "resume_delivery", failing_resume)
-    with pytest.raises(RuntimeError, match="fix failed"):
-        runner.wait_for_delivery(
-            PR_URL, {"number": 39, "title": "t", "body": ""}, {},
-            "owner/repo",
-        )
+    assert number == 39
 
 
 def test_issue_labels_returns_names_and_fails_fast(monkeypatch):
@@ -4060,6 +3989,13 @@ def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
         "add": "ai-blocked",
         "remove": "ai-pr-opened",
     }
+    # ... and the leftover ai-fix-needed label (the delivery was
+    # awaiting the next review session) is removed too, so the
+    # terminal state is ai-blocked alone.
+    assert edits[1][1] == {
+        "repo": "owner/repo",
+        "remove": "ai-fix-needed",
+    }
     # ... with a failure comment carrying the run marker and run_id.
     body = comments[0][1]["body"]
     assert "Muyan Pilot failed:" in body
@@ -4094,10 +4030,10 @@ def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
     assert "closed without a merge" in blocked
     assert "next step:" in blocked
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked
-    # The blocked scene carries the actual role (the delivery label was
-    # ai-fix-needed) and the completed review rounds (review round 2,
-    # PR #42) — not the hardcoded fix/0.
-    assert "- role: fix" in blocked
+    # The blocked scene carries the actual role (Issue #82: both
+    # opened-PR states are review states, so always `review`) and the
+    # completed review rounds (review round 2, PR #42).
+    assert "- role: review" in blocked
     assert "- review/fix round: 2" in blocked
 
 
@@ -4181,7 +4117,19 @@ def test_wait_for_delivery_logs_awaiting_without_bound_run_id(monkeypatch, caplo
     """When no run id is bound the wait still works: the failure comment
     simply carries no marker."""
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
-    fake_pr_view(monkeypatch, "CLOSED")
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"] and command[2] == "view":
+            return json.dumps({"state": "CLOSED"})
+        if command[:2] == ["gh", "issue"] and command[-1] == "labels":
+            # No leftover fix-needed label: only ai-pr-opened is removed.
+            return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    # The fake rejects anything that is not a pr/issue view.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "list"])
     comments: list = []
     monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
     monkeypatch.setattr(
