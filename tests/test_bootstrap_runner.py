@@ -484,7 +484,10 @@ def test_pick_next_delivery_recovers_in_flight_issue_before_ready(
     Issues — a dead run is resumed, never skipped by the ready scan."""
     in_flight = {"number": 2, "title": "in flight", "body": ""}
     ready = {"number": 3, "title": "ready", "body": ""}
-    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda repo: None)
+    monkeypatch.setattr(
+        runner, "pick_resumable_delivery",
+        lambda repo, slot_dir, max_concurrency: None,
+    )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency: (
@@ -507,7 +510,9 @@ def test_pick_next_delivery_keeps_resumable_delivery_first(
     scene = {"run_id": "a1b2c3d4"}
     monkeypatch.setattr(
         runner, "pick_resumable_delivery",
-        lambda repo: (resumable, scene) if repo == "r2" else None,
+        lambda repo, slot_dir, max_concurrency: (
+            (resumable, scene) if repo == "r2" else None
+        ),
     )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
@@ -523,7 +528,10 @@ def test_pick_next_delivery_falls_through_to_ready_when_no_in_flight(
     monkeypatch, tmp_path,
 ):
     ready = {"number": 3, "title": "ready", "body": ""}
-    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda repo: None)
+    monkeypatch.setattr(
+        runner, "pick_resumable_delivery",
+        lambda repo, slot_dir, max_concurrency: None,
+    )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency: None,
@@ -537,7 +545,10 @@ def test_pick_next_delivery_falls_through_to_ready_when_no_in_flight(
 def test_pick_next_delivery_returns_none_when_all_scans_empty(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda repo: None)
+    monkeypatch.setattr(
+        runner, "pick_resumable_delivery",
+        lambda repo, slot_dir, max_concurrency: None,
+    )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency: None,
@@ -1945,6 +1956,111 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     assert waits[0][0][:2] == (
         "https://github.com/x/y/pull/12", issue,
     )
+
+
+def test_main_routes_fix_needed_resume_to_fixer_then_wait(
+    monkeypatch, tmp_path,
+):
+    """A resumed `ai-fix-needed` delivery runs the Fixer on the same PR
+    (Issue #45) and then enters the delivery wait."""
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
+    issue = {"number": 12, "title": "task", "body": "body"}
+    scene = {
+        "run_id": "a1b2c3d4",
+        "base_branch": "main",
+        "base_sha": "abc123def456",
+        "pr_url": "https://github.com/owner/repo/pull/12",
+    }
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: (
+            "owner/repo", issue, scene,
+        ),
+    )
+
+    def fake_run(command, **kwargs):
+        # The dispatch reads the Issue's current labels to choose the
+        # fixer vs the review wait.
+        assert command[:3] == ["gh", "issue", "view"]
+        assert command[-2:] == ["--json", "labels"]
+        return json.dumps({"labels": [
+            {"name": "ai-ready"}, {"name": "ai-fix-needed"},
+        ]})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    fixes = []
+    monkeypatch.setattr(
+        runner, "resume_delivery",
+        lambda *args, **kwargs: fixes.append((args, kwargs))
+        or scene["pr_url"],
+    )
+    waits = []
+    monkeypatch.setattr(
+        runner, "wait_for_delivery",
+        lambda *args, **kwargs: waits.append((args, kwargs)),
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    assert len(fixes) == 1
+    assert fixes[0][0][:2] == (issue, scene)
+    # The fixer's verified URL is the one the wait loop holds.
+    assert waits[0][0][:2] == (scene["pr_url"], issue)
+
+
+def test_main_routes_awaiting_review_resume_to_delivery_wait(
+    monkeypatch, tmp_path,
+):
+    """A resumed `ai-pr-opened` delivery (stranded by a dead runner or
+    the Issue #70 progress 404) goes straight to the delivery wait:
+    the independent review of the same PR runs, and a clean PR is
+    never sent to the Fixer (Issue #45 round-5 contract). The run id
+    from the scene is bound before the wait so the resumed review's
+    journal lines and comments carry it (Issue #41)."""
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
+    issue = {"number": 12, "title": "task", "body": "body"}
+    scene = {
+        "run_id": "a1b2c3d4",
+        "base_branch": "main",
+        "base_sha": "abc123def456",
+        "pr_url": "https://github.com/owner/repo/pull/12",
+    }
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: (
+            "owner/repo", issue, scene,
+        ),
+    )
+
+    def fake_run(command, **kwargs):
+        assert command[:3] == ["gh", "issue", "view"]
+        assert command[-2:] == ["--json", "labels"]
+        return json.dumps({"labels": [
+            {"name": "ai-ready"}, {"name": "ai-pr-opened"},
+        ]})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    fixes = []
+    monkeypatch.setattr(
+        runner, "resume_delivery",
+        lambda *args, **kwargs: fixes.append((args, kwargs))
+        or scene["pr_url"],
+    )
+    waits = []
+    monkeypatch.setattr(
+        runner, "wait_for_delivery",
+        lambda *args, **kwargs: waits.append((args, kwargs)),
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    # No fixer for a clean PR: the wait runs on the scene's PR URL.
+    assert fixes == []
+    assert waits[0][0][:2] == (scene["pr_url"], issue)
+    # The resumed review runs under the scene's run id.
+    assert runner.current_run_id() == "a1b2c3d4"
 
 
 def test_main_accepts_repeated_source_repo(monkeypatch, tmp_path):

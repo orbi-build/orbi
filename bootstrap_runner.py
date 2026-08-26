@@ -556,24 +556,53 @@ def resume_scene(comments: list[dict]) -> dict:
     )
 
 
-def pick_resumable_delivery(repo: str) -> tuple[dict, dict] | None:
-    """Return the newest `ai-fix-needed` delivery and its resume scene.
+def pick_resumable_delivery(
+    repo: str, slot_dir: Path, max_concurrency: int,
+) -> tuple[dict, dict] | None:
+    """Return the newest opened-PR delivery and its resume scene.
 
-    Only the explicit fix-needed state is scanned (Issue #45): a review
-    finding or a base conflict moves the Issue from `ai-pr-opened`
-    (awaiting review) to `ai-fix-needed`, and the next tick resumes that
-    same run on the same branch, worktree and PR instead of claiming a
-    new Issue. A clean PR that is simply awaiting review is never sent
-    to the Fixer. Issues already `ai-blocked` are excluded, as are
-    closed Issues. A scene that cannot be recovered is an unresolvable
-    state: the Issue is marked `ai-blocked` with the concrete reason and
-    the error re-raised, so the tick stops instead of silently skipping
-    the delivery while a fresh task starts ahead of it.
+    Both opened-PR states are scanned (Issue #70): `ai-fix-needed` (a
+    review finding or a base conflict — the next tick runs the Fixer on
+    the same branch, worktree and PR, Issue #45) and `ai-pr-opened`
+    (awaiting review — the next tick runs the independent review; a
+    clean PR is still never sent to the Fixer, Issue #45 round-5
+    contract). The `ai-pr-opened` scan exists because the delivery that
+    opened the PR can be gone: the progress-publishing failure behind
+    Issue #70 used to label the delivered Issue `ai-blocked` before the
+    review started, and a killed runner can die inside the delivery
+    wait loop, leaving a valid MERGEABLE PR with no owner. Without the
+    scan such a delivery is picked up by no other scan (`pick_issue`
+    excludes `ai-pr-opened`) and is stranded forever. `ai-blocked`
+    Issues are excluded (they need a human decision first), as are
+    merged and in-flight Issues and closed Issues. A scene that cannot
+    be recovered is an unresolvable state: the Issue is marked
+    `ai-blocked` with the concrete reason and the error re-raised, so
+    the tick stops instead of silently skipping the delivery while a
+    fresh task starts ahead of it.
+
+    The scan runs only when no OTHER runner is live (the same guard as
+    `pick_in_progress_issue`, Issue #39 slot semantics): a slot held by
+    another process proves a live runner is working, so an opened-PR
+    delivery is in flight, not stranded — resuming it here would start
+    a second review Pi in the same worktree/branch/run, and the second
+    `gh pr merge --match-head-commit` on the already-merged PR would
+    fail and mark the merged Issue `ai-blocked` (Issue #70 review
+    round 1). This runner's own slot is excluded: `main` took it
+    before the claim scan and holds it for the whole delivery.
     """
+    mine = os.getpid()
+    for _, holder in slot_occupancy(slot_dir, max_concurrency):
+        if holder is not None and holder != mine:
+            return None
     raw = run_command([
         "gh", "issue", "list", "--repo", repo, "--state", "open",
         "--search",
-        f"label:{FIX_NEEDED_LABEL} -label:{BLOCKED_LABEL}",
+        # `label:a,b` is GitHub's OR within one label qualifier
+        # (verified live: repeating the qualifier matches only the
+        # first label).
+        f"label:{FIX_NEEDED_LABEL},{PR_OPENED_LABEL} "
+        f"-label:{BLOCKED_LABEL} -label:{MERGED_LABEL} "
+        f"-label:{IN_PROGRESS_LABEL}",
         "--json", "number,title,state,url", "--limit", "1",
     ])
     issues = parse_issue_array(raw)
@@ -648,7 +677,9 @@ def pick_next_delivery(
     run being started on an Issue that is already in flight.
     """
     for repo in repos:
-        selected = pick_resumable_delivery(repo)
+        selected = pick_resumable_delivery(
+            repo, slot_dir, max_concurrency,
+        )
         if selected is not None:
             issue, scene = selected
             return repo, issue, scene
@@ -2639,7 +2670,22 @@ def main(argv: list[str] | None = None) -> int:
         if scene is not None:
             # An open PR is a recoverable review/fix state: resume the
             # same run on the same branch, worktree and PR (Issue #45).
-            pr_url = resume_delivery(issue, scene, config, source_repo)
+            # Bind the scene's run id first so every journal line and
+            # GitHub comment of the resumed delivery carries it
+            # (Issue #41). The explicit `ai-fix-needed` state runs the
+            # Fixer on the same PR; a delivery that is simply awaiting
+            # review (`ai-pr-opened`, stranded by a dead runner or the
+            # progress failure of Issue #70) goes straight to the
+            # independent review — a clean PR is never sent to the
+            # Fixer (Issue #45 round-5 contract).
+            set_run_id(scene["run_id"])
+            labels = issue_labels(int(issue["number"]), source_repo)
+            if FIX_NEEDED_LABEL in labels:
+                pr_url = resume_delivery(
+                    issue, scene, config, source_repo,
+                )
+            else:
+                pr_url = scene["pr_url"]
         else:
             pr_url = process_issue(issue, config, source_repo)
         # The delivery is not done when the PR is open: hold the slot
