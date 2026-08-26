@@ -130,6 +130,14 @@ def test_docs_config_is_a_mintlify_config_named_muyan_pilot():
     assert config.get("name") == "Muyan Pilot", (
         f"docs.json name must be 'Muyan Pilot', got: {config.get('name')!r}"
     )
+    # The official Mintlify schema (mintlify.com/docs.json) and settings
+    # reference mark `theme` as required: a config without it does not
+    # validate against its own declared schema, so the site build contract
+    # would break. Pin the value the build expects.
+    assert config.get("theme") == "mint", (
+        f"docs.json must set the required Mintlify theme, "
+        f"got: {config.get('theme')!r}"
+    )
 
 
 def test_docs_navigation_matches_the_actual_pages_exactly():

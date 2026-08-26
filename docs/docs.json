@@ -1,6 +1,7 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "name": "Muyan Pilot",
+  "theme": "mint",
   "colors": {
     "primary": "#1d76db"
   },
