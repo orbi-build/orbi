@@ -2496,6 +2496,16 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     config["repo_dir"], source_repo, number,
                     scene["run_id"],
                 )
+                # Issue #90: the worktree is derived from the
+                # configured repo_dir, source repo, Issue number and
+                # run id (never read from a comment). A missing
+                # directory means the scene cannot be resumed: fail
+                # fast BEFORE any git/Pi mutation (no freeze_pr, no
+                # review Pi) — the handler below marks the Issue
+                # ai-blocked ALONE with the PR and branch preserved
+                # (the pre-#82 resume_delivery fail-fast, restored).
+                if not worktree.is_dir():
+                    raise RuntimeError(f"worktree missing: {worktree}")
                 branch = task_branch(source_repo, number, scene["run_id"])
                 review_config = {
                     **config,
