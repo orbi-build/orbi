@@ -100,6 +100,51 @@ def test_render_prompt_replaces_context_values():
     assert rendered == "owner/repo #3 Fix context.md"
 
 
+def test_prompt_requires_verifying_external_behavior_against_docs():
+    """Issue #73: the implementer prompt must make it a hard rule to
+    verify external behavior (APIs, CLIs, config, HTTP paths) against
+    official docs or `--help` before writing it — no assembling from
+    memory — and test assertions must assert the real contract, not
+    the implementation's guessed shape. It must also state that
+    bypass failures (progress, notifications) only log and never
+    decide the delivery outcome."""
+    template = (
+        Path(__file__).resolve().parent.parent / "prompt.md"
+    ).read_text(encoding="utf-8")
+    assert "--help" in template
+    assert "docs" in template.lower()
+    # The bypass rule is explicit.
+    assert "bypass" in template.lower()
+
+
+def test_review_prompt_flags_unverified_external_behavior():
+    """Issue #73: the review prompt must check that external behavior
+    (paths, parameters, status codes) was verified against docs or a
+    real call, and that a bypass failure cannot break the main
+    delivery — the #57 guessed-PATCH-route class of bug must be
+    caught by review, not shipped."""
+    template = (
+        Path(__file__).resolve().parent.parent / "prompt_review.md"
+    ).read_text(encoding="utf-8")
+    assert "verify" in template.lower()
+    assert "bypass" in template.lower()
+
+
+def test_prompt_does_not_require_review_fix_loop_before_pr():
+    """Issue #78: the implementer only does plan -> implement -> test
+    -> push PR. The independent review happens AFTER the PR is open
+    (the Runner runs it); the prompt must not demand a complete
+    review-fix loop before opening the PR — the old wording made the
+    local Pi self-review for hours (#18/#34)."""
+    template = (
+        Path(__file__).resolve().parent.parent / "prompt.md"
+    ).read_text(encoding="utf-8")
+    assert "complete review-fix loop" not in template
+    # The review is explicitly positioned AFTER the PR is open, and the
+    # implementer never reviews/fixes/merges.
+    assert "you do not review, fix, or merge" in template
+
+
 def test_prompt_template_requires_fixes_keyword_for_the_source_issue():
     """Issue #53: the Pi prompt must require `Fixes #<issue>` in the PR
     body so GitHub closes the source Issue natively on merge; the
@@ -241,18 +286,34 @@ def test_pick_issue_uses_github_queue(monkeypatch):
 
     def fake_run(command, **kwargs):
         calls.append(command)
+        search = command[command.index("--search") + 1]
+        if "label:bug" in search:
+            return json.dumps([])
         return json.dumps([issue])
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.pick_issue("xqliu/muyan-ceo") == issue
-    assert calls == [[
-        "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
-        "--state", "open", "--search",
-        "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
-        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked",
-        "--json", "number,title,body,blockedBy",
-        "--limit", "200",
-    ]]
+    # Issue #71: the bug scan runs first; with no bug in the queue the
+    # plain ready scan decides. Both keep the same exclusions.
+    assert calls == [
+        [
+            "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
+            "--state", "open", "--search",
+            "label:ai-ready label:bug -label:ai-in-progress "
+            "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
+            "-label:ai-blocked",
+            "--json", "number,title,body,blockedBy",
+            "--limit", "200",
+        ],
+        [
+            "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
+            "--state", "open", "--search",
+            "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
+            "-label:ai-fix-needed -label:ai-merged -label:ai-blocked",
+            "--json", "number,title,body,blockedBy",
+            "--limit", "200",
+        ],
+    ]
 
 
 def test_open_blocker_numbers_returns_only_open_blockers():
@@ -402,6 +463,115 @@ def test_pick_issue_fails_open_when_blocked_by_query_fails(
     error = subprocess.CalledProcessError(
         1, ["gh"], output="boom", stderr="rate limited",
     )
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: (_ for _ in ()).throw(error),
+    )
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/muyan-pilot") is None
+    assert "blocked_by_check_failed" in caplog.text
+
+
+def test_pick_issue_prefers_bug_labeled_issues(monkeypatch):
+    """Issue #71: when an `ai-ready`+`bug` Issue and a plain `ai-ready`
+    Issue exist at the same time, the runner claims the bug first —
+    if the delivery loop is broken, claiming enhancements only piles
+    up unreviewed PRs. No priority numbers, no new state: the bug
+    scan runs first with the same exclusions, and the plain ready
+    scan only runs when the bug scan found nothing claimable."""
+    bug = {
+        "number": 11, "title": "bug", "body": "",
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    searches = []
+
+    def fake_run(command, **kwargs):
+        searches.append(command[command.index("--search") + 1])
+        return json.dumps([bug])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.pick_issue("xqliu/muyan-pilot") == bug
+    # The bug scan ran first and found the bug: the plain ready scan
+    # never ran.
+    assert len(searches) == 1
+    assert "label:bug" in searches[0]
+    assert "label:ai-ready" in searches[0]
+
+
+def test_pick_issue_bug_scan_keeps_existing_exclusions(monkeypatch):
+    """Issue #71: the bug scan keeps the exact same exclusions as the
+    ready scan (in-flight, opened-PR, fix-needed, merged, blocked)."""
+    bug = {
+        "number": 11, "title": "bug", "body": "",
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    searches = []
+
+    def fake_run(command, **kwargs):
+        searches.append(command[command.index("--search") + 1])
+        return json.dumps([bug])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.pick_issue("xqliu/muyan-pilot") == bug
+    assert searches[0] == (
+        "label:ai-ready label:bug -label:ai-in-progress "
+        "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
+        "-label:ai-blocked"
+    )
+
+
+def test_pick_issue_falls_back_to_ready_scan_when_no_bug(monkeypatch):
+    """Issue #71: with no claimable bug, behavior is exactly as before
+    (the plain ready scan runs second and decides)."""
+    feature = {
+        "number": 10, "title": "feature", "body": "",
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    searches = []
+
+    def fake_run(command, **kwargs):
+        searches.append(command[command.index("--search") + 1])
+        if "label:bug" in searches[-1]:
+            return json.dumps([])
+        return json.dumps([feature])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.pick_issue("xqliu/muyan-pilot") == feature
+    assert len(searches) == 2
+    assert "label:bug" in searches[0]
+    assert "label:bug" not in searches[1]
+
+
+def test_pick_issue_bug_blocked_by_open_blocker_falls_back(monkeypatch):
+    """Issue #71: a bug with open native blockers is skipped by the bug
+    scan (same blockedBy semantics as the ready scan); the plain ready
+    scan then decides."""
+    blocked_bug = {
+        "number": 11, "title": "bug", "body": "",
+        "blockedBy": {"nodes": [{"number": 9}], "totalCount": 1},
+    }
+    feature = {
+        "number": 10, "title": "feature", "body": "",
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    searches = []
+
+    def fake_run(command, **kwargs):
+        searches.append(command[command.index("--search") + 1])
+        if "label:bug" in searches[-1]:
+            return json.dumps([blocked_bug])
+        return json.dumps([feature])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.pick_issue("xqliu/muyan-pilot") == feature
+    assert len(searches) == 2
+
+
+def test_pick_issue_bug_scan_failure_fails_open(monkeypatch, caplog):
+    """Issue #71: a failed bug scan fails open like the ready scan
+    (Issue #54) — the tick claims nothing from this repo, the error is
+    logged, never raised."""
+    error = subprocess.CalledProcessError(1, ["gh"], output="boom")
     monkeypatch.setattr(
         runner, "run_command",
         lambda command, **kwargs: (_ for _ in ()).throw(error),
@@ -2904,6 +3074,122 @@ def test_stream_pi_drains_pipe_data_written_after_exit(
         )
     assert result == "late stdout data"
     assert "stderr=late stderr data" in caplog.text
+
+
+def test_stream_pi_kills_pi_when_upstream_dies_during_model_wait(
+    tmp_path, caplog,
+):
+    """Issue #75: the model is expected to reply next (model_wait) but
+    the session JSONL is frozen — the upstream (llama/proxy) is dead
+    (HTTP timeout, connection drop) and Pi sits in epoll_wait. The
+    runner must kill Pi and fail fast (the normal failure path releases
+    the slot): an infinite `model_wait` hang is not acceptable. This is
+    not a business timeout: it only fires while the session file is
+    frozen (stale seconds), never while events keep arriving."""
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.0, {"type": "message", "id": "a1",
+               "timestamp": fresh_timestamp(),
+               "message": {"role": "assistant", "content": [
+                   {"type": "toolCall", "id": "t1", "name": "bash",
+                    "arguments": {"command": "pytest tests/"}}]}}),
+        (0.1, {"type": "message", "id": "r1",
+               "timestamp": fresh_timestamp(1),
+               "message": {"role": "toolResult", "toolCallId": "t1",
+                           "toolName": "bash",
+                           "content": [{"type": "text", "text": "ok"}]}}),
+    ]
+    command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
+    with caplog.at_level("ERROR"), pytest.raises(
+        RuntimeError, match="upstream",
+    ) as excinfo:
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            model_wait_dead_seconds=0.5,
+            run_id="run1", issue=75, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    # The failure message names the dead upstream and the stale time.
+    assert "model_wait" in str(excinfo.value)
+    lines = caplog.text.splitlines()
+    failures = [line for line in lines if " run_failed " in line]
+    assert len(failures) == 1
+    assert "reason=upstream_dead_stale_" in failures[0]
+    assert "issue=xqliu/muyan-pilot#75" in failures[0]
+    assert f"worktree={tmp_path}" in failures[0]
+    # The kill happened fast (well before the child's 10 s sleep).
+    assert "WARNING" not in caplog.text
+
+
+def test_stream_pi_upstream_dead_default_is_ten_minutes():
+    # Issue #75 contract: a frozen model_wait of 10 minutes declares
+    # the upstream dead (the real incident hung for over an hour).
+    assert runner.PI_MODEL_WAIT_DEAD_SECONDS == 600.0
+
+
+def test_stream_pi_slow_model_still_generating_is_not_killed(
+    tmp_path, caplog,
+):
+    """Issue #75: the kill only fires while the session file is FROZEN
+    (stale seconds past the threshold in model_wait). A model that
+    keeps producing session events is not dead: every new record
+    resets the stale time, so a long slow generation — even with a
+    model_wait window that would have crossed the threshold had the
+    file stayed frozen — survives without a kill."""
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.1, {"type": "message", "id": "r1",
+               "timestamp": fresh_timestamp(1),
+               "message": {"role": "toolResult", "toolCallId": "t1",
+                           "toolName": "bash",
+                           "content": [{"type": "text", "text": "ok"}]}}),
+        # A new event arrives BEFORE the 0.4 s dead threshold: the
+        # model is slow, not dead (the stale time resets).
+        (0.3, {"type": "message", "id": "a2",
+               "timestamp": fresh_timestamp(2),
+               "message": {"role": "assistant", "content": [
+                   {"type": "text", "text": "done"}]}}),
+    ]
+    command = make_fake_pi(
+        tmp_path, session_records=records, stdout="final answer",
+        sleep=0.8,
+    )
+    with caplog.at_level("INFO"):
+        result = runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            model_wait_dead_seconds=0.4,
+            run_id="run1", issue=75, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    assert result == "final answer"
+    assert "upstream_dead" not in caplog.text
+
+
+def test_stream_pi_no_upstream_kill_before_model_wait(tmp_path, caplog):
+    """Issue #75: the kill only applies while the model is expected to
+    reply next (model_wait). A frozen session that is NOT waiting on
+    the model (e.g. Pi itself stalled after an assistant message) is
+    the existing `pi_idle` warning's territory, not a kill: the
+    business task keeps running (no artificial timeout)."""
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.1, {"type": "message", "id": "a1",
+               "timestamp": fresh_timestamp(1),
+               "message": {"role": "assistant", "content": [
+                   {"type": "text", "text": "thinking out loud"}]}}),
+    ]
+    command = make_fake_pi(tmp_path, session_records=records, sleep=1.2)
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            model_wait_dead_seconds=0.5,
+            run_id="run1", issue=75, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    assert "upstream_dead" not in caplog.text
 
 
 def test_stream_pi_times_out_and_kills_process(tmp_path, caplog):

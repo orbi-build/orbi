@@ -32,6 +32,15 @@ build files, and the changed code plus its callers before judging.
   chain, R5 requirements/design (every acceptance item has evidence),
   R6 dependencies/architecture, R7 observability, R8 KISS/equivalent refactor,
   R9 exception propagation.
+- Verify external behavior (Issue #73): every API path, CLI argument, config
+  key and status code in the diff must be verified against the official docs
+  or a real call — flag "this external behavior was not verified" when it was
+  not (the #57 guessed-PATCH-route class of bug must be caught here, not
+  shipped). Test assertions must assert the real contract, not the
+  implementation's guessed shape.
+- Bypass failures must only log (Issue #73/#79): a bypass (progress comments,
+  notifications, log enhancements) whose failure can decide the main delivery
+  outcome is a finding.
 - Verify the run evidence: the real test/build commands were run and pass in
   the repository's declared runtime; Python business code keeps 100% line and
   branch coverage when Python changed.

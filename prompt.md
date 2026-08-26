@@ -36,8 +36,24 @@ This project is intentionally an MVP. Do not invent a task platform, database,
 queue framework, policy engine, risk model, multi-agent DAG, daemon loop, or fallback path.
 Use the existing GitHub Issue task pool and fail fast with useful logs.
 
-Use the configured skills for implementation. Use TDD, 100% line and branch coverage for Python code,
-then perform the complete review-fix loop before declaring the PR ready.
+Hard rules for external behavior (Issue #73):
+
+- Before writing an external interface, CLI, config, or HTTP path, verify it
+  against the official docs or `--help`, and follow the existing correct
+  examples in the repository. Assembling paths or parameters from memory is
+  forbidden.
+- Test assertions must assert the real contract (the docs, or one real call),
+  not the shape the implementation itself guessed. A guessed path must not be
+  tested green.
+- Bypass features (progress comments, notifications, log enhancements) only
+  log on failure: a bypass failure must never decide whether the main delivery
+  succeeded (Issue #79 makes the progress path a pure bypass).
+
+Use the configured skills for implementation. Use TDD, 100% line and branch
+coverage for Python code. Do NOT run a review-fix loop or any independent
+review before opening the PR (Issue #78): the independent review happens
+AFTER the PR is open, run by the Runner — catch problems early with TDD
+and the real test suite, not by reviewing yourself.
 
 Work through this exact loop:
 

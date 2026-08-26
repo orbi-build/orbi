@@ -881,6 +881,132 @@ def test_process_issue_publishing_failure_is_never_blocked_scene(
     )
 
 
+# --- Issue #79: the whole ProgressPublisher path is a bypass --------------
+
+
+def test_process_issue_ensure_failure_does_not_fail_delivery(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #79 acceptance: the progress comment cannot even be
+    created (the ensure GET/POST 404s) BEFORE `run_pi`. The delivery
+    must not fail: Pi still runs, the PR is still opened, the Issue is
+    never `ai-blocked`, and the error is logged as
+    `progress_publish_failed` (the same bypass semantics as the
+    in-stream callback)."""
+    calls, posted = make_failing_gh(
+        monkeypatch,
+        lambda command: command[:2] == ["gh", "api"],
+    )
+    patch_process_deps(monkeypatch, tmp_path)
+    edits = []
+    monkeypatch.setattr(runner, "edit_issue", lambda number, **kwargs:
+                        edits.append(kwargs))
+    caplog.set_level("ERROR")
+
+    pr_url = runner.process_issue(make_issue(), make_config(tmp_path),
+                                  "xqliu/muyan-pilot")
+
+    # The delivery completed: the PR is open and awaits review...
+    assert pr_url == "https://github.com/xqliu/muyan-pilot/pull/40"
+    assert any(
+        kwargs.get("add") == "ai-pr-opened"
+        for kwargs in edits
+    )
+    # ...Pi ran (run_pi was not skipped because ensure failed)...
+    assert runner.run_pi.called
+    # ...and the delivery was NOT marked blocked.
+    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    # The failure is logged like the in-stream callback.
+    assert any(
+        "progress_publish_failed" in line
+        and "run=a1b2c3d4" in line
+        and "issue=xqliu/muyan-pilot#18" in line
+        and "role=implement" in line
+        for line in caplog.text.splitlines()
+    ), caplog.text
+    # No blocked scene was published.
+    assert not any("Muyan Pilot: blocked" in body for body in posted)
+
+
+def test_process_issue_started_milestone_failure_does_not_fail_delivery(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #79: the `started` milestone POST failing before `run_pi`
+    is the same contract: logged, not fatal; Pi still runs and the PR
+    is still opened."""
+    calls, posted = make_failing_gh(
+        monkeypatch,
+        lambda command: (
+            command[:2] == ["gh", "api"]
+            and "--method" in command
+            and "POST" in command
+            and "Muyan Pilot: started" in command[-1]
+        ),
+    )
+    patch_process_deps(monkeypatch, tmp_path)
+    edits = []
+    monkeypatch.setattr(runner, "edit_issue", lambda number, **kwargs:
+                        edits.append(kwargs))
+    caplog.set_level("ERROR")
+
+    pr_url = runner.process_issue(make_issue(), make_config(tmp_path),
+                                  "xqliu/muyan-pilot")
+
+    assert pr_url == "https://github.com/xqliu/muyan-pilot/pull/40"
+    assert runner.run_pi.called
+    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    assert any("progress_publish_failed" in line
+               for line in caplog.text.splitlines()), caplog.text
+    # The ensure itself succeeded (only the milestone failed)...
+    assert any("Muyan Pilot progress" in body for body in posted)
+    # ...and the failed milestone was not posted.
+    assert not any("Muyan Pilot: started" in body for body in posted)
+
+
+def test_process_issue_plan_test_milestone_failures_do_not_fail_delivery(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #79: the post-Pi `plan ready` / `tests passed` milestone
+    POSTs failing is the same contract: logged, not fatal; the PR is
+    still opened and the run continues into the review wait."""
+    calls, posted = make_failing_gh(
+        monkeypatch,
+        lambda command: (
+            command[:2] == ["gh", "api"]
+            and "--method" in command
+            and "POST" in command
+            and ("Muyan Pilot: plan ready" in command[-1]
+                 or "Muyan Pilot: tests passed" in command[-1])
+        ),
+    )
+    patch_process_deps(monkeypatch, tmp_path)
+    edits = []
+    monkeypatch.setattr(runner, "edit_issue", lambda number, **kwargs:
+                        edits.append(kwargs))
+    caplog.set_level("ERROR")
+
+    # The worktree (created by the patched create_worktree) carries a
+    # plan.md and a passing test.log so both milestones would post.
+    worktree = tmp_path / "wt"
+    worktree.mkdir(parents=True, exist_ok=True)
+    (worktree / "plan.md").write_text("# Plan\n", encoding="utf-8")
+    (worktree / "test.log").write_text(
+        "5 passed in 1.0s\n", encoding="utf-8",
+    )
+
+    pr_url = runner.process_issue(make_issue(), make_config(tmp_path),
+                                  "xqliu/muyan-pilot")
+
+    assert pr_url == "https://github.com/xqliu/muyan-pilot/pull/40"
+    assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
+    assert caplog.text.count("progress_publish_failed") >= 2, caplog.text
+    # The failed milestones were not posted...
+    assert not any("Muyan Pilot: plan ready" in body for body in posted)
+    assert not any("Muyan Pilot: tests passed" in body for body in posted)
+    # ...but the delivery record still completed.
+    assert any("Muyan Pilot: PR opened" in body for body in posted)
+
+
 # --- review_and_merge_if_clean wiring (the reviewer stays observable) ---------
 
 

@@ -6,3 +6,8 @@ htmlcov/
 .pi-session/
 .worktrees/
 muyan-pilot.toml
+# Per-run artifacts written into the task worktree (prompt.md steps 2
+# and 5): never version-controlled, so a new worktree created from the
+# frozen base never inherits the previous run's plan or test log.
+plan.md
+test.log

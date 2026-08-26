@@ -10,6 +10,15 @@ Environment="PATH=%h/.npm-global/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="MUYAN_PILOT_CONFIG=%h/Documents/muyan/muyan-pilot/muyan-pilot.toml"
 # Deployment adapter only: disable systemd's default startup kill limit.
 TimeoutStartSec=infinity
+# Issue #52: before the Runner starts, fast-forward the local main
+# checkout to the latest origin/main (outside the Python process). A
+# dirty checkout, a failed fetch or a non-fast-forwardable state fails
+# this command: the service does not start and the reason lands in the
+# systemd journal (fail fast). A currently running long task is never
+# hot-updated or killed: while the service is active, systemd ignores
+# the timer's start request, and the next real start picks up the
+# latest code.
+ExecStartPre=/bin/sh -c 'git fetch origin main && git merge --ff-only origin/main'
 ExecStart=/usr/bin/python3 %h/Documents/muyan/muyan-pilot/bootstrap_runner.py
 StandardOutput=journal
 StandardError=journal

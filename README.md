@@ -22,6 +22,16 @@ systemctl --user list-timers muyan-pilot.timer
 
 手工命令只用于首次验证或立即执行一个 tick，不是日常调度方式。
 
+## 代码更新（Issue #52）
+
+service 每次真正启动时，先由 `ExecStartPre` 在 Python Runner 进程外执行：
+
+```bash
+git fetch origin main && git merge --ff-only origin/main
+```
+
+本地 main 被 fast-forward 到最新 `origin/main` 后，Runner 才用新代码启动。当前正在运行的长任务不会被热更新、不会被杀、也不会启动第二个 Runner（service active 时 systemd 忽略 timer 的 start 请求；下一次 service 真正启动时生效）。main 工作区不干净、fetch 失败或无法 fast-forward 时，preflight 命令失败，service 不启动，原因写入 systemd journal（fail fast）。不新增 refresh service、worker、dispatcher 或常驻进程；15 分钟 timer 配置保持不变。
+
 ## 远程 CI（GitHub Actions）
 
 仓库契约（全量 pytest + 100% line/branch coverage）不只在本机 Runner 上跑：`.github/workflows/ci.yml` 让 GitHub Actions 在每次 `pull_request` 和每次 `push` 到 `main` 时跑同一份契约，测试失败或覆盖率低于 100% 时 CI 变红。单个 job，不加 lint、矩阵或缓存（Issue #56）。
@@ -44,6 +54,39 @@ python3 muyan_pilot.py status --config muyan-pilot.toml
 ```
 
 `add` 成功后打印新 Issue 的 URL 和 `ai-ready` 标签；`status` 只读，不修改任何标签。命令失败立即报错，不做回退。
+
+```bash
+# 打印当前 run 的 Pi session 文件路径（repo_dir/.worktrees 下最新的 .pi-session/*.jsonl）
+python3 muyan_pilot.py session --config muyan-pilot.toml
+
+# 持续跟随该文件（等价 tail -f；跟的是命令启动时选中的文件，不中途跳到更新的文件）
+python3 muyan_pilot.py session --follow --config muyan-pilot.toml
+```
+
+`session` 是排查附件（日常仍看 journal / GitHub），不是日常入口：没有 session 文件时 fail fast（退出码非零，说明没有正在跑的 Pi），不猜路径；`--pretty` 把 JSONL 打一行摘要（timestamp / role / tool|text|thinking 截断），默认仍是原始 JSONL。不开 tmux、不新包装脚本、不新增 systemd unit（Issue #74）。
+
+## GitHub Issue 标签（外部状态）
+
+GitHub label 是仓库的**外部状态**：它不会随代码提交自动创建，缺失时扫描会静默漏掉对应状态的 Issue。新仓库初始化时必须先创建这些 label，再用 `gh label list` 检查：
+
+```bash
+# 仓库初始化：创建全部 label（已存在时 gh 会报错，可忽略或先 gh label list 检查）
+for l in ai-ready ai-in-progress ai-pr-opened ai-fix-needed ai-merged ai-blocked; do
+  gh label create "$l" --repo xqliu/muyan-pilot --force
+  gh label edit "$l" --repo xqliu/muyan-pilot \
+    --description "Muyan Pilot delivery state (see README)"
+done
+gh label list --repo xqliu/muyan-pilot
+```
+
+| Label | 含义 | 进入条件 | 离开条件 |
+|---|---|---|---|
+| `ai-ready` | 明确派发给 Pilot 的新任务（允许 AI 领取） | `muyan_pilot.py add` 创建时自动添加，或人工 `gh issue edit --add-label ai-ready` | 领取时加 `ai-in-progress`（`ai-ready` 保留）；成功合并后保留（与 `ai-merged` 共存，表示已交付） |
+| `ai-in-progress` | Runner 已领取、正在执行 | 领取 `ai-ready` Issue 时由 Runner 添加 | 开出 PR 时移除（转 `ai-pr-opened`）；失败时移除（转 `ai-blocked`）；Runner 被杀时残留，由下一 tick 的重启恢复扫描接回 |
+| `ai-pr-opened` | PR 已创建，当前等待 review；不会自动再次启动 Fixer | `verify_pr` 验收通过后由 Runner 添加（同时移除 `ai-in-progress`） | clean verdict 合并后移除（转 `ai-merged`）；review finding / base 冲突时移除（转 `ai-fix-needed`）；终态失败时移除（转 `ai-blocked`） |
+| `ai-fix-needed` | 已有 PR 需要在原 branch/worktree/PR 上继续修复；定时 Runner 自动拾取 | 审查会话未能修复的 finding，或 PR 落后最新 base / merge conflict | 下一个审查会话（同一 PR）clean verdict 合并后移除（转 `ai-merged`）；超轮 / 无法修复时移除（转 `ai-blocked`） |
+| `ai-merged` | 成功终态：Runner 已合并 PR 并确认 merge commit 落在保护分支 | Runner 合并并确认后添加（替代 `ai-pr-opened`） | 终态，不再自动变更；PR body 的 `Fixes #N` 在 merge 时自动关闭 Issue |
+| `ai-blocked` | Runner fail fast，需要人工处理；不会被自动拾取 | 命令失败、现场无法恢复、审查超轮等 fail fast 场景 | 人工修复现场并重新转为 `ai-fix-needed`（同一 PR）或重新领取（新 run）；不自动恢复 |
 
 ## 任务依赖（blockedBy）
 
@@ -213,7 +256,40 @@ Runner 被 SIGKILL 时无法执行任何清理：任务 worktree 和 `ai-in-prog
 
 Pi 创建 PR 前必须重新 fetch：若 `origin/<base_branch>` 已前进，需合入最新 base、手工解决冲突、重跑完整测试后再推送。Runner 在验收时用 `git merge-base --is-ancestor origin/<base_branch> HEAD` 验证最新远端 base 是交付 HEAD 的祖先；不满足则 fail fast，不接受 PR。不自动解决冲突，不 force push，不 merge 或 push 保护分支。
 
+同一 worktree 下 Pi 新旧 `.pi-session` 的识别：恢复的 run（同一 worktree）会创建**新的** session JSONL，journal 只跟踪当前这次调用的 session（启动前已存在的 JSONL 永不跟随），避免把上一个 run 的 session 报告成活着的会话（Issue #45）。
+
 `.worktrees/` 已加入 `.gitignore`，不会进入版本库。
+
+## 自动 loop 与恢复现场（Issue #49）
+
+自动 loop 的完整状态链（systemd timer 是唯一自动入口，不需要人工触发 CLI；一个本地 Pi slot 内始终只有一个执行进程）：
+
+```text
+ai-ready
+  -> ai-in-progress          （领取，加标签，建 worktree，启动 Pi）
+  -> ai-pr-opened            （PR 验收通过，等待 review）
+  -> review                  （独立审查会话，会话内修复）
+  -> ai-fix-needed           （未修复 finding / base 冲突；同一 PR 的下一个审查会话）
+  -> review                  （下一个审查会话；`ai-fix-needed` 保留到合并，不重新加回 `ai-pr-opened`）
+  -> merge                   （clean verdict + merge 门禁）
+  -> ai-merged               （成功终态；Fixes #N 自动关闭 Issue）
+```
+
+规则：
+
+- 只有两个 opened-PR 状态会被自动拾取：`ai-fix-needed`（下一个审查会话）和 `ai-pr-opened`（独立审查）；`ai-ready` 走领取，`ai-blocked` **不会自动恢复**（先要人工决策：修复现场后转 `ai-fix-needed` 或重新领取）；
+- 修复必须沿用同一 PR number、branch、worktree、run_id（PR number 永远不变，head 可以前进）；
+- base 前进时先 merge 最新 `origin/<base>`（冲突交给 Pi 解决），重跑全量测试后再继续；
+- review 结论、测试、覆盖率、验证和结果都要回写 GitHub Issue/PR（`REVIEW_VERDICT` 评论、milestone、进度评论），不只留在本地；
+- malformed recovery scene（缺少完整现场、无可信评论）fail fast：Issue 标记 `ai-blocked` 并写明具体原因，本 tick 停止，不做猜测。
+
+恢复现场（resume scene）契约：
+
+- Runner 开 PR 后在源 Issue 发布 `Muyan Pilot opened PR:` 评论，携带 run marker `<!-- muyan-pilot:run=<8 hex> -->`、可见 `run_id=` 字段、`base_branch`、`base_sha` 和 PR URL——这是恢复的唯一现场（这条 scene 评论不是旁路：它失败仍 fail fast，因为 resume 靠它）；
+- 只有 **trusted maintainer**（OWNER/MAINTAINER/MEMBER/COLLABORATOR）发布的评论才可信；公开评论（authorAssociation=NONE）永远不可信，无法把 Runner 指向任意本地路径；
+- branch 和 worktree 由配置的 repo、source repo、Issue 编号和 run_id **推导**，绝不从公开 comment 读取；
+- **PR body 也必须包含稳定的 run marker**，否则恢复 fail fast（Runner 验收时校验）；
+- **历史兼容**：统一 run_id 机制之前创建的旧 PR 可能只有 Issue comment marker、没有 PR body marker——恢复前需要**补齐 PR body marker**（编辑 PR body 加入 `<!-- muyan-pilot:run=<run_id> -->`），不能只改 label。
 
 ## PR body 契约：`Fixes #N`（Issue #53）
 
