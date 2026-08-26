@@ -1099,7 +1099,8 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
 
 
 def verify_pr(worktree: Path, branch: str, base_branch: str,
-              run_id: str, *, pr_repo: str | None = None,
+              run_id: str, *, issue: int,
+              pr_repo: str | None = None,
               expected_url: str | None = None,
               require_latest_base: bool = True) -> str:
     """Verify that exactly one open PR of the task branch is the delivery.
@@ -1108,8 +1109,11 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
     `require_latest_base` is False — the resume pre-validation runs
     before the base merge, when being behind is the expected state),
     exactly one open PR for the head branch, PR base, PR head == local
-    HEAD, and the run marker in the PR body. When `pr_repo` is given
-    (resume path), the PR's head repo must be that repo; when
+    HEAD, the run marker in the PR body, and the `Fixes #<issue>`
+    keyword in the PR body (Issue #53: GitHub closes the source Issue
+    natively only when the body carries the keyword, so a PR without it
+    would leave the Issue open after the merge). When `pr_repo` is
+    given (resume path), the PR's head repo must be that repo; when
     `expected_url` is given, the verified PR URL must exactly equal the
     recovered original PR URL (Issue #45 review: the resume must keep
     the same PR number).
@@ -1200,6 +1204,18 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
         raise RuntimeError(
             f"PR body is missing the stable run marker {marker}; the PR "
             "must carry the machine-readable run id of this attempt"
+        )
+    fixes = f"Fixes #{issue}"
+    # The number must match exactly, not as a digit prefix: `Fixes #41`
+    # closes Issue 41, not Issue 4 (review F1, Issue #53).
+    if not re.search(rf"Fixes #{issue}(?!\d)", body):
+        LOGGER.error(
+            "pr_fixes_missing issue=%s branch=%s", issue, branch,
+        )
+        raise RuntimeError(
+            f"PR body is missing `{fixes}`; the keyword must point at the "
+            "source Issue so GitHub closes it natively when the PR merges "
+            "into the default branch"
         )
     if expected_url is not None and url != expected_url:
         LOGGER.error(
@@ -1993,7 +2009,9 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         )
         _publish_plan_milestone(publisher, worktree)
         _publish_test_milestone(publisher, worktree)
-        pr_url = verify_pr(worktree, branch, base_branch, run_id)
+        pr_url = verify_pr(
+            worktree, branch, base_branch, run_id, issue=number,
+        )
         commit = run_command(
             ["git", "rev-parse", "HEAD"], cwd=worktree,
         )
@@ -2164,7 +2182,7 @@ def resume_delivery(issue: dict, scene: dict, config: dict,
         # to fix (merge_latest_base runs next).
         verified_url = verify_pr(
             worktree, branch, base_branch, run_id,
-            pr_repo=source_repo, expected_url=pr_url,
+            issue=number, pr_repo=source_repo, expected_url=pr_url,
             require_latest_base=False,
         )
         merge_latest_base(worktree, base_branch)
@@ -2187,7 +2205,7 @@ def resume_delivery(issue: dict, scene: dict, config: dict,
         # must still exactly equal the recovered original PR URL.
         verified_url = verify_pr(
             worktree, branch, base_branch, run_id,
-            pr_repo=source_repo, expected_url=pr_url,
+            issue=number, pr_repo=source_repo, expected_url=pr_url,
         )
         # The state transition comes first: the Issue leaves the
         # fix-needed state before the progress comment is recorded, so

@@ -47,7 +47,7 @@ Work through this exact loop:
 4. Add or update tests. For UI work, use Playwright against the real running application, assert the changed flow, check browser errors, and save screenshots under the run artifacts.
 5. Run the real project tests/build/smoke checks and record the commands and results in `test.log` inside the task worktree (the automatic `tests passed/failed` milestone and the progress comment's tests field read that file).
 6. Verify the result yourself.
-7. Commit the change, push only the current feature branch, and open exactly one draft or normal PR for this Issue. After the PR is open, the Runner runs an independent review/fix loop and merges it itself; you do not review, fix, or merge.
+7. Commit the change, push only the current feature branch, and open exactly one draft or normal PR for this Issue. The PR body must contain `Fixes #{{ISSUE_NUMBER}}` (it may be on the first line) so GitHub natively closes the source Issue when the PR merges into the default branch — the runner rejects a PR whose body is missing it. After the PR is open, the Runner runs an independent review/fix loop and merges it itself; you do not review, fix, or merge.
 
 Base freshness before creating the PR:
 
@@ -82,6 +82,10 @@ for this run:
   branch coverage, the real verification and the complete review-fix
   loop, then commit and push ONLY the task branch so the same PR
   updates.
+- If the PR body is missing `Fixes #{{ISSUE_NUMBER}}`, add it (for
+  example via `gh pr edit <number> --body ...`) so the merge closes the
+  source Issue natively; the re-verification rejects a PR body without
+  it.
 - If the conflict or the findings cannot be resolved, stop and explain
   the concrete blocker in the final response; the runner marks the Issue
   `ai-blocked` and the PR, branch and worktree stay for inspection.

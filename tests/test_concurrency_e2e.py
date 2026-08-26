@@ -129,6 +129,8 @@ elif args[:2] == ["issue", "view"]:
 elif args[:2] == ["pr", "list"]:
     branch = args[args.index("--head") + 1]
     head = git("rev-parse", "HEAD")
+    # Branch shape: muyan-pilot-owner-repo-issue-<n>-<run_id>.
+    issue_num = branch.rsplit("-", 2)[1]
     run_id = branch.rsplit("-", 1)[1]
     print(json.dumps([{
         "number": 99,
@@ -139,7 +141,7 @@ elif args[:2] == ["pr", "list"]:
         "headRefOid": head,
         "headRepository": {"name": "repo"},
         "headRepositoryOwner": {"login": "owner"},
-        "body": f"<!-- muyan-pilot:run={run_id} -->\\n\\nPlan for {branch}",
+        "body": f"<!-- muyan-pilot:run={run_id} -->\\n\\nFixes #{issue_num}\\n\\nPlan for {branch}",
     }]))
 elif args[:2] == ["pr", "comment"]:
     state.setdefault("pr_comments", []).append(

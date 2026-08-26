@@ -149,6 +149,12 @@ follow it before changing code.
 - Pi (the implementer) does not merge and does not push `main` or `master`.
   It delivers through exactly one PR linked to the Issue; the Runner is the
   only merge actor (see below).
+- The PR description must contain `Fixes #<issue-number>` (it may be on
+  the first line), pointing at the source Issue so GitHub closes the Issue
+  natively when the PR merges into the default branch. The keyword works
+  in the PR body and in commit messages, but not in the PR title. The
+  runner rejects a PR whose body is missing it, so a merge can never
+  leave the source Issue open.
 
 ## Auto review, fix and merge
 

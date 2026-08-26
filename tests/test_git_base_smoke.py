@@ -120,7 +120,8 @@ def test_verify_pr_rejects_delivery_behind_latest_remote_base(clone, caplog):
         RuntimeError, match="behind latest remote base",
     ):
         runner.verify_pr(
-            clone, "muyan-pilot/owner-repo-issue-3-a1b2c3d4", "main", "a1b2c3d4",
+            clone, "muyan-pilot/owner-repo-issue-3-a1b2c3d4", "main",
+            "a1b2c3d4", issue=3,
         )
     assert "base_branch=main" in caplog.text
 
@@ -136,11 +137,15 @@ def test_verify_pr_accepts_delivery_that_contains_latest_remote_base(clone, monk
             "url": "https://github.com/owner/repo/pull/3",
             "baseRefName": "main",
             "headRefOid": local_head,
-            "body": "<!-- muyan-pilot:run=a1b2c3d4 -->\n\nPlan",
+            "body": (
+                "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+                "Fixes #3\n\nPlan"
+            ),
         }]),
     )
     assert runner.verify_pr(
-        clone, "muyan-pilot/owner-repo-issue-3-a1b2c3d4", "main", "a1b2c3d4",
+        clone, "muyan-pilot/owner-repo-issue-3-a1b2c3d4", "main",
+        "a1b2c3d4", issue=3,
     ) == "https://github.com/owner/repo/pull/3"
 
 
@@ -156,12 +161,16 @@ def test_verify_pr_rejects_pr_head_newer_than_local_head(clone, monkeypatch):
             "url": "https://github.com/owner/repo/pull/3",
             "baseRefName": "main",
             "headRefOid": pushed_head,
-            "body": "<!-- muyan-pilot:run=a1b2c3d4 -->\n\nPlan",
+            "body": (
+                "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+                "Fixes #3\n\nPlan"
+            ),
         }]),
     )
     with pytest.raises(RuntimeError, match="is not local HEAD"):
         runner.verify_pr(
-            clone, "muyan-pilot/owner-repo-issue-3-a1b2c3d4", "main", "a1b2c3d4",
+            clone, "muyan-pilot/owner-repo-issue-3-a1b2c3d4", "main",
+            "a1b2c3d4", issue=3,
         )
 
 
