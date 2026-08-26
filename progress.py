@@ -6,7 +6,7 @@ Issue. The comment carries a hidden HTML run marker
 (`<!-- muyan-pilot:run=<run_id> -->`) so a restarted process finds the same
 comment again and keeps PATCHing it in place — no database, no new
 heartbeat comments. Milestone events (started, plan ready, tests
-passed/failed, review findings, fix pushed, PR opened, merged, blocked)
+passed/failed, review findings, PR opened, merged, blocked)
 are published as short standalone comments so GitHub Mobile pushes a
 notification for each one.
 

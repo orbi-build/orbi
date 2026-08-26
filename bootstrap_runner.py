@@ -4,21 +4,22 @@
 This is intentionally small. It claims one ready GitHub Issue, gives it to
 Pi in an isolated worktree, and accepts success only when one open PR exists.
 After the implementer opens the PR, the Runner closes the loop itself: it
-freezes the exact PR base/head SHA, runs an independent review session, loops
-a fixer session on the same feature branch/worktree while Blocker/Major
-findings exist, re-checks the merge gate against the latest remote base, and
-merges via `gh pr merge --match-head-commit`. Pi never pushes the protected
-branch; the Runner is the only merge actor. Any command failure is logged and
+freezes the exact PR base/head SHA, runs one independent review session that
+reviews the diff AND fixes Blocker/Major findings in the same session
+(modify code, run tests, push the task branch — Issue #82: no cold-start
+fixer, no third review), re-freezes the head after a clean verdict,
+re-checks the merge gate against the latest remote base, and merges via
+`gh pr merge --match-head-commit`. Pi never pushes the protected branch;
+the Runner is the only merge actor. Any command failure is logged and
 raised. There is no fallback, queue, daemon, or multi-agent framework.
 
 Throughout the whole lifecycle the Runner publishes live progress
 automatically (Issue #18): one per-run GitHub progress comment carrying a
 hidden run marker is PATCHed in place on every activity change and at most
-every 30 seconds while any Pi session (implementer, reviewer or fixer)
-runs, and short milestone comments (started, plan ready, tests
-passed/failed, review findings, fix pushed, PR opened, merged, blocked)
-notify GitHub Mobile. No human command, poll or status check is part of
-the normal workflow.
+every 30 seconds while any Pi session (implementer or reviewer) runs, and
+short milestone comments (started, plan ready, tests passed/failed, review
+findings, PR opened, merged, blocked) notify GitHub Mobile. No human
+command, poll or status check is part of the normal workflow.
 """
 from __future__ import annotations
 
@@ -71,12 +72,13 @@ PI_HEARTBEAT_SECONDS = 30.0
 PI_IDLE_WARN_SECONDS = 300.0
 
 # The bootstrap runner streams every Pi session of a run through the same
-# live activity pipeline (Issue #24/#40); implement/review/fix share the
-# same line format and carry their role (Issue #41: one run_id end to
-# end, the roles are steps of the same run).
+# live activity pipeline (Issue #24/#40); implement/review share the same
+# line format and carry their role (Issue #41: one run_id end to end, the
+# roles are steps of the same run). Issue #82 removed the cold-start fixer
+# role: the review session fixes findings in the same session, so a run
+# has at most two Pi sessions (implement, then review).
 ROLE_IMPLEMENT = "implement"
 ROLE_REVIEW = "review"
-ROLE_FIX = "fix"
 
 # Run correlation (Issue #41): one task attempt generates one run_id and
 # every journal line of the attempt starts with `[run_id]`, so a single
@@ -86,12 +88,15 @@ RUN_ID_PATTERN = re.compile(r"^[0-9a-f]{8}$")
 _CURRENT_RUN_ID: str | None = None
 
 # GitHub labels are the only state store (Issue #45). After a PR is
-# opened the Issue is in a recoverable review/fix state: `ai-pr-opened`
-# means awaiting review, and only the explicit `ai-fix-needed` state
-# (a review finding or a base conflict) is scanned for Fixer work. The
-# next tick resumes that same run on the same branch, worktree and PR
-# instead of claiming a new Issue. `ai-merged` is the success terminal
-# state the Runner sets after it merges the PR itself (Issue #34).
+# opened the Issue is in a recoverable review state: `ai-pr-opened`
+# means awaiting review, and the explicit `ai-fix-needed` state (a review
+# finding the reviewer could not fix in-session, or a base conflict)
+# means awaiting the next review session — Issue #82: the review session
+# itself fixes findings in the same session, so both labels resume into
+# the same independent review (no cold-start fixer). The next tick
+# resumes that same run on the same branch, worktree and PR instead of
+# claiming a new Issue. `ai-merged` is the success terminal state the
+# Runner sets after it merges the PR itself (Issue #34).
 IN_PROGRESS_LABEL = "ai-in-progress"
 PR_OPENED_LABEL = "ai-pr-opened"
 FIX_NEEDED_LABEL = "ai-fix-needed"
@@ -421,19 +426,6 @@ def issue_comments(number: int, *, repo: str) -> list[dict]:
     return comments
 
 
-def issue_body(number: int, *, repo: str) -> str:
-    """Return the Issue body; the fixer works from the original task."""
-    raw = run_command([
-        "gh", "issue", "view", str(number), "--repo", repo,
-        "--json", "body",
-    ])
-    data = json.loads(raw)
-    if not isinstance(data, dict):
-        raise ValueError("issue view must be a JSON object")
-    body = data.get("body")
-    return body if isinstance(body, str) else ""
-
-
 def new_run_id() -> str:
     """Return a unique short run identifier for one task attempt."""
     return uuid.uuid4().hex[:8]
@@ -561,20 +553,21 @@ def pick_resumable_delivery(
 ) -> tuple[dict, dict] | None:
     """Return the newest opened-PR delivery and its resume scene.
 
-    Both opened-PR states are scanned (Issue #70): `ai-fix-needed` (a
-    review finding or a base conflict — the next tick runs the Fixer on
-    the same branch, worktree and PR, Issue #45) and `ai-pr-opened`
-    (awaiting review — the next tick runs the independent review; a
-    clean PR is still never sent to the Fixer, Issue #45 round-5
-    contract). The `ai-pr-opened` scan exists because the delivery that
-    opened the PR can be gone: the progress-publishing failure behind
-    Issue #70 used to label the delivered Issue `ai-blocked` before the
-    review started, and a killed runner can die inside the delivery
-    wait loop, leaving a valid MERGEABLE PR with no owner. Without the
-    scan such a delivery is picked up by no other scan (`pick_issue`
-    excludes `ai-pr-opened`) and is stranded forever. `ai-blocked`
-    Issues are excluded (they need a human decision first), as are
-    merged and in-flight Issues and closed Issues. A scene that cannot
+    Both opened-PR states are scanned (Issue #70): `ai-fix-needed`
+    (awaiting the next review session after a finding or a base
+    conflict — Issue #82: the review session fixes findings in the same
+    session, so the next tick runs the same independent review on the
+    same branch, worktree and PR) and `ai-pr-opened` (awaiting review —
+    the next tick runs the independent review). The `ai-pr-opened`
+    scan exists because the delivery that opened the PR can be gone: the
+    progress-publishing failure behind Issue #70 used to label the
+    delivered Issue `ai-blocked` before the review started, and a killed
+    runner can die inside the delivery wait loop, leaving a valid
+    MERGEABLE PR with no owner. Without the scan such a delivery is
+    picked up by no other scan (`pick_issue` excludes `ai-pr-opened`)
+    and is stranded forever. `ai-blocked` Issues are excluded (they need
+    a human decision first), as are merged and in-flight Issues and
+    closed Issues. A scene that cannot
     be recovered is an unresolvable state: the Issue is marked
     `ai-blocked` with the concrete reason and the error re-raised, so
     the tick stops instead of silently skipping the delivery while a
@@ -616,9 +609,6 @@ def pick_resumable_delivery(
         scene = resume_scene(comments)
     except ValueError as exc:
         block_scene_failure(issue, exc, repo, comments)
-    # The fixer works from the original task, so the resumable issue
-    # carries its body like a freshly claimed one.
-    issue["body"] = issue_body(int(issue["number"]), repo=repo)
     return issue, scene
 
 
@@ -694,55 +684,6 @@ def pick_next_delivery(
         if issue is not None:
             return repo, issue, None
     return None
-
-
-def merge_in_progress(worktree: Path) -> bool:
-    """True when the worktree is mid-merge (conflicts staged for a commit)."""
-    try:
-        run_command(
-            ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
-            cwd=worktree,
-        )
-        return True
-    except subprocess.CalledProcessError:
-        return False
-
-
-def merge_latest_base(worktree: Path, base_branch: str) -> bool:
-    """Fetch `origin/<base>` and merge it when the delivery is behind.
-
-    Returns True when a merge was started. A conflicted merge is left
-    staged for the fixer (Pi) to resolve: the runner never auto-resolves,
-    force-pushes, or pushes the protected branch (Issue #45). A merge
-    failure that is not a conflict fails fast.
-    """
-    run_command(["git", "fetch", "origin", base_branch], cwd=worktree)
-    try:
-        run_command(
-            ["git", "merge-base", "--is-ancestor",
-             f"origin/{base_branch}", "HEAD"],
-            cwd=worktree,
-        )
-    except subprocess.CalledProcessError:
-        LOGGER.info(
-            "base_advanced base_branch=%s worktree=%s; merging into the "
-            "task branch",
-            base_branch, worktree,
-        )
-        try:
-            run_command(
-                ["git", "merge", f"origin/{base_branch}"], cwd=worktree,
-            )
-        except subprocess.CalledProcessError:
-            if not merge_in_progress(worktree):
-                raise
-            LOGGER.warning(
-                "base_merge_conflict base_branch=%s worktree=%s; the "
-                "conflict is left staged for the fixer",
-                base_branch, worktree,
-            )
-        return True
-    return False
 
 
 def worktree_path(repo_dir: Path, source_repo: str, number: int,
@@ -1072,8 +1013,13 @@ def stream_pi(
 
 def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
            *, timeout: int | None = None, branch: str | None = None,
-           pr_url: str | None = None,
            progress: Callable[[dict], None] | None = None) -> str:
+    """Run the implementer Pi session for a freshly claimed Issue.
+
+    Issue #82 removed the fixer reuse of this function: findings are
+    fixed by the review session in the same session, so the implementer
+    is the only user of `prompt.md` now.
+    """
     system_prompt = render_prompt(
         config["prompt"].read_text(encoding="utf-8"),
         {
@@ -1098,18 +1044,6 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         f"Issue body:\n{issue.get('body', '')}\n\n"
         f"Worktree: {worktree}\n"
     )
-    if pr_url is not None:
-        context += (
-            f"Existing PR: {pr_url}\n"
-            "This run already opened that PR. Keep the same PR number, the "
-            "same run id, branch and worktree: never close the PR, never "
-            "create a new PR, never re-claim the Issue. Fix the review "
-            "findings and/or resolve the merge conflicts left in the "
-            "worktree, rerun the full test suite with coverage and the "
-            "complete review, then commit and push ONLY the task branch "
-            "so the same PR updates. No force push, no push of the "
-            "protected branch.\n"
-        )
     context += "Complete the delivery process in the system prompt."
     command = [
         "pi", *_skill_args(_skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)),
@@ -1336,13 +1270,15 @@ def freeze_pr(worktree: Path, branch: str, base_branch: str) -> dict:
     }
 
 
-# Role-specific skill filtering (Issue #83): the review session is
-# read-only and ends with a single REVIEW_VERDICT line, so the
-# delivery-oriented skills must not be loaded there (tdd-dev would
-# steer it into the implement/test/PR flow, review-fix-loop would
-# open another fix/review round). The implementer/fixer keeps
-# tdd-dev and code-review but not review-fix-loop: the Runner itself
-# runs the independent review/fix loop once the PR is open.
+# Role-specific skill filtering (Issue #83): the review session ends
+# with a single REVIEW_VERDICT line and its job is to review this one
+# diff and fix it until it can merge (Issue #82) — not to open another
+# full delivery — so the delivery-oriented skills must not be loaded
+# there (tdd-dev would steer it into the implement/test/PR flow,
+# review-fix-loop would open another fix/review round). The
+# implementer keeps tdd-dev and code-review but not review-fix-loop:
+# the Runner itself runs the independent review loop once the PR is
+# open.
 REVIEW_EXCLUDED_SKILLS = frozenset({"tdd-dev", "review-fix-loop"})
 IMPLEMENT_EXCLUDED_SKILLS = frozenset({"review-fix-loop"})
 
@@ -1381,11 +1317,17 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
                issue: int, branch: str, round: int,
                timeout: int | None = None,
                progress: Callable[[dict], None] | None = None) -> str:
-    """Run one independent, read-only review session for a frozen PR.
+    """Run one independent review session for a frozen PR.
 
-    The review streams live activity through the same pipeline as the
-    implementer and fixer (role=review; Issue #41: one run_id end to end,
-    the roles are steps of the same run).
+    The session is independent (new process, `prompt_review.md`, a new
+    session JSONL) and reviews the exact frozen base/head. Issue #82:
+    when it finds Blocker/Major issues it fixes them IN THIS SAME
+    SESSION (modify code, run the full test suite with coverage, commit
+    and push the task branch) and re-emits the final verdict — there is
+    no cold-start fixer and no third review. The review streams live
+    activity through the same pipeline as the implementer (role=review;
+    Issue #41: one run_id end to end, the roles are steps of the same
+    run).
     """
     system_prompt = render_prompt(
         config["prompt_review"].read_text(encoding="utf-8"),
@@ -1403,8 +1345,9 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
     context = (
         f"Independently review PR #{pr['number']} ({pr['url']}) of "
         f"{source_repo} against base {config['base_branch']}@{pr['base_oid']} "
-        f"and head {pr['head_oid']} (round {round}). Follow code-review R1-R9 "
-        "and end with a single REVIEW_VERDICT line."
+        f"and head {pr['head_oid']} (round {round}). Follow code-review R1-R9; "
+        "fix Blocker/Major findings in this same session (push only the "
+        "task branch) and end with a single REVIEW_VERDICT line."
     )
     command = [
         "pi", *_skill_args(_skills_for(config, REVIEW_EXCLUDED_SKILLS)),
@@ -1601,21 +1544,26 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     """Run one independent review round; merge when the verdict is clean.
 
     The delivery wait loop (which holds the slot) calls this while the
-    PR is open and the Issue awaits review (`ai-pr-opened`). It freezes
-    the PR, runs the independent review (streamed, role=review), and
-    then:
+    PR is open and the Issue awaits review (`ai-pr-opened`) or awaits the
+    next review session (`ai-fix-needed`). It freezes the PR, runs the
+    independent review (streamed, role=review), and then:
 
-    - clean verdict -> merge gate (latest-base ancestor, mergeable,
-      head match, `gh pr merge --match-head-commit`), confirm the merge
-      landed on origin/<base>, sync the deployment checkout, label the
-      Issue `ai-merged`; returns True;
-    - Blocker/Major findings -> comment them to Issue and PR and label
-      the Issue `ai-fix-needed`; the #45 fix loop repairs the same PR
-      and returns the Issue to `ai-pr-opened`, where the next wait
-      iteration re-reviews; returns False;
-    - a gate failure because the head is behind the latest base ->
-      label the Issue `ai-fix-needed` with the absorb-base finding
-      (the fixer merges the latest base); returns False;
+    - clean verdict -> the reviewer may have fixed findings IN THE SAME
+      SESSION and pushed the task branch (Issue #82), so the PR is
+      RE-FROZEN before the merge gate: the gate (latest-base ancestor,
+      mergeable, head match, `gh pr merge --match-head-commit`) then
+      runs against the head the verdict actually covers; confirm the
+      merge landed on origin/<base>, sync the deployment checkout,
+      label the Issue `ai-merged`; returns True;
+    - Blocker/Major findings the reviewer could not fix in-session ->
+      comment them to Issue and PR and label the Issue `ai-fix-needed`;
+      the next wait iteration (or the next tick after a restart) runs
+      the same independent review again — no cold-start fixer, no
+      third review; returns False;
+    - a gate failure because the head is behind the latest base or has
+      a merge conflict -> label the Issue `ai-fix-needed` with the
+      absorb-base finding (the next review session absorbs the latest
+      base in-session); returns False;
     - missing/malformed verdict or an exhausted round budget -> raise;
       the caller marks the Issue `ai-blocked`.
     """
@@ -1657,6 +1605,17 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         verdict["majors"],
     )
     if review_has_findings(verdict):
+        # The reviewer could not make the PR mergeable in this session
+        # (Issue #82: findings are fixed in the same session; reaching
+        # this branch means the fix was not verifiable or not this
+        # session's to decide). The Issue moves to the explicit
+        # fix-needed state: the next review session retries the same PR
+        # (no cold-start fixer), and the round budget bounds the loop.
+        LOGGER.info(
+            "review_findings_unfixed pr=%s round=%s; the Issue moves to "
+            "ai-fix-needed, the next review session retries the same PR",
+            pr["number"], round,
+        )
         body = (
             f"{marker}\n"
             f"Muyan Pilot review round {round} for PR #{pr['number']}: "
@@ -1678,20 +1637,32 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         ), outcome=(
             "**Muyan Pilot review findings**\n\n"
             f"round {round}: {verdict['blockers']} blocker(s), "
-            f"{verdict['majors']} major(s); the fix loop repairs the "
-            "same PR automatically"
+            f"{verdict['majors']} major(s); the next review session "
+            "retries the same PR automatically"
         )))
         edit_issue(
             number, repo=source_repo, add=FIX_NEEDED_LABEL,
             remove=PR_OPENED_LABEL,
         )
         return False
+    # Issue #82: the reviewer fixes findings in the same session and
+    # pushes the task branch, so the head the verdict covers may be
+    # NEWER than the frozen head. Re-freeze before the merge gate: the
+    # gate then checks the latest-base ancestor, mergeability and the
+    # exact reviewed head against the current remote head, and merges
+    # only that head via --match-head-commit.
+    refrozen = freeze_pr(worktree, branch, base_branch)
+    if refrozen["head_oid"] != pr["head_oid"]:
+        LOGGER.info(
+            "review_head_advanced pr=%s round=%s frozen=%s reviewed=%s",
+            pr["number"], round, pr["head_oid"], refrozen["head_oid"],
+        )
     try:
-        merged = merge_gate(worktree, pr, base_branch)
+        merged = merge_gate(worktree, refrozen, base_branch)
     except RuntimeError as exc:
         message = str(exc)
-        # Behind and merge-conflict are the same fixer job: absorb
-        # origin/<base>, resolve, retest. Other gate failures
+        # Behind and merge-conflict are the same next-session job:
+        # absorb origin/<base>, resolve, retest. Other gate failures
         # (head moved, etc.) fail fast.
         if (
             "behind latest remote base" not in message
@@ -1702,8 +1673,9 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             f"{marker}\n"
             f"Muyan Pilot review round {round} for PR #{pr['number']}: "
             "the PR is behind the latest base or has a merge conflict; "
-            f"merge the latest origin/{base_branch} into the branch, "
-            "resolve conflicts, and rerun the full test suite"
+            f"the next review session merges the latest "
+            f"origin/{base_branch} into the branch in-session, resolves "
+            "conflicts, and reruns the full test suite"
         )
         comment_issue(number, repo=source_repo, body=body)
         comment_pr(pr["number"], body=body)
@@ -2084,11 +2056,11 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         commit = run_command(
             ["git", "rev-parse", "HEAD"], cwd=worktree,
         )
-        # No `fix pushed` milestone on a fresh claim: the implementer
-        # always commits the delivery on top of the frozen base, so the
-        # head always advanced — the PR opened milestone below announces
-        # the delivery. `fix pushed` is the fixer's milestone
-        # (resume_delivery), where it marks a real fix on an opened PR.
+        # The PR opened milestone announces the delivery: the
+        # implementer always commits the delivery on top of the frozen
+        # base, so the head always advanced. (Issue #82 removed the
+        # fixer's `fix pushed` milestone: findings are fixed by the
+        # review session, which records its own round comments.)
         edit_issue(
             number, repo=source_repo, add=PR_OPENED_LABEL,
             remove=IN_PROGRESS_LABEL,
@@ -2192,198 +2164,6 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         raise
 
 
-def resume_delivery(issue: dict, scene: dict, config: dict,
-                    source_repo: str) -> str:
-    """Resume the fix loop of an opened PR on the same run (Issue #45).
-
-    The scene (run id, base, PR URL) is recovered from the Issue's
-    trusted `Muyan Pilot opened PR:` comment, so a restart of the runner
-    or the service resumes from GitHub state alone. Branch and worktree
-    are DERIVED from the configured repo_dir, source_repo, Issue number
-    and run id — never read from the comment — so no comment can steer
-    the runner into an arbitrary local path. Before any git or Pi
-    mutation the configured base and the open PR (repo, head branch,
-    base, run marker, exact URL) are validated; the latest remote base is
-    then merged into the ORIGINAL branch (conflicts stay staged for the
-    fixer), Pi fixes the PR in the ORIGINAL worktree, and the SAME PR is
-    re-verified: the returned URL is the one verify_pr verified, which
-    must exactly equal the recovered original PR URL. Any failure marks
-    the Issue `ai-blocked` and preserves the PR, branch and worktree: the
-    run is never re-claimed, the PR is never closed or replaced.
-    """
-    number = int(issue["number"])
-    run_id = validate_run_id(scene["run_id"])
-    # Derive the expected branch and worktree from the runner's own
-    # config and the run id (the values the first run used when it
-    # created them); a comment can never name an arbitrary local path.
-    branch = task_branch(source_repo, number, run_id)
-    worktree = worktree_path(config["repo_dir"], source_repo, number, run_id)
-    base_branch = scene["base_branch"]
-    pr_url = scene["pr_url"]
-    set_run_id(run_id)
-    started = time.monotonic()
-    publisher = ProgressPublisher(
-        number, source_repo, run_id, run_command=run_command,
-    )
-    scene_info = (
-        f"base_branch={base_branch} base_sha={scene['base_sha']} "
-        f"run_id={run_id} branch={branch} worktree={worktree} "
-        f"pr_url={pr_url}"
-    )
-    LOGGER.info("issue=%s resuming opened PR %s", number, scene_info)
-    try:
-        # Validate the configured base before any git/Pi mutation: a
-        # scene frozen on another base branch is never merged.
-        if base_branch != config["base_branch"]:
-            raise RuntimeError(
-                f"base branch mismatch: scene has {base_branch}, config "
-                f"has {config['base_branch']}; the resume must use the "
-                "configured base branch"
-            )
-        if not worktree.is_dir():
-            raise RuntimeError(f"worktree missing: {worktree}")
-        # Validate the open PR before any git/Pi mutation: exactly one
-        # open PR of the derived branch, in the configured source repo,
-        # on the configured base, carrying the run marker, and with the
-        # exact URL of the recovered original PR (same PR number). The
-        # latest-base check is deferred to the post-fix verification:
-        # being behind the base is the expected state the resume exists
-        # to fix (merge_latest_base runs next).
-        verified_url = verify_pr(
-            worktree, branch, base_branch, run_id,
-            issue=number, pr_repo=source_repo, expected_url=pr_url,
-            require_latest_base=False,
-        )
-        merge_latest_base(worktree, base_branch)
-        config = {**config, "base_sha": scene["base_sha"], "run_id": run_id}
-        publisher.ensure(_progress_body(_progress_state(
-            issue=number, run_id=run_id, role=ROLE_FIX,
-            branch=branch, worktree=worktree, started=started,
-            pr_url=verified_url, review_round=0,
-        )))
-        run_pi(
-            issue, worktree, config, source_repo,
-            branch=branch, pr_url=verified_url,
-            progress=LiveProgressThrottle(
-                publisher, issue=number, run_id=run_id,
-                role=ROLE_FIX, branch=branch, worktree=worktree,
-                started=started, pr_url=verified_url, review_round=0,
-            ),
-        )
-        # Re-verify the SAME PR after the fixer pushed: the verified URL
-        # must still exactly equal the recovered original PR URL.
-        verified_url = verify_pr(
-            worktree, branch, base_branch, run_id,
-            issue=number, pr_repo=source_repo, expected_url=pr_url,
-        )
-        # The state transition comes first: the Issue leaves the
-        # fix-needed state before the progress comment is recorded, so
-        # an observer never sees a "fixed PR" comment on an Issue that
-        # is still fix-needed (a crash in between re-runs the fixer,
-        # which is idempotent; the comment is a record, the label is
-        # the state).
-        edit_issue(
-            number, repo=source_repo, add=PR_OPENED_LABEL,
-            remove=FIX_NEEDED_LABEL,
-        )
-        # The fix is delivered here: the PR is re-verified and the
-        # Issue is back in `ai-pr-opened`. From here on only the
-        # delivery-record publishing remains, and a failure there must
-        # NOT fail the delivery (Issue #60, same contract as the fresh
-        # claim): each step is best-effort and independent — an error
-        # is logged (`progress_publish_failed`) and the next step
-        # still runs — and the run continues into the review/merge
-        # wait loop either way.
-        for step in (
-            lambda: comment_issue(
-                number, repo=source_repo,
-                body=(
-                    f"{run_marker(run_id)}\n"
-                    f"Muyan Pilot fixed PR: {verified_url} ({scene_info})"
-                ),
-            ),
-            lambda: publisher.milestone(
-                f"fix pushed: {verified_url} ({scene_info})"
-            ),
-            lambda: publisher.finish(_progress_body(_progress_state(
-                issue=number, run_id=run_id, role=ROLE_FIX,
-                branch=branch, worktree=worktree, started=started,
-                pr_url=verified_url, review_round=0,
-            ), outcome=(
-                "**Muyan Pilot fix pushed**\n\n"
-                "the same PR is awaiting review again; the independent "
-                "review and merge happen automatically"
-            ))),
-        ):
-            try:
-                step()
-            except Exception:
-                LOGGER.exception(
-                    "progress_publish_failed run=%s issue=%s role=%s",
-                    run_id, issue_context(source_repo, number), ROLE_FIX,
-                )
-    except Exception as exc:
-        LOGGER.exception("issue=%s resume failed", number)
-        activity_scene = ""
-        try:
-            snapshot = activity_snapshot(worktree / ".pi-session")
-            if snapshot is None:
-                # No session file yet: the scene still carries the full
-                # debug entry (worktree, branch) with '-' session fields.
-                snapshot = {
-                    "session_id": None, "session_file": None,
-                    "phase": "starting", "last_activity": None,
-                    "action": None, "result": None,
-                }
-            activity_scene = format_run_scene(
-                snapshot,
-                run_id=run_id, issue=issue_context(source_repo, number),
-                role=ROLE_IMPLEMENT, branch=branch, worktree=str(worktree),
-            )
-        except Exception:
-            LOGGER.exception("issue=%s activity scene failed", number)
-        try:
-            edit_issue(
-                number, repo=source_repo, add=BLOCKED_LABEL,
-                remove=FIX_NEEDED_LABEL,
-            )
-            detail = _failure_detail(exc)
-            body = (
-                f"{run_marker(run_id)}\n"
-                f"Muyan Pilot failed: {detail} ({scene_info})"
-            )
-            if activity_scene:
-                body += f" {activity_scene}"
-            comment_issue(number, repo=source_repo, body=body)
-            # The blocked milestone is posted even when the progress
-            # comment was never created (a failure before `ensure`):
-            # the mobile notification of the terminal failure must not
-            # depend on it.
-            publisher.milestone(
-                f"blocked: {sanitize(detail)} ({scene_info})"
-            )
-            if publisher.comment_id is not None:
-                publisher.finish(_progress_body(_progress_state(
-                    issue=number, run_id=run_id, role=ROLE_FIX,
-                    branch=branch, worktree=worktree,
-                    started=started, pr_url=pr_url,
-                    review_round=0,
-                ), outcome=(
-                    "**Muyan Pilot blocked**\n\n"
-                    f"failure: {detail}\n"
-                    "next step: fix the failure above and resume this "
-                    "same PR (branch, worktree and PR are preserved)"
-                )))
-        except Exception:
-            LOGGER.exception("issue=%s failure reporting failed", number)
-        raise
-    # The fix succeeded: the Issue is back in awaiting review (the
-    # transition happened before the progress comment), so the next
-    # tick does not re-run the Fixer (a clean PR is simply waiting for
-    # review now).
-    return verified_url
-
-
 def pr_state(pr_url: str) -> str:
     """Return the GitHub state of one PR: `OPEN`, `MERGED` or `CLOSED`.
 
@@ -2428,21 +2208,22 @@ def _finish_blocked_progress(
     number: int, run_id: str | None, source_repo: str,
     worktree: Path | None, branch: str | None, pr_url: str,
     detail: str, next_step: str,
-    role: str = ROLE_FIX, review_round: int = 0,
+    role: str = ROLE_REVIEW, review_round: int = 0,
 ) -> None:
     """Finish the tracked progress comment with the blocked scene.
 
     The contract (Issue #18): on failure the progress comment becomes
     the blocked scene with the next-step reason — the same terminal
-    body the `process_issue` and `resume_delivery` failure paths write.
-    `ensure` finds the run's existing progress comment by its hidden
-    marker (PATCHing it in place) or creates it when the run never
-    reached one; either way the blocked scene is the final state.
-    `role` and `review_round` are the actual role and completed review
-    rounds of the blocked run (review round 2, PR #42): the caller
-    derives them from the Issue's delivery label and trusted
-    review-round comments, so the terminal comment never shows a stale
-    hardcoded `fix`/`0`.
+    body the `process_issue` failure path writes. `ensure` finds the
+    run's existing progress comment by its hidden marker (PATCHing it
+    in place) or creates it when the run never reached one; either way
+    the blocked scene is the final state. `role` and `review_round`
+    are the actual role and completed review rounds of the blocked run
+    (review round 2, PR #42): the caller derives them from the
+    Issue's trusted review-round comments, so the terminal comment
+    never shows a stale hardcoded role/round. Issue #82: the only
+    post-PR role is `review` (the review session fixes findings in the
+    same session), so the default is `ROLE_REVIEW`.
     """
     if run_id is None:
         return
@@ -2466,7 +2247,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
     """Own the delivery lifecycle: hold the slot until merge or failure.
 
     The slot is acquired by `main` before the claim and must stay
-    occupied through implement -> review -> fix -> merge (Issue #39): a
+    occupied through implement -> review -> merge (Issue #39): a
     delivery whose PR is open still needs the machine, and no other
     Runner may start a second Pi while it is held. The Runner is the
     owner of that lifecycle, so it re-checks the delivery every
@@ -2479,20 +2260,18 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
       marked `ai-blocked` (removing `ai-pr-opened`/`ai-fix-needed`) with
       a failure comment carrying the run marker, then the slot is
       released by the caller;
-    - Issue in the explicit `ai-fix-needed` state (a review finding or
-      a base conflict) -> the Runner runs the SAME-PR fix (Issue #45)
-      itself, on the same run, in the same worktree, while still holding
-      the slot; the fix returns the Issue to `ai-pr-opened` and the
-      wait continues. A new Runner can never take the slot to fix this
-      delivery while it is held, so the fix must happen here;
-    - Issue awaiting review (`ai-pr-opened`) -> the Runner runs the
-      independent review of the frozen PR (Issue #34) itself, on the
-      same run, while still holding the slot: a clean verdict merges
-      the PR via the merge gate, confirms the merge, syncs the
-      deployment checkout and labels the Issue `ai-merged` (terminal,
-      the slot is released); findings label the Issue `ai-fix-needed`
-      and the fix step above repairs the same PR before the next
-      iteration re-reviews;
+    - Issue in an opened-PR state (`ai-pr-opened` awaiting review, or
+      `ai-fix-needed` awaiting the next review session after a finding
+      or a base conflict) -> the Runner runs the independent review of
+      the frozen PR (Issue #34) itself, on the same run, while still
+      holding the slot: the review session fixes Blocker/Major findings
+      IN THE SAME SESSION (Issue #82 — no cold-start fixer, no third
+      review), a clean verdict re-freezes the head and merges the PR
+      via the merge gate, confirms the merge, syncs the deployment
+      checkout and labels the Issue `ai-merged` (terminal, the slot is
+      released); unfixed findings or a behind/conflict gate label the
+      Issue `ai-fix-needed` and the next iteration re-runs the same
+      independent review;
     - otherwise -> keep holding the slot and re-check.
 
     There is no timeout: systemd owns the run lifecycle and kills the
@@ -2525,6 +2304,13 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 number, repo=source_repo, add=BLOCKED_LABEL,
                 remove=PR_OPENED_LABEL,
             )
+            # A PR closed while in `ai-fix-needed` (awaiting the next
+            # review session) leaves that label behind: remove it too,
+            # so the terminal state is `ai-blocked` alone.
+            if FIX_NEEDED_LABEL in issue_labels(number, source_repo):
+                edit_issue(
+                    number, repo=source_repo, remove=FIX_NEEDED_LABEL,
+                )
             body = (
                 f"Muyan Pilot failed: PR {pr_url} was closed without "
                 "a merge; the delivery is terminally failed"
@@ -2542,15 +2328,11 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 )
                 # The blocked scene carries the actual role and the
                 # completed review rounds (review round 2, PR #42):
-                # the delivery label says which role was in flight
-                # (ai-fix-needed -> fix, otherwise the awaiting-review
-                # review), and the trusted review-round comments bound
-                # the round count (GitHub is the only state store).
-                blocked_role = (
-                    ROLE_FIX if FIX_NEEDED_LABEL in
-                    issue_labels(number, source_repo)
-                    else ROLE_REVIEW
-                )
+                # Issue #82 — both opened-PR states are review states
+                # (the review session fixes findings in the same
+                # session), so the role is always `review`, and the
+                # trusted review-round comments bound the round count
+                # (GitHub is the only state store).
                 blocked_round = review_rounds_so_far(
                     issue_comments(number, repo=source_repo),
                 )
@@ -2563,34 +2345,29 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     "delivery is terminally failed",
                     "investigate why the PR was closed and re-open the "
                     "delivery or start a fresh run on the Issue",
-                    role=blocked_role, review_round=blocked_round,
+                    role=ROLE_REVIEW, review_round=blocked_round,
                 )
             return
         labels = issue_labels(number, source_repo)
-        if FIX_NEEDED_LABEL in labels and BLOCKED_LABEL not in labels:
-            # The review found a problem (or the base advanced): fix the
-            # SAME PR on the SAME run while still holding the slot.
-            LOGGER.info(
-                "issue=%s delivery_fix_needed pr=%s; resuming the fix "
-                "loop of the same PR",
-                number, pr_url,
-            )
-            scene = resume_scene(issue_comments(number, repo=source_repo))
-            fix_issue = dict(issue)
-            fix_issue["body"] = issue_body(number, repo=source_repo)
-            resume_delivery(fix_issue, scene, config, source_repo)
-            continue  # the fix returned the Issue to awaiting review
-        if (PR_OPENED_LABEL in labels and BLOCKED_LABEL not in labels
+        if ((PR_OPENED_LABEL in labels or FIX_NEEDED_LABEL in labels)
+                and BLOCKED_LABEL not in labels
                 and MERGED_LABEL not in labels):
-            # The PR is awaiting review: run the independent review of
-            # the frozen PR on the same run (Issue #34). A clean
-            # verdict merges and returns True (terminal); findings
-            # label the Issue `ai-fix-needed` and the fix step above
-            # repairs the same PR before the next iteration re-reviews.
-            # A review that cannot run (unrecoverable scene, missing
-            # worktree, missing/malformed verdict, exhausted rounds)
-            # is a real failure: the Issue is marked `ai-blocked` so
-            # it is never stranded in awaiting review without an owner.
+            # The PR is in an opened-PR review state: run the
+            # independent review of the frozen PR on the same run
+            # (Issue #34). `ai-pr-opened` awaits review; `ai-fix-needed`
+            # awaits the next review session after a finding or a base
+            # conflict (Issue #82: the review session fixes findings in
+            # the same session, so both states run the same review). A
+            # clean verdict re-freezes the head, merges and returns
+            # True (terminal); unfixed findings or a behind/conflict
+            # gate label the Issue `ai-fix-needed` and the next
+            # iteration re-runs the same independent review. A review
+            # that cannot run (unrecoverable scene, missing worktree,
+            # missing/malformed verdict, exhausted rounds) is a real
+            # failure: the Issue is marked `ai-blocked` ALONE (the
+            # opened-PR state label, `ai-pr-opened` or `ai-fix-needed`,
+            # is removed) so it is never stranded in an opened-PR state
+            # without an owner.
             worktree = None
             branch = None
             try:
@@ -2619,6 +2396,15 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     number, repo=source_repo, add=BLOCKED_LABEL,
                     remove=PR_OPENED_LABEL,
                 )
+                # A review failure while the Issue is in `ai-fix-needed`
+                # (awaiting the next review session) leaves that label
+                # behind: remove it too, so the terminal state is
+                # `ai-blocked` alone (Issue #82 routes both opened-PR
+                # states into the same review).
+                if FIX_NEEDED_LABEL in issue_labels(number, source_repo):
+                    edit_issue(
+                        number, repo=source_repo, remove=FIX_NEEDED_LABEL,
+                    )
                 body = (
                     f"Muyan Pilot failed: the independent review of "
                     f"PR {pr_url} failed: {exc}"
@@ -2660,7 +2446,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     number, pr_url,
                 )
                 return
-            continue  # findings: the fix loop repairs, then re-review
+            continue  # findings: the next iteration re-runs the review
         LOGGER.info(
             "issue=%s delivery_awaiting pr=%s state=%s",
             number, pr_url, state,
@@ -2706,29 +2492,25 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         source_repo, issue, scene = selected
         if scene is not None:
-            # An open PR is a recoverable review/fix state: resume the
+            # An open PR is a recoverable review state: resume the
             # same run on the same branch, worktree and PR (Issue #45).
             # Bind the scene's run id first so every journal line and
             # GitHub comment of the resumed delivery carries it
-            # (Issue #41). The explicit `ai-fix-needed` state runs the
-            # Fixer on the same PR; a delivery that is simply awaiting
-            # review (`ai-pr-opened`, stranded by a dead runner or the
-            # progress failure of Issue #70) goes straight to the
-            # independent review — a clean PR is never sent to the
-            # Fixer (Issue #45 round-5 contract).
+            # (Issue #41). Both opened-PR states go straight to the
+            # delivery wait: `ai-pr-opened` awaits review, and
+            # `ai-fix-needed` awaits the next review session —
+            # Issue #82: the review session itself fixes findings in the
+            # same session, so there is no cold-start fixer to run
+            # here (a stranded `ai-pr-opened` delivery, dead runner or
+            # the progress failure of Issue #70, is reviewed the same
+            # way).
             set_run_id(scene["run_id"])
-            labels = issue_labels(int(issue["number"]), source_repo)
-            if FIX_NEEDED_LABEL in labels:
-                pr_url = resume_delivery(
-                    issue, scene, config, source_repo,
-                )
-            else:
-                pr_url = scene["pr_url"]
+            pr_url = scene["pr_url"]
         else:
             pr_url = process_issue(issue, config, source_repo)
         # The delivery is not done when the PR is open: hold the slot
-        # through review -> fix -> merge and release it only after the
-        # PR is merged or terminally failed (Issue #39).
+        # through review -> merge and release it only after the PR is
+        # merged or terminally failed (Issue #39).
         wait_for_delivery(pr_url, issue, config, source_repo)
     finally:
         slot.release()

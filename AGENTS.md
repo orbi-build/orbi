@@ -38,14 +38,14 @@ follow it before changing code.
   evidence.
 - Journal: while a session runs, the journal gets a heartbeat at most every
   30 seconds and an immediate event on phase/action change. Every line
-  carries issue, run id, role (implement/review/fix/merge), phase, elapsed,
+  carries issue, run id, role (implement/review/merge), phase, elapsed,
   last activity, last action, session and branch. No model/session activity
   for 5 minutes logs an idle warning; the first new activity after it logs
   a resumed event.
 - GitHub: exactly one progress comment per run, carrying a hidden run
   marker. It is PATCHed in place (at most every 30 seconds or on progress
   change) and never replaced by new heartbeat comments. Milestones (started,
-  plan ready, tests passed/failed, review findings, fix pushed, PR opened,
+  plan ready, tests passed/failed, review findings, PR opened,
   merged, blocked) are short standalone comments so GitHub Mobile pushes a
   notification. After a process restart the same comment is found by the
   run marker and kept — no database. On success the comment becomes the
@@ -66,7 +66,8 @@ follow it before changing code.
   a new independent run and the old scene is preserved.
 - Before creating the PR, re-fetch `origin/<base_branch>`; if the base
   advanced, merge it into the task branch, resolve conflicts manually, rerun
-  the full tests and the complete review-fix loop, then push the task branch.
+  the full tests, then push the task branch (the independent review runs
+  after the PR is opened and absorbs any further base advance in-session).
 - The runner rejects a delivery whose HEAD does not contain the latest remote
   base. No auto conflict resolution, no force push, no merge or push of the
   protected branch.
@@ -93,25 +94,34 @@ follow it before changing code.
 - No DAG, topological sort, or multi-worker scheduling: single-slot
   serial execution only reads the field, skips, and waits.
 
-## Review and fix loop (same PR)
+## Review, in-session fix and merge (same PR)
 
-- After a PR is opened, the Issue is in a recoverable review/fix state,
-  not done: `ai-pr-opened` means awaiting review (a clean PR is never
-  sent to the Fixer); a review finding, an advanced base, or a merge
-  conflict moves it to the explicit `ai-fix-needed` state, which is a
-  fixable state, never a reason to close the PR, re-claim the Issue, or
-  open a replacement PR. A successful fix consumes `ai-fix-needed` and
-  returns the Issue to `ai-pr-opened` (awaiting review again).
-- The next tick resumes the same run on the same feature branch,
-  worktree and PR number. Both opened-PR states are scanned (Issue
-  #70): `ai-fix-needed` (the next tick runs the Fixer on the same PR)
-  and `ai-pr-opened` (awaiting review — the next tick runs the
-  independent review on the same PR; a clean PR is still never sent to
-  the Fixer). The `ai-pr-opened` scan exists because the delivery that
-  opened the PR can be gone (a killed runner, or the progress failure
-  behind Issue #70 that used to block the Issue before the review
-  started): without it a valid MERGEABLE PR is stranded with no owner.
-  `ai-blocked` Issues are excluded (they need a human decision first),
+- The review session is independent (a new Pi process, `prompt_review.md`,
+  a new JSONL) and, since Issue #82, ALSO the fixer: the reviewer may
+  modify code, run the full test suite with 100% line/branch coverage,
+  commit, and push ONLY the task branch — then re-emit the
+  `REVIEW_VERDICT` for the fixed head. There is no cold-start Fixer and
+  no third review session: a `pass` verdict means zero Blocker/Major
+  findings AFTER the in-session fixes. The review prompt never attaches
+  the `review-fix-loop` or `tdd-dev` skills: the reviewer applies the
+  code-review R1–R9 criteria directly and fixes findings in-session
+  (no nested review/fix loop).
+- After a PR is opened the Issue is in a recoverable review state, not
+  done: `ai-pr-opened` means awaiting review. `ai-fix-needed` marks a
+  delivery whose head is not mergeable yet (the review found a finding
+  the session could not fix, or the PR is behind the latest base / has a
+  merge conflict): the NEXT tick resumes the same run on the same
+  feature branch, worktree and PR number and runs the next independent
+  review session, which merges the latest `origin/<base>` into the
+  branch IN-SESSION, resolves any conflict, re-runs the full suite and
+  re-emits the verdict. Both opened-PR states are scanned (Issue #70).
+  The `ai-pr-opened` scan exists because the delivery that opened the
+  PR can be gone (a killed runner, or the progress failure behind Issue
+  #70 that used to block the Issue before the review started): without
+  it a valid MERGEABLE PR is stranded with no owner. `ai-fix-needed` is
+  never a reason to close the PR, re-claim the Issue, or open a
+  replacement PR; a successful merge moves the Issue to `ai-merged`.
+- `ai-blocked` Issues are excluded (they need a human decision first),
   as are merged and in-flight Issues; the fresh-claim scan excludes
   both opened-PR states, so an opened-PR Issue is never re-claimed as
   new work. The resume scene (run id, base, PR URL) is
@@ -126,17 +136,18 @@ follow it before changing code.
   task starts ahead of it — never guessed. Before any git/Pi mutation
   the configured base and the open PR (head repo, head branch, base,
   run marker, exact URL) are validated.
-- When the latest remote base is not an ancestor of the delivery HEAD,
-  the runner performs a plain `git merge origin/<base>` on the original
-  branch and hands any conflict to the fixer; no auto conflict
-  resolution, no `--abort`, no force push, no push of the protected
-  branch.
-- After a fix, the full test suite, 100% line/branch coverage, the real
-  verification and the complete R1–R9 review run again before the same
-  PR is re-verified.
-- An unresolvable fix keeps the PR, branch and worktree intact and marks
-  the Issue `ai-blocked` (removing `ai-fix-needed`) with the concrete
-  conflict or finding.
+- The Harness merge gate is unchanged: it re-fetches the latest remote
+  base and requires the PR head to contain it, the PR to be mergeable,
+  and the remote head to still be the reviewed head. After a clean
+  verdict the PR is RE-FROZEN (the reviewer may have pushed an
+  in-session fix, advancing the head) and the gate runs against the
+  re-frozen head; `gh pr merge --match-head-commit` then lands exactly
+  that head. No auto conflict resolution by the Runner, no `--abort`,
+  no force push, no merge or push of the protected branch.
+- An unresolvable review (Pi failure, exhausted review rounds, a
+  finding the session could not fix) keeps the PR, branch and worktree
+  intact and marks the Issue `ai-blocked` (removing the opened-PR
+  state) with the concrete finding.
 
 ## Run correlation
 
@@ -167,23 +178,32 @@ follow it before changing code.
 ## Auto review, fix and merge
 
 - After the implementer opens the PR, the Runner freezes the exact PR
-  base/head SHA and runs an independent, read-only review session
-  (code-review R1–R9) against those SHAs. The reviewer ends with one
-  machine-readable `REVIEW_VERDICT` line; a missing or malformed verdict fails
-  fast and is never treated as a pass.
-- While Blocker/Major findings exist, the Runner comments them to the Issue and
-  PR, runs a fixer on the same feature branch/worktree, re-freezes the SHA,
-  reruns the full suite, and re-reviews. The loop is bounded (5 rounds); if it
-  exhausts rounds with findings it fails fast and marks the Issue `ai-blocked`.
+  base/head SHA and runs an independent review session (code-review R1–R9)
+  against those SHAs. Since Issue #82 the reviewer is also the fixer: it may
+  modify code, run the full suite with 100% line/branch coverage, commit and
+  push ONLY the task branch, then re-emit the verdict for the fixed head. The
+  reviewer ends with one machine-readable `REVIEW_VERDICT` line; a missing or
+  malformed verdict fails fast and is never treated as a pass.
+- A `pass` verdict means zero Blocker/Major findings AFTER the in-session
+  fixes: the Runner re-freezes the PR (the head may have advanced), runs the
+  merge gate against the re-frozen head, and merges with `gh pr merge
+  --match-head-commit` so only the reviewed head lands. A finding the session
+  could not fix (or a PR behind the latest base / with a merge conflict)
+  leaves the head unmergeable: the Issue is marked `ai-fix-needed` and the
+  NEXT tick runs the next independent review session on the same PR, which
+  absorbs the latest base in-session, resolves conflicts, re-runs the suite
+  and re-emits the verdict. The review loop is bounded (5 rounds); if it
+  exhausts rounds with findings it fails fast and marks the Issue
+  `ai-blocked`.
 - The merge gate re-fetches the latest remote base and requires the PR head to
   contain it, the PR to be mergeable, and the remote head to still be the
-  reviewed head; it then merges with `gh pr merge --match-head-commit` so only
-  the reviewed head lands. A PR behind the latest base is rejected, never
+  reviewed head. A PR behind the latest base is rejected, never
   merged. The Runner confirms the PR is MERGED and the merge commit is on the
   protected branch before marking the Issue `ai-merged`.
-- A review finding is not `ai-blocked`: it enters the same PR's fix/review
-  loop. Only command failure, an unavailable environment, or a fix that cannot
-  be verified fails fast and marks `ai-blocked`.
+- A review finding is not `ai-blocked`: it is fixed in the review session
+  (or in the next review session on the same PR). Only command failure, an
+  unavailable environment, or a review that cannot be verified fails fast and
+  marks `ai-blocked`.
 
 ## Scope
 

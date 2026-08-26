@@ -40,9 +40,10 @@ LOGGER.addFilter(RunIdFilter())
 ISSUE_URL_PATTERN = re.compile(r"/issues/(\d+)$")
 READY_LABEL = "ai-ready"
 IN_PROGRESS_LABEL = "ai-in-progress"
-# `ai-pr-opened` (awaiting review), `ai-fix-needed` (Fixer pending),
-# `ai-merged` (the Runner merged the PR itself, Issue #34) and
-# `ai-blocked` are all result states of an opened delivery (Issue #45).
+# `ai-pr-opened` (awaiting review), `ai-fix-needed` (awaiting the next
+# review session, Issue #82), `ai-merged` (the Runner merged the PR
+# itself, Issue #34) and `ai-blocked` are all result states of an
+# opened delivery (Issue #45).
 RESULT_LABELS = ("ai-pr-opened", "ai-fix-needed", "ai-merged", "ai-blocked")
 
 
@@ -99,8 +100,9 @@ def recent_result(repo: str) -> dict | None:
     """Return the newest delivery result Issue, any state.
 
     Result states: `ai-pr-opened` (awaiting review), `ai-fix-needed`
-    (Fixer pending), `ai-merged` (success terminal, the Runner merged
-    the PR itself) and `ai-blocked` (needs human attention).
+    (awaiting the next review session, Issue #82), `ai-merged` (success
+    terminal, the Runner merged the PR itself) and `ai-blocked` (needs
+    human attention).
     """
     newest = None
     for label in RESULT_LABELS:
