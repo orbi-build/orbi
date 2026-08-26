@@ -1255,6 +1255,111 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
     return url
 
 
+def verify_resumed_pr(scene: dict, issue: dict, config: dict,
+                      source_repo: str) -> str:
+    """Verify the PR of a resumed delivery BEFORE any git/Pi mutation.
+
+    Issue #89: #82 removed the cold-start fixer together with the
+    pre-Pi `verify_pr` of the old `resume_delivery` — the resume passed
+    the comment's PR URL straight to the delivery wait while the review
+    froze the PR derived from the run id, so the two lines could be
+    different PRs (a comment must never steer the runner into the wrong
+    PR, Issue #45). Restored: branch and worktree are DERIVED from the
+    configured repo_dir, source repo, Issue number and run id (never
+    read from the comment), the scene base must still equal the
+    configured base (Issue #91) and the worktree must exist (Issue #90)
+    — both checked BEFORE any command runs — and the existing
+    `verify_pr` then validates exactly one open PR of the derived
+    branch in the configured source repo, on the configured base,
+    carrying the run marker and the `Fixes` keyword, with the EXACT URL
+    of the recovered scene. `require_latest_base=False`: being behind
+    the latest base is the expected state the review session absorbs
+    in-session (Issue #82), so the base merge never returns to the
+    runner. The returned URL is the one verify_pr verified — the
+    delivery wait only ever sees verified URLs, never the comment
+    string.
+
+    Any failure is terminal: the Issue is marked `ai-blocked` ALONE
+    (the opened-PR state label is removed, and a leftover
+    `ai-fix-needed` too) with a run-marked failure comment, the blocked
+    milestone and the blocked progress scene, and the error is
+    re-raised so the tick stops — no review Pi is started, nothing is
+    merged, and the PR, branch and worktree stay intact.
+    """
+    number = int(issue["number"])
+    run_id = scene["run_id"]
+    branch = task_branch(source_repo, number, run_id)
+    worktree = worktree_path(
+        config["repo_dir"], source_repo, number, run_id,
+    )
+    try:
+        if scene["base_branch"] != config["base_branch"]:
+            raise ValueError(
+                f"resume scene base_branch={scene['base_branch']} "
+                f"differs from configured base_branch="
+                f"{config['base_branch']}; the PR is frozen on a "
+                "different base and must not be resumed against the "
+                "configured one"
+            )
+        if not worktree.is_dir():
+            raise RuntimeError(f"worktree missing: {worktree}")
+        return verify_pr(
+            worktree, branch, config["base_branch"], run_id,
+            issue=number, pr_repo=source_repo,
+            expected_url=scene["pr_url"], require_latest_base=False,
+        )
+    except Exception as exc:
+        LOGGER.exception(
+            "issue=%s resume_pr_verification_failed pr=%s branch=%s",
+            number, scene["pr_url"], branch,
+        )
+        try:
+            edit_issue(
+                number, repo=source_repo, add=BLOCKED_LABEL,
+                remove=PR_OPENED_LABEL,
+            )
+            # A resume that fails while the Issue awaits the next
+            # review session (`ai-fix-needed`) leaves that label
+            # behind: remove it too, so the terminal state is
+            # `ai-blocked` alone (Issue #82 routes both opened-PR
+            # states into the same resume).
+            if FIX_NEEDED_LABEL in issue_labels(number, source_repo):
+                edit_issue(
+                    number, repo=source_repo, remove=FIX_NEEDED_LABEL,
+                )
+            body = (
+                f"Muyan Pilot failed: the resume verification of "
+                f"PR {scene['pr_url']} failed: {exc}; the PR, branch "
+                f"{branch} and worktree {worktree} are preserved"
+            )
+            if current_run_id():
+                body = f"{run_marker(current_run_id())}\n{body}"
+            comment_issue(number, repo=source_repo, body=body)
+            if current_run_id():
+                ProgressPublisher(
+                    number, source_repo, current_run_id(),
+                    run_command=run_command,
+                ).milestone(
+                    f"blocked: the resume verification of "
+                    f"PR {scene['pr_url']} failed: {exc}"
+                )
+                _finish_blocked_progress(
+                    number, current_run_id(), source_repo, worktree,
+                    branch, scene["pr_url"],
+                    f"the resume verification of PR {scene['pr_url']} "
+                    f"failed: {exc}",
+                    "fix the resume verification failure above and "
+                    "resume the delivery of this same PR",
+                    role=ROLE_REVIEW,
+                    review_round=review_rounds_so_far(
+                        issue_comments(number, repo=source_repo),
+                    ),
+                )
+        except Exception:
+            LOGGER.exception("issue=%s failure reporting failed", number)
+        raise
+
+
 def parse_review_verdict(text: str) -> dict:
     """Extract the last REVIEW_VERDICT JSON line from a review session.
 
@@ -2633,7 +2738,14 @@ def main(argv: list[str] | None = None) -> int:
             # the progress failure of Issue #70, is reviewed the same
             # way).
             set_run_id(scene["run_id"])
-            pr_url = scene["pr_url"]
+            # Issue #89: verify the open PR BEFORE any git/Pi mutation
+            # (head repo, base, run marker, exact URL of the recovered
+            # scene — the pre-#82 resume_delivery check, restored):
+            # the wait receives the VERIFIED URL, never the comment
+            # string, so a comment can never steer the runner into the
+            # wrong PR (Issue #45). A mismatch is terminal: the Issue
+            # is marked ai-blocked and the tick stops.
+            pr_url = verify_resumed_pr(scene, issue, config, source_repo)
         else:
             pr_url = process_issue(issue, config, source_repo)
         # The delivery is not done when the PR is open: hold the slot
