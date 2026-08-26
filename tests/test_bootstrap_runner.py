@@ -14,6 +14,7 @@ from unittest.mock import Mock
 import pytest
 
 import bootstrap_runner as runner
+import pi_activity
 from tests.test_progress_wiring import make_fake_gh
 
 
@@ -232,7 +233,10 @@ def test_run_command_logs_optional_timeout_and_reraises(tmp_path, caplog):
 
 
 def test_pick_issue_uses_github_queue(monkeypatch):
-    issue = {"number": 9, "title": "task", "body": "body"}
+    issue = {
+        "number": 9, "title": "task", "body": "body",
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
     calls = []
 
     def fake_run(command, **kwargs):
@@ -246,8 +250,165 @@ def test_pick_issue_uses_github_queue(monkeypatch):
         "--state", "open", "--search",
         "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked",
-        "--json", "number,title,body", "--limit", "1",
+        "--json", "number,title,body,blockedBy",
+        "--limit", "200",
     ]]
+
+
+def test_open_blocker_numbers_returns_only_open_blockers():
+    # GitHub keeps a relation listed after its blocker closes (the
+    # node carries `state: "CLOSED"` and is inert — verified against
+    # the live API, Issue #54): only OPEN blockers block.
+    issue = {"blockedBy": {"nodes": [
+        {"number": 31, "state": "OPEN", "title": "a"},
+        {"number": 32, "state": "CLOSED", "title": "b"},
+    ], "totalCount": 2}}
+    assert runner.open_blocker_numbers(issue) == [31]
+
+
+def test_open_blocker_numbers_counts_missing_state_as_open():
+    # A node without an explicit state counts as open: claiming a
+    # possibly-blocked Issue costs a full run, waiting one tick does
+    # not (Issue #54).
+    issue = {"blockedBy": {"nodes": [{"number": 31}], "totalCount": 1}}
+    assert runner.open_blocker_numbers(issue) == [31]
+
+
+def test_open_blocker_numbers_fails_open_on_missing_or_malformed_field():
+    # A missing or malformed `blockedBy` field must never block the
+    # queue (Issue #54 fail open): no known blockers, not an error.
+    assert runner.open_blocker_numbers({"number": 9}) == []
+    assert runner.open_blocker_numbers({"blockedBy": "nope"}) == []
+    assert runner.open_blocker_numbers({"blockedBy": {"nodes": "nope"}}) == []
+    assert runner.open_blocker_numbers({"blockedBy": {"nodes": ["nope"]}}) == []
+    assert runner.open_blocker_numbers({"blockedBy": {"nodes": [
+        {"number": 31, "state": "OPEN"},
+        {"title": "no number", "state": "OPEN"},
+        {"number": "32", "state": "OPEN"},
+        {"number": True, "state": "OPEN"},
+    ]}}) == [31]
+
+
+def test_pick_issue_skips_blocked_issue_and_claims_next(monkeypatch, caplog):
+    """A ready Issue with open native blockers (Issue #54) is never
+    claimed: no label change, no worktree — the runner logs a
+    structured `blocked_by` line with the blocker list and moves on to
+    the next ready Issue of the same repo."""
+    blocked = {
+        "number": 54, "title": "blocked task", "body": "",
+        "blockedBy": {"nodes": [
+            {"number": 31, "title": "base"},
+            {"number": 32, "title": "retry"},
+        ], "totalCount": 2},
+    }
+    ready = {
+        "number": 55, "title": "free task", "body": "",
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([blocked, ready]),
+    )
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/muyan-pilot") == ready
+    assert "blocked_by" in caplog.text
+    assert "54" in caplog.text
+    assert "31" in caplog.text
+    assert "32" in caplog.text
+
+
+def test_pick_issue_returns_none_when_all_ready_issues_blocked(
+    monkeypatch, caplog,
+):
+    blocked_a = {
+        "number": 1, "title": "a", "body": "",
+        "blockedBy": {"nodes": [{"number": 9}], "totalCount": 1},
+    }
+    blocked_b = {
+        "number": 2, "title": "b", "body": "",
+        "blockedBy": {"nodes": [{"number": 8}], "totalCount": 1},
+    }
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([blocked_a, blocked_b]),
+    )
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/muyan-pilot") is None
+    assert caplog.text.count("blocked_by") >= 2
+
+
+def test_pick_issue_claims_issue_whose_blocker_is_closed(monkeypatch):
+    """A closed blocker no longer blocks (Issue #54): GitHub keeps the
+    relation listed with `state: "CLOSED"` (verified against the live
+    API), and the runner counts only open blockers — the next tick
+    claims the Issue without any runner-side bookkeeping."""
+    issue = {
+        "number": 54, "title": "unblocked task", "body": "",
+        "blockedBy": {"nodes": [
+            {"number": 31, "state": "CLOSED", "title": "done"},
+        ], "totalCount": 1},
+    }
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([issue]),
+    )
+    assert runner.pick_issue("xqliu/muyan-pilot") == issue
+
+
+def test_pick_issue_claims_issue_with_empty_blocked_by(monkeypatch):
+    issue = {
+        "number": 54, "title": "free task", "body": "",
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([issue]),
+    )
+    assert runner.pick_issue("xqliu/muyan-pilot") == issue
+
+
+def test_pick_issue_stays_blocked_while_any_blocker_is_open(monkeypatch):
+    blocked = {
+        "number": 54, "title": "mixed", "body": "",
+        "blockedBy": {"nodes": [
+            {"number": 31, "state": "CLOSED", "title": "done"},
+            {"number": 32, "state": "OPEN", "title": "pending"},
+        ], "totalCount": 2},
+    }
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([blocked]),
+    )
+    assert runner.pick_issue("xqliu/muyan-pilot") is None
+
+
+def test_pick_issue_fails_open_when_blocked_by_field_missing(monkeypatch):
+    # Older gh versions or a changed API shape omit the field: the
+    # Issue must still be claimable (fail open, Issue #54).
+    issue = {"number": 9, "title": "task", "body": "body"}
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([issue]),
+    )
+    assert runner.pick_issue("xqliu/muyan-pilot") == issue
+
+
+def test_pick_issue_fails_open_when_blocked_by_query_fails(
+    monkeypatch, caplog,
+):
+    """A failed blockedBy query must not deadlock the queue (Issue
+    #54 fail open): the tick claims nothing this round and the error
+    is logged, never raised — the next tick retries the query."""
+    error = subprocess.CalledProcessError(
+        1, ["gh"], output="boom", stderr="rate limited",
+    )
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: (_ for _ in ()).throw(error),
+    )
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/muyan-pilot") is None
+    assert "blocked_by_check_failed" in caplog.text
 
 
 def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
@@ -723,7 +884,7 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     patches = [
         command for command in gh_calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-ceo/issues/4/comments/77"
+        and command[2] == "repos/xqliu/muyan-ceo/issues/comments/77"
         and "PATCH" in command
     ]
     assert patches, "the existing progress comment was not updated"
@@ -2070,7 +2231,10 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     # activity line; unchanged polls must not repeat it (Issue #40).
     assert len(activities) == 1
     line = activities[0]
-    assert "run=run1" in line
+    # No redundant `run=` field on the high-frequency lines (Issue #57);
+    # the `[run_id]` prefix is the run-id carrier (bound-run tests and
+    # the e2e suite cover the prefix itself).
+    assert "run=run1" not in line
     assert "issue=xqliu/muyan-pilot#24" in line
     assert "role=implement" in line
     assert "phase=test" in line
@@ -2085,7 +2249,7 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     # The idle tail produced heartbeats at the poll interval.
     assert len(heartbeats) >= 1
     for line in heartbeats:
-        assert "run=run1" in line
+        assert "run=run1" not in line
         assert "role=implement" in line
         assert "phase=starting" in line or "phase=test" in line
         assert "elapsed=" in line
@@ -2095,6 +2259,127 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     # The legacy verbose line is gone.
     assert "pi_activity" not in caplog.text
     assert "pi_idle" not in caplog.text
+
+
+def test_stream_pi_high_frequency_lines_carry_run_id_exactly_once(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #57: the `[run_id]` prefix (Issue #41) is the single
+    run-id carrier on the high-frequency lines; the redundant `run=`
+    field is gone, so the 8-hex id appears exactly once per line and a
+    single grep still reconstructs the whole timeline. The run is
+    bound like in the real journal (`process_issue` binds it before
+    starting Pi)."""
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    records = fake_session_records() + [
+        (0.5, {"type": "message", "id": "r1",
+               "timestamp": fresh_timestamp(2),
+               "message": {"role": "toolResult", "toolCallId": "t1",
+                           "toolName": "bash",
+                           "content": [{"type": "text", "text": "ok"}]}}),
+        (1.2, {"type": "message", "id": "a2",
+               "timestamp": fresh_timestamp(3),
+               "message": {"role": "assistant", "content": [
+                   {"type": "text", "text": "done"}]}}),
+    ]
+    command = make_fake_pi(
+        tmp_path, session_records=records, stdout="final answer",
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="a1b2c3d4", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    kinds = (
+        "activity", "heartbeat", "model_wait", "resumed",
+        "pi_idle", "pi_resumed",
+    )
+    high_freq = [
+        message for message in caplog.messages
+        if any(f" {kind} " in message for kind in kinds)
+    ]
+    # The record set produces every high-frequency kind except the idle
+    # pair (activity + heartbeats, one model_wait, one resumed).
+    assert any(" activity " in m for m in high_freq)
+    assert any(" heartbeat " in m for m in high_freq)
+    assert any(" model_wait " in m for m in high_freq)
+    assert any(" resumed " in m for m in high_freq)
+    for message in high_freq:
+        assert "run=" not in message, message
+        assert message.startswith("[a1b2c3d4]"), message
+        assert message.count("a1b2c3d4") == 1, message
+
+
+def test_stream_pi_idle_lines_carry_run_id_exactly_once(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #57: `pi_idle` / `pi_resumed` repeat the same rule as the
+    other high-frequency lines: prefix only, no `run=` field."""
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    # a1 is 4s stale when it is polled, so the idle warning fires;
+    # a2 arrives later with a fresh timestamp, so the resume does not
+    # re-trigger the warning.
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(-5), "cwd": "/w"}),
+        (0.1, {"type": "message", "id": "a1",
+               "timestamp": fresh_timestamp(-4),
+               "message": {"role": "assistant", "content": [
+                   {"type": "text", "text": "one"}]}}),
+        (1.0, {"type": "message", "id": "a2",
+               "timestamp": fresh_timestamp(1.0),
+               "message": {"role": "assistant", "content": [
+                   {"type": "text", "text": "two"}]}}),
+    ]
+    command = make_fake_pi(
+        tmp_path, session_records=records, stdout="ok",
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.5,
+            run_id="a1b2c3d4", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    idles = [m for m in caplog.messages if " pi_idle " in m]
+    resumed = [m for m in caplog.messages if " pi_resumed " in m]
+    assert len(idles) == 1
+    assert len(resumed) == 1
+    for message in idles + resumed:
+        assert "run=" not in message, message
+        assert message.startswith("[a1b2c3d4]"), message
+        assert message.count("a1b2c3d4") == 1, message
+
+
+def test_stream_pi_scene_lines_keep_run_field_for_parse_scene(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #57: the low-frequency scene lines (run_start / run_failed)
+    keep `run=` so `pi_activity.parse_scene` still returns the run id
+    from the lines that need to be parsed. The run is bound like in
+    the real journal."""
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    command = make_fake_pi(
+        tmp_path, session_records=fake_session_records(),
+        stderr="pi exploded", exit_code=3,
+    )
+    with caplog.at_level("INFO"), pytest.raises(
+        subprocess.CalledProcessError,
+    ):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="a1b2c3d4", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    starts = [m for m in caplog.messages if " run_start " in m]
+    failures = [m for m in caplog.messages if " run_failed " in m]
+    assert len(starts) == 1 and len(failures) == 1
+    for message in starts + failures:
+        assert "run=a1b2c3d4" in message, message
+        fields = pi_activity.parse_scene(message)
+        assert fields["run"] == "a1b2c3d4"
+        assert fields["issue"] == "xqliu/muyan-pilot#24"
 
 
 def test_stream_pi_activity_keeps_action_after_tool_result(tmp_path, caplog):
@@ -2286,7 +2571,9 @@ def test_stream_pi_model_wait_then_resumed_no_warning_spam(
     assert len(waits) == 1
     assert len(resumed) == 1
     wait = waits[0]
-    assert "run=run1" in wait
+    # The transition lines carry no redundant `run=` field (Issue #57);
+    # the `[run_id]` prefix is the run-id carrier.
+    assert "run=run1" not in wait
     assert "issue=xqliu/muyan-pilot#24" in wait
     assert "role=implement" in wait
     assert "phase=test" in wait
@@ -2295,7 +2582,7 @@ def test_stream_pi_model_wait_then_resumed_no_warning_spam(
     assert "branch=" not in wait
     assert f"worktree={tmp_path}" not in wait
     resume = resumed[0]
-    assert "run=run1" in resume
+    assert "run=run1" not in resume
     assert "state=resumed" in resume
     assert "phase=test" in resume
     # While waiting, the heartbeats carry the model_wait state and the
@@ -2363,7 +2650,9 @@ def test_stream_pi_logs_idle_warning_once_when_session_stalls(
     idles = [line for line in lines if " pi_idle " in line]
     assert len(idles) == 1, f"exactly one idle warning: {lines}"
     idle = idles[0]
-    assert "run=run1" in idle
+    # No redundant `run=` field (Issue #57); the `[run_id]` prefix is
+    # the run-id carrier.
+    assert "run=run1" not in idle
     assert "issue=xqliu/muyan-pilot#24" in idle
     assert "role=implement" in idle
     assert "phase=starting" in idle
@@ -2402,9 +2691,10 @@ def test_stream_pi_logs_pi_resumed_after_idle_warning(tmp_path, caplog):
     resumed = [line for line in lines if " pi_resumed " in line]
     assert len(idles) == 1
     assert len(resumed) == 1
-    # resumed comes after the warning and carries the run context.
+    # resumed comes after the warning and carries no redundant `run=`
+    # field (Issue #57).
     assert lines.index(resumed[0]) > lines.index(idles[0])
-    assert "run=run1" in resumed[0]
+    assert "run=run1" not in resumed[0]
     assert "issue=xqliu/muyan-pilot#24" in resumed[0]
     assert "role=implement" in resumed[0]
     assert "phase=starting" in resumed[0]
@@ -3285,7 +3575,7 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
     patches = [
         command for command in api_calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/owner/repo/issues/39/comments/77"
+        and command[2] == "repos/owner/repo/issues/comments/77"
         and "PATCH" in command
     ]
     assert patches, "the tracked progress comment was not updated"
@@ -3535,7 +3825,7 @@ def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
     patches = [
         command for command in api_calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/owner/repo/issues/39/comments/77"
+        and command[2] == "repos/owner/repo/issues/comments/77"
         and "PATCH" in command
     ]
     assert patches, "the tracked progress comment was not updated"

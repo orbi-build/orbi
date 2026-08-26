@@ -174,10 +174,12 @@ elif args[:2] == ["pr", "merge"]:
     save()
 elif args[:1] == ["api"]:
     # The progress publisher (Issue #18) keeps the single per-run
-    # comment via gh api: list (GET), create (POST), update (PATCH).
-    # Endpoint: repos/<owner>/<repo>/issues/<n>/comments[/<id>]
+    # comment via gh api: list (GET) and create (POST) on
+    # repos/<owner>/<repo>/issues/<n>/comments, update (PATCH) on
+    # repos/<owner>/<repo>/issues/comments/<id> — the GitHub update
+    # route carries no issue number (Issue #58).
     parts = args[1].split("/")
-    num = parts[4]
+    num = parts[4] if parts[4].isdigit() else None
     if "--method" in args:
         method = args[args.index("--method") + 1]
         body = args[args.index("--field") + 1][len("body="):]
@@ -190,7 +192,8 @@ elif args[:1] == ["api"]:
             save()
             print(json.dumps({"id": cid, "body": body}))
         elif method == "PATCH":
-            cid = int(parts[6])
+            # Update route: repos/<owner>/<repo>/issues/comments/<id>
+            cid = int(parts[5])
             for c in state["comments"]:
                 if c.get("id") == cid:
                     c["body"] = body

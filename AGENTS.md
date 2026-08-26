@@ -51,6 +51,12 @@ follow it before changing code.
   run marker and kept — no database. On success the comment becomes the
   final delivery summary (PR, tests, review evidence); on failure it becomes
   the blocked scene with the next-step reason.
+- Once the PR exists (verified and labeled `ai-pr-opened`), the delivery is
+  complete: progress-publishing failures (the delivered PATCH, the `PR
+  opened` milestone, the opened-PR scene comment) are logged as
+  `progress_publish_failed` and never fail the delivery or mark the Issue
+  `ai-blocked` — the run continues into the independent review/merge loop
+  (Issue #60).
 
 ## Base freshness
 
@@ -64,6 +70,28 @@ follow it before changing code.
 - The runner rejects a delivery whose HEAD does not contain the latest remote
   base. No auto conflict resolution, no force push, no merge or push of the
   protected branch.
+
+## Task dependencies (blockedBy)
+
+- Task dependencies use GitHub's native `blockedBy` relation
+  (`gh issue edit N --add-blocked-by M`); never write `Depends on #N`
+  in the Issue body — the body is not part of `blockedBy` and the
+  runner does not parse body dependencies.
+- Before claiming an `ai-ready` Issue the runner reads `blockedBy`
+  (`gh issue list --json blockedBy`). Open blockers (blocker nodes with
+  `state: "OPEN"`) mean the Issue is not claimed: no `ai-in-progress`,
+  no label change, no worktree; a structured
+  `blocked_by issue=N repo=... blockers=M1,M2` log line is written and
+  the next ready Issue of the same repo is considered. A closed blocker
+  no longer blocks: GitHub keeps the relation listed with
+  `state: "CLOSED"` (inert, verified against the live API) and the
+  runner counts only open blockers — the next tick claims the Issue
+  with no bookkeeping.
+- A failed `blockedBy` query fails open (treated as unblocked: the tick
+  claims nothing from that repo, logs `blocked_by_check_failed`, and
+  the next tick retries) — an API error must never deadlock the queue.
+- No DAG, topological sort, or multi-worker scheduling: single-slot
+  serial execution only reads the field, skips, and waits.
 
 ## Review and fix loop (same PR)
 

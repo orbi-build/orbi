@@ -262,19 +262,79 @@ def parse_issue_list(raw: str) -> dict | None:
     return issues[0] if issues else None
 
 
+def open_blocker_numbers(issue: dict) -> list[int]:
+    """Return the numbers of the issue's OPEN native GitHub blockers.
+
+    `gh issue list --json blockedBy` (gh 2.94+) carries the native
+    dependency relation as `{"nodes": [...], "totalCount": N}`. GitHub
+    keeps a relation listed after its blocker closes (the node then
+    carries `state: "CLOSED"` and is inert — verified against the live
+    API, Issue #54), so only OPEN blockers actually block: a closed
+    blocker clears the dependency without any runner-side bookkeeping,
+    and the next tick claims the Issue. A node without an explicit
+    `state` counts as open (claiming a possibly-blocked Issue costs a
+    full run; waiting one tick does not). A missing or malformed field
+    means "no known blockers" (fail open): an API shape change must
+    never deadlock the queue.
+    """
+    blocked_by = issue.get("blockedBy")
+    if not isinstance(blocked_by, dict):
+        return []
+    nodes = blocked_by.get("nodes")
+    if not isinstance(nodes, list):
+        return []
+    numbers: list[int] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        number = node.get("number")
+        if not isinstance(number, int) or isinstance(number, bool):
+            continue
+        if node.get("state", "OPEN") != "OPEN":
+            continue
+        numbers.append(number)
+    return numbers
+
+
 def pick_issue(repo: str) -> dict | None:
     # A merged delivery keeps `ai-ready` + `ai-merged` on the (still
     # open) Issue; `ai-merged` is the success terminal state, so it is
     # excluded from the ready scan like every other delivery state.
-    raw = run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", "open",
-        "--search",
-        "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
-        f"-label:{FIX_NEEDED_LABEL} -label:{MERGED_LABEL} "
-        f"-label:{BLOCKED_LABEL}",
-        "--json", "number,title,body", "--limit", "1",
-    ])
-    return parse_issue_list(raw)
+    # The scan fetches the ready queue (not just the first Issue) and
+    # reads the native GitHub dependency per Issue (Issue #54): an
+    # Issue with open blockers is skipped — no claim, no label change,
+    # no worktree — and the next ready Issue is considered instead.
+    try:
+        raw = run_command([
+            "gh", "issue", "list", "--repo", repo, "--state", "open",
+            "--search",
+            "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
+            f"-label:{FIX_NEEDED_LABEL} -label:{MERGED_LABEL} "
+            f"-label:{BLOCKED_LABEL}",
+            "--json", "number,title,body,blockedBy", "--limit", "200",
+        ])
+        issues = parse_issue_array(raw)
+    except Exception as exc:
+        # Fail open (Issue #54): a failed blockedBy query must never
+        # deadlock the queue. This tick claims nothing from this repo
+        # and the next tick retries the query; the error is logged,
+        # never raised, and no label is touched.
+        LOGGER.error(
+            "blocked_by_check_failed repo=%s error=%s",
+            repo, exc,
+        )
+        return None
+    for issue in issues:
+        blockers = open_blocker_numbers(issue)
+        if blockers:
+            LOGGER.info(
+                "blocked_by issue=%s repo=%s blockers=%s",
+                issue.get("number"), repo,
+                ",".join(str(number) for number in blockers),
+            )
+            continue
+        return issue
+    return None
 
 
 def pick_in_progress_issue(
@@ -730,13 +790,18 @@ def _decode_chunks(chunks: list[bytes]) -> str:
     return b"".join(chunks).decode("utf-8", "replace")
 
 
-def _log_activity(activity: dict, *, run_id: str, issue_ref: str,
+def _log_activity(activity: dict, *, issue_ref: str,
                   role: str, state: str | None = None) -> None:
-    """Log one short activity line with the changed fields only."""
+    """Log one short activity line with the changed fields only.
+
+    No `run=` field (Issue #57): the `[run_id]` prefix added by
+    `RunIdFilter` (Issue #41) is the single run-id carrier on the
+    high-frequency lines, so the id appears exactly once per line.
+    """
     LOGGER.info(
-        "activity run=%s issue=%s role=%s phase=%s action=%s result=%s "
+        "activity issue=%s role=%s phase=%s action=%s result=%s "
         "state=%s idle=%s",
-        run_id, issue_ref, role, activity["phase"],
+        issue_ref, role, activity["phase"],
         quote_value(activity["action"] or "-"),
         activity["result"] or "-",
         state or "-",
@@ -744,19 +809,20 @@ def _log_activity(activity: dict, *, run_id: str, issue_ref: str,
     )
 
 
-def _log_heartbeat(activity: dict, *, run_id: str, issue_ref: str,
+def _log_heartbeat(activity: dict, *, issue_ref: str,
                    role: str, elapsed: float,
                    state: str | None = None) -> None:
     """Log one heartbeat line when nothing changed since the last poll.
 
     `state` carries the model_wait flag while the model is expected to
     reply next, so a slow active model is not reported as idle (Issue
-    #40).
+    #40). No `run=` field (Issue #57): the `[run_id]` prefix is the
+    single run-id carrier on the high-frequency lines.
     """
     LOGGER.info(
-        "heartbeat run=%s issue=%s role=%s phase=%s state=%s elapsed=%s "
+        "heartbeat issue=%s role=%s phase=%s state=%s elapsed=%s "
         "idle=%s",
-        run_id, issue_ref, role, activity["phase"], state or "-",
+        issue_ref, role, activity["phase"], state or "-",
         format_duration(elapsed), format_duration(activity["stale_seconds"]),
     )
 
@@ -881,25 +947,27 @@ def stream_pi(
                 # Only changed fields are repeated; an unchanged poll is a
                 # heartbeat (Issue #40).
                 _log_activity(
-                    activity, run_id=run_id, issue_ref=issue_ref,
+                    activity, issue_ref=issue_ref,
                     role=role,
                     state="model_wait" if activity["model_wait"] else None,
                 )
                 last_visible = visible
             else:
                 _log_heartbeat(
-                    activity, run_id=run_id, issue_ref=issue_ref,
+                    activity, issue_ref=issue_ref,
                     role=role, elapsed=time.monotonic() - start,
                     state="model_wait" if activity["model_wait"] else None,
                 )
             if activity["model_wait"] != last_model_wait:
                 # One transition line per state change: entering model_wait
                 # (the model is expected to reply next) or leaving it
-                # (the next session event arrived: resumed).
+                # (the next session event arrived: resumed). No `run=`
+                # field: the `[run_id]` prefix carries the run id
+                # (Issue #57).
                 LOGGER.info(
-                    "%s run=%s issue=%s role=%s phase=%s state=%s",
+                    "%s issue=%s role=%s phase=%s state=%s",
                     "model_wait" if activity["model_wait"] else "resumed",
-                    run_id, issue_ref, role,
+                    issue_ref, role,
                     activity["phase"],
                     "model_wait" if activity["model_wait"] else "resumed",
                 )
@@ -911,9 +979,11 @@ def stream_pi(
             # logs `pi_resumed`. A slow active model (model_wait) never
             # warns (Issue #40).
             if idle_warned and activity["changed"]:
+                # No `run=` field: the `[run_id]` prefix carries the run
+                # id (Issue #57).
                 LOGGER.info(
-                    "pi_resumed run=%s issue=%s role=%s phase=%s",
-                    run_id, issue_ref, role, activity["phase"],
+                    "pi_resumed issue=%s role=%s phase=%s",
+                    issue_ref, role, activity["phase"],
                 )
                 idle_warned = False
             elif (
@@ -921,10 +991,12 @@ def stream_pi(
                 and not idle_warned
                 and activity["stale_seconds"] >= idle_warn_seconds
             ):
+                # No `run=` field: the `[run_id]` prefix carries the run
+                # id (Issue #57).
                 LOGGER.warning(
-                    "pi_idle run=%s issue=%s role=%s phase=%s "
+                    "pi_idle issue=%s role=%s phase=%s "
                     "stale_seconds=%s",
-                    run_id, issue_ref, role, activity["phase"],
+                    issue_ref, role, activity["phase"],
                     format_duration(activity["stale_seconds"]),
                 )
                 idle_warned = True
@@ -1952,16 +2024,38 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             number, repo=source_repo, add=PR_OPENED_LABEL,
             remove=IN_PROGRESS_LABEL,
         )
-        comment_issue(
-            number, repo=source_repo,
-            body=opened_pr_comment_body(run_id, run_info, pr_url),
-        )
-        publisher.milestone(f"PR opened: {pr_url} ({run_info})")
-        publisher.finish(_progress_body(_progress_state(
-            issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
-            branch=branch, worktree=worktree, started=started,
-            pr_url=pr_url, review_round=0,
-        ), outcome="**Muyan Pilot delivered**"))
+        # The delivery is complete here: the PR is verified and the
+        # Issue has left the claim state for the review/fix loop. From
+        # here on only the delivery-record publishing remains, and a
+        # failure there must NOT fail the delivery (Issue #60: the
+        # #57 delivered PATCH 404'd and the runner labeled the Issue
+        # ai-blocked, skipping the review of a valid PR). Each step is
+        # best-effort and independent — like the in-stream callback,
+        # an error is logged (`progress_publish_failed`) and the next
+        # step still runs — and the run continues into the
+        # review/merge wait loop either way.
+        for step in (
+            lambda: comment_issue(
+                number, repo=source_repo,
+                body=opened_pr_comment_body(run_id, run_info, pr_url),
+            ),
+            lambda: publisher.milestone(
+                f"PR opened: {pr_url} ({run_info})"
+            ),
+            lambda: publisher.finish(_progress_body(_progress_state(
+                issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
+                branch=branch, worktree=worktree, started=started,
+                pr_url=pr_url, review_round=0,
+            ), outcome="**Muyan Pilot delivered**")),
+        ):
+            try:
+                step()
+            except Exception:
+                LOGGER.exception(
+                    "progress_publish_failed run=%s issue=%s role=%s",
+                    run_id, issue_context(source_repo, number),
+                    ROLE_IMPLEMENT,
+                )
         LOGGER.info(
             "run_end %s",
             format_end_scene(
@@ -2123,23 +2217,42 @@ def resume_delivery(issue: dict, scene: dict, config: dict,
             number, repo=source_repo, add=PR_OPENED_LABEL,
             remove=FIX_NEEDED_LABEL,
         )
-        comment_issue(
-            number, repo=source_repo,
-            body=(
-                f"{run_marker(run_id)}\n"
-                f"Muyan Pilot fixed PR: {verified_url} ({scene_info})"
+        # The fix is delivered here: the PR is re-verified and the
+        # Issue is back in `ai-pr-opened`. From here on only the
+        # delivery-record publishing remains, and a failure there must
+        # NOT fail the delivery (Issue #60, same contract as the fresh
+        # claim): each step is best-effort and independent — an error
+        # is logged (`progress_publish_failed`) and the next step
+        # still runs — and the run continues into the review/merge
+        # wait loop either way.
+        for step in (
+            lambda: comment_issue(
+                number, repo=source_repo,
+                body=(
+                    f"{run_marker(run_id)}\n"
+                    f"Muyan Pilot fixed PR: {verified_url} ({scene_info})"
+                ),
             ),
-        )
-        publisher.milestone(f"fix pushed: {verified_url} ({scene_info})")
-        publisher.finish(_progress_body(_progress_state(
-            issue=number, run_id=run_id, role=ROLE_FIX,
-            branch=branch, worktree=worktree, started=started,
-            pr_url=verified_url, review_round=0,
-        ), outcome=(
-            "**Muyan Pilot fix pushed**\n\n"
-            "the same PR is awaiting review again; the independent "
-            "review and merge happen automatically"
-        )))
+            lambda: publisher.milestone(
+                f"fix pushed: {verified_url} ({scene_info})"
+            ),
+            lambda: publisher.finish(_progress_body(_progress_state(
+                issue=number, run_id=run_id, role=ROLE_FIX,
+                branch=branch, worktree=worktree, started=started,
+                pr_url=verified_url, review_round=0,
+            ), outcome=(
+                "**Muyan Pilot fix pushed**\n\n"
+                "the same PR is awaiting review again; the independent "
+                "review and merge happen automatically"
+            ))),
+        ):
+            try:
+                step()
+            except Exception:
+                LOGGER.exception(
+                    "progress_publish_failed run=%s issue=%s role=%s",
+                    run_id, issue_context(source_repo, number), ROLE_FIX,
+                )
     except Exception as exc:
         LOGGER.exception("issue=%s resume failed", number)
         activity_scene = ""

@@ -1,0 +1,42 @@
+# Remote CI gate for the repository contract (AGENTS.md): the full pytest
+# suite with 100% line/branch coverage, run on GitHub for every pull
+# request and every push to main (Issue #56).
+#
+# KISS: one job, no lint, no matrix, no cache.
+#
+# Python: production runs /usr/bin/python3 (3.14.6) on the Runner machine.
+# GitHub-hosted runners do not have that interpreter at that path, so this
+# workflow pins the same minor version (3.14) via actions/setup-python and
+# runs the contract commands through the pinned `python3` on PATH. The
+# difference is documented in the README section "远程 CI（GitHub Actions）".
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14 (production minor version)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install requirements and the test toolchain
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+          python3 -m pip install pytest coverage pyyaml
+
+      - name: Run the full test suite with branch coverage (contract)
+        run: python3 -m coverage run --branch -m pytest tests/ -q
+
+      - name: Enforce 100% line/branch coverage (contract)
+        run: python3 -m coverage report --fail-under=100 --show-missing
