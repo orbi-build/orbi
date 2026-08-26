@@ -38,47 +38,38 @@ REQUIRED_ITEMS = (
     # 5. Fail fast on command errors and keep the log scene.
     ("fail-fast", "fail fast"),
     ("log-scene", "log"),
-    # 6. No merge, no push of main/master, deliver through PRs only.
-    ("no-merge", "merge"),
-    ("no-protected-push", "main"),
-    ("no-protected-push-master", "master"),
+    # 6. Implementer delivers through one PR; Runner merges main/master.
+    ("merge-actor", "the runner is the only merge actor"),
+    ("protected-main", "main"),
+    ("protected-master", "master"),
     ("pr-only", "PR"),
     # 6a. PR body: must carry `Fixes #<issue-number>` pointing at the
     #     source Issue so GitHub natively closes the Issue when the PR
-    #     merges into the default branch (the keyword does not work in
-    #     the PR title).
+    #     merges into the default branch (GitHub reads body, not PR title).
     ("pr-fixes-keyword", "fixes #<issue-number>"),
     ("pr-fixes-auto-close", "closes the issue"),
     ("pr-fixes-default-branch", "default branch"),
     ("pr-fixes-title", "pr title"),
     # 6b. Base freshness: worktrees start from the frozen origin/<base> SHA,
     #     runs carry a unique run id, the base is re-fetched before the PR,
-    #     behind deliveries are rejected, no auto conflict resolution or
-    #     force push.
+    #     delivery HEAD contains the latest remote base.
     ("base-freshness", "base freshness"),
     ("base-frozen-sha", "frozen"),
     ("base-run-id", "run id"),
     ("base-refetch", "re-fetch"),
-    ("base-reject-behind", "rejects"),
-    ("base-no-auto-resolve", "auto conflict resolution"),
-    ("base-no-force-push", "force push"),
+    ("base-contains-latest", "contains the latest remote base"),
+    ("base-plain-merge", "plain `git merge`"),
     # 6c. Run correlation: one run_id per attempt is the single
     #     end-to-end correlation id; every journal line and GitHub text of
-    #     the run carries it; a run-scoped event without a run id fails fast.
+    #     the run carries it; a run-scoped event includes a valid run id.
     ("run-single-id", "one run_id"),
     ("run-journal-prefix", "[run_id]"),
     ("run-github-marker", "muyan-pilot:run="),
-    ("run-no-new-id", "no new id"),
     ("run-fail-fast", "fails fast"),
-    # 7. No database, queue, daemon loop, risk engine, or fallback.
-    ("no-database", "database"),
-    ("no-queue", "queue"),
-    ("no-daemon", "daemon"),
-    ("no-risk-engine", "risk engine"),
-    ("no-fallback", "fallback"),
-    # 8. No business task timeout; systemd only schedules and owns the run
-    #    lifecycle.
-    ("no-timeout", "timeout"),
+    # 7. State is GitHub Issues and labels.
+    ("state-issues", "github issues"),
+    ("state-labels", "labels"),
+    # 8. systemd schedules the tick and owns the run lifecycle.
     ("systemd-scope", "systemd"),
 )
 
