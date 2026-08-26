@@ -2476,6 +2476,22 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 scene = resume_scene(
                     issue_comments(number, repo=source_repo),
                 )
+                # Issue #91: the scene freezes the base the PR was
+                # opened against. The config may have moved on (or the
+                # comment is stale): reviewing or merging a PR frozen on
+                # another base against the configured one would run the
+                # freeze/merge gate on the wrong base, so fail fast
+                # before any git/Pi mutation instead of silently
+                # switching bases. The handler below marks the Issue
+                # ai-blocked with both base values named.
+                if scene["base_branch"] != config["base_branch"]:
+                    raise ValueError(
+                        f"resume scene base_branch={scene['base_branch']} "
+                        f"differs from configured base_branch="
+                        f"{config['base_branch']}; the PR is frozen on a "
+                        "different base and must not be reviewed or "
+                        "merged against the configured one"
+                    )
                 worktree = worktree_path(
                     config["repo_dir"], source_repo, number,
                     scene["run_id"],
