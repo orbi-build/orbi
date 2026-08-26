@@ -1,0 +1,170 @@
+# Getting started
+
+This page takes you from a fresh clone to a first verified tick. Every
+command works at any clone path — nothing here depends on a specific
+machine layout.
+
+## Prerequisites
+
+| Requirement | What it is used for | Check |
+|---|---|---|
+| Python 3.14 | The Runner and the test contract (CI pins the same minor version) | `python3 --version` |
+| [Pi](https://github.com/earendil-works/pi) CLI | The development agent; one full session per task | `pi --version` |
+| Git | Worktrees, branches, base freshness | `git --version` |
+| GitHub CLI (`gh`) | Issues, labels, PRs, merge | `gh auth status` |
+| systemd (user session) | The timer that triggers one tick every 15 minutes | `systemctl --user status` |
+| A working OpenAI-compatible model endpoint | Pi's model provider — a local llama.cpp server or any OpenAI-compatible API | one real `pi --print` call (below) |
+
+Pi must be configured with a provider that can serve a coding agent
+stably (system prompt + tool schemas + long sessions). Verify the endpoint
+with one real call before dispatching work — do not assume the key or the
+model service works:
+
+```bash
+pi --print "reply with the single word: ok"
+```
+
+If this fails, fix the model endpoint first; the Runner will fail fast on
+every task otherwise.
+
+<Note>
+The `local-llm-kv-cache` proxy is an **optional** enhancement (faster
+prefix reuse for local llama.cpp models), not a core prerequisite — see
+[Optional components](/optional-kv-cache).
+</Note>
+
+## 1. Clone the repository
+
+```bash
+git clone https://github.com/xqliu/muyan-pilot.git
+cd muyan-pilot
+```
+
+## 2. Create the configuration
+
+The repository ships a committed example; the real config is local state
+(gitignored). Copy it and edit it:
+
+```bash
+cp .muyan-pilot.example.toml muyan-pilot.toml
+```
+
+All fields (TOML, relative paths resolve against the config file's
+directory):
+
+| Field | Required | Default | Meaning |
+|---|---|---|---|
+| `source_repos` | yes | — | Ordered list of `owner/repo` task pools scanned each tick (e.g. your pilot repo first, then your backlog repo) |
+| `repo_dir` | no | `.` | The Runner checkout the service starts from (where `bootstrap_runner.py` lives) |
+| `workspace_root` | no | `..` | Directory that contains the task worktrees and the repositories the agent may modify |
+| `prompt` | no | `prompt.md` | Implementer prompt template (placeholders like `{{SOURCE_REPO}}` are rendered by the Runner) |
+| `prompt_review` | no | `prompt_review.md` | Review prompt template for the independent post-PR review session |
+| `base_branch` | no | `main` | Delivery base branch; every task worktree is created from the frozen `origin/<base_branch>` SHA |
+| `max_concurrency` | no | `1` | Concurrent Pilot tasks on this machine (positive integer; a local model/GPU usually serves one stable task) |
+| `skills` | no | `[]` | Optional Pi skill paths (absolute, `~`, or relative to the config file) |
+| `context_files` | no | `[]` | Optional Markdown context files injected into the prompt as paths |
+
+Minimal example:
+
+```toml
+source_repos = [
+  "OWNER/PILOT-REPO",
+  "OWNER/BACKLOG-REPO",
+]
+
+repo_dir = "."
+workspace_root = ".."
+prompt = "prompt.md"
+prompt_review = "prompt_review.md"
+base_branch = "main"
+max_concurrency = 1
+skills = []
+context_files = []
+```
+
+## 3. Initialize the delivery labels
+
+GitHub labels are **external state**: a commit never creates them, and a
+missing label makes the scan silently skip that state. Create them once
+per task-pool repository:
+
+```bash
+for l in ai-ready ai-in-progress ai-pr-opened ai-fix-needed ai-merged ai-blocked; do
+  gh label create "$l" --repo OWNER/PILOT-REPO --force
+  gh label edit "$l" --repo OWNER/PILOT-REPO \
+    --description "Muyan Pilot delivery state (see docs)"
+done
+gh label list --repo OWNER/PILOT-REPO
+```
+
+## 4. Run one tick manually
+
+The manual command is for first verification and troubleshooting only —
+normal operation is scheduled by the timer (step 6):
+
+```bash
+python3 bootstrap_runner.py --config muyan-pilot.toml
+```
+
+One tick does at most one thing: resume an opened PR (review/fix/merge) or
+claim one `ai-ready` Issue (bug-labeled Issues are picked before new
+features), then it exits. With an empty ready queue it exits cleanly
+without claiming anything.
+
+## 5. Smoke walkthrough (from zero)
+
+The smallest end-to-end proof that your setup works. Run it in the clone
+directory from step 1; every command is relative to that directory.
+
+```bash
+# a. Dispatch a tiny task into the first configured source repo.
+#    `add` creates the Issue and labels it ai-ready in one step.
+python3 muyan_pilot.py add "Docs: verify smoke walkthrough" \
+  --body "Read README.md and confirm the smoke walkthrough commands exist." \
+  --config muyan-pilot.toml
+
+# b. Watch the queue: the new Issue is ready.
+python3 muyan_pilot.py status --config muyan-pilot.toml
+
+# c. Run one tick: the Runner claims the Issue, starts Pi in a fresh
+#    worktree, and works toward a PR.
+python3 bootstrap_runner.py --config muyan-pilot.toml
+
+# d. Follow the live activity while the tick runs (second terminal):
+journalctl --user -u muyan-pilot.service -f
+# or, for a manual tick, follow the session JSONL directly:
+python3 muyan_pilot.py session --follow --config muyan-pilot.toml
+
+# e. After the PR is opened, the Issue carries ai-pr-opened and the
+#    delivery continues (independent review, in-session fix, merge) on
+#    later ticks. Watch the Issue and the PR on GitHub.
+gh issue list --repo OWNER/PILOT-REPO --label ai-pr-opened
+```
+
+You are done when: the Issue moves `ai-ready → ai-in-progress →
+ai-pr-opened → ai-merged`, a PR exists with `Fixes #<issue>` in its body,
+and the journal shows `run_end ... result=pr_opened`. If any step fails,
+the Issue is marked `ai-blocked` with the scene — see
+[Operations](/operations) for recovery.
+
+## 6. Enable the timer
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/muyan-pilot.service systemd/muyan-pilot.timer ~/.config/systemd/user/
+```
+
+The committed units reference the author's clone layout via `%h`
+specifiers (`%h/Documents/muyan/muyan-pilot`). Point `WorkingDirectory`,
+`MUYAN_PILOT_CONFIG` and `ExecStart` at **your** clone path, then:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now muyan-pilot.timer
+systemctl --user list-timers muyan-pilot.timer
+```
+
+The timer fires every 15 minutes, 24 hours a day (00:00–23:45). While a
+task is running, further timer starts are ignored by systemd; the next
+real start picks up the latest code (the service fast-forwards `main`
+before starting — see [Operations](/operations)).

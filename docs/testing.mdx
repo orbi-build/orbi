@@ -1,0 +1,46 @@
+# Testing
+
+The repository contract (see `AGENTS.md`) is: the full pytest suite with
+**100% line and branch coverage** for the Python code. The same contract
+runs locally on the Runner machine and remotely on GitHub.
+
+## Local contract commands
+
+Run them from the repository root (production interpreter
+`/usr/bin/python3`, Python 3.14):
+
+```bash
+/usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
+/usr/bin/python3 -m coverage report --fail-under=100 --show-missing
+```
+
+The second command exits non-zero when any line or branch is below 100%,
+so the pair is a gate, not a report.
+
+## Remote CI (GitHub Actions)
+
+`.github/workflows/ci.yml` runs the same contract on every `pull_request`
+and every push to `main`: one job, Python 3.14 pinned via
+`actions/setup-python` (GitHub-hosted runners do not have the production
+interpreter at the production path, so the workflow pins the same minor
+version and runs the identical commands through `python3` on PATH),
+`requirements.txt` installed, then the two contract commands above. No
+lint, no matrix, no cache.
+
+A PR is not mergeable while CI is red — the Runner's merge gate also
+requires a mergeable PR.
+
+## What the tests cover
+
+- **Behavioral tests** for the runner, the CLI, slots, progress
+  publishing, activity streaming and the resume/review/merge logic (the
+  majority of the suite, including end-to-end tests against real `git`
+  and `gh` fixtures).
+- **Static contract tests** that pin the repository to its own docs and
+  files: `AGENTS.md` contract items, the label set, the systemd units
+  (15-minute schedule, preflight), the CI workflow, the LICENSE, and the
+  documentation site under `docs/` (this page's claims are enforced by
+  `tests/test_docs_site.py`).
+
+When you change code, update or add tests in the same PR and keep the
+coverage gate green.

@@ -4,6 +4,10 @@
 
 开发契约见 [AGENTS.md](AGENTS.md)：每次本地 Pi 自举开发前先读 Issue、context files、README 和相关代码，TDD、100% 覆盖率、UI 用 Playwright、失败 fail fast、不 merge、不 push 保护分支、不引入数据库/队列/daemon/fallback、不设业务任务 timeout。
 
+## 文档站
+
+面向新用户的完整开源文档（安装前提、配置、首次启动、smoke walkthrough、工作流、运维、安全、测试、贡献）在仓库 [`docs/`](docs/) 目录：`docs/docs.json` + `docs/*.mdx`，由 Mintlify 构建和托管（连接默认分支 `main`，Git Settings 的 documentation path 配置为 `/docs`，每次合并后自动构建发布）。Mintlify 默认地址为 <https://muyan-pilot.mintlify.site>（若绑定了自定义域名，以 Mintlify 控制台配置的地址为准）。仓库内的 Markdown/MDX 是唯一事实源，Mintlify 只负责构建、搜索和托管，不产生第二份内容；本 README 保留 GitHub 首页与运行契约概览。
+
 ## 当前运行
 
 ```bash
@@ -243,7 +247,7 @@ journalctl --user -u muyan-pilot.service | grep e07383c2
 gh search issues "e07383c2" --repo xqliu/muyan-pilot
 
 # 本地在 repo 中搜索 run_id 找到 worktree、session 和 run artifacts
-grep -r e07383c2 /home/xqianliu/Documents/muyan/muyan-pilot/.worktrees/
+grep -r e07383c2 .worktrees/   # 在 clone 根目录执行
 ```
 
 缺少合法 run_id 的 run-scoped 事件（绑定 run、构建 GitHub marker、PR body 校验）会 fail fast，不做回退。

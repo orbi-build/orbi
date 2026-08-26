@@ -1,0 +1,83 @@
+# Contributing
+
+Muyan Pilot is developed the same way it runs: tasks are GitHub Issues,
+deliveries are PRs, and the repository contract (`AGENTS.md`) applies to
+human contributors too.
+
+## Issue granularity
+
+One Issue is **one runtime outcome** (when X, should Y, actually Z): one
+observable behavior, a handful of related files, tests included. The
+title should work as a test name. Open an Issue once the root cause or
+the desired behavior is pinned — not as a vague wish.
+
+- Dependencies between Issues use GitHub's native `blockedBy` relation
+  (`gh issue edit N --add-blocked-by M`); do not write `Depends on #N`
+  in the body — the Runner does not parse body dependencies.
+- Multi-task work is organized as an Epic (see [Workflow](/workflow)):
+  the Epic coordinates, the sub-Issues deliver.
+
+## Creating an Issue
+
+Dispatch a task for the Pilot by creating an Issue and labeling it
+`ai-ready` (the CLI does both in one step):
+
+```bash
+python3 muyan_pilot.py add "task title" --body "task body" --config muyan-pilot.toml
+```
+
+or manually:
+
+```bash
+gh issue create --repo OWNER/PILOT-REPO --title "task title" --body "task body"
+gh issue edit <number> --repo OWNER/PILOT-REPO --add-label ai-ready
+```
+
+A good body states the background, the expected behavior, the acceptance
+criteria, and (for bugs) the reproduction. The Pilot reads the Issue, the
+repository's `AGENTS.md`, README and code before changing anything.
+
+## Reporting a bug
+
+Open an Issue with the `bug` label and include:
+
+- the command that failed and its return code / stdout / stderr;
+- the journal scene (`journalctl --user -u muyan-pilot.service` around
+  the failure, or the `run_failed` line with its run id);
+- the Issue/PR state (labels) and the run id from the progress comment;
+- the environment: OS, Python version, Pi version, model endpoint type.
+
+Bug-labeled `ai-ready` Issues are picked up before new features (P0
+convention), so a broken delivery loop gets fixed first.
+
+## Contributing code
+
+1. Read `AGENTS.md` — it is the development contract (TDD, 100% line and
+   branch coverage, fail fast, no database/queue/daemon/fallback, no
+   business task timeout).
+2. Work on a feature branch; never push the protected branch directly.
+3. Write the failing test first, then the smallest implementation, then
+   refactor. External interfaces (CLI flags, HTTP paths, config fields)
+   are asserted against the official docs or one real call — never
+   against a guessed shape.
+4. Run the full contract locally:
+
+   ```bash
+   /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
+   /usr/bin/python3 -m coverage report --fail-under=100 --show-missing
+   ```
+
+5. Open one PR per Issue. The PR description must contain
+   `Fixes #<issue-number>` (it may be on the first line) so GitHub closes
+   the Issue natively on merge.
+6. CI must be green (same contract as local). The independent review and
+   merge are performed by the Runner for Pilot-dispatched work; for
+   human PRs, review and merge follow the repository's normal GitHub
+   flow.
+
+## What not to add
+
+The MVP boundary is intentional: no database, no message queue, no daemon
+loop, no web UI, no task DAG, no risk model, no fallback path, no
+business task timeout. Proposals that add one of these should first
+explain why a real, repeated failure requires them.

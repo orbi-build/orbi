@@ -1,0 +1,72 @@
+# Optional: local-llm-kv-cache proxy
+
+The [`local-llm-kv-cache`](https://github.com/xqliu/local-llm-kv-cache)
+proxy is an **optional enhancement** for local llama.cpp setups: it adds
+a two-level KV cache (in-memory hot session cache + disk-backed cold
+prefix cache) so coding agents do not re-prefill the stable system prompt
+and tool schemas on every new session. It is a separate project with its
+own repository, tests and README — this page only records how it
+connects to Muyan Pilot. It is **not** a core prerequisite: the Pilot
+works directly against any OpenAI-compatible endpoint without it.
+
+## What it changes for the Pilot
+
+- The proxy listens on `127.0.0.1:18082` (default) and forwards to the
+  llama.cpp server (default upstream `127.0.0.1:8080`).
+- Point Pi's (and any other agent's) provider URL at the proxy
+  (`http://127.0.0.1:18082/v1`) instead of the llama server directly.
+- The Pilot itself is unchanged: it only ever talks to the configured
+  OpenAI-compatible endpoint.
+
+## Installation
+
+Follow the upstream repository's README for the full instructions; the
+short form (its own clone path, e.g. under your home directory):
+
+```bash
+git clone https://github.com/xqliu/local-llm-kv-cache.git
+cd local-llm-kv-cache
+mkdir -p ~/.config/systemd/user
+cp local-llm-kv-cache.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now local-llm-kv-cache.service
+curl -fsS http://127.0.0.1:18082/health
+```
+
+Requirements: Python 3.10+ and a llama.cpp server with slot
+save/restore enabled. Hybrid/recurrent models (e.g. Qwen3.8) need a
+llama.cpp build with the checkpoint persistence fix — see the upstream
+README for the exact branch/commit and the upstream PR reference.
+
+## Configuration
+
+The user unit carries the settings as environment variables:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PI_LLAMA_UPSTREAM` | `http://127.0.0.1:8080` | The llama.cpp server the proxy forwards to |
+| `PI_LLAMA_CACHE_HOST` | `127.0.0.1` | Bind address of the proxy |
+| `PI_LLAMA_CACHE_PORT` | `18082` | Proxy port (agents point here) |
+| `PI_LLAMA_CACHE_DIR` | `~/.llama-slot-cache` | Disk-backed KV state directory |
+| `PI_LLAMA_CACHE_MAX_GIB` | `12` | Disk cache size cap |
+| `PI_LLAMA_CACHE_WAIT_SECONDS` | `120` | Max wait for a slot restore |
+| `PI_LLAMA_CACHE_PREFIX_SEED_DELAY` | `2` | Delay before prefix seeding |
+
+Edit the unit, then `systemctl --user daemon-reload &&
+systemctl --user restart local-llm-kv-cache.service`.
+
+## Troubleshooting
+
+- `curl -fsS http://127.0.0.1:18082/health` fails → the proxy is not
+  running: `systemctl --user status local-llm-kv-cache.service` and the
+  journal for the unit.
+- Requests time out → check `PI_LLAMA_UPSTREAM` reaches a live llama.cpp
+  server; the proxy never serves model output on its own.
+- Cache never hits → the proxy does not fake hits; verify the llama.cpp
+  build supports checkpoint persistence for your model type (upstream
+  README), and that the agent's stable prefix (system prompt + tool
+  schemas) is actually stable between sessions.
+- To stop using it: disable the unit, point the agent's provider URL
+  back at the llama server, and delete the KV cache directory if you do
+  not want the cached prompt state kept locally (see
+  [Security](/security) on why that directory is sensitive).

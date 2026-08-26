@@ -1,0 +1,62 @@
+# Security
+
+Muyan Pilot runs an autonomous coding agent with a GitHub token on your
+machine. The security model is deliberately simple: hard boundaries in
+the delivery contract, local-only secrets, and no remote state store.
+
+## The AI never merges or pushes protected branches
+
+- The implementer Pi **only pushes its feature branch** and opens one PR.
+  It does not merge, does not push `main`/`master`, does not force push,
+  and never auto-resolves conflicts.
+- The **Runner is the only merge actor**, and it merges only through the
+  reviewed PR: a clean `REVIEW_VERDICT`, the merge gate (PR head contains
+  the latest remote base, PR mergeable, remote head still the reviewed
+  head), and `gh pr merge --match-head-commit` so exactly the reviewed
+  head lands.
+- GitHub branch protection on the default branch is the final boundary:
+  keep the protected branch restricted to the account that runs the
+  Runner (or to no one — the Runner's token performs the merge).
+- Delivery state is derived, never trusted from public text: the resume
+  scene is only read from comments posted by a trusted maintainer
+  (OWNER/MAINTAINER/MEMBER/COLLABORATOR), and branch/worktree paths are
+  derived from the configured repo, Issue number and run id — a public
+  comment can never steer the Runner into an arbitrary local path.
+
+## GitHub token
+
+- The Runner authenticates with `gh` (`gh auth status` must succeed). Use
+  a **fine-grained personal access token** scoped to the repositories the
+  Pilot actually works on, with the minimum permissions: contents
+  (read/write), pull requests (read/write), issues (read/write), and
+  metadata (read). Avoid organization-wide or classic broad-scope tokens.
+- The token lives in `gh`'s local credential store on the Runner machine.
+  It is never written into the repository, the config file, the journal,
+  or a GitHub comment.
+- Logs are redacted by construction: command lines carrying secrets are
+  logged as `<redacted>`, and tool summaries are truncated and masked.
+  The full prompt, Issue body and token never reach the journal or the
+  progress comments.
+- Rotate the token on a normal schedule; a compromised token is contained
+  to the repositories it can see.
+
+## Local state files
+
+The Pilot keeps local state that never leaves the machine:
+
+- **Config** (`muyan-pilot.toml`): local, gitignored. The repository only
+  ships the example (`.muyan-pilot.example.toml`).
+- **Run artifacts**: plan, test log, session JSONL and review evidence
+  live in the task worktree (`.worktrees/...`, gitignored).
+- **Slots**: `<repo_dir>/.muyan-pilot/slots/slot-N` lock files (gitignored
+  via the `.muyan-pilot/` directory convention of the checkout).
+- **KV cache files** (only if you run the optional
+  [local-llm-kv-cache](/optional-kv-cache) proxy): the disk-backed prefix
+  and session KV state (e.g. `~/.llama-slot-cache/*.bin`) contains
+  serialized model state derived from your prompts — treat it as
+  sensitive local data, keep it on the same machine, and delete it if you
+  no longer need the cached sessions.
+
+If you run the Pilot on a shared machine, give the Runner user its own
+home directory so the config, worktrees and KV files stay private to that
+user.
