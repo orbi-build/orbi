@@ -338,9 +338,13 @@ def test_pick_resumable_delivery_returns_newest_issue_with_scene(monkeypatch):
     assert scene["run_id"] == FAKE_RUN_ID
     assert scene["pr_url"] == FAKE_PR_URL
     # Newest-first list, then the full comment history of that Issue.
+    # Both opened-PR states are scanned (Issue #70): `label:a,b` is
+    # GitHub's OR within one label qualifier.
     assert calls[0] == [
         "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
-        "--search", "label:ai-fix-needed -label:ai-blocked",
+        "--search",
+        "label:ai-fix-needed,ai-pr-opened "
+        "-label:ai-blocked -label:ai-merged -label:ai-in-progress",
         "--json", "number,title,state,url", "--limit", "1",
     ]
     assert calls[1] == [
@@ -349,11 +353,17 @@ def test_pick_resumable_delivery_returns_newest_issue_with_scene(monkeypatch):
     ]
 
 
-def test_pick_resumable_delivery_scans_only_fix_needed_issues(monkeypatch):
-    """`ai-pr-opened` means awaiting review: only the explicit
-    `ai-fix-needed` state (review finding or base conflict) is scanned
-    for Fixer work, so a clean PR waiting for review is never sent to
-    the Fixer (Issue #45 round-5 review, Major 1)."""
+def test_pick_resumable_delivery_scans_fix_needed_and_awaiting_review(
+    monkeypatch,
+):
+    """Both opened-PR states are scanned (Issue #70): `ai-fix-needed`
+    (a review finding or base conflict — Fixer work) and
+    `ai-pr-opened` (awaiting review — a stranded delivery whose runner
+    died, or the progress 404 that used to block the Issue before the
+    review started). Blocked, merged and in-flight Issues are excluded.
+    A clean PR is still never sent to the Fixer: `main` routes an
+    `ai-pr-opened` resume to the independent review (Issue #45
+    round-5 contract, tested in test_bootstrap_runner)."""
     calls = []
 
     def counting(command, **kwargs):
@@ -364,7 +374,9 @@ def test_pick_resumable_delivery_scans_only_fix_needed_issues(monkeypatch):
     assert runner.pick_resumable_delivery("owner/repo") is None
     assert calls == [[
         "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
-        "--search", "label:ai-fix-needed -label:ai-blocked",
+        "--search",
+        "label:ai-fix-needed,ai-pr-opened "
+        "-label:ai-blocked -label:ai-merged -label:ai-in-progress",
         "--json", "number,title,state,url", "--limit", "1",
     ]]
 
@@ -1388,6 +1400,16 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
             "owner/repo", issue, scene
         ),
     )
+    # The dispatch reads the Issue's current labels to choose the fixer
+    # vs the review wait (Issue #70): this delivery is fix-needed.
+    def fake_run(command, **kwargs):
+        assert command[:3] == ["gh", "issue", "view"]
+        assert command[-2:] == ["--json", "labels"]
+        return json.dumps({"labels": [
+            {"name": "ai-ready"}, {"name": "ai-fix-needed"},
+        ]})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
     monkeypatch.setattr(
         runner, "resume_delivery",
         lambda *args, **kwargs: resumed.append(args) or FAKE_PR_URL,

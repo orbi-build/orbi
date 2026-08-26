@@ -173,9 +173,11 @@ def install_fake_gh(monkeypatch, comments: list[str],
                         ],
                     })
                 if command[2] == "list":
-                    # Only the explicit `ai-fix-needed` state is scanned
-                    # for Fixer work; `ai-pr-opened` means awaiting
-                    # review (Issue #45 round-5 review, Major 1).
+                    # Both opened-PR states are scanned (Issue #70):
+                    # `ai-fix-needed` (Fixer work) and `ai-pr-opened`
+                    # (awaiting review). The opened-PR search string
+                    # carries `label:ai-fix-needed`, so it is
+                    # recognized here; every other scan is empty.
                     if "label:ai-fix-needed" in " ".join(command):
                         return json.dumps([{
                             "number": ISSUE_NUMBER,
@@ -428,10 +430,12 @@ def test_e2e_base_advances_and_resume_fixes_the_same_pr(
 def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
     clone, tmp_path, monkeypatch, caplog,
 ):
-    """Round-5 review (Major 1): a clean PR that is simply awaiting
-    review (`ai-pr-opened`, no `ai-fix-needed`, no finding, no base
-    conflict) must NOT be sent to the Fixer. The tick falls through to
-    the ready queue and starts no Pi for the delivery."""
+    """Round-5 review (Major 1) + Issue #70: a clean PR that is simply
+    awaiting review (`ai-pr-opened`, no `ai-fix-needed`, no finding, no
+    base conflict) must NOT be sent to the Fixer. The next tick resumes
+    the SAME delivery through the resumable scan (which now also
+    covers `ai-pr-opened`) and sends it straight to the delivery wait
+    (independent review) — no fixer, no fresh claim, no second Pi."""
     comments: list[str] = []
     edits: list[list[str]] = []
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
@@ -448,38 +452,52 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
     edits_before = len(edits)
     comments_before = len(comments)
 
-    # The next tick: the fake gh answers the `ai-fix-needed` scan with
-    # an EMPTY queue (the Issue is only `ai-pr-opened`), so the runner
-    # must fall through to the ready queue and start no fixer.
+    # The next tick: the resumable scan now also covers `ai-pr-opened`
+    # (Issue #70), so the stranded delivery is found and its scene is
+    # recovered; the dispatch sends it straight to the delivery wait
+    # (independent review) — no fixer, no fresh claim.
+    # The only gh calls of the awaiting-review tick: the opened-PR
+    # scan (fix-needed OR pr-opened) finds the stranded delivery, the
+    # scene is recovered from the comment history, the dispatch reads
+    # the labels — and the wait (stubbed below) takes over. The
+    # in-flight and ready scans never run (the delivery is resumed, so
+    # nothing is claimed), and the fake rejects anything else.
     def fake_run(command, **kwargs):
-        if command[:1] == ["gh"] and command[1] == "issue" \
-                and command[2] == "list":
-            search = " ".join(command)
-            # The ready search also carries `-label:ai-fix-needed`, so
-            # the ready queue is recognized first, and the fix-needed
-            # scan (empty here: the Issue is only `ai-pr-opened`) after.
-            if "label:ai-ready" in search:
-                return json.dumps([{
-                    "number": 99, "title": "next ready task",
-                    "body": "body",
-                }])
-            if "label:ai-fix-needed" in search:
-                return "[]"
+        if command[:1] == ["gh"] and command[1] == "issue":
+            if command[2] == "list":
+                search = " ".join(command)
+                if "label:ai-fix-needed" in search:
+                    return json.dumps([{
+                        "number": ISSUE_NUMBER,
+                        "title": "Continue fixing the same PR",
+                        "state": "OPEN",
+                        "url": f"https://github.com/{REPO}/issues/{ISSUE_NUMBER}",
+                    }])
+                raise AssertionError(f"unexpected command: {command}")
+            if command[2] == "view":
+                if command[-1] == "body":
+                    return json.dumps({"body": "original task body"})
+                if command[-1] == "labels":
+                    # Awaiting review: no `ai-fix-needed` label, so the
+                    # dispatch must not start a fixer.
+                    return json.dumps({"labels": [
+                        {"name": "ai-ready"},
+                        {"name": "ai-pr-opened"},
+                    ]})
+                return json.dumps({
+                    "comments": [
+                        {"id": i + 1, "body": body,
+                         "authorAssociation": "OWNER"}
+                        for i, body in enumerate(comments)
+                    ],
+                })
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    # `process_issue` is the fresh-claim path: it must be the one that
-    # gets the ready Issue, and the resumed delivery count stays zero.
-    claims = []
-
-    def fake_process(iss, cfg, repo):
-        claims.append(iss)
-        return PR_URL
-
-    monkeypatch.setattr(runner, "process_issue", fake_process)
     # The delivery wait (slot held until merge, Issue #39) is out of
-    # scope here: this test proves the awaiting-review tick starts no
-    # fixer, so the wait is stubbed.
+    # scope here: this test proves the awaiting-review tick resumes the
+    # review of the SAME PR without starting a fixer, so the wait is
+    # stubbed.
     waits = []
     monkeypatch.setattr(
         runner, "wait_for_delivery",
@@ -495,16 +513,17 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
         encoding="utf-8",
     )
     assert runner.main(["--config", str(config_path)]) == 0
-    assert [c["number"] for c in claims] == [99]
-    # The claimed ready Issue's delivery is the one that is waited on.
+    # The stranded delivery's own PR is the one that is waited on
+    # (the fresh-claim path never ran: no ready Issue was claimed).
     assert waits[0][0][0] == PR_URL
+    assert waits[0][0][1]["number"] == ISSUE_NUMBER
     # No fixer ran: the delivery HEAD is unchanged and no label edit or
     # comment touched the delivery Issue during the awaiting-review tick.
     assert git(worktree, "rev-parse", "HEAD") == head_before
     assert len(edits) == edits_before
     assert len(comments) == comments_before
     assert not any("fixed PR" in c for c in comments)
-    # The awaiting-review fake rejects anything but the two list scans.
+    # The awaiting-review fake rejects anything but the issue scans.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "pr", "list"])
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -512,6 +531,8 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
             "gh", "issue", "list", "--repo", REPO, "--state", "open",
             "--search", "label:ai-blocked", "--json", "number",
         ])
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "issue", "create", "--repo", REPO])
 
 
 def test_e2e_public_comment_scene_is_never_resumed(

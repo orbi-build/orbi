@@ -70,17 +70,25 @@ def git(*cmd):
 
 
 def match_issue(labels, search):
-    required = [t[6:] for t in search.split() if t.startswith("label:")]
+    # `label:a,b` is GitHub's OR within one qualifier (Issue #70 scans
+    # `ai-fix-needed` OR `ai-pr-opened`); space-separated qualifiers
+    # are AND.
+    required = [
+        t[6:].split(",")
+        for t in search.split() if t.startswith("label:")
+    ]
     excluded = [t[7:] for t in search.split() if t.startswith("-label:")]
-    return all(r in labels for r in required) and not any(
-        e in labels for e in excluded
-    )
+    return all(any(r in labels for r in group) for group in required) \
+        and not any(e in labels for e in excluded)
 
 
 if args[:2] == ["issue", "list"]:
     search = args[args.index("--search") + 1]
     out = [
-        {"number": int(num), "title": issue["title"],
+        # `--state open` only ever returns open Issues, and the real
+        # payload carries `state` (the resumable scan checks it).
+        {"number": int(num), "state": "OPEN",
+         "title": issue["title"],
          "body": issue.get("body", "")}
         for num, issue in sorted(
             state["issues"].items(), key=lambda kv: int(kv[0])
@@ -811,3 +819,93 @@ def test_killed_runner_is_resumed_by_the_next_claim_scan(clone, tmp_path):
     assert "capacity_full" not in err
     assert "delivery_auto_merged" in err
     assert slots_held(clone) == [(1, None)], "slot must be released on exit"
+
+
+def test_stranded_pr_opened_delivery_is_resumed_to_review_and_merge(
+    clone, tmp_path,
+):
+    """Issue #70 acceptance: the runner that opened a PR can die before
+    the review starts (the progress 404 used to label the Issue
+    ai-blocked and skip the review; a killed runner leaves no owner at
+    all). The NEXT tick must resume the SAME delivery through the
+    resumable scan (`ai-pr-opened` is scanned now), run the independent
+    review on the SAME PR and auto-merge it — never re-claim the Issue,
+    never start a second run, never block it."""
+    bin_dir = install_fakes(tmp_path)
+    state = tmp_path / "gh-state.json"
+    write_state(state, {"7": ["ai-ready"]})
+    pi_log = tmp_path / "pi.log"
+    config = write_config(clone, tmp_path, 1)
+
+    first = start_runner(config, bin_dir, state, pi_log)
+    wait_for(
+        lambda: "ai-pr-opened" in read_state(state)["issues"]["7"]["labels"],
+        what="first runner to open the PR",
+    )
+    # Wait until the trusted opened-PR scene comment exists (it is the
+    # recovery source of the next tick), then kill the runner inside the
+    # delivery wait: the PR stays open and unreviewed, the Issue stays
+    # `ai-pr-opened` — a stranded delivery with no owner.
+    wait_for(
+        lambda: any(
+            "Muyan Pilot opened PR:" in c["body"]
+            for c in read_state(state)["comments"]
+        ),
+        what="opened-PR scene comment to be posted",
+    )
+    first.kill()  # SIGKILL: the delivery wait dies with the process
+    first.wait(timeout=10)
+    snap = read_state(state)
+    assert "ai-pr-opened" in snap["issues"]["7"]["labels"]
+    assert "ai-blocked" not in snap["issues"]["7"]["labels"]
+    assert "ai-fix-needed" not in snap["issues"]["7"]["labels"]
+    worktrees = sorted(
+        (clone / ".worktrees").glob("muyan-pilot-owner-repo-issue-7-*"),
+    )
+    assert len(worktrees) == 1
+    dead_run_id = worktrees[0].name.rsplit("-", 1)[-1]
+
+    # The NEXT tick (a fresh main()): the resumable scan now finds the
+    # stranded `ai-pr-opened` delivery, recovers the scene, and the
+    # dispatch sends it straight to the delivery wait (independent
+    # review) — no fixer for a clean PR, no fresh claim.
+    second = start_runner(config, bin_dir, state, pi_log)
+    wait_for(
+        lambda: "ai-merged" in read_state(state)["issues"]["7"]["labels"],
+        timeout=180,
+        what="second runner to resume the review and merge the same PR",
+    )
+    out, err = second.communicate(timeout=120)
+    assert second.returncode == 0, err
+    assert "capacity_full" not in err
+    assert "no_ready_issue" not in err
+    assert "delivery_auto_merged" in err
+
+    snap = read_state(state)
+    labels = snap["issues"]["7"]["labels"]
+    # The stranded delivery ended in the terminal success state — it
+    # was never blocked, never re-claimed.
+    assert "ai-merged" in labels
+    assert "ai-blocked" not in labels
+    assert "ai-pr-opened" not in labels
+    # Same run, same worktree: nothing was recreated.
+    worktrees = sorted(
+        (clone / ".worktrees").glob("muyan-pilot-owner-repo-issue-7-*"),
+    )
+    assert len(worktrees) == 1
+    assert worktrees[0].name.rsplit("-", 1)[-1] == dead_run_id
+    # One Pi per phase of the SAME run: implement (first runner),
+    # review, fix, re-review (second runner) — never a second
+    # implement.
+    assert len(pi_invocations(pi_log)) == 4
+    started = [
+        c for c in snap["comments"] if "Muyan Pilot started Pi:" in c["body"]
+    ]
+    assert [c["issue"] for c in started] == ["7"]
+    # The review actually ran on the resumed delivery.
+    bodies = [c["body"] for c in snap["comments"]]
+    assert any("Muyan Pilot review round 1" in b for b in bodies)
+    assert any("Muyan Pilot merged PR:" in b for b in bodies)
+    assert slots_held(clone) == [(1, None)], (
+        "slot must be released after the merge"
+    )

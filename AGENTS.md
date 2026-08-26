@@ -103,10 +103,18 @@ follow it before changing code.
   open a replacement PR. A successful fix consumes `ai-fix-needed` and
   returns the Issue to `ai-pr-opened` (awaiting review again).
 - The next tick resumes the same run on the same feature branch,
-  worktree and PR number. Only `ai-fix-needed` Issues (not `ai-blocked`)
-  are scanned for Fixer work; the fresh-claim scan excludes
-  `ai-fix-needed` too, so a fix-pending Issue is never re-claimed as new
-  work. The resume scene (run id, base, PR URL) is
+  worktree and PR number. Both opened-PR states are scanned (Issue
+  #70): `ai-fix-needed` (the next tick runs the Fixer on the same PR)
+  and `ai-pr-opened` (awaiting review — the next tick runs the
+  independent review on the same PR; a clean PR is still never sent to
+  the Fixer). The `ai-pr-opened` scan exists because the delivery that
+  opened the PR can be gone (a killed runner, or the progress failure
+  behind Issue #70 that used to block the Issue before the review
+  started): without it a valid MERGEABLE PR is stranded with no owner.
+  `ai-blocked` Issues are excluded (they need a human decision first),
+  as are merged and in-flight Issues; the fresh-claim scan excludes
+  both opened-PR states, so an opened-PR Issue is never re-claimed as
+  new work. The resume scene (run id, base, PR URL) is
   recovered from the latest `Muyan Pilot opened PR:` comment posted by
   a trusted maintainer (OWNER/MAINTAINER/MEMBER/COLLABORATOR; a public
   comment is never trusted). Branch and worktree are derived from the
