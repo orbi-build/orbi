@@ -3,15 +3,63 @@
 Development contract for this repository. Every local Pi bootstrap run must
 follow it before changing code.
 
+Four audiences, one file:
+
+- **Issue authors** (humans or the monitor): granularity below.
+- **Implementer Pi**: read first, TDD, one PR. No independent review
+  before the PR exists.
+- **Reviewer Pi**: a new `pi --print` after the PR, `prompt_review.md`,
+  a new JSONL.
+- **Runner**: labels, base freshness, observability, the post-PR
+  review/fix/merge loop.
+
 ## Read first
 
 - Read the GitHub Issue, the configured context files, `README.md`, and the
   relevant code before touching anything.
 
+## Issue granularity
+
+Write GitHub Issues so one Pilot implement session can finish them. One
+Issue is **one runtime outcome** (when X, should Y, actually Z), not a
+subsystem and not a philosophy.
+
+- Right size: one observable behavior, a handful of related files, tests
+  included, hundreds of lines not thousands. Title should work as a test
+  name.
+- Too coarse: "optimize review" or "GitHub observability" as a whole
+  product. Those become overnight diffs, merge conflicts, and review
+  Majors.
+- Too fine: one sentence per Issue (`prompt.md` vs `AGENTS.md` vs one
+  string in the runner). Claim/worktree/review/merge overhead exceeds
+  the change.
+- Split when two changes do not have to land together (prompt wording vs
+  `--skill` lists vs harness control flow). Do not split files that are
+  the same wording change.
+- Do not open an Issue until the root cause is pinned. A wrong-cause
+  ticket costs more than a large one.
+
+## Implement vs review
+
+- Implementer session: plan, TDD, tests, push one PR. Do not run a complete independent review-fix loop
+  or R1–R9 before the PR is open. The Runner does that after the PR exists.
+- Independent review is a **new** `pi --print` process with
+  `prompt_review.md` and a new JSONL. It does not continue the
+  implementer's chat. Sharing the worktree and the local model is
+  enough isolation; do not invent a second worktree for review.
+- `review-fix-loop` / full R1–R9 before the PR duplicates the Runner
+  review and is too expensive on the local model. Catch what tests can
+  catch in the implement session; leave judgment of the frozen diff to
+  the post-PR review session.
+
 ## TDD and coverage
 
 - TDD: write a failing test first, then the smallest implementation, then
-  refactor.
+  refactor. That is how defects are caught early: while the files are still
+  in context, not by running a full independent R1–R9 review before the PR.
+- External APIs, CLI flags, and HTTP paths are asserted against official
+  docs or one real call. Do not freeze a guessed URL or response shape as
+  a green test.
 - Python code keeps 100% line and branch coverage:
 
   ```bash
@@ -29,6 +77,45 @@ follow it before changing code.
 
 - Command errors fail fast: log the command, return code, stdout and stderr,
   then raise. Never swallow an error or add a fallback path.
+
+## Git
+
+- Work on the task feature branch.
+- Pi (the implementer) does not merge and does not push `main` or `master`.
+  It delivers through exactly one PR linked to the Issue; the Runner is the
+  only merge actor (see **After the PR**).
+- The PR description must contain `Fixes #<issue-number>` (it may be on
+  the first line), pointing at the source Issue so GitHub closes the Issue
+  natively when the PR merges into the default branch. The keyword works
+  in the PR body and in commit messages, but not in the PR title. The
+  runner rejects a PR whose body is missing it, so a merge can never
+  leave the source Issue open.
+
+## Base freshness
+
+- Every task worktree is created from the frozen `origin/<base_branch>` SHA
+  (default `main`), never from the main worktree's current HEAD.
+- Branch and worktree names carry the unique run id, so a retried Issue gets
+  a new independent run and the old scene is preserved.
+- Before creating the PR, re-fetch `origin/<base_branch>`; if the base
+  advanced, merge it into the task branch, resolve conflicts manually, rerun
+  the full test suite, then push the task branch.
+- The runner rejects a delivery whose HEAD does not contain the latest remote
+  base. No auto conflict resolution, no force push, no merge or push of the
+  protected branch.
+
+## Run correlation
+
+- One task attempt generates one run_id (8 hex chars) and reuses it for
+  every later step of the attempt; a retry generates a new one. No new id
+  system is introduced: no trace_id, no log_id, no second UUID, no
+  tracing backend.
+- Every journal line of the attempt starts with `[run_id]`, so one grep
+  reconstructs the full timeline; every Issue/PR comment and the PR body
+  carry the stable marker `<!-- muyan-pilot:run=<run_id> -->` plus the
+  visible `run_id=` field; branch, worktree, Pi session dir and run
+  artifacts carry it in their paths. A run-scoped event without a valid
+  run_id fails fast.
 
 ## Automatic observability
 
@@ -58,19 +145,6 @@ follow it before changing code.
   `ai-blocked` — the run continues into the independent review/merge loop
   (Issue #60).
 
-## Base freshness
-
-- Every task worktree is created from the frozen `origin/<base_branch>` SHA
-  (default `main`), never from the main worktree's current HEAD.
-- Branch and worktree names carry the unique run id, so a retried Issue gets
-  a new independent run and the old scene is preserved.
-- Before creating the PR, re-fetch `origin/<base_branch>`; if the base
-  advanced, merge it into the task branch, resolve conflicts manually, rerun
-  the full tests and the complete review-fix loop, then push the task branch.
-- The runner rejects a delivery whose HEAD does not contain the latest remote
-  base. No auto conflict resolution, no force push, no merge or push of the
-  protected branch.
-
 ## Task dependencies (blockedBy)
 
 - Task dependencies use GitHub's native `blockedBy` relation
@@ -93,15 +167,27 @@ follow it before changing code.
 - No DAG, topological sort, or multi-worker scheduling: single-slot
   serial execution only reads the field, skips, and waits.
 
-## Review and fix loop (same PR)
+## After the PR: review, fix, and merge
+
+The implementer is done when the PR exists. Everything below is the
+Runner, not the implement session.
 
 - After a PR is opened, the Issue is in a recoverable review/fix state,
   not done: `ai-pr-opened` means awaiting review (a clean PR is never
-  sent to the Fixer); a review finding, an advanced base, or a merge
-  conflict moves it to the explicit `ai-fix-needed` state, which is a
-  fixable state, never a reason to close the PR, re-claim the Issue, or
-  open a replacement PR. A successful fix consumes `ai-fix-needed` and
-  returns the Issue to `ai-pr-opened` (awaiting review again).
+  sent to the Fixer). The Runner freezes the exact PR base/head SHA and
+  starts an independent, read-only review session (code-review R1–R9)
+  against those SHAs — a new `pi --print`, `prompt_review.md`, a new
+  JSONL. The reviewer ends with one machine-readable `REVIEW_VERDICT`
+  line; a missing or malformed verdict fails fast and is never treated
+  as a pass.
+- A review finding, an advanced base, or a merge conflict moves the
+  Issue to the explicit `ai-fix-needed` state, which is a fixable
+  state, never a reason to close the PR, re-claim the Issue, or open a
+  replacement PR. A successful fix consumes `ai-fix-needed` and returns
+  the Issue to `ai-pr-opened` (awaiting review again). A review finding
+  is not `ai-blocked`: it enters this same-PR loop. Only command
+  failure, an unavailable environment, or a fix that cannot be verified
+  fails fast and marks `ai-blocked`.
 - The next tick resumes the same run on the same feature branch,
   worktree and PR number. Only `ai-fix-needed` Issues (not `ai-blocked`)
   are scanned for Fixer work; the fresh-claim scan excludes
@@ -123,59 +209,23 @@ follow it before changing code.
   branch and hands any conflict to the fixer; no auto conflict
   resolution, no `--abort`, no force push, no push of the protected
   branch.
-- After a fix, the full test suite, 100% line/branch coverage, the real
+- While Blocker/Major findings exist, the Runner comments them to the
+  Issue and PR, runs a fixer on the same feature branch/worktree,
+  re-freezes the SHA, reruns the full suite, and re-reviews. After a
+  fix, the full test suite, 100% line/branch coverage, the real
   verification and the complete R1–R9 review run again before the same
-  PR is re-verified.
-- An unresolvable fix keeps the PR, branch and worktree intact and marks
-  the Issue `ai-blocked` (removing `ai-fix-needed`) with the concrete
-  conflict or finding.
-
-## Run correlation
-
-- One task attempt generates one run_id (8 hex chars) and reuses it for
-  every later step of the attempt; a retry generates a new one. No new id
-  system is introduced: no trace_id, no log_id, no second UUID, no
-  tracing backend.
-- Every journal line of the attempt starts with `[run_id]`, so one grep
-  reconstructs the full timeline; every Issue/PR comment and the PR body
-  carry the stable marker `<!-- muyan-pilot:run=<run_id> -->` plus the
-  visible `run_id=` field; branch, worktree, Pi session dir and run
-  artifacts carry it in their paths. A run-scoped event without a valid
-  run_id fails fast.
-
-## Git
-
-- Work on the task feature branch.
-- Pi (the implementer) does not merge and does not push `main` or `master`.
-  It delivers through exactly one PR linked to the Issue; the Runner is the
-  only merge actor (see below).
-- The PR description must contain `Fixes #<issue-number>` (it may be on
-  the first line), pointing at the source Issue so GitHub closes the Issue
-  natively when the PR merges into the default branch. The keyword works
-  in the PR body and in commit messages, but not in the PR title. The
-  runner rejects a PR whose body is missing it, so a merge can never
-  leave the source Issue open.
-
-## Auto review, fix and merge
-
-- After the implementer opens the PR, the Runner freezes the exact PR
-  base/head SHA and runs an independent, read-only review session
-  (code-review R1–R9) against those SHAs. The reviewer ends with one
-  machine-readable `REVIEW_VERDICT` line; a missing or malformed verdict fails
-  fast and is never treated as a pass.
-- While Blocker/Major findings exist, the Runner comments them to the Issue and
-  PR, runs a fixer on the same feature branch/worktree, re-freezes the SHA,
-  reruns the full suite, and re-reviews. The loop is bounded (5 rounds); if it
-  exhausts rounds with findings it fails fast and marks the Issue `ai-blocked`.
-- The merge gate re-fetches the latest remote base and requires the PR head to
-  contain it, the PR to be mergeable, and the remote head to still be the
-  reviewed head; it then merges with `gh pr merge --match-head-commit` so only
-  the reviewed head lands. A PR behind the latest base is rejected, never
-  merged. The Runner confirms the PR is MERGED and the merge commit is on the
-  protected branch before marking the Issue `ai-merged`.
-- A review finding is not `ai-blocked`: it enters the same PR's fix/review
-  loop. Only command failure, an unavailable environment, or a fix that cannot
-  be verified fails fast and marks `ai-blocked`.
+  PR is re-verified. The loop is bounded (5 rounds); if it exhausts
+  rounds with findings it fails fast and marks the Issue `ai-blocked`.
+  An unresolvable fix keeps the PR, branch and worktree intact and
+  marks the Issue `ai-blocked` (removing `ai-fix-needed`) with the
+  concrete conflict or finding.
+- The merge gate re-fetches the latest remote base and requires the PR
+  head to contain it, the PR to be mergeable, and the remote head to
+  still be the reviewed head; it then merges with
+  `gh pr merge --match-head-commit` so only the reviewed head lands. A
+  PR behind the latest base is rejected, never merged. The Runner
+  confirms the PR is MERGED and the merge commit is on the protected
+  branch before marking the Issue `ai-merged`.
 
 ## Scope
 
