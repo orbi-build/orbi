@@ -33,6 +33,14 @@ REQUIRED_ITEMS = (
     ("no-protected-push", "main"),
     ("no-protected-push-master", "master"),
     ("pr-only", "PR"),
+    # 6a. PR body: must carry `Fixes #<issue-number>` pointing at the
+    #     source Issue so GitHub natively closes the Issue when the PR
+    #     merges into the default branch (the keyword does not work in
+    #     the PR title).
+    ("pr-fixes-keyword", "fixes #<issue-number>"),
+    ("pr-fixes-auto-close", "closes the issue"),
+    ("pr-fixes-default-branch", "default branch"),
+    ("pr-fixes-title", "pr title"),
     # 6b. Base freshness: worktrees start from the frozen origin/<base> SHA,
     #     runs carry a unique run id, the base is re-fetched before the PR,
     #     behind deliveries are rejected, no auto conflict resolution or

@@ -950,10 +950,10 @@ def test_resume_delivery_success_keeps_same_run_branch_and_pr(
                                   FAKE_RUN_ID)
     assert verify_calls[0][2] == {
         "pr_repo": "owner/repo", "expected_url": FAKE_PR_URL,
-        "require_latest_base": False,
+        "require_latest_base": False, "issue": 9,
     }
     assert verify_calls[1][2] == {
-        "pr_repo": "owner/repo", "expected_url": FAKE_PR_URL,
+        "pr_repo": "owner/repo", "expected_url": FAKE_PR_URL, "issue": 9,
     }
     # The pre-mutation verify ran before the merge and the fixer...
     assert calls.index(verify_calls[0]) < calls.index(
@@ -1098,7 +1098,7 @@ def _resume_pr_validation_failure_test(monkeypatch, tmp_path, caplog,
     assert verify_calls == [
         ("verify", (worktree, FAKE_BRANCH, "main", FAKE_RUN_ID),
          {"pr_repo": "owner/repo", "expected_url": FAKE_PR_URL,
-          "require_latest_base": False}),
+          "require_latest_base": False, "issue": 9}),
     ]
     # ...and it failed before any git mutation or fixer start.
     assert not any(call[0] == "merge" for call in calls)

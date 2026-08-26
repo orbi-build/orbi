@@ -99,6 +99,31 @@ def test_render_prompt_replaces_context_values():
     assert rendered == "owner/repo #3 Fix context.md"
 
 
+def test_prompt_template_requires_fixes_keyword_for_the_source_issue():
+    """Issue #53: the Pi prompt must require `Fixes #<issue>` in the PR
+    body so GitHub closes the source Issue natively on merge; the
+    requirement renders with the real issue number."""
+    template = (
+        Path(__file__).resolve().parent.parent / "prompt.md"
+    ).read_text(encoding="utf-8")
+    assert "Fixes #{{ISSUE_NUMBER}}" in template
+    rendered = runner.render_prompt(template, {
+        "SOURCE_REPO": "xqliu/muyan-pilot",
+        "SOURCE_REPOS": "xqliu/muyan-pilot",
+        "ISSUE_NUMBER": "53",
+        "ISSUE_TITLE": "t",
+        "ISSUE_BODY": "b",
+        "WORKSPACE_ROOT": "/tmp",
+        "CONTEXT_FILES": "",
+        "SKILLS": "",
+        "BASE_BRANCH": "main",
+        "BASE_SHA": "abc123",
+        "RUN_ID": "a2241189",
+    })
+    assert "Fixes #53" in rendered
+    assert "{{" not in rendered
+
+
 def test_validate_config_accepts_existing_files(tmp_path):
     prompt = tmp_path / "prompt.md"
     prompt_review = tmp_path / "prompt_review.md"
@@ -639,7 +664,10 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
                 "headRefOid": head,
                 "headRepository": {"name": "muyan-pilot"},
                 "headRepositoryOwner": {"login": "muyantech"},
-                "body": "<!-- muyan-pilot:run=a1b2c3d4 -->\n\nPlan",
+                "body": (
+                    "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+                    "Fixes #4\n\nPlan"
+                ),
             }])
         if command[:3] == ["git", "branch", "--show-current"]:
             return branch
@@ -731,7 +759,10 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
                 "headRefOid": head,
                 "headRepository": {"name": "muyan-pilot"},
                 "headRepositoryOwner": {"login": "muyantech"},
-                "body": "<!-- muyan-pilot:run=a1b2c3d4 -->\n\nPlan",
+                "body": (
+                    "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+                    "Fixes #4\n\nPlan"
+                ),
             }])
         if command[:3] == ["git", "branch", "--show-current"]:
             return branch
@@ -799,7 +830,10 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
                 "headRefOid": head,
                 "headRepository": {"name": "muyan-pilot"},
                 "headRepositoryOwner": {"login": "muyantech"},
-                "body": "<!-- muyan-pilot:run=ffffeeee -->\n\nPlan",
+                "body": (
+                    "<!-- muyan-pilot:run=ffffeeee -->\n\n"
+                    "Fixes #4\n\nPlan"
+                ),
             }])
         if command[:3] == ["git", "branch", "--show-current"]:
             return "muyan-pilot/xqliu-muyan-ceo-issue-4-ffffeeee"
@@ -863,7 +897,10 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
                 "headRefOid": head,
                 "headRepository": {"name": "muyan-pilot"},
                 "headRepositoryOwner": {"login": "muyantech"},
-                "body": "<!-- muyan-pilot:run=ffffeeee -->\n\nPlan",
+                "body": (
+                    "<!-- muyan-pilot:run=ffffeeee -->\n\n"
+                    "Fixes #4\n\nPlan"
+                ),
             }])
         if command[:3] == ["git", "branch", "--show-current"]:
             return "muyan-pilot/xqliu-muyan-ceo-issue-4-ffffeeee"
@@ -1036,7 +1073,9 @@ def test_run_pi_redacts_prompt_and_issue_from_command_log(monkeypatch, tmp_path)
 def test_verify_pr_rejects_wrong_branch(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "other-branch")
     with pytest.raises(RuntimeError, match="Pi changed branch"):
-        runner.verify_pr(tmp_path, "muyan-pilot/issue-4", "main", "e07383c2")
+        runner.verify_pr(
+            tmp_path, "muyan-pilot/issue-4", "main", "e07383c2", issue=4,
+        )
 
 
 FAKE_HEAD_SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -1056,7 +1095,10 @@ def fake_verify_pr_payload(**overrides) -> str:
         "headRefOid": FAKE_HEAD_SHA,
         "headRepository": {"name": "muyan-pilot"},
         "headRepositoryOwner": {"login": "muyantech"},
-        "body": f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\nPlan",
+        "body": (
+            f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\n"
+            "Fixes #4\n\nPlan"
+        ),
     }
     payload.update(overrides)
     return json.dumps([payload])
@@ -1087,7 +1129,10 @@ def test_verify_pr_rejects_delivery_behind_latest_remote_base(monkeypatch, tmp_p
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="behind latest remote base",
     ):
-        runner.verify_pr(tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID)
+        runner.verify_pr(
+            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, issue=4,
+        )
     assert "base_branch=main" in caplog.text
 
 
@@ -1102,7 +1147,10 @@ def test_verify_pr_rejects_missing_pr(monkeypatch, tmp_path):
     ])
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="exactly one open PR"):
-        runner.verify_pr(tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID)
+        runner.verify_pr(
+            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, issue=4,
+        )
 
 
 def test_verify_pr_rejects_non_array(monkeypatch, tmp_path):
@@ -1111,7 +1159,10 @@ def test_verify_pr_rejects_non_array(monkeypatch, tmp_path):
     ])
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="exactly one open PR"):
-        runner.verify_pr(tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID)
+        runner.verify_pr(
+            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, issue=4,
+        )
 
 
 def test_verify_pr_returns_url_when_delivery_contains_latest_base(monkeypatch, tmp_path):
@@ -1124,6 +1175,7 @@ def test_verify_pr_returns_url_when_delivery_contains_latest_base(monkeypatch, t
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.verify_pr(
         tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+        issue=4,
     ) == "https://github.com/muyantech/muyan-pilot/pull/4"
     assert ["git", "fetch", "origin", "main"] in calls
     assert ["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"] in calls
@@ -1135,7 +1187,10 @@ def test_verify_pr_rejects_pr_without_url(monkeypatch, tmp_path):
     ])
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="open PR has no URL"):
-        runner.verify_pr(tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID)
+        runner.verify_pr(
+            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, issue=4,
+        )
 
 
 def test_verify_pr_rejects_pr_based_on_wrong_branch(monkeypatch, tmp_path):
@@ -1148,7 +1203,10 @@ def test_verify_pr_rejects_pr_based_on_wrong_branch(monkeypatch, tmp_path):
     with pytest.raises(
         RuntimeError, match="PR base is develop, expected main",
     ):
-        runner.verify_pr(tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID)
+        runner.verify_pr(
+            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, issue=4,
+        )
 
 
 def test_verify_pr_rejects_stale_remote_pr_head(monkeypatch, tmp_path):
@@ -1163,7 +1221,10 @@ def test_verify_pr_rejects_stale_remote_pr_head(monkeypatch, tmp_path):
     with pytest.raises(
         RuntimeError, match="PR head deadbeef.* is not local HEAD 01234567",
     ):
-        runner.verify_pr(tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID)
+        runner.verify_pr(
+            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, issue=4,
+        )
 
 
 def test_verify_pr_rejects_pr_body_without_run_marker(monkeypatch, tmp_path, caplog):
@@ -1176,7 +1237,10 @@ def test_verify_pr_rejects_pr_body_without_run_marker(monkeypatch, tmp_path, cap
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="missing the stable run marker",
     ):
-        runner.verify_pr(tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID)
+        runner.verify_pr(
+            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, issue=4,
+        )
     assert "pr_run_marker_missing" in caplog.text
 
 
@@ -1190,7 +1254,106 @@ def test_verify_pr_rejects_pr_body_missing_field(monkeypatch, tmp_path):
     with pytest.raises(
         RuntimeError, match="missing the stable run marker",
     ):
-        runner.verify_pr(tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID)
+        runner.verify_pr(
+            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, issue=4,
+        )
+
+
+# ------------------------------------------- Fixes #N (Issue #53)
+
+
+def test_verify_pr_accepts_pr_body_with_fixes_keyword(monkeypatch, tmp_path):
+    """The contract keyword `Fixes #<issue>` in the body is accepted, so
+    GitHub closes the source Issue natively when the PR merges."""
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return fake_verify_pr_payload(
+                body=f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\nFixes #4",
+            )
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.verify_pr(
+        tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+        issue=4,
+    ) == FAKE_PR_URL
+
+
+def test_verify_pr_rejects_pr_body_without_fixes_keyword(
+    monkeypatch, tmp_path, caplog,
+):
+    """A body without `Fixes #<issue>` would leave the source Issue open
+    after the merge: the delivery is rejected."""
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return fake_verify_pr_payload(
+                body=f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\nPlan",
+            )
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("ERROR"), pytest.raises(
+        RuntimeError, match=r"missing `Fixes #4`",
+    ):
+        runner.verify_pr(
+            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, issue=4,
+        )
+    assert "pr_fixes_missing" in caplog.text
+    assert "issue=4" in caplog.text
+
+
+def test_verify_pr_rejects_pr_body_with_wrong_issue_number(
+    monkeypatch, tmp_path, caplog,
+):
+    """`Fixes #9` does not close Issue #4: the keyword must point at the
+    source Issue of this delivery."""
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return fake_verify_pr_payload(
+                body=(
+                    f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\n"
+                    "Fixes #9"
+                ),
+            )
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("ERROR"), pytest.raises(
+        RuntimeError, match=r"missing `Fixes #4`",
+    ):
+        runner.verify_pr(
+            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, issue=4,
+        )
+    assert "pr_fixes_missing" in caplog.text
+
+
+def test_verify_pr_rejects_pr_body_with_longer_issue_number(
+    monkeypatch, tmp_path, caplog,
+):
+    """`Fixes #41` closes Issue 41, not Issue 4: the keyword must match
+    the source Issue number exactly, not as a digit prefix (review F1)."""
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return fake_verify_pr_payload(
+                body=(
+                    f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\n"
+                    "Fixes #41"
+                ),
+            )
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("ERROR"), pytest.raises(
+        RuntimeError, match=r"missing `Fixes #4`",
+    ):
+        runner.verify_pr(
+            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, issue=4,
+        )
+    assert "pr_fixes_missing" in caplog.text
 
 
 def test_verify_pr_queries_base_head_and_accepts_matching_pr(
@@ -1205,6 +1368,7 @@ def test_verify_pr_queries_base_head_and_accepts_matching_pr(
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.verify_pr(
         tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+        issue=4,
     ) == "https://github.com/muyantech/muyan-pilot/pull/4"
     assert ["git", "rev-parse", "HEAD"] in calls
     assert [
@@ -1225,7 +1389,7 @@ def test_verify_pr_accepts_pr_in_expected_repo_and_url(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", fake_verify_run)
     assert runner.verify_pr(
         tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
-        pr_repo=FAKE_PR_REPO, expected_url=FAKE_PR_URL,
+        issue=4, pr_repo=FAKE_PR_REPO, expected_url=FAKE_PR_URL,
     ) == FAKE_PR_URL
 
 
@@ -1245,7 +1409,7 @@ def test_verify_pr_rejects_pr_head_in_another_repo(monkeypatch, tmp_path, caplog
     ):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, pr_repo=FAKE_PR_REPO,
+            FAKE_RUN_ID, issue=4, pr_repo=FAKE_PR_REPO,
         )
     assert "pr_repo_mismatch" in caplog.text
 
@@ -1265,7 +1429,7 @@ def test_verify_pr_rejects_pr_head_repo_missing_fields(monkeypatch, tmp_path):
     ):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, pr_repo=FAKE_PR_REPO,
+            FAKE_RUN_ID, issue=4, pr_repo=FAKE_PR_REPO,
         )
 
 
@@ -1284,7 +1448,7 @@ def test_verify_pr_rejects_pr_head_repo_empty_fields(monkeypatch, tmp_path):
     ):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, pr_repo=FAKE_PR_REPO,
+            FAKE_RUN_ID, issue=4, pr_repo=FAKE_PR_REPO,
         )
 
 
@@ -1298,13 +1462,17 @@ def test_verify_pr_skips_repo_check_when_pr_repo_not_given(monkeypatch,
                 "url": FAKE_PR_URL,
                 "baseRefName": "main",
                 "headRefOid": FAKE_HEAD_SHA,
-                "body": f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\nPlan",
+                "body": (
+                    f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\n"
+                    "Fixes #4\n\nPlan"
+                ),
             }])
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.verify_pr(
         tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+        issue=4,
     ) == FAKE_PR_URL
 
 
@@ -1326,7 +1494,7 @@ def test_verify_pr_rejects_url_different_from_expected(monkeypatch, tmp_path, ca
     ):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, expected_url=FAKE_PR_URL,
+            FAKE_RUN_ID, issue=4, expected_url=FAKE_PR_URL,
         )
     assert "pr_url_mismatch" in caplog.text
 
@@ -1337,6 +1505,7 @@ def test_verify_pr_skips_url_check_when_expected_url_not_given(
     monkeypatch.setattr(runner, "run_command", fake_verify_run)
     assert runner.verify_pr(
         tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+        issue=4,
     ) == FAKE_PR_URL
 
 
@@ -1355,7 +1524,7 @@ def test_verify_pr_skips_latest_base_check_when_not_required(
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.verify_pr(
         tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
-        require_latest_base=False,
+        issue=4, require_latest_base=False,
     ) == FAKE_PR_URL
     assert not any(c[:3] == ["git", "fetch", "origin"] for c in calls)
     assert not any(
@@ -1388,7 +1557,10 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
                 "headRefOid": head,
                 "headRepository": {"name": "muyan-pilot"},
                 "headRepositoryOwner": {"login": "muyantech"},
-                "body": "<!-- muyan-pilot:run=a1b2c3d4 -->\n\nPlan",
+                "body": (
+                    "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+                    "Fixes #4\n\nPlan"
+                ),
             }])
         if command[:3] == ["git", "branch", "--show-current"]:
             return branch

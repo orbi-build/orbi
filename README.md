@@ -191,6 +191,14 @@ Pi 创建 PR 前必须重新 fetch：若 `origin/<base_branch>` 已前进，需�
 
 `.worktrees/` 已加入 `.gitignore`，不会进入版本库。
 
+## PR body 契约：`Fixes #N`（Issue #53）
+
+Pi 创建的 PR description 必须包含 `Fixes #<issue-number>`（可以放在首行），指向其源 Issue。GitHub 原生行为：PR merge 到默认分支（`main`）时，body（或 commit message）中的 `Fixes`/`Closes`/`Resolves #<n>` 关键词会自动关闭对应 Issue；PR title 不支持该关键词。没有这个关键词，merge 后 Issue 仍然 OPEN（例如 #45 的遗留状态），需要人工补关。
+
+- prompt（`prompt.md`）在 PR 创建步骤和 Fixer resume 段都要求携带 `Fixes #<issue-number>`（模板里的 `{{ISSUE_NUMBER}}` 由 Runner 渲染成真实 Issue 编号）；
+- Runner 验收（`verify_pr`）校验 PR body 含 `Fixes #<issue-number>`，缺失即 fail fast 拒绝该 PR（`pr_fixes_missing`），与 run marker 校验同级；
+- 开发契约见 `AGENTS.md`（Git 一节）。
+
 ## PR 创建后的 review/fix 循环（Issue #45）
 
 PR 创建后任务没有结束：Issue 进入可恢复的 review/fix 状态。`ai-pr-opened` 表示**等待 review**（干净 PR 不会被送进 Fixer）；只有显式的 `ai-fix-needed` 状态（Review finding 或 base 前进/冲突）才会触发 Fixer。Review finding、base 前进或 merge conflict 都是可修复状态，不等于任务失败，也不重新进入 ready 队列。
@@ -218,7 +226,7 @@ Pi 不直接 push 保护分支。实现 Agent 只 push feature branch 并创建 
 2. **独立审查**：启动一个独立、只读的 Review Agent（code-review R1–R9），对精确 base/head SHA 审查需求、diff、调用链、测试与运行证据；审查会话与 implement/fix 一样通过 live activity 管道输出（journal 中 `role=review`）。审查会话必须以一行机器可读的 `REVIEW_VERDICT {"verdict":"pass|findings","blockers":N,"majors":N,"minors":N,"findings":[...]}` 结尾；读不到合法 verdict 一律 fail fast，绝不当作通过。
 3. **修复循环**：verdict 有 Blocker/Major 时，把 finding 评论到 Issue 和 PR，Issue 标记 `ai-fix-needed`；同一 feature branch/worktree 上的 Fixer（journal 中 `role=fix`）修复并 push 后回到 `ai-pr-opened`，下一轮等待重新冻结 SHA、全量回归、完整复审。审查/修复循环最多 5 轮（见 `MAX_REVIEW_ROUNDS`）；超轮仍有 Blocker/Major 则 fail fast 并标记 `ai-blocked`。
 4. **合并门禁**：重新 fetch 最新 `origin/<base>`，要求 PR head 包含最新 base、PR mergeable、远端 head 仍是被审查的 head；然后 `gh pr merge <n> --match-head-commit <head> --merge`，只有被审查的 head 能落地。落后最新 base 的 PR 不会被合并（转 `ai-fix-needed`，由 Fixer 吸收最新 base 后重试）。
-5. **确认合并并同步部署 checkout**：`gh pr view` 确认 PR `MERGED` 且 `mergeCommit` 已落在 `origin/<base>`；随后把配置 `repo_dir` 的 base checkout `git merge --ff-only origin/<base>` 并验证本地 HEAD == `origin/<base>`，下一个 systemd tick 加载的就是刚合并的新代码。Issue 因 PR 关联自动 CLOSED。
+5. **确认合并并同步部署 checkout**：`gh pr view` 确认 PR `MERGED` 且 `mergeCommit` 已落在 `origin/<base>`；随后把配置 `repo_dir` 的 base checkout `git merge --ff-only origin/<base>` 并验证本地 HEAD == `origin/<base>`，下一个 systemd tick 加载的就是刚合并的新代码。Issue 由 PR body 的 `Fixes #N` 关键词在 merge 时自动 CLOSED（见上方「PR body 契约」）。
 
 成功合并后 Issue 标记 `ai-merged`（替代 `ai-pr-opened`），评论写入 PR URL、merge commit、审查轮次和 base/run 信息。下一任务只从新的 `origin/<base>` 创建。不 force push、不直接 push 保护分支、不设业务 timeout；审查 finding 不是 `ai-blocked`，而是进入同一 PR 的 fix/review 循环。
 

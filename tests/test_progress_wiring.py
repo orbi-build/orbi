@@ -415,6 +415,30 @@ def test_process_issue_creates_progress_comment_with_marker(monkeypatch, tmp_pat
     assert "- PR: -" in body
 
 
+def test_process_issue_passes_issue_number_to_verify_pr(
+    monkeypatch, tmp_path,
+):
+    """The fresh path verifies the `Fixes #<issue>` keyword against the
+    source Issue number (Issue #53)."""
+    make_fake_gh(monkeypatch)
+    patch_process_deps(monkeypatch, tmp_path)
+    verify_calls = []
+
+    def fake_verify_pr(*args, **kwargs):
+        verify_calls.append((args, kwargs))
+        return "https://github.com/xqliu/muyan-pilot/pull/40"
+
+    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    runner.process_issue(make_issue(), make_config(tmp_path),
+                         "xqliu/muyan-pilot")
+    assert len(verify_calls) == 1
+    args, kwargs = verify_calls[0]
+    assert kwargs.get("issue") == 18, (
+        f"verify_pr must verify the Fixes keyword against the source "
+        f"Issue number, got args={args} kwargs={kwargs}"
+    )
+
+
 def test_process_issue_posts_started_and_pr_opened_milestones(
     monkeypatch, tmp_path,
 ):

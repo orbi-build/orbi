@@ -230,6 +230,7 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     },
                     "body": (
                         f"<!-- muyan-pilot:run={run_id} -->\n\n"
+                        f"Fixes #{ISSUE_NUMBER}\n\n"
                         f"Plan for {branch}"
                     ),
                 }])
