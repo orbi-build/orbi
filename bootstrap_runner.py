@@ -2364,8 +2364,10 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
             # iteration re-runs the same independent review. A review
             # that cannot run (unrecoverable scene, missing worktree,
             # missing/malformed verdict, exhausted rounds) is a real
-            # failure: the Issue is marked `ai-blocked` so it is never
-            # stranded in an opened-PR state without an owner.
+            # failure: the Issue is marked `ai-blocked` ALONE (the
+            # opened-PR state label, `ai-pr-opened` or `ai-fix-needed`,
+            # is removed) so it is never stranded in an opened-PR state
+            # without an owner.
             worktree = None
             branch = None
             try:
@@ -2394,6 +2396,15 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     number, repo=source_repo, add=BLOCKED_LABEL,
                     remove=PR_OPENED_LABEL,
                 )
+                # A review failure while the Issue is in `ai-fix-needed`
+                # (awaiting the next review session) leaves that label
+                # behind: remove it too, so the terminal state is
+                # `ai-blocked` alone (Issue #82 routes both opened-PR
+                # states into the same review).
+                if FIX_NEEDED_LABEL in issue_labels(number, source_repo):
+                    edit_issue(
+                        number, repo=source_repo, remove=FIX_NEEDED_LABEL,
+                    )
                 body = (
                     f"Muyan Pilot failed: the independent review of "
                     f"PR {pr_url} failed: {exc}"

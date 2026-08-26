@@ -3822,6 +3822,107 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
     assert "- review/fix round: 2" in blocked
 
 
+def test_wait_for_delivery_marks_blocked_when_review_fails_while_fix_needed(
+        monkeypatch, caplog, tmp_path,
+):
+    """A review failure while the Issue is `ai-fix-needed` (awaiting the
+    next review session) must leave the terminal state `ai-blocked`
+    ALONE: this PR routes both opened-PR states into the same review, so
+    the leftover `ai-fix-needed` label is removed too (Issue #82).
+    """
+    api_calls: list = []
+    existing = {
+        "id": 77,
+        "body": (
+            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+            "**Muyan Pilot progress**\n\nawaiting review"
+        ),
+    }
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps({"state": "OPEN"})
+        if command[:2] == ["gh", "api"]:
+            api_calls.append(command)
+            if "--method" not in command:
+                # The run's live progress comment exists.
+                return json.dumps([existing])
+            method = command[command.index("--method") + 1]
+            if method == "POST":
+                body = command[command.index("--field") + 1]
+                return json.dumps({"id": 78, "body": body[len("body="):],
+                                   "url": "https://x/78"})
+            return ""
+        if command[-1] == "comments":
+            # No trusted `Muyan Pilot opened PR:` comment: the scene
+            # cannot be recovered, so the review fails fast.
+            return json.dumps({"comments": [
+                {"body": "public comment", "authorAssociation": "NONE"},
+            ]})
+        # The delivery is in the `ai-fix-needed` state (awaiting the
+        # next review session).
+        return json.dumps({"labels": [{"name": "ai-fix-needed"}]})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    edits: list = []
+    comments: list = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: edits.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *args, **kwargs: comments.append((args, kwargs)),
+    )
+    issue = {"number": 39, "title": "task", "body": ""}
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    caplog.set_level("INFO")
+    runner.wait_for_delivery(
+        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        "owner/repo",
+    )
+    # The Issue is marked ai-blocked (removing ai-pr-opened) ...
+    assert edits[0][1] == {
+        "repo": "owner/repo",
+        "add": "ai-blocked",
+        "remove": "ai-pr-opened",
+    }
+    # ... and the leftover ai-fix-needed label is removed too, so the
+    # terminal state is ai-blocked alone (never
+    # ai-blocked + ai-fix-needed).
+    assert edits[1][1] == {
+        "repo": "owner/repo",
+        "remove": "ai-fix-needed",
+    }
+    assert len(edits) == 2
+    body = comments[0][1]["body"]
+    assert "the independent review of" in body
+    assert f"<!-- muyan-pilot:run=a1b2c3d4 -->" in body
+    assert "delivery_review_failed" in caplog.text
+    # The terminal failure also posts the blocked milestone AND the
+    # tracked progress comment becomes the blocked scene.
+    posted_bodies = [
+        command[command.index("--field") + 1][len("body="):]
+        for command in api_calls
+        if "--method" in command and "POST" in command
+    ]
+    assert any("Muyan Pilot: blocked" in body for body in posted_bodies)
+    assert any(
+        ("the independent review of" in body for body in posted_bodies),
+    )
+    patches = [
+        command for command in api_calls
+        if command[:2] == ["gh", "api"]
+        and command[2] == "repos/owner/repo/issues/comments/77"
+        and "PATCH" in command
+    ]
+    assert patches, "the tracked progress comment was not updated"
+    blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
+    assert "Muyan Pilot blocked" in blocked
+    assert "the independent review of" in blocked
+    assert "- role: review" in blocked
+
+
 def test_wait_for_delivery_runs_review_when_fix_needed(
     monkeypatch, caplog, tmp_path,
 ):
