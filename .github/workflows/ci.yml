@@ -48,6 +48,17 @@ jobs:
           python3 -m pip install -r requirements.txt
           python3 -m pip install pytest coverage pyyaml
 
+      # CLI packaging (Issue #140): the console script must install in a
+      # clean environment and the entry must work (`muyan-pilot --help`
+      # and `muyan-pilot --version`, exit 0). The packaging file is the
+      # PEP 621 pyproject.toml; the build runs in an isolated
+      # environment (setuptools from the index).
+      - name: Install the CLI (console script) and verify the entry (Issue #140)
+        run: |
+          python3 -m pip install .
+          muyan-pilot --help
+          muyan-pilot --version
+
       - name: Run the full test suite with branch coverage (contract)
         run: python3 -m coverage run --branch -m pytest tests/ -q
 

@@ -325,7 +325,7 @@ def test_docs_document_operations_commands():
         "operations must document the 5-minute idle polling interval"
     )
     assert "journalctl" in text, "operations must show the journal command"
-    assert "muyan_pilot.py" in text, "operations must name the CLI"
+    assert "muyan-pilot" in text, "operations must name the CLI"
     for command in ("status", "session", "add"):
         assert command in text, f"operations must document the {command} command"
     assert "worktree" in text.lower(), "operations must explain the task worktree"

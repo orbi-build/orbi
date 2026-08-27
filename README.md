@@ -13,10 +13,29 @@
 - **系统架构总览**（GitHub Issues、systemd timer/service、Runner、Pi、worktree、llama-server、可选 `local-llm-kv-cache` proxy、PR/review/merge）：文档站首页 [index](docs/index.mdx) / [zh/index](docs/zh/index.mdx)；
 - **任务生命周期状态机**（`ai-ready` → `ai-in-progress` → `ai-pr-opened` → `ai-fix-needed` → `ai-merged` / `ai-blocked`，标出 Epic/Release task/P0 边界）：[workflow](docs/workflow.mdx) / [zh/workflow](docs/zh/workflow.mdx)。
 
+## CLI 安装与升级（Issue #140）
+
+正式使用方式是 `uv tool` 安装的可执行 CLI（console script `muyan-pilot = muyan_pilot:main`，见 `pyproject.toml`）：
+
+```bash
+# 在部署 checkout 目录安装（如 /home/xqianliu/Documents/muyan/muyan-pilot）：
+# --python 固定生产解释器（本机 /usr/bin/python3，3.14）
+uv tool install --python /usr/bin/python3 /home/xqianliu/Documents/muyan/muyan-pilot
+# merge 到 main 之后升级（版本号变化时）：
+uv tool upgrade muyan-pilot
+# 或者从最新本地代码直接重装（版本号未变时；--reinstall 绕过构建缓存）：
+uv tool install --force --reinstall /home/xqianliu/Documents/muyan/muyan-pilot
+# 验证安装：
+muyan-pilot --help
+muyan-pilot --version
+```
+
+`uv tool` 把 CLI 装进隔离的 tool 环境，可执行文件在 `~/.local/bin/muyan-pilot`（systemd unit 的 PATH 已包含该目录，见「部署一致性」）。发布包不携带第三方运行时依赖、token 或用户目录：配置（`muyan-pilot.toml`）和用户 systemd 目录保持机器本地。`muyan_pilot.py` 的直接执行入口（用解释器直接运行该文件）保留为开发/兼容路径，不是正式使用方式。
+
 ## 当前运行
 
 ```bash
-/usr/bin/python3 bootstrap_runner.py --config muyan-pilot.toml
+python3 bootstrap_runner.py --config muyan-pilot.toml
 ```
 
 正常运行使用 systemd user timer，全天 24 小时运行，每 5 分钟自动执行一次（触发点覆盖 00:00–23:55）：
@@ -24,7 +43,7 @@
 ```bash
 # 幂等安装用户级 service/timer（仓库模板复制到用户 systemd 目录、
 # daemon-reload、enable timer），并输出部署 commit/hash：
-python3 muyan_pilot.py install-units --config muyan-pilot.toml
+muyan-pilot install-units --config muyan-pilot.toml
 systemctl --user list-timers muyan-pilot.timer
 ```
 
@@ -44,15 +63,15 @@ git fetch origin main && git merge --ff-only origin/main
 
 仓库中的 `systemd/muyan-pilot.service` 和 `systemd/muyan-pilot.timer` 是已安装 unit 的**唯一事实源**：代码和实际运行配置必须一致，漂移必须能被明确发现。
 
-**幂等安装**：`python3 muyan_pilot.py install-units` 把两个模板复制到用户 systemd 目录（`~/.config/systemd/user/`，可用 `--installed-dir` 覆盖）、执行 `systemctl --user daemon-reload`、`systemctl --user enable --now muyan-pilot.timer`，并输出部署 commit（部署 checkout 的 HEAD，即模板来源）和每个 unit 的 sha256。安装**不会**启动、停止或重启 service：当前运行中的 Runner 不被中断，新配置从下一次 service 启动生效。
+**幂等安装**：`muyan-pilot install-units` 把两个模板复制到用户 systemd 目录（`~/.config/systemd/user/`，可用 `--installed-dir` 覆盖）、执行 `systemctl --user daemon-reload`、`systemctl --user enable --now muyan-pilot.timer`，并输出部署 commit（部署 checkout 的 HEAD，即模板来源）和每个 unit 的 sha256。安装**不会**启动、停止或重启 service：当前运行中的 Runner 不被中断，新配置从下一次 service 启动生效。service 模板的 `ExecStart` 使用已安装 `muyan-pilot` CLI 的明确绝对入口（`%h/.local/bin/muyan-pilot`，即 `uv tool install` 之后 `~/.local/bin` 下的可执行文件；`WorkingDirectory` 仍是部署 checkout，`ExecStartPre` 在 Runner 启动前同步 `origin/main`）。
 
 **启动前漂移检查**：Runner 每次启动时（`ExecStartPre` 同步完 checkout 之后、领取任何 Issue 之前）对比已安装 unit 与仓库模板（service 和 timer 都覆盖）。一致时记录 `unit_drift clean`；发现漂移时记录结构化日志并 fail fast（非零退出，不取 slot、不领取 Issue、不改任何标签），直到 unit 同步：
 
 ```text
-unit_drift unit=muyan-pilot.timer repo=<repo path> installed=<installed path> repo_sha256=... installed_sha256=... fix=python3 muyan_pilot.py install-units
+unit_drift unit=muyan-pilot.timer repo=<repo path> installed=<installed path> repo_sha256=... installed_sha256=... fix=muyan-pilot install-units
 ```
 
-**只读诊断**：`python3 muyan_pilot.py doctor`（可用 `--installed-dir` 指定检查目录）报告 repo commit、unit drift（clean 或具体漂移 + 修复命令）、Git transport（配置的 origin URL、protocol、SSH 探测；见「Git transport」）、timer/service active 状态、Runner slot、Pi session、每个 source repo 的当前 Issue 和最近 journal 活动。只读：不改标签、不改 unit、不做 git 变更。
+**只读诊断**：`muyan-pilot doctor`（可用 `--installed-dir` 指定检查目录）报告 repo commit、unit drift（clean 或具体漂移 + 修复命令）、Git transport（配置的 origin URL、protocol、SSH 探测；见「Git transport」）、timer/service active 状态、Runner slot、Pi session、每个 source repo 的当前 Issue 和最近 journal 活动。只读：不改标签、不改 unit、不做 git 变更。
 
 **完整部署时序**（从代码合并到下一次 Runner 启动）：
 
@@ -67,7 +86,7 @@ git merge 到 main
   -> Runner 启动并执行一个 Issue
 ```
 
-**模板变更必须合并后重新同步（Issue #131）**：`systemd/muyan-pilot.service` 和 `systemd/muyan-pilot.timer` 是部署配置，不是普通代码——修改任一模板的 PR 合并到 main 后、下一次 timer 触发前，必须由人工运行 `python3 muyan_pilot.py install-units --config muyan-pilot.toml` 同步两个 user unit（幂等，不碰运行中的 Runner）。Runner 本身 never auto-syncs（从不自动复制、自动覆盖已安装 unit）：模板变更未同步时，每次启动都会被启动前漂移检查 fail fast（结构化 `unit_drift` 行、非零退出、不取 slot、不领取 Issue），直到人工运行同步命令——这是设计内的哨兵行为，不是故障（2026-08-27 实例：PR #130 把 timer 从 15 分钟改为 5 分钟，合并后无人运行 `install-units`，service 每次启动都因 `unit_drift` 失败，直到人工同步，见 Issue #131）。
+**模板变更必须合并后重新同步（Issue #131）**：`systemd/muyan-pilot.service` 和 `systemd/muyan-pilot.timer` 是部署配置，不是普通代码——修改任一模板的 PR 合并到 main 后、下一次 timer 触发前，必须由人工运行 `muyan-pilot install-units --config muyan-pilot.toml` 同步两个 user unit（幂等，不碰运行中的 Runner）。Runner 本身 never auto-syncs（从不自动复制、自动覆盖已安装 unit）：模板变更未同步时，每次启动都会被启动前漂移检查 fail fast（结构化 `unit_drift` 行、非零退出、不取 slot、不领取 Issue），直到人工运行同步命令——这是设计内的哨兵行为，不是故障（2026-08-27 实例：PR #130 把 timer 从 15 分钟改为 5 分钟，合并后无人运行 `install-units`，service 每次启动都因 `unit_drift` 失败，直到人工同步，见 Issue #131）。
 
 ## Git transport（Issue #114）
 
@@ -84,17 +103,17 @@ git merge 到 main
 transport_check_failed repo_dir=<repo path> source_repos=<...> reason=ssh_unreachable: git ls-remote git@github.com:owner/repo.git failed: ... stderr=git@github.com: Permission denied (publickey). — ...
 ```
 
-**已有 HTTPS remote 的迁移路径**：Runner 从不静默改写 remote，也从不从评论或 Issue 内容读取 remote。迁移只由人工执行的一次性 setup 入口完成（`python3 muyan_pilot.py setup`，内部执行 `git remote set-url origin git@github.com:owner/repo.git`）；其他路径遇到 HTTPS remote 时 fail fast，失败信息携带确切的迁移命令。指向其他仓库的 remote 从不被迁移（改写会把 checkout 指向另一个仓库），无论 setup 是否授权迁移都直接以 mismatch 现场 fail fast。手工等价命令：
+**已有 HTTPS remote 的迁移路径**：Runner 从不静默改写 remote，也从不从评论或 Issue 内容读取 remote。迁移只由人工执行的一次性 setup 入口完成（`muyan-pilot setup`，内部执行 `git remote set-url origin git@github.com:owner/repo.git`）；其他路径遇到 HTTPS remote 时 fail fast，失败信息携带确切的迁移命令。指向其他仓库的 remote 从不被迁移（改写会把 checkout 指向另一个仓库），无论 setup 是否授权迁移都直接以 mismatch 现场 fail fast。手工等价命令：
 
 ```bash
 git remote set-url origin git@github.com:OWNER/REPO.git
 ```
 
-**只读诊断**：`python3 muyan_pilot.py doctor` 报告 transport 行（remote、配置的 URL、protocol、期望 URL、SSH 探测结果）；SSH 不可用时 doctor 把失败现场写进报告（`transport: FAILED ...`），不中断其余报告——fail-fast 门禁是启动前检查，doctor 是诊断报告。
+**只读诊断**：`muyan-pilot doctor` 报告 transport 行（remote、配置的 URL、protocol、期望 URL、SSH 探测结果）；SSH 不可用时 doctor 把失败现场写进报告（`transport: FAILED ...`），不中断其余报告——fail-fast 门禁是启动前检查，doctor 是诊断报告。
 
 ## 远程 CI（GitHub Actions）
 
-仓库契约（全量 pytest + 100% line/branch coverage）不只在本机 Runner 上跑：`.github/workflows/ci.yml` 让 GitHub Actions 在每次 `pull_request` 和每次 `push` 到 `main` 时跑同一份契约，测试失败或覆盖率低于 100% 时 CI 变红。单个 job，不加 lint、矩阵或缓存（Issue #56）。
+仓库契约（全量 pytest + 100% line/branch coverage）不只在本机 Runner 上跑：`.github/workflows/ci.yml` 让 GitHub Actions 在每次 `pull_request` 和每次 `push` 到 `main` 时跑同一份契约，测试失败或覆盖率低于 100% 时 CI 变红。单个 job，不加 lint、矩阵或缓存（Issue #56）。CI 还在干净环境里 `pip install .` 安装 console script 并验证入口（`muyan-pilot --help` / `muyan-pilot --version` 退出码 0，Issue #140）——「干净环境安装后 `muyan-pilot --help` 成功」是永久门禁，不是一次性本地检查。
 
 与本地的差异：生产运行时是 Runner 机器的 `/usr/bin/python3`（3.14.6），GitHub-hosted runner 没有这个解释器，所以 workflow 用 `actions/setup-python` 固定同一 minor 版本 `3.14`，契约命令通过 PATH 上固定的 `python3` 执行（命令与本地相同，只有解释器路径不同）。
 
@@ -102,44 +121,44 @@ Checkout 用 `fetch-depth: 0`（完整历史 + 全部 tags）：发布对账测�
 
 ## 任务派发与状态
 
-`muyan_pilot.py` 是最小 CLI，用于手工派活和查看队列。GitHub Issue 与标签是唯一状态存储，不引入数据库或 Web UI：
+`muyan-pilot` 是最小 CLI（`uv tool` 安装，见「CLI 安装与升级」），用于手工派活和查看队列。GitHub Issue 与标签是唯一状态存储，不引入数据库或 Web UI：
 
 ```bash
 # 在第一个配置的 source repo 创建 Issue 并自动添加 ai-ready
-python3 muyan_pilot.py add "任务标题" --body "任务描述" --config muyan-pilot.toml
+muyan-pilot add "任务标题" --body "任务描述" --config muyan-pilot.toml
 
 # 派发到指定 source repo（必须在配置 source_repos 中）
-python3 muyan_pilot.py add "任务标题" --repo xqliu/muyan-ceo --config muyan-pilot.toml
+muyan-pilot add "任务标题" --repo xqliu/muyan-ceo --config muyan-pilot.toml
 
 # 查看每个 source repo 的当前任务（ai-in-progress）、待办（ai-ready）和最近结果（ai-pr-opened / ai-fix-needed / ai-merged / ai-blocked）
-python3 muyan_pilot.py status --config muyan-pilot.toml
+muyan-pilot status --config muyan-pilot.toml
 ```
 
 `add` 成功后打印新 Issue 的 URL 和 `ai-ready` 标签；`status` 只读，不修改任何标签。命令失败立即报错，不做回退。
 
 ```bash
 # 打印当前 run 的 Pi session 文件路径（repo_dir/.worktrees 下最新的 .pi-session/*.jsonl）
-python3 muyan_pilot.py session --config muyan-pilot.toml
+muyan-pilot session --config muyan-pilot.toml
 
 # 持续跟随该文件（等价 tail -f；跟的是命令启动时选中的文件，不中途跳到更新的文件）
-python3 muyan_pilot.py session --follow --config muyan-pilot.toml
+muyan-pilot session --follow --config muyan-pilot.toml
 ```
 
 `session` 是排查附件（日常仍看 journal / GitHub），不是日常入口：没有 session 文件时 fail fast（退出码非零，说明没有正在跑的 Pi），不猜路径；`--pretty` 把 JSONL 打一行摘要（timestamp / role / tool|text|thinking 截断），默认仍是原始 JSONL。不开 tmux、不新包装脚本、不新增 systemd unit（Issue #74）。
 
 ```bash
 # 幂等安装 systemd units（见「部署一致性」）：输出部署 commit 和每个 unit 的 sha256
-python3 muyan_pilot.py install-units --config muyan-pilot.toml
+muyan-pilot install-units --config muyan-pilot.toml
 
 # 只读部署/健康报告：repo commit、unit drift、timer/service active、
 # Runner slot、Pi session、当前 Issue、最近 journal 活动
-python3 muyan_pilot.py doctor --config muyan-pilot.toml
+muyan-pilot doctor --config muyan-pilot.toml
 
 # 一次性 setup（新机器/新仓库）：gh auth + 仓库权限、平台 labels
 # （labels.toml 为唯一事实源）、systemd user units、checkout 检查
 # （含 Git transport：HTTPS origin 迁移为 SSH + SSH 连通性探测）、
 # 可选模型 proxy（warning only）；幂等、fail-fast，--json 输出等价 JSON
-python3 muyan_pilot.py setup --config muyan-pilot.toml
+muyan-pilot setup --config muyan-pilot.toml
 ```
 
 ## GitHub Issue 标签（外部状态）
@@ -149,7 +168,7 @@ GitHub label 是仓库的**外部状态**：它不会随代码提交自动创建
 ```bash
 # 一次性 setup：gh auth + 仓库权限、平台 labels、systemd user units、
 # checkout 检查、可选模型 proxy（warning only）；输出 key=value（--json 等价 JSON）
-python3 muyan_pilot.py setup --config muyan-pilot.toml
+muyan-pilot setup --config muyan-pilot.toml
 ```
 
 setup 不可用时的手工等价命令（已存在时 gh 会报错，可忽略或先 `gh label list` 检查）：
@@ -168,7 +187,7 @@ gh label list --repo xqliu/muyan-pilot
 
 | Label | 含义 | 进入条件 | 离开条件 |
 |---|---|---|---|
-| `ai-ready` | 明确派发给 Pilot 的新任务（允许 AI 领取） | `muyan_pilot.py add` 创建时自动添加，或人工 `gh issue edit --add-label ai-ready` | 领取时加 `ai-in-progress`（`ai-ready` 保留）；成功合并后保留（与 `ai-merged` 共存，表示已交付） |
+| `ai-ready` | 明确派发给 Pilot 的新任务（允许 AI 领取） | `muyan-pilot add` 创建时自动添加，或人工 `gh issue edit --add-label ai-ready` | 领取时加 `ai-in-progress`（`ai-ready` 保留）；成功合并后保留（与 `ai-merged` 共存，表示已交付） |
 | `ai-in-progress` | Runner 已领取、正在执行 | 领取 `ai-ready` Issue 时由 Runner 添加 | 开出 PR 时移除（转 `ai-pr-opened`）；失败时移除（转 `ai-blocked`）；Runner 被杀时残留，由下一 tick 的重启恢复扫描接回 |
 | `ai-pr-opened` | PR 已创建，当前等待 review；不会自动再次启动 Fixer | `verify_pr` 验收通过后由 Runner 添加（同时移除 `ai-in-progress`） | clean verdict 合并后移除（转 `ai-merged`）；review finding / base 冲突时移除（转 `ai-fix-needed`）；终态失败时移除（转 `ai-blocked`） |
 | `ai-fix-needed` | 已有 PR 需要在原 branch/worktree/PR 上继续修复；定时 Runner 自动拾取 | 审查会话未能修复的 finding，或 PR 落后最新 base / merge conflict | 下一个审查会话（同一 PR）clean verdict 合并后移除（转 `ai-merged`）；超轮 / 无法修复时移除（转 `ai-blocked`） |
@@ -209,7 +228,7 @@ Runner 行为（单 slot 串行，只做“读字段-跳过-等待”，不引�
 正常运行完全自动化：人不需要执行 status 命令、不需要轮询进程、不需要督工。
 任务进入 GitHub Issue 池后，Runner 自己完成领取 → plan → implement → test →
 verify → independent review（会话内修复）→ merge，并主动发布过程和最终结果。
-`muyan_pilot.py status` 只保留为开发/故障排查附件，不是产品入口，也不能作为
+`muyan-pilot status` 只保留为开发/故障排查附件，不是产品入口，也不能作为
 自动可观测性的验收证据。
 
 ### journal（本地，systemd）
@@ -274,10 +293,10 @@ Issue 标记 `ai-blocked`。
 
 ### 调试附件
 
-`muyan_pilot.py status` 只读展示当前（`ai-in-progress`）任务的实时状态（仅供开发/故障排查）：
+`muyan-pilot status` 只读展示当前（`ai-in-progress`）任务的实时状态（仅供开发/故障排查）：
 
 ```bash
-python3 muyan_pilot.py status --config muyan-pilot.toml
+muyan-pilot status --config muyan-pilot.toml
 # capacity: 1
 # slots: 1/1
 #   slot-1: pid=4321
@@ -319,7 +338,7 @@ Runner 每次处理一个 delivery：领取（或恢复）一个 Issue 后，在
 - 同一任务内部 implement/review 串行执行，共用同一个 slot，任意时刻最多一个 Pi 子进程；
 - 达到 `max_concurrency` 时，新 Runner 不领取 Issue、不修改标签、不调用 Pi，记录结构化日志 `capacity_full max_concurrency=... slot_dir=...` 后正常退出（退出码 0），等 systemd timer 下次触发；
 - slot 锁由打开的文件描述符持有：进程正常结束、SIGTERM/SIGINT（systemd stop / Ctrl+C）或被 SIGKILL 时，内核自动释放锁——活着的持有者永远不会因为时间或 PID 检查丢失 slot，死掉的持有者永远不会占住 slot，异常退出不会造成永久锁死；slot 文件本身保留（它是锁目标，不是令牌），`status` 按锁的实际状态报告占用；
-- `muyan_pilot.py status` 显示配置容量和当前已占用 slot（`capacity: N`、`slots: k/N`、`slot-N: pid=...`）；占用判定用非阻塞 `flock` 探测（探测成功即空闲并立即解锁），PID 仅用于展示；
+- `muyan-pilot status` 显示配置容量和当前已占用 slot（`capacity: N`、`slots: k/N`、`slot-N: pid=...`）；占用判定用非阻塞 `flock` 探测（探测成功即空闲并立即解锁），PID 仅用于展示；
 - 直接在 Pilot 外手工运行的任意 `pi` 命令不属于该配置控制范围：`max_concurrency` 只约束 Runner 领取任务时启动的 Pi，手工 `pi` 不受 slot 管理，也不会释放或占用任何 slot。
 
 ## 全链路 run_id（correlation ID）

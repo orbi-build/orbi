@@ -17,7 +17,7 @@ flowchart LR
   subgraph machine["Runner machine (systemd user session)"]
     timer["muyan-pilot.timer (5-minute tick)"]
     service["muyan-pilot.service (ExecStartPre: fast-forward main)"]
-    runner["Runner (muyan_pilot.py): claim → worktree → Pi → PR → review → merge"]
+    runner["Runner (muyan-pilot CLI): claim → worktree → Pi → PR → review → merge"]
     worktree["task worktree + feature branch (frozen origin/main SHA, run id in the name)"]
     pi["Pi sessions (implement + independent review)"]
     model["llama-server (core: any OpenAI-compatible endpoint)"]

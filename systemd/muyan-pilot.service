@@ -19,6 +19,12 @@ TimeoutStartSec=infinity
 # the timer's start request, and the next real start picks up the
 # latest code.
 ExecStartPre=/bin/sh -c 'git fetch origin main && git merge --ff-only origin/main'
-ExecStart=/usr/bin/python3 %h/Documents/muyan/muyan-pilot/bootstrap_runner.py
+# Issue #140: the Runner is the installed `muyan-pilot` CLI (the
+# uv-tool console script, `uv tool install` / `uv tool upgrade`; the
+# executable lands in the user bin dir `~/.local/bin`). The absolute
+# entry is verifiable with `systemd-analyze --user verify`. The
+# WorkingDirectory stays the deployment checkout: ExecStartPre syncs
+# it and the config (muyan-pilot.toml) lives there.
+ExecStart=%h/.local/bin/muyan-pilot
 StandardOutput=journal
 StandardError=journal

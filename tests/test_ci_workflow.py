@@ -140,6 +140,34 @@ def test_ci_workflow_installs_requirements_txt():
     ), f"CI must install requirements.txt, steps run: {commands!r}"
 
 
+def test_ci_workflow_installs_the_cli_and_verifies_the_entry():
+    """Issue #140: the CI gate includes a clean-environment install of
+    the console script (`pip install .`) and a real entry check
+    (`muyan-pilot --help` / `muyan-pilot --version`, exit 0) — the
+    acceptance `muyan-pilot --help` in a clean environment is a
+    permanent gate, not a one-time local check."""
+    commands = step_commands(steps_of(load_workflow()))
+    installing = [
+        command for command in commands
+        if "pip install ." in command
+    ]
+    assert installing, (
+        "CI must install the package (pip install .) in a clean "
+        f"environment, steps run: {commands!r}"
+    )
+    entry = [
+        command for command in commands
+        if "muyan-pilot --help" in command
+    ]
+    assert entry, (
+        "CI must verify the installed CLI entry (muyan-pilot --help), "
+        f"steps run: {commands!r}"
+    )
+    assert any(
+        "muyan-pilot --version" in command for command in entry
+    ), "CI must also check the version entry (muyan-pilot --version)"
+
+
 def test_ci_workflow_runs_the_contract_test_command():
     commands = step_commands(steps_of(load_workflow()))
     assert any(

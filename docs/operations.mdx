@@ -45,7 +45,7 @@ and merges to main, run the idempotent install BEFORE the next timer
 trigger:
 
 ```bash
-python3 muyan_pilot.py install-units --config muyan-pilot.toml
+muyan-pilot install-units --config muyan-pilot.toml
 ```
 
 It copies both templates into the user unit directory, runs
@@ -99,24 +99,31 @@ a stalled session either resumes (the failure signal reached the model
 and the first new event resets the recovery state) or the run fails
 fast through the normal `ai-blocked` path.
 
-## The CLI (`muyan_pilot.py`)
+## The CLI (`muyan-pilot`)
+
+The official entry is the installed `muyan-pilot` console script
+(`uv tool install --python /usr/bin/python3 <clone dir>`; refresh with
+`uv tool upgrade muyan-pilot` or `uv tool install --force --reinstall
+<clone dir>` — see [Getting started](/getting-started)). The
+direct-execution entry of `muyan_pilot.py` stays a development/
+compatibility path.
 
 ```bash
 # Create an Issue in a configured source repo and label it ai-ready
-python3 muyan_pilot.py add "task title" --body "task body" --config muyan-pilot.toml
-python3 muyan_pilot.py add "task title" --repo OWNER/BACKLOG-REPO --config muyan-pilot.toml
+muyan-pilot add "task title" --body "task body" --config muyan-pilot.toml
+muyan-pilot add "task title" --repo OWNER/BACKLOG-REPO --config muyan-pilot.toml
 
 # Read-only queue view: current (ai-in-progress) task with live Pi
 # activity, the next ready Issue, and the most recent result per source
 # repo (ai-pr-opened / ai-fix-needed / ai-merged / ai-blocked)
-python3 muyan_pilot.py status --config muyan-pilot.toml
+muyan-pilot status --config muyan-pilot.toml
 
 # Read-only deployment/health report: repo commit, unit drift, git
 # transport (configured origin URL, protocol, expected SSH URL, SSH
 # probe — a failed transport is reported as `transport: FAILED ...`,
 # not raised), timer/service state, slots, Pi session, current Issue,
 # recent journal
-python3 muyan_pilot.py doctor --config muyan-pilot.toml
+muyan-pilot doctor --config muyan-pilot.toml
 
 # One-time, idempotent initialization (new machine / new repo): gh
 # auth + repo permissions, platform labels, systemd user units, and
@@ -125,13 +132,12 @@ python3 muyan_pilot.py doctor --config muyan-pilot.toml
 # human-authorized migration path; the Runner itself never rewrites a
 # remote) and the SSH connectivity is probed (fail fast, no HTTPS
 # fallback)
-python3 muyan_pilot.py setup --config muyan-pilot.toml
-```
+muyan-pilot setup --config muyan-pilot.toml
 
 # Print the live Pi session JSONL path (fail fast when no session exists)
-python3 muyan_pilot.py session --config muyan-pilot.toml
-python3 muyan_pilot.py session --follow --config muyan-pilot.toml   # tail -f
-python3 muyan_pilot.py session --pretty --config muyan-pilot.toml   # one-line summaries
+muyan-pilot session --config muyan-pilot.toml
+muyan-pilot session --follow --config muyan-pilot.toml   # tail -f
+muyan-pilot session --pretty --config muyan-pilot.toml   # one-line summaries
 ```
 
 All commands accept the config via `--config` or the

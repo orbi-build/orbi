@@ -33,8 +33,10 @@ TIMER_UNIT = "muyan-pilot.timer"
 UNIT_NAMES = (SERVICE_UNIT, TIMER_UNIT)
 
 # The idempotent install command that repairs any drift (carried on
-# every unit_drift line as the fix command).
-FIX_COMMAND = "python3 muyan_pilot.py install-units"
+# every unit_drift line as the fix command). Issue #140: the official
+# entry is the installed `muyan-pilot` CLI (the uv-tool console
+# script), not a hand-written Python file entry.
+FIX_COMMAND = "muyan-pilot install-units"
 
 
 class UnitDriftError(RuntimeError):

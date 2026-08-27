@@ -19,6 +19,18 @@ import bootstrap_runner as runner
 import pilot_setup
 import systemd_deploy
 
+@pytest.fixture(autouse=True)
+def _default_command_lookup(monkeypatch):
+    """Issue #140: the installed `muyan-pilot` CLI is a required
+    command; the orchestration tests must not depend on whether the
+    CLI happens to be installed on the test machine. The dedicated
+    `check_commands` tests re-stub `shutil.which` themselves."""
+    monkeypatch.setattr(
+        pilot_setup.shutil, "which",
+        lambda name: f"/usr/bin/{name}",
+    )
+
+
 VALID_DEFS = [
     {"name": "ai-ready", "color": "1d76db", "description": "dispatched"},
     {"name": "ai-in-progress", "color": "fbca04", "description": "work"},
@@ -238,6 +250,9 @@ def test_check_commands_reports_the_required_commands(monkeypatch):
         "git": "/usr/bin/git",
         "gh": "/usr/bin/gh",
         "python3": "/usr/bin/python3",
+        # Issue #140: the installed CLI is a prerequisite too (the
+        # systemd entry it documents must exist on the machine).
+        "muyan-pilot": "/usr/bin/muyan-pilot",
         "systemctl": "user-bus-ok",
     }
 

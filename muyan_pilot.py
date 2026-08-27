@@ -45,6 +45,11 @@ LOGGER = logging.getLogger("muyan_pilot.cli")
 # bound, every journal line of this process starts with `[run_id]`.
 LOGGER.addFilter(RunIdFilter())
 
+# The CLI version (Issue #140): the single source of truth for the
+# `--version` output. tests/test_cli_packaging.py pins it against the
+# PEP 621 `version` in pyproject.toml, so the two cannot drift.
+__version__ = "0.2.0"
+
 ISSUE_URL_PATTERN = re.compile(r"/issues/(\d+)$")
 READY_LABEL = "ai-ready"
 IN_PROGRESS_LABEL = "ai-in-progress"
@@ -458,6 +463,10 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(os.environ.get("MUYAN_PILOT_CONFIG", "muyan-pilot.toml")),
     )
     parser = argparse.ArgumentParser(description=__doc__, parents=[common])
+    parser.add_argument(
+        "--version", action="version",
+        version=f"muyan-pilot {__version__}",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     add_parser = subparsers.add_parser(
         "add", parents=[common],

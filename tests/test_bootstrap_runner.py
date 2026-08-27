@@ -4557,7 +4557,7 @@ def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
     assert f"installed={installed / 'muyan-pilot.timer'}" in caplog.text
     assert "repo_sha256=" in caplog.text
     assert "installed_sha256=" in caplog.text
-    assert "fix=python3 muyan_pilot.py install-units" in caplog.text
+    assert "fix=muyan-pilot install-units" in caplog.text
     # No slot was taken and nothing was claimed.
     assert not (repo / ".muyan-pilot" / "slots").exists()
 

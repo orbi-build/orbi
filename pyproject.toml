@@ -1,0 +1,47 @@
+# Standard Python packaging for the Muyan Pilot CLI (Issue #140).
+#
+# The official usage is the installed console script:
+#
+#     uv tool install --python /usr/bin/python3 <this repo>
+#     muyan-pilot --help
+#
+# `uv tool upgrade muyan-pilot` refreshes the installed CLI after a
+# merge to main. The direct-execution entry `python3 muyan_pilot.py`
+# stays as a development/compatibility path.
+#
+# The release package is machine-independent: no third-party runtime
+# dependency (the bootstrap intentionally has none), no token, no user
+# directory — the config file (muyan-pilot.toml) and the user systemd
+# dir stay machine-local.
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "muyan-pilot"
+version = "0.2.0"
+description = "Local AI development worker: claims GitHub Issues, runs Pi in isolated worktrees, and delivers PRs (GitHub Issues + labels are the only state store)."
+readme = "README.md"
+requires-python = ">=3.14"
+license = { text = "Apache-2.0" }
+authors = [{ name = "xqliu" }]
+dependencies = []
+
+[project.scripts]
+muyan-pilot = "muyan_pilot:main"
+
+# Flat-module layout: the console script imports these top-level
+# modules, so every one of them ships with the distribution.
+[tool.setuptools]
+py-modules = [
+    "muyan_pilot",
+    "bootstrap_runner",
+    "git_transport",
+    "systemd_deploy",
+    "pilot_setup",
+    "pilot_slots",
+    "pi_activity",
+    "pi_recovery",
+    "progress",
+]
