@@ -49,6 +49,20 @@ Hard rules for external behavior (Issue #73):
   log on failure: a bypass failure must never decide whether the main delivery
   succeeded (Issue #79 makes the progress path a pure bypass).
 
+Hard rules for blocking commands (Issue #95):
+
+- Any shell command that can block — running tests, generator or polling
+  verification, network waits, interactive tools — must be wrapped in
+  `timeout <seconds> ...`. A timeout is the signal that the path needs a
+  fix (a missing termination guard, a wrong mock); it is never ignorable
+  noise and never a reason to rerun the same command unchanged.
+- Testing an unbounded-loop function (a `while True` poller such as
+  `wait_for_delivery`) requires a termination guard: monkeypatch
+  `time.sleep` to raise on the Nth call, inject an iteration cap
+  parameter, or use pytest-timeout. The TDD red phase must fail fast —
+  a hung test (a 99% CPU spin or a forever `next(g)` wait) is a broken
+  test, not a red test.
+
 Use the configured skills for implementation. Use TDD, 100% line and branch
 coverage for Python code. Do NOT run a review-fix loop or any independent
 review before opening the PR (Issue #78): the independent review happens

@@ -41,6 +41,14 @@ build files, and the changed code plus its callers before judging.
 - Bypass failures must only log (Issue #73/#79): a bypass (progress comments,
   notifications, log enhancements) whose failure can decide the main delivery
   outcome is a finding.
+- Blocking commands (Issue #95): a diff that drives a shell command which can
+  block (running tests, generator/polling verification, network waits,
+  interactive tools) without a `timeout <seconds>` wrapper, or that tests an
+  unbounded-loop function (`while True` poller) without a termination guard
+  (monkeypatched `time.sleep` raising on the Nth call, an injected iteration
+  cap, or pytest-timeout), is a **Blocker** — the red phase must fail fast,
+  never hang (the 99% CPU spin / forever `next(g)` class of hang must be
+  caught here, not shipped).
 - Verify the run evidence: the real test/build commands were run and pass in
   the repository's declared runtime; Python business code keeps 100% line and
   branch coverage when Python changed.

@@ -37,6 +37,13 @@ is **one runtime outcome** (when X, should Y, actually Z).
   refactor.
 - External APIs, CLI flags, and HTTP paths are asserted against official docs
   or one real call.
+- Blocking commands (Issue #95): any shell command that can block (running
+  tests, generator/polling verification, network waits, interactive tools)
+  is wrapped in `timeout <seconds> ...` — a timeout is the signal that the
+  path needs a fix, never ignorable noise. Testing an unbounded-loop
+  function (`while True` poller) requires a termination guard (monkeypatched
+  `time.sleep` raising on the Nth call, an injected iteration cap, or
+  pytest-timeout): the red phase must fail fast and never hang.
 - Python code keeps 100% line and branch coverage:
 
   ```bash
