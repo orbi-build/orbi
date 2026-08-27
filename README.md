@@ -220,13 +220,17 @@ Pi 长时间运行时，Runner 不再只留下启动命令和最终结果。`boo
 - `model_wait issue=... role=... phase=... state=model_wait`——最近一条 session 事件是 tool result（模型正在等待响应）时输出一次；等待期间只按轮询间隔输出带 `state=model_wait` 的 heartbeat，不升级 WARNING（慢模型不等于卡死）；
 - `resumed issue=... role=... phase=... state=resumed`——下一条 session 事件到达时输出一次。
 - `pi_idle issue=... role=... phase=... stale_seconds=...`——超过 5 分钟（`PI_IDLE_WARN_SECONDS=300`）没有 model/session 活动且不在 `model_wait` 时输出一次 WARNING；卡住的 session 不会每个 heartbeat 重复告警，`model_wait` 期间永不告警（慢模型不等于卡死）；
-- `pi_resumed issue=... role=... phase=...`——idle 告警后第一条新 session 事件到达时输出一次（恢复后输出 resumed）。
-- `run_failed run=... issue=... role=... branch=... worktree=... session=... session_file=... phase=... ... reason=pi_exit_N|timeout_...s|upstream_dead_stale_...s`——进程异常退出、超时或上游已死（Issue #75）时先记录完整现场再抛出错误；
+- `pi_idle_term run=... issue=... role=... pid=... cmdline=... result=sent|failed: ...`（或无 pid 的 `result=no_target`）——idle 告警后第一个 idle 窗口内，对 idle 窗口开始前就已存在、仍在运行的 Pi 后代（挂死的 bash/pytest 等工具）逐个发 SIGTERM（保留现场），让工具拿到非零退出、失败信号回到模型（Issue #94）；找不到挂死后代时记 `no_target`（Pi 自身卡住）；
+- `pi_idle_kill run=... issue=... role=... pid=... cmdline=... result=sent|already_dead|failed: ...`——再过一个 idle 窗口仍无新活动且被 TERM 的后代仍存活时发 SIGKILL；TERM 已生效（进程已退出）时记 `already_dead`，不再发信号；
+- `pi_resumed issue=... role=... phase=...`——idle 告警后第一条新 session 事件到达时输出一次（恢复后输出 resumed），整个 idle 恢复状态同时复位；
+- `run_failed run=... issue=... role=... branch=... worktree=... session=... session_file=... phase=... ... reason=pi_exit_N|timeout_...s|upstream_dead_stale_...s|idle_recovery_stale_...s`——进程异常退出、超时、上游已死（Issue #75）或连续 3 个 idle 窗口（`PI_IDLE_RECOVERY_CYCLES=3`）仍无新活动（Issue #94，Runner 杀掉 Pi 会话本身）时先记录完整现场再抛出错误；
 - `run_end run=... issue=... role=... result=pr_opened elapsed=...m pr=... commit=...`——验收通过后记录结果和完整排查入口。
 
 上游已死检测（Issue #75）：`model_wait` 期间 session JSONL 冻结超过 `PI_MODEL_WAIT_DEAD_SECONDS`（默认 600 秒）判定上游（llama/proxy）已死——HTTP 超时或连接断开后 Pi 停在 epoll_wait 永不退出：Runner 杀掉 Pi 进程，记录 `run_failed ... reason=upstream_dead_stale_...s` 后 fail fast（Issue 标记 `ai-blocked`，现场留在 journal 和 Issue 评论，slot 随进程退出由内核释放，下一拍可 resume 或领取下一个 `ai-fix-needed`）。事件持续到达时永不触发（慢模型不是死上游），它也不是业务任务 timeout。
 
-所有行都是稳定 `key=value`（含空格或双引号的值加双引号，内嵌双引号转义为 `\\"`，可用 `pi_activity.parse_scene` 解析）；systemd journal 已提供时间、host 和进程，Python 日志不再重复打印自己的时间戳。每条行都带 `[run_id]` 前缀（见下文全链路 run_id 一节），它是高频行（`activity` / `heartbeat` / `model_wait` / `resumed` / `pi_idle` / `pi_resumed`）唯一的 run id 载体：这些行不再重复 `run=` 字段，同一个 8-hex run id 在一行里只出现一次（Issue #57）。低频场景行（`run_start` / `run_failed` / `run_end`）保留 `run=` 字段，`pi_activity.parse_scene` 仍能从这些行解析出 `run`。默认 tail 示例（仅用于查看，不是产品步骤）：
+idle 卡死自动恢复（Issue #94）：非 `model_wait` 的卡死（Pi 的 bash 工具子进程永久阻塞，如 TDD red 阶段的死循环测试、`next(generator)` 永久等待）不再只告警。Runner 在现有轮询循环里按 idle 窗口（`idle_warn_seconds`，默认 5 分钟）逐级恢复：第一个窗口对 idle 窗口开始前就已存在、仍在运行的 Pi 后代逐个 SIGTERM（判定依据是 `/proc/<pid>/stat` 的 ppid 链 + 进程启动时间早于 idle 起点，不靠猜；只动 Pi 的后代，不碰系统其他进程，也不碰窗口开始后新起的进程）——工具拿到非零退出，失败信号回到模型，会话自行继续；第二个窗口对被 TERM 后仍存活的后代 SIGKILL；连续 `PI_IDLE_RECOVERY_CYCLES`（默认 3）个窗口仍无新活动时杀掉 Pi 会话本身，按现有 `ai-blocked`/可恢复流程收尾（Issue 标记 `ai-blocked`，slot 随进程退出释放）——slot 绝不被无限占用。每一步写 `pi_idle_term` / `pi_idle_kill` journal 行（带 run_id、pid、cmdline、TERM/KILL、结果），GitHub 进度评论通过 `recovery` 字段（`term` / `kill`）同步现场；第一条新 session 事件到达时整个恢复状态复位（`pi_resumed`）。不引入常驻进程/守护线程。
+
+所有行都是稳定 `key=value`（含空格或双引号的值加双引号，内嵌双引号转义为 `\\"`，可用 `pi_activity.parse_scene` 解析）；systemd journal 已提供时间、host 和进程，Python 日志不再重复打印自己的时间戳。每条行都带 `[run_id]` 前缀（见下文全链路 run_id 一节），它是高频行（`activity` / `heartbeat` / `model_wait` / `resumed` / `pi_idle` / `pi_resumed`）唯一的 run id 载体：这些行不再重复 `run=` 字段，同一个 8-hex run id 在一行里只出现一次（Issue #57）。低频场景行（`run_start` / `run_failed` / `run_end` / `pi_idle_term` / `pi_idle_kill`）保留 `run=` 字段，`pi_activity.parse_scene` 仍能从这些行解析出 `run`。默认 tail 示例（仅用于查看，不是产品步骤）：
 
 ```bash
 journalctl --user -u muyan-pilot.service -f

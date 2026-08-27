@@ -73,14 +73,29 @@ is **one runtime outcome** (when X, should Y, actually Z).
   carries issue, run id, role (implement/review/merge), phase, elapsed,
   last activity, last action, session and branch. No model/session activity
   for 5 minutes logs an idle warning; the first new activity after it logs
-  a resumed event. A session frozen in `model_wait` (the newest event is a
-  tool result) past `PI_MODEL_WAIT_DEAD_SECONDS` (default 600 s) declares
-  the upstream (llama/proxy) dead — the HTTP timeout or connection drop
-  left Pi in epoll_wait and it will never exit on its own: the Runner
-  kills Pi, logs `run_failed ... reason=upstream_dead_stale_...`, and fails
-  fast through the normal failure path (the Issue is marked `ai-blocked`
-  with the scene in the Issue comment, the slot is released by the kernel
-  when the process exits, and the next tick can resume or claim the next
+  a resumed event. A stalled (non-`model_wait`) session is recovered
+  automatically, not only warned (Issue #94): one step per idle window of
+  `PI_IDLE_WARN_SECONDS` since the stall was first seen — window 1
+  SIGTERMs the Pi descendants that already existed before the window
+  (the hung tools: ppid chain + start time from `/proc/<pid>/stat`, never
+  a name guess; only Pi descendants, never other system processes, never
+  a process spawned after the window began), so the tool gets a non-zero
+  exit and the failure signal reaches the model; window 2 SIGKILLs a
+  target that survived; after `PI_IDLE_RECOVERY_CYCLES` (default 3)
+  consecutive idle windows the Runner kills the Pi session itself and
+  fails fast through the normal failure path (the slot is never held
+  forever). Every step logs a `pi_idle_term` / `pi_idle_kill` line (run
+  id, pid, cmdline, TERM/KILL, result) and the progress comment shows the
+  recovery state via its `recovery` field; the first new activity resets
+  the whole recovery state. A session frozen in `model_wait` (the newest
+  event is a tool result) past `PI_MODEL_WAIT_DEAD_SECONDS` (default 600 s)
+  declares the upstream (llama/proxy) dead — the HTTP timeout or
+  connection drop left Pi in epoll_wait and it will never exit on its
+  own: the Runner kills Pi, logs
+  `run_failed ... reason=upstream_dead_stale_...`, and fails fast through
+  the normal failure path (the Issue is marked `ai-blocked` with the
+  scene in the Issue comment, the slot is released by the kernel when the
+  process exits, and the next tick can resume or claim the next
   `ai-fix-needed`) (Issue #75). It never fires while events keep arriving
   (a slow model is not a dead upstream) and it is NOT a business task
   timeout.

@@ -29,6 +29,7 @@ import logging
 import os
 import re
 import select
+import signal
 import subprocess
 import time
 import tomllib
@@ -38,6 +39,7 @@ from pathlib import Path
 
 from git_transport import TransportError, check_transport
 from pilot_slots import acquire_slot, slot_dir_for, slot_occupancy
+from pi_recovery import find_idle_descendants, pid_alive, signal_pid
 from pi_activity import (
     SessionWatcher,
     activity_snapshot,
@@ -83,6 +85,15 @@ PI_IDLE_WARN_SECONDS = 300.0
 # it only fires while the session file is frozen (stale seconds), never
 # while events keep arriving — a slow generation survives.
 PI_MODEL_WAIT_DEAD_SECONDS = 600.0
+# Idle-stall recovery (Issue #94): a stalled (non-model_wait) session
+# is recovered automatically instead of only warning. Measured in idle
+# windows of `idle_warn_seconds`: at the first window the pre-idle
+# descendants (the hung tools) get SIGTERM (the failure signal reaches
+# the model), at the second window a target that survived gets
+# SIGKILL, and after `PI_IDLE_RECOVERY_CYCLES` consecutive idle windows
+# the Pi session itself is killed and the run fails fast through the
+# normal `ai-blocked` path — the slot is never held forever.
+PI_IDLE_RECOVERY_CYCLES = 3
 
 # The bootstrap runner streams every Pi session of a run through the same
 # live activity pipeline (Issue #24/#40); implement/review share the same
@@ -917,6 +928,24 @@ def stream_pi(
     model_wait, ONE `pi_idle` WARNING carries `stale_seconds`; the
     first new session event after it logs `pi_resumed`. A slow active
     model (model_wait) is never reported idle (Issue #40).
+
+    Idle-stall recovery (Issue #94): the warning is no longer the end
+    of the story. While the session stays stalled (no new activity,
+    not model_wait) the runner recovers it, one step per idle window
+    of `idle_warn_seconds` since the stall was first seen:
+    window 1 SIGTERMs the Pi descendants that already existed before
+    the window (the hung tools — found by the ppid chain in
+    `/proc/<pid>/stat` plus their start time, never a name guess) so
+    the tool gets a non-zero exit and the failure signal reaches the
+    model; window 2 SIGKILLs a target that survived; after
+    `PI_IDLE_RECOVERY_CYCLES` (default 3) consecutive idle windows the
+    Pi session itself is killed and the run fails fast through the
+    normal failure path (`ai-blocked`, the slot released) — the slot
+    is never held forever. Every step logs a `pi_idle_term` /
+    `pi_idle_kill` line (run id, pid, cmdline, result) and the live
+    progress comment shows the recovery state via the `recovery`
+    activity field. The first new session event resets the whole
+    recovery state (`pi_resumed`).
     """
     # The raw pi command embeds the full prompt and Issue body; only the
     # redacted form may ever reach the journal or an exception message.
@@ -962,6 +991,25 @@ def stream_pi(
     # Idle warning state (Issue #18): at most one `pi_idle` warning per
     # stall; the first new session event after it logs `pi_resumed`.
     idle_warned = False
+    # Idle-stall recovery state (Issue #94): `idle_start_epoch` marks
+    # the start of the current idle window (only descendants that
+    # started no later than it are targets — a process spawned after
+    # the window began is a new tool call, never a target); `recovery`
+    # is the live state shown in the GitHub progress comment (None /
+    # `term` / `kill`); `recovery_targets` are the TERMed descendants
+    # tracked for the KILL escalation; `recovery_step` is the highest
+    # escalation step already executed (0 none, 1 TERM, 2 KILL).
+    idle_start_epoch: float | None = None
+    # The monotonic moment the idle window opened: escalation is
+    # measured in idle windows of NEW silence since the runner first
+    # saw the stall (never in absolute stale seconds — a session that
+    # is already stale when the window opens, e.g. old record
+    # timestamps, starts at step one, not at the session kill).
+    idle_start_monotonic: float | None = None
+    recovery: str | None = None
+    recovery_targets: list[dict] = []
+    recovery_step = 0
+    idle_recovery_failed = False
     try:
         while True:
             if deadline is not None and time.monotonic() >= deadline:
@@ -979,14 +1027,6 @@ def stream_pi(
                     else:
                         stderr_chunks.append(data)
             activity = watcher.poll()
-            if progress is not None:
-                try:
-                    progress(activity)
-                except Exception:
-                    LOGGER.exception(
-                        "progress_publish_failed run=%s issue=%s role=%s",
-                        run_id, issue_ref, role,
-                    )
             visible = (
                 activity["phase"], activity["action"], activity["result"],
             )
@@ -1033,6 +1073,13 @@ def stream_pi(
                     issue_ref, role, activity["phase"],
                 )
                 idle_warned = False
+                # The stall is over: the whole recovery state resets
+                # (Issue #94) — a later stall starts a fresh window.
+                idle_start_epoch = None
+                idle_start_monotonic = None
+                recovery = None
+                recovery_targets = []
+                recovery_step = 0
             elif (
                 not activity["model_wait"]
                 and not idle_warned
@@ -1047,6 +1094,107 @@ def stream_pi(
                     format_duration(activity["stale_seconds"]),
                 )
                 idle_warned = True
+                # The idle window starts now (Issue #94): only
+                # descendants that already existed before this moment
+                # are recovery targets.
+                idle_start_epoch = time.time()
+                idle_start_monotonic = time.monotonic()
+            # Idle-stall recovery (Issue #94): a stalled session (no
+            # model/session activity for idle windows, and the model is
+            # NOT expected to reply next) is recovered instead of only
+            # warning. Escalation, one step per idle window:
+            #   window 1: SIGTERM the pre-idle descendants (the hung
+            #             tools) — the tool gets a non-zero exit, the
+            #             failure signal reaches the model, the session
+            #             continues on its own;
+            #   window 2: SIGKILL a TERMed target that is still alive;
+            #   window N (PI_IDLE_RECOVERY_CYCLES, default 3): kill the
+            #             Pi session itself and fail fast through the
+            #             normal `ai-blocked` path (the slot is never
+            #             held forever). Only pi descendants (ppid
+            #             chain) that started no later than the idle
+            #             start are ever signaled — never other system
+            #             processes, never a process spawned after the
+            #             window began. The progress comment is synced
+            #             via the `recovery` activity field.
+            if (
+                idle_warned
+                and not activity["model_wait"]
+                and activity["stale_seconds"] >= idle_warn_seconds
+                and idle_start_epoch is not None
+            ):
+                # Escalation is measured in idle windows of NEW silence
+                # since the window opened (never in absolute stale
+                # seconds): a session that is already stale when the
+                # window opens (e.g. old record timestamps) starts at
+                # step one, not at the session kill.
+                silence = time.monotonic() - idle_start_monotonic
+                cycle = int(silence // idle_warn_seconds) + 1
+                if cycle >= 1 and recovery_step == 0:
+                    targets = find_idle_descendants(
+                        process.pid, idle_start_epoch,
+                    )
+                    if targets:
+                        recovery_targets = targets
+                        for target in targets:
+                            result = signal_pid(
+                                target["pid"], signal.SIGTERM,
+                            )
+                            LOGGER.warning(
+                                "pi_idle_term run=%s issue=%s role=%s "
+                                "pid=%s cmdline=%s result=%s",
+                                run_id, issue_ref, role, target["pid"],
+                                quote_value(target["cmdline"] or "-"),
+                                result,
+                            )
+                        recovery = "term"
+                    else:
+                        # No hung tool found (Pi itself is stuck): the
+                        # escalation continues, nothing is signaled.
+                        LOGGER.warning(
+                            "pi_idle_term run=%s issue=%s role=%s "
+                            "result=no_target",
+                            run_id, issue_ref, role,
+                        )
+                    recovery_step = 1
+                elif cycle >= 2 and recovery_step == 1:
+                    for target in recovery_targets:
+                        if not pid_alive(target["pid"]):
+                            # The TERM worked between polls: record it,
+                            # signal nothing.
+                            LOGGER.warning(
+                                "pi_idle_kill run=%s issue=%s role=%s "
+                                "pid=%s cmdline=%s result=already_dead",
+                                run_id, issue_ref, role, target["pid"],
+                                quote_value(target["cmdline"] or "-"),
+                            )
+                            continue
+                        result = signal_pid(target["pid"], signal.SIGKILL)
+                        LOGGER.warning(
+                            "pi_idle_kill run=%s issue=%s role=%s "
+                            "pid=%s cmdline=%s result=%s",
+                            run_id, issue_ref, role, target["pid"],
+                            quote_value(target["cmdline"] or "-"),
+                            result,
+                        )
+                    recovery = "kill"
+                    recovery_step = 2
+                if cycle >= PI_IDLE_RECOVERY_CYCLES:
+                    process.kill()
+                    idle_recovery_failed = True
+                    break
+            # The live progress comment shows the recovery state while
+            # it is active (Issue #94); the watcher state is a fresh
+            # dict per poll, so the field never leaks into other polls.
+            activity["recovery"] = recovery
+            if progress is not None:
+                try:
+                    progress(activity)
+                except Exception:
+                    LOGGER.exception(
+                        "progress_publish_failed run=%s issue=%s role=%s",
+                        run_id, issue_ref, role,
+                    )
             # Upstream-dead detection (Issue #75): the model is
             # expected to reply next (model_wait) but the session file
             # has been frozen for the dead threshold — the upstream
@@ -1069,6 +1217,21 @@ def stream_pi(
         _drain_stream(process.stderr, stderr_chunks)
     stdout = _decode_chunks(stdout_chunks)
     stderr = _decode_chunks(stderr_chunks)
+    if idle_recovery_failed:
+        stale = format_duration(activity["stale_seconds"])
+        LOGGER.error(
+            "run_failed %s reason=idle_recovery_stale_%s",
+            format_run_scene(
+                activity, run_id=run_id, issue=issue_ref,
+                role=role, branch=branch, worktree=str(cwd),
+            ),
+            stale,
+        )
+        raise RuntimeError(
+            f"Pi session stayed idle for {stale} after idle recovery "
+            f"(TERM/KILL of pre-idle descendants); Pi was killed "
+            "(Issue #94)"
+        )
     if upstream_dead:
         stale = format_duration(activity["stale_seconds"])
         LOGGER.error(
@@ -2152,6 +2315,10 @@ def _progress_state(*, issue: int, title: str, run_id: str, role: str,
         "branch": branch,
         "pr": pr_url,
         "session": (activity or {}).get("session_id"),
+        # Idle-stall recovery state (Issue #94): `term` / `kill` while
+        # the runner recovers a stalled session, absent/None otherwise
+        # (the body renders the line only while it is active).
+        "recovery": (activity or {}).get("recovery"),
     }
 
 
@@ -2275,6 +2442,9 @@ class LiveProgressThrottle:
         visible = (
             activity["phase"], activity["action"], activity["result"],
             activity["model_wait"],
+            # The idle-recovery state is visible progress (Issue #94):
+            # entering/leaving it PATCHes the live comment immediately.
+            activity.get("recovery"),
         )
         now = time.monotonic()
         if visible == self._last_visible and \
