@@ -1,0 +1,130 @@
+# 一次性 setup
+
+`muyan_pilot.py setup` 是新机器或新任务池仓库的一次性、配置驱动的初始化
+入口。它验证本地前提、对齐平台标签、安装 systemd user units、检查
+checkout、报告可选模型 proxy——一条命令，稳定的机器可读结果。
+
+```bash
+python3 muyan_pilot.py setup --config muyan-pilot.toml
+```
+
+每台机器运行一次（每个新任务池仓库再各运行一次）。它**幂等**：重复运行
+从不创建重复的标签、units 或 timer，也从不碰业务 Issue 或业务标签。
+
+## 按顺序做什么
+
+setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下，stderr
+给出具体原因，退出码非零。
+
+1. **命令** — PATH 上有 `git`、`gh`、`python3`，且 `systemctl --user`
+   user bus 可达（没有 user bus 的容器或 headless session 会以 bus 错误
+   失败）。
+2. **认证** — `gh auth status`（已登录且 token 可用）。
+3. **每个目标仓库**（默认每个配置的 `source_repos` 条目；`--repo
+   OWNER/REPO` 时恰好一个）：
+   - 仓库存在且 viewer 有写权限（`gh repo view` → `viewerPermission`
+     必须是 `WRITE`、`MAINTAIN` 或 `ADMIN`）；
+   - 七个平台标签从仓库根目录的 `labels.toml` **声明式**对齐——标签
+     名/颜色/描述的唯一事实源：缺的创建、漂移的更新、从不删除，业务
+     标签（`bug`、`enhancement`、...）从不被碰。
+4. **Systemd units** — 仓库模板（`systemd/muyan-pilot.service`、
+   `systemd/muyan-pilot.timer`）幂等安装到 user unit 目录（与
+   `install-units` 相同的安装：复制、`daemon-reload`、enable timer——
+   从不启动、停止或重启 service），然后报告 timer 的
+   enabled/active 状态和下次触发时间。
+5. **Checkout + git transport** — 检查配置的 `repo_dir`：`origin`
+   remote 的**传输协议**（Issue #114）：git 数据操作（fetch、push——
+   包括 `.github/workflows/*.yml`）必须走 SSH
+   （`git@github.com:owner/repo.git`），所以已有的 HTTPS `origin` 在这里
+   用普通的 `git remote set-url origin git@github.com:owner/repo.git`
+   迁移（setup 是人工授权的迁移路径——Runner 本身从不改写 remote）；
+   SSH URL 必须匹配第一个配置的 source repo——指向**另一个**仓库的
+   remote 从不被迁移（改写会把 checkout 指向另一个仓库），直接以
+   `setup_failed reason=... origin remote repo mismatch ...` 失败；
+   `git ls-remote <ssh-url>` 必须退出 0（SSH 可达且已认证——失败是
+   `setup_failed reason=... ssh_unreachable ...`，**没有 HTTPS 回退**）。
+   然后是只读部分：当前分支、干净 worktree（checkout 不干净会失败：
+   timer 的 `ExecStartPre` fast-forward 拒绝脏 worktree，Runner 就永远
+   无法启动）、base 新鲜度（本地 `HEAD` 对比刚 fetch 的
+   `origin/<base_branch>`——只报告，不失败：timer 每次启动都会把干净
+   checkout fast-forward）。
+6. **可选模型 proxy** — 检查 `local-llm-kv-cache` proxy 的 health
+   endpoint（`http://127.0.0.1:18082/health`），报告为**可选**：它的
+   缺失或不健康只是输出里的 warning，从不阻塞核心 GitHub/Pilot setup。
+
+setup 从不创建业务 Issue、从不领取任务、从不启动 Pi、从不修改保护分支。
+
+## 选项
+
+| 选项 | 含义 |
+|---|---|
+| `--config PATH` | `muyan-pilot.toml` 配置（默认：`$MUYAN_PILOT_CONFIG` 或 `muyan-pilot.toml`） |
+| `--repo OWNER/REPO` | 只初始化这个配置的 source repo（默认：每个配置的 source repo） |
+| `--installed-dir PATH` | user unit 目录（默认：标准 `~/.config/systemd/user`） |
+| `--json` | 以 JSON 而不是 `key=value` 行输出结果 |
+
+## 输出
+
+默认输出是稳定的 `key=value` 行（每个关注点一行；含空格的值加引号），
+agent 和脚本可以解析：
+
+```text
+setup=ok version=1 base_branch=main
+repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=7/7
+service=installed path=~/.config/systemd/user/muyan-pilot.service sha256=9f2c...
+timer=enabled active=true next="Thu 2026-08-27 10:00:00 +08"
+checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:xqliu/muyan-pilot.git protocol=ssh migrated=false ssh_reachable=true
+model_endpoint=optional optional_proxy=healthy url=http://127.0.0.1:18082/health
+```
+
+`labels=7/7` 表示七个平台标签都与 `labels.toml` 一致；`next` 是 timer
+的下次触发时间（没有时为 `-`）；`optional_proxy` 是 `healthy`、
+`unhealthy` 或 `unavailable`，从不改变退出码。`migrated=true` 表示
+setup 把 HTTPS `origin` 改写成了 SSH URL（重跑后报告 `migrated=false`）；
+`ssh_reachable` 是 `git ls-remote` 探测结果。
+
+`--json` 输出等价的 JSON 文档：
+
+```bash
+python3 muyan_pilot.py setup --config muyan-pilot.toml --json
+```
+
+## 成功与失败示例
+
+成功（退出码 `0`）：
+
+```bash
+$ python3 muyan_pilot.py setup --config muyan-pilot.toml
+setup=ok version=1 base_branch=main
+repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=7/7
+service=installed path=~/.config/systemd/user/muyan-pilot.service sha256=9f2c...
+timer=enabled active=true next="Thu 2026-08-27 10:00:00 +08"
+checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:xqliu/muyan-pilot.git protocol=ssh migrated=false ssh_reachable=true
+model_endpoint=optional optional_proxy=unhealthy url=http://127.0.0.1:18082/health
+```
+
+（这里可选 proxy 没运行——注意 `optional_proxy=unhealthy`——但核心
+setup 仍以退出码 `0` 成功。）
+
+失败（退出码非零，stderr 输出 `setup_failed reason=...`）：
+
+```text
+setup_failed reason=systemctl --user user bus unavailable (is a systemd user session running?): ...
+setup_failed reason=repo not accessible: nobody/no-such (gh repo view failed: ...)
+setup_failed reason=insufficient permission for owner/repo: viewerPermission='READ' (one of ['ADMIN', 'MAINTAIN', 'WRITE'] required to manage labels)
+setup_failed reason=label alignment failed for owner/repo: ai-ready (gh label create failed: ...)
+setup_failed reason=checkout is not clean: /path/to/checkout (uncommitted changes: ' M bootstrap_runner.py') — commit or stash them first: ...
+setup_failed reason=checkout check failed for /path/to/checkout: ssh_unreachable: git ls-remote git@github.com:owner/repo.git failed: ... stderr=git@github.com: Permission denied (publickey). — fix SSH and retry
+```
+
+仓库错误、无法创建的缺失标签（权限）、脏 checkout、SSH 不可达（没有
+HTTPS 回退）或缺 systemd user bus 都会带具体原因停下——不会半初始化
+而没有明确信号。
+
+## 幂等性
+
+在已初始化的机器上重跑 setup，对外部状态是 no-op：已一致的标签不重写，
+unit 模板从仓库重新复制（漂移修复），timer 保持 enabled，不创建或修改
+任何 Issue 或业务数据。报告的 hash 和状态跨运行稳定。HTTPS→SSH 迁移
+是一次性的：第一次运行后 `origin` remote 已是 SSH，重跑只重新验证
+（`migrated=false`）。

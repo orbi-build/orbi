@@ -1,0 +1,68 @@
+# 可选：local-llm-kv-cache proxy
+
+[local-llm-kv-cache](https://github.com/xqliu/local-llm-kv-cache) proxy
+是本地 llama.cpp 配置的**可选增强**：它加了两级 KV cache（内存热
+session cache + 磁盘冷 prefix cache），让 coding agent 不必在每个新
+session 重新 prefill 稳定的 system prompt 和 tool schemas。它是独立项
+目，有自己的仓库、测试和 README——这一页只记录它如何接入 Muyan
+Pilot。它**不是**核心前提：没有它，Pilot 直接对接任意
+OpenAI-compatible endpoint 就能工作。
+
+## 它改变了 Pilot 的什么
+
+- proxy 用提交的 systemd unit 安装时监听 `127.0.0.1:18082`（proxy 自己
+  代码的默认端口是 `8081`），转发到 llama.cpp server（默认 upstream
+  `127.0.0.1:8080`）。
+- 把 Pi（和任何其他 agent）的 provider URL 指向 proxy
+  （`http://127.0.0.1:18082/v1`），而不是直接指向 llama server。
+- Pilot 本身不变：它永远只和配置的 OpenAI-compatible endpoint 说话。
+
+## 安装
+
+完整说明见上游仓库的 README；简版（它自己的 clone 路径，例如在你的
+home 目录下）：
+
+```bash
+git clone https://github.com/xqliu/local-llm-kv-cache.git
+cd local-llm-kv-cache
+mkdir -p ~/.config/systemd/user
+cp local-llm-kv-cache.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now local-llm-kv-cache.service
+curl -fsS http://127.0.0.1:18082/health
+```
+
+要求：Python 3.10+ 和启用了 slot save/restore 的 llama.cpp server。
+hybrid/recurrent 模型（例如 Qwen3.8）需要带 checkpoint 持久化修复的
+llama.cpp 构建——精确 branch/commit 和上游 PR 引用见上游 README。
+
+## 配置
+
+user unit 用环境变量承载设置：
+
+| 变量 | 默认 | 含义 |
+|---|---|---|
+| `PI_LLAMA_UPSTREAM` | `http://127.0.0.1:8080` | proxy 转发到的 llama.cpp server |
+| `PI_LLAMA_CACHE_HOST` | `127.0.0.1` | proxy 绑定地址 |
+| `PI_LLAMA_CACHE_PORT` | `8081` (代码默认；提交的 unit 设为 `18082`) | proxy 端口（agent 指向这里） |
+| `PI_LLAMA_CACHE_DIR` | `~/.llama-slot-cache` | 磁盘 KV 状态目录 |
+| `PI_LLAMA_CACHE_MAX_GIB` | `12` | 磁盘缓存大小上限 |
+| `PI_LLAMA_CACHE_WAIT_SECONDS` | `120` | slot restore 最大等待 |
+| `PI_LLAMA_CACHE_PREFIX_SEED_DELAY` | `2` | prefix 播种延迟 |
+
+编辑 unit 后 `systemctl --user daemon-reload &&
+systemctl --user restart local-llm-kv-cache.service`。
+
+## 排障
+
+- `curl -fsS http://127.0.0.1:18082/health` 失败 → proxy 没运行：
+  `systemctl --user status local-llm-kv-cache.service` 和该 unit 的
+  journal。
+- 请求超时 → 检查 `PI_LLAMA_UPSTREAM` 能否到达存活的 llama.cpp
+  server；proxy 自己从不产出模型输出。
+- cache 从不命中 → proxy 不伪造命中；验证你的 llama.cpp 构建支持你的
+  模型类型的 checkpoint 持久化（上游 README），以及 agent 的稳定
+  prefix（system prompt + tool schemas）在 session 之间确实稳定。
+- 停止使用：disable unit，把 agent 的 provider URL 指回 llama
+  server，如果不想让缓存的 prompt 状态留在本地就删除 KV cache 目录
+  （为什么该目录敏感见[安全](/zh/security)）。

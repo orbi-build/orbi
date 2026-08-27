@@ -1,0 +1,60 @@
+# 安全
+
+Muyan Pilot 在你的机器上运行一个带 GitHub token 的自主 coding agent。
+安全模型刻意简单：交付契约里的硬边界、本地密钥、没有远端状态存储。
+
+## AI 从不 merge 或 push 保护分支
+
+- 实现者 Pi **只 push 自己的 feature branch** 并开一个 PR。不 merge、
+  不 push `main`/`master`、不 force push、从不自动解决冲突。
+- **Runner 是唯一 merge actor**，且只通过已审查的 PR merge：clean
+  `REVIEW_VERDICT`、merge 门禁（PR head 包含最新远端 base、PR
+  mergeable、远端 head 仍是被审查的 head）、`gh pr merge
+  --match-head-commit` 保证只有被审查的 head 落地。
+- 默认分支上的 GitHub branch protection 是最终边界：把保护分支的
+  权限限定在运行 Runner 的账号（或谁都不给——由 Runner 的 token 执行
+  merge）。
+- 交付状态是推导出来的，从不信任公开文本：恢复现场只从 trusted
+  maintainer（OWNER/MAINTAINER/MEMBER/COLLABORATOR）发布的评论读取；
+  branch/worktree 路径由配置的 repo、Issue 编号和 run id 推导——公开
+  评论永远无法把 Runner 指向任意本地路径。
+
+## GitHub token（API）与 SSH（git 数据）——两条通道
+
+- **GitHub API 操作**（Issue、PR、label、comment、merge）用 `gh`
+  认证（`gh auth status` 必须成功）。使用**细粒度 personal access
+  token**，限定在 Pilot 实际工作的仓库，最小权限：contents
+  （read/write）、pull requests（read/write）、issues（read/write）、
+  metadata（read）。避免组织级或经典宽 scope token。
+- **Git 数据操作**（fetch、push——包括 `.github/workflows/*.yml`）用
+  机器的 **SSH key** 走 `git@github.com:owner/repo.git`（Issue #114）。
+  workflow 推送从不依赖 OAuth App 的 `workflow` scope——那是阻塞
+  Issue #106 的 HTTPS/OAuth 传输。启动前检查验证 SSH 传输，损坏时
+  fail fast（没有 HTTPS 回退）。
+- 两条通道从不混用：SSH 不是 API 认证，`gh` token 不是 git 数据凭据。
+  token 存在 Runner 机器上 `gh` 的本地凭据存储；SSH key 在用户的 SSH
+  agent/config 里。两者都不写入仓库、配置文件、journal 或 GitHub
+  评论。
+- 日志按构造脱敏：带密钥的命令日志固定为 `<redacted>`，工具摘要截断
+  并屏蔽。完整 prompt、Issue body 和 token 永远不进 journal 或进度
+  评论。
+- 按正常周期轮换 token；泄露的 token 被限制在它可见的仓库内。
+
+## 本地状态文件
+
+Pilot 保留从不出机的本地状态：
+
+- **配置**（`muyan-pilot.toml`）：本地、gitignored。仓库只提交
+  example（`.muyan-pilot.example.toml`）。
+- **Run 产物**：plan、test log、session JSONL 和 review 证据在任务
+  worktree（`.worktrees/...`，gitignored）。
+- **Slots**：`<repo_dir>/.muyan-pilot/slots/slot-N` 锁文件（通过
+  checkout 的 `.muyan-pilot/` 目录约定 gitignore）。
+- **KV cache 文件**（仅当你运行可选的
+  [local-llm-kv-cache](/zh/optional-kv-cache) proxy）：磁盘上的 prefix
+  和 session KV 状态（例如 `~/.llama-slot-cache/*.bin`）包含从你的
+  prompt 派生的序列化模型状态——当作敏感本地数据处理，留在同一台
+  机器，不再需要缓存的 session 时删除。
+
+如果你在共享机器上运行 Pilot，给 Runner 用户独立的 home 目录，让
+配置、worktree 和 KV 文件只属于该用户。

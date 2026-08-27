@@ -1,0 +1,75 @@
+# 贡献
+
+Muyan Pilot 用和它运行一样的方式开发：任务是 GitHub Issue，交付是
+PR，仓库契约（`AGENTS.md`）同样适用于人类贡献者。
+
+## Issue 粒度
+
+一个 Issue 是**一个 runtime outcome**（当 X，应该 Y，实际 Z）：一个
+可观测行为、一小批相关文件、含测试。标题应该能当测试名用。根因或期望
+行为确定后再开 Issue——不要作为模糊愿望。
+
+- Issue 之间的依赖用 GitHub 原生 `blockedBy` 关系（`gh issue edit N
+  --add-blocked-by M`）；不要在 body 里写 `Depends on #N`——Runner 不
+  解析 body 依赖。
+- 多任务工作组织为 Epic（见[工作流](/zh/workflow)）：Epic 负责协调，
+  子 Issue 负责交付。
+
+## 创建 Issue
+
+通过创建 Issue 并加 `ai-ready` 标签来给 Pilot 派活（CLI 一步完成两
+件事）：
+
+```bash
+python3 muyan_pilot.py add "task title" --body "task body" --config muyan-pilot.toml
+```
+
+或手工：
+
+```bash
+gh issue create --repo OWNER/PILOT-REPO --title "task title" --body "task body"
+gh issue edit <number> --repo OWNER/PILOT-REPO --add-label ai-ready
+```
+
+好的 body 写清背景、期望行为、验收标准，（bug 时）复现步骤。Pilot 在
+改任何东西之前会读 Issue、仓库的 `AGENTS.md`、README 和代码。
+
+## 报告 bug
+
+开一个带 `bug` 标签的 Issue，包含：
+
+- 失败的命令及其返回码 / stdout / stderr；
+- journal 现场（失败前后的 `journalctl --user -u muyan-pilot.service`，
+  或带 run id 的 `run_failed` 行）；
+- Issue/PR 状态（标签）和进度评论里的 run id；
+- 环境：OS、Python 版本、Pi 版本、模型 endpoint 类型。
+
+带 `bug` 标签的 `ai-ready` Issue 先于新 feature 被领取，带 `p0` 标签
+的紧急 Issue 最先被领取（见工作流页），所以坏掉的交付循环——或生产
+故障——最先被修。
+
+## 贡献代码
+
+1. 读 `AGENTS.md`——它是开发契约（TDD、100% 行/分支覆盖、fail fast、
+   无数据库/队列/daemon/fallback、无业务任务 timeout）。
+2. 在 feature branch 上工作；从不直接 push 保护分支。
+3. 先写失败测试，再写最小实现，再重构。外部接口（CLI flag、HTTP
+   path、配置字段）对照官方文档或一次真实调用断言——从不对照猜出来的
+   形状。
+4. 本地跑完整契约：
+
+   ```bash
+   /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
+   /usr/bin/python3 -m coverage report --fail-under=100 --show-missing
+   ```
+
+5. 一个 Issue 一个 PR。PR 描述必须包含 `Fixes #<issue-number>`（可以
+   放在首行），merge 时 GitHub 原生关闭 Issue。
+6. CI 必须绿（与本地同一契约）。Pilot 派发的任务由 Runner 执行独立
+   审查和合并；人类 PR 的 review 和 merge 走仓库正常的 GitHub 流程。
+
+## 不要加什么
+
+MVP 边界是刻意的：无数据库、无消息队列、无 daemon 循环、无 Web UI、
+无任务 DAG、无风险模型、无 fallback 路径、无业务任务 timeout。想加
+其中任何一项的提案，应先解释为什么某个真实、重复出现的失败需要它。

@@ -27,6 +27,11 @@ version and runs the identical commands through `python3` on PATH),
 `requirements.txt` installed, then the two contract commands above. No
 lint, no matrix, no cache.
 
+The same single job also runs the Mintlify docs build smoke (Issue #116):
+the official `mint` CLI's `mint validate` (strict build validation of the
+`docs/` site — config, pages, links — non-zero exit on any warning or
+error).
+
 A PR is not mergeable while CI is red — the Runner's merge gate also
 requires a mergeable PR.
 
@@ -40,7 +45,9 @@ requires a mergeable PR.
   files: `AGENTS.md` contract items, the label set, the systemd units
   (15-minute schedule, preflight), the CI workflow, the LICENSE, and the
   documentation site under `docs/` (this page's claims are enforced by
-  `tests/test_docs_site.py`).
+  `tests/test_docs_site.py`; the Chinese pages and the EN/ZH parity by
+  `tests/test_docs_i18n.py`; the Mermaid diagrams by
+  `tests/test_docs_mermaid.py`).
 
 When you change code, update or add tests in the same PR and keep the
 coverage gate green.

@@ -6,7 +6,12 @@
 
 ## 文档站
 
-面向新用户的完整开源文档（安装前提、配置、首次启动、smoke walkthrough、工作流、运维、安全、测试、贡献）在仓库 [`docs/`](docs/) 目录：`docs/docs.json` + `docs/*.mdx`，由 Mintlify 构建和托管（连接默认分支 `main`，Git Settings 的 documentation path 配置为 `/docs`，每次合并后自动构建发布）。Mintlify 默认地址为 <https://muyan-pilot.mintlify.site>（若绑定了自定义域名，以 Mintlify 控制台配置的地址为准）。仓库内的 Markdown/MDX 是唯一事实源，Mintlify 只负责构建、搜索和托管，不产生第二份内容；本 README 保留 GitHub 首页与运行契约概览。
+面向新用户的完整开源文档（安装前提、配置、首次启动、smoke walkthrough、工作流、运维、安全、测试、贡献）在仓库 [`docs/`](docs/) 目录：`docs/docs.json` + `docs/*.mdx`，由 Mintlify 构建和托管（连接默认分支 `main`，Git Settings 的 documentation path 配置为 `/docs`，每次合并后自动构建发布）。Mintlify 默认地址为 <https://muyan-pilot.mintlify.site>（若绑定了自定义域名，以 Mintlify 控制台配置的地址为准）。文档站提供英文（默认）和中文（[`docs/zh/`](docs/zh/)，Mintlify i18n 语言切换）两个语言版本，两种语言共享同一事实源（同一套命令、标签、配置字段和端口，不复制出互相漂移的实现说明）。仓库内的 Markdown/MDX 是唯一事实源，Mintlify 只负责构建、搜索和托管，不产生第二份内容；本 README 保留 GitHub 首页与运行契约概览。
+
+两张总览图（Mintlify 渲染 Mermaid，仓库内保留可读源码）：
+
+- **系统架构总览**（GitHub Issues、systemd timer/service、Runner、Pi、worktree、llama-server、可选 `local-llm-kv-cache` proxy、PR/review/merge）：文档站首页 [index](docs/index.mdx) / [zh/index](docs/zh/index.mdx)；
+- **任务生命周期状态机**（`ai-ready` → `ai-in-progress` → `ai-pr-opened` → `ai-fix-needed` → `ai-merged` / `ai-blocked`，标出 Epic/Release task/P0 边界）：[workflow](docs/workflow.mdx) / [zh/workflow](docs/zh/workflow.mdx)。
 
 ## 当前运行
 
