@@ -24,6 +24,7 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
+import git_transport
 import systemd_deploy
 
 from bootstrap_runner import (
@@ -363,6 +364,28 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
     lines.append(
         f"commit: {run_command(['git', 'rev-parse', 'HEAD'], cwd=repo_dir)}"
     )
+    # Git transport (Issue #114): the checkout's origin protocol, the
+    # expected SSH URL of the first configured source repo and the SSH
+    # probe. doctor is the diagnostic report: a failed transport is
+    # REPORTED with the structured reason (the rest of the report stays
+    # readable) — the fail-fast gate is the pre-start check.
+    try:
+        transport = git_transport.check_transport(
+            repo_dir, config["source_repos"],
+            run_command=run_command, migrate=False,
+        )
+        reachable = transport["ssh_reachable"]
+        reachable_text = "-" if reachable is None else (
+            "true" if reachable else "false"
+        )
+        lines.append(
+            f"transport: remote={transport['remote']} "
+            f"url={transport['url']} protocol={transport['protocol']} "
+            f"expected={transport['expected']} "
+            f"ssh_reachable={reachable_text}"
+        )
+    except git_transport.TransportError as exc:
+        lines.append(f"transport: FAILED {exc}")
     status = systemd_deploy.unit_status(repo_dir, installed_dir)
     drifted = [entry for entry in status if entry["drifted"]]
     if drifted:

@@ -59,6 +59,20 @@ REQUIRED_ITEMS = (
     ("base-refetch", "re-fetch"),
     ("base-contains-latest", "contains the latest remote base"),
     ("base-plain-merge", "plain `git merge`"),
+    # 6b2. Git transport (Issue #114): git data operations go over SSH,
+    #      GitHub API operations stay on the gh token; the pre-start
+    #      check fails fast without an HTTPS fallback; only the
+    #      human-run setup entry migrates an HTTPS remote.
+    ("git-transport", "git transport"),
+    ("git-transport-ssh-url", "git@github.com:owner/repo.git"),
+    ("git-transport-workflow", ".github/workflows/*.yml"),
+    ("git-transport-gh-token", "`gh` token"),
+    ("git-transport-no-mix", "ssh is never used as api authentication"),
+    ("git-transport-preflight", "transport_check_failed"),
+    ("git-transport-no-fallback", "no https fallback"),
+    ("git-transport-probe", "git ls-remote"),
+    ("git-transport-migration-entry", "muyan_pilot.py setup"),
+    ("git-transport-migration-command", "git remote set-url origin"),
     # 6c. Run correlation: one run_id per attempt is the single
     #     end-to-end correlation id; every journal line and GitHub text of
     #     the run carries it; a run-scoped event includes a valid run id.

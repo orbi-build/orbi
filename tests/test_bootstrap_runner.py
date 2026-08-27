@@ -4186,6 +4186,121 @@ def test_main_preflight_receives_the_configured_repo_dir(
     assert seen == [tmp_path]
 
 
+# --- git transport preflight (Issue #114) ------------------------------------
+
+
+def test_main_transport_check_blocks_claim_before_slot(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #114: an unusable git transport fails the start BEFORE any
+    slot or claim: the structured transport reason is raised (non-zero
+    exit), no slot is taken and nothing is claimed — no HTTPS fallback,
+    no silent skip."""
+    import git_transport
+
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\n', encoding="utf-8",
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError(
+            "pick_next_delivery must not run on transport failure"
+        )
+
+    monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
+    # The guard itself must fail loudly if it is ever reached.
+    with pytest.raises(
+        AssertionError, match="must not run on transport failure",
+    ):
+        fail_if_called()
+    monkeypatch.setattr(
+        runner, "check_transport",
+        lambda *a, **k: (_ for _ in ()).throw(
+            git_transport.TransportError(
+                "ssh_unreachable: git ls-remote "
+                "git@github.com:owner/repo.git failed: "
+                "Permission denied (publickey)"
+            ),
+        ),
+    )
+    with caplog.at_level("ERROR"):
+        with pytest.raises(
+            git_transport.TransportError, match="ssh_unreachable",
+        ):
+            runner.main(["--config", str(config)])
+    # The structured reason is logged with the run-free preflight scene.
+    assert "transport_check_failed" in caplog.text
+    assert "ssh_unreachable" in caplog.text
+    # No slot was taken and nothing was claimed.
+    assert not (tmp_path / ".muyan-pilot" / "slots").exists()
+
+
+def test_main_transport_check_clean_proceeds_to_claim(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #114: a passing transport check logs `transport clean` and
+    the tick proceeds to the normal claim flow (slot taken, queue
+    scanned)."""
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\n', encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        runner, "check_transport",
+        lambda *a, **k: {
+            "remote": "origin", "protocol": "ssh",
+            "url": "git@github.com:owner/repo.git",
+            "expected": "git@github.com:owner/repo.git",
+            "migrated": False, "ssh_reachable": True,
+        },
+    )
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: None,
+    )
+    with caplog.at_level("INFO"):
+        assert runner.main(["--config", str(config)]) == 0
+    assert "transport clean" in caplog.text
+    # The slot was taken AFTER the preflight passed.
+    assert (tmp_path / ".muyan-pilot" / "slots" / "slot-1").exists()
+
+
+def test_main_transport_preflight_receives_the_configured_args(
+    monkeypatch, tmp_path,
+):
+    """Issue #114: the preflight checks the configured repo_dir and
+    source repos with the real run_command, and never migrates (the
+    migration is the human-run setup entry's job)."""
+    seen: dict = {}
+
+    def fake_check(repo_dir, source_repos, **kwargs):
+        seen["repo_dir"] = Path(repo_dir)
+        seen["source_repos"] = list(source_repos)
+        seen["migrate"] = kwargs.get("migrate")
+        seen["run_command"] = kwargs.get("run_command")
+        return {}
+
+    monkeypatch.setattr(runner, "check_transport", fake_check)
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text(
+        'source_repos = ["owner/repo", "owner/backlog"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: None,
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    assert seen["repo_dir"] == tmp_path
+    assert seen["source_repos"] == ["owner/repo", "owner/backlog"]
+    assert seen["migrate"] is False
+    assert seen["run_command"] is runner.run_command
+
+
 # --- delivery lifecycle: slot held until merge or terminal failure ----------
 
 PR_URL = "https://github.com/owner/repo/pull/46"

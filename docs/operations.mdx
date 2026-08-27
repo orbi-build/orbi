@@ -22,7 +22,15 @@ missed tick is dropped, never queued). Each tick starts
    the timer's start request, and the next real start picks up the latest
    code.
 2. **Runs one tick**: resume an opened PR (review/fix/merge) or claim one
-   `ai-ready` Issue, then exit.
+   `ai-ready` Issue, then exit. Before any slot or claim the tick also
+   runs the pre-start **git transport check** (Issue #114): the
+   deployment checkout's configured `origin` remote must be SSH for the
+   first configured source repo and `git ls-remote <ssh-url>` must exit
+   0 (SSH reachable and authenticated). A broken transport logs the
+   structured `transport_check_failed ... reason=...` line and fails the
+   start — no slot, no claim, no label change, **no HTTPS fallback**
+   (git data operations, including `.github/workflows/*.yml` pushes,
+   always go over SSH; GitHub API operations stay on the `gh` token).
 
 ```bash
 systemctl --user list-timers muyan-pilot.timer
@@ -68,6 +76,23 @@ python3 muyan_pilot.py add "task title" --repo OWNER/BACKLOG-REPO --config muyan
 # repo (ai-pr-opened / ai-fix-needed / ai-merged / ai-blocked)
 python3 muyan_pilot.py status --config muyan-pilot.toml
 
+# Read-only deployment/health report: repo commit, unit drift, git
+# transport (configured origin URL, protocol, expected SSH URL, SSH
+# probe — a failed transport is reported as `transport: FAILED ...`,
+# not raised), timer/service state, slots, Pi session, current Issue,
+# recent journal
+python3 muyan_pilot.py doctor --config muyan-pilot.toml
+
+# One-time, idempotent initialization (new machine / new repo): gh
+# auth + repo permissions, platform labels, systemd user units, and
+# the checkout check INCLUDING the git transport — an existing HTTPS
+# `origin` is migrated to `git@github.com:owner/repo.git` (the
+# human-authorized migration path; the Runner itself never rewrites a
+# remote) and the SSH connectivity is probed (fail fast, no HTTPS
+# fallback)
+python3 muyan_pilot.py setup --config muyan-pilot.toml
+```
+
 # Print the live Pi session JSONL path (fail fast when no session exists)
 python3 muyan_pilot.py session --config muyan-pilot.toml
 python3 muyan_pilot.py session --follow --config muyan-pilot.toml   # tail -f
@@ -87,6 +112,13 @@ main worktree's current HEAD. Branch and worktree names carry the run id
 (e.g. `.worktrees/<...>-issue-14-e07383c2`), so a retried Issue gets a
 new independent run and the old scene is preserved. `.worktrees/` is
 gitignored.
+
+The task worktree shares the deployment checkout's single `origin`
+remote (a `git worktree add` worktree inherits the main repository's
+remote configuration), so the git transport is configured once on the
+checkout and every worktree inherits it: new bootstrap worktrees have
+an SSH `git remote -v` by construction, and their fetch/push —
+including `.github/workflows/*.yml` — go over SSH (Issue #114).
 
 Before creating the PR, the implementer re-fetches the base: if
 `origin/<base_branch>` advanced, it merges the latest base into the task

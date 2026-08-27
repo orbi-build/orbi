@@ -23,16 +23,26 @@ the delivery contract, local-only secrets, and no remote state store.
   derived from the configured repo, Issue number and run id — a public
   comment can never steer the Runner into an arbitrary local path.
 
-## GitHub token
+## GitHub token (API) and SSH (git data) — two channels
 
-- The Runner authenticates with `gh` (`gh auth status` must succeed). Use
-  a **fine-grained personal access token** scoped to the repositories the
+- **GitHub API operations** (Issue, PR, label, comment, merge)
+  authenticate with `gh` (`gh auth status` must succeed). Use a
+  **fine-grained personal access token** scoped to the repositories the
   Pilot actually works on, with the minimum permissions: contents
   (read/write), pull requests (read/write), issues (read/write), and
   metadata (read). Avoid organization-wide or classic broad-scope tokens.
-- The token lives in `gh`'s local credential store on the Runner machine.
-  It is never written into the repository, the config file, the journal,
-  or a GitHub comment.
+- **Git data operations** (fetch, push — including
+  `.github/workflows/*.yml`) authenticate with the machine's **SSH key**
+  over `git@github.com:owner/repo.git` (Issue #114). A workflow push
+  must never depend on the OAuth App `workflow` scope — the
+  HTTPS/OAuth transport that blocked Issue #106. The pre-start check
+  verifies the SSH transport and fails fast when it is broken (no
+  HTTPS fallback).
+- The channels are never mixed: SSH is not an API authentication and
+  the `gh` token is not a git-data credential. The token lives in `gh`'s
+  local credential store on the Runner machine; the SSH key lives in the
+  user's SSH agent/config. Neither is written into the repository, the
+  config file, the journal, or a GitHub comment.
 - Logs are redacted by construction: command lines carrying secrets are
   logged as `<redacted>`, and tool summaries are truncated and masked.
   The full prompt, Issue body and token never reach the journal or the

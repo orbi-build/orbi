@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -1102,13 +1103,22 @@ def _deploy_world(tmp_path, drift: bool = False) -> tuple[dict, Path]:
     return config, installed
 
 
-def _fake_doctor_commands(monkeypatch) -> list:
+def _fake_doctor_commands(monkeypatch, ssh_down: bool = False) -> list:
     calls: list = []
 
     def fake_run(command, **kwargs):
         calls.append(command)
         if command[:3] == ["git", "rev-parse", "HEAD"]:
             return "0123456789abcdef0123456789abcdef01234567"
+        if command[:2] == ["git", "config"]:
+            return "git@github.com:xqliu/muyan-pilot.git"
+        if command[:2] == ["git", "ls-remote"]:
+            if ssh_down:
+                raise subprocess.CalledProcessError(
+                    128, command,
+                    stderr="git@github.com: Permission denied (publickey).",
+                )
+            return "abc\tHEAD"
         if command[:2] == ["systemctl", "--user"]:
             assert command[2:5] == ["show", "-p", "ActiveState"]
             return "active"
@@ -1208,6 +1218,10 @@ def _setup_result() -> dict:
             "branch": "main",
             "clean": True,
             "base_fresh": True,
+            "remote_url": "git@github.com:xqliu/muyan-pilot.git",
+            "remote_protocol": "ssh",
+            "migrated": False,
+            "ssh_reachable": True,
         },
         "optional_proxy": {
             "optional": True,
@@ -1317,6 +1331,18 @@ def test_doctor_report_clean(tmp_path, monkeypatch):
         assert (
             f"  {entry['unit']}: sha256={entry['installed_sha256']}"
         ) in lines
+    # The git transport (Issue #114): the checkout's origin is SSH for
+    # the configured source repo and the SSH probe succeeded.
+    assert (
+        "transport: remote=origin "
+        "url=git@github.com:xqliu/muyan-pilot.git protocol=ssh "
+        "expected=git@github.com:xqliu/muyan-pilot.git ssh_reachable=true"
+    ) in lines
+    # The probe is the real read-only command (verified against the
+    # live CLI: exit 0 = reachable + authenticated).
+    assert [
+        "git", "ls-remote", "git@github.com:xqliu/muyan-pilot.git",
+    ] in calls
     assert "muyan-pilot.timer: active" in lines
     assert "muyan-pilot.service: active" in lines
     assert "slots: 0/1" in lines
@@ -1339,6 +1365,25 @@ def test_doctor_report_clean(tmp_path, monkeypatch):
         "journalctl", "--user", "-u", "muyan-pilot.service",
         "-n", "20", "--no-pager",
     ] in calls
+
+
+def test_doctor_report_reports_a_failed_transport(tmp_path, monkeypatch):
+    """Issue #114: doctor is the diagnostic report — a failed transport
+    (SSH unreachable) is REPORTED with the structured reason, not
+    raised: the rest of the health report stays readable. The
+    fail-fast gate is the pre-start check, not doctor."""
+    config, installed = _deploy_world(tmp_path, drift=False)
+    _fake_doctor_commands(monkeypatch, ssh_down=True)
+    monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
+    report = muyan_pilot.doctor_report(config, installed)
+    lines = report.splitlines()
+    failed = [line for line in lines if line.startswith("transport: FAILED")]
+    assert len(failed) == 1
+    assert "ssh_unreachable" in failed[0]
+    assert "Permission denied (publickey)" in failed[0]
+    # The report continues past the transport failure.
+    assert "slots: 0/1" in lines
+    assert "journal:" in lines
 
 
 def test_doctor_report_drift_carries_paths_hashes_and_fix(

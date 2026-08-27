@@ -79,6 +79,17 @@ def fake_run_factory(state: dict):
         head = list(command)
         if head[:3] == ["git", "rev-parse", "HEAD"]:
             return "0123456789abcdef0123456789abcdef01234567"
+        if head[:2] == ["git", "config"]:
+            return state.get(
+                "origin_url", "git@github.com:xqliu/muyan-pilot.git",
+            )
+        if head[:2] == ["git", "ls-remote"]:
+            if state.get("ssh_down"):
+                raise subprocess.CalledProcessError(
+                    128, command,
+                    stderr="git@github.com: Permission denied (publickey).",
+                )
+            return "abc\tHEAD"
         if head[:2] == ["git", "remote"]:
             return "origin"
         if head[:3] == ["git", "branch", "--show-current"]:
@@ -520,24 +531,32 @@ def test_timer_next_trigger_ignores_other_timers():
 def test_check_checkout_reports_remote_branch_clean_and_fresh(tmp_path):
     repo = tmp_path / "checkout"
     repo.mkdir()
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["git", "config"]:
+            return "git@github.com:xqliu/muyan-pilot.git"
+        if command[:2] == ["git", "ls-remote"]:
+            return "abc\tHEAD"
+        if command[:3] == ["git", "rev-parse", "origin/main"]:
+            return "0123456789abcdef0123456789abcdef01234567"
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "0123456789abcdef0123456789abcdef01234567"
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return "main"
+        return ""
+
     result = pilot_setup.check_checkout(
-        repo, "main", run_command=lambda command, **kwargs: (
-            "0123456789abcdef0123456789abcdef01234567"
-            if command[:3] == ["git", "rev-parse", "origin/main"]
-            else "0123456789abcdef0123456789abcdef01234567"
-            if command[:3] == ["git", "rev-parse", "HEAD"]
-            else "origin"
-            if command[:2] == ["git", "remote"]
-            else "main"
-            if command[:3] == ["git", "branch", "--show-current"]
-            else ""
-        ),
+        repo, "main", ["xqliu/muyan-pilot"], run_command=fake_run,
     )
     assert result == {
         "remote": "origin",
         "branch": "main",
         "clean": True,
         "base_fresh": True,
+        "remote_url": "git@github.com:xqliu/muyan-pilot.git",
+        "remote_protocol": "ssh",
+        "migrated": False,
+        "ssh_reachable": True,
     }
 
 
@@ -546,15 +565,17 @@ def test_check_checkout_fails_fast_on_a_dirty_checkout(tmp_path):
     repo.mkdir()
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["git", "remote"]:
-            return "origin"
+        if command[:2] == ["git", "config"]:
+            return "git@github.com:xqliu/muyan-pilot.git"
+        if command[:2] == ["git", "ls-remote"]:
+            return "abc\tHEAD"
         if command[:2] == ["git", "status"]:
             return " M bootstrap_runner.py"
         return ""
 
     with pytest.raises(pilot_setup.SetupError, match="not clean"):
         pilot_setup.check_checkout(
-            repo, "main", run_command=fake_run,
+            repo, "main", ["xqliu/muyan-pilot"], run_command=fake_run,
         )
 
 
@@ -563,8 +584,10 @@ def test_check_checkout_reports_a_stale_base(tmp_path):
     repo.mkdir()
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["git", "remote"]:
-            return "origin"
+        if command[:2] == ["git", "config"]:
+            return "git@github.com:xqliu/muyan-pilot.git"
+        if command[:2] == ["git", "ls-remote"]:
+            return "abc\tHEAD"
         if command[:3] == ["git", "rev-parse", "origin/main"]:
             return "1111111111111111111111111111111111111111"
         if command[:3] == ["git", "rev-parse", "HEAD"]:
@@ -572,7 +595,7 @@ def test_check_checkout_reports_a_stale_base(tmp_path):
         return ""
 
     result = pilot_setup.check_checkout(
-        repo, "main", run_command=fake_run,
+        repo, "main", ["xqliu/muyan-pilot"], run_command=fake_run,
     )
     assert result["base_fresh"] is False
 
@@ -582,7 +605,7 @@ def test_check_checkout_fails_fast_without_an_origin_remote(tmp_path):
     repo.mkdir()
     with pytest.raises(pilot_setup.SetupError, match="remote"):
         pilot_setup.check_checkout(
-            repo, "main",
+            repo, "main", ["xqliu/muyan-pilot"],
             run_command=lambda command, **kwargs: (
                 (_ for _ in ()).throw(
                     subprocess.CalledProcessError(1, command, stderr="no remote")
@@ -596,13 +619,124 @@ def test_check_checkout_fails_fast_on_a_git_error(tmp_path):
     repo.mkdir()
     with pytest.raises(pilot_setup.SetupError, match="checkout"):
         pilot_setup.check_checkout(
-            repo, "main",
+            repo, "main", ["xqliu/muyan-pilot"],
             run_command=lambda command, **kwargs: (
                 (_ for _ in ()).throw(
                     subprocess.CalledProcessError(1, command, stderr="boom")
                 )
             ),
         )
+
+
+# --- git transport in the checkout check (Issue #114) -------------------------
+
+
+def test_check_checkout_migrates_an_https_remote_to_ssh(tmp_path):
+    """Issue #114: the setup entry is the human-authorized migration
+    path: an existing HTTPS `origin` is rewritten to the SSH URL of
+    the first configured source repo with the plain
+    `git remote set-url origin <ssh-url>` (never a remote read from a
+    comment or Issue)."""
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    state = {"url": "https://github.com/xqliu/muyan-pilot.git"}
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["git", "config"]:
+            return state["url"]
+        if command[:3] == ["git", "remote", "set-url"]:
+            state["url"] = command[4]
+            return ""
+        if command[:2] == ["git", "ls-remote"]:
+            return "abc\tHEAD"
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return "main"
+        return ""
+
+    result = pilot_setup.check_checkout(
+        repo, "main", ["xqliu/muyan-pilot"], run_command=fake_run,
+    )
+    assert state["url"] == "git@github.com:xqliu/muyan-pilot.git"
+    assert result["remote_url"] == "git@github.com:xqliu/muyan-pilot.git"
+    assert result["remote_protocol"] == "ssh"
+    assert result["migrated"] is True
+    assert result["ssh_reachable"] is True
+
+
+def test_check_checkout_fails_fast_when_ssh_is_unreachable(tmp_path):
+    """Issue #114: a failed SSH probe fails the setup with the
+    structured reason (the exact probe command and git stderr) — no
+    HTTPS fallback, no silent skip."""
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["git", "config"]:
+            return "git@github.com:xqliu/muyan-pilot.git"
+        if command[:2] == ["git", "ls-remote"]:
+            raise subprocess.CalledProcessError(
+                128, command,
+                stderr="git@github.com: Permission denied (publickey).",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    with pytest.raises(
+        pilot_setup.SetupError, match="ssh_unreachable",
+    ) as exc:
+        pilot_setup.check_checkout(
+            repo, "main", ["xqliu/muyan-pilot"], run_command=fake_run,
+        )
+    message = str(exc.value)
+    assert "git ls-remote git@github.com:xqliu/muyan-pilot.git" in message
+    assert "Permission denied (publickey)" in message
+    # The fake is strict: an unexpected command fails loudly.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["git", "worktree", "add"])
+
+
+def test_check_checkout_fails_fast_on_a_generic_git_error(tmp_path):
+    """A non-git failure of a checkout command (e.g. a spawn error)
+    fails the setup with the checkout reason — never a guessed state."""
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["git", "config"]:
+            return "git@github.com:xqliu/muyan-pilot.git"
+        if command[:2] == ["git", "ls-remote"]:
+            return "abc\tHEAD"
+        if command[:3] == ["git", "branch", "--show-current"]:
+            raise OSError("spawn failed")
+        raise AssertionError(f"unexpected command: {command}")
+
+    with pytest.raises(pilot_setup.SetupError, match="checkout"):
+        pilot_setup.check_checkout(
+            repo, "main", ["xqliu/muyan-pilot"], run_command=fake_run,
+        )
+    # The fake is strict: an unexpected command fails loudly.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["git", "worktree", "add"])
+
+
+def test_check_checkout_fails_fast_on_a_remote_repo_mismatch(tmp_path):
+    """Issue #114: the checkout's remote must match the configured
+    source repo — a clone of a different repo fails fast with both
+    URLs (no migration of a mismatching remote)."""
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["git", "config"]:
+            return "git@github.com:other/repo.git"
+        raise AssertionError(f"unexpected command: {command}")
+
+    with pytest.raises(pilot_setup.SetupError, match="mismatch"):
+        pilot_setup.check_checkout(
+            repo, "main", ["xqliu/muyan-pilot"], run_command=fake_run,
+        )
+    # The fake is strict: an unexpected command fails loudly.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["git", "worktree", "add"])
 
 
 # --- optional model proxy (never blocks) --------------------------------------
@@ -761,6 +895,44 @@ def test_run_setup_optional_proxy_failure_never_blocks(tmp_path):
     assert result["optional_proxy"]["proxy"] == "unhealthy"
 
 
+def test_run_setup_migrates_an_https_checkout_remote(tmp_path):
+    """Issue #114: the full setup entry migrates the deployment
+    checkout's HTTPS `origin` to SSH (the human-authorized path) and
+    reports it in the checkout result."""
+    repo, installed, state = make_run_state(tmp_path)
+    state["origin_url"] = "https://github.com/xqliu/muyan-pilot.git"
+    fake_run, calls = fake_run_factory(state)
+    config = runner.load_config(make_config(tmp_path, repo))
+    result = pilot_setup.run_setup(
+        config, installed, run_command=fake_run,
+    )
+    assert result["checkout"]["remote_url"] == (
+        "git@github.com:xqliu/muyan-pilot.git"
+    )
+    assert result["checkout"]["remote_protocol"] == "ssh"
+    assert result["checkout"]["migrated"] is True
+    assert result["checkout"]["ssh_reachable"] is True
+    assert [
+        "git", "remote", "set-url", "origin",
+        "git@github.com:xqliu/muyan-pilot.git",
+    ] in calls
+
+
+def test_run_setup_fails_fast_when_ssh_is_unreachable(tmp_path):
+    """Issue #114: a failed SSH probe fails the setup (structured
+    reason) — no HTTPS fallback, no silent skip."""
+    repo, installed, state = make_run_state(tmp_path)
+    state["ssh_down"] = True
+    fake_run, calls = fake_run_factory(state)
+    config = runner.load_config(make_config(tmp_path, repo))
+    with pytest.raises(pilot_setup.SetupError, match="ssh_unreachable"):
+        pilot_setup.run_setup(
+            config, installed, run_command=fake_run,
+        )
+    # No migration happened (the remote was already SSH).
+    assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
+
+
 def test_run_setup_missing_labels_file_fails_fast(tmp_path):
     repo = make_repo(tmp_path)
     (repo / "labels.toml").unlink()
@@ -803,6 +975,10 @@ def sample_result() -> dict:
             "branch": "main",
             "clean": True,
             "base_fresh": True,
+            "remote_url": "git@github.com:xqliu/muyan-pilot.git",
+            "remote_protocol": "ssh",
+            "migrated": False,
+            "ssh_reachable": True,
         },
         "optional_proxy": {
             "optional": True,
@@ -828,7 +1004,9 @@ def test_format_setup_renders_stable_key_value_lines():
         'timer=enabled active=true next="Thu 2026-08-27 10:00:00 +08"'
     ) in lines
     assert (
-        "checkout=remote=origin branch=main clean=true base_fresh=true"
+        "checkout=remote=origin branch=main clean=true base_fresh=true "
+        "remote_url=git@github.com:xqliu/muyan-pilot.git protocol=ssh "
+        "migrated=false ssh_reachable=true"
     ) in lines
     assert (
         "model_endpoint=optional optional_proxy=healthy "
@@ -983,8 +1161,14 @@ def test_check_checkout_fails_fast_when_origin_is_missing(tmp_path):
     repo.mkdir()
     with pytest.raises(pilot_setup.SetupError, match="origin remote"):
         pilot_setup.check_checkout(
-            repo, "main",
-            run_command=lambda command, **kwargs: "upstream",
+            repo, "main", ["xqliu/muyan-pilot"],
+            run_command=lambda command, **kwargs: (
+                (_ for _ in ()).throw(
+                    subprocess.CalledProcessError(
+                        128, command, stderr="No remote configured",
+                    )
+                )
+            ),
         )
 
 

@@ -41,13 +41,23 @@ non-zero exit code.
    timer — the service is never started, stopped or restarted), then
    the timer's enabled/active state and next trigger time are
    reported.
-5. **Checkout** — read-only check of the configured `repo_dir`:
-   `origin` remote present, current branch, clean worktree (a dirty
-   checkout fails: the timer's `ExecStartPre` fast-forward refuses a
-   dirty worktree, so the Runner could never start), and base
-   freshness (local `HEAD` vs freshly fetched
-   `origin/<base_branch>` — reported, not a failure: the timer
-   fast-forwards a clean checkout at each start).
+5. **Checkout + git transport** — check of the configured `repo_dir`:
+   the `origin` remote's **transport** (Issue #114): git data
+   operations (fetch, push — including `.github/workflows/*.yml`) must
+   go over SSH (`git@github.com:owner/repo.git`), so an existing
+   HTTPS `origin` is migrated here with the plain
+   `git remote set-url origin git@github.com:owner/repo.git` (setup is
+   the human-authorized migration path — the Runner itself never
+   rewrites a remote), the SSH URL must match the first configured
+   source repo, and `git ls-remote <ssh-url>` must exit 0 (SSH
+   reachable and authenticated — a failure is `setup_failed
+   reason=... ssh_unreachable ...`, no HTTPS fallback). Then the
+   read-only parts: current branch, clean worktree (a dirty checkout
+   fails: the timer's `ExecStartPre` fast-forward refuses a dirty
+   worktree, so the Runner could never start), and base freshness
+   (local `HEAD` vs freshly fetched `origin/<base_branch>` —
+   reported, not a failure: the timer fast-forwards a clean checkout
+   at each start).
 6. **Optional model proxy** — the `local-llm-kv-cache` proxy health
    endpoint (`http://127.0.0.1:18082/health`) is checked and reported
    as **optional**: its absence or unhealthiness is a warning in the
@@ -75,14 +85,16 @@ setup=ok version=1 base_branch=main
 repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=7/7
 service=installed path=~/.config/systemd/user/muyan-pilot.service sha256=9f2c...
 timer=enabled active=true next="Thu 2026-08-27 10:00:00 +08"
-checkout=remote=origin branch=main clean=true base_fresh=true
+checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:xqliu/muyan-pilot.git protocol=ssh migrated=false ssh_reachable=true
 model_endpoint=optional optional_proxy=healthy url=http://127.0.0.1:18082/health
 ```
 
 `labels=7/7` means all seven platform labels match `labels.toml`;
 `next` is the timer's next trigger time (`-` when it has none);
 `optional_proxy` is `healthy`, `unhealthy` or `unavailable` and never
-changes the exit code.
+changes the exit code. `migrated=true` means setup rewrote an HTTPS
+`origin` to the SSH URL (a re-run then reports `migrated=false`);
+`ssh_reachable` is the `git ls-remote` probe result.
 
 `--json` prints the equivalent JSON document:
 
@@ -100,7 +112,7 @@ setup=ok version=1 base_branch=main
 repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=7/7
 service=installed path=~/.config/systemd/user/muyan-pilot.service sha256=9f2c...
 timer=enabled active=true next="Thu 2026-08-27 10:00:00 +08"
-checkout=remote=origin branch=main clean=true base_fresh=true
+checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:xqliu/muyan-pilot.git protocol=ssh migrated=false ssh_reachable=true
 model_endpoint=optional optional_proxy=unhealthy url=http://127.0.0.1:18082/health
 ```
 
@@ -115,12 +127,13 @@ setup_failed reason=repo not accessible: nobody/no-such (gh repo view failed: ..
 setup_failed reason=insufficient permission for owner/repo: viewerPermission='READ' (one of ['ADMIN', 'MAINTAIN', 'WRITE'] required to manage labels)
 setup_failed reason=label alignment failed for owner/repo: ai-ready (gh label create failed: ...)
 setup_failed reason=checkout is not clean: /path/to/checkout (uncommitted changes: ' M bootstrap_runner.py') — commit or stash them first: ...
+setup_failed reason=checkout check failed for /path/to/checkout: ssh_unreachable: git ls-remote git@github.com:owner/repo.git failed: ... stderr=git@github.com: Permission denied (publickey). — fix SSH and retry
 ```
 
 A wrong repo, missing labels that cannot be created (permission), a
-dirty checkout or a missing systemd user bus all stop the setup with
-the concrete reason — nothing is half-initialized without a clear
-signal.
+dirty checkout, an unreachable SSH (no HTTPS fallback) or a missing
+systemd user bus all stop the setup with the concrete reason —
+nothing is half-initialized without a clear signal.
 
 ## Idempotency
 
@@ -128,4 +141,6 @@ Re-running setup on an already-initialized machine is a no-op for the
 external state: labels that already match are not rewritten, the unit
 templates are re-copied from the repo (drift repair), the timer stays
 enabled, and no Issues or business data are created or modified. The
-reported hashes and states are stable across runs.
+reported hashes and states are stable across runs. The HTTPS→SSH
+migration is one-shot: after the first run the `origin` remote is SSH
+and re-runs only re-verify it (`migrated=false`).

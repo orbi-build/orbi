@@ -298,6 +298,37 @@ def test_docs_document_contributing_paths():
     assert "Fixes #" in text, "contributing must document the PR body contract"
 
 
+def test_docs_document_the_git_transport_boundary():
+    """Issue #114: the docs must document the two-channel boundary —
+    git data operations over SSH (including workflow file pushes),
+    GitHub API operations on the gh token, the pre-start transport
+    check without an HTTPS fallback, and the human-run setup migration
+    of an existing HTTPS remote."""
+    operations = page_text("operations")
+    assert "transport_check_failed" in operations, (
+        "operations must document the pre-start transport check"
+    )
+    assert "no HTTPS fallback" in operations, (
+        "operations must state that a broken transport never falls back "
+        "to HTTPS"
+    )
+    setup = page_text("setup")
+    assert "git remote set-url origin" in setup, (
+        "setup must document the HTTPS-to-SSH migration command"
+    )
+    assert "ssh_unreachable" in setup, (
+        "setup must document the SSH connectivity failure"
+    )
+    workflow = page_text("workflow")
+    assert "SSH" in workflow, (
+        "workflow must document the SSH git transport"
+    )
+    security = page_text("security")
+    assert "SSH key" in security, (
+        "security must document the SSH key as the git-data credential"
+    )
+
+
 def test_docs_smoke_walkthrough_is_clone_path_independent():
     """The smoke walkthrough must use only relative paths / clone-local
     paths so it works at any clone location — no personal absolute path
