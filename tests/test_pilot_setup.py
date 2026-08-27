@@ -437,7 +437,9 @@ def test_install_units_step_reports_install_state(tmp_path):
         repo, installed, run_command=fake_run,
     )
     assert result["service"]["installed"] is True
-    assert result["service"]["installed_path"] == installed / "muyan-pilot.service"
+    assert result["service"]["installed_path"] == str(
+        installed / "muyan-pilot.service",
+    )
     assert result["service"]["sha256"] == systemd_deploy.sha256_hex(
         installed / "muyan-pilot.service",
     )
@@ -858,6 +860,20 @@ def test_format_setup_renders_multiple_repos():
     assert len(repo_lines) == 2
     assert repo_lines[1].startswith("repo=xqliu/muyan-ceo ")
     assert "labels=6/7" in repo_lines[1]
+
+
+def test_install_units_step_result_is_json_serializable(tmp_path):
+    """Regression: install_units_step returns a Path for the installed
+    unit; the --json contract requires the result document to stay
+    JSON-serializable."""
+    state = {}
+    fake_run, calls = fake_run_factory(state)
+    repo = make_repo(tmp_path)
+    result = pilot_setup.install_units_step(
+        repo, tmp_path / "units", run_command=fake_run,
+    )
+    assert isinstance(result["service"]["installed_path"], str)
+    json.loads(pilot_setup.to_json(result))
 
 
 def test_json_output_round_trips_the_result():

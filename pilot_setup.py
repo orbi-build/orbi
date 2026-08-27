@@ -351,7 +351,9 @@ def install_units_step(repo_dir: Path, installed_dir: Path | None,
     return {
         "service": {
             "installed": True,
-            "installed_path": service["installed_path"],
+            # str: the result document must stay JSON-serializable
+            # (--json output contract).
+            "installed_path": str(service["installed_path"]),
             "sha256": service["sha256"],
         },
         "timer": {
