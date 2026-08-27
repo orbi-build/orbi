@@ -101,14 +101,26 @@ python3 muyan_pilot.py install-units --config muyan-pilot.toml
 # 只读部署/健康报告：repo commit、unit drift、timer/service active、
 # Runner slot、Pi session、当前 Issue、最近 journal 活动
 python3 muyan_pilot.py doctor --config muyan-pilot.toml
+
+# 一次性 setup（新机器/新仓库）：gh auth + 仓库权限、平台 labels
+# （labels.toml 为唯一事实源）、systemd user units、checkout 检查、
+# 可选模型 proxy（warning only）；幂等、fail-fast，--json 输出等价 JSON
+python3 muyan_pilot.py setup --config muyan-pilot.toml
 ```
 
 ## GitHub Issue 标签（外部状态）
 
-GitHub label 是仓库的**外部状态**：它不会随代码提交自动创建，缺失时扫描会静默漏掉对应状态的 Issue。新仓库初始化时必须先创建这些 label，再用 `gh label list` 检查：
+GitHub label 是仓库的**外部状态**：它不会随代码提交自动创建，缺失时扫描会静默漏掉对应状态的 Issue。新仓库/新机器用一次性 setup 入口完成初始化（幂等、fail-fast，label 名称/颜色/描述以仓库内的 `labels.toml` 为唯一事实源，已存在的 label 只做声明式对齐，业务 label 从不被改动）：
 
 ```bash
-# 仓库初始化：创建全部 label（已存在时 gh 会报错，可忽略或先 gh label list 检查）
+# 一次性 setup：gh auth + 仓库权限、平台 labels、systemd user units、
+# checkout 检查、可选模型 proxy（warning only）；输出 key=value（--json 等价 JSON）
+python3 muyan_pilot.py setup --config muyan-pilot.toml
+```
+
+setup 不可用时的手工等价命令（已存在时 gh 会报错，可忽略或先 `gh label list` 检查）：
+
+```bash
 for l in ai-ready ai-in-progress ai-pr-opened ai-fix-needed ai-merged ai-blocked; do
   gh label create "$l" --repo xqliu/muyan-pilot --force
   gh label edit "$l" --repo xqliu/muyan-pilot \

@@ -82,24 +82,25 @@ skills = []
 context_files = []
 ```
 
-## 3. Initialize the delivery labels
+## 3. Run the one-time setup
 
-GitHub labels are **external state**: a commit never creates them, and a
-missing label makes the scan silently skip that state. Create them once
-per task-pool repository:
+The setup entry does the whole initialization in one command: it
+verifies `gh auth status` and the repo permissions, aligns the platform
+labels from the repo-managed `labels.toml` (the single source of truth
+for label name, color and description — a commit never creates labels,
+and a missing label makes the scan silently skip that state), installs
+the systemd user units and enables the timer, checks the checkout, and
+reports the optional model proxy:
 
 ```bash
-for l in ai-ready ai-in-progress ai-pr-opened ai-fix-needed ai-merged ai-blocked; do
-  gh label create "$l" --repo OWNER/PILOT-REPO --force
-  gh label edit "$l" --repo OWNER/PILOT-REPO \
-    --description "Muyan Pilot delivery state (see docs)"
-done
-# p0 is the urgent-priority label (not a delivery state, see the
-# workflow page): picked up before bugs and features.
-gh label create p0 --repo OWNER/PILOT-REPO --force --color "fbca04" \
-  --description "Muyan Pilot urgent priority: picked up before bugs and features"
-gh label list --repo OWNER/PILOT-REPO
+python3 muyan_pilot.py setup --config muyan-pilot.toml
 ```
+
+It is idempotent (re-running it never creates duplicate labels, units
+or timers) and fail-fast (a wrong repo, insufficient permission, a
+dirty checkout or a missing systemd user bus stops it with the concrete
+reason). See [One-time setup](/setup) for the full output contract,
+success and failure examples.
 
 ## 4. Run one tick manually
 
@@ -151,24 +152,28 @@ and the journal shows `run_end ... result=pr_opened`. If any step fails,
 the Issue is marked `ai-blocked` with the scene — see
 [Operations](/operations) for recovery.
 
-## 6. Enable the timer
+## 6. Verify the timer
+
+The setup step already installed the units and enabled the timer; verify
+it:
 
 ```bash
-mkdir -p ~/.config/systemd/user
-cp systemd/muyan-pilot.service systemd/muyan-pilot.timer ~/.config/systemd/user/
-```
-
-The committed units reference the author's clone layout via `%h`
-specifiers (`%h/Documents/muyan/muyan-pilot`). Point `WorkingDirectory`,
-`MUYAN_PILOT_CONFIG` and `ExecStart` at **your** clone path, then:
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now muyan-pilot.timer
 systemctl --user list-timers muyan-pilot.timer
 ```
 
-The timer fires every 15 minutes, 24 hours a day (00:00–23:45). While a
-task is running, further timer starts are ignored by systemd; the next
-real start picks up the latest code (the service fast-forwards `main`
-before starting — see [Operations](/operations)).
+The setup output carries `timer=enabled active=true next=...` (the next
+trigger time). The timer fires every 15 minutes, 24 hours a day
+(00:00–23:45). While a task is running, further timer starts are ignored
+by systemd; the next real start picks up the latest code (the service
+fast-forwards `main` before starting — see [Operations](/operations)).
+
+<Note>
+The committed unit templates reference the author's clone layout via
+`%h` specifiers (`%h/Documents/muyan/muyan-pilot`). If your clone lives
+elsewhere, edit the **installed** units in your user unit directory
+(`~/.config/systemd/user/`) to point `WorkingDirectory`,
+`MUYAN_PILOT_CONFIG` and `ExecStart` at **your** clone path, then
+`systemctl --user daemon-reload`. The repo templates stay the single
+source of truth for everything else — see [Operations](/operations) on
+drift detection.
+</Note>
