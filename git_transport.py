@@ -82,24 +82,30 @@ def remote_protocol(url: str) -> str:
     return "other"
 
 
-def _ssh_repo_path(url: str) -> str | None:
-    """The `owner/name` path of one SSH remote URL, or None.
+def _remote_repo_path(url: str) -> str | None:
+    """The `owner/name` path of one GitHub remote URL, or None.
 
-    Accepts both the SCP-style form (`git@github.com:owner/name[.git]`)
-    and the `ssh://` scheme; the optional `.git` suffix is stripped so
-    a remote configured without it still matches the expected URL.
+    Accepts the SCP-style SSH form (`git@github.com:owner/name[.git]`),
+    the `ssh://` scheme and the `https://`/`http://` web forms; the
+    optional `.git` suffix is stripped so a remote configured without
+    it still matches the expected repo. A URL on any other host (or a
+    local path) has no GitHub repo path: it can never be migrated, a
+    rewrite of such a remote would re-target the checkout at a
+    guessed destination.
     """
-    scp_prefix = f"{SSH_USER}@{GITHUB_HOST}:"
-    scheme_prefix = f"ssh://{SSH_USER}@{GITHUB_HOST}/"
-    if url.startswith(scp_prefix):
-        path = url[len(scp_prefix):]
-    elif url.startswith(scheme_prefix):
-        path = url[len(scheme_prefix):]
-    else:
-        return None
-    if path.endswith(".git"):
-        path = path[: -len(".git")]
-    return path or None
+    prefixes = (
+        f"{SSH_USER}@{GITHUB_HOST}:",
+        f"ssh://{SSH_USER}@{GITHUB_HOST}/",
+        f"https://{GITHUB_HOST}/",
+        f"http://{GITHUB_HOST}/",
+    )
+    for prefix in prefixes:
+        if url.startswith(prefix):
+            path = url[len(prefix):]
+            if path.endswith(".git"):
+                path = path[: -len(".git")]
+            return path or None
+    return None
 
 
 def check_transport(
@@ -112,16 +118,19 @@ def check_transport(
 ) -> dict:
     """Check (and only when authorized, migrate) the git transport.
 
-    Checks, in order: the `origin` remote exists; its protocol is SSH;
-    the SSH URL matches the FIRST configured source repo (the
-    deployment checkout is that repo's clone — the worktrees share the
-    single remote); when `probe` is on, `git ls-remote <ssh-url>`
-    exits 0 (SSH reachable and authenticated). An HTTPS remote is
-    migrated with `git remote set-url origin <ssh-url>` ONLY when
-    `migrate` is True (the human-run setup entry); otherwise the
-    failure carries the exact migration command and the setup entry.
-    Any failure raises :class:`TransportError` with the concrete
-    reason — no HTTPS fallback, no silent skip.
+    Checks, in order: the `origin` remote exists; it points at the
+    FIRST configured source repo (the deployment checkout is that
+    repo's clone — the worktrees share the single remote); its
+    protocol is SSH; when `probe` is on, `git ls-remote <ssh-url>`
+    exits 0 (SSH reachable and authenticated). An HTTPS remote of the
+    SAME repo is migrated with `git remote set-url origin <ssh-url>`
+    ONLY when `migrate` is True (the human-run setup entry); a remote
+    pointing at a DIFFERENT repo is never rewritten (the migration
+    would re-target the checkout) — it fails with the mismatch scene
+    whether or not `migrate` is set. Every other failure carries the
+    exact migration command and the setup entry. Any failure raises
+    :class:`TransportError` with the concrete reason — no HTTPS
+    fallback, no silent skip.
     """
     expected = ssh_url_for(source_repos[0])
     # The CONFIGURED URL is the transport (verified against the real
@@ -146,6 +155,19 @@ def check_transport(
         raise TransportError(
             f"checkout has no origin remote: {repo_dir} ({exc})"
         ) from exc
+    # The repo the remote points at is verified BEFORE any protocol
+    # decision or rewrite: a remote that does not point at the first
+    # configured source repo is never migrated (the migration would
+    # re-target the checkout at a different repository), whether or
+    # not `migrate` is authorized.
+    repo_path = _remote_repo_path(url)
+    if repo_path != source_repos[0]:
+        raise TransportError(
+            f"origin remote repo mismatch: actual={url} "
+            f"(repo={repo_path!r}) expected={expected} "
+            f"(repo={source_repos[0]!r}); the deployment checkout "
+            "must be a clone of the first configured source repo"
+        )
     protocol = remote_protocol(url)
     if protocol == "https":
         if not migrate:
@@ -171,14 +193,6 @@ def check_transport(
         )
     else:
         migrated = False
-    repo_path = _ssh_repo_path(url)
-    if repo_path != source_repos[0]:
-        raise TransportError(
-            f"origin remote repo mismatch: actual={url} "
-            f"(repo={repo_path!r}) expected={expected} "
-            f"(repo={source_repos[0]!r}); the deployment checkout "
-            "must be a clone of the first configured source repo"
-        )
     ssh_reachable: bool | None
     if probe:
         try:

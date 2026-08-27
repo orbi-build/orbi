@@ -353,19 +353,81 @@ def test_ok_run_factory_rejects_an_unexpected_command():
         fake_run(["definitely", "not", "a", "known", "command"])
 
 
-def test_ssh_repo_path_returns_none_for_a_non_ssh_url():
-    """The defensive branch: a URL that is neither the SCP form nor
-    the `ssh://` scheme has no repo path (check_transport only calls
-    this for SSH URLs, so the branch is unit-tested directly)."""
-    assert git_transport._ssh_repo_path(
-        "https://github.com/xqliu/muyan-pilot.git"
-    ) is None
-    assert git_transport._ssh_repo_path(
+def test_remote_repo_path_extracts_the_repo_from_every_github_form():
+    """All four GitHub URL forms (SCP SSH, `ssh://` scheme, https,
+    http) yield the `owner/name` path; the optional `.git` suffix is
+    stripped."""
+    assert git_transport._remote_repo_path(
         "git@github.com:xqliu/muyan-pilot"
     ) == "xqliu/muyan-pilot"
-    assert git_transport._ssh_repo_path(
+    assert git_transport._remote_repo_path(
         "ssh://git@github.com/xqliu/muyan-pilot.git"
     ) == "xqliu/muyan-pilot"
+    assert git_transport._remote_repo_path(
+        "https://github.com/xqliu/muyan-pilot.git"
+    ) == "xqliu/muyan-pilot"
+    assert git_transport._remote_repo_path(
+        "http://github.com/xqliu/muyan-pilot"
+    ) == "xqliu/muyan-pilot"
+
+
+def test_remote_repo_path_returns_none_for_a_non_github_url():
+    """A URL on any other host (or a local path) has no GitHub repo
+    path: such a remote can never be migrated (a rewrite would
+    re-target the checkout at a guessed destination)."""
+    assert git_transport._remote_repo_path(
+        "git@gitlab.com:other/repo.git"
+    ) is None
+    assert git_transport._remote_repo_path(
+        "/home/u/repos/muyan-pilot"
+    ) is None
+
+
+def test_check_transport_never_migrates_a_remote_pointing_at_a_different_repo(
+    tmp_path,
+):
+    """Issue #114: the migration rewrites the checkout's single
+    `origin` remote — pointing it at a DIFFERENT repository would
+    re-target the whole checkout (subsequent fetches/pulls hit the
+    wrong repo). A remote that does not point at the first configured
+    source repo therefore fails with the mismatch scene even when
+    `migrate` is authorized (the human-run setup entry): no
+    `set-url`, no probe, the remote is left untouched."""
+    state = {
+        "origin_url": "https://github.com/other/repo.git",
+    }
+    fake_run, calls, _ = ok_run_factory(state)
+    with pytest.raises(
+        git_transport.TransportError, match="mismatch",
+    ) as exc:
+        git_transport.check_transport(
+            tmp_path, ["xqliu/muyan-pilot"],
+            run_command=fake_run, migrate=True,
+        )
+    message = str(exc.value)
+    assert "https://github.com/other/repo.git" in message
+    assert "git@github.com:xqliu/muyan-pilot.git" in message
+    # No rewrite of the mismatching remote, no probe.
+    assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
+    assert [c for c in calls if c[:2] == ["git", "ls-remote"]] == []
+    assert state["origin_url"] == "https://github.com/other/repo.git"
+
+
+def test_check_transport_never_migrates_a_non_github_remote(tmp_path):
+    """A remote on a non-GitHub host (or a local path) has no
+    recognizable repo: it fails with the mismatch scene (repo=None)
+    even when `migrate` is authorized — never a guessed rewrite."""
+    state = {"origin_url": "git@gitlab.com:other/repo.git"}
+    fake_run, calls, _ = ok_run_factory(state)
+    with pytest.raises(
+        git_transport.TransportError, match="mismatch",
+    ) as exc:
+        git_transport.check_transport(
+            tmp_path, ["xqliu/muyan-pilot"],
+            run_command=fake_run, migrate=True,
+        )
+    assert "repo=None" in str(exc.value)
+    assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
 
 
 # --- real git: the worktree inherits the checkout's transport -----------------

@@ -77,7 +77,7 @@ git merge 到 main
 transport_check_failed repo_dir=<repo path> source_repos=<...> reason=ssh_unreachable: git ls-remote git@github.com:owner/repo.git failed: ... stderr=git@github.com: Permission denied (publickey). — ...
 ```
 
-**已有 HTTPS remote 的迁移路径**：Runner 从不静默改写 remote，也从不从评论或 Issue 内容读取 remote。迁移只由人工执行的一次性 setup 入口完成（`python3 muyan_pilot.py setup`，内部执行 `git remote set-url origin git@github.com:owner/repo.git`）；其他路径遇到 HTTPS remote 时 fail fast，失败信息携带确切的迁移命令。手工等价命令：
+**已有 HTTPS remote 的迁移路径**：Runner 从不静默改写 remote，也从不从评论或 Issue 内容读取 remote。迁移只由人工执行的一次性 setup 入口完成（`python3 muyan_pilot.py setup`，内部执行 `git remote set-url origin git@github.com:owner/repo.git`）；其他路径遇到 HTTPS remote 时 fail fast，失败信息携带确切的迁移命令。指向其他仓库的 remote 从不被迁移（改写会把 checkout 指向另一个仓库），无论 setup 是否授权迁移都直接以 mismatch 现场 fail fast。手工等价命令：
 
 ```bash
 git remote set-url origin git@github.com:OWNER/REPO.git

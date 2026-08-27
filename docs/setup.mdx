@@ -49,8 +49,11 @@ non-zero exit code.
    `git remote set-url origin git@github.com:owner/repo.git` (setup is
    the human-authorized migration path — the Runner itself never
    rewrites a remote), the SSH URL must match the first configured
-   source repo, and `git ls-remote <ssh-url>` must exit 0 (SSH
-   reachable and authenticated — a failure is `setup_failed
+   source repo — a remote pointing at a DIFFERENT repo is never
+   migrated (the rewrite would re-target the checkout at another
+   repository) and fails with `setup_failed reason=... origin remote
+   repo mismatch ...` — and `git ls-remote <ssh-url>` must exit 0
+   (SSH reachable and authenticated — a failure is `setup_failed
    reason=... ssh_unreachable ...`, no HTTPS fallback). Then the
    read-only parts: current branch, clean worktree (a dirty checkout
    fails: the timer's `ExecStartPre` fast-forward refuses a dirty

@@ -176,7 +176,11 @@ is **one runtime outcome** (when X, should Y, actually Z).
   from a comment or Issue body: only the human-run setup entry
   (`muyan_pilot.py setup`) migrates it with the plain
   `git remote set-url origin git@github.com:owner/repo.git`; every
-  other path fails fast with the exact migration command. `muyan_pilot.py
+  other path fails fast with the exact migration command. A remote
+  that does not point at the first configured source repo is never
+  migrated (the rewrite would re-target the checkout at a different
+  repository) — it fails with the mismatch scene whether or not the
+  setup entry authorizes the migration. `muyan_pilot.py
   doctor` reports the transport read-only (protocol, expected URL, SSH
   probe) — a failed transport is REPORTED there, not raised (the
   pre-start check is the fail-fast gate).
