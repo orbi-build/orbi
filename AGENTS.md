@@ -161,6 +161,32 @@ is **one runtime outcome** (when X, should Y, actually Z).
 - No DAG, topological sort, or multi-worker scheduling: single-slot
   serial execution only reads the field, skips, and waits.
 
+## Pickup priority (P0)
+
+- Emergency priority is the plain GitHub label `p0` — NOT a delivery
+  state: it only orders the ready pickup, never changes the Issue
+  granularity (one Issue = one runtime outcome), any delivery state, or
+  the terminal-state semantics. The Runner never adds or removes it.
+- The ready pickup order is fixed: `ai-ready`+`p0` → `ai-ready`+`bug`
+  → plain `ai-ready` (three `gh issue list` scans sharing the exact
+  same exclusions and blockedBy semantics). P0 obeys every existing
+  exclusion rule (`ai-in-progress`, `ai-pr-opened`, `ai-fix-needed`,
+  `ai-merged`, `ai-blocked`) and the single-slot constraint: a blocked
+  P0 is skipped (falling back to the bug/plain scans) and an in-flight
+  P0 is resumed by the restart scan (which fetches `labels` too, so the
+  progress comment keeps showing `p0`).
+- The pickup log line carries the explicit `priority=p0` /
+  `priority=normal` field; the GitHub progress comment shows the
+  `priority` field; the run scene (`run_info`) and the started
+  milestone carry `priority=...`.
+- A failed P0 run enters `ai-blocked` ALONE (the claim label is
+  removed; the `ai-ready` residue is excluded by every ready scan) —
+  no tick re-claims it, so there is no infinite retry; the failure
+  comment and blocked scene keep the concrete reason and the
+  recoverable scene.
+- review/merge failures of a P0 PR follow the existing same-PR, bounded
+  review-round mechanism (no new loop).
+
 ## Review, in-session fix and merge (same PR)
 
 - The review session is independent (a new Pi process, `prompt_review.md`,

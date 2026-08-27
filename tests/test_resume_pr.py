@@ -340,7 +340,9 @@ def test_pick_resumable_delivery_returns_newest_issue_with_scene(
         "--search",
         "label:ai-fix-needed,ai-pr-opened "
         "-label:ai-blocked -label:ai-merged -label:ai-in-progress",
-        "--json", "number,title,state,url", "--limit", "1",
+        # `labels` (Issue #101): a resumed P0 delivery keeps its
+        # priority in the progress comment through review/merge.
+        "--json", "number,title,state,url,labels", "--limit", "1",
     ]
     assert calls[1] == [
         "gh", "issue", "view", "9", "--repo", "owner/repo",
@@ -374,7 +376,9 @@ def test_pick_resumable_delivery_scans_fix_needed_and_awaiting_review(
         "--search",
         "label:ai-fix-needed,ai-pr-opened "
         "-label:ai-blocked -label:ai-merged -label:ai-in-progress",
-        "--json", "number,title,state,url", "--limit", "1",
+        # `labels` (Issue #101): a resumed P0 delivery keeps its
+        # priority in the progress comment through review/merge.
+        "--json", "number,title,state,url,labels", "--limit", "1",
     ]]
 
 

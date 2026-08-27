@@ -111,13 +111,19 @@ DAG, no priority numbers, no separate queues:
   tag exists on the remote, and the release evidence is complete. Like
   any task it delivers through one PR (or closes the Epic when the
   evidence is already on the remote).
-- **P0 priority**: the convention that urgent bug fixes come before new
-  features. The current implementation is deliberately simple: the ready
-  scan picks `bug`-labeled `ai-ready` Issues before plain `ai-ready`
-  Issues (same exclusions, same blockedBy semantics) — if the delivery
-  loop is broken, claiming enhancements only piles up unreviewed PRs.
-  There is no priority number or weighted queue; dispatch order is the
-  only other lever (create the urgent Issue first).
+- **P0 priority**: the plain `p0` GitHub label marks an urgent Issue
+  (a production outage). It is NOT a delivery state — it only orders the
+  ready pickup, never changes the Issue granularity, any delivery state,
+  or the terminal-state semantics, and the Runner never adds or removes
+  it. The ready pickup order is fixed: `ai-ready`+`p0` →
+  `ai-ready`+`bug` → plain `ai-ready` (three `gh issue list` scans
+  sharing the exact same exclusions and blockedBy semantics). P0 obeys
+  every existing exclusion rule and the single-slot constraint: a
+  blocked P0 is skipped (falling back to the bug/plain scans) and an
+  in-flight P0 is resumed by the restart scan. A failed P0 run enters
+  `ai-blocked` ALONE (the claim label is removed; the `ai-ready`
+  residue is excluded by every ready scan), so no tick re-claims it —
+  no infinite retry. There is no priority number or weighted queue.
 
 Task dependencies between Issues use GitHub's native `blockedBy`
 relation (`gh issue edit N --add-blocked-by M`); the Runner reads the

@@ -225,14 +225,20 @@ def test_docs_document_the_full_issue_to_merge_workflow():
 def test_docs_document_labels_run_marker_epic_release_task_and_p0():
     """The workflow page must give the basic explanation of the project's
     GitHub workflow vocabulary: the delivery labels, the run marker, Epic
-    coordination issues (ai-epic), Release tasks, and the bug-first (P0)
-    pickup order. Epic/Release task/P0 are workflow concepts — the docs
-    must not claim runner features that are not implemented yet (Issue
-    #93/#98/#101 are still open)."""
+    coordination issues (ai-epic), Release tasks, and the P0 pickup
+    order (the plain `p0` label, Issue #101: `ai-ready`+`p0` before
+    `ai-ready`+`bug` before plain `ai-ready`, failed P0 enters
+    `ai-blocked` with no infinite retry). Epic/Release task/P0 are
+    workflow concepts — the docs must not claim runner features that are
+    not implemented yet (Issue #93/#98 are still open)."""
     text = page_text("workflow")
     assert "ai-epic" in text, "workflow must explain Epic issues (ai-epic)"
     assert "Release" in text, "workflow must explain Release tasks"
-    assert "P0" in text, "workflow must explain the P0 (bug-first) priority"
+    assert "P0" in text, "workflow must explain the P0 priority"
+    # Issue #101: the P0 explanation names the plain `p0` label and the
+    # fixed pickup order (p0 before bug before plain).
+    assert "`p0`" in text, "P0 explanation must name the p0 label"
+    assert "`ai-ready`+`p0`" in text, "P0 explanation must show the order"
     assert "bug" in text.lower(), "P0 explanation must name the bug label"
     # The docs only reference labels that exist in the runner's label set.
     mentioned = set(LABEL_PATTERN.findall(text))

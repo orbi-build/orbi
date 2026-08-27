@@ -114,6 +114,13 @@ PR_OPENED_LABEL = "ai-pr-opened"
 FIX_NEEDED_LABEL = "ai-fix-needed"
 MERGED_LABEL = "ai-merged"
 BLOCKED_LABEL = "ai-blocked"
+# P0 urgent priority (Issue #101): a plain GitHub label, not a delivery
+# state. It only orders the ready pickup (`ai-ready`+`p0` first); it
+# never changes the delivery states, the blockedBy semantics or the
+# terminal states. A failed P0 run enters `ai-blocked` like every other
+# failed run — the ready scans exclude `ai-blocked`, so the `ai-ready`
+# residue never re-enters the queue (no infinite retry).
+P0_LABEL = "p0"
 
 # Only comments posted by a repo maintainer are trusted to carry the
 # recovery scene: a public comment (authorAssociation=NONE) must never
@@ -313,20 +320,44 @@ def open_blocker_numbers(issue: dict) -> list[int]:
     return numbers
 
 
-# Ready scans (Issue #71): bugs are claimed before new features — if
-# the delivery loop is broken, claiming enhancements only piles up
-# unreviewed PRs. The bug scan runs first with the exact same
-# exclusions; the plain ready scan only runs when the bug scan found
-# nothing claimable. No priority numbers, no separate queue, no new
-# state machine: two `gh issue list` searches with the same blockedBy
-# semantics (Issue #54).
+# Ready scans (Issue #71/#101): P0 urgent Issues are claimed before
+# bugs, bugs before new features — if the delivery loop is broken,
+# claiming enhancements only piles up unreviewed PRs, and a production
+# outage (P0) must not wait behind ordinary work. The P0 scan runs
+# first, then the bug scan, then the plain ready scan — each with the
+# exact same exclusions. No priority numbers, no separate queue, no
+# new state machine: three `gh issue list` searches with the same
+# blockedBy semantics (Issue #54). `p0` is a plain label, not a
+# delivery state: it only orders the pickup (Issue #101).
 READY_SCAN_EXCLUSIONS = (
     f"-label:{IN_PROGRESS_LABEL} -label:{PR_OPENED_LABEL} "
     f"-label:{FIX_NEEDED_LABEL} -label:{MERGED_LABEL} "
     f"-label:{BLOCKED_LABEL}"
 )
+P0_READY_SEARCH = f"label:ai-ready label:{P0_LABEL} {READY_SCAN_EXCLUSIONS}"
 BUG_READY_SEARCH = f"label:ai-ready label:bug {READY_SCAN_EXCLUSIONS}"
 READY_SEARCH = f"label:ai-ready {READY_SCAN_EXCLUSIONS}"
+
+
+def issue_priority(issue: dict) -> str:
+    """Return the pickup priority of one issue (Issue #101).
+
+    `p0` when the issue carries the `p0` label, `normal` otherwise.
+    The ready/in-flight/resumable scans fetch `labels` (verified
+    against `gh issue list --help`: `labels` is a supported JSON
+    field, an array of `{name, ...}` nodes), so this is a pure
+    function of the scanned issue — no extra gh call. A missing or
+    malformed `labels` field fails to `normal` (like the blockedBy
+    field fails open): a P0 misread as normal only loses its ordering
+    for one run, never the delivery.
+    """
+    labels = issue.get("labels")
+    if not isinstance(labels, list):
+        return "normal"
+    for label in labels:
+        if isinstance(label, dict) and label.get("name") == P0_LABEL:
+            return "p0"
+    return "normal"
 
 
 def pick_issue(repo: str) -> dict | None:
@@ -337,14 +368,17 @@ def pick_issue(repo: str) -> dict | None:
     # reads the native GitHub dependency per Issue (Issue #54): an
     # Issue with open blockers is skipped — no claim, no label change,
     # no worktree — and the next ready Issue is considered instead.
-    # Issue #71: the bug scan runs first; a bug with open blockers is
-    # skipped there and the plain ready scan still decides.
-    for search in (BUG_READY_SEARCH, READY_SEARCH):
+    # Issue #71/#101: the P0 scan runs first, then the bug scan; a P0
+    # or bug with open blockers is skipped there and the next scan
+    # still decides. The scan also fetches `labels` so the picked
+    # issue's priority is visible without an extra gh call.
+    for search in (P0_READY_SEARCH, BUG_READY_SEARCH, READY_SEARCH):
         try:
             raw = run_command([
                 "gh", "issue", "list", "--repo", repo, "--state", "open",
                 "--search", search,
-                "--json", "number,title,body,blockedBy", "--limit", "200",
+                "--json", "number,title,body,labels,blockedBy",
+                "--limit", "200",
             ])
             issues = parse_issue_array(raw)
         except Exception as exc:
@@ -366,6 +400,12 @@ def pick_issue(repo: str) -> dict | None:
                     ",".join(str(number) for number in blockers),
                 )
                 continue
+            # The pickup log carries the explicit priority field
+            # (Issue #101): `p0` for urgent Issues, `normal` otherwise.
+            LOGGER.info(
+                "picked issue=%s repo=%s priority=%s",
+                issue.get("number"), repo, issue_priority(issue),
+            )
             return issue
     return None
 
@@ -404,7 +444,9 @@ def pick_in_progress_issue(
         "label:ai-ready label:ai-in-progress "
         f"-label:{PR_OPENED_LABEL} -label:{FIX_NEEDED_LABEL} "
         f"-label:{MERGED_LABEL} -label:{BLOCKED_LABEL}",
-        "--json", "number,title,body", "--limit", "1",
+        # `labels` (Issue #101): a P0 a killed runner left behind
+        # keeps its priority in the progress comment on resume.
+        "--json", "number,title,body,labels", "--limit", "1",
     ])
     return parse_issue_list(raw)
 
@@ -624,7 +666,9 @@ def pick_resumable_delivery(
         f"label:{FIX_NEEDED_LABEL},{PR_OPENED_LABEL} "
         f"-label:{BLOCKED_LABEL} -label:{MERGED_LABEL} "
         f"-label:{IN_PROGRESS_LABEL}",
-        "--json", "number,title,state,url", "--limit", "1",
+        # `labels` (Issue #101): a resumed P0 delivery keeps its
+        # priority in the progress comment through review/merge.
+        "--json", "number,title,state,url,labels", "--limit", "1",
     ])
     issues = parse_issue_array(raw)
     if not issues:
@@ -1368,6 +1412,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
                         review_round=review_rounds_so_far(
                             issue_comments(number, repo=source_repo),
                         ),
+                        priority=issue_priority(issue),
                     ),
                 )
         except Exception:
@@ -1718,7 +1763,7 @@ def sync_base_checkout(repo_dir: Path, base_branch: str) -> None:
 
 def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                               config: dict, source_repo: str,
-                              number: int) -> bool:
+                              number: int, priority: str) -> bool:
     """Run one independent review round; merge when the verdict is clean.
 
     The delivery wait loop (which holds the slot) calls this while the
@@ -1772,7 +1817,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         action=lambda: publisher.ensure(_progress_body(_progress_state(
             issue=number, run_id=config["run_id"], role=ROLE_REVIEW,
             branch=branch, worktree=worktree, started=started,
-            pr_url=pr["url"], review_round=round,
+            pr_url=pr["url"], review_round=round, priority=priority,
         ))),
     )
     output = run_review(
@@ -1781,6 +1826,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             publisher, issue=number, run_id=config["run_id"],
             role=ROLE_REVIEW, branch=branch, worktree=worktree,
             started=started, pr_url=pr["url"], review_round=round,
+            priority=priority,
         ),
     )
     verdict = parse_review_verdict(output)
@@ -1831,6 +1877,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                     role=ROLE_REVIEW, branch=branch,
                     worktree=worktree, started=started,
                     pr_url=pr["url"], review_round=round,
+                    priority=priority,
                 ), outcome=(
                     "**Muyan Pilot review findings**\n\n"
                     f"round {round}: {verdict['blockers']} blocker(s), "
@@ -1905,6 +1952,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                 role=ROLE_REVIEW, branch=branch,
                 worktree=worktree, started=started,
                 pr_url=merged["url"], review_round=round,
+                priority=priority,
             ), outcome=(
                 "**Muyan Pilot delivered**\n\n"
                 f"PR {merged['url']} merged "
@@ -2058,10 +2106,12 @@ def delivery_head_advanced(worktree: Path, base_sha: str) -> bool:
 
 def _progress_state(*, issue: int, run_id: str, role: str, branch: str,
                     worktree: Path, started: float, pr_url: str | None,
-                    review_round: int,
+                    review_round: int, priority: str,
                     activity: dict | None = None) -> dict:
     """Collect the current run state for the GitHub progress comment.
 
+    `priority` is the pickup priority of the issue (`p0` or `normal`,
+    Issue #101), derived from the issue's labels at claim/resume time.
     `activity` is the live state from the `stream_pi` watcher while a Pi
     session runs (fresh and already read); without it the newest session
     file is full-scanned. Activity snapshotting is best-effort
@@ -2078,6 +2128,7 @@ def _progress_state(*, issue: int, run_id: str, role: str, branch: str,
         "run_id": run_id,
         "issue": issue,
         "role": role,
+        "priority": priority,
         "phase": (activity or {}).get("phase") or "starting",
         "elapsed": format_elapsed(time.monotonic() - started),
         "last_activity": (activity or {}).get("last_activity"),
@@ -2156,7 +2207,7 @@ def _safe_publish(*, run_id: str, issue: int, source_repo: str,
 
 def _live_progress(publisher: ProgressPublisher, *, issue: int, run_id: str,
                    role: str, branch: str, worktree: Path, started: float,
-                   pr_url: str | None, review_round: int,
+                   pr_url: str | None, review_round: int, priority: str,
                    activity: dict | None = None) -> None:
     """One live GitHub progress update while a Pi session is running.
 
@@ -2172,7 +2223,8 @@ def _live_progress(publisher: ProgressPublisher, *, issue: int, run_id: str,
     state = _progress_state(
         issue=issue, run_id=run_id, role=role, branch=branch,
         worktree=worktree, started=started, pr_url=pr_url,
-        review_round=review_round, activity=activity,
+        review_round=review_round, priority=priority,
+        activity=activity,
     )
     publisher.patch(_progress_body(state))
 
@@ -2189,14 +2241,14 @@ class LiveProgressThrottle:
 
     def __init__(self, publisher: ProgressPublisher, *, issue: int,
                  run_id: str, role: str, branch: str, worktree: Path,
-                 started: float, pr_url: str | None,
-                 review_round: int) -> None:
+                 started: float, pr_url: str | None, review_round: int,
+                 priority: str) -> None:
         def publish(activity: dict) -> None:
             _live_progress(
                 publisher, issue=issue, run_id=run_id, role=role,
                 branch=branch, worktree=worktree, started=started,
                 pr_url=pr_url, review_round=review_round,
-                activity=activity,
+                priority=priority, activity=activity,
             )
 
         self._publish = publish
@@ -2248,8 +2300,13 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             )
     base_sha = freeze_base(config["repo_dir"], base_branch)
     branch = task_branch(source_repo, number, run_id)
+    # Pickup priority (Issue #101): derived from the scanned issue's
+    # labels (no extra gh call) and carried on every journal line and
+    # scene comment of the attempt via `run_info`.
+    priority = issue_priority(issue)
     run_info = (
-        f"base_branch={base_branch} base_sha={base_sha} run_id={run_id}"
+        f"base_branch={base_branch} base_sha={base_sha} run_id={run_id} "
+        f"priority={priority}"
     )
     LOGGER.info(
         "issue=%s %s", number, run_info,
@@ -2287,7 +2344,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
                 _progress_state(
                     issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
                     branch=branch, worktree=worktree, started=started,
-                    pr_url=None, review_round=0,
+                    pr_url=None, review_round=0, priority=priority,
                 ),
             )),
         )
@@ -2304,6 +2361,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
                 publisher, issue=number, run_id=run_id,
                 role=ROLE_IMPLEMENT, branch=branch, worktree=worktree,
                 started=started, pr_url=None, review_round=0,
+                priority=priority,
             ),
         )
         _safe_publish(
@@ -2359,7 +2417,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             action=lambda: publisher.finish(_progress_body(_progress_state(
                 issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
                 branch=branch, worktree=worktree, started=started,
-                pr_url=pr_url, review_round=0,
+                pr_url=pr_url, review_round=0, priority=priority,
             ), outcome="**Muyan Pilot delivered**")),
         )
         LOGGER.info(
@@ -2437,6 +2495,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
                             role=ROLE_IMPLEMENT, branch=branch,
                             worktree=worktree, started=started,
                             pr_url=None, review_round=0,
+                            priority=priority,
                         ), outcome=(
                             "**Muyan Pilot blocked**\n\n"
                             f"failure: {detail}\n"
@@ -2496,6 +2555,7 @@ def _finish_blocked_progress(
     worktree: Path | None, branch: str | None, pr_url: str,
     detail: str, next_step: str,
     role: str = ROLE_REVIEW, review_round: int = 0,
+    priority: str = "normal",
 ) -> None:
     """Finish the tracked progress comment with the blocked scene.
 
@@ -2521,7 +2581,7 @@ def _finish_blocked_progress(
         issue=number, run_id=run_id, role=role,
         branch=branch or "-", worktree=worktree or Path("-"),
         started=time.monotonic(), pr_url=pr_url,
-        review_round=review_round,
+        review_round=review_round, priority=priority,
     ), outcome=(
         "**Muyan Pilot blocked**\n\n"
         f"failure: {detail}\n"
@@ -2568,10 +2628,15 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
     number = int(issue["number"])
     run_id = current_run_id()
     marker = run_marker(run_id) if run_id else ""
+    # Pickup priority (Issue #101): derived from the scanned issue's
+    # labels (the resumable/in-flight scans fetch `labels`), so the
+    # progress comment of a resumed P0 delivery keeps showing `p0`
+    # through review/merge.
+    priority = issue_priority(issue)
     LOGGER.info(
-        "issue=%s delivery_awaiting pr=%s; holding the slot until the "
-        "PR is merged or terminally failed",
-        number, pr_url,
+        "issue=%s delivery_awaiting pr=%s priority=%s; holding the "
+        "slot until the PR is merged or terminally failed",
+        number, pr_url, priority,
     )
     while True:
         state = pr_state(pr_url)
@@ -2646,6 +2711,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                         "the delivery or start a fresh run on the "
                         "Issue",
                         role=ROLE_REVIEW, review_round=blocked_round,
+                        priority=priority,
                     ),
                 )
             return
@@ -2714,6 +2780,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 merged = review_and_merge_if_clean(
                     worktree, branch, config["base_branch"],
                     review_config, source_repo, number,
+                    priority=priority,
                 )
             except Exception as exc:
                 LOGGER.exception(
@@ -2775,6 +2842,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                             review_round=review_rounds_so_far(
                                 issue_comments(number, repo=source_repo),
                             ),
+                            priority=priority,
                         ),
                     )
                 return
