@@ -2,11 +2,13 @@ import json
 import logging
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock
@@ -2924,14 +2926,18 @@ def test_stream_pi_idle_lines_carry_run_id_exactly_once(
     """Issue #57: `pi_idle` / `pi_resumed` repeat the same rule as the
     other high-frequency lines: prefix only, no `run=` field."""
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
-    # a1 is 4s stale when it is polled, so the idle warning fires;
-    # a2 arrives later with a fresh timestamp, so the resume does not
-    # re-trigger the warning.
+    # a1 is back-dated by just under one idle period (0.5 s), so the
+    # first poll already reports a single idle period of staleness and
+    # the idle warning fires — but NOT two periods: a much older
+    # timestamp would count as several idle cycles and escalate the
+    # Issue #94 recovery straight to a session termination before a2
+    # can arrive. a2 arrives later with a fresh timestamp, so the
+    # resume does not re-trigger the warning.
     records = [
         (0.0, {"type": "session", "id": "sess-1",
-               "timestamp": fresh_timestamp(-5), "cwd": "/w"}),
+               "timestamp": fresh_timestamp(-0.4), "cwd": "/w"}),
         (0.1, {"type": "message", "id": "a1",
-               "timestamp": fresh_timestamp(-4),
+               "timestamp": fresh_timestamp(-0.4),
                "message": {"role": "assistant", "content": [
                    {"type": "text", "text": "one"}]}}),
         (1.0, {"type": "message", "id": "a2",
@@ -3239,12 +3245,15 @@ def test_stream_pi_idle_warn_default_is_five_minutes():
 
 
 def test_stream_pi_logs_idle_warning_once_when_session_stalls(
-    tmp_path, caplog,
+    tmp_path, monkeypatch, caplog,
 ):
     """Issue #18 acceptance: a stalled session (no model/session
     activity past the threshold, not waiting on the model) logs ONE
     `pi_idle` WARNING carrying `stale_seconds` — never a warning per
-    heartbeat."""
+    heartbeat. The run id is bound like in the real journal
+    (`process_issue` binds it before starting Pi), so the `[run_id]`
+    prefix is present on every line."""
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
     command = make_fake_pi(tmp_path, session_records=[], sleep=1.2)
     with caplog.at_level("INFO"):
         runner.stream_pi(
@@ -3401,6 +3410,9 @@ def test_stream_pi_drains_pipe_data_written_after_exit(
             self.returncode = 0
 
         def poll(self):
+            return self.returncode
+
+        def wait(self):
             return self.returncode
 
     def fake_popen(command, **kwargs):
@@ -3784,6 +3796,789 @@ def test_run_review_passes_progress_callback_to_stream_pi(
     )
     assert seen["progress"] is callback
     assert seen["role"] == "review"
+
+
+# --- Issue #94: pi_idle auto-recovery (TERM/KILL/terminate) ------------------
+
+
+def spawn_sleep(seconds: float = 30.0) -> subprocess.Popen:
+    """Spawn a real long-lived `sleep` child (dies on SIGTERM by default)."""
+    return subprocess.Popen(["sleep", str(seconds)])
+
+
+def wait_cmdline(pid: int, needle: str, timeout: float = 5.0) -> str:
+    """Wait until /proc/<pid>/cmdline contains `needle`.
+
+    Right after Popen the child may still be between fork and exec
+    (cmdline still shows the parent), so tests that assert on the
+    child's command must wait for the exec to be visible. Raises
+    AssertionError when the deadline passes first.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        cmdline = runner.proc_cmdline(pid)
+        if cmdline is not None and needle in cmdline:
+            return cmdline
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"cmdline of {pid} never contained {needle!r}: {cmdline!r}"
+            )
+        time.sleep(0.01)
+
+
+def test_wait_cmdline_times_out_for_gone_pid():
+    # The deadline path: a pid that never shows the needle raises.
+    proc = spawn_sleep(0.2)
+    proc.wait()
+    with pytest.raises(AssertionError, match="never contained"):
+        wait_cmdline(proc.pid, "sleep", timeout=0.05)
+
+
+def test_read_proc_stat_returns_fields_for_live_process():
+    proc = spawn_sleep()
+    try:
+        stat = runner.read_proc_stat(proc.pid)
+        assert stat is not None
+        assert stat["pid"] == proc.pid
+        assert stat["ppid"] == os.getpid()
+        assert stat["comm"] == "sleep"
+        assert stat["start_time"] >= 0
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_read_proc_stat_returns_none_for_gone_process():
+    proc = spawn_sleep(0.2)
+    proc.wait()
+    assert runner.read_proc_stat(proc.pid) is None
+
+
+def test_read_proc_stat_rejects_malformed_stat(monkeypatch):
+    # Defensive parsing branches: a malformed /proc/<pid>/stat (no
+    # parentheses, a non-matching pid, too few fields, non-numeric
+    # fields) must yield None, never a crash — the recovery walk skips
+    # such entries instead of failing the run.
+    cases = [
+        # no parentheses at all
+        "1234 simple",
+        # the pid field does not match the directory name
+        "9999 (x) S 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 20 0 1 0 1 0 0 0 "
+        "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        # too few numeric fields after the comm
+        "1234 (x) S 1 1 1",
+        # non-numeric ppid
+        "1234 (x) S notanumber 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 20 0 1 0 "
+        "1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+    ]
+    for raw in cases:
+        monkeypatch.setattr(
+            Path, "read_text",
+            lambda self, encoding=None, _raw=raw: _raw,
+        )
+        assert runner.read_proc_stat(1234) is None, raw
+
+
+def test_proc_start_epoch_is_recent_for_live_process():
+    before = time.time()
+    proc = spawn_sleep()
+    try:
+        epoch = runner.proc_start_epoch(proc.pid)
+        assert epoch is not None
+        # start_time has 1/SC_CLK_TCK (10 ms) granularity and can round
+        # down, so allow one tick of slack before `before`.
+        assert before - 0.05 <= epoch <= time.time() + 1
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_proc_start_epoch_none_for_gone_process():
+    proc = spawn_sleep(0.2)
+    proc.wait()
+    assert runner.proc_start_epoch(proc.pid) is None
+
+
+def test_proc_start_epoch_none_when_uptime_unreadable(monkeypatch):
+    # A missing / corrupted /proc/uptime must yield None (the
+    # descendant walk skips the entry), never a crash.
+    real_read_text = Path.read_text
+
+    def read_text(self, encoding=None):
+        if self.name == "uptime":
+            raise OSError("gone")
+        return real_read_text(self, encoding)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    proc = spawn_sleep()
+    try:
+        assert runner.proc_start_epoch(proc.pid) is None
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_proc_cmdline_returns_sanitized_command():
+    proc = spawn_sleep()
+    try:
+        cmdline = wait_cmdline(proc.pid, "sleep")
+        assert "30" in cmdline
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_proc_cmdline_redacts_tokens():
+    # A token shape in argv must never reach the journal: the cmdline
+    # is sanitized like every other journal value (Issue #40).
+    token = "sk-abcdefghijklmnopqrstuv"
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time\ntime.sleep(30)\n", token],
+    )
+    try:
+        cmdline = wait_cmdline(proc.pid, "redacted")
+        # The raw token is gone, replaced by the redacted shape.
+        assert token not in cmdline
+        assert "sk-<redacted>" in cmdline
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_proc_cmdline_none_for_gone_process():
+    proc = spawn_sleep(0.2)
+    proc.wait()
+    assert runner.proc_cmdline(proc.pid) is None
+
+
+def test_proc_cmdline_none_for_empty_cmdline(monkeypatch):
+    # An empty cmdline (a kernel thread or a race) yields None.
+    monkeypatch.setattr(Path, "read_bytes", lambda self: b"")
+    assert runner.proc_cmdline(os.getpid()) is None
+
+
+def test_pi_descendants_finds_nested_tree_started_before_window():
+    # pi -> sh -> sleep: a two-level descendant chain (the real pi
+    # spawns `bash -c "..."` which in turn spawns the tool process).
+    # The inner `sh -c 'sleep 30 & wait'` cannot be exec-optimized
+    # away (it must stay to wait), so the intermediate sh is real.
+    pi = subprocess.Popen(
+        ["sh", "-c", "sh -c 'sleep 30 & wait' & wait"],
+    )
+    time.sleep(0.3)  # let the children spawn
+    try:
+        descendants = runner.pi_descendants(
+            pi.pid, before_epoch=time.time(),
+        )
+        pids = {entry["pid"] for entry in descendants}
+        # Both the intermediate sh AND the deepest sleep are in the
+        # tree (the BFS must not stop at the first level).
+        assert len(descendants) >= 2, descendants
+        for entry in descendants:
+            assert entry["start_epoch"] < time.time()
+            assert entry["cmdline"]
+            assert entry["ppid"] > 0
+        assert any("sleep" in entry["cmdline"] for entry in descendants)
+        # The root itself and the test process are never descendants.
+        assert pids.isdisjoint({pi.pid, os.getpid()})
+    finally:
+        pi.kill()
+        pi.wait()
+
+
+def test_pi_descendants_excludes_processes_started_after_window():
+    # A descendant that starts AFTER the idle window opened is a NEW
+    # tool call of a recovering session — the start-time filter must
+    # exclude it from the snapshot (only pre-existing processes are
+    # the hung tools of the stalled session).
+    pi = subprocess.Popen(
+        ["sh", "-c", "sleep 30 & sleep 0.5; sleep 31 & wait"],
+    )
+    time.sleep(0.3)
+    early_cutoff = time.time()  # only the first sleep started before this
+    time.sleep(0.6)  # the second sleep starts now
+    try:
+        descendants = runner.pi_descendants(
+            pi.pid, before_epoch=early_cutoff,
+        )
+        cmdlines = [entry["cmdline"] for entry in descendants]
+        # The early `sleep 30` is in the snapshot; the late `sleep 31`
+        # (started after the window) is excluded.
+        assert any("30" in cmdline for cmdline in cmdlines)
+        assert not any("31" in cmdline for cmdline in cmdlines)
+    finally:
+        pi.kill()
+        pi.wait()
+
+
+def test_pi_descendants_excludes_non_descendants():
+    # An unrelated process (not in the pi tree) must never be returned,
+    # even though it is alive and old.
+    stray = spawn_sleep()
+    pi = spawn_sleep()  # a plain process with no children
+    try:
+        descendants = runner.pi_descendants(
+            pi.pid, before_epoch=time.time() - 1,
+        )
+        assert descendants == []
+        # And a tree that has children never picks up the stray one.
+        tree = subprocess.Popen(["sh", "-c", "sleep 30 & wait"])
+        time.sleep(0.3)
+        try:
+            pids = {
+                entry["pid"]
+                for entry in runner.pi_descendants(
+                    tree.pid, before_epoch=time.time(),
+                )
+            }
+            assert stray.pid not in pids
+        finally:
+            tree.kill()
+            tree.wait()
+    finally:
+        stray.kill()
+        stray.wait()
+        pi.kill()
+        pi.wait()
+
+
+def test_pi_descendants_empty_for_gone_root():
+    proc = spawn_sleep(0.2)
+    proc.wait()
+    assert runner.pi_descendants(proc.pid, before_epoch=time.time()) == []
+
+
+def test_pi_descendants_skips_entry_with_unreadable_start_time(
+    monkeypatch,
+):
+    # A descendant whose start time cannot be read (stat and uptime
+    # disagree in a race) is skipped, never a crash: the entry is
+    # simply not part of the snapshot.
+    unreadable = spawn_sleep()
+    normal = spawn_sleep()
+    real_proc_start_epoch = runner.proc_start_epoch
+
+    def fake_proc_start_epoch(pid):
+        # The first child's start time is "unreadable"; the second
+        # child resolves normally (both are real descendants of the
+        # test process, so the BFS reaches the start-time check).
+        if pid == unreadable.pid:
+            return None
+        return real_proc_start_epoch(pid)
+
+    monkeypatch.setattr(runner, "proc_start_epoch", fake_proc_start_epoch)
+    try:
+        descendants = runner.pi_descendants(
+            os.getpid(), before_epoch=time.time() + 3600,
+        )
+        pids = {entry["pid"] for entry in descendants}
+        assert unreadable.pid not in pids
+        assert normal.pid in pids
+    finally:
+        unreadable.kill()
+        unreadable.wait()
+        normal.kill()
+        normal.wait()
+
+
+def test_signal_pid_sends_signal_and_reports_result():
+    proc = spawn_sleep()
+    try:
+        assert runner.signal_pid(proc.pid, signal.SIGTERM) is True
+        proc.wait(timeout=5)
+        assert proc.returncode == -signal.SIGTERM
+        # The process is gone now: the second signal reports already exited.
+        assert runner.signal_pid(proc.pid, signal.SIGKILL) is False
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def make_hung_pi(tmp_path: Path, *, hang: float = 30.0) -> list[str]:
+    """Build a fake pi that hangs on a descendant like the real incident.
+
+    The script mimics the two real incidents (run 9240f1e4 / cd855188):
+    it writes an assistant toolCall, spawns a child that will not exit
+    (`sleep <hang>`), and waits for it — the session JSONL is frozen
+    while the child lives. When the child is killed by the runner the
+    wait returns, the script writes a toolResult + assistant record
+    (fresh activity) and exits 0, like a model that got the failure
+    signal and continued.
+    """
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir(exist_ok=True)
+    script = (
+        "import json, os, subprocess, sys, time\n"
+        f"session = {str(session_dir / 'sess.jsonl')!r}\n"
+        "ts = time.time()\n"
+        "def rec(**kw):\n"
+        "    kw.setdefault('timestamp', time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(ts)))\n"
+        "    with open(session, 'a') as handle:\n"
+        "        handle.write(json.dumps(kw) + '\\n')\n"
+        "rec(type='session', id='sess-1', cwd='/w')\n"
+        "rec(type='message', id='a1',\n"
+        "    message={'role': 'assistant', 'content': [\n"
+        "        {'type': 'toolCall', 'id': 't1', 'name': 'bash',\n"
+        f"         'arguments': {{'command': 'sleep {hang!r}'}}}}]}})\n"
+        f"child = subprocess.Popen(['sleep', {str(hang)!r}])\n"
+        "rc = child.wait()\n"
+        "ts = time.time()\n"
+        "rec(type='message', id='r1',\n"
+        "    message={'role': 'toolResult', 'toolCallId': 't1',\n"
+        "             'toolName': 'bash', 'isError': True,\n"
+        "             'content': [{'type': 'text', 'text': 'killed'}]})\n"
+        "rec(type='message', id='a2',\n"
+        "    message={'role': 'assistant', 'content': [\n"
+        "        {'type': 'text', 'text': 'retry with timeout'}]})\n"
+        "sys.exit(0)\n"
+    )
+    return [sys.executable, "-c", script]
+
+
+def test_stream_pi_idle_term_recovers_session(tmp_path, caplog):
+    """Issue #94 acceptance 1: TERM 成功恢复. A stalled session (no
+    activity past the threshold, not model_wait) gets its pre-existing
+    descendant SIGTERM'd; the child dies, the fake pi writes fresh
+    session events, and the run continues to a normal exit — no
+    `run_failed`, no kill of the pi process itself."""
+    command = make_hung_pi(tmp_path)
+    with caplog.at_level("INFO"):
+        result = runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.4,
+            run_id="run94", issue=94, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    idles = [line for line in lines if " pi_idle " in line]
+    recovers = [line for line in lines if " pi_idle_recover " in line]
+    resumed = [line for line in lines if " pi_resumed " in line]
+    assert len(idles) == 1
+    assert len(recovers) == 1
+    assert len(resumed) == 1
+    recover = recovers[0]
+    assert "issue=xqliu/muyan-pilot#94" in recover
+    assert "role=implement" in recover
+    assert "pid=" in recover
+    assert "cmdline=\"" in recover  # the sleep command, quoted
+    assert "sleep" in recover
+    assert "signal=TERM" in recover
+    assert "result=ok" in recover
+    # No redundant `run=` field (Issue #57); the prefix carries the id.
+    assert "run=run94" not in recover
+    # The recovery is a WARNING-level escalation of the idle warning
+    # (visible in journalctl without -p info).
+    assert any(
+        record.levelno == logging.WARNING
+        and "pi_idle_recover" in record.getMessage()
+        for record in caplog.records
+    )
+    # The session recovered: no failure, the pi process exited normally.
+    assert "run_failed" not in caplog.text
+    assert result == ""
+
+
+def test_stream_pi_idle_term_then_kill_escalation(tmp_path, caplog):
+    """Issue #94 acceptance 2: TERM 后仍存活升级 KILL. A descendant
+    that ignores SIGTERM (a `sleep` cannot be stopped by a plain
+    SIGTERM? no — sleep dies on SIGTERM; so use a child that traps
+    nothing but survives via a second level: the runner must SIGKILL
+    it one more idle cycle later when it is still alive)."""
+    # A child that ignores SIGTERM: `sh -c 'trap \"\" TERM; while :; do
+    # sleep 0.1; done'` — the classic hung tool that needs SIGKILL.
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir(exist_ok=True)
+    script = (
+        "import json, os, signal, subprocess, sys, time\n"
+        f"session = {str(session_dir / 'sess.jsonl')!r}\n"
+        "ts = time.time()\n"
+        "def rec(**kw):\n"
+        "    kw.setdefault('timestamp', time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(ts)))\n"
+        "    with open(session, 'a') as handle:\n"
+        "        handle.write(json.dumps(kw) + '\\n')\n"
+        "rec(type='session', id='sess-1', cwd='/w')\n"
+        "rec(type='message', id='a1',\n"
+        "    message={'role': 'assistant', 'content': [\n"
+        "        {'type': 'toolCall', 'id': 't1', 'name': 'bash',\n"
+        "         'arguments': {'command': 'hang'}}]})\n"
+        "child = subprocess.Popen(['sh', '-c',\n"
+        "    'trap \\\"\\\" TERM; while :; do sleep 0.1; done'])\n"
+        "rc = child.wait()\n"
+        "ts = time.time()\n"
+        "rec(type='message', id='r1',\n"
+        "    message={'role': 'toolResult', 'toolCallId': 't1',\n"
+        "             'toolName': 'bash', 'isError': True,\n"
+        "             'content': [{'type': 'text', 'text': 'killed'}]})\n"
+        "rec(type='message', id='a2',\n"
+        "    message={'role': 'assistant', 'content': [\n"
+        "        {'type': 'text', 'text': 'retry with timeout'}]})\n"
+        "sys.exit(0)\n"
+    )
+    command = [sys.executable, "-c", script]
+    with caplog.at_level("INFO"):
+        result = runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.4,
+            run_id="run94", issue=94, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    # The persistent child is the `trap "" TERM` sh loop; the snapshot
+    # may also carry the transient `sleep 0.1` of the loop (a
+    # legitimate pre-existing descendant), so filter on the quoted
+    # cmdline field (the logger name contains "trap" via "bootstrap",
+    # so the whole line must not be searched).
+    def trap_lines(name: str) -> list[str]:
+        return [
+            line for line in lines
+            if " pi_idle_recover " in line and f"signal={name}" in line
+            and 'cmdline="sh -c trap' in line
+        ]
+
+    terms = trap_lines("TERM")
+    kills = trap_lines("KILL")
+    resumed = [line for line in lines if " pi_resumed " in line]
+    assert len(terms) == 1
+    assert len(kills) == 1
+    assert len(resumed) == 1
+    # The KILL line carries the same pid as the TERM line.
+    term_pid = terms[0].split("pid=")[1].split(" ")[0]
+    kill_pid = kills[0].split("pid=")[1].split(" ")[0]
+    assert term_pid == kill_pid
+    assert "result=ok" in kills[0]
+    # The KILL comes after the TERM (one more idle cycle later).
+    assert lines.index(kills[0]) > lines.index(terms[0])
+    assert "run_failed" not in caplog.text
+    assert result == ""
+
+
+def test_stream_pi_consecutive_idle_terminates_session(tmp_path, caplog):
+    """Issue #94 acceptance 3: 连续 idle 升级终止会话. A descendant that
+    survives BOTH TERM and KILL (and the session stays frozen — no new
+    events) escalates to terminating the Pi session itself after
+    `PI_IDLE_TERMINATE_CYCLES` (default 3) consecutive idle cycles:
+    `run_failed ... reason=idle_terminated_stale_...` + RuntimeError,
+    so the existing failure path marks the Issue ai-blocked and the
+    slot is released."""
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir(exist_ok=True)
+    script = (
+        "import json, os, signal, subprocess, sys, time\n"
+        f"session = {str(session_dir / 'sess.jsonl')!r}\n"
+        "ts = time.time()\n"
+        "def rec(**kw):\n"
+        "    kw.setdefault('timestamp', time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(ts)))\n"
+        "    with open(session, 'a') as handle:\n"
+        "        handle.write(json.dumps(kw) + '\\n')\n"
+        "rec(type='session', id='sess-1', cwd='/w')\n"
+        "rec(type='message', id='a1',\n"
+        "    message={'role': 'assistant', 'content': [\n"
+        "        {'type': 'toolCall', 'id': 't1', 'name': 'bash',\n"
+        "         'arguments': {'command': 'hang'}}]})\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "child = subprocess.Popen(['sh', '-c',\n"
+        "    'trap \\\"\\\" TERM; while :; do sleep 0.1; done'])\n"
+        f"with open({str(tmp_path / 'child.pid')!r}, 'w') as handle:\n"
+        "    handle.write(str(child.pid))\n"
+        "child.wait()\n"
+        "# The session stays frozen even after the descendant died: the\n"
+        "# pi process itself is stuck (no new events) — the escalation\n"
+        "# must terminate the session after 3 idle cycles.\n"
+        "time.sleep(60)\n"
+        "sys.exit(0)\n"
+    )
+    command = [sys.executable, "-c", script]
+    child_pid_file = tmp_path / "child.pid"
+    try:
+        # INFO level: the pi_idle / pi_idle_recover lines are WARNING,
+        # the run_failed line is ERROR — all must be visible.
+        with caplog.at_level("INFO"), pytest.raises(
+            RuntimeError, match="idle",
+        ) as excinfo:
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.1,
+                idle_warn_seconds=0.4,
+                run_id="run94", issue=94,
+                source_repo="xqliu/muyan-pilot", branch="b",
+            )
+    finally:
+        # The runner KILLs the pi process; the TERM-trapping child is
+        # orphaned and must be cleaned up by the test.
+        try:
+            os.kill(int(child_pid_file.read_text()), signal.SIGKILL)
+        except (OSError, ValueError):
+            pass
+    assert "stalled" in str(excinfo.value)
+    lines = caplog.text.splitlines()
+    failures = [line for line in lines if " run_failed " in line]
+    assert len(failures) == 1
+    assert "reason=idle_terminated_stale_" in failures[0]
+    assert "issue=xqliu/muyan-pilot#94" in failures[0]
+    assert f"worktree={tmp_path}" in failures[0]
+    # TERM and KILL were both attempted before the termination.
+    recovers = [line for line in lines if " pi_idle_recover " in line]
+    assert any("signal=TERM" in line for line in recovers)
+    assert any("signal=KILL" in line for line in recovers)
+
+
+def test_stream_pi_idle_recovery_never_touches_non_descendants(
+    tmp_path, caplog,
+):
+    """Issue #94 acceptance 4: 非 pi 后代不被误杀. A long-lived stray
+    process (NOT in the pi tree) must survive the whole recovery —
+    only the pi descendant is signalled."""
+    stray = spawn_sleep(10)
+    try:
+        command = make_hung_pi(tmp_path)
+        with caplog.at_level("INFO"):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.1,
+                idle_warn_seconds=0.4,
+                run_id="run94", issue=94,
+                source_repo="xqliu/muyan-pilot", branch="b",
+            )
+        # The stray process is still alive and was never signalled.
+        assert stray.poll() is None
+        lines = caplog.text.splitlines()
+        recovers = [line for line in lines
+                    if " pi_idle_recover " in line]
+        assert all(str(stray.pid) not in line for line in recovers)
+    finally:
+        stray.kill()
+        stray.wait()
+
+
+def test_stream_pi_idle_recovery_no_action_during_model_wait(
+    tmp_path, caplog,
+):
+    """Issue #40 semantics preserved: while the newest event is a tool
+    result the model is expected to reply next — a frozen session is a
+    slow model, never an idle recovery (the Issue #75 upstream-dead
+    kill owns that state)."""
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.0, {"type": "message", "id": "a1",
+               "timestamp": fresh_timestamp(),
+               "message": {"role": "assistant", "content": [
+                   {"type": "toolCall", "id": "t1", "name": "bash",
+                    "arguments": {"command": "pytest tests/"}}]}}),
+        (0.1, {"type": "message", "id": "r1",
+               "timestamp": fresh_timestamp(1),
+               "message": {"role": "toolResult", "toolCallId": "t1",
+                           "toolName": "bash",
+                           "content": [{"type": "text", "text": "ok"}]}}),
+    ]
+    command = make_fake_pi(tmp_path, session_records=records, sleep=1.2)
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.5,
+            run_id="run94", issue=94, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    assert " pi_idle " not in caplog.text
+    assert " pi_idle_recover " not in caplog.text
+
+
+def test_stream_pi_idle_recovery_milestone_is_bypass(tmp_path, caplog):
+    """Issue #79: the milestone callback is pure observability — a
+    failing milestone must be logged as progress_publish_failed and
+    never interrupt the recovery or the delivery."""
+    command = make_hung_pi(tmp_path)
+    milestones = []
+
+    def boom(message):
+        raise RuntimeError("gh api failed")
+
+    # INFO level: the pi_idle_recover line is WARNING, the
+    # progress_publish_failed line is ERROR — both must be visible.
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.4,
+            run_id="run94", issue=94, source_repo="xqliu/muyan-pilot",
+            branch="b", milestone=boom,
+        )
+    assert "progress_publish_failed" in caplog.text
+    assert "run=run94" in caplog.text
+    # The recovery itself still happened (the delivery is not blocked
+    # by the observability failure).
+    assert " pi_idle_recover " in caplog.text
+
+
+def test_stream_pi_idle_recovery_posts_milestones(tmp_path):
+    """The progress comment syncs a milestone per recovery step
+    (TERM, then KILL when needed)."""
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir(exist_ok=True)
+    script = (
+        "import json, os, signal, subprocess, sys, time\n"
+        f"session = {str(session_dir / 'sess.jsonl')!r}\n"
+        "ts = time.time()\n"
+        "def rec(**kw):\n"
+        "    kw.setdefault('timestamp', time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(ts)))\n"
+        "    with open(session, 'a') as handle:\n"
+        "        handle.write(json.dumps(kw) + '\\n')\n"
+        "rec(type='session', id='sess-1', cwd='/w')\n"
+        "rec(type='message', id='a1',\n"
+        "    message={'role': 'assistant', 'content': [\n"
+        "        {'type': 'toolCall', 'id': 't1', 'name': 'bash',\n"
+        "         'arguments': {'command': 'hang'}}]})\n"
+        "child = subprocess.Popen(['sh', '-c',\n"
+        "    'trap \\\"\\\" TERM; while :; do sleep 0.1; done'])\n"
+        "rc = child.wait()\n"
+        "ts = time.time()\n"
+        "rec(type='message', id='r1',\n"
+        "    message={'role': 'toolResult', 'toolCallId': 't1',\n"
+        "             'toolName': 'bash', 'isError': True,\n"
+        "             'content': [{'type': 'text', 'text': 'killed'}]})\n"
+        "rec(type='message', id='a2',\n"
+        "    message={'role': 'assistant', 'content': [\n"
+        "        {'type': 'text', 'text': 'retry with timeout'}]})\n"
+        "sys.exit(0)\n"
+    )
+    command = [sys.executable, "-c", script]
+    milestones = []
+    runner.stream_pi(
+        command, cwd=tmp_path, poll_interval=0.1,
+        idle_warn_seconds=0.4,
+        run_id="run94", issue=94, source_repo="xqliu/muyan-pilot",
+        branch="b", milestone=milestones.append,
+    )
+    assert any("TERM" in m for m in milestones)
+    assert any("KILL" in m for m in milestones)
+
+
+def test_stream_pi_idle_terminate_cycles_default_is_three():
+    # Issue #94 contract: 3 consecutive idle cycles terminate the
+    # session (the Issue's "连续 N 个周期（如 3 个）").
+    assert runner.PI_IDLE_TERMINATE_CYCLES == 3
+
+
+def test_idle_recovery_step_skips_already_signaled_pid(
+    monkeypatch, caplog,
+):
+    # A pid that already received the current signal in this step is
+    # never signalled twice (defensive: the step must be idempotent
+    # per (pid, signal)); a not-yet-signalled pid is signalled once.
+    recovery = {
+        "descendants": [
+            {"pid": 77, "ppid": 4242, "start_epoch": 1.0,
+             "cmdline": "sleep 30"},
+            {"pid": 78, "ppid": 4242, "start_epoch": 1.0,
+             "cmdline": "sleep 31"},
+        ],
+        "cycle": 1,
+        "signaled": {77: "TERM"},  # 77 already TERMed in this step
+    }
+    sent = []
+
+    def fake_signal_pid(pid, signum):
+        sent.append((pid, signum))
+        return True
+
+    monkeypatch.setattr(runner, "signal_pid", fake_signal_pid)
+    with caplog.at_level("WARNING"):
+        runner._idle_recovery_step(
+            recovery, types.SimpleNamespace(pid=4242),
+            {"phase": "test"}, run_id="run94",
+            issue_ref="owner/repo#94", role="implement",
+        )
+    # 77 is skipped (already TERMed), 78 is signalled exactly once.
+    assert sent == [(78, signal.SIGTERM)]
+    lines = [line for line in caplog.text.splitlines()
+             if " pi_idle_recover " in line]
+    assert len(lines) == 1
+    assert "pid=78" in lines[0]
+    assert "pid=77" not in caplog.text
+
+
+def test_idle_recovery_step_terminate_kills_pi():
+    # Cycle >= PI_IDLE_TERMINATE_CYCLES: the Pi session itself is
+    # terminated (process.kill) and the step flags the recovery state.
+    class FakeProcess:
+        pid = 4242
+        killed = False
+
+        def kill(self):
+            self.killed = True
+
+    process = FakeProcess()
+    recovery = {
+        "descendants": [
+            {"pid": 77, "ppid": 4242, "start_epoch": 1.0,
+             "cmdline": "sleep 30"},
+        ],
+        "cycle": runner.PI_IDLE_TERMINATE_CYCLES,
+        "signaled": {},
+    }
+    runner._idle_recovery_step(
+        recovery, process, {"phase": "test"}, run_id="run94",
+        issue_ref="owner/repo#94", role="implement",
+    )
+    assert process.killed is True
+    assert recovery["terminated"] is True
+
+
+def test_run_pi_passes_milestone_callback_to_stream_pi(
+    monkeypatch, tmp_path,
+):
+    seen = {}
+
+    def fake_stream(command, **kwargs):
+        seen.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(runner, "stream_pi", fake_stream)
+    monkeypatch.setattr(runner, "render_prompt", lambda template, values: "sp")
+    (tmp_path / "prompt.md").write_text("p", encoding="utf-8")
+    callback = lambda message: None  # noqa: E731
+    runner.run_pi(
+        {"number": 4, "title": "t", "body": "b"},
+        tmp_path,
+        {
+            "prompt": tmp_path / "prompt.md",
+            "source_repos": ["owner/repo"],
+            "workspace_root": tmp_path,
+            "context_files": [],
+            "skills": [],
+            "base_branch": "main",
+            "base_sha": "abc",
+            "run_id": "a1b2c3d4",
+        },
+        "owner/repo", branch="branch", milestone=callback,
+    )
+    assert seen["milestone"] is callback
+
+
+def test_run_review_passes_milestone_callback_to_stream_pi(
+    monkeypatch, tmp_path,
+):
+    seen = {}
+
+    def fake_stream(command, **kwargs):
+        seen.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(runner, "stream_pi", fake_stream)
+    monkeypatch.setattr(runner, "render_prompt", lambda template, values: "sp")
+    (tmp_path / "prompt_review.md").write_text("p", encoding="utf-8")
+    callback = lambda message: None  # noqa: E731
+    runner.run_review(
+        tmp_path,
+        {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"},
+        {
+            "prompt_review": tmp_path / "prompt_review.md",
+            "source_repos": ["owner/repo"],
+            "base_branch": "main",
+            "run_id": "a1b2c3d4",
+            "skills": [],
+        },
+        "owner/repo", 4, "branch", 1, milestone=callback,
+    )
+    assert seen["milestone"] is callback
 
 
 # --- role-specific --skill lists (Issue #83) ---------------------------------

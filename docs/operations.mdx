@@ -48,13 +48,27 @@ Stable `key=value` lines you will see:
 - `pi_idle` — one WARNING when there is no model/session activity for
   more than 5 minutes (`PI_IDLE_WARN_SECONDS=300`) and the model is not
   expected to reply; a slow active model (`model_wait`) never warns;
+- `pi_idle_recover ... pid=... cmdline="..." signal=TERM|KILL
+  result=ok|already_exited` — the idle auto-recovery (Issue #94): the
+  WARNING is followed by action. The Pi tree's descendant processes
+  that already existed before the idle window (the hung bash/pytest/
+  python tools; identified via the `/proc` ppid chain plus start time,
+  never other system processes) are SIGTERM'd so the bash tool gets a
+  non-zero exit and the failure signal reaches the model; one more
+  idle period with a descendant still alive escalates to SIGKILL;
 - `run_failed` — the full scene plus the reason
-  (`pi_exit_N`, `timeout_...s`, or `upstream_dead_stale_...s` when a
+  (`pi_exit_N`, `timeout_...s`, `upstream_dead_stale_...s` when a
   frozen `model_wait` past `PI_MODEL_WAIT_DEAD_SECONDS` (default 600 s)
-  declares the upstream model dead and the Runner kills Pi).
+  declares the upstream model dead and the Runner kills Pi, or
+  `idle_terminated_stale_...s` when the session stayed stalled for
+  `PI_IDLE_TERMINATE_CYCLES` (default 3) consecutive idle periods even
+  after its hung descendants were SIGTERM'd and SIGKILL'd — the Runner
+  terminates the Pi session and fails fast through the normal failure
+  path, so the slot is never held forever).
 
-The idle warning and the upstream-dead kill are log/health thresholds —
-they are not the 15-minute schedule and not a business task timeout.
+The idle warning, the idle auto-recovery and the upstream-dead kill
+are log/health thresholds — they are not the 15-minute schedule and
+not a business task timeout.
 
 ## The CLI (`muyan_pilot.py`)
 

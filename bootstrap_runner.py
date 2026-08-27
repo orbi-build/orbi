@@ -29,6 +29,7 @@ import logging
 import os
 import re
 import select
+import signal
 import subprocess
 import time
 import tomllib
@@ -71,6 +72,17 @@ PI_HEARTBEAT_SECONDS = 30.0
 # warning; the first new session event after it logs `pi_resumed`.
 # A slow active model (model_wait, Issue #40) is never reported idle.
 PI_IDLE_WARN_SECONDS = 300.0
+# Idle auto-recovery (Issue #94): a stalled session (no activity past
+# `PI_IDLE_WARN_SECONDS`, not model_wait) is not only warned about — the
+# runner recovers it. Cycle 1: the descendant processes that already
+# existed before the idle window started (the hung bash/pytest/python
+# tools) are SIGTERM'd, so Pi's bash tool gets a non-zero exit and the
+# failure signal reaches the model. One more idle cycle with the
+# descendant still alive: SIGKILL. After this many consecutive idle
+# cycles the Pi session itself is terminated and the run fails fast
+# through the existing failure path (ai-blocked, slot released) — the
+# slot is never held forever.
+PI_IDLE_TERMINATE_CYCLES = 3
 # Upstream-dead detection (Issue #75): while the newest session event
 # is a tool result (model_wait) the model is expected to reply next.
 # A real (slow) model keeps producing session events; a dead upstream
@@ -871,6 +883,198 @@ def _log_heartbeat(activity: dict, *, issue_ref: str,
     )
 
 
+def read_proc_stat(pid: int) -> dict | None:
+    """Parse `/proc/<pid>/stat`; None when the process is gone.
+
+    Returns `{pid, comm, state, ppid, start_time}` where `start_time`
+    is field 22 in clock ticks since boot. `comm` may contain spaces
+    and parentheses, so the line is split on the first `(` and the
+    LAST `)` — the numeric fields after it are state (field 3), ppid
+    (field 4) and start_time (field 22).
+    """
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+    except OSError:
+        return None
+    open_idx = raw.find("(")
+    close_idx = raw.rfind(")")
+    if open_idx < 0 or close_idx <= open_idx:
+        return None
+    pid_field = raw[:open_idx].strip()
+    if not pid_field.isdigit() or int(pid_field) != pid:
+        return None
+    rest = raw[close_idx + 1:].split()
+    # rest[0] is field 3 (state), rest[1] field 4 (ppid), rest[k] is
+    # field k+3 — start_time is field 22, so rest[19].
+    if len(rest) < 20:
+        return None
+    try:
+        return {
+            "pid": pid,
+            "comm": raw[open_idx + 1:close_idx],
+            "state": rest[0],
+            "ppid": int(rest[1]),
+            "start_time": int(rest[19]),
+        }
+    except ValueError:
+        return None
+
+
+def proc_start_epoch(pid: int) -> float | None:
+    """Process start time as wall-clock epoch seconds; None if gone.
+
+    `/proc/<pid>/stat` field 22 counts clock ticks since boot, so the
+    start epoch is `now - (uptime_ticks - start_time) / SC_CLK_TCK`
+    with the current ticks-since-boot from `/proc/uptime`. This is the
+    "started earlier than the idle window" evidence of Issue #94 (no
+    guessing).
+    """
+    stat = read_proc_stat(pid)
+    if stat is None:
+        return None
+    try:
+        uptime = float(Path("/proc/uptime").read_text(encoding="ascii")
+                       .split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+    ticks_per_second = os.sysconf("SC_CLK_TCK")
+    return time.time() - (uptime * ticks_per_second
+                          - stat["start_time"]) / ticks_per_second
+
+
+def proc_cmdline(pid: int) -> str | None:
+    """One-line, token-redacted `/proc/<pid>/cmdline`; None if gone.
+
+    The raw argv may carry secrets (a tool command with a token); the
+    value is sanitized like every other journal value (Issue #40).
+    """
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    cmdline = " ".join(
+        part.decode("utf-8", errors="replace")
+        for part in raw.split(b"\0")
+        if part
+    )
+    return sanitize(cmdline)
+
+
+def pi_descendants(root_pid: int, *, before_epoch: float) -> list[dict]:
+    """Descendants of `root_pid` that started before `before_epoch`.
+
+    Issue #94: the hung tool processes are the Pi tree's descendants
+    that ALREADY EXISTED before the idle window started and are still
+    running. A breadth-first walk over `/proc/*/stat` (ppid chain) with
+    the start-time filter — only Pi's own tree is ever considered, so
+    no other system process can be returned. A gone root yields `[]`.
+    """
+    root = read_proc_stat(root_pid)
+    if root is None:
+        return []
+    found: dict[int, dict] = {}
+    frontier = [root_pid]
+    while frontier:
+        next_frontier: list[int] = []
+        for entry in os.scandir("/proc"):
+            if not entry.name.isdigit():
+                continue
+            child = read_proc_stat(int(entry.name))
+            if child is None or child["ppid"] not in frontier:
+                continue
+            start_epoch = proc_start_epoch(child["pid"])
+            if start_epoch is None:
+                continue
+            if start_epoch >= before_epoch:
+                # A NEW process of the recovering session (or a
+                # recycled pid that started after the window): never
+                # part of the hung-tool snapshot.
+                continue
+            found[child["pid"]] = {
+                "pid": child["pid"],
+                "ppid": child["ppid"],
+                "start_epoch": start_epoch,
+                "cmdline": proc_cmdline(child["pid"]) or child["comm"],
+            }
+            next_frontier.append(child["pid"])
+        frontier = next_frontier
+    return list(found.values())
+
+
+def signal_pid(pid: int, signum: int) -> bool:
+    """Send `signum` to `pid`; True on success, False when the process
+    already exited (the scene is preserved: the caller logs the
+    already-exited result instead of crashing)."""
+    try:
+        os.kill(pid, signum)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _idle_recovery_step(
+    recovery: dict, process: subprocess.Popen, activity: dict,
+    *, run_id: str, issue_ref: str, role: str,
+    milestone: Callable[[str], None] | None = None,
+) -> None:
+    """One escalation step of the idle auto-recovery (Issue #94).
+
+    Cycle 1 (the poll that opened the idle window): SIGTERM every
+    descendant of the snapshot. Cycle 2: SIGKILL every descendant that
+    is still alive. Cycle >= `PI_IDLE_TERMINATE_CYCLES`: terminate the
+    Pi session itself (`process.kill()`), set `recovery["terminated"]`
+    and let the caller fail fast through the existing failure path.
+    Only the snapshot's pids are ever signalled — the ppid chain plus
+    the start-time filter of `pi_descendants` guarantees they are Pi's
+    own pre-existing descendants, never other system processes.
+
+    Every step writes one journal line (run id via the `[run_id]`
+    prefix, pid, quoted cmdline, signal, result) and posts one
+    milestone on the progress comment — the milestone is a pure
+    bypass (Issue #79): a failure is logged as
+    `progress_publish_failed` and never interrupts the recovery.
+    """
+    cycle = recovery["cycle"]
+    if cycle >= PI_IDLE_TERMINATE_CYCLES:
+        process.kill()
+        recovery["terminated"] = True
+        return
+    signum = signal.SIGTERM if cycle == 1 else signal.SIGKILL
+    name = "TERM" if cycle == 1 else "KILL"
+    for entry in recovery["descendants"]:
+        pid = entry["pid"]
+        if recovery["signaled"].get(pid) == name:
+            continue  # already escalated to this signal for this pid
+        if cycle >= 2 and read_proc_stat(pid) is None:
+            # The TERM worked (or the process exited on its own): no
+            # KILL is needed for it.
+            recovery["signaled"][pid] = name
+            continue
+        sent = signal_pid(pid, signum)
+        recovery["signaled"][pid] = name
+        # No `run=` field: the `[run_id]` prefix carries the run id
+        # (Issue #57), the same rule as `pi_idle` / `pi_resumed`.
+        LOGGER.warning(
+            "pi_idle_recover issue=%s role=%s phase=%s pid=%s "
+            "cmdline=%s signal=%s result=%s",
+            issue_ref, role, activity["phase"], pid,
+            quote_value(entry["cmdline"]), name,
+            "ok" if sent else "already_exited",
+        )
+        if milestone is not None:
+            try:
+                milestone(
+                    f"pi idle: SIG{name} {pid} ({entry['cmdline']})"
+                )
+            except Exception:
+                LOGGER.exception(
+                    "progress_publish_failed run=%s issue=%s role=%s",
+                    run_id, issue_ref, role,
+                )
+
+
 def stream_pi(
     command: list[str],
     *,
@@ -886,6 +1090,7 @@ def stream_pi(
     role: str = ROLE_IMPLEMENT,
     log_command: list[str] | None = None,
     progress: Callable[[dict], None] | None = None,
+    milestone: Callable[[str], None] | None = None,
 ) -> str:
     """Run Pi and stream concise live activity into the journal (Issue #40).
 
@@ -916,6 +1121,21 @@ def stream_pi(
     model_wait, ONE `pi_idle` WARNING carries `stale_seconds`; the
     first new session event after it logs `pi_resumed`. A slow active
     model (model_wait) is never reported idle (Issue #40).
+
+    Idle auto-recovery (Issue #94): the warning is not the end of the
+    story. The descendant processes that existed before the idle window
+    started (the hung bash/pytest/python tools of the Pi tree, found via
+    the `/proc` ppid chain plus start time — never other system
+    processes) are SIGTERM'd so the bash tool gets a non-zero exit and
+    the failure signal reaches the model; one more idle cycle with a
+    descendant still alive escalates to SIGKILL; after
+    `PI_IDLE_TERMINATE_CYCLES` consecutive idle cycles the Pi session
+    itself is terminated and the run fails fast (the existing failure
+    path marks the Issue ai-blocked, the slot is released). Each step
+    logs `pi_idle_recover ... pid=... cmdline=... signal=TERM|KILL
+    result=...` and posts one milestone through `milestone` — a
+    milestone failure is logged as `progress_publish_failed` and never
+    interrupts the delivery (pure bypass, Issue #79).
     """
     # The raw pi command embeds the full prompt and Issue body; only the
     # redacted form may ever reach the journal or an exception message.
@@ -953,6 +1173,7 @@ def stream_pi(
     activity = watcher.poll()
     timed_out = False
     upstream_dead = False
+    idle_terminated = False
     # model_wait transitions (Issue #40): one line when the state is
     # entered and one when it is left; unchanged polls are heartbeats
     # that carry the state, so a slow model never looks idle and no
@@ -961,6 +1182,12 @@ def stream_pi(
     # Idle warning state (Issue #18): at most one `pi_idle` warning per
     # stall; the first new session event after it logs `pi_resumed`.
     idle_warned = False
+    # Idle auto-recovery state (Issue #94): None while the session is
+    # not stalled; while stalled it carries the descendant snapshot
+    # taken at the window start (the hung tool processes that existed
+    # before it), the current cycle and the per-pid escalation
+    # bookkeeping.
+    idle_recovery: dict | None = None
     try:
         while True:
             if deadline is not None and time.monotonic() >= deadline:
@@ -1018,12 +1245,22 @@ def stream_pi(
                     "model_wait" if activity["model_wait"] else "resumed",
                 )
                 last_model_wait = activity["model_wait"]
-            # Idle warning (Issue #18): a stalled session (no model/
-            # session event for `idle_warn_seconds`, and the model is
-            # not expected to reply next) logs ONE `pi_idle` warning
-            # with the stale time; the first new session event after it
-            # logs `pi_resumed`. A slow active model (model_wait) never
-            # warns (Issue #40).
+            # Idle warning (Issue #18) + auto-recovery (Issue #94): a
+            # stalled session (no model/session event for
+            # `idle_warn_seconds`, and the model is not expected to
+            # reply next) logs ONE `pi_idle` warning with the stale
+            # time, then the runner recovers instead of only warning:
+            # the descendant processes that existed BEFORE the idle
+            # window (the hung bash/pytest/python tools) are SIGTERM'd
+            # so Pi's bash tool gets a non-zero exit and the failure
+            # signal reaches the model; one more idle cycle with the
+            # descendant still alive escalates to SIGKILL; after
+            # `PI_IDLE_TERMINATE_CYCLES` consecutive idle cycles the
+            # Pi session itself is terminated and the run fails fast
+            # through the existing failure path (the slot is never
+            # held forever). The first new session event after the
+            # warning logs `pi_resumed` and drops the recovery state.
+            # A slow active model (model_wait) never warns (Issue #40).
             if idle_warned and activity["changed"]:
                 # No `run=` field: the `[run_id]` prefix carries the run
                 # id (Issue #57).
@@ -1032,6 +1269,7 @@ def stream_pi(
                     issue_ref, role, activity["phase"],
                 )
                 idle_warned = False
+                idle_recovery = None
             elif (
                 not activity["model_wait"]
                 and not idle_warned
@@ -1046,6 +1284,44 @@ def stream_pi(
                     format_duration(activity["stale_seconds"]),
                 )
                 idle_warned = True
+                # Open the recovery window: snapshot the descendants
+                # that existed before the window started (start time
+                # earlier than the idle start, ppid chain under Pi —
+                # no other system process can match), then SIGTERM
+                # them (scene preserved: the bash tool gets the
+                # failure signal, not a dead pipe).
+                idle_recovery = {
+                    "descendants": pi_descendants(
+                        process.pid, before_epoch=time.time(),
+                    ),
+                    "cycle": 1,
+                    "signaled": {},
+                }
+                _idle_recovery_step(
+                    idle_recovery, process, activity,
+                    run_id=run_id, issue_ref=issue_ref, role=role,
+                    milestone=milestone,
+                )
+            elif (
+                idle_warned and idle_recovery is not None
+                and not activity["changed"]
+            ):
+                # Still stalled: the cycle is how many full idle periods
+                # (each `idle_warn_seconds`) the session has been frozen
+                # — one more period without activity escalates one step
+                # (TERM -> KILL -> terminate the session), never one
+                # step per poll.
+                cycle = int(activity["stale_seconds"] // idle_warn_seconds)
+                if cycle > idle_recovery["cycle"]:
+                    idle_recovery["cycle"] = cycle
+                    _idle_recovery_step(
+                        idle_recovery, process, activity,
+                        run_id=run_id, issue_ref=issue_ref, role=role,
+                        milestone=milestone,
+                    )
+                    if idle_recovery.get("terminated"):
+                        idle_terminated = True
+                        break
             # Upstream-dead detection (Issue #75): the model is
             # expected to reply next (model_wait) but the session file
             # has been frozen for the dead threshold — the upstream
@@ -1066,6 +1342,12 @@ def stream_pi(
     finally:
         _drain_stream(process.stdout, stdout_chunks)
         _drain_stream(process.stderr, stderr_chunks)
+        # Reap the child: a Pi that was killed (timeout, upstream
+        # death, idle termination) would otherwise linger as a zombie
+        # child of the runner until the Popen object is garbage
+        # collected — the reap is what makes `returncode` reliable
+        # below and keeps the runner's own process table clean.
+        process.wait()
     stdout = _decode_chunks(stdout_chunks)
     stderr = _decode_chunks(stderr_chunks)
     if upstream_dead:
@@ -1081,6 +1363,28 @@ def stream_pi(
         raise RuntimeError(
             f"Pi is stuck in model_wait with a frozen session for {stale}: "
             "the upstream (llama/proxy) is dead; Pi was killed (Issue #75)"
+        )
+    if idle_terminated:
+        # Issue #94: the session stayed stalled for
+        # `PI_IDLE_TERMINATE_CYCLES` consecutive idle cycles even after
+        # its hung descendants were SIGTERM'd and SIGKILL'd — the Pi
+        # session itself was terminated and the run fails fast through
+        # the existing failure path (ai-blocked, slot released by the
+        # kernel; the next tick can resume or claim the next Issue).
+        stale = format_duration(activity["stale_seconds"])
+        LOGGER.error(
+            "run_failed %s reason=idle_terminated_stale_%s",
+            format_run_scene(
+                activity, run_id=run_id, issue=issue_ref,
+                role=role, branch=branch, worktree=str(cwd),
+            ),
+            stale,
+        )
+        raise RuntimeError(
+            f"Pi session stalled for {stale}: its hung descendants were "
+            f"SIGTERM'd and SIGKILL'd but the session stayed frozen for "
+            f"{PI_IDLE_TERMINATE_CYCLES} idle cycles; Pi was terminated "
+            "(Issue #94)"
         )
     if timed_out:
         reason = f"timeout_{format_duration(timeout)}"
@@ -1116,7 +1420,8 @@ def stream_pi(
 
 def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
            *, timeout: int | None = None, branch: str | None = None,
-           progress: Callable[[dict], None] | None = None) -> str:
+           progress: Callable[[dict], None] | None = None,
+           milestone: Callable[[str], None] | None = None) -> str:
     """Run the implementer Pi session for a freshly claimed Issue.
 
     Issue #82 removed the fixer reuse of this function: findings are
@@ -1166,6 +1471,7 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         source_repo=source_repo,
         branch=branch,
         progress=progress,
+        milestone=milestone,
     )
 
 
@@ -1540,7 +1846,8 @@ def _skill_args(skills: list[str | Path]) -> list[str]:
 def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
                issue: int, branch: str, round: int,
                timeout: int | None = None,
-               progress: Callable[[dict], None] | None = None) -> str:
+               progress: Callable[[dict], None] | None = None,
+               milestone: Callable[[str], None] | None = None) -> str:
     """Run one independent review session for a frozen PR.
 
     The session is independent (new process, `prompt_review.md`, a new
@@ -1594,6 +1901,7 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
         branch=branch,
         role=ROLE_REVIEW,
         progress=progress,
+        milestone=milestone,
     )
 
 
@@ -1834,6 +2142,10 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             worktree=worktree, started=started, pr_url=pr["url"],
             review_round=round, priority=priority,
         ),
+        # Issue #94: the idle auto-recovery steps (TERM/KILL) post one
+        # milestone each; `stream_pi` wraps the call as a pure bypass
+        # (Issue #79), so a gh failure here can never fail the review.
+        milestone=publisher.milestone,
     )
     verdict = parse_review_verdict(output)
     LOGGER.info(
@@ -2385,6 +2697,11 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
                 started=started, pr_url=None, review_round=0,
                 priority=priority,
             ),
+            # Issue #94: the idle auto-recovery steps (TERM/KILL) post
+            # one milestone each; `stream_pi` wraps the call as a pure
+            # bypass (Issue #79), so a gh failure here can never fail
+            # the delivery.
+            milestone=publisher.milestone,
         )
         _safe_publish(
             run_id=run_id, issue=number, source_repo=source_repo,
