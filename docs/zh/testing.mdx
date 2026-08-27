@@ -25,6 +25,13 @@
 `requirements.txt`，然后运行上面两条契约命令。没有 lint、没有矩阵、
 没有缓存。
 
+Checkout 用 `fetch-depth: 0`（完整历史 + 全部 tags）：发布对账测试
+（`tests/test_release_v01.py`）用 `git cat-file` / `git rev-parse` 对
+checkout 里的真实 annotated tag object（`v0.1.0`）及其 commit 关系做校验，
+而默认浅 checkout（`fetch-depth: 1`）以 `--no-tags` 抓取，CI 环境里没有
+tag object，测试会以 `could not get object info` 失败（Issue #126）。现有
+tags 只是在 CI 里可见，不被移动、覆盖或重写。
+
 CI 里还运行 Mintlify 文档构建 smoke（Issue #116）：官方 `mint` CLI
 的 `mint validate`（严格构建校验，任何 warning 或 error 都退出非零）
 ——文档配置、页面和链接在远端同样被门禁。

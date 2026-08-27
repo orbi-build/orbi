@@ -21,8 +21,21 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out the repository
+      # The release reconciliation tests (tests/test_release_v01.py) verify
+      # the real annotated tag object (v0.1.0) and its commit relationships
+      # with `git cat-file` / `git rev-parse` / `git merge-base --is-ancestor`
+      # against the checkout. The default shallow checkout (fetch-depth: 1)
+      # runs `git fetch --no-tags` (verified against the official
+      # actions/checkout@v4 source), so the tag object is absent and the
+      # test fails with `could not get object info` (Issue #126).
+      # fetch-depth: 0 makes the action fetch all branches and
+      # +refs/tags/*:refs/tags/* without --depth (full history plus every
+      # tag object), so the release verification uses the real remote
+      # objects. No tags are moved, overwritten, or rewritten.
+      - name: Check out the repository (full history + all tags)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python 3.14 (production minor version)
         uses: actions/setup-python@v5

@@ -96,6 +96,8 @@ git remote set-url origin git@github.com:OWNER/REPO.git
 
 与本地的差异：生产运行时是 Runner 机器的 `/usr/bin/python3`（3.14.6），GitHub-hosted runner 没有这个解释器，所以 workflow 用 `actions/setup-python` 固定同一 minor 版本 `3.14`，契约命令通过 PATH 上固定的 `python3` 执行（命令与本地相同，只有解释器路径不同）。
 
+Checkout 用 `fetch-depth: 0`（完整历史 + 全部 tags）：发布对账测试（`tests/test_release_v01.py`）用 `git cat-file` / `git rev-parse` 对 checkout 里的真实 annotated tag object（`v0.1.0`）及其 commit 关系做校验，而默认浅 checkout（`fetch-depth: 1`）以 `--no-tags` 抓取，CI 环境里没有 tag object，测试会以 `could not get object info` 失败（Issue #126）。现有 tags 只是在 CI 里可见，不被移动、覆盖或重写。
+
 ## 任务派发与状态
 
 `muyan_pilot.py` 是最小 CLI，用于手工派活和查看队列。GitHub Issue 与标签是唯一状态存储，不引入数据库或 Web UI：

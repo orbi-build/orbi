@@ -27,6 +27,15 @@ version and runs the identical commands through `python3` on PATH),
 `requirements.txt` installed, then the two contract commands above. No
 lint, no matrix, no cache.
 
+The checkout uses `fetch-depth: 0` (full history + all tags): the release
+reconciliation tests (`tests/test_release_v01.py`) verify the REAL annotated
+tag object (`v0.1.0`) and its commit relationships with `git cat-file` /
+`git rev-parse` against the checkout, while the default shallow checkout
+(`fetch-depth: 1`) fetches with `--no-tags`, so the tag object is absent in
+the CI environment and the test fails with `could not get object info`
+(Issue #126). The existing tags are only made visible in CI — never moved,
+overwritten, or rewritten.
+
 The same single job also runs the Mintlify docs build smoke (Issue #116):
 the official `mint` CLI's `mint validate` (strict build validation of the
 `docs/` site — config, pages, links — non-zero exit on any warning or
