@@ -1,0 +1,161 @@
+# 快速开始
+
+这一页带你从全新 clone 走到第一个验证过的 tick。这里的所有命令在任何
+clone 路径下都能工作——不依赖任何特定机器布局。
+
+## 前提
+
+| 要求 | 用途 | 检查 |
+|---|---|---|
+| Python 3.14 | Runner 和测试契约（CI 固定同一 minor 版本） | `python3 --version` |
+| [Pi](https://github.com/earendil-works/pi) CLI | 开发 agent；每个任务一个完整 session | `pi --version` |
+| Git | worktree、分支、base 新鲜度 | `git --version` |
+| GitHub CLI（`gh`） | Issue、标签、PR、merge | `gh auth status` |
+| systemd（user session） | 每刻钟触发一个 tick 的 timer | `systemctl --user status` |
+| 可用的 OpenAI-compatible 模型 endpoint | Pi 的模型 provider——本地 llama.cpp server 或任意 OpenAI-compatible API | 一次真实 `pi --print` 调用（见下） |
+
+Pi 必须配置一个能稳定服务 coding agent 的 provider（system prompt +
+tool schemas + 长 session）。派活之前先用一次真实调用验证 endpoint——
+不要假设 key 或模型服务可用：
+
+```bash
+pi --print "reply with the single word: ok"
+```
+
+如果失败，先修模型 endpoint；否则 Runner 会在每个任务上 fail fast。
+
+<Note>
+`local-llm-kv-cache` proxy 是**可选**增强（本地 llama.cpp 模型更快的
+prefix 复用），不是核心前提——见[可选组件](/zh/optional-kv-cache)。
+</Note>
+
+## 1. Clone 仓库
+
+```bash
+git clone https://github.com/xqliu/muyan-pilot.git
+cd muyan-pilot
+```
+
+## 2. 创建配置
+
+仓库带一份提交的 example；真实配置是本地状态（gitignored）。复制并编辑：
+
+```bash
+cp .muyan-pilot.example.toml muyan-pilot.toml
+```
+
+全部字段（TOML，相对路径相对配置文件所在目录解析）：
+
+| 字段 | 必填 | 默认 | 含义 |
+|---|---|---|---|
+| `source_repos` | 是 | — | 每个 tick 按顺序扫描的 `owner/repo` 任务池列表（例如先你的 pilot 仓库，再你的 backlog 仓库） |
+| `repo_dir` | 否 | `.` | service 启动的 Runner checkout（`bootstrap_runner.py` 所在目录） |
+| `workspace_root` | 否 | `..` | 包含任务 worktree 和 agent 可修改仓库的目录 |
+| `prompt` | 否 | `prompt.md` | 实现者 prompt 模板（`{{SOURCE_REPO}}` 等占位符由 Runner 渲染） |
+| `prompt_review` | 否 | `prompt_review.md` | PR 后独立审查 session 的 review prompt 模板 |
+| `base_branch` | 否 | `main` | 交付 base 分支；每个任务 worktree 都从冻结的 `origin/<base_branch>` SHA 创建 |
+| `max_concurrency` | 否 | `1` | 本机并发 Pilot 任务数（正整数；本地模型/GPU 通常只稳定服务一个任务） |
+| `skills` | 否 | `[]` | 可选 Pi skill 路径（绝对、`~`，或相对配置文件） |
+| `context_files` | 否 | `[]` | 可选 Markdown 上下文文件，以路径形式注入 prompt |
+
+最小示例：
+
+```toml
+source_repos = [
+  "OWNER/PILOT-REPO",
+  "OWNER/BACKLOG-REPO",
+]
+
+repo_dir = "."
+workspace_root = ".."
+prompt = "prompt.md"
+prompt_review = "prompt_review.md"
+base_branch = "main"
+max_concurrency = 1
+skills = []
+context_files = []
+```
+
+## 3. 运行一次性 setup
+
+setup 入口用一条命令完成全部初始化：验证 `gh auth status` 和仓库权限、
+从仓库管理的 `labels.toml`（标签名/颜色/描述的唯一事实源——commit 从不
+创建标签，缺标签会让扫描静默漏掉对应状态）声明式对齐平台标签、安装
+systemd user units 并 enable timer、检查 checkout、报告可选模型 proxy：
+
+```bash
+python3 muyan_pilot.py setup --config muyan-pilot.toml
+```
+
+它幂等（重复运行从不创建重复的标签、units 或 timer）且 fail-fast（仓库
+错误、权限不足、checkout 不干净或缺 systemd user bus 都会带具体原因
+停下）。完整输出契约、成功和失败示例见[一次性 setup](/zh/setup)。
+
+## 4. 手工运行一个 tick
+
+手工命令只用于首次验证和排查——正常运行由 timer 调度（第 6 步）：
+
+```bash
+python3 bootstrap_runner.py --config muyan-pilot.toml
+```
+
+一个 tick 最多做一件事：恢复一个已打开的 PR（review/fix/merge），或
+领取一个 `ai-ready` Issue（带 `p0` 标签的 Issue 最先被领取，然后是
+`bug` 标签的，最后是普通 feature），然后退出。ready 队列为空时干净
+退出，不领取任何东西。
+
+## 5. Smoke walkthrough（从零）
+
+验证环境可用的最小端到端证明。在第 1 步的 clone 目录里运行；每条命令
+都相对该目录。
+
+```bash
+# a. 向第一个配置的 source repo 派一个极小任务。
+#    `add` 一步完成创建 Issue 并加 ai-ready 标签。
+python3 muyan_pilot.py add "Docs: verify smoke walkthrough" \
+  --body "Read README.md and confirm the smoke walkthrough commands exist." \
+  --config muyan-pilot.toml
+
+# b. 看队列：新 Issue 已 ready。
+python3 muyan_pilot.py status --config muyan-pilot.toml
+
+# c. 跑一个 tick：Runner 领取 Issue，在全新 worktree 里启动 Pi，
+#    朝 PR 推进。
+python3 bootstrap_runner.py --config muyan-pilot.toml
+
+# d. tick 运行期间跟实时活动（第二个终端）：
+journalctl --user -u muyan-pilot.service -f
+# 或者对手工 tick 直接跟 session JSONL：
+python3 muyan_pilot.py session --follow --config muyan-pilot.toml
+
+# e. PR 打开后，Issue 带 ai-pr-opened，交付在后续 tick 继续
+#    （独立审查、会话内修复、merge）。在 GitHub 上看 Issue 和 PR。
+gh issue list --repo OWNER/PILOT-REPO --label ai-pr-opened
+```
+
+完成标志：Issue 走完 `ai-ready → ai-in-progress → ai-pr-opened →
+ai-merged`，存在一个 body 带 `Fixes #<issue>` 的 PR，journal 显示
+`run_end ... result=pr_opened`。任何一步失败，Issue 会被标记
+`ai-blocked` 并留下现场——恢复方法见[运维](/zh/operations)。
+
+## 6. 验证 timer
+
+setup 已经安装 units 并 enable 了 timer；验证一下：
+
+```bash
+systemctl --user list-timers muyan-pilot.timer
+```
+
+setup 输出带 `timer=enabled active=true next=...`（下次触发时间）。
+timer 每刻钟触发一次，全天 24 小时（00:00–23:45）。任务运行期间，
+后续 timer 启动请求被 systemd 忽略；下一次真正启动会取到最新代码
+（service 启动前先 fast-forward `main`——见[运维](/zh/operations)）。
+
+<Note>
+提交的 unit 模板通过 `%h` 占位符引用作者的 clone 布局
+（`%h/Documents/muyan/muyan-pilot`）。如果你的 clone 在别处，编辑你
+user unit 目录（`~/.config/systemd/user/`）里**已安装**的 units，把
+`WorkingDirectory`、`MUYAN_PILOT_CONFIG` 和 `ExecStart` 指向**你的**
+clone 路径，然后 `systemctl --user daemon-reload`。仓库模板仍是其余
+一切的唯一事实源——漂移检测见[运维](/zh/operations)。
+</Note>

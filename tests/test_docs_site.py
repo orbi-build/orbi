@@ -1,16 +1,21 @@
-"""Documentation site contract for the v0.1.0 open-source release (Issue #104).
+"""Documentation site contract for the v0.1.0 open-source release (Issue #104
++ Issue #116).
 
-The minimal open-source docs live in `docs/` (Mintlify config `docs.json`
-plus `*.mdx` pages) and are the single source of truth: Mintlify only
-builds, searches and hosts them (repository default branch, documentation
-path `/docs`). These tests fail when the docs are missing, when the
-Mintlify navigation drifts from the actual pages, when a required topic
-disappears (problem/scenarios/MVP boundary, install prerequisites, config
-fields, Issue→PR workflow, operations commands, labels/run marker/Epic/
-Release task/P0, security boundary, test+coverage commands, contributing,
-smoke walkthrough), when a doc references a label or config field the
-implementation does not have, or when a doc carries a personal absolute
-path, an unimplemented feature, or the stale 5-minute timer.
+The open-source docs live in `docs/` (Mintlify config `docs.json` plus
+`*.mdx` pages) and are the single source of truth: Mintlify only builds,
+searches and hosts them (repository default branch, documentation path
+`/docs`). The English pages sit at the `docs/` root and the Chinese
+translation lives in `docs/zh/` (the verified Mintlify i18n layout: the
+`navigation.languages` array, default language unprefixed, translated page
+paths prefixed with the language directory). These tests fail when the
+docs are missing, when the Mintlify navigation drifts from the actual
+pages, when a required topic disappears (problem/scenarios/MVP boundary,
+install prerequisites, config fields, Issue→PR workflow, operations
+commands, labels/run marker/Epic/Release task/P0, security boundary,
+test+coverage commands, contributing, smoke walkthrough), when a doc
+references a label or config field the implementation does not have, or
+when a doc (in any language) carries a personal absolute path, an
+unimplemented feature, or the stale 5-minute timer.
 """
 import json
 import re
@@ -75,10 +80,15 @@ PERSONAL_PATH_PATTERN = re.compile(r"/home/[a-z0-9_]+|/Users/[a-z0-9_]+")
 
 
 def docs_files() -> list[Path]:
-    """All committed Markdown/MDX pages under docs/ (sorted, stable)."""
+    """All committed Markdown/MDX pages under docs/ (sorted, stable).
+
+    Includes the language subdirectories (Issue #116: `docs/zh/`), so
+    every global content check (labels, personal paths, stale timer,
+    unimplemented features) covers every language.
+    """
     assert DOCS_DIR.is_dir(), f"missing docs directory: {DOCS_DIR}"
     files = sorted(
-        path for path in DOCS_DIR.iterdir()
+        path for path in DOCS_DIR.rglob("*")
         if path.is_file() and path.suffix in (".md", ".mdx")
     )
     assert files, "docs/ contains no Markdown/MDX pages"
@@ -98,27 +108,50 @@ def load_docs_config() -> dict:
     return config
 
 
-def navigation_pages(config: dict) -> list[str]:
-    """Every page slug referenced by the Mintlify navigation."""
+def navigation_languages(config: dict) -> list[dict]:
+    """The Mintlify i18n navigation (Issue #116, verified against the
+    official i18n guide + docs.json schema reference): the `languages`
+    array, one entry per language, each with its own groups."""
     navigation = config.get("navigation")
     assert isinstance(navigation, dict) and navigation, (
         "docs.json has no navigation section"
     )
-    pages: list[str] = []
-    groups = navigation.get("groups")
-    assert isinstance(groups, list) and groups, (
-        "docs.json navigation has no groups"
+    languages = navigation.get("languages")
+    assert isinstance(languages, list) and languages, (
+        "docs.json navigation must use the languages array (Mintlify i18n)"
     )
-    for group in groups:
-        assert isinstance(group, dict) and group.get("group"), (
-            f"navigation group without a name: {group!r}"
+    return languages
+
+
+def language_page_entries(config: dict) -> list[tuple[str, list[str]]]:
+    """(language code, page paths) for every navigation language entry.
+
+    The default language lists its pages without a prefix (files at the
+    docs root); every other language prefixes its page paths with the
+    language directory (e.g. `zh/index` -> `docs/zh/index.mdx`).
+    """
+    entries: list[tuple[str, list[str]]] = []
+    for lang in navigation_languages(config):
+        assert isinstance(lang, dict) and lang.get("language"), (
+            f"navigation language entry without a code: {lang!r}"
         )
-        group_pages = group.get("pages")
-        assert isinstance(group_pages, list) and group_pages, (
-            f"navigation group {group.get('group')!r} has no pages"
+        code = str(lang["language"])
+        pages: list[str] = []
+        groups = lang.get("groups")
+        assert isinstance(groups, list) and groups, (
+            f"navigation language {code!r} has no groups"
         )
-        pages.extend(group_pages)
-    return pages
+        for group in groups:
+            assert isinstance(group, dict) and group.get("group"), (
+                f"navigation group without a name: {group!r}"
+            )
+            group_pages = group.get("pages")
+            assert isinstance(group_pages, list) and group_pages, (
+                f"navigation group {group.get('group')!r} has no pages"
+            )
+            pages.extend(group_pages)
+        entries.append((code, pages))
+    return entries
 
 
 def test_docs_config_is_a_mintlify_config_named_muyan_pilot():
@@ -140,15 +173,51 @@ def test_docs_config_is_a_mintlify_config_named_muyan_pilot():
     )
 
 
-def test_docs_navigation_matches_the_actual_pages_exactly():
-    """KISS: one group per topic, every page listed once, no orphan page
-    outside the navigation and no navigation entry without a file."""
+def test_docs_navigation_uses_the_verified_i18n_languages_layout():
+    """Issue #116: the navigation is the Mintlify i18n `languages` array
+    (verified against the official i18n guide + docs.json schema
+    reference): English is the default language (listed first, its pages
+    unprefixed at the docs root), Chinese is `zh` (a supported code) with
+    its pages prefixed `zh/` (files under `docs/zh/`), and no page path
+    appears in more than one language (the official warning: duplicating
+    paths across languages is undefined behavior)."""
     config = load_docs_config()
-    listed = navigation_pages(config)
-    actual = {path.stem for path in docs_files()}
+    entries = language_page_entries(config)
+    codes = [code for code, _pages in entries]
+    assert codes[0] == "en", (
+        f"the default language must be English (first entry), got: {codes!r}"
+    )
+    assert "zh" in codes, (
+        f"the Chinese language must be `zh` (Mintlify supported code), got: {codes!r}"
+    )
+    assert len(codes) == len(set(codes)), f"duplicate language codes: {codes!r}"
+    en_pages = dict(entries)["en"]
+    zh_pages = dict(entries)["zh"]
+    assert all(not page.startswith("en/") for page in en_pages), (
+        f"default-language pages must be unprefixed (docs root), got: {en_pages!r}"
+    )
+    assert zh_pages, "the Chinese navigation lists no pages"
+    assert all(page.startswith("zh/") for page in zh_pages), (
+        f"translated pages must be prefixed with the language directory, got: {zh_pages!r}"
+    )
+    overlap = set(en_pages) & set(zh_pages)
+    assert not overlap, f"page paths duplicated across languages: {sorted(overlap)}"
+
+
+def test_docs_navigation_matches_the_actual_pages_exactly():
+    """KISS: one group per topic per language, every page listed once, no
+    orphan page outside the navigation and no navigation entry without a
+    file (Issue #116: the i18n `languages` layout)."""
+    config = load_docs_config()
+    entries = language_page_entries(config)
+    listed: list[str] = []
+    for _code, pages in entries:
+        listed.extend(pages)
     assert len(listed) == len(set(listed)), (
         f"navigation lists a page twice: {sorted(set(p for p in listed if listed.count(p) > 1))}"
     )
+    actual = {str(path.relative_to(DOCS_DIR)).removesuffix(".mdx").removesuffix(".md")
+              for path in docs_files()}
     missing = set(listed) - actual
     assert not missing, f"navigation references missing pages: {sorted(missing)}"
     orphans = actual - set(listed)

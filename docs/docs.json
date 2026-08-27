@@ -6,34 +6,86 @@
     "primary": "#1d76db"
   },
   "navigation": {
-    "groups": [
+    "languages": [
       {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "getting-started",
-          "setup"
+        "language": "en",
+        "default": true,
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "index",
+              "getting-started",
+              "setup"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "workflow",
+              "operations"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "security",
+              "testing",
+              "contributing"
+            ]
+          },
+          {
+            "group": "Optional Components",
+            "pages": [
+              "optional-kv-cache"
+            ]
+          },
+          {
+            "group": "Releases",
+            "pages": [
+              "release-v0.1.0"
+            ]
+          }
         ]
       },
       {
-        "group": "Core Concepts",
-        "pages": [
-          "workflow",
-          "operations"
-        ]
-      },
-      {
-        "group": "Guides",
-        "pages": [
-          "security",
-          "testing",
-          "contributing"
-        ]
-      },
-      {
-        "group": "Optional Components",
-        "pages": [
-          "optional-kv-cache"
+        "language": "zh",
+        "groups": [
+          {
+            "group": "快速开始",
+            "pages": [
+              "zh/index",
+              "zh/getting-started",
+              "zh/setup"
+            ]
+          },
+          {
+            "group": "核心概念",
+            "pages": [
+              "zh/workflow",
+              "zh/operations"
+            ]
+          },
+          {
+            "group": "指南",
+            "pages": [
+              "zh/security",
+              "zh/testing",
+              "zh/contributing"
+            ]
+          },
+          {
+            "group": "可选组件",
+            "pages": [
+              "zh/optional-kv-cache"
+            ]
+          },
+          {
+            "group": "发布",
+            "pages": [
+              "zh/release-v0.1.0"
+            ]
+          }
         ]
       }
     ]

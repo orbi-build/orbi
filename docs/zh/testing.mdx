@@ -1,0 +1,53 @@
+# 测试
+
+仓库契约（见 `AGENTS.md`）：Python 代码的完整 pytest 套件，
+**100% 行和分支覆盖**。同一契约在 Runner 机器本地和 GitHub 远端
+运行。
+
+## 本地契约命令
+
+从仓库根目录运行（生产解释器 `/usr/bin/python3`，Python 3.14）：
+
+```bash
+/usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
+/usr/bin/python3 -m coverage report --fail-under=100 --show-missing
+```
+
+第二条命令在任何行或分支低于 100% 时退出非零，所以这对命令是门禁，
+不是报告。
+
+## 远端 CI（GitHub Actions）
+
+`.github/workflows/ci.yml` 在每次 `pull_request` 和每次 push 到
+`main` 时运行同一契约：单个 job，`actions/setup-python` 固定 Python
+3.14（GitHub-hosted runner 没有生产路径上的生产解释器，所以 workflow
+固定同一 minor 版本，通过 PATH 上的 `python3` 运行相同命令），安装
+`requirements.txt`，然后运行上面两条契约命令。没有 lint、没有矩阵、
+没有缓存。
+
+Checkout 用 `fetch-depth: 0`（完整历史 + 全部 tags）：发布对账测试
+（`tests/test_release_v01.py`）用 `git cat-file` / `git rev-parse` 对
+checkout 里的真实 annotated tag object（`v0.1.0`）及其 commit 关系做校验，
+而默认浅 checkout（`fetch-depth: 1`）以 `--no-tags` 抓取，CI 环境里没有
+tag object，测试会以 `could not get object info` 失败（Issue #126）。现有
+tags 只是在 CI 里可见，不被移动、覆盖或重写。
+
+CI 里还运行 Mintlify 文档构建 smoke（Issue #116）：官方 `mint` CLI
+的 `mint validate`（严格构建校验，任何 warning 或 error 都退出非零）
+——文档配置、页面和链接在远端同样被门禁。
+
+CI 红的时候 PR 不可合并——Runner 的 merge 门禁也要求 PR mergeable。
+
+## 测试覆盖什么
+
+- **行为测试**：runner、CLI、slots、进度发布、活动流、
+  resume/review/merge 逻辑（套件主体，包括针对真实 `git` 和 `gh`
+  fixture 的端到端测试）。
+- **静态契约测试**：把仓库钉在它自己的文档和文件上：`AGENTS.md`
+  契约项、标签集、systemd units（每刻钟调度、preflight）、CI
+  workflow、LICENSE、`docs/` 下的文档站（本页的声明由
+  `tests/test_docs_site.py` 强制执行；中文页面和 EN/ZH 同一事实源由
+  `tests/test_docs_i18n.py` 强制执行；Mermaid 图由
+  `tests/test_docs_mermaid.py` 强制执行）。
+
+改代码时，在同一个 PR 里更新或新增测试，保持覆盖率门禁绿。

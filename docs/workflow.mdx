@@ -7,6 +7,26 @@ automatic chain and the project's GitHub workflow vocabulary.
 
 ## The complete chain
 
+State machine (the six delivery states; the review/fix loop stays on the
+same PR — only its head may advance):
+
+```mermaid
+flowchart LR
+  epic["Epic (ai-epic) — coordination only, never claimed"]
+  epic -.splits into.-> ready
+  release["Release task — a regular ai-ready Issue (release reconciliation)"]
+  release -.delivers through.-> ready
+  ready["ai-ready<br/>(pickup order: P0-labeled first, then bug-labeled, then plain)"]
+  ready -->|claim: label + worktree + Pi| progress["ai-in-progress"]
+  progress -->|PR verified: base fresh, run marker, Fixes #N| opened["ai-pr-opened"]
+  opened -->|independent review session, fixes in-session| verdict{REVIEW_VERDICT}
+  verdict -->|clean verdict + merge gate| merged["ai-merged (terminal)"]
+  verdict -->|finding / base conflict / rounds exhausted| blocked["ai-blocked (terminal, human decides)"]
+  opened -->|finding / base conflict| fixneeded["ai-fix-needed"]
+  fixneeded -->|next tick: next review session on the SAME PR| opened
+  progress -->|fail fast| blocked
+```
+
 ```text
 ai-ready                a task is dispatched (muyan_pilot.py add, or a human
                         adds the label)

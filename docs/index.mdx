@@ -6,6 +6,42 @@ isolated worktree, runs the real test suite, opens a PR, then completes an
 independent review (with in-session fixes) and merges a clean PR — with the
 whole delivery recorded in GitHub Issues, comments and the PR itself.
 
+## System architecture overview
+
+```mermaid
+flowchart LR
+  subgraph github["GitHub — task pool + delivery record"]
+    issues["Issues + labels (ai-ready → ai-merged)"]
+    prs["PRs (Fixes #N, run marker) + review/merge"]
+  end
+  subgraph machine["Runner machine (systemd user session)"]
+    timer["muyan-pilot.timer (15-minute tick)"]
+    service["muyan-pilot.service (ExecStartPre: fast-forward main)"]
+    runner["Runner (muyan_pilot.py): claim → worktree → Pi → PR → review → merge"]
+    worktree["task worktree + feature branch (frozen origin/main SHA, run id in the name)"]
+    pi["Pi sessions (implement + independent review)"]
+    model["llama-server (core: any OpenAI-compatible endpoint)"]
+    proxy["local-llm-kv-cache proxy (OPTIONAL: prefix reuse)"]
+  end
+  issues -->|scan + labels| runner
+  timer -->|triggers| service
+  service -->|starts| runner
+  runner -->|creates| worktree
+  runner -->|starts| pi
+  pi -->|reads/writes| worktree
+  pi -->|OpenAI-compatible| model
+  pi -.->|optional| proxy
+  proxy -->|forwards| model
+  runner -->|gh API: PR / review / merge| prs
+  prs -->|merge → ai-merged| issues
+```
+
+The solid arrow `Pi → llama-server` is the core path (any
+OpenAI-compatible endpoint works). The dotted arrow marks the optional
+[`local-llm-kv-cache`](/optional-kv-cache) proxy: it only adds faster
+prefix reuse for local llama.cpp models and is never a core
+prerequisite.
+
 ## The problem it solves
 
 Small and medium development tasks (a bug, a feature, a docs change, a

@@ -91,6 +91,34 @@ def test_ci_workflow_keeps_one_job_without_lint_matrix_or_cache():
         )
 
 
+def test_ci_workflow_checkout_fetches_full_history_and_tags():
+    """Issue #126: the release reconciliation tests
+    (tests/test_release_v01.py) verify the REAL annotated tag object
+    (v0.1.0 → 912631d3) and its commit relationships with `git
+    cat-file` / `git rev-parse` / `git merge-base --is-ancestor`
+    against the checkout. The default shallow checkout (fetch-depth: 1)
+    runs `git fetch --no-tags` (verified against the official
+    actions/checkout@v4 source: git-command-manager.ts), so the tag
+    object is absent in the CI environment and the test fails with
+    `could not get object info`. `fetch-depth: 0` makes the action
+    fetch all branches and `+refs/tags/*:refs/tags/*` without `--depth`
+    (full history plus every tag object), so the release verification
+    uses the real remote objects."""
+    steps = steps_of(load_workflow())
+    checkout = [
+        step for step in steps
+        if str(step.get("uses", "")).startswith("actions/checkout")
+    ]
+    assert checkout, "CI must check out the repository via actions/checkout"
+    assert len(checkout) == 1, f"exactly one checkout step, got {len(checkout)}"
+    with_options = checkout[0].get("with", {})
+    assert str(with_options.get("fetch-depth")) == "0", (
+        "CI checkout must fetch full history and all tags "
+        f"(fetch-depth: 0) so the annotated tag objects exist for the "
+        f"release reconciliation tests, got: {with_options!r}"
+    )
+
+
 def test_ci_workflow_pins_python_3_14_like_production():
     steps = steps_of(load_workflow())
     setup = [
@@ -131,6 +159,27 @@ def test_ci_workflow_enforces_full_line_and_branch_coverage():
     )
     assert any("--show-missing" in command for command in enforcing), (
         "coverage report must keep the local --show-missing shape"
+    )
+
+
+def test_ci_workflow_runs_the_mintlify_docs_build_smoke():
+    """Issue #116: the docs build smoke runs in CI with the official
+    Mintlify CLI — `mint validate` (strict build validation, non-zero
+    exit on any warning or error) in the SAME single job (KISS: no
+    second job, no cache, no matrix)."""
+    commands = step_commands(steps_of(load_workflow()))
+    assert any(
+        re.search(r"npm (i|install)( -g)? mint\b", command) for command in commands
+    ), (
+        "CI must install the official Mintlify CLI (mint), "
+        f"steps run: {commands!r}"
+    )
+    assert any(
+        re.search(r"^mint validate$|\bmint validate\b", command) and "--" not in command
+        for command in commands
+    ), (
+        "CI must run the Mintlify build smoke `mint validate`, "
+        f"steps run: {commands!r}"
     )
 
 
