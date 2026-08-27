@@ -8,8 +8,8 @@ verification, troubleshooting and recovery.
 
 ## The timer
 
-`systemd/muyan-pilot.timer` fires every 15 minutes, 24 hours a day
-(`OnCalendar=*-*-* *:00/15`, `AccuracySec=30s`, `Persistent=false` — a
+`systemd/muyan-pilot.timer` fires every 5 minutes, 24 hours a day
+(`OnCalendar=*-*-* *:00/5`, `AccuracySec=30s`, `Persistent=false` — a
 missed tick is dropped, never queued). Each tick starts
 `muyan-pilot.service`, which:
 
@@ -71,7 +71,7 @@ Stable `key=value` lines you will see:
   consecutive idle windows and the Runner kills the Pi session itself).
 
 The idle warning, the idle recovery and the upstream-dead kill are
-log/health thresholds — they are not the 15-minute schedule and not a
+log/health thresholds — they are not the 5-minute schedule and not a
 business task timeout. The idle recovery never holds the slot forever:
 a stalled session either resumes (the failure signal reached the model
 and the first new event resets the recovery state) or the run fails

@@ -6,8 +6,8 @@ journal 和 GitHub。正常路径永远不需要 status 命令、轮询或督工
 
 ## Timer
 
-`systemd/muyan-pilot.timer` 每刻钟触发一次，全天 24 小时
-（`OnCalendar=*-*-* *:00/15`、`AccuracySec=30s`、`Persistent=false`——
+`systemd/muyan-pilot.timer` 每 5 分钟触发一次，全天 24 小时
+（`OnCalendar=*-*-* *:00/5`、`AccuracySec=30s`、`Persistent=false`——
 错过的 tick 被丢弃，从不排队）。每个 tick 启动
 `muyan-pilot.service`，它：
 
@@ -56,7 +56,7 @@ journalctl --user -u muyan-pilot.service | grep e07383c2
   `PI_MODEL_WAIT_DEAD_SECONDS`（默认 600 秒）判定上游模型已死，Runner
   杀掉 Pi）。
 
-idle 告警和上游已死 kill 是日志/健康阈值——它们不是每刻钟调度，也
+idle 告警和上游已死 kill 是日志/健康阈值——它们不是每 5 分钟调度，也
 不是业务任务 timeout。
 
 ## CLI（`muyan_pilot.py`）

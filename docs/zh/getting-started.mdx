@@ -11,7 +11,7 @@ clone 路径下都能工作——不依赖任何特定机器布局。
 | [Pi](https://github.com/earendil-works/pi) CLI | 开发 agent；每个任务一个完整 session | `pi --version` |
 | Git | worktree、分支、base 新鲜度 | `git --version` |
 | GitHub CLI（`gh`） | Issue、标签、PR、merge | `gh auth status` |
-| systemd（user session） | 每刻钟触发一个 tick 的 timer | `systemctl --user status` |
+| systemd（user session） | 每 5 分钟触发一个 tick 的 timer | `systemctl --user status` |
 | 可用的 OpenAI-compatible 模型 endpoint | Pi 的模型 provider——本地 llama.cpp server 或任意 OpenAI-compatible API | 一次真实 `pi --print` 调用（见下） |
 
 Pi 必须配置一个能稳定服务 coding agent 的 provider（system prompt +
@@ -147,7 +147,7 @@ systemctl --user list-timers muyan-pilot.timer
 ```
 
 setup 输出带 `timer=enabled active=true next=...`（下次触发时间）。
-timer 每刻钟触发一次，全天 24 小时（00:00–23:45）。任务运行期间，
+timer 每 5 分钟触发一次，全天 24 小时（00:00–23:55）。任务运行期间，
 后续 timer 启动请求被 systemd 忽略；下一次真正启动会取到最新代码
 （service 启动前先 fast-forward `main`——见[运维](/zh/operations)）。
 

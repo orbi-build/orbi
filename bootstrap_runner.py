@@ -2796,8 +2796,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
     delivery whose PR is open still needs the machine, and no other
     Runner may start a second Pi while it is held. The Runner is the
     owner of that lifecycle, so it re-checks the delivery every
-    `poll_interval` seconds (the same cadence as the idle timer and the
-    Pi activity poll):
+    `poll_interval` seconds (the same cadence as the Pi activity poll):
 
     - PR `MERGED` -> terminal: the delivery is done, the slot is
       released by the caller and the next tick may claim new work;

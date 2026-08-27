@@ -142,7 +142,7 @@ is **one runtime outcome** (when X, should Y, actually Z).
   currently running long task is never hot-updated or killed — while the
   service is active, systemd ignores the timer's start request, and the
   next real start runs the latest code. No refresh service, worker,
-  dispatcher or resident process is added; the 15-minute timer is
+  dispatcher or resident process is added; the 5-minute timer is
   unchanged.
 - Deployment consistency (Issue #103): the repo templates
   `systemd/muyan-pilot.service` and `systemd/muyan-pilot.timer` are the

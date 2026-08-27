@@ -19,7 +19,7 @@
 /usr/bin/python3 bootstrap_runner.py --config muyan-pilot.toml
 ```
 
-正常运行使用 systemd user timer，全天 24 小时运行，每 15 分钟自动执行一次（触发点覆盖 00:00–23:45）：
+正常运行使用 systemd user timer，全天 24 小时运行，每 5 分钟自动执行一次（触发点覆盖 00:00–23:55）：
 
 ```bash
 # 幂等安装用户级 service/timer（仓库模板复制到用户 systemd 目录、
@@ -38,7 +38,7 @@ service 每次真正启动时，先由 `ExecStartPre` 在 Python Runner 进程�
 git fetch origin main && git merge --ff-only origin/main
 ```
 
-本地 main 被 fast-forward 到最新 `origin/main` 后，Runner 才用新代码启动。当前正在运行的长任务不会被热更新、不会被杀、也不会启动第二个 Runner（service active 时 systemd 忽略 timer 的 start 请求；下一次 service 真正启动时生效）。main 工作区不干净、fetch 失败或无法 fast-forward 时，preflight 命令失败，service 不启动，原因写入 systemd journal（fail fast）。不新增 refresh service、worker、dispatcher 或常驻进程；15 分钟 timer 配置保持不变。
+本地 main 被 fast-forward 到最新 `origin/main` 后，Runner 才用新代码启动。当前正在运行的长任务不会被热更新、不会被杀、也不会启动第二个 Runner（service active 时 systemd 忽略 timer 的 start 请求；下一次 service 真正启动时生效）。main 工作区不干净、fetch 失败或无法 fast-forward 时，preflight 命令失败，service 不启动，原因写入 systemd journal（fail fast）。不新增 refresh service、worker、dispatcher 或常驻进程；5 分钟 timer 配置保持不变。
 
 ## 部署一致性（Issue #103）
 
@@ -313,7 +313,7 @@ Runner 每次处理一个 delivery：领取（或恢复）一个 Issue 后，在
 
 本机允许的 Pilot 并发任务数由 `muyan-pilot.toml` 的 `max_concurrency` 配置：必须是正整数，缺失时默认 1（本地 AI/GPU 只能稳定服务一个任务）；非整数、布尔值、0 或负数启动即 fail fast。slot 状态在 `<repo_dir>/.muyan-pilot/slots/slot-N`（N = 1..max_concurrency）：每个 slot 文件是一个普通的锁目标，**文件上的排他 `flock(2)` 锁就是所有权**——内核保证同一时刻至多一个进程持有某个 slot 的锁。持有者 PID 只作为 `status` 展示的观察性元数据写入文件，不是所有权依据；没有 stale PID/超时回收启发式，没有 atexit/信号清理协议。
 
-- 并发额度按完整任务生命周期计算：Runner 在领取 Issue 之前取得 slot，implement → review（会话内修复）→ merge 期间始终占用；PR 打开后任务没有结束，Runner 持有 slot 轮询 PR 状态（15 秒一次，与空闲 timer 同频）：PR `MERGED` 或终态失败（PR 未合并被关闭 → Issue 标记 `ai-blocked`）才释放 slot 退出；期间 Issue 进入 `ai-fix-needed`（review finding 或 base 冲突）时，**下一个 tick 在同一 run、同一 PR 上启动下一个独立审查会话**（会话内吸收最新 base 并修复 finding，见下节），不会冷启动 Fixer，也不会让新 Runner 插队领取新 Issue；
+- 并发额度按完整任务生命周期计算：Runner 在领取 Issue 之前取得 slot，implement → review（会话内修复）→ merge 期间始终占用；PR 打开后任务没有结束，Runner 持有 slot 轮询 PR 状态（15 秒一次，与 Pi 活动轮询同频）：PR `MERGED` 或终态失败（PR 未合并被关闭 → Issue 标记 `ai-blocked`）才释放 slot 退出；期间 Issue 进入 `ai-fix-needed`（review finding 或 base 冲突）时，**下一个 tick 在同一 run、同一 PR 上启动下一个独立审查会话**（会话内吸收最新 base 并修复 finding，见下节），不会冷启动 Fixer，也不会让新 Runner 插队领取新 Issue；
 - 同一任务内部 implement/review 串行执行，共用同一个 slot，任意时刻最多一个 Pi 子进程；
 - 达到 `max_concurrency` 时，新 Runner 不领取 Issue、不修改标签、不调用 Pi，记录结构化日志 `capacity_full max_concurrency=... slot_dir=...` 后正常退出（退出码 0），等 systemd timer 下次触发；
 - slot 锁由打开的文件描述符持有：进程正常结束、SIGTERM/SIGINT（systemd stop / Ctrl+C）或被 SIGKILL 时，内核自动释放锁——活着的持有者永远不会因为时间或 PID 检查丢失 slot，死掉的持有者永远不会占住 slot，异常退出不会造成永久锁死；slot 文件本身保留（它是锁目标，不是令牌），`status` 按锁的实际状态报告占用；

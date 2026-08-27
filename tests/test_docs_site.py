@@ -15,7 +15,7 @@ commands, labels/run marker/Epic/Release task/P0, security boundary,
 test+coverage commands, contributing, smoke walkthrough), when a doc
 references a label or config field the implementation does not have, or
 when a doc (in any language) carries a personal absolute path, an
-unimplemented feature, or the stale 5-minute timer.
+unimplemented feature, or the stale 15-minute timer.
 """
 import json
 import re
@@ -316,12 +316,14 @@ def test_docs_document_labels_run_marker_epic_release_task_and_p0():
 
 
 def test_docs_document_operations_commands():
-    """Operations must cover first start, the 15-minute timer, journal
+    """Operations must cover first start, the 5-minute timer, journal
     logs, the status/session/add CLI, worktrees and failure recovery —
     with the commands the implementation actually provides."""
     text = page_text("operations")
     assert "muyan-pilot.timer" in text
-    assert "15" in text, "operations must document the 15-minute idle polling interval"
+    assert "OnCalendar=*-*-* *:00/5" in text, (
+        "operations must document the 5-minute idle polling interval"
+    )
     assert "journalctl" in text, "operations must show the journal command"
     assert "muyan_pilot.py" in text, "operations must name the CLI"
     for command in ("status", "session", "add"):
@@ -427,18 +429,18 @@ def test_docs_do_not_document_unimplemented_runner_features():
     )
 
 
-def test_docs_do_not_resurrect_the_stale_five_minute_timer():
-    """Acceptance: no stale 5-minute timer convention. The idle polling
-    interval stays 15 minutes (Issue #51 explicitly not in v0.1); the only
-    5-minute number in the contract is the PI_IDLE_WARN_SECONDS idle
-    warning, which is a log threshold, not a schedule."""
+def test_docs_document_the_five_minute_timer():
+    """Issue #51: the idle polling interval is 5 minutes. The operations
+    pages (EN and ZH) must document the real OnCalendar, and no stale
+    15-minute OnCalendar may remain in any doc page."""
+    en = page_text("operations")
+    assert "OnCalendar=*-*-* *:00/5" in en, (
+        "English operations must document the 5-minute timer"
+    )
     for path in docs_files():
         content = path.read_text(encoding="utf-8")
-        assert "5 分钟" not in content and "5分钟" not in content, (
-            f"{path.name} resurrects the stale 5-minute timer"
-        )
-        assert "00/5" not in content, (
-            f"{path.name} resurrects the stale 5-minute OnCalendar"
+        assert "00/15" not in content, (
+            f"{path.name} carries the stale 15-minute OnCalendar"
         )
 
 
