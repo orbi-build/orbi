@@ -292,6 +292,86 @@ def test_docs_operations_name_the_cli():
             )
 
 
+# --- the bare entry IS the Runner (the systemd ExecStart) ----------------------
+
+
+def test_bare_cli_runs_the_runner_tick(monkeypatch, tmp_path):
+    """Issue #140 acceptance: `systemd 使用 CLI 入口可启动 Runner`.
+
+    The service's `ExecStart` is the bare installed CLI (no
+    subcommand), so `muyan-pilot` with NO arguments must run one
+    Runner tick — exactly like the legacy `python3
+    bootstrap_runner.py` — and must NOT die with the argparse error
+    `the following arguments are required: command` (the pre-fix
+    failure mode that made every timer tick exit 2 without ever
+    starting the Runner)."""
+    import muyan_pilot
+
+    calls = []
+
+    def fake_runner_main(argv):
+        calls.append(argv)
+        return 0
+
+    monkeypatch.setattr(
+        muyan_pilot.bootstrap_runner, "main", fake_runner_main,
+    )
+    config = tmp_path / "muyan-pilot.toml"
+    assert muyan_pilot.main(["--config", str(config)]) == 0
+    assert calls == [["--config", str(config)]], (
+        "the bare CLI must delegate to the Runner's main with the "
+        f"same --config, got: {calls!r}"
+    )
+
+
+def test_bare_cli_default_config_delegates_to_the_runner(monkeypatch):
+    """`muyan-pilot` with no arguments at all uses the default config
+    path (MUYAN_PILOT_CONFIG / muyan-pilot.toml) and still delegates
+    to the Runner tick."""
+    import muyan_pilot
+
+    calls = []
+    monkeypatch.setattr(
+        muyan_pilot.bootstrap_runner, "main",
+        lambda argv: calls.append(argv) or 7,
+    )
+    monkeypatch.delenv("MUYAN_PILOT_CONFIG", raising=False)
+    assert muyan_pilot.main([]) == 7
+    assert calls == [["--config", "muyan-pilot.toml"]]
+
+
+def test_bare_cli_real_call_reaches_the_runner_not_argparse(tmp_path):
+    """Real call of the ExecStart shape (bare installed CLI): the
+    failure must come from the RUNNER's fail-fast path (config
+    loading), never from argparse rejecting the bare entry. Skipped
+    when the CLI is not installed on this machine."""
+    import shutil
+    import subprocess
+
+    cli = shutil.which("muyan-pilot")
+    if cli is None:
+        pytest.skip("muyan-pilot CLI is not installed on this machine")
+    result = subprocess.run(
+        [cli, "--config", str(tmp_path / "missing.toml")],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode != 0, (
+        f"bare CLI with a missing config must fail fast, got rc=0 "
+        f"stdout={result.stdout.strip()}"
+    )
+    assert "the following arguments are required: command" not in (
+        result.stderr + result.stdout
+    ), (
+        "the bare CLI (the systemd ExecStart shape) was rejected by "
+        f"argparse instead of starting the Runner: "
+        f"{result.stderr.strip()}"
+    )
+    assert "FileNotFoundError" in result.stderr, (
+        "the bare CLI must reach the Runner's config loading "
+        f"(fail-fast on the missing config), got: {result.stderr.strip()}"
+    )
+
+
 # --- the compatibility path ----------------------------------------------------
 
 
@@ -372,7 +452,7 @@ def test_parse_unit_rejects_key_before_any_section(tmp_path):
         parse_unit(bad)
 
 
-def test_real_call_tests_skip_without_the_cli(monkeypatch):
+def test_real_call_tests_skip_without_the_cli(monkeypatch, tmp_path):
     """The real-call tests must skip (not fail) on a machine without
     the installed CLI — the suite must not require an install."""
     import shutil
@@ -382,6 +462,8 @@ def test_real_call_tests_skip_without_the_cli(monkeypatch):
         test_installed_cli_help_and_version_match_real_calls()
     with pytest.raises(pytest.skip.Exception):
         test_service_template_passes_systemd_analyze_verify()
+    with pytest.raises(pytest.skip.Exception):
+        test_bare_cli_real_call_reaches_the_runner_not_argparse(tmp_path)
 
 
 def test_service_verify_test_skips_without_systemd_analyze(monkeypatch):

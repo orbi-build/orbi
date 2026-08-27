@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """Muyan Pilot task dispatch and status CLI.
 
-`add` creates an Issue in a configured source repo and labels it `ai-ready`.
-`status` reports the current in-progress Issue (with its live Pi activity:
-phase, last activity time, the last meaningful action, the newest tool
-call result, session file and worktree), the next ready Issue, and the
-most recent result (`ai-pr-opened` / `ai-fix-needed` / `ai-merged` /
-`ai-blocked`) per source repo.
+With NO subcommand the CLI IS the Runner entry (Issue #140): it runs one
+tick, exactly like the legacy `python3 bootstrap_runner.py` — this is
+what the systemd service's `ExecStart` (the installed `muyan-pilot`)
+invokes on every timer trigger. The named subcommands are the dispatch
+and debug entries on top of that:
+
+`add` creates an Issue in a configured source repo and labels it
+`ai-ready`.
+`status` reports the current in-progress Issue (with its live Pi
+activity: phase, last activity time, the last meaningful action, the
+newest tool call result, session file and worktree), the next ready
+Issue, and the most recent result (`ai-pr-opened` / `ai-fix-needed` /
+`ai-merged` / `ai-blocked`) per source repo.
 
 GitHub Issues and labels are the only state store. There is no database,
 queue, or web UI. Command failures are logged and raised by the reused
@@ -24,6 +31,7 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
+import bootstrap_runner
 import git_transport
 import systemd_deploy
 
@@ -467,7 +475,11 @@ def main(argv: list[str] | None = None) -> int:
         "--version", action="version",
         version=f"muyan-pilot {__version__}",
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    # Issue #140: the subcommand is OPTIONAL — with no subcommand the
+    # installed CLI runs one Runner tick (the systemd ExecStart is the
+    # bare `muyan-pilot`), exactly like the legacy
+    # `python3 bootstrap_runner.py`.
+    subparsers = parser.add_subparsers(dest="command")
     add_parser = subparsers.add_parser(
         "add", parents=[common],
         help="create an Issue in a source repo and add ai-ready",
@@ -533,6 +545,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format=log_format())
+
+    if args.command is None:
+        # Issue #140: no subcommand = the Runner tick. Delegate to the
+        # Runner's own main: it re-parses `--config` and owns the whole
+        # tick contract (unit-drift preflight, transport preflight,
+        # slot, claim, fail-fast) — the same behavior the legacy
+        # `python3 bootstrap_runner.py` entry had.
+        return bootstrap_runner.main(["--config", str(args.config)])
 
     config = load_config(args.config)
     validate_config(config)
