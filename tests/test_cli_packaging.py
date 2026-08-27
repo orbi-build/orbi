@@ -196,13 +196,25 @@ def test_service_template_passes_systemd_analyze_verify():
     """Issue #140 acceptance: the service template starts the Runner
     via the CLI entry — verified with the REAL `systemd-analyze
     --user verify` (the user manager context, where the `%h` specifier
-    and the installed CLI resolve). Skipped when the CLI is not
-    installed on this machine: the check needs the real executable."""
+    and the installed CLI resolve). Skipped unless the installed CLI
+    sits at the unit's ExecStart path (`~/.local/bin/muyan-pilot`,
+    the `uv tool` layout) and `systemd-analyze` is available:
+    `systemd-analyze --user verify` resolves the unit's absolute
+    ExecStart against THIS machine, so any other install location
+    (e.g. CI's `pip install .` venv bin) cannot be verified here —
+    the unit's ExecStart string itself is pinned by
+    `test_service_exec_start_uses_the_installed_cli`."""
+    import os
     import shutil
     import subprocess
 
-    if shutil.which("muyan-pilot") is None:
-        pytest.skip("muyan-pilot CLI is not installed on this machine")
+    exec_start = os.path.expanduser("~/.local/bin/muyan-pilot")
+    if not os.path.isfile(exec_start):
+        pytest.skip(
+            "the installed CLI is not at the unit's ExecStart path "
+            f"({exec_start}); systemd-analyze verify can only check "
+            "the unit against this machine's real executable"
+        )
     if shutil.which("systemd-analyze") is None:
         pytest.skip("systemd-analyze not available on this machine")
     result = subprocess.run(
@@ -461,9 +473,22 @@ def test_real_call_tests_skip_without_the_cli(monkeypatch, tmp_path):
     with pytest.raises(pytest.skip.Exception):
         test_installed_cli_help_and_version_match_real_calls()
     with pytest.raises(pytest.skip.Exception):
-        test_service_template_passes_systemd_analyze_verify()
-    with pytest.raises(pytest.skip.Exception):
         test_bare_cli_real_call_reaches_the_runner_not_argparse(tmp_path)
+
+
+def test_service_verify_test_skips_when_the_cli_is_not_at_the_exec_start_path(
+    monkeypatch,
+):
+    """The CLI is on the PATH (e.g. CI's `pip install .` venv bin) but
+    NOT at the unit's ExecStart path (`~/.local/bin/muyan-pilot`):
+    `systemd-analyze --user verify` would fail on the missing
+    absolute entry, so the test skips — it must not fail on a machine
+    whose install layout differs from the uv-tool one."""
+    import os
+
+    monkeypatch.setattr(os.path, "isfile", lambda path: False)
+    with pytest.raises(pytest.skip.Exception):
+        test_service_template_passes_systemd_analyze_verify()
 
 
 def test_service_verify_test_skips_without_systemd_analyze(monkeypatch):
