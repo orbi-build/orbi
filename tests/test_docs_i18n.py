@@ -106,6 +106,48 @@ def test_chinese_and_english_page_sets_stay_the_same_source_of_truth():
     )
 
 
+def test_chinese_homepage_carries_a_real_frontmatter_title():
+    """Issue #128: the zh language index page has no filename-derived
+    title the renderer can use, so without a frontmatter `title` the
+    renderer falls back to the capitalized language code — the live
+    site showed "Zh" in the sidebar, breadcrumb and page header (and
+    `/zh.md` injected `# Zh` before the content). The frontmatter
+    `title` is the documented page-metadata mechanism (official
+    Mintlify i18n guide). The title must be a real, natural title that
+    names the project — never the internal language code."""
+    text = zh_page_text("index")
+    match = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
+    assert match is not None, (
+        "zh/index.mdx must start with YAML frontmatter (page metadata)"
+    )
+    title_match = re.search(
+        r'^title:\s*["\']?([^"\'\n]+?)["\']?\s*$',
+        match.group(1),
+        re.MULTILINE,
+    )
+    assert title_match is not None, "frontmatter must set a title"
+    title = title_match.group(1).strip()
+    assert title, "the frontmatter title must not be empty"
+    assert title.lower() != "zh", (
+        f"the title must not be the internal language code, got: {title!r}"
+    )
+    assert "Muyan Pilot" in title, (
+        "the Chinese home title must name the project, "
+        f"got: {title!r}"
+    )
+
+
+def test_english_homepage_keeps_its_existing_title_behavior():
+    """Issue #128 scope: the English page behavior is unaffected — the
+    English index keeps no frontmatter title (the renderer keeps its
+    pre-Issue-128 filename fallback "Index")."""
+    text = (DOCS_DIR / "index.mdx").read_text(encoding="utf-8")
+    assert not text.startswith("---"), (
+        "the English index must not gain a frontmatter title "
+        "(English behavior stays unchanged)"
+    )
+
+
 def test_chinese_overview_names_the_task_pool_and_mvp_boundary():
     """The Chinese overview (index) must say what the project is (GitHub
     Issue task pool) and the explicit MVP boundary (no database/queue/
