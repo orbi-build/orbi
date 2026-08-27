@@ -311,7 +311,8 @@ def test_failure_detail_without_stderr_uses_message():
 
 def test_progress_body_outcome_header_prepends_outcome():
     state = {
-        "run_id": "a1b2c3d4", "issue": 18, "role": "implement",
+        "run_id": "a1b2c3d4", "issue": 18,
+        "issue_title": "Publish progress", "role": "implement",
         "phase": "test", "elapsed": "1s", "last_activity": None,
         "last_action": None, "tests": None, "review_round": 0,
         "branch": "b", "pr": None, "session": None,
@@ -409,7 +410,8 @@ def test_process_issue_creates_progress_comment_with_marker(monkeypatch, tmp_pat
         f"expected exactly one progress comment, got: {posted}"
     )
     body = progress_posts[0]
-    assert "- issue: #18" in body
+    # Issue #100: the issue line shows the number AND the title.
+    assert "- issue: #18 Publish progress" in body
     assert "- role: implement" in body
     assert "- branch: muyan-pilot/xqliu-muyan-pilot-issue-18-a1b2c3d4" in body
     assert "- PR: -" in body
@@ -506,6 +508,22 @@ def test_process_issue_p0_failure_enters_ai_blocked_terminal_state(
     assert "Muyan Pilot blocked" in last_body
     assert "- priority: p0" in last_body
     assert "pi exploded" in last_body
+    # Issue #100: the P0 blocked scene shows the number AND the title.
+    assert "- issue: #18 Publish progress" in last_body
+
+
+def test_process_issue_fails_fast_on_missing_issue_title(
+    monkeypatch, tmp_path,
+):
+    """Issue #100: a scanned issue without a title violates the GitHub
+    issue data contract: `process_issue` fails fast (KeyError) instead
+    of fabricating a title or publishing a bare `#<number>` line."""
+    make_fake_gh(monkeypatch)
+    patch_process_deps(monkeypatch, tmp_path)
+    issue = {"number": 18, "body": "body"}  # no "title"
+    with pytest.raises(KeyError):
+        runner.process_issue(issue, make_config(tmp_path),
+                             "xqliu/muyan-pilot")
 
 
 def test_process_issue_passes_issue_number_to_verify_pr(
@@ -1358,7 +1376,8 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
         tmp_path, "branch", "main",
         {"repo_dir": tmp_path, "base_branch": "main", "base_sha": "b1",
          "run_id": "a1b2c3d4"},
-        "xqliu/muyan-pilot", 18, priority="normal",
+        "xqliu/muyan-pilot", 18, title="Publish progress",
+        priority="normal",
     )
     return merged, edits, calls, posted
 
@@ -1551,6 +1570,9 @@ def test_wait_for_delivery_closed_unmerged_posts_blocked_milestone(
     assert "closed without a merge" in blocked
     assert "next step:" in blocked
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked
+    # Issue #100: the wait-loop blocked scene shows the number AND
+    # the title, consistent with the other scenes.
+    assert "- issue: #39 t" in blocked
     # The blocked scene carries the actual role (Issue #82: both
     # opened-PR states are review states, so always `review`) and the
     # completed review rounds (review round 2, PR #42).

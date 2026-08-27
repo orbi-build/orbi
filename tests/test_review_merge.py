@@ -642,7 +642,7 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     make_fake_gh(monkeypatch)
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
-        "owner/repo", 4,
+        "owner/repo", 4, title="Review task",
         priority="normal",
     )
     assert merged is True
@@ -697,7 +697,7 @@ def test_review_and_merge_refreezes_head_after_in_session_fix(
     make_fake_gh(monkeypatch)
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
-        "owner/repo", 4,
+        "owner/repo", 4, title="Review task",
         priority="normal",
     )
     assert merged is True
@@ -737,7 +737,7 @@ def test_review_and_merge_clean_verdict_without_head_advance_keeps_frozen_head(
     make_fake_gh(monkeypatch)
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
-        "owner/repo", 4,
+        "owner/repo", 4, title="Review task",
         priority="normal",
     )
     assert merged is True
@@ -774,7 +774,7 @@ def test_review_and_merge_keeps_merged_when_checkout_sync_fails(
     make_fake_gh(monkeypatch)
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
-        "owner/repo", 4,
+        "owner/repo", 4, title="Review task",
         priority="normal",
     )
     assert merged is True
@@ -814,7 +814,7 @@ def test_review_and_merge_findings_labels_fix_needed_and_comments(
     make_fake_gh(monkeypatch)
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
-        "owner/repo", 4,
+        "owner/repo", 4, title="Review task",
         priority="normal",
     )
     assert merged is False
@@ -859,7 +859,7 @@ def test_review_and_merge_behind_base_labels_fix_needed(monkeypatch, tmp_path):
     make_fake_gh(monkeypatch)
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
-        "owner/repo", 4,
+        "owner/repo", 4, title="Review task",
         priority="normal",
     )
     assert merged is False
@@ -899,7 +899,7 @@ def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
     make_fake_gh(monkeypatch)
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
-        "owner/repo", 4,
+        "owner/repo", 4, title="Review task",
         priority="normal",
     )
     assert merged is False
@@ -925,7 +925,7 @@ def test_review_and_merge_reraises_non_fixable_gate_error(monkeypatch, tmp_path)
         make_fake_gh(monkeypatch)
         runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
-            "owner/repo", 4,
+            "owner/repo", 4, title="Review task",
             priority="normal",
         )
 
@@ -940,7 +940,7 @@ def test_review_and_merge_missing_verdict_raises(monkeypatch, tmp_path):
         make_fake_gh(monkeypatch)
         runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
-            "owner/repo", 4,
+            "owner/repo", 4, title="Review task",
             priority="normal",
         )
 
@@ -960,7 +960,7 @@ def test_review_and_merge_exhausted_rounds_raises(monkeypatch, tmp_path, caplog)
         make_fake_gh(monkeypatch)
         runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
-            "owner/repo", 4,
+            "owner/repo", 4, title="Review task",
             priority="normal",
         )
     assert "review_rounds_exhausted" in caplog.text

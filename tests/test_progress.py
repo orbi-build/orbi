@@ -65,10 +65,142 @@ def test_format_elapsed_omits_zero_units(seconds, expected):
     assert progress.format_elapsed(seconds) == expected
 
 
+def test_issue_field_renders_number_and_title():
+    # Issue #100: the progress comment's issue line shows the number
+    # AND the title; the `#<number>` prefix is preserved so existing
+    # log/scene parsing keeps working.
+    assert progress.issue_field(89, "ship it") == "#89 ship it"
+    assert progress.issue_field(18, "Publish progress") == \
+        "#18 Publish progress"
+
+
+def test_issue_field_keeps_the_hash_number_prefix():
+    # A grep for `#18` (the existing journal/scene convention) must
+    # still find the issue line.
+    field = progress.issue_field(18, "Publish progress")
+    assert field.startswith("#18")
+
+
+def test_issue_field_flattens_spaces_and_newlines_to_one_line():
+    # Titles with spaces, internal newlines and repeated whitespace
+    # stay single-line and readable (Issue #100 requirement).
+    assert progress.issue_field(7, "a  b\n\nc\t\td") == "#7 a b c d"
+
+
+def test_issue_field_keeps_markdown_characters_readable():
+    # Markdown in the title is not escaped or stripped: the comment is
+    # Markdown too, so the title renders as-is on one line.
+    title = "Bug: `resume` uses **PR URL**, no more verify_pr (#45)"
+    assert progress.issue_field(7, title) == f"#7 {title}"
+
+
+def test_issue_field_handles_a_long_title():
+    # A long title is kept in full (no silent truncation): the field
+    # stays one line and readable.
+    title = "x" * 300
+    field = progress.issue_field(7, title)
+    assert field == f"#7 {title}"
+    assert "\n" not in field
+
+
+def test_issue_field_fails_fast_on_missing_or_empty_title():
+    # A missing or blank title violates the GitHub issue data contract
+    # (issues always carry a non-empty string title): fail fast, never
+    # fabricate one (Issue #100 requirement).
+    with pytest.raises(ValueError, match="title"):
+        progress.issue_field(7, None)
+    with pytest.raises(ValueError, match="title"):
+        progress.issue_field(7, "")
+    with pytest.raises(ValueError, match="title"):
+        progress.issue_field(7, "   \n  ")
+
+
+def test_issue_field_fails_fast_on_non_string_title():
+    with pytest.raises(ValueError, match="title"):
+        progress.issue_field(7, 123)
+
+
+def test_issue_field_fails_fast_on_non_int_issue():
+    with pytest.raises(ValueError, match="issue"):
+        progress.issue_field("7", "t")
+    # bool is an int subclass but not an issue number.
+    with pytest.raises(ValueError, match="issue"):
+        progress.issue_field(True, "t")
+
+
+def test_progress_body_issue_line_carries_number_and_title():
+    # Issue #100: every progress scene renders `#<number> <title>`.
+    body = progress.progress_body({
+        "run_id": "abc123",
+        "issue": 89,
+        "issue_title": "Bug: resume 使用评论里的 PR URL，不再 verify_pr",
+        "role": "implement",
+        "phase": "test",
+        "elapsed": "3m 12s",
+        "last_activity": None,
+        "last_action": None,
+        "tests": None,
+        "review_round": 0,
+        "branch": "b",
+        "pr": None,
+        "session": None,
+    })
+    assert (
+        "- issue: #89 Bug: resume 使用评论里的 PR URL，不再 verify_pr"
+        in body
+    )
+    # The `#89` prefix is preserved for existing parsing.
+    assert "- issue: #89" in body
+
+
+def test_progress_body_issue_line_is_single_line_for_any_title():
+    state = {
+        "run_id": "abc123",
+        "issue": 7,
+        "issue_title": "a\n\nb  c",
+        "role": "review",
+        "phase": "test",
+        "elapsed": "1s",
+        "last_activity": None,
+        "last_action": None,
+        "tests": None,
+        "review_round": 2,
+        "branch": "b",
+        "pr": None,
+        "session": None,
+    }
+    body = progress.progress_body(state)
+    lines = body.splitlines()
+    issue_lines = [line for line in lines if line.startswith("- issue:")]
+    assert issue_lines == ["- issue: #7 a b c"]
+
+
+def test_progress_body_fails_fast_without_issue_title():
+    # A state without the title is a contract violation: fail fast,
+    # never render a bare `#<number>` (that would hide the violation).
+    state = {
+        "run_id": "abc123",
+        "issue": 18,
+        "role": "implement",
+        "phase": "starting",
+        "elapsed": "0s",
+        "last_activity": None,
+        "last_action": None,
+        "tests": None,
+        "review_round": 0,
+        "branch": "b",
+        "pr": None,
+        "session": None,
+    }
+    with pytest.raises(KeyError):
+        progress.progress_body(state)
+
+
 def test_progress_body_starts_with_hidden_run_marker():
     body = progress.progress_body({
         "run_id": "abc123",
         "issue": 18,
+        "issue_title": "Publish progress",
         "role": "implement",
         "phase": "test",
         "elapsed": "3m 12s",
@@ -83,7 +215,7 @@ def test_progress_body_starts_with_hidden_run_marker():
     lines = body.splitlines()
     assert lines[0] == "<!-- muyan-pilot:run=abc123 -->"
     assert "**Muyan Pilot progress**" in body
-    assert "- issue: #18" in body
+    assert "- issue: #18 Publish progress" in body
     assert "- role: implement" in body
     assert "- phase: test" in body
     assert "- elapsed: 3m 12s" in body
@@ -100,6 +232,7 @@ def test_progress_body_marks_missing_values_as_dash():
     body = progress.progress_body({
         "run_id": "abc123",
         "issue": 18,
+        "issue_title": "Publish progress",
         "role": "implement",
         "phase": "starting",
         "elapsed": "0s",
@@ -121,6 +254,7 @@ def test_progress_body_shows_pr_url_when_present():
     body = progress.progress_body({
         "run_id": "abc123",
         "issue": 18,
+        "issue_title": "Publish progress",
         "role": "implement",
         "phase": "pr",
         "elapsed": "1h 0m",
@@ -145,6 +279,7 @@ def test_progress_body_shows_priority_field():
     state = {
         "run_id": "abc123",
         "issue": 7,
+        "issue_title": "p0 outage",
         "role": "implement",
         "phase": "test",
         "elapsed": "3m 12s",
