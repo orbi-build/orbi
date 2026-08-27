@@ -60,8 +60,10 @@ COLOR_PATTERN = re.compile(r"^[0-9a-fA-F]{6}$")
 # Permissions that may create/edit labels (GitHub viewerPermission).
 WRITE_PERMISSIONS = frozenset({"WRITE", "MAINTAIN", "ADMIN"})
 
-# Required local commands (checked with shutil.which).
-REQUIRED_COMMANDS = ("git", "gh", "python3")
+# Required local commands (checked with shutil.which). Issue #140:
+# the installed `muyan-pilot` CLI is a prerequisite too — the systemd
+# entry it documents (and the service's ExecStart) must exist.
+REQUIRED_COMMANDS = ("git", "gh", "python3", "muyan-pilot")
 
 # The optional local-llm-kv-cache proxy health endpoint (docs/
 # optional-kv-cache.mdx: the committed user unit listens on 18082).
@@ -149,10 +151,11 @@ def load_label_defs(path: Path) -> list[dict]:
 def check_commands(run_command) -> dict:
     """Verify the required commands and the systemctl --user bus.
 
-    ``git``, ``gh`` and ``python3`` must be on the PATH; the systemd
-    user bus must be reachable (a probe ``systemctl --user show`` must
-    succeed — a container or a headless session without a user bus
-    fails fast with the concrete reason). No mutation happens here.
+    ``git``, ``gh``, ``python3`` and the installed ``muyan-pilot`` CLI
+    must be on the PATH; the systemd user bus must be reachable (a
+    probe ``systemctl --user show`` must succeed — a container or a
+    headless session without a user bus fails fast with the concrete
+    reason). No mutation happens here.
     """
     paths: dict[str, str] = {}
     for name in REQUIRED_COMMANDS:

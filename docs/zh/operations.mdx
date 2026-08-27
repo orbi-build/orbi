@@ -39,7 +39,7 @@ unit 模板是部署配置，不是普通代码。当 PR 修改
 main 后，必须在下一次 timer 触发前运行幂等安装命令：
 
 ```bash
-python3 muyan_pilot.py install-units --config muyan-pilot.toml
+muyan-pilot install-units --config muyan-pilot.toml
 ```
 
 它把两个模板复制到用户 unit 目录、daemon-reload、enable timer——从不
@@ -79,37 +79,41 @@ journalctl --user -u muyan-pilot.service | grep e07383c2
 idle 告警和上游已死 kill 是日志/健康阈值——它们不是每 5 分钟调度，也
 不是业务任务 timeout。
 
-## CLI（`muyan_pilot.py`）
+## CLI（`muyan-pilot`）
+
+正式入口是安装后的 `muyan-pilot` console script（`uv tool install
+--python /usr/bin/python3 <clone 目录>` 安装，`uv tool upgrade
+muyan-pilot` 或 `uv tool install --force --reinstall <clone 目录>`
+刷新——见[快速开始](/zh/getting-started)）。
+`muyan_pilot.py` 的直接执行入口保留为开发/兼容路径。
 
 ```bash
 # 在配置的 source repo 创建 Issue 并加 ai-ready 标签
-python3 muyan_pilot.py add "task title" --body "task body" --config muyan-pilot.toml
-python3 muyan_pilot.py add "task title" --repo OWNER/BACKLOG-REPO --config muyan-pilot.toml
+muyan-pilot add "task title" --body "task body" --config muyan-pilot.toml
+muyan-pilot add "task title" --repo OWNER/BACKLOG-REPO --config muyan-pilot.toml
 
 # 只读队列视图：当前（ai-in-progress）任务带实时 Pi 活动、下一个 ready
 # Issue、每个 source repo 的最近结果（ai-pr-opened / ai-fix-needed /
 # ai-merged / ai-blocked）
-python3 muyan_pilot.py status --config muyan-pilot.toml
+muyan-pilot status --config muyan-pilot.toml
 
 # 只读部署/健康报告：repo commit、unit drift、git transport（配置的
 # origin URL、protocol、期望 SSH URL、SSH 探测——传输失败报告为
 # `transport: FAILED ...`，不抛出）、timer/service 状态、slots、Pi
 # session、当前 Issue、最近 journal
-python3 muyan_pilot.py doctor --config muyan-pilot.toml
+muyan-pilot doctor --config muyan-pilot.toml
 
 # 一次性、幂等初始化（新机器/新仓库）：gh auth + 仓库权限、平台 labels、
 # systemd user units、checkout 检查（含 git transport：已有 HTTPS
 # `origin` 迁移为 `git@github.com:owner/repo.git`（人工授权的迁移路径；
 # Runner 本身从不改写 remote），并探测 SSH 连通性（fail fast，没有
 # HTTPS 回退））
-python3 muyan_pilot.py setup --config muyan-pilot.toml
-```
+muyan-pilot setup --config muyan-pilot.toml
 
-```bash
 # 打印当前 run 的 Pi session JSONL 路径（没有 session 时 fail fast）
-python3 muyan_pilot.py session --config muyan-pilot.toml
-python3 muyan_pilot.py session --follow --config muyan-pilot.toml   # tail -f
-python3 muyan_pilot.py session --pretty --config muyan-pilot.toml   # 一行摘要
+muyan-pilot session --config muyan-pilot.toml
+muyan-pilot session --follow --config muyan-pilot.toml   # tail -f
+muyan-pilot session --pretty --config muyan-pilot.toml   # 一行摘要
 ```
 
 所有命令通过 `--config` 或 `MUYAN_PILOT_CONFIG` 环境变量接收配置

@@ -1165,7 +1165,7 @@ def test_unit_drift_blocks_the_start_without_claiming(clone, tmp_path):
     assert f"installed={unit_dir / 'muyan-pilot.timer'}" in err
     assert "repo_sha256=" in err
     assert "installed_sha256=" in err
-    assert "fix=python3 muyan_pilot.py install-units" in err
+    assert "fix=muyan-pilot install-units" in err
     # Nothing was claimed: no labels, no comments, no Pi, no slot.
     snap = read_state(state)
     assert snap["issues"]["7"]["labels"] == ["ai-ready"]

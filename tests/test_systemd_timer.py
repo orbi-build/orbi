@@ -89,9 +89,10 @@ def test_service_keeps_running_task_without_duration_limit():
     assert section["TimeoutStartSec"] == ["infinity"]
     assert "RuntimeMaxSec" not in section
     assert "TimeoutStopSec" not in section
-    assert section["ExecStart"] == [
-        "/usr/bin/python3 %h/Documents/muyan/muyan-pilot/bootstrap_runner.py",
-    ]
+    # Issue #140: the service starts the installed `muyan-pilot` CLI
+    # (the uv-tool console script, explicit deployable absolute entry),
+    # not a hand-written Python file entry.
+    assert section["ExecStart"] == ["%h/.local/bin/muyan-pilot"]
 
 
 def test_service_fast_forwards_main_before_runner_starts():
@@ -160,7 +161,7 @@ def test_readme_documents_the_idempotent_install_command():
     it never kills or restarts a running Runner (the new config takes
     effect at the next service start)."""
     readme = README_FILE.read_text(encoding="utf-8")
-    assert "muyan_pilot.py install-units" in readme
+    assert "muyan-pilot install-units" in readme
     assert "daemon-reload" in readme
     # The manual cp is no longer the documented install path.
     assert "cp systemd/muyan-pilot.service" not in readme
@@ -186,7 +187,7 @@ def test_readme_documents_the_unit_drift_fail_fast():
     # The structured line's fields.
     assert "repo_sha256=" in readme
     assert "installed_sha256=" in readme
-    assert "fix=python3 muyan_pilot.py install-units" in readme
+    assert "fix=muyan-pilot install-units" in readme
     # No claim while drifted.
     assert "不领取" in readme
     # The repo templates are the single source of truth.
@@ -198,7 +199,7 @@ def test_readme_documents_the_doctor_command():
     report: repo commit, unit drift, timer/service active state,
     current Issue, Runner/Pi and recent journal activity."""
     readme = README_FILE.read_text(encoding="utf-8")
-    assert "muyan_pilot.py doctor" in readme
+    assert "muyan-pilot doctor" in readme
     assert "journal" in readme
     # doctor is read-only.
     assert "只读" in readme

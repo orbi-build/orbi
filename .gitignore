@@ -2,6 +2,10 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+# Python packaging build artifacts (Issue #140: pyproject.toml builds)
+build/
+dist/
+*.egg-info/
 .muyan-pilot/
 .pi-session/
 .worktrees/

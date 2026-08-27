@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """Muyan Pilot task dispatch and status CLI.
 
-`add` creates an Issue in a configured source repo and labels it `ai-ready`.
-`status` reports the current in-progress Issue (with its live Pi activity:
-phase, last activity time, the last meaningful action, the newest tool
-call result, session file and worktree), the next ready Issue, and the
-most recent result (`ai-pr-opened` / `ai-fix-needed` / `ai-merged` /
-`ai-blocked`) per source repo.
+With NO subcommand the CLI IS the Runner entry (Issue #140): it runs one
+tick, exactly like the legacy `python3 bootstrap_runner.py` — this is
+what the systemd service's `ExecStart` (the installed `muyan-pilot`)
+invokes on every timer trigger. The named subcommands are the dispatch
+and debug entries on top of that:
+
+`add` creates an Issue in a configured source repo and labels it
+`ai-ready`.
+`status` reports the current in-progress Issue (with its live Pi
+activity: phase, last activity time, the last meaningful action, the
+newest tool call result, session file and worktree), the next ready
+Issue, and the most recent result (`ai-pr-opened` / `ai-fix-needed` /
+`ai-merged` / `ai-blocked`) per source repo.
 
 GitHub Issues and labels are the only state store. There is no database,
 queue, or web UI. Command failures are logged and raised by the reused
@@ -24,6 +31,7 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
+import bootstrap_runner
 import git_transport
 import systemd_deploy
 
@@ -44,6 +52,11 @@ LOGGER = logging.getLogger("muyan_pilot.cli")
 # Same run correlation mechanism as the runner (Issue #41): when a run id is
 # bound, every journal line of this process starts with `[run_id]`.
 LOGGER.addFilter(RunIdFilter())
+
+# The CLI version (Issue #140): the single source of truth for the
+# `--version` output. tests/test_cli_packaging.py pins it against the
+# PEP 621 `version` in pyproject.toml, so the two cannot drift.
+__version__ = "0.2.0"
 
 ISSUE_URL_PATTERN = re.compile(r"/issues/(\d+)$")
 READY_LABEL = "ai-ready"
@@ -458,7 +471,15 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(os.environ.get("MUYAN_PILOT_CONFIG", "muyan-pilot.toml")),
     )
     parser = argparse.ArgumentParser(description=__doc__, parents=[common])
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument(
+        "--version", action="version",
+        version=f"muyan-pilot {__version__}",
+    )
+    # Issue #140: the subcommand is OPTIONAL — with no subcommand the
+    # installed CLI runs one Runner tick (the systemd ExecStart is the
+    # bare `muyan-pilot`), exactly like the legacy
+    # `python3 bootstrap_runner.py`.
+    subparsers = parser.add_subparsers(dest="command")
     add_parser = subparsers.add_parser(
         "add", parents=[common],
         help="create an Issue in a source repo and add ai-ready",
@@ -524,6 +545,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format=log_format())
+
+    if args.command is None:
+        # Issue #140: no subcommand = the Runner tick. Delegate to the
+        # Runner's own main: it re-parses `--config` and owns the whole
+        # tick contract (unit-drift preflight, transport preflight,
+        # slot, claim, fail-fast) — the same behavior the legacy
+        # `python3 bootstrap_runner.py` entry had.
+        return bootstrap_runner.main(["--config", str(args.config)])
 
     config = load_config(args.config)
     validate_config(config)

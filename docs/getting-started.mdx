@@ -9,6 +9,7 @@ machine layout.
 | Requirement | What it is used for | Check |
 |---|---|---|
 | Python 3.14 | The Runner and the test contract (CI pins the same minor version) | `python3 --version` |
+| [uv](https://docs.astral.sh/uv/) | Installs the `muyan-pilot` CLI into an isolated tool environment | `uv --version` |
 | [Pi](https://github.com/earendil-works/pi) CLI | The development agent; one full session per task | `pi --version` |
 | Git | Worktrees, branches, base freshness | `git --version` |
 | GitHub CLI (`gh`) | Issues, labels, PRs, merge | `gh auth status` |
@@ -40,7 +41,30 @@ git clone https://github.com/xqliu/muyan-pilot.git
 cd muyan-pilot
 ```
 
-## 2. Create the configuration
+## 2. Install the CLI
+
+The official usage is the installed `muyan-pilot` console script (the
+PEP 621 packaging in `pyproject.toml` maps
+`muyan-pilot = muyan_pilot:main`). Install it with `uv tool` from the
+clone directory — `--python` pins the production interpreter (3.14):
+
+```bash
+uv tool install --python /usr/bin/python3 .
+muyan-pilot --help
+```
+
+`uv tool` keeps the CLI in an isolated tool environment; the executable
+lands in `~/.local/bin` (on the PATH of the systemd unit). After a merge
+to main, refresh it with `uv tool upgrade muyan-pilot` (when the version
+changes) or `uv tool install --force --reinstall .` from the clone
+directory (when the version is unchanged — `--reinstall` bypasses the
+build cache). The release package carries no third-party runtime
+dependency, no token and no user directory — the config file and the
+user systemd dir stay machine-local. The direct-execution entry of
+`muyan_pilot.py` (running the file with the interpreter) stays a
+development/compatibility path.
+
+## 3. Create the configuration
 
 The repository ships a committed example; the real config is local state
 (gitignored). Copy it and edit it:
@@ -82,7 +106,7 @@ skills = []
 context_files = []
 ```
 
-## 3. Run the one-time setup
+## 4. Run the one-time setup
 
 The setup entry does the whole initialization in one command: it
 verifies `gh auth status` and the repo permissions, aligns the platform
@@ -93,7 +117,7 @@ the systemd user units and enables the timer, checks the checkout, and
 reports the optional model proxy:
 
 ```bash
-python3 muyan_pilot.py setup --config muyan-pilot.toml
+muyan-pilot setup --config muyan-pilot.toml
 ```
 
 It is idempotent (re-running it never creates duplicate labels, units
@@ -102,10 +126,10 @@ dirty checkout or a missing systemd user bus stops it with the concrete
 reason). See [One-time setup](/setup) for the full output contract,
 success and failure examples.
 
-## 4. Run one tick manually
+## 5. Run one tick manually
 
 The manual command is for first verification and troubleshooting only —
-normal operation is scheduled by the timer (step 6):
+normal operation is scheduled by the timer (step 7):
 
 ```bash
 python3 bootstrap_runner.py --config muyan-pilot.toml
@@ -116,7 +140,7 @@ claim one `ai-ready` Issue (`p0`-labeled Issues are picked first, then
 bug-labeled Issues, then plain features), then it exits. With an empty
 ready queue it exits cleanly without claiming anything.
 
-## 5. Smoke walkthrough (from zero)
+## 6. Smoke walkthrough (from zero)
 
 The smallest end-to-end proof that your setup works. Run it in the clone
 directory from step 1; every command is relative to that directory.
@@ -124,12 +148,12 @@ directory from step 1; every command is relative to that directory.
 ```bash
 # a. Dispatch a tiny task into the first configured source repo.
 #    `add` creates the Issue and labels it ai-ready in one step.
-python3 muyan_pilot.py add "Docs: verify smoke walkthrough" \
+muyan-pilot add "Docs: verify smoke walkthrough" \
   --body "Read README.md and confirm the smoke walkthrough commands exist." \
   --config muyan-pilot.toml
 
 # b. Watch the queue: the new Issue is ready.
-python3 muyan_pilot.py status --config muyan-pilot.toml
+muyan-pilot status --config muyan-pilot.toml
 
 # c. Run one tick: the Runner claims the Issue, starts Pi in a fresh
 #    worktree, and works toward a PR.
@@ -138,7 +162,7 @@ python3 bootstrap_runner.py --config muyan-pilot.toml
 # d. Follow the live activity while the tick runs (second terminal):
 journalctl --user -u muyan-pilot.service -f
 # or, for a manual tick, follow the session JSONL directly:
-python3 muyan_pilot.py session --follow --config muyan-pilot.toml
+muyan-pilot session --follow --config muyan-pilot.toml
 
 # e. After the PR is opened, the Issue carries ai-pr-opened and the
 #    delivery continues (independent review, in-session fix, merge) on
@@ -152,7 +176,7 @@ and the journal shows `run_end ... result=pr_opened`. If any step fails,
 the Issue is marked `ai-blocked` with the scene — see
 [Operations](/operations) for recovery.
 
-## 6. Verify the timer
+## 7. Verify the timer
 
 The setup step already installed the units and enabled the timer; verify
 it:
@@ -170,10 +194,12 @@ fast-forwards `main` before starting — see [Operations](/operations)).
 <Note>
 The committed unit templates reference the author's clone layout via
 `%h` specifiers (`%h/Documents/muyan/muyan-pilot`). If your clone lives
-elsewhere, edit the **installed** units in your user unit directory
-(`~/.config/systemd/user/`) to point `WorkingDirectory`,
-`MUYAN_PILOT_CONFIG` and `ExecStart` at **your** clone path, then
-`systemctl --user daemon-reload`. The repo templates stay the single
+elsewhere, install the CLI from **your** clone path (step 2) and edit
+the **installed** units in your user unit directory
+(`~/.config/systemd/user/`) to point `WorkingDirectory` and
+`MUYAN_PILOT_CONFIG` at **your** clone path, then
+`systemctl --user daemon-reload`. `ExecStart` is the installed
+`muyan-pilot` CLI and stays relative. The repo templates stay the single
 source of truth for everything else — see [Operations](/operations) on
 drift detection.
 </Note>

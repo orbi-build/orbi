@@ -48,6 +48,31 @@ jobs:
           python3 -m pip install -r requirements.txt
           python3 -m pip install pytest coverage pyyaml
 
+      # CLI packaging (Issue #140): the console script must install in a
+      # clean environment and the entry must work (`muyan-pilot --help`
+      # and `muyan-pilot --version`, exit 0). The packaging file is the
+      # PEP 621 pyproject.toml.
+      #
+      # The install uses the DOCUMENTED production flow (`uv tool
+      # install`, the uv-tool console script) — not a plain `pip
+      # install .`: uv tool places the self-contained executable at
+      # ~/.local/bin/muyan-pilot, the same path the service template's
+      # ExecStart (%h/.local/bin/muyan-pilot) uses, so the real
+      # `systemd-analyze --user verify` test resolves the unit's
+      # absolute ExecStart against the real executable here (a plain
+      # pip install would put the script in the venv bin, where the
+      # unit's %h path does not point).
+      - name: Install uv (the documented CLI installer)
+        run: |
+          python3 -m pip install uv
+          uv --version
+
+      - name: Install the CLI (uv tool, the documented flow) and verify the entry (Issue #140)
+        run: |
+          uv tool install --python 3.14 .
+          ~/.local/bin/muyan-pilot --help
+          ~/.local/bin/muyan-pilot --version
+
       - name: Run the full test suite with branch coverage (contract)
         run: python3 -m coverage run --branch -m pytest tests/ -q
 

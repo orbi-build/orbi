@@ -1,13 +1,13 @@
 # One-time setup
 
-`muyan_pilot.py setup` is the one-time, config-driven initialization
+`muyan-pilot setup` is the one-time, config-driven initialization
 entry for a new machine or a new task-pool repository. It verifies the
 local prerequisites, aligns the platform labels, installs the systemd
 user units, checks the checkout, and reports the optional model proxy —
 in one command, with a stable machine-readable result.
 
 ```bash
-python3 muyan_pilot.py setup --config muyan-pilot.toml
+muyan-pilot setup --config muyan-pilot.toml
 ```
 
 Run it once per machine (and once per new task-pool repository). It is
@@ -20,9 +20,10 @@ Setup is **fail-fast**: a core prerequisite failure stops the run
 before any later mutation, with the concrete reason on stderr and a
 non-zero exit code.
 
-1. **Commands** — `git`, `gh`, `python3` on the PATH, and a reachable
-   `systemctl --user` user bus (a container or headless session without
-   a user bus fails with the bus error).
+1. **Commands** — `git`, `gh`, `python3` and the installed
+   `muyan-pilot` CLI on the PATH, and a reachable `systemctl --user`
+   user bus (a container or headless session without a user bus fails
+   with the bus error).
 2. **Auth** — `gh auth status` (logged in with a usable token).
 3. **Per target repository** (every configured `source_repos` entry by
    default; exactly one with `--repo OWNER/REPO`):
@@ -102,7 +103,7 @@ changes the exit code. `migrated=true` means setup rewrote an HTTPS
 `--json` prints the equivalent JSON document:
 
 ```bash
-python3 muyan_pilot.py setup --config muyan-pilot.toml --json
+muyan-pilot setup --config muyan-pilot.toml --json
 ```
 
 ## Success and failure examples
@@ -110,7 +111,7 @@ python3 muyan_pilot.py setup --config muyan-pilot.toml --json
 Success (exit code `0`):
 
 ```bash
-$ python3 muyan_pilot.py setup --config muyan-pilot.toml
+$ muyan-pilot setup --config muyan-pilot.toml
 setup=ok version=1 base_branch=main
 repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=7/7
 service=installed path=~/.config/systemd/user/muyan-pilot.service sha256=9f2c...

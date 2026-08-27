@@ -182,7 +182,7 @@ def test_chinese_getting_started_documents_prerequisites_and_smoke():
         "the KV cache proxy must not be presented as a core prerequisite"
     )
     assert "smoke" in text.lower(), "getting-started must contain the smoke walkthrough"
-    assert "muyan_pilot.py add" in text, "smoke must use the real add command"
+    assert "muyan-pilot add" in text, "smoke must use the real add command"
     assert "bootstrap_runner.py" in text, "smoke must run the real one-tick command"
     assert "journalctl --user -u muyan-pilot.service" in text, (
         "smoke must show the real journal command"
@@ -246,7 +246,7 @@ def test_chinese_operations_documents_the_real_commands_and_recovery():
         "operations must document the 5-minute idle polling interval"
     )
     assert "journalctl" in text, "operations must show the journal command"
-    assert "muyan_pilot.py" in text, "operations must name the CLI"
+    assert "muyan-pilot" in text, "operations must name the CLI"
     for command in ("status", "session", "add"):
         assert command in text, f"operations must document the {command} command"
     assert "worktree" in text.lower(), "operations must explain the task worktree"

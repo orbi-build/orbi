@@ -65,7 +65,7 @@ is **one runtime outcome** (when X, should Y, actually Z).
 ## Automatic observability
 
 - Normal operation publishes progress automatically: no human status
-  command, no polling, no supervision. `muyan_pilot.py status` is a debug
+  command, no polling, no supervision. `muyan-pilot status` is a debug
   attachment only — never part of the normal workflow or acceptance
   evidence.
 - Journal: while a session runs, the journal gets a heartbeat at most every
@@ -146,8 +146,8 @@ is **one runtime outcome** (when X, should Y, actually Z).
   unchanged.
 - Deployment consistency (Issue #103): the repo templates
   `systemd/muyan-pilot.service` and `systemd/muyan-pilot.timer` are the
-  single source of truth for the installed user units. `muyan_pilot.py
-  install-units` is the idempotent install (copy both templates into the
+  single source of truth for the installed user units. The idempotent
+  install is `muyan-pilot install-units` (copy both templates into the
   user unit dir, `systemctl --user daemon-reload`, enable the timer, print
   the deployed commit and unit hashes): it NEVER starts/stops/restarts the
   service — a running Runner is never killed or restarted by an install,
@@ -155,15 +155,23 @@ is **one runtime outcome** (when X, should Y, actually Z).
   checks BOTH installed units against the templates BEFORE any slot or
   claim: drift logs a structured `unit_drift` line per unit (repo path,
   installed path, sha256s, the install fix command) and fails fast — no
-  slot, no claim, no label change — until the units are synced. `muyan_pilot.py
-  doctor` is the read-only report (repo commit, unit drift, timer/service
-  active, slots, Pi session, current Issue, recent journal). Full sequence:
+  slot, no claim, no label change — until the units are synced. The
+  read-only report is `muyan-pilot doctor` (repo commit, unit drift,
+  timer/service active, slots, Pi session, current Issue, recent
+  journal). Full sequence:
   merge to main -> install units -> daemon-reload -> timer next trigger ->
   ExecStartPre syncs origin/main -> drift check -> Runner starts one Issue.
+- The service `ExecStart` is the installed `muyan-pilot` CLI (Issue #140):
+  the official usage is the `uv tool`-installed console script (`uv tool
+  install` / `uv tool upgrade`), and the unit uses the explicit
+  deployable entry `%h/.local/bin/muyan-pilot` (verifiable with
+  `systemd-analyze --user verify`); the direct-execution entry of
+  `muyan_pilot.py` stays a development/compatibility path, never the
+  documented usage.
 - A template change is a deployment change (Issue #131): a PR that
   modifies `systemd/muyan-pilot.service` or `systemd/muyan-pilot.timer`
   must be followed, after the merge to main, by the human-run
-  `muyan_pilot.py install-units` (the "install units" step of the
+  `muyan-pilot install-units` (the "install units" step of the
   deployment sequence) — the Runner NEVER auto-copies or auto-overwrites
   the installed units. An unsynced template change is caught by the
   pre-start drift check (structured `unit_drift`, fail fast, no slot,
@@ -198,16 +206,16 @@ is **one runtime outcome** (when X, should Y, actually Z).
   silent skip**.
 - An existing HTTPS remote is never rewritten silently and never read
   from a comment or Issue body: only the human-run setup entry
-  (`muyan_pilot.py setup`) migrates it with the plain
+  (`muyan-pilot setup`) migrates it with the plain
   `git remote set-url origin git@github.com:owner/repo.git`; every
   other path fails fast with the exact migration command. A remote
   that does not point at the first configured source repo is never
   migrated (the rewrite would re-target the checkout at a different
   repository) — it fails with the mismatch scene whether or not the
-  setup entry authorizes the migration. `muyan_pilot.py
-  doctor` reports the transport read-only (protocol, expected URL, SSH
-  probe) — a failed transport is REPORTED there, not raised (the
-  pre-start check is the fail-fast gate).
+  setup entry authorizes the migration. `muyan-pilot doctor` reports
+  the transport read-only (protocol, expected URL, SSH probe) — a
+  failed transport is REPORTED there, not raised (the pre-start check
+  is the fail-fast gate).
 
 ## Task dependencies (blockedBy)
 

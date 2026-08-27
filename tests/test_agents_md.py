@@ -71,7 +71,7 @@ REQUIRED_ITEMS = (
     ("git-transport-preflight", "transport_check_failed"),
     ("git-transport-no-fallback", "no https fallback"),
     ("git-transport-probe", "git ls-remote"),
-    ("git-transport-migration-entry", "muyan_pilot.py setup"),
+    ("git-transport-migration-entry", "muyan-pilot setup"),
     ("git-transport-migration-command", "git remote set-url origin"),
     # 6c. Run correlation: one run_id per attempt is the single
     #     end-to-end correlation id; every journal line and GitHub text of

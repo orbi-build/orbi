@@ -28,7 +28,7 @@ flowchart LR
 ```
 
 ```text
-ai-ready                任务被派发（muyan_pilot.py add，或人工加标签）
+ai-ready                任务被派发（muyan-pilot add，或人工加标签）
   -> ai-in-progress     Runner 领取：加标签，从冻结的 origin/<base> SHA
                         创建 worktree，启动 Pi session
   -> ai-pr-opened       PR 验收通过（base 新鲜度、run marker、Fixes #N）；

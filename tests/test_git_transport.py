@@ -177,7 +177,7 @@ def test_check_transport_diagnoses_an_https_remote_without_migrating(
     # entry that performs it — never a silent rewrite, never a remote
     # read from a comment or Issue.
     assert "git remote set-url origin git@github.com:xqliu/muyan-pilot.git" in message
-    assert "muyan_pilot.py setup" in message
+    assert "muyan-pilot setup" in message
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
     # No HTTPS fallback: no ls-remote of the HTTPS URL either.
     assert [c for c in calls if c[:2] == ["git", "ls-remote"]] == []
