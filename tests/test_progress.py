@@ -301,6 +301,36 @@ def test_progress_body_shows_priority_field():
     assert "- priority: normal" in body
 
 
+def test_progress_body_shows_recovery_field_only_when_active():
+    """Issue #94: the live progress comment shows the idle-recovery
+    state (`term` / `kill`) at the end of the body while the runner
+    is recovering a stalled session; without it the body is exactly
+    the pre-#94 shape (no empty recovery line)."""
+    state = {
+        "run_id": "abc123",
+        "issue": 94,
+        "issue_title": "Idle recovery",
+        "role": "implement",
+        "phase": "test",
+        "elapsed": "6m",
+        "last_activity": None,
+        "last_action": None,
+        "tests": None,
+        "review_round": 0,
+        "branch": "b",
+        "pr": None,
+        "session": None,
+    }
+    body = progress.progress_body(state)
+    assert "- recovery" not in body
+    body = progress.progress_body({**state, "recovery": "term"})
+    assert "- recovery: term" in body
+    # The recovery line is the last line of the body.
+    assert body.splitlines()[-1] == "- recovery: term"
+    body = progress.progress_body({**state, "recovery": "kill"})
+    assert body.splitlines()[-1] == "- recovery: kill"
+
+
 def make_publisher(run_command=None, comments=None, posted=None,
                    post_response=None):
     """Build a ProgressPublisher over a fake gh layer.

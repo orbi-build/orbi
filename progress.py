@@ -132,6 +132,11 @@ def progress_body(state: dict) -> str:
         f"- PR: {value('pr')}",
         f"- session: {value('session')}",
     ]
+    # Idle-stall recovery (Issue #94): the recovery state is shown only
+    # while it is active (`term` / `kill`); an idle run keeps the
+    # pre-#94 body shape exactly.
+    if state.get("recovery"):
+        lines.append(f"- recovery: {state['recovery']}")
     return "\n".join(lines)
 
 

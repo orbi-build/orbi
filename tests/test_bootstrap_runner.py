@@ -2369,6 +2369,87 @@ def test_process_issue_upstream_dead_failure_marks_blocked(
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked[0]
 
 
+def test_process_issue_idle_recovery_failure_marks_blocked(
+    monkeypatch, tmp_path,
+):
+    """Issue #94 acceptance: the idle-recovery escalation of the
+    implementer session (three idle cycles without any new activity,
+    stream_pi killed Pi and raised) flows through the EXISTING
+    `ai-blocked`/recoverable failure path exactly like the Issue #75
+    upstream-dead failure: the Issue is marked `ai-blocked` (removing
+    `ai-in-progress`), the `Muyan Pilot failed` comment carries the
+    idle-recovery reason and the run marker, and the error re-raises
+    so the tick exits and the kernel releases the slot — the slot is
+    never held forever. No special handling, no fallback."""
+    calls = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(
+        runner, "create_worktree", Mock(return_value=tmp_path),
+    )
+    idle_recovery = RuntimeError(
+        "Pi session stayed idle for 15m after idle recovery (TERM/KILL "
+        "of pre-idle descendants); Pi was killed (Issue #94)"
+    )
+
+    def dead_run_pi(*args, **kwargs):
+        raise idle_recovery
+
+    monkeypatch.setattr(runner, "run_pi", dead_run_pi)
+    monkeypatch.setattr(
+        runner, "activity_snapshot", lambda session_dir: None,
+    )
+    posted = []
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            # Restart-resume scan (Issue #18): fresh claim, no label.
+            return "[]"
+        calls.append(("comment", (), {"body": command[-1]}))
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="idle recovery"):
+        runner.process_issue(
+            {"number": 94, "title": "Idle recovery", "body": ""},
+            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+             "base_branch": "main"},
+            "xqliu/muyan-pilot",
+        )
+    edits = [entry for entry in calls if isinstance(entry, dict)]
+    assert edits == [
+        {"repo": "xqliu/muyan-pilot", "add": "ai-in-progress"},
+        {"repo": "xqliu/muyan-pilot", "add": "ai-blocked",
+         "remove": "ai-in-progress"},
+    ]
+    comment_bodies = [
+        entry[2]["body"] for entry in calls
+        if isinstance(entry, tuple) and entry[0] == "comment"
+    ]
+    failure = [
+        body for body in comment_bodies
+        if "Muyan Pilot failed:" in body
+    ]
+    assert len(failure) == 1
+    # The idle-recovery reason and the run marker stay in the Issue.
+    assert "idle recovery" in failure[0]
+    assert "(Issue #94)" in failure[0]
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failure[0]
+    # The blocked milestone notification carries the same scene.
+    blocked = [body for body in posted if "Muyan Pilot: blocked" in body]
+    assert blocked
+    assert "idle recovery" in blocked[0]
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked[0]
+
+
 def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypatch, tmp_path, caplog):
     edit_calls = []
 
@@ -3543,6 +3624,307 @@ def test_stream_pi_no_upstream_kill_before_model_wait(tmp_path, caplog):
     assert "upstream_dead" not in caplog.text
 
 
+def make_hung_pi(tmp_path, *, child_sleep=10.0, ignore_sigterm=False,
+                 react_on_child_death=True, exit_code=0,
+                 model_wait=False):
+    """Build a command that mimics a HUNG Pi (Issue #94): it writes the
+    session toolCall, spawns a long-running child (the hung bash tool)
+    and waits for it. When `react_on_child_death`, the child's death
+    (the runner's TERM/KILL) makes the fake Pi write the toolResult
+    error — the failure signal to the model — and exit with
+    `exit_code` (the session continues on its own). Otherwise it stays
+    silent (Pi itself is stuck). `model_wait` writes a toolResult
+    first (the model is expected to reply next: the Issue #75
+    territory, never the idle-recovery territory).
+
+    The sleeps are short on purpose (Issue #95 termination guard):
+    WITHOUT the recovery implementation the child exits naturally and
+    the run ends, so the red phase fails on the missing recovery
+    lines instead of hanging for the full child sleep."""
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir(exist_ok=True)
+    ignore = (
+        "import signal as _sig\n"
+        "_sig.signal(_sig.SIGTERM, _sig.SIG_IGN)\n"
+        if ignore_sigterm else ""
+    )
+    tool_result = (
+        "write({'type': 'message', 'id': 'r0', 'timestamp': ts(),\n"
+        "       'message': {'role': 'toolResult', 'toolCallId': 't1',\n"
+        "                   'toolName': 'bash', 'isError': False,\n"
+        "                   'content': [{'type': 'text', 'text': 'ok'}]}})\n"
+        if model_wait else ""
+    )
+    react = (
+        "write({'type': 'message', 'id': 'r1', 'timestamp': ts(),\n"
+        "       'message': {'role': 'toolResult', 'toolCallId': 't1',\n"
+        "                   'toolName': 'bash', 'isError': True,\n"
+        "                   'content': [{'type': 'text',\n"
+        "                                  'text': 'killed by runner'}]}})\n"
+        if react_on_child_death else "time.sleep(10)\n"
+    )
+    script = (
+        "import json, subprocess, sys, time\n"
+        "from datetime import datetime, timezone\n"
+        f"session = {str(session_dir / 'sess.jsonl')!r}\n"
+        "def ts():\n"
+        "    return datetime.now(timezone.utc).isoformat()\n"
+        "def write(record):\n"
+        "    with open(session, 'a') as handle:\n"
+        "        handle.write(json.dumps(record) + '\\n')\n"
+        "write({'type': 'session', 'id': 'sess-hung', 'timestamp': ts(),\n"
+        "       'cwd': '/w'})\n"
+        "write({'type': 'message', 'id': 'a1', 'timestamp': ts(),\n"
+        "       'message': {'role': 'assistant', 'content': [\n"
+        "           {'type': 'toolCall', 'id': 't1', 'name': 'bash',\n"
+        "            'arguments': {'command': 'sleep 300'}}]}})\n"
+        f"{tool_result}"
+        f"{ignore}"
+        "child = subprocess.Popen([sys.executable, '-c',\n"
+        f"     'import time; time.sleep({child_sleep!r})'])\n"
+        "while child.poll() is None:\n"
+        "    time.sleep(0.05)\n"
+        f"{react}"
+        f"sys.exit({exit_code!r})\n"
+    )
+    return [sys.executable, "-c", script]
+
+
+def test_stream_pi_idle_recovery_terms_hung_descendant_and_resumes(
+    tmp_path, caplog,
+):
+    """Issue #94 acceptance 1 (TERM 成功恢复): a stalled session
+    (no model/session activity past `idle_warn_seconds`, not
+    model_wait) with a hung descendant that existed before the idle
+    window gets SIGTERM'd — the journal line carries run_id, pid,
+    cmdline and result — the fake Pi gets the non-zero exit, writes
+    the failure toolResult and the run RESUMES and SUCCEEDS (the
+    failure signal reached the model)."""
+    command = make_hung_pi(tmp_path)
+    with caplog.at_level("INFO"):
+        result = runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.3,
+            run_id="run1", issue=94, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    assert result == ""
+    lines = caplog.text.splitlines()
+    idles = [line for line in lines if " pi_idle " in line]
+    assert len(idles) == 1  # the existing warning, once
+    terms = [line for line in lines if " pi_idle_term " in line]
+    assert len(terms) == 1, f"exactly one TERM step: {lines}"
+    term = terms[0]
+    assert "run=run1" in term
+    assert "issue=xqliu/muyan-pilot#94" in term
+    assert "role=implement" in term
+    assert "pid=" in term
+    assert "cmdline=" in term
+    assert "result=sent" in term
+    # The TERM came after the warning...
+    assert lines.index(term) > lines.index(idles[0])
+    # ...and the model got the failure signal: the fake Pi wrote the
+    # error toolResult (visible as result=error) and resumed.
+    resumed = [line for line in lines if " pi_resumed " in line]
+    assert len(resumed) == 1
+    assert lines.index(resumed[0]) > lines.index(term)
+    assert "result=error" in caplog.text
+    # The run SUCCEEDED: no failure, no session kill.
+    assert "run_failed" not in caplog.text
+    # No KILL escalation: the TERM worked within one idle cycle.
+    assert " pi_idle_kill " not in caplog.text
+
+
+def test_stream_pi_idle_recovery_kills_descendant_that_ignores_term(
+    tmp_path, caplog,
+):
+    """Issue #94 acceptance 2 (TERM 后仍存活升级 KILL): a descendant
+    that ignores SIGTERM is still alive one idle cycle later — the
+    runner SIGKILLs it (journal line with pid, cmdline, result), the
+    fake Pi reacts to the death and the run resumes."""
+    command = make_hung_pi(
+        tmp_path, ignore_sigterm=True, react_on_child_death=True,
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.3,
+            run_id="run1", issue=94, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    terms = [line for line in lines if " pi_idle_term " in line]
+    kills = [line for line in lines if " pi_idle_kill " in line]
+    assert len(terms) == 1 and "result=sent" in terms[0]
+    assert len(kills) == 1, f"exactly one KILL step: {lines}"
+    kill = kills[0]
+    assert "run=run1" in kill
+    assert "pid=" in kill
+    assert "cmdline=" in kill
+    assert "result=sent" in kill  # the SIGKILL was delivered
+    # The KILL came one idle cycle after the TERM...
+    assert lines.index(kill) > lines.index(terms[0])
+    # ...and the run still recovered (the fake Pi reacted to the death).
+    resumed = [line for line in lines if " pi_resumed " in line]
+    assert len(resumed) == 1
+    assert "run_failed" not in caplog.text
+
+
+def test_stream_pi_idle_recovery_kills_pi_session_after_three_idle_cycles(
+    tmp_path, caplog,
+):
+    """Issue #94 acceptance 3 (连续 idle 升级终止会话): the hung tool
+    died from the TERM but the session NEVER resumes (Pi itself is
+    stuck) — after three idle cycles the runner kills the Pi session
+    itself and fails fast: `run_failed` carries the full scene and
+    `reason=idle_recovery_stale_...`, the error names the idle
+    recovery, and the normal `ai-blocked` flow takes over (the slot is
+    never held forever)."""
+    command = make_hung_pi(tmp_path, react_on_child_death=False)
+    with caplog.at_level("INFO"), pytest.raises(
+        RuntimeError, match="idle recovery",
+    ):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.3,
+            run_id="run1", issue=94, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    terms = [line for line in lines if " pi_idle_term " in line]
+    kills = [line for line in lines if " pi_idle_kill " in line]
+    assert len(terms) == 1 and "result=sent" in terms[0]
+    # The TERM worked (the child died) — the KILL step reports the
+    # target as already dead instead of signaling again.
+    assert len(kills) == 1
+    assert "result=already_dead" in kills[0]
+    failures = [line for line in lines if " run_failed " in line]
+    assert len(failures) == 1
+    failure = failures[0]
+    assert "reason=idle_recovery_stale_" in failure
+    assert "run=run1" in failure
+    assert "issue=xqliu/muyan-pilot#94" in failure
+    assert f"worktree={tmp_path}" in failure
+
+
+def test_stream_pi_idle_recovery_without_descendants_still_terminates(
+    tmp_path, caplog,
+):
+    """Issue #94: a stalled session with NO pre-idle descendants (Pi
+    itself is stuck, no hung tool) still escalates: the TERM step logs
+    `result=no_target` (nothing was signaled — no pid), there is no
+    KILL step, and after three idle cycles the session is killed and
+    the run fails fast."""
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.1, {"type": "message", "id": "a1",
+               "timestamp": fresh_timestamp(1),
+               "message": {"role": "assistant", "content": [
+                   {"type": "text", "text": "stuck thinking"}]}}),
+    ]
+    command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
+    with caplog.at_level("INFO"), pytest.raises(
+        RuntimeError, match="idle recovery",
+    ):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.3,
+            run_id="run1", issue=94, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    terms = [line for line in lines if " pi_idle_term " in line]
+    assert len(terms) == 1
+    assert "result=no_target" in terms[0]
+    assert " pid=" not in terms[0]
+    assert " pi_idle_kill " not in caplog.text
+    failures = [line for line in lines if " run_failed " in line]
+    assert len(failures) == 1
+    assert "reason=idle_recovery_stale_" in failures[0]
+
+
+def test_stream_pi_idle_recovery_never_signals_non_descendants(
+    tmp_path, caplog,
+):
+    """Issue #94 constraint (非 pi 后代不被误杀): a long-running
+    process that is NOT a descendant of the Pi process (parented by
+    the test itself) is never signaled — the ppid chain is the only
+    target criterion."""
+    bystander = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+    )
+    try:
+        command = make_hung_pi(tmp_path)
+        with caplog.at_level("INFO"):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.1,
+                idle_warn_seconds=0.3,
+                run_id="run1", issue=94, source_repo="xqliu/muyan-pilot",
+                branch="b",
+            )
+        # The bystander is untouched: still running, and its pid never
+        # appears on a recovery line.
+        assert bystander.poll() is None
+        for line in caplog.text.splitlines():
+            if " pi_idle_term " in line or " pi_idle_kill " in line:
+                assert f"pid={bystander.pid}" not in line
+    finally:
+        bystander.kill()
+        bystander.wait()
+
+
+def test_stream_pi_idle_recovery_never_fires_during_model_wait(
+    tmp_path, caplog,
+):
+    """Issue #94: the recovery is the non-model_wait territory (same
+    gate as the `pi_idle` warning). A frozen model_wait with a hung
+    descendant is the Issue #75 upstream-dead case: the runner kills
+    Pi via that path and never TERMs the descendant."""
+    command = make_hung_pi(tmp_path, model_wait=True)
+    with caplog.at_level("ERROR"), pytest.raises(
+        RuntimeError, match="upstream",
+    ):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            model_wait_dead_seconds=0.5,
+            run_id="run1", issue=94, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    assert " pi_idle_term " not in caplog.text
+    assert " pi_idle_kill " not in caplog.text
+    failures = [line for line in caplog.text.splitlines()
+                if " run_failed " in line]
+    assert len(failures) == 1
+    assert "reason=upstream_dead_stale_" in failures[0]
+
+
+def test_stream_pi_idle_recovery_state_visible_in_progress_callback(
+    tmp_path,
+):
+    """Issue #94: the live GitHub progress comment is synced with the
+    recovery — the activity state passed to the progress callback
+    carries `recovery` (None -> `term` while the TERMed tool is being
+    waited on -> back to None when the session resumes)."""
+    command = make_hung_pi(tmp_path)
+    seen = []
+
+    def progress(activity):
+        seen.append(activity.get("recovery"))
+
+    runner.stream_pi(
+        command, cwd=tmp_path, poll_interval=0.1,
+        idle_warn_seconds=0.3,
+        run_id="run1", issue=94, source_repo="xqliu/muyan-pilot",
+        branch="b", progress=progress,
+    )
+    assert "term" in seen
+    # Before the stall and after the resume the state is None again.
+    assert seen[0] is None
+    assert seen[-1] is None
+    assert seen.index("term") > 0
+
+
 def test_stream_pi_times_out_and_kills_process(tmp_path, caplog):
     command = make_fake_pi(tmp_path, session_records=[], sleep=10.0)
     with caplog.at_level("ERROR"), pytest.raises(
@@ -3723,6 +4105,50 @@ def test_live_progress_throttle_patches_on_change_and_cadence():
     # The rendered body carries the live state.
     assert "- phase: test" in calls[-1]
     assert "- last action: bash pytest tests/" in calls[-1]
+
+
+def test_live_progress_throttle_patches_on_recovery_change():
+    """Issue #94: the recovery state is part of the visible progress —
+    entering idle recovery (None -> `term`) PATCHes the live comment
+    immediately even though phase/action/result did not change, and
+    the rendered body carries the `recovery` line."""
+    calls = []
+
+    class FakePublisher:
+        comment_id = 1
+
+        def patch(self, body):
+            calls.append(body)
+
+    publisher = FakePublisher()
+    throttle = runner.LiveProgressThrottle(
+        publisher, issue=94, title="Idle recovery", run_id="run1",
+        role="implement", branch="b", worktree=Path("/w"),
+        started=time.monotonic(), pr_url=None, review_round=0,
+        priority="normal",
+    )
+    first = {
+        "phase": "test", "action": "bash pytest tests/", "result": None,
+        "model_wait": False, "session_id": None,
+        "last_activity": None, "stale_seconds": 0.0,
+        "session_file": None, "events": 0, "changed": False,
+        "recovery": None,
+    }
+    throttle(first)
+    assert len(calls) == 1
+    assert "- recovery" not in calls[0]  # no recovery line when idle-recovery is off
+    # Entering recovery: visible change -> immediate PATCH with the line.
+    throttle(dict(first, recovery="term"))
+    assert len(calls) == 2
+    assert "- recovery: term" in calls[1]
+    # Escalating to KILL: another visible change -> another PATCH.
+    throttle(dict(first, recovery="kill"))
+    assert len(calls) == 3
+    assert "- recovery: kill" in calls[2]
+    # Back to None after the resume: visible change -> PATCH without the line.
+    throttle(first)
+    assert len(calls) == 4
+    assert "- recovery" not in calls[3]
 
 
 def test_run_pi_passes_progress_callback_to_stream_pi(monkeypatch, tmp_path):
