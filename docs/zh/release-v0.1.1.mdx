@@ -1,0 +1,30 @@
+# v0.1.1 发布（修正版 release tag）
+
+`v0.1.1` 是 v0.1.0 发布（Epic #80，发布 PR #92，合并提交
+`f6c065e8ec7ec53d7e9fb99e6475c1bc16c2dabf`）的修正版 release tag。
+GitHub Release `v0.1.1` 发布于 2026-08-27。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.1.1` | 注解 tag `b68d4f7d46582760ee04bac4308b785b4cc12c5d` | 提交 `f82969e974b17803759493bad7e339bdcd6f463f`（"Fix review round 1 findings: session follow, run artifacts, state chain (Issue #80)"） |
+
+## 为什么是修正版 tag
+
+`v0.1.0` 指向 `335fa274`，这是 PR #92 分支上的一个中间提交。经过审查
+并合并的最终 head 是 `f82969e9` —— review 第 1 轮的修复 —— 它不在
+`v0.1.0` 指向的可达范围内。`v0.1.1` 修正了发布指针，且没有移动
+`v0.1.0`（不可变，从未 force-push）。
+
+## 相对 v0.1.0 包含的修复
+
+- `muyan_pilot.py`：session-follow 行处理（只跟随给定文件；`--pretty`
+  解析器不丢行/不断行）
+- `.gitignore`：run 产物忽略项
+- `README.md`：与 session 契约对齐的措辞
+- `tests/test_muyan_pilot.py`、`tests/test_run_artifacts.py`：钉住测试
+- 从树中移除 run 产物 `plan.md`/`test.log`
+
+持久、可审计的对账记录（Epic #80 每一项的结论与 PR 证据）见
+[v0.1.0 发布对账记录](/zh/release-v0.1.0)（Issue #97）。
