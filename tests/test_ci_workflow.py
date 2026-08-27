@@ -142,18 +142,48 @@ def test_ci_workflow_installs_requirements_txt():
 
 def test_ci_workflow_installs_the_cli_and_verifies_the_entry():
     """Issue #140: the CI gate includes a clean-environment install of
-    the console script (`pip install .`) and a real entry check
-    (`muyan-pilot --help` / `muyan-pilot --version`, exit 0) — the
-    acceptance `muyan-pilot --help` in a clean environment is a
-    permanent gate, not a one-time local check."""
+    the console script and a real entry check (`muyan-pilot --help` /
+    `muyan-pilot --version`, exit 0) — the acceptance `muyan-pilot
+    --help` in a clean environment is a permanent gate, not a one-time
+    local check. The install must use the DOCUMENTED production flow
+    (`uv tool install`, the uv-tool console script): it places the
+    self-contained executable at the unit's ExecStart path
+    (`~/.local/bin/muyan-pilot`), so the real `systemd-analyze --user
+    verify` test resolves the unit's absolute ExecStart against the
+    real executable on the runner (a plain `pip install .` would put
+    the script in the venv bin, where the unit's %h path does not
+    point)."""
     commands = step_commands(steps_of(load_workflow()))
-    installing = [
+    uv_installs = [
         command for command in commands
-        if "pip install ." in command
+        if any(
+            line.strip() == "python3 -m pip install uv"
+            for line in command.splitlines()
+        )
     ]
-    assert installing, (
-        "CI must install the package (pip install .) in a clean "
+    assert uv_installs, (
+        "CI must install uv (the documented CLI installer) in a clean "
         f"environment, steps run: {commands!r}"
+    )
+    cli_installs = [
+        command for command in commands
+        if any(
+            line.lstrip().startswith("uv tool install")
+            for line in command.splitlines()
+        )
+    ]
+    assert cli_installs, (
+        "CI must install the CLI with the documented `uv tool install` "
+        f"flow, steps run: {commands!r}"
+    )
+    assert any(
+        line.lstrip().startswith("uv tool install") and line.rstrip().endswith(" .")
+        for command in cli_installs
+        for line in command.splitlines()
+    ), (
+        "CI must install the CLI from the checkout (uv tool install .) "
+        f"so the console script is built from the PEP 621 packaging, "
+        f"steps run: {cli_installs!r}"
     )
     entry = [
         command for command in commands
@@ -166,6 +196,13 @@ def test_ci_workflow_installs_the_cli_and_verifies_the_entry():
     assert any(
         "muyan-pilot --version" in command for command in entry
     ), "CI must also check the version entry (muyan-pilot --version)"
+    assert any(
+        "~/.local/bin/muyan-pilot" in command for command in entry
+    ), (
+        "CI must verify the entry at the unit's ExecStart path "
+        "(~/.local/bin/muyan-pilot), not a venv bin copy: "
+        f"{entry!r}"
+    )
 
 
 def test_ci_workflow_runs_the_contract_test_command():
