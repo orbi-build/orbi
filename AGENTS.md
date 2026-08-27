@@ -160,6 +160,15 @@ is **one runtime outcome** (when X, should Y, actually Z).
   active, slots, Pi session, current Issue, recent journal). Full sequence:
   merge to main -> install units -> daemon-reload -> timer next trigger ->
   ExecStartPre syncs origin/main -> drift check -> Runner starts one Issue.
+- A template change is a deployment change (Issue #131): a PR that
+  modifies `systemd/muyan-pilot.service` or `systemd/muyan-pilot.timer`
+  must be followed, after the merge to main, by the human-run
+  `muyan_pilot.py install-units` (the "install units" step of the
+  deployment sequence) — the Runner NEVER auto-copies or auto-overwrites
+  the installed units. An unsynced template change is caught by the
+  pre-start drift check (structured `unit_drift`, fail fast, no slot,
+  no claim) on every start until the human runs the sync command: the
+  gate is the canary for the deployment, not a bug to be bypassed.
 
 ## Git transport (Issue #114)
 

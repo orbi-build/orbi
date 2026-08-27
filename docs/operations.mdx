@@ -37,6 +37,28 @@ systemctl --user list-timers muyan-pilot.timer
 systemctl --user status muyan-pilot.service
 ```
 
+## After a unit template changes (Issue #131)
+
+The unit templates are deployment config, not ordinary code. When a PR
+changes `systemd/muyan-pilot.service` or `systemd/muyan-pilot.timer`
+and merges to main, run the idempotent install BEFORE the next timer
+trigger:
+
+```bash
+python3 muyan_pilot.py install-units --config muyan-pilot.toml
+```
+
+It copies both templates into the user unit directory, runs
+daemon-reload and enables the timer — it never starts, stops or
+restarts a running Runner. The Runner itself NEVER auto-copies or
+auto-overwrites the installed units: an unsynced template change makes
+every start fail the pre-start `unit_drift` check (structured
+`unit_drift` line, non-zero exit, no slot, no claim) until the sync
+command is run. That fail-fast is the designed canary for the
+deployment, not a bug (2026-08-27: PR #130 changed the timer from 15
+to 5 minutes; the post-merge `install-units` was never run, so every
+start failed with `unit_drift` until a human synced — Issue #131).
+
 ## Logs (journal)
 
 The journal is the local record. Every line of a run starts with the run

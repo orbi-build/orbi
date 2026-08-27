@@ -67,6 +67,8 @@ git merge 到 main
   -> Runner 启动并执行一个 Issue
 ```
 
+**模板变更必须合并后重新同步（Issue #131）**：`systemd/muyan-pilot.service` 和 `systemd/muyan-pilot.timer` 是部署配置，不是普通代码——修改任一模板的 PR 合并到 main 后、下一次 timer 触发前，必须由人工运行 `python3 muyan_pilot.py install-units --config muyan-pilot.toml` 同步两个 user unit（幂等，不碰运行中的 Runner）。Runner 本身 never auto-syncs（从不自动复制、自动覆盖已安装 unit）：模板变更未同步时，每次启动都会被启动前漂移检查 fail fast（结构化 `unit_drift` 行、非零退出、不取 slot、不领取 Issue），直到人工运行同步命令——这是设计内的哨兵行为，不是故障（2026-08-27 实例：PR #130 把 timer 从 15 分钟改为 5 分钟，合并后无人运行 `install-units`，service 每次启动都因 `unit_drift` 失败，直到人工同步，见 Issue #131）。
+
 ## Git transport（Issue #114）
 
 两条认证通道，职责边界清晰：

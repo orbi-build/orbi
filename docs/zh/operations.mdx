@@ -32,6 +32,26 @@ systemctl --user list-timers muyan-pilot.timer
 systemctl --user status muyan-pilot.service
 ```
 
+## Unit 模板变更后（Issue #131）
+
+unit 模板是部署配置，不是普通代码。当 PR 修改
+`systemd/muyan-pilot.service` 或 `systemd/muyan-pilot.timer` 并合并到
+main 后，必须在下一次 timer 触发前运行幂等安装命令：
+
+```bash
+python3 muyan_pilot.py install-units --config muyan-pilot.toml
+```
+
+它把两个模板复制到用户 unit 目录、daemon-reload、enable timer——从不
+启动、停止或重启运行中的 Runner。Runner 本身 NEVER auto-copies /
+auto-overwrites（从不自动复制、自动覆盖已安装 unit）：模板变更未同步
+时，每次启动都会被启动前 `unit_drift` 检查 fail fast（结构化
+`unit_drift` 行、非零退出、不取 slot、不领取 Issue），直到人工运行
+同步命令。这个 fail-fast 是部署的哨兵行为，不是缺陷（2026-08-27
+实例：PR #130 把 timer 从 15 分钟改为 5 分钟，合并后无人运行
+`install-units`，每次启动都因 `unit_drift` 失败，直到人工同步——
+Issue #131）。
+
 ## 日志（journal）
 
 journal 是本地记录。一个 run 的每行都以 run id 前缀 `[<run_id>]` 开头，

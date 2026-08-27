@@ -236,3 +236,50 @@ def test_agents_md_documents_the_deployment_consistency_contract():
     assert "restart" in text
     # Drift blocks the start before any claim.
     assert "no claim" in text or "no slot" in text
+
+
+def test_template_change_pins_the_post_merge_install_contract():
+    """Issue #131 regression: a `systemd/` template change is a
+    deployment change. The 2026-08-27 incident: PR #130 (Issue #51)
+    changed the timer template from 15 to 5 minutes and merged to
+    main; the documented post-merge `install-units` step was never
+    run, so every service start failed the pre-start `unit_drift`
+    check (fail fast, by design) until a human ran the fix command.
+
+    The contract must therefore be pinned in EVERY place it is
+    documented — README, AGENTS.md and the EN/ZH operations pages —
+    so a future template change cannot merge and strand the
+    deployment again without the mandatory sync step being visible:
+    after the merge to main the human runs
+    `muyan_pilot.py install-units`; the Runner itself NEVER
+    auto-copies or auto-overwrites the installed units (the drift
+    check stays fail-fast — it is the canary, not a bug)."""
+    def template_change_contract(text: str) -> None:
+        # The trigger: a change of either repo unit template.
+        assert "systemd/muyan-pilot.timer" in text
+        assert "systemd/muyan-pilot.service" in text
+        # The mandatory follow-up: the idempotent install command,
+        # run after the merge to main.
+        assert "install-units" in text
+        # The Runner never auto-syncs the installed units.
+        assert "never" in text.lower() and "auto" in text.lower()
+        # The unsynced state is caught by the fail-fast drift check.
+        assert "unit_drift" in text
+
+    readme = README_FILE.read_text(encoding="utf-8")
+    # The README pins it in the deployment-consistency section (the
+    # section that carries the full deployment sequence).
+    section = readme.split("部署一致性", 1)[-1]
+    template_change_contract(section)
+
+    agents = AGENTS_FILE.read_text(encoding="utf-8")
+    # AGENTS.md pins it inside the Base freshness / deployment
+    # consistency contract.
+    agents_section = agents.split("## Base freshness", 1)[-1]
+    template_change_contract(agents_section)
+
+    # EN/ZH operations pages carry the same contract (the i18n parity
+    # contract: both languages document the same fact).
+    for slug in ("operations.mdx", "zh/operations.mdx"):
+        page = (REPO_ROOT / "docs" / slug).read_text(encoding="utf-8")
+        template_change_contract(page)
