@@ -63,6 +63,27 @@ def find_progress_comment(
     return None
 
 
+def issue_field(issue: int, title: str) -> str:
+    """Render the progress comment's issue value: `#<number> <title>`.
+
+    Issue #100: the issue line shows the number AND the title so a
+    mobile user sees what the agent works on without opening GitHub.
+    The `#<number>` prefix is preserved so existing log/scene parsing
+    keeps working. The title is flattened to a single line (whitespace
+    collapsed) so spaces, Markdown and long titles stay readable.
+    A missing or non-string title violates the GitHub issue data
+    contract (issues always carry a non-empty string title) and fails
+    fast — a title is never fabricated.
+    """
+    if not isinstance(issue, int) or isinstance(issue, bool):
+        raise ValueError(f"issue number must be an int, got {issue!r}")
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError(
+            f"issue title must be a non-empty string, got {title!r}",
+        )
+    return f"#{issue} {' '.join(title.split())}"
+
+
 def format_elapsed(seconds: float) -> str:
     """Format seconds as `45s`, `3m 12s` or `1h 2m 3s` (zero units omitted)."""
     total = max(0, int(seconds))
@@ -89,7 +110,10 @@ def progress_body(state: dict) -> str:
         "",
         PROGRESS_HEADER,
         "",
-        f"- issue: #{state['issue']}",
+        # Issue #100: number AND title, one consistent format in every
+        # scene; both state keys are required (a state without the
+        # title fails fast, never a fabricated or bare number).
+        f"- issue: {issue_field(state['issue'], state['issue_title'])}",
         # The visible run_id field is `run_id=<id>` (key=value, Issue
         # #41 contract), so a grep for the value finds every comment
         # of the run.

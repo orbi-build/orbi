@@ -3632,9 +3632,10 @@ def test_stream_pi_live_progress_patches_github_before_child_exits(
 
     publisher = FakePublisher()
     throttle = runner.LiveProgressThrottle(
-        publisher, issue=24, run_id="run1", role="implement",
-        branch="b", worktree=tmp_path, started=time.monotonic(),
-        pr_url=None, review_round=0, priority="normal",
+        publisher, issue=24, title="Live progress", run_id="run1",
+        role="implement", branch="b", worktree=tmp_path,
+        started=time.monotonic(), pr_url=None, review_round=0,
+        priority="normal",
     )
     result = runner.stream_pi(
         command, cwd=tmp_path, poll_interval=0.1,
@@ -3692,9 +3693,10 @@ def test_live_progress_throttle_patches_on_change_and_cadence():
 
     publisher = FakePublisher()
     throttle = runner.LiveProgressThrottle(
-        publisher, issue=1, run_id="run1", role="implement",
-        branch="b", worktree=Path("/w"), started=time.monotonic(),
-        pr_url=None, review_round=0, priority="normal",
+        publisher, issue=1, title="Throttle task", run_id="run1",
+        role="implement", branch="b", worktree=Path("/w"),
+        started=time.monotonic(), pr_url=None, review_round=0,
+        priority="normal",
     )
     first = {
         "phase": "starting", "action": None, "result": None,
@@ -4248,7 +4250,7 @@ def test_finish_blocked_progress_is_a_noop_without_run_id(monkeypatch):
     )
     runner._finish_blocked_progress(
         39, None, "owner/repo", None, None, "https://x/pull/46",
-        "failure", "next step",
+        "failure", "next step", title="Blocked task",
     )
     assert calls == []
 
@@ -4274,7 +4276,7 @@ def test_finish_blocked_progress_creates_the_comment_when_missing(
     monkeypatch.setattr(runner, "run_command", fake_run)
     runner._finish_blocked_progress(
         39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
-        "the failure", "the next step",
+        "the failure", "the next step", title="Blocked task",
     )
     posts = [
         command for command in api_calls
@@ -4286,6 +4288,8 @@ def test_finish_blocked_progress_creates_the_comment_when_missing(
     assert "the failure" in body
     assert "the next step" in body
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in body
+    # Issue #100: the blocked scene shows the number AND the title.
+    assert "- issue: #39 Blocked task" in body
 
 
 def test_finish_blocked_progress_carries_the_actual_role_and_round(
@@ -4308,7 +4312,7 @@ def test_finish_blocked_progress_carries_the_actual_role_and_round(
     monkeypatch.setattr(runner, "run_command", fake_run)
     runner._finish_blocked_progress(
         39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
-        "the failure", "the next step",
+        "the failure", "the next step", title="Blocked task",
         role=runner.ROLE_REVIEW, review_round=2,
     )
     posts = [
@@ -4338,7 +4342,7 @@ def test_finish_blocked_progress_defaults_to_review_round_zero(monkeypatch):
     monkeypatch.setattr(runner, "run_command", fake_run)
     runner._finish_blocked_progress(
         39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
-        "the failure", "the next step",
+        "the failure", "the next step", title="Blocked task",
     )
     posts = [
         command for command in api_calls
@@ -4528,7 +4532,7 @@ def test_wait_for_delivery_passes_p0_priority_to_the_review(
         PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
         "owner/repo",
     )
-    assert review_calls == [{"priority": "p0"}]
+    assert review_calls == [{"title": "p0 task", "priority": "p0"}]
     # The awaiting log line carries the explicit priority field.
     awaiting = [m for m in caplog.messages if "delivery_awaiting" in m]
     assert any("priority=p0" in m for m in awaiting)

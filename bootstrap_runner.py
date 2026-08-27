@@ -1408,6 +1408,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
                         f"{scene['pr_url']} failed: {exc}",
                         "fix the resume verification failure above "
                         "and resume the delivery of this same PR",
+                        title=issue["title"],
                         role=ROLE_REVIEW,
                         review_round=review_rounds_so_far(
                             issue_comments(number, repo=source_repo),
@@ -1763,8 +1764,12 @@ def sync_base_checkout(repo_dir: Path, base_branch: str) -> None:
 
 def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                               config: dict, source_repo: str,
-                              number: int, priority: str) -> bool:
+                              number: int, title: str, priority: str) -> bool:
     """Run one independent review round; merge when the verdict is clean.
+
+    `title` is the issue's GitHub title (Issue #100): the review
+    progress scenes (ensure, findings, merged) show `#<number> <title>`
+    like every other scene; it is required, never fabricated.
 
     The delivery wait loop (which holds the slot) calls this while the
     PR is open and the Issue awaits review (`ai-pr-opened`) or awaits the
@@ -1815,18 +1820,19 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         run_id=config["run_id"], issue=number,
         source_repo=source_repo, role=ROLE_REVIEW,
         action=lambda: publisher.ensure(_progress_body(_progress_state(
-            issue=number, run_id=config["run_id"], role=ROLE_REVIEW,
-            branch=branch, worktree=worktree, started=started,
-            pr_url=pr["url"], review_round=round, priority=priority,
+            issue=number, title=title, run_id=config["run_id"],
+            role=ROLE_REVIEW, branch=branch, worktree=worktree,
+            started=started, pr_url=pr["url"], review_round=round,
+            priority=priority,
         ))),
     )
     output = run_review(
         worktree, pr, config, source_repo, number, branch, round,
         progress=LiveProgressThrottle(
-            publisher, issue=number, run_id=config["run_id"],
-            role=ROLE_REVIEW, branch=branch, worktree=worktree,
-            started=started, pr_url=pr["url"], review_round=round,
-            priority=priority,
+            publisher, issue=number, title=title,
+            run_id=config["run_id"], role=ROLE_REVIEW, branch=branch,
+            worktree=worktree, started=started, pr_url=pr["url"],
+            review_round=round, priority=priority,
         ),
     )
     verdict = parse_review_verdict(output)
@@ -1873,7 +1879,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             source_repo=source_repo, role=ROLE_REVIEW,
             action=lambda: publisher.finish(_progress_body(
                 _progress_state(
-                    issue=number, run_id=config["run_id"],
+                    issue=number, title=title, run_id=config["run_id"],
                     role=ROLE_REVIEW, branch=branch,
                     worktree=worktree, started=started,
                     pr_url=pr["url"], review_round=round,
@@ -1948,7 +1954,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         source_repo=source_repo, role=ROLE_REVIEW,
         action=lambda: publisher.finish(_progress_body(
             _progress_state(
-                issue=number, run_id=config["run_id"],
+                issue=number, title=title, run_id=config["run_id"],
                 role=ROLE_REVIEW, branch=branch,
                 worktree=worktree, started=started,
                 pr_url=merged["url"], review_round=round,
@@ -2104,12 +2110,18 @@ def delivery_head_advanced(worktree: Path, base_sha: str) -> bool:
     return head != base_sha
 
 
-def _progress_state(*, issue: int, run_id: str, role: str, branch: str,
-                    worktree: Path, started: float, pr_url: str | None,
-                    review_round: int, priority: str,
+def _progress_state(*, issue: int, title: str, run_id: str, role: str,
+                    branch: str, worktree: Path, started: float,
+                    pr_url: str | None, review_round: int, priority: str,
                     activity: dict | None = None) -> dict:
     """Collect the current run state for the GitHub progress comment.
 
+    `title` is the issue's GitHub title (Issue #100): the progress
+    comment's issue line shows `#<number> <title>` in every scene. It
+    is required — the GitHub issue data contract guarantees a
+    non-empty string title (every runner scan fetches it), and a
+    missing title fails fast in `progress.issue_field` instead of
+    fabricating one.
     `priority` is the pickup priority of the issue (`p0` or `normal`,
     Issue #101), derived from the issue's labels at claim/resume time.
     `activity` is the live state from the `stream_pi` watcher while a Pi
@@ -2127,6 +2139,7 @@ def _progress_state(*, issue: int, run_id: str, role: str, branch: str,
     return {
         "run_id": run_id,
         "issue": issue,
+        "issue_title": title,
         "role": role,
         "priority": priority,
         "phase": (activity or {}).get("phase") or "starting",
@@ -2205,9 +2218,10 @@ def _safe_publish(*, run_id: str, issue: int, source_repo: str,
         )
 
 
-def _live_progress(publisher: ProgressPublisher, *, issue: int, run_id: str,
-                   role: str, branch: str, worktree: Path, started: float,
-                   pr_url: str | None, review_round: int, priority: str,
+def _live_progress(publisher: ProgressPublisher, *, issue: int,
+                   title: str, run_id: str, role: str, branch: str,
+                   worktree: Path, started: float, pr_url: str | None,
+                   review_round: int, priority: str,
                    activity: dict | None = None) -> None:
     """One live GitHub progress update while a Pi session is running.
 
@@ -2221,9 +2235,9 @@ def _live_progress(publisher: ProgressPublisher, *, issue: int, run_id: str,
     ensures first.
     """
     state = _progress_state(
-        issue=issue, run_id=run_id, role=role, branch=branch,
-        worktree=worktree, started=started, pr_url=pr_url,
-        review_round=review_round, priority=priority,
+        issue=issue, title=title, run_id=run_id, role=role,
+        branch=branch, worktree=worktree, started=started,
+        pr_url=pr_url, review_round=review_round, priority=priority,
         activity=activity,
     )
     publisher.patch(_progress_body(state))
@@ -2240,13 +2254,14 @@ class LiveProgressThrottle:
     """
 
     def __init__(self, publisher: ProgressPublisher, *, issue: int,
-                 run_id: str, role: str, branch: str, worktree: Path,
-                 started: float, pr_url: str | None, review_round: int,
-                 priority: str) -> None:
+                 title: str, run_id: str, role: str, branch: str,
+                 worktree: Path, started: float, pr_url: str | None,
+                 review_round: int, priority: str) -> None:
         def publish(activity: dict) -> None:
             _live_progress(
-                publisher, issue=issue, run_id=run_id, role=role,
-                branch=branch, worktree=worktree, started=started,
+                publisher, issue=issue, title=title, run_id=run_id,
+                role=role, branch=branch, worktree=worktree,
+                started=started,
                 pr_url=pr_url, review_round=review_round,
                 priority=priority, activity=activity,
             )
@@ -2271,6 +2286,12 @@ class LiveProgressThrottle:
 
 def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     number = int(issue["number"])
+    # Issue #100: the progress comment's issue line shows the number
+    # AND the title in every scene. The scanned issue dict always
+    # carries the GitHub title (every scan fetches `title`); a missing
+    # or non-string title fails fast here (KeyError / ValueError in
+    # `progress.issue_field`) — it is never fabricated.
+    title = issue["title"]
     base_branch = config["base_branch"]
     # The run id is generated once per attempt and bound BEFORE any
     # other step is logged, so every journal line of the attempt
@@ -2342,8 +2363,9 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             role=ROLE_IMPLEMENT,
             action=lambda: publisher.ensure(_progress_body(
                 _progress_state(
-                    issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
-                    branch=branch, worktree=worktree, started=started,
+                    issue=number, title=title, run_id=run_id,
+                    role=ROLE_IMPLEMENT, branch=branch,
+                    worktree=worktree, started=started,
                     pr_url=None, review_round=0, priority=priority,
                 ),
             )),
@@ -2358,7 +2380,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         run_pi(
             issue, worktree, config, source_repo, branch=branch,
             progress=LiveProgressThrottle(
-                publisher, issue=number, run_id=run_id,
+                publisher, issue=number, title=title, run_id=run_id,
                 role=ROLE_IMPLEMENT, branch=branch, worktree=worktree,
                 started=started, pr_url=None, review_round=0,
                 priority=priority,
@@ -2415,8 +2437,9 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             run_id=run_id, issue=number, source_repo=source_repo,
             role=ROLE_IMPLEMENT,
             action=lambda: publisher.finish(_progress_body(_progress_state(
-                issue=number, run_id=run_id, role=ROLE_IMPLEMENT,
-                branch=branch, worktree=worktree, started=started,
+                issue=number, title=title, run_id=run_id,
+                role=ROLE_IMPLEMENT, branch=branch,
+                worktree=worktree, started=started,
                 pr_url=pr_url, review_round=0, priority=priority,
             ), outcome="**Muyan Pilot delivered**")),
         )
@@ -2491,7 +2514,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
                     source_repo=source_repo, role=ROLE_IMPLEMENT,
                     action=lambda: publisher.finish(_progress_body(
                         _progress_state(
-                            issue=number, run_id=run_id,
+                            issue=number, title=title, run_id=run_id,
                             role=ROLE_IMPLEMENT, branch=branch,
                             worktree=worktree, started=started,
                             pr_url=None, review_round=0,
@@ -2553,11 +2576,15 @@ def issue_labels(number: int, repo: str) -> list[str]:
 def _finish_blocked_progress(
     number: int, run_id: str | None, source_repo: str,
     worktree: Path | None, branch: str | None, pr_url: str,
-    detail: str, next_step: str,
+    detail: str, next_step: str, title: str,
     role: str = ROLE_REVIEW, review_round: int = 0,
     priority: str = "normal",
 ) -> None:
     """Finish the tracked progress comment with the blocked scene.
+
+    `title` is the issue's GitHub title (Issue #100): the blocked scene
+    shows `#<number> <title>` like every other progress scene; it is
+    required, never fabricated.
 
     The contract (Issue #18): on failure the progress comment becomes
     the blocked scene with the next-step reason — the same terminal
@@ -2578,7 +2605,7 @@ def _finish_blocked_progress(
         number, source_repo, run_id, run_command=run_command,
     )
     publisher.ensure(_progress_body(_progress_state(
-        issue=number, run_id=run_id, role=role,
+        issue=number, title=title, run_id=run_id, role=role,
         branch=branch or "-", worktree=worktree or Path("-"),
         started=time.monotonic(), pr_url=pr_url,
         review_round=review_round, priority=priority,
@@ -2626,6 +2653,11 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
     the open descriptor). No polling shim, no daemon loop, no queue.
     """
     number = int(issue["number"])
+    # Issue #100: the progress comment's issue line shows the number
+    # AND the title in every scene; the scanned issue dict always
+    # carries the GitHub title (every scan fetches `title`) — a
+    # missing or non-string title fails fast, never fabricated.
+    title = issue["title"]
     run_id = current_run_id()
     marker = run_marker(run_id) if run_id else ""
     # Pickup priority (Issue #101): derived from the scanned issue's
@@ -2710,6 +2742,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                         "investigate why the PR was closed and re-open "
                         "the delivery or start a fresh run on the "
                         "Issue",
+                        title=title,
                         role=ROLE_REVIEW, review_round=blocked_round,
                         priority=priority,
                     ),
@@ -2780,7 +2813,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 merged = review_and_merge_if_clean(
                     worktree, branch, config["base_branch"],
                     review_config, source_repo, number,
-                    priority=priority,
+                    title=title, priority=priority,
                 )
             except Exception as exc:
                 LOGGER.exception(
@@ -2838,6 +2871,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                             f"failed: {exc}",
                             "fix the review failure above and resume "
                             "the delivery of this same PR",
+                            title=title,
                             role=ROLE_REVIEW,
                             review_round=review_rounds_so_far(
                                 issue_comments(number, repo=source_repo),
