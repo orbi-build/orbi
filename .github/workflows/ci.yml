@@ -40,3 +40,13 @@ jobs:
 
       - name: Enforce 100% line/branch coverage (contract)
         run: python3 -m coverage report --fail-under=100 --show-missing
+
+      # Mintlify docs build smoke (Issue #116): the official `mint` CLI
+      # validates the docs/ build (docs.json config, pages, links) in
+      # strict mode — non-zero exit on any warning or error. Same single
+      # job: no second job, no cache, no matrix.
+      - name: Install the Mintlify CLI (docs build smoke)
+        run: npm install -g mint
+
+      - name: Validate the Mintlify docs build (Issue #116)
+        run: cd docs && mint validate

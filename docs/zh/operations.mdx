@@ -1,0 +1,135 @@
+# 运维
+
+正常运行完全自动：timer 触发 tick，tick 最多做一件事，进度自己发布到
+journal 和 GitHub。正常路径永远不需要 status 命令、轮询或督工——下面的
+命令只用于首次验证、排查和恢复。
+
+## Timer
+
+`systemd/muyan-pilot.timer` 每刻钟触发一次，全天 24 小时
+（`OnCalendar=*-*-* *:00/15`、`AccuracySec=30s`、`Persistent=false`——
+错过的 tick 被丢弃，从不排队）。每个 tick 启动
+`muyan-pilot.service`，它：
+
+1. **先 fast-forward 代码**（`ExecStartPre`，在 Python 进程外）：
+   `git fetch origin main && git merge --ff-only origin/main`。checkout
+   不干净、fetch 失败或无法 fast-forward 时 preflight 失败：service 不
+   启动，原因写入 systemd journal（fail fast）。正在运行的长任务从不被
+   热更新或杀掉——service active 时 systemd 忽略 timer 的 start 请求，
+   下一次真正启动取到最新代码。
+2. **运行一个 tick**：恢复一个已打开的 PR（review/fix/merge），或领取
+   一个 `ai-ready` Issue，然后退出。在任何 slot 或领取之前，tick 还
+   运行启动前 **git transport 检查**（Issue #114）：部署 checkout 的
+   **配置的** `origin` remote 必须是第一个配置 source repo 的 SSH
+   形式，且 `git ls-remote <ssh-url>` 退出 0（SSH 可达且已认证）。
+   传输损坏记录结构化 `transport_check_failed ... reason=...` 行并让
+   启动失败——不取 slot、不领取、不改标签，**没有 HTTPS 回退**（git
+   数据操作，包括 `.github/workflows/*.yml` 推送，永远走 SSH；GitHub
+   API 操作留在 `gh` token 上）。
+
+```bash
+systemctl --user list-timers muyan-pilot.timer
+systemctl --user status muyan-pilot.service
+```
+
+## 日志（journal）
+
+journal 是本地记录。一个 run 的每行都以 run id 前缀 `[<run_id>]` 开头，
+一条 grep 还原完整时间线：
+
+```bash
+journalctl --user -u muyan-pilot.service -f
+journalctl --user -u muyan-pilot.service | grep e07383c2
+```
+
+你会看到的稳定 `key=value` 行：
+
+- `run_start` / `run_end` — 开始时的完整现场（branch、worktree、
+  session 文件），结束时的结果（PR URL、commit）；
+- `activity` / `heartbeat` / `model_wait` / `resumed` — session 运行
+  期间的实时 Pi 活动（phase、最近动作、elapsed、idle）；
+- `pi_idle` — 超过 300 秒（`PI_IDLE_WARN_SECONDS=300`）没有
+  model/session 活动且模型不期望回复时的一次 WARNING；活跃的慢模型
+  （`model_wait`）从不告警；
+- `run_failed` — 完整现场加原因（`pi_exit_N`、`timeout_...s`，或
+  `upstream_dead_stale_...s`——冻结的 `model_wait` 超过
+  `PI_MODEL_WAIT_DEAD_SECONDS`（默认 600 秒）判定上游模型已死，Runner
+  杀掉 Pi）。
+
+idle 告警和上游已死 kill 是日志/健康阈值——它们不是每刻钟调度，也
+不是业务任务 timeout。
+
+## CLI（`muyan_pilot.py`）
+
+```bash
+# 在配置的 source repo 创建 Issue 并加 ai-ready 标签
+python3 muyan_pilot.py add "task title" --body "task body" --config muyan-pilot.toml
+python3 muyan_pilot.py add "task title" --repo OWNER/BACKLOG-REPO --config muyan-pilot.toml
+
+# 只读队列视图：当前（ai-in-progress）任务带实时 Pi 活动、下一个 ready
+# Issue、每个 source repo 的最近结果（ai-pr-opened / ai-fix-needed /
+# ai-merged / ai-blocked）
+python3 muyan_pilot.py status --config muyan-pilot.toml
+
+# 只读部署/健康报告：repo commit、unit drift、git transport（配置的
+# origin URL、protocol、期望 SSH URL、SSH 探测——传输失败报告为
+# `transport: FAILED ...`，不抛出）、timer/service 状态、slots、Pi
+# session、当前 Issue、最近 journal
+python3 muyan_pilot.py doctor --config muyan-pilot.toml
+
+# 一次性、幂等初始化（新机器/新仓库）：gh auth + 仓库权限、平台 labels、
+# systemd user units、checkout 检查（含 git transport：已有 HTTPS
+# `origin` 迁移为 `git@github.com:owner/repo.git`（人工授权的迁移路径；
+# Runner 本身从不改写 remote），并探测 SSH 连通性（fail fast，没有
+# HTTPS 回退））
+python3 muyan_pilot.py setup --config muyan-pilot.toml
+```
+
+```bash
+# 打印当前 run 的 Pi session JSONL 路径（没有 session 时 fail fast）
+python3 muyan_pilot.py session --config muyan-pilot.toml
+python3 muyan_pilot.py session --follow --config muyan-pilot.toml   # tail -f
+python3 muyan_pilot.py session --pretty --config muyan-pilot.toml   # 一行摘要
+```
+
+所有命令通过 `--config` 或 `MUYAN_PILOT_CONFIG` 环境变量接收配置
+（默认 `muyan-pilot.toml`）。`status` 和 `session` 是调试附件——
+journal 和 GitHub 仍是正常可观测路径。
+
+## Worktree 与 base 新鲜度
+
+每次领取先 fetch 并冻结 `origin/<base_branch>`，任务 worktree 和
+feature branch 都从那个精确 SHA 创建——绝不来自主工作区当前 HEAD。
+branch 和 worktree 名带 run id（例如
+`.worktrees/<...>-issue-14-e07383c2`），所以重试的 Issue 得到新的独立
+run，旧现场保留。`.worktrees/` 已 gitignore。
+
+任务 worktree 共享部署 checkout 的单一 `origin` remote（`git worktree
+add` 创建的 worktree 继承主仓库的 remote 配置），所以 git transport 只
+在 checkout 上配置一次，所有 worktree 继承：新 bootstrap worktree
+天然有 SSH `git remote -v`，它们的 fetch/push——包括
+`.github/workflows/*.yml`——走 SSH（Issue #114）。
+
+创建 PR 前，实现者重新 fetch base：如果 `origin/<base_branch>` 前进了，
+它把最新 base 合入 task branch、手工解决冲突、重跑完整测试，然后才
+推送。Runner 用 `git merge-base --is-ancestor origin/<base_branch>
+HEAD` 验证，拒绝 head 不包含最新远端 base 的交付。
+
+## 故障恢复
+
+| 状态 | 发生了什么 | 怎么办 |
+|---|---|---|
+| `ai-blocked` | Runner fail fast（命令错误、现场无法恢复、审查超轮） | 读 Issue 评论（现场 + 原因）和 journal。修环境或修任务，然后把同一 PR 路径重新标为 `ai-fix-needed`（同一 run 继续），或移除标签重新派发为全新 `ai-ready`（新 run）。它从不自动恢复。 |
+| `ai-fix-needed` | PR head 尚不可合并（review finding 或 base 冲突） | 什么都不用做——下一 tick 在同一 PR 上启动下一个审查会话，会话内吸收最新 base。 |
+| 被杀后残留的 `ai-in-progress` | Runner 在任务中途被 SIGKILL | 下一 tick 的重启扫描接回（仅当没有其他 Runner 活着时）：同一 run id、同一 worktree、同一条进度评论——不新建 run。 |
+
+run 产物（plan、test log、session JSONL）留在任务 worktree 作为本地
+记录；GitHub 承载交付记录。
+
+## 并发
+
+`max_concurrency`（默认 1）限定本机并发交付数。slot 是
+`<repo_dir>/.muyan-pilot/slots/slot-N` 上的排他 `flock(2)` 锁，在任何
+领取之前取得，整个交付生命周期（implement → review → merge）持有；
+进程无论如何退出，内核都会释放它。拿不到 slot 的 Runner 记录
+`capacity_full` 后退出，不领取 Issue。

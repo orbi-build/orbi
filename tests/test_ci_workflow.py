@@ -134,6 +134,27 @@ def test_ci_workflow_enforces_full_line_and_branch_coverage():
     )
 
 
+def test_ci_workflow_runs_the_mintlify_docs_build_smoke():
+    """Issue #116: the docs build smoke runs in CI with the official
+    Mintlify CLI — `mint validate` (strict build validation, non-zero
+    exit on any warning or error) in the SAME single job (KISS: no
+    second job, no cache, no matrix)."""
+    commands = step_commands(steps_of(load_workflow()))
+    assert any(
+        re.search(r"npm (i|install)( -g)? mint\b", command) for command in commands
+    ), (
+        "CI must install the official Mintlify CLI (mint), "
+        f"steps run: {commands!r}"
+    )
+    assert any(
+        re.search(r"^mint validate$|\bmint validate\b", command) and "--" not in command
+        for command in commands
+    ), (
+        "CI must run the Mintlify build smoke `mint validate`, "
+        f"steps run: {commands!r}"
+    )
+
+
 def test_readme_documents_remote_ci():
     readme = README_FILE.read_text(encoding="utf-8")
     assert "GitHub Actions" in readme, "README must name the remote CI"
