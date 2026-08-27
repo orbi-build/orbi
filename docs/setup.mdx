@@ -1,0 +1,131 @@
+# One-time setup
+
+`muyan_pilot.py setup` is the one-time, config-driven initialization
+entry for a new machine or a new task-pool repository. It verifies the
+local prerequisites, aligns the platform labels, installs the systemd
+user units, checks the checkout, and reports the optional model proxy —
+in one command, with a stable machine-readable result.
+
+```bash
+python3 muyan_pilot.py setup --config muyan-pilot.toml
+```
+
+Run it once per machine (and once per new task-pool repository). It is
+**idempotent**: re-running it never creates duplicate labels, units or
+timers, and never touches business Issues or business labels.
+
+## What it does, in order
+
+Setup is **fail-fast**: a core prerequisite failure stops the run
+before any later mutation, with the concrete reason on stderr and a
+non-zero exit code.
+
+1. **Commands** — `git`, `gh`, `python3` on the PATH, and a reachable
+   `systemctl --user` user bus (a container or headless session without
+   a user bus fails with the bus error).
+2. **Auth** — `gh auth status` (logged in with a usable token).
+3. **Per target repository** (every configured `source_repos` entry by
+   default; exactly one with `--repo OWNER/REPO`):
+   - the repo exists and the viewer has write permission
+     (`gh repo view` → `viewerPermission` must be `WRITE`, `MAINTAIN`
+     or `ADMIN`);
+   - the seven platform labels are aligned **declaratively** from the
+     repo-managed `labels.toml` (repo root) — the single source of
+     truth for label name, color and description: a missing label is
+     created, a drifted label is updated, nothing is deleted, and
+     business labels (`bug`, `enhancement`, ...) are never touched.
+4. **Systemd units** — the repo templates
+   (`systemd/muyan-pilot.service`, `systemd/muyan-pilot.timer`) are
+   installed idempotently into the user unit directory (the same
+   install `install-units` performs: copy, `daemon-reload`, enable the
+   timer — the service is never started, stopped or restarted), then
+   the timer's enabled/active state and next trigger time are
+   reported.
+5. **Checkout** — read-only check of the configured `repo_dir`:
+   `origin` remote present, current branch, clean worktree (a dirty
+   checkout fails: the timer's `ExecStartPre` fast-forward refuses a
+   dirty worktree, so the Runner could never start), and base
+   freshness (local `HEAD` vs freshly fetched
+   `origin/<base_branch>` — reported, not a failure: the timer
+   fast-forwards a clean checkout at each start).
+6. **Optional model proxy** — the `local-llm-kv-cache` proxy health
+   endpoint (`http://127.0.0.1:18082/health`) is checked and reported
+   as **optional**: its absence or unhealthiness is a warning in the
+   output and never blocks the core GitHub/Pilot setup.
+
+Setup never creates business Issues, never claims a task, never starts
+Pi, and never modifies a protected branch.
+
+## Options
+
+| Option | Meaning |
+|---|---|
+| `--config PATH` | The `muyan-pilot.toml` configuration (default: `$MUYAN_PILOT_CONFIG` or `muyan-pilot.toml`) |
+| `--repo OWNER/REPO` | Initialize exactly this configured source repo (default: every configured source repo) |
+| `--installed-dir PATH` | User unit directory (default: the standard `~/.config/systemd/user`) |
+| `--json` | Print the result as JSON instead of `key=value` lines |
+
+## Output
+
+The default output is stable `key=value` lines (one per concern; values
+containing spaces are quoted), so agents and scripts can parse it:
+
+```text
+setup=ok version=1 base_branch=main
+repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=7/7
+service=installed path=~/.config/systemd/user/muyan-pilot.service sha256=9f2c...
+timer=enabled active=true next="Thu 2026-08-27 10:00:00 +08"
+checkout=remote=origin branch=main clean=true base_fresh=true
+model_endpoint=optional optional_proxy=healthy url=http://127.0.0.1:18082/health
+```
+
+`labels=7/7` means all seven platform labels match `labels.toml`;
+`next` is the timer's next trigger time (`-` when it has none);
+`optional_proxy` is `healthy`, `unhealthy` or `unavailable` and never
+changes the exit code.
+
+`--json` prints the equivalent JSON document:
+
+```bash
+python3 muyan_pilot.py setup --config muyan-pilot.toml --json
+```
+
+## Success and failure examples
+
+Success (exit code `0`):
+
+```bash
+$ python3 muyan_pilot.py setup --config muyan-pilot.toml
+setup=ok version=1 base_branch=main
+repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=7/7
+service=installed path=~/.config/systemd/user/muyan-pilot.service sha256=9f2c...
+timer=enabled active=true next="Thu 2026-08-27 10:00:00 +08"
+checkout=remote=origin branch=main clean=true base_fresh=true
+model_endpoint=optional optional_proxy=unhealthy url=http://127.0.0.1:18082/health
+```
+
+(The optional proxy is down here — note `optional_proxy=unhealthy` —
+but the core setup still succeeds with exit code `0`.)
+
+Failures (non-zero exit code, `setup_failed reason=...` on stderr):
+
+```text
+setup_failed reason=systemctl --user user bus unavailable (is a systemd user session running?): ...
+setup_failed reason=repo not accessible: nobody/no-such (gh repo view failed: ...)
+setup_failed reason=insufficient permission for owner/repo: viewerPermission='READ' (one of ['ADMIN', 'MAINTAIN', 'WRITE'] required to manage labels)
+setup_failed reason=label alignment failed for owner/repo: ai-ready (gh label create failed: ...)
+setup_failed reason=checkout is not clean: /path/to/checkout (uncommitted changes: ' M bootstrap_runner.py') — commit or stash them first: ...
+```
+
+A wrong repo, missing labels that cannot be created (permission), a
+dirty checkout or a missing systemd user bus all stop the setup with
+the concrete reason — nothing is half-initialized without a clear
+signal.
+
+## Idempotency
+
+Re-running setup on an already-initialized machine is a no-op for the
+external state: labels that already match are not rewritten, the unit
+templates are re-copied from the repo (drift repair), the timer stays
+enabled, and no Issues or business data are created or modified. The
+reported hashes and states are stable across runs.

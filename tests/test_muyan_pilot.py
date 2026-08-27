@@ -1179,6 +1179,128 @@ def test_main_install_units_prints_report_and_returns_zero(
     assert "deployed commit=abc installed_dir=/x" in out
 
 
+# --- setup (Issue #117) -------------------------------------------------------
+
+
+
+def _setup_result() -> dict:
+    """A complete run_setup result document (format_setup contract)."""
+    return {
+        "setup": "ok",
+        "version": 1,
+        "base_branch": "main",
+        "repos": [
+            {
+                "repo": "xqliu/muyan-pilot",
+                "permission": "ADMIN",
+                "default_branch": "main",
+                "labels": {"aligned": 7, "total": 7},
+            },
+        ],
+        "service": {
+            "installed": True,
+            "installed_path": "/u/.config/systemd/user/muyan-pilot.service",
+            "sha256": "ab" * 32,
+        },
+        "timer": {"enabled": True, "active": True, "next": "-"},
+        "checkout": {
+            "remote": "origin",
+            "branch": "main",
+            "clean": True,
+            "base_fresh": True,
+        },
+        "optional_proxy": {
+            "optional": True,
+            "proxy": "healthy",
+            "url": "http://127.0.0.1:18082/health",
+        },
+    }
+
+def _setup_world(tmp_path):
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text("source_repos = [\"xqliu/muyan-pilot\"]\n",
+                      encoding="utf-8")
+    _write_prompts(tmp_path)
+    return config
+
+
+def test_main_setup_prints_key_value_lines_and_returns_zero(
+    monkeypatch, tmp_path, capsys,
+):
+    config = _setup_world(tmp_path)
+    seen = {}
+    result = _setup_result()
+
+    def fake_run_setup(cfg, installed_dir, **kwargs):
+        seen["config"] = cfg
+        seen["installed_dir"] = installed_dir
+        seen.update(kwargs)
+        return result
+
+    monkeypatch.setattr(muyan_pilot.pilot_setup, "run_setup", fake_run_setup)
+    assert muyan_pilot.main([
+        "setup", "--config", str(config),
+        "--installed-dir", str(tmp_path / "u"),
+    ]) == 0
+    assert seen["installed_dir"] == tmp_path / "u"
+    assert seen["repos"] is None
+    assert seen["config"]["source_repos"] == ["xqliu/muyan-pilot"]
+    out = capsys.readouterr().out
+    assert "setup=ok" in out
+
+
+def test_main_setup_json_prints_the_equivalent_document(
+    monkeypatch, tmp_path, capsys,
+):
+    config = _setup_world(tmp_path)
+    result = {"setup": "ok", "version": 1, "base_branch": "main"}
+    monkeypatch.setattr(
+        muyan_pilot.pilot_setup, "run_setup",
+        lambda cfg, installed_dir, **kwargs: result,
+    )
+    assert muyan_pilot.main([
+        "setup", "--json", "--config", str(config),
+    ]) == 0
+    out = capsys.readouterr().out
+    assert json.loads(out) == result
+
+
+def test_main_setup_repo_override_is_passed_through(
+    monkeypatch, tmp_path, capsys,
+):
+    config = _setup_world(tmp_path)
+    seen = {}
+
+    def fake_run_setup(cfg, installed_dir, **kwargs):
+        seen.update(kwargs)
+        return _setup_result()
+
+    monkeypatch.setattr(muyan_pilot.pilot_setup, "run_setup", fake_run_setup)
+    assert muyan_pilot.main([
+        "setup", "--repo", "xqliu/muyan-pilot", "--config", str(config),
+    ]) == 0
+    assert seen["repos"] == ["xqliu/muyan-pilot"]
+
+
+def test_main_setup_failure_prints_the_reason_and_returns_nonzero(
+    monkeypatch, tmp_path, capsys,
+):
+    config = _setup_world(tmp_path)
+
+    def failing(cfg, installed_dir, **kwargs):
+        raise muyan_pilot.pilot_setup.SetupError(
+            "insufficient permission for xqliu/muyan-pilot",
+        )
+
+    monkeypatch.setattr(muyan_pilot.pilot_setup, "run_setup", failing)
+    assert muyan_pilot.main([
+        "setup", "--config", str(config),
+    ]) == 1
+    err = capsys.readouterr().err
+    assert "setup_failed" in err
+    assert "insufficient permission" in err
+
+
 def test_doctor_report_clean(tmp_path, monkeypatch):
     config, installed = _deploy_world(tmp_path, drift=False)
     calls = _fake_doctor_commands(monkeypatch)

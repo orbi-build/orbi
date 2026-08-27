@@ -35,6 +35,7 @@ from bootstrap_runner import (
     run_command,
     validate_config,
 )
+import pilot_setup
 from pilot_slots import slot_occupancy
 from pi_activity import activity_snapshot
 
@@ -479,6 +480,25 @@ def main(argv: list[str] | None = None) -> int:
         "--installed-dir", type=Path, default=None,
         help="user unit directory to check (default: the standard dir)",
     )
+    setup_parser = subparsers.add_parser(
+        "setup", parents=[common],
+        help="one-time, idempotent initialization: gh auth + repo "
+             "permissions, platform labels, systemd user units, checkout "
+             "check and the optional model proxy (Issue #117)",
+    )
+    setup_parser.add_argument(
+        "--repo", default=None,
+        help="initialize exactly this source repo (default: every "
+             "configured source repo)",
+    )
+    setup_parser.add_argument(
+        "--installed-dir", type=Path, default=None,
+        help="user unit directory (default: the standard user dir)",
+    )
+    setup_parser.add_argument(
+        "--json", action="store_true",
+        help="print the result as JSON instead of key=value lines",
+    )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format=log_format())
 
@@ -534,6 +554,23 @@ def main(argv: list[str] | None = None) -> int:
         print(install_units_command(config, args.installed_dir))
     elif args.command == "doctor":
         print(doctor_report(config, args.installed_dir))
+    elif args.command == "setup":
+        try:
+            result = pilot_setup.run_setup(
+                config, args.installed_dir,
+                repos=[args.repo] if args.repo else None,
+                run_command=run_command,
+            )
+        except pilot_setup.SetupError as exc:
+            print(
+                f"setup_failed reason={exc}",
+                file=sys.stderr,
+            )
+            return 1
+        if args.json:
+            print(pilot_setup.to_json(result))
+        else:
+            print("\n".join(pilot_setup.format_setup(result)))
     else:
         print(status_report(config))
     return 0
