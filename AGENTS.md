@@ -146,6 +146,45 @@ is **one runtime outcome** (when X, should Y, actually Z).
   merge to main -> install units -> daemon-reload -> timer next trigger ->
   ExecStartPre syncs origin/main -> drift check -> Runner starts one Issue.
 
+## Git transport (Issue #114)
+
+- Two authentication channels with distinct responsibilities: **Git
+  data operations** (fetch, push — including pushing
+  `.github/workflows/*.yml`) go over **SSH**
+  (`git@github.com:owner/repo.git`, the machine's SSH key); **GitHub
+  API operations** (Issue, PR, label, comment, merge) stay on the
+  existing `gh` token. SSH is never used as API authentication and the
+  `gh` token is never used for git data. A workflow push must never
+  depend on the OAuth App `workflow` scope (the HTTPS/OAuth transport
+  that blocked Issue #106).
+- The deployment checkout's single `origin` remote is the transport:
+  a task worktree created with `git worktree add` shares the main
+  repository's remote configuration (verified against real git), so
+  the transport is configured once on the checkout and every worktree
+  inherits it. New bootstrap worktrees therefore have an SSH
+  `git remote -v` by construction.
+- Pre-start check: BEFORE any slot or claim (right after the unit-drift
+  preflight) the Runner verifies the checkout's transport — the
+  CONFIGURED `origin` URL (`git config remote.origin.url`, never the
+  insteadOf-rewritten data-plane URL) is SSH for the first configured
+  source repo, and `git ls-remote <ssh-url>` exits 0 (SSH reachable and
+  authenticated — verified against the real CLI). A failure logs the
+  structured `transport_check_failed ... reason=...` line and fails the
+  start: no slot, no claim, no label change, **no HTTPS fallback, no
+  silent skip**.
+- An existing HTTPS remote is never rewritten silently and never read
+  from a comment or Issue body: only the human-run setup entry
+  (`muyan_pilot.py setup`) migrates it with the plain
+  `git remote set-url origin git@github.com:owner/repo.git`; every
+  other path fails fast with the exact migration command. A remote
+  that does not point at the first configured source repo is never
+  migrated (the rewrite would re-target the checkout at a different
+  repository) — it fails with the mismatch scene whether or not the
+  setup entry authorizes the migration. `muyan_pilot.py
+  doctor` reports the transport read-only (protocol, expected URL, SSH
+  probe) — a failed transport is REPORTED there, not raised (the
+  pre-start check is the fail-fast gate).
+
 ## Task dependencies (blockedBy)
 
 - Task dependencies use GitHub's native `blockedBy` relation

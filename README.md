@@ -47,7 +47,7 @@ git fetch origin main && git merge --ff-only origin/main
 unit_drift unit=muyan-pilot.timer repo=<repo path> installed=<installed path> repo_sha256=... installed_sha256=... fix=python3 muyan_pilot.py install-units
 ```
 
-**只读诊断**：`python3 muyan_pilot.py doctor`（可用 `--installed-dir` 指定检查目录）报告 repo commit、unit drift（clean 或具体漂移 + 修复命令）、timer/service active 状态、Runner slot、Pi session、每个 source repo 的当前 Issue 和最近 journal 活动。只读：不改标签、不改 unit、不做 git 变更。
+**只读诊断**：`python3 muyan_pilot.py doctor`（可用 `--installed-dir` 指定检查目录）报告 repo commit、unit drift（clean 或具体漂移 + 修复命令）、Git transport（配置的 origin URL、protocol、SSH 探测；见「Git transport」）、timer/service active 状态、Runner slot、Pi session、每个 source repo 的当前 Issue 和最近 journal 活动。只读：不改标签、不改 unit、不做 git 变更。
 
 **完整部署时序**（从代码合并到下一次 Runner 启动）：
 
@@ -58,8 +58,32 @@ git merge 到 main
   -> timer 下一次触发
   -> ExecStartPre 同步 origin/main（fetch + fast-forward）
   -> 启动前 unit 漂移检查（一致才继续）
+  -> 启动前 Git transport 检查（SSH 且可达才继续，见下节）
   -> Runner 启动并执行一个 Issue
 ```
+
+## Git transport（Issue #114）
+
+两条认证通道，职责边界清晰：
+
+- **Git 数据操作**（fetch、push——包括推送 `.github/workflows/*.yml`）走 **SSH**（`git@github.com:owner/repo.git`，用本机 SSH key 认证）。workflow 文件推送不再依赖 OAuth App 的 `workflow` scope（#106 被 HTTPS/OAuth 通道阻塞的根因）；
+- **GitHub API 操作**（Issue、PR、label、comment、merge）继续走现有 `gh` token。SSH 从不作为 API 认证，`gh` token 也从不用于 git 数据。
+
+部署 checkout 的单一 `origin` remote 就是 transport：`git worktree add` 创建的任务 worktree 共享主仓库的 remote 配置（已对真实 git 验证），所以 transport 只在 checkout 上配置一次，所有 worktree 天然继承——**新 bootstrap worktree 的 `git remote -v` 默认就是 SSH**。
+
+**启动前检查**：Runner 每次启动时（unit 漂移检查之后、取 slot/领取任何 Issue 之前）校验 checkout 的 transport——**配置的** `origin` URL（`git config remote.origin.url`，不是 insteadOf 重写后的数据面 URL）必须是第一个配置 source repo 的 SSH 形式，且 `git ls-remote <ssh-url>` 退出码 0（SSH 可达且已认证，已对真实 CLI 验证）。失败时记录结构化日志并 fail fast（非零退出，不取 slot、不领取 Issue、不改任何标签），**不自动降级到 HTTPS，也不静默跳过 workflow 文件**：
+
+```text
+transport_check_failed repo_dir=<repo path> source_repos=<...> reason=ssh_unreachable: git ls-remote git@github.com:owner/repo.git failed: ... stderr=git@github.com: Permission denied (publickey). — ...
+```
+
+**已有 HTTPS remote 的迁移路径**：Runner 从不静默改写 remote，也从不从评论或 Issue 内容读取 remote。迁移只由人工执行的一次性 setup 入口完成（`python3 muyan_pilot.py setup`，内部执行 `git remote set-url origin git@github.com:owner/repo.git`）；其他路径遇到 HTTPS remote 时 fail fast，失败信息携带确切的迁移命令。指向其他仓库的 remote 从不被迁移（改写会把 checkout 指向另一个仓库），无论 setup 是否授权迁移都直接以 mismatch 现场 fail fast。手工等价命令：
+
+```bash
+git remote set-url origin git@github.com:OWNER/REPO.git
+```
+
+**只读诊断**：`python3 muyan_pilot.py doctor` 报告 transport 行（remote、配置的 URL、protocol、期望 URL、SSH 探测结果）；SSH 不可用时 doctor 把失败现场写进报告（`transport: FAILED ...`），不中断其余报告——fail-fast 门禁是启动前检查，doctor 是诊断报告。
 
 ## 远程 CI（GitHub Actions）
 
@@ -103,14 +127,15 @@ python3 muyan_pilot.py install-units --config muyan-pilot.toml
 python3 muyan_pilot.py doctor --config muyan-pilot.toml
 
 # 一次性 setup（新机器/新仓库）：gh auth + 仓库权限、平台 labels
-# （labels.toml 为唯一事实源）、systemd user units、checkout 检查、
+# （labels.toml 为唯一事实源）、systemd user units、checkout 检查
+# （含 Git transport：HTTPS origin 迁移为 SSH + SSH 连通性探测）、
 # 可选模型 proxy（warning only）；幂等、fail-fast，--json 输出等价 JSON
 python3 muyan_pilot.py setup --config muyan-pilot.toml
 ```
 
 ## GitHub Issue 标签（外部状态）
 
-GitHub label 是仓库的**外部状态**：它不会随代码提交自动创建，缺失时扫描会静默漏掉对应状态的 Issue。新仓库/新机器用一次性 setup 入口完成初始化（幂等、fail-fast，label 名称/颜色/描述以仓库内的 `labels.toml` 为唯一事实源，已存在的 label 只做声明式对齐，业务 label 从不被改动）：
+GitHub label 是仓库的**外部状态**：它不会随代码提交自动创建，缺失时扫描会静默漏掉对应状态的 Issue。新仓库/新机器用一次性 setup 入口完成初始化（幂等、fail-fast，label 名称/颜色/描述以仓库内的 `labels.toml` 为唯一事实源，已存在的 label 只做声明式对齐，业务 label 从不被改动；同时完成 Git transport 初始化：HTTPS `origin` 迁移为 SSH 并探测 SSH 连通性，见「Git transport」）：
 
 ```bash
 # 一次性 setup：gh auth + 仓库权限、平台 labels、systemd user units、
@@ -315,7 +340,7 @@ grep -r e07383c2 .worktrees/   # 在 clone 根目录执行
 
 ## 任务 base 与 worktree
 
-每次领取任务前，Runner 在配置 repo 中执行 `git fetch origin <base_branch>`，并冻结 `origin/<base_branch>` 的精确 SHA（`base_branch` 在 TOML 中配置，默认 `main`）。任务 worktree 和 feature branch 都从该 SHA 创建，绝不使用主工作区当前 HEAD；branch 和目录名都带唯一 run 标识（例如 `.worktrees/muyan-pilot-xqliu-muyan-pilot-issue-14-a1b2c3d4`），同一个 Issue 返工时会生成新的独立 run，旧现场原样保留。base branch、base SHA 和 run 标识会写入 Issue 评论和 `status` 输出。
+每次领取任务前，Runner 在配置 repo 中执行 `git fetch origin <base_branch>`，并冻结 `origin/<base_branch>` 的精确 SHA（`base_branch` 在 TOML 中配置，默认 `main`）。任务 worktree 和 feature branch 都从该 SHA 创建，绝不使用主工作区当前 HEAD；branch 和目录名都带唯一 run 标识（例如 `.worktrees/muyan-pilot-xqliu-muyan-pilot-issue-14-a1b2c3d4`），同一个 Issue 返工时会生成新的独立 run，旧现场原样保留。base branch、base SHA 和 run 标识会写入 Issue 评论和 `status` 输出。任务 worktree 共享部署 checkout 的单一 `origin` remote（Git transport 为 SSH，见「Git transport」），worktree 内的 fetch/push（包括 workflow 文件）都走这条 SSH 通道。
 
 ### 重启恢复（kill 后自动续跑）
 

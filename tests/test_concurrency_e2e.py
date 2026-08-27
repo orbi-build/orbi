@@ -345,7 +345,15 @@ def git(repo: Path, *args: str) -> str:
 
 @pytest.fixture()
 def clone(tmp_path: Path) -> Path:
-    """Local bare origin plus a clone with one commit on main."""
+    """Local bare origin plus a clone with one commit on main.
+
+    The clone's `origin` remote is the SSH URL of the task repo
+    (Issue #114: the pre-start transport check requires the checkout's
+    remote to be SSH for the configured source repo); a
+    `url.<base>.insteadOf` rewrite (git-config(1)) keeps the git data
+    plane local: fetch/ls-remote of the SSH URL resolve to the bare
+    origin without any network.
+    """
     origin = tmp_path / "origin.git"
     origin.mkdir()
     git(origin, "init", "--bare", "-b", "main")
@@ -356,6 +364,13 @@ def clone(tmp_path: Path) -> Path:
     )
     git(clone, "config", "user.email", "pilot@test.local")
     git(clone, "config", "user.name", "Pilot")
+    # The deployment checkout's transport (Issue #114): the origin
+    # remote is the SSH URL of the task repo; the insteadOf rewrite
+    # keeps the data plane local (no network in the e2e world).
+    git(clone, "remote", "set-url", "origin",
+        f"git@github.com:{REPO}.git")
+    git(clone, "config", f"url.{origin}.insteadOf",
+        f"git@github.com:{REPO}.git")
     # The deployment checkout carries the unit templates (Issue #103):
     # the pre-start drift check compares them against the installed
     # units, so a synthetic clone without them could never pass it.

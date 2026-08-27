@@ -36,6 +36,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+from git_transport import TransportError, check_transport
 from pilot_slots import acquire_slot, slot_dir_for, slot_occupancy
 from pi_activity import (
     SessionWatcher,
@@ -2915,6 +2916,31 @@ def main(argv: list[str] | None = None) -> int:
     # (`muyan_pilot.py install-units`). A currently RUNNING task is
     # never interrupted — only the next start is blocked.
     check_unit_drift(config["repo_dir"])
+    # Git transport preflight (Issue #114): BEFORE any slot or claim
+    # the deployment checkout's git transport must be SSH and reachable
+    # (the task worktrees share the checkout's single `origin` remote,
+    # so the worktree's fetch/push — including `.github/workflows/*.yml`
+    # — uses it). A broken transport fails the start with the
+    # structured reason: no slot, no claim, no label change, no HTTPS
+    # fallback. The `gh` token (GitHub API) is untouched.
+    try:
+        transport = check_transport(
+            config["repo_dir"], config["source_repos"],
+            run_command=run_command, migrate=False,
+        )
+    except TransportError as exc:
+        LOGGER.error(
+            "transport_check_failed repo_dir=%s source_repos=%s "
+            "reason=%s",
+            config["repo_dir"], config["source_repos"], exc,
+        )
+        raise
+    LOGGER.info(
+        "transport clean remote=%s protocol=%s url=%s "
+        "ssh_reachable=%s",
+        transport.get("remote", "-"), transport.get("protocol", "-"),
+        transport.get("url", "-"), transport.get("ssh_reachable", "-"),
+    )
     # Concurrency cap (Issue #39): take one slot BEFORE claiming anything.
     # The slot is held for the whole delivery lifecycle (implement ->
     # review -> fix -> merge) and released only after the delivery is

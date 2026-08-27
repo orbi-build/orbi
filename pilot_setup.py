@@ -37,6 +37,7 @@ import shutil
 import tomllib
 from pathlib import Path
 
+import git_transport
 import systemd_deploy
 from pi_activity import quote_value
 
@@ -364,24 +365,31 @@ def install_units_step(repo_dir: Path, installed_dir: Path | None,
     }
 
 
-def check_checkout(repo_dir: Path, base_branch: str, *,
+def check_checkout(repo_dir: Path, base_branch: str,
+                   source_repos: list[str], *,
                    run_command) -> dict:
-    """Read-only local checkout check (no git mutation).
+    """Local checkout check including the git transport (Issue #114).
 
-    Reports the ``origin`` remote, the current branch and whether the
-    local HEAD equals the freshly fetched ``origin/<base_branch>``
-    (base freshness — the same comparison the delivery gate uses,
-    read-only). A missing remote, a dirty worktree (the timer's
-    ``ExecStartPre`` fast-forward would refuse it) or any git error
-    fails fast with the concrete reason.
+    Reports the ``origin`` remote, its transport, the current branch
+    and whether the local HEAD equals the freshly fetched
+    ``origin/<base_branch>`` (base freshness — the same comparison
+    the delivery gate uses). The git transport step (``git_transport``
+    contract): the remote must be SSH for the first configured source
+    repo (the worktrees share the checkout's single remote) and SSH
+    must be reachable (``git ls-remote`` exits 0 — verified against
+    the real CLI). The setup entry is the human-authorized migration
+    path: an existing HTTPS ``origin`` is migrated with the plain
+    ``git remote set-url origin <ssh-url>`` (never a remote read from
+    a comment or Issue, never a silent rewrite outside setup). A
+    missing remote, an unreachable SSH (no HTTPS fallback), a dirty
+    worktree (the timer's ``ExecStartPre`` fast-forward would refuse
+    it) or any git error fails fast with the concrete reason.
     """
     try:
-        remote = run_command(["git", "remote"], cwd=repo_dir)
-        if "origin" not in remote.splitlines():
-            raise SetupError(
-                f"checkout has no origin remote: {repo_dir} "
-                f"(remotes: {remote!r})"
-            )
+        transport = git_transport.check_transport(
+            repo_dir, source_repos, run_command=run_command,
+            migrate=True,
+        )
         branch = run_command(
             ["git", "branch", "--show-current"], cwd=repo_dir,
         )
@@ -402,15 +410,23 @@ def check_checkout(repo_dir: Path, base_branch: str, *,
         )
     except SetupError:
         raise
+    except git_transport.TransportError as exc:
+        raise SetupError(
+            f"checkout check failed for {repo_dir}: {exc}"
+        ) from exc
     except Exception as exc:
         raise SetupError(
             f"checkout check failed for {repo_dir}: {exc}"
         ) from exc
     return {
-        "remote": "origin",
+        "remote": transport["remote"],
         "branch": branch,
         "clean": True,
         "base_fresh": head == base,
+        "remote_url": transport["url"],
+        "remote_protocol": transport["protocol"],
+        "migrated": transport["migrated"],
+        "ssh_reachable": transport["ssh_reachable"],
     }
 
 
@@ -478,7 +494,8 @@ def run_setup(config: dict, installed_dir: Path | None, *,
         })
     units = install_units_step(repo_dir, installed_dir, run_command=run_command)
     checkout = check_checkout(
-        repo_dir, config["base_branch"], run_command=run_command,
+        repo_dir, config["base_branch"], config["source_repos"],
+        run_command=run_command,
     )
     optional_proxy = check_optional_proxy(run_command)
     return {
@@ -524,11 +541,19 @@ def format_setup(result: dict) -> list[str]:
         f"next={quote_value(timer['next'])}"
     )
     checkout = result["checkout"]
+    reachable = checkout["ssh_reachable"]
+    reachable_text = "-" if reachable is None else (
+        "true" if reachable else "false"
+    )
     lines.append(
         f"checkout=remote={checkout['remote']} "
         f"branch={quote_value(checkout['branch'])} "
         f"clean={'true' if checkout['clean'] else 'false'} "
-        f"base_fresh={'true' if checkout['base_fresh'] else 'false'}"
+        f"base_fresh={'true' if checkout['base_fresh'] else 'false'} "
+        f"remote_url={checkout['remote_url']} "
+        f"protocol={checkout['remote_protocol']} "
+        f"migrated={'true' if checkout['migrated'] else 'false'} "
+        f"ssh_reachable={reachable_text}"
     )
     proxy = result["optional_proxy"]
     lines.append(
