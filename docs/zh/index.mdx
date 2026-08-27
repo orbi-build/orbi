@@ -18,7 +18,7 @@ flowchart LR
     prs["PR（Fixes #N、run marker）+ review/merge"]
   end
   subgraph machine["Runner 机器（systemd user session）"]
-    timer["muyan-pilot.timer（每刻钟 tick）"]
+    timer["muyan-pilot.timer（每 5 分钟 tick）"]
     service["muyan-pilot.service（ExecStartPre：fast-forward main）"]
     runner["Runner（muyan_pilot.py）：领取 → worktree → Pi → PR → review → merge"]
     worktree["任务 worktree + feature branch（冻结 origin/main SHA，名字带 run id）"]
@@ -74,7 +74,7 @@ Muyan Pilot 刻意是一个 MVP，边界是设计的一部分：
 
 - GitHub Issue 和标签是**唯一**状态存储——没有数据库、没有消息队列、
   没有 Web UI。
-- Python Runner **不是 daemon**：systemd user timer 每刻钟触发一个
+- Python Runner **不是 daemon**：systemd user timer 每 5 分钟触发一个
   tick；每个 tick 最多处理一个 Issue（或恢复一个已打开的 PR）然后退出。
 - 没有任务 DAG、没有多 Agent 并行、没有风险模型、没有 policy engine、
   没有 fallback 路径——命令错误立即失败（fail fast），现场留在 journal

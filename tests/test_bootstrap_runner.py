@@ -4502,7 +4502,7 @@ def _drift_world(tmp_path, drift: bool) -> tuple[Path, Path]:
     (repo / "systemd").mkdir(parents=True)
     for name, body in (
         ("muyan-pilot.service", "[Service]\nExecStart=/usr/bin/python3 bootstrap_runner.py\n"),
-        ("muyan-pilot.timer", "[Timer]\nOnCalendar=*-*-* *:00/15\n"),
+        ("muyan-pilot.timer", "[Timer]\nOnCalendar=*-*-* *:00/5\n"),
     ):
         (repo / "systemd" / name).write_text(body, encoding="utf-8")
     installed = tmp_path / "units"

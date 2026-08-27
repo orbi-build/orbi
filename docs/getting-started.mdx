@@ -12,7 +12,7 @@ machine layout.
 | [Pi](https://github.com/earendil-works/pi) CLI | The development agent; one full session per task | `pi --version` |
 | Git | Worktrees, branches, base freshness | `git --version` |
 | GitHub CLI (`gh`) | Issues, labels, PRs, merge | `gh auth status` |
-| systemd (user session) | The timer that triggers one tick every 15 minutes | `systemctl --user status` |
+| systemd (user session) | The timer that triggers one tick every 5 minutes | `systemctl --user status` |
 | A working OpenAI-compatible model endpoint | Pi's model provider — a local llama.cpp server or any OpenAI-compatible API | one real `pi --print` call (below) |
 
 Pi must be configured with a provider that can serve a coding agent
@@ -162,8 +162,8 @@ systemctl --user list-timers muyan-pilot.timer
 ```
 
 The setup output carries `timer=enabled active=true next=...` (the next
-trigger time). The timer fires every 15 minutes, 24 hours a day
-(00:00–23:45). While a task is running, further timer starts are ignored
+trigger time). The timer fires every 5 minutes, 24 hours a day
+(00:00–23:55). While a task is running, further timer starts are ignored
 by systemd; the next real start picks up the latest code (the service
 fast-forwards `main` before starting — see [Operations](/operations)).
 

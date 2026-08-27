@@ -27,7 +27,7 @@ def make_repo(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     (systemd / "muyan-pilot.timer").write_text(
-        "[Timer]\nOnCalendar=*-*-* *:00/15\n", encoding="utf-8",
+        "[Timer]\nOnCalendar=*-*-* *:00/5\n", encoding="utf-8",
     )
     return repo
 

@@ -44,7 +44,7 @@ CI 红的时候 PR 不可合并——Runner 的 merge 门禁也要求 PR mergeab
   resume/review/merge 逻辑（套件主体，包括针对真实 `git` 和 `gh`
   fixture 的端到端测试）。
 - **静态契约测试**：把仓库钉在它自己的文档和文件上：`AGENTS.md`
-  契约项、标签集、systemd units（每刻钟调度、preflight）、CI
+  契约项、标签集、systemd units（每 5 分钟调度、preflight）、CI
   workflow、LICENSE、`docs/` 下的文档站（本页的声明由
   `tests/test_docs_site.py` 强制执行；中文页面和 EN/ZH 同一事实源由
   `tests/test_docs_i18n.py` 强制执行；Mermaid 图由

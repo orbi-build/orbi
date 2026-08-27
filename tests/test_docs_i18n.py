@@ -3,7 +3,7 @@
 The Chinese docs live in `docs/zh/` (the verified Mintlify i18n layout:
 same structure as the default English pages at the `docs/` root) and keep
 the SAME single source of truth as the English pages — the implementation
-facts (labels, config fields, commands, ports, the 15-minute timer, the
+facts (labels, config fields, commands, ports, the 5-minute timer, the
 P0 pickup order, the PR body contract, the git transport boundary, the
 optional KV cache proxy) are asserted in the Chinese pages exactly as the
 English pages carry them. These tests fail when the Chinese entry or a
@@ -236,13 +236,15 @@ def test_chinese_workflow_documents_the_full_issue_to_merge_chain():
 
 def test_chinese_operations_documents_the_real_commands_and_recovery():
     """The Chinese operations page must carry the real operations facts:
-    the 15-minute timer, the journal, the CLI commands, the worktree and
+    the 5-minute timer, the journal, the CLI commands, the worktree and
     base freshness, the failure recovery (ai-blocked), the ExecStartPre
     code-update preflight, and the transport check without an HTTPS
     fallback — same facts as the English page."""
     text = zh_page_text("operations")
     assert "muyan-pilot.timer" in text
-    assert "15" in text, "operations must document the 15-minute idle polling interval"
+    assert "OnCalendar=*-*-* *:00/5" in text, (
+        "operations must document the 5-minute idle polling interval"
+    )
     assert "journalctl" in text, "operations must show the journal command"
     assert "muyan_pilot.py" in text, "operations must name the CLI"
     for command in ("status", "session", "add"):

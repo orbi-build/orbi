@@ -1,7 +1,7 @@
-"""Regression tests for the systemd scheduling files (Issues #21, #33).
+"""Regression tests for the systemd scheduling files (Issues #21, #33, #51).
 
-The scheduler runs 24 hours a day: the idle polling interval is 15 minutes
-across the full day (00:00, 00:15, ..., 23:45). The timer must not add a
+The scheduler runs 24 hours a day: the idle polling interval is 5 minutes
+across the full day (00:00, 00:05, ..., 23:55). The timer must not add a
 task duration limit, must not queue catch-up ticks, and the README must
 document the same schedule as the unit files.
 """
@@ -37,18 +37,18 @@ def parse_unit(path: Path) -> dict[str, dict[str, list[str]]]:
     return sections
 
 
-def test_timer_polls_ready_issues_every_15_minutes_all_day():
+def test_timer_polls_ready_issues_every_5_minutes_all_day():
     timer = parse_unit(TIMER_FILE)
     on_calendar = timer["Timer"]["OnCalendar"]
-    # Triggers: 00:00, 00:15, ..., 23:45 — every tick across the full day.
-    assert on_calendar == ["*-*-* *:00/15"]
+    # Triggers: 00:00, 00:05, ..., 23:55 — every tick across the full day.
+    assert on_calendar == ["*-*-* *:00/5"]
     # Semantic guard: the hour field must be open (no night-window range such
-    # as 01..06) and the minute field must step by 15 minutes.
+    # as 01..06) and the minute field must step by 5 minutes.
     date_part, time_part = on_calendar[0].split(" ")
     assert date_part == "*-*-*"
     hour_field, minute_field = time_part.split(":")
     assert hour_field == "*"
-    assert minute_field == "00/15"
+    assert minute_field == "00/5"
 
 
 def test_timer_calendar_expression_parses_with_systemd_analyze():

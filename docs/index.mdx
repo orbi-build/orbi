@@ -15,7 +15,7 @@ flowchart LR
     prs["PRs (Fixes #N, run marker) + review/merge"]
   end
   subgraph machine["Runner machine (systemd user session)"]
-    timer["muyan-pilot.timer (15-minute tick)"]
+    timer["muyan-pilot.timer (5-minute tick)"]
     service["muyan-pilot.service (ExecStartPre: fast-forward main)"]
     runner["Runner (muyan_pilot.py): claim → worktree → Pi → PR → review → merge"]
     worktree["task worktree + feature branch (frozen origin/main SHA, run id in the name)"]
@@ -76,7 +76,7 @@ Muyan Pilot is intentionally an MVP. The boundary is part of the design:
 - GitHub Issues and labels are the **only** state store — no database, no
   message queue, no web UI.
 - The Python Runner is **not a daemon**: a systemd user timer triggers one
-  tick every 15 minutes; each tick processes at most one Issue (or resumes
+  tick every 5 minutes; each tick processes at most one Issue (or resumes
   one opened PR) and exits.
 - No task DAG, no multi-agent parallelism, no risk model, no policy
   engine, no fallback path — a command error fails fast and leaves the
