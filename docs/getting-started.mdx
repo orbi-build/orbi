@@ -94,6 +94,10 @@ for l in ai-ready ai-in-progress ai-pr-opened ai-fix-needed ai-merged ai-blocked
   gh label edit "$l" --repo OWNER/PILOT-REPO \
     --description "Muyan Pilot delivery state (see docs)"
 done
+# p0 is the urgent-priority label (not a delivery state, see the
+# workflow page): picked up before bugs and features.
+gh label create p0 --repo OWNER/PILOT-REPO --force --color "fbca04" \
+  --description "Muyan Pilot urgent priority: picked up before bugs and features"
 gh label list --repo OWNER/PILOT-REPO
 ```
 
@@ -107,9 +111,9 @@ python3 bootstrap_runner.py --config muyan-pilot.toml
 ```
 
 One tick does at most one thing: resume an opened PR (review/fix/merge) or
-claim one `ai-ready` Issue (bug-labeled Issues are picked before new
-features), then it exits. With an empty ready queue it exits cleanly
-without claiming anything.
+claim one `ai-ready` Issue (`p0`-labeled Issues are picked first, then
+bug-labeled Issues, then plain features), then it exits. With an empty
+ready queue it exits cleanly without claiming anything.
 
 ## 5. Smoke walkthrough (from zero)
 

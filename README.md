@@ -114,6 +114,9 @@ for l in ai-ready ai-in-progress ai-pr-opened ai-fix-needed ai-merged ai-blocked
   gh label edit "$l" --repo xqliu/muyan-pilot \
     --description "Muyan Pilot delivery state (see README)"
 done
+# p0 是紧急优先级 label（不是交付状态，见「领取优先级（P0）」）
+gh label create p0 --repo xqliu/muyan-pilot --force --color "fbca04" \
+  --description "Muyan Pilot urgent priority: picked up before bugs and features"
 gh label list --repo xqliu/muyan-pilot
 ```
 
@@ -125,6 +128,7 @@ gh label list --repo xqliu/muyan-pilot
 | `ai-fix-needed` | 已有 PR 需要在原 branch/worktree/PR 上继续修复；定时 Runner 自动拾取 | 审查会话未能修复的 finding，或 PR 落后最新 base / merge conflict | 下一个审查会话（同一 PR）clean verdict 合并后移除（转 `ai-merged`）；超轮 / 无法修复时移除（转 `ai-blocked`） |
 | `ai-merged` | 成功终态：Runner 已合并 PR 并确认 merge commit 落在保护分支 | Runner 合并并确认后添加（替代 `ai-pr-opened`） | 终态，不再自动变更；PR body 的 `Fixes #N` 在 merge 时自动关闭 Issue |
 | `ai-blocked` | Runner fail fast，需要人工处理；不会被自动拾取 | 命令失败、现场无法恢复、审查超轮等 fail fast 场景 | 人工修复现场并重新转为 `ai-fix-needed`（同一 PR）或重新领取（新 run）；不自动恢复 |
+| `p0` | 紧急优先级（**不是交付状态**）：只改变领取顺序，不改变 Issue 粒度、交付状态或终态语义 | 人工加 label（生产链路出现高优先级故障时） | 人工移除；Runner 从不增删该 label |
 
 ## 任务依赖（blockedBy）
 
@@ -143,6 +147,16 @@ Runner 行为（单 slot 串行，只做“读字段-跳过-等待”，不引�
 - 存在未关闭 blocker（blocker 节点 `state=OPEN`）→ **不领取**：不加 `ai-in-progress`、不改任何标签、不建 worktree，记录结构化日志 `blocked_by issue=N repo=... blockers=M1,M2`，继续检查同 repo 后面的 ready Issue；
 - blocker 关闭后不再阻塞：GitHub 会把该关系保留在列表中（节点 `state=CLOSED`，惰性，已对真实 API 验证），Runner 只统计未关闭 blocker——无需人工操作，下一 tick 该 Issue 自然可领；
 - `blockedBy` 查询失败 → **fail open**（视为未阻塞：本 tick 不从该 repo 领取，记录 `blocked_by_check_failed`，下一 tick 重试查询），API 异常不会死锁队列。
+
+## 领取优先级（P0）
+
+紧急优先级用普通 GitHub label `p0` 表示（**不是交付状态**）：它只表达处理优先级，不改变 Issue 粒度（仍要求一个 Issue 对应一个 runtime outcome），不改变任何交付状态或终态语义，Runner 也从不增删该 label。
+
+- ready 领取顺序固定为：`ai-ready`+`p0` → `ai-ready`+`bug` → 普通 `ai-ready`（三次 `gh issue list` 扫描，共享同一组排除条件和 `blockedBy` 语义）；
+- P0 仍遵守全部现有排除规则（`ai-in-progress`、`ai-pr-opened`、`ai-fix-needed`、`ai-merged`、`ai-blocked`）和单 slot 约束：P0 被阻塞（open blocker）时跳过并回退到 bug/普通扫描，P0 已在途（`ai-in-progress`）时由重启恢复扫描接回（扫描同样携带 `labels`，恢复后进度评论继续显示 `p0`）；
+- 领取日志行携带明确的 `priority=p0` / `priority=normal` 字段；GitHub 进度评论显示 `priority` 字段；run 现场（`run_info`）与 started milestone 携带 `priority=...`；
+- P0 执行失败进入 `ai-blocked`（alone，移除领取标签）：`ai-ready` 标签残留被所有 ready 扫描排除，**没有任何 tick 会重新领取**，因此不会无限重试；失败评论和 blocked 现场保留具体失败原因和可恢复现场；
+- P0 的 review/merge 失败沿用现有同一 PR、有限 review round（`MAX_REVIEW_ROUNDS=5`）机制，不引入新的循环。
 
 ## 自动可观测（正常运行不需要执行任何命令）
 
@@ -197,7 +211,8 @@ elapsed、last activity、last action、session、branch。implementer、reviewe
 **Pi 运行期间就是活的**：implementer、reviewer 两种 session 的每次
 活动变化/心跳都会渲染当前状态并 PATCH 同一条评论（不是等 Pi 退出后才
 回写），手机用户看到的始终是进行中的进展，而不是一条静态的 starting
-评论。评论始终显示：当前阶段、role、已运行时间、最近活动时间、最近动作、
+评论。评论始终显示：当前阶段、role、优先级（`p0`/`normal`，见「领取
+优先级（P0）」）、已运行时间、最近活动时间、最近动作、
 测试状态、review/fix round、branch、PR/merge 状态。进程重启后按 run marker
 找回同一条评论继续更新，不需要数据库。
 

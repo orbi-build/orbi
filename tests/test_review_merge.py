@@ -643,6 +643,7 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4,
+        priority="normal",
     )
     assert merged is True
     assert "sync" in calls
@@ -697,6 +698,7 @@ def test_review_and_merge_refreezes_head_after_in_session_fix(
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4,
+        priority="normal",
     )
     assert merged is True
     # The merge gate ran against the RE-FROZEN (fixed) head...
@@ -736,6 +738,7 @@ def test_review_and_merge_clean_verdict_without_head_advance_keeps_frozen_head(
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4,
+        priority="normal",
     )
     assert merged is True
     assert calls == [("gate", "h1")]
@@ -772,6 +775,7 @@ def test_review_and_merge_keeps_merged_when_checkout_sync_fails(
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4,
+        priority="normal",
     )
     assert merged is True
     assert ("edit", {"repo": "owner/repo", "add": "ai-merged",
@@ -811,6 +815,7 @@ def test_review_and_merge_findings_labels_fix_needed_and_comments(
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4,
+        priority="normal",
     )
     assert merged is False
     # The findings are recorded on Issue and PR with the run marker...
@@ -855,6 +860,7 @@ def test_review_and_merge_behind_base_labels_fix_needed(monkeypatch, tmp_path):
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4,
+        priority="normal",
     )
     assert merged is False
     # A behind head is never merged: the fixer absorbs the latest base.
@@ -894,6 +900,7 @@ def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", _review_merge_config(tmp_path),
         "owner/repo", 4,
+        priority="normal",
     )
     assert merged is False
     assert "merge conflict" in calls[0][1] or "not mergeable" in calls[0][1]
@@ -919,6 +926,7 @@ def test_review_and_merge_reraises_non_fixable_gate_error(monkeypatch, tmp_path)
         runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
             "owner/repo", 4,
+            priority="normal",
         )
 
 
@@ -933,6 +941,7 @@ def test_review_and_merge_missing_verdict_raises(monkeypatch, tmp_path):
         runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
             "owner/repo", 4,
+            priority="normal",
         )
 
 
@@ -952,5 +961,6 @@ def test_review_and_merge_exhausted_rounds_raises(monkeypatch, tmp_path, caplog)
         runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
             "owner/repo", 4,
+            priority="normal",
         )
     assert "review_rounds_exhausted" in caplog.text

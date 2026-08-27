@@ -486,6 +486,9 @@ def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
     }
     merged = runner.review_and_merge_if_clean(
         worktree, branch, "main", review_config, REPO, ISSUE_NUMBER,
+        # Issue #101: the wait loop derives the priority from the
+        # scanned issue's labels (no extra gh call).
+        priority=runner.issue_priority(issue()),
     )
     assert merged is True
     assert pr["merged"] is True

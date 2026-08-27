@@ -143,6 +143,46 @@ def test_readme_documents_upstream_dead_kill():
     assert "业务" in text
 
 
+def test_readme_documents_p0_priority_and_terminal_state():
+    """Issue #101: the README must document the P0 contract: the plain
+    `p0` label (not a delivery state), the fixed pickup order
+    (`ai-ready`+`p0` → `ai-ready`+`bug` → plain `ai-ready`), the
+    unchanged exclusion/single-slot semantics, and the terminal state
+    of a failed P0 (`ai-blocked`, never re-claimed — no infinite
+    retry)."""
+    text = README.read_text(encoding="utf-8")
+    # The label is documented in the table and the initialization.
+    assert "`p0`" in text
+    assert "gh label create p0" in text
+    # It is explicitly NOT a delivery state.
+    assert "不是交付状态" in text
+    # The fixed pickup order is documented.
+    assert "`ai-ready`+`p0`" in text
+    assert "`ai-ready`+`bug`" in text
+    # The existing exclusion rules and single-slot constraint apply.
+    assert "单 slot" in text
+    # The terminal state of a failed P0: ai-blocked, no infinite retry.
+    assert "无限重试" in text
+    assert "ai-blocked" in text
+
+
+def test_agents_md_documents_p0_priority():
+    """Issue #101: the development contract must document the same P0
+    semantics: plain label, fixed pickup order, unchanged exclusions
+    and single-slot constraint, `priority=` log/progress field, and the
+    `ai-blocked` terminal state without infinite retry."""
+    text = AGENTS.read_text(encoding="utf-8")
+    assert "pickup priority (p0)" in text.lower()
+    assert "`p0`" in text
+    assert "`ai-ready`+`p0`" in text
+    assert "`ai-ready`+`bug`" in text
+    # The explicit log/progress field.
+    assert "priority=p0" in text
+    # The terminal state without infinite retry.
+    assert "ai-blocked" in text
+    assert "no infinite retry" in text
+
+
 def test_agents_md_documents_upstream_dead_kill():
     """Issue #75: the development contract (AGENTS.md) must document
     the same upstream-dead behavior in its observability section: a

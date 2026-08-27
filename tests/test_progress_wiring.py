@@ -9,7 +9,7 @@ summary or the blocked scene — in the same comment.
 import json
 import subprocess
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, call as mock_call
 
 import pytest
 
@@ -413,6 +413,99 @@ def test_process_issue_creates_progress_comment_with_marker(monkeypatch, tmp_pat
     assert "- role: implement" in body
     assert "- branch: muyan-pilot/xqliu-muyan-pilot-issue-18-a1b2c3d4" in body
     assert "- PR: -" in body
+
+
+def test_process_issue_p0_progress_comment_and_milestones_carry_priority(
+    monkeypatch, tmp_path,
+):
+    """Issue #101: a P0 pickup (the scan's issue dict carries `labels`)
+    shows `priority: p0` in the progress comment and `priority=p0` in
+    the journal/scene text (run_info, started milestone, started-Pi
+    scene comment) — the explicit field is visible end to end."""
+    calls, posted = make_fake_gh(monkeypatch)
+    patch_process_deps(monkeypatch, tmp_path)
+    edit = Mock()
+    # AFTER patch_process_deps: it installs its own edit_issue mock.
+    monkeypatch.setattr(runner, "edit_issue", edit)
+    issue = make_issue()
+    issue["labels"] = [{"name": "p0"}, {"name": "ai-ready"}]
+    runner.process_issue(issue, make_config(tmp_path), "xqliu/muyan-pilot")
+    progress_posts = [
+        body for body in posted if "**Muyan Pilot progress**" in body
+    ]
+    assert len(progress_posts) == 1
+    assert "- priority: p0" in progress_posts[0]
+    milestones = [
+        body for body in posted
+        if any(line.startswith(progress.MILESTONE_PREFIX)
+               for line in body.splitlines())
+    ]
+    started = [b for b in milestones if "Muyan Pilot: started" in b]
+    assert started, f"no started milestone: {milestones}"
+    assert "priority=p0" in started[0]
+    # The started-Pi scene comment (run_info) carries the priority too.
+    scene_comments = [
+        call for call in calls
+        if call[:2] == ["gh", "issue"] and "comment" in call
+    ]
+    assert any("priority=p0" in call[-1] for call in scene_comments)
+
+
+def test_process_issue_p0_failure_enters_ai_blocked_terminal_state(
+    monkeypatch, tmp_path,
+):
+    """Issue #101: a failed P0 run enters the terminal state
+    `ai-blocked` ALONE (the claim label is removed, the `ai-ready`
+    residue is excluded by every ready scan) — no tick can re-claim it,
+    so there is no infinite retry; the blocked scene keeps the
+    priority visible and the concrete failure reason."""
+    calls, posted = make_fake_gh(monkeypatch)
+    patch_process_deps(
+        monkeypatch, tmp_path,
+        run_pi_side_effect=subprocess.CalledProcessError(
+            3, ["pi"], stderr="pi exploded",
+        ),
+    )
+    edit = Mock()
+    # AFTER patch_process_deps: it installs its own edit_issue mock.
+    monkeypatch.setattr(runner, "edit_issue", edit)
+    issue = make_issue()
+    issue["labels"] = [{"name": "p0"}, {"name": "ai-ready"}]
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.process_issue(issue, make_config(tmp_path),
+                             "xqliu/muyan-pilot")
+    # Claim first, then the terminal state: `ai-blocked` added,
+    # `ai-in-progress` removed.
+    assert edit.call_args_list[0] == mock_call(
+        18, repo="xqliu/muyan-pilot", add="ai-in-progress",
+    )
+    assert edit.call_args_list[1] == mock_call(
+        18, repo="xqliu/muyan-pilot", add="ai-blocked",
+        remove="ai-in-progress",
+    )
+    # The failure comment carries the run marker and the reason.
+    failure_comments = [
+        call for call in calls
+        if call[:2] == ["gh", "issue"] and "comment" in call
+        and "Muyan Pilot failed" in call[-1]
+    ]
+    assert failure_comments, f"no failure comment: {calls}"
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failure_comments[0][-1]
+    assert "pi exploded" in failure_comments[0][-1]
+    # The blocked progress scene keeps the priority visible.
+    final_patches = [
+        command for command in calls
+        if command[:2] == ["gh", "api"]
+        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
+        and "PATCH" in command
+    ]
+    assert final_patches, "no PATCH of the progress comment"
+    last_body = final_patches[-1][
+        final_patches[-1].index("--field") + 1
+    ][len("body="):] if final_patches else ""
+    assert "Muyan Pilot blocked" in last_body
+    assert "- priority: p0" in last_body
+    assert "pi exploded" in last_body
 
 
 def test_process_issue_passes_issue_number_to_verify_pr(
@@ -1265,7 +1358,7 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
         tmp_path, "branch", "main",
         {"repo_dir": tmp_path, "base_branch": "main", "base_sha": "b1",
          "run_id": "a1b2c3d4"},
-        "xqliu/muyan-pilot", 18,
+        "xqliu/muyan-pilot", 18, priority="normal",
     )
     return merged, edits, calls, posted
 

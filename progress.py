@@ -95,6 +95,9 @@ def progress_body(state: dict) -> str:
         # of the run.
         f"- run_id={state['run_id']}",
         f"- role: {value('role')}",
+        # Pickup priority (Issue #101): `p0` for urgent Issues,
+        # `normal` otherwise — visible at a glance on mobile.
+        f"- priority: {value('priority')}",
         f"- phase: {value('phase')}",
         f"- elapsed: {value('elapsed')}",
         f"- last activity: {value('last_activity')}",

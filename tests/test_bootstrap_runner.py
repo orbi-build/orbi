@@ -280,6 +280,7 @@ def test_run_command_logs_optional_timeout_and_reraises(tmp_path, caplog):
 def test_pick_issue_uses_github_queue(monkeypatch):
     issue = {
         "number": 9, "title": "task", "body": "body",
+        "labels": [{"name": "ai-ready"}],
         "blockedBy": {"nodes": [], "totalCount": 0},
     }
     calls = []
@@ -287,22 +288,32 @@ def test_pick_issue_uses_github_queue(monkeypatch):
     def fake_run(command, **kwargs):
         calls.append(command)
         search = command[command.index("--search") + 1]
-        if "label:bug" in search:
+        if "label:p0" in search or "label:bug" in search:
             return json.dumps([])
         return json.dumps([issue])
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.pick_issue("xqliu/muyan-ceo") == issue
-    # Issue #71: the bug scan runs first; with no bug in the queue the
-    # plain ready scan decides. Both keep the same exclusions.
+    # Issue #101: the P0 scan runs first, then the bug scan (Issue
+    # #71); with nothing in either queue the plain ready scan decides.
+    # All three keep the same exclusions.
     assert calls == [
+        [
+            "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
+            "--state", "open", "--search",
+            "label:ai-ready label:p0 -label:ai-in-progress "
+            "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
+            "-label:ai-blocked",
+            "--json", "number,title,body,labels,blockedBy",
+            "--limit", "200",
+        ],
         [
             "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
             "--state", "open", "--search",
             "label:ai-ready label:bug -label:ai-in-progress "
             "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
             "-label:ai-blocked",
-            "--json", "number,title,body,blockedBy",
+            "--json", "number,title,body,labels,blockedBy",
             "--limit", "200",
         ],
         [
@@ -310,7 +321,7 @@ def test_pick_issue_uses_github_queue(monkeypatch):
             "--state", "open", "--search",
             "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
             "-label:ai-fix-needed -label:ai-merged -label:ai-blocked",
-            "--json", "number,title,body,blockedBy",
+            "--json", "number,title,body,labels,blockedBy",
             "--limit", "200",
         ],
     ]
@@ -477,54 +488,12 @@ def test_pick_issue_prefers_bug_labeled_issues(monkeypatch):
     Issue exist at the same time, the runner claims the bug first —
     if the delivery loop is broken, claiming enhancements only piles
     up unreviewed PRs. No priority numbers, no new state: the bug
-    scan runs first with the same exclusions, and the plain ready
-    scan only runs when the bug scan found nothing claimable."""
+    scan runs (after the P0 scan, Issue #101) with the same
+    exclusions, and the plain ready scan only runs when the bug scan
+    found nothing claimable."""
     bug = {
         "number": 11, "title": "bug", "body": "",
-        "blockedBy": {"nodes": [], "totalCount": 0},
-    }
-    searches = []
-
-    def fake_run(command, **kwargs):
-        searches.append(command[command.index("--search") + 1])
-        return json.dumps([bug])
-
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    assert runner.pick_issue("xqliu/muyan-pilot") == bug
-    # The bug scan ran first and found the bug: the plain ready scan
-    # never ran.
-    assert len(searches) == 1
-    assert "label:bug" in searches[0]
-    assert "label:ai-ready" in searches[0]
-
-
-def test_pick_issue_bug_scan_keeps_existing_exclusions(monkeypatch):
-    """Issue #71: the bug scan keeps the exact same exclusions as the
-    ready scan (in-flight, opened-PR, fix-needed, merged, blocked)."""
-    bug = {
-        "number": 11, "title": "bug", "body": "",
-        "blockedBy": {"nodes": [], "totalCount": 0},
-    }
-    searches = []
-
-    def fake_run(command, **kwargs):
-        searches.append(command[command.index("--search") + 1])
-        return json.dumps([bug])
-
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    assert runner.pick_issue("xqliu/muyan-pilot") == bug
-    assert searches[0] == (
-        "label:ai-ready label:bug -label:ai-in-progress "
-        "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
-        "-label:ai-blocked"
-    )
-
-
-def test_pick_issue_falls_back_to_ready_scan_when_no_bug(monkeypatch):
-    """Issue #71: with no claimable bug, behavior is exactly as before
-    (the plain ready scan runs second and decides)."""
-    feature = {
-        "number": 10, "title": "feature", "body": "",
+        "labels": [{"name": "bug"}, {"name": "ai-ready"}],
         "blockedBy": {"nodes": [], "totalCount": 0},
     }
     searches = []
@@ -532,14 +501,73 @@ def test_pick_issue_falls_back_to_ready_scan_when_no_bug(monkeypatch):
     def fake_run(command, **kwargs):
         searches.append(command[command.index("--search") + 1])
         if "label:bug" in searches[-1]:
+            return json.dumps([bug])
+        return json.dumps([])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.pick_issue("xqliu/muyan-pilot") == bug
+    # The P0 scan ran first and found nothing; the bug scan found the
+    # bug: the plain ready scan never ran.
+    assert len(searches) == 2
+    assert "label:p0" in searches[0]
+    assert "label:bug" in searches[1]
+    assert "label:ai-ready" in searches[1]
+
+
+def test_pick_issue_bug_scan_keeps_existing_exclusions(monkeypatch):
+    """Issue #71: the bug scan keeps the exact same exclusions as the
+    ready scan (in-flight, opened-PR, fix-needed, merged, blocked),
+    and runs after the P0 scan (Issue #101)."""
+    bug = {
+        "number": 11, "title": "bug", "body": "",
+        "labels": [{"name": "bug"}, {"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    searches = []
+
+    def fake_run(command, **kwargs):
+        searches.append(command[command.index("--search") + 1])
+        if "label:bug" in searches[-1]:
+            return json.dumps([bug])
+        return json.dumps([])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.pick_issue("xqliu/muyan-pilot") == bug
+    assert searches[0] == (
+        "label:ai-ready label:p0 -label:ai-in-progress "
+        "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
+        "-label:ai-blocked"
+    )
+    assert searches[1] == (
+        "label:ai-ready label:bug -label:ai-in-progress "
+        "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
+        "-label:ai-blocked"
+    )
+
+
+def test_pick_issue_falls_back_to_ready_scan_when_no_bug(monkeypatch):
+    """Issue #71: with no claimable P0 or bug, behavior is exactly as
+    before (the plain ready scan runs last and decides)."""
+    feature = {
+        "number": 10, "title": "feature", "body": "",
+        "labels": [{"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    searches = []
+
+    def fake_run(command, **kwargs):
+        searches.append(command[command.index("--search") + 1])
+        if "label:p0" in searches[-1] or "label:bug" in searches[-1]:
             return json.dumps([])
         return json.dumps([feature])
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.pick_issue("xqliu/muyan-pilot") == feature
-    assert len(searches) == 2
-    assert "label:bug" in searches[0]
-    assert "label:bug" not in searches[1]
+    assert len(searches) == 3
+    assert "label:p0" in searches[0]
+    assert "label:bug" in searches[1]
+    assert "label:bug" not in searches[2]
+    assert "label:p0" not in searches[2]
 
 
 def test_pick_issue_bug_blocked_by_open_blocker_falls_back(monkeypatch):
@@ -548,23 +576,27 @@ def test_pick_issue_bug_blocked_by_open_blocker_falls_back(monkeypatch):
     scan then decides."""
     blocked_bug = {
         "number": 11, "title": "bug", "body": "",
+        "labels": [{"name": "bug"}, {"name": "ai-ready"}],
         "blockedBy": {"nodes": [{"number": 9}], "totalCount": 1},
     }
     feature = {
         "number": 10, "title": "feature", "body": "",
+        "labels": [{"name": "ai-ready"}],
         "blockedBy": {"nodes": [], "totalCount": 0},
     }
     searches = []
 
     def fake_run(command, **kwargs):
         searches.append(command[command.index("--search") + 1])
+        if "label:p0" in searches[-1]:
+            return json.dumps([])
         if "label:bug" in searches[-1]:
             return json.dumps([blocked_bug])
         return json.dumps([feature])
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.pick_issue("xqliu/muyan-pilot") == feature
-    assert len(searches) == 2
+    assert len(searches) == 3
 
 
 def test_pick_issue_bug_scan_failure_fails_open(monkeypatch, caplog):
@@ -581,13 +613,186 @@ def test_pick_issue_bug_scan_failure_fails_open(monkeypatch, caplog):
     assert "blocked_by_check_failed" in caplog.text
 
 
-def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
-    """A killed runner leaves `ai-ready`+`ai-in-progress` behind (Issue
-    #18): the claim scan must recover such in-flight Issues, so the
-    restart resume (run id / worktree / progress comment reuse) is
-    reachable in the production flow — the ready scan alone excludes
-    `ai-in-progress` and would strand the run forever."""
-    issue = {"number": 18, "title": "task", "body": "body"}
+# --- Issue #101: P0 priority ---------------------------------------------------
+
+
+def test_pick_issue_prefers_p0_over_bug_and_plain(monkeypatch, caplog):
+    """Issue #101: when an `ai-ready`+`p0` Issue, an `ai-ready`+`bug`
+    Issue and a plain `ai-ready` Issue exist at the same time, the
+    runner claims the P0 first — the P0 scan runs first with the exact
+    same exclusions, and the bug/plain scans only run when the P0 scan
+    found nothing claimable. The journal line carries `priority=p0`."""
+    p0 = {
+        "number": 7, "title": "p0 outage", "body": "",
+        "labels": [{"name": "p0"}, {"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    bug = {
+        "number": 11, "title": "bug", "body": "",
+        "labels": [{"name": "bug"}, {"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    feature = {
+        "number": 10, "title": "feature", "body": "",
+        "labels": [{"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    searches = []
+
+    def fake_run(command, **kwargs):
+        searches.append(command[command.index("--search") + 1])
+        # All three Issues exist in the repo; the P0 scan (the only
+        # scan that runs) sees them all and must pick the P0.
+        return json.dumps([p0, bug, feature])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/muyan-pilot") == p0
+    # The P0 scan ran first and found the P0: the bug and plain ready
+    # scans never ran.
+    assert len(searches) == 1
+    assert "label:p0" in searches[0]
+    assert "label:ai-ready" in searches[0]
+    # The pickup log carries the explicit priority field.
+    assert "priority=p0" in caplog.text
+    assert "issue=7" in caplog.text
+
+
+def test_pick_issue_p0_scan_keeps_existing_exclusions(monkeypatch):
+    """Issue #101: the P0 scan keeps the exact same exclusions as the
+    bug and ready scans (in-flight, opened-PR, fix-needed, merged,
+    blocked) — a P0 in any delivery state is never claimed by the
+    ready scan (single-slot and resume semantics are unchanged)."""
+    p0 = {
+        "number": 7, "title": "p0", "body": "",
+        "labels": [{"name": "p0"}, {"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    searches = []
+
+    def fake_run(command, **kwargs):
+        searches.append(command[command.index("--search") + 1])
+        # Only the P0 scan runs (it finds the P0): it must carry the
+        # exact exclusions.
+        return json.dumps([p0])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.pick_issue("xqliu/muyan-pilot") == p0
+    assert searches[0] == (
+        "label:ai-ready label:p0 -label:ai-in-progress "
+        "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
+        "-label:ai-blocked"
+    )
+
+
+def test_pick_issue_p0_blocked_by_open_blocker_falls_back_to_bug(
+    monkeypatch, caplog,
+):
+    """Issue #101: a P0 with open native blockers is skipped by the P0
+    scan (same blockedBy semantics as the other scans — no claim, no
+    label change, no worktree); the bug scan then decides."""
+    blocked_p0 = {
+        "number": 7, "title": "p0 blocked", "body": "",
+        "labels": [{"name": "p0"}, {"name": "ai-ready"}],
+        "blockedBy": {"nodes": [{"number": 3}], "totalCount": 1},
+    }
+    bug = {
+        "number": 11, "title": "bug", "body": "",
+        "labels": [{"name": "bug"}, {"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    searches = []
+
+    def fake_run(command, **kwargs):
+        searches.append(command[command.index("--search") + 1])
+        # Only the P0 and bug scans run (the bug scan claims the bug):
+        # the P0 scan sees the blocked P0, the bug scan the bug.
+        if "label:p0" in searches[-1]:
+            return json.dumps([blocked_p0])
+        return json.dumps([bug])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/muyan-pilot") == bug
+    # The blocked P0 was skipped with the structured blocked_by line;
+    # the bug was claimed with priority=normal (it is not a P0).
+    assert "blocked_by" in caplog.text
+    assert "issue=7" in caplog.text
+    assert "3" in caplog.text
+    assert len(searches) == 2
+    assert "priority=normal" in caplog.text
+
+
+def test_pick_issue_p0_scan_failure_fails_open(monkeypatch, caplog):
+    """Issue #101: a failed P0 scan fails open like the other scans
+    (Issue #54) — the tick claims nothing from this repo, the error is
+    logged, never raised."""
+    error = subprocess.CalledProcessError(1, ["gh"], output="boom")
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: (_ for _ in ()).throw(error),
+    )
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/muyan-pilot") is None
+    assert "blocked_by_check_failed" in caplog.text
+
+
+def test_pick_issue_logs_priority_normal_for_plain_pickup(
+    monkeypatch, caplog,
+):
+    """Issue #101: a non-P0 pickup (bug or plain) logs
+    `priority=normal` — the explicit field is present on every
+    pickup, not only for P0."""
+    feature = {
+        "number": 10, "title": "feature", "body": "",
+        "labels": [{"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+
+    def fake_run(command, **kwargs):
+        search = command[command.index("--search") + 1]
+        if "label:p0" in search or "label:bug" in search:
+            return json.dumps([])
+        return json.dumps([feature])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/muyan-pilot") == feature
+    assert "priority=normal" in caplog.text
+    assert "issue=10" in caplog.text
+
+
+def test_issue_priority_reads_the_p0_label():
+    """Issue #101: `issue_priority` is a pure function of the issue's
+    `labels` (the scans fetch `labels`, so no extra gh call): `p0`
+    when the label is present, `normal` otherwise."""
+    assert runner.issue_priority({
+        "number": 7,
+        "labels": [{"name": "p0"}, {"name": "ai-ready"}],
+    }) == "p0"
+    assert runner.issue_priority({
+        "number": 10,
+        "labels": [{"name": "ai-ready"}, {"name": "bug"}],
+    }) == "normal"
+    assert runner.issue_priority({"number": 10}) == "normal"
+    # Malformed label fields never break the pickup (fail to normal,
+    # like the blockedBy field fails open): a P0 misread as normal
+    # only loses its ordering for one run, never the delivery.
+    assert runner.issue_priority({"number": 10, "labels": "nope"}) \
+        == "normal"
+    assert runner.issue_priority({
+        "number": 10, "labels": ["p0", {"name": 7}],
+    }) == "normal"
+
+
+def test_pick_in_progress_issue_scan_fetches_labels(monkeypatch, tmp_path):
+    """Issue #101: the in-flight restart scan fetches `labels` too, so
+    a P0 a killed runner left behind keeps its priority in the
+    progress comment on resume (the scan's exclusions are unchanged)."""
+    issue = {
+        "number": 18, "title": "task", "body": "body",
+        "labels": [{"name": "p0"}, {"name": "ai-ready"}],
+    }
     calls = []
 
     def fake_run(command, **kwargs):
@@ -604,7 +809,37 @@ def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
         "--state", "open", "--search",
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked",
-        "--json", "number,title,body", "--limit", "1",
+        "--json", "number,title,body,labels", "--limit", "1",
+    ]]
+
+
+def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
+    """A killed runner leaves `ai-ready`+`ai-in-progress` behind (Issue
+    #18): the claim scan must recover such in-flight Issues, so the
+    restart resume (run id / worktree / progress comment reuse) is
+    reachable in the production flow — the ready scan alone excludes
+    `ai-in-progress` and would strand the run forever."""
+    issue = {
+        "number": 18, "title": "task", "body": "body",
+        "labels": [{"name": "ai-ready"}],
+    }
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return json.dumps([issue])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    # No slot dir yet: every slot is free, so the scan runs.
+    assert runner.pick_in_progress_issue(
+        "xqliu/muyan-pilot", tmp_path / "slots", 1,
+    ) == issue
+    assert calls == [[
+        "gh", "issue", "list", "--repo", "xqliu/muyan-pilot",
+        "--state", "open", "--search",
+        "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
+        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked",
+        "--json", "number,title,body,labels", "--limit", "1",
     ]]
 
 
@@ -3399,7 +3634,7 @@ def test_stream_pi_live_progress_patches_github_before_child_exits(
     throttle = runner.LiveProgressThrottle(
         publisher, issue=24, run_id="run1", role="implement",
         branch="b", worktree=tmp_path, started=time.monotonic(),
-        pr_url=None, review_round=0,
+        pr_url=None, review_round=0, priority="normal",
     )
     result = runner.stream_pi(
         command, cwd=tmp_path, poll_interval=0.1,
@@ -3459,7 +3694,7 @@ def test_live_progress_throttle_patches_on_change_and_cadence():
     throttle = runner.LiveProgressThrottle(
         publisher, issue=1, run_id="run1", role="implement",
         branch="b", worktree=Path("/w"), started=time.monotonic(),
-        pr_url=None, review_round=0,
+        pr_url=None, review_round=0, priority="normal",
     )
     first = {
         "phase": "starting", "action": None, "result": None,
@@ -4238,6 +4473,65 @@ def test_wait_for_delivery_auto_merges_on_clean_review(
     # PR state poll.
     assert pr_calls["n"] == 1
     assert "delivery_auto_merged" in caplog.text
+
+
+def test_wait_for_delivery_passes_p0_priority_to_the_review(
+        monkeypatch, caplog, tmp_path,
+):
+    """Issue #101: a P0 delivery in an opened-PR state (the resumable
+    scan fetches `labels`) keeps its priority end to end: the awaiting
+    log line carries `priority=p0` and the independent review receives
+    it, so the review/merge progress comment shows `p0` too."""
+    states = ["OPEN"]
+    review_calls = []
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"] and command[2] == "view":
+            return json.dumps({"state": "OPEN"})
+        if command[:2] == ["gh", "issue"] and command[2] == "view":
+            if command[-1] == "comments":
+                return json.dumps({"comments": [
+                    {
+                        "body": (
+                            "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
+                            "Muyan Pilot opened PR: "
+                            f"{PR_URL} (base_branch=main "
+                            "base_sha=abc123def456 run_id=a1b2c3d4)"
+                        ),
+                        "authorAssociation": "OWNER",
+                    },
+                ]})
+            return json.dumps({"labels": [
+                {"name": "ai-pr-opened"}, {"name": "p0"},
+            ]})
+        raise AssertionError(f"unexpected command: {command}")
+
+    # The fake rejects anything that is not a pr/issue view.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "list"])
+    monkeypatch.setattr(runner, "run_command", fake_run)
+
+    def fake_review(*args, **kwargs):
+        review_calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(runner, "review_and_merge_if_clean", fake_review)
+    (tmp_path / ".worktrees"
+     / "muyan-pilot-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
+    issue = {
+        "number": 39, "title": "p0 task", "body": "",
+        "labels": [{"name": "ai-pr-opened"}, {"name": "p0"}],
+    }
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    caplog.set_level("INFO")
+    runner.wait_for_delivery(
+        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        "owner/repo",
+    )
+    assert review_calls == [{"priority": "p0"}]
+    # The awaiting log line carries the explicit priority field.
+    awaiting = [m for m in caplog.messages if "delivery_awaiting" in m]
+    assert any("priority=p0" in m for m in awaiting)
 
 
 def test_wait_for_delivery_marks_blocked_when_review_fails(

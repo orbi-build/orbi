@@ -138,6 +138,34 @@ def test_progress_body_shows_pr_url_when_present():
     assert "- review/fix round: 1" in body
 
 
+def test_progress_body_shows_priority_field():
+    """Issue #101: the live progress comment shows the pickup priority
+    (`p0` for urgent Issues, `normal` otherwise) right after the role,
+    so a mobile user sees at a glance that this run is a P0."""
+    state = {
+        "run_id": "abc123",
+        "issue": 7,
+        "role": "implement",
+        "phase": "test",
+        "elapsed": "3m 12s",
+        "last_activity": None,
+        "last_action": None,
+        "tests": None,
+        "review_round": 0,
+        "branch": "b",
+        "pr": None,
+        "session": None,
+    }
+    body = progress.progress_body({**state, "priority": "p0"})
+    assert "- priority: p0" in body
+    # The priority line sits between role and phase.
+    lines = body.splitlines()
+    assert lines.index("- priority: p0") == \
+        lines.index("- role: implement") + 1
+    body = progress.progress_body({**state, "priority": "normal"})
+    assert "- priority: normal" in body
+
+
 def make_publisher(run_command=None, comments=None, posted=None,
                    post_response=None):
     """Build a ProgressPublisher over a fake gh layer.
