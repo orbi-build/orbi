@@ -1,0 +1,87 @@
+# v0.1.0 发布对账记录（Issue #97）
+
+v0.1.0 发布（Epic #80，发布 PR #92）的一次性发布状态对账。
+run_id=5ce476bd。本记录是持久、可审计的工件；它所描述的每一处 GitHub
+状态变更都列在 Issue #97 的对账结果评论中，并附命令证据。
+
+## Tag 状态（对 origin 验证，从未移动）
+
+| Ref | 对象 | 指向 | 状态 |
+|---|---|---|---|
+| `v0.1.0` | 注解 tag `912631d390b0b1f7039afac52125ecf7e1d92589` | 提交 `335fa274e4b451a025bc2426b2a9fe7297ce8bb2`（"test: record post-merge verification in test.log (Issue #80)"） | **不可变，未动** |
+| `v0.1.1`（修正版） | 注解 tag（本次运行创建） | 提交 `f82969e974b17803759493bad7e339bdcd6f463f`（"Fix review round 1 findings: session follow, run artifacts, state chain (Issue #80)"） | 新建，本次运行推送 |
+| PR #92 合并提交 | `f6c065e8ec7ec53d7e9fb99e6475c1bc16c2dabf` | — | 2026-08-26T13:21:26Z 合并 |
+
+已验证的关系（在本仓库上用真实 `git merge-base --is-ancestor` 验证）：
+`335fa274`（`v0.1.0` 指向）是 `f82969e9`（修正版 `v0.1.1` head）的祖先，
+且 `f82969e9` 是 PR #92 合并时的分支 head（合并提交 `f6c065e8` 的祖先）。
+现有 `v0.1.0` tag 未被移动、未被 force-push（本次运行前后
+`git ls-remote --tags origin` 均显示 `v0.1.0` 仍在
+`912631d390b0b1f7039afac52125ecf7e1d92589`）。
+
+## 为什么需要修正版 tag
+
+`v0.1.0` 指向 `335fa274`，这是 PR #92 分支上的一个中间提交。经过审查
+并合并的最终 head 是 `f82969e9` —— review 第 1 轮的修复提交 —— 它
+**不在** `v0.1.0` 指向的可达范围内。`git diff 335fa274 f82969e9` 显示
+原 tag 缺少的修复：
+
+- `muyan_pilot.py`：session-follow 行处理（`follow_session_file` 契约：
+  只跟随给定文件、中途不重新发现、`--pretty` 解析器不丢行/不断行）；
+- `.gitignore`：run 产物忽略项；
+- `README.md`：与 session 契约对齐的措辞；
+- `tests/test_muyan_pilot.py`、`tests/test_run_artifacts.py`：上述行为的
+  钉住测试；
+- 从树中移除 run 产物 `plan.md`/`test.log`。
+
+因此 `v0.1.1` 包含 `v0.1.0` 的全部内容，加上随 PR #92 实际发布的
+review 第 1 轮修复。
+
+## 子 Issue 结论（Epic #80 清单）
+
+每个核心项都有明确结论：MERGED（附 PR 证据）、已验证未完成（verified
+incomplete）、或明确排除（excluded）。
+
+| Issue | 项目 | 结论 | 证据 |
+|---|---|---|---|
+| #75 | llama/proxy 上游死时 Pi 退出并释放 slot | MERGED | PR #110（合并提交 `6e793e54b5cf830f84ce3311e468a62f1210ebf5`）；代码：`bootstrap_runner.py` 中 `PI_MODEL_WAIT_DEAD_SECONDS` 上游死亡 kill 路径 |
+| #77 | 进程死在 `ai-pr-opened` 时下一拍继续审查、合并 | MERGED | PR #85（合并提交 `d76045a734de717a1b8edfdd1e26a3f021919fd1`，为 #70 交付、覆盖同一缺陷）；Issue 已带证据评论关闭 |
+| #78 | Implementer 开 PR 前不做独立 review-fix 循环 | MERGED | PR #109（合并提交 `678c72f91ffc18f8bf79c09a6ccbec28c1f57d0f`）；守卫测试 `tests/test_agents_md.py` |
+| #79 | `ProgressPublisher` 全程旁路，不挡主交付 | MERGED | PR #107（合并提交 `e2cc6dca5b66e5a6b16df38fc9819a2c13a78fa7`）；代码：`progress_publish_failed` 只记日志路径 |
+| #82 | 审查在同一 session 内修复后再 verdict | MERGED | PR #87（合并提交 `724892763f90eaa166ee20f26157335b51111222`）；`prompt_review.md` 会话内修复契约 |
+| #52 | Runner 从最新 `origin/main` 代码启动 | MERGED | PR #92（`systemd/muyan-pilot.service` 的 ExecStartPre `git fetch origin main && git merge --ff-only origin/main`）；Epic #80 的 "(PR #112)" 引用不准确 —— PR #112 是 #103 的部署一致性；#52 代码落在 PR #92 |
+| #53 | PR body 使用 `Fixes #N`，GitHub 原生自动关闭 Issue | MERGED | PR #69（合并提交 `133786e391a3eec9c23f73c5172f6dedd6faea4c`） |
+| #71 | bug 优先于普通任务领取 | MERGED | PR #92（`bootstrap_runner.py` 的 `BUG_READY_SEARCH`；后由 #101 的 P0 扫描扩展） |
+| #73 | Prompt/skill/harness：外部行为先查文档，不凭记忆猜 | MERGED | PR #92（prompt.md "Hard rules for external behavior (Issue #73)"、prompt_review.md 验证规则、旁路只记日志规则；由 `tests/test_bootstrap_runner.py` prompt 契约测试钉住）。该 Issue 此前仍 OPEN 且无终态标签 —— 本次运行补 `ai-merged` 标签 + 证据评论后关闭 |
+| #74 | `muyan_pilot.py session [--follow] [--pretty]` | MERGED | PR #92（`muyan_pilot.py` 的 `session` 子命令）；真实调用 `muyan_pilot.py session --help` 退出码 0 且显示 `--follow`/`--pretty`（由 `tests/test_release_v01.py` 断言） |
+| #49 | 标签、run marker、恢复状态文档 | MERGED | PR #111（docs 站点）+ 契约测试 `tests/test_docs_labels.py`；由 #76 清理运行关闭 |
+| #76 | 关闭已带 `ai-merged` 且 PR 已合并的遗留 Issue | MERGED | 清理运行关闭 #49/#52/#71/#74（2026-08-27T01:56Z）及自身，附证据评论 |
+| #81 | 根目录 LICENSE | MERGED | PR #88（合并提交 `b9a7e1fe9021629bb14f2b36ea1302d818a5981c`） |
+| #83 | 实现/审查 Pi 使用不同 `--skill` 列表 | MERGED | PR #86（合并提交 `468fdd4e1251f1b497136ac232d97551d04bdf30`） |
+
+## 已验证未完成（保持 OPEN —— 不为清单勾选而关闭）
+
+| Issue | 项目 | 结论 | 证据 |
+|---|---|---|---|
+| #93 | Runner：识别并正确处理 Epic Issue | verified incomplete，保持 OPEN | 当前 main（`87ec2c4`）无实现证据：领取扫描无 `ai-epic` 跳过、无 `epic_not_claimed` 结构化日志、无 Epic 完成门禁、无单元测试，`labels.toml` 也没有 `ai-epic`。#80 不被领取只是因为它没有 `ai-ready`，而不是因为有 Epic 机制。已在 #93 添加证据评论；未改任何标签 |
+
+## v0.1 之外（不变，按 Epic #80）
+
+#94、#95、#98、#101、#105、#106、#114、#117 —— 保持在普通 backlog；
+均不是 v0.1 阻塞项。（#95、#101、#114、#117 后来已由各自 PR 交付；
+这不改变 v0.1 范围。）
+
+## 本次运行做出的 GitHub 状态变更（全部可审计）
+
+1. `gh issue edit 73 --add-label ai-merged` + 证据评论 +
+   `gh issue close 73`（评论带 run marker）。
+2. #93 证据评论（verified incomplete；保持 OPEN）。
+3. 在 `f82969e9` 创建注解 tag `v0.1.1`（release 说明即上文）；
+   `git push origin v0.1.1`；用 `git ls-remote --tags origin` 验证
+   （`v0.1.0` 未动）。
+4. 在 `f82969e9` 创建 GitHub Release `v0.1.1`（发布证据）。
+5. #80 证据评论（本对账表 + 收口项状态）。
+6. #97 对账结果评论，附完整命令证据。
+
+未修改保护分支、未创建第二个业务 PR、现有 `v0.1.0` tag 既未移动也
+未 force-push。

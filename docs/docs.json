@@ -39,6 +39,12 @@
             "pages": [
               "optional-kv-cache"
             ]
+          },
+          {
+            "group": "Releases",
+            "pages": [
+              "release-v0.1.0"
+            ]
           }
         ]
       },
@@ -72,6 +78,12 @@
             "group": "可选组件",
             "pages": [
               "zh/optional-kv-cache"
+            ]
+          },
+          {
+            "group": "发布",
+            "pages": [
+              "zh/release-v0.1.0"
             ]
           }
         ]

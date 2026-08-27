@@ -1,0 +1,91 @@
+# v0.1.0 release reconciliation record (Issue #97)
+
+One-time release-state reconciliation for the v0.1.0 release (Epic #80,
+release PR #92). run_id=5ce476bd. This record is the durable, auditable
+artifact; every GitHub state change it describes is listed with the
+command evidence in the Issue #97 reconciliation comment.
+
+## Tag state (verified against origin, never moved)
+
+| Ref | Object | Points at | Status |
+|---|---|---|---|
+| `v0.1.0` | annotated tag `912631d390b0b1f7039afac52125ecf7e1d92589` | commit `335fa274e4b451a025bc2426b2a9fe7297ce8bb2` ("test: record post-merge verification in test.log (Issue #80)") | **immutable, untouched** |
+| `v0.1.1` (corrected) | annotated tag (created by this run) | commit `f82969e974b17803759493bad7e339bdcd6f463f` ("Fix review round 1 findings: session follow, run artifacts, state chain (Issue #80)") | new, pushed by this run |
+| PR #92 merge commit | `f6c065e8ec7ec53d7e9fb99e6475c1bc16c2dabf` | — | MERGED 2026-08-26T13:21:26Z |
+
+Verified relationship (real `git merge-base --is-ancestor` on this
+repository): `335fa274` (the `v0.1.0` target) IS an ancestor of
+`f82969e9` (the corrected `v0.1.1` head), and `f82969e9` is the PR #92
+branch head at merge time (an ancestor of the merge commit
+`f6c065e8`). The existing `v0.1.0` tag was NOT moved and NOT
+force-pushed (`git ls-remote --tags origin` before and after this run
+shows `v0.1.0` still at `912631d390b0b1f7039afac52125ecf7e1d92589`).
+
+## Why a corrected tag was needed
+
+`v0.1.0` points at `335fa274`, an intermediate commit of the PR #92
+branch. The final head that was reviewed and merged is `f82969e9` —
+the review-round-1 fix commit — which is NOT reachable from the
+`v0.1.0` target. `git diff 335fa274 f82969e9` shows the fixes the
+original tag misses:
+
+- `muyan_pilot.py`: session-follow line handling (the `follow_session_file`
+  contract: only follow the file it was given, no re-discovery mid-follow,
+  no fragmented/dropped lines for the `--pretty` parser);
+- `.gitignore`: run-artifact ignore entries;
+- `README.md`: wording aligned with the session contract;
+- `tests/test_muyan_pilot.py`, `tests/test_run_artifacts.py`: the pinning
+  tests for the above;
+- removal of the run artifacts `plan.md`/`test.log` from the tree.
+
+`v0.1.1` therefore contains everything `v0.1.0` contains plus the
+review-round-1 fixes that actually shipped with PR #92.
+
+## Sub-Issue verdicts (Epic #80 checklist)
+
+Every core item has a conclusive verdict: MERGED (with PR evidence),
+verified incomplete, or excluded.
+
+| Issue | Item | Verdict | Evidence |
+|---|---|---|---|
+| #75 | Pi exits on llama/proxy upstream death and releases the slot | MERGED | PR #110 (merge commit `6e793e54b5cf830f84ce3311e468a62f1210ebf5`); code: `PI_MODEL_WAIT_DEAD_SECONDS` upstream-dead kill path in `bootstrap_runner.py` |
+| #77 | Resume independent review when the process dies at `ai-pr-opened` | MERGED | PR #85 (merge commit `d76045a734de717a1b8edfdd1e26a3f021919fd1`, delivered for #70 covering the same defect); Issue closed with evidence comment |
+| #78 | Implementer does not run the independent review-fix loop before the PR | MERGED | PR #109 (merge commit `678c72f91ffc18f8bf79c09a6ccbec28c1f57d0f`); guard test `tests/test_agents_md.py` |
+| #79 | `ProgressPublisher` is a pure bypass, never blocks the main delivery | MERGED | PR #107 (merge commit `e2cc6dca5b66e5a6b16df38fc9819a2c13a78fa7`); code: `progress_publish_failed` log-only path |
+| #82 | Reviewer fixes findings in the same session before the verdict | MERGED | PR #87 (merge commit `724892763f90eaa166ee20f26157335b51111222`); `prompt_review.md` in-session fix contract |
+| #52 | Start the Runner from the latest `origin/main` | MERGED | PR #92 (ExecStartPre `git fetch origin main && git merge --ff-only origin/main` in `systemd/muyan-pilot.service`); Epic #80's "(PR #112)" reference is inaccurate — PR #112 is #103's deployment consistency; the #52 code landed in PR #92 |
+| #53 | PR body uses `Fixes #N` so GitHub closes the Issue natively | MERGED | PR #69 (merge commit `133786e391a3eec9c23f73c5172f6dedd6faea4c`) |
+| #71 | Pick `ai-ready` bugs before new features | MERGED | PR #92 (`BUG_READY_SEARCH` in `bootstrap_runner.py`; later extended by #101's P0 scan) |
+| #73 | Prompt/skill/harness: verify against docs and reality, do not guess | MERGED | PR #92 (prompt.md "Hard rules for external behavior (Issue #73)", prompt_review.md verification rules, bypass-log-only rule; pinned by `tests/test_bootstrap_runner.py` prompt-contract tests). Issue was still OPEN with no terminal label — closed by this run with an evidence comment and the `ai-merged` label |
+| #74 | `muyan_pilot.py session [--follow] [--pretty]` | MERGED | PR #92 (`session` subcommand in `muyan_pilot.py`); real call `muyan_pilot.py session --help` exits 0 and shows `--follow`/`--pretty` (asserted in `tests/test_release_v01.py`) |
+| #49 | Document GitHub labels, run markers, and recovery state | MERGED | PR #111 (docs site) + contract test `tests/test_docs_labels.py`; closed by the #76 cleanup run |
+| #76 | Close leftover Issues that already have `ai-merged` and a merged PR | MERGED | Cleanup run closed #49/#52/#71/#74 (2026-08-27T01:56Z) and itself, with an evidence comment |
+| #81 | Root-directory LICENSE | MERGED | PR #88 (merge commit `b9a7e1fe9021629bb14f2b36ea1302d818a5981c`) |
+| #83 | Different `--skill` lists for implement vs review Pi | MERGED | PR #86 (merge commit `468fdd4e1251f1b497136ac232d97551d04bdf30`) |
+
+## Verified incomplete (stays OPEN — not closed to tick the checklist)
+
+| Issue | Item | Verdict | Evidence |
+|---|---|---|---|
+| #93 | Runner: identify and correctly handle Epic Issues | verified incomplete, stays OPEN | No implementation evidence in current main (`87ec2c4`): no `ai-epic` skip in the claim scan, no `epic_not_claimed` structured log, no Epic completion gate, no unit tests, and `ai-epic` is absent from `labels.toml`. #80 is excluded from pickup only because it lacks `ai-ready`, not because of an Epic mechanism. An evidence comment was added to #93; no labels changed |
+
+## Out of v0.1 (unchanged, per Epic #80)
+
+#94, #95, #98, #101, #105, #106, #114, #117 — remain in the normal
+backlog; none is a v0.1 blocker. (#95, #101, #114, #117 have since been
+delivered by their own PRs; that does not change the v0.1 scope.)
+
+## GitHub state changes made by this run (all auditable)
+
+1. `gh issue edit 73 --add-label ai-merged` + evidence comment +
+   `gh issue close 73` (run marker in the comment).
+2. Evidence comment on #93 (verified incomplete; stays OPEN).
+3. Annotated tag `v0.1.1` created at `f82969e9` with the release notes
+   above; `git push origin v0.1.1`; verified with
+   `git ls-remote --tags origin` (`v0.1.0` untouched).
+4. GitHub Release `v0.1.1` created at `f82969e9` (release evidence).
+5. Evidence comment on #80 (this reconciliation table + closure items).
+6. Reconciliation result comment on #97 with the full command evidence.
+
+No protected branch was modified, no second business PR was created, and
+the existing `v0.1.0` tag was neither moved nor force-pushed.
