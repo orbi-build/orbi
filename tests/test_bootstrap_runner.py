@@ -4742,10 +4742,32 @@ def _drift_world(tmp_path, drift: bool) -> tuple[Path, Path]:
     return repo, installed
 
 
+def _fake_preflight_run(monkeypatch, installed: Path) -> list:
+    """A recording run_command for the preflight self-heal (Issue #142).
+
+    The real `install_units` would run `systemctl --user` against the
+    real machine; the wiring tests record the commands instead and
+    keep the install's file copy real (that is what is under test).
+    `git rev-parse HEAD` returns a fixed commit; every other command
+    succeeds with empty output.
+    """
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "0123456789abcdef0123456789abcdef01234567"
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    return calls
+
+
 def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
                                                   caplog):
-    """Issue #103: a drifted installed unit fails the start BEFORE any
-    slot or claim: the structured `unit_drift` line (repo path,
+    """Issue #142: a drift the self-heal CANNOT resolve (the re-verify
+    still sees it after the idempotent install) fails the start BEFORE
+    any slot or claim: the structured `unit_drift` line (repo path,
     installed path, hashes, fix command) is logged, the tick raises
     (non-zero exit), no slot is taken and nothing is claimed — while
     a currently RUNNING task is never interrupted (only the next
@@ -4758,6 +4780,20 @@ def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
     monkeypatch.setattr(
         runner, "check_unit_drift", systemd_deploy.check_unit_drift,
     )
+    # The install's copy is real; the external steps are recorded.
+    calls = _fake_preflight_run(monkeypatch, installed)
+    # The installed timer is re-tampered right after every copy: the
+    # re-verify still sees the drift (an unresolvable scene).
+    real_write_bytes = Path.write_bytes
+
+    def re_tamper(self, data):
+        real_write_bytes(self, data)
+        if self.name == "muyan-pilot.timer" and str(self).startswith(
+            str(installed),
+        ):
+            real_write_bytes(self, data + b"# drift\n")
+
+    monkeypatch.setattr(Path, "write_bytes", re_tamper)
     _write_prompts(tmp_path)
     config = tmp_path / "muyan-pilot.toml"
     config.write_text(
@@ -4777,6 +4813,16 @@ def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
     with caplog.at_level("ERROR"):
         with pytest.raises(runner.UnitDriftError, match="unit_drift"):
             runner.main(["--config", str(config)])
+    # The self-heal ran the idempotent install (daemon-reload, enable
+    # the timer) before the re-verify failed — and never touched the
+    # service itself.
+    assert ["systemctl", "--user", "daemon-reload"] in calls
+    assert [
+        "systemctl", "--user", "enable", "--now", "muyan-pilot.timer",
+    ] in calls
+    for command in calls:
+        if command[:2] == ["systemctl", "--user"]:
+            assert command[2] in ("daemon-reload", "enable")
     # The structured line carries what the Issue requires.
     assert "unit_drift unit=muyan-pilot.timer" in caplog.text
     assert f"repo={repo / 'systemd' / 'muyan-pilot.timer'}" in caplog.text
@@ -4785,6 +4831,95 @@ def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
     assert "installed_sha256=" in caplog.text
     assert "fix=muyan-pilot install-units" in caplog.text
     # No slot was taken and nothing was claimed.
+    assert not (repo / ".muyan-pilot" / "slots").exists()
+
+
+def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #142: the normal scene — a template change merged to main
+    (the ExecStartPre-synced checkout carries the new templates, the
+    installed units are still the old ones). The preflight self-heals
+    with the SAME idempotent install (copy, daemon-reload, enable the
+    timer — never start/stop/restart the service), the re-verify is
+    clean, the structured `auto_synced` line is logged and the tick
+    proceeds to the normal claim flow (slot taken, queue scanned).
+    No more per-tick drift loop until a human intervenes."""
+    import systemd_deploy
+
+    repo, installed = _drift_world(tmp_path, drift=True)
+    monkeypatch.setenv("MUYAN_PILOT_UNIT_DIR", str(installed))
+    monkeypatch.setattr(
+        runner, "check_unit_drift", systemd_deploy.check_unit_drift,
+    )
+    calls = _fake_preflight_run(monkeypatch, installed)
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text(
+        f'source_repos = ["owner/repo"]\nrepo_dir = "{repo}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency: None,
+    )
+    with caplog.at_level("INFO"):
+        assert runner.main(["--config", str(config)]) == 0
+    # The self-heal ran the idempotent install (and never the service).
+    assert ["systemctl", "--user", "daemon-reload"] in calls
+    assert [
+        "systemctl", "--user", "enable", "--now", "muyan-pilot.timer",
+    ] in calls
+    for command in calls:
+        if command[:2] == ["systemctl", "--user"]:
+            assert command[2] in ("daemon-reload", "enable")
+    # The repo template won: the installed unit matches it again.
+    status = systemd_deploy.unit_status(repo, installed)
+    assert all(entry["drifted"] is False for entry in status)
+    assert "unit_drift auto_synced unit=muyan-pilot.timer" in caplog.text
+    assert "commit=0123456789abcdef0123456789abcdef01234567" in caplog.text
+    # The tick proceeded: the slot was taken AFTER the preflight passed.
+    assert (repo / ".muyan-pilot" / "slots" / "slot-1").exists()
+
+
+def test_main_unit_drift_auto_sync_failure_blocks_claim(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #142: a failing self-heal (e.g. daemon-reload fails) fails
+    fast BEFORE any slot or claim — the install error propagates,
+    nothing is claimed, and the scene stays in the journal."""
+    import systemd_deploy
+
+    repo, installed = _drift_world(tmp_path, drift=True)
+    monkeypatch.setenv("MUYAN_PILOT_UNIT_DIR", str(installed))
+    monkeypatch.setattr(
+        runner, "check_unit_drift", systemd_deploy.check_unit_drift,
+    )
+
+    def failing_run(command, **kwargs):
+        if command[:3] == ["systemctl", "--user", "enable"]:
+            raise subprocess.CalledProcessError(1, command, stderr="nope")
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", failing_run)
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text(
+        f'source_repos = ["owner/repo"]\nrepo_dir = "{repo}"\n',
+        encoding="utf-8",
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("pick_next_delivery must not run on unit drift")
+
+    monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
+    # The guard itself must fail loudly if it is ever reached.
+    with pytest.raises(
+        AssertionError, match="must not run on unit drift",
+    ):
+        fail_if_called()
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.main(["--config", str(config)])
     assert not (repo / ".muyan-pilot" / "slots").exists()
 
 

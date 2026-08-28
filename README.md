@@ -65,9 +65,10 @@ git fetch origin main && git merge --ff-only origin/main
 
 **幂等安装**：`muyan-pilot install-units` 把两个模板复制到用户 systemd 目录（`~/.config/systemd/user/`，可用 `--installed-dir` 覆盖）、执行 `systemctl --user daemon-reload`、`systemctl --user enable --now muyan-pilot.timer`，并输出部署 commit（部署 checkout 的 HEAD，即模板来源）和每个 unit 的 sha256。安装**不会**启动、停止或重启 service：当前运行中的 Runner 不被中断，新配置从下一次 service 启动生效。service 模板的 `ExecStart` 使用已安装 `muyan-pilot` CLI 的明确绝对入口（`%h/.local/bin/muyan-pilot`，即 `uv tool install` 之后 `~/.local/bin` 下的可执行文件；`WorkingDirectory` 仍是部署 checkout，`ExecStartPre` 在 Runner 启动前同步 `origin/main`）。
 
-**启动前漂移检查**：Runner 每次启动时（`ExecStartPre` 同步完 checkout 之后、领取任何 Issue 之前）对比已安装 unit 与仓库模板（service 和 timer 都覆盖）。一致时记录 `unit_drift clean`；发现漂移时记录结构化日志并 fail fast（非零退出，不取 slot、不领取 Issue、不改任何标签），直到 unit 同步：
+**启动前漂移检查（含自愈，Issue #142）**：Runner 每次启动时（`ExecStartPre` 同步完 checkout 之后、领取任何 Issue 之前）对比已安装 unit 与仓库模板（service 和 timer 都覆盖）。一致时记录 `unit_drift clean`；发现漂移时用**同一个幂等安装**自愈（复制模板、`daemon-reload`、enable timer——不启动、停止或重启 service，运行中的 Runner 不受影响），再用**同一个哈希检查**复核：复核通过时每个 unit 记录一行结构化 `unit_drift auto_synced`（before/after sha256、部署 commit），本次启动继续；复核后仍然漂移（或安装步骤本身失败）时记录结构化日志并 fail fast（非零退出，不取 slot、不领取 Issue、不改任何标签）：
 
 ```text
+unit_drift auto_synced unit=muyan-pilot.timer before_sha256=... after_sha256=... commit=<deployed HEAD>
 unit_drift unit=muyan-pilot.timer repo=<repo path> installed=<installed path> repo_sha256=... installed_sha256=... fix=muyan-pilot install-units
 ```
 
@@ -76,17 +77,15 @@ unit_drift unit=muyan-pilot.timer repo=<repo path> installed=<installed path> re
 **完整部署时序**（从代码合并到下一次 Runner 启动）：
 
 ```text
-git merge 到 main
-  -> install units（仓库模板复制到用户 systemd 目录，幂等，不碰运行中的 Runner）
-  -> daemon-reload
+git merge 到 main（含 unit 模板变更）
   -> timer 下一次触发
   -> ExecStartPre 同步 origin/main（fetch + fast-forward）
-  -> 启动前 unit 漂移检查（一致才继续）
+  -> 启动前 unit 漂移检查（漂移则幂等自愈 + 复核，见上；仍漂移才 fail fast）
   -> 启动前 Git transport 检查（SSH 且可达才继续，见下节）
   -> Runner 启动并执行一个 Issue
 ```
 
-**模板变更必须合并后重新同步（Issue #131）**：`systemd/muyan-pilot.service` 和 `systemd/muyan-pilot.timer` 是部署配置，不是普通代码——修改任一模板的 PR 合并到 main 后、下一次 timer 触发前，必须由人工运行 `muyan-pilot install-units --config muyan-pilot.toml` 同步两个 user unit（幂等，不碰运行中的 Runner）。Runner 本身 never auto-syncs（从不自动复制、自动覆盖已安装 unit）：模板变更未同步时，每次启动都会被启动前漂移检查 fail fast（结构化 `unit_drift` 行、非零退出、不取 slot、不领取 Issue），直到人工运行同步命令——这是设计内的哨兵行为，不是故障（2026-08-27 实例：PR #130 把 timer 从 15 分钟改为 5 分钟，合并后无人运行 `install-units`，service 每次启动都因 `unit_drift` 失败，直到人工同步，见 Issue #131）。
+**模板变更不再需要人工同步（Issue #142）**：`systemd/muyan-pilot.service` 和 `systemd/muyan-pilot.timer` 仍是部署配置，但模板变更的 PR 合并到 main 后**不需要任何人工步骤**：下一次 timer 触发时 `ExecStartPre` 同步 checkout，启动前漂移检查发现已安装 unit 落后于模板，就用同一个幂等安装自愈（不碰运行中的 Runner）并复核，tick 继续——不再出现“每 5 分钟重复同一个 `unit_drift` 错误直到人工介入”的循环（#131、#140 两次实例的根因）。`muyan-pilot install-units --config muyan-pilot.toml` 保留为手工入口（首次 setup、需要立即同步时）；自愈后仍漂移（例如安装步骤失败、模板缺失）时，启动前检查仍然 fail fast（结构化 `unit_drift` 行、非零退出、不取 slot、不领取 Issue）——哈希校验和哨兵边界不变。
 
 ## Git transport（Issue #114）
 

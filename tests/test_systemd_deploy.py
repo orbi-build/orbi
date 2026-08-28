@@ -334,3 +334,123 @@ def test_install_units_fails_fast_on_missing_template(tmp_path):
 
 def test_unit_drift_error_is_a_runtime_error():
     assert issubclass(systemd_deploy.UnitDriftError, RuntimeError)
+
+
+# --- pre-start self-heal (Issue #142) ---------------------------------------
+
+
+def test_sync_drifted_units_installs_and_reverifies_clean(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #142: a drifted unit (the normal scene after a template
+    change merges to main) is synced with the SAME idempotent install
+    (copy, daemon-reload, enable the timer — never start/stop/restart
+    the service) and re-verified: the tick can continue."""
+    repo = make_repo(tmp_path)
+    installed = make_installed(tmp_path, repo, mutate="muyan-pilot.timer")
+    before_sha = systemd_deploy.sha256_hex(installed / "muyan-pilot.timer")
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "0123456789abcdef0123456789abcdef01234567"
+        return ""
+
+    with caplog.at_level("INFO"):
+        report = systemd_deploy.sync_drifted_units(
+            repo, installed, run_command=fake_run,
+        )
+    # The install ran: daemon-reload + enable the timer, and the service
+    # is NEVER started/stopped/restarted by the sync.
+    assert ["systemctl", "--user", "daemon-reload"] in calls
+    assert [
+        "systemctl", "--user", "enable", "--now", "muyan-pilot.timer",
+    ] in calls
+    for command in calls:
+        if command[:2] == ["systemctl", "--user"]:
+            assert command[2] in ("daemon-reload", "enable")
+    # The repo template won: the installed unit matches it again.
+    status = systemd_deploy.unit_status(repo, installed)
+    assert all(entry["drifted"] is False for entry in status)
+    # The report carries one entry per unit with the before/after hashes
+    # and the deployed commit.
+    assert [entry["unit"] for entry in report] == list(
+        systemd_deploy.UNIT_NAMES,
+    )
+    timer = report[1]
+    assert timer["before_sha256"] == before_sha
+    assert timer["after_sha256"] == systemd_deploy.sha256_hex(
+        repo / "systemd" / "muyan-pilot.timer",
+    )
+    assert timer["commit"] == "0123456789abcdef0123456789abcdef01234567"
+    # The structured auto_synced line is logged for the synced unit.
+    assert "unit_drift auto_synced unit=muyan-pilot.timer" in caplog.text
+    assert f"before_sha256={before_sha}" in caplog.text
+    assert "after_sha256=" in caplog.text
+    assert "commit=0123456789abcdef0123456789abcdef01234567" in caplog.text
+
+
+def test_sync_drifted_units_is_a_no_op_when_clean(monkeypatch, tmp_path):
+    """Issue #142: with no drift nothing is installed (no systemctl
+    calls, no copy) — the preflight only heals a real drift."""
+    repo = make_repo(tmp_path)
+    installed = make_installed(tmp_path, repo)
+    calls: list[list[str]] = []
+    report = systemd_deploy.sync_drifted_units(
+        repo, installed, run_command=lambda command, **kwargs: calls.append(command) or "",
+    )
+    assert report == []
+    assert calls == []
+
+
+def test_sync_drifted_units_install_failure_propagates(
+    monkeypatch, tmp_path,
+):
+    """Issue #142: a failing install step (here: enabling the timer)
+    fails fast — the error propagates, no auto_synced claim is made."""
+    repo = make_repo(tmp_path)
+    installed = make_installed(tmp_path, repo, mutate="muyan-pilot.service")
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["systemctl", "--user", "enable"]:
+            raise subprocess.CalledProcessError(1, command, stderr="nope")
+        return ""
+
+    with pytest.raises(subprocess.CalledProcessError):
+        systemd_deploy.sync_drifted_units(
+            repo, installed, run_command=fake_run,
+        )
+
+
+def test_sync_drifted_units_still_drifted_after_sync_fails_fast(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #142: the re-verify is the same hash check — if the units
+    still drift after the sync (the scene is not recoverable by the
+    idempotent install), the preflight fails fast with the structured
+    `unit_drift` lines and `UnitDriftError` (no slot, no claim)."""
+    repo = make_repo(tmp_path)
+    installed = make_installed(tmp_path, repo, mutate="muyan-pilot.timer")
+    # A second process overwrites the installed unit right after the
+    # copy: the re-verify sees the drift again.
+    real_write_bytes = Path.write_bytes
+
+    def overwrite_after_copy(self, data):
+        real_write_bytes(self, data)
+        if self.name == "muyan-pilot.timer" and str(self).startswith(
+            str(installed),
+        ):
+            real_write_bytes(self, data + b"# drift\n")
+
+    monkeypatch.setattr(Path, "write_bytes", overwrite_after_copy)
+    with caplog.at_level("ERROR"):
+        with pytest.raises(
+            systemd_deploy.UnitDriftError, match="unit_drift",
+        ):
+            systemd_deploy.sync_drifted_units(
+                repo, installed, run_command=lambda command, **kwargs: "",
+            )
+    assert "unit_drift unit=muyan-pilot.timer" in caplog.text
+    assert "fix=muyan-pilot install-units" in caplog.text
+    assert "unit_drift auto_synced" not in caplog.text

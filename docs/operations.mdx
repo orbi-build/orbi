@@ -37,27 +37,27 @@ systemctl --user list-timers muyan-pilot.timer
 systemctl --user status muyan-pilot.service
 ```
 
-## After a unit template changes (Issue #131)
+## After a unit template changes (Issue #131, #142)
 
-The unit templates are deployment config, not ordinary code. When a PR
-changes `systemd/muyan-pilot.service` or `systemd/muyan-pilot.timer`
-and merges to main, run the idempotent install BEFORE the next timer
-trigger:
+The unit templates (`systemd/muyan-pilot.service` and
+`systemd/muyan-pilot.timer`) are deployment config, not ordinary code
+— but a template change needs NO human step after the merge. The next timer
+trigger's `ExecStartPre` fast-forwards the checkout, and the pre-start
+`unit_drift` check self-heals: it runs the SAME idempotent install
+(copy both templates into the user unit directory, daemon-reload,
+enable the timer — it never starts, stops or restarts a running
+Runner), re-verifies with the SAME hash check, and the tick continues
+with one structured `unit_drift auto_synced` line per unit (before and
+after sha256, deployed commit). There is no per-tick drift loop until
+human intervention (the #131/#140 scene: every start failed with
+`unit_drift` until a human ran the sync command).
 
-```bash
-muyan-pilot install-units --config muyan-pilot.toml
-```
-
-It copies both templates into the user unit directory, runs
-daemon-reload and enables the timer — it never starts, stops or
-restarts a running Runner. The Runner itself NEVER auto-copies or
-auto-overwrites the installed units: an unsynced template change makes
-every start fail the pre-start `unit_drift` check (structured
-`unit_drift` line, non-zero exit, no slot, no claim) until the sync
-command is run. That fail-fast is the designed canary for the
-deployment, not a bug (2026-08-27: PR #130 changed the timer from 15
-to 5 minutes; the post-merge `install-units` was never run, so every
-start failed with `unit_drift` until a human synced — Issue #131).
+`muyan-pilot install-units --config muyan-pilot.toml` stays the manual
+entry (first setup, or an immediate sync). A drift the self-heal cannot
+resolve — a failing install step, a missing template, a unit that
+drifts again before the re-verify — still fails the start (structured
+`unit_drift` line, non-zero exit, no slot, no claim): the hash check
+and the fail-fast canary are unchanged.
 
 ## Logs (journal)
 

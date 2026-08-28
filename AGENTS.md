@@ -162,7 +162,7 @@ acceptance criteria.
   next real start runs the latest code. No refresh service, worker,
   dispatcher or resident process is added; the 5-minute timer is
   unchanged.
-- Deployment consistency (Issue #103): the repo templates
+- Deployment consistency (Issue #103, #142): the repo templates
   `systemd/muyan-pilot.service` and `systemd/muyan-pilot.timer` are the
   single source of truth for the installed user units. The idempotent
   install is `muyan-pilot install-units` (copy both templates into the
@@ -171,14 +171,19 @@ acceptance criteria.
   service — a running Runner is never killed or restarted by an install,
   the new config takes effect at the next service start. Every Runner start
   checks BOTH installed units against the templates BEFORE any slot or
-  claim: drift logs a structured `unit_drift` line per unit (repo path,
-  installed path, sha256s, the install fix command) and fails fast — no
-  slot, no claim, no label change — until the units are synced. The
-  read-only report is `muyan-pilot doctor` (repo commit, unit drift,
-  timer/service active, slots, Pi session, current Issue, recent
-  journal). Full sequence:
-  merge to main -> install units -> daemon-reload -> timer next trigger ->
-  ExecStartPre syncs origin/main -> drift check -> Runner starts one Issue.
+  claim: drift is self-healed with the SAME idempotent install (the
+  pre-start sync, Issue #142) and re-verified with the SAME hash check —
+  clean logs one structured `unit_drift auto_synced` line per unit (before
+  and after sha256, deployed commit) and the start continues. Drift that
+  survives the sync — or a failing install step — logs a structured
+  `unit_drift` line per unit (repo path, installed path, sha256s, the
+  install fix command) and fails fast — no slot, no claim, no label
+  change. The read-only report is `muyan-pilot doctor` (repo commit,
+  unit drift, timer/service active, slots, Pi session, current Issue,
+  recent journal). Full sequence:
+  merge to main -> timer next trigger -> ExecStartPre syncs origin/main ->
+  drift check (auto-sync + re-verify when drifted) -> Runner starts one
+  Issue.
 - The service `ExecStart` is the installed `muyan-pilot` CLI (Issue #140):
   the official usage is the `uv tool`-installed console script (`uv tool
   install` / `uv tool upgrade`), and the unit uses the explicit
@@ -186,15 +191,18 @@ acceptance criteria.
   `systemd-analyze --user verify`); the direct-execution entry of
   `muyan_pilot.py` stays a development/compatibility path, never the
   documented usage.
-- A template change is a deployment change (Issue #131): a PR that
-  modifies `systemd/muyan-pilot.service` or `systemd/muyan-pilot.timer`
-  must be followed, after the merge to main, by the human-run
-  `muyan-pilot install-units` (the "install units" step of the
-  deployment sequence) — the Runner NEVER auto-copies or auto-overwrites
-  the installed units. An unsynced template change is caught by the
-  pre-start drift check (structured `unit_drift`, fail fast, no slot,
-  no claim) on every start until the human runs the sync command: the
-  gate is the canary for the deployment, not a bug to be bypassed.
+- A template change is a deployment change (Issue #131, #142): a PR
+  that modifies `systemd/muyan-pilot.service` or `systemd/muyan-pilot.timer`
+  takes effect without a human step — the NEXT timer trigger's
+  `ExecStartPre` syncs the checkout, and the pre-start drift check
+  self-heals the installed units with the same idempotent install
+  (copy, daemon-reload, enable the timer — never touches a running
+  Runner) before the tick continues. No per-tick drift loop until human
+  intervention (the #131/#140 scene). `muyan-pilot install-units` stays
+  the manual entry (setup, immediate sync); a drift the self-heal cannot
+  resolve is still caught by the pre-start check (structured
+  `unit_drift`, fail fast, no slot, no claim) — the gate stays the
+  canary for the deployment, not a bug to be bypassed.
 
 ## Git transport (Issue #114)
 

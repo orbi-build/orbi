@@ -206,17 +206,17 @@ def test_readme_documents_the_doctor_command():
 
 
 def test_readme_documents_the_full_deployment_sequence():
-    """Issue #103: the README must show the complete sequence from code
-    merge to the next Runner start: merge -> install units ->
-    daemon-reload -> timer next trigger -> ExecStartPre syncs
-    origin/main -> Runner starts one Issue."""
+    """Issue #103/#142: the README must show the complete sequence from
+    code merge to the next Runner start: merge (template changes need
+    no human step) -> timer next trigger -> ExecStartPre syncs
+    origin/main -> pre-start drift check (self-heal + re-verify when
+    drifted) -> Runner starts one Issue."""
     readme = README_FILE.read_text(encoding="utf-8")
     sequence = readme.split("完整部署时序", 1)[-1]
     assert "git merge 到 main" in sequence
-    assert "install units" in sequence
-    assert "daemon-reload" in sequence
     assert "timer 下一次触发" in sequence
     assert "ExecStartPre 同步 origin/main" in sequence
+    assert "启动前 unit 漂移检查" in sequence
     assert "Runner 启动并执行一个 Issue" in sequence
 
 
@@ -239,33 +239,33 @@ def test_agents_md_documents_the_deployment_consistency_contract():
     assert "no claim" in text or "no slot" in text
 
 
-def test_template_change_pins_the_post_merge_install_contract():
-    """Issue #131 regression: a `systemd/` template change is a
-    deployment change. The 2026-08-27 incident: PR #130 (Issue #51)
-    changed the timer template from 15 to 5 minutes and merged to
-    main; the documented post-merge `install-units` step was never
-    run, so every service start failed the pre-start `unit_drift`
-    check (fail fast, by design) until a human ran the fix command.
+def test_template_change_pins_the_self_healing_contract():
+    """Issue #131/#142 regression: a `systemd/` template change is a
+    deployment change. The 2026-08-27/#140 incidents: the timer
+    template change (PR #130) and the service `ExecStart` change
+    (#140) merged to main while the installed units stayed stale, so
+    every service start failed the pre-start `unit_drift` check until
+    a human ran the fix command — a per-tick drift loop.
 
     The contract must therefore be pinned in EVERY place it is
     documented — README, AGENTS.md and the EN/ZH operations pages —
     so a future template change cannot merge and strand the
-    deployment again without the mandatory sync step being visible:
-    after the merge to main the human runs
-    `muyan_pilot.py install-units`; the Runner itself NEVER
-    auto-copies or auto-overwrites the installed units (the drift
-    check stays fail-fast — it is the canary, not a bug)."""
+    deployment again: the change takes effect WITHOUT a human step
+    (the pre-start drift check self-heals with the same idempotent
+    install and re-verifies, `unit_drift auto_synced`), `install-units`
+    stays the manual entry, and the fail-fast canary is unchanged for
+    a drift the self-heal cannot resolve."""
     def template_change_contract(text: str) -> None:
         # The trigger: a change of either repo unit template.
         assert "systemd/muyan-pilot.timer" in text
         assert "systemd/muyan-pilot.service" in text
-        # The mandatory follow-up: the idempotent install command,
-        # run after the merge to main.
+        # The self-heal: the structured auto_synced line.
+        assert "unit_drift auto_synced" in text
+        # install-units stays the manual entry (setup, immediate sync).
         assert "install-units" in text
-        # The Runner never auto-syncs the installed units.
-        assert "never" in text.lower() and "auto" in text.lower()
-        # The unsynced state is caught by the fail-fast drift check.
+        # The drift check stays fail-fast for an unresolvable drift.
         assert "unit_drift" in text
+        assert "fail fast" in text
 
     readme = README_FILE.read_text(encoding="utf-8")
     # The README pins it in the deployment-consistency section (the
