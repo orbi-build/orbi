@@ -8,6 +8,10 @@ origin` and `gh release list` (this run): tags `v0.1.0`, `v0.1.1`,
 
 - every listed release page corresponds to a real tag (no dead links,
   nothing real missing, nothing invented listed);
+- the navigation lists the releases in DESCENDING version order (Issue
+  #154): the latest release (v0.1.2) is the first entry in both the
+  English `Releases` and the Chinese `发布` group, so the current
+  release is found at the top of the list;
 - `v0.1.3` must not appear anywhere in the docs (fact-based handling:
   no page, no navigation entry, no text claim);
 - the release pages pin the REAL tag objects and commits (verified
@@ -50,12 +54,16 @@ RELEASES = {
 }
 
 # The only versions with a real tag on origin — and therefore the only
-# versions the docs may list (in version order). No v0.1.3 exists
-# (no tag, no GitHub Release), so it must not be documented.
+# versions the docs may list. No v0.1.3 exists (no tag, no GitHub
+# Release), so it must not be documented.
 REAL_RELEASE_SLUGS = [
     f"release-{version}"
     for version in ("v0.1.0", "v0.1.1", "v0.1.2")
 ]
+
+# Issue #154: the navigation order is DESCENDING by version — the
+# latest release first (v0.1.2, v0.1.1, v0.1.0).
+RELEASE_SLUGS_LATEST_FIRST = list(reversed(REAL_RELEASE_SLUGS))
 
 
 def git(*args: str) -> str:
@@ -147,20 +155,22 @@ def test_release_group_lookup_fails_fast_when_the_release_group_is_missing(
         module.release_group_pages("en")
 
 
-def test_release_navigation_lists_exactly_the_real_releases_in_order():
-    """Acceptance: the Chinese (and English) release navigation matches
-    the real v0.1.x tags — every listed page exists, nothing real is
+def test_release_navigation_lists_exactly_the_real_releases_latest_first():
+    """Acceptance (Issue #154): the English and Chinese release
+    navigation match the real v0.1.x tags in DESCENDING version order —
+    the latest release (v0.1.2) is the first entry, nothing real is
     missing, nothing invented is listed."""
     en_pages = release_group_pages("en")
     zh_pages = release_group_pages("zh")
-    assert en_pages == REAL_RELEASE_SLUGS, (
-        f"en Releases group must list exactly {REAL_RELEASE_SLUGS} in "
-        f"version order, got: {en_pages!r}"
+    assert en_pages == RELEASE_SLUGS_LATEST_FIRST, (
+        f"en Releases group must list exactly "
+        f"{RELEASE_SLUGS_LATEST_FIRST} (latest first, descending "
+        f"version order), got: {en_pages!r}"
     )
-    assert zh_pages == [f"zh/{slug}" for slug in REAL_RELEASE_SLUGS], (
+    assert zh_pages == [f"zh/{slug}" for slug in RELEASE_SLUGS_LATEST_FIRST], (
         f"zh 发布 group must list exactly "
-        f"{[f'zh/{slug}' for slug in REAL_RELEASE_SLUGS]} in version "
-        f"order, got: {zh_pages!r}"
+        f"{[f'zh/{slug}' for slug in RELEASE_SLUGS_LATEST_FIRST]} (latest "
+        f"first, descending version order), got: {zh_pages!r}"
     )
 
 
