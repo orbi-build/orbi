@@ -242,6 +242,28 @@ def test_ci_workflow_installs_the_cli_editable_and_verifies_the_import_source():
         "the import-source check must compare against the checkout "
         f"path (GITHUB_WORKSPACE), got: {source_checks!r}"
     )
+    # The probe must run from a NEUTRAL cwd: `python -c` puts the cwd
+    # first on sys.path, so run from the checkout the checkout's own
+    # `muyan_pilot.py` shadows the tool env's import (editable finder
+    # and site-packages alike) and the check would pass even for a
+    # non-editable install (verified against a real non-editable
+    # install). The probe line must `cd /` before the interpreter.
+    probe_lines = [
+        line
+        for command in source_checks
+        for line in command.splitlines()
+        if "muyan_pilot.__file__" in line
+    ]
+    assert probe_lines, (
+        f"no probe line for muyan_pilot.__file__ in: {source_checks!r}"
+    )
+    for line in probe_lines:
+        assert "cd / &&" in line, (
+            "the import-source probe must run from a neutral cwd "
+            "(`cd / &&`), otherwise the checkout's own muyan_pilot.py "
+            f"shadows the tool env's import and the check is a no-op: "
+            f"{line!r}"
+        )
 
 
 def test_ci_workflow_runs_the_contract_test_command():

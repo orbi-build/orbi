@@ -78,9 +78,16 @@ jobs:
           # from the checkout (not a site-packages copy): the tool
           # env's python (the console script's own interpreter, from
           # its shebang) reports the import source and it must start
-          # with the checkout path.
+          # with the checkout path. The probe runs from a NEUTRAL cwd
+          # (`cd /`): `python -c` puts the cwd first on sys.path, so
+          # run from the checkout the checkout's own `muyan_pilot.py`
+          # would shadow the tool env's import (editable finder and
+          # site-packages alike) and the check would pass even for a
+          # non-editable install (verified against a real non-editable
+          # install: checkout cwd reports the checkout file, a neutral
+          # cwd reports the site-packages copy).
           tool_python=$(head -n 1 ~/.local/bin/muyan-pilot | sed 's/^#!//')
-          source_path=$("$tool_python" -c "import muyan_pilot; print(muyan_pilot.__file__)")
+          source_path=$(cd / && "$tool_python" -c "import muyan_pilot; print(muyan_pilot.__file__)")
           case "$source_path" in
             "$GITHUB_WORKSPACE"/*)
               echo "cli_source ok: $source_path"
