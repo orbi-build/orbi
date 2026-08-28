@@ -88,10 +88,15 @@ idle 告警和上游已死 kill 是日志/健康阈值——它们不是每 5 �
 
 ## CLI（`muyan-pilot`）
 
-正式入口是安装后的 `muyan-pilot` console script（`uv tool install
---python /usr/bin/python3 <clone 目录>` 安装，`uv tool upgrade
-muyan-pilot` 或 `uv tool install --force --reinstall <clone 目录>`
-刷新——见[快速开始](/zh/getting-started)）。
+正式入口是安装后的 `muyan-pilot` console script，以 **editable**
+`uv tool` 安装（官方本地部署——tool 环境直接从 clone 目录导入
+`muyan_pilot`，`ExecStartPre` 的 checkout 同步会被下一个 CLI 进程自动
+取到，普通源码/模板变更无需重装或升级；`uv tool install --force
+--reinstall --editable --python /usr/bin/python3 <clone 目录>`——见
+[快速开始](/zh/getting-started)）。`muyan-pilot doctor` 报告一致性
+（`cli_source: clean` 或 `cli_source: DRIFT` + 结构化
+`cli_source_drift` 行：实际导入路径、期望 repo_dir、精确的 editable
+重装命令），`muyan-pilot setup` 校验或重装。
 `muyan_pilot.py` 的直接执行入口保留为开发/兼容路径。
 
 ```bash
@@ -104,7 +109,8 @@ muyan-pilot add "task title" --repo OWNER/BACKLOG-REPO --config muyan-pilot.toml
 # ai-merged / ai-blocked）
 muyan-pilot status --config muyan-pilot.toml
 
-# 只读部署/健康报告：repo commit、unit drift、git transport（配置的
+# 只读部署/健康报告：repo commit、unit drift、CLI 源码（cli_source:
+# clean / DRIFT + 结构化 cli_source_drift 行）、git transport（配置的
 # origin URL、protocol、期望 SSH URL、SSH 探测——传输失败报告为
 # `transport: FAILED ...`，不抛出）、timer/service 实例状态、slots、
 # Pi session、当前 Issue、最近 journal

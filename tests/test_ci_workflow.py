@@ -205,6 +205,45 @@ def test_ci_workflow_installs_the_cli_and_verifies_the_entry():
     )
 
 
+def test_ci_workflow_installs_the_cli_editable_and_verifies_the_import_source():
+    """Issue #152: the CI install is the REAL editable uv tool install
+    (`--editable`: the tool env imports `muyan_pilot` from the
+    checkout, the official local deployment) and the CI verifies the
+    IMPORT SOURCE (`muyan_pilot.__file__` inside the checkout path) —
+    a non-editable install would silently copy the source into
+    site-packages and the ExecStartPre sync could never reach it."""
+    commands = step_commands(steps_of(load_workflow()))
+    editable_installs = [
+        command for command in commands
+        if any(
+            line.lstrip().startswith("uv tool install")
+            and "--editable" in line
+            for line in command.splitlines()
+        )
+    ]
+    assert editable_installs, (
+        "CI must install the CLI with the EDITABLE uv tool install "
+        "(uv tool install --editable), steps run: {commands!r}"
+    )
+    # The import-source verification: the tool env's python must report
+    # `muyan_pilot.__file__` and the step must check it against the
+    # checkout path (GITHUB_WORKSPACE).
+    source_checks = [
+        command for command in commands
+        if "muyan_pilot.__file__" in command
+    ]
+    assert source_checks, (
+        "CI must verify the editable import source "
+        "(muyan_pilot.__file__), steps run: {commands!r}"
+    )
+    assert any(
+        "GITHUB_WORKSPACE" in command for command in source_checks
+    ), (
+        "the import-source check must compare against the checkout "
+        f"path (GITHUB_WORKSPACE), got: {source_checks!r}"
+    )
+
+
 def test_ci_workflow_runs_the_contract_test_command():
     commands = step_commands(steps_of(load_workflow()))
     assert any(

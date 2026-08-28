@@ -39,12 +39,14 @@ import shutil
 import tomllib
 from pathlib import Path
 
+import cli_source
 import git_transport
 import systemd_deploy
 from pi_activity import quote_value
 
 # Bumped whenever the setup output contract changes shape.
-SETUP_VERSION = 1
+# Issue #152 added the `cli=` line (the editable install step).
+SETUP_VERSION = 2
 
 # The repo-managed single source of truth for the platform labels.
 LABELS_FILE = "labels.toml"
@@ -152,6 +154,45 @@ def load_label_defs(path: Path) -> list[dict]:
             f"missing={missing} unknown={unknown}"
         )
     return defs
+
+
+def install_cli_step(repo_dir: Path, module_file: Path, *,
+                     run_command) -> dict:
+    """Install or verify the editable uv tool install (Issue #152).
+
+    The official local deployment is the EDITABLE tool install: the
+    tool env imports ``muyan_pilot`` from the deployment checkout, so
+    the ``ExecStartPre`` checkout sync is picked up by the NEXT CLI
+    process automatically (no per-version reinstall, no second copy
+    of the source in site-packages). ``module_file`` is the RUNNING
+    process's import source (``cli_source.module_file()`` in the real
+    CLI): when it already sits directly inside ``repo_dir`` the
+    editable install is verified WITHOUT any uv call (idempotent
+    re-run); otherwise the exact editable force reinstall from
+    ``repo_dir`` runs via ``run_command`` (``uv tool install --force
+    --reinstall --editable --python /usr/bin/python3 <repo_dir>``).
+    A failing install raises ``SetupError`` (fail fast, no fallback,
+    no half-initialized state). The step NEVER touches a running
+    Runner process — the new source is loaded by the next CLI start.
+    """
+    repo_dir = Path(repo_dir).resolve()
+    actual = Path(module_file).resolve()
+    if actual.parent == repo_dir:
+        return {
+            "action": "verified",
+            "source": str(actual),
+        }
+    try:
+        run_command(cli_source.reinstall_args(repo_dir))
+    except Exception as exc:
+        raise SetupError(
+            f"editable tool install failed for {repo_dir}: {exc} "
+            f"(fix: {cli_source.reinstall_command(repo_dir)})"
+        ) from exc
+    return {
+        "action": "installed",
+        "source": str(repo_dir / "muyan_pilot.py"),
+    }
 
 
 def check_commands(run_command) -> dict:
@@ -481,7 +522,8 @@ def run_setup(config: dict, installed_dir: Path | None, *,
     """Run the full one-time setup and return its result document.
 
     Order (fail fast, no mutation before the prerequisites pass):
-    commands -> auth -> per target repo (permission check, then label
+    commands -> CLI editable install (verify or reinstall, Issue
+    #152) -> auth -> per target repo (permission check, then label
     alignment) -> unit install -> read-only checkout check -> optional
     proxy health (warning only). ``repos`` overrides the target set
     (the ``--repo`` flag); it must be a non-empty subset of the
@@ -502,6 +544,13 @@ def run_setup(config: dict, installed_dir: Path | None, *,
     repo_dir = config["repo_dir"]
     defs = load_label_defs(repo_dir / LABELS_FILE)
     check_commands(run_command)
+    # Issue #152: the CLI source step precedes every other step — the
+    # running CLI must import from the deployment checkout, otherwise
+    # the unit migration below (and the pre-start self-heal it
+    # repairs) could never run the new code (the #152 deadlock).
+    cli = install_cli_step(
+        repo_dir, cli_source.module_file(), run_command=run_command,
+    )
     check_auth(run_command)
     repo_results = []
     for repo in targets:
@@ -522,6 +571,7 @@ def run_setup(config: dict, installed_dir: Path | None, *,
         "version": SETUP_VERSION,
         "base_branch": config["base_branch"],
         "repos": repo_results,
+        "cli": cli,
         "service": units["service"],
         "timer": units["timer"],
         "checkout": checkout,
@@ -540,6 +590,13 @@ def format_setup(result: dict) -> list[str]:
         (
             f"setup={result['setup']} version={result['version']} "
             f"base_branch={result['base_branch']}"
+        ),
+        # Issue #152: the editable install step result (verified = the
+        # running CLI already imports from the checkout; installed =
+        # the editable force reinstall ran).
+        (
+            f"cli={result['cli']['action']} "
+            f"source={quote_value(result['cli']['source'])}"
         ),
     ]
     for entry in result["repos"]:

@@ -45,24 +45,37 @@ cd muyan-pilot
 
 The official usage is the installed `muyan-pilot` console script (the
 PEP 621 packaging in `pyproject.toml` maps
-`muyan-pilot = muyan_pilot:main`). Install it with `uv tool` from the
-clone directory — `--python` pins the production interpreter (3.14):
+`muyan-pilot = muyan_pilot:main`), installed as an **editable**
+`uv tool` install — the official local deployment (Issue #152). From
+the clone directory, `--python` pins the production interpreter (3.14):
 
 ```bash
-uv tool install --python /usr/bin/python3 .
+uv tool install --force --reinstall --editable --python /usr/bin/python3 .
 muyan-pilot --help
 ```
 
 `uv tool` keeps the CLI in an isolated tool environment; the executable
-lands in `~/.local/bin` (on the PATH of the systemd unit). After a merge
-to main, refresh it with `uv tool upgrade muyan-pilot` (when the version
-changes) or `uv tool install --force --reinstall .` from the clone
-directory (when the version is unchanged — `--reinstall` bypasses the
-build cache). The release package carries no third-party runtime
-dependency, no token and no user directory — the config file and the
-user systemd dir stay machine-local. The direct-execution entry of
-`muyan_pilot.py` (running the file with the interpreter) stays a
-development/compatibility path.
+lands in `~/.local/bin` (on the PATH of the systemd unit).
+
+**Why `--editable` matters**: a non-editable install copies the source
+into the tool environment's site-packages. The service's `ExecStartPre`
+fast-forwards the checkout to the latest `main` before every start —
+with a copied source the CLI would keep executing the stale copy
+(bootstrap deadlock: Issue #152). With the editable install the tool
+env imports `muyan_pilot` directly from the clone directory, so the
+next CLI process (the next timer-triggered Runner) picks up the merged
+code automatically: **ordinary Python source and systemd
+template/migration changes need NO reinstall and no upgrade command**.
+Only when dependencies, the entry point, the
+package name, the build backend or the Python version changes do you
+re-run the exact force editable reinstall command above. `muyan-pilot
+doctor` reports the consistency (`cli_source: clean` or
+`cli_source: DRIFT` with the structured `cli_source_drift` line), and
+`muyan-pilot setup` verifies or reinstalls it idempotently. The release
+package carries no third-party runtime dependency, no token and no user
+directory — the config file and the user systemd dir stay
+machine-local. The direct-execution entry of `muyan_pilot.py` (running
+the file with the interpreter) stays a development/compatibility path.
 
 ## 3. Create the configuration
 
@@ -109,11 +122,13 @@ context_files = []
 ## 4. Run the one-time setup
 
 The setup entry does the whole initialization in one command: it
-verifies `gh auth status` and the repo permissions, aligns the platform
-labels from the repo-managed `labels.toml` (the single source of truth
-for label name, color and description — a commit never creates labels,
-and a missing label makes the scan silently skip that state), installs
-the systemd user units and enables the timer, checks the checkout, and
+verifies or reinstalls the editable CLI install (Issue #152 — the
+running CLI must import from the deployment checkout), verifies
+`gh auth status` and the repo permissions, aligns the platform labels
+from the repo-managed `labels.toml` (the single source of truth for
+label name, color and description — a commit never creates labels, and
+a missing label makes the scan silently skip that state), installs the
+systemd user units and enables the timer, checks the checkout, and
 reports the optional model proxy:
 
 ```bash

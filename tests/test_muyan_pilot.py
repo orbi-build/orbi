@@ -1199,8 +1199,12 @@ def _setup_result() -> dict:
     """A complete run_setup result document (format_setup contract)."""
     return {
         "setup": "ok",
-        "version": 1,
+        "version": 2,
         "base_branch": "main",
+        "cli": {
+            "action": "verified",
+            "source": "/repo/muyan_pilot.py",
+        },
         "repos": [
             {
                 "repo": "xqliu/muyan-pilot",
@@ -1425,6 +1429,105 @@ def test_doctor_report_drift_carries_paths_hashes_and_fix(
         f"installed_sha256={entry['installed_sha256']}"
     ) in lines
     assert f"  fix: {systemd_deploy.FIX_COMMAND}" in lines
+
+
+def _fake_cli_source(monkeypatch, drifted: bool = False) -> dict:
+    """Stub the read-only CLI source check (Issue #152) for the doctor
+    tests: a clean editable source from the world's checkout, or a
+    drifted site-packages source with the exact fix command."""
+    import types
+
+    if drifted:
+        actual = Path(
+            "/home/u/.local/share/uv/tools/muyan-pilot/"
+            "lib/python3.14/site-packages/muyan_pilot.py",
+        )
+    else:
+        actual = None  # filled per-world below
+    state = {"actual": actual}
+
+    def fake_cli_source(expected_repo_dir):
+        if state["actual"] is None:
+            state["actual"] = Path(expected_repo_dir) / "muyan_pilot.py"
+        return {
+            "actual": Path(state["actual"]),
+            "expected": Path(expected_repo_dir).resolve(),
+            "editable": not drifted,
+            "fix": (
+                "uv tool install --force --reinstall --editable "
+                f"--python /usr/bin/python3 {Path(expected_repo_dir)}"
+            ),
+        }
+
+    def fake_drift_line(source):
+        if source["editable"]:
+            return None
+        from pi_activity import quote_value
+
+        return (
+            "cli_source_drift "
+            f"source={quote_value(str(source['actual']))} "
+            f"expected={quote_value(str(source['expected']))} "
+            f"fix={quote_value(source['fix'])}"
+        )
+
+    stub = types.SimpleNamespace(
+        cli_source=fake_cli_source, drift_line=fake_drift_line,
+    )
+    monkeypatch.setattr(muyan_pilot, "cli_source", stub)
+    return state
+
+
+def test_doctor_report_cli_source_clean(tmp_path, monkeypatch):
+    """Issue #152: doctor read-only verifies that the running process
+    imports `muyan_pilot` from the configured repo_dir (the editable
+    uv tool install): the clean report names the import source."""
+    config, installed = _deploy_world(tmp_path, drift=False)
+    _fake_doctor_commands(monkeypatch)
+    _fake_cli_source(monkeypatch, drifted=False)
+    monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
+    report = muyan_pilot.doctor_report(config, installed)
+    lines = report.splitlines()
+    assert any(
+        line.startswith("cli_source: clean") for line in lines
+    ), report
+    assert (
+        f"cli_source: clean source={config['repo_dir'] / 'muyan_pilot.py'}"
+    ) in lines
+    assert "cli_source_drift" not in report
+
+
+def test_doctor_report_cli_source_drift_carries_source_expected_fix(
+    tmp_path, monkeypatch,
+):
+    """Issue #152: a non-editable (site-packages) or stale source is
+    REPORTED with the structured `cli_source_drift` line (actual path,
+    expected repo_dir, the exact editable reinstall command) — the fix
+    leads with the editable reinstall, never with
+    `muyan-pilot install-units` alone. The report stays readable and
+    the rest of the health report is still produced."""
+    config, installed = _deploy_world(tmp_path, drift=False)
+    _fake_doctor_commands(monkeypatch)
+    _fake_cli_source(monkeypatch, drifted=True)
+    monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
+    report = muyan_pilot.doctor_report(config, installed)
+    lines = report.splitlines()
+    assert "cli_source: DRIFT" in lines
+    assert any(
+        line.startswith("  cli_source_drift ")
+        and "source=/home/u/.local/share/uv/tools/muyan-pilot/"
+        in line
+        and f"expected={config['repo_dir'].resolve()}" in line
+        and (
+            'fix="uv tool install --force --reinstall --editable '
+            '--python /usr/bin/python3 '
+            f"{config['repo_dir']}\""
+        ) in line
+        for line in lines
+    ), f"drift line missing or malformed in:\n{report}"
+    # The report continues past the drift (doctor is read-only).
+    assert "slots: 0/1" in lines
+    assert "journal:" in lines
 
 
 def test_doctor_report_missing_installed_unit_is_drift(tmp_path, monkeypatch):

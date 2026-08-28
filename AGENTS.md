@@ -192,13 +192,23 @@ acceptance criteria.
   merge to main -> timer next trigger -> ExecStartPre syncs origin/main ->
   drift check (auto-sync + re-verify when drifted) -> Runner starts one
   Issue.
-- The service `ExecStart` is the installed `muyan-pilot` CLI (Issue #140):
-  the official usage is the `uv tool`-installed console script (`uv tool
-  install` / `uv tool upgrade`), and the unit uses the explicit
-  deployable entry `%h/.local/bin/muyan-pilot` (verifiable with
+- The service `ExecStart` is the installed `muyan-pilot` CLI (Issue #140,
+  #152): the official usage is the EDITABLE `uv tool`-installed console
+  script (`uv tool install --force --reinstall --editable --python
+  /usr/bin/python3 <deployment checkout>` — the tool env imports
+  `muyan_pilot` from the deployment checkout, so the ExecStartPre
+  checkout sync is picked up by the next CLI process automatically and
+  ordinary source/template changes need NO reinstall or upgrade), and
+  the unit uses the explicit deployable entry
+  `%h/.local/bin/muyan-pilot` (verifiable with
   `systemd-analyze --user verify`); the direct-execution entry of
   `muyan_pilot.py` stays a development/compatibility path, never the
-  documented usage.
+  documented usage. A non-editable (site-packages) or stale CLI source
+  is reported by `muyan-pilot doctor` as `cli_source: DRIFT` with the
+  structured `cli_source_drift` line (actual import path, expected
+  repo_dir, the exact editable reinstall command) and repaired by
+  `muyan-pilot setup` (the CLI step verifies or force-reinstalls the
+  editable install); the Runner never installs the tool at start.
 - A template change is a deployment change (Issue #131, #142): a PR
   that modifies `systemd/muyan-pilot@.service` or `systemd/muyan-pilot@.timer`
   takes effect without a human step — the NEXT timer trigger's

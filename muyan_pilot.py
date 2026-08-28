@@ -32,6 +32,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import bootstrap_runner
+import cli_source
 import git_transport
 import systemd_deploy
 
@@ -418,6 +419,23 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
             lines.append(
                 f"  {entry['unit']}: sha256={entry['installed_sha256']}"
             )
+    # CLI source (Issue #152): the official local deployment is the
+    # editable uv tool install — the tool env imports `muyan_pilot`
+    # from the deployment checkout, so the ExecStartPre sync is picked
+    # up by the next CLI process. A non-editable (site-packages) or
+    # stale (different checkout) source is REPORTED with the
+    # structured `cli_source_drift` line (actual path, expected
+    # repo_dir, the exact editable reinstall command — the fix leads
+    # with the editable reinstall, never with
+    # `muyan-pilot install-units` alone). Read-only: the report stays
+    # readable and the rest of the health report is still produced.
+    source = cli_source.cli_source(repo_dir)
+    line = cli_source.drift_line(source)
+    if line is None:
+        lines.append(f"cli_source: clean source={source['actual']}")
+    else:
+        lines.append("cli_source: DRIFT")
+        lines.append(f"  {line}")
     # Issue #149: report the INSTANCES (verified against the real CLI:
     # `systemctl show` rejects the bare template name, and `journalctl
     # -u` with a template-name glob fails when no instance exists —

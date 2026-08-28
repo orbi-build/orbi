@@ -1,13 +1,17 @@
 # Standard Python packaging for the Muyan Pilot CLI (Issue #140).
 #
-# The official usage is the installed console script:
+# The official usage is the installed console script, installed as an
+# EDITABLE uv tool (Issue #152): the tool env imports the modules
+# directly from the deployment checkout, so the ExecStartPre checkout
+# sync is picked up by the next CLI process automatically (no
+# per-version reinstall):
 #
-#     uv tool install --python /usr/bin/python3 <this repo>
+#     uv tool install --force --reinstall --editable \
+#         --python /usr/bin/python3 <this repo>
 #     muyan-pilot --help
 #
-# `uv tool upgrade muyan-pilot` refreshes the installed CLI after a
-# merge to main. The direct-execution entry `python3 muyan_pilot.py`
-# stays as a development/compatibility path.
+# The direct-execution entry `python3 muyan_pilot.py` stays as a
+# development/compatibility path.
 #
 # The release package is machine-independent: no third-party runtime
 # dependency (the bootstrap intentionally has none), no token, no user
@@ -44,4 +48,6 @@ py-modules = [
     "pi_activity",
     "pi_recovery",
     "progress",
+    # Issue #152: the CLI source consistency check (doctor/setup).
+    "cli_source",
 ]

@@ -1,10 +1,11 @@
 # One-time setup
 
 `muyan-pilot setup` is the one-time, config-driven initialization
-entry for a new machine or a new task-pool repository. It verifies the
-local prerequisites, aligns the platform labels, installs the systemd
-user units, checks the checkout, and reports the optional model proxy —
-in one command, with a stable machine-readable result.
+entry for a new machine or a new task-pool repository. It verifies or
+reinstalls the editable CLI install, verifies the local prerequisites,
+aligns the platform labels, installs the systemd user units, checks
+the checkout, and reports the optional model proxy — in one command,
+with a stable machine-readable result.
 
 ```bash
 muyan-pilot setup --config muyan-pilot.toml
@@ -24,8 +25,20 @@ non-zero exit code.
    `muyan-pilot` CLI on the PATH, and a reachable `systemctl --user`
    user bus (a container or headless session without a user bus fails
    with the bus error).
-2. **Auth** — `gh auth status` (logged in with a usable token).
-3. **Per target repository** (every configured `source_repos` entry by
+2. **CLI editable install** (Issue #152) — the official local
+   deployment is the EDITABLE `uv tool` install: the tool env imports
+   `muyan_pilot` from the deployment checkout, so the `ExecStartPre`
+   checkout sync is picked up by the next CLI process automatically.
+   When the running process already imports from the configured
+   `repo_dir` the step verifies it (no uv call, `cli=verified`);
+   otherwise it runs the exact force editable reinstall
+   (`uv tool install --force --reinstall --editable --python
+   /usr/bin/python3 <repo_dir>`, `cli=installed`). A failing install
+   fails fast — no unit install, no half-initialized state. The step
+   never touches a running Runner process (the new source is loaded by
+   the next CLI start).
+3. **Auth** — `gh auth status` (logged in with a usable token).
+4. **Per target repository** (every configured `source_repos` entry by
    default; exactly one with `--repo OWNER/REPO`):
    - the repo exists and the viewer has write permission
      (`gh repo view` → `viewerPermission` must be `WRITE`, `MAINTAIN`
@@ -35,7 +48,7 @@ non-zero exit code.
      truth for label name, color and description: a missing label is
      created, a drifted label is updated, nothing is deleted, and
      business labels (`bug`, `enhancement`, ...) are never touched.
-4. **Systemd units** — the repo templates
+5. **Systemd units** — the repo templates
    (`systemd/muyan-pilot@.service`, `systemd/muyan-pilot@.timer`) are
    installed idempotently into the user unit directory (the same
    install `install-units` performs: copy, migrate the pre-#149
@@ -43,7 +56,7 @@ non-zero exit code.
    instances `muyan-pilot@1.timer` / `muyan-pilot@2.timer` — the
    service is never started, stopped or restarted), then each timer
    instance's enabled/active state and next trigger time are reported.
-5. **Checkout + git transport** — check of the configured `repo_dir`:
+6. **Checkout + git transport** — check of the configured `repo_dir`:
    the `origin` remote's **transport** (Issue #114): git data
    operations (fetch, push — including `.github/workflows/*.yml`) must
    go over SSH (`git@github.com:owner/repo.git`), so an existing
@@ -63,7 +76,7 @@ non-zero exit code.
    (local `HEAD` vs freshly fetched `origin/<base_branch>` —
    reported, not a failure: the timer fast-forwards a clean checkout
    at each start).
-6. **Optional model proxy** — the `local-llm-kv-cache` proxy health
+7. **Optional model proxy** — the `local-llm-kv-cache` proxy health
    endpoint (`http://127.0.0.1:18082/health`) is checked and reported
    as **optional**: its absence or unhealthiness is a warning in the
    output and never blocks the core GitHub/Pilot setup.
@@ -86,7 +99,8 @@ The default output is stable `key=value` lines (one per concern; values
 containing spaces are quoted), so agents and scripts can parse it:
 
 ```text
-setup=ok version=1 base_branch=main
+setup=ok version=2 base_branch=main
+cli=verified source=/path/to/checkout/muyan_pilot.py
 repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=8/8
 service=installed path=~/.config/systemd/user/muyan-pilot@.service sha256=9f2c...
 timer=muyan-pilot@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
@@ -95,7 +109,10 @@ checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@git
 model_endpoint=optional optional_proxy=healthy url=http://127.0.0.1:18082/health
 ```
 
-`labels=8/8` means all eight platform labels match `labels.toml`;
+`cli=verified` means the running CLI already imports `muyan_pilot`
+from the deployment checkout (the editable install is in place);
+`cli=installed` means the force editable reinstall ran. `labels=8/8`
+means all eight platform labels match `labels.toml`;
 there is one `timer=` line per timer instance and its `next` is that
 instance's next trigger time (`-` when it has none);
 `optional_proxy` is `healthy`, `unhealthy` or `unavailable` and never
@@ -115,7 +132,8 @@ Success (exit code `0`):
 
 ```bash
 $ muyan-pilot setup --config muyan-pilot.toml
-setup=ok version=1 base_branch=main
+setup=ok version=2 base_branch=main
+cli=verified source=/path/to/checkout/muyan_pilot.py
 repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=8/8
 service=installed path=~/.config/systemd/user/muyan-pilot@.service sha256=9f2c...
 timer=muyan-pilot@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
@@ -131,6 +149,7 @@ Failures (non-zero exit code, `setup_failed reason=...` on stderr):
 
 ```text
 setup_failed reason=systemctl --user user bus unavailable (is a systemd user session running?): ...
+setup_failed reason=editable tool install failed for /path/to/checkout: ... (fix: uv tool install --force --reinstall --editable --python /usr/bin/python3 /path/to/checkout)
 setup_failed reason=repo not accessible: nobody/no-such (gh repo view failed: ...)
 setup_failed reason=insufficient permission for owner/repo: viewerPermission='READ' (one of ['ADMIN', 'MAINTAIN', 'WRITE'] required to manage labels)
 setup_failed reason=label alignment failed for owner/repo: ai-ready (gh label create failed: ...)

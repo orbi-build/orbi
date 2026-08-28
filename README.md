@@ -13,24 +13,23 @@
 - **系统架构总览**（GitHub Issues、systemd timer/service、Runner、Pi、worktree、llama-server、可选 `local-llm-kv-cache` proxy、PR/review/merge）：文档站首页 [index](docs/index.mdx) / [zh/index](docs/zh/index.mdx)；
 - **任务生命周期状态机**（`ai-ready` → `ai-in-progress` → `ai-pr-opened` → `ai-fix-needed` → `ai-merged` / `ai-blocked`，标出 Epic/Release task/P0 边界）：[workflow](docs/workflow.mdx) / [zh/workflow](docs/zh/workflow.mdx)。
 
-## CLI 安装与升级（Issue #140）
+## CLI 安装与升级（Issue #140、#152）
 
-正式使用方式是 `uv tool` 安装的可执行 CLI（console script `muyan-pilot = muyan_pilot:main`，见 `pyproject.toml`）：
+正式使用方式是 **editable** `uv tool` 安装的可执行 CLI（console script `muyan-pilot = muyan_pilot:main`，见 `pyproject.toml`）——这是官方本地部署方式：
 
 ```bash
 # 在部署 checkout 目录安装（如 /home/xqianliu/Documents/muyan/muyan-pilot）：
 # --python 固定生产解释器（本机 /usr/bin/python3，3.14）
-uv tool install --python /usr/bin/python3 /home/xqianliu/Documents/muyan/muyan-pilot
-# merge 到 main 之后升级（版本号变化时）：
-uv tool upgrade muyan-pilot
-# 或者从最新本地代码直接重装（版本号未变时；--reinstall 绕过构建缓存）：
-uv tool install --force --reinstall /home/xqianliu/Documents/muyan/muyan-pilot
+# --editable：tool 环境直接从部署 checkout 导入 muyan_pilot（不是复制到 site-packages）
+uv tool install --force --reinstall --editable --python /usr/bin/python3 /home/xqianliu/Documents/muyan/muyan-pilot
 # 验证安装：
 muyan-pilot --help
 muyan-pilot --version
 ```
 
-`uv tool` 把 CLI 装进隔离的 tool 环境，可执行文件在 `~/.local/bin/muyan-pilot`（systemd unit 的 PATH 已包含该目录，见「部署一致性」）。发布包不携带第三方运行时依赖、token 或用户目录：配置（`muyan-pilot.toml`）和用户 systemd 目录保持机器本地。`muyan_pilot.py` 的直接执行入口（用解释器直接运行该文件）保留为开发/兼容路径，不是正式使用方式。
+**为什么必须 editable（Issue #152）**：非 editable 安装会把源码复制进 tool 环境的 site-packages；`ExecStartPre` 把 checkout 同步到最新 main 之后，CLI 仍在执行旧副本——这正是 #152 的 P0 启动死锁（旧 CLI 检查旧的非模板 unit 路径，永远跑不到新的迁移代码）。editable 安装下，下一个 CLI 进程（下一个 timer 启动的 Runner）自动从 checkout 取到最新代码：**普通 Python 源码与 systemd 模板/迁移代码变更不需要任何重装或升级命令**。只有依赖、入口点、包名、构建后端或 Python 版本变化时，才重新执行上面的 force editable 重装命令。
+
+`uv tool` 把 CLI 装进隔离的 tool 环境，可执行文件在 `~/.local/bin/muyan-pilot`（systemd unit 的 PATH 已包含该目录，见「部署一致性」）。`muyan-pilot doctor` 报告 CLI 源码一致性：`cli_source: clean source=...`（运行进程从配置的 checkout 导入）或 `cli_source: DRIFT` + 结构化 `cli_source_drift` 行（实际导入路径、期望 repo_dir、精确的 editable 重装命令）。发布包不携带第三方运行时依赖、token 或用户目录：配置（`muyan-pilot.toml`）和用户 systemd 目录保持机器本地。`muyan_pilot.py` 的直接执行入口（用解释器直接运行该文件）保留为开发/兼容路径，不是正式使用方式。
 
 ## 当前运行
 
@@ -76,7 +75,7 @@ unit_drift auto_synced unit=muyan-pilot@.timer before_sha256=... after_sha256=..
 unit_drift unit=muyan-pilot@.timer repo=<repo path> installed=<installed path> repo_sha256=... installed_sha256=... fix=muyan-pilot install-units
 ```
 
-**只读诊断**：`muyan-pilot doctor`（可用 `--installed-dir` 指定检查目录）报告 repo commit、unit drift（clean 或具体漂移 + 修复命令）、Git transport（配置的 origin URL、protocol、SSH 探测；见「Git transport」）、timer/service active 状态、Runner slot、Pi session、每个 source repo 的当前 Issue 和最近 journal 活动。只读：不改标签、不改 unit、不做 git 变更。
+**只读诊断**：`muyan-pilot doctor`（可用 `--installed-dir` 指定检查目录）报告 repo commit、unit drift（clean 或具体漂移 + 修复命令）、CLI 源码一致性（`cli_source: clean` 或 `cli_source: DRIFT` + 结构化 `cli_source_drift` 行，见「CLI 安装与升级」）、Git transport（配置的 origin URL、protocol、SSH 探测；见「Git transport」）、timer/service active 状态、Runner slot、Pi session、每个 source repo 的当前 Issue 和最近 journal 活动。只读：不改标签、不改 unit、不做 git 变更。
 
 **完整部署时序**（从代码合并到下一次 Runner 启动）：
 

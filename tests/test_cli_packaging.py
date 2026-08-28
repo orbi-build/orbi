@@ -47,6 +47,8 @@ RUNTIME_MODULES = (
     "pi_activity",
     "pi_recovery",
     "progress",
+    # Issue #152: the CLI source consistency check (doctor/setup).
+    "cli_source",
 )
 
 # The docs pages that document user-facing commands (EN + ZH parity).
@@ -239,20 +241,54 @@ def test_setup_requires_the_installed_cli():
 # --- the documentation contract -----------------------------------------------
 
 
-def test_readme_uses_the_cli_and_the_uv_tool_install():
+def test_readme_uses_the_cli_and_the_editable_uv_tool_install():
     readme = README_FILE.read_text(encoding="utf-8")
     # The official commands are the installed CLI.
     assert "muyan-pilot install-units" in readme
     assert "muyan-pilot doctor" in readme
     assert "muyan-pilot setup" in readme
     assert "muyan-pilot add" in readme
-    # The install/upgrade flow is the verifiable uv tool flow.
+    # Issue #152: the official local deployment is the EDITABLE uv
+    # tool install (the tool env imports the source from the
+    # deployment checkout; the ExecStartPre sync is picked up by the
+    # next CLI process — no per-version reinstall).
     assert "uv tool install" in readme
-    assert "uv tool upgrade" in readme
+    assert "--editable" in readme
+    assert "uv tool install --force --reinstall --editable" in readme
     # The user is no longer required to hand-write the Python entry.
     assert "python3 muyan_pilot.py" not in readme
     # The compatibility path stays documented (development use only).
     assert "muyan_pilot.py" in readme
+
+
+def test_docs_make_the_editable_install_the_official_deployment():
+    """Issue #152: README, AGENTS and the EN/ZH docs make the
+    editable uv tool install the official local deployment and never
+    require `uv tool upgrade` for ordinary Python source or systemd
+    template/migration changes (with the editable install the
+    ExecStartPre checkout sync is picked up automatically — the
+    upgrade command is gone from the documented flow). The exact
+    force-reinstall command is documented as the fix for a
+    non-editable/stale CLI source."""
+    pages = {
+        "README.md": README_FILE,
+        "AGENTS.md": AGENTS_FILE,
+    }
+    for slug in DOC_PAGES:
+        pages[slug] = REPO_ROOT / "docs" / slug
+    for name, path in pages.items():
+        text = path.read_text(encoding="utf-8")
+        assert "uv tool upgrade" not in text, (
+            f"{name} still requires `uv tool upgrade`: with the "
+            "editable install ordinary source/template changes need "
+            "no reinstall"
+        )
+    # The install/upgrade pages (EN + ZH) name the editable install.
+    for slug in ("getting-started.mdx", "zh/getting-started.mdx"):
+        page = (REPO_ROOT / "docs" / slug).read_text(encoding="utf-8")
+        assert "--editable" in page, (
+            f"docs/{slug} must document the editable uv tool install"
+        )
 
 
 def test_agents_md_uses_the_cli():
