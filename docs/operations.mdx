@@ -6,21 +6,29 @@ GitHub by itself. You never need a status command, polling, or
 supervision in the normal path — the commands below are for first
 verification, troubleshooting and recovery.
 
-## The timer
+## The timers
 
-`systemd/muyan-pilot.timer` fires every 5 minutes, 24 hours a day
-(`OnCalendar=*-*-* *:00/5`, `AccuracySec=30s`, `Persistent=false` — a
-missed tick is dropped, never queued). Each tick starts
-`muyan-pilot.service`, which:
+The timer template `systemd/muyan-pilot@.timer` is deployed as TWO
+instances, `muyan-pilot@1.timer` and `muyan-pilot@2.timer`. Each fires
+every 5 minutes, 24 hours a day (`OnCalendar=*-*-* *:00/5`,
+`AccuracySec=30s`, `Persistent=false` — a missed tick is dropped, never
+queued) and starts its OWN service instance
+(`muyan-pilot@1.timer` → `muyan-pilot@1.service`,
+`muyan-pilot@2.timer` → `muyan-pilot@2.service`), so two independent
+Runner instances can run concurrently. Each tick's service instance:
 
 1. **Fast-forwards the code first** (`ExecStartPre`, outside the Python
    process): `git fetch origin main && git merge --ff-only origin/main`.
    A dirty checkout, a failed fetch or a non-fast-forwardable state fails
    the preflight: the service does not start and the reason lands in the
    systemd journal (fail fast). A currently running long task is never
-   hot-updated or killed — while the service is active, systemd ignores
-   the timer's start request, and the next real start picks up the latest
-   code.
+   hot-updated or killed — while one service instance is active, systemd
+   ignores further starts of THAT instance, and the next real start picks
+   up the latest code. Because two instances may run `ExecStartPre` in
+   the same tick, the fetch + fast-forward is wrapped in a short-lived
+   `flock` on the shared state-dir lock file (`base-sync.lock`, the
+   Python-side sync takes the SAME lock): the main worktree is never
+   written concurrently.
 2. **Runs one tick**: resume an opened PR (review/fix/merge) or claim one
    `ai-ready` Issue, then exit. Before any slot or claim the tick also
    runs the pre-start **git transport check** (Issue #114): the
@@ -33,24 +41,28 @@ missed tick is dropped, never queued). Each tick starts
    always go over SSH; GitHub API operations stay on the `gh` token).
 
 ```bash
-systemctl --user list-timers muyan-pilot.timer
-systemctl --user status muyan-pilot.service
+systemctl --user list-timers 'muyan-pilot@*.timer'
+systemctl --user status 'muyan-pilot@*.service'
 ```
 
 ## After a unit template changes (Issue #131, #142)
 
-The unit templates (`systemd/muyan-pilot.service` and
-`systemd/muyan-pilot.timer`) are deployment config, not ordinary code
+The unit templates (`systemd/muyan-pilot@.service` and
+`systemd/muyan-pilot@.timer`) are deployment config, not ordinary code
 — but a template change needs NO human step after the merge. The next timer
 trigger's `ExecStartPre` fast-forwards the checkout, and the pre-start
 `unit_drift` check self-heals: it runs the SAME idempotent install
 (copy both templates into the user unit directory, daemon-reload,
-enable the timer — it never starts, stops or restarts a running
-Runner), re-verifies with the SAME hash check, and the tick continues
-with one structured `unit_drift auto_synced` line per unit (before and
-after sha256, deployed commit). There is no per-tick drift loop until
-human intervention (the #131/#140 scene: every start failed with
-`unit_drift` until a human ran the sync command).
+enable the two timer instances — it never starts, stops or restarts a
+running Runner), re-verifies with the SAME hash check, and the tick
+continues with one structured `unit_drift auto_synced` line per unit
+(before and after sha256, deployed commit). There is no per-tick drift
+loop until human intervention (the #131/#140 scene: every start failed
+with `unit_drift` until a human ran the sync command). The same install
+also migrates the pre-#149 non-templated units (`muyan-pilot.service` /
+`muyan-pilot.timer`) away once: it stops the legacy timer (a timer stop
+— never the service) and removes the legacy files, so the old
+single-instance schedule cannot keep firing the old service.
 
 `muyan-pilot install-units --config muyan-pilot.toml` stays the manual
 entry (first setup, or an immediate sync). A drift the self-heal cannot
@@ -65,8 +77,8 @@ The journal is the local record. Every line of a run starts with the run
 id prefix `[<run_id>]`, so one grep reconstructs the full timeline:
 
 ```bash
-journalctl --user -u muyan-pilot.service -f
-journalctl --user -u muyan-pilot.service | grep e07383c2
+journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service -f
+journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service | grep e07383c2
 ```
 
 Stable `key=value` lines you will see:
@@ -121,8 +133,8 @@ muyan-pilot status --config muyan-pilot.toml
 # Read-only deployment/health report: repo commit, unit drift, git
 # transport (configured origin URL, protocol, expected SSH URL, SSH
 # probe — a failed transport is reported as `transport: FAILED ...`,
-# not raised), timer/service state, slots, Pi session, current Issue,
-# recent journal
+# not raised), timer/service instance state, slots, Pi session,
+# current Issue, recent journal
 muyan-pilot doctor --config muyan-pilot.toml
 
 # One-time, idempotent initialization (new machine / new repo): gh
@@ -187,4 +199,7 @@ on the machine. A slot is an exclusive `flock(2)` lock on
 for the whole delivery lifecycle (implement → review → merge); the kernel
 releases it when the process exits, however it exits. A Runner that
 cannot take a slot logs `capacity_full` and exits without claiming an
-Issue.
+Issue. The two timer instances may start two Runner instances in the
+same tick; they compete for the SAME slots — the capacity is
+`max_concurrency` (with the default 1 the behavior is exactly the
+pre-#149 one), never the instance count.

@@ -152,22 +152,30 @@ acceptance criteria.
 - A delivery is acceptable only when its HEAD contains the latest remote base;
   base updates use a plain `git merge` on the task branch.
 - The Runner's own code updates at the next service start (Issue #52):
-  `muyan-pilot.service` runs `ExecStartPre` =
-  `git fetch origin main && git merge --ff-only origin/main` in the main
-  checkout before `ExecStart`. A dirty checkout, a failed fetch or a
-  non-fast-forwardable state fails the preflight: the service does not
-  start and the reason lands in the systemd journal (fail fast). A
-  currently running long task is never hot-updated or killed — while the
-  service is active, systemd ignores the timer's start request, and the
-  next real start runs the latest code. No refresh service, worker,
-  dispatcher or resident process is added; the 5-minute timer is
-  unchanged.
+  the service template `muyan-pilot@.service` (deployed as the two
+  instances `muyan-pilot@1.service` / `muyan-pilot@2.service`) runs
+  `ExecStartPre` = the `git fetch origin main && git merge --ff-only
+  origin/main` in the main checkout wrapped in a short-lived `flock` on
+  the shared state-dir lock file (`base-sync.lock`, the Python-side
+  sync takes the SAME lock) before `ExecStart`. A dirty checkout, a
+  failed fetch or a non-fast-forwardable state fails the preflight: the
+  service does not start and the reason lands in the systemd journal
+  (fail fast). A currently running long task is never hot-updated or
+  killed — while one service instance is active, systemd ignores
+  further starts of THAT instance, and the next real start runs the
+  latest code. Two instances may run concurrently; the capacity is the
+  Runner's flock slots (`max_concurrency`), never the instance count.
+  No refresh service, worker, dispatcher or resident process is added;
+  the 5-minute timers are unchanged.
 - Deployment consistency (Issue #103, #142): the repo templates
-  `systemd/muyan-pilot.service` and `systemd/muyan-pilot.timer` are the
+  `systemd/muyan-pilot@.service` and `systemd/muyan-pilot@.timer` are the
   single source of truth for the installed user units. The idempotent
   install is `muyan-pilot install-units` (copy both templates into the
-  user unit dir, `systemctl --user daemon-reload`, enable the timer, print
-  the deployed commit and unit hashes): it NEVER starts/stops/restarts the
+  user unit dir, migrate the pre-#149 non-templated units away once —
+  `systemctl --user disable --now muyan-pilot.timer` (a timer stop, never
+  the service) plus removing the legacy files — `systemctl --user
+  daemon-reload`, enable the two timer instances, print the deployed
+  commit and unit hashes): it NEVER starts/stops/restarts the
   service — a running Runner is never killed or restarted by an install,
   the new config takes effect at the next service start. Every Runner start
   checks BOTH installed units against the templates BEFORE any slot or
@@ -192,12 +200,12 @@ acceptance criteria.
   `muyan_pilot.py` stays a development/compatibility path, never the
   documented usage.
 - A template change is a deployment change (Issue #131, #142): a PR
-  that modifies `systemd/muyan-pilot.service` or `systemd/muyan-pilot.timer`
+  that modifies `systemd/muyan-pilot@.service` or `systemd/muyan-pilot@.timer`
   takes effect without a human step — the NEXT timer trigger's
   `ExecStartPre` syncs the checkout, and the pre-start drift check
   self-heals the installed units with the same idempotent install
-  (copy, daemon-reload, enable the timer — never touches a running
-  Runner) before the tick continues. No per-tick drift loop until human
+  (copy, legacy migration, daemon-reload, enable the two timer
+  instances — never touches a running Runner) before the tick continues. No per-tick drift loop until human
   intervention (the #131/#140 scene). `muyan-pilot install-units` stays
   the manual entry (setup, immediate sync); a drift the self-heal cannot
   resolve is still caught by the pre-start check (structured

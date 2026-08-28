@@ -329,13 +329,14 @@ def slot_lines(state_dir: Path, capacity: int) -> list[str]:
     return lines
 
 
-# Deployment consistency (Issue #103): the repo templates
-# (systemd/muyan-pilot.service + .timer) are the single source of
+# Deployment consistency (Issue #103, #149): the repo templates
+# (systemd/muyan-pilot@.service + @.timer) are the single source of
 # truth. `install-units` deploys them idempotently (it never
 # starts/stops/restarts the service — a running Runner keeps running,
-# the new config takes effect at the next service start); `doctor`
+# the new config takes effect at the next service start) and enables
+# the two timer instances (muyan-pilot@1.timer / @2.timer); `doctor`
 # is the read-only report (repo commit, unit drift, timer/service
-# state, slots, Pi session, current Issue, recent journal).
+# instance state, slots, Pi session, current Issue, recent journal).
 JOURNAL_LINES = 20
 
 
@@ -417,7 +418,12 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
             lines.append(
                 f"  {entry['unit']}: sha256={entry['installed_sha256']}"
             )
-    for unit in (systemd_deploy.TIMER_UNIT, systemd_deploy.SERVICE_UNIT):
+    # Issue #149: report the INSTANCES (verified against the real CLI:
+    # `systemctl show` rejects the bare template name, and `journalctl
+    # -u` with a template-name glob fails when no instance exists —
+    # instance names always work).
+    for unit in (*systemd_deploy.TIMER_INSTANCES,
+                 *systemd_deploy.SERVICE_INSTANCES):
         state = run_command([
             "systemctl", "--user", "show", "-p", "ActiveState",
             "--value", unit,
@@ -430,8 +436,10 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
         lines.append(f"source: {repo}")
         current = current_issue(repo)
         lines.append(f"  current: {format_issue(current) if current else '-'}")
-    journal = run_command([
-        "journalctl", "--user", "-u", systemd_deploy.SERVICE_UNIT,
+    journal_args: list[str] = ["journalctl", "--user"]
+    for unit in systemd_deploy.SERVICE_INSTANCES:
+        journal_args.extend(["-u", unit])
+    journal = run_command(journal_args + [
         "-n", str(JOURNAL_LINES), "--no-pager",
     ])
     lines.append("journal:")

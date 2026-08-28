@@ -1,12 +1,14 @@
-"""Systemd deployment consistency tests (Issue #103).
+"""Systemd deployment consistency tests (Issue #103, #149).
 
-The repo templates (``systemd/muyan-pilot.service`` and
-``muyan-pilot.timer``) are the single source of truth. The install
+The repo templates (``systemd/muyan-pilot@.service`` and
+``muyan-pilot@.timer``) are the single source of truth. The install
 command is idempotent and must never start/stop/restart the service:
 a currently running Runner keeps running, and the new config takes
-effect at the next service start. The pre-start check compares the
-installed units against the templates and fails fast with a
-structured ``unit_drift`` line when they drift.
+effect at the next service start. The install enables the two timer
+instances (``muyan-pilot@1.timer``, ``muyan-pilot@2.timer``) and
+migrates the pre-#149 non-templated units away once. The pre-start
+check compares the installed units against the templates and fails
+fast with a structured ``unit_drift`` line when they drift.
 """
 import hashlib
 import subprocess
@@ -22,11 +24,11 @@ def make_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     systemd = repo / "systemd"
     systemd.mkdir(parents=True)
-    (systemd / "muyan-pilot.service").write_text(
+    (systemd / "muyan-pilot@.service").write_text(
         "[Service]\nExecStart=/usr/bin/python3 bootstrap_runner.py\n",
         encoding="utf-8",
     )
-    (systemd / "muyan-pilot.timer").write_text(
+    (systemd / "muyan-pilot@.timer").write_text(
         "[Timer]\nOnCalendar=*-*-* *:00/5\n", encoding="utf-8",
     )
     return repo
@@ -51,9 +53,22 @@ def make_installed(
 
 
 def test_unit_names_cover_service_and_timer():
-    # The check must cover BOTH units (Issue #103 requirement).
+    # The check must cover BOTH template units (Issue #103
+    # requirement, the instantiated names since Issue #149).
     assert systemd_deploy.UNIT_NAMES == (
-        "muyan-pilot.service", "muyan-pilot.timer",
+        "muyan-pilot@.service", "muyan-pilot@.timer",
+    )
+
+
+def test_instance_names_cover_two_timers_and_two_services():
+    # Issue #149: exactly two timer instances, each triggering its own
+    # service instance (the capacity is the flock slots, not the
+    # instance count).
+    assert systemd_deploy.TIMER_INSTANCES == (
+        "muyan-pilot@1.timer", "muyan-pilot@2.timer",
+    )
+    assert systemd_deploy.SERVICE_INSTANCES == (
+        "muyan-pilot@1.service", "muyan-pilot@2.service",
     )
 
 
@@ -119,51 +134,51 @@ def test_unit_status_reports_clean_when_templates_match(tmp_path):
 
 def test_unit_status_reports_drift_for_a_changed_unit(tmp_path):
     repo = make_repo(tmp_path)
-    installed = make_installed(tmp_path, repo, mutate="muyan-pilot.timer")
+    installed = make_installed(tmp_path, repo, mutate="muyan-pilot@.timer")
     status = systemd_deploy.unit_status(repo, installed)
     by_unit = {entry["unit"]: entry for entry in status}
-    assert by_unit["muyan-pilot.service"]["drifted"] is False
-    assert by_unit["muyan-pilot.timer"]["drifted"] is True
-    assert by_unit["muyan-pilot.timer"]["missing"] is False
+    assert by_unit["muyan-pilot@.service"]["drifted"] is False
+    assert by_unit["muyan-pilot@.timer"]["drifted"] is True
+    assert by_unit["muyan-pilot@.timer"]["missing"] is False
     assert (
-        by_unit["muyan-pilot.timer"]["repo_sha256"]
-        != by_unit["muyan-pilot.timer"]["installed_sha256"]
+        by_unit["muyan-pilot@.timer"]["repo_sha256"]
+        != by_unit["muyan-pilot@.timer"]["installed_sha256"]
     )
 
 
 def test_unit_status_reports_missing_installed_unit_as_drift(tmp_path):
     repo = make_repo(tmp_path)
     installed = make_installed(tmp_path, repo)
-    (installed / "muyan-pilot.service").unlink()
+    (installed / "muyan-pilot@.service").unlink()
     status = systemd_deploy.unit_status(repo, installed)
     by_unit = {entry["unit"]: entry for entry in status}
-    assert by_unit["muyan-pilot.service"]["drifted"] is True
-    assert by_unit["muyan-pilot.service"]["missing"] is True
-    assert by_unit["muyan-pilot.service"]["installed_sha256"] is None
-    assert by_unit["muyan-pilot.timer"]["drifted"] is False
+    assert by_unit["muyan-pilot@.service"]["drifted"] is True
+    assert by_unit["muyan-pilot@.service"]["missing"] is True
+    assert by_unit["muyan-pilot@.service"]["installed_sha256"] is None
+    assert by_unit["muyan-pilot@.timer"]["drifted"] is False
 
 
 def test_unit_status_reports_missing_template_as_drift(tmp_path):
     repo = make_repo(tmp_path)
     installed = make_installed(tmp_path, repo)
-    (repo / "systemd" / "muyan-pilot.timer").unlink()
+    (repo / "systemd" / "muyan-pilot@.timer").unlink()
     status = systemd_deploy.unit_status(repo, installed)
     by_unit = {entry["unit"]: entry for entry in status}
-    assert by_unit["muyan-pilot.timer"]["drifted"] is True
-    assert by_unit["muyan-pilot.timer"]["repo_sha256"] is None
-    assert by_unit["muyan-pilot.service"]["drifted"] is False
+    assert by_unit["muyan-pilot@.timer"]["drifted"] is True
+    assert by_unit["muyan-pilot@.timer"]["repo_sha256"] is None
+    assert by_unit["muyan-pilot@.service"]["drifted"] is False
 
 
 def test_drift_lines_carry_paths_hashes_and_fix_command(tmp_path):
     repo = make_repo(tmp_path)
-    installed = make_installed(tmp_path, repo, mutate="muyan-pilot.service")
+    installed = make_installed(tmp_path, repo, mutate="muyan-pilot@.service")
     status = systemd_deploy.unit_status(repo, installed)
     lines = systemd_deploy.drift_lines(status)
     assert len(lines) == 1
     line = lines[0]
-    assert line.startswith("unit_drift unit=muyan-pilot.service ")
-    assert f"repo={repo / 'systemd' / 'muyan-pilot.service'}" in line
-    assert f"installed={installed / 'muyan-pilot.service'}" in line
+    assert line.startswith("unit_drift unit=muyan-pilot@.service ")
+    assert f"repo={repo / 'systemd' / 'muyan-pilot@.service'}" in line
+    assert f"installed={installed / 'muyan-pilot@.service'}" in line
     drifted = [e for e in status if e["drifted"]][0]
     assert f"repo_sha256={drifted['repo_sha256']}" in line
     assert f"installed_sha256={drifted['installed_sha256']}" in line
@@ -177,11 +192,11 @@ def test_drift_lines_quote_values_with_spaces(tmp_path):
     # stays parseable.
     spaced = tmp_path / "my repo"
     repo = make_repo(spaced)
-    installed = make_installed(spaced, repo, mutate="muyan-pilot.timer")
+    installed = make_installed(spaced, repo, mutate="muyan-pilot@.timer")
     status = systemd_deploy.unit_status(repo, installed)
     lines = systemd_deploy.drift_lines(status)
-    assert f'repo="{repo / "systemd" / "muyan-pilot.timer"}"' in lines[0]
-    assert f'installed="{installed / "muyan-pilot.timer"}"' in lines[0]
+    assert f'repo="{repo / "systemd" / "muyan-pilot@.timer"}"' in lines[0]
+    assert f'installed="{installed / "muyan-pilot@.timer"}"' in lines[0]
 
 
 def test_drift_lines_is_empty_when_clean(tmp_path):
@@ -193,20 +208,20 @@ def test_drift_lines_is_empty_when_clean(tmp_path):
 
 def test_check_unit_drift_raises_with_all_drifted_units(tmp_path, caplog):
     repo = make_repo(tmp_path)
-    installed = make_installed(tmp_path, repo, mutate="muyan-pilot.service")
-    (installed / "muyan-pilot.timer").unlink()
+    installed = make_installed(tmp_path, repo, mutate="muyan-pilot@.service")
+    (installed / "muyan-pilot@.timer").unlink()
     with caplog.at_level("ERROR"):
         with pytest.raises(
             systemd_deploy.UnitDriftError, match="unit_drift",
         ) as excinfo:
             systemd_deploy.check_unit_drift(repo, installed)
     message = str(excinfo.value)
-    assert "muyan-pilot.service" in message
-    assert "muyan-pilot.timer" in message
+    assert "muyan-pilot@.service" in message
+    assert "muyan-pilot@.timer" in message
     assert "install-units" in message
     # Every drifted unit is logged as a structured line.
-    assert "unit_drift unit=muyan-pilot.service" in caplog.text
-    assert "unit_drift unit=muyan-pilot.timer" in caplog.text
+    assert "unit_drift unit=muyan-pilot@.service" in caplog.text
+    assert "unit_drift unit=muyan-pilot@.timer" in caplog.text
 
 
 def test_check_unit_drift_logs_clean_and_returns(tmp_path, caplog):
@@ -246,12 +261,14 @@ def test_install_units_copies_templates_and_reloads(monkeypatch, tmp_path):
         assert (installed / name).read_bytes() == (
             repo / "systemd" / name
         ).read_bytes()
-    # daemon-reload runs, the timer is enabled (idempotent), and the
-    # service is NEVER started/stopped/restarted by the install.
+    # daemon-reload runs, BOTH timer instances are enabled (idempotent,
+    # activates only the timers), and the service is NEVER
+    # started/stopped/restarted by the install.
     assert ["systemctl", "--user", "daemon-reload"] in calls
-    assert [
-        "systemctl", "--user", "enable", "--now", "muyan-pilot.timer",
-    ] in calls
+    for instance in systemd_deploy.TIMER_INSTANCES:
+        assert [
+            "systemctl", "--user", "enable", "--now", instance,
+        ] in calls
     for command in calls:
         if command[:2] == ["systemctl", "--user"]:
             assert command[2] in ("daemon-reload", "enable")
@@ -267,6 +284,135 @@ def test_install_units_copies_templates_and_reloads(monkeypatch, tmp_path):
         )
 
 
+def test_install_units_migrates_the_legacy_units_once(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #149: the pre-#149 deployment (the non-templated units)
+    is migrated away by the SAME idempotent install: the legacy timer
+    is stopped (a TIMER stop — the service is never started/stopped/
+    restarted, a running Runner keeps running), the legacy files are
+    removed, and the new templates + both instances are installed."""
+    repo = make_repo(tmp_path)
+    installed = tmp_path / "install"
+    installed.mkdir()
+    # The pre-#149 installed units (the non-templated names).
+    (installed / "muyan-pilot.service").write_text(
+        "[Service]\nExecStart=old\n", encoding="utf-8",
+    )
+    (installed / "muyan-pilot.timer").write_text(
+        "[Timer]\nOnCalendar=old\n", encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "0123456789abcdef0123456789abcdef01234567"
+        return ""
+
+    with caplog.at_level("INFO"):
+        systemd_deploy.install_units(
+            repo, installed, run_command=fake_run,
+        )
+    # The legacy timer is stopped (disable --now: a timer stop, never
+    # a service stop) and the legacy files are removed.
+    assert [
+        "systemctl", "--user", "disable", "--now", "muyan-pilot.timer",
+    ] in calls
+    assert not (installed / "muyan-pilot.service").exists()
+    assert not (installed / "muyan-pilot.timer").exists()
+    # The new templates are installed and both instances enabled.
+    for name in systemd_deploy.UNIT_NAMES:
+        assert (installed / name).is_file()
+    for instance in systemd_deploy.TIMER_INSTANCES:
+        assert [
+            "systemctl", "--user", "enable", "--now", instance,
+        ] in calls
+    # The service is NEVER started/stopped/restarted (only the legacy
+    # TIMER is disabled).
+    for command in calls:
+        if command[:2] == ["systemctl", "--user"]:
+            assert command[2] in ("daemon-reload", "enable", "disable")
+            if command[2] == "disable":
+                assert command[4] == "muyan-pilot.timer"
+    assert "legacy_units_migrated" in caplog.text
+
+
+def test_install_units_legacy_migration_is_idempotent(
+    monkeypatch, tmp_path,
+):
+    """Issue #149: the migration runs exactly once — the first install
+    on a pre-#149 world disables the legacy timer, and every later
+    install (no legacy files left) is a no-op (no disable call, no
+    file removal)."""
+    repo = make_repo(tmp_path)
+    installed = tmp_path / "install"
+    installed.mkdir()
+    (installed / "muyan-pilot.service").write_text(
+        "[Service]\nExecStart=old\n", encoding="utf-8",
+    )
+    (installed / "muyan-pilot.timer").write_text(
+        "[Timer]\nOnCalendar=old\n", encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "0123456789abcdef0123456789abcdef01234567"
+        return ""
+
+    systemd_deploy.install_units(repo, installed, run_command=fake_run)
+    first_calls = list(calls)
+    calls.clear()
+    systemd_deploy.install_units(repo, installed, run_command=fake_run)
+    assert ["systemctl", "--user", "disable", "--now",
+            "muyan-pilot.timer"] in first_calls
+    assert ["systemctl", "--user", "disable", "--now",
+            "muyan-pilot.timer"] not in calls
+
+
+def test_migrate_legacy_units_removes_only_the_files_that_exist(
+    tmp_path,
+):
+    """Issue #149: a partial legacy deployment (the legacy timer exists
+    but the legacy service file does not) is still migrated: the timer
+    is stopped and only the EXISTING legacy file is removed (no missing
+    file is fabricated or raised)."""
+    installed = tmp_path / "install"
+    installed.mkdir()
+    (installed / "muyan-pilot.timer").write_text(
+        "[Timer]\nOnCalendar=old\n", encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return ""
+
+    migrated = systemd_deploy.migrate_legacy_units(
+        installed, run_command=fake_run,
+    )
+    assert migrated is True
+    assert ["systemctl", "--user", "disable", "--now",
+            "muyan-pilot.timer"] in calls
+    assert not (installed / "muyan-pilot.timer").exists()
+    assert not (installed / "muyan-pilot.service").exists()
+
+
+def test_migrate_legacy_units_returns_false_without_legacy_files(
+    tmp_path,
+):
+    installed = tmp_path / "install"
+    installed.mkdir()
+    calls: list[list[str]] = []
+    assert systemd_deploy.migrate_legacy_units(
+        installed, run_command=lambda command, **kwargs:
+        calls.append(command) or "",
+    ) is False
+    assert calls == []
+
+
 def test_install_units_is_idempotent_and_overwrites_drift(
     monkeypatch, tmp_path,
 ):
@@ -276,7 +422,7 @@ def test_install_units_is_idempotent_and_overwrites_drift(
         repo, installed, run_command=lambda command, **kwargs: "",
     )
     # Simulate drift after the first install.
-    (installed / "muyan-pilot.service").write_text(
+    (installed / "muyan-pilot@.service").write_text(
         "tampered\n", encoding="utf-8",
     )
     second = systemd_deploy.install_units(
@@ -324,8 +470,8 @@ def test_install_units_fails_fast_when_a_systemctl_step_fails(
 
 def test_install_units_fails_fast_on_missing_template(tmp_path):
     repo = make_repo(tmp_path)
-    (repo / "systemd" / "muyan-pilot.timer").unlink()
-    with pytest.raises(FileNotFoundError, match="muyan-pilot.timer"):
+    (repo / "systemd" / "muyan-pilot@.timer").unlink()
+    with pytest.raises(FileNotFoundError, match="muyan-pilot@.timer"):
         systemd_deploy.install_units(
             repo, tmp_path / "install",
             run_command=lambda command, **kwargs: "",
@@ -347,8 +493,8 @@ def test_sync_drifted_units_installs_and_reverifies_clean(
     (copy, daemon-reload, enable the timer — never start/stop/restart
     the service) and re-verified: the tick can continue."""
     repo = make_repo(tmp_path)
-    installed = make_installed(tmp_path, repo, mutate="muyan-pilot.timer")
-    before_sha = systemd_deploy.sha256_hex(installed / "muyan-pilot.timer")
+    installed = make_installed(tmp_path, repo, mutate="muyan-pilot@.timer")
+    before_sha = systemd_deploy.sha256_hex(installed / "muyan-pilot@.timer")
     calls: list[list[str]] = []
 
     def fake_run(command, **kwargs):
@@ -361,12 +507,13 @@ def test_sync_drifted_units_installs_and_reverifies_clean(
         report = systemd_deploy.sync_drifted_units(
             repo, installed, run_command=fake_run,
         )
-    # The install ran: daemon-reload + enable the timer, and the service
-    # is NEVER started/stopped/restarted by the sync.
+    # The install ran: daemon-reload + enable BOTH timer instances, and
+    # the service is NEVER started/stopped/restarted by the sync.
     assert ["systemctl", "--user", "daemon-reload"] in calls
-    assert [
-        "systemctl", "--user", "enable", "--now", "muyan-pilot.timer",
-    ] in calls
+    for instance in systemd_deploy.TIMER_INSTANCES:
+        assert [
+            "systemctl", "--user", "enable", "--now", instance,
+        ] in calls
     for command in calls:
         if command[:2] == ["systemctl", "--user"]:
             assert command[2] in ("daemon-reload", "enable")
@@ -381,11 +528,11 @@ def test_sync_drifted_units_installs_and_reverifies_clean(
     timer = report[1]
     assert timer["before_sha256"] == before_sha
     assert timer["after_sha256"] == systemd_deploy.sha256_hex(
-        repo / "systemd" / "muyan-pilot.timer",
+        repo / "systemd" / "muyan-pilot@.timer",
     )
     assert timer["commit"] == "0123456789abcdef0123456789abcdef01234567"
     # The structured auto_synced line is logged for the synced unit.
-    assert "unit_drift auto_synced unit=muyan-pilot.timer" in caplog.text
+    assert "unit_drift auto_synced unit=muyan-pilot@.timer" in caplog.text
     assert f"before_sha256={before_sha}" in caplog.text
     assert "after_sha256=" in caplog.text
     assert "commit=0123456789abcdef0123456789abcdef01234567" in caplog.text
@@ -410,7 +557,7 @@ def test_sync_drifted_units_install_failure_propagates(
     """Issue #142: a failing install step (here: enabling the timer)
     fails fast — the error propagates, no auto_synced claim is made."""
     repo = make_repo(tmp_path)
-    installed = make_installed(tmp_path, repo, mutate="muyan-pilot.service")
+    installed = make_installed(tmp_path, repo, mutate="muyan-pilot@.service")
 
     def fake_run(command, **kwargs):
         if command[:3] == ["systemctl", "--user", "enable"]:
@@ -431,14 +578,14 @@ def test_sync_drifted_units_still_drifted_after_sync_fails_fast(
     idempotent install), the preflight fails fast with the structured
     `unit_drift` lines and `UnitDriftError` (no slot, no claim)."""
     repo = make_repo(tmp_path)
-    installed = make_installed(tmp_path, repo, mutate="muyan-pilot.timer")
+    installed = make_installed(tmp_path, repo, mutate="muyan-pilot@.timer")
     # A second process overwrites the installed unit right after the
     # copy: the re-verify sees the drift again.
     real_write_bytes = Path.write_bytes
 
     def overwrite_after_copy(self, data):
         real_write_bytes(self, data)
-        if self.name == "muyan-pilot.timer" and str(self).startswith(
+        if self.name == "muyan-pilot@.timer" and str(self).startswith(
             str(installed),
         ):
             real_write_bytes(self, data + b"# drift\n")
@@ -451,6 +598,6 @@ def test_sync_drifted_units_still_drifted_after_sync_fails_fast(
             systemd_deploy.sync_drifted_units(
                 repo, installed, run_command=lambda command, **kwargs: "",
             )
-    assert "unit_drift unit=muyan-pilot.timer" in caplog.text
+    assert "unit_drift unit=muyan-pilot@.timer" in caplog.text
     assert "fix=muyan-pilot install-units" in caplog.text
     assert "unit_drift auto_synced" not in caplog.text

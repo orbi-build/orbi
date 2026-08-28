@@ -41,11 +41,13 @@ python3 bootstrap_runner.py --config muyan-pilot.toml
 正常运行使用 systemd user timer，全天 24 小时运行，每 5 分钟自动执行一次（触发点覆盖 00:00–23:55）：
 
 ```bash
-# 幂等安装用户级 service/timer（仓库模板复制到用户 systemd 目录、
-# daemon-reload、enable timer），并输出部署 commit/hash：
+# 幂等安装用户级 service/timer 模板（仓库模板复制到用户 systemd 目录、
+# daemon-reload、enable 两个 timer 实例），并输出部署 commit/hash：
 muyan-pilot install-units --config muyan-pilot.toml
-systemctl --user list-timers muyan-pilot.timer
+systemctl --user list-timers 'muyan-pilot@*.timer'
 ```
+
+两个 timer 实例 `muyan-pilot@1.timer` 和 `muyan-pilot@2.timer` 各自触发自己的 service 实例（`muyan-pilot@1.timer` → `muyan-pilot@1.service`，`muyan-pilot@2.timer` → `muyan-pilot@2.service`），所以可以同时运行两个独立的 Runner 实例；容量仍由 Runner 内的 flock slot（`max_concurrency`）决定，而不是实例数（Issue #149）。
 
 `install-units` 是幂等的：重复执行只会把仓库模板重新复制到位并 `daemon-reload`，**不会**启动、停止或重启正在运行的 Runner（新配置从下一次 service 启动生效）。手工命令只用于首次验证或立即执行一个 tick，不是日常调度方式。
 
@@ -59,17 +61,19 @@ git fetch origin main && git merge --ff-only origin/main
 
 本地 main 被 fast-forward 到最新 `origin/main` 后，Runner 才用新代码启动。当前正在运行的长任务不会被热更新、不会被杀、也不会启动第二个 Runner（service active 时 systemd 忽略 timer 的 start 请求；下一次 service 真正启动时生效）。main 工作区不干净、fetch 失败或无法 fast-forward 时，preflight 命令失败，service 不启动，原因写入 systemd journal（fail fast）。不新增 refresh service、worker、dispatcher 或常驻进程；5 分钟 timer 配置保持不变。
 
+Issue #149：两个实例可能在同一 tick 启动，所以 `ExecStartPre` 的 fetch + fast-forward 包在一个短生命周期的 `flock`（共享状态目录下的 `base-sync.lock`，Python 侧 `sync_base_checkout` 取同一把锁）里：main worktree 不会被并发写入；flock 拿到后执行 git 命令，退出时自动释放，不新增常驻进程。
+
 ## 部署一致性（Issue #103）
 
-仓库中的 `systemd/muyan-pilot.service` 和 `systemd/muyan-pilot.timer` 是已安装 unit 的**唯一事实源**：代码和实际运行配置必须一致，漂移必须能被明确发现。
+仓库中的 `systemd/muyan-pilot@.service` 和 `systemd/muyan-pilot@.timer`（模板 unit）是已安装 unit 的**唯一事实源**：代码和实际运行配置必须一致，漂移必须能被明确发现。Issue #149 起部署启用两个 timer 实例 `muyan-pilot@1.timer` / `muyan-pilot@2.timer`，各自触发自己的 service 实例。
 
-**幂等安装**：`muyan-pilot install-units` 把两个模板复制到用户 systemd 目录（`~/.config/systemd/user/`，可用 `--installed-dir` 覆盖）、执行 `systemctl --user daemon-reload`、`systemctl --user enable --now muyan-pilot.timer`，并输出部署 commit（部署 checkout 的 HEAD，即模板来源）和每个 unit 的 sha256。安装**不会**启动、停止或重启 service：当前运行中的 Runner 不被中断，新配置从下一次 service 启动生效。service 模板的 `ExecStart` 使用已安装 `muyan-pilot` CLI 的明确绝对入口（`%h/.local/bin/muyan-pilot`，即 `uv tool install` 之后 `~/.local/bin` 下的可执行文件；`WorkingDirectory` 仍是部署 checkout，`ExecStartPre` 在 Runner 启动前同步 `origin/main`）。
+**幂等安装**：`muyan-pilot install-units` 把两个模板复制到用户 systemd 目录（`~/.config/systemd/user/`，可用 `--installed-dir` 覆盖）、执行 `systemctl --user daemon-reload`、`systemctl --user enable --now` 两个 timer 实例，并输出部署 commit（部署 checkout 的 HEAD，即模板来源）和每个 unit 的 sha256。安装**不会**启动、停止或重启 service：当前运行中的 Runner 不被中断，新配置从下一次 service 启动生效。安装同时**一次性迁移** #149 之前的非模板 unit（`systemd/muyan-pilot.service` / `systemd/muyan-pilot.timer`）：`systemctl --user disable --now muyan-pilot.timer`（停的是 timer，绝不停/启/重启 service，运行中的 Runner 不受影响）并删除旧文件，旧单实例调度不会再拉起旧 service（模板变更即部署变更，无需人工步骤）；已迁移过的机器上这一步是 no-op。service 模板的 `ExecStart` 使用已安装 `muyan-pilot` CLI 的明确绝对入口（`%h/.local/bin/muyan-pilot`，即 `uv tool install` 之后 `~/.local/bin` 下的可执行文件；`WorkingDirectory` 仍是部署 checkout，`ExecStartPre` 在 Runner 启动前同步 `origin/main`）。
 
-**启动前漂移检查（含自愈，Issue #142）**：Runner 每次启动时（`ExecStartPre` 同步完 checkout 之后、领取任何 Issue 之前）对比已安装 unit 与仓库模板（service 和 timer 都覆盖）。一致时记录 `unit_drift clean`；发现漂移时用**同一个幂等安装**自愈（复制模板、`daemon-reload`、enable timer——不启动、停止或重启 service，运行中的 Runner 不受影响），再用**同一个哈希检查**复核：复核通过时每个 unit 记录一行结构化 `unit_drift auto_synced`（before/after sha256、部署 commit），本次启动继续；复核后仍然漂移（或安装步骤本身失败）时记录结构化日志并 fail fast（非零退出，不取 slot、不领取 Issue、不改任何标签）：
+**启动前漂移检查（含自愈，Issue #142）**：Runner 每次启动时（`ExecStartPre` 同步完 checkout 之后、领取任何 Issue 之前）对比已安装 unit 与仓库模板（service 和 timer 模板都覆盖）。一致时记录 `unit_drift clean`；发现漂移时用**同一个幂等安装**自愈（复制模板、`daemon-reload`、enable 两个 timer 实例——不启动、停止或重启 service，运行中的 Runner 不受影响），再用**同一个哈希检查**复核：复核通过时每个 unit 记录一行结构化 `unit_drift auto_synced`（before/after sha256、部署 commit），本次启动继续；复核后仍然漂移（或安装步骤本身失败）时记录结构化日志并 fail fast（非零退出，不取 slot、不领取 Issue、不改任何标签）：
 
 ```text
-unit_drift auto_synced unit=muyan-pilot.timer before_sha256=... after_sha256=... commit=<deployed HEAD>
-unit_drift unit=muyan-pilot.timer repo=<repo path> installed=<installed path> repo_sha256=... installed_sha256=... fix=muyan-pilot install-units
+unit_drift auto_synced unit=muyan-pilot@.timer before_sha256=... after_sha256=... commit=<deployed HEAD>
+unit_drift unit=muyan-pilot@.timer repo=<repo path> installed=<installed path> repo_sha256=... installed_sha256=... fix=muyan-pilot install-units
 ```
 
 **只读诊断**：`muyan-pilot doctor`（可用 `--installed-dir` 指定检查目录）报告 repo commit、unit drift（clean 或具体漂移 + 修复命令）、Git transport（配置的 origin URL、protocol、SSH 探测；见「Git transport」）、timer/service active 状态、Runner slot、Pi session、每个 source repo 的当前 Issue 和最近 journal 活动。只读：不改标签、不改 unit、不做 git 变更。
@@ -85,7 +89,7 @@ git merge 到 main（含 unit 模板变更）
   -> Runner 启动并执行一个 Issue
 ```
 
-**模板变更不再需要人工同步（Issue #142）**：`systemd/muyan-pilot.service` 和 `systemd/muyan-pilot.timer` 仍是部署配置，但模板变更的 PR 合并到 main 后**不需要任何人工步骤**：下一次 timer 触发时 `ExecStartPre` 同步 checkout，启动前漂移检查发现已安装 unit 落后于模板，就用同一个幂等安装自愈（不碰运行中的 Runner）并复核，tick 继续——不再出现“每 5 分钟重复同一个 `unit_drift` 错误直到人工介入”的循环（#131、#140 两次实例的根因）。`muyan-pilot install-units --config muyan-pilot.toml` 保留为手工入口（首次 setup、需要立即同步时）；自愈后仍漂移（例如安装步骤失败、模板缺失）时，启动前检查仍然 fail fast（结构化 `unit_drift` 行、非零退出、不取 slot、不领取 Issue）——哈希校验和哨兵边界不变。
+**模板变更不再需要人工同步（Issue #142）**：`systemd/muyan-pilot@.service` 和 `systemd/muyan-pilot@.timer` 仍是部署配置，但模板变更的 PR 合并到 main 后**不需要任何人工步骤**：下一次 timer 触发时 `ExecStartPre` 同步 checkout，启动前漂移检查发现已安装 unit 落后于模板，就用同一个幂等安装自愈（不碰运行中的 Runner）并复核，tick 继续——不再出现“每 5 分钟重复同一个 `unit_drift` 错误直到人工介入”的循环（#131、#140 两次实例的根因）。`muyan-pilot install-units --config muyan-pilot.toml` 保留为手工入口（首次 setup、需要立即同步时）；自愈后仍漂移（例如安装步骤失败、模板缺失）时，启动前检查仍然 fail fast（结构化 `unit_drift` 行、非零退出、不取 slot、不领取 Issue）——哈希校验和哨兵边界不变。
 
 ## Git transport（Issue #114）
 
@@ -146,7 +150,8 @@ muyan-pilot session --follow --config muyan-pilot.toml
 `session` 是排查附件（日常仍看 journal / GitHub），不是日常入口：没有 session 文件时 fail fast（退出码非零，说明没有正在跑的 Pi），不猜路径；`--pretty` 把 JSONL 打一行摘要（timestamp / role / tool|text|thinking 截断），默认仍是原始 JSONL。不开 tmux、不新包装脚本、不新增 systemd unit（Issue #74）。
 
 ```bash
-# 幂等安装 systemd units（见「部署一致性」）：输出部署 commit 和每个 unit 的 sha256
+# 幂等安装 systemd unit 模板 + 两个 timer 实例（见「部署一致性」）：
+# 输出部署 commit 和每个 unit 的 sha256
 muyan-pilot install-units --config muyan-pilot.toml
 
 # 只读部署/健康报告：repo commit、unit drift、timer/service active、
@@ -266,7 +271,7 @@ idle 卡死自动恢复（Issue #94）：非 `model_wait` 的卡死（Pi 的 bas
 所有行都是稳定 `key=value`（含空格或双引号的值加双引号，内嵌双引号转义为 `\\"`，可用 `pi_activity.parse_scene` 解析）；systemd journal 已提供时间、host 和进程，Python 日志不再重复打印自己的时间戳。每条行都带 `[run_id]` 前缀（见下文全链路 run_id 一节），它是高频行（`activity` / `heartbeat` / `model_wait` / `resumed` / `pi_idle` / `pi_resumed`）唯一的 run id 载体：这些行不再重复 `run=` 字段，同一个 8-hex run id 在一行里只出现一次（Issue #57）。低频场景行（`run_start` / `run_failed` / `run_end` / `pi_idle_term` / `pi_idle_kill`）保留 `run=` 字段，`pi_activity.parse_scene` 仍能从这些行解析出 `run`。默认 tail 示例（仅用于查看，不是产品步骤）：
 
 ```bash
-journalctl --user -u muyan-pilot.service -f
+journalctl --user -u 'muyan-pilot@*.service' -f
 # Aug 25 14:30:01 host muyan-pilot[123]: INFO [e07383c2] run_start run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement branch=muyan-pilot/... worktree=/home/.../.worktrees/... session=sess-1 session_file=/home/.../.pi-session/sess-1.jsonl phase=starting last_activity=- action=- result=-
 # Aug 25 14:30:16 host muyan-pilot[123]: INFO [e07383c2] activity issue=xqliu/muyan-pilot#18 role=implement phase=test action="bash pytest tests/" result=- state=- idle=6s
 # Aug 25 14:30:31 host muyan-pilot[123]: INFO [e07383c2] heartbeat issue=xqliu/muyan-pilot#18 role=implement phase=test state=- elapsed=30s idle=15s
@@ -340,7 +345,7 @@ cp .muyan-pilot.example.toml muyan-pilot.toml
 # 编辑 muyan-pilot.toml
 ```
 
-Runner 每次处理一个 delivery：领取（或恢复）一个 Issue 后，在整个 implement → review（会话内修复）→ merge 期间持有并发 slot，PR 合并或终态失败后退出，由 systemd timer 再次触发；不在 Python 内实现 daemon，不引入数据库、队列、重试或复杂恢复。没有人为的任务时长上限；命令错误立即失败，真正卡死时通过 systemd/journal 排查并人工停止。并发上限见下一节 `max_concurrency`：拿不到 slot 的 Runner 记录 `capacity_full` 后正常退出，不领取 Issue。
+Runner 每次处理一个 delivery：领取（或恢复）一个 Issue 后，在整个 implement → review（会话内修复）→ merge 期间持有并发 slot，PR 合并或终态失败后退出，由 systemd timer 再次触发；不在 Python 内实现 daemon，不引入数据库、队列、重试或复杂恢复。没有人为的任务时长上限；命令错误立即失败，真正卡死时通过 systemd/journal 排查并人工停止。并发上限见下一节 `max_concurrency`：拿不到 slot 的 Runner 记录 `capacity_full` 后正常退出，不领取 Issue。Issue #149 起两个 timer 实例（`muyan-pilot@1.timer` / `muyan-pilot@2.timer`）可能同时触发两个 Runner 实例，它们竞争同一组 flock slot：容量仍是 `max_concurrency`（默认 1 时行为与之前完全一致），实例数不是容量。
 
 ## 并发限制（max_concurrency）
 
@@ -371,7 +376,7 @@ Runner 每次处理一个 delivery：领取（或恢复）一个 Issue 后，在
 
 ```bash
 # journal 中还原一个 run 的完整时间线
-journalctl --user -u muyan-pilot.service | grep e07383c2
+journalctl --user -u 'muyan-pilot@*.service' | grep e07383c2
 
 # GitHub 上搜索一个 run 的 progress / milestone / review / merge 记录
 gh search issues "e07383c2" --repo xqliu/muyan-pilot

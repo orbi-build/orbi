@@ -320,7 +320,12 @@ def test_docs_document_operations_commands():
     logs, the status/session/add CLI, worktrees and failure recovery —
     with the commands the implementation actually provides."""
     text = page_text("operations")
-    assert "muyan-pilot.timer" in text
+    assert "muyan-pilot@.timer" in text, (
+        "operations must document the timer template"
+    )
+    assert "muyan-pilot@1.timer" in text, (
+        "operations must document the two timer instances (Issue #149)"
+    )
     assert "OnCalendar=*-*-* *:00/5" in text, (
         "operations must document the 5-minute idle polling interval"
     )

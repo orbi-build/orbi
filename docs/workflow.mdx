@@ -109,7 +109,7 @@ same Issue generates a new one. The same id appears in:
 Reconstruct a full timeline with one grep:
 
 ```bash
-journalctl --user -u muyan-pilot.service | grep e07383c2
+journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service | grep e07383c2
 gh search issues "e07383c2" --repo OWNER/PILOT-REPO
 ```
 

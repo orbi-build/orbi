@@ -18,8 +18,8 @@ flowchart LR
     prs["PR（Fixes #N、run marker）+ review/merge"]
   end
   subgraph machine["Runner 机器（systemd user session）"]
-    timer["muyan-pilot.timer（每 5 分钟 tick）"]
-    service["muyan-pilot.service（ExecStartPre：fast-forward main）"]
+    timer["muyan-pilot@1.timer + @2.timer（每 5 分钟 tick）"]
+    service["muyan-pilot@.service（ExecStartPre：flock + fast-forward main）"]
     runner["Runner（muyan-pilot CLI）：领取 → worktree → Pi → PR → review → merge"]
     worktree["任务 worktree + feature branch（冻结 origin/main SHA，名字带 run id）"]
     pi["Pi session（implement + 独立 review）"]

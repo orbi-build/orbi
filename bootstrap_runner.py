@@ -24,6 +24,7 @@ command, poll or status check is part of the normal workflow.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import logging
 import os
@@ -2004,7 +2005,56 @@ def review_rounds_so_far(comments: list[dict]) -> int:
     return rounds
 
 
-def sync_base_checkout(repo_dir: Path, base_branch: str) -> None:
+BASE_SYNC_LOCK_NAME = "base-sync.lock"
+
+
+def base_sync_lock_path(repo_dir: Path) -> Path:
+    """Issue #149: the lock file serializing ALL writers of the
+    deployment base checkout.
+
+    Two timer instances may start in the same tick, so the service
+    template's `ExecStartPre` wraps the fetch + fast-forward in a
+    short-lived `flock` on this SAME file, and the Python-side sync
+    below takes the same lock: the main worktree is never written
+    concurrently. The lock lives in the shared state dir (next to the
+    slot files), never in a per-process temp dir.
+    """
+    return Path(repo_dir) / ".muyan-pilot" / BASE_SYNC_LOCK_NAME
+
+
+def _acquire_base_sync_lock(
+    repo_dir: Path, lock_timeout_seconds: float,
+) -> int:
+    """Take the base-sync flock; fail fast when it is still held after
+    the timeout. The kernel releases an flock when its holder exits,
+    so a dead holder can never wedge the lock."""
+    lock_path = base_sync_lock_path(repo_dir)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    deadline = time.monotonic() + lock_timeout_seconds
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except (BlockingIOError, InterruptedError, PermissionError):
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                LOGGER.error(
+                    "base_sync_lock_timeout repo_dir=%s lock=%s "
+                    "timeout_seconds=%s",
+                    repo_dir, lock_path, lock_timeout_seconds,
+                )
+                raise RuntimeError(
+                    f"could not take the base-sync lock {lock_path} "
+                    f"within {lock_timeout_seconds}s (another Runner "
+                    "instance or the ExecStartPre preflight is syncing "
+                    "the deployment checkout)"
+                ) from None
+            time.sleep(0.1)
+
+
+def sync_base_checkout(repo_dir: Path, base_branch: str,
+                       *, lock_timeout_seconds: float = 300.0) -> None:
     """Fast-forward the configured repo_dir base checkout to origin/<base>.
 
     systemd executes the runner from this checkout: after a merge lands
@@ -2012,7 +2062,24 @@ def sync_base_checkout(repo_dir: Path, base_branch: str) -> None:
     the deployment checkout is synced here and verified to equal the
     remote base. A checkout that cannot fast-forward (local drift) fails
     fast; the merge itself already landed on GitHub.
+
+    Issue #149: the whole sync runs under the short-lived base-sync
+    flock (the SAME lock the service template's `ExecStartPre` uses),
+    so two instances starting in the same tick never write the main
+    worktree concurrently; the lock is released when the sync finishes
+    (success or failure).
     """
+    fd = _acquire_base_sync_lock(repo_dir, lock_timeout_seconds)
+    try:
+        _sync_base_checkout_locked(repo_dir, base_branch)
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _sync_base_checkout_locked(repo_dir: Path, base_branch: str) -> None:
+    """The actual fetch + fast-forward + verify, under the base-sync
+    flock (see ``sync_base_checkout``)."""
     run_command(["git", "fetch", "origin", base_branch], cwd=repo_dir)
     local_head = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
     remote_head = run_command(

@@ -98,7 +98,7 @@ attempt 的每一步复用同一个值；同一 Issue 的 retry 生成新的。�
 一条 grep 还原完整时间线：
 
 ```bash
-journalctl --user -u muyan-pilot.service | grep e07383c2
+journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service | grep e07383c2
 gh search issues "e07383c2" --repo OWNER/PILOT-REPO
 ```
 

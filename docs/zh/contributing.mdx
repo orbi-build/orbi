@@ -52,7 +52,8 @@ gh issue edit <number> --repo OWNER/PILOT-REPO --add-label ai-ready
 开一个带 `bug` 标签的 Issue，包含：
 
 - 失败的命令及其返回码 / stdout / stderr；
-- journal 现场（失败前后的 `journalctl --user -u muyan-pilot.service`，
+- journal 现场（失败前后的
+  `journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service`，
   或带 run id 的 `run_failed` 行）；
 - Issue/PR 状态（标签）和进度评论里的 run id；
 - 环境：OS、Python 版本、Pi 版本、模型 endpoint 类型。

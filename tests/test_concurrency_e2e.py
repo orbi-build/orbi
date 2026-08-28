@@ -480,7 +480,7 @@ def install_deployed_units(unit_dir: Path) -> None:
     """Simulate the deployed machine: the repo templates installed as
     the user units (the idempotent install the README documents)."""
     unit_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("muyan-pilot.service", "muyan-pilot.timer"):
+    for name in ("muyan-pilot@.service", "muyan-pilot@.timer"):
         shutil.copyfile(REPO_ROOT / "systemd" / name, unit_dir / name)
 
 
@@ -1152,7 +1152,7 @@ def test_unit_drift_auto_syncs_and_claims_without_human_intervention(
     # A drifted deployment: the installed timer carries one extra line.
     unit_dir = tmp_path / "drifted-units"
     install_deployed_units(unit_dir)
-    with (unit_dir / "muyan-pilot.timer").open(
+    with (unit_dir / "muyan-pilot@.timer").open(
         "a", encoding="utf-8",
     ) as handle:
         handle.write("# drift\n")
@@ -1182,13 +1182,13 @@ def test_unit_drift_auto_syncs_and_claims_without_human_intervention(
     runner_proc.kill()
     out, err = runner_proc.communicate(timeout=30)
     # The self-heal is logged with the structured auto_synced line.
-    assert "unit_drift auto_synced unit=muyan-pilot.timer" in err
+    assert "unit_drift auto_synced unit=muyan-pilot@.timer" in err
     assert "before_sha256=" in err
     assert "after_sha256=" in err
     assert "commit=" in err
     # The repo template won: the installed unit matches it again.
-    assert (unit_dir / "muyan-pilot.timer").read_bytes() == (
-        clone / "systemd" / "muyan-pilot.timer"
+    assert (unit_dir / "muyan-pilot@.timer").read_bytes() == (
+        clone / "systemd" / "muyan-pilot@.timer"
     ).read_bytes()
     assert "ai-in-progress" in read_state(state)["issues"]["7"]["labels"]
 
@@ -1227,7 +1227,7 @@ def test_unit_drift_unresolvable_blocks_the_start_without_claiming(
     # A drifted deployment: the installed timer carries one extra line.
     unit_dir = tmp_path / "unresolvable-units"
     install_deployed_units(unit_dir)
-    with (unit_dir / "muyan-pilot.timer").open(
+    with (unit_dir / "muyan-pilot@.timer").open(
         "a", encoding="utf-8",
     ) as handle:
         handle.write("# drift\n")
@@ -1239,7 +1239,7 @@ def test_unit_drift_unresolvable_blocks_the_start_without_claiming(
     fake_systemctl.write_text(
         "#!/bin/sh\n"
         "if [ \"$1\" = '--user' ] && [ \"$2\" = 'daemon-reload' ]; then\n"
-        f"    printf '# drift\\n' >> {unit_dir / 'muyan-pilot.timer'}\n"
+        f"    printf '# drift\\n' >> {unit_dir / 'muyan-pilot@.timer'}\n"
         "fi\n"
         "exit 0\n",
         encoding="utf-8",
@@ -1251,9 +1251,9 @@ def test_unit_drift_unresolvable_blocks_the_start_without_claiming(
     )
     out, err = runner_proc.communicate(timeout=60)
     assert runner_proc.returncode != 0, err
-    assert "unit_drift unit=muyan-pilot.timer" in err
-    assert f"repo={clone / 'systemd' / 'muyan-pilot.timer'}" in err
-    assert f"installed={unit_dir / 'muyan-pilot.timer'}" in err
+    assert "unit_drift unit=muyan-pilot@.timer" in err
+    assert f"repo={clone / 'systemd' / 'muyan-pilot@.timer'}" in err
+    assert f"installed={unit_dir / 'muyan-pilot@.timer'}" in err
     assert "repo_sha256=" in err
     assert "installed_sha256=" in err
     assert "fix=muyan-pilot install-units" in err

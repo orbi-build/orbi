@@ -145,7 +145,7 @@ muyan-pilot status --config muyan-pilot.toml
 python3 bootstrap_runner.py --config muyan-pilot.toml
 
 # d. tick 运行期间跟实时活动（第二个终端）：
-journalctl --user -u muyan-pilot.service -f
+journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service -f
 # 或者对手工 tick 直接跟 session JSONL：
 muyan-pilot session --follow --config muyan-pilot.toml
 
@@ -159,18 +159,22 @@ ai-merged`，存在一个 body 带 `Fixes #<issue>` 的 PR，journal 显示
 `run_end ... result=pr_opened`。任何一步失败，Issue 会被标记
 `ai-blocked` 并留下现场——恢复方法见[运维](/zh/operations)。
 
-## 7. 验证 timer
+## 7. 验证 timers
 
-setup 已经安装 units 并 enable 了 timer；验证一下：
+setup 已经安装 unit 模板并 enable 了两个 timer 实例
+（`muyan-pilot@1.timer` 和 `muyan-pilot@2.timer`，各自触发自己的
+service 实例——见[运维](/zh/operations)）；验证一下：
 
 ```bash
-systemctl --user list-timers muyan-pilot.timer
+systemctl --user list-timers 'muyan-pilot@*.timer'
 ```
 
-setup 输出带 `timer=enabled active=true next=...`（下次触发时间）。
-timer 每 5 分钟触发一次，全天 24 小时（00:00–23:55）。任务运行期间，
-后续 timer 启动请求被 systemd 忽略；下一次真正启动会取到最新代码
-（service 启动前先 fast-forward `main`——见[运维](/zh/operations)）。
+setup 输出每个实例一行（两个实例各一行），形如
+`timer=muyan-pilot@1.timer enabled active=true next=...`，带下次触发时间。每个 timer 每 5 分钟触发一次，全天 24 小时（00:00–23:55）。一个
+service 实例 active 时，systemd 忽略对**该实例**的后续启动请求；下一
+次真正启动会取到最新代码（service 启动前先 fast-forward `main`——见
+[运维](/zh/operations)）。两个实例可以同时运行；容量由 Runner 的
+flock slot（`max_concurrency`）决定，而不是实例数。
 
 <Note>
 提交的 unit 模板通过 `%h` 占位符引用作者的 clone 布局
