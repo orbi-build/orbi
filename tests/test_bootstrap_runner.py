@@ -6909,3 +6909,215 @@ def test_main_holds_slot_through_delivery_wait(monkeypatch, tmp_path):
     thread.join(timeout=10)
     # After the wait ends, the slot is released.
     assert pilot_slots.slot_occupancy(slot_dir, 1) == [(1, None)]
+
+
+# --- configurable Pi provider/model/thinking (Issue #119) -------------------
+
+
+def _model_config(tmp_path, **extra):
+    """Build a minimal config for run_pi/run_review with model keys."""
+    config = {
+        "prompt": tmp_path / "prompt.md",
+        "prompt_review": tmp_path / "prompt_review.md",
+        "source_repos": ["owner/repo"],
+        "workspace_root": tmp_path,
+        "context_files": [],
+        "skills": [],
+        "base_branch": "main",
+        "base_sha": "abc123def456",
+        "run_id": "a1b2c3d4",
+    }
+    config.update(extra)
+    return config
+
+
+def _command_model_args(command):
+    """Return the (flag, value) pairs for the pi model options."""
+    flags = ("--provider", "--model", "--thinking")
+    return [
+        (item, command[index + 1])
+        for index, item in enumerate(command)
+        if item in flags
+    ]
+
+
+def test_load_config_defaults_pi_model_keys_to_none(tmp_path):
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    config = runner.load_config(config_path)
+    assert config["pi_provider"] is None
+    assert config["pi_model"] is None
+    assert config["pi_thinking"] is None
+
+
+def test_load_config_reads_pi_model_keys(tmp_path):
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\n'
+        'pi_provider = "openai"\n'
+        'pi_model = "gpt-5.6-sol"\n'
+        'pi_thinking = "medium"\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["pi_provider"] == "openai"
+    assert config["pi_model"] == "gpt-5.6-sol"
+    assert config["pi_thinking"] == "medium"
+
+
+@pytest.mark.parametrize(
+    "key, value",
+    [
+        ("pi_provider", '""'),
+        ("pi_provider", "123"),
+        ("pi_provider", "true"),
+        ("pi_model", '""'),
+        ("pi_model", "123"),
+        ("pi_model", "true"),
+        ("pi_thinking", '""'),
+        ("pi_thinking", "123"),
+        ("pi_thinking", "true"),
+    ],
+)
+def test_load_config_rejects_invalid_pi_model_keys(tmp_path, key, value):
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        f'source_repos = ["owner/repo"]\n{key} = {value}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=f"{key} must be a non-empty string"):
+        runner.load_config(config_path)
+
+
+def test_run_pi_passes_configured_model_args(monkeypatch, tmp_path):
+    (tmp_path / "prompt.md").write_text("SYSTEM", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "done",
+    )
+    config = _model_config(
+        tmp_path, pi_provider="openai", pi_model="gpt-5.6-sol",
+        pi_thinking="medium",
+    )
+    runner.run_pi(
+        {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
+        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+    )
+    command, kwargs = calls[0]
+    assert _command_model_args(command) == [
+        ("--provider", "openai"),
+        ("--model", "gpt-5.6-sol"),
+        ("--thinking", "medium"),
+    ]
+    # The journal-visible redacted command carries the same non-sensitive
+    # values, so the run scene proves what was actually launched.
+    assert _command_model_args(kwargs["log_command"]) == [
+        ("--provider", "openai"),
+        ("--model", "gpt-5.6-sol"),
+        ("--thinking", "medium"),
+    ]
+    # The prompt and issue context stay redacted in the log command.
+    assert kwargs["log_command"][-2:] == ["<redacted>", "<issue-context-redacted>"]
+
+
+def test_run_pi_passes_partial_model_args(monkeypatch, tmp_path):
+    (tmp_path / "prompt.md").write_text("SYSTEM", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "done",
+    )
+    config = _model_config(tmp_path, pi_provider="openai")
+    runner.run_pi(
+        {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
+        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+    )
+    command, kwargs = calls[0]
+    assert _command_model_args(command) == [("--provider", "openai")]
+    assert "--model" not in command
+    assert "--thinking" not in command
+    assert _command_model_args(kwargs["log_command"]) == [("--provider", "openai")]
+
+
+def test_run_pi_omits_model_args_when_not_configured(monkeypatch, tmp_path):
+    """Default compatibility: without the keys the command is exactly the
+    pre-#119 shape (Pi keeps its own defaults)."""
+    (tmp_path / "prompt.md").write_text("SYSTEM", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "done",
+    )
+    config = _model_config(tmp_path)
+    runner.run_pi(
+        {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
+        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+    )
+    command, kwargs = calls[0]
+    assert "--provider" not in command
+    assert "--model" not in command
+    assert "--thinking" not in command
+    assert command[:3] == ["pi", "--print", "--session-dir"]
+    assert kwargs["log_command"] == [
+        "pi", "--print", "--session-dir", str(tmp_path / ".pi-session"),
+        "--system-prompt", "<redacted>", "<issue-context-redacted>",
+    ]
+
+
+def test_run_review_passes_configured_model_args(monkeypatch, tmp_path):
+    (tmp_path / "prompt_review.md").write_text("REVIEW", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "ok",
+    )
+    config = _model_config(
+        tmp_path, pi_provider="openai", pi_model="gpt-5.6-sol",
+        pi_thinking="medium",
+    )
+    runner.run_review(
+        tmp_path,
+        {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"},
+        config, "owner/repo", 4, "branch", 1,
+    )
+    command, kwargs = calls[0]
+    assert _command_model_args(command) == [
+        ("--provider", "openai"),
+        ("--model", "gpt-5.6-sol"),
+        ("--thinking", "medium"),
+    ]
+    assert _command_model_args(kwargs["log_command"]) == [
+        ("--provider", "openai"),
+        ("--model", "gpt-5.6-sol"),
+        ("--thinking", "medium"),
+    ]
+    assert kwargs["log_command"][-2:] == [
+        "<redacted>", "<review-context-redacted>",
+    ]
+
+
+def test_run_review_omits_model_args_when_not_configured(monkeypatch, tmp_path):
+    """Default compatibility for the review session as well."""
+    (tmp_path / "prompt_review.md").write_text("REVIEW", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "ok",
+    )
+    config = _model_config(tmp_path)
+    runner.run_review(
+        tmp_path,
+        {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"},
+        config, "owner/repo", 4, "branch", 1,
+    )
+    command, kwargs = calls[0]
+    assert "--provider" not in command
+    assert "--model" not in command
+    assert "--thinking" not in command
+    assert kwargs["log_command"] == [
+        "pi", "--print", "--session-dir", str(tmp_path / ".pi-session"),
+        "--system-prompt", "<redacted>", "<review-context-redacted>",
+    ]

@@ -233,6 +233,12 @@ def load_config(path: Path) -> dict:
         or max_concurrency < 1
     ):
         raise ValueError("max_concurrency must be a positive integer")
+    # Optional Pi model selection (Issue #119): each key is absent -> None
+    # (the Pi flag is not passed, Pi keeps its own default) or a non-empty
+    # string passed to Pi verbatim. Anything else fails fast.
+    pi_provider = _optional_pi_string(data, "pi_provider")
+    pi_model = _optional_pi_string(data, "pi_model")
+    pi_thinking = _optional_pi_string(data, "pi_thinking")
     repo_dir = _config_path(data.get("repo_dir", "."), base)
     return {
         "source_repos": source_repos,
@@ -250,11 +256,51 @@ def load_config(path: Path) -> dict:
         "active_milestone": active_milestone,
         "max_concurrency": max_concurrency,
         "slot_dir": slot_dir_for(repo_dir),
+        "pi_provider": pi_provider,
+        "pi_model": pi_model,
+        "pi_thinking": pi_thinking,
         # Multi-repo registry (Issue #134): the explicit per-repo entries
         # (name, path, github, base_branch). Absent section -> [] so the
         # single-repo config keeps its exact shape and flow.
         "repositories": parse_repositories(data.get("repositories", []), base),
     }
+
+
+def _optional_pi_string(data: dict, key: str) -> str | None:
+    """Read one optional Pi model key (Issue #119).
+
+    Absent -> None (the corresponding `pi --provider/--model/--thinking`
+    flag is not passed and Pi keeps its own default). Present -> must be a
+    non-empty string, passed to Pi verbatim; anything else fails fast.
+    """
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{key} must be a non-empty string")
+    return value
+
+
+def _pi_model_args(config: dict) -> list[str]:
+    """Return the configured Pi model flags (Issue #119).
+
+    One `--flag value` pair per configured key, in the fixed order
+    provider, model, thinking; an unset key contributes nothing, so a
+    config without any of the three keys returns [] and the Pi command
+    keeps its exact pre-#119 shape. The values are non-sensitive model
+    identifiers (never keys or tokens) and are part of the redacted
+    `log_command`, so the journal run scene records what was launched.
+    """
+    args: list[str] = []
+    for flag, key in (
+        ("--provider", "pi_provider"),
+        ("--model", "pi_model"),
+        ("--thinking", "pi_thinking"),
+    ):
+        value = config.get(key)
+        if value is not None:
+            args.extend((flag, value))
+    return args
 
 
 def parse_repositories(entries: object, base: Path) -> list[dict]:
@@ -1487,6 +1533,7 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
     context += "Complete the delivery process in the system prompt."
     command = [
         "pi", *_skill_args(_skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)),
+        *_pi_model_args(config),
         "--print", "--session-dir",
         str(worktree / ".pi-session"), "--system-prompt", system_prompt, context,
     ]
@@ -1495,7 +1542,8 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         cwd=worktree,
         timeout=timeout,
         log_command=[
-            "pi", "--print", "--session-dir", str(worktree / ".pi-session"),
+            "pi", *_pi_model_args(config), "--print", "--session-dir",
+            str(worktree / ".pi-session"),
             "--system-prompt", "<redacted>", "<issue-context-redacted>",
         ],
         run_id=config["run_id"],
@@ -1912,6 +1960,7 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
     )
     command = [
         "pi", *_skill_args(_skills_for(config, REVIEW_EXCLUDED_SKILLS)),
+        *_pi_model_args(config),
         "--print", "--session-dir",
         str(worktree / ".pi-session"), "--system-prompt", system_prompt,
         context,
@@ -1921,7 +1970,7 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
         cwd=worktree,
         timeout=timeout,
         log_command=[
-            "pi", "--print", "--session-dir",
+            "pi", *_pi_model_args(config), "--print", "--session-dir",
             str(worktree / ".pi-session"),
             "--system-prompt", "<redacted>", "<review-context-redacted>",
         ],
