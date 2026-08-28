@@ -5,8 +5,9 @@ initialization entry for a new machine or new task-pool repository:
 
 - verifies ``gh auth status`` and the viewer's read/write permission on
   every target repo;
-- verifies the required commands (``git``, ``gh``, ``python3``) and the
-  ``systemctl --user`` user bus;
+- verifies the required commands (``git``, ``gh``, ``python3``, ``uv``,
+  the ``muyan-pilot`` CLI — a missing one fails fast with its
+  actionable install guidance) and the ``systemctl --user`` user bus;
 - aligns the platform labels (``ai-ready``, ``ai-in-progress``,
   ``ai-pr-opened``, ``ai-fix-needed``, ``ai-merged``, ``ai-blocked``,
   ``p0``, ``ai-epic``) declaratively from the repo-managed
@@ -71,7 +72,39 @@ WRITE_PERMISSIONS = frozenset({"WRITE", "MAINTAIN", "ADMIN"})
 # Required local commands (checked with shutil.which). Issue #140:
 # the installed `muyan-pilot` CLI is a prerequisite too — the systemd
 # entry it documents (and the service's ExecStart) must exist.
-REQUIRED_COMMANDS = ("git", "gh", "python3", "muyan-pilot")
+# Issue #156: `uv` is a prerequisite too — the CLI editable step
+# (Issue #152) calls `uv tool install`, so a machine that has the CLI
+# but no uv must fail HERE (with actionable install guidance), not
+# mid-install with an indirect error.
+REQUIRED_COMMANDS = ("git", "gh", "python3", "uv", "muyan-pilot")
+
+# Actionable install guidance per required command (Issue #156): the
+# missing-command error must tell the user how to install the
+# prerequisite. The uv entry is the official installer command, verified
+# against https://docs.astral.sh/uv/getting-started/installation/.
+COMMAND_INSTALL_HINTS = {
+    "git": (
+        "install git (e.g. `apt-get install git` / `dnf install git` / "
+        "`brew install git`)"
+    ),
+    "gh": (
+        "install the GitHub CLI (https://cli.github.com/) and log in "
+        "with `gh auth login` (setup verifies the login, it never runs "
+        "it for you)"
+    ),
+    "python3": (
+        "install Python 3.14 (the production minor version pinned by CI)"
+    ),
+    "uv": (
+        "install uv first: curl -LsSf https://astral.sh/uv/install.sh | sh "
+        "(https://docs.astral.sh/uv/getting-started/installation/)"
+    ),
+    "muyan-pilot": (
+        "install the editable uv tool CLI from the deployment checkout: "
+        "uv tool install --force --reinstall --editable --python "
+        "/usr/bin/python3 <repo_dir>"
+    ),
+}
 
 # The optional local-llm-kv-cache proxy health endpoint (docs/
 # optional-kv-cache.mdx: the committed user unit listens on 18082).
@@ -198,17 +231,24 @@ def install_cli_step(repo_dir: Path, module_file: Path, *,
 def check_commands(run_command) -> dict:
     """Verify the required commands and the systemctl --user bus.
 
-    ``git``, ``gh``, ``python3`` and the installed ``muyan-pilot`` CLI
-    must be on the PATH; the systemd user bus must be reachable (a
-    probe ``systemctl --user show`` must succeed — a container or a
-    headless session without a user bus fails fast with the concrete
-    reason). No mutation happens here.
+    ``git``, ``gh``, ``python3``, ``uv`` and the installed
+    ``muyan-pilot`` CLI must be on the PATH (Issue #156: ``uv`` is
+    checked explicitly because the CLI editable step calls
+    ``uv tool install``); a missing command fails fast with the
+    actionable install guidance for that command (``COMMAND_INSTALL_
+    HINTS``). The systemd user bus must be reachable (a probe
+    ``systemctl --user show`` must succeed — a container or a headless
+    session without a user bus fails fast with the concrete reason).
+    No mutation happens here.
     """
     paths: dict[str, str] = {}
     for name in REQUIRED_COMMANDS:
         path = shutil.which(name)
         if path is None:
-            raise SetupError(f"required command missing: {name} (not on PATH)")
+            raise SetupError(
+                f"required command missing: {name} (not on PATH) — "
+                f"{COMMAND_INSTALL_HINTS[name]}"
+            )
         paths[name] = path
     # Probe an INSTANCE name (verified against the real CLI: `systemctl
     # show` rejects the bare template name `muyan-pilot@.timer` but

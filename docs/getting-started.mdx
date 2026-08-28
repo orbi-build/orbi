@@ -6,15 +6,28 @@ machine layout.
 
 ## Prerequisites
 
+You install these yourself — `muyan-pilot setup` only **checks** them
+(it verifies `git`, `gh`, `python3`, `uv` and the systemd user session
+on the machine); it never installs system packages, never installs
+`gh`, and never runs `gh auth login` (you log in first, setup only
+verifies the login).
+
 | Requirement | What it is used for | Check |
 |---|---|---|
 | Python 3.14 | The Runner and the test contract (CI pins the same minor version) | `python3 --version` |
-| [uv](https://docs.astral.sh/uv/) | Installs the `muyan-pilot` CLI into an isolated tool environment | `uv --version` |
+| [uv](https://docs.astral.sh/uv/) | Installs the `muyan-pilot` CLI into an isolated tool environment (setup's CLI editable step calls `uv tool install`) | `uv --version` |
 | [Pi](https://github.com/earendil-works/pi) CLI | The development agent; one full session per task | `pi --version` |
 | Git | Worktrees, branches, base freshness | `git --version` |
 | GitHub CLI (`gh`) | Issues, labels, PRs, merge | `gh auth status` |
 | systemd (user session) | The timer that triggers one tick every 5 minutes | `systemctl --user status` |
 | A working OpenAI-compatible model endpoint | Pi's model provider — a local llama.cpp server or any OpenAI-compatible API | one real `pi --print` call (below) |
+
+Install `uv` with the official installer (verified against the [uv
+docs](https://docs.astral.sh/uv/getting-started/installation/)):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 
 Pi must be configured with a provider that can serve a coding agent
 stably (system prompt + tool schemas + long sessions). Verify the endpoint
@@ -122,14 +135,16 @@ context_files = []
 ## 4. Run the one-time setup
 
 The setup entry does the whole initialization in one command: it
-verifies or reinstalls the editable CLI install (Issue #152 — the
-running CLI must import from the deployment checkout), verifies
-`gh auth status` and the repo permissions, aligns the platform labels
-from the repo-managed `labels.toml` (the single source of truth for
-label name, color and description — a commit never creates labels, and
-a missing label makes the scan silently skip that state), installs the
-systemd user units and enables the timer, checks the checkout, and
-reports the optional model proxy:
+verifies the prerequisites you installed (git, gh, python3, uv, the
+systemd user session — a missing one fails fast with the actionable
+install guidance), verifies or reinstalls the editable CLI install
+(Issue #152 — the running CLI must import from the deployment
+checkout), verifies `gh auth status` and the repo permissions, aligns
+the platform labels from the repo-managed `labels.toml` (the single
+source of truth for label name, color and description — a commit never
+creates labels, and a missing label makes the scan silently skip that
+state), installs the systemd user units and enables the timer, checks
+the checkout, and reports the optional model proxy:
 
 ```bash
 muyan-pilot setup --config muyan-pilot.toml

@@ -17,10 +17,13 @@ muyan-pilot setup --config muyan-pilot.toml
 setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下，stderr
 给出具体原因，退出码非零。
 
-1. **命令** — PATH 上有 `git`、`gh`、`python3` 和已安装的 `muyan-pilot`
-   CLI，且 `systemctl --user` user bus 可达（没有 user bus 的容器或
-   headless session 会以 bus 错误
-   失败）。
+1. **命令** — PATH 上有 `git`、`gh`、`python3`、`uv` 和已安装的
+   `muyan-pilot` CLI（这些前提由你自己安装——setup 只检查；缺失会
+   fail fast 并给出可执行的安装指引，例如 `required command missing:
+   uv (not on PATH) — install uv first: curl -LsSf
+   https://astral.sh/uv/install.sh | sh`），且 `systemctl --user`
+   user bus 可达（没有 user bus 的容器或 headless session 会以 bus
+   错误失败）。
 2. **CLI editable 安装**（Issue #152）——官方本地部署是 **editable**
    `uv tool` 安装：tool 环境直接从部署 checkout 导入 `muyan_pilot`，
    所以 `ExecStartPre` 的 checkout 同步会被下一个 CLI 进程自动取到。
@@ -128,6 +131,7 @@ setup 仍以退出码 `0` 成功。）
 失败（退出码非零，stderr 输出 `setup_failed reason=...`）：
 
 ```text
+setup_failed reason=required command missing: uv (not on PATH) — install uv first: curl -LsSf https://astral.sh/uv/install.sh | sh (https://docs.astral.sh/uv/getting-started/installation/)
 setup_failed reason=systemctl --user user bus unavailable (is a systemd user session running?): ...
 setup_failed reason=editable tool install failed for /path/to/checkout: ... (fix: uv tool install --force --reinstall --editable --python /usr/bin/python3 /path/to/checkout)
 setup_failed reason=repo not accessible: nobody/no-such (gh repo view failed: ...)
@@ -137,9 +141,9 @@ setup_failed reason=checkout is not clean: /path/to/checkout (uncommitted change
 setup_failed reason=checkout check failed for /path/to/checkout: ssh_unreachable: git ls-remote git@github.com:owner/repo.git failed: ... stderr=git@github.com: Permission denied (publickey). — fix SSH and retry
 ```
 
-仓库错误、无法创建的缺失标签（权限）、脏 checkout、SSH 不可达（没有
-HTTPS 回退）或缺 systemd user bus 都会带具体原因停下——不会半初始化
-而没有明确信号。
+缺失的前提命令（例如 `uv`）、仓库错误、无法创建的缺失标签（权限）、
+脏 checkout、SSH 不可达（没有 HTTPS 回退）或缺 systemd user bus 都会
+带具体原因停下——不会半初始化而没有明确信号。
 
 ## 幂等性
 

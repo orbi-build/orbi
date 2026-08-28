@@ -413,6 +413,33 @@ def test_docs_document_the_minimal_implementation_principle():
     )
 
 
+def test_docs_document_the_uv_prerequisite_boundary():
+    """Issue #156: the docs must draw the initialization boundary — the
+    USER installs git/gh/python3/systemd user session/uv (uv with the
+    official installer command), while `muyan-pilot setup` only checks
+    auth, repos, the CLI editable install, units and timers; setup never
+    installs system packages, never installs gh, never runs
+    `gh auth login`. The setup page must list uv in the command step and
+    show the uv-missing failure example."""
+    started = page_text("getting-started")
+    assert "curl -LsSf https://astral.sh/uv/install.sh | sh" in started, (
+        "getting-started must give the official uv install command "
+        "(verified against the uv docs)"
+    )
+    assert "gh auth login" in started, (
+        "getting-started must state that setup never runs gh auth login "
+        "(the user logs in)"
+    )
+    setup = page_text("setup")
+    assert "required command missing: uv" in setup, (
+        "setup must show the uv-missing setup_failed example"
+    )
+    assert "curl -LsSf https://astral.sh/uv/install.sh | sh" in setup, (
+        "setup's uv-missing failure example must carry the actionable "
+        "install guidance"
+    )
+
+
 def test_docs_document_the_git_transport_boundary():
     """Issue #114: the docs must document the two-channel boundary —
     git data operations over SSH (including workflow file pushes),

@@ -236,6 +236,9 @@ def test_setup_requires_the_installed_cli():
     assert "muyan-pilot" in pilot_setup.REQUIRED_COMMANDS
     for name in ("git", "gh", "python3"):
         assert name in pilot_setup.REQUIRED_COMMANDS
+    # Issue #156: setup calls `uv tool install` (the CLI editable step,
+    # Issue #152), so the prerequisite check must verify uv explicitly.
+    assert "uv" in pilot_setup.REQUIRED_COMMANDS
 
 
 # --- the documentation contract -----------------------------------------------

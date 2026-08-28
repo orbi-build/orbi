@@ -291,6 +291,9 @@ def test_check_commands_reports_the_required_commands(monkeypatch):
         "git": "/usr/bin/git",
         "gh": "/usr/bin/gh",
         "python3": "/usr/bin/python3",
+        # Issue #156: setup calls `uv tool install` in the CLI editable
+        # step (Issue #152), so uv is a checked prerequisite too.
+        "uv": "/usr/bin/uv",
         # Issue #140: the installed CLI is a prerequisite too (the
         # systemd entry it documents must exist on the machine).
         "muyan-pilot": "/usr/bin/muyan-pilot",
@@ -307,6 +310,26 @@ def test_check_commands_fails_fast_on_a_missing_command(monkeypatch):
         pilot_setup.check_commands(
             run_command=lambda command, **kwargs: "loaded",
         )
+
+
+def test_check_commands_fails_fast_when_uv_is_missing(monkeypatch):
+    """Issue #156: a machine with the CLI but no uv used to fail only in
+    the later CLI editable install step with an indirect error. The
+    prerequisite check must fail fast at the commands step, name uv and
+    carry actionable install guidance (the official uv installer, verified
+    against https://docs.astral.sh/uv/getting-started/installation/)."""
+    monkeypatch.setattr(
+        pilot_setup.shutil, "which",
+        lambda name: None if name == "uv" else f"/usr/bin/{name}",
+    )
+    with pytest.raises(pilot_setup.SetupError) as excinfo:
+        pilot_setup.check_commands(
+            run_command=lambda command, **kwargs: "loaded",
+        )
+    reason = str(excinfo.value)
+    assert "uv" in reason
+    assert "curl -LsSf https://astral.sh/uv/install.sh | sh" in reason
+    assert "https://docs.astral.sh/uv/" in reason
 
 
 def test_check_commands_fails_fast_without_a_user_bus(monkeypatch):

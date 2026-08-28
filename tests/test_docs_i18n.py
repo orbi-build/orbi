@@ -349,6 +349,31 @@ def test_chinese_kv_cache_page_matches_the_upstream_port_contract():
     )
 
 
+def test_chinese_docs_document_the_uv_prerequisite_boundary():
+    """Issue #156: the Chinese docs carry the same initialization
+    boundary as the English page — the user installs uv (official
+    installer command), setup only checks/verifies, and setup never
+    installs system packages, never installs gh, never runs
+    `gh auth login`. The Chinese setup page lists uv in the command
+    step and shows the uv-missing failure example."""
+    started = zh_page_text("getting-started")
+    assert "curl -LsSf https://astral.sh/uv/install.sh | sh" in started, (
+        "Chinese getting-started must give the official uv install command"
+    )
+    assert "gh auth login" in started, (
+        "Chinese getting-started must state that setup never runs "
+        "gh auth login"
+    )
+    setup = zh_page_text("setup")
+    assert "required command missing: uv" in setup, (
+        "Chinese setup must show the uv-missing setup_failed example"
+    )
+    assert "curl -LsSf https://astral.sh/uv/install.sh | sh" in setup, (
+        "Chinese setup's uv-missing failure example must carry the "
+        "actionable install guidance"
+    )
+
+
 def test_chinese_setup_documents_the_migration_and_ssh_failure():
     """Same setup facts as the English page: the HTTPS-to-SSH migration
     command and the SSH connectivity failure."""
