@@ -357,6 +357,22 @@ Runner 每次处理一个 delivery：领取（或恢复）一个 Issue 后，在
 - `muyan-pilot status` 显示配置容量和当前已占用 slot（`capacity: N`、`slots: k/N`、`slot-N: pid=...`）；占用判定用非阻塞 `flock` 探测（探测成功即空闲并立即解锁），PID 仅用于展示；
 - 直接在 Pilot 外手工运行的任意 `pi` 命令不属于该配置控制范围：`max_concurrency` 只约束 Runner 领取任务时启动的 Pi，手工 `pi` 不受 slot 管理，也不会释放或占用任何 slot。
 
+## Pi 默认 provider/model（pi_provider / pi_model / pi_thinking，Issue #119）
+
+部署者可以在 `muyan-pilot.toml` 中可选声明 Pi 的 provider、model 和 thinking level，不必修改全局 Pi 配置或启动脚本：
+
+```toml
+pi_provider = "openai"
+pi_model = "gpt-5.6-sol"
+pi_thinking = "medium"
+```
+
+- Runner 启动 implement 和 review 的 Pi 时都显式传递 `--provider <pi_provider> --model <pi_model> --thinking <pi_thinking>`（flag 契约以 `pi --help` 为准）；
+- 三个键彼此独立：未配置某项时不传对应参数，Pi 继续使用自身默认值；配置值以 TOML 为准，不依赖 `~/.pi/agent/settings.json`；
+- 配置值按原样传给 Pi 启动入口，并记录在 journal 的 `command=` 行（redacted 命令的一部分）——provider/model/thinking 是非敏感的模型标识，prompt 和 Issue 内容仍保持 redacted；
+- 键存在但为空字符串或非字符串时 `load_config` fail fast（`<key> must be a non-empty string`）；Pi 启动失败沿用现有 fail-fast 契约（非零退出/超时 → `run_failed` + 异常）；
+- 不按任务类型、label 或角色自动选择模型，不做动态路由、benchmark、成本路由或 fallback，不支持一个 run 中途切换模型；token/密钥不进入配置、日志、Issue 或 PR。
+
 ## 全链路 run_id（correlation ID）
 
 每个任务 attempt 只生成一次 `run_id`（8 位 hex，例如 `e07383c2`），语义等同 trace ID：implement、review、merge 全部复用同一个值；同一个 Issue retry 时生成新的 run_id，Issue number 是多个 run 的共同父标识。不创建 `trace_id`/`log_id`/另一套 UUID，不引入 tracing backend。

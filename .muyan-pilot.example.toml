@@ -25,6 +25,14 @@ base_branch = "main"
 # Runner exits, however it exits. A Runner that cannot take a slot logs
 # capacity_full and exits without claiming an Issue.
 max_concurrency = 1
+# Optional Pi model selection (Issue #119): passed to EVERY Pi session
+# (implement and review) as --provider/--model/--thinking. Omit a key to
+# keep Pi's own default for that setting; values are passed verbatim and
+# recorded in the journal (non-sensitive model identifiers, never keys).
+# pi_provider = "openai"
+# pi_model = "gpt-5.6-sol"
+# pi_thinking = "medium"
+
 # Optional Pi skills. Paths may be absolute, use ~, or be relative to this file.
 skills = []
 
