@@ -96,6 +96,7 @@ cp .muyan-pilot.example.toml muyan-pilot.toml
 | `prompt` | 否 | `prompt.md` | 实现者 prompt 模板（`{{SOURCE_REPO}}` 等占位符由 Runner 渲染） |
 | `prompt_review` | 否 | `prompt_review.md` | PR 后独立审查 session 的 review prompt 模板 |
 | `base_branch` | 否 | `main` | 交付 base 分支；每个任务 worktree 都从冻结的 `origin/<base_branch>` SHA 创建 |
+| `active_milestone` | 否 | 未设置 | 新领取扫描的领取范围（Issue #139）：当前活跃的 GitHub Milestone 标题（如 `v0.2.0`）。设置后 p0/bug/普通三个 ready 扫描只领取该 Milestone 的 Issue（`milestone:"<title>"` 限定词直接进 gh 搜索查询——其他 Milestone 或无 Milestone 的 Issue 永远进不了队列）；`ai-ready` 仍是执行开关，领取顺序（p0 → bug → 普通）不变，P0 不跨 Milestone，恢复态（已开 PR、在途重启）不受 Milestone 限制。未设置 = 所有 `ai-ready` Issue 都可领取（#139 之前的行为） |
 | `max_concurrency` | 否 | `1` | 本机并发 Pilot 任务数（正整数；本地模型/GPU 通常只稳定服务一个任务） |
 | `skills` | 否 | `[]` | 可选 Pi skill 路径（绝对、`~`，或相对配置文件） |
 | `context_files` | 否 | `[]` | 可选 Markdown 上下文文件，以路径形式注入 prompt |
@@ -146,7 +147,8 @@ python3 bootstrap_runner.py --config muyan-pilot.toml
 
 一个 tick 最多做一件事：恢复一个已打开的 PR（review/fix/merge），或
 领取一个 `ai-ready` Issue（带 `p0` 标签的 Issue 最先被领取，然后是
-`bug` 标签的，最后是普通 feature），然后退出。ready 队列为空时干净
+`bug` 标签的，最后是普通 feature；设置 `active_milestone` 后只领取该
+Milestone 的 Issue——Issue #139），然后退出。ready 队列为空时干净
 退出，不领取任何东西。
 
 ## 6. Smoke walkthrough（从零）

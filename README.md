@@ -226,6 +226,7 @@ Runner 行为（单 slot 串行，只做“读字段-跳过-等待”，不引�
 
 - ready 领取顺序固定为：`ai-ready`+`p0` → `ai-ready`+`bug` → 普通 `ai-ready`（三次 `gh issue list` 扫描，共享同一组排除条件和 `blockedBy` 语义）；
 - P0 仍遵守全部现有排除规则（`ai-in-progress`、`ai-pr-opened`、`ai-fix-needed`、`ai-merged`、`ai-blocked`）和单 slot 约束：P0 被阻塞（open blocker）时跳过并回退到 bug/普通扫描，P0 已在途（`ai-in-progress`）时由重启恢复扫描接回（扫描同样携带 `labels`，恢复后进度评论继续显示 `p0`）；
+- active Milestone 领取范围（Issue #139）：可选配置 `active_milestone`（Milestone 标题，如 `v0.2.0`）把**新领取**扫描限制在一个版本内——设置后 p0/bug/普通三次扫描的 gh 搜索查询都携带 `milestone:"<title>"` 限定词（带引号形式，Milestone 标题可含空格/特殊字符），其他 Milestone 或无 Milestone 的 Issue 永远进不了队列，没有 `ai-ready` 的 Milestone Issue 也进不了（`ai-ready` 仍是执行开关，Milestone 只是版本范围）；**P0 不跨 Milestone**（active Milestone 是所有新领取的范围，`p0` 只在其内部排序）；范围只在查询层（`is_epic` 代码层跳过和 blockedBy 跳过是不变的第二层），扫描失败仍按 fail open 契约处理（绝不静默领取错误版本）；**恢复态不受 Milestone 限制**：已开 PR 的恢复扫描和在途重启扫描把任务跑完，不受 Milestone 变更影响；值必须显式配置（绝不从 repo 的 Milestone 列表猜），未设置时保持 #139 之前的行为（兼容），空串/非字符串启动即 fail fast；
 - 领取日志行携带明确的 `priority=p0` / `priority=normal` 字段；GitHub 进度评论显示 `priority` 字段；run 现场（`run_info`）与 started milestone 携带 `priority=...`；
 - P0 执行失败进入 `ai-blocked`（alone，移除领取标签）：`ai-ready` 标签残留被所有 ready 扫描排除，**没有任何 tick 会重新领取**，因此不会无限重试；失败评论和 blocked 现场保留具体失败原因和可恢复现场；
 - P0 的 review/merge 失败沿用现有同一 PR、有限 review round（`MAX_REVIEW_ROUNDS=5`）机制，不引入新的循环。
