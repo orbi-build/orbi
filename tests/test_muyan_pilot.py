@@ -1081,16 +1081,16 @@ def _deploy_world(tmp_path, drift: bool = False) -> tuple[dict, Path]:
     repo = tmp_path / "repo"
     (repo / "systemd").mkdir(parents=True)
     for name, body in (
-        ("muyan-pilot.service", "[Service]\nExecStart=/usr/bin/python3 bootstrap_runner.py\n"),
-        ("muyan-pilot.timer", "[Timer]\nOnCalendar=*-*-* *:00/5\n"),
+        ("muyan-pilot@.service", "[Service]\nExecStart=/usr/bin/python3 bootstrap_runner.py\n"),
+        ("muyan-pilot@.timer", "[Timer]\nOnCalendar=*-*-* *:00/5\n"),
     ):
         (repo / "systemd" / name).write_text(body, encoding="utf-8")
     installed = tmp_path / "units"
     installed.mkdir()
-    for name in ("muyan-pilot.service", "muyan-pilot.timer"):
+    for name in ("muyan-pilot@.service", "muyan-pilot@.timer"):
         shutil.copyfile(repo / "systemd" / name, installed / name)
     if drift:
-        (installed / "muyan-pilot.service").write_text(
+        (installed / "muyan-pilot@.service").write_text(
             "[Service]\n# drift\n", encoding="utf-8",
         )
     config = {
@@ -1162,8 +1162,10 @@ def test_install_units_command_reports_commit_and_hashes(monkeypatch,
         "deployed commit=0123456789abcdef0123456789abcdef01234567 "
         f"installed_dir={installed}"
     )
-    assert f"unit=muyan-pilot.service sha256=hash-muyan-pilot.service" in lines
-    assert f"unit=muyan-pilot.timer sha256=hash-muyan-pilot.timer" in lines
+    assert f"unit=muyan-pilot@.service sha256=hash-muyan-pilot@.service" \
+        in lines
+    assert f"unit=muyan-pilot@.timer sha256=hash-muyan-pilot@.timer" \
+        in lines
 
 
 def test_main_install_units_prints_report_and_returns_zero(
@@ -1209,10 +1211,19 @@ def _setup_result() -> dict:
         ],
         "service": {
             "installed": True,
-            "installed_path": "/u/.config/systemd/user/muyan-pilot.service",
+            "installed_path": "/u/.config/systemd/user/muyan-pilot@.service",
             "sha256": "ab" * 32,
         },
-        "timer": {"enabled": True, "active": True, "next": "-"},
+        "timer": {
+            "instances": {
+                "muyan-pilot@1.timer": {
+                    "enabled": True, "active": True, "next": "-",
+                },
+                "muyan-pilot@2.timer": {
+                    "enabled": True, "active": True, "next": "-",
+                },
+            },
+        },
         "checkout": {
             "remote": "origin",
             "branch": "main",
@@ -1343,8 +1354,11 @@ def test_doctor_report_clean(tmp_path, monkeypatch):
     assert [
         "git", "ls-remote", "git@github.com:xqliu/muyan-pilot.git",
     ] in calls
-    assert "muyan-pilot.timer: active" in lines
-    assert "muyan-pilot.service: active" in lines
+    # Issue #149: all FOUR instances are reported.
+    assert "muyan-pilot@1.timer: active" in lines
+    assert "muyan-pilot@2.timer: active" in lines
+    assert "muyan-pilot@1.service: active" in lines
+    assert "muyan-pilot@2.service: active" in lines
     assert "slots: 0/1" in lines
     assert "pi: none" in lines
     assert "source: xqliu/muyan-pilot" in lines
@@ -1352,17 +1366,18 @@ def test_doctor_report_clean(tmp_path, monkeypatch):
     assert "journal:" in lines
     assert "  line one" in lines
     assert "  line two" in lines
-    # The exact read-only commands (verified against the live machine).
+    # The exact read-only commands (verified against the live machine:
+    # instance names, never the bare template name).
+    for unit in ("muyan-pilot@1.timer", "muyan-pilot@2.timer",
+                 "muyan-pilot@1.service", "muyan-pilot@2.service"):
+        assert [
+            "systemctl", "--user", "show", "-p", "ActiveState",
+            "--value", unit,
+        ] in calls
     assert [
-        "systemctl", "--user", "show", "-p", "ActiveState", "--value",
-        "muyan-pilot.timer",
-    ] in calls
-    assert [
-        "systemctl", "--user", "show", "-p", "ActiveState", "--value",
-        "muyan-pilot.service",
-    ] in calls
-    assert [
-        "journalctl", "--user", "-u", "muyan-pilot.service",
+        "journalctl", "--user",
+        "-u", "muyan-pilot@1.service",
+        "-u", "muyan-pilot@2.service",
         "-n", "20", "--no-pager",
     ] in calls
 
@@ -1414,12 +1429,12 @@ def test_doctor_report_drift_carries_paths_hashes_and_fix(
 
 def test_doctor_report_missing_installed_unit_is_drift(tmp_path, monkeypatch):
     config, installed = _deploy_world(tmp_path, drift=False)
-    (installed / "muyan-pilot.timer").unlink()
+    (installed / "muyan-pilot@.timer").unlink()
     _fake_doctor_commands(monkeypatch)
     monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
     report = muyan_pilot.doctor_report(config, installed)
     assert "unit_drift: DRIFT" in report
-    assert "muyan-pilot.timer" in report
+    assert "muyan-pilot@.timer" in report
     assert "installed_sha256=-" in report
 
 

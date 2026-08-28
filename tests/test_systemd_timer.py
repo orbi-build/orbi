@@ -1,10 +1,20 @@
-"""Regression tests for the systemd scheduling files (Issues #21, #33, #51).
+"""Regression tests for the systemd scheduling files (Issues #21, #33,
+#51, #149).
 
 The scheduler runs 24 hours a day: the idle polling interval is 5 minutes
 across the full day (00:00, 00:05, ..., 23:55). The timer must not add a
 task duration limit, must not queue catch-up ticks, and the README must
 document the same schedule as the unit files.
+
+Issue #149: the units are TEMPLATES (`muyan-pilot@.service` /
+`muyan-pilot@.timer`) and the deployment enables two timer instances
+(`muyan-pilot@1.timer`, `muyan-pilot@2.timer`), each triggering its own
+service instance, so two independent Runner instances can run
+concurrently. The service `ExecStartPre` wraps the fetch +
+fast-forward in a short-lived `flock` so two instances starting in the
+same tick never write the main worktree concurrently.
 """
+import os
 import re
 import shutil
 import subprocess
@@ -13,8 +23,8 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TIMER_FILE = REPO_ROOT / "systemd" / "muyan-pilot.timer"
-SERVICE_FILE = REPO_ROOT / "systemd" / "muyan-pilot.service"
+TIMER_FILE = REPO_ROOT / "systemd" / "muyan-pilot@.timer"
+SERVICE_FILE = REPO_ROOT / "systemd" / "muyan-pilot@.service"
 README_FILE = REPO_ROOT / "README.md"
 AGENTS_FILE = REPO_ROOT / "AGENTS.md"
 
@@ -72,13 +82,23 @@ def test_timer_calendar_test_skips_without_systemd_analyze(monkeypatch):
 
 def test_timer_does_not_queue_catch_up_ticks_or_second_service():
     timer = parse_unit(TIMER_FILE)
-    # While muyan-pilot.service is active systemd does not start a second
-    # instance of the same unit; Persistent=false additionally means a
-    # missed tick is dropped instead of queued for a second task.
+    # While one service instance is active systemd does not start a
+    # second instance of the SAME unit; Persistent=false additionally
+    # means a missed tick is dropped instead of queued for a second
+    # task.
     assert timer["Timer"]["Persistent"] == ["false"]
     assert timer["Timer"]["AccuracySec"] == ["30s"]
-    assert timer["Timer"]["Unit"] == ["muyan-pilot.service"]
     assert timer["Install"]["WantedBy"] == ["timers.target"]
+
+
+def test_timer_template_triggers_its_own_service_instance():
+    """Issue #149: the timer template must name the service instance of
+    the SAME instance argument (`%i`): `muyan-pilot@1.timer` starts
+    `muyan-pilot@1.service`, `muyan-pilot@2.timer` starts
+    `muyan-pilot@2.service` — two independent Runner instances, no
+    dispatcher."""
+    timer = parse_unit(TIMER_FILE)
+    assert timer["Timer"]["Unit"] == ["muyan-pilot@%i.service"]
 
 
 def test_service_keeps_running_task_without_duration_limit():
@@ -116,7 +136,60 @@ def test_service_fast_forwards_main_before_runner_starts():
         path.name for path in (REPO_ROOT / "systemd").iterdir()
         if path.is_file()
     )
-    assert systemd_files == ["muyan-pilot.service", "muyan-pilot.timer"]
+    assert systemd_files == ["muyan-pilot@.service", "muyan-pilot@.timer"]
+
+
+def test_service_preflight_is_serialized_with_a_short_lived_flock():
+    """Issue #149: two instances may run ExecStartPre in the same tick,
+    so the fetch + fast-forward must be wrapped in a short-lived
+    `flock` on the shared state-dir lock file (the Python-side sync in
+    bootstrap_runner takes the SAME lock): the main worktree is never
+    written concurrently. The flock must run the git commands (the
+    fail-fast semantics are unchanged: a failed fetch or merge is a
+    non-zero preflight)."""
+    service = parse_unit(SERVICE_FILE)
+    pre = service["Service"]["ExecStartPre"][0]
+    assert pre.startswith("/usr/bin/flock ")
+    assert "/.muyan-pilot/base-sync.lock" in pre
+    assert " -c 'git fetch origin main && git merge --ff-only origin/main'" \
+        in pre
+
+
+def test_templates_and_instances_pass_systemd_analyze_verify(
+    monkeypatch, tmp_path,
+):
+    """Issue #149 acceptance: `systemd-analyze --user verify` must pass
+    for the service/timer TEMPLATES and the INSTANCES (verified against
+    the real CLI on a machine with a user systemd). The templates are
+    copied into a throwaway user unit dir (XDG_CONFIG_HOME) so the real
+    user units are never touched."""
+    analyze = shutil.which("systemd-analyze")
+    if analyze is None:
+        pytest.skip("systemd-analyze not available on this machine")
+    unit_dir = tmp_path / "systemd" / "user"
+    unit_dir.mkdir(parents=True)
+    for name in ("muyan-pilot@.service", "muyan-pilot@.timer"):
+        shutil.copyfile(REPO_ROOT / "systemd" / name, unit_dir / name)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    for name in ("muyan-pilot@.service", "muyan-pilot@.timer",
+                 "muyan-pilot@1.service", "muyan-pilot@1.timer",
+                 "muyan-pilot@2.timer"):
+        result = subprocess.run(
+            [analyze, "--user", "verify", str(unit_dir / name)],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert result.returncode == 0, (
+            f"systemd-analyze --user verify failed for {name}: "
+            f"{result.stdout} {result.stderr}"
+        )
+
+
+def test_analyze_verify_skips_without_systemd_analyze(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    with pytest.raises(pytest.skip.Exception):
+        test_templates_and_instances_pass_systemd_analyze_verify(
+            monkeypatch, Path("/tmp"),
+        )
 
 
 def test_readme_documents_code_update_at_next_runner_start():
@@ -178,10 +251,18 @@ def test_readme_documents_the_unit_drift_fail_fast():
     both units are compared against the repo templates, drift logs a
     structured `unit_drift` line (repo path, installed path, hashes,
     fix command) and fails fast without claiming any Issue until the
-    units are synced."""
+    units are synced. Issue #149: the templates are the INSTANTIATED
+    units and the README documents the one-time legacy migration away
+    from the pre-#149 non-templated units."""
     readme = README_FILE.read_text(encoding="utf-8")
     assert "unit_drift" in readme
-    # Both units are covered.
+    # Both template units are covered.
+    assert "muyan-pilot@.service" in readme
+    assert "muyan-pilot@.timer" in readme
+    # The two enabled timer instances.
+    assert "muyan-pilot@1.timer" in readme
+    assert "muyan-pilot@2.timer" in readme
+    # The one-time legacy migration names the old units.
     assert "muyan-pilot.service" in readme
     assert "muyan-pilot.timer" in readme
     # The structured line's fields.
@@ -256,9 +337,10 @@ def test_template_change_pins_the_self_healing_contract():
     stays the manual entry, and the fail-fast canary is unchanged for
     a drift the self-heal cannot resolve."""
     def template_change_contract(text: str) -> None:
-        # The trigger: a change of either repo unit template.
-        assert "systemd/muyan-pilot.timer" in text
-        assert "systemd/muyan-pilot.service" in text
+        # The trigger: a change of either repo unit template
+        # (templated units since Issue #149).
+        assert "systemd/muyan-pilot@.timer" in text
+        assert "systemd/muyan-pilot@.service" in text
         # The self-heal: the structured auto_synced line.
         assert "unit_drift auto_synced" in text
         # install-units stays the manual entry (setup, immediate sync).

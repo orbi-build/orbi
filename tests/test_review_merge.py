@@ -8,7 +8,9 @@ verdict (the reviewer may have pushed a fix), re-checks the merge gate
 against the latest origin/main, and merges via `gh pr merge
 --match-head-commit`. Pi never pushes main.
 """
+import fcntl
 import json
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import Mock
@@ -580,6 +582,106 @@ def test_sync_base_checkout_fails_fast_when_synced_head_mismatches(
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="after the sync"):
         runner.sync_base_checkout(tmp_path, "main")
+
+
+def test_sync_base_checkout_lock_path_is_the_shared_state_dir_file(
+    tmp_path,
+):
+    # Issue #149: the SAME lock file the ExecStartPre flock in the
+    # service template uses (the shared state dir, never a per-process
+    # temp file).
+    assert runner.base_sync_lock_path(tmp_path) == (
+        tmp_path / ".muyan-pilot" / "base-sync.lock"
+    )
+
+
+def test_sync_base_checkout_fails_fast_while_the_lock_is_held(
+    tmp_path,
+):
+    # Issue #149: two instances may start in the same tick; the
+    # Python-side sync must not run git while the ExecStartPre flock
+    # (or another Runner's sync) holds the lock — it fails fast with a
+    # useful error instead of racing the main worktree.
+    lock_path = runner.base_sync_lock_path(tmp_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        with pytest.raises(
+            RuntimeError, match="base-sync.lock",
+        ):
+            runner.sync_base_checkout(
+                tmp_path, "main", lock_timeout_seconds=0.5,
+            )
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def test_sync_base_checkout_releases_the_lock_after_sync(
+    monkeypatch, tmp_path,
+):
+    # Issue #149: the lock is short-lived — released when the sync
+    # finishes (success or failure), so the next tick / instance can
+    # proceed; no daemon holds it.
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    runner.run_command(["git", "init", "--bare", "-b", "main", "."],
+                       cwd=origin)
+    actor = _clone_origin(origin, "actor")
+    runner.run_command(["git", "commit", "--allow-empty", "-m", "base"],
+                       cwd=actor)
+    runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
+    checkout = _clone_origin(origin, "checkout")
+    runner.run_command(["git", "commit", "--allow-empty", "-m", "merged"],
+                       cwd=actor)
+    runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
+
+    runner.sync_base_checkout(checkout, "main")
+
+    # After the sync the lock is free: a non-blocking probe acquires
+    # and releases it immediately.
+    lock_path = runner.base_sync_lock_path(checkout)
+    probe = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        fcntl.flock(probe, fcntl.LOCK_UN)
+        os.close(probe)
+
+
+def test_sync_base_checkout_releases_the_lock_on_failure(
+    monkeypatch, tmp_path,
+):
+    # Issue #149: a failed sync (not fast-forwardable) must still
+    # release the lock — the kernel releases it on process exit, but
+    # the Runner stays alive and the next tick must not inherit a
+    # stuck lock.
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    runner.run_command(["git", "init", "--bare", "-b", "main", "."],
+                       cwd=origin)
+    actor = _clone_origin(origin, "actor")
+    runner.run_command(["git", "commit", "--allow-empty", "-m", "base"],
+                       cwd=actor)
+    runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
+    checkout = _clone_origin(origin, "checkout")
+    runner.run_command(["git", "commit", "--allow-empty", "-m", "drift"],
+                       cwd=checkout)
+    runner.run_command(["git", "commit", "--allow-empty", "-m", "ahead"],
+                       cwd=actor)
+    runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
+
+    with pytest.raises(RuntimeError, match="cannot fast-forward"):
+        runner.sync_base_checkout(checkout, "main")
+
+    lock_path = runner.base_sync_lock_path(checkout)
+    probe = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        fcntl.flock(probe, fcntl.LOCK_UN)
+        os.close(probe)
 
 
 # ---------------------------------------------------------------------------

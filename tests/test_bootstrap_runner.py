@@ -5027,16 +5027,16 @@ def _drift_world(tmp_path, drift: bool) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
     (repo / "systemd").mkdir(parents=True)
     for name, body in (
-        ("muyan-pilot.service", "[Service]\nExecStart=/usr/bin/python3 bootstrap_runner.py\n"),
-        ("muyan-pilot.timer", "[Timer]\nOnCalendar=*-*-* *:00/5\n"),
+        ("muyan-pilot@.service", "[Service]\nExecStart=/usr/bin/python3 bootstrap_runner.py\n"),
+        ("muyan-pilot@.timer", "[Timer]\nOnCalendar=*-*-* *:00/5\n"),
     ):
         (repo / "systemd" / name).write_text(body, encoding="utf-8")
     installed = tmp_path / "units"
     installed.mkdir()
-    for name in ("muyan-pilot.service", "muyan-pilot.timer"):
+    for name in ("muyan-pilot@.service", "muyan-pilot@.timer"):
         target = installed / name
         shutil.copyfile(repo / "systemd" / name, target)
-        if drift and name == "muyan-pilot.timer":
+        if drift and name == "muyan-pilot@.timer":
             with target.open("a", encoding="utf-8") as handle:
                 handle.write("# drift\n")
     return repo, installed
@@ -5088,7 +5088,7 @@ def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
 
     def re_tamper(self, data):
         real_write_bytes(self, data)
-        if self.name == "muyan-pilot.timer" and str(self).startswith(
+        if self.name == "muyan-pilot@.timer" and str(self).startswith(
             str(installed),
         ):
             real_write_bytes(self, data + b"# drift\n")
@@ -5117,16 +5117,17 @@ def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
     # the timer) before the re-verify failed — and never touched the
     # service itself.
     assert ["systemctl", "--user", "daemon-reload"] in calls
-    assert [
-        "systemctl", "--user", "enable", "--now", "muyan-pilot.timer",
-    ] in calls
+    for instance in systemd_deploy.TIMER_INSTANCES:
+        assert [
+            "systemctl", "--user", "enable", "--now", instance,
+        ] in calls
     for command in calls:
         if command[:2] == ["systemctl", "--user"]:
             assert command[2] in ("daemon-reload", "enable")
     # The structured line carries what the Issue requires.
-    assert "unit_drift unit=muyan-pilot.timer" in caplog.text
-    assert f"repo={repo / 'systemd' / 'muyan-pilot.timer'}" in caplog.text
-    assert f"installed={installed / 'muyan-pilot.timer'}" in caplog.text
+    assert "unit_drift unit=muyan-pilot@.timer" in caplog.text
+    assert f"repo={repo / 'systemd' / 'muyan-pilot@.timer'}" in caplog.text
+    assert f"installed={installed / 'muyan-pilot@.timer'}" in caplog.text
     assert "repo_sha256=" in caplog.text
     assert "installed_sha256=" in caplog.text
     assert "fix=muyan-pilot install-units" in caplog.text
@@ -5167,16 +5168,17 @@ def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
         assert runner.main(["--config", str(config)]) == 0
     # The self-heal ran the idempotent install (and never the service).
     assert ["systemctl", "--user", "daemon-reload"] in calls
-    assert [
-        "systemctl", "--user", "enable", "--now", "muyan-pilot.timer",
-    ] in calls
+    for instance in systemd_deploy.TIMER_INSTANCES:
+        assert [
+            "systemctl", "--user", "enable", "--now", instance,
+        ] in calls
     for command in calls:
         if command[:2] == ["systemctl", "--user"]:
             assert command[2] in ("daemon-reload", "enable")
     # The repo template won: the installed unit matches it again.
     status = systemd_deploy.unit_status(repo, installed)
     assert all(entry["drifted"] is False for entry in status)
-    assert "unit_drift auto_synced unit=muyan-pilot.timer" in caplog.text
+    assert "unit_drift auto_synced unit=muyan-pilot@.timer" in caplog.text
     assert "commit=0123456789abcdef0123456789abcdef01234567" in caplog.text
     # The tick proceeded: the slot was taken AFTER the preflight passed.
     assert (repo / ".muyan-pilot" / "slots" / "slot-1").exists()

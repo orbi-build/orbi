@@ -160,7 +160,7 @@ muyan-pilot status --config muyan-pilot.toml
 python3 bootstrap_runner.py --config muyan-pilot.toml
 
 # d. Follow the live activity while the tick runs (second terminal):
-journalctl --user -u muyan-pilot.service -f
+journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service -f
 # or, for a manual tick, follow the session JSONL directly:
 muyan-pilot session --follow --config muyan-pilot.toml
 
@@ -176,20 +176,26 @@ and the journal shows `run_end ... result=pr_opened`. If any step fails,
 the Issue is marked `ai-blocked` with the scene — see
 [Operations](/operations) for recovery.
 
-## 7. Verify the timer
+## 7. Verify the timers
 
-The setup step already installed the units and enabled the timer; verify
-it:
+The setup step already installed the unit templates and enabled the two
+timer instances (`muyan-pilot@1.timer` and `muyan-pilot@2.timer`, each
+triggering its own service instance — see [Operations](/operations));
+verify them:
 
 ```bash
-systemctl --user list-timers muyan-pilot.timer
+systemctl --user list-timers 'muyan-pilot@*.timer'
 ```
 
-The setup output carries `timer=enabled active=true next=...` (the next
-trigger time). The timer fires every 5 minutes, 24 hours a day
-(00:00–23:55). While a task is running, further timer starts are ignored
-by systemd; the next real start picks up the latest code (the service
-fast-forwards `main` before starting — see [Operations](/operations)).
+The setup output carries one line per instance (`timer=muyan-pilot@1.timer
+enabled active=true next=...`, `timer=muyan-pilot@2.timer ...`) with the
+next trigger time. Each timer fires every 5 minutes, 24 hours a day
+(00:00–23:55). While one service instance is active, systemd ignores
+further starts of THAT instance; the next real start picks up the latest
+code (the service fast-forwards `main` before starting — see
+[Operations](/operations)). Two instances may run concurrently; the
+capacity is the Runner's flock slots (`max_concurrency`), not the
+instance count.
 
 <Note>
 The committed unit templates reference the author's clone layout via

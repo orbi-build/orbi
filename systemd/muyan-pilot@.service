@@ -1,5 +1,5 @@
 [Unit]
-Description=Muyan Pilot — process one ready GitHub Issue
+Description=Muyan Pilot — process one ready GitHub Issue (instance %i)
 After=network-online.target
 Wants=network-online.target
 
@@ -18,7 +18,11 @@ TimeoutStartSec=infinity
 # hot-updated or killed: while the service is active, systemd ignores
 # the timer's start request, and the next real start picks up the
 # latest code.
-ExecStartPre=/bin/sh -c 'git fetch origin main && git merge --ff-only origin/main'
+# Issue #149: both instances may start in the same tick, so the
+# fetch + fast-forward is wrapped in a short-lived flock on the shared
+# state-dir lock file (the Python-side sync in bootstrap_runner takes
+# the SAME lock): the main worktree is never written concurrently.
+ExecStartPre=/usr/bin/flock %h/Documents/muyan/muyan-pilot/.muyan-pilot/base-sync.lock -c 'git fetch origin main && git merge --ff-only origin/main'
 # Issue #140: the Runner is the installed `muyan-pilot` CLI (the
 # uv-tool console script, `uv tool install` / `uv tool upgrade`; the
 # executable lands in the user bin dir `~/.local/bin`). The absolute

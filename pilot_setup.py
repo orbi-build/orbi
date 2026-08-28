@@ -17,8 +17,9 @@ initialization entry for a new machine or new task-pool repository:
   ever touched;
 - installs the repo's user systemd service/timer templates idempotently
   (reusing ``systemd_deploy.install_units``: copy, daemon-reload,
-  enable the timer — never start/stop/restart the service) and reports
-  the enable/active state plus the next trigger time;
+  enable the two timer instances ``muyan-pilot@1.timer`` /
+  ``muyan-pilot@2.timer`` — never start/stop/restart the service) and
+  reports each instance's enable/active state plus next trigger time;
 - checks the local checkout read-only (remote, current branch, clean
   status, base freshness);
 - checks the optional ``local-llm-kv-cache`` proxy health and reports it
@@ -168,9 +169,13 @@ def check_commands(run_command) -> dict:
         if path is None:
             raise SetupError(f"required command missing: {name} (not on PATH)")
         paths[name] = path
+    # Probe an INSTANCE name (verified against the real CLI: `systemctl
+    # show` rejects the bare template name `muyan-pilot@.timer` but
+    # accepts instance names, exiting 0 with `not-found` before the
+    # units are installed — the probe only needs the user bus).
     probe = [
         "systemctl", "--user", "show", "-p", "LoadState", "--value",
-        systemd_deploy.TIMER_UNIT,
+        systemd_deploy.TIMER_INSTANCES[0],
     ]
     try:
         run_command(probe)
@@ -307,16 +312,17 @@ def align_labels(repo: str, defs: list[dict], run_command) -> dict:
     return {"repo": repo, "aligned": aligned, "total": len(defs)}
 
 
-def timer_next_trigger(list_timers_output: str) -> str:
-    """The NEXT column of the muyan-pilot.timer row, or ``-``.
+def timer_next_trigger(list_timers_output: str, unit_name: str) -> str:
+    """The NEXT column of the given timer instance's row, or ``-``.
 
     ``systemctl --user list-timers --no-pager`` prints a header line
     (``NEXT  LEFT ...``) followed by one row per timer; the row whose
-    UNIT column is the Pilot timer carries the next trigger time.
+    UNIT column is the given instance (e.g. ``muyan-pilot@1.timer``)
+    carries the next trigger time.
     """
     for line in list_timers_output.splitlines():
         columns = line.split()
-        if len(columns) >= 2 and columns[-2] == systemd_deploy.TIMER_UNIT:
+        if len(columns) >= 2 and columns[-2] == unit_name:
             # NEXT is the first fixed-width column and itself contains
             # spaces ("Thu 2026-08-27 10:00:00 +08"): it ends where the
             # all-whitespace column separator begins, so take the line
@@ -333,10 +339,12 @@ def install_units_step(repo_dir: Path, installed_dir: Path | None,
     """Install the repo's user units and report their live state.
 
     Reuses the idempotent ``systemd_deploy.install_units`` (copy the
-    repo templates, ``daemon-reload``, enable the timer — never
-    start/stop/restart the service), then reports the timer's enabled
-    state (``systemctl --user is-enabled``), active state (``show -p
-    ActiveState``) and next trigger time (``list-timers``).
+    repo templates, migrate the pre-#149 non-templated units away,
+    ``daemon-reload``, enable the two timer instances — never
+    start/stop/restart the service), then reports EACH timer
+    instance's enabled state (``systemctl --user is-enabled``),
+    active state (``show -p ActiveState``) and next trigger time
+    (``list-timers``).
     """
     try:
         result = systemd_deploy.install_units(
@@ -346,16 +354,21 @@ def install_units_step(repo_dir: Path, installed_dir: Path | None,
         raise SetupError(
             f"systemd units install failed: {exc}"
         ) from exc
-    enabled = run_command([
-        "systemctl", "--user", "is-enabled", systemd_deploy.TIMER_UNIT,
-    ]) == "enabled"
-    active = run_command([
-        "systemctl", "--user", "show", "-p", "ActiveState", "--value",
-        systemd_deploy.TIMER_UNIT,
-    ]) == "active"
-    next_trigger = timer_next_trigger(run_command([
+    list_timers = run_command([
         "systemctl", "--user", "list-timers", "--no-pager",
-    ]))
+    ])
+    instances = {}
+    for instance in systemd_deploy.TIMER_INSTANCES:
+        instances[instance] = {
+            "enabled": run_command([
+                "systemctl", "--user", "is-enabled", instance,
+            ]) == "enabled",
+            "active": run_command([
+                "systemctl", "--user", "show", "-p", "ActiveState",
+                "--value", instance,
+            ]) == "active",
+            "next": timer_next_trigger(list_timers, instance),
+        }
     service = result["units"][systemd_deploy.SERVICE_UNIT]
     return {
         "service": {
@@ -366,9 +379,7 @@ def install_units_step(repo_dir: Path, installed_dir: Path | None,
             "sha256": service["sha256"],
         },
         "timer": {
-            "enabled": enabled,
-            "active": active,
-            "next": next_trigger,
+            "instances": instances,
         },
     }
 
@@ -543,11 +554,14 @@ def format_setup(result: dict) -> list[str]:
         f"sha256={service['sha256']}"
     )
     timer = result["timer"]
-    lines.append(
-        f"timer={'enabled' if timer['enabled'] else 'disabled'} "
-        f"active={'true' if timer['active'] else 'false'} "
-        f"next={quote_value(timer['next'])}"
-    )
+    for instance in systemd_deploy.TIMER_INSTANCES:
+        entry = timer["instances"][instance]
+        lines.append(
+            f"timer={instance} "
+            f"{'enabled' if entry['enabled'] else 'disabled'} "
+            f"active={'true' if entry['active'] else 'false'} "
+            f"next={quote_value(entry['next'])}"
+        )
     checkout = result["checkout"]
     reachable = checkout["ssh_reachable"]
     reachable_text = "-" if reachable is None else (

@@ -62,11 +62,11 @@ def make_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     systemd = repo / "systemd"
     systemd.mkdir(parents=True)
-    (systemd / "muyan-pilot.service").write_text(
+    (systemd / "muyan-pilot@.service").write_text(
         "[Service]\nExecStart=/usr/bin/python3 bootstrap_runner.py\n",
         encoding="utf-8",
     )
-    (systemd / "muyan-pilot.timer").write_text(
+    (systemd / "muyan-pilot@.timer").write_text(
         "[Timer]\nOnCalendar=*-*-* *:00/5\n", encoding="utf-8",
     )
     write_labels_toml(repo, VALID_DEFS)
@@ -129,17 +129,26 @@ def fake_run_factory(state: dict):
             return ""
         if head[:3] == ["systemctl", "--user", "show"]:
             if "-p" in command and command[command.index("-p") + 1] == "ActiveState":
-                return state.get("active_state", "active")
+                unit = command[-1]
+                return state.get(
+                    f"active_state:{unit}", state.get("active_state", "active"),
+                )
             return "loaded"
         if head[:3] == ["systemctl", "--user", "is-enabled"]:
-            return state.get("is_enabled", "enabled")
+            unit = command[-1]
+            return state.get(
+                f"is_enabled:{unit}", state.get("is_enabled", "enabled"),
+            )
         if head[:3] == ["systemctl", "--user", "list-timers"]:
             return state.get(
                 "list_timers",
                 "NEXT\n"
                 "Thu 2026-08-27 10:00:00 +08        1min "
                 "Thu 2026-08-27 09:45:00 +08    15min ago "
-                "muyan-pilot.timer                   muyan-pilot.service\n",
+                "muyan-pilot@1.timer                muyan-pilot@1.service\n"
+                "Fri 2026-08-27 10:05:00 +08        6min "
+                "Thu 2026-08-27 10:00:00 +08     5min ago "
+                "muyan-pilot@2.timer                muyan-pilot@2.service\n",
             )
         if head[:1] == ["curl"]:
             if state.get("proxy_down"):
@@ -467,19 +476,28 @@ def test_install_units_step_reports_install_state(tmp_path):
     )
     assert result["service"]["installed"] is True
     assert result["service"]["installed_path"] == str(
-        installed / "muyan-pilot.service",
+        installed / "muyan-pilot@.service",
     )
     assert result["service"]["sha256"] == systemd_deploy.sha256_hex(
-        installed / "muyan-pilot.service",
+        installed / "muyan-pilot@.service",
     )
-    assert result["timer"]["enabled"] is True
-    assert result["timer"]["active"] is True
-    assert result["timer"]["next"] == "Thu 2026-08-27 10:00:00 +08"
+    # Issue #149: EACH timer instance is reported.
+    instances = result["timer"]["instances"]
+    assert sorted(instances) == sorted(systemd_deploy.TIMER_INSTANCES)
+    assert instances["muyan-pilot@1.timer"]["enabled"] is True
+    assert instances["muyan-pilot@1.timer"]["active"] is True
+    assert instances["muyan-pilot@1.timer"]["next"] == (
+        "Thu 2026-08-27 10:00:00 +08"
+    )
+    assert instances["muyan-pilot@2.timer"]["next"] == (
+        "Fri 2026-08-27 10:05:00 +08"
+    )
     # The install itself is the systemd_deploy idempotent install.
     assert ["systemctl", "--user", "daemon-reload"] in calls
-    assert [
-        "systemctl", "--user", "enable", "--now", "muyan-pilot.timer",
-    ] in calls
+    for instance in systemd_deploy.TIMER_INSTANCES:
+        assert [
+            "systemctl", "--user", "enable", "--now", instance,
+        ] in calls
 
 
 def test_install_units_step_reports_a_disabled_inactive_timer(tmp_path):
@@ -489,8 +507,29 @@ def test_install_units_step_reports_a_disabled_inactive_timer(tmp_path):
     result = pilot_setup.install_units_step(
         repo, tmp_path / "units", run_command=fake_run,
     )
-    assert result["timer"]["enabled"] is False
-    assert result["timer"]["active"] is False
+    instances = result["timer"]["instances"]
+    for instance in systemd_deploy.TIMER_INSTANCES:
+        assert instances[instance]["enabled"] is False
+        assert instances[instance]["active"] is False
+
+
+def test_install_units_step_reports_per_instance_state(tmp_path):
+    # Issue #149: one instance can be enabled/active while the other
+    # is not — the per-instance report must not collapse them.
+    state = {
+        "is_enabled:muyan-pilot@2.timer": "disabled",
+        "active_state:muyan-pilot@2.timer": "inactive",
+    }
+    fake_run, calls = fake_run_factory(state)
+    repo = make_repo(tmp_path)
+    result = pilot_setup.install_units_step(
+        repo, tmp_path / "units", run_command=fake_run,
+    )
+    instances = result["timer"]["instances"]
+    assert instances["muyan-pilot@1.timer"]["enabled"] is True
+    assert instances["muyan-pilot@1.timer"]["active"] is True
+    assert instances["muyan-pilot@2.timer"]["enabled"] is False
+    assert instances["muyan-pilot@2.timer"]["active"] is False
 
 
 def test_install_units_step_reports_a_missing_next_trigger(tmp_path):
@@ -500,7 +539,9 @@ def test_install_units_step_reports_a_missing_next_trigger(tmp_path):
     result = pilot_setup.install_units_step(
         repo, tmp_path / "units", run_command=fake_run,
     )
-    assert result["timer"]["next"] == "-"
+    instances = result["timer"]["instances"]
+    for instance in systemd_deploy.TIMER_INSTANCES:
+        assert instances[instance]["next"] == "-"
 
 
 def test_install_units_step_fails_fast_on_an_install_error(tmp_path):
@@ -522,15 +563,17 @@ def test_timer_next_trigger_parses_the_list_timers_row():
         "NEXT                                   LEFT LAST\n"
         "Thu 2026-08-27 10:00:00 +08        1min 46s "
         "Thu 2026-08-27 09:18:18 +08    28min ago "
-        "muyan-pilot.timer                   muyan-pilot.service\n"
+        "muyan-pilot@1.timer                muyan-pilot@1.service\n"
     )
-    assert pilot_setup.timer_next_trigger(raw) == (
-        "Thu 2026-08-27 10:00:00 +08"
-    )
+    assert pilot_setup.timer_next_trigger(
+        raw, "muyan-pilot@1.timer",
+    ) == "Thu 2026-08-27 10:00:00 +08"
 
 
 def test_timer_next_trigger_returns_dash_when_the_timer_is_absent():
-    assert pilot_setup.timer_next_trigger("NEXT\n") == "-"
+    assert pilot_setup.timer_next_trigger(
+        "NEXT\n", "muyan-pilot@1.timer",
+    ) == "-"
 
 
 def test_timer_next_trigger_ignores_other_timers():
@@ -540,7 +583,28 @@ def test_timer_next_trigger_ignores_other_timers():
         "Thu 2026-08-27 09:18:18 +08    28min ago "
         "other.timer                         other.service\n"
     )
-    assert pilot_setup.timer_next_trigger(raw) == "-"
+    assert pilot_setup.timer_next_trigger(
+        raw, "muyan-pilot@1.timer",
+    ) == "-"
+
+
+def test_timer_next_trigger_distinguishes_the_two_instances():
+    # Issue #149: the two instances have independent next triggers.
+    raw = (
+        "NEXT                                   LEFT LAST\n"
+        "Thu 2026-08-27 10:00:00 +08        1min 46s "
+        "Thu 2026-08-27 09:18:18 +08    28min ago "
+        "muyan-pilot@1.timer                muyan-pilot@1.service\n"
+        "Fri 2026-08-27 10:05:00 +08        6min 46s "
+        "Thu 2026-08-27 10:00:00 +08     5min ago "
+        "muyan-pilot@2.timer                muyan-pilot@2.service\n"
+    )
+    assert pilot_setup.timer_next_trigger(
+        raw, "muyan-pilot@1.timer",
+    ) == "Thu 2026-08-27 10:00:00 +08"
+    assert pilot_setup.timer_next_trigger(
+        raw, "muyan-pilot@2.timer",
+    ) == "Fri 2026-08-27 10:05:00 +08"
 
 
 # --- checkout check (read-only) ----------------------------------------------
@@ -825,8 +889,12 @@ def test_run_setup_success_reports_all_steps(tmp_path):
         },
     ]
     assert result["service"]["installed"] is True
-    assert result["timer"]["enabled"] is True
-    assert result["timer"]["active"] is True
+    # Issue #149: the timer report is per instance.
+    instances = result["timer"]["instances"]
+    assert sorted(instances) == sorted(systemd_deploy.TIMER_INSTANCES)
+    for instance in systemd_deploy.TIMER_INSTANCES:
+        assert instances[instance]["enabled"] is True
+        assert instances[instance]["active"] is True
     assert result["checkout"]["clean"] is True
     assert result["checkout"]["base_fresh"] is True
     assert result["optional_proxy"]["optional"] is True
@@ -980,13 +1048,24 @@ def sample_result() -> dict:
         ],
         "service": {
             "installed": True,
-            "installed_path": "/home/u/.config/systemd/user/muyan-pilot.service",
+            "installed_path": (
+                "/home/u/.config/systemd/user/muyan-pilot@.service"
+            ),
             "sha256": "ab" * 32,
         },
         "timer": {
-            "enabled": True,
-            "active": True,
-            "next": "Thu 2026-08-27 10:00:00 +08",
+            "instances": {
+                "muyan-pilot@1.timer": {
+                    "enabled": True,
+                    "active": True,
+                    "next": "Thu 2026-08-27 10:00:00 +08",
+                },
+                "muyan-pilot@2.timer": {
+                    "enabled": True,
+                    "active": True,
+                    "next": "Fri 2026-08-27 10:05:00 +08",
+                },
+            },
         },
         "checkout": {
             "remote": "origin",
@@ -1015,11 +1094,17 @@ def test_format_setup_renders_stable_key_value_lines():
     )
     assert (
         "service=installed path=/home/u/.config/systemd/user/"
-        "muyan-pilot.service sha256=" + "ab" * 32 in lines
+        "muyan-pilot@.service sha256=" + "ab" * 32 in lines
     )
-    # The NEXT field carries spaces, so it is quoted (quote_value).
+    # Issue #149: one line per timer instance; the NEXT field carries
+    # spaces, so it is quoted (quote_value).
     assert (
-        'timer=enabled active=true next="Thu 2026-08-27 10:00:00 +08"'
+        'timer=muyan-pilot@1.timer enabled active=true '
+        'next="Thu 2026-08-27 10:00:00 +08"'
+    ) in lines
+    assert (
+        'timer=muyan-pilot@2.timer enabled active=true '
+        'next="Fri 2026-08-27 10:05:00 +08"'
     ) in lines
     assert (
         "checkout=remote=origin branch=main clean=true base_fresh=true "
@@ -1034,10 +1119,13 @@ def test_format_setup_renders_stable_key_value_lines():
 
 def test_format_setup_quotes_values_with_spaces():
     result = sample_result()
-    result["timer"]["next"] = "Thu 2026 08-27 10:00:00"
+    result["timer"]["instances"]["muyan-pilot@1.timer"]["next"] = (
+        "Thu 2026 08-27 10:00:00"
+    )
     lines = pilot_setup.format_setup(result)
     assert (
-        'timer=enabled active=true next="Thu 2026 08-27 10:00:00"'
+        'timer=muyan-pilot@1.timer enabled active=true '
+        'next="Thu 2026 08-27 10:00:00"'
     ) in lines
 
 
@@ -1170,8 +1258,10 @@ def test_align_labels_fails_fast_on_non_array_label_list():
 def test_timer_next_trigger_falls_back_to_the_first_column():
     # A timer row without the two-space column separator (defensive
     # fallback): the first column is reported as-is.
-    raw = "X muyan-pilot.timer muyan-pilot.service\n"
-    assert pilot_setup.timer_next_trigger(raw) == "X"
+    raw = "X muyan-pilot@1.timer muyan-pilot@1.service\n"
+    assert pilot_setup.timer_next_trigger(
+        raw, "muyan-pilot@1.timer",
+    ) == "X"
 
 
 def test_check_checkout_fails_fast_when_origin_is_missing(tmp_path):

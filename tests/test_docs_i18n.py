@@ -184,9 +184,10 @@ def test_chinese_getting_started_documents_prerequisites_and_smoke():
     assert "smoke" in text.lower(), "getting-started must contain the smoke walkthrough"
     assert "muyan-pilot add" in text, "smoke must use the real add command"
     assert "bootstrap_runner.py" in text, "smoke must run the real one-tick command"
-    assert "journalctl --user -u muyan-pilot.service" in text, (
-        "smoke must show the real journal command"
-    )
+    assert (
+        "journalctl --user -u muyan-pilot@1.service -u "
+        "muyan-pilot@2.service" in text
+    ), "smoke must show the real journal command (both service instances)"
 
 
 def test_chinese_config_field_table_matches_the_implementation():
@@ -241,7 +242,12 @@ def test_chinese_operations_documents_the_real_commands_and_recovery():
     code-update preflight, and the transport check without an HTTPS
     fallback — same facts as the English page."""
     text = zh_page_text("operations")
-    assert "muyan-pilot.timer" in text
+    assert "muyan-pilot@.timer" in text, (
+        "operations must document the timer template"
+    )
+    assert "muyan-pilot@1.timer" in text, (
+        "operations must document the two timer instances (Issue #149)"
+    )
     assert "OnCalendar=*-*-* *:00/5" in text, (
         "operations must document the 5-minute idle polling interval"
     )

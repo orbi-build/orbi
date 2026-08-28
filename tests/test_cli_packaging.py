@@ -31,7 +31,7 @@ import systemd_deploy
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = REPO_ROOT / "pyproject.toml"
-SERVICE_FILE = REPO_ROOT / "systemd" / "muyan-pilot.service"
+SERVICE_FILE = REPO_ROOT / "systemd" / "muyan-pilot@.service"
 README_FILE = REPO_ROOT / "README.md"
 AGENTS_FILE = REPO_ROOT / "AGENTS.md"
 

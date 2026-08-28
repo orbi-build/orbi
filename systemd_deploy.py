@@ -1,16 +1,20 @@
-"""Systemd deployment consistency for Muyan Pilot (Issue #103).
+"""Systemd deployment consistency for Muyan Pilot (Issue #103, #149).
 
-The repo templates ``systemd/muyan-pilot.service`` and
-``systemd/muyan-pilot.timer`` are the single source of truth for the
+The repo templates ``systemd/muyan-pilot@.service`` and
+``systemd/muyan-pilot@.timer`` are the single source of truth for the
 user-level units. This module provides:
 
 - an idempotent install (overwrite-copy the templates into the user
-  unit directory, ``systemctl --user daemon-reload``, enable the
-  timer) that NEVER starts/stops/restarts the service: a currently
-  running Runner keeps running, and the new config takes effect at
-  the next service start;
-- a pre-start consistency check that compares BOTH installed units
-  against the templates and fails fast with a structured
+  unit directory, ``systemctl --user daemon-reload``, enable the two
+  timer instances ``muyan-pilot@1.timer`` and ``muyan-pilot@2.timer``)
+  that NEVER starts/stops/restarts the service: a currently running
+  Runner keeps running, and the new config takes effect at the next
+  service start. The install also migrates the pre-#149
+  non-templated units away once (stop the legacy timer — a timer stop
+  never touches the service — and remove the legacy files), so the
+  old single-instance schedule cannot keep firing the old service;
+- a pre-start consistency check that compares BOTH installed template
+  units against the templates and fails fast with a structured
   ``unit_drift`` line (repo path, installed path, hashes, fix
   command) when they drift.
 
@@ -28,9 +32,22 @@ from pi_activity import quote_value
 
 LOGGER = logging.getLogger("muyan_pilot.systemd_deploy")
 
-SERVICE_UNIT = "muyan-pilot.service"
-TIMER_UNIT = "muyan-pilot.timer"
+SERVICE_UNIT = "muyan-pilot@.service"
+TIMER_UNIT = "muyan-pilot@.timer"
 UNIT_NAMES = (SERVICE_UNIT, TIMER_UNIT)
+# Issue #149: the two enabled timer instances. Each instance triggers
+# its own service instance (muyan-pilot@1.timer ->
+# muyan-pilot@1.service, ...@2 -> ...@2), so two independent Runner
+# instances can run concurrently; the capacity is still the flock
+# slots in the Runner (max_concurrency), never the instance count.
+TIMER_INSTANCES = ("muyan-pilot@1.timer", "muyan-pilot@2.timer")
+SERVICE_INSTANCES = (
+    "muyan-pilot@1.service", "muyan-pilot@2.service",
+)
+# The pre-#149 non-templated units: install_units migrates them away
+# once (a template change is a deployment change, no human step).
+LEGACY_TIMER_UNIT = "muyan-pilot.timer"
+LEGACY_UNIT_NAMES = ("muyan-pilot.service", "muyan-pilot.timer")
 
 # The idempotent install command that repairs any drift (carried on
 # every unit_drift line as the fix command). Issue #140: the official
@@ -208,18 +225,51 @@ def sync_drifted_units(repo_dir: Path,
     return report
 
 
+def migrate_legacy_units(installed_dir: Path, *, run_command) -> bool:
+    """One-time migration away from the pre-#149 non-templated units.
+
+    Returns True when a legacy timer unit file was present (and
+    migrated), False when there was nothing to migrate (a fresh
+    install or an already-migrated machine — idempotent).
+
+    The legacy ``muyan-pilot.timer`` is stopped with ``disable --now``
+    (a TIMER stop: it never starts, stops or restarts the SERVICE — a
+    currently running Runner keeps running) and the legacy
+    ``muyan-pilot.service``/``muyan-pilot.timer`` files are removed,
+    so the old single-instance schedule cannot keep firing the old
+    service (a third Runner without the ExecStartPre flock, Issue
+    #149). A failing step propagates unchanged (fail fast).
+    """
+    if not (installed_dir / LEGACY_TIMER_UNIT).is_file():
+        return False
+    run_command([
+        "systemctl", "--user", "disable", "--now", LEGACY_TIMER_UNIT,
+    ])
+    for name in LEGACY_UNIT_NAMES:
+        legacy = installed_dir / name
+        if legacy.is_file():
+            legacy.unlink()
+    LOGGER.info(
+        "legacy_units_migrated installed_dir=%s removed=%s",
+        installed_dir, ",".join(LEGACY_UNIT_NAMES),
+    )
+    return True
+
+
 def install_units(repo_dir: Path, installed_dir: Path | None = None,
                   *, run_command) -> dict:
     """Idempotently install the repo templates as the user units.
 
-    Overwrites BOTH installed units with the repo templates (the repo
-    is the single source of truth), runs ``systemctl --user
-    daemon-reload`` and enables the timer (``enable --now`` is
-    idempotent and activates only the timer, never the service). The
-    service is NEVER started, stopped or restarted: a currently
-    running Runner keeps running, and the new config takes effect at
-    the next service start. Returns the deployed commit (the
-    deployment checkout's HEAD) and the installed units' hashes.
+    Overwrites BOTH installed template units with the repo templates
+    (the repo is the single source of truth), migrates the pre-#149
+    non-templated units away once (see ``migrate_legacy_units``), runs
+    ``systemctl --user daemon-reload`` and enables the two timer
+    instances (``enable --now`` is idempotent and activates only the
+    timers, never the services). The services are NEVER started,
+    stopped or restarted: a currently running Runner keeps running,
+    and the new config takes effect at the next service start.
+    Returns the deployed commit (the deployment checkout's HEAD) and
+    the installed units' hashes.
     """
     repo_dir = Path(repo_dir)
     if installed_dir is None:
@@ -233,12 +283,14 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
                 "templates are the single source of truth)"
             )
     installed_dir.mkdir(parents=True, exist_ok=True)
+    migrate_legacy_units(installed_dir, run_command=run_command)
     for name in UNIT_NAMES:
         (installed_dir / name).write_bytes(
             (repo_unit_dir(repo_dir) / name).read_bytes(),
         )
     run_command(["systemctl", "--user", "daemon-reload"])
-    run_command(["systemctl", "--user", "enable", "--now", TIMER_UNIT])
+    for instance in TIMER_INSTANCES:
+        run_command(["systemctl", "--user", "enable", "--now", instance])
     commit = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
     units = {
         name: {
@@ -248,8 +300,10 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
         for name in UNIT_NAMES
     }
     LOGGER.info(
-        "units_installed commit=%s installed_dir=%s units=%s",
+        "units_installed commit=%s installed_dir=%s units=%s "
+        "instances=%s",
         commit, installed_dir, ",".join(UNIT_NAMES),
+        ",".join(TIMER_INSTANCES),
     )
     return {
         "commit": commit,
