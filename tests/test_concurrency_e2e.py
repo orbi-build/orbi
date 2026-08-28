@@ -1157,6 +1157,21 @@ def test_unit_drift_auto_syncs_and_claims_without_human_intervention(
     ) as handle:
         handle.write("# drift\n")
 
+    # A no-op fake systemctl on PATH: the self-heal runs the SAME
+    # idempotent install, whose external steps (daemon-reload, enable
+    # the timer) must succeed — but the e2e world has no user systemd
+    # bus (GitHub CI, Issue #56's clean environment), so the real
+    # `systemctl --user` would fail and the test would depend on the
+    # host machine. The file copy and the re-verify (what is under
+    # test) stay real; the `auto_synced` line below only appears after
+    # the install's systemctl steps succeeded.
+    fake_systemctl = bin_dir / "systemctl"
+    fake_systemctl.write_text(
+        "#!/bin/sh\nexit 0\n",
+        encoding="utf-8",
+    )
+    fake_systemctl.chmod(0o755)
+
     runner_proc = start_runner(
         config, bin_dir, state, pi_log, unit_dir=unit_dir,
     )
