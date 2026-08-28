@@ -40,22 +40,31 @@ cd muyan-pilot
 ## 2. 安装 CLI
 
 正式使用方式是安装后的 `muyan-pilot` console script（`pyproject.toml`
-的 PEP 621 打包把 `muyan-pilot = muyan_pilot:main` 映射为可执行文件）。
-在 clone 目录里用 `uv tool` 安装——`--python` 固定生产解释器（3.14）：
+的 PEP 621 打包把 `muyan-pilot = muyan_pilot:main` 映射为可执行文件），
+以 **editable** `uv tool` 安装——这是官方本地部署方式（Issue #152）。
+在 clone 目录里安装，`--python` 固定生产解释器（3.14）：
 
 ```bash
-uv tool install --python /usr/bin/python3 .
+uv tool install --force --reinstall --editable --python /usr/bin/python3 .
 muyan-pilot --help
 ```
 
 `uv tool` 把 CLI 装进隔离的 tool 环境，可执行文件落在 `~/.local/bin`
-（systemd unit 的 PATH 已包含该目录）。merge 到 main 之后用
-`uv tool upgrade muyan-pilot` 刷新（版本号变化时），或在 clone 目录里
-`uv tool install --force --reinstall .` 直接重装（版本号未变时——
-`--reinstall` 绕过构建缓存）。发布包不携带第三方运行时依赖、token
-或用户目录——配置文件和用户 systemd 目录保持机器本地。
-`muyan_pilot.py` 的直接执行入口（用解释器直接运行该文件）保留为
-开发/兼容路径。
+（systemd unit 的 PATH 已包含该目录）。
+
+**为什么必须 `--editable`**：非 editable 安装会把源码复制进 tool
+环境的 site-packages；service 的 `ExecStartPre` 每次启动前把 checkout
+快进到最新 `main`——源码被复制后 CLI 仍在执行旧副本（启动死锁：
+Issue #152）。editable 安装下 tool 环境直接从 clone 目录导入
+`muyan_pilot`，下一个 CLI 进程（下一个 timer 启动的 Runner）自动取到
+merge 后的代码：**普通 Python 源码与 systemd 模板/迁移代码变更不需要
+任何重装或升级命令**。只有依赖、入口点、
+包名、构建后端或 Python 版本变化时，才重新执行上面的 force editable
+重装命令。`muyan-pilot doctor` 报告一致性（`cli_source: clean` 或
+`cli_source: DRIFT` + 结构化 `cli_source_drift` 行），`muyan-pilot
+setup` 幂等地校验或重装。发布包不携带第三方运行时依赖、token 或用户
+目录——配置文件和用户 systemd 目录保持机器本地。`muyan_pilot.py` 的
+直接执行入口（用解释器直接运行该文件）保留为开发/兼容路径。
 
 ## 3. 创建配置
 

@@ -48,30 +48,55 @@ jobs:
           python3 -m pip install -r requirements.txt
           python3 -m pip install pytest coverage pyyaml
 
-      # CLI packaging (Issue #140): the console script must install in a
-      # clean environment and the entry must work (`muyan-pilot --help`
-      # and `muyan-pilot --version`, exit 0). The packaging file is the
-      # PEP 621 pyproject.toml.
+      # CLI packaging (Issue #140, #152): the console script must
+      # install in a clean environment and the entry must work
+      # (`muyan-pilot --help` and `muyan-pilot --version`, exit 0).
+      # The packaging file is the PEP 621 pyproject.toml.
       #
-      # The install uses the DOCUMENTED production flow (`uv tool
-      # install`, the uv-tool console script) — not a plain `pip
-      # install .`: uv tool places the self-contained executable at
-      # ~/.local/bin/muyan-pilot, the same path the service template's
-      # ExecStart (%h/.local/bin/muyan-pilot) uses, so the real
-      # `systemd-analyze --user verify` test resolves the unit's
-      # absolute ExecStart against the real executable here (a plain
-      # pip install would put the script in the venv bin, where the
-      # unit's %h path does not point).
+      # The install uses the DOCUMENTED production flow — the EDITABLE
+      # uv tool install (Issue #152), not a plain `pip install .` and
+      # not a non-editable `uv tool install`: uv tool places the
+      # executable at ~/.local/bin/muyan-pilot (the same path the
+      # service template's ExecStart %h/.local/bin/muyan-pilot uses, so
+      # the real `systemd-analyze --user verify` test resolves the
+      # unit's absolute ExecStart against the real executable here),
+      # and --editable makes the tool env import `muyan_pilot` from
+      # the checkout instead of copying the source into site-packages —
+      # the official local deployment, where the ExecStartPre checkout
+      # sync is picked up by the next CLI process automatically.
       - name: Install uv (the documented CLI installer)
         run: |
           python3 -m pip install uv
           uv --version
 
-      - name: Install the CLI (uv tool, the documented flow) and verify the entry (Issue #140)
+      - name: Install the CLI (uv tool EDITABLE, the documented flow) and verify the entry and import source (Issue #140, #152)
         run: |
-          uv tool install --python 3.14 .
+          uv tool install --force --reinstall --editable --python 3.14 .
           ~/.local/bin/muyan-pilot --help
           ~/.local/bin/muyan-pilot --version
+          # Issue #152: the editable install must import `muyan_pilot`
+          # from the checkout (not a site-packages copy): the tool
+          # env's python (the console script's own interpreter, from
+          # its shebang) reports the import source and it must start
+          # with the checkout path. The probe runs from a NEUTRAL cwd
+          # (`cd /`): `python -c` puts the cwd first on sys.path, so
+          # run from the checkout the checkout's own `muyan_pilot.py`
+          # would shadow the tool env's import (editable finder and
+          # site-packages alike) and the check would pass even for a
+          # non-editable install (verified against a real non-editable
+          # install: checkout cwd reports the checkout file, a neutral
+          # cwd reports the site-packages copy).
+          tool_python=$(head -n 1 ~/.local/bin/muyan-pilot | sed 's/^#!//')
+          source_path=$(cd / && "$tool_python" -c "import muyan_pilot; print(muyan_pilot.__file__)")
+          case "$source_path" in
+            "$GITHUB_WORKSPACE"/*)
+              echo "cli_source ok: $source_path"
+              ;;
+            *)
+              echo "cli_source DRIFT: $source_path (expected $GITHUB_WORKSPACE)" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Run the full test suite with branch coverage (contract)
         run: python3 -m coverage run --branch -m pytest tests/ -q

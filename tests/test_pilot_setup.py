@@ -31,6 +31,32 @@ def _default_command_lookup(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _cli_source_world(monkeypatch, tmp_path):
+    """Issue #152: the setup's CLI step checks the RUNNING process's
+    `muyan_pilot` import source. The test world simulates a CLI
+    running from its own checkout (an editable install of
+    `make_repo`'s `tmp_path/repo`); a test that needs a drifted
+    source re-points `world["module_file"]` before calling
+    `run_setup`."""
+    import types
+
+    world = {"module_file": tmp_path / "repo" / "muyan_pilot.py"}
+    stub = types.SimpleNamespace(
+        module_file=lambda: world["module_file"],
+        reinstall_args=lambda repo_dir: [
+            "uv", "tool", "install", "--force", "--reinstall",
+            "--editable", "--python", "/usr/bin/python3", str(repo_dir),
+        ],
+        reinstall_command=lambda repo_dir: (
+            "uv tool install --force --reinstall --editable "
+            f"--python /usr/bin/python3 {repo_dir}"
+        ),
+    )
+    monkeypatch.setattr(pilot_setup, "cli_source", stub)
+    return world
+
+
 VALID_DEFS = [
     {"name": "ai-ready", "color": "1d76db", "description": "dispatched"},
     {"name": "ai-in-progress", "color": "fbca04", "description": "work"},
@@ -159,6 +185,9 @@ def fake_run_factory(state: dict):
         if head[:2] == ["systemctl", "--user"] and head[2] in (
             "daemon-reload", "enable",
         ):
+            return ""
+        # Issue #152: the editable tool install (uv tool install ...).
+        if head[:2] == ["uv", "tool"]:
             return ""
         raise AssertionError(f"unexpected command: {command}")
 
@@ -857,6 +886,75 @@ def test_check_optional_proxy_reports_a_missing_curl_without_raising():
     assert result["optional"] is True
 
 
+# --- CLI editable install (Issue #152) ----------------------------------------
+
+
+def test_install_cli_step_verifies_an_existing_editable_install(tmp_path):
+    """The running CLI already imports `muyan_pilot` from the
+    configured checkout (the editable install): setup verifies it
+    WITHOUT any uv call (idempotent re-run, no per-setup reinstall)."""
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    calls: list = []
+    result = pilot_setup.install_cli_step(
+        repo, repo / "muyan_pilot.py",
+        run_command=lambda command, **kwargs: calls.append(command) or "",
+    )
+    assert calls == []
+    assert result == {
+        "action": "verified",
+        "source": str((repo / "muyan_pilot.py").resolve()),
+    }
+
+
+def test_install_cli_step_installs_the_editable_tool_when_drifted(tmp_path):
+    """A non-editable (site-packages) or stale source triggers the
+    EXACT editable force reinstall from the configured checkout
+    (the flags verified against the real `uv tool install --help`:
+    `--force`, `--reinstall`, `--editable`, `--python`)."""
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    calls: list = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return ""
+
+    result = pilot_setup.install_cli_step(
+        repo,
+        "/home/u/.local/share/uv/tools/muyan-pilot/"
+        "lib/python3.14/site-packages/muyan_pilot.py",
+        run_command=fake_run,
+    )
+    assert calls == [[
+        "uv", "tool", "install", "--force", "--reinstall", "--editable",
+        "--python", "/usr/bin/python3", str(repo),
+    ]]
+    assert result == {
+        "action": "installed",
+        "source": str((repo / "muyan_pilot.py").resolve()),
+    }
+
+
+def test_install_cli_step_fails_fast_on_a_failed_reinstall(tmp_path):
+    """A failing `uv tool install` fails the setup with the concrete
+    reason (fail fast, no fallback, no half-initialized state)."""
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+
+    def failing(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            1, command, stderr="uv boom",
+        )
+
+    with pytest.raises(
+        pilot_setup.SetupError, match="editable tool install",
+    ):
+        pilot_setup.install_cli_step(
+            repo, "/elsewhere/muyan_pilot.py", run_command=failing,
+        )
+
+
 # --- run_setup orchestration ---------------------------------------------------
 
 
@@ -898,6 +996,14 @@ def test_run_setup_success_reports_all_steps(tmp_path):
     assert result["checkout"]["clean"] is True
     assert result["checkout"]["base_fresh"] is True
     assert result["optional_proxy"]["optional"] is True
+    # Issue #152: the CLI step reports the editable install verified
+    # (the test process imports muyan_pilot from the repo world).
+    assert result["cli"]["action"] == "verified"
+    assert result["cli"]["source"] == str(
+        (repo / "muyan_pilot.py").resolve(),
+    )
+    # No uv call: an existing editable install is never reinstalled.
+    assert [c for c in calls if c[:2] == ["uv", "tool"]] == []
 
 
 def test_run_setup_repo_override_limits_the_target(tmp_path):
@@ -963,6 +1069,66 @@ def test_run_setup_fails_fast_on_a_label_error_before_units(tmp_path):
 
     config = runner.load_config(make_config(tmp_path, repo))
     with pytest.raises(pilot_setup.SetupError, match="label"):
+        pilot_setup.run_setup(
+            config, installed, run_command=failing,
+        )
+    assert [c for c in calls if c[:3] == ["systemctl", "--user", "daemon-reload"]] == []
+
+
+def test_run_setup_installs_the_editable_cli_when_drifted(tmp_path,
+                                                        _cli_source_world):
+    """Issue #152: a non-editable (site-packages) or stale CLI source
+    is reinstalled with the editable force reinstall BEFORE any unit
+    install — the #152 deadlock was that the old CLI could never run
+    the new migration code, so the source fix must precede the unit
+    work."""
+    repo, installed, state = make_run_state(tmp_path)
+    _cli_source_world["module_file"] = (
+        "/home/u/.local/share/uv/tools/muyan-pilot/"
+        "lib/python3.14/site-packages/muyan_pilot.py"
+    )
+    fake_run, calls = fake_run_factory(state)
+    config = runner.load_config(make_config(tmp_path, repo))
+    result = pilot_setup.run_setup(
+        config, installed, run_command=fake_run,
+    )
+    assert result["setup"] == "ok"
+    assert result["cli"]["action"] == "installed"
+    assert result["cli"]["source"] == str(
+        (repo / "muyan_pilot.py").resolve(),
+    )
+    uv_calls = [c for c in calls if c[:2] == ["uv", "tool"]]
+    assert uv_calls == [[
+        "uv", "tool", "install", "--force", "--reinstall", "--editable",
+        "--python", "/usr/bin/python3", str(repo),
+    ]]
+    # The reinstall precedes the unit install (daemon-reload).
+    uv_index = calls.index(uv_calls[0])
+    reload_index = next(
+        i for i, c in enumerate(calls)
+        if c[:3] == ["systemctl", "--user", "daemon-reload"]
+    )
+    assert uv_index < reload_index
+
+
+def test_run_setup_fails_fast_on_a_failed_cli_reinstall(
+    tmp_path, _cli_source_world,
+):
+    """Issue #152: a failing editable reinstall fails the setup
+    before any unit install (fail fast, no half-initialized state)."""
+    repo, installed, state = make_run_state(tmp_path)
+    _cli_source_world["module_file"] = "/elsewhere/muyan_pilot.py"
+    fake_run, calls = fake_run_factory(state)
+
+    def failing(command, **kwargs):
+        if command[:2] == ["uv", "tool"]:
+            raise subprocess.CalledProcessError(
+                1, command, stderr="uv boom",
+            )
+        return fake_run(command, **kwargs)
+
+    config = runner.load_config(make_config(tmp_path, repo))
+    with pytest.raises(pilot_setup.SetupError, match="editable tool install"):
         pilot_setup.run_setup(
             config, installed, run_command=failing,
         )
@@ -1036,7 +1202,8 @@ def test_run_setup_missing_labels_file_fails_fast(tmp_path):
 def sample_result() -> dict:
     return {
         "setup": "ok",
-        "version": 1,
+        # Issue #152 bumped the setup output contract (the cli line).
+        "version": 2,
         "base_branch": "main",
         "repos": [
             {
@@ -1082,12 +1249,22 @@ def sample_result() -> dict:
             "proxy": "healthy",
             "url": "http://127.0.0.1:18082/health",
         },
+        # Issue #152: the CLI editable-install step result.
+        "cli": {
+            "action": "verified",
+            "source": "/home/u/repo/muyan_pilot.py",
+        },
     }
 
 
 def test_format_setup_renders_stable_key_value_lines():
     lines = pilot_setup.format_setup(sample_result())
-    assert lines[0] == "setup=ok version=1 base_branch=main"
+    assert lines[0] == "setup=ok version=2 base_branch=main"
+    # Issue #152: the CLI line reports the editable install state and
+    # the import source (the checkout root `muyan_pilot.py`).
+    assert lines[1] == (
+        "cli=verified source=/home/u/repo/muyan_pilot.py"
+    )
     assert (
         "repo=xqliu/muyan-pilot permission=ADMIN "
         "default_branch=main labels=8/8" in lines

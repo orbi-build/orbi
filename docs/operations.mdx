@@ -113,10 +113,17 @@ fast through the normal `ai-blocked` path.
 
 ## The CLI (`muyan-pilot`)
 
-The official entry is the installed `muyan-pilot` console script
-(`uv tool install --python /usr/bin/python3 <clone dir>`; refresh with
-`uv tool upgrade muyan-pilot` or `uv tool install --force --reinstall
-<clone dir>` — see [Getting started](/getting-started)). The
+The official entry is the installed `muyan-pilot` console script, as an
+**editable** `uv tool` install (the official local deployment — the
+tool env imports `muyan_pilot` from the clone dir, so the
+`ExecStartPre` checkout sync is picked up by the next CLI process
+automatically and ordinary source/template changes need no reinstall or
+upgrade; `uv tool install --force --reinstall --editable --python
+/usr/bin/python3 <clone dir>` — see [Getting started](/getting-started)).
+`muyan-pilot doctor` reports the consistency (`cli_source: clean` or
+`cli_source: DRIFT` with the structured `cli_source_drift` line: actual
+import path, expected repo_dir, the exact editable reinstall command),
+and `muyan-pilot setup` verifies or reinstalls it. The
 direct-execution entry of `muyan_pilot.py` stays a development/
 compatibility path.
 
@@ -130,11 +137,12 @@ muyan-pilot add "task title" --repo OWNER/BACKLOG-REPO --config muyan-pilot.toml
 # repo (ai-pr-opened / ai-fix-needed / ai-merged / ai-blocked)
 muyan-pilot status --config muyan-pilot.toml
 
-# Read-only deployment/health report: repo commit, unit drift, git
-# transport (configured origin URL, protocol, expected SSH URL, SSH
-# probe — a failed transport is reported as `transport: FAILED ...`,
-# not raised), timer/service instance state, slots, Pi session,
-# current Issue, recent journal
+# Read-only deployment/health report: repo commit, unit drift, CLI
+# source (cli_source: clean / DRIFT + the structured cli_source_drift
+# line), git transport (configured origin URL, protocol, expected SSH
+# URL, SSH probe — a failed transport is reported as `transport:
+# FAILED ...`, not raised), timer/service instance state, slots, Pi
+# session, current Issue, recent journal
 muyan-pilot doctor --config muyan-pilot.toml
 
 # One-time, idempotent initialization (new machine / new repo): gh
