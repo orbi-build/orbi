@@ -182,6 +182,9 @@ done
 # p0 是紧急优先级 label（不是交付状态，见「领取优先级（P0）」）
 gh label create p0 --repo xqliu/muyan-pilot --force --color "fbca04" \
   --description "Muyan Pilot urgent priority: picked up before bugs and features"
+# ai-epic 是 Epic 协调 label（不是交付状态，见「Epic Issue（ai-epic）」）
+gh label create ai-epic --repo xqliu/muyan-pilot --force --color "bfdadc" \
+  --description "Epic coordination issue; not directly executable by Runner"
 gh label list --repo xqliu/muyan-pilot
 ```
 
@@ -194,6 +197,7 @@ gh label list --repo xqliu/muyan-pilot
 | `ai-merged` | 成功终态：Runner 已合并 PR 并确认 merge commit 落在保护分支 | Runner 合并并确认后添加（替代 `ai-pr-opened`） | 终态，不再自动变更；PR body 的 `Fixes #N` 在 merge 时自动关闭 Issue |
 | `ai-blocked` | Runner fail fast，需要人工处理；不会被自动拾取 | 命令失败、现场无法恢复、审查超轮等 fail fast 场景 | 人工修复现场并重新转为 `ai-fix-needed`（同一 PR）或重新领取（新 run）；不自动恢复 |
 | `p0` | 紧急优先级（**不是交付状态**）：只改变领取顺序，不改变 Issue 粒度、交付状态或终态语义 | 人工加 label（生产链路出现高优先级故障时） | 人工移除；Runner 从不增删该 label |
+| `ai-epic` | Epic 协调 Issue（发布清单/多任务聚合，**不是可执行任务、不是交付状态**）：只负责聚合与发布门禁 | 人工加 label（创建 Epic 时） | 人工移除（Epic 完成并关闭时）；Runner 从不增删该 label，也从不领取带它的 Issue |
 
 ## 任务依赖（blockedBy）
 
@@ -222,6 +226,15 @@ Runner 行为（单 slot 串行，只做“读字段-跳过-等待”，不引�
 - 领取日志行携带明确的 `priority=p0` / `priority=normal` 字段；GitHub 进度评论显示 `priority` 字段；run 现场（`run_info`）与 started milestone 携带 `priority=...`；
 - P0 执行失败进入 `ai-blocked`（alone，移除领取标签）：`ai-ready` 标签残留被所有 ready 扫描排除，**没有任何 tick 会重新领取**，因此不会无限重试；失败评论和 blocked 现场保留具体失败原因和可恢复现场；
 - P0 的 review/merge 失败沿用现有同一 PR、有限 review round（`MAX_REVIEW_ROUNDS=5`）机制，不引入新的循环。
+
+## Epic Issue（ai-epic）
+
+多任务工作（发布清单、跨任务聚合）用 `ai-epic` 标签的协调 Issue 表达（例如 v0.1 发布清单 #80、0.2.0 工作区 #133）——**不是**可执行任务，也不引入 DAG、数据库、队列或常驻服务：
+
+- **职责边界**：Epic 只负责聚合和发布门禁；实际开发项必须拆成独立的 `ai-ready` 子 Issue，每个子 Issue 一个 runtime outcome、一个 PR、一次独立审查、一次合并。子 Issue 之间的前置条件用 GitHub 原生 `blockedBy` 表达（见「任务依赖（blockedBy）」），Runner 不解析正文复选框或 `Depends on` 行；
+- **Runner 行为（Issue #93）**：普通领取扫描（P0/bug/普通三次扫描）**从不领取**带 `ai-epic` 的 Issue——不加 `ai-in-progress`、不改任何标签、不建 worktree、不启动 `run_pi`、不占执行 slot，记录结构化日志 `epic_not_claimed issue=N repo=...` 后继续检查下一个 ready Issue（Epic 检查先于 blockedBy 检查：「它是 Epic」才是被记录的原因）；重启恢复扫描同样排除 `ai-epic`——遗留 `ai-in-progress` 的 Epic（#80 场景）绝不会被恢复进 run；
+- **完成条件**：子 Issue 已完成、相关 PR 已合并、发布 tag/交付物已存在于远端、没有遗留 `ai-in-progress`。这些条件由 GitHub Issue/label、原生 `blockedBy`、PR 和远端 tag 证据确定；
+- **关闭门禁**：任一完成条件未满足时，Epic 不得被标记完成或自动关闭。Epic 由人工或 release task（一个普通 `ai-ready` Issue，职责是对账上述证据，通常伴随最后一个 `Fixes #<epic>` commit/PR）关闭——Runner 从不标记 Epic 完成，也从不自动关闭 Epic。
 
 ## 自动可观测（正常运行不需要执行任何命令）
 

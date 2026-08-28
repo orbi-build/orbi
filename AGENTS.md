@@ -283,6 +283,34 @@ acceptance criteria.
 - review/merge failures of a P0 PR follow the existing same-PR, bounded
   review-round mechanism (no new loop).
 
+## Epic Issues (ai-epic)
+
+- An Epic is a coordination Issue that groups related tasks (a release
+  checklist, a multi-task grouping). It carries the plain `ai-epic`
+  label and is NOT an executable task: the actual work is split into
+  independent `ai-ready` sub-Issues, each with one runtime outcome, one
+  PR, one independent review and one merge. Preconditions between
+  sub-Issues use the native `blockedBy` relation (see Task
+  dependencies) — the Runner never parses body checkboxes or
+  `Depends on` lines to infer dependencies.
+- The ready claim scan NEVER claims an `ai-epic` Issue (Issue #93): no
+  `ai-in-progress`, no label change, no worktree, no run, no slot — a
+  structured `epic_not_claimed issue=N repo=...` line is written and
+  the next ready Issue is considered. The Epic check precedes the
+  blockedBy check: "it is an Epic" is the recorded cause, never a
+  `blocked_by` line. The restart-resume scan excludes `ai-epic` too:
+  a legacy Epic left behind with `ai-in-progress` (the #80 scene,
+  before the Epic mechanism existed) is never resumed into a run.
+- The Epic's completion is judged from GitHub evidence — sub-Issues
+  done, their PRs merged, the release tag/artifacts on the remote, no
+  leftover `ai-in-progress` — and the Epic is closed by a human or a
+  release task (a regular `ai-ready` Issue that reconciles that
+  evidence, typically with a final `Fixes #<epic>`). The Runner never
+  marks an Epic complete or closes it: while any completion condition
+  is unmet the Epic stays open. No database, queue or resident service
+  tracks the Epic — GitHub Issues/labels, native `blockedBy`, PRs and
+  the remote tag are the only state.
+
 ## Review, in-session fix and merge (same PR)
 
 - The review session is independent (a new Pi process, `prompt_review.md`,

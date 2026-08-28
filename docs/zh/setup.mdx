@@ -25,7 +25,7 @@ setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下
    OWNER/REPO` 时恰好一个）：
    - 仓库存在且 viewer 有写权限（`gh repo view` → `viewerPermission`
      必须是 `WRITE`、`MAINTAIN` 或 `ADMIN`）；
-   - 七个平台标签从仓库根目录的 `labels.toml` **声明式**对齐——标签
+   - 八个平台标签从仓库根目录的 `labels.toml` **声明式**对齐——标签
      名/颜色/描述的唯一事实源：缺的创建、漂移的更新、从不删除，业务
      标签（`bug`、`enhancement`、...）从不被碰。
 4. **Systemd units** — 仓库模板（`systemd/muyan-pilot.service`、
@@ -71,14 +71,14 @@ agent 和脚本可以解析：
 
 ```text
 setup=ok version=1 base_branch=main
-repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=7/7
+repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=8/8
 service=installed path=~/.config/systemd/user/muyan-pilot.service sha256=9f2c...
 timer=enabled active=true next="Thu 2026-08-27 10:00:00 +08"
 checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:xqliu/muyan-pilot.git protocol=ssh migrated=false ssh_reachable=true
 model_endpoint=optional optional_proxy=healthy url=http://127.0.0.1:18082/health
 ```
 
-`labels=7/7` 表示七个平台标签都与 `labels.toml` 一致；`next` 是 timer
+`labels=8/8` 表示八个平台标签都与 `labels.toml` 一致；`next` 是 timer
 的下次触发时间（没有时为 `-`）；`optional_proxy` 是 `healthy`、
 `unhealthy` 或 `unavailable`，从不改变退出码。`migrated=true` 表示
 setup 把 HTTPS `origin` 改写成了 SSH URL（重跑后报告 `migrated=false`）；
@@ -97,7 +97,7 @@ muyan-pilot setup --config muyan-pilot.toml --json
 ```bash
 $ muyan-pilot setup --config muyan-pilot.toml
 setup=ok version=1 base_branch=main
-repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=7/7
+repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=8/8
 service=installed path=~/.config/systemd/user/muyan-pilot.service sha256=9f2c...
 timer=enabled active=true next="Thu 2026-08-27 10:00:00 +08"
 checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:xqliu/muyan-pilot.git protocol=ssh migrated=false ssh_reachable=true

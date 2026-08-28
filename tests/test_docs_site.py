@@ -297,9 +297,9 @@ def test_docs_document_labels_run_marker_epic_release_task_and_p0():
     coordination issues (ai-epic), Release tasks, and the P0 pickup
     order (the plain `p0` label, Issue #101: `ai-ready`+`p0` before
     `ai-ready`+`bug` before plain `ai-ready`, failed P0 enters
-    `ai-blocked` with no infinite retry). Epic/Release task/P0 are
-    workflow concepts — the docs must not claim runner features that are
-    not implemented yet (Issue #93/#98 are still open)."""
+    `ai-blocked` with no infinite retry). The Epic skip is implemented
+    behavior (Issue #93: the claim scan never claims an `ai-epic`
+    Issue and logs `epic_not_claimed`)."""
     text = page_text("workflow")
     assert "ai-epic" in text, "workflow must explain Epic issues (ai-epic)"
     assert "Release" in text, "workflow must explain Release tasks"
@@ -453,14 +453,17 @@ def test_docs_smoke_walkthrough_is_clone_path_independent():
         )
 
 
-def test_docs_do_not_document_unimplemented_runner_features():
-    """Acceptance: no unimplemented feature. The runner does not skip
-    ai-epic Issues yet (Issue #93 open) and has no P0 priority field
-    (Issue #101 open) — the docs may name the concepts but must not
-    claim that behavior from the current code."""
-    text = page_text("workflow").lower()
-    assert "epic_not_claimed" not in text, (
-        "the runner does not log epic_not_claimed yet (Issue #93 is open)"
+def test_docs_document_the_implemented_epic_skip():
+    """Issue #93: the runner skips `ai-epic` Issues in the claim scan
+    with the structured `epic_not_claimed` line — the workflow page
+    must document that real behavior (the docs may name a concept only
+    when the code carries it)."""
+    text = page_text("workflow")
+    assert "ai-epic" in text, (
+        "workflow must name the ai-epic label the claim scan skips"
+    )
+    assert "epic_not_claimed" in text, (
+        "workflow must document the structured epic_not_claimed log line"
     )
     operations = page_text("operations").lower()
     assert "priority" not in operations or "bug" in operations, (

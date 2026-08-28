@@ -9,7 +9,8 @@ initialization entry for a new machine or new task-pool repository:
   ``systemctl --user`` user bus;
 - aligns the platform labels (``ai-ready``, ``ai-in-progress``,
   ``ai-pr-opened``, ``ai-fix-needed``, ``ai-merged``, ``ai-blocked``,
-  ``p0``) declaratively from the repo-managed ``labels.toml`` — the
+  ``p0``, ``ai-epic``) declaratively from the repo-managed
+  ``labels.toml`` — the
   single source of truth for label name, color and description. A
   missing label is created, a drifted label is updated, nothing is
   deleted, and no business label (``bug``, ``enhancement``, ...) is
@@ -54,6 +55,10 @@ REQUIRED_LABELS = (
     "ai-merged",
     "ai-blocked",
     "p0",
+    # Epic marker (Issue #93): the claim scan skips `ai-epic` Issues
+    # (`epic_not_claimed`), so the label is platform state the setup
+    # entry must guarantee — same as every delivery-state label.
+    "ai-epic",
 )
 COLOR_PATTERN = re.compile(r"^[0-9a-fA-F]{6}$")
 
@@ -78,7 +83,7 @@ class SetupError(RuntimeError):
 def load_label_defs(path: Path) -> list[dict]:
     """Parse and validate the repo-managed label definitions.
 
-    The file must define EXACTLY the 7 platform labels (no more, no
+    The file must define EXACTLY the 8 platform labels (no more, no
     less, no duplicates), each with a non-empty name, a 6-hex color and
     a non-empty description. Any deviation is a fail-fast SetupError:
     a typo'd or missing label would silently skip a delivery state.

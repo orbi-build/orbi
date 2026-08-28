@@ -18,7 +18,8 @@ README = REPO_ROOT / "README.md"
 AGENTS = REPO_ROOT / "AGENTS.md"
 
 # The runner's delivery-state labels plus the claim label (`ai-ready`
-# is a literal in the scans, not a runner constant).
+# is a literal in the scans, not a runner constant) and the Epic marker
+# (Issue #93: the claim scan skips `ai-epic` Issues).
 KNOWN_LABELS = frozenset({
     "ai-ready",
     runner.IN_PROGRESS_LABEL,
@@ -26,6 +27,7 @@ KNOWN_LABELS = frozenset({
     runner.FIX_NEEDED_LABEL,
     runner.MERGED_LABEL,
     runner.BLOCKED_LABEL,
+    runner.EPIC_LABEL,
 })
 
 LABEL_PATTERN = re.compile(r"\bai-[a-z][a-z-]*\b")
