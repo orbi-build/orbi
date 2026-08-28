@@ -5,15 +5,27 @@ clone 路径下都能工作——不依赖任何特定机器布局。
 
 ## 前提
 
+这些前提由**你自己安装**——`muyan-pilot setup` 只**检查**它们（校验
+`git`、`gh`、`python3`、`uv` 和 systemd user session）；它从不自动安装
+系统包、从不安装 `gh`、也不执行 `gh auth login`（你先登录，setup 只
+验证登录状态）。
+
 | 要求 | 用途 | 检查 |
 |---|---|---|
 | Python 3.14 | Runner 和测试契约（CI 固定同一 minor 版本） | `python3 --version` |
-| [uv](https://docs.astral.sh/uv/) | 把 `muyan-pilot` CLI 装进隔离的 tool 环境 | `uv --version` |
+| [uv](https://docs.astral.sh/uv/) | 把 `muyan-pilot` CLI 装进隔离的 tool 环境（setup 的 CLI editable 步骤会调 `uv tool install`） | `uv --version` |
 | [Pi](https://github.com/earendil-works/pi) CLI | 开发 agent；每个任务一个完整 session | `pi --version` |
 | Git | worktree、分支、base 新鲜度 | `git --version` |
 | GitHub CLI（`gh`） | Issue、标签、PR、merge | `gh auth status` |
 | systemd（user session） | 每 5 分钟触发一个 tick 的 timer | `systemctl --user status` |
 | 可用的 OpenAI-compatible 模型 endpoint | Pi 的模型 provider——本地 llama.cpp server 或任意 OpenAI-compatible API | 一次真实 `pi --print` 调用（见下） |
+
+用官方安装器安装 `uv`（已对照
+[uv 官方文档](https://docs.astral.sh/uv/getting-started/installation/)）：
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 
 Pi 必须配置一个能稳定服务 coding agent 的 provider（system prompt +
 tool schemas + 长 session）。派活之前先用一次真实调用验证 endpoint——
@@ -108,9 +120,12 @@ context_files = []
 
 ## 4. 运行一次性 setup
 
-setup 入口用一条命令完成全部初始化：验证 `gh auth status` 和仓库权限、
-从仓库管理的 `labels.toml`（标签名/颜色/描述的唯一事实源——commit 从不
-创建标签，缺标签会让扫描静默漏掉对应状态）声明式对齐平台标签、安装
+setup 入口用一条命令完成全部初始化：校验你安装好的前提（git、gh、
+python3、uv、systemd user session——缺失会 fail fast 并给出可执行的
+安装指引）、校验或重装 editable CLI 安装（Issue #152——运行中的 CLI
+必须从部署 checkout 导入）、验证 `gh auth status` 和仓库权限、从仓库
+管理的 `labels.toml`（标签名/颜色/描述的唯一事实源——commit 从不创建
+标签，缺标签会让扫描静默漏掉对应状态）声明式对齐平台标签、安装
 systemd user units 并 enable timer、检查 checkout、报告可选模型 proxy：
 
 ```bash

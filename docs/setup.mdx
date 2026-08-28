@@ -21,10 +21,13 @@ Setup is **fail-fast**: a core prerequisite failure stops the run
 before any later mutation, with the concrete reason on stderr and a
 non-zero exit code.
 
-1. **Commands** — `git`, `gh`, `python3` and the installed
-   `muyan-pilot` CLI on the PATH, and a reachable `systemctl --user`
-   user bus (a container or headless session without a user bus fails
-   with the bus error).
+1. **Commands** — `git`, `gh`, `python3`, `uv` and the installed
+   `muyan-pilot` CLI on the PATH (you install these yourself — setup
+   only checks them; a missing one fails fast with the actionable
+   install guidance, e.g. `required command missing: uv (not on PATH)
+   — install uv first: curl -LsSf https://astral.sh/uv/install.sh | sh`),
+   and a reachable `systemctl --user` user bus (a container or headless
+   session without a user bus fails with the bus error).
 2. **CLI editable install** (Issue #152) — the official local
    deployment is the EDITABLE `uv tool` install: the tool env imports
    `muyan_pilot` from the deployment checkout, so the `ExecStartPre`
@@ -148,6 +151,7 @@ but the core setup still succeeds with exit code `0`.)
 Failures (non-zero exit code, `setup_failed reason=...` on stderr):
 
 ```text
+setup_failed reason=required command missing: uv (not on PATH) — install uv first: curl -LsSf https://astral.sh/uv/install.sh | sh (https://docs.astral.sh/uv/getting-started/installation/)
 setup_failed reason=systemctl --user user bus unavailable (is a systemd user session running?): ...
 setup_failed reason=editable tool install failed for /path/to/checkout: ... (fix: uv tool install --force --reinstall --editable --python /usr/bin/python3 /path/to/checkout)
 setup_failed reason=repo not accessible: nobody/no-such (gh repo view failed: ...)
@@ -157,10 +161,11 @@ setup_failed reason=checkout is not clean: /path/to/checkout (uncommitted change
 setup_failed reason=checkout check failed for /path/to/checkout: ssh_unreachable: git ls-remote git@github.com:owner/repo.git failed: ... stderr=git@github.com: Permission denied (publickey). — fix SSH and retry
 ```
 
-A wrong repo, missing labels that cannot be created (permission), a
-dirty checkout, an unreachable SSH (no HTTPS fallback) or a missing
-systemd user bus all stop the setup with the concrete reason —
-nothing is half-initialized without a clear signal.
+A missing prerequisite command (e.g. `uv`), a wrong repo, missing
+labels that cannot be created (permission), a dirty checkout, an
+unreachable SSH (no HTTPS fallback) or a missing systemd user bus all
+stop the setup with the concrete reason — nothing is half-initialized
+without a clear signal.
 
 ## Idempotency
 
