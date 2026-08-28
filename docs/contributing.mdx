@@ -17,6 +17,23 @@ the desired behavior is pinned — not as a vague wish.
 - Multi-task work is organized as an Epic (see [Workflow](/workflow)):
   the Epic coordinates, the sub-Issues deliver.
 
+## Minimal implementation (KISS/LEAN)
+
+The Pilot implements the **smallest complete change** that satisfies the
+Issue's acceptance criteria — KISS and LEAN are the development contract
+(`AGENTS.md`, Issue #118):
+
+- No speculative features, no no-benefit abstractions, no extra framework
+  layers, no fallbacks, no future-proofing, no scope expansion beyond the
+  acceptance criteria.
+- 如无必要勿增实体 — do not multiply entities beyond necessity: every new
+  file, dependency, state, label, command and abstraction must map to an
+  acceptance criterion of the Issue.
+- When two designs both satisfy the requirements, the simpler one wins:
+  fewer concepts, fewer files.
+- The MVP boundary stays intact: no database, queue, DAG, daemon, risk
+  engine or fallback.
+
 ## Creating an Issue
 
 Dispatch a task for the Pilot by creating an Issue and labeling it

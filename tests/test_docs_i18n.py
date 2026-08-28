@@ -297,6 +297,31 @@ def test_chinese_contributing_documents_issue_bug_and_pr_paths():
     assert "Fixes #" in text, "contributing must document the PR body contract"
 
 
+def test_chinese_contributing_documents_the_minimal_implementation_principle():
+    """Issue #118: the Chinese contributing page carries the same
+    KISS/LEAN minimal implementation principle as the English page —
+    smallest complete change, forbidden expansion list, 如无必要勿增实体,
+    the simpler-design rule and the unchanged MVP boundary."""
+    text = zh_page_text("contributing")
+    assert "KISS" in text, "contributing must name KISS"
+    assert "LEAN" in text, "contributing must name LEAN"
+    assert "最小完整变更" in text, (
+        "contributing must state the smallest complete change principle"
+    )
+    assert "如无必要勿增实体" in text, (
+        "contributing must state 如无必要勿增实体"
+    )
+    assert "验收条件" in text, (
+        "contributing must tie every new entity to an acceptance criterion"
+    )
+    assert "概念更少、文件更少" in text, (
+        "contributing must prefer the simpler design"
+    )
+    assert "未来功能" in text or "future-proofing" in text, (
+        "contributing must forbid future features / future-proofing"
+    )
+
+
 def test_chinese_kv_cache_page_matches_the_upstream_port_contract():
     """Same port contract as the English page: the agent-facing port
     18082 (the committed unit's value) stays documented, but the

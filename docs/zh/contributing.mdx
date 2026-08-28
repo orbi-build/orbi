@@ -15,6 +15,19 @@ PR，仓库契约（`AGENTS.md`）同样适用于人类贡献者。
 - 多任务工作组织为 Epic（见[工作流](/zh/workflow)）：Epic 负责协调，
   子 Issue 负责交付。
 
+## 最小实现（KISS/LEAN）
+
+Pilot 只实现满足 Issue 验收标准的**最小完整变更**——KISS 和 LEAN 是
+开发契约（`AGENTS.md`，Issue #118）：
+
+- 不做 speculative feature、无收益抽象、额外框架层、fallback、未来功能
+  （future-proofing），不扩张验收标准之外的范围。
+- 如无必要勿增实体：每个新增文件、依赖、状态、label、命令和抽象都必须
+  对应 Issue 的一个验收条件。
+- 两个设计都满足需求时，选更简单的：概念更少、文件更少。
+- MVP 边界保持不变：无数据库、无队列、无 DAG、无 daemon、无风险模型、
+  无 fallback。
+
 ## 创建 Issue
 
 通过创建 Issue 并加 `ai-ready` 标签来给 Pilot 派活（CLI 一步完成两

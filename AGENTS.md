@@ -20,6 +20,24 @@ is **one runtime outcome** (when X, should Y, actually Z).
   hundreds of lines. Title should work as a test name.
 - Open the Issue once the root cause is pinned.
 
+## Minimal implementation (KISS/LEAN)
+
+The positive contract for every implement and review session (Issue #118):
+implement the smallest complete change that satisfies the Issue's
+acceptance criteria.
+
+- KISS and LEAN are the default: no speculative feature, no
+  no-benefit abstraction, no extra framework layer, no fallback, no
+  future-proofing, no scope expansion beyond the Issue's acceptance
+  criteria.
+- 如无必要勿增实体 — do not multiply entities beyond necessity: every new
+  file, dependency, state, label, command and abstraction must map
+  to an acceptance criterion of the Issue.
+- When two designs both satisfy the requirements, choose the simpler one:
+  fewer concepts, fewer files.
+- The MVP scope below stays unchanged: no database, queue, DAG, daemon,
+  risk engine or fallback.
+
 ## Implement vs review
 
 - Implementer session: plan, TDD, tests, push one PR.

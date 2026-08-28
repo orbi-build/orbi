@@ -36,6 +36,21 @@ This project is intentionally an MVP. Do not invent a task platform, database,
 queue framework, policy engine, risk model, multi-agent DAG, daemon loop, or fallback path.
 Use the existing GitHub Issue task pool and fail fast with useful logs.
 
+Minimal implementation — KISS/LEAN (Issue #118):
+
+- Implement only the Issue's acceptance criteria: the smallest complete
+  change that makes the required behavior real. Speculative features,
+  no-benefit abstractions, extra framework layers, fallbacks,
+  future-proofing and scope expansion are forbidden — an Issue is one
+  runtime outcome, not a platform project.
+- 如无必要勿增实体 (do not multiply entities beyond necessity): every new
+  file, dependency, state, label, command and abstraction must map to an
+  acceptance criterion of this Issue.
+- When two designs both satisfy the requirements, choose the simpler one:
+  fewer concepts, fewer files.
+- This does not relax the MVP boundary: no database, queue, DAG, daemon,
+  risk engine or fallback.
+
 Hard rules for external behavior (Issue #73):
 
 - Before writing an external interface, CLI, config, or HTTP path, verify it

@@ -30,8 +30,8 @@ build files, and the changed code plus its callers before judging.
 
 - R1 parameters/contract, R2 core logic, R3 boundaries, R4 end-to-end call
   chain, R5 requirements/design (every acceptance item has evidence),
-  R6 dependencies/architecture, R7 observability, R8 KISS/equivalent refactor,
-  R9 exception propagation.
+  R6 dependencies/architecture, R7 observability, R8 KISS/scope and
+  equivalent refactor, R9 exception propagation.
 - Verify external behavior (Issue #73): every API path, CLI argument, config
   key and status code in the diff must be verified against the official docs
   or a real call — flag "this external behavior was not verified" when it was
@@ -49,6 +49,17 @@ build files, and the changed code plus its callers before judging.
   cap, or pytest-timeout), is a **Blocker** — the red phase must fail fast,
   never hang (the 99% CPU spin / forever `next(g)` class of hang must be
   caught here, not shipped).
+- Out-of-scope and over-engineering (R8, Issue #118): the diff may only
+  implement the Issue's acceptance criteria — the smallest complete
+  change. A speculative feature, no-benefit abstraction, extra framework
+  layer, fallback, future-proofing, or scope expansion is a finding, and
+  so is any new file, dependency, state, label, command or abstraction
+  that does not map to an acceptance criterion (如无必要勿增实体: do not
+  multiply entities beyond necessity). When two designs both satisfy the
+  requirements, the simpler one (fewer concepts, fewer files) is the
+  contract; a more complex design that adds no required behavior is a
+  finding. Every such finding states the minimal fix direction: delete or
+  shrink the out-of-scope part until only the acceptance criteria remain.
 - Verify the run evidence: the real test/build commands were run and pass in
   the repository's declared runtime; Python business code keeps 100% line and
   branch coverage when Python changed.

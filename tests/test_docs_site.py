@@ -369,6 +369,45 @@ def test_docs_document_contributing_paths():
     assert "Fixes #" in text, "contributing must document the PR body contract"
 
 
+def test_docs_document_the_minimal_implementation_principle():
+    """Issue #118: the contributing page documents Issue granularity and
+    the KISS/LEAN minimal implementation principle — the smallest
+    complete change for the acceptance criteria, the forbidden expansion
+    list, 如无必要勿增实体 (every new entity maps to an acceptance
+    criterion), the simpler-design rule, and the unchanged MVP
+    boundary."""
+    text = page_text("contributing")
+    assert "issue granularity" in text.lower(), (
+        "contributing must document the Issue granularity"
+    )
+    assert "kiss" in text.lower(), "contributing must name KISS"
+    assert "lean" in text.lower(), "contributing must name LEAN"
+    assert "smallest complete" in text.lower(), (
+        "contributing must state the smallest complete change principle"
+    )
+    assert "speculative" in text.lower(), (
+        "contributing must forbid speculative features"
+    )
+    assert "no-benefit abstraction" in text.lower(), (
+        "contributing must forbid no-benefit abstractions"
+    )
+    assert "future-proofing" in text.lower(), (
+        "contributing must forbid future-proofing"
+    )
+    assert "scope expansion" in text.lower(), (
+        "contributing must forbid scope expansion"
+    )
+    assert "如无必要勿增实体" in text, (
+        "contributing must state 如无必要勿增实体"
+    )
+    assert "acceptance criterion" in text.lower(), (
+        "contributing must tie every new entity to an acceptance criterion"
+    )
+    assert "fewer concepts, fewer files" in text.lower(), (
+        "contributing must prefer the simpler design"
+    )
+
+
 def test_docs_document_the_git_transport_boundary():
     """Issue #114: the docs must document the two-channel boundary —
     git data operations over SSH (including workflow file pushes),
