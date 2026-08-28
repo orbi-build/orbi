@@ -153,6 +153,61 @@ def check_unit_drift(repo_dir: Path,
     )
 
 
+def sync_drifted_units(repo_dir: Path,
+                       installed_dir: Path | None = None,
+                       *, run_command) -> list[dict]:
+    """Pre-start self-heal for drifted units (Issue #142).
+
+    The normal scene: a template change merged to main, the
+    ExecStartPre-synced checkout carries the new templates, and the
+    installed units are still the old ones. Runs the SAME idempotent
+    install (``install_units``: copy the templates, daemon-reload,
+    enable the timer — never start/stop/restart the service, so a
+    currently running Runner is untouched) and re-verifies with the
+    SAME hash check (``unit_status``). Clean after the sync: logs one
+    structured ``unit_drift auto_synced`` line per unit (unit,
+    before/after sha256, deployed commit) and returns the per-unit
+    report. Still drifted after the sync: logs the structured
+    ``unit_drift`` lines and raises ``UnitDriftError`` (fail fast —
+    the caller claims no Issue). A failing install step propagates
+    unchanged. No drift: returns ``[]`` without touching anything.
+    """
+    repo_dir = Path(repo_dir)
+    if installed_dir is None:
+        installed_dir = installed_unit_dir()
+    installed_dir = Path(installed_dir)
+    before = unit_status(repo_dir, installed_dir)
+    if not any(entry["drifted"] for entry in before):
+        return []
+    result = install_units(repo_dir, installed_dir, run_command=run_command)
+    after = unit_status(repo_dir, installed_dir)
+    lines = drift_lines(after)
+    if lines:
+        for line in lines:
+            LOGGER.error(line)
+        raise UnitDriftError(
+            "installed systemd units still drift after the pre-start "
+            f"sync; sync with: {FIX_COMMAND}\n" + "\n".join(lines)
+        )
+    report: list[dict] = []
+    for entry_before, entry_after in zip(before, after):
+        LOGGER.info(
+            "unit_drift auto_synced unit=%s "
+            "before_sha256=%s after_sha256=%s commit=%s",
+            entry_after["unit"],
+            entry_before["installed_sha256"] or "-",
+            entry_after["installed_sha256"],
+            result["commit"],
+        )
+        report.append({
+            "unit": entry_after["unit"],
+            "before_sha256": entry_before["installed_sha256"],
+            "after_sha256": entry_after["installed_sha256"],
+            "commit": result["commit"],
+        })
+    return report
+
+
 def install_units(repo_dir: Path, installed_dir: Path | None = None,
                   *, run_command) -> dict:
     """Idempotently install the repo templates as the user units.

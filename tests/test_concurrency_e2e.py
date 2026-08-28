@@ -1133,14 +1133,16 @@ def test_live_pr_opened_delivery_is_not_resumed_by_second_runner(
     assert slots_held(clone, 2) == [(1, None), (2, None)]
 
 
-def test_unit_drift_blocks_the_start_without_claiming(clone, tmp_path):
-    """Issue #103: a drifted installed unit fails the start BEFORE any
-    claim: non-zero exit, the structured `unit_drift` line in the log
-    (repo path, installed path, hashes, fix command), no slot, no
-    label change, no Pi — and once the units are synced with the
-    idempotent install the same start passes the preflight and
-    claims normally. A currently RUNNING task is never interrupted;
-    only the next start is blocked."""
+def test_unit_drift_auto_syncs_and_claims_without_human_intervention(
+    clone, tmp_path,
+):
+    """Issue #142: the normal scene — a template change merged to main
+    (the installed units are still the old ones). The start self-heals
+    with the SAME idempotent install (copy, daemon-reload, enable the
+    timer — never start/stop/restart the service), the re-verify is
+    clean, the structured `unit_drift auto_synced` line is logged and
+    the tick claims normally — no per-tick drift loop until a human
+    intervenes. A clean deployment still logs `unit_drift clean`."""
     bin_dir = install_fakes(tmp_path)
     state = tmp_path / "gh-state.json"
     write_state(state, {"7": ["ai-ready"]})
@@ -1158,6 +1160,80 @@ def test_unit_drift_blocks_the_start_without_claiming(clone, tmp_path):
     runner_proc = start_runner(
         config, bin_dir, state, pi_log, unit_dir=unit_dir,
     )
+    wait_for(
+        lambda: "ai-in-progress" in read_state(state)["issues"]["7"]["labels"],
+        what="runner to self-heal the drift and claim",
+    )
+    runner_proc.kill()
+    out, err = runner_proc.communicate(timeout=30)
+    # The self-heal is logged with the structured auto_synced line.
+    assert "unit_drift auto_synced unit=muyan-pilot.timer" in err
+    assert "before_sha256=" in err
+    assert "after_sha256=" in err
+    assert "commit=" in err
+    # The repo template won: the installed unit matches it again.
+    assert (unit_dir / "muyan-pilot.timer").read_bytes() == (
+        clone / "systemd" / "muyan-pilot.timer"
+    ).read_bytes()
+    assert "ai-in-progress" in read_state(state)["issues"]["7"]["labels"]
+
+    # A clean deployment (the units now match the templates) passes
+    # the preflight without any sync and claims normally.
+    write_state(state, {"8": ["ai-ready"]})
+    runner_proc = start_runner(
+        config, bin_dir, state, pi_log, unit_dir=unit_dir,
+    )
+    wait_for(
+        lambda: "ai-in-progress" in read_state(state)["issues"]["8"]["labels"],
+        what="runner to claim on a clean deployment",
+    )
+    runner_proc.kill()
+    out, err = runner_proc.communicate(timeout=30)
+    assert "unit_drift clean" in err
+    assert "unit_drift auto_synced" not in err
+    assert "ai-in-progress" in read_state(state)["issues"]["8"]["labels"]
+
+
+def test_unit_drift_unresolvable_blocks_the_start_without_claiming(
+    clone, tmp_path,
+):
+    """Issue #142: a drift the self-heal CANNOT resolve (the installed
+    unit is re-tampered right after the install's copy, so the
+    re-verify still sees it) fails the start BEFORE any claim:
+    non-zero exit, the structured `unit_drift` line in the log (repo
+    path, installed path, hashes, fix command), no slot, no label
+    change, no Pi."""
+    bin_dir = install_fakes(tmp_path)
+    state = tmp_path / "gh-state.json"
+    write_state(state, {"7": ["ai-ready"]})
+    pi_log = tmp_path / "pi.log"
+    config = write_config(clone, tmp_path, 1)
+
+    # A drifted deployment: the installed timer carries one extra line.
+    unit_dir = tmp_path / "unresolvable-units"
+    install_deployed_units(unit_dir)
+    with (unit_dir / "muyan-pilot.timer").open(
+        "a", encoding="utf-8",
+    ) as handle:
+        handle.write("# drift\n")
+
+    # A fake systemctl on PATH: every daemon-reload re-tampers the
+    # installed timer AFTER the install's copy, so the re-verify still
+    # sees the drift (an unresolvable scene).
+    fake_systemctl = bin_dir / "systemctl"
+    fake_systemctl.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = '--user' ] && [ \"$2\" = 'daemon-reload' ]; then\n"
+        f"    printf '# drift\\n' >> {unit_dir / 'muyan-pilot.timer'}\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_systemctl.chmod(0o755)
+
+    runner_proc = start_runner(
+        config, bin_dir, state, pi_log, unit_dir=unit_dir,
+    )
     out, err = runner_proc.communicate(timeout=60)
     assert runner_proc.returncode != 0, err
     assert "unit_drift unit=muyan-pilot.timer" in err
@@ -1166,24 +1242,10 @@ def test_unit_drift_blocks_the_start_without_claiming(clone, tmp_path):
     assert "repo_sha256=" in err
     assert "installed_sha256=" in err
     assert "fix=muyan-pilot install-units" in err
+    assert "unit_drift auto_synced" not in err
     # Nothing was claimed: no labels, no comments, no Pi, no slot.
     snap = read_state(state)
     assert snap["issues"]["7"]["labels"] == ["ai-ready"]
     assert snap["comments"] == []
     assert pi_invocations(pi_log) == []
     assert slot_files(clone) == []
-
-    # After syncing the units (the idempotent install), the same start
-    # passes the preflight and claims normally.
-    install_deployed_units(unit_dir)
-    runner_proc = start_runner(
-        config, bin_dir, state, pi_log, unit_dir=unit_dir,
-    )
-    wait_for(
-        lambda: "ai-in-progress" in read_state(state)["issues"]["7"]["labels"],
-        what="runner to claim after the units are synced",
-    )
-    runner_proc.kill()
-    out, err = runner_proc.communicate(timeout=30)
-    assert "unit_drift clean" in err
-    assert "ai-in-progress" in read_state(state)["issues"]["7"]["labels"]

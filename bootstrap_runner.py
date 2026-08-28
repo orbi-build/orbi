@@ -50,7 +50,11 @@ from pi_activity import (
     sanitize,
 )
 from progress import ProgressPublisher, format_elapsed, progress_body
-from systemd_deploy import UnitDriftError, check_unit_drift
+from systemd_deploy import (
+    UnitDriftError,
+    check_unit_drift,
+    sync_drifted_units,
+)
 
 
 LOGGER = logging.getLogger("muyan_pilot.bootstrap")
@@ -3127,15 +3131,20 @@ def main(argv: list[str] | None = None) -> int:
 
     config = load_config(args.config)
     validate_config(config)
-    # Deployment consistency (Issue #103): BEFORE any slot or claim the
-    # installed systemd units must match the repo templates (the
-    # templates the ExecStartPre-synced checkout just loaded). Drift
-    # logs a structured `unit_drift` line per unit and fails fast:
-    # this start takes no slot, claims no Issue and changes no label
-    # until the units are synced with the idempotent install command
-    # (`muyan_pilot.py install-units`). A currently RUNNING task is
-    # never interrupted — only the next start is blocked.
-    check_unit_drift(config["repo_dir"])
+    # Deployment consistency (Issue #103, #142): BEFORE any slot or
+    # claim the installed systemd units must match the repo templates
+    # (the templates the ExecStartPre-synced checkout just loaded).
+    # Drift is self-healed with the SAME idempotent install (copy the
+    # templates, daemon-reload, enable the timer — never start/stop/
+    # restart the service: a currently RUNNING task is never
+    # interrupted) and re-verified with the SAME hash check. Drift
+    # that survives the sync — or a failing install step — logs a
+    # structured `unit_drift` line per unit and fails fast: this
+    # start takes no slot, claims no Issue and changes no label.
+    try:
+        check_unit_drift(config["repo_dir"])
+    except UnitDriftError:
+        sync_drifted_units(config["repo_dir"], run_command=run_command)
     # Git transport preflight (Issue #114): BEFORE any slot or claim
     # the deployment checkout's git transport must be SSH and reachable
     # (the task worktrees share the checkout's single `origin` remote,

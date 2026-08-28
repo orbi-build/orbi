@@ -32,25 +32,23 @@ systemctl --user list-timers muyan-pilot.timer
 systemctl --user status muyan-pilot.service
 ```
 
-## Unit 模板变更后（Issue #131）
+## Unit 模板变更后（Issue #131、#142）
 
-unit 模板是部署配置，不是普通代码。当 PR 修改
-`systemd/muyan-pilot.service` 或 `systemd/muyan-pilot.timer` 并合并到
-main 后，必须在下一次 timer 触发前运行幂等安装命令：
+unit 模板（`systemd/muyan-pilot.service` 和 `systemd/muyan-pilot.timer`）
+是部署配置，不是普通代码——但模板变更合并后**不需要任何人工步骤**。下一次 timer 触发时 `ExecStartPre` 同步 checkout，启动前
+`unit_drift` 检查自动自愈：用同一个幂等安装（把两个模板复制到用户
+unit 目录、daemon-reload、enable timer——从不启动、停止或重启运行中
+的 Runner）、再用同一个哈希检查复核，tick 继续，每个 unit 记录一行
+结构化 `unit_drift auto_synced`（before/after sha256、部署 commit）。
+不再出现“每 5 分钟重复同一个 `unit_drift` 错误直到人工介入”的循环
+（#131/#140 实例：每次启动都因 `unit_drift` 失败，直到人工运行同步
+命令）。
 
-```bash
-muyan-pilot install-units --config muyan-pilot.toml
-```
-
-它把两个模板复制到用户 unit 目录、daemon-reload、enable timer——从不
-启动、停止或重启运行中的 Runner。Runner 本身 NEVER auto-copies /
-auto-overwrites（从不自动复制、自动覆盖已安装 unit）：模板变更未同步
-时，每次启动都会被启动前 `unit_drift` 检查 fail fast（结构化
-`unit_drift` 行、非零退出、不取 slot、不领取 Issue），直到人工运行
-同步命令。这个 fail-fast 是部署的哨兵行为，不是缺陷（2026-08-27
-实例：PR #130 把 timer 从 15 分钟改为 5 分钟，合并后无人运行
-`install-units`，每次启动都因 `unit_drift` 失败，直到人工同步——
-Issue #131）。
+`muyan-pilot install-units --config muyan-pilot.toml` 保留为手工入口
+（首次 setup、需要立即同步时）。自愈后仍漂移（安装步骤失败、模板
+缺失、复核前 unit 再次漂移）时，启动仍然 fail fast（结构化
+`unit_drift` 行、非零退出、不取 slot、不领取 Issue）：哈希校验和
+哨兵边界不变。
 
 ## 日志（journal）
 
