@@ -277,6 +277,56 @@ def test_run_command_logs_optional_timeout_and_reraises(tmp_path, caplog):
     assert "command_timeout timeout=7 stdout=partial stderr=wait" in caplog.text
 
 
+def test_single_line_flattens_line_breaks_to_visible_escapes():
+    assert runner.single_line("a\nb") == "a\\nb"
+    assert runner.single_line("a\r\nb") == "a\\nb"
+    assert runner.single_line("a\rb") == "a\\nb"
+    assert runner.single_line("no breaks") == "no breaks"
+
+
+def test_run_command_logs_multiline_body_as_one_journal_line(
+        monkeypatch, tmp_path, caplog):
+    # The progress comment body (progress.py) is multi-line; it reaches
+    # the journal through the `command=` log of the gh api call.
+    body = (
+        "<!-- muyan-pilot:run=e6f5ec8a -->\n"
+        "**Muyan Pilot progress**\n"
+        "- run_id=e6f5ec8a\n"
+        "- role: implement\n"
+        "- priority: normal\n"
+        "- phase: read\n"
+        "- elapsed: 8m 2s"
+    )
+    command = [
+        "gh", "api", "repos/xqliu/muyan-pilot/issues/143/comments",
+        "--method", "POST", "--field", f"body={body}",
+    ]
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    completed = Mock(stdout='{"id": 1}', stderr="")
+    monkeypatch.setattr(runner.subprocess, "run", Mock(return_value=completed))
+    with caplog.at_level("INFO"):
+        assert runner.run_command(command, cwd=tmp_path) == '{"id": 1}'
+    # Exactly one command= record and it is a single journal line.
+    command_records = [
+        record for record in caplog.records
+        if record.getMessage().startswith("command=")
+    ]
+    assert len(command_records) == 1
+    message = command_records[0].getMessage()
+    assert "\n" not in message
+    # The body fields stay fully visible on that one line.
+    for field in (
+        "- run_id=e6f5ec8a", "- role: implement", "- priority: normal",
+        "- phase: read", "- elapsed: 8m 2s",
+    ):
+        assert field in message
+    # The real command (and thus the GitHub comment body) is unchanged.
+    runner.subprocess.run.assert_called_once_with(
+        command, cwd=tmp_path, capture_output=True,
+        text=True, check=True, timeout=None,
+    )
+
+
 def test_pick_issue_uses_github_queue(monkeypatch):
     issue = {
         "number": 9, "title": "task", "body": "body",

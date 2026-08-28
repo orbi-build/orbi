@@ -258,6 +258,20 @@ def validate_config(config: dict) -> None:
             raise FileNotFoundError(path)
 
 
+def single_line(value: str) -> str:
+    """Flatten a log value to one journal line (Issue #143).
+
+    A command argument may carry line breaks (the multi-line progress
+    comment body behind `gh api ... --field body=...`); emitted verbatim,
+    they split one `command=` log into several systemd journal lines with
+    the same timestamp and PID. Escape each line break to the visible
+    two-character sequence `\\n` so the field content stays readable on
+    one line. This only changes the log display — the real command is
+    never modified.
+    """
+    return value.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n")
+
+
 def run_command(command: list[str], *, cwd: Path | None = None,
                 timeout: int | None = None,
                 log_command: list[str] | None = None,
@@ -265,7 +279,7 @@ def run_command(command: list[str], *, cwd: Path | None = None,
     """Run one external command; log context and fail fast on any error."""
     LOGGER.info(
         "command=%s cwd=%s",
-        " ".join(log_command or command), cwd or Path.cwd(),
+        single_line(" ".join(log_command or command)), cwd or Path.cwd(),
     )
     try:
         result = subprocess.run(
