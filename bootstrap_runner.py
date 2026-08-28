@@ -212,6 +212,17 @@ def load_config(path: Path) -> dict:
     base_branch = data.get("base_branch", "main")
     if not isinstance(base_branch, str) or not base_branch:
         raise ValueError("base_branch must be a non-empty string")
+    # Claim scope (Issue #139): the active Milestone is an EXPLICIT
+    # version scope for the fresh-claim scans — it is never guessed
+    # from the repo's Milestone list. Absent (None) keeps the current
+    # behavior exactly (compat); present it must be a non-empty
+    # string, otherwise the config is a misconfiguration and the start
+    # fails fast.
+    active_milestone = data.get("active_milestone")
+    if active_milestone is not None and (
+        not isinstance(active_milestone, str) or not active_milestone
+    ):
+        raise ValueError("active_milestone must be a non-empty string")
     # Concurrency cap (Issue #39): the local machine can only serve a
     # limited number of concurrent tasks, so the default is 1. Any other
     # value must be a positive integer; fail fast on anything else.
@@ -236,6 +247,7 @@ def load_config(path: Path) -> dict:
             _config_path(item, base) for item in data.get("context_files", [])
         ],
         "base_branch": base_branch,
+        "active_milestone": active_milestone,
         "max_concurrency": max_concurrency,
         "slot_dir": slot_dir_for(repo_dir),
         # Multi-repo registry (Issue #134): the explicit per-repo entries
@@ -431,9 +443,34 @@ READY_SCAN_EXCLUSIONS = (
     f"-label:{FIX_NEEDED_LABEL} -label:{MERGED_LABEL} "
     f"-label:{BLOCKED_LABEL}"
 )
-P0_READY_SEARCH = f"label:ai-ready label:{P0_LABEL} {READY_SCAN_EXCLUSIONS}"
-BUG_READY_SEARCH = f"label:ai-ready label:bug {READY_SCAN_EXCLUSIONS}"
-READY_SEARCH = f"label:ai-ready {READY_SCAN_EXCLUSIONS}"
+
+
+def ready_searches(active_milestone: str | None = None) -> tuple[str, str, str]:
+    """Return the three ready scans (p0, bug, plain) in pickup order.
+
+    With a configured `active_milestone` (Issue #139) every scan
+    carries the `milestone:"<title>"` qualifier — the quoted form is
+    the contract because milestone titles may contain spaces or
+    special characters (verified against the live API). The scope is
+    part of the QUERY, so an Issue of another Milestone (or of no
+    Milestone) never enters the result set, and a `v0.2.0` Issue
+    without `ai-ready` never does either: the `label:ai-ready`
+    qualifier stays. The Milestone is a version scope, not a
+    replacement for the `ai-ready` execution switch. P0 does NOT
+    cross milestones (Issue #139 decision): the active Milestone is
+    the claim scope of EVERY fresh claim, and `p0` only orders the
+    pickup inside it — one uniform rule, no special case. Without a
+    configured Milestone the searches are byte-identical to the
+    pre-#139 scans (compat).
+    """
+    scope = (
+        f' milestone:"{active_milestone}"' if active_milestone else ""
+    )
+    return (
+        f"label:ai-ready label:{P0_LABEL}{scope} {READY_SCAN_EXCLUSIONS}",
+        f"label:ai-ready label:bug{scope} {READY_SCAN_EXCLUSIONS}",
+        f"label:ai-ready{scope} {READY_SCAN_EXCLUSIONS}",
+    )
 
 
 def issue_priority(issue: dict) -> str:
@@ -475,7 +512,7 @@ def is_epic(issue: dict) -> bool:
     return False
 
 
-def pick_issue(repo: str) -> dict | None:
+def pick_issue(repo: str, active_milestone: str | None = None) -> dict | None:
     # A merged delivery keeps `ai-ready` + `ai-merged` on the (still
     # open) Issue; `ai-merged` is the success terminal state, so it is
     # excluded from the ready scan like every other delivery state.
@@ -490,8 +527,12 @@ def pick_issue(repo: str) -> dict | None:
     # scan; a P0 or bug with open blockers is skipped there and the
     # next scan still decides. The scan also fetches `labels` so the
     # picked issue's priority (and Epic-ness) is visible without an
-    # extra gh call.
-    for search in (P0_READY_SEARCH, BUG_READY_SEARCH, READY_SEARCH):
+    # extra gh call. Issue #139: with a configured `active_milestone`
+    # all three scans are scoped to that Milestone in the query itself
+    # (see `ready_searches`) — the Epic skip and the blockedBy skip
+    # above are the unchanged second (code) layer, and a failed scan
+    # still fails open (never a silent claim of the wrong version).
+    for search in ready_searches(active_milestone):
         try:
             raw = run_command([
                 "gh", "issue", "list", "--repo", repo, "--state", "open",
@@ -587,10 +628,12 @@ def pick_in_progress_issue(
     return parse_issue_list(raw)
 
 
-def pick_next_issue(repos: list[str]) -> tuple[str, dict] | None:
+def pick_next_issue(
+    repos: list[str], active_milestone: str | None = None,
+) -> tuple[str, dict] | None:
     """Scan sources in order; return the first ready issue and its source."""
     for repo in repos:
-        issue = pick_issue(repo)
+        issue = pick_issue(repo, active_milestone)
         if issue is not None:
             return repo, issue
     return None
@@ -861,6 +904,7 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
 
 def pick_next_delivery(
     repos: list[str], slot_dir: Path, max_concurrency: int,
+    active_milestone: str | None = None,
 ) -> tuple[str, dict, dict | None] | None:
     """Scan sources in order: resumable PRs, in-flight restarts, ready.
 
@@ -873,6 +917,11 @@ def pick_next_delivery(
     scan: `process_issue`'s resume block reuses the newest worktree's
     run id, so the same progress comment is kept instead of a second
     run being started on an Issue that is already in flight.
+
+    Issue #139: `active_milestone` scopes only the FRESH claim
+    (`pick_issue`) — the resumable-PR and in-flight restart scans are
+    resume states, and running an in-flight or opened-PR delivery to
+    completion is never gated by a Milestone change.
     """
     for repo in repos:
         selected = pick_resumable_delivery(
@@ -888,7 +937,7 @@ def pick_next_delivery(
         if issue is not None:
             return repo, issue, None
     for repo in repos:
-        issue = pick_issue(repo)
+        issue = pick_issue(repo, active_milestone)
         if issue is not None:
             return repo, issue, None
     return None
@@ -3323,6 +3372,7 @@ def main(argv: list[str] | None = None) -> int:
         selected = pick_next_delivery(
             config["source_repos"], config["slot_dir"],
             config["max_concurrency"],
+            config["active_milestone"],
         )
         if selected is None:
             LOGGER.info(

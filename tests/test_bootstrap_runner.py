@@ -87,6 +87,55 @@ def test_load_config_rejects_empty_base_branch(tmp_path):
         runner.load_config(config_path)
 
 
+def test_load_config_defaults_active_milestone_to_none(tmp_path):
+    """Issue #139: without an active_milestone the config keeps the
+    current compat behavior (no milestone filter on the ready scans)."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    config = runner.load_config(config_path)
+    assert config["active_milestone"] is None
+
+
+def test_load_config_reads_explicit_active_milestone(tmp_path):
+    """Issue #139: the active Milestone is an explicit claim scope —
+    it is never guessed from the repo's Milestone list."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = "v0.2.0"\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["active_milestone"] == "v0.2.0"
+
+
+def test_load_config_rejects_empty_active_milestone(tmp_path):
+    """Issue #139: an empty active_milestone is a misconfiguration —
+    fail fast instead of silently disabling the scope."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = ""\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError, match="active_milestone must be a non-empty string",
+    ):
+        runner.load_config(config_path)
+
+
+def test_load_config_rejects_non_string_active_milestone(tmp_path):
+    """Issue #139: a non-string active_milestone is a misconfiguration —
+    fail fast."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = 1\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError, match="active_milestone must be a non-empty string",
+    ):
+        runner.load_config(config_path)
+
+
 def test_load_config_parses_repositories_registry(tmp_path):
     """Issue #134: an explicit [[repositories]] section parses into a
     registry of name/path/github/base_branch, with each path resolved
@@ -783,6 +832,158 @@ def test_pick_issue_fails_open_when_blocked_by_query_fails(
     assert "blocked_by_check_failed" in caplog.text
 
 
+def test_pick_issue_scopes_all_three_ready_scans_to_active_milestone(
+    monkeypatch,
+):
+    """Issue #139: with `active_milestone = "v0.2.0"` the ready scans
+    only see the active Milestone: every one of the three gh searches
+    (p0, bug, plain) carries the `milestone:"v0.2.0"` qualifier (the
+    quoted form is the contract — milestone titles may contain spaces
+    or special characters; verified against the live API). A
+    `v0.1.2 + ai-ready` Issue therefore never enters the queue of a
+    `v0.2.0` Runner, and a `v0.2.0` Issue without `ai-ready` never
+    enters it either (the `label:ai-ready` qualifier stays)."""
+    issue = {
+        "number": 139, "title": "task", "body": "body",
+        "labels": [{"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        search = command[command.index("--search") + 1]
+        if "label:p0" in search or "label:bug" in search:
+            return json.dumps([])
+        return json.dumps([issue])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.pick_issue(
+        "xqliu/muyan-ceo", active_milestone="v0.2.0",
+    ) == issue
+    scope = ' milestone:"v0.2.0"'
+    exclusions = (
+        "-label:ai-in-progress -label:ai-pr-opened -label:ai-fix-needed "
+        "-label:ai-merged -label:ai-blocked"
+    )
+    assert calls == [
+        [
+            "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
+            "--state", "open", "--search",
+            f"label:ai-ready label:p0{scope} {exclusions}",
+            "--json", "number,title,body,labels,blockedBy",
+            "--limit", "200",
+        ],
+        [
+            "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
+            "--state", "open", "--search",
+            f"label:ai-ready label:bug{scope} {exclusions}",
+            "--json", "number,title,body,labels,blockedBy",
+            "--limit", "200",
+        ],
+        [
+            "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
+            "--state", "open", "--search",
+            f"label:ai-ready{scope} {exclusions}",
+            "--json", "number,title,body,labels,blockedBy",
+            "--limit", "200",
+        ],
+    ]
+
+
+def test_pick_issue_p0_scan_keeps_the_milestone_scope():
+    """Issue #139 (explicit decision): P0 does NOT cross milestones.
+    The active milestone is the claim scope of every fresh claim —
+    `p0` only orders the pickup inside the active milestone, so a P0
+    sitting in an old milestone never enters the current version's
+    queue (one uniform rule, no special case). The scan order itself
+    is unchanged: the p0 scan is still the FIRST one."""
+    p0_search, bug_search, plain_search = runner.ready_searches("v0.2.0")
+    for search in (p0_search, bug_search, plain_search):
+        assert 'milestone:"v0.2.0"' in search
+    assert "label:p0" in p0_search
+    assert "label:p0" not in bug_search
+    assert "label:p0" not in plain_search
+
+
+def test_ready_searches_without_milestone_are_the_compat_scans():
+    """Issue #139 compat: without a configured Milestone the three
+    ready scans are byte-identical to the pre-#139 scans — a config
+    without `active_milestone` behaves exactly like before."""
+    p0_search, bug_search, plain_search = runner.ready_searches(None)
+    assert p0_search == (
+        "label:ai-ready label:p0 -label:ai-in-progress "
+        "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
+        "-label:ai-blocked"
+    )
+    assert bug_search == (
+        "label:ai-ready label:bug -label:ai-in-progress "
+        "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
+        "-label:ai-blocked"
+    )
+    assert plain_search == (
+        "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
+        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked"
+    )
+    # The default (no argument) is the same compat behavior.
+    assert runner.ready_searches() == runner.ready_searches(None)
+
+
+def test_pick_issue_keeps_epic_and_blocked_by_guards_with_milestone(
+    monkeypatch, caplog,
+):
+    """Issue #139: the milestone scope never weakens the existing
+    guards — an `ai-epic` Issue is still skipped by the code layer
+    (the query results can still contain it), and an Issue with open
+    native blockers is still skipped, inside the active Milestone."""
+    epic = {
+        "number": 141, "title": "epic", "body": "body",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-epic"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    blocked = {
+        "number": 142, "title": "blocked", "body": "body",
+        "labels": [{"name": "ai-ready"}],
+        "blockedBy": {"nodes": [{"number": 9}], "totalCount": 1},
+    }
+    ready = {
+        "number": 143, "title": "free", "body": "body",
+        "labels": [{"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([epic, blocked, ready]),
+    )
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue(
+            "xqliu/muyan-pilot", active_milestone="v0.2.0",
+        ) == ready
+    assert "epic_not_claimed" in caplog.text
+    assert "blocked_by" in caplog.text
+
+
+def test_pick_issue_fails_open_when_milestone_query_fails(
+    monkeypatch, caplog,
+):
+    """Issue #139: a failed ready scan with the milestone qualifier
+    follows the existing fail-open contract (Issue #54) — the tick
+    claims nothing (never the wrong version), logs the structured
+    error, and the next tick retries."""
+    error = subprocess.CalledProcessError(
+        1, ["gh"], output="boom", stderr="rate limited",
+    )
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: (_ for _ in ()).throw(error),
+    )
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue(
+            "xqliu/muyan-pilot", active_milestone="v0.2.0",
+        ) is None
+    assert "blocked_by_check_failed" in caplog.text
+
+
 def test_pick_issue_prefers_bug_labeled_issues(monkeypatch):
     """Issue #71: when an `ai-ready`+`bug` Issue and a plain `ai-ready`
     Issue exist at the same time, the runner claims the bug first —
@@ -1425,7 +1626,7 @@ def test_pick_next_delivery_recovers_in_flight_issue_before_ready(
             in_flight if repo == "r1" else None
         ),
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo: ready)
+    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: ready)
     assert runner.pick_next_delivery(
         ["r1", "r2"], tmp_path / "slots", 1,
     ) == ("r1", in_flight, None)
@@ -1449,7 +1650,7 @@ def test_pick_next_delivery_keeps_resumable_delivery_first(
         runner, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency: in_flight,
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo: in_flight)
+    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: in_flight)
     assert runner.pick_next_delivery(
         ["r1", "r2"], tmp_path / "slots", 1,
     ) == ("r2", resumable, scene)
@@ -1467,7 +1668,7 @@ def test_pick_next_delivery_falls_through_to_ready_when_no_in_flight(
         runner, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency: None,
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo: ready)
+    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: ready)
     assert runner.pick_next_delivery(
         ["r1"], tmp_path / "slots", 1,
     ) == ("r1", ready, None)
@@ -1484,7 +1685,7 @@ def test_pick_next_delivery_returns_none_when_all_scans_empty(
         runner, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency: None,
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo: None)
+    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: None)
     assert runner.pick_next_delivery(
         ["r1"], tmp_path / "slots", 1,
     ) is None
@@ -1494,7 +1695,7 @@ def test_pick_next_issue_returns_first_ready_source(monkeypatch):
     issue = {"number": 1, "title": "pilot", "body": ""}
     calls = []
 
-    def pick(repo):
+    def pick(repo, active_milestone=None):
         calls.append(repo)
         return issue if repo == "xqliu/muyan-ceo" else None
 
@@ -1509,7 +1710,7 @@ def test_pick_next_issue_falls_through_to_second_source(monkeypatch):
     issue = {"number": 2, "title": "pilot", "body": ""}
     calls = []
 
-    def pick(repo):
+    def pick(repo, active_milestone=None):
         calls.append(repo)
         return issue if repo == "xqliu/muyan-pilot" else None
 
@@ -1521,7 +1722,7 @@ def test_pick_next_issue_falls_through_to_second_source(monkeypatch):
 
 
 def test_pick_next_issue_returns_none_when_all_sources_empty(monkeypatch):
-    monkeypatch.setattr(runner, "pick_issue", lambda repo: None)
+    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: None)
     assert runner.pick_next_issue(["xqliu/muyan-ceo", "xqliu/muyan-pilot"]) is None
 
 
@@ -3035,12 +3236,54 @@ def _write_prompts(tmp_path):
 def test_main_returns_zero_when_queue_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
     )
     _write_prompts(tmp_path)
     config = tmp_path / "muyan-pilot.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     assert runner.main(["--config", str(config)]) == 0
+
+
+def test_main_passes_configured_active_milestone_to_the_claim_scan(
+    monkeypatch, tmp_path,
+):
+    """Issue #139: the configured `active_milestone` reaches the claim
+    scan (the fresh-claim scope), and an unconfigured one passes None
+    (the compat behavior — no milestone filter)."""
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = "v0.2.0"\n',
+        encoding="utf-8",
+    )
+    seen = {}
+
+    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None):
+        seen["milestone"] = active_milestone
+        return None
+
+    monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
+    assert runner.main(["--config", str(config)]) == 0
+    assert seen["milestone"] == "v0.2.0"
+
+
+def test_main_passes_none_active_milestone_when_unconfigured(
+    monkeypatch, tmp_path,
+):
+    """Issue #139 compat: without the config field the claim scan
+    receives None and keeps the pre-#139 scans."""
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    seen = {}
+
+    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None):
+        seen["milestone"] = active_milestone
+        return None
+
+    monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
+    assert runner.main(["--config", str(config)]) == 0
+    assert seen["milestone"] is None
 
 
 def test_main_processes_one_issue(monkeypatch, tmp_path):
@@ -3052,7 +3295,7 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
             "xqliu/muyan-pilot", issue, None
         ),
     )
@@ -3093,7 +3336,7 @@ def test_main_routes_fix_needed_resume_to_delivery_wait(
     }
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
             "owner/repo", issue, scene,
         ),
     )
@@ -3139,7 +3382,7 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
     }
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
             "owner/repo", issue, scene,
         ),
     )
@@ -3169,7 +3412,7 @@ def test_main_accepts_repeated_source_repo(monkeypatch, tmp_path):
     config.write_text("source_repos = [\"xqliu/muyan-pilot\", \"xqliu/muyan-ceo\"]\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
             seen.append(repos) or (repos[0], issue, None)
         ),
     )
@@ -4947,7 +5190,7 @@ def test_main_capacity_full_does_not_pick_issue_or_call_pi(
     held = pilot_slots.acquire_slot(slot_dir, 1, os.getpid())
     assert held is not None
 
-    def fail_if_called(repos, slot_dir, max_concurrency):
+    def fail_if_called(repos, slot_dir, max_concurrency, active_milestone=None):
         raise AssertionError("pick_next_delivery must not run when capacity is full")
 
     monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
@@ -4978,7 +5221,7 @@ def test_main_holds_slot_while_processing_issue(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     seen = {}
 
-    def fake_pick(repos, slot_dir, max_concurrency):
+    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None):
         seen["occupancy"] = pilot_slots.slot_occupancy(
             tmp_path / ".muyan-pilot" / "slots", 1,
         )
@@ -5000,7 +5243,7 @@ def test_main_reacquires_slot_after_previous_release(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
     )
 
     assert runner.main(["--config", str(config)]) == 0
@@ -5162,7 +5405,7 @@ def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
@@ -5244,7 +5487,7 @@ def test_main_unit_drift_clean_proceeds_to_claim(monkeypatch, tmp_path,
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
@@ -5269,7 +5512,7 @@ def test_main_preflight_receives_the_configured_repo_dir(
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen == [tmp_path]
@@ -5348,7 +5591,7 @@ def test_main_transport_check_clean_proceeds_to_claim(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
@@ -5381,7 +5624,7 @@ def test_main_transport_preflight_receives_the_configured_args(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen["repo_dir"] == tmp_path
@@ -6636,7 +6879,7 @@ def test_main_holds_slot_through_delivery_wait(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
             "owner/repo", issue, None
         ),
     )

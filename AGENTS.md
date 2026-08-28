@@ -297,6 +297,25 @@ acceptance criteria.
   P0 is skipped (falling back to the bug/plain scans) and an in-flight
   P0 is resumed by the restart scan (which fetches `labels` too, so the
   progress comment keeps showing `p0`).
+- Active Milestone claim scope (Issue #139): the optional config field
+  `active_milestone` (a Milestone TITLE, e.g. `v0.2.0`) restricts the
+  FRESH-claim scans to one version: with it set, all three ready scans
+  carry the `milestone:"<title>"` qualifier in the gh search query
+  (the quoted form — milestone titles may contain spaces or special
+  characters), so an Issue of another Milestone or of no Milestone
+  never enters the queue, and a Milestone Issue without `ai-ready`
+  never does either. The Milestone is a version scope, NOT a
+  replacement for the `ai-ready` execution switch. P0 does NOT cross
+  milestones (the active Milestone is the claim scope of every fresh
+  claim; `p0` only orders the pickup inside it). The scope is
+  query-layer only (the `is_epic` code-layer skip and the blockedBy
+  skip are the unchanged second layer), a failed scan still fails open
+  (never a silent claim of the wrong version), and resume states are
+  never gated by it: the opened-PR resume and the in-flight restart
+  scans run work to completion regardless of Milestone changes. The
+  value is explicit — never guessed from the repo's Milestone list;
+  absent it keeps the pre-#139 behavior exactly (compat), and an
+  empty/non-string value fails the start fast.
 - The pickup log line carries the explicit `priority=p0` /
   `priority=normal` field; the GitHub progress comment shows the
   `priority` field; the run scene (`run_info`) and the started
