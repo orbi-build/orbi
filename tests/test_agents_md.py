@@ -27,6 +27,24 @@ REQUIRED_ITEMS = (
     ("review-after-pr", "after the pr exists"),
     ("review-new-jsonl", "new jsonl"),
     ("review-prompt-review", "prompt_review.md"),
+    # 2d. Minimal implementation (KISS/LEAN, Issue #118): the smallest
+    #     complete change for the acceptance criteria; no speculative
+    #     features, no-benefit abstractions, extra framework layers,
+    #     fallback, future-proofing or scope expansion; 如无必要勿增实体
+    #     (every new entity maps to an acceptance criterion); the simpler
+    #     design (fewer concepts, fewer files) wins.
+    ("kiss-section", "minimal implementation (kiss/lean)"),
+    ("kiss-smallest", "smallest complete change"),
+    ("kiss-acceptance", "acceptance criteria"),
+    ("kiss-no-speculative", "speculative feature"),
+    ("kiss-no-abstraction", "no-benefit abstraction"),
+    ("kiss-no-framework", "extra framework layer"),
+    ("kiss-no-fallback", "fallback"),
+    ("kiss-no-future", "future-proofing"),
+    ("kiss-no-scope", "scope expansion"),
+    ("kiss-occam", "如无必要勿增实体"),
+    ("kiss-entity-mapping", "to an acceptance criterion"),
+    ("kiss-simpler", "fewer concepts, fewer files"),
     # 3. 100% line and branch coverage for Python code.
     ("coverage", "100% line and branch coverage"),
     # 4. UI work: real Playwright interaction, assertions, console/network
