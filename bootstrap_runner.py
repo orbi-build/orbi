@@ -237,7 +237,48 @@ def load_config(path: Path) -> dict:
         "base_branch": base_branch,
         "max_concurrency": max_concurrency,
         "slot_dir": slot_dir_for(repo_dir),
+        # Multi-repo registry (Issue #134): the explicit per-repo entries
+        # (name, path, github, base_branch). Absent section -> [] so the
+        # single-repo config keeps its exact shape and flow.
+        "repositories": parse_repositories(data.get("repositories", []), base),
     }
+
+
+def parse_repositories(entries: object, base: Path) -> list[dict]:
+    """Parse the explicit multi-repo registry (Issue #134).
+
+    Each entry is a TOML table with the required string fields `name`,
+    `path`, `github` and `base_branch`; `path` is resolved relative to
+    the config file's directory. A missing/empty/non-string field, a
+    non-table entry or a duplicate `name` fails fast — the existence and
+    Git-checkout checks happen in `validate_config`.
+    """
+    if not isinstance(entries, list):
+        raise ValueError("repositories must be a list of tables")
+    repos: list[dict] = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise ValueError(f"repositories[{index}] must be a table")
+        missing = [
+            field for field in ("name", "path", "github", "base_branch")
+            if not isinstance(entry.get(field), str) or not entry.get(field)
+        ]
+        if missing:
+            raise ValueError(
+                f"repositories[{index}] is missing required field(s): "
+                + ", ".join(missing)
+            )
+        if any(repo["name"] == entry["name"] for repo in repos):
+            raise ValueError(
+                f"duplicate repositories name: {entry['name']!r}"
+            )
+        repos.append({
+            "name": entry["name"],
+            "path": _config_path(entry["path"], base),
+            "github": entry["github"],
+            "base_branch": entry["base_branch"],
+        })
+    return repos
 
 
 def render_prompt(template: str, values: dict[str, str]) -> str:
@@ -256,6 +297,19 @@ def validate_config(config: dict) -> None:
     ]:
         if not path.is_file():
             raise FileNotFoundError(path)
+    # Multi-repo registry (Issue #134): every registered path must exist
+    # and be a Git checkout — a `.git` directory (a plain checkout) or a
+    # `.git` file (a linked worktree). Absent key -> no registry, so a
+    # single-repo config keeps its exact flow.
+    for repo in config.get("repositories", []):
+        path = repo["path"]
+        if not path.is_dir():
+            raise FileNotFoundError(path)
+        if not (path / ".git").exists():
+            raise ValueError(
+                f"repositories entry {repo['name']!r}: {path} "
+                "is not a git checkout"
+            )
 
 
 def single_line(value: str) -> str:

@@ -87,6 +87,153 @@ def test_load_config_rejects_empty_base_branch(tmp_path):
         runner.load_config(config_path)
 
 
+def test_load_config_parses_repositories_registry(tmp_path):
+    """Issue #134: an explicit [[repositories]] section parses into a
+    registry of name/path/github/base_branch, with each path resolved
+    relative to the config file."""
+    (tmp_path / "checkouts" / "pilot").mkdir(parents=True)
+    (tmp_path / "checkouts" / "ceo").mkdir(parents=True)
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/pilot"]\n'
+        "[[repositories]]\n"
+        'name = "pilot"\n'
+        'path = "checkouts/pilot"\n'
+        'github = "owner/pilot"\n'
+        'base_branch = "main"\n'
+        "[[repositories]]\n"
+        'name = "ceo"\n'
+        'path = "checkouts/ceo"\n'
+        'github = "owner/ceo"\n'
+        'base_branch = "develop"\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["repositories"] == [
+        {
+            "name": "pilot",
+            "path": (tmp_path / "checkouts" / "pilot").resolve(),
+            "github": "owner/pilot",
+            "base_branch": "main",
+        },
+        {
+            "name": "ceo",
+            "path": (tmp_path / "checkouts" / "ceo").resolve(),
+            "github": "owner/ceo",
+            "base_branch": "develop",
+        },
+    ]
+
+
+def test_load_config_defaults_repositories_to_empty_list(tmp_path):
+    """Issue #134: without a repositories section the config keeps the
+    exact single-repo shape (empty registry, all existing keys intact)."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/pilot"]\nrepo_dir = "repo"\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["repositories"] == []
+    assert config["source_repos"] == ["owner/pilot"]
+    assert config["repo_dir"] == (tmp_path / "repo").resolve()
+    assert config["base_branch"] == "main"
+
+
+@pytest.mark.parametrize("field", ["name", "path", "github", "base_branch"])
+def test_load_config_rejects_repository_missing_field(tmp_path, field):
+    """Issue #134: a repository entry missing one required field is
+    rejected, naming the field."""
+    entry = {
+        "name": "pilot",
+        "path": "checkouts/pilot",
+        "github": "owner/pilot",
+        "base_branch": "main",
+    }
+    del entry[field]
+    lines = ["source_repos = [\"owner/pilot\"]\n", "[[repositories]]\n"]
+    lines += [f'{key} = "{value}"\n' for key, value in entry.items()]
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text("".join(lines), encoding="utf-8")
+    with pytest.raises(ValueError, match=field):
+        runner.load_config(config_path)
+
+
+def test_load_config_rejects_repository_empty_field(tmp_path):
+    """Issue #134: an empty required field counts as missing."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/pilot"]\n'
+        "[[repositories]]\n"
+        'name = "pilot"\n'
+        'path = ""\n'
+        'github = "owner/pilot"\n'
+        'base_branch = "main"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="path"):
+        runner.load_config(config_path)
+
+
+def test_load_config_rejects_repository_non_string_field(tmp_path):
+    """Issue #134: a required field with a non-string type is rejected."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/pilot"]\n'
+        "[[repositories]]\n"
+        'name = "pilot"\n'
+        'path = "checkouts/pilot"\n'
+        'github = "owner/pilot"\n'
+        "base_branch = 1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="base_branch"):
+        runner.load_config(config_path)
+
+
+def test_load_config_rejects_repository_non_table_entry(tmp_path):
+    """Issue #134: a repositories entry that is not a table is rejected."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/pilot"]\n'
+        'repositories = ["pilot"]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"repositories\[0\]"):
+        runner.load_config(config_path)
+
+
+def test_load_config_rejects_repositories_not_a_list(tmp_path):
+    """Issue #134: a repositories section that is not a list is rejected."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/pilot"]\n'
+        'repositories = "pilot"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="repositories must be a list"):
+        runner.load_config(config_path)
+
+
+def test_load_config_rejects_duplicate_repository_name(tmp_path):
+    """Issue #134: two entries with the same name are rejected, naming
+    the duplicate."""
+    entry = (
+        "[[repositories]]\n"
+        'name = "pilot"\n'
+        'path = "checkouts/pilot"\n'
+        'github = "owner/pilot"\n'
+        'base_branch = "main"\n'
+    )
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/pilot"]\n' + entry + entry,
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="duplicate.*pilot"):
+        runner.load_config(config_path)
+
+
 def test_render_prompt_replaces_context_values():
     rendered = runner.render_prompt(
         "{{SOURCE_REPO}} #{{ISSUE_NUMBER}} {{ISSUE_TITLE}} {{CONTEXT_FILES}}",
@@ -218,6 +365,109 @@ def test_validate_config_rejects_missing_repo_dir(tmp_path):
             "skills": [],
             "context_files": [],
         })
+
+
+def _git_checkout(path: Path) -> Path:
+    """A real Git checkout with one commit (verified against the real
+    CLI; the commit lets `git worktree add` check a branch out)."""
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main", str(path)],
+        check=True,
+        capture_output=True,
+    )
+    (path / "README.md").write_text("repo", encoding="utf-8")
+    identity = ["-c", "user.name=test", "-c", "user.email=test@example.com"]
+    subprocess.run(
+        ["git", *identity, "add", "README.md"],
+        cwd=path, check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", *identity, "commit", "-q", "-m", "init"],
+        cwd=path, check=True, capture_output=True,
+    )
+    return path
+
+
+def _base_config(tmp_path: Path) -> dict:
+    """The minimal valid single-repo config (no repositories key)."""
+    prompt = tmp_path / "prompt.md"
+    prompt_review = tmp_path / "prompt_review.md"
+    for path in (prompt, prompt_review):
+        path.write_text("ok", encoding="utf-8")
+    return {
+        "repo_dir": tmp_path,
+        "prompt": prompt,
+        "prompt_review": prompt_review,
+        "skills": [],
+        "context_files": [],
+    }
+
+
+def test_validate_config_accepts_repository_git_checkout(tmp_path):
+    """Issue #134: a registered path that is a real Git checkout passes."""
+    checkout = _git_checkout(tmp_path / "pilot")
+    config = _base_config(tmp_path)
+    config["repositories"] = [{
+        "name": "pilot",
+        "path": checkout,
+        "github": "owner/pilot",
+        "base_branch": "main",
+    }]
+    runner.validate_config(config)
+
+
+def test_validate_config_accepts_repository_linked_worktree(tmp_path):
+    """Issue #134: a linked worktree (a .git FILE, not a directory) is a
+    Git checkout too."""
+    main_repo = _git_checkout(tmp_path / "main")
+    worktree = tmp_path / "wt"
+    subprocess.run(
+        ["git", "worktree", "add", "-q", str(worktree)],
+        cwd=main_repo,
+        check=True,
+        capture_output=True,
+    )
+    assert (worktree / ".git").is_file()
+    config = _base_config(tmp_path)
+    config["repositories"] = [{
+        "name": "wt",
+        "path": worktree,
+        "github": "owner/pilot",
+        "base_branch": "main",
+    }]
+    runner.validate_config(config)
+
+
+def test_validate_config_rejects_missing_repository_path(tmp_path):
+    """Issue #134: a registered path that does not exist is rejected."""
+    config = _base_config(tmp_path)
+    config["repositories"] = [{
+        "name": "pilot",
+        "path": tmp_path / "no-such-checkout",
+        "github": "owner/pilot",
+        "base_branch": "main",
+    }]
+    with pytest.raises(FileNotFoundError, match="no-such-checkout"):
+        runner.validate_config(config)
+
+
+def test_validate_config_rejects_repository_path_not_a_git_checkout(
+    tmp_path,
+):
+    """Issue #134: an existing path without a .git (file or directory)
+    is not a Git checkout and is rejected."""
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    config = _base_config(tmp_path)
+    config["repositories"] = [{
+        "name": "plain",
+        "path": plain,
+        "github": "owner/plain",
+        "base_branch": "main",
+    }]
+    with pytest.raises(ValueError, match="not a git checkout"):
+        runner.validate_config(config)
 
 
 def test_run_command_returns_stdout(monkeypatch, tmp_path):
