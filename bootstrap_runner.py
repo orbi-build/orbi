@@ -133,6 +133,18 @@ BLOCKED_LABEL = "ai-blocked"
 # failed run — the ready scans exclude `ai-blocked`, so the `ai-ready`
 # residue never re-enters the queue (no infinite retry).
 P0_LABEL = "p0"
+# Epic marker (Issue #93): the plain `ai-epic` label marks a
+# coordination Issue (a release checklist or a multi-task grouping).
+# An Epic is NOT an executable task: the ready claim scan skips it
+# (structured `epic_not_claimed` line — no claim, no label change, no
+# worktree, no run, no slot) and the restart-resume scan excludes it
+# (a legacy Epic left behind with `ai-in-progress` must never be
+# resumed into a run). The actual work lives in independent `ai-ready`
+# sub-Issues (one runtime outcome, one PR each); the Epic's completion
+# is judged from GitHub evidence (sub-Issues done, PRs merged, release
+# tag on the remote, no leftover `ai-in-progress`) and closed by a
+# human or a release task — never by the claim path.
+EPIC_LABEL = "ai-epic"
 
 # Only comments posted by a repo maintainer are trusted to carry the
 # recovery scene: a public comment (authorAssociation=NONE) must never
@@ -372,6 +384,24 @@ def issue_priority(issue: dict) -> str:
     return "normal"
 
 
+def is_epic(issue: dict) -> bool:
+    """Return True when one issue carries the `ai-epic` label (Issue #93).
+
+    A pure function of the issue's `labels` (the scans fetch `labels`,
+    so no extra gh call), the same style as `issue_priority`. A
+    missing or malformed `labels` field fails open to "not an epic":
+    the scan always requests `labels`, so a shape change only loses
+    the Epic guard for one run — it must never deadlock the queue.
+    """
+    labels = issue.get("labels")
+    if not isinstance(labels, list):
+        return False
+    for label in labels:
+        if isinstance(label, dict) and label.get("name") == EPIC_LABEL:
+            return True
+    return False
+
+
 def pick_issue(repo: str) -> dict | None:
     # A merged delivery keeps `ai-ready` + `ai-merged` on the (still
     # open) Issue; `ai-merged` is the success terminal state, so it is
@@ -380,10 +410,14 @@ def pick_issue(repo: str) -> dict | None:
     # reads the native GitHub dependency per Issue (Issue #54): an
     # Issue with open blockers is skipped — no claim, no label change,
     # no worktree — and the next ready Issue is considered instead.
-    # Issue #71/#101: the P0 scan runs first, then the bug scan; a P0
-    # or bug with open blockers is skipped there and the next scan
-    # still decides. The scan also fetches `labels` so the picked
-    # issue's priority is visible without an extra gh call.
+    # Issue #93: an `ai-epic` Issue is skipped too — no claim, no
+    # label change, no worktree, no run, no slot — with the structured
+    # `epic_not_claimed` line (the Epic check precedes the blockedBy
+    # check). Issue #71/#101: the P0 scan runs first, then the bug
+    # scan; a P0 or bug with open blockers is skipped there and the
+    # next scan still decides. The scan also fetches `labels` so the
+    # picked issue's priority (and Epic-ness) is visible without an
+    # extra gh call.
     for search in (P0_READY_SEARCH, BUG_READY_SEARCH, READY_SEARCH):
         try:
             raw = run_command([
@@ -404,6 +438,18 @@ def pick_issue(repo: str) -> dict | None:
             )
             return None
         for issue in issues:
+            # Epic skip (Issue #93): an `ai-epic` Issue is never
+            # claimed — no label change, no worktree, no run, no slot.
+            # The check precedes the blockedBy check: "it is an Epic"
+            # is the more fundamental reason, so the structured
+            # `epic_not_claimed` line (not a `blocked_by` line) is the
+            # recorded cause.
+            if is_epic(issue):
+                LOGGER.info(
+                    "epic_not_claimed issue=%s repo=%s",
+                    issue.get("number"), repo,
+                )
+                continue
             blockers = open_blocker_numbers(issue)
             if blockers:
                 LOGGER.info(
@@ -436,7 +482,11 @@ def pick_in_progress_issue(
     production flow. `process_issue`'s resume block (newest worktree's
     run id) then reuses the run instead of starting a second one. Every
     other delivery state is excluded: those Issues are owned by the
-    resumable-PR scan (`ai-fix-needed`) or are terminal.
+    resumable-PR scan (`ai-fix-needed`) or are terminal. `ai-epic` is
+    excluded too (Issue #93): a legacy Epic left behind with
+    `ai-in-progress` (the #80 scene, before the Epic mechanism existed)
+    must never be resumed into a run — an Epic is coordination, not an
+    executable task.
 
     The scan runs only when no OTHER runner is live: a slot held by
     another process proves a live runner is working (on this or another
@@ -455,7 +505,8 @@ def pick_in_progress_issue(
         "--search",
         "label:ai-ready label:ai-in-progress "
         f"-label:{PR_OPENED_LABEL} -label:{FIX_NEEDED_LABEL} "
-        f"-label:{MERGED_LABEL} -label:{BLOCKED_LABEL}",
+        f"-label:{MERGED_LABEL} -label:{BLOCKED_LABEL} "
+        f"-label:{EPIC_LABEL}",
         # `labels` (Issue #101): a P0 a killed runner left behind
         # keeps its priority in the progress comment on resume.
         "--json", "number,title,body,labels", "--limit", "1",

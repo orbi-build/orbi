@@ -785,6 +785,230 @@ def test_issue_priority_reads_the_p0_label():
     }) == "normal"
 
 
+# --- Issue #93: Epic handling (ai-epic) --------------------------------------
+
+
+def test_is_epic_reads_the_ai_epic_label():
+    """Issue #93: `is_epic` is a pure function of the issue's `labels`
+    (the scans fetch `labels`, so no extra gh call): True when the
+    `ai-epic` label is present. A missing or malformed `labels` field
+    fails open to "not an epic" (the same style as `issue_priority`
+    failing to normal): the scan always requests `labels`, so a shape
+    change only loses the Epic guard for one run — it must never
+    deadlock the queue."""
+    assert runner.is_epic({
+        "number": 80,
+        "labels": [{"name": "ai-epic"}, {"name": "ai-ready"}],
+    }) is True
+    assert runner.is_epic({
+        "number": 10,
+        "labels": [{"name": "ai-ready"}, {"name": "bug"}],
+    }) is False
+    assert runner.is_epic({"number": 10}) is False
+    assert runner.is_epic({"number": 10, "labels": "nope"}) is False
+    assert runner.is_epic({
+        "number": 10, "labels": ["ai-epic", {"name": 7}],
+    }) is False
+
+
+def test_pick_issue_skips_epic_and_claims_next(monkeypatch, caplog):
+    """Issue #93: an `ai-ready` Issue carrying `ai-epic` is never
+    claimed — no label change, no worktree, no run: the runner logs a
+    structured `epic_not_claimed` line with the Issue number and repo
+    and moves on to the next ready Issue of the same repo."""
+    epic = {
+        "number": 80, "title": "v0.1 release checklist", "body": "",
+        "labels": [{"name": "ai-epic"}, {"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    ready = {
+        "number": 81, "title": "sub task", "body": "",
+        "labels": [{"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([epic, ready]),
+    )
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/muyan-pilot") == ready
+    assert "epic_not_claimed" in caplog.text
+    assert "issue=80" in caplog.text
+    assert "repo=xqliu/muyan-pilot" in caplog.text
+    # The Epic was skipped for being an Epic — not for blockers — so
+    # no `blocked_by` line is logged for it.
+    assert "blocked_by" not in caplog.text
+
+
+def test_pick_issue_returns_none_when_only_epics_are_ready(
+    monkeypatch, caplog,
+):
+    """Issue #93: a ready queue that only contains Epics yields no
+    claim — the tick ends idle upstream (`no_ready_issue`), so an
+    Epic never occupies a delivery slot."""
+    epic_a = {
+        "number": 80, "title": "v0.1 checklist", "body": "",
+        "labels": [{"name": "ai-epic"}, {"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    epic_b = {
+        "number": 133, "title": "0.2.0 workspace", "body": "",
+        "labels": [{"name": "ai-epic"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+
+    def fake_run(command, **kwargs):
+        search = command[command.index("--search") + 1]
+        # The Epics carry no p0/bug label: only the plain ready scan
+        # sees them.
+        if "label:p0" in search or "label:bug" in search:
+            return json.dumps([])
+        return json.dumps([epic_a, epic_b])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/muyan-pilot") is None
+    assert caplog.text.count("epic_not_claimed") == 2
+    assert "issue=80" in caplog.text
+    assert "issue=133" in caplog.text
+
+
+def test_pick_issue_epic_check_precedes_blocker_check(monkeypatch, caplog):
+    """Issue #93: an Epic is never claimed regardless of its blockedBy
+    state — the `epic_not_claimed` reason (it is an Epic) is more
+    fundamental than its blocker list, so the Epic check runs first
+    and no `blocked_by` line is logged for it."""
+    epic = {
+        "number": 80, "title": "epic", "body": "",
+        "labels": [{"name": "ai-epic"}, {"name": "ai-ready"}],
+        "blockedBy": {
+            "nodes": [{"number": 9}, {"number": 10}], "totalCount": 2,
+        },
+    }
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([epic]),
+    )
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/muyan-pilot") is None
+    assert "epic_not_claimed" in caplog.text
+    assert "issue=80" in caplog.text
+    assert "blocked_by" not in caplog.text
+
+
+def test_pick_issue_skips_epic_in_p0_and_bug_scans(monkeypatch, caplog):
+    """Issue #93: the Epic skip applies to EVERY ready scan (P0, bug,
+    plain) — an `ai-epic` Issue is never claimed no matter which
+    priority queue it sits in; the next non-Epic ready Issue is
+    claimed instead."""
+    epic_p0 = {
+        "number": 80, "title": "epic p0", "body": "",
+        "labels": [
+            {"name": "ai-epic"}, {"name": "ai-ready"}, {"name": "p0"},
+        ],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    epic_bug = {
+        "number": 81, "title": "epic bug", "body": "",
+        "labels": [
+            {"name": "ai-epic"}, {"name": "ai-ready"}, {"name": "bug"},
+        ],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    feature = {
+        "number": 10, "title": "feature", "body": "",
+        "labels": [{"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+
+    def fake_run(command, **kwargs):
+        search = command[command.index("--search") + 1]
+        if "label:p0" in search:
+            return json.dumps([epic_p0])
+        if "label:bug" in search:
+            return json.dumps([epic_bug])
+        return json.dumps([feature])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/muyan-pilot") == feature
+    assert caplog.text.count("epic_not_claimed") == 2
+    assert "issue=80" in caplog.text
+    assert "issue=81" in caplog.text
+
+
+def test_pick_in_progress_issue_scan_excludes_epics(monkeypatch, tmp_path):
+    """Issue #93: the restart-resume scan excludes `ai-epic` — a
+    legacy Epic left behind with `ai-in-progress` (the #80 scene,
+    before the Epic mechanism existed) must never be resumed into
+    `run_pi`: an Epic is coordination, not an executable task."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return json.dumps([])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.pick_in_progress_issue(
+        "xqliu/muyan-pilot", tmp_path / "slots", 1,
+    ) is None
+    assert calls == [[
+        "gh", "issue", "list", "--repo", "xqliu/muyan-pilot",
+        "--state", "open", "--search",
+        "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
+        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
+        "-label:ai-epic",
+        "--json", "number,title,body,labels", "--limit", "1",
+    ]]
+
+
+def test_main_epic_only_queue_ends_idle_without_process_issue(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #93: when the ready queue contains only `ai-epic`
+    Issues, the tick ends idle (`no_ready_issue`): no claim, no
+    worktree, no `run_pi` — an Epic never enters the delivery
+    pipeline and never occupies a slot through a delivery."""
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
+    epic = {
+        "number": 80, "title": "v0.1 release checklist", "body": "",
+        "labels": [{"name": "ai-epic"}, {"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["gh", "issue", "list"]:
+            search = command[command.index("--search") + 1]
+            # The resumable-PR and in-flight restart scans are idle;
+            # the ready scans see the Epic.
+            if search.startswith("label:ai-fix-needed") or search.startswith(
+                "label:ai-ready label:ai-in-progress",
+            ):
+                return "[]"
+            return json.dumps([epic])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    # The fake rejects anything that is not issue-list traffic.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "list"])
+
+    def fail_process(*args, **kwargs):
+        raise AssertionError("process_issue must not run for an Epic")
+
+    monkeypatch.setattr(runner, "process_issue", fail_process)
+    # The guard itself must fail loudly if it is ever reached.
+    with pytest.raises(AssertionError, match="must not run for an Epic"):
+        fail_process()
+    with caplog.at_level("INFO"):
+        assert runner.main(["--config", str(config)]) == 0
+    assert "no_ready_issue" in caplog.text
+    assert "epic_not_claimed" in caplog.text
+    assert "issue=80" in caplog.text
+
+
 def test_pick_in_progress_issue_scan_fetches_labels(monkeypatch, tmp_path):
     """Issue #101: the in-flight restart scan fetches `labels` too, so
     a P0 a killed runner left behind keeps its priority in the
@@ -808,7 +1032,8 @@ def test_pick_in_progress_issue_scan_fetches_labels(monkeypatch, tmp_path):
         "gh", "issue", "list", "--repo", "xqliu/muyan-pilot",
         "--state", "open", "--search",
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
-        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked",
+        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
+        "-label:ai-epic",
         "--json", "number,title,body,labels", "--limit", "1",
     ]]
 
@@ -838,7 +1063,8 @@ def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
         "gh", "issue", "list", "--repo", "xqliu/muyan-pilot",
         "--state", "open", "--search",
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
-        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked",
+        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
+        "-label:ai-epic",
         "--json", "number,title,body,labels", "--limit", "1",
     ]]
 

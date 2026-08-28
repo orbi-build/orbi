@@ -39,6 +39,9 @@ VALID_DEFS = [
     {"name": "ai-merged", "color": "0e8a16", "description": "merged"},
     {"name": "ai-blocked", "color": "d73a4a", "description": "blocked"},
     {"name": "p0", "color": "fbca04", "description": "urgent"},
+    # Issue #93: the Epic marker is platform state (the claim scan
+    # skips `ai-epic`), so it is part of the platform label set.
+    {"name": "ai-epic", "color": "bfdadc", "description": "epic"},
 ]
 
 
@@ -162,12 +165,12 @@ def test_fake_run_factory_rejects_an_unexpected_command():
 # --- labels.toml: the single source of truth -------------------------------
 
 
-def test_load_label_defs_parses_all_seven_platform_labels(tmp_path):
+def test_load_label_defs_parses_all_eight_platform_labels(tmp_path):
     path = write_labels_toml(tmp_path, VALID_DEFS)
     defs = pilot_setup.load_label_defs(path)
     assert [entry["name"] for entry in defs] == [
         "ai-ready", "ai-in-progress", "ai-pr-opened",
-        "ai-fix-needed", "ai-merged", "ai-blocked", "p0",
+        "ai-fix-needed", "ai-merged", "ai-blocked", "p0", "ai-epic",
     ]
     assert defs[0] == {
         "name": "ai-ready", "color": "1d76db", "description": "dispatched",
@@ -183,10 +186,10 @@ def test_load_label_defs_rejects_a_missing_platform_label(tmp_path):
 
 def test_load_label_defs_rejects_an_unknown_label(tmp_path):
     defs = VALID_DEFS + [
-        {"name": "ai-epic", "color": "bfdadc", "description": "epic"},
+        {"name": "ai-unknown", "color": "bfdadc", "description": "x"},
     ]
     path = write_labels_toml(tmp_path, defs)
-    with pytest.raises(pilot_setup.SetupError, match="ai-epic"):
+    with pytest.raises(pilot_setup.SetupError, match="ai-unknown"):
         pilot_setup.load_label_defs(path)
 
 
@@ -225,8 +228,8 @@ def test_load_label_defs_rejects_malformed_toml(tmp_path):
         pilot_setup.load_label_defs(path)
 
 
-def test_committed_labels_toml_covers_the_seven_platform_labels():
-    """The committed labels.toml (repo root) must define exactly the 7
+def test_committed_labels_toml_covers_the_eight_platform_labels():
+    """The committed labels.toml (repo root) must define exactly the 8
     platform labels with valid colors and non-empty descriptions."""
     path = Path(__file__).resolve().parent.parent / "labels.toml"
     defs = pilot_setup.load_label_defs(path)
@@ -390,8 +393,8 @@ def test_align_labels_creates_missing_and_edits_drifted(tmp_path):
         run_command=fake_run,
     )
     assert result["repo"] == "xqliu/muyan-pilot"
-    assert result["aligned"] == 7
-    assert result["total"] == 7
+    assert result["aligned"] == 8
+    assert result["total"] == 8
     # Only the drifted p0 label is written; ai-ready already matches and
     # the business label `bug` is never touched.
     creates = [c for c in calls if c[:3] == ["gh", "label", "create"]]
@@ -413,7 +416,7 @@ def test_align_labels_is_idempotent_when_everything_matches(tmp_path):
         pilot_setup.load_label_defs(repo / "labels.toml"),
         run_command=fake_run,
     )
-    assert result["aligned"] == 7
+    assert result["aligned"] == 8
     assert [c for c in calls if c[:3] == ["gh", "label", "create"]] == []
 
 
@@ -426,9 +429,9 @@ def test_align_labels_reports_partial_alignment(tmp_path):
         pilot_setup.load_label_defs(repo / "labels.toml"),
         run_command=fake_run,
     )
-    assert result["aligned"] == 7
-    assert result["total"] == 7
-    assert len([c for c in calls if c[:3] == ["gh", "label", "create"]]) == 7
+    assert result["aligned"] == 8
+    assert result["total"] == 8
+    assert len([c for c in calls if c[:3] == ["gh", "label", "create"]]) == 8
 
 
 def test_align_labels_fails_fast_on_a_label_write_error(tmp_path):
@@ -818,7 +821,7 @@ def test_run_setup_success_reports_all_steps(tmp_path):
             "repo": "xqliu/muyan-pilot",
             "permission": "ADMIN",
             "default_branch": "main",
-            "labels": {"aligned": 7, "total": 7},
+            "labels": {"aligned": 8, "total": 8},
         },
     ]
     assert result["service"]["installed"] is True
@@ -972,7 +975,7 @@ def sample_result() -> dict:
                 "repo": "xqliu/muyan-pilot",
                 "permission": "ADMIN",
                 "default_branch": "main",
-                "labels": {"aligned": 7, "total": 7},
+                "labels": {"aligned": 8, "total": 8},
             },
         ],
         "service": {
@@ -1008,7 +1011,7 @@ def test_format_setup_renders_stable_key_value_lines():
     assert lines[0] == "setup=ok version=1 base_branch=main"
     assert (
         "repo=xqliu/muyan-pilot permission=ADMIN "
-        "default_branch=main labels=7/7" in lines
+        "default_branch=main labels=8/8" in lines
     )
     assert (
         "service=installed path=/home/u/.config/systemd/user/"
@@ -1045,14 +1048,14 @@ def test_format_setup_renders_multiple_repos():
             "repo": "xqliu/muyan-ceo",
             "permission": "WRITE",
             "default_branch": "main",
-            "labels": {"aligned": 6, "total": 7},
+            "labels": {"aligned": 6, "total": 8},
         },
     )
     lines = pilot_setup.format_setup(result)
     repo_lines = [line for line in lines if line.startswith("repo=")]
     assert len(repo_lines) == 2
     assert repo_lines[1].startswith("repo=xqliu/muyan-ceo ")
-    assert "labels=6/7" in repo_lines[1]
+    assert "labels=6/8" in repo_lines[1]
 
 
 def test_install_units_step_result_is_json_serializable(tmp_path):

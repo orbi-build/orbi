@@ -129,10 +129,17 @@ DAG, no priority numbers, no separate queues:
   example the v0.1 release checklist). It is marked with the `ai-epic`
   label. An Epic is not itself a directly executable task: the actual
   work is split into independent `ai-ready` Issues, each with one runtime
-  outcome, one PR, one review and one merge. The Epic is closed only
-  after its sub-Issues are done and the release evidence exists on the
-  remote (tag, merged PRs) — typically with a final `Fixes #<epic>`
-  commit/PR.
+  outcome, one PR, one review and one merge. The Runner NEVER claims an
+  Epic (Issue #93): the ready claim scan skips it with the structured
+  `epic_not_claimed issue=N repo=...` journal line (no claim, no label
+  change, no worktree, no run, no slot), and the restart-resume scan
+  excludes it too. The Epic is closed only after its sub-Issues are
+  done and the release evidence exists on the remote (tag, merged PRs)
+  — the completion is judged from GitHub evidence (sub-Issues, native
+  `blockedBy`, merged PRs, remote tag, no leftover `ai-in-progress`),
+  and while any condition is unmet the Epic stays open: it is closed by
+  a human or a release task, typically with a final `Fixes #<epic>`
+  commit/PR — never by the Runner.
 - **Release task**: a regular `ai-ready` Issue whose job is release
   reconciliation — checking that the sub-Issues are merged, the version
   tag exists on the remote, and the release evidence is complete. Like

@@ -116,9 +116,15 @@ PR 验收时校验该关键词，缺失即 fail fast。
 - **Epic**：协调 Issue，把一组相关任务归在一起（例如 v0.1 release
   checklist）。它带 `ai-epic` 标签。Epic 本身不是可直接执行的任务：
   实际工作拆成独立的 `ai-ready` Issue，每个一个 runtime outcome、一个
-  PR、一次 review、一次 merge。只有当子 Issue 完成且 release 证据
-  （tag、已合并 PR）在远端存在后 Epic 才关闭——通常伴随最后一个
-  `Fixes #<epic>` commit/PR。
+  PR、一次 review、一次 merge。Runner **从不领取** Epic（Issue #93）：
+  普通领取扫描跳过它并记录结构化日志
+  `epic_not_claimed issue=N repo=...`（不领取、不改标签、不建 worktree、
+  不启动 run、不占 slot），重启恢复扫描也排除它。只有当子 Issue 完成
+  且 release 证据（tag、已合并 PR）在远端存在后 Epic 才关闭——完成条件
+  由 GitHub 证据（子 Issue、原生 `blockedBy`、已合并 PR、远端 tag、无
+  遗留 `ai-in-progress`）确定；任一条件未满足时 Epic 保持 open：由人工
+  或 release task 关闭（通常伴随最后一个 `Fixes #<epic>` commit/PR），
+  绝不由 Runner 关闭。
 - **Release task**：一个普通 `ai-ready` Issue，职责是 release 对账——
   检查子 Issue 已合并、版本 tag 在远端存在、release 证据完整。和任何
   任务一样通过一个 PR 交付（或当证据已在远端时直接关闭 Epic）。

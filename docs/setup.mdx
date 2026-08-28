@@ -30,7 +30,7 @@ non-zero exit code.
    - the repo exists and the viewer has write permission
      (`gh repo view` → `viewerPermission` must be `WRITE`, `MAINTAIN`
      or `ADMIN`);
-   - the seven platform labels are aligned **declaratively** from the
+   - the eight platform labels are aligned **declaratively** from the
      repo-managed `labels.toml` (repo root) — the single source of
      truth for label name, color and description: a missing label is
      created, a drifted label is updated, nothing is deleted, and
@@ -86,14 +86,14 @@ containing spaces are quoted), so agents and scripts can parse it:
 
 ```text
 setup=ok version=1 base_branch=main
-repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=7/7
+repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=8/8
 service=installed path=~/.config/systemd/user/muyan-pilot.service sha256=9f2c...
 timer=enabled active=true next="Thu 2026-08-27 10:00:00 +08"
 checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:xqliu/muyan-pilot.git protocol=ssh migrated=false ssh_reachable=true
 model_endpoint=optional optional_proxy=healthy url=http://127.0.0.1:18082/health
 ```
 
-`labels=7/7` means all seven platform labels match `labels.toml`;
+`labels=8/8` means all eight platform labels match `labels.toml`;
 `next` is the timer's next trigger time (`-` when it has none);
 `optional_proxy` is `healthy`, `unhealthy` or `unavailable` and never
 changes the exit code. `migrated=true` means setup rewrote an HTTPS
@@ -113,7 +113,7 @@ Success (exit code `0`):
 ```bash
 $ muyan-pilot setup --config muyan-pilot.toml
 setup=ok version=1 base_branch=main
-repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=7/7
+repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=8/8
 service=installed path=~/.config/systemd/user/muyan-pilot.service sha256=9f2c...
 timer=enabled active=true next="Thu 2026-08-27 10:00:00 +08"
 checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:xqliu/muyan-pilot.git protocol=ssh migrated=false ssh_reachable=true
