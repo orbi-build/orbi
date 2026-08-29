@@ -17,6 +17,17 @@ prompt_review = "prompt_review.md"
 # Delivery base branch: every task worktree is created from the latest
 # origin/<base_branch> (fetched and frozen at claim time). Default: "main".
 base_branch = "main"
+# Claim scope (Issue #139): the active GitHub Milestone title (e.g.
+# "v0.2.0") that the fresh-claim scans (p0, bug, plain) are restricted
+# to. The milestone:"<title>" qualifier is part of the gh search query,
+# so an Issue of another Milestone (or of no Milestone) never enters the
+# queue of this Runner; `ai-ready` stays the execution switch and the
+# pickup order (p0 -> bug -> plain) is unchanged. P0 does not cross
+# milestones. Resume states (opened PRs, in-flight restarts) are never
+# gated by the Milestone. Leave it out (or comment it out) to keep the
+# pre-#139 behavior: every `ai-ready` Issue is claimable. It is never
+# guessed — an empty or non-string value fails the start fast.
+# active_milestone = "v0.2.0"
 # Maximum concurrent Pilot tasks on this machine. Must be a positive integer;
 # missing means 1. The local AI/GPU can only serve one stable task, so keep
 # the default. A slot (flock on <repo_dir>/.muyan-pilot/slots/slot-N) is

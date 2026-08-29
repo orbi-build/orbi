@@ -110,6 +110,7 @@ directory):
 | `prompt` | no | `prompt.md` | Implementer prompt template (placeholders like `{{SOURCE_REPO}}` are rendered by the Runner) |
 | `prompt_review` | no | `prompt_review.md` | Review prompt template for the independent post-PR review session |
 | `base_branch` | no | `main` | Delivery base branch; every task worktree is created from the frozen `origin/<base_branch>` SHA |
+| `active_milestone` | no | unset | Claim scope for the fresh-claim scans (Issue #139): the active GitHub Milestone title (e.g. `v0.2.0`). Set it to restrict the p0/bug/plain ready scans to that Milestone (the `milestone:"<title>"` qualifier is part of the gh search query — an Issue of another or no Milestone never enters the queue); `ai-ready` stays the execution switch, the pickup order is unchanged, P0 does not cross milestones, and resume states (opened PRs, in-flight restarts) are never gated by it. Unset = every `ai-ready` Issue is claimable (pre-#139 behavior) |
 | `max_concurrency` | no | `1` | Concurrent Pilot tasks on this machine (positive integer; a local model/GPU usually serves one stable task) |
 | `skills` | no | `[]` | Optional Pi skill paths (absolute, `~`, or relative to the config file) |
 | `context_files` | no | `[]` | Optional Markdown context files injected into the prompt as paths |
@@ -167,8 +168,10 @@ python3 bootstrap_runner.py --config muyan-pilot.toml
 
 One tick does at most one thing: resume an opened PR (review/fix/merge) or
 claim one `ai-ready` Issue (`p0`-labeled Issues are picked first, then
-bug-labeled Issues, then plain features), then it exits. With an empty
-ready queue it exits cleanly without claiming anything.
+bug-labeled Issues, then plain features; with `active_milestone` set,
+only Issues of that Milestone are claimable — Issue #139), then it
+exits. With an empty ready queue it exits cleanly without claiming
+anything.
 
 ## 6. Smoke walkthrough (from zero)
 
