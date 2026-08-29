@@ -22,7 +22,15 @@ service 实例（`muyan-pilot@1.timer` → `muyan-pilot@1.service`，
    的后续 start 请求，下一次真正启动取到最新代码。两个实例可能在同一
    tick 运行 `ExecStartPre`，所以 fetch + fast-forward 包在一个短生命
    周期的 `flock`（共享状态目录下的 `base-sync.lock`，Python 侧同步取
-   同一把锁）里：main worktree 不会被并发写入。
+   同一把锁）里：main worktree 不会被并发写入。自 Issue #171 起，所有更新
+   共享 remote-tracking ref 的 fetch 都走同一把锁：Runner 侧的
+   `freeze_base` / `verify_pr` / `merge_gate` / `confirm_merged` fetch 统一
+   经 `fetch_base_ref`（先取锁 → fetch → 释放，锁或 fetch 出错即 fail
+   fast），implement/review 两个 prompt 指示 Pi 用
+   `flock <BASE_SYNC_LOCK> git fetch origin <base_branch>` 执行 base
+   新鲜度 fetch（锁路径从配置的 `repo_dir` 渲染进两个 prompt）。两个并发
+   Runner（或 Runner 与 Pi 会话）因此不再争抢共享 ref（不会出现
+   `cannot lock ref ... is at <X> but expected <Y>` 失败）。
 2. **运行一个 tick**：恢复一个已打开的 PR（review/fix/merge），或领取
    一个 `ai-ready` Issue，然后退出。在任何 slot 或领取之前，tick 还
    运行启动前 **git transport 检查**（Issue #114）：部署 checkout 的

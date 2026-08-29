@@ -771,6 +771,7 @@ def test_run_pi_fresh_context_has_no_existing_pr(monkeypatch, tmp_path):
     )
     config = {
         "prompt": prompt_path,
+        "repo_dir": tmp_path,
         "source_repos": ["owner/repo"],
         "workspace_root": tmp_path,
         "context_files": [],
@@ -916,11 +917,12 @@ def test_verify_resumed_pr_verifies_scene_pr_and_returns_verified_url(
     verified_url = "https://github.com/owner/repo/pull/9"
 
     def fake_verify_pr(worktree, branch, base_branch, run_id, *, issue,
-                       pr_repo=None, expected_url=None,
+                       repo_dir=None, pr_repo=None, expected_url=None,
                        require_latest_base=True):
         calls.append({
             "worktree": worktree, "branch": branch,
             "base_branch": base_branch, "run_id": run_id, "issue": issue,
+            "repo_dir": repo_dir,
             "pr_repo": pr_repo, "expected_url": expected_url,
             "require_latest_base": require_latest_base,
         })
@@ -949,6 +951,9 @@ def test_verify_resumed_pr_verifies_scene_pr_and_returns_verified_url(
     assert call["pr_repo"] == "owner/repo"
     assert call["expected_url"] == FAKE_PR_URL
     assert call["require_latest_base"] is False
+    # Issue #171: the verify fetch's lock location is the configured
+    # deployment checkout (the shared state dir), never the worktree.
+    assert call["repo_dir"] == tmp_path
 
 
 

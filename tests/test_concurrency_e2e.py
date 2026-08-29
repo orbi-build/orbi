@@ -301,8 +301,14 @@ if "INDEPENDENT REVIEW" in system_prompt:
         )
     # A head behind the latest base is fixed in-session too (Issue
     # #82), on EVERY review round: the base may advance between rounds.
-    # Absorb origin/main, resolve, retest, push.
-    subprocess.run(["git", "fetch", "origin", "main"], check=True)
+    # Absorb origin/main, resolve, retest, push. The fetch updates the
+    # shared remote-tracking ref, so it runs under the base-sync lock
+    # (Issue #171): the same `flock <lock> git fetch origin main` the
+    # real review prompt instructs (the lock path comes from the
+    # rendered prompt).
+    lock = system_prompt.split("lock=")[1].split()[0]
+    subprocess.run(["flock", lock, "git", "fetch", "origin", "main"],
+                   check=True)
     behind = subprocess.run(
         ["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"],
         capture_output=True,
@@ -468,15 +474,19 @@ def write_config(
         "You are the delivery agent.\n"
         "- Delivery base branch: `{{BASE_BRANCH}}`\n"
         "- Delivery base SHA: `{{BASE_SHA}}`\n"
+        "- Base sync lock: `{{BASE_SYNC_LOCK}}`\n"
         "- Run id: `{{RUN_ID}}`\n",
         encoding="utf-8",
     )
     # validate_config requires the review prompt to exist as well (the
     # Runner runs the independent review itself). The review prompt
     # carries the run_id so the fake pi can key its
-    # first-review-findings state per run.
+    # first-review-findings state per run, and the base-sync lock path
+    # (Issue #171) so the fake pi's base-absorb fetch runs under the
+    # SAME lock the real review prompt instructs.
     (tmp_path / "prompt_review.md").write_text(
-        "INDEPENDENT REVIEW\nrun_id={{RUN_ID}}\n", encoding="utf-8",
+        "INDEPENDENT REVIEW\nrun_id={{RUN_ID}}\n"
+        "lock={{BASE_SYNC_LOCK}}\n", encoding="utf-8",
     )
     config = tmp_path / f"muyan-pilot-{max_concurrency}.toml"
     config.write_text(

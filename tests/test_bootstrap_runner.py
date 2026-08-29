@@ -1,3 +1,4 @@
+import fcntl
 import json
 import logging
 import os
@@ -361,8 +362,10 @@ def test_prompt_template_requires_fixes_keyword_for_the_source_issue():
         "BASE_BRANCH": "main",
         "BASE_SHA": "abc123",
         "RUN_ID": "a2241189",
+        "BASE_SYNC_LOCK": "/checkout/.muyan-pilot/base-sync.lock",
     })
     assert "Fixes #53" in rendered
+    assert "/checkout/.muyan-pilot/base-sync.lock" in rendered
     assert "{{" not in rendered
 
 
@@ -1824,6 +1827,41 @@ def test_freeze_base_fetches_remote_and_returns_exact_sha(monkeypatch, tmp_path)
     )]
 
 
+def _probe_lock_free(repo_dir: Path) -> bool:
+    """True when a non-blocking probe acquires the base-sync lock
+    (i.e. the lock is FREE); False while it is held."""
+    lock_path = runner.base_sync_lock_path(repo_dir)
+    probe = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except BlockingIOError:
+        return False
+    finally:
+        fcntl.flock(probe, fcntl.LOCK_UN)
+        os.close(probe)
+
+
+def test_freeze_base_fetches_under_the_base_sync_lock(
+    monkeypatch, tmp_path,
+):
+    # Issue #171: the freeze fetch updates the shared remote-tracking
+    # ref, so it must run under the SAME base-sync lock (a concurrent
+    # probe must not acquire it while the fetch is in flight) and the
+    # lock must be free again afterwards.
+    held = []
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "fetch", "origin"]:
+            held.append(not _probe_lock_free(tmp_path))
+        return "abc123def456"
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.freeze_base(tmp_path, "main") == "abc123def456"
+    assert held == [True]
+    assert _probe_lock_free(tmp_path) is True
+
+
 def test_freeze_base_fails_fast_when_remote_base_is_missing(monkeypatch, tmp_path):
     error = subprocess.CalledProcessError(
         128, ["git", "rev-parse", "origin/main"],
@@ -2286,12 +2324,75 @@ def test_issue_context_uses_owner_repo_number_form():
     )
 
 
+def test_run_pi_renders_base_sync_lock_into_prompt(monkeypatch, tmp_path):
+    # Issue #171: the implementer prompt carries the absolute path of
+    # the shared base-sync lock so Pi's base freshness fetch can run
+    # under it (flock <lock> git fetch origin <base>).
+    prompt_path = tmp_path / "prompt.md"
+    prompt_path.write_text(
+        "SYSTEM {{BASE_SYNC_LOCK}}",
+        encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: calls.append(command) or "done")
+    issue = {"number": 4, "title": "t", "body": "b"}
+    config = {
+        "prompt": prompt_path,
+        "repo_dir": tmp_path / "checkout",
+        "source_repos": ["owner/repo"],
+        "workspace_root": tmp_path,
+        "context_files": [],
+        "skills": [],
+        "base_branch": "main",
+        "base_sha": "abc123def456",
+        "run_id": "run1",
+    }
+    runner.run_pi(
+        issue, tmp_path, config, "owner/repo",
+        branch="muyan-pilot/owner-repo-issue-4-run1",
+    )
+    command = calls[0]
+    assert command[command.index("--system-prompt") + 1] == "SYSTEM " + str(
+        tmp_path / "checkout" / ".muyan-pilot" / "base-sync.lock",
+    )
+
+
+def test_run_review_renders_base_sync_lock_into_prompt(monkeypatch, tmp_path):
+    # Issue #171: the review prompt carries the SAME lock path (the
+    # review session's base merge fetch must not race the shared ref).
+    prompt_path = tmp_path / "prompt_review.md"
+    prompt_path.write_text(
+        "REVIEW {{BASE_SYNC_LOCK}}",
+        encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: calls.append(command) or "ok")
+    runner.run_review(
+        tmp_path,
+        {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"},
+        {
+            "prompt_review": prompt_path,
+            "repo_dir": tmp_path / "checkout",
+            "source_repos": ["owner/repo"],
+            "base_branch": "main",
+            "run_id": "a1b2c3d4",
+            "skills": [],
+        },
+        "owner/repo", 4, "branch", 1,
+    )
+    command = calls[0]
+    assert command[command.index("--system-prompt") + 1] == "REVIEW " + str(
+        tmp_path / "checkout" / ".muyan-pilot" / "base-sync.lock",
+    )
+
+
 def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_path):
     prompt_path = tmp_path / "prompt.md"
     prompt_path.write_text(
         "SYSTEM {{SOURCE_REPO}} {{ISSUE_NUMBER}} {{ISSUE_TITLE}} {{ISSUE_BODY}} "
         "{{WORKSPACE_ROOT}} {{CONTEXT_FILES}} {{SKILLS}} {{BASE_BRANCH}} "
-        "{{BASE_SHA}} {{RUN_ID}}",
+        "{{BASE_SHA}} {{RUN_ID}} {{BASE_SYNC_LOCK}}",
         encoding="utf-8",
     )
     calls = []
@@ -2299,6 +2400,7 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
     issue = {"number": 4, "title": "Fix title", "body": "Fix body"}
     config = {
         "prompt": prompt_path,
+        "repo_dir": tmp_path / "checkout",
         "source_repos": ["owner/repo"],
         "workspace_root": tmp_path,
         "context_files": ["context.md"],
@@ -2319,7 +2421,10 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
     assert "Fix body" in command[7]
     assert "context.md" in command[7]
     assert "skill.md" in command[7]
-    assert command[7].endswith("main abc123def456 run1")
+    assert command[7].endswith(
+        "main abc123def456 run1 "
+        + str(tmp_path / "checkout" / ".muyan-pilot" / "base-sync.lock"),
+    )
     assert command[8] == "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: " + str(tmp_path) + "\nComplete the delivery process in the system prompt."
     assert kwargs["cwd"] == tmp_path
     assert kwargs["timeout"] is None
@@ -2338,6 +2443,7 @@ def test_run_pi_passes_task_branch_to_stream_pi(monkeypatch, tmp_path):
     issue = {"number": 5, "title": "t", "body": "b"}
     config = {
         "prompt": prompt_path,
+        "repo_dir": tmp_path,
         "source_repos": ["owner/repo"],
         "workspace_root": tmp_path,
         "context_files": [],
@@ -2361,7 +2467,7 @@ def test_run_pi_redacts_prompt_and_issue_from_command_log(monkeypatch, tmp_path)
     monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: calls.append((command, kwargs)) or "done")
     runner.run_pi(
         {"number": 5, "title": "secret", "body": "token"}, tmp_path,
-        {"prompt": prompt_path, "source_repos": ["owner/repo"], "workspace_root": tmp_path, "context_files": [], "skills": [], "base_branch": "main", "base_sha": "abc123def456", "run_id": "run1"},
+        {"prompt": prompt_path, "repo_dir": tmp_path, "source_repos": ["owner/repo"], "workspace_root": tmp_path, "context_files": [], "skills": [], "base_branch": "main", "base_sha": "abc123def456", "run_id": "run1"},
         "owner/repo", branch="muyan-pilot/owner-repo-issue-5-run1",
     )
     command, kwargs = calls[0]
@@ -2378,7 +2484,7 @@ def test_verify_pr_rejects_wrong_branch(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "other-branch")
     with pytest.raises(RuntimeError, match="Pi changed branch"):
         runner.verify_pr(
-            tmp_path, "muyan-pilot/issue-4", "main", "e07383c2", issue=4,
+            tmp_path, "muyan-pilot/issue-4", "main", "e07383c2", issue=4, repo_dir=tmp_path,
         )
 
 
@@ -2435,7 +2541,7 @@ def test_verify_pr_rejects_delivery_behind_latest_remote_base(monkeypatch, tmp_p
     ):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, issue=4,
+            FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
     assert "base_branch=main" in caplog.text
 
@@ -2453,7 +2559,7 @@ def test_verify_pr_rejects_missing_pr(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="exactly one open PR"):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, issue=4,
+            FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
 
 
@@ -2465,7 +2571,7 @@ def test_verify_pr_rejects_non_array(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="exactly one open PR"):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, issue=4,
+            FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
 
 
@@ -2479,10 +2585,46 @@ def test_verify_pr_returns_url_when_delivery_contains_latest_base(monkeypatch, t
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.verify_pr(
         tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
-        issue=4,
+        issue=4, repo_dir=tmp_path,
     ) == "https://github.com/muyantech/muyan-pilot/pull/4"
     assert ["git", "fetch", "origin", "main"] in calls
     assert ["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"] in calls
+
+
+def test_verify_pr_requires_the_repo_dir_lock_location(
+    monkeypatch, tmp_path,
+):
+    # Issue #171: the verify fetch updates the shared remote-tracking
+    # ref, so the lock location (the deployment checkout's shared state
+    # dir) must be explicit — there is no bypass path.
+    monkeypatch.setattr(runner, "run_command", fake_verify_run)
+    with pytest.raises(TypeError):
+        runner.verify_pr(
+            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, issue=4,
+        )
+
+
+def test_verify_pr_fetches_under_the_base_sync_lock(
+    monkeypatch, tmp_path,
+):
+    # Issue #171: the verify fetch runs under the SAME base-sync lock
+    # (a concurrent probe must not acquire it while the fetch is in
+    # flight) and the lock must be free again afterwards.
+    held = []
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "fetch", "origin"]:
+            held.append(not _probe_lock_free(tmp_path))
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    runner.verify_pr(
+        tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+        FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
+    )
+    assert held == [True]
+    assert _probe_lock_free(tmp_path) is True
 
 
 def test_verify_pr_rejects_pr_without_url(monkeypatch, tmp_path):
@@ -2493,7 +2635,7 @@ def test_verify_pr_rejects_pr_without_url(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="open PR has no URL"):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, issue=4,
+            FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
 
 
@@ -2509,7 +2651,7 @@ def test_verify_pr_rejects_pr_based_on_wrong_branch(monkeypatch, tmp_path):
     ):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, issue=4,
+            FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
 
 
@@ -2527,7 +2669,7 @@ def test_verify_pr_rejects_stale_remote_pr_head(monkeypatch, tmp_path):
     ):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, issue=4,
+            FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
 
 
@@ -2543,7 +2685,7 @@ def test_verify_pr_rejects_pr_body_without_run_marker(monkeypatch, tmp_path, cap
     ):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, issue=4,
+            FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
     assert "pr_run_marker_missing" in caplog.text
 
@@ -2560,7 +2702,7 @@ def test_verify_pr_rejects_pr_body_missing_field(monkeypatch, tmp_path):
     ):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, issue=4,
+            FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
 
 
@@ -2580,7 +2722,7 @@ def test_verify_pr_accepts_pr_body_with_fixes_keyword(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.verify_pr(
         tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
-        issue=4,
+        issue=4, repo_dir=tmp_path,
     ) == FAKE_PR_URL
 
 
@@ -2602,7 +2744,7 @@ def test_verify_pr_rejects_pr_body_without_fixes_keyword(
     ):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, issue=4,
+            FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
     assert "pr_fixes_missing" in caplog.text
     assert "issue=4" in caplog.text
@@ -2629,7 +2771,7 @@ def test_verify_pr_rejects_pr_body_with_wrong_issue_number(
     ):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, issue=4,
+            FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
     assert "pr_fixes_missing" in caplog.text
 
@@ -2655,7 +2797,7 @@ def test_verify_pr_rejects_pr_body_with_longer_issue_number(
     ):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, issue=4,
+            FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
     assert "pr_fixes_missing" in caplog.text
 
@@ -2672,7 +2814,7 @@ def test_verify_pr_queries_base_head_and_accepts_matching_pr(
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.verify_pr(
         tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
-        issue=4,
+        issue=4, repo_dir=tmp_path,
     ) == "https://github.com/muyantech/muyan-pilot/pull/4"
     assert ["git", "rev-parse", "HEAD"] in calls
     assert [
@@ -2693,7 +2835,7 @@ def test_verify_pr_accepts_pr_in_expected_repo_and_url(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", fake_verify_run)
     assert runner.verify_pr(
         tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
-        issue=4, pr_repo=FAKE_PR_REPO, expected_url=FAKE_PR_URL,
+        issue=4, repo_dir=tmp_path, pr_repo=FAKE_PR_REPO, expected_url=FAKE_PR_URL,
     ) == FAKE_PR_URL
 
 
@@ -2713,7 +2855,7 @@ def test_verify_pr_rejects_pr_head_in_another_repo(monkeypatch, tmp_path, caplog
     ):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, issue=4, pr_repo=FAKE_PR_REPO,
+            FAKE_RUN_ID, issue=4, repo_dir=tmp_path, pr_repo=FAKE_PR_REPO,
         )
     assert "pr_repo_mismatch" in caplog.text
 
@@ -2733,7 +2875,7 @@ def test_verify_pr_rejects_pr_head_repo_missing_fields(monkeypatch, tmp_path):
     ):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, issue=4, pr_repo=FAKE_PR_REPO,
+            FAKE_RUN_ID, issue=4, repo_dir=tmp_path, pr_repo=FAKE_PR_REPO,
         )
 
 
@@ -2752,7 +2894,7 @@ def test_verify_pr_rejects_pr_head_repo_empty_fields(monkeypatch, tmp_path):
     ):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, issue=4, pr_repo=FAKE_PR_REPO,
+            FAKE_RUN_ID, issue=4, repo_dir=tmp_path, pr_repo=FAKE_PR_REPO,
         )
 
 
@@ -2776,7 +2918,7 @@ def test_verify_pr_skips_repo_check_when_pr_repo_not_given(monkeypatch,
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.verify_pr(
         tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
-        issue=4,
+        issue=4, repo_dir=tmp_path,
     ) == FAKE_PR_URL
 
 
@@ -2798,7 +2940,7 @@ def test_verify_pr_rejects_url_different_from_expected(monkeypatch, tmp_path, ca
     ):
         runner.verify_pr(
             tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
-            FAKE_RUN_ID, issue=4, expected_url=FAKE_PR_URL,
+            FAKE_RUN_ID, issue=4, repo_dir=tmp_path, expected_url=FAKE_PR_URL,
         )
     assert "pr_url_mismatch" in caplog.text
 
@@ -2809,7 +2951,7 @@ def test_verify_pr_skips_url_check_when_expected_url_not_given(
     monkeypatch.setattr(runner, "run_command", fake_verify_run)
     assert runner.verify_pr(
         tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
-        issue=4,
+        issue=4, repo_dir=tmp_path,
     ) == FAKE_PR_URL
 
 
@@ -2828,7 +2970,7 @@ def test_verify_pr_skips_latest_base_check_when_not_required(
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.verify_pr(
         tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
-        issue=4, require_latest_base=False,
+        issue=4, repo_dir=tmp_path, require_latest_base=False,
     ) == FAKE_PR_URL
     assert not any(c[:3] == ["git", "fetch", "origin"] for c in calls)
     assert not any(
@@ -5343,6 +5485,7 @@ def test_run_pi_passes_progress_callback_to_stream_pi(monkeypatch, tmp_path):
         {"number": 4, "title": "Fix", "body": "b"}, tmp_path,
         {
             "prompt": tmp_path / "prompt.md",
+            "repo_dir": tmp_path,
             "source_repos": ["owner/repo"],
             "workspace_root": tmp_path,
             "base_branch": "main",
@@ -5378,6 +5521,7 @@ def test_run_review_passes_progress_callback_to_stream_pi(
          "head_oid": "h1", "head_ref": "h"},
         {
             "prompt_review": tmp_path / "prompt_review.md",
+            "repo_dir": tmp_path,
             "source_repos": ["owner/repo"],
             "base_branch": "main",
             "run_id": "a1b2c3d4",
@@ -5403,6 +5547,7 @@ def _skill_config(tmp_path, *names):
     return {
         "prompt": tmp_path / "prompt.md",
         "prompt_review": tmp_path / "prompt_review.md",
+        "repo_dir": tmp_path,
         "source_repos": ["owner/repo"],
         "workspace_root": tmp_path,
         "context_files": [],
@@ -7473,6 +7618,7 @@ def _model_config(tmp_path, **extra):
     config = {
         "prompt": tmp_path / "prompt.md",
         "prompt_review": tmp_path / "prompt_review.md",
+        "repo_dir": tmp_path,
         "source_repos": ["owner/repo"],
         "workspace_root": tmp_path,
         "context_files": [],

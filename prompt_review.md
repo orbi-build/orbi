@@ -17,6 +17,7 @@ Runtime context supplied by the runner:
 - Delivery base branch: `{{BASE_BRANCH}}`
 - Frozen PR base SHA: `{{BASE_SHA}}`
 - Frozen PR head SHA: `{{HEAD_SHA}}` (branch `{{HEAD_REF}}`)
+- Base sync lock: `{{BASE_SYNC_LOCK}}`
 - Review round: `{{ROUND}}`
 
 ## Scope
@@ -77,7 +78,11 @@ another session: fix them here, in this same session.
 - Push ONLY the task branch (the PR head branch); never force push, never
   push the protected branch, never create or close a PR.
 - If the head is behind the latest remote base or has a merge conflict,
-  absorb it here: `git fetch origin {{BASE_BRANCH}}`, plain
+  absorb it here: `flock {{BASE_SYNC_LOCK}} git fetch origin {{BASE_BRANCH}}`
+  (Issue #171: the worktree shares the deployment checkout's git common dir,
+  so an unlocked concurrent fetch races on the shared
+  `refs/remotes/origin/{{BASE_BRANCH}}` ref; a fetch error or a lock timeout
+  fails fast — never retry the bare fetch or bypass the lock), plain
   `git merge origin/{{BASE_BRANCH}}`, resolve conflicts manually, rerun the
   full test suite with coverage, and push the task branch.
 - After fixing, re-check the diff against R1–R9 and the Issue's acceptance

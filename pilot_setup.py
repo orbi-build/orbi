@@ -40,6 +40,7 @@ import shutil
 import tomllib
 from pathlib import Path
 
+import bootstrap_runner
 import cli_source
 import git_transport
 import systemd_deploy
@@ -503,7 +504,13 @@ def check_checkout(repo_dir: Path, base_branch: str,
                 "first: the timer's ExecStartPre fast-forward refuses "
                 "a dirty worktree, so the Runner could never start"
             )
-        run_command(["git", "fetch", "origin", base_branch], cwd=repo_dir)
+        # Issue #171: the checkout check's fetch updates the shared
+        # remote-tracking ref, so it runs under the SAME base-sync
+        # lock the Runner and the Pi prompt-side fetches use (no
+        # unlocked fetch path exists).
+        bootstrap_runner.fetch_base_ref(
+            repo_dir, base_branch, command_runner=run_command,
+        )
         head = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
         base = run_command(
             ["git", "rev-parse", f"origin/{base_branch}"], cwd=repo_dir,

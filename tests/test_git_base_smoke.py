@@ -121,7 +121,7 @@ def test_verify_pr_rejects_delivery_behind_latest_remote_base(clone, caplog):
     ):
         runner.verify_pr(
             clone, "muyan-pilot/owner-repo-issue-3-a1b2c3d4", "main",
-            "a1b2c3d4", issue=3,
+            "a1b2c3d4", issue=3, repo_dir=clone,
         )
     assert "base_branch=main" in caplog.text
 
@@ -145,7 +145,7 @@ def test_verify_pr_accepts_delivery_that_contains_latest_remote_base(clone, monk
     )
     assert runner.verify_pr(
         clone, "muyan-pilot/owner-repo-issue-3-a1b2c3d4", "main",
-        "a1b2c3d4", issue=3,
+        "a1b2c3d4", issue=3, repo_dir=clone,
     ) == "https://github.com/owner/repo/pull/3"
 
 
@@ -170,7 +170,7 @@ def test_verify_pr_rejects_pr_head_newer_than_local_head(clone, monkeypatch):
     with pytest.raises(RuntimeError, match="is not local HEAD"):
         runner.verify_pr(
             clone, "muyan-pilot/owner-repo-issue-3-a1b2c3d4", "main",
-            "a1b2c3d4", issue=3,
+            "a1b2c3d4", issue=3, repo_dir=clone,
         )
 
 

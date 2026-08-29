@@ -28,7 +28,17 @@ Runner instances can run concurrently. Each tick's service instance:
    the same tick, the fetch + fast-forward is wrapped in a short-lived
    `flock` on the shared state-dir lock file (`base-sync.lock`, the
    Python-side sync takes the SAME lock): the main worktree is never
-   written concurrently.
+   written concurrently. Since Issue #171 EVERY fetch that updates the
+   shared remote-tracking ref runs under that same lock: the Runner-side
+   `freeze_base` / `verify_pr` / `merge_gate` / `confirm_merged` fetches
+   go through `fetch_base_ref` (acquire lock → fetch → release, fail fast
+   on lock or fetch errors), and the implement/review prompts instruct Pi
+   to run the base-freshness fetch as
+   `flock <BASE_SYNC_LOCK> git fetch origin <base_branch>` (the lock path
+   is rendered into both prompts from the configured `repo_dir`). Two
+   concurrent Runners — or a Runner and a Pi session — therefore never
+   race the shared ref (no `cannot lock ref ... is at <X> but expected
+   <Y>` failures).
 2. **Runs one tick**: resume an opened PR (review/fix/merge) or claim one
    `ai-ready` Issue, then exit. Before any slot or claim the tick also
    runs the pre-start **git transport check** (Issue #114): the

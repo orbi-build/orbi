@@ -108,7 +108,7 @@ def test_merge_gate_merges_head_containing_latest_base(clone, monkeypatch):
           "head_ref": "muyan-pilot/owner-repo-issue-4-run1",
           "head_oid": head_oid}
     commands = install_fake_gh(monkeypatch, clone, make_pr(head_oid))
-    merged = runner.merge_gate(clone, pr, "main")
+    merged = runner.merge_gate(clone, pr, "main", repo_dir=clone)
     assert merged["merged"] is True
     # The merge used --match-head-commit with the reviewed head SHA.
     merge_cmd = [c for c in commands if c[:2] == ["gh", "pr"]
@@ -129,7 +129,7 @@ def test_merge_gate_merges_head_containing_latest_base(clone, monkeypatch):
             else ""
         ),
     )
-    confirmed = runner.confirm_merged(clone, merged, "main")
+    confirmed = runner.confirm_merged(clone, merged, "main", repo_dir=clone)
     assert confirmed["state"] == "MERGED"
     assert confirmed["merge_commit"] == merge_commit
 
@@ -162,7 +162,7 @@ def test_merge_gate_rejects_head_behind_latest_base(clone, monkeypatch, caplog):
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="behind latest remote base",
     ):
-        runner.merge_gate(clone, pr, "main")
+        runner.merge_gate(clone, pr, "main", repo_dir=clone)
     # No merge was attempted: a stale baseline is never merged.
     assert not [c for c in commands if c[:2] == ["gh", "pr"]
                and "merge" in c]
@@ -201,7 +201,7 @@ def test_deployment_checkout_fast_forwards_after_independent_merge(
           "head_ref": "muyan-pilot/owner-repo-issue-4-run1",
           "head_oid": head_oid}
     install_fake_gh(monkeypatch, clone, make_pr(head_oid))
-    merged = runner.merge_gate(clone, pr, "main")
+    merged = runner.merge_gate(clone, pr, "main", repo_dir=clone)
     assert merged["merged"] is True
     merge_commit = git(clone, "rev-parse", "origin/main")
     # The remote advanced; the deployment checkout has not yet.
@@ -216,7 +216,7 @@ def test_deployment_checkout_fast_forwards_after_independent_merge(
         return real_run(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    confirmed = runner.confirm_merged(clone, merged, "main")
+    confirmed = runner.confirm_merged(clone, merged, "main", repo_dir=clone)
     assert confirmed["merge_commit"] == merge_commit
 
     # The deployment checkout now fast-forwards to the merged base.

@@ -13,6 +13,7 @@ Runtime context supplied by the runner:
   `{{SKILLS}}`
 - Delivery base branch: `{{BASE_BRANCH}}`
 - Delivery base SHA (frozen `origin/{{BASE_BRANCH}}` at claim time): `{{BASE_SHA}}`
+- Base sync lock: `{{BASE_SYNC_LOCK}}`
 - Run id: `{{RUN_ID}}`
 
 Run correlation (Issue #41):
@@ -99,7 +100,13 @@ Base freshness before creating the PR:
 Your worktree was created from `{{BASE_SHA}}` (the frozen
 `origin/{{BASE_BRANCH}}` at claim time). Before creating the PR:
 
-1. Run `git fetch origin {{BASE_BRANCH}}` in the worktree.
+1. Run `flock {{BASE_SYNC_LOCK}} git fetch origin {{BASE_BRANCH}}` in the
+   worktree (Issue #171: the worktree shares the deployment checkout's git
+   common dir, so an unlocked concurrent fetch races on the shared
+   `refs/remotes/origin/{{BASE_BRANCH}}` ref and fails with `cannot lock
+   ref`; the Runner's own fetches hold the same lock). A fetch error or a
+   lock timeout fails fast — do not retry the bare fetch and do not bypass
+   the lock.
 2. If `git merge-base --is-ancestor origin/{{BASE_BRANCH}} HEAD` fails, the
    base advanced while you worked: merge `origin/{{BASE_BRANCH}}` into your
    task branch, resolve conflicts manually, rerun the full test suite, then
