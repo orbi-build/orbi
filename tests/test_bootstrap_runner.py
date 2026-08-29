@@ -14,6 +14,7 @@ from unittest.mock import Mock
 import pytest
 
 import bootstrap_runner as runner
+import cli_install
 import pi_activity
 from tests.test_progress_wiring import make_fake_gh
 
@@ -5631,6 +5632,87 @@ def test_main_transport_preflight_receives_the_configured_args(
     assert seen["source_repos"] == ["owner/repo", "owner/backlog"]
     assert seen["migrate"] is False
     assert seen["run_command"] is runner.run_command
+
+
+def test_main_cli_install_refresh_runs_before_slot_and_claim(
+    monkeypatch, tmp_path,
+):
+    """Issue #158: the editable CLI install refresh runs in the Runner
+    tick entry BEFORE any slot or claim, with the configured repo_dir
+    and the real run_command — so a stale editable finder (a merged
+    packaging change) is refreshed before the tick can claim work,
+    and the NEXT CLI process can import the new runtime modules."""
+    seen: dict = {}
+
+    def fake_refresh(repo_dir, *, run_command, lock_timeout_seconds=300.0):
+        seen["repo_dir"] = Path(repo_dir)
+        seen["run_command"] = run_command
+        seen["slot_existed_at_refresh"] = (
+            Path(repo_dir) / ".muyan-pilot" / "slots"
+        ).exists()
+        return "unchanged"
+
+    monkeypatch.setattr(cli_install, "refresh_cli_install", fake_refresh)
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\n', encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    assert seen["repo_dir"] == tmp_path
+    assert seen["run_command"] is runner.run_command
+    # BEFORE the slot: at the refresh moment no slot exists yet (the
+    # slot is taken only after every preflight passed).
+    assert seen["slot_existed_at_refresh"] is False
+    # ...and the tick proceeded to the normal claim flow (slot taken
+    # after the refresh).
+    assert (tmp_path / ".muyan-pilot" / "slots" / "slot-1").exists()
+
+
+def test_main_cli_install_failure_fails_fast_before_slot_and_claim(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #158: a failing editable install fails the start BEFORE
+    any slot or claim (non-zero exit, the structured
+    `cli_install_failed` line in the journal), nothing is claimed, no
+    slot is taken — no fallback, no skipped tick."""
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\n', encoding="utf-8",
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError(
+            "pick_next_delivery must not run on cli install failure"
+        )
+
+    monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
+    with pytest.raises(
+        AssertionError, match="must not run on cli install failure",
+    ):
+        fail_if_called()
+    monkeypatch.setattr(
+        cli_install, "refresh_cli_install",
+        lambda *a, **k: (_ for _ in ()).throw(
+            cli_install.CliInstallError(
+                "editable CLI install failed for /repo: uv exploded "
+                "(fix: uv tool install --force --reinstall --editable "
+                "--python /usr/bin/python3 /repo)"
+            ),
+        ),
+    )
+    with caplog.at_level("ERROR"):
+        with pytest.raises(
+            cli_install.CliInstallError, match="CLI install failed",
+        ):
+            runner.main(["--config", str(config)])
+    # No slot was taken and nothing was claimed.
+    assert not (tmp_path / ".muyan-pilot" / "slots").exists()
 
 
 # --- delivery lifecycle: slot held until merge or terminal failure ----------

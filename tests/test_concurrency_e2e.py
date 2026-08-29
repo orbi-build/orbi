@@ -23,6 +23,7 @@ executable records every invocation. These prove the acceptance criteria:
 - a SIGKILLed runner releases its slot automatically (the kernel owns
   the flock lock), so an abnormal exit never deadlocks the machine.
 """
+import hashlib
 import json
 import os
 import shutil
@@ -375,10 +376,28 @@ def clone(tmp_path: Path) -> Path:
     # the pre-start drift check compares them against the installed
     # units, so a synthetic clone without them could never pass it.
     shutil.copytree(REPO_ROOT / "systemd", clone / "systemd")
+    # The deployment checkout carries the packaging input (Issue #158):
+    # the pre-start CLI install refresh fingerprints the checkout's
+    # `pyproject.toml`.
+    shutil.copyfile(REPO_ROOT / "pyproject.toml", clone / "pyproject.toml")
     (clone / "a.txt").write_text("a", encoding="utf-8")
     git(clone, "add", ".")
     git(clone, "commit", "-m", "first")
     git(clone, "push", "origin", "main")
+    # The e2e world's tool env is UP TO DATE (Issue #158): the
+    # last-install state is pre-recorded for the clone's packaging
+    # input, so the pre-start refresh is a no-op and never runs a real
+    # `uv tool install` against the synthetic clone (the refresh's own
+    # behavior is covered by tests/test_cli_install.py and the wiring
+    # tests in tests/test_bootstrap_runner.py).
+    fingerprint = hashlib.sha256(
+        (clone / "pyproject.toml").read_bytes(),
+    ).hexdigest()
+    state_dir = clone / ".muyan-pilot"
+    state_dir.mkdir()
+    (state_dir / "cli-install.json").write_text(
+        json.dumps({"pyproject_sha256": fingerprint}), encoding="utf-8",
+    )
     return clone
 
 

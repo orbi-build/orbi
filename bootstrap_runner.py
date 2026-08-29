@@ -38,6 +38,8 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+import cli_install
+from cli_install import base_sync_lock_path, acquire_base_sync_lock
 from git_transport import TransportError, check_transport
 from pilot_slots import acquire_slot, slot_dir_for, slot_occupancy
 from pi_recovery import find_idle_descendants, pid_alive, signal_pid
@@ -2316,52 +2318,11 @@ def review_rounds_so_far(comments: list[dict]) -> int:
     return rounds
 
 
-BASE_SYNC_LOCK_NAME = "base-sync.lock"
-
-
-def base_sync_lock_path(repo_dir: Path) -> Path:
-    """Issue #149: the lock file serializing ALL writers of the
-    deployment base checkout.
-
-    Two timer instances may start in the same tick, so the service
-    template's `ExecStartPre` wraps the fetch + fast-forward in a
-    short-lived `flock` on this SAME file, and the Python-side sync
-    below takes the same lock: the main worktree is never written
-    concurrently. The lock lives in the shared state dir (next to the
-    slot files), never in a per-process temp dir.
-    """
-    return Path(repo_dir) / ".muyan-pilot" / BASE_SYNC_LOCK_NAME
-
-
-def _acquire_base_sync_lock(
-    repo_dir: Path, lock_timeout_seconds: float,
-) -> int:
-    """Take the base-sync flock; fail fast when it is still held after
-    the timeout. The kernel releases an flock when its holder exits,
-    so a dead holder can never wedge the lock."""
-    lock_path = base_sync_lock_path(repo_dir)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
-    deadline = time.monotonic() + lock_timeout_seconds
-    while True:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return fd
-        except (BlockingIOError, InterruptedError, PermissionError):
-            if time.monotonic() >= deadline:
-                os.close(fd)
-                LOGGER.error(
-                    "base_sync_lock_timeout repo_dir=%s lock=%s "
-                    "timeout_seconds=%s",
-                    repo_dir, lock_path, lock_timeout_seconds,
-                )
-                raise RuntimeError(
-                    f"could not take the base-sync lock {lock_path} "
-                    f"within {lock_timeout_seconds}s (another Runner "
-                    "instance or the ExecStartPre preflight is syncing "
-                    "the deployment checkout)"
-                ) from None
-            time.sleep(0.1)
+# The base-sync lock helpers live in cli_install (Issue #158: one
+# home for the concurrency primitive — the checkout sync, the
+# ExecStartPre preflight and the CLI install refresh all serialize on
+# the SAME lock file); they are re-exported here so existing callers
+# and tests keep their imports.
 
 
 def sync_base_checkout(repo_dir: Path, base_branch: str,
@@ -2380,7 +2341,7 @@ def sync_base_checkout(repo_dir: Path, base_branch: str,
     worktree concurrently; the lock is released when the sync finishes
     (success or failure).
     """
-    fd = _acquire_base_sync_lock(repo_dir, lock_timeout_seconds)
+    fd = acquire_base_sync_lock(repo_dir, lock_timeout_seconds)
     try:
         _sync_base_checkout_locked(repo_dir, base_branch)
     finally:
@@ -3577,6 +3538,24 @@ def main(argv: list[str] | None = None) -> int:
 
     config = load_config(args.config)
     validate_config(config)
+    # Editable CLI install refresh (Issue #158): BEFORE any slot or
+    # claim the tool env's editable metadata must match the checkout's
+    # packaging inputs — the finder's module mapping is generated at
+    # install time from `pyproject.toml`, so a merged packaging change
+    # (e.g. a new runtime module in `py-modules`) would otherwise make
+    # the NEXT CLI process die with `ModuleNotFoundError` before the
+    # Runner can start (the #158 incident). Unchanged: no uv call (no
+    # per-tick reinstall); changed or first install: ONE lock-
+    # protected editable force reinstall (the SAME base-sync flock the
+    # service template's ExecStartPre uses — two instances starting in
+    # the same tick serialize, the second reuses the first's result).
+    # A failing install fails the start with the structured
+    # `cli_install_failed` line (reason + fix command): no slot, no
+    # claim, no label change. Runs ONLY in the Runner tick entry (the
+    # bare CLI) — the subcommands never install.
+    cli_install.refresh_cli_install(
+        config["repo_dir"], run_command=run_command,
+    )
     # Deployment consistency (Issue #103, #142): BEFORE any slot or
     # claim the installed systemd units must match the repo templates
     # (the templates the ExecStartPre-synced checkout just loaded).
