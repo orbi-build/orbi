@@ -7179,6 +7179,10 @@ def test_wait_for_delivery_worktree_missing_stays_fix_needed(
     assert "Muyan Pilot needs a fix:" in body
     assert f"<!-- muyan-pilot:run=a1b2c3d4 -->" in body
     assert "muyan-pilot-owner-repo-issue-39-a1b2c3d4" in body
+    # The full scene carries the ACTUAL branch (derived before the
+    # worktree check, Issue #50) — never a `branch=None` placeholder.
+    assert "branch=muyan-pilot/owner-repo-issue-39-a1b2c3d4" in body
+    assert "branch=None" not in body
     assert "delivery_review_failed" in caplog.text
     # The failure comment is written to the Issue AND the PR
     # (Issue #50).

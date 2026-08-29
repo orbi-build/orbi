@@ -4247,6 +4247,13 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     config["repo_dir"], source_repo, number,
                     scene["run_id"],
                 )
+                # Derived from the same trusted inputs (never read from
+                # a comment) BEFORE the worktree check: a missing
+                # worktree is a recoverable failure whose comment must
+                # carry the full scene including the branch (Issue
+                # #50), so the branch must be set even when the
+                # directory does not exist.
+                branch = task_branch(source_repo, number, scene["run_id"])
                 # Issue #90 + #50: the worktree is derived from the
                 # configured repo_dir, source repo, Issue number and
                 # run id (never read from a comment). A missing
@@ -4258,7 +4265,6 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 # preserved.
                 if not worktree.is_dir():
                     raise RuntimeError(f"worktree missing: {worktree}")
-                branch = task_branch(source_repo, number, scene["run_id"])
                 review_config = {
                     **config,
                     "base_sha": scene["base_sha"],
