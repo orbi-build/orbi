@@ -149,12 +149,21 @@ def test_verify_pr_accepts_delivery_that_contains_latest_remote_base(clone, monk
     ) == "https://github.com/owner/repo/pull/3"
 
 
-def test_verify_pr_rejects_pr_head_newer_than_local_head(clone, monkeypatch):
-    # Commit A is pushed (the PR points at it); commit B is local only.
+def test_verify_pr_passes_through_when_local_head_ahead_of_pr_head(
+        clone, monkeypatch, caplog,
+):
+    """Issue #50 (the #158 `d13b0c56` scene, real git): commit A is
+    pushed (the PR points at it), commit B is local only (a killed
+    session never pushed it). The verification must NOT fail — it logs
+    the exact heads (local ahead of the PR head) and returns the PR URL
+    so the next review session can push the task branch on the same
+    PR (no replacement PR, no discarded commit, no force push)."""
     git(clone, "checkout", "-b", "muyan-pilot/owner-repo-issue-3-a1b2c3d4")
     commit_file(clone, "delivery-a.txt", "commit A")
     pushed_head = git(clone, "rev-parse", "HEAD")
     commit_file(clone, "delivery-b.txt", "commit B")
+    local_head = git(clone, "rev-parse", "HEAD")
+    assert local_head != pushed_head
     install_fake_gh(
         monkeypatch,
         json.dumps([{
@@ -167,11 +176,15 @@ def test_verify_pr_rejects_pr_head_newer_than_local_head(clone, monkeypatch):
             ),
         }]),
     )
-    with pytest.raises(RuntimeError, match="is not local HEAD"):
-        runner.verify_pr(
+    with caplog.at_level("INFO"):
+        url = runner.verify_pr(
             clone, "muyan-pilot/owner-repo-issue-3-a1b2c3d4", "main",
             "a1b2c3d4", issue=3, repo_dir=clone,
         )
+    assert url == "https://github.com/owner/repo/pull/3"
+    assert "local_head_ahead_of_pr_head" in caplog.text
+    assert f"pr_head={pushed_head}" in caplog.text
+    assert f"local_head={local_head}" in caplog.text
 
 
 def test_git_helper_fails_fast_on_nonzero_exit(clone):

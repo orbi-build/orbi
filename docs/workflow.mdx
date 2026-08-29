@@ -21,10 +21,11 @@ flowchart LR
   progress -->|PR verified: base fresh, run marker, Fixes #N| opened["ai-pr-opened"]
   opened -->|independent review session, fixes in-session| verdict{REVIEW_VERDICT}
   verdict -->|clean verdict + merge gate| merged["ai-merged (terminal)"]
-  verdict -->|finding / base conflict / rounds exhausted| blocked["ai-blocked (terminal, human decides)"]
-  opened -->|finding / base conflict| fixneeded["ai-fix-needed"]
-  fixneeded -->|next tick: next review session on the SAME PR| opened
-  progress -->|fail fast| blocked
+  verdict -->|rounds exhausted (human decision)| blocked["ai-blocked (terminal, human decides)"]
+  opened -->|finding / base conflict / recoverable failure (Issue #50)| fixneeded["ai-fix-needed"]
+  fixneeded -->|next tick: next review session on the SAME run, branch, worktree, PR| opened
+  fixneeded -->|unrecoverable precondition (Issue #50)| blocked
+  progress -->|fail fast (no PR yet)| blocked
 ```
 
 ```text
@@ -38,20 +39,35 @@ ai-ready                a task is dispatched (muyan-pilot add, or a human
                         base/head SHAs and FIXES findings in-session
                         (code, full test suite, 100% coverage, push only
                         the task branch), then emits a REVIEW_VERDICT
-  -> ai-fix-needed      a finding could not be fixed in-session, or the PR
-                        is behind the latest base / has a merge conflict:
-                        the NEXT tick starts the next review session on
-                        the same run, same branch, same PR
+  -> ai-fix-needed      a finding could not be fixed in-session, the PR is
+                        behind the latest base / has a merge conflict, or
+                        an AI-recoverable failure of the existing run/PR
+                        (Issue #50: a Pi execution failure, a verification
+                        failure, an unpushed local commit, a missing
+                        worktree): the failure comment is written to the
+                        Issue AND the PR with the full scene (run_id, PR,
+                        branch, worktree, session, phase, last activity,
+                        concrete error), and the NEXT tick starts the next
+                        review session on the same run_id, branch,
+                        worktree and PR
   -> merge              clean verdict + merge gate (head contains the
                         latest base, PR mergeable, remote head unchanged)
   -> ai-merged          success terminal state; the PR body's Fixes #N
                         closes the Issue natively
 ```
 
-Failure at any point fails fast: the Issue is marked `ai-blocked` with the
-concrete scene (command, return code, stdout/stderr, branch, worktree,
-session file), and the automatic loop never touches it again — a human
-decides the next step.
+A failure of an existing run/PR is classified (Issue #50): an
+AI-recoverable failure (a Pi execution failure, a verification failure, an
+unpushed local commit, a missing worktree, a finding that could not be
+fixed) keeps the Issue in the automatic fix loop — `ai-fix-needed` with
+the failure comment on the Issue AND the PR carrying the full scene — and
+the next tick resumes the same run, branch, worktree and PR (no
+replacement PR, no re-claim). Only an external precondition the AI cannot
+safely judge or fix (an unrecoverable scene, a base-branch config change,
+an exhausted review round budget, a PR closed without merge) fails fast:
+the Issue is marked `ai-blocked` with the explicit reason why automatic
+recovery is impossible, and the automatic loop never touches it again — a
+human decides the next step.
 
 Rules of the chain:
 
@@ -63,8 +79,9 @@ Rules of the chain:
   review session). `ai-ready` is claimed as new work; `ai-blocked` is
   never auto-recovered.
 - The review/fix loop is bounded (5 rounds). Exhausting rounds with
-  findings, or a review that cannot be verified, marks the Issue
-  `ai-blocked`; the PR, branch and worktree stay intact.
+  findings marks the Issue `ai-blocked` (the bounded loop is a human
+  decision); a recoverable failure (Issue #50) keeps it `ai-fix-needed`.
+  Either way the PR, branch and worktree stay intact.
 - Base advances are absorbed by a plain `git merge` of the latest
   `origin/<base>` on the task branch (conflicts resolved manually),
   followed by a full test rerun. No force push, no auto conflict
@@ -88,9 +105,9 @@ commits — initialize them per repository (see
 | `ai-ready` | Explicitly dispatched to the Pilot; may be claimed |
 | `ai-in-progress` | Claimed and running (a leftover after a kill is resumed by the next tick) |
 | `ai-pr-opened` | PR created and verified; awaiting the independent review |
-| `ai-fix-needed` | The PR head is not mergeable yet; the next tick runs the next review session on the same PR |
+| `ai-fix-needed` | The PR head is not mergeable yet, or an AI-recoverable failure of the run/PR (Issue #50); the next tick resumes the same run, branch, worktree and PR |
 | `ai-merged` | Success terminal state; the Runner merged the PR and confirmed the merge commit on the protected branch |
-| `ai-blocked` | The Runner failed fast; a human must decide the next step |
+| `ai-blocked` | Only an external precondition the AI cannot safely judge or fix (Issue #50); the blocked comment states why automatic recovery is impossible; a human must decide the next step |
 
 ## Run marker and run_id
 
