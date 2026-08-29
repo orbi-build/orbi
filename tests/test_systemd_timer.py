@@ -115,6 +115,21 @@ def test_service_keeps_running_task_without_duration_limit():
     assert section["ExecStart"] == ["%h/.local/bin/muyan-pilot"]
 
 
+def test_service_loads_optional_provider_env_file():
+    """Issue #172: the systemd-launched Runner must be able to obtain
+    the provider API keys referenced by the provider file. The service
+    loads the user-local env file from the gitignored state dir
+    (`.muyan-pilot/env`, next to `base-sync.lock`) with the `-` optional
+    prefix: a deployment without provider files starts unchanged, and
+    the key itself lives only in that local file — never in the
+    template, the repo, or the journal."""
+    service = parse_unit(SERVICE_FILE)
+    section = service["Service"]
+    assert section["EnvironmentFile"] == [
+        "-%h/Documents/muyan/muyan-pilot/.muyan-pilot/env"
+    ]
+
+
 def test_service_fast_forwards_main_before_runner_starts():
     """Issue #52: the service must fast-forward the local main checkout
     to the latest origin/main BEFORE the Runner starts (ExecStartPre,
