@@ -8168,11 +8168,14 @@ def test_prepare_pi_agent_dir_materializes_merged_models_json(
     assert merged["providers"]["groq"]["baseUrl"] == (
         "https://api.groq.com/openai/v1"
     )
-    # settings.json is a symlink to the user's file (behavior unchanged);
-    # auth.json is absent in the user dir, so no symlink.
-    settings_link = agent_dir / "settings.json"
-    assert settings_link.is_symlink()
-    assert settings_link.resolve() == user_agent / "settings.json"
+    # Issue #172: settings.json is a REAL per-run file consistent with
+    # the merged catalog (a symlink to the global file would keep its
+    # defaults/enabledModels pointing at models absent from this run's
+    # catalog). The user's `{}` base stays `{}`. auth.json is absent in
+    # the user dir, so no symlink.
+    settings = agent_dir / "settings.json"
+    assert not settings.is_symlink()
+    assert json.loads(settings.read_text(encoding="utf-8")) == {}
     assert not (agent_dir / "auth.json").exists()
 
 
@@ -8204,7 +8207,7 @@ def test_prepare_pi_agent_dir_repo_providers_win_on_collision(
     )
 
 
-def test_prepare_pi_agent_dir_symlinks_auth_and_settings(
+def test_prepare_pi_agent_dir_auth_symlink_settings_real_file(
     tmp_path, monkeypatch,
 ):
     home = tmp_path / "home"
@@ -8212,10 +8215,297 @@ def test_prepare_pi_agent_dir_symlinks_auth_and_settings(
     monkeypatch.setenv("HOME", str(home))
     config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
     agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
-    for name in ("settings.json", "auth.json"):
-        link = agent_dir / name
-        assert link.is_symlink()
-        assert link.resolve() == user_agent / name
+    # auth.json stays a symlink (stored auth for the merged catalog's
+    # providers is still valid); settings.json is a real per-run file
+    # (Issue #172), never a link to the user's global settings.
+    auth_link = agent_dir / "auth.json"
+    assert auth_link.is_symlink()
+    assert auth_link.resolve() == user_agent / "auth.json"
+    settings = agent_dir / "settings.json"
+    assert not settings.is_symlink()
+    assert settings.is_file()
+
+
+# --- per-run settings consistency (Issue #172) ----------------------------
+
+
+def _user_settings(home: Path, settings: dict) -> Path:
+    agent = home / ".pi" / "agent"
+    agent.mkdir(parents=True, exist_ok=True)
+    (agent / "settings.json").write_text(
+        json.dumps(settings), encoding="utf-8",
+    )
+    return agent
+
+
+def test_prepare_pi_agent_dir_settings_points_at_selected_provider_model(
+    tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    user_agent = _user_agent_dir(
+        home,
+        models={"providers": {"local-qwen": {
+            "baseUrl": "http://127.0.0.1:18082/v1",
+            "api": "openai-completions",
+            "apiKey": "local",
+            "models": [{"id": "qwen3.8:27b"}],
+        }}},
+        settings=False,
+    )
+    _user_settings(home, {
+        "defaultProvider": "openai",
+        "defaultModel": "gpt-5.6-sol",
+        "enabledModels": [
+            "openai/gpt-5.6-sol",
+            "openrouter/stealth/ox-alpha",
+        ],
+        "httpIdleTimeoutMs": 0,
+        "theme": "light/dark",
+        "packages": ["npm:pi-mcp-adapter"],
+    })
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(
+        tmp_path, pi_providers_data=GROQ_PROVIDERS,
+        pi_provider="groq", pi_model="qwen/qwen3.8-27b",
+    )
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    settings = json.loads(
+        (agent_dir / "settings.json").read_text(encoding="utf-8"),
+    )
+    # The runtime defaults and enabled models point at the SELECTED
+    # provider/model (which exists in the merged catalog) — never at a
+    # model the per-run catalog cannot resolve.
+    assert settings["defaultProvider"] == "groq"
+    assert settings["defaultModel"] == "qwen/qwen3.8-27b"
+    assert settings["enabledModels"] == ["groq/qwen/qwen3.8-27b"]
+    # The user's disabled (0) HTTP idle timeout is dropped: Pi falls
+    # back to its built-in default so a first response that never
+    # arrives fails with a concrete timeout instead of hanging.
+    assert "httpIdleTimeoutMs" not in settings
+    # The user's other settings are preserved.
+    assert settings["theme"] == "light/dark"
+    assert settings["packages"] == ["npm:pi-mcp-adapter"]
+    # The global file is never modified.
+    global_settings = json.loads(
+        (user_agent / "settings.json").read_text(encoding="utf-8"),
+    )
+    assert global_settings["defaultProvider"] == "openai"
+    assert global_settings["httpIdleTimeoutMs"] == 0
+
+
+def test_prepare_pi_agent_dir_settings_filters_enabled_models_to_catalog(
+    tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    _user_agent_dir(
+        home,
+        models={"providers": {"userprov": {
+            "baseUrl": "http://user:1/v1",
+            "api": "openai-completions",
+            "apiKey": "u",
+            "models": [{"id": "um"}],
+        }}},
+        settings=False,
+    )
+    _user_settings(home, {
+        "enabledModels": [
+            "userprov/um",
+            "openai/gpt-5.6-sol",
+            "bogus/none",
+        ],
+    })
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    settings = json.loads(
+        (agent_dir / "settings.json").read_text(encoding="utf-8"),
+    )
+    # Without a selected provider/model only the patterns that resolve
+    # in the merged catalog (user providers + repo file) survive.
+    assert settings["enabledModels"] == ["userprov/um"]
+
+
+def test_prepare_pi_agent_dir_settings_bare_model_id_resolves_when_unambiguous(
+    tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    _user_agent_dir(
+        home,
+        models={"providers": {
+            "provA": {
+                "baseUrl": "http://a:1/v1",
+                "api": "openai-completions",
+                "apiKey": "a",
+                "models": [{"id": "shared"}, {"id": "only-a"}],
+            },
+            "provB": {
+                "baseUrl": "http://b:1/v1",
+                "api": "openai-completions",
+                "apiKey": "b",
+                "models": [{"id": "shared"}],
+            },
+        }},
+        settings=False,
+    )
+    _user_settings(home, {
+        "enabledModels": ["only-a", "shared", ""],
+    })
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    settings = json.loads(
+        (agent_dir / "settings.json").read_text(encoding="utf-8"),
+    )
+    # Pi's exact match: an unambiguous bare id resolves, an ambiguous
+    # one (same id on two providers) does not, an empty pattern never
+    # does.
+    assert settings["enabledModels"] == ["only-a"]
+
+
+def test_prepare_pi_agent_dir_settings_ignores_malformed_catalog_entries(
+    tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    _user_agent_dir(
+        home,
+        models={"providers": {
+            "nomodels": {"baseUrl": "http://n:1/v1", "api": "x"},
+            "badmodel": {
+                "baseUrl": "http://b:1/v1",
+                "api": "x",
+                "models": [{"name": "no id"}],
+            },
+            "good": {
+                "baseUrl": "http://g:1/v1",
+                "api": "x",
+                "models": [{"id": "gm"}],
+            },
+        }},
+        settings=False,
+    )
+    _user_settings(home, {"enabledModels": ["good/gm", "nomodels/x"]})
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    settings = json.loads(
+        (agent_dir / "settings.json").read_text(encoding="utf-8"),
+    )
+    # Malformed user catalog entries are skipped, never a crash: the
+    # resolvable pattern survives.
+    assert settings["enabledModels"] == ["good/gm"]
+
+
+def test_prepare_pi_agent_dir_settings_user_file_not_object_fails_fast(
+    tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    _user_agent_dir(home, models=None, settings=False)
+    (home / ".pi" / "agent" / "settings.json").write_text(
+        "[1, 2]", encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        runner.prepare_pi_agent_dir(tmp_path, config)
+
+
+def test_prepare_pi_agent_dir_settings_drops_unresolvable_enabled_models(
+    tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    _user_agent_dir(home, models=None, settings=False)
+    _user_settings(home, {"enabledModels": ["openai/gpt-5.6-sol"]})
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    settings = json.loads(
+        (agent_dir / "settings.json").read_text(encoding="utf-8"),
+    )
+    # Nothing resolves: the key is dropped entirely (Pi falls back to
+    # the full catalog) — an empty list would scope the run to zero
+    # models.
+    assert "enabledModels" not in settings
+
+
+def test_prepare_pi_agent_dir_settings_keeps_nonzero_http_idle_timeout(
+    tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    _user_agent_dir(home, models=None, settings=False)
+    _user_settings(home, {"httpIdleTimeoutMs": 60000})
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    settings = json.loads(
+        (agent_dir / "settings.json").read_text(encoding="utf-8"),
+    )
+    # A real (non-disabled) timeout is the user's explicit choice and
+    # stays.
+    assert settings["httpIdleTimeoutMs"] == 60000
+
+
+def test_prepare_pi_agent_dir_settings_user_file_missing(
+    tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(
+        tmp_path, pi_providers_data=GROQ_PROVIDERS,
+        pi_provider="groq", pi_model="qwen/qwen3.8-27b",
+    )
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    settings = json.loads(
+        (agent_dir / "settings.json").read_text(encoding="utf-8"),
+    )
+    assert settings == {
+        "defaultProvider": "groq",
+        "defaultModel": "qwen/qwen3.8-27b",
+        "enabledModels": ["groq/qwen/qwen3.8-27b"],
+    }
+
+
+def test_prepare_pi_agent_dir_settings_user_file_invalid_fails_fast(
+    tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    _user_agent_dir(home, models=None, settings=False)
+    (home / ".pi" / "agent" / "settings.json").write_text(
+        "{nope", encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
+    with pytest.raises(ValueError, match="not valid JSON"):
+        runner.prepare_pi_agent_dir(tmp_path, config)
+
+
+def test_prepare_pi_agent_dir_selected_model_not_in_catalog_fails_fast(
+    tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    _user_agent_dir(home, models=None, settings=False)
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(
+        tmp_path, pi_providers_data=GROQ_PROVIDERS,
+        pi_provider="groq", pi_model="qwen/qwen3.8-27b",
+    )
+    # The selected provider/model is validated against the provider
+    # file at config load (load_config); prepare_pi_agent_dir receives
+    # the same validated config, so the per-run settings can always
+    # point at a model that exists in the merged catalog.
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    settings = json.loads(
+        (agent_dir / "settings.json").read_text(encoding="utf-8"),
+    )
+    merged = json.loads(
+        (agent_dir / "models.json").read_text(encoding="utf-8"),
+    )
+    model_ids = [
+        f"{pid}/{m['id']}"
+        for pid, entry in merged["providers"].items()
+        for m in entry.get("models", [])
+    ]
+    assert settings["enabledModels"][0] in model_ids
 
 
 def test_prepare_pi_agent_dir_user_dir_missing(tmp_path, monkeypatch):
@@ -8228,7 +8518,13 @@ def test_prepare_pi_agent_dir_user_dir_missing(tmp_path, monkeypatch):
         (agent_dir / "models.json").read_text(encoding="utf-8"),
     )
     assert set(merged["providers"]) == {"groq"}
-    assert not (agent_dir / "settings.json").exists()
+    # Issue #172: the per-run settings.json is always written (an empty
+    # base when the user has none) — the run never inherits the global
+    # file's defaults through a symlink.
+    settings = json.loads(
+        (agent_dir / "settings.json").read_text(encoding="utf-8"),
+    )
+    assert settings == {}
     assert not (agent_dir / "auth.json").exists()
 
 
@@ -8523,16 +8819,22 @@ def test_e2e_provider_endpoint_reaches_pi_process(monkeypatch, tmp_path):
 def test_prepare_pi_agent_dir_is_idempotent_on_resume(
     tmp_path, monkeypatch,
 ):
-    """A resumed run in the same worktree replaces stale symlinks."""
+    """A resumed run in the same worktree replaces stale files."""
     home = tmp_path / "home"
     user_agent = _user_agent_dir(home, auth=False)
     monkeypatch.setenv("HOME", str(home))
     config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
     agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
-    # Simulate a stale broken symlink left by an earlier attempt.
+    # Simulate stale leftovers from an earlier attempt: a broken auth
+    # symlink and a settings symlink (the pre-#172 shape).
     stale = agent_dir / "auth.json"
     stale.symlink_to(tmp_path / "gone.json")
     assert not stale.exists()  # broken
+    settings = agent_dir / "settings.json"
+    settings.unlink()
+    settings.symlink_to(user_agent / "settings.json")
     runner.prepare_pi_agent_dir(tmp_path, config)
     assert not (agent_dir / "auth.json").exists()
-    assert (agent_dir / "settings.json").is_symlink()
+    # The stale settings symlink is replaced by the real per-run file.
+    assert not settings.is_symlink()
+    assert json.loads(settings.read_text(encoding="utf-8")) == {}

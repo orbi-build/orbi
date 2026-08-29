@@ -481,8 +481,34 @@ def prepare_pi_agent_dir(worktree: Path, config: dict) -> Path | None:
       files when they exist, so Pi's other behavior (settings, stored
       auth) is unchanged apart from the provider catalog.
 
-    The dir holds no secrets: the API key stays an env-var reference in
-    the file and never a materialized value.
+    The per-run `settings.json` is a REAL file (Issue #172), consistent
+    with the per-run catalog:
+
+    - base: the user agent dir's settings when it exists (the user's
+      other settings are preserved), `{}` otherwise — the user's global
+      `~/.pi/agent/settings.json` is never modified;
+    - `pi_provider`/`pi_model` configured: `defaultProvider` /
+      `defaultModel` point at the selected provider/model and
+      `enabledModels` is exactly that model, so the initial model
+      selection (CLI flags, then scoped models, then settings defaults)
+      can only land on a model of the merged catalog;
+    - not configured: `enabledModels` keeps only the patterns that
+      resolve in the merged catalog (Pi's exact reference match:
+      canonical `provider/modelId` or unambiguous bare model id,
+      case-insensitive); a pattern that resolves to nothing would make
+      Pi warn `No models match pattern` at startup and could steer the
+      initial model to a provider the run cannot use — an empty result
+      drops the key entirely (Pi falls back to the full catalog);
+    - a user `httpIdleTimeoutMs` of `0` (Pi's documented "disabled")
+      is dropped: with it, a first response that never arrives hangs
+      forever; without the key Pi applies its built-in default (300s)
+      and the request fails with a concrete timeout error instead.
+
+    `auth.json` stays a SYMLINK to the user agent dir's file when it
+    exists: stored auth for providers present in the merged catalog is
+    still valid. The dir holds no secrets: the API key stays an
+    env-var reference in the provider file and never a materialized
+    value.
     """
     providers_data = config.get("pi_providers_data")
     if providers_data is None:
@@ -511,16 +537,97 @@ def prepare_pi_agent_dir(worktree: Path, config: dict) -> Path | None:
         json.dumps({"providers": merged_providers}, indent=2),
         encoding="utf-8",
     )
-    # Idempotent for a resumed run in the same worktree: a stale
-    # symlink from an earlier attempt is replaced, never kept.
-    for name in ("settings.json", "auth.json"):
-        source = user_agent / name
-        link = agent_dir / name
-        if link.is_symlink():
-            link.unlink()
-        if source.is_file():
-            link.symlink_to(source)
+    # Per-run settings.json (Issue #172): a real file consistent with
+    # the merged catalog above, never a symlink to the user's global
+    # settings (whose defaults/enabledModels may reference models this
+    # run's catalog cannot resolve). Idempotent for a resumed run in
+    # the same worktree: a stale file or symlink from an earlier
+    # attempt is replaced, never kept.
+    user_settings = user_agent / "settings.json"
+    base_settings: dict = {}
+    if user_settings.is_file():
+        try:
+            loaded = json.loads(user_settings.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"user agent dir settings.json {user_settings} is not "
+                f"valid JSON: {exc}"
+            ) from None
+        if not isinstance(loaded, dict):
+            raise ValueError(
+                f"user agent dir settings.json {user_settings} must be "
+                f"a JSON object"
+            )
+        base_settings = loaded
+    settings = dict(base_settings)
+    pi_provider = config.get("pi_provider")
+    pi_model = config.get("pi_model")
+    if pi_provider is not None and pi_model is not None:
+        settings["defaultProvider"] = pi_provider
+        settings["defaultModel"] = pi_model
+        settings["enabledModels"] = [f"{pi_provider}/{pi_model}"]
+    else:
+        patterns = settings.get("enabledModels")
+        if isinstance(patterns, list):
+            resolved = _resolve_enabled_models(patterns, merged_providers)
+            if resolved:
+                settings["enabledModels"] = resolved
+            else:
+                settings.pop("enabledModels", None)
+    if settings.get("httpIdleTimeoutMs") == 0:
+        settings.pop("httpIdleTimeoutMs")
+    stale = agent_dir / "settings.json"
+    if stale.is_symlink() or stale.is_file():
+        stale.unlink()
+    stale.write_text(
+        json.dumps(settings, indent=2), encoding="utf-8",
+    )
+    # auth.json keeps its pre-#172 shape: a symlink to the user's
+    # stored auth (valid for the merged catalog's providers).
+    auth_source = user_agent / "auth.json"
+    auth_link = agent_dir / "auth.json"
+    if auth_link.is_symlink():
+        auth_link.unlink()
+    if auth_source.is_file():
+        auth_link.symlink_to(auth_source)
     return agent_dir
+
+
+def _resolve_enabled_models(patterns: list, providers: dict) -> list:
+    """Filter `enabledModels` patterns to the merged catalog (Issue #172).
+
+    Mirrors Pi's exact reference match (`model-resolver.js`
+    `findExactModelReferenceMatch`, verified against Pi 0.84.3): the
+    canonical `provider/modelId` form, or a bare model id that is
+    unambiguous across the catalog — case-insensitive. A pattern that
+    resolves to nothing would make Pi warn `No models match pattern`
+    at startup and could steer the initial model selection to a model
+    the run cannot use, so the per-run settings.json keeps only what
+    the per-run models.json can resolve.
+    """
+    canonical: set = set()
+    bare_counts: dict = {}
+    for provider_id, entry in providers.items():
+        models = entry.get("models") if isinstance(entry, dict) else None
+        if not isinstance(models, list):
+            continue
+        for model in models:
+            model_id = model.get("id") if isinstance(model, dict) else None
+            if not isinstance(model_id, str) or not model_id:
+                continue
+            canonical.add(f"{provider_id}/{model_id}".lower())
+            key = model_id.lower()
+            bare_counts[key] = bare_counts.get(key, 0) + 1
+    resolved = []
+    for pattern in patterns:
+        if not isinstance(pattern, str) or not pattern.strip():
+            continue
+        reference = pattern.strip().lower()
+        if reference in canonical:
+            resolved.append(pattern)
+        elif bare_counts.get(reference, 0) == 1:
+            resolved.append(pattern)
+    return resolved
 
 
 def _pi_model_args(config: dict) -> list[str]:
