@@ -4393,6 +4393,356 @@ def test_stream_pi_no_upstream_kill_before_model_wait(tmp_path, caplog):
     assert "upstream_dead" not in caplog.text
 
 
+# --- Issue #169: evidence-based stall detection ------------------------------
+
+
+def make_upstream_listener(drop: bool = False):
+    """A local TCP listener that mimics the upstream (llama/proxy).
+
+    Returns `(port, stop)`: the listener accepts ONE connection and
+    either holds it (a live upstream) or closes it immediately (the
+    upstream died: the client socket goes CLOSE_WAIT). `stop()` closes
+    the listener.
+    """
+    import socket as _socket
+    import threading as _threading
+    listener = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+
+    def serve():
+        conn, _ = listener.accept()
+        if drop:
+            conn.close()
+        else:
+            time.sleep(30)
+        conn.close()  # idempotent: safe after the drop close
+
+    thread = _threading.Thread(target=serve, daemon=True)
+    thread.start()
+
+    def stop():
+        listener.close()
+
+    return port, stop
+
+
+def make_slow_model_pi(tmp_path, *, port: int, hold_seconds: float = 2.5,
+                       drop_upstream: bool = False) -> list[str]:
+    """Build a command that mimics a SLOW Pi (Issue #169): it writes the
+    session toolCall + toolResult (the model is expected to reply next:
+    model_wait), opens a TCP connection to the local upstream listener
+    (the live model request) and holds it for `hold_seconds` — a long
+    generation that crosses the dead threshold. When `drop_upstream`
+    the listener closes the connection immediately (the upstream died:
+    the client socket leaves the live TCP states). After the hold it
+    writes the assistant reply and exits — the slow model that was NOT
+    killed gets to finish."""
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir(exist_ok=True)
+    script = (
+        "import json, socket, sys, time\n"
+        "from datetime import datetime, timezone\n"
+        f"session = {str(session_dir / 'sess.jsonl')!r}\n"
+        "def ts():\n"
+        "    return datetime.now(timezone.utc).isoformat()\n"
+        "def write(record):\n"
+        "    with open(session, 'a') as handle:\n"
+        "        handle.write(json.dumps(record) + '\\n')\n"
+        "write({'type': 'session', 'id': 'sess-slow', 'timestamp': ts(),\n"
+        "       'cwd': '/w'})\n"
+        "write({'type': 'message', 'id': 'a1', 'timestamp': ts(),\n"
+        "       'message': {'role': 'assistant', 'content': [\n"
+        "           {'type': 'toolCall', 'id': 't1', 'name': 'bash',\n"
+        "            'arguments': {'command': 'pytest tests/'}}]}})\n"
+        "write({'type': 'message', 'id': 'r1', 'timestamp': ts(),\n"
+        "       'message': {'role': 'toolResult', 'toolCallId': 't1',\n"
+        "                   'toolName': 'bash', 'isError': False,\n"
+        "                   'content': [{'type': 'text', 'text': 'ok'}]}})\n"
+        f"sock = socket.create_connection(('127.0.0.1', {port!r}))\n"
+        f"time.sleep({hold_seconds!r})\n"
+        "try:\n"
+        "    sock.close()\n"
+        "except OSError:\n"
+        "    pass\n"
+        "write({'type': 'message', 'id': 'a2', 'timestamp': ts(),\n"
+        "       'message': {'role': 'assistant', 'content': [\n"
+        "           {'type': 'text', 'text': 'slow answer'}]}})\n"
+        "sys.exit(0)\n"
+    )
+    return [sys.executable, "-c", script]
+
+
+def test_stream_pi_slow_model_past_threshold_with_live_upstream_not_killed(
+    tmp_path, caplog,
+):
+    """Issue #169 acceptance 1 (the #158 regression): the model_wait
+    silence crosses the dead threshold while the model request is still
+    connected to the upstream (a live TCP connection: a slow local
+    model generating for minutes). The bare session freeze is NOT
+    evidence the upstream is dead — Pi must not be killed, the run
+    finishes, and the slow wait is visible as `state=model_wait_slow`
+    (slow, not dead) on the heartbeats."""
+    port, stop = make_upstream_listener(drop=False)
+    try:
+        command = make_slow_model_pi(
+            tmp_path, port=port, hold_seconds=2.5,
+        )
+        with caplog.at_level("INFO"):
+            result = runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.1,
+                model_wait_dead_seconds=0.5,
+                run_id="run1", issue=158, source_repo="xqliu/muyan-pilot",
+                branch="b",
+            )
+    finally:
+        stop()
+    assert result == ""
+    assert "upstream_dead" not in caplog.text
+    assert "run_failed" not in caplog.text
+    # The slow wait is visible as a state, not a kill: heartbeats
+    # carried `state=model_wait_slow` once the silence crossed the
+    # threshold (the connection was still alive: slow, not dead).
+    slow = [line for line in caplog.text.splitlines()
+            if "state=model_wait_slow" in line]
+    assert len(slow) >= 1, caplog.text
+    for line in slow:
+        assert " heartbeat " in line
+
+
+def test_stream_pi_dead_upstream_still_killed_during_model_wait(
+    tmp_path, caplog,
+):
+    """Issue #169 acceptance 3: the upstream closed the connection
+    (the client socket left the live TCP states) and the model_wait
+    silence crossed the threshold — the evidence is sufficient: the
+    runner kills Pi and fails fast with the `upstream_dead` reason
+    (the #75 contract, now with evidence)."""
+    port, stop = make_upstream_listener(drop=True)
+    try:
+        command = make_slow_model_pi(
+            tmp_path, port=port, hold_seconds=3.0, drop_upstream=True,
+        )
+        with caplog.at_level("ERROR"), pytest.raises(
+            RuntimeError, match="upstream",
+        ):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.1,
+                model_wait_dead_seconds=0.5,
+                run_id="run1", issue=169, source_repo="xqliu/muyan-pilot",
+                branch="b",
+            )
+    finally:
+        stop()
+    lines = caplog.text.splitlines()
+    failures = [line for line in lines if " run_failed " in line]
+    assert len(failures) == 1
+    assert "reason=upstream_dead_stale_" in failures[0]
+    assert "issue=xqliu/muyan-pilot#169" in failures[0]
+    # The kill is the failure path: no idle warning, no recovery.
+    assert " pi_idle " not in caplog.text
+    assert " pi_idle_term " not in caplog.text
+
+
+def make_timeout_tool_pi(tmp_path, *, tool_seconds: float = 0.6,
+                         react_on_tool_done: bool = True,
+                         wrapper_honors_deadline: bool = True) -> list[str]:
+    """Build a command that mimics a Pi running a LONG tool with an
+    explicit `timeout` (Issue #169, the #105 regression): it writes the
+    session toolCall, spawns `bash -c 'timeout <tool_seconds> sleep 300'`
+    (the tool self-terminates at its deadline — no session event until
+    then) and waits for it. When `wrapper_honors_deadline` is False the
+    fake simulates a wrapper that FAILED to end its command (a fake
+    `timeout` on PATH that ignores the duration: the sleep outlives the
+    nominal deadline, the evidence flips back to stalled). When
+    `react_on_tool_done` the tool's exit (deadline reached or killed)
+    makes the fake Pi write the toolResult and exit; otherwise it stays
+    silent (Pi itself is stuck)."""
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir(exist_ok=True)
+    react = (
+        "write({'type': 'message', 'id': 'r1', 'timestamp': ts(),\n"
+        "       'message': {'role': 'toolResult', 'toolCallId': 't1',\n"
+        "                   'toolName': 'bash', 'isError': True,\n"
+        "                   'content': [{'type': 'text',\n"
+        "                                  'text': 'tool finished'}]}})\n"
+        if react_on_tool_done else "time.sleep(10)\n"
+    )
+    if wrapper_honors_deadline:
+        tool_command = f"timeout {tool_seconds!r} sleep 300"
+    else:
+        # The nominal deadline is in the command line (what the runner
+        # sees), but the wrapper never ends the command: a fake
+        # `timeout` on PATH that ignores the duration and just runs the
+        # command — the sleep runs on past the deadline.
+        fake_bin = session_dir / "bin"
+        fake_bin.mkdir(exist_ok=True)
+        fake_timeout = fake_bin / "timeout"
+        fake_timeout.write_text(
+            "#!/bin/sh\nshift\nexec \"$@\"\n", encoding="utf-8",
+        )
+        fake_timeout.chmod(0o755)
+        tool_command = (
+            f"PATH={fake_bin!s}:/usr/bin:/bin "
+            f"timeout {tool_seconds!r} sleep 30000"
+        )
+    script = (
+        "import json, subprocess, sys, time\n"
+        "from datetime import datetime, timezone\n"
+        f"session = {str(session_dir / 'sess.jsonl')!r}\n"
+        "def ts():\n"
+        "    return datetime.now(timezone.utc).isoformat()\n"
+        "def write(record):\n"
+        "    with open(session, 'a') as handle:\n"
+        "        handle.write(json.dumps(record) + '\\n')\n"
+        "write({'type': 'session', 'id': 'sess-timeout', 'timestamp': ts(),\n"
+        "       'cwd': '/w'})\n"
+        "write({'type': 'message', 'id': 'a1', 'timestamp': ts(),\n"
+        "       'message': {'role': 'assistant', 'content': [\n"
+        "           {'type': 'toolCall', 'id': 't1', 'name': 'bash',\n"
+        "            'arguments': {'command': 'timeout 0.6 sleep 300'}}]}})\n"
+        f"child = subprocess.Popen(['bash', '-c', {tool_command!r}])\n"
+        "while child.poll() is None:\n"
+        "    time.sleep(0.05)\n"
+        f"{react}"
+        "sys.exit(0)\n"
+    )
+    return [sys.executable, "-c", script]
+
+
+def test_stream_pi_timeout_tool_inside_deadline_not_killed(
+    tmp_path, caplog,
+):
+    """Issue #169 acceptance 2 (the #105 regression): a pre-idle
+    descendant running `timeout <seconds> ...` INSIDE its deadline is
+    a legitimately running tool, not a hung one — the runner logs
+    `pi_idle_wait` (the evidence: pid, cmdline, deadline) instead of
+    TERMed it, and the run SUCCEEDS when the tool reaches its deadline
+    on its own."""
+    command = make_timeout_tool_pi(tmp_path, tool_seconds=0.6)
+    with caplog.at_level("INFO"):
+        result = runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.3,
+            run_id="run1", issue=105, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    assert result == ""
+    lines = caplog.text.splitlines()
+    waits = [line for line in lines if " pi_idle_wait " in line]
+    assert len(waits) == 1, f"exactly one wait decision: {lines}"
+    wait = waits[0]
+    assert "run=run1" in wait
+    assert "issue=xqliu/muyan-pilot#105" in wait
+    assert "pid=" in wait
+    assert "cmdline=" in wait
+    assert "deadline=" in wait
+    # No signal was ever DELIVERED: the tool finished on its own
+    # deadline (a later `no_target` record is fine — the descendants
+    # were already gone when the next window re-evaluated).
+    terms = [line for line in lines if " pi_idle_term " in line]
+    assert not any("result=sent" in line for line in terms), lines
+    assert " pi_idle_kill " not in caplog.text
+    assert "run_failed" not in caplog.text
+    # The session resumed when the tool's result arrived.
+    resumed = [line for line in lines if " pi_resumed " in line]
+    assert len(resumed) == 1
+
+
+def test_stream_pi_timeout_tool_past_deadline_still_terminated(
+    tmp_path, caplog,
+):
+    """Issue #169 constraint: the wait is bounded — when the `timeout`
+    deadline passed but the descendant is STILL alive (the wrapper
+    failed to end the command), the evidence flips: the existing
+    TERM → KILL → session-kill escalation runs (the slot is never held
+    forever, no silent ignoring of the timeout). The tool deadline
+    (0.3 s) lands clearly BEFORE the idle window opens (0.6 s), so the
+    first escalation window already sees a past deadline."""
+    command = make_timeout_tool_pi(
+        tmp_path, tool_seconds=0.3, react_on_tool_done=False,
+        wrapper_honors_deadline=False,
+    )
+    with caplog.at_level("INFO"), pytest.raises(
+        RuntimeError, match="idle recovery",
+    ):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.3,
+            run_id="run1", issue=105, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    # The first escalation window already saw a past deadline (the
+    # wrapper failed to end the command): no wait decision at all.
+    assert " pi_idle_wait " not in caplog.text
+    # The existing escalation ran: the pre-idle descendants were TERMed
+    # (one line per target, at least one delivered)...
+    terms = [line for line in lines if " pi_idle_term " in line]
+    assert len(terms) >= 1
+    assert any("result=sent" in line for line in terms)
+    # ...and after the bounded cycles the session was killed.
+    failures = [line for line in lines if " run_failed " in line]
+    assert len(failures) == 1
+    assert "reason=idle_recovery_stale_" in failures[0]
+
+
+def test_stream_pi_idle_recovery_state_wait_visible_in_progress_callback(
+    tmp_path,
+):
+    """Issue #169: the live GitHub progress comment shows the wait
+    state — the activity state passed to the progress callback carries
+    `recovery=wait` while the runner waits for the tool's deadline."""
+    command = make_timeout_tool_pi(tmp_path, tool_seconds=0.6)
+    seen = []
+
+    def progress(activity):
+        seen.append(activity.get("recovery"))
+
+    runner.stream_pi(
+        command, cwd=tmp_path, poll_interval=0.1,
+        idle_warn_seconds=0.3,
+        run_id="run1", issue=105, source_repo="xqliu/muyan-pilot",
+        branch="b", progress=progress,
+    )
+    assert "wait" in seen
+    assert "term" not in seen
+    assert seen[-1] is None
+
+
+def test_pending_timeout_targets_unit(tmp_path, monkeypatch):
+    """Issue #169: the clock-consistent pending computation — a target
+    whose start time is unreadable (it exited between the discovery and
+    the check) is skipped, a target without a clear timeout is not
+    pending, a target inside its deadline is pending with the remaining
+    time, and a target whose deadline already passed is not pending."""
+    now_mono = time.monotonic()
+
+    def fake_start(pid, *, hz):
+        if pid == 1:
+            return None  # gone between discovery and the check
+        if pid == 2:
+            return now_mono - 1.0  # started 1 s ago, timeout 5 s
+        return now_mono - 9.0  # started 9 s ago, timeout 5 s (passed)
+
+    monkeypatch.setattr(runner, "process_start_monotonic", fake_start)
+    targets = [
+        {"pid": 1, "cmdline": "timeout 5 pytest"},
+        {"pid": 2, "cmdline": "timeout 5 pytest"},
+        {"pid": 3, "cmdline": "timeout 5 pytest"},
+        {"pid": 4, "cmdline": "pytest"},  # no clear timeout
+    ]
+    pending = runner._pending_timeout_targets(targets)
+    assert [target["pid"] for target, _ in pending] == [2]
+    # The deadline is the realtime now plus the remaining time.
+    (target, deadline) = pending[0]
+    assert target["pid"] == 2
+    assert time.time() + 3.0 < deadline < time.time() + 5.0
+    # An empty target list is a no-op.
+    assert runner._pending_timeout_targets([]) == []
+
+
 def make_hung_pi(tmp_path, *, child_sleep=10.0, ignore_sigterm=False,
                  react_on_child_death=True, exit_code=0,
                  model_wait=False):

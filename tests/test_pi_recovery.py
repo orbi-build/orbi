@@ -21,17 +21,20 @@ FAKE_HZ = 100.0
 
 def make_procfs(tmp_path, processes, btime=FAKE_BTIME):
     """Build a fake procfs: `processes` is a list of
-    `(pid, comm, ppid, starttime_ticks, cmdline_bytes_or_None)`."""
+    `(pid, comm, ppid, starttime_ticks, cmdline_bytes_or_None, state)`
+    (the state char is optional, default `S`)."""
     proc = tmp_path / "proc"
     proc.mkdir()
     (proc / "stat").write_text(f"btime {int(btime)}\n", encoding="utf-8")
-    for pid, comm, ppid, starttime, cmdline in processes:
+    for item in processes:
+        pid, comm, ppid, starttime, cmdline = item[:5]
+        state = item[5] if len(item) > 5 else "S"
         entry = proc / str(pid)
         entry.mkdir()
         # stat layout: pid (comm) state ppid ... starttime (field 22).
         # After the LAST ')' the fields start at index 0 (state); ppid is
         # index 1 and starttime index 19.
-        fields = ["S", str(ppid)] + ["0"] * 17 + [str(starttime)]
+        fields = [state, str(ppid)] + ["0"] * 17 + [str(starttime)]
         (entry / "stat").write_text(
             f"{pid} ({comm}) " + " ".join(fields), encoding="utf-8",
         )
@@ -359,6 +362,25 @@ def test_find_idle_descendants_skips_unreadable_start_time(
     assert [t["pid"] for t in targets] == [200]
 
 
+def test_find_idle_descendants_skips_zombies(tmp_path, monkeypatch):
+    # Issue #169: a descendant that already exited but was not reaped
+    # yet (state Z, the parent is busy) is DEAD — signaling it is
+    # meaningless and its empty cmdline would fall back to the comm
+    # name (a lie like `timeout` for an exited `timeout 0.6 sleep 300`).
+    # Only running states are targets.
+    proc = make_procfs(tmp_path, [
+        (100, "pi", 1, 10, b"pi"),
+        (200, "timeout", 100, 100, b"timeout\x000.6\x00sleep\x00300",
+         "Z"),
+        (300, "sleep", 100, 200, b"sleep\x00300"),
+    ])
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    targets = pi_recovery.find_idle_descendants(
+        100, start_epoch(1000), btime=FAKE_BTIME, hz=FAKE_HZ,
+    )
+    assert [t["pid"] for t in targets] == [300]
+
+
 def test_find_idle_descendants_uses_real_clock_when_not_given(
     tmp_path, monkeypatch,
 ):
@@ -437,3 +459,370 @@ def test_signal_pid_reports_failed_for_unreachable_process(
     monkeypatch.setattr(pi_recovery.os, "kill", deny)
     assert pi_recovery.signal_pid(42, signal.SIGTERM) == \
         "failed: [Errno 1] Operation not permitted"
+
+
+# --- Issue #169: evidence-based stall detection ------------------------------
+
+
+def test_process_state_reads_stat_state_char(tmp_path, monkeypatch):
+    proc = make_procfs(tmp_path, [(42, "bash", 7, 100, b"bash")])
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.process_state(42) == "S"
+
+
+def test_process_state_none_for_gone_process(tmp_path, monkeypatch):
+    proc = make_procfs(tmp_path, [])
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.process_state(99) is None
+
+
+def test_process_state_none_for_malformed_stat(tmp_path, monkeypatch):
+    proc = make_procfs(tmp_path, [])
+    (proc / "5").mkdir()
+    (proc / "5" / "stat").write_text("garbage without parens",
+                                     encoding="utf-8")
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.process_state(5) is None
+
+
+def test_process_start_monotonic_reads_field_22(tmp_path, monkeypatch):
+    # stat field 22 (starttime) in ticks since boot, converted with the
+    # given hz: 100 ticks at hz=100 -> 1.0 s since boot. The value is a
+    # MONOTONIC offset (Issue #169): it is compared against
+    # `time.monotonic()`, never against the realtime epoch — a realtime
+    # step after boot (NTP) must not skew a process's age.
+    proc = make_procfs(tmp_path, [(42, "bash", 7, 100, b"bash")])
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.process_start_monotonic(42, hz=FAKE_HZ) == 1.0
+
+
+def test_process_start_monotonic_none_for_gone_process(tmp_path, monkeypatch):
+    proc = make_procfs(tmp_path, [])
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.process_start_monotonic(99, hz=FAKE_HZ) is None
+
+
+def test_process_start_monotonic_none_for_malformed_stat(
+    tmp_path, monkeypatch,
+):
+    proc = make_procfs(tmp_path, [])
+    (proc / "5").mkdir()
+    (proc / "5" / "stat").write_text("garbage without parens",
+                                     encoding="utf-8")
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.process_start_monotonic(5, hz=FAKE_HZ) is None
+
+
+def test_process_start_monotonic_none_for_non_numeric_starttime(
+    tmp_path, monkeypatch,
+):
+    proc = make_procfs(tmp_path, [])
+    (proc / "6").mkdir()
+    # 17 zero fields after ppid, then a non-numeric starttime at index 19.
+    (proc / "6" / "stat").write_text(
+        "6 (bad) S 1 " + " ".join(["0"] * 17 + ["x"]), encoding="utf-8",
+    )
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.process_start_monotonic(6, hz=FAKE_HZ) is None
+
+
+def test_timeout_duration_plain_seconds(tmp_path):
+    # The prompt contract form: `timeout <seconds> ...` — the duration
+    # is the immediate next token after the wrapper word.
+    assert pi_recovery.timeout_duration("timeout 240 pytest tests/") == 240.0
+
+
+def test_timeout_duration_after_bash_c_prefix(tmp_path):
+    # The Pi bash tool spawns `bash -c <command>`: the wrapper word is
+    # found wherever it stands in the command line.
+    assert pi_recovery.timeout_duration(
+        "/bin/bash -c timeout 240 pytest tests/",
+    ) == 240.0
+
+
+def test_timeout_duration_suffixes(tmp_path):
+    # coreutils duration suffixes: s, m, h, d.
+    assert pi_recovery.timeout_duration("timeout 4m pytest") == 240.0
+    assert pi_recovery.timeout_duration("timeout 1.5m pytest") == 90.0
+    assert pi_recovery.timeout_duration("timeout 1h pytest") == 3600.0
+    assert pi_recovery.timeout_duration("timeout 2d pytest") == 172800.0
+
+
+def test_timeout_duration_none_without_clear_timeout(tmp_path):
+    # No wrapper word, a word that merely contains `timeout`, or a
+    # missing/unparseable duration: NOT a clear timeout (fail-safe, the
+    # existing recovery behavior applies).
+    assert pi_recovery.timeout_duration("pytest tests/") is None
+    assert pi_recovery.timeout_duration("timeoutctl 240 x") is None
+    assert pi_recovery.timeout_duration("timeout pytest") is None
+    assert pi_recovery.timeout_duration("timeout abc pytest") is None
+    assert pi_recovery.timeout_duration("timeout -k 5 240 pytest") is None
+    assert pi_recovery.timeout_duration("timeout 0 pytest") is None
+
+
+def test_timeout_duration_edge_tokens(tmp_path):
+    # A `timeout` as the LAST token has no duration at all; an empty
+    # duration token, a multi-dot number and a bare `.` are not
+    # parseable durations.
+    assert pi_recovery.timeout_duration("bash -c timeout") is None
+    assert pi_recovery.timeout_duration("timeout '' x") is None
+    assert pi_recovery.timeout_duration("timeout 1.2.3 x") is None
+    assert pi_recovery.timeout_duration("timeout . x") is None
+
+
+def test_timeout_deadline_plain_seconds(tmp_path):
+    # The prompt contract form: `timeout <seconds> ...`.
+    assert pi_recovery.timeout_deadline(
+        "timeout 240 pytest tests/", 1000.0,
+    ) == 1240.0
+
+
+def test_timeout_deadline_after_bash_c_prefix(tmp_path):
+    # The Pi bash tool spawns `bash -c <command>`: the wrapper word is
+    # found wherever it stands in the command line.
+    assert pi_recovery.timeout_deadline(
+        "/bin/bash -c timeout 240 pytest tests/", 1000.0,
+    ) == 1240.0
+
+
+def test_timeout_deadline_duration_suffixes(tmp_path):
+    # coreutils duration suffixes: s, m, h, d.
+    assert pi_recovery.timeout_deadline(
+        "timeout 4m pytest", 0.0,
+    ) == 240.0
+    assert pi_recovery.timeout_deadline(
+        "timeout 1.5m pytest", 0.0,
+    ) == 90.0
+    assert pi_recovery.timeout_deadline(
+        "timeout 1h pytest", 0.0,
+    ) == 3600.0
+    assert pi_recovery.timeout_deadline(
+        "timeout 2d pytest", 0.0,
+    ) == 172800.0
+
+
+def test_timeout_deadline_none_without_timeout_word(tmp_path):
+    assert pi_recovery.timeout_deadline("pytest tests/", 1000.0) is None
+    # `timeout` inside a longer word is not the wrapper.
+    assert pi_recovery.timeout_deadline("timeoutctl 240 x", 1000.0) is None
+
+
+def test_timeout_deadline_none_without_duration(tmp_path):
+    # A `timeout` without a parseable duration is not a CLEAR timeout:
+    # the existing recovery behavior applies (fail-safe).
+    assert pi_recovery.timeout_deadline("timeout pytest", 1000.0) is None
+    assert pi_recovery.timeout_deadline("timeout abc pytest", 1000.0) is None
+    assert pi_recovery.timeout_deadline(
+        "timeout -k 5 240 pytest", 1000.0,
+    ) is None
+
+
+def test_upstream_alive_true_for_established_tcp_socket(
+    tmp_path, monkeypatch,
+):
+    # The process holds a socket whose inode appears in /proc/net/tcp
+    # with a non-zero remote address: the upstream connection is live.
+    proc = tmp_path / "proc"
+    (proc / "42" / "fd").mkdir(parents=True)
+    (proc / "42" / "stat").write_text(
+        "42 (pi) S 1 " + " ".join(["0"] * 18), encoding="utf-8",
+    )
+    (proc / "42" / "fd" / "7").symlink_to("socket:[12345]")
+    (proc / "42" / "fd" / "8").symlink_to("anon_inode:[eventpoll]")
+    (proc / "net").mkdir()
+    (proc / "net" / "tcp").write_text(
+        "  sl  local_address rem_address   st inode\n"
+        "   0: 0100007F:1F90 0100007F:8762 01 00000000:00000000 00:00000000 00000000     0        0 12345 1 00000000d7514f4a 100\n",
+        encoding="utf-8",
+    )
+    (proc / "net" / "tcp6").write_text(
+        "  sl  local_address remote_address st inode\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.upstream_alive(42) is True
+
+
+def test_upstream_alive_false_for_listen_only_socket(
+    tmp_path, monkeypatch,
+):
+    # A socket with a zero remote address (LISTEN) is not an upstream
+    # connection: no remote peer, no live model request.
+    proc = tmp_path / "proc"
+    (proc / "42" / "fd").mkdir(parents=True)
+    (proc / "42" / "stat").write_text(
+        "42 (pi) S 1 " + " ".join(["0"] * 18), encoding="utf-8",
+    )
+    (proc / "42" / "fd" / "7").symlink_to("socket:[12345]")
+    (proc / "net").mkdir()
+    (proc / "net" / "tcp").write_text(
+        "  sl  local_address rem_address   st inode\n"
+        "   0: 0100007F:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 12345 1 00000000d7514f4a 100\n",
+        encoding="utf-8",
+    )
+    (proc / "net" / "tcp6").write_text(
+        "  sl  local_address remote_address st inode\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.upstream_alive(42) is False
+
+
+def test_upstream_alive_true_for_established_tcp6_socket(
+    tmp_path, monkeypatch,
+):
+    proc = tmp_path / "proc"
+    (proc / "42" / "fd").mkdir(parents=True)
+    (proc / "42" / "stat").write_text(
+        "42 (pi) S 1 " + " ".join(["0"] * 18), encoding="utf-8",
+    )
+    (proc / "42" / "fd" / "7").symlink_to("socket:[999]")
+    (proc / "net").mkdir()
+    (proc / "net" / "tcp").write_text(
+        "  sl  local_address rem_address   st inode\n",
+        encoding="utf-8",
+    )
+    (proc / "net" / "tcp6").write_text(
+        "  sl  local_address remote_address st inode\n"
+        "   0: 00000000000000000000000000000001:01BB "
+        "00000000000000000000000000000002:01BB 01 00000000:00000000 00:00000000 00000000     0        0 999 1 00000000d7514f4a 100\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.upstream_alive(42) is True
+
+
+def test_upstream_alive_false_for_close_wait_socket(
+    tmp_path, monkeypatch,
+):
+    # The peer (the upstream) closed the connection: the socket sits in
+    # CLOSE_WAIT (08) with the remote address still printed — the
+    # request is dead, the runner must not see a live upstream.
+    proc = tmp_path / "proc"
+    (proc / "42" / "fd").mkdir(parents=True)
+    (proc / "42" / "stat").write_text(
+        "42 (pi) S 1 " + " ".join(["0"] * 18), encoding="utf-8",
+    )
+    (proc / "42" / "fd" / "7").symlink_to("socket:[12345]")
+    (proc / "net").mkdir()
+    (proc / "net" / "tcp").write_text(
+        "  sl  local_address rem_address   st inode\n"
+        "   0: 0100007F:1F90 0100007F:8762 08 00000000:00000000 "
+        "00:00000000 00000000     0        0 12345 1 00000000d7514f4a 100\n",
+        encoding="utf-8",
+    )
+    (proc / "net" / "tcp6").write_text(
+        "  sl  local_address remote_address st inode\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.upstream_alive(42) is False
+
+
+def test_upstream_alive_false_for_gone_process(tmp_path, monkeypatch):
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.upstream_alive(42) is False
+
+
+def test_upstream_alive_false_when_socket_has_no_remote_entry(
+    tmp_path, monkeypatch,
+):
+    # The process holds a socket (e.g. AF_UNIX: `socket:[ino]` in the fd
+    # table but no /proc/net/tcp entry with a remote address): no live
+    # upstream TCP connection.
+    proc = tmp_path / "proc"
+    (proc / "42" / "fd").mkdir(parents=True)
+    (proc / "42" / "stat").write_text(
+        "42 (pi) S 1 " + " ".join(["0"] * 18), encoding="utf-8",
+    )
+    (proc / "42" / "fd" / "7").symlink_to("socket:[777]")
+    (proc / "net").mkdir()
+    # The only TCP entry belongs to ANOTHER process's socket.
+    (proc / "net" / "tcp").write_text(
+        "  sl  local_address rem_address   st inode\n"
+        "   0: 0100007F:1F90 0100007F:8762 01 00000000:00000000 00:00000000 00000000     0        0 555 1 00000000d7514f4a 100\n",
+        encoding="utf-8",
+    )
+    (proc / "net" / "tcp6").write_text(
+        "  sl  local_address remote_address st inode\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.upstream_alive(42) is False
+
+
+def test_upstream_alive_skips_fd_entry_that_cannot_be_read(
+    tmp_path, monkeypatch,
+):
+    # An fd entry that vanishes between the directory listing and the
+    # readlink (OSError) is skipped, never a crash — the remaining
+    # socket is still evaluated.
+    proc = tmp_path / "proc"
+    (proc / "42" / "fd").mkdir(parents=True)
+    (proc / "42" / "stat").write_text(
+        "42 (pi) S 1 " + " ".join(["0"] * 18), encoding="utf-8",
+    )
+    # A REGULAR file in the fd table: readlink on it raises OSError.
+    (proc / "42" / "fd" / "8").write_text("nope", encoding="utf-8")
+    (proc / "42" / "fd" / "7").symlink_to("socket:[12345]")
+    (proc / "net").mkdir()
+    (proc / "net" / "tcp").write_text(
+        "  sl  local_address rem_address   st inode\n"
+        "   0: 0100007F:1F90 0100007F:8762 01 00000000:00000000 00:00000000 00000000     0        0 12345 1 00000000d7514f4a 100\n",
+        encoding="utf-8",
+    )
+    (proc / "net" / "tcp6").write_text(
+        "  sl  local_address remote_address st inode\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.upstream_alive(42) is True
+
+
+def test_upstream_alive_skips_unreadable_net_tables(
+    tmp_path, monkeypatch,
+):
+    # A /proc/net table that cannot be read (OSError) is skipped, never
+    # a crash: with no readable table there is no live evidence.
+    proc = tmp_path / "proc"
+    (proc / "42" / "fd").mkdir(parents=True)
+    (proc / "42" / "stat").write_text(
+        "42 (pi) S 1 " + " ".join(["0"] * 18), encoding="utf-8",
+    )
+    (proc / "42" / "fd" / "7").symlink_to("socket:[12345]")
+    (proc / "net").mkdir()
+    # `tcp` is a DIRECTORY: read_text raises IsADirectoryError (OSError).
+    (proc / "net" / "tcp").mkdir()
+    (proc / "net" / "tcp6").write_text(
+        "  sl  local_address remote_address st inode\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.upstream_alive(42) is False
+
+
+def test_upstream_alive_false_for_live_state_without_remote_ip(
+    tmp_path, monkeypatch,
+):
+    # A socket in a live state (SYN_SENT) whose remote address is the
+    # all-zero placeholder has no remote peer yet: not a live upstream.
+    proc = tmp_path / "proc"
+    (proc / "42" / "fd").mkdir(parents=True)
+    (proc / "42" / "stat").write_text(
+        "42 (pi) S 1 " + " ".join(["0"] * 18), encoding="utf-8",
+    )
+    (proc / "42" / "fd" / "7").symlink_to("socket:[12345]")
+    (proc / "net").mkdir()
+    (proc / "net" / "tcp").write_text(
+        "  sl  local_address rem_address   st inode\n"
+        "   0: 0100007F:1F90 00000000:0000 02 00000000:00000000 00:00000000 00000000     0        0 12345 1 00000000d7514f4a 100\n",
+        encoding="utf-8",
+    )
+    (proc / "net" / "tcp6").write_text(
+        "  sl  local_address remote_address st inode\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.upstream_alive(42) is False

@@ -611,6 +611,54 @@ def test_watcher_state_reports_model_wait_after_tool_result(tmp_path):
     assert state["model_wait"] is True
 
 
+def test_watcher_state_model_wait_seconds_counts_silence_in_model_wait(
+    tmp_path,
+):
+    """Issue #169: while the newest event is a tool result the silence
+    since that event is the model_wait duration — the evidence the
+    runner needs to tell a slow model from a dead upstream (a bare
+    `model_wait` flag says nothing about how long the request has
+    been pending)."""
+    session = tmp_path / "s.jsonl"
+    write_records(session, [SESSION_RECORD, ASSISTANT_TOOL_CALL, TOOL_RESULT])
+    last_epoch = pi_activity.parse_iso_utc("2026-01-01T00:00:03Z")
+    watcher = pi_activity.SessionWatcher(
+        tmp_path, now=lambda: last_epoch + 42.0,
+    )
+    state = watcher.poll()
+    assert state["model_wait"] is True
+    assert state["model_wait_seconds"] == pytest.approx(42.0)
+
+
+def test_watcher_state_model_wait_seconds_zero_outside_model_wait(
+    tmp_path,
+):
+    # Outside model_wait (the newest event is not a tool result) there is
+    # no pending model request: the duration is 0, whatever the stale
+    # time is.
+    session = tmp_path / "s.jsonl"
+    write_records(session, [SESSION_RECORD, ASSISTANT_TEXT])
+    last_epoch = pi_activity.parse_iso_utc("2026-01-01T00:00:04Z")
+    watcher = pi_activity.SessionWatcher(
+        tmp_path, now=lambda: last_epoch + 42.0,
+    )
+    state = watcher.poll()
+    assert state["model_wait"] is False
+    assert state["model_wait_seconds"] == 0.0
+
+
+def test_watcher_state_model_wait_seconds_clamped_to_zero(tmp_path):
+    # A clock skew (now before the last event) clamps to 0 like
+    # `stale_seconds`.
+    session = tmp_path / "s.jsonl"
+    write_records(session, [SESSION_RECORD, ASSISTANT_TOOL_CALL, TOOL_RESULT])
+    last_epoch = pi_activity.parse_iso_utc("2026-01-01T00:00:03Z")
+    watcher = pi_activity.SessionWatcher(
+        tmp_path, now=lambda: last_epoch - 10.0,
+    )
+    assert watcher.poll()["model_wait_seconds"] == 0.0
+
+
 def test_watcher_state_no_model_wait_after_assistant_text(tmp_path):
     # An assistant text is not a pending model request: no model_wait.
     session = tmp_path / "s.jsonl"
