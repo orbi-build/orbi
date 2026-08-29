@@ -835,6 +835,180 @@ def test_capacity_two_allows_two_runners_and_rejects_third(clone, tmp_path):
     assert sorted(c["issue"] for c in started) == ["7", "8"]
 
 
+def _run_ref_hammer(
+    clone: Path, tmp_path: Path, monkeypatch,
+    rounds: int = 5, workers: int = 4,
+    base_sha: str | None = None,
+) -> list[str]:
+    """Hammer the runner's ref-writing paths on the shared checkout.
+
+    Four worker threads run the runner's ref-writing paths (the same
+    calls the Runners make) while an advancer thread keeps pushing
+    commits to the BARE origin — the #105 scene (a delivery merge
+    landing on origin/main) with a wide window: every fetch must copy
+    the new objects while holding git's optimistic ref expectation.
+    Returns the collected operation errors (empty when every operation
+    succeeded). ``base_sha`` overrides the worktree base (a bad SHA
+    makes ``create_worktree`` fail — the error-collection path).
+    """
+    import fcntl
+    import os
+    import threading
+
+    import bootstrap_runner as runner
+
+    # The fake `gh` on PATH answers the PR commands of the verify path
+    # (the state file carries the default OPEN PR state, which is
+    # MERGEABLE with the worktree's own HEAD — see the fake in this
+    # module).
+    bin_dir = install_fakes(tmp_path)
+    state = tmp_path / "gh-state.json"
+    # `ai-pr-opened` makes the fake `gh pr list` report the PR (the fake
+    # derives it from the label, exactly like the delivery path does).
+    write_state(state, {"9": ["ai-pr-opened"]})
+    monkeypatch.setenv(
+        "PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+    )
+    monkeypatch.setenv("MUYAN_FAKE_GH_STATE", str(state))
+
+    # A task worktree of the deployment checkout (shared refstore),
+    # the same shape the runner creates for a delivery.
+    worktree = clone / ".worktrees" / \
+        "muyan-pilot-owner-repo-issue-9-01234567"
+    git(clone, "worktree", "add", "-b",
+        "muyan-pilot/owner-repo-issue-9-01234567", str(worktree), "HEAD")
+    if base_sha is None:
+        base_sha = git(clone, "rev-parse", "HEAD")
+
+    # The advancer keeps pushing commits to the BARE origin while the
+    # hammer runs.
+    adv = tmp_path / "adv"
+    subprocess.run(
+        ["git", "clone", "-q", str(tmp_path / "origin.git"), str(adv)],
+        capture_output=True, text=True, check=True,
+    )
+    git(adv, "config", "user.email", "pilot@test.local")
+    git(adv, "config", "user.name", "Pilot")
+    stop = threading.Event()
+
+    def advance() -> None:
+        i = 0
+        while not stop.is_set():
+            with open(adv / f"adv{i % 16}.txt", "a",
+                      encoding="utf-8") as handle:
+                handle.write(f"adv {i}\n")
+            git(adv, "add", ".")
+            git(adv, "commit", "-qm", f"adv {i}")
+            git(adv, "push", "-q", "origin", "main")
+            i += 1
+
+    advancer = threading.Thread(target=advance, daemon=True)
+    errors: list[str] = []
+    errors_lock = threading.Lock()
+    barrier = threading.Barrier(workers)
+
+    def hammer(worker: int) -> None:
+        for round_no in range(rounds):
+            # All threads enter the same round at the same time:
+            # maximum overlap of the ref-writing git commands.
+            barrier.wait(timeout=60)
+            # A unique Issue number per (round, worker) — a unique
+            # worktree path and branch, so `create_worktree` always
+            # runs the real `git worktree add -b` (never the
+            # path-exists short-circuit).
+            number = 1000 + round_no * workers + worker
+            try:
+                runner.freeze_base(clone, "main")
+                runner.create_worktree(
+                    clone, "owner/repo", number, "01234567", base_sha,
+                )
+                runner.verify_pr(
+                    worktree, "muyan-pilot/owner-repo-issue-9-01234567",
+                    "main", "01234567", repo_dir=clone, issue=9,
+                    require_latest_base=False,
+                )
+                runner.sync_base_checkout(clone, "main")
+            except Exception as exc:
+                with errors_lock:
+                    errors.append(repr(exc))
+
+    advancer.start()
+    threads = [
+        threading.Thread(target=hammer, args=(worker,))
+        for worker in range(workers)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=300)
+    stop.set()
+    advancer.join(timeout=30)
+    for thread in threads:
+        assert not thread.is_alive(), "a hammer thread hung"
+    # The lock is short-lived: after the hammer it is free again.
+    lock_path = runner.base_sync_lock_path(clone)
+    probe = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        fcntl.flock(probe, fcntl.LOCK_UN)
+        os.close(probe)
+    return errors
+
+
+def test_concurrent_ref_writing_on_the_shared_checkout_never_fails(
+    clone, tmp_path, monkeypatch,
+):
+    """Issue #105 regression: the task worktrees are git worktrees of the
+    deployment checkout — they share its refstore and object database.
+    With `max_concurrency = 2` two Runners issue ref-writing git commands
+    (fetch, worktree add, merge) from the checkout AND from their
+    worktrees at the same time; git's optimistic ref lock made the loser
+    fail with `cannot lock ref 'refs/remotes/origin/main': is at X but
+    expected Y` — in the #105 scene the PR was already MERGED, the
+    confirm fetch raced, and the delivery was marked `ai-blocked`.
+
+    The runner's ref-writing paths must serialize on the shared
+    base-sync flock (the SAME lock the ExecStartPre preflight uses), so
+    concurrent operations wait instead of racing: four threads hammer
+    the runner's ref-writing paths exactly the way the Runners call
+    them — `freeze_base` / `create_worktree` / `sync_base_checkout` on
+    the checkout, `verify_pr` from a task worktree (the git cwd) with
+    the checkout as `repo_dir` (the lock) — while an advancer thread
+    keeps pushing commits to origin (the #105 scene: a delivery merge
+    landing on origin/main while the other Runner is mid-fetch). Every
+    operation must succeed: with the lock the fetches wait for each
+    other instead of racing git's optimistic ref lock. Without the lock
+    the same hammer fails with `cannot lock ref` (verified against the
+    neutered lock).
+
+    `merge_gate` and `confirm_merged` are not in the hammer: their base
+    checks (the PR head must contain the latest remote base) cannot pass
+    while the advancer advances origin, and their lock serialization is
+    covered by the unit tests (test_merge_gate_serializes_on_the_shared
+    _checkout_lock, test_confirm_merged_serializes_on_the_shared
+    _checkout_lock) plus the real concurrent delivery in
+    test_capacity_two_allows_two_runners_and_rejects_third."""
+    errors = _run_ref_hammer(clone, tmp_path, monkeypatch)
+    assert errors == [], (
+        f"concurrent ref-writing on the shared checkout failed: {errors}"
+    )
+
+
+def test_ref_hammer_collects_a_failing_operation(clone, tmp_path, monkeypatch):
+    """The hammer's error collection: a failing ref-writing operation
+    (a bad worktree base SHA) is recorded, never swallowed — the
+    fail-fast contract of the runner's git paths (AGENTS.md: log the
+    command, return code, stdout and stderr, then raise; never swallow
+    an error)."""
+    errors = _run_ref_hammer(
+        clone, tmp_path, monkeypatch, rounds=1, workers=2,
+        base_sha="0" * 40,  # not a commit: `git worktree add` fails
+    )
+    assert errors, "the failing operation must be collected"
+    assert any("worktree" in error for error in errors), errors
+
+
 def test_killed_runner_slot_is_released_by_the_kernel(clone, tmp_path):
     """SIGKILL cannot run any cleanup; the kernel releases the flock
     lock, so the next runner takes the slot back — no permanent lock."""
