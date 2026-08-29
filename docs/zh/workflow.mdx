@@ -21,10 +21,11 @@ flowchart LR
   progress -->|PR 验收：base 新鲜、run marker、Fixes #N| opened["ai-pr-opened"]
   opened -->|独立审查会话（会话内修复）| verdict{"REVIEW_VERDICT"}
   verdict -->|clean verdict + merge 门禁| merged["ai-merged（终态）"]
-  verdict -->|finding / base 冲突 / 超轮| blocked["ai-blocked（终态，人工决策）"]
-  opened -->|finding / base 冲突| fixneeded["ai-fix-needed"]
-  fixneeded -->|下一 tick：同一 PR 的下一个审查会话| opened
-  progress -->|fail fast| blocked
+  verdict -->|超轮（人工决策）| blocked["ai-blocked（终态，人工决策）"]
+  opened -->|finding / base 冲突 / 可恢复失败（Issue #50）| fixneeded["ai-fix-needed"]
+  fixneeded -->|下一 tick：同一 run、branch、worktree、PR 的下一个审查会话| opened
+  fixneeded -->|不可恢复前置条件（Issue #50）| blocked
+  progress -->|fail fast（PR 尚未存在）| blocked
 ```
 
 ```text
@@ -37,16 +38,26 @@ ai-ready                任务被派发（muyan-pilot add，或人工加标签�
                         在会话内修复 findings（代码、完整测试、100%
                         覆盖率、只 push task branch），然后输出
                         REVIEW_VERDICT
-  -> ai-fix-needed      会话内未能修复 finding，或 PR 落后最新 base /
-                        有 merge conflict：下一个 tick 在同一 run、
-                        同一 branch、同一 PR 上启动下一个审查会话
+  -> ai-fix-needed      会话内未能修复 finding，PR 落后最新 base / 有
+                        merge conflict，或已有 run/PR 的**可恢复失败**
+                        （Issue #50：Pi 执行失败、验证失败、未推送本地
+                        commit、worktree 缺失）：失败 comment 写入 Issue
+                        和 PR，带完整现场（run_id、PR、branch、worktree、
+                        session、phase、last activity、具体错误）；下一
+                        个 tick 在同一 run_id、branch、worktree、PR 上
+                        启动下一个审查会话
   -> merge              clean verdict + merge 门禁（head 包含最新 base、
                         PR mergeable、远端 head 未变）
   -> ai-merged          成功终态；PR body 的 Fixes #N 原生关闭 Issue
 ```
 
-任何一点失败都 fail fast：Issue 被标记 `ai-blocked` 并留下具体现场
-（命令、返回码、stdout/stderr、branch、worktree、session 文件），自动
+已有 run/PR 的失败被分类（Issue #50）：**可恢复失败**（Pi 执行失败、
+验证失败、未推送本地 commit、worktree 缺失、会话内未能修复的 finding）
+留在自动修复循环——Issue 标记 `ai-fix-needed`，失败 comment 写入 Issue
+和 PR（带完整现场），下一个 tick 在同一 run、branch、worktree、PR 上
+继续（不重新创建 PR、不重复领取）。只有 **AI 无法安全判断或修复的外部
+前置条件**（无可恢复现场、base 分支变更、审查超轮、PR 未合并被关闭）
+才 fail fast：Issue 被标记 `ai-blocked` 并写明为什么不能自动恢复，自动
 循环从此不再碰它——人工决定下一步。
 
 链路规则：
@@ -56,8 +67,9 @@ ai-ready                任务被派发（muyan-pilot add，或人工加标签�
 - 只有两个 opened-PR 状态会被自动拾取：`ai-pr-opened`（等待 review）
   和 `ai-fix-needed`（等待下一个审查会话）。`ai-ready` 作为新工作被
   领取；`ai-blocked` 从不自动恢复。
-- review/fix 循环有界（5 轮）。超轮仍有 findings，或 review 无法验证，
-  Issue 标记 `ai-blocked`；PR、branch 和 worktree 原样保留。
+- review/fix 循环有界（5 轮）。超轮仍有 findings 时 Issue 标记
+  `ai-blocked`（超轮是人工决策）；可恢复失败（Issue #50）保持
+  `ai-fix-needed`。无论哪种，PR、branch 和 worktree 原样保留。
 - base 前进由 task branch 上对最新 `origin/<base>` 的普通 `git merge`
   吸收（冲突手工解决），然后重跑完整测试。不 force push、不自动解决
   冲突、不 push 保护分支。
@@ -78,9 +90,9 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 | `ai-ready` | 明确派发给 Pilot；可以被领取 |
 | `ai-in-progress` | 已领取、正在执行（被杀后的残留由下一 tick 接回） |
 | `ai-pr-opened` | PR 已创建并验收；等待独立审查 |
-| `ai-fix-needed` | PR head 尚不可合并；下一 tick 在同一 PR 上运行下一个审查会话 |
+| `ai-fix-needed` | PR head 尚不可合并，或已有 run/PR 的可恢复失败（Issue #50）；下一 tick 在同一 run、branch、worktree、PR 上继续 |
 | `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支 |
-| `ai-blocked` | Runner fail fast；人工必须决定下一步 |
+| `ai-blocked` | 只用于 AI 无法安全判断或修复的外部前置条件（Issue #50）；blocked comment 写明为什么不能自动恢复；人工必须决定下一步 |
 
 ## Run marker 与 run_id
 

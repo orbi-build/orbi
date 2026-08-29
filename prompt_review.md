@@ -85,6 +85,13 @@ another session: fix them here, in this same session.
   fails fast — never retry the bare fetch or bypass the lock), plain
   `git merge origin/{{BASE_BRANCH}}`, resolve conflicts manually, rerun the
   full test suite with coverage, and push the task branch.
+- If the local HEAD is ahead of the frozen PR head (`{{HEAD_SHA}}`) — an
+  unpushed local commit, e.g. a fix committed by a previous review session
+  that was killed before `git push` (the #158 `d13b0c56` scene): push the
+  task branch (plain `git push origin {{HEAD_REF}}`, never a force push) so
+  the reviewed head is on the remote before you emit the verdict — never
+  discard the local commit and never create a replacement PR (Issue #50:
+  the same run, branch, worktree and PR continue).
 - After fixing, re-check the diff against R1–R9 and the Issue's acceptance
   items before emitting the verdict.
 - If you cannot make the PR mergeable (the fix is not verifiable, or the

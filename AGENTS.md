@@ -442,12 +442,18 @@ acceptance criteria.
 - After a PR is opened the Issue is in a recoverable review state, not
   done: `ai-pr-opened` means awaiting review. `ai-fix-needed` marks a
   delivery whose head is not mergeable yet (the review found a finding
-  the session could not fix, or the PR is behind the latest base / has a
-  merge conflict): the NEXT tick resumes the same run on the same
-  feature branch, worktree and PR number and runs the next independent
-  review session, which merges the latest `origin/<base>` into the
-  branch IN-SESSION, resolves any conflict, re-runs the full suite and
-  re-emits the verdict. Both opened-PR states are scanned (Issue #70).
+  the session could not fix, the PR is behind the latest base / has a
+  merge conflict, or an AI-recoverable failure of the existing run/PR
+  — a Pi execution failure, a verification failure, an unpushed local
+  commit (the #158 scene: the local commit is preserved and the next
+  review session pushes the task branch on the same PR), or a missing
+  worktree — Issue #50): the NEXT tick resumes the SAME run_id, branch,
+  worktree and PR and runs the next independent review session, which
+  merges the latest `origin/<base>` into the branch IN-SESSION, resolves
+  any conflict, re-runs the full suite and re-emits the verdict. A
+  recoverable failure is reported on the Issue AND the PR with the full
+  scene (run_id, PR, branch, worktree, session, phase, last activity and
+  the concrete error). Both opened-PR states are scanned (Issue #70).
   The `ai-pr-opened` scan exists because the delivery that opened the
   PR can be gone (a killed runner, or the progress failure behind Issue
   #70 that used to block the Issue before the review started): without
@@ -477,10 +483,22 @@ acceptance criteria.
   re-frozen head; `gh pr merge --match-head-commit` then lands exactly
   that head. No auto conflict resolution by the Runner, no `--abort`,
   no force push, no merge or push of the protected branch.
-- An unresolvable review (Pi failure, exhausted review rounds, a
-  finding the session could not fix) keeps the PR, branch and worktree
-  intact and marks the Issue `ai-blocked` (removing the opened-PR
-  state) with the concrete finding.
+- A RECOVERABLE failure of the existing run/PR (Issue #50: a Pi
+  execution failure, a verification failure, an unpushed local commit,
+  a missing worktree, a finding the session could not fix) keeps the PR,
+  branch and worktree intact and marks the Issue `ai-fix-needed` (the
+  opened-PR state label is removed) with the failure comment on the
+  Issue AND the PR carrying the full scene (run_id, PR, branch,
+  worktree, session, phase, last activity, concrete error); the next
+  tick resumes the same run, branch, worktree and PR — no replacement
+  PR, no re-claim, never `ai-blocked`.
+- An UNRECOVERABLE failure (Issue #50: an external precondition the AI
+  cannot safely judge or fix — an unrecoverable scene, a base-branch
+  config change, an exhausted review round budget, a PR closed without
+  merge) keeps the PR, branch and worktree intact and marks the Issue
+  `ai-blocked` ALONE (the opened-PR state label is removed, and a
+  leftover `ai-fix-needed` too) with the explicit reason why automatic
+  recovery is impossible.
 
 ## Run correlation
 
@@ -533,10 +551,16 @@ acceptance criteria.
   reviewed head. A PR behind the latest base is rejected, never
   merged. The Runner confirms the PR is MERGED and the merge commit is on the
   protected branch before marking the Issue `ai-merged`.
-- A review finding is not `ai-blocked`: it is fixed in the review session
-  (or in the next review session on the same PR). Only command failure, an
-  unavailable environment, or a review that cannot be verified fails fast and
-  marks `ai-blocked`.
+- A review finding or an AI-recoverable failure of the existing run/PR
+  (Issue #50: a Pi execution failure, a verification failure, an unpushed
+  local commit, a missing worktree) is NOT `ai-blocked`: it is fixed in
+  the next review session on the same PR (the Issue stays `ai-fix-needed`
+  and the next tick resumes the same run, branch, worktree and PR).
+  Only an unrecoverable external precondition (an exhausted review round
+  budget, an unrecoverable scene, a base-branch config change, a PR
+  closed without merge) fails fast and marks `ai-blocked` — and the
+  blocked comment must state the explicit reason why automatic recovery
+  is impossible.
 
 ## Scope
 

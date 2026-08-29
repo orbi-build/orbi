@@ -251,6 +251,12 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     for comment_id, body in zip(comment_ids, comments)
                 ])
             if command[1] == "pr":
+                if command[2] == "comment":
+                    # Issue #50: the failure comment is written to the
+                    # PR too (the same body as the Issue comment).
+                    comment_ids.append(len(comments) + 1)
+                    comments.append(command[-1])
+                    return ""
                 if command[2] == "view":
                     cwd = kwargs.get("cwd")
                     if cwd is None:
@@ -731,13 +737,17 @@ def test_e2e_public_comment_scene_is_never_resumed(
     assert not any("merge" in " ".join(e) for e in edits)
 
 
-def test_e2e_review_failure_keeps_pr_and_marks_blocked(
+def test_e2e_review_failure_keeps_pr_and_stays_fix_needed(
     clone, tmp_path, monkeypatch, caplog,
 ):
-    """Issue #82: a review session that cannot finish (the fix is not
-    verifiable) fails fast: the Issue is marked ``ai-blocked`` and the
+    """Issue #82 + #50: a review session that cannot finish (the Pi
+    fails, the fix is not verifiable) is a RECOVERABLE failure: the
+    Issue is marked ``ai-fix-needed`` (never ``ai-blocked``) and the
     PR, branch and worktree are preserved (never deleted, never
-    force-pushed, never re-claimed)."""
+    force-pushed, never re-claimed); the failure comment (Issue AND
+    PR) carries the run marker, the concrete error and the full
+    scene, and the next timer resumes the same run, branch, worktree
+    and PR."""
     comments: list[str] = []
     edits: list[list[str]] = []
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
@@ -751,33 +761,37 @@ def test_e2e_review_failure_keeps_pr_and_marks_blocked(
     branch = f"muyan-pilot/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-{run_id}"
     worktree = worktree_for(clone, run_id)
 
-    # The review session cannot finish (e.g. the in-session fix is not
-    # verifiable): the delivery wait marks the Issue ai-blocked.
+    # The review session cannot finish (the Pi fails): the delivery
+    # wait keeps the Issue in the automatic fix loop (ai-fix-needed).
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI_REVIEW_FAILING)
     runner.set_run_id(run_id)
     runner.wait_for_delivery(
         pr_url, issue(), config, REPO, poll_interval=0.01,
     )
 
-    # The Issue is marked ai-blocked (leaving the opened-PR state)...
+    # The Issue is marked ai-fix-needed (leaving the opened-PR state)
+    # — never ai-blocked (Issue #50) ...
     assert [
         "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
-        "--add-label", "ai-blocked", "--remove-label", "ai-pr-opened",
+        "--add-label", "ai-fix-needed", "--remove-label", "ai-pr-opened",
     ] in edits
+    assert not any("ai-blocked" in edit for edit in edits)
     # ...the PR, branch and worktree are all preserved (never deleted,
     # never force-pushed).
     assert worktree.is_dir()
     assert git(worktree, "branch", "--show-current") == branch
-    # The failure report and the blocked milestone are the last two
-    # comments (the progress comment is PATCHed in place, never
-    # re-posted).
+    # The failure report is written to the Issue AND the PR (the last
+    # two issue comments: the failure, then the fix-needed milestone;
+    # the progress comment is PATCHed in place, never re-posted).
     failure = comments[-2]
-    assert "Muyan Pilot failed:" in failure
+    assert "Muyan Pilot needs a fix:" in failure
     assert "returned non-zero exit status 3" in failure
     assert f"<!-- muyan-pilot:run={run_id} -->" in failure
-    blocked = comments[-1]
-    assert "Muyan Pilot: blocked" in blocked
-    assert f"<!-- muyan-pilot:run={run_id} -->" in blocked
+    assert f"branch={branch}" in failure
+    assert f"worktree={worktree}" in failure
+    fix_needed = comments[-1]
+    assert "Muyan Pilot: fix needed" in fix_needed
+    assert f"<!-- muyan-pilot:run={run_id} -->" in fix_needed
 
 
 def test_e2e_pr_closed_while_fix_needed_removes_leftover_label(

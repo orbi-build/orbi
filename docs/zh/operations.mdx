@@ -164,8 +164,8 @@ HEAD` 验证，拒绝 head 不包含最新远端 base 的交付。
 
 | 状态 | 发生了什么 | 怎么办 |
 |---|---|---|
-| `ai-blocked` | Runner fail fast（命令错误、现场无法恢复、审查超轮） | 读 Issue 评论（现场 + 原因）和 journal。修环境或修任务，然后把同一 PR 路径重新标为 `ai-fix-needed`（同一 run 继续），或移除标签重新派发为全新 `ai-ready`（新 run）。它从不自动恢复。 |
-| `ai-fix-needed` | PR head 尚不可合并（review finding 或 base 冲突） | 什么都不用做——下一 tick 在同一 PR 上启动下一个审查会话，会话内吸收最新 base。 |
+| `ai-blocked` | 只用于 AI 无法安全判断或修复的外部前置条件（Issue #50：现场无法恢复、base 分支变更、审查超轮、PR 未合并被关闭）——comment 写明为什么不能自动恢复 | 读 Issue 评论（现场 + 原因）和 journal。修环境或修任务，然后把同一 PR 路径重新标为 `ai-fix-needed`（同一 run 继续），或移除标签重新派发为全新 `ai-ready`（新 run）。它从不自动恢复。 |
+| `ai-fix-needed` | PR head 尚不可合并（review finding、base 冲突），或已有 run/PR 的可恢复失败（Issue #50：Pi 执行失败、验证失败、未推送本地 commit、worktree 缺失） | 什么都不用做——下一 tick 在同一 run_id、branch、worktree、PR 上启动下一个审查会话，会话内吸收最新 base。 |
 | 被杀后残留的 `ai-in-progress` | Runner 在任务中途被 SIGKILL | 下一 tick 的重启扫描接回（仅当没有其他 Runner 活着时）：同一 run id、同一 worktree、同一条进度评论——不新建 run。 |
 
 run 产物（plan、test log、session JSONL）留在任务 worktree 作为本地

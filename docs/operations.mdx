@@ -202,8 +202,8 @@ delivery whose head does not contain the latest remote base.
 
 | State | What happened | What to do |
 |---|---|---|
-| `ai-blocked` | The Runner failed fast (command error, unrecoverable scene, review exhausted) | Read the Issue comment (scene + reason) and the journal. Fix the environment or the task, then either relabel the same PR path as `ai-fix-needed` (same run continues) or remove the labels and re-dispatch as a fresh `ai-ready` (new run). It is never auto-recovered. |
-| `ai-fix-needed` | The PR head is not mergeable yet (review finding or base conflict) | Nothing — the next tick starts the next review session on the same PR, which absorbs the latest base in-session. |
+| `ai-blocked` | Only an external precondition the AI cannot safely judge or fix (Issue #50: unrecoverable scene, base-branch config change, review rounds exhausted, PR closed without merge) — the comment states WHY automatic recovery is impossible | Read the Issue comment (scene + reason) and the journal. Fix the environment or the task, then either relabel the same PR path as `ai-fix-needed` (same run continues) or remove the labels and re-dispatch as a fresh `ai-ready` (new run). It is never auto-recovered. |
+| `ai-fix-needed` | The PR head is not mergeable yet (review finding, base conflict) or an AI-recoverable failure of the run/PR (Issue #50: Pi execution failure, verification failure, unpushed local commit, missing worktree) | Nothing — the next tick resumes the same run_id, branch, worktree and PR and starts the next review session, which absorbs the latest base in-session. |
 | Leftover `ai-in-progress` after a kill | The Runner was SIGKILLed mid-task | The next tick's resume scan picks it up (only when no other Runner is alive): same run id, same worktree, same progress comment — no new run. |
 
 The run artifacts (plan, test log, session JSONL) stay in the task

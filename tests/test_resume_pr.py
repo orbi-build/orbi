@@ -962,23 +962,26 @@ def make_resume_failure_fake(monkeypatch, *, progress_comments=None,
     """Shared `run_command` fake of the resume verification failure
     tests (Issue #89).
 
-    Answers exactly the blocked-scene reporting: the progress API
+    Answers exactly the failure-scene reporting: the progress API
     (GET comment list / POST create / PATCH update), the Issue label
-    read (the leftover `ai-fix-needed` check) and the comment-history
-    read (the completed review rounds — no round comments exist yet).
-    Anything else is rejected. `progress_comments` is the GET payload
-    (an existing tracked progress comment makes the blocked scene
-    PATCH it in place; empty makes it POST a new one) and `labels`
-    the label read. Captures the gh api calls and the label edits /
-    failure comments; monkeypatches `edit_issue` / `comment_issue`
+    read (the leftover `ai-fix-needed` check), the comment-history
+    read (the completed review rounds — no round comments exist yet)
+    and the PR failure comment (Issue #50: the failure comment is
+    written to the Issue AND the PR). Anything else is rejected.
+    `progress_comments` is the GET payload (an existing tracked
+    progress comment makes the blocked/fix-needed scene PATCH it in
+    place; empty makes it POST a new one) and `labels` the label
+    read. Captures the gh api calls and the label edits / failure
+    comments; monkeypatches `edit_issue` / `comment_issue`
     accordingly. Returns `(captured, fake_run)` where `captured` is
-    `{"api": [...], "edits": [...], "comments": [...]}`.
+    `{"api": [...], "edits": [...], "comments": [...],
+    "pr_comments": [...]}`.
     """
     if progress_comments is None:
         progress_comments = []
     if labels is None:
         labels = ["ai-pr-opened"]
-    captured = {"api": [], "edits": [], "comments": []}
+    captured = {"api": [], "edits": [], "comments": [], "pr_comments": []}
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
@@ -990,6 +993,10 @@ def make_resume_failure_fake(monkeypatch, *, progress_comments=None,
                 body = command[command.index("--field") + 1]
                 return json.dumps({"id": 78, "body": body[len("body="):],
                                    "url": "https://x/78"})
+            return ""
+        if command[:3] == ["gh", "pr", "comment"]:
+            # Issue #50: the failure comment is written to the PR too.
+            captured["pr_comments"].append(command[command.index("--body") + 1])
             return ""
         if command[-1] == "labels":
             return json.dumps({
@@ -1071,15 +1078,17 @@ def test_resume_failure_fake_answers_blocked_scene_and_rejects_other(
     assert captured["comments"] == []
 
 
-def test_verify_resumed_pr_blocks_issue_when_pr_url_mismatch(
+def test_verify_resumed_pr_pr_url_mismatch_stays_fix_needed(
     monkeypatch, tmp_path, caplog,
 ):
-    """Issue #89 acceptance: the comment URL does not match the open PR
-    of the task branch -> fail fast, the Issue is marked `ai-blocked`
-    ALONE (the opened-PR state label is removed), a run-marked failure
-    comment names the reason, and the error is re-raised so the tick
-    stops — no review Pi is started, the wrong PR is never merged.
-    (The pre-#82 `pr_url_mismatch` resume test, restored.)"""
+    """Issue #89 + #50: the comment URL does not match the open PR of
+    the task branch -> fail fast, but the failure is RECOVERABLE: the
+    Issue is marked `ai-fix-needed` (never `ai-blocked`) with a
+    run-marked failure comment that names the reason, and the error is
+    re-raised so the tick stops — no review Pi is started, the wrong
+    PR is never merged; the next tick resumes the same run, branch,
+    worktree and PR. (The pre-#82 `pr_url_mismatch` resume test,
+    restored.)"""
     existing = {
         "id": 77,
         "body": (
@@ -1115,26 +1124,31 @@ def test_verify_resumed_pr_blocks_issue_when_pr_url_mismatch(
         )
     # No review Pi was started and nothing was merged.
     assert reviews == []
-    # The Issue is marked ai-blocked ALONE (ai-pr-opened removed) ...
+    # The Issue is marked ai-fix-needed (ai-pr-opened removed) — never
+    # ai-blocked (Issue #50: the next tick resumes the same PR) ...
     assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-blocked",
+        ((9,), {"repo": "owner/repo", "add": "ai-fix-needed",
                 "remove": "ai-pr-opened"}),
     ]
     # ... with a run-marked failure comment that names the reason ...
     assert len(captured["comments"]) == 1
     body = captured["comments"][0][1]["body"]
-    assert "Muyan Pilot failed:" in body
+    assert "Muyan Pilot needs a fix:" in body
     assert run_marker_body() in body
     assert "not the recovered original PR" in body
-    # ... and the blocked milestone.
+    # ... written to the Issue AND the PR (Issue #50) ...
+    assert len(captured["pr_comments"]) == 1
+    assert captured["pr_comments"][0] == body
+    # ... and the fix-needed milestone.
     posted = [
         command[command.index("--field") + 1][len("body="):]
         for command in captured["api"]
         if "--method" in command and "POST" in command
     ]
-    assert any("Muyan Pilot: blocked" in body for body in posted)
+    assert any("Muyan Pilot: fix needed" in body for body in posted)
     assert any("not the recovered original PR" in body for body in posted)
-    # The tracked progress comment becomes the blocked scene in place.
+    # The tracked progress comment becomes the fix-needed scene in
+    # place.
     patches = [
         command for command in captured["api"]
         if command[:2] == ["gh", "api"]
@@ -1142,17 +1156,18 @@ def test_verify_resumed_pr_blocks_issue_when_pr_url_mismatch(
         and "PATCH" in command
     ]
     assert patches, "the tracked progress comment was not updated"
-    blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Muyan Pilot blocked" in blocked
-    assert "next step:" in blocked
+    fix_needed = patches[-1][patches[-1].index("--field") + 1][len("body="):]
+    assert "Muyan Pilot fix needed" in fix_needed
+    assert "next step:" in fix_needed
     assert "resume_pr_verification_failed" in caplog.text
 
 
-def test_verify_resumed_pr_blocks_issue_when_pr_repo_mismatch(
+def test_verify_resumed_pr_pr_repo_mismatch_stays_fix_needed(
     monkeypatch, tmp_path, caplog,
 ):
-    """Issue #89 acceptance: the PR head repo is not the configured
-    source repo -> the same terminal fail-fast (the pre-#82
+    """Issue #89 + #50: the PR head repo is not the configured source
+    repo -> the same fail-fast, but RECOVERABLE: `ai-fix-needed` (the
+    next tick resumes the same PR), never `ai-blocked` (the pre-#82
     `pr_repo_mismatch` resume test, restored)."""
     captured, _ = make_resume_failure_fake(monkeypatch)
 
@@ -1172,23 +1187,25 @@ def test_verify_resumed_pr_blocks_issue_when_pr_repo_mismatch(
             make_resume_config(tmp_path), "owner/repo",
         )
     assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-blocked",
+        ((9,), {"repo": "owner/repo", "add": "ai-fix-needed",
                 "remove": "ai-pr-opened"}),
     ]
     body = captured["comments"][0][1]["body"]
-    assert "Muyan Pilot failed:" in body
+    assert "Muyan Pilot needs a fix:" in body
     assert run_marker_body() in body
     assert "fork/repo" in body
+    assert len(captured["pr_comments"]) == 1
     assert "resume_pr_verification_failed" in caplog.text
 
 
-def test_verify_resumed_pr_removes_leftover_fix_needed_label(
+def test_verify_resumed_pr_recoverable_failure_keeps_fix_needed_label(
     monkeypatch, tmp_path,
 ):
-    """A resume that fails while the Issue awaits the next review
-    session (`ai-fix-needed`) leaves that label behind: the terminal
-    state is `ai-blocked` alone (Issue #82 routes both opened-PR
-    states into the same resume)."""
+    """Issue #50: a RECOVERABLE resume failure while the Issue awaits
+    the next review session (`ai-fix-needed`) keeps the `ai-fix-needed`
+    label (the opened-PR state label is removed, the fix-needed label
+    is the one the next tick scans for — Issue #82 routes both
+    opened-PR states into the same resume)."""
     captured, _ = make_resume_failure_fake(
         monkeypatch, labels=["ai-fix-needed"],
     )
@@ -1204,21 +1221,25 @@ def test_verify_resumed_pr_removes_leftover_fix_needed_label(
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
-    # The opened-PR state transition AND the leftover-label removal.
+    # The single transition: ai-pr-opened removed, ai-fix-needed added
+    # (the label the Issue already carries is re-added idempotently —
+    # the next tick's scan needs it).
     assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-blocked",
+        ((9,), {"repo": "owner/repo", "add": "ai-fix-needed",
                 "remove": "ai-pr-opened"}),
-        ((9,), {"repo": "owner/repo", "remove": "ai-fix-needed"}),
     ]
 
 
 def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
     monkeypatch, tmp_path, caplog,
 ):
-    """Issue #91 (pre-verify): the scene freezes the base the PR was
-    opened against; when the configured base differs, the resume fails
-    fast BEFORE any git/gh command (no verify_pr, no fetch) and the
-    Issue is marked ai-blocked with both base values named."""
+    """Issue #91 + #50 (pre-verify): the scene freezes the base the PR
+    was opened against; when the configured base differs, the resume
+    fails fast BEFORE any git/gh command (no verify_pr, no fetch) and
+    the Issue is marked ai-blocked with both base values named — a
+    base-branch change is a human decision (an explicit
+    UnrecoverableDeliveryError), never ai-fix-needed (auto-retrying
+    would keep failing on the same mismatch)."""
     commands: list = []
     captured, fake_run = make_resume_failure_fake(monkeypatch)
 
@@ -1236,17 +1257,21 @@ def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
     caplog.set_level("INFO")
     scene = make_resume_scene()
     scene["base_branch"] = "develop"
-    with pytest.raises(ValueError, match="differs from configured"):
+    with pytest.raises(
+        runner.UnrecoverableDeliveryError, match="differs from configured",
+    ):
         runner.verify_resumed_pr(
             scene, make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
     # No git command ran before the terminal transition (the only gh
     # traffic is the blocked-scene reporting: the progress API, the
-    # label read and the comment-history read of the review rounds).
+    # label read, the comment-history read of the review rounds and
+    # the PR failure comment of Issue #50).
     assert all(command[0] != "git" for command in commands)
     assert all(
         command[:2] == ["gh", "api"]
+        or command[:3] == ["gh", "pr", "comment"]
         or command[-1] in ("comments", "labels")
         for command in commands
     )
@@ -1259,6 +1284,9 @@ def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
     assert run_marker_body() in body
     assert "base_branch=develop" in body
     assert "base_branch=main" in body
+    # Issue #50: the blocked comment states why automatic recovery is
+    # impossible.
+    assert "cannot be recovered automatically" in body
     assert "resume_pr_verification_failed" in caplog.text
     # The fake proves the contract when called directly: verify_pr
     # must never run on a base mismatch.
@@ -1268,14 +1296,16 @@ def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
         fake_verify_pr()
 
 
-def test_verify_resumed_pr_fails_fast_when_worktree_missing(
+def test_verify_resumed_pr_worktree_missing_stays_fix_needed(
     monkeypatch, tmp_path, caplog,
 ):
-    """Issue #90 (pre-verify): the worktree is derived from the
+    """Issue #90 + #50 (pre-verify): the worktree is derived from the
     configured repo_dir, source repo, Issue number and run id (never
-    read from a comment); a missing directory means the scene cannot
-    be resumed: fail fast BEFORE any git/gh command and mark the Issue
-    ai-blocked with the PR and branch preserved."""
+    read from a comment); a missing directory is a RECOVERABLE failure
+    (the branch still exists on the remote and the worktree can be
+    recreated on the next resume): fail fast BEFORE any git/gh command
+    and mark the Issue ai-fix-needed (never ai-blocked) with the PR
+    and branch preserved."""
     commands: list = []
     captured, fake_run = make_resume_failure_fake(monkeypatch)
 
@@ -1298,25 +1328,36 @@ def test_verify_resumed_pr_fails_fast_when_worktree_missing(
             make_resume_config(tmp_path), "owner/repo",
         )
     # No git command ran against the missing worktree (the only gh
-    # traffic is the blocked-scene reporting).
+    # traffic is the fix-needed-scene reporting).
     assert all(command[0] != "git" for command in commands)
     assert all(
         command[:2] == ["gh", "api"]
+        or command[:3] == ["gh", "pr", "comment"]
         or command[-1] in ("comments", "labels")
         for command in commands
     )
     assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-blocked",
+        ((9,), {"repo": "owner/repo", "add": "ai-fix-needed",
                 "remove": "ai-pr-opened"}),
     ]
     body = captured["comments"][0][1]["body"]
-    assert "Muyan Pilot failed:" in body
+    assert "Muyan Pilot needs a fix:" in body
     assert run_marker_body() in body
     assert str(expected_resume_worktree(tmp_path)) in body
     # The PR and branch are preserved in the failure comment (the
-    # pre-#82 resume_delivery fail-fast scene).
+    # pre-#82 resume_delivery fail-fast scene) ... the failure comment
+    # is written to the Issue AND the PR (Issue #50) ...
     assert FAKE_PR_URL in body
     assert FAKE_BRANCH in body
+    assert len(captured["pr_comments"]) == 1
+    # ... and the fix-needed milestone (not the blocked one).
+    posted = [
+        command[command.index("--field") + 1][len("body="):]
+        for command in captured["api"]
+        if "--method" in command and "POST" in command
+    ]
+    assert any("Muyan Pilot: fix needed" in body for body in posted)
+    assert not any("Muyan Pilot: blocked" in body for body in posted)
     assert "resume_pr_verification_failed" in caplog.text
     # The fake proves the contract when called directly: verify_pr
     # must never run on a missing worktree.
@@ -1355,13 +1396,13 @@ def test_verify_resumed_pr_reraises_when_failure_reporting_fails(
     assert "failure reporting failed" in caplog.text
 
 
-def test_verify_resumed_pr_without_bound_run_id_still_blocks(
+def test_verify_resumed_pr_without_bound_run_id_still_fix_needed(
     monkeypatch, tmp_path, caplog,
 ):
-    """A resume verification failure with no bound run id (the caller
-    must bind the scene's run id first; this is the defensive branch)
-    still marks the Issue ai-blocked: the failure comment and the
-    blocked scene simply carry no run marker, and the milestone /
+    """Issue #50: a RECOVERABLE resume verification failure with no
+    bound run id (the caller must bind the scene's run id first; this
+    is the defensive branch) still marks the Issue ai-fix-needed: the
+    failure comment simply carries no run marker, and the milestone /
     progress scene are skipped (no run id to bind them to)."""
     captured, _ = make_resume_failure_fake(monkeypatch)
 
@@ -1379,16 +1420,17 @@ def test_verify_resumed_pr_without_bound_run_id_still_blocks(
             make_resume_config(tmp_path), "owner/repo",
         )
     assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-blocked",
+        ((9,), {"repo": "owner/repo", "add": "ai-fix-needed",
                 "remove": "ai-pr-opened"}),
     ]
     body = captured["comments"][0][1]["body"]
-    assert "Muyan Pilot failed:" in body
-    # No run id: no marker, no milestone, no blocked progress scene —
-    # the only gh traffic is the label read of the leftover-label
-    # check (no progress API at all).
+    assert "Muyan Pilot needs a fix:" in body
+    # No run id: no marker, no milestone, no fix-needed progress scene
+    # — the only gh traffic is the label read of the leftover-label
+    # check and the PR failure comment (no progress API at all).
     assert run_marker_body() not in body
     assert captured["api"] == []
+    assert len(captured["pr_comments"]) == 1
     assert "resume_pr_verification_failed" in caplog.text
 
 

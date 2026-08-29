@@ -207,10 +207,10 @@ gh label list --repo xqliu/muyan-pilot
 |---|---|---|---|
 | `ai-ready` | 明确派发给 Pilot 的新任务（允许 AI 领取） | `muyan-pilot add` 创建时自动添加，或人工 `gh issue edit --add-label ai-ready` | 领取时加 `ai-in-progress`（`ai-ready` 保留）；成功合并后保留（与 `ai-merged` 共存，表示已交付） |
 | `ai-in-progress` | Runner 已领取、正在执行 | 领取 `ai-ready` Issue 时由 Runner 添加 | 开出 PR 时移除（转 `ai-pr-opened`）；失败时移除（转 `ai-blocked`）；Runner 被杀时残留，由下一 tick 的重启恢复扫描接回 |
-| `ai-pr-opened` | PR 已创建，当前等待 review；不会自动再次启动 Fixer | `verify_pr` 验收通过后由 Runner 添加（同时移除 `ai-in-progress`） | clean verdict 合并后移除（转 `ai-merged`）；review finding / base 冲突时移除（转 `ai-fix-needed`）；终态失败时移除（转 `ai-blocked`） |
-| `ai-fix-needed` | 已有 PR 需要在原 branch/worktree/PR 上继续修复；定时 Runner 自动拾取 | 审查会话未能修复的 finding，或 PR 落后最新 base / merge conflict | 下一个审查会话（同一 PR）clean verdict 合并后移除（转 `ai-merged`）；超轮 / 无法修复时移除（转 `ai-blocked`） |
+| `ai-pr-opened` | PR 已创建，当前等待 review；不会自动再次启动 Fixer | `verify_pr` 验收通过后由 Runner 添加（同时移除 `ai-in-progress`） | clean verdict 合并后移除（转 `ai-merged`）；review finding / base 冲突 / **可恢复失败**（Pi 执行失败、验证失败、未推送本地 commit、worktree 缺失等，Issue #50）时移除（转 `ai-fix-needed`）；只有**不可恢复失败**（Issue #50）时移除（转 `ai-blocked`） |
+| `ai-fix-needed` | 已有 PR 需要在原 branch/worktree/PR 上继续修复；定时 Runner 自动拾取 | 审查会话未能修复的 finding，或 PR 落后最新 base / merge conflict，或已有 run/PR 的**可恢复失败**（Issue #50：失败 comment 写入 Issue 和 PR，带 run_id、PR、branch、worktree、session、phase、last activity 和具体错误） | 下一个审查会话（同一 PR，同一 run_id/branch/worktree）clean verdict 合并后移除（转 `ai-merged`）；审查超轮（`MAX_REVIEW_ROUNDS`）时移除（转 `ai-blocked`，超轮是人工决策） |
 | `ai-merged` | 成功终态：Runner 已合并 PR 并确认 merge commit 落在保护分支 | Runner 合并并确认后添加（替代 `ai-pr-opened`） | 终态，不再自动变更；PR body 的 `Fixes #N` 在 merge 时自动关闭 Issue |
-| `ai-blocked` | Runner fail fast，需要人工处理；不会被自动拾取 | 命令失败、现场无法恢复、审查超轮等 fail fast 场景 | 人工修复现场并重新转为 `ai-fix-needed`（同一 PR）或重新领取（新 run）；不自动恢复 |
+| `ai-blocked` | Runner fail fast，需要人工处理；不会被自动拾取 | **只用于 AI 无法安全判断或修复的外部前置条件**（Issue #50）：无可恢复的 opened-PR 现场（缺少/不可信 `Muyan Pilot opened PR` 评论）、base 分支变更、审查超轮、PR 未合并被关闭；进入时 comment 必须写明为什么不能自动恢复。已有 run/PR 的可恢复失败**不**进入此状态（转 `ai-fix-needed`，见上） | 人工修复现场并重新转为 `ai-fix-needed`（同一 PR）或重新领取（新 run）；不自动恢复 |
 | `p0` | 紧急优先级（**不是交付状态**）：只改变领取顺序，不改变 Issue 粒度、交付状态或终态语义 | 人工加 label（生产链路出现高优先级故障时） | 人工移除；Runner 从不增删该 label |
 | `ai-epic` | Epic 协调 Issue（发布清单/多任务聚合，**不是可执行任务、不是交付状态**）：只负责聚合与发布门禁 | 人工加 label（创建 Epic 时） | 人工移除（Epic 完成并关闭时）；Runner 从不增删该 label，也从不领取带它的 Issue |
 
@@ -365,7 +365,7 @@ Runner 每次处理一个 delivery：领取（或恢复）一个 Issue 后，在
 
 本机允许的 Pilot 并发任务数由 `muyan-pilot.toml` 的 `max_concurrency` 配置：必须是正整数，缺失时默认 1（本地 AI/GPU 只能稳定服务一个任务）；非整数、布尔值、0 或负数启动即 fail fast。slot 状态在 `<repo_dir>/.muyan-pilot/slots/slot-N`（N = 1..max_concurrency）：每个 slot 文件是一个普通的锁目标，**文件上的排他 `flock(2)` 锁就是所有权**——内核保证同一时刻至多一个进程持有某个 slot 的锁。持有者 PID 只作为 `status` 展示的观察性元数据写入文件，不是所有权依据；没有 stale PID/超时回收启发式，没有 atexit/信号清理协议。
 
-- 并发额度按完整任务生命周期计算：Runner 在领取 Issue 之前取得 slot，implement → review（会话内修复）→ merge 期间始终占用；PR 打开后任务没有结束，Runner 持有 slot 轮询 PR 状态（15 秒一次，与 Pi 活动轮询同频）：PR `MERGED` 或终态失败（PR 未合并被关闭 → Issue 标记 `ai-blocked`）才释放 slot 退出；期间 Issue 进入 `ai-fix-needed`（review finding 或 base 冲突）时，**下一个 tick 在同一 run、同一 PR 上启动下一个独立审查会话**（会话内吸收最新 base 并修复 finding，见下节），不会冷启动 Fixer，也不会让新 Runner 插队领取新 Issue；
+- 并发额度按完整任务生命周期计算：Runner 在领取 Issue 之前取得 slot，implement → review（会话内修复）→ merge 期间始终占用；PR 打开后任务没有结束，Runner 持有 slot 轮询 PR 状态（15 秒一次，与 Pi 活动轮询同频）：PR `MERGED` 或终态失败（PR 未合并被关闭 → Issue 标记 `ai-blocked`）才释放 slot 退出；期间 Issue 进入 `ai-fix-needed`（review finding、base 冲突，或已有 run/PR 的**可恢复失败**——Pi 执行失败、验证失败、未推送本地 commit、worktree 缺失等，Issue #50）时，**下一个 tick 在同一 run_id、同一 branch、同一 worktree、同一 PR 上启动下一个独立审查会话**（会话内吸收最新 base 并修复 finding，见下节），不会冷启动 Fixer，也不会让新 Runner 插队领取新 Issue；
 - 同一任务内部 implement/review 串行执行，共用同一个 slot，任意时刻最多一个 Pi 子进程；
 - 达到 `max_concurrency` 时，新 Runner 不领取 Issue、不修改标签、不调用 Pi，记录结构化日志 `capacity_full max_concurrency=... slot_dir=...` 后正常退出（退出码 0），等 systemd timer 下次触发；
 - slot 锁由打开的文件描述符持有：进程正常结束、SIGTERM/SIGINT（systemd stop / Ctrl+C）或被 SIGKILL 时，内核自动释放锁——活着的持有者永远不会因为时间或 PID 检查丢失 slot，死掉的持有者永远不会占住 slot，异常退出不会造成永久锁死；slot 文件本身保留（它是锁目标，不是令牌），`status` 按锁的实际状态报告占用；
@@ -507,7 +507,8 @@ PR 创建后任务没有结束：Issue 进入可恢复的 review 状态。`ai-pr
 - 每个 tick 先按顺序扫描 source repos 中两个 opened-PR 状态的 open Issue（Issue #70）：`ai-fix-needed`（finding 或 base 冲突 → 同一 PR 的下一个审查会话）和 `ai-pr-opened`（等待 review → 同一 PR 的独立审查）。`ai-pr-opened` 被扫描是因为开 PR 的那次 delivery 可能已经不在（Runner 被杀，或 Issue #70 背后的进度 PATCH 404 曾把已交付的 Issue 在审查开始前就标成 `ai-blocked`）：没有这个扫描，一个有效的 MERGEABLE PR 会永远没有 owner。`ai-blocked` 的 Issue 被排除（先要人工决策），`ai-merged` 和 `ai-in-progress` 同样被排除；找到时，Runner 只信任由维护者（OWNER/MAINTAINER/MEMBER/COLLABORATOR）发布的最新 `Muyan Pilot opened PR:` 评论（公开评论永远不可信），从中恢复 run 现场（`run_id`、base_branch、base_sha、PR URL），branch 和 worktree 由配置的 repo、Issue 编号和 run_id **推导**（绝不从评论读取，评论无法指定任意本地路径），在**原 worktree、原 branch、同一 PR** 上继续（`ai-fix-needed` 与 `ai-pr-opened` 都直接进入审查等待），而不是领取新 Issue。现场无法恢复（评论缺少完整现场、无可信评论）时 fail fast：Issue 标记 `ai-blocked` 并写明具体原因，本 tick 停止，不做猜测，也不让新任务插队。任何 git/Pi 变更前，Runner 先校验配置的 base 和 open PR（head repo、head branch、base、run marker、精确 URL）。
 - 审查会话（journal 中 `role=review`）在会话内完成修复：修改代码、重跑完整测试与 100% 行/分支覆盖率、commit 并**只 push 原 task branch**，然后对修复后的 head 重新输出 `REVIEW_VERDICT`。PR 头分支前进，**PR number 保持不变**。
 - 审查会话无法修复的 finding（或 PR 落后最新 base / merge conflict）：Issue 标记 `ai-fix-needed`，等待下一个 tick 的下一个审查会话（会话内 `git merge origin/<base>` 吸收最新 base、解决冲突、全量回归后重新输出 verdict）。Runner 自己不自动解决冲突、不 `--abort`、不 force push、不 push 保护分支。
-- 审查/修复循环最多 5 轮（见 `MAX_REVIEW_ROUNDS`）：超轮仍有 Blocker/Major、审查 Pi 失败或无法验证时，Issue 标记 `ai-blocked`（移除 opened-PR 状态），评论写明具体失败和完整现场；PR、branch、worktree 原样保留，不删除、不关闭、不重建。
+- **可恢复失败留在自动修复循环**（Issue #50）：审查 Pi 执行失败、验证失败、未推送本地 commit（#158 场景：本地 commit 保留，下一次审查会话在同一 PR 上继续 push 和验证）、worktree 缺失等已有 run/PR 的失败**不**是终态——Issue 标记 `ai-fix-needed`（移除 opened-PR 状态），失败 comment 同时写入 Issue 和 PR，带 run_id、PR、branch、worktree、session、phase、last activity 和具体错误；下一个 tick 自动拾取并在同一 run、branch、worktree、PR 上继续。PR、branch、worktree 原样保留，不删除、不关闭、不重建，也不重新创建 PR。
+- 审查/修复循环最多 5 轮（见 `MAX_REVIEW_ROUNDS`）：**只有**超轮仍有 Blocker/Major 时 Issue 才标记 `ai-blocked`（移除 opened-PR 状态，超轮是人工决策），评论写明为什么不能自动恢复和完整现场；`ai-blocked` 只用于 AI 无法安全判断或修复的外部前置条件（Issue #50）。
 - Runner/服务重启后，仅凭 Issue 标签、评论 marker、PR head、branch 和 worktree 即可恢复该循环；implement/review/merge 串行占用同一个并发 slot，不会为同一个 run 启动第二个 Pi。
 
 状态语义：
@@ -526,7 +527,7 @@ Pi 不直接 push 保护分支。实现 Agent 只 push feature branch 并创建 
 2. **独立审查（同时是修复者，Issue #82）**：启动一个独立的 Review Agent（code-review R1–R9，不附加 `review-fix-loop`/`tdd-dev` skill），对精确 base/head SHA 审查需求、diff、调用链、测试与运行证据；审查会话与 implementer 一样通过 live activity 管道输出（journal 中 `role=review`）。审查者**可以修改代码**：发现 Blocker/Major 时在同一会话内修复、重跑完整测试与 100% 行/分支覆盖率、commit 并只 push task branch，然后对修复后的 head 重新输出 verdict——没有冷启动 Fixer，也没有第三次 review。审查会话必须以一行机器可读的 `REVIEW_VERDICT {"verdict":"pass|findings","blockers":N,"majors":N,"minors":N,"findings":[...]}` 结尾；`pass` 表示**会话内修复之后**零 Blocker/Major；读不到合法 verdict 一律 fail fast，绝不当作通过。
 3. **重新冻结并合并门禁**：clean verdict 后 Runner 重新冻结 PR（审查者可能已 push 修复，head 前进），重新 fetch 最新 `origin/<base>`，要求 PR head 包含最新 base、PR mergeable、远端 head 仍是被审查的 head；然后 `gh pr merge <n> --match-head-commit <head> --merge`，只有被审查的 head 能落地。
 4. **确认合并并同步部署 checkout**：`gh pr view` 确认 PR `MERGED` 且 `mergeCommit` 已落在 `origin/<base>`；随后把配置 `repo_dir` 的 base checkout `git merge --ff-only origin/<base>` 并验证本地 HEAD == `origin/<base>`，下一个 systemd tick 加载的就是刚合并的新代码。Issue 由 PR body 的 `Fixes #N` 关键词在 merge 时自动 CLOSED（见上方「PR body 契约」）。
-5. **未合并的 head**：审查会话未能修复的 finding（或 PR 落后最新 base / merge conflict）→ Issue 标记 `ai-fix-needed`，下一个 tick 在同一 PR 上启动下一个审查会话（会话内吸收最新 base、解决冲突、全量回归、重新输出 verdict）。审查循环最多 5 轮（见 `MAX_REVIEW_ROUNDS`）；超轮仍有 Blocker/Major、审查 Pi 失败或无法验证时 fail fast 并标记 `ai-blocked`。
+5. **未合并的 head**：审查会话未能修复的 finding（或 PR 落后最新 base / merge conflict）→ Issue 标记 `ai-fix-needed`，下一个 tick 在同一 PR 上启动下一个审查会话（会话内吸收最新 base、解决冲突、全量回归、重新输出 verdict）。已有 run/PR 的**可恢复失败**（审查 Pi 执行失败、验证失败、未推送本地 commit、worktree 缺失等，Issue #50）同样标记 `ai-fix-needed`：失败 comment 写入 Issue 和 PR（带 run_id、PR、branch、worktree、session、phase、last activity 和具体错误），下一个 tick 在同一 run、branch、worktree、PR 上继续，不重新创建 PR、不重复领取。审查循环最多 5 轮（见 `MAX_REVIEW_ROUNDS`）；**只有**超轮仍有 Blocker/Major 时 fail fast 并标记 `ai-blocked`（超轮是人工决策，comment 写明为什么不能自动恢复）。
 
 成功合并后 Issue 标记 `ai-merged`（替代 `ai-pr-opened`），评论写入 PR URL、merge commit、审查轮次和 base/run 信息。下一任务只从新的 `origin/<base>` 创建。不 force push、不直接 push 保护分支、不设业务 timeout；审查 finding 不是 `ai-blocked`，而是在同一 PR 的审查会话内修复（或交给下一个审查会话）。
 
