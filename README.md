@@ -376,6 +376,36 @@ pi_thinking = "medium"
 - 键存在但为空字符串或非字符串时 `load_config` fail fast（`<key> must be a non-empty string`）；Pi 启动失败沿用现有 fail-fast 契约（非零退出/超时 → `run_failed` + 异常）；
 - 不按任务类型、label 或角色自动选择模型，不做动态路由、benchmark、成本路由或 fallback，不支持一个 run 中途切换模型；token/密钥不进入配置、日志、Issue 或 PR。
 
+## 可配置 Pi provider（pi_providers，Issue #157）
+
+`pi_provider`/`pi_model` 只能选择 Pi 已认识的 provider。要接入任意 OpenAI-compatible 端点（如 Groq），在 `muyan-pilot.toml` 中可选声明一个 provider 文件（路径，JSON，与 Pi 的 `~/.pi/agent/models.json` 同构）：
+
+```toml
+pi_providers = ".muyan-pilot/pi-providers.json"
+pi_provider = "groq"
+pi_model = "qwen/qwen3.8-27b"
+```
+
+```json
+{
+  "providers": {
+    "groq": {
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "api": "openai-completions",
+      "apiKey": "$GROQ_API_KEY",
+      "models": [{ "id": "qwen/qwen3.8-27b" }]
+    }
+  }
+}
+```
+
+- `baseUrl`（provider 端点）只允许出现在这个 provider 文件里；`muyan-pilot.toml` 只选择运行时 provider/model/thinking，不携带端点；
+- `apiKey` 是环境变量引用（`$VAR` 或 `${VAR}`，Pi 的 value 语法），绝不写密钥值；密钥只存在于进程环境（如 systemd `Environment=`）；
+- Runner 在启动 Pi 前把文件物化到任务 worktree 的 `.muyan-pilot/pi-agent/`（gitignored，每 run 一份）：`models.json` = 用户 `~/.pi/agent/models.json` 的 providers 与文件的 providers 合并（同 id 时文件优先，用户已有 provider 继续可用），`settings.json`/`auth.json` 以符号链接指向用户目录（其余行为不变），并通过 `PI_CODING_AGENT_DIR` 指向该目录（已对真实 Pi 0.84.3 验证）——implement 与 review 的 Pi 走同一条路径、同一份 provider 配置；
+- `load_config` fail fast：文件不存在/不是合法 JSON/没有 `providers` 对象；带 `models` 的 provider 缺 `baseUrl` 或 `api`（provider 级或每个 model 级）；`pi_provider` 未在文件中定义；`pi_model` 不在该 provider 的 models 里（Pi 对未知 model id 只告警仍发请求，不存在 fail fast，所以由 Runner 在启动前校验）；选中 provider 的 `apiKey` 引用的环境变量缺失或为空（只报告变量名，不报告值）；
+- 未配置 `pi_providers` 时行为与 #157 之前完全一致（不物化目录、不设置 `PI_CODING_AGENT_DIR`、Pi 命令与环境不变）；
+- 日志/Issue/PR 只出现 provider、model、thinking 等非敏感标识；`baseUrl` 与 API key 不进入 journal（redacted `command=` 行只含 `--provider/--model/--thinking`）、不进入 Issue/PR 评论。
+
 ## 全链路 run_id（correlation ID）
 
 每个任务 attempt 只生成一次 `run_id`（8 位 hex，例如 `e07383c2`），语义等同 trace ID：implement、review、merge 全部复用同一个值；同一个 Issue retry 时生成新的 run_id，Issue number 是多个 run 的共同父标识。不创建 `trace_id`/`log_id`/另一套 UUID，不引入 tracing backend。
