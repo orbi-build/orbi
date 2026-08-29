@@ -43,6 +43,16 @@ max_concurrency = 1
 # pi_provider = "openai"
 # pi_model = "gpt-5.6-sol"
 # pi_thinking = "medium"
+# Optional provider file (Issue #157): path to a JSON file in Pi's
+# models.json shape (providers with baseUrl / api / apiKey / models).
+# The file is the ONLY place a provider endpoint (baseUrl) may be
+# configured; the TOML only selects the runtime provider/model above.
+# `apiKey` is an env-var reference like "$GROQ_API_KEY" — never a key
+# value. The Runner validates the file at startup (fail fast on a
+# missing baseUrl, a selected provider/model that does not exist, or a
+# missing env var for the selected provider's key) and passes the
+# catalog to Pi through a per-run agent dir (PI_CODING_AGENT_DIR).
+# pi_providers = ".muyan-pilot/pi-providers.json"
 
 # Optional Pi skills. Paths may be absolute, use ~, or be relative to this file.
 skills = []

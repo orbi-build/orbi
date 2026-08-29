@@ -239,6 +239,20 @@ def load_config(path: Path) -> dict:
     pi_provider = _optional_pi_string(data, "pi_provider")
     pi_model = _optional_pi_string(data, "pi_model")
     pi_thinking = _optional_pi_string(data, "pi_thinking")
+    # Optional Pi provider file (Issue #157): the provider metadata
+    # (baseUrl / api / apiKey / models) lives in a separate JSON file in
+    # Pi's own `models.json` shape; `muyan-pilot.toml` only selects the
+    # provider/model/thinking used at runtime. Absent key -> None (Pi
+    # keeps using its own agent dir, the exact pre-#157 behavior).
+    pi_providers = _optional_pi_string(data, "pi_providers")
+    pi_providers_path = (
+        _config_path(pi_providers, base) if pi_providers is not None
+        else None
+    )
+    pi_providers_data = (
+        _load_pi_providers(pi_providers_path, pi_provider, pi_model)
+        if pi_providers_path is not None else None
+    )
     repo_dir = _config_path(data.get("repo_dir", "."), base)
     return {
         "source_repos": source_repos,
@@ -259,6 +273,8 @@ def load_config(path: Path) -> dict:
         "pi_provider": pi_provider,
         "pi_model": pi_model,
         "pi_thinking": pi_thinking,
+        "pi_providers": pi_providers_path,
+        "pi_providers_data": pi_providers_data,
         # Multi-repo registry (Issue #134): the explicit per-repo entries
         # (name, path, github, base_branch). Absent section -> [] so the
         # single-repo config keeps its exact shape and flow.
@@ -279,6 +295,180 @@ def _optional_pi_string(data: dict, key: str) -> str | None:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{key} must be a non-empty string")
     return value
+
+
+def _load_pi_providers(path: Path, pi_provider: str | None,
+                       pi_model: str | None) -> dict:
+    """Load and validate the Pi provider file (Issue #157).
+
+    The file uses Pi's own `models.json` shape (`{"providers": {id:
+    {baseUrl, api, apiKey, models: [...]}}}`) — verified against the
+    installed Pi 0.84.3 docs (`docs/models.md`). Fail fast with a
+    specific message: file missing, invalid JSON, missing `providers`
+    object, a provider entry with `models` but no `baseUrl` or no
+    `api` (provider- or model-level — Pi's own schema requirement),
+    the selected provider/model not defined in the file, or an
+    `apiKey` env-var reference (`$VAR` / `${VAR}`) whose variable is
+    missing or empty. The key value itself is never logged; only the
+    variable name is named in the error.
+    """
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"pi_providers file {path} is not valid JSON: {exc}"
+        ) from None
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"pi_providers file {path} must have a 'providers' object"
+        )
+    providers = data.get("providers")
+    if not isinstance(providers, dict) or not providers:
+        raise ValueError(
+            f"pi_providers file {path} must have a 'providers' object"
+        )
+    for provider_id, entry in providers.items():
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"pi_providers file {path}: provider {provider_id!r} "
+                "must be an object"
+            )
+        models = entry.get("models")
+        if models is not None:
+            if not isinstance(models, list) or not models:
+                raise ValueError(
+                    f"pi_providers file {path}: provider {provider_id!r} "
+                    "models must be a non-empty list"
+                )
+            if not isinstance(entry.get("baseUrl"), str) or not entry["baseUrl"]:
+                raise ValueError(
+                    f"pi_providers file {path}: provider {provider_id!r} "
+                    "is missing baseUrl"
+                )
+            if not isinstance(entry.get("api"), str) or not entry["api"]:
+                if not all(
+                    isinstance(model, dict)
+                    and isinstance(model.get("api"), str)
+                    and model["api"]
+                    for model in models
+                ):
+                    raise ValueError(
+                        f"pi_providers file {path}: provider "
+                        f"{provider_id!r} is missing api"
+                    )
+            for model in models:
+                if not isinstance(model, dict) or not model.get("id"):
+                    raise ValueError(
+                        f"pi_providers file {path}: provider "
+                        f"{provider_id!r} has a model without an id"
+                    )
+    if pi_provider is not None:
+        if pi_provider not in providers:
+            raise ValueError(
+                f"pi_provider {pi_provider!r} is not defined in "
+                f"pi_providers file {path}"
+            )
+        entry = providers[pi_provider]
+        # Only the SELECTED provider's key must resolve: an unselected
+        # provider with a missing key just stays unavailable in Pi
+        # (verified against real Pi 0.84.3), it never breaks the run.
+        _check_pi_provider_api_key(path, pi_provider, entry)
+        if pi_model is not None:
+            model_ids = [
+                model["id"] for model in entry.get("models", [])
+            ] if isinstance(entry.get("models"), list) else []
+            if pi_model not in model_ids:
+                raise ValueError(
+                    f"pi_model {pi_model!r} is not defined for provider "
+                    f"{pi_provider!r} in pi_providers file {path}"
+                )
+    return data
+
+
+def _check_pi_provider_api_key(path: Path, provider_id: str,
+                               entry: dict) -> None:
+    """Fail fast when an `apiKey` env-var reference is unresolved.
+
+    Pi's value-resolution syntax (`docs/models.md`): `$VAR` or
+    `${VAR}` interpolates the named environment variable; a missing
+    variable leaves the value unresolved and Pi would only fail at
+    request time. The Runner fails at config load instead (before any
+    slot or claim). Only the variable NAME is reported — never a key
+    value.
+    """
+    api_key = entry.get("apiKey")
+    if not isinstance(api_key, str) or not api_key:
+        return
+    for match in re.finditer(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)", api_key):
+        name = match.group(1) or match.group(2)
+        value = os.environ.get(name)
+        if not value:
+            raise ValueError(
+                f"API key for provider {provider_id!r} references "
+                f"missing environment variable {name} "
+                f"(pi_providers file {path})"
+            )
+
+
+def prepare_pi_agent_dir(worktree: Path, config: dict) -> Path | None:
+    """Materialize the per-run Pi agent dir (Issue #157).
+
+    Returns None when no provider file is configured — the Pi command
+    and environment keep their exact pre-#157 shape (Pi uses its own
+    agent dir). Otherwise creates `<worktree>/.muyan-pilot/pi-agent/`
+    (gitignored, per-run) and returns it:
+
+    - `models.json`: the user agent dir's providers merged with the
+      configured file's providers (the file wins on id collision) —
+      the user's existing providers keep working, the file adds or
+      overrides; the merged catalog is what Pi loads via
+      `PI_CODING_AGENT_DIR` (verified against real Pi 0.84.3);
+    - `settings.json` / `auth.json`: SYMLINKS to the user agent dir's
+      files when they exist, so Pi's other behavior (settings, stored
+      auth) is unchanged apart from the provider catalog.
+
+    The dir holds no secrets: the API key stays an env-var reference in
+    the file and never a materialized value.
+    """
+    providers_data = config.get("pi_providers_data")
+    if providers_data is None:
+        return None
+    agent_dir = worktree / ".muyan-pilot" / "pi-agent"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    user_agent = Path(os.path.expanduser("~")) / ".pi" / "agent"
+    merged_providers: dict = {}
+    user_models = user_agent / "models.json"
+    if user_models.is_file():
+        try:
+            user_data = json.loads(user_models.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"user agent dir models.json {user_models} is not valid "
+                f"JSON: {exc}"
+            ) from None
+        user_providers = user_data.get("providers") if isinstance(
+            user_data, dict
+        ) else None
+        if not isinstance(user_providers, dict):
+            user_providers = {}
+        merged_providers.update(user_providers)
+    merged_providers.update(providers_data["providers"])
+    (agent_dir / "models.json").write_text(
+        json.dumps({"providers": merged_providers}, indent=2),
+        encoding="utf-8",
+    )
+    # Idempotent for a resumed run in the same worktree: a stale
+    # symlink from an earlier attempt is replaced, never kept.
+    for name in ("settings.json", "auth.json"):
+        source = user_agent / name
+        link = agent_dir / name
+        if link.is_symlink():
+            link.unlink()
+        if source.is_file():
+            link.symlink_to(source)
+    return agent_dir
 
 
 def _pi_model_args(config: dict) -> list[str]:
@@ -1117,6 +1307,7 @@ def stream_pi(
     role: str = ROLE_IMPLEMENT,
     log_command: list[str] | None = None,
     progress: Callable[[dict], None] | None = None,
+    pi_env: dict[str, str] | None = None,
 ) -> str:
     """Run Pi and stream concise live activity into the journal (Issue #40).
 
@@ -1186,8 +1377,13 @@ def stream_pi(
     # are only emitted when the visible fields actually change.
     initial = watcher.poll()
     last_visible = (initial["phase"], initial["action"], initial["result"])
+    # Issue #157: `pi_env` carries the per-run Pi agent dir
+    # (`PI_CODING_AGENT_DIR`, verified against real Pi 0.84.3) so the
+    # configured provider file is visible to Pi. Absent -> the process
+    # inherits the Runner's environment unchanged (pre-#157 shape).
     process = subprocess.Popen(
         command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=None if pi_env is None else {**os.environ, **pi_env},
     )
     LOGGER.info(
         "run_start %s",
@@ -1537,6 +1733,15 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         "--print", "--session-dir",
         str(worktree / ".pi-session"), "--system-prompt", system_prompt, context,
     ]
+    # Issue #157: the provider file (baseUrl / api / apiKey / models)
+    # reaches Pi through the materialized per-run agent dir, never
+    # through the command line or the log (the redacted command keeps
+    # only the #119 provider/model/thinking identifiers). Unconfigured
+    # -> the stream_pi call keeps its exact pre-#157 shape.
+    agent_dir = prepare_pi_agent_dir(worktree, config)
+    extra = {}
+    if agent_dir is not None:
+        extra["pi_env"] = {"PI_CODING_AGENT_DIR": str(agent_dir)}
     return stream_pi(
         command,
         cwd=worktree,
@@ -1551,6 +1756,7 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         source_repo=source_repo,
         branch=branch,
         progress=progress,
+        **extra,
     )
 
 
@@ -1965,6 +2171,12 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
         str(worktree / ".pi-session"), "--system-prompt", system_prompt,
         context,
     ]
+    # Issue #157: the review session uses the SAME provider config as
+    # the implementer (one materialized dir per worktree, re-used).
+    agent_dir = prepare_pi_agent_dir(worktree, config)
+    extra = {}
+    if agent_dir is not None:
+        extra["pi_env"] = {"PI_CODING_AGENT_DIR": str(agent_dir)}
     return stream_pi(
         command,
         cwd=worktree,
@@ -1980,6 +2192,7 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
         branch=branch,
         role=ROLE_REVIEW,
         progress=progress,
+        **extra,
     )
 
 

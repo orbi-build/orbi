@@ -7121,3 +7121,659 @@ def test_run_review_omits_model_args_when_not_configured(monkeypatch, tmp_path):
         "pi", "--print", "--session-dir", str(tmp_path / ".pi-session"),
         "--system-prompt", "<redacted>", "<review-context-redacted>",
     ]
+
+
+# --- configurable Pi provider file (Issue #157) ----------------------------
+
+
+GROQ_PROVIDERS = {
+    "providers": {
+        "groq": {
+            "baseUrl": "https://api.groq.com/openai/v1",
+            "api": "openai-completions",
+            "apiKey": "$GROQ_API_KEY",
+            "models": [
+                {
+                    "id": "qwen/qwen3.8-27b",
+                    "contextWindow": 131072,
+                    "maxTokens": 16384,
+                }
+            ],
+        }
+    }
+}
+
+
+def _providers_config(tmp_path, providers, **toml_keys):
+    """Write a provider file + TOML, return the config path."""
+    providers_path = tmp_path / "pi-providers.json"
+    providers_path.write_text(
+        json.dumps(providers), encoding="utf-8",
+    )
+    keys = {"pi_providers": '"pi-providers.json"'}
+    keys.update(toml_keys)
+    toml = 'source_repos = ["owner/repo"]\n' + "\n".join(
+        f"{key} = {value}" for key, value in keys.items()
+    ) + "\n"
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(toml, encoding="utf-8")
+    return config_path
+
+
+def test_load_config_pi_providers_absent_defaults_to_none(tmp_path):
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    config = runner.load_config(config_path)
+    assert config["pi_providers"] is None
+    assert config["pi_providers_data"] is None
+
+
+@pytest.mark.parametrize("value", ['""', "123", "true"])
+def test_load_config_pi_providers_rejects_non_string(tmp_path, value):
+    config_path = _providers_config(tmp_path, GROQ_PROVIDERS)
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\n'
+        f'pi_providers = {value}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="pi_providers must be a non-empty string"):
+        runner.load_config(config_path)
+
+
+def test_load_config_pi_providers_file_missing(tmp_path):
+    config_path = _providers_config(tmp_path, GROQ_PROVIDERS)
+    (tmp_path / "pi-providers.json").unlink()
+    with pytest.raises(FileNotFoundError):
+        runner.load_config(config_path)
+
+
+def test_load_config_pi_providers_invalid_json(tmp_path):
+    config_path = _providers_config(tmp_path, GROQ_PROVIDERS)
+    (tmp_path / "pi-providers.json").write_text("{nope", encoding="utf-8")
+    with pytest.raises(ValueError, match="not valid JSON"):
+        runner.load_config(config_path)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"nope": {}},
+        {"providers": []},
+        {"providers": "x"},
+    ],
+)
+def test_load_config_pi_providers_rejects_missing_providers_object(
+    tmp_path, data,
+):
+    config_path = _providers_config(tmp_path, data)
+    with pytest.raises(
+        ValueError, match="must have a 'providers' object",
+    ):
+        runner.load_config(config_path)
+
+
+def test_load_config_pi_providers_rejects_non_object_entry(tmp_path):
+    config_path = _providers_config(
+        tmp_path, {"providers": {"groq": "nope"}},
+    )
+    with pytest.raises(
+        ValueError, match="provider 'groq' must be an object",
+    ):
+        runner.load_config(config_path)
+
+
+def test_load_config_pi_providers_rejects_missing_base_url(tmp_path):
+    providers = {"providers": {"groq": {
+        "api": "openai-completions",
+        "apiKey": "local",
+        "models": [{"id": "m1"}],
+    }}}
+    config_path = _providers_config(tmp_path, providers)
+    with pytest.raises(
+        ValueError, match="provider 'groq' is missing baseUrl",
+    ):
+        runner.load_config(config_path)
+
+
+def test_load_config_pi_providers_rejects_missing_api(tmp_path):
+    providers = {"providers": {"groq": {
+        "baseUrl": "https://api.groq.com/openai/v1",
+        "apiKey": "local",
+        "models": [{"id": "m1"}],
+    }}}
+    config_path = _providers_config(tmp_path, providers)
+    with pytest.raises(
+        ValueError, match="provider 'groq' is missing api",
+    ):
+        runner.load_config(config_path)
+
+
+def test_load_config_pi_providers_accepts_model_level_api(tmp_path):
+    providers = {"providers": {"groq": {
+        "baseUrl": "https://api.groq.com/openai/v1",
+        "apiKey": "local",
+        "models": [
+            {"id": "m1", "api": "openai-completions"},
+        ],
+    }}}
+    config_path = _providers_config(tmp_path, providers)
+    config = runner.load_config(config_path)
+    assert config["pi_providers_data"] == providers
+
+
+def test_load_config_pi_providers_rejects_unknown_provider(tmp_path, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    config_path = _providers_config(
+        tmp_path, GROQ_PROVIDERS, pi_provider='"other"',
+    )
+    with pytest.raises(
+        ValueError, match="pi_provider 'other' is not defined",
+    ):
+        runner.load_config(config_path)
+
+
+def test_load_config_pi_providers_rejects_unknown_model(tmp_path, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    config_path = _providers_config(
+        tmp_path, GROQ_PROVIDERS,
+        pi_provider='"groq"', pi_model='"missing/model"',
+    )
+    with pytest.raises(
+        ValueError,
+        match="pi_model 'missing/model' is not defined for provider 'groq'",
+    ):
+        runner.load_config(config_path)
+
+
+def test_load_config_pi_providers_rejects_missing_api_key_env(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    config_path = _providers_config(
+        tmp_path, GROQ_PROVIDERS,
+        pi_provider='"groq"', pi_model='"qwen/qwen3.8-27b"',
+    )
+    with pytest.raises(
+        ValueError,
+        match="API key for provider 'groq' references missing "
+              "environment variable GROQ_API_KEY",
+    ):
+        runner.load_config(config_path)
+
+
+def test_load_config_pi_providers_rejects_empty_api_key_env(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setenv("GROQ_API_KEY", "")
+    config_path = _providers_config(
+        tmp_path, GROQ_PROVIDERS,
+        pi_provider='"groq"', pi_model='"qwen/qwen3.8-27b"',
+    )
+    with pytest.raises(
+        ValueError,
+        match="API key for provider 'groq' references missing "
+              "environment variable GROQ_API_KEY",
+    ):
+        runner.load_config(config_path)
+
+
+def test_load_config_pi_providers_accepts_groq_example(tmp_path, monkeypatch):
+    """The Issue's Groq example parses verbatim with the key present."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    config_path = _providers_config(
+        tmp_path, GROQ_PROVIDERS,
+        pi_provider='"groq"', pi_model='"qwen/qwen3.8-27b"',
+        pi_thinking='"medium"',
+    )
+    config = runner.load_config(config_path)
+    assert config["pi_provider"] == "groq"
+    assert config["pi_model"] == "qwen/qwen3.8-27b"
+    assert config["pi_providers_data"] == GROQ_PROVIDERS
+    assert config["pi_providers"].name == "pi-providers.json"
+
+
+def test_load_config_pi_providers_unselected_provider_missing_key_ok(
+    tmp_path, monkeypatch,
+):
+    """Only the selected provider's key must resolve: an unselected
+    provider with a missing key stays unavailable in Pi, it never
+    breaks the start."""
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    providers = {
+        "providers": {
+            "groq": GROQ_PROVIDERS["providers"]["groq"],
+            "local": {
+                "baseUrl": "http://127.0.0.1:18082/v1",
+                "api": "openai-completions",
+                "apiKey": "local",
+                "models": [{"id": "Qwen3.8-27B"}],
+            },
+        }
+    }
+    config_path = _providers_config(
+        tmp_path, providers,
+        pi_provider='"local"', pi_model='"Qwen3.8-27B"',
+    )
+    config = runner.load_config(config_path)
+    assert config["pi_providers_data"] == providers
+
+
+# --- provider dir materialization + Pi env (Issue #157) --------------------
+
+
+def _user_agent_dir(home: Path, models=None, settings=True, auth=True) -> Path:
+    """Create a fake ~/.pi/agent under `home`."""
+    agent = home / ".pi" / "agent"
+    agent.mkdir(parents=True, exist_ok=True)
+    if models is not None:
+        (agent / "models.json").write_text(
+            json.dumps(models), encoding="utf-8",
+        )
+    if settings:
+        (agent / "settings.json").write_text("{}", encoding="utf-8")
+    if auth:
+        (agent / "auth.json").write_text("{}", encoding="utf-8")
+    return agent
+
+
+def test_prepare_pi_agent_dir_none_when_not_configured(tmp_path):
+    config = _model_config(tmp_path)
+    assert config.get("pi_providers_data") is None
+    assert runner.prepare_pi_agent_dir(tmp_path, config) is None
+    assert not (tmp_path / ".muyan-pilot" / "pi-agent").exists()
+
+
+def test_prepare_pi_agent_dir_materializes_merged_models_json(
+    tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    user_agent = _user_agent_dir(
+        home,
+        models={"providers": {"userprov": {
+            "baseUrl": "http://user:1/v1",
+            "api": "openai-completions",
+            "apiKey": "u",
+            "models": [{"id": "um"}],
+        }}},
+        auth=False,
+    )
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    assert agent_dir == tmp_path / ".muyan-pilot" / "pi-agent"
+    merged = json.loads(
+        (agent_dir / "models.json").read_text(encoding="utf-8"),
+    )
+    # The user's providers stay available; the repo file adds its own.
+    assert set(merged["providers"]) == {"userprov", "groq"}
+    assert merged["providers"]["groq"]["baseUrl"] == (
+        "https://api.groq.com/openai/v1"
+    )
+    # settings.json is a symlink to the user's file (behavior unchanged);
+    # auth.json is absent in the user dir, so no symlink.
+    settings_link = agent_dir / "settings.json"
+    assert settings_link.is_symlink()
+    assert settings_link.resolve() == user_agent / "settings.json"
+    assert not (agent_dir / "auth.json").exists()
+
+
+def test_prepare_pi_agent_dir_repo_providers_win_on_collision(
+    tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    _user_agent_dir(
+        home,
+        models={"providers": {"groq": {
+            "baseUrl": "http://stale:1/v1",
+            "api": "openai-completions",
+            "apiKey": "u",
+            "models": [{"id": "old"}],
+        }}},
+    )
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    merged = json.loads(
+        (agent_dir / "models.json").read_text(encoding="utf-8"),
+    )
+    # The repo file is the source of truth for the providers it names.
+    assert merged["providers"]["groq"]["baseUrl"] == (
+        "https://api.groq.com/openai/v1"
+    )
+    assert [m["id"] for m in merged["providers"]["groq"]["models"]] == (
+        ["qwen/qwen3.8-27b"]
+    )
+
+
+def test_prepare_pi_agent_dir_symlinks_auth_and_settings(
+    tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    user_agent = _user_agent_dir(home)
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    for name in ("settings.json", "auth.json"):
+        link = agent_dir / name
+        assert link.is_symlink()
+        assert link.resolve() == user_agent / name
+
+
+def test_prepare_pi_agent_dir_user_dir_missing(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    merged = json.loads(
+        (agent_dir / "models.json").read_text(encoding="utf-8"),
+    )
+    assert set(merged["providers"]) == {"groq"}
+    assert not (agent_dir / "settings.json").exists()
+    assert not (agent_dir / "auth.json").exists()
+
+
+def test_prepare_pi_agent_dir_user_models_json_invalid_fails_fast(
+    tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    user_agent = _user_agent_dir(home, models=None)
+    (user_agent / "models.json").write_text("{nope", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
+    with pytest.raises(ValueError, match="not valid JSON"):
+        runner.prepare_pi_agent_dir(tmp_path, config)
+
+
+def test_stream_pi_sets_pi_env_on_the_process(tmp_path):
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir()
+    script = (
+        "import os, sys\n"
+        "sys.stdout.write(os.environ.get('PI_CODING_AGENT_DIR', ''))\n"
+    )
+    result = runner.stream_pi(
+        [sys.executable, "-c", script],
+        cwd=tmp_path, poll_interval=0.1,
+        run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+        branch="b", pi_env={"PI_CODING_AGENT_DIR": "/agent-dir"},
+    )
+    assert result == "/agent-dir"
+
+
+def test_stream_pi_without_pi_env_keeps_inherited_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("MUYAN_TEST_ENV_MARKER", "inherited")
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir()
+    script = (
+        "import os, sys\n"
+        "sys.stdout.write(os.environ.get('MUYAN_TEST_ENV_MARKER', ''))\n"
+    )
+    result = runner.stream_pi(
+        [sys.executable, "-c", script],
+        cwd=tmp_path, poll_interval=0.1,
+        run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+        branch="b",
+    )
+    assert result == "inherited"
+
+
+def test_run_pi_materializes_provider_dir_and_env(monkeypatch, tmp_path):
+    """The implementer session gets the materialized dir via env."""
+    (tmp_path / "prompt.md").write_text("SYSTEM", encoding="utf-8")
+    home = tmp_path / "home"
+    _user_agent_dir(home, auth=False, settings=False)
+    monkeypatch.setenv("HOME", str(home))
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(kwargs) or "done",
+    )
+    config = _model_config(
+        tmp_path, pi_provider="groq", pi_model="qwen/qwen3.8-27b",
+        pi_providers_data=GROQ_PROVIDERS,
+    )
+    runner.run_pi(
+        {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
+        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+    )
+    kwargs = calls[0]
+    agent_dir = tmp_path / ".muyan-pilot" / "pi-agent"
+    assert kwargs["pi_env"] == {"PI_CODING_AGENT_DIR": str(agent_dir)}
+    assert (agent_dir / "models.json").is_file()
+    # The redacted command is unchanged: no baseUrl, no apiKey, no dir.
+    assert "https://api.groq.com/openai/v1" not in " ".join(
+        kwargs["log_command"]
+    )
+    assert "PI_CODING_AGENT_DIR" not in " ".join(kwargs["log_command"])
+
+
+def test_run_pi_without_providers_keeps_pre_157_env(monkeypatch, tmp_path):
+    """No provider file: no materialization, no pi_env (pre-#157)."""
+    (tmp_path / "prompt.md").write_text("SYSTEM", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(kwargs) or "done",
+    )
+    config = _model_config(tmp_path)
+    runner.run_pi(
+        {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
+        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+    )
+    kwargs = calls[0]
+    assert "pi_env" not in kwargs
+    assert not (tmp_path / ".muyan-pilot" / "pi-agent").exists()
+
+
+def test_run_review_materializes_provider_dir_and_env(monkeypatch, tmp_path):
+    """The review session uses the SAME provider config (Issue #157)."""
+    (tmp_path / "prompt_review.md").write_text("REVIEW", encoding="utf-8")
+    home = tmp_path / "home"
+    _user_agent_dir(home, auth=False, settings=False)
+    monkeypatch.setenv("HOME", str(home))
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(kwargs) or "ok",
+    )
+    config = _model_config(
+        tmp_path, pi_provider="groq", pi_model="qwen/qwen3.8-27b",
+        pi_providers_data=GROQ_PROVIDERS,
+    )
+    runner.run_review(
+        tmp_path,
+        {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"},
+        config, "owner/repo", 4, "branch", 1,
+    )
+    kwargs = calls[0]
+    agent_dir = tmp_path / ".muyan-pilot" / "pi-agent"
+    assert kwargs["pi_env"] == {"PI_CODING_AGENT_DIR": str(agent_dir)}
+    merged = json.loads(
+        (agent_dir / "models.json").read_text(encoding="utf-8"),
+    )
+    assert merged["providers"]["groq"]["baseUrl"] == (
+        "https://api.groq.com/openai/v1"
+    )
+
+
+def test_load_config_pi_providers_rejects_top_level_list(tmp_path):
+    config_path = _providers_config(tmp_path, GROQ_PROVIDERS)
+    (tmp_path / "pi-providers.json").write_text("[1, 2]", encoding="utf-8")
+    with pytest.raises(
+        ValueError, match="must have a 'providers' object",
+    ):
+        runner.load_config(config_path)
+
+
+def test_load_config_pi_providers_accepts_entry_without_models(tmp_path):
+    """An override-only entry (no models, e.g. routing a built-in
+    provider through a proxy) is valid — Pi's own schema allows it."""
+    providers = {"providers": {"anthropic": {
+        "baseUrl": "https://proxy.example.com/v1",
+    }}}
+    config_path = _providers_config(tmp_path, providers)
+    config = runner.load_config(config_path)
+    assert config["pi_providers_data"] == providers
+
+
+def test_load_config_pi_providers_rejects_empty_models_list(tmp_path):
+    providers = {"providers": {"groq": {
+        "baseUrl": "https://api.groq.com/openai/v1",
+        "api": "openai-completions",
+        "models": [],
+    }}}
+    config_path = _providers_config(tmp_path, providers)
+    with pytest.raises(
+        ValueError, match="models must be a non-empty list",
+    ):
+        runner.load_config(config_path)
+
+
+def test_load_config_pi_providers_rejects_model_without_id(tmp_path):
+    providers = {"providers": {"groq": {
+        "baseUrl": "https://api.groq.com/openai/v1",
+        "api": "openai-completions",
+        "models": [{"contextWindow": 131072}],
+    }}}
+    config_path = _providers_config(tmp_path, providers)
+    with pytest.raises(
+        ValueError, match="has a model without an id",
+    ):
+        runner.load_config(config_path)
+
+
+def test_load_config_pi_providers_provider_without_model_ok(
+    tmp_path, monkeypatch,
+):
+    """pi_provider set, pi_model unset: the model check is skipped
+    (Pi resolves its own default model for the provider)."""
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    config_path = _providers_config(
+        tmp_path, GROQ_PROVIDERS, pi_provider='"groq"',
+    )
+    config = runner.load_config(config_path)
+    assert config["pi_model"] is None
+
+
+def test_load_config_pi_providers_provider_without_api_key_ok(
+    tmp_path, monkeypatch,
+):
+    """A selected provider without apiKey (auth via auth.json /
+    --api-key) is valid — nothing to resolve."""
+    providers = {"providers": {"local": {
+        "baseUrl": "http://127.0.0.1:18082/v1",
+        "api": "openai-completions",
+        "models": [{"id": "Qwen3.8-27B"}],
+    }}}
+    config_path = _providers_config(
+        tmp_path, providers, pi_provider='"local"',
+        pi_model='"Qwen3.8-27B"',
+    )
+    config = runner.load_config(config_path)
+    assert config["pi_providers_data"] == providers
+
+
+def test_load_config_pi_providers_braced_env_reference(tmp_path, monkeypatch):
+    """`${VAR}` is the braced env-var form of Pi's value syntax."""
+    providers = {"providers": {"groq": {
+        "baseUrl": "https://api.groq.com/openai/v1",
+        "api": "openai-completions",
+        "apiKey": "${GROQ_API_KEY}",
+        "models": [{"id": "qwen/qwen3.8-27b"}],
+    }}}
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    config_path = _providers_config(
+        tmp_path, providers, pi_provider='"groq"',
+        pi_model='"qwen/qwen3.8-27b"',
+    )
+    with pytest.raises(
+        ValueError, match="missing environment variable GROQ_API_KEY",
+    ):
+        runner.load_config(config_path)
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    config = runner.load_config(config_path)
+    assert config["pi_providers_data"] == providers
+
+
+def test_prepare_pi_agent_dir_user_models_json_without_providers_key(
+    tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    user_agent = _user_agent_dir(home, models=None)
+    (user_agent / "models.json").write_text(
+        '{"nope": 1}', encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    merged = json.loads(
+        (agent_dir / "models.json").read_text(encoding="utf-8"),
+    )
+    assert set(merged["providers"]) == {"groq"}
+
+
+# --- e2e: the provider endpoint reaches the Pi process (Issue #157) -------
+
+
+FAKE_PI_PROVIDER = """#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+provider = args[args.index("--provider") + 1]
+model = args[args.index("--model") + 1]
+agent_dir = os.environ.get("PI_CODING_AGENT_DIR")
+assert agent_dir, "PI_CODING_AGENT_DIR is not set"
+catalog = json.load(open(os.path.join(agent_dir, "models.json")))
+entry = catalog["providers"][provider]
+assert model in [m["id"] for m in entry["models"]], (
+    f"model {model} not in materialized catalog"
+)
+# Prove the provider endpoint from the repo file reached Pi: print the
+# baseUrl of the selected provider (the runner never puts it on argv).
+sys.stdout.write(entry["baseUrl"])
+"""
+
+
+def test_e2e_provider_endpoint_reaches_pi_process(monkeypatch, tmp_path):
+    """run_pi -> materialized dir -> PI_CODING_AGENT_DIR -> Pi sees the
+    repo-file provider endpoint (baseUrl) for the selected model."""
+    (tmp_path / "prompt.md").write_text("SYSTEM", encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "pi"
+    fake.write_text(FAKE_PI_PROVIDER, encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv(
+        "PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+    )
+    config = _model_config(
+        tmp_path, pi_provider="groq", pi_model="qwen/qwen3.8-27b",
+        pi_providers_data=GROQ_PROVIDERS,
+    )
+    result = runner.run_pi(
+        {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
+        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+    )
+    assert result == "https://api.groq.com/openai/v1"
+
+
+def test_prepare_pi_agent_dir_is_idempotent_on_resume(
+    tmp_path, monkeypatch,
+):
+    """A resumed run in the same worktree replaces stale symlinks."""
+    home = tmp_path / "home"
+    user_agent = _user_agent_dir(home, auth=False)
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    # Simulate a stale broken symlink left by an earlier attempt.
+    stale = agent_dir / "auth.json"
+    stale.symlink_to(tmp_path / "gone.json")
+    assert not stale.exists()  # broken
+    runner.prepare_pi_agent_dir(tmp_path, config)
+    assert not (agent_dir / "auth.json").exists()
+    assert (agent_dir / "settings.json").is_symlink()
