@@ -92,24 +92,42 @@ acceptance criteria.
   last activity, last action, session and branch. No model/session activity
   for 5 minutes logs an idle warning; the first new activity after it logs
   a resumed event. A stalled (non-`model_wait`) session is recovered
-  automatically, not only warned (Issue #94): one step per idle window of
-  `PI_IDLE_WARN_SECONDS` since the stall was first seen — window 1
-  SIGTERMs the Pi descendants that already existed before the window
-  (the hung tools: ppid chain + start time from `/proc/<pid>/stat`, never
-  a name guess; only Pi descendants, never other system processes, never
-  a process spawned after the window began), so the tool gets a non-zero
-  exit and the failure signal reaches the model; window 2 SIGKILLs a
-  target that survived; after `PI_IDLE_RECOVERY_CYCLES` (default 3)
-  consecutive idle windows the Runner kills the Pi session itself and
-  fails fast through the normal failure path (the slot is never held
-  forever). Every step logs a `pi_idle_term` / `pi_idle_kill` line (run
-  id, pid, cmdline, TERM/KILL, result) and the progress comment shows the
-  recovery state via its `recovery` field; the first new activity resets
-  the whole recovery state. A session frozen in `model_wait` (the newest
-  event is a tool result) past `PI_MODEL_WAIT_DEAD_SECONDS` (default 600 s)
-  declares the upstream (llama/proxy) dead — the HTTP timeout or
-  connection drop left Pi in epoll_wait and it will never exit on its
-  own: the Runner kills Pi, logs
+  automatically, not only warned (Issue #94, evidence-based since Issue
+  #169): one step per idle window of `PI_IDLE_WARN_SECONDS` since the
+  stall was first seen — window 1 checks the Pi descendants that already
+  existed before the window (the hung tools: ppid chain + start time from
+  `/proc/<pid>/stat`, never a name guess; only Pi descendants, never
+  other system processes, never a process spawned after the window began,
+  never a zombie that has already exited). If one of them is a coreutils
+  `timeout <seconds> ...` command still inside its deadline (start time +
+  duration, computed in the monotonic clock domain so NTP realtime steps
+  cannot skew it), it is a legitimate long-running command, not a hang:
+  the Runner logs one `pi_idle_wait` line (run id, pid, cmdline,
+  deadline), reports `recovery=wait` in the progress comment, and pauses
+  the escalation — every later window re-evaluates; when the deadline
+  passes with the descendant still alive (the wrapper failed to end the
+  command) the evidence flips and the escalation proceeds. Otherwise
+  window 1 SIGTERMs the descendants, so the tool gets a non-zero exit and
+  the failure signal reaches the model; window 2 SIGKILLs a target that
+  survived; after `PI_IDLE_RECOVERY_CYCLES` (default 3) consecutive idle
+  windows the Runner kills the Pi session itself and fails fast through
+  the normal failure path (the slot is never held forever). Every step
+  logs a `pi_idle_wait` / `pi_idle_term` / `pi_idle_kill` line (run id,
+  pid, cmdline, deadline/TERM/KILL, result) and the progress comment shows
+  the recovery state via its `recovery` field (`wait` / `term` / `kill`);
+  the first new activity resets the whole recovery state. A session frozen
+  in `model_wait` (the newest event is a tool result) past
+  `PI_MODEL_WAIT_DEAD_SECONDS` (default 600 s) declares the upstream
+  (llama/proxy) dead ONLY when the Pi process has no live upstream
+  connection (Issue #169): the silence alone is not evidence — a slow
+  local model generating for minutes keeps its TCP connection alive and
+  must not be killed (the #158 regression). The evidence is the fd table:
+  a `socket:[...]` inode of the Pi process that appears in
+  `/proc/net/tcp` or `/proc/net/tcp6` in state ESTABLISHED, SYN_SENT or
+  SYN_RECV with a non-zero remote address is live; CLOSE_WAIT and all
+  other states are not. With the silence AND no live connection the HTTP
+  timeout or connection drop left Pi in epoll_wait and it will never exit
+  on its own: the Runner kills Pi, logs
   `run_failed ... reason=upstream_dead_stale_...`, and fails fast through
   the normal failure path (the Issue is marked `ai-blocked` with the
   scene in the Issue comment, the slot is released by the kernel when the

@@ -223,6 +223,7 @@ class SessionWatcher:
             stale = now - self._last_activity_epoch
         else:
             stale = now - self.start_time
+        in_model_wait = self.last_role == "toolResult"
         return {
             "session_id": self.session_id,
             "session_file": str(self.session_file) if self.session_file
@@ -234,8 +235,10 @@ class SessionWatcher:
             "result": self.result,
             # True only while the newest session event is a tool result:
             # the model is expected to reply next, so a long silence is a
-            # slow model, not a stalled agent (Issue #40).
-            "model_wait": self.last_role == "toolResult",
+            # slow model, not a stalled agent (Issue #40). The pending
+            # duration while in model_wait is `stale_seconds` itself
+            # (the silence since the newest event, Issue #169).
+            "model_wait": in_model_wait,
             "changed": changed,
             "stale_seconds": max(0.0, stale),
         }

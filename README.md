@@ -253,20 +253,21 @@ verify → independent review（会话内修复）→ merge，并主动发布过
 Pi 长时间运行时，Runner 不再只留下启动命令和最终结果。`bootstrap_runner.py` 运行 Pi 期间每 15 秒读取任务 worktree 里的 Pi session JSONL（`.pi-session/*.jsonl`），把简短活动写入 journal（systemd 日志）；已经打开 `journalctl -f` 时内容持续自动刷新。完整不变现场（branch / worktree / session 文件）只在 run 开始和失败时各记录一次，运行中只输出短的变化字段，避免每 15–30 秒重复整段上下文：
 
 - `run_start run=... issue=owner/repo#n role=implement branch=... worktree=... session=... session_file=... phase=... last_activity=... action=... result=...`——run 开始时记录一次完整现场；
-- `activity issue=... role=... phase=... action="..." result=... state=-|model_wait idle=...s`——phase/action/result 变化时输出（tool_result 只更新 result，不覆盖真实动作）；
-- `heartbeat issue=... role=... phase=... state=-|model_wait elapsed=...m idle=...s`——没有变化时按轮询间隔输出，idle 直接写在行上；
-- `model_wait issue=... role=... phase=... state=model_wait`——最近一条 session 事件是 tool result（模型正在等待响应）时输出一次；等待期间只按轮询间隔输出带 `state=model_wait` 的 heartbeat，不升级 WARNING（慢模型不等于卡死）；
+- `activity issue=... role=... phase=... action="..." result=... state=-|model_wait|model_wait_slow idle=...s`——phase/action/result 变化时输出（tool_result 只更新 result，不覆盖真实动作）；
+- `heartbeat issue=... role=... phase=... state=-|model_wait|model_wait_slow elapsed=...m idle=...s`——没有变化时按轮询间隔输出，idle 直接写在行上；
+- `model_wait issue=... role=... phase=... state=model_wait`——最近一条 session 事件是 tool result（模型正在等待响应）时输出一次；等待期间只按轮询间隔输出带 `state=model_wait` 的 heartbeat，不升级 WARNING（慢模型不等于卡死）；等待静默超过 `PI_MODEL_WAIT_DEAD_SECONDS` 后 heartbeat 的 state 变为 `model_wait_slow`（慢，不是死：只有同时没有活的上游连接才是 kill 证据，见下）；
 - `resumed issue=... role=... phase=... state=resumed`——下一条 session 事件到达时输出一次。
 - `pi_idle issue=... role=... phase=... stale_seconds=...`——超过 5 分钟（`PI_IDLE_WARN_SECONDS=300`）没有 model/session 活动且不在 `model_wait` 时输出一次 WARNING；卡住的 session 不会每个 heartbeat 重复告警，`model_wait` 期间永不告警（慢模型不等于卡死）；
+- `pi_idle_wait run=... issue=... role=... pid=... cmdline=... deadline=...`——idle 窗口内发现挂死后代正在跑 coreutils `timeout <seconds> ...` 且还没到 deadline 时输出一次（每个卡死一次）：这是合法运行中的长命令（如 `timeout 240 pytest tests/`），不是挂死——Runner 等 deadline，不杀（Issue #169 修复 #105 误杀）；deadline 过后进程仍存活时证据翻转，升级照常进行；
 - `pi_idle_term run=... issue=... role=... pid=... cmdline=... result=sent|failed: ...`（或无 pid 的 `result=no_target`）——idle 告警后第一个 idle 窗口内，对 idle 窗口开始前就已存在、仍在运行的 Pi 后代（挂死的 bash/pytest 等工具）逐个发 SIGTERM（保留现场），让工具拿到非零退出、失败信号回到模型（Issue #94）；找不到挂死后代时记 `no_target`（Pi 自身卡住）；
 - `pi_idle_kill run=... issue=... role=... pid=... cmdline=... result=sent|already_dead|failed: ...`——再过一个 idle 窗口仍无新活动且被 TERM 的后代仍存活时发 SIGKILL；TERM 已生效（进程已退出）时记 `already_dead`，不再发信号；
 - `pi_resumed issue=... role=... phase=...`——idle 告警后第一条新 session 事件到达时输出一次（恢复后输出 resumed），整个 idle 恢复状态同时复位；
 - `run_failed run=... issue=... role=... branch=... worktree=... session=... session_file=... phase=... ... reason=pi_exit_N|timeout_...s|upstream_dead_stale_...s|idle_recovery_stale_...s`——进程异常退出、超时、上游已死（Issue #75）或连续 3 个 idle 窗口（`PI_IDLE_RECOVERY_CYCLES=3`）仍无新活动（Issue #94，Runner 杀掉 Pi 会话本身）时先记录完整现场再抛出错误；
 - `run_end run=... issue=... role=... result=pr_opened elapsed=...m pr=... commit=...`——验收通过后记录结果和完整排查入口。
 
-上游已死检测（Issue #75）：`model_wait` 期间 session JSONL 冻结超过 `PI_MODEL_WAIT_DEAD_SECONDS`（默认 600 秒）判定上游（llama/proxy）已死——HTTP 超时或连接断开后 Pi 停在 epoll_wait 永不退出：Runner 杀掉 Pi 进程，记录 `run_failed ... reason=upstream_dead_stale_...s` 后 fail fast（Issue 标记 `ai-blocked`，现场留在 journal 和 Issue 评论，slot 随进程退出由内核释放，下一拍可 resume 或领取下一个 `ai-fix-needed`）。事件持续到达时永不触发（慢模型不是死上游），它也不是业务任务 timeout。
+上游已死检测（Issue #75，Issue #169 起基于证据）：`model_wait` 期间 session JSONL 冻结超过 `PI_MODEL_WAIT_DEAD_SECONDS`（默认 600 秒）**且** Pi 进程没有活的上游连接（fd 表里的 `socket:[...]` 在 `/proc/net/tcp`/`tcp6` 中没有处于 ESTABLISHED/SYN_SENT/SYN_RECV 状态且带远端地址的 socket；CLOSE_WAIT 等已断开状态不算）才判定上游（llama/proxy）已死——HTTP 超时或连接断开后 Pi 停在 epoll_wait 永不退出：Runner 杀掉 Pi 进程，记录 `run_failed ... reason=upstream_dead_stale_...s` 后 fail fast（Issue 标记 `ai-blocked`，现场留在 journal 和 Issue 评论，slot 随进程退出由内核释放，下一拍可 resume 或领取下一个 `ai-fix-needed`）。session 冻结本身不是证据：本地慢模型生成几分钟时连接仍然活着（heartbeat 显示 `state=model_wait_slow`），Runner 不杀（#158 回归）；事件持续到达时同样永不触发（慢模型不是死上游）。它也不是业务任务 timeout。
 
-idle 卡死自动恢复（Issue #94）：非 `model_wait` 的卡死（Pi 的 bash 工具子进程永久阻塞，如 TDD red 阶段的死循环测试、`next(generator)` 永久等待）不再只告警。Runner 在现有轮询循环里按 idle 窗口（`idle_warn_seconds`，默认 5 分钟）逐级恢复：第一个窗口对 idle 窗口开始前就已存在、仍在运行的 Pi 后代逐个 SIGTERM（判定依据是 `/proc/<pid>/stat` 的 ppid 链 + 进程启动时间早于 idle 起点，不靠猜；只动 Pi 的后代，不碰系统其他进程，也不碰窗口开始后新起的进程）——工具拿到非零退出，失败信号回到模型，会话自行继续；第二个窗口对被 TERM 后仍存活的后代 SIGKILL；连续 `PI_IDLE_RECOVERY_CYCLES`（默认 3）个窗口仍无新活动时杀掉 Pi 会话本身，按现有 `ai-blocked`/可恢复流程收尾（Issue 标记 `ai-blocked`，slot 随进程退出释放）——slot 绝不被无限占用。每一步写 `pi_idle_term` / `pi_idle_kill` journal 行（带 run_id、pid、cmdline、TERM/KILL、结果），GitHub 进度评论通过 `recovery` 字段（`term` / `kill`）同步现场；第一条新 session 事件到达时整个恢复状态复位（`pi_resumed`）。不引入常驻进程/守护线程。
+idle 卡死自动恢复（Issue #94，Issue #169 起基于证据）：非 `model_wait` 的卡死（Pi 的 bash 工具子进程永久阻塞，如 TDD red 阶段的死循环测试、`next(generator)` 永久等待）不再只告警。Runner 在现有轮询循环里按 idle 窗口（`idle_warn_seconds`，默认 5 分钟）逐级恢复：第一个窗口检查 idle 窗口开始前就已存在、仍在运行的 Pi 后代（判定依据是 `/proc/<pid>/stat` 的 ppid 链 + 进程启动时间早于 idle 起点，不靠猜；只动 Pi 的后代，不碰系统其他进程，也不碰窗口开始后新起的进程；已退出未收割的僵尸不算目标）——如果某个后代的命令行是 coreutils `timeout <seconds> ...` 且 deadline（进程启动时间 + duration，用 monotonic 时钟域计算，NTP 校时不影响）还没到，它是合法运行中的长命令：Runner 记一次 `pi_idle_wait`（带 pid、cmdline、deadline）、`recovery=wait`，不杀，升级暂停，后续每个窗口重新评估；deadline 过后仍存活（wrapper 没能结束命令）时证据翻转，照常 SIGTERM——工具拿到非零退出，失败信号回到模型，会话自行继续；第二个窗口对被 TERM 后仍存活的后代 SIGKILL；连续 `PI_IDLE_RECOVERY_CYCLES`（默认 3）个窗口仍无新活动时杀掉 Pi 会话本身，按现有 `ai-blocked`/可恢复流程收尾（Issue 标记 `ai-blocked`，slot 随进程退出释放）——slot 绝不被无限占用。每一步写 `pi_idle_wait` / `pi_idle_term` / `pi_idle_kill` journal 行（带 run_id、pid、cmdline、deadline/TERM/KILL、结果），GitHub 进度评论通过 `recovery` 字段（`wait` / `term` / `kill`）同步现场；第一条新 session 事件到达时整个恢复状态复位（`pi_resumed`）。不引入常驻进程/守护线程。
 
 所有行都是稳定 `key=value`（含空格或双引号的值加双引号，内嵌双引号转义为 `\\"`，可用 `pi_activity.parse_scene` 解析）；systemd journal 已提供时间、host 和进程，Python 日志不再重复打印自己的时间戳。每条行都带 `[run_id]` 前缀（见下文全链路 run_id 一节），它是高频行（`activity` / `heartbeat` / `model_wait` / `resumed` / `pi_idle` / `pi_resumed`）唯一的 run id 载体：这些行不再重复 `run=` 字段，同一个 8-hex run id 在一行里只出现一次（Issue #57）。低频场景行（`run_start` / `run_failed` / `run_end` / `pi_idle_term` / `pi_idle_kill`）保留 `run=` 字段，`pi_activity.parse_scene` 仍能从这些行解析出 `run`。默认 tail 示例（仅用于查看，不是产品步骤）：
 
@@ -277,11 +278,12 @@ journalctl --user -u 'muyan-pilot@*.service' -f
 # Aug 25 14:30:31 host muyan-pilot[123]: INFO [e07383c2] heartbeat issue=xqliu/muyan-pilot#18 role=implement phase=test state=- elapsed=30s idle=15s
 # Aug 25 14:30:32 host muyan-pilot[123]: INFO [e07383c2] activity issue=xqliu/muyan-pilot#18 role=implement phase=test action="bash pytest tests/" result=ok state=- idle=0s
 # Aug 25 14:30:32 host muyan-pilot[123]: INFO [e07383c2] model_wait issue=xqliu/muyan-pilot#18 role=implement phase=test state=model_wait
-# Aug 25 14:41:40 host muyan-pilot[123]: INFO [e07383c2] heartbeat issue=xqliu/muyan-pilot#18 role=implement phase=test state=model_wait elapsed=11m idle=11m
+# Aug 25 14:41:40 host muyan-pilot[123]: INFO [e07383c2] heartbeat issue=xqliu/muyan-pilot#18 role=implement phase=test state=model_wait_slow elapsed=11m idle=11m
 # Aug 25 14:42:19 host muyan-pilot[123]: INFO [e07383c2] activity issue=xqliu/muyan-pilot#18 role=implement phase=test action="assistant text" result=- state=- idle=0s
 # Aug 25 14:42:19 host muyan-pilot[123]: INFO [e07383c2] resumed issue=xqliu/muyan-pilot#18 role=implement phase=test state=resumed
 # Aug 25 16:02:10 host muyan-pilot[123]: WARNING [e07383c2] pi_idle issue=xqliu/muyan-pilot#18 role=implement phase=pr stale_seconds=5m
-# Aug 25 16:03:05 host muyan-pilot[123]: INFO [e07383c2] pi_resumed issue=xqliu/muyan-pilot#18 role=implement phase=pr
+# Aug 25 16:03:05 host muyan-pilot[123]: INFO [e07383c2] pi_idle_wait run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement pid=4242 cmdline="timeout 240 pytest tests/" deadline=2025-08-25T16:05:30Z
+# Aug 25 16:06:00 host muyan-pilot[123]: INFO [e07383c2] pi_resumed issue=xqliu/muyan-pilot#18 role=implement phase=pr
 # Aug 25 15:12:40 host muyan-pilot[123]: INFO [e07383c2] run_end run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement result=pr_opened elapsed=42m pr=https://github.com/xqliu/muyan-pilot/pull/19 commit=0123456789abcdef0123456789abcdef01234567
 ```
 
