@@ -164,6 +164,19 @@ acceptance criteria.
   advanced, merge it into the task branch, resolve conflicts manually, rerun
   the full tests, then push the task branch (the independent review runs
   after the PR is opened and absorbs any further base advance in-session).
+- Every fetch that updates the shared remote-tracking ref
+  (`refs/remotes/origin/<base_branch>`) runs under the SAME shared
+  state-dir lock (`base-sync.lock`) that `ExecStartPre` uses (Issue #171):
+  the Runner-side `freeze_base` / `verify_pr` / `merge_gate` /
+  `confirm_merged` fetches go through `fetch_base_ref` (which acquires the
+  lock, fetches, and releases it), and the implement/review prompts
+  instruct Pi to run the base-freshness fetch as
+  `flock <BASE_SYNC_LOCK> git fetch origin <base_branch>` (the lock path is
+  rendered into both prompts from the configured `repo_dir`). Two concurrent
+  Runners (or a Runner and a Pi session) therefore never race the shared
+  ref — no `cannot lock ref ... is at <X> but expected <Y>` failures — and
+  a lock or fetch error fails fast with the concrete error, never a retry
+  or a fallback fetch.
 - The runner rejects a delivery whose HEAD does not contain the latest remote
   base. No auto conflict resolution, no force push, no merge or push of the
   protected branch.

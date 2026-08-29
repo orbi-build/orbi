@@ -62,6 +62,8 @@ git fetch origin main && git merge --ff-only origin/main
 
 Issue #149：两个实例可能在同一 tick 启动，所以 `ExecStartPre` 的 fetch + fast-forward 包在一个短生命周期的 `flock`（共享状态目录下的 `base-sync.lock`，Python 侧 `sync_base_checkout` 取同一把锁）里：main worktree 不会被并发写入；flock 拿到后执行 git 命令，退出时自动释放，不新增常驻进程。
 
+Issue #171：两个 Runner（或 Runner 与 Pi 会话）并发 `git fetch` 会争抢共享的 remote-tracking ref（`refs/remotes/origin/main`），产生 `cannot lock ref ... is at <X> but expected <Y>` 的 CAS 失败，使 review Pi 会话非零退出。修复：所有更新共享 remote-tracking ref 的 fetch 都走同一把 `base-sync.lock`——Runner 侧的 `freeze_base` / `verify_pr` / `merge_gate` / `confirm_merged` 统一经 `fetch_base_ref`（先取锁、再 fetch、finally 释放，锁或 fetch 出错即 fail fast，不重试、不降级）；implement/review 两个 prompt 把锁路径渲染为 `BASE_SYNC_LOCK`，并指示 Pi 用 `flock <BASE_SYNC_LOCK> git fetch origin <base>` 执行 base 新鲜度 fetch。不新增进程、锁或常驻服务。
+
 ## 部署一致性（Issue #103）
 
 仓库中的 `systemd/muyan-pilot@.service` 和 `systemd/muyan-pilot@.timer`（模板 unit）是已安装 unit 的**唯一事实源**：代码和实际运行配置必须一致，漂移必须能被明确发现。Issue #149 起部署启用两个 timer 实例 `muyan-pilot@1.timer` / `muyan-pilot@2.timer`，各自触发自己的 service 实例。

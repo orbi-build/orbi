@@ -165,6 +165,38 @@ def test_prompt_review_md_keeps_the_kiss_lean_check():
     )
 
 
+# --- Issue #171: shared-ref fetches under the base-sync lock ------------------
+
+LOCK_FETCH_ITEMS = (
+    # The fetch instruction names the lock placeholder and the exact
+    # command shape (flock <lock> git fetch origin <base>): the worktree
+    # shares the deployment checkout's common dir, so an unlocked
+    # concurrent fetch races on the shared remote-tracking ref.
+    ("lock-fetch-flock",
+     "flock {{base_sync_lock}} git fetch origin {{base_branch}}"),
+    # A fetch error or lock timeout fails fast; no bare-fetch retry and
+    # no lock bypass.
+    ("lock-fetch-fail-fast", "fails fast"),
+    ("lock-fetch-no-bypass", "bypass"),
+)
+
+
+def test_prompt_md_fetches_the_base_under_the_base_sync_lock():
+    missing = _missing(_text(PROMPT), LOCK_FETCH_ITEMS)
+    assert not missing, (
+        f"prompt.md is missing the locked base fetch (Issue #171): "
+        f"{missing}"
+    )
+
+
+def test_prompt_review_md_fetches_the_base_under_the_base_sync_lock():
+    missing = _missing(_text(PROMPT_REVIEW), LOCK_FETCH_ITEMS)
+    assert not missing, (
+        f"prompt_review.md is missing the locked base fetch (Issue #171): "
+        f"{missing}"
+    )
+
+
 # --- AGENTS.md (TDD section) ---------------------------------------------------
 
 AGENTS_TDD_ITEMS = (

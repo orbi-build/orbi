@@ -939,8 +939,13 @@ def log_format() -> str:
 
 
 def freeze_base(repo_dir: Path, base_branch: str) -> str:
-    """Fetch the remote and freeze the exact SHA of origin/<base_branch>."""
-    run_command(["git", "fetch", "origin", base_branch], cwd=repo_dir)
+    """Fetch the remote and freeze the exact SHA of origin/<base_branch>.
+
+    The fetch runs under the base-sync lock (Issue #171): it updates
+    the shared remote-tracking ref, so it must not race the other
+    Runner/Pi fetches on that ref.
+    """
+    fetch_base_ref(repo_dir, base_branch)
     return run_command(
         ["git", "rev-parse", f"origin/{base_branch}"], cwd=repo_dir,
     )
@@ -1829,6 +1834,10 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
             "BASE_BRANCH": config["base_branch"],
             "BASE_SHA": config["base_sha"],
             "RUN_ID": config["run_id"],
+            # Issue #171: the absolute path of the shared base-sync
+            # lock — the prompt's base freshness fetch must run under
+            # it (flock <lock> git fetch origin <base>).
+            "BASE_SYNC_LOCK": str(base_sync_lock_path(config["repo_dir"])),
         },
     )
     context = (
@@ -1871,7 +1880,7 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
 
 
 def verify_pr(worktree: Path, branch: str, base_branch: str,
-              run_id: str, *, issue: int,
+              run_id: str, *, issue: int, repo_dir: Path,
               pr_repo: str | None = None,
               expected_url: str | None = None,
               require_latest_base: bool = True) -> str:
@@ -1900,10 +1909,10 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
     if require_latest_base:
         # Re-fetch before judging: the delivery must contain the latest
         # remote base, otherwise it is behind and the PR is rejected
-        # (fail fast).
-        run_command(
-            ["git", "fetch", "origin", base_branch], cwd=worktree,
-        )
+        # (fail fast). The fetch updates the shared remote-tracking
+        # ref, so it runs under the base-sync lock (Issue #171) with
+        # the deployment checkout as the lock location.
+        fetch_base_ref(repo_dir, base_branch, cwd=worktree)
         try:
             run_command(
                 ["git", "merge-base", "--is-ancestor",
@@ -2051,7 +2060,8 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
             raise RuntimeError(f"worktree missing: {worktree}")
         return verify_pr(
             worktree, branch, config["base_branch"], run_id,
-            issue=number, pr_repo=source_repo,
+            issue=number, repo_dir=config["repo_dir"],
+            pr_repo=source_repo,
             expected_url=scene["pr_url"], require_latest_base=False,
         )
     except Exception as exc:
@@ -2265,6 +2275,10 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
             "HEAD_SHA": pr["head_oid"],
             "HEAD_REF": pr["head_ref"],
             "ROUND": str(round),
+            # Issue #171: the SAME shared base-sync lock as the
+            # implementer — the review session's base-absorb fetch must
+            # run under it (flock <lock> git fetch origin <base>).
+            "BASE_SYNC_LOCK": str(base_sync_lock_path(config["repo_dir"])),
         },
     )
     context = (
@@ -2306,15 +2320,18 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
     )
 
 
-def merge_gate(worktree: Path, pr: dict, base_branch: str) -> dict:
+def merge_gate(worktree: Path, pr: dict, base_branch: str,
+               *, repo_dir: Path) -> dict:
     """Merge the reviewed PR only if the gate still holds against latest base.
 
     Re-fetch the latest remote base, require the PR head to contain it, the PR
     to be mergeable, and the remote head to still be the reviewed head. Then
     merge with `--match-head-commit` so only that exact head can land. No force
-    push, no direct push of the protected branch.
+    push, no direct push of the protected branch. The base fetch updates the
+    shared remote-tracking ref, so it runs under the base-sync lock
+    (Issue #171) with the deployment checkout as the lock location.
     """
-    run_command(["git", "fetch", "origin", base_branch], cwd=worktree)
+    fetch_base_ref(repo_dir, base_branch, cwd=worktree)
     try:
         run_command(
             ["git", "merge-base", "--is-ancestor",
@@ -2365,8 +2382,14 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str) -> dict:
     return {**pr, "merged": True}
 
 
-def confirm_merged(worktree: Path, pr: dict, base_branch: str) -> dict:
-    """Confirm the PR is MERGED and origin/<base> contains the merge commit."""
+def confirm_merged(worktree: Path, pr: dict, base_branch: str,
+                   *, repo_dir: Path) -> dict:
+    """Confirm the PR is MERGED and origin/<base> contains the merge commit.
+
+    The base fetch updates the shared remote-tracking ref, so it runs
+    under the base-sync lock (Issue #171) with the deployment checkout
+    as the lock location.
+    """
     raw = run_command([
         "gh", "pr", "view", str(pr["number"]),
         "--json", "state,mergedAt,mergeCommit",
@@ -2383,7 +2406,7 @@ def confirm_merged(worktree: Path, pr: dict, base_branch: str) -> dict:
         raise RuntimeError(
             f"PR #{pr['number']} is merged but has no merge commit oid"
         )
-    run_command(["git", "fetch", "origin", base_branch], cwd=worktree)
+    fetch_base_ref(repo_dir, base_branch, cwd=worktree)
     try:
         run_command(
             ["git", "merge-base", "--is-ancestor", merge_commit,
@@ -2439,6 +2462,13 @@ def base_sync_lock_path(repo_dir: Path) -> Path:
     below takes the same lock: the main worktree is never written
     concurrently. The lock lives in the shared state dir (next to the
     slot files), never in a per-process temp dir.
+
+    Issue #171 extended the same lock to EVERY fetch that updates the
+    shared remote-tracking ref ``refs/remotes/origin/<base>``: task
+    worktrees share the deployment checkout's common dir, so an
+    unlocked concurrent fetch (Runner verify/gate/confirm, the Pi
+    prompt-side fetch) races on that one ref and fails with
+    ``cannot lock ref ... is at <X> but expected <Y>``.
     """
     return Path(repo_dir) / ".muyan-pilot" / BASE_SYNC_LOCK_NAME
 
@@ -2472,6 +2502,39 @@ def _acquire_base_sync_lock(
                     "the deployment checkout)"
                 ) from None
             time.sleep(0.1)
+
+
+def fetch_base_ref(repo_dir: Path, base_branch: str,
+                   *, cwd: Path | None = None,
+                   lock_timeout_seconds: float = 300.0,
+                   command_runner: Callable[[list[str]], str] | None = None,
+                   ) -> None:
+    """Fetch ``origin/<base>`` under the base-sync lock (Issue #171).
+
+    Every command that updates the shared remote-tracking ref
+    ``refs/remotes/origin/<base>`` must run under the SAME lock in the
+    deployment checkout's shared state dir (the one the ExecStartPre
+    flock and ``sync_base_checkout`` use): worktrees share the common
+    dir, so an unlocked concurrent fetch races on the ref and fails
+    the session. ``repo_dir`` is the deployment checkout (the lock
+    location); ``cwd`` is where the fetch runs (the task worktree for
+    the Runner verify/gate/confirm paths, the checkout itself by
+    default). ``command_runner`` overrides the command executor (the
+    setup entry injects its own); by default the module's
+    ``run_command`` is used. A lock timeout or a fetch error fails
+    fast — no retry, no lock bypass.
+    """
+    if command_runner is None:
+        command_runner = run_command
+    fd = _acquire_base_sync_lock(repo_dir, lock_timeout_seconds)
+    try:
+        command_runner(
+            ["git", "fetch", "origin", base_branch],
+            cwd=cwd if cwd is not None else repo_dir,
+        )
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def sync_base_checkout(repo_dir: Path, base_branch: str,
@@ -2685,7 +2748,10 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             pr["number"], round, pr["head_oid"], refrozen["head_oid"],
         )
     try:
-        merged = merge_gate(worktree, refrozen, base_branch)
+        merged = merge_gate(
+            worktree, refrozen, base_branch,
+            repo_dir=config["repo_dir"],
+        )
     except RuntimeError as exc:
         message = str(exc)
         # Behind and merge-conflict are the same next-session job:
@@ -2711,7 +2777,9 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             remove=PR_OPENED_LABEL,
         )
         return False
-    confirmed = confirm_merged(worktree, merged, base_branch)
+    confirmed = confirm_merged(
+        worktree, merged, base_branch, repo_dir=config["repo_dir"],
+    )
     # Issue #79: the merged publishing is bypass — the GitHub merge
     # already landed; a 404 here must not stop the `ai-merged`
     # transition and the merged PR scene comment below.
@@ -3180,6 +3248,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         )
         pr_url = verify_pr(
             worktree, branch, base_branch, run_id, issue=number,
+            repo_dir=config["repo_dir"],
         )
         commit = run_command(
             ["git", "rev-parse", "HEAD"], cwd=worktree,

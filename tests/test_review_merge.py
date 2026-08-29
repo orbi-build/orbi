@@ -224,6 +224,7 @@ def _review_config(tmp_path, prompt_name="prompt_review.md"):
                       encoding="utf-8")
     return {
         "prompt_review": prompt,
+        "repo_dir": tmp_path,
         "source_repos": ["owner/repo"],
         "workspace_root": tmp_path,
         "context_files": [],
@@ -298,13 +299,51 @@ def test_merge_gate_merges_reviewed_head_with_match_head_commit(monkeypatch, tmp
     pr = runner.merge_gate(tmp_path, {"number": 4, "url": "u",
                                       "base_ref": "main", "base_oid": "b1",
                                       "head_ref": "h", "head_oid": "h1"},
-                           "main")
+                           "main", repo_dir=tmp_path)
     assert pr["merged"] is True
     # The merge must use --match-head-commit with the reviewed head SHA.
     merge_cmd = [c for c in calls if c[:2] == ["gh", "pr"] and "merge" in c][0]
     assert "--match-head-commit" in merge_cmd
     assert merge_cmd[merge_cmd.index("--match-head-commit") + 1] == "h1"
     assert "--merge" in merge_cmd
+
+
+def test_merge_gate_requires_the_repo_dir_lock_location(
+    monkeypatch, tmp_path,
+):
+    # Issue #171: the gate fetch updates the shared remote-tracking
+    # ref, so the lock location (the deployment checkout's shared state
+    # dir) must be explicit — there is no bypass path.
+    monkeypatch.setattr(runner, "run_command", _merge_gate_fake())
+    with pytest.raises(TypeError):
+        runner.merge_gate(tmp_path, {"number": 4, "url": "u",
+                                     "base_ref": "main", "base_oid": "b1",
+                                     "head_ref": "h", "head_oid": "h1"},
+                         "main")
+
+
+def test_merge_gate_fetches_under_the_base_sync_lock(
+    monkeypatch, tmp_path,
+):
+    # Issue #171: the gate's base freshness fetch runs under the SAME
+    # base-sync lock (a concurrent probe must not acquire it while the
+    # fetch is in flight).
+    spy, held = _lock_held_during_fetch(
+        tmp_path, inner=lambda command, **kwargs: "",
+    )
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "fetch", "origin"]:
+            return spy(command, **kwargs)
+        return _merge_gate_fake()(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    runner.merge_gate(tmp_path, {"number": 4, "url": "u",
+                                 "base_ref": "main", "base_oid": "b1",
+                                 "head_ref": "h", "head_oid": "h1"},
+                      "main", repo_dir=tmp_path)
+    assert held == [True]
+    _lock_free(tmp_path)
 
 
 def test_merge_gate_rejects_head_behind_latest_base(monkeypatch, tmp_path, caplog):
@@ -318,7 +357,8 @@ def test_merge_gate_rejects_head_behind_latest_base(monkeypatch, tmp_path, caplo
     ):
         runner.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                                      "base_oid": "b1", "head_ref": "h",
-                                     "head_oid": "h1"}, "main")
+                                     "head_oid": "h1"}, "main",
+                          repo_dir=tmp_path)
     assert "base_branch=main" in caplog.text
 
 
@@ -327,7 +367,8 @@ def test_merge_gate_rejects_non_mergeable_pr(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="not mergeable"):
         runner.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                                      "base_oid": "b1", "head_ref": "h",
-                                     "head_oid": "h1"}, "main")
+                                     "head_oid": "h1"}, "main",
+                          repo_dir=tmp_path)
 
 
 def test_merge_gate_rejects_head_that_moved_since_review(monkeypatch, tmp_path):
@@ -337,7 +378,8 @@ def test_merge_gate_rejects_head_that_moved_since_review(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="head moved since review"):
         runner.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                                      "base_oid": "b1", "head_ref": "h",
-                                     "head_oid": "h1"}, "main")
+                                     "head_oid": "h1"}, "main",
+                          repo_dir=tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -357,9 +399,55 @@ def test_confirm_merged_accepts_merged_pr_on_origin_main(monkeypatch, tmp_path):
     result = runner.confirm_merged(
         tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                    "base_oid": "b1", "head_ref": "h", "head_oid": "h1"}, "main",
+        repo_dir=tmp_path,
     )
     assert result["state"] == "MERGED"
     assert result["merge_commit"] == "m1"
+
+
+def test_confirm_merged_requires_the_repo_dir_lock_location(
+    monkeypatch, tmp_path,
+):
+    # Issue #171: the confirm fetch updates the shared remote-tracking
+    # ref, so the lock location must be explicit — no bypass path.
+    monkeypatch.setattr(runner, "run_command", _merge_gate_fake())
+    with pytest.raises(TypeError):
+        runner.confirm_merged(
+            tmp_path, {"number": 4, "url": "u", "base_ref": "main",
+                       "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
+            "main",
+        )
+
+
+def test_confirm_merged_fetches_under_the_base_sync_lock(
+    monkeypatch, tmp_path,
+):
+    # Issue #171: the confirm fetch runs under the SAME base-sync lock
+    # (a concurrent probe must not acquire it while the fetch is in
+    # flight).
+    spy, held = _lock_held_during_fetch(
+        tmp_path, inner=lambda command, **kwargs: "",
+    )
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "fetch", "origin"]:
+            return spy(command, **kwargs)
+        if command[:2] == ["gh", "pr"] and "view" in command:
+            return json.dumps({
+                "number": 4, "url": "u", "state": "MERGED",
+                "mergedAt": "2026-08-25T00:00:00Z",
+                "mergeCommit": {"oid": "m1"},
+            })
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    runner.confirm_merged(
+        tmp_path, {"number": 4, "url": "u", "base_ref": "main",
+                   "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
+        "main", repo_dir=tmp_path,
+    )
+    assert held == [True]
+    _lock_free(tmp_path)
 
 
 def test_confirm_merged_rejects_unmerged_pr(monkeypatch, tmp_path):
@@ -374,7 +462,7 @@ def test_confirm_merged_rejects_unmerged_pr(monkeypatch, tmp_path):
         runner.confirm_merged(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
-            "main",
+            "main", repo_dir=tmp_path,
         )
 
 
@@ -397,7 +485,7 @@ def test_confirm_merged_rejects_merge_commit_missing_from_origin_main(
         runner.confirm_merged(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
-            "main",
+            "main", repo_dir=tmp_path,
         )
     assert "merge_commit=m1" in caplog.text
 
@@ -414,7 +502,7 @@ def test_confirm_merged_rejects_merged_pr_without_commit_oid(monkeypatch, tmp_pa
         runner.confirm_merged(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
-            "main",
+            "main", repo_dir=tmp_path,
         )
 
 
@@ -685,6 +773,196 @@ def test_sync_base_checkout_releases_the_lock_on_failure(
 
 
 # ---------------------------------------------------------------------------
+# fetch_base_ref (Issue #171: every shared-ref fetch under one lock)
+# ---------------------------------------------------------------------------
+
+def _lock_held_during_fetch(checkout: Path, inner=None) -> list[bool]:
+    """Spy on run_command: while the fetch runs, probe whether the
+    base-sync lock is held (a non-blocking acquire must fail).
+
+    ``inner`` is what the fetch resolves to after the probe: the real
+    ``run_command`` by default (real-git tests), or a no-op fake for
+    the non-git tmp_path tests.
+    """
+    held: list[bool] = []
+    if inner is None:
+        inner = runner.run_command
+
+    def spy(command, **kwargs):
+        if command[:3] == ["git", "fetch", "origin"]:
+            held.append(_probe_held(checkout))
+        return inner(command, **kwargs)
+
+    return spy, held
+
+
+def _probe_held(checkout: Path) -> bool:
+    """True while the base-sync lock is held: a non-blocking probe
+    acquire fails; False (and the probe releases) when it is free."""
+    lock_path = runner.base_sync_lock_path(checkout)
+    probe = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return False
+    except BlockingIOError:
+        return True
+    finally:
+        fcntl.flock(probe, fcntl.LOCK_UN)
+        os.close(probe)
+
+
+def _lock_free(checkout: Path) -> None:
+    """A non-blocking probe acquires and releases the lock immediately."""
+    assert _probe_held(checkout) is False
+
+
+def test_fetch_base_ref_updates_the_remote_tracking_ref(monkeypatch, tmp_path):
+    # Issue #171: the shared fetch helper updates origin/<base> ...
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    runner.run_command(["git", "init", "--bare", "-b", "main", "."],
+                       cwd=origin)
+    actor = _clone_origin(origin, "actor")
+    runner.run_command(["git", "commit", "--allow-empty", "-m", "base"],
+                       cwd=actor)
+    runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
+    checkout = _clone_origin(origin, "checkout")
+    runner.run_command(["git", "commit", "--allow-empty", "-m", "ahead"],
+                       cwd=actor)
+    runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
+    remote_head = runner.run_command(
+        ["git", "rev-parse", "HEAD"], cwd=actor,
+    )
+
+    runner.fetch_base_ref(checkout, "main")
+
+    assert runner.run_command(
+        ["git", "rev-parse", "origin/main"], cwd=checkout,
+    ) == remote_head
+
+
+def test_fetch_base_ref_holds_the_base_sync_lock_while_fetching(
+    monkeypatch, tmp_path,
+):
+    # Issue #171: the fetch runs UNDER the same base-sync lock the
+    # ExecStartPre flock and sync_base_checkout use — a concurrent
+    # probe must not acquire it while the fetch is in flight.
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    runner.run_command(["git", "init", "--bare", "-b", "main", "."],
+                       cwd=origin)
+    actor = _clone_origin(origin, "actor")
+    runner.run_command(["git", "commit", "--allow-empty", "-m", "base"],
+                       cwd=actor)
+    runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
+    checkout = _clone_origin(origin, "checkout")
+
+    spy, held = _lock_held_during_fetch(checkout)
+    monkeypatch.setattr(runner, "run_command", spy)
+    runner.fetch_base_ref(checkout, "main")
+
+    assert held == [True]
+    _lock_free(checkout)
+
+
+def test_fetch_base_ref_fetches_in_the_given_worktree(
+    monkeypatch, tmp_path,
+):
+    # Issue #171: the Runner verifies from the TASK WORKTREE (a
+    # different worktree sharing the same common dir); the fetch runs
+    # there (updating the shared refs/remotes/origin/<base>) while the
+    # lock is still the deployment checkout's shared-state-dir lock.
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    runner.run_command(["git", "init", "--bare", "-b", "main", "."],
+                       cwd=origin)
+    actor = _clone_origin(origin, "actor")
+    runner.run_command(["git", "commit", "--allow-empty", "-m", "base"],
+                       cwd=actor)
+    runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
+    checkout = _clone_origin(origin, "checkout")
+    worktree = tmp_path / "worktree"
+    runner.run_command(
+        ["git", "worktree", "add", str(worktree), "--detach",
+         "origin/main"],
+        cwd=checkout,
+    )
+    runner.run_command(["git", "commit", "--allow-empty", "-m", "ahead"],
+                       cwd=actor)
+    runner.run_command(["git", "push", "origin", "HEAD:main"], cwd=actor)
+    remote_head = runner.run_command(
+        ["git", "rev-parse", "HEAD"], cwd=actor,
+    )
+
+    spy, held = _lock_held_during_fetch(checkout)
+    monkeypatch.setattr(runner, "run_command", spy)
+    runner.fetch_base_ref(checkout, "main", cwd=worktree)
+
+    assert held == [True]
+    # The fetch ran in the worktree: ITS view of the shared ref moved.
+    assert runner.run_command(
+        ["git", "rev-parse", "origin/main"], cwd=worktree,
+    ) == remote_head
+    _lock_free(checkout)
+
+
+def test_fetch_base_ref_fails_fast_while_the_lock_is_held(tmp_path):
+    # Issue #171: a lock timeout is a fail-fast error with the scene
+    # (lock path, timeout) — never a silent skip or a lock bypass.
+    lock_path = runner.base_sync_lock_path(tmp_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        with pytest.raises(
+            RuntimeError, match="base-sync.lock",
+        ):
+            runner.fetch_base_ref(
+                tmp_path, "main", lock_timeout_seconds=0.5,
+            )
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def test_fetch_base_ref_propagates_fetch_errors_unchanged(
+    monkeypatch, tmp_path,
+):
+    # Issue #171: a real fetch/network/ref error must propagate
+    # fail-fast (the CalledProcessError with its stderr), never be
+    # swallowed or retried silently.
+    error = subprocess.CalledProcessError(
+        128, ["git", "fetch", "origin", "main"],
+        stderr="fatal: cannot lock ref 'refs/remotes/origin/main'",
+    )
+
+    def fake_run(command, **kwargs):
+        raise error
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.fetch_base_ref(tmp_path, "main")
+
+
+def test_fetch_base_ref_releases_the_lock_on_fetch_failure(
+    monkeypatch, tmp_path,
+):
+    # Issue #171: a failed fetch must still release the lock — the
+    # next fetch (any Runner, any Pi session) must not inherit a stuck
+    # lock.
+    def fake_run(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            128, command, stderr="fatal: unable to access",
+        )
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.fetch_base_ref(tmp_path, "main")
+
+    _lock_free(tmp_path)
+
+
+# ---------------------------------------------------------------------------
 # review_and_merge_if_clean (the wait-loop review step)
 # ---------------------------------------------------------------------------
 
@@ -783,8 +1061,8 @@ def test_review_and_merge_refreezes_head_after_in_session_fix(
     )
     monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
 
-    def fake_gate(worktree, pr, base_branch):
-        calls.append(("gate", pr["head_oid"]))
+    def fake_gate(worktree, pr, base_branch, *, repo_dir):
+        calls.append(("gate", pr["head_oid"], repo_dir))
         return {**pr, "merged": True}
 
     monkeypatch.setattr(runner, "merge_gate", fake_gate)
@@ -803,8 +1081,9 @@ def test_review_and_merge_refreezes_head_after_in_session_fix(
         priority="normal",
     )
     assert merged is True
-    # The merge gate ran against the RE-FROZEN (fixed) head...
-    assert calls == [("gate", "h2")]
+    # The merge gate ran against the RE-FROZEN (fixed) head... with the
+    # deployment checkout as the base-sync lock location (Issue #171).
+    assert calls == [("gate", "h2", tmp_path)]
     # ...and the head advance is logged for the journal.
     assert "review_head_advanced" in caplog.text
     assert "frozen=h1" in caplog.text
@@ -823,8 +1102,8 @@ def test_review_and_merge_clean_verdict_without_head_advance_keeps_frozen_head(
     )
     monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
 
-    def fake_gate(worktree, pr, base_branch):
-        calls.append(("gate", pr["head_oid"]))
+    def fake_gate(worktree, pr, base_branch, *, repo_dir):
+        calls.append(("gate", pr["head_oid"], repo_dir))
         return {**pr, "merged": True}
 
     monkeypatch.setattr(runner, "merge_gate", fake_gate)
@@ -843,7 +1122,8 @@ def test_review_and_merge_clean_verdict_without_head_advance_keeps_frozen_head(
         priority="normal",
     )
     assert merged is True
-    assert calls == [("gate", "h1")]
+    # ...with the deployment checkout as the lock location (Issue #171).
+    assert calls == [("gate", "h1", tmp_path)]
     assert "review_head_advanced" not in caplog.text
 
 
