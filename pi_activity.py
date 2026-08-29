@@ -235,13 +235,10 @@ class SessionWatcher:
             "result": self.result,
             # True only while the newest session event is a tool result:
             # the model is expected to reply next, so a long silence is a
-            # slow model, not a stalled agent (Issue #40).
+            # slow model, not a stalled agent (Issue #40). The pending
+            # duration while in model_wait is `stale_seconds` itself
+            # (the silence since the newest event, Issue #169).
             "model_wait": in_model_wait,
-            # The silence since the newest session event while in
-            # model_wait (0 outside it): the evidence that separates a
-            # slow model from a dead upstream (Issue #169) — the bare
-            # flag above says nothing about the pending duration.
-            "model_wait_seconds": max(0.0, stale) if in_model_wait else 0.0,
             "changed": changed,
             "stale_seconds": max(0.0, stale),
         }

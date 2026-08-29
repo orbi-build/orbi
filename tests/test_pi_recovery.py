@@ -570,53 +570,6 @@ def test_timeout_duration_edge_tokens(tmp_path):
     assert pi_recovery.timeout_duration("timeout . x") is None
 
 
-def test_timeout_deadline_plain_seconds(tmp_path):
-    # The prompt contract form: `timeout <seconds> ...`.
-    assert pi_recovery.timeout_deadline(
-        "timeout 240 pytest tests/", 1000.0,
-    ) == 1240.0
-
-
-def test_timeout_deadline_after_bash_c_prefix(tmp_path):
-    # The Pi bash tool spawns `bash -c <command>`: the wrapper word is
-    # found wherever it stands in the command line.
-    assert pi_recovery.timeout_deadline(
-        "/bin/bash -c timeout 240 pytest tests/", 1000.0,
-    ) == 1240.0
-
-
-def test_timeout_deadline_duration_suffixes(tmp_path):
-    # coreutils duration suffixes: s, m, h, d.
-    assert pi_recovery.timeout_deadline(
-        "timeout 4m pytest", 0.0,
-    ) == 240.0
-    assert pi_recovery.timeout_deadline(
-        "timeout 1.5m pytest", 0.0,
-    ) == 90.0
-    assert pi_recovery.timeout_deadline(
-        "timeout 1h pytest", 0.0,
-    ) == 3600.0
-    assert pi_recovery.timeout_deadline(
-        "timeout 2d pytest", 0.0,
-    ) == 172800.0
-
-
-def test_timeout_deadline_none_without_timeout_word(tmp_path):
-    assert pi_recovery.timeout_deadline("pytest tests/", 1000.0) is None
-    # `timeout` inside a longer word is not the wrapper.
-    assert pi_recovery.timeout_deadline("timeoutctl 240 x", 1000.0) is None
-
-
-def test_timeout_deadline_none_without_duration(tmp_path):
-    # A `timeout` without a parseable duration is not a CLEAR timeout:
-    # the existing recovery behavior applies (fail-safe).
-    assert pi_recovery.timeout_deadline("timeout pytest", 1000.0) is None
-    assert pi_recovery.timeout_deadline("timeout abc pytest", 1000.0) is None
-    assert pi_recovery.timeout_deadline(
-        "timeout -k 5 240 pytest", 1000.0,
-    ) is None
-
-
 def test_upstream_alive_true_for_established_tcp_socket(
     tmp_path, monkeypatch,
 ):

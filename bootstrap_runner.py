@@ -1660,6 +1660,12 @@ def stream_pi(
                             "result=no_target",
                             run_id, issue_ref, role,
                         )
+                        # The pre-idle descendants are gone (a waited
+                        # tool reached its own deadline): the wait state
+                        # is stale — clear it so the progress comment
+                        # does not keep showing `recovery: wait` while
+                        # the escalation runs (Issue #169).
+                        recovery = None
                     if not pending:
                         recovery_step = 1
                 elif cycle >= 2 and recovery_step == 1:

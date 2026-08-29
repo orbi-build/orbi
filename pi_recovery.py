@@ -219,20 +219,6 @@ def timeout_duration(cmdline: str) -> float | None:
     return None
 
 
-def timeout_deadline(cmdline: str, start_epoch: float) -> float | None:
-    """The epoch at which a coreutils `timeout <duration>` wrapper ends
-    the command, or None when the command has no clear timeout.
-
-    `start_epoch` is the process start time in the SAME clock domain as
-    the caller's `now` — the clock-consistent pair is
-    `process_start_monotonic` plus `time.monotonic()` (Issue #169).
-    """
-    seconds = timeout_duration(cmdline)
-    if seconds is None:
-        return None
-    return start_epoch + seconds
-
-
 # /proc/net/tcp socket states that still hold a live connection to a
 # remote peer: ESTABLISHED (01), SYN_SENT (02), SYN_RECV (03). A
 # CLOSE_WAIT (08) socket has already been closed by the peer — the

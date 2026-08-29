@@ -4711,6 +4711,64 @@ def test_stream_pi_idle_recovery_state_wait_visible_in_progress_callback(
     assert seen[-1] is None
 
 
+def test_stream_pi_wait_state_cleared_when_waited_tool_exits(
+    tmp_path, caplog,
+):
+    """Issue #169: the wait evidence FLIPS when the waited tool reaches
+    its own deadline and exits while Pi stays silent (Pi itself is
+    stuck): the next window finds no pre-idle descendants (`no_target`),
+    the stale `wait` state is cleared (the progress callback must not
+    keep reporting `recovery=wait` after the tool is gone), and the
+    escalation continues to the bounded session kill."""
+    command = make_timeout_tool_pi(
+        tmp_path, tool_seconds=0.6, react_on_tool_done=False,
+    )
+    seen = []
+
+    def progress(activity):
+        seen.append(activity.get("recovery"))
+
+    with caplog.at_level("INFO"), pytest.raises(
+        RuntimeError, match="idle recovery",
+    ):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.3,
+            run_id="run1", issue=105, source_repo="xqliu/muyan-pilot",
+            branch="b", progress=progress,
+        )
+    lines = caplog.text.splitlines()
+    waits = [line for line in lines if " pi_idle_wait " in line]
+    assert len(waits) == 1, lines
+    # The tool exited on its own deadline: the next window finds no
+    # pre-idle descendants (`no_target`, nothing was signaled)...
+    terms = [line for line in lines if " pi_idle_term " in line]
+    assert any("result=no_target" in line for line in terms), lines
+    assert not any("result=sent" in line for line in terms), lines
+    # ...and the stale wait state is cleared: no `wait` is reported
+    # after the no_target window (the escalation keeps running).
+    no_target_index = next(
+        i for i, line in enumerate(lines)
+        if " pi_idle_term " in line and "result=no_target" in line
+    )
+    wait_after = [
+        line for line in lines[no_target_index:]
+        if " pi_idle_wait " in line
+    ]
+    assert not wait_after, lines
+    # The poll right after the last `wait` is the no_target window:
+    # the stale state is cleared (None), and the escalation continues
+    # (`kill`) — no `wait` is ever reported after the tool is gone.
+    last_wait = max(i for i, state in enumerate(seen) if state == "wait")
+    assert seen[last_wait + 1] is None, seen
+    assert all(state != "wait" for state in seen[last_wait + 1:]), seen
+    assert "kill" in seen[last_wait + 1:], seen
+    # The escalation still ends in the bounded session kill.
+    failures = [line for line in lines if " run_failed " in line]
+    assert len(failures) == 1
+    assert "reason=idle_recovery_stale_" in failures[0]
+
+
 def test_pending_timeout_targets_unit(tmp_path, monkeypatch):
     """Issue #169: the clock-consistent pending computation — a target
     whose start time is unreadable (it exited between the discovery and
