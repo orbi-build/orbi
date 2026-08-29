@@ -13,7 +13,6 @@ over this default).
 import pytest
 
 import bootstrap_runner as runner
-import cli_install
 
 
 @pytest.fixture(autouse=True)
@@ -23,9 +22,11 @@ def _default_cli_install_preflight(monkeypatch):
     tmp repo_dirs that carry no tool env, and the real `uv tool
     install` must never run in them. The refresh's own tests and the
     wiring tests stub or exercise it explicitly (a ``monkeypatch``
-    always wins over this default)."""
+    always wins over this default). The implementation lives in
+    `bootstrap_runner` itself (see the NOTE there), so the stub
+    patches ITS module global — the call `main()` makes."""
     monkeypatch.setattr(
-        cli_install, "refresh_cli_install", lambda *a, **k: "unchanged",
+        runner, "refresh_cli_install", lambda *a, **k: "unchanged",
     )
 
 

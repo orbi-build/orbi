@@ -255,7 +255,18 @@ acceptance criteria.
   retries). Ordinary Python source content is NOT part of the
   fingerprint (the editable finder maps the live files — a content
   change needs no reinstall), and systemd template changes stay with
-  the unit drift mechanism above.
+  the unit drift mechanism above. The refresh IMPLEMENTATION lives in
+  `bootstrap_runner` itself, NOT in a separate new module: the
+  bootstrap chain (`muyan_pilot` -> `bootstrap_runner`) must still
+  LOAD and REFRESH in a tool env whose installed finder predates this
+  PR's packaging change (the #158 scene) — a new module for the
+  refresh would not be importable there, and the very refresh that
+  reinstalls the tool env could never run (the #158 incident, one
+  module later). `cli_install` is a thin re-export of the
+  implementation for the tests' single import point; the bootstrap
+  chain never imports it (a regression test pins this: a fresh
+  `bootstrap_runner` loads with `cli_install` blocked from the import
+  system and its `refresh_cli_install` gate still runs).
 - A template change is a deployment change (Issue #131, #142): a PR
   that modifies `systemd/muyan-pilot@.service` or `systemd/muyan-pilot@.timer`
   takes effect without a human step — the NEXT timer trigger's

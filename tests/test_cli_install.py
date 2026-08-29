@@ -44,16 +44,11 @@ import pytest
 import cli_install
 import cli_source
 
-# The real refresh, captured at import time (before any fixture runs):
-# these tests exercise the function under test, overriding the suite's
-# default no-op stub from conftest (the conftest fixture runs first,
-# this one wins).
-_REAL_REFRESH = cli_install.refresh_cli_install
-
-
-@pytest.fixture(autouse=True)
-def _real_refresh(monkeypatch):
-    monkeypatch.setattr(cli_install, "refresh_cli_install", _REAL_REFRESH)
+# `cli_install` is a thin re-export of the implementation in
+# `bootstrap_runner` (see the NOTE there): these tests exercise the
+# real refresh through that single import point. The suite's default
+# no-op stub (conftest) patches `bootstrap_runner.refresh_cli_install`
+# — the call `main()` makes — and never touches this import point.
 
 
 def _write_pyproject(repo: Path, text: str) -> Path:
@@ -456,8 +451,8 @@ def test_two_concurrent_starts_run_exactly_one_install(tmp_path):
 
 def test_base_sync_lock_path_is_the_shared_state_dir_file(tmp_path):
     """The refresh serializes on the SAME lock file the ExecStartPre
-    flock in the service template uses (moved here from
-    bootstrap_runner: one home for the concurrency primitive)."""
+    flock in the service template uses (the shared state dir, next to
+    the slots — never a per-process temp file)."""
     assert cli_install.base_sync_lock_path(tmp_path) == (
         tmp_path / ".muyan-pilot" / "base-sync.lock"
     )
