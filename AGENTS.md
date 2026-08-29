@@ -226,7 +226,47 @@ acceptance criteria.
   structured `cli_source_drift` line (actual import path, expected
   repo_dir, the exact editable reinstall command) and repaired by
   `muyan-pilot setup` (the CLI step verifies or force-reinstalls the
-  editable install); the Runner never installs the tool at start.
+  editable install).
+- The Runner refreshes the editable install at start (Issue #158):
+  the editable finder's module MAPPING is generated at INSTALL time
+  from the checkout's `pyproject.toml` (`py-modules`, entry points,
+  version, dependencies), so a merged PACKAGING change (e.g. a new
+  runtime module in `py-modules`) leaves a stale finder and the next
+  CLI process dies with `ModuleNotFoundError` before the Runner can
+  start (the #158 incident: `cli_source` merged to main, the installed
+  finder still mapped the pre-#152 module set, the systemd start
+  failed). The Runner tick entry (BEFORE any slot or claim; the CLI
+  subcommands never install) compares the packaging fingerprint (the
+  sha256 of the checkout's `pyproject.toml`) with the last successful
+  install's fingerprint, stored in the shared state dir
+  (`<repo_dir>/.muyan-pilot/cli-install.json` — the same gitignored
+  dir as `base-sync.lock` and the slots; it is NOT a second release
+  state): unchanged -> NO uv call at all (no per-tick unconditional
+  reinstall); changed or no state yet (first install) -> ONE
+  lock-protected `uv tool install --force --reinstall --editable
+  --python /usr/bin/python3 <repo_dir>` (the SAME base-sync flock the
+  service template's `ExecStartPre` uses — two instances starting in
+  the same tick serialize, the second re-reads the state under the
+  lock and reuses the first's result, never a concurrent uv install),
+  the fingerprint is recorded only after a successful install, and a
+  failing install fails the start fast with the structured
+  `cli_install_failed` line (reason + the exact fix command): no
+  slot, no claim, no label change, no state recorded (the next start
+  retries). Ordinary Python source content is NOT part of the
+  fingerprint (the editable finder maps the live files — a content
+  change needs no reinstall), and systemd template changes stay with
+  the unit drift mechanism above. The refresh IMPLEMENTATION lives in
+  `bootstrap_runner` itself, NOT in a separate new module: the
+  bootstrap chain (`muyan_pilot` -> `bootstrap_runner`) must still
+  LOAD and REFRESH in a tool env whose installed finder predates this
+  PR's packaging change (the #158 scene) — a new module for the
+  refresh would not be importable there, and the very refresh that
+  reinstalls the tool env could never run (the #158 incident, one
+  module later). `cli_install` is a thin re-export of the
+  implementation for the tests' single import point; the bootstrap
+  chain never imports it (a regression test pins this: a fresh
+  `bootstrap_runner` loads with `cli_install` blocked from the import
+  system and its `refresh_cli_install` gate still runs).
 - A template change is a deployment change (Issue #131, #142): a PR
   that modifies `systemd/muyan-pilot@.service` or `systemd/muyan-pilot@.timer`
   takes effect without a human step — the NEXT timer trigger's

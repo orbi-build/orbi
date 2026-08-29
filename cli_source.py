@@ -23,8 +23,11 @@ checkout drifts the same way.
 This module is READ-ONLY: it reports the running process's
 ``muyan_pilot`` import source against the configured ``repo_dir`` and
 the exact fix command. The fix is a HUMAN/setup step (``muyan-pilot
-setup`` runs it idempotently); the Runner never installs the tool at
-start, so two concurrent service instances cannot race the tool env.
+setup`` runs it idempotently). Since Issue #158 the Runner ALSO
+refreshes the editable install at start (``cli_install``) when the
+packaging inputs changed — under the SAME base-sync flock the
+``ExecStartPre`` preflight takes, so two concurrent service instances
+still never race the tool env.
 """
 from __future__ import annotations
 

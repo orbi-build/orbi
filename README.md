@@ -13,7 +13,7 @@
 - **系统架构总览**（GitHub Issues、systemd timer/service、Runner、Pi、worktree、llama-server、可选 `local-llm-kv-cache` proxy、PR/review/merge）：文档站首页 [index](docs/index.mdx) / [zh/index](docs/zh/index.mdx)；
 - **任务生命周期状态机**（`ai-ready` → `ai-in-progress` → `ai-pr-opened` → `ai-fix-needed` → `ai-merged` / `ai-blocked`，标出 Epic/Release task/P0 边界）：[workflow](docs/workflow.mdx) / [zh/workflow](docs/zh/workflow.mdx)。
 
-## CLI 安装与升级（Issue #140、#152）
+## CLI 安装与升级（Issue #140、#152、#158）
 
 正式使用方式是 **editable** `uv tool` 安装的可执行 CLI（console script `muyan-pilot = muyan_pilot:main`，见 `pyproject.toml`）——这是官方本地部署方式：
 
@@ -27,7 +27,17 @@ muyan-pilot --help
 muyan-pilot --version
 ```
 
-**为什么必须 editable（Issue #152）**：非 editable 安装会把源码复制进 tool 环境的 site-packages；`ExecStartPre` 把 checkout 同步到最新 main 之后，CLI 仍在执行旧副本——这正是 #152 的 P0 启动死锁（旧 CLI 检查旧的非模板 unit 路径，永远跑不到新的迁移代码）。editable 安装下，下一个 CLI 进程（下一个 timer 启动的 Runner）自动从 checkout 取到最新代码：**普通 Python 源码与 systemd 模板/迁移代码变更不需要任何重装或升级命令**。只有依赖、入口点、包名、构建后端或 Python 版本变化时，才重新执行上面的 force editable 重装命令。
+**为什么必须 editable（Issue #152）**：非 editable 安装会把源码复制进 tool 环境的 site-packages；`ExecStartPre` 把 checkout 同步到最新 main 之后，CLI 仍在执行旧副本——这正是 #152 的 P0 启动死锁（旧 CLI 检查旧的非模板 unit 路径，永远跑不到新的迁移代码）。editable 安装下，下一个 CLI 进程（下一个 timer 启动的 Runner）自动从 checkout 取到最新代码：**普通 Python 源码与 systemd 模板/迁移代码变更不需要任何重装或升级命令**。
+
+**打包元数据变更的自动刷新（Issue #158）**：editable finder 的模块映射是在**安装时**从 checkout 的 `pyproject.toml`（`py-modules`、入口点、版本、依赖）生成的——所以合并了打包输入变更（例如 `py-modules` 新增运行时模块）后，已安装的 finder 会过期，下一个 CLI 进程在 Runner 启动前就 `ModuleNotFoundError`（#158 事故：`cli_source` 合入 main 后，已安装 finder 仍映射 #152 之前的模块集，systemd 启动失败）。现在 Runner 每次启动（tick 入口，在任何 slot/claim 之前）自动刷新：
+
+- 打包指纹 = checkout `pyproject.toml` 的 sha256，与**上次成功安装**记录的指纹（共享状态目录 `.muyan-pilot/cli-install.json`，与 `base-sync.lock`、slots 同目录，gitignored，随 checkout 同步存活）比较；
+- **未变**：完全不跑 `uv`（不做每 tick 无条件重装）；
+- **变更或首次安装**（无状态记录）：在 base-sync flock 保护下跑一次上面的 force editable 重装（与服务模板 `ExecStartPre` 同一把锁——两个 instance 同 tick 启动时串行化，第二个等待并复用第一个的结果，绝不并发 `uv`）；安装成功后才记录新指纹；
+- **安装失败**：fail fast（非零退出，结构化 `cli_install_failed` 行：原因 + 精确的修复命令），不取 slot、不 claim、不改标签，不记录状态（下次启动重试）；
+- 普通 Python 源码内容变更**不**触发重装（editable finder 映射的就是活文件，这正是 editable 的意义）。
+
+上面的 force editable 命令仍是人工 setup 入口（`muyan-pilot setup` 的 CLI 步骤）；Runner 启动时的自动刷新只在打包输入变更时执行同一条命令。
 
 `uv tool` 把 CLI 装进隔离的 tool 环境，可执行文件在 `~/.local/bin/muyan-pilot`（systemd unit 的 PATH 已包含该目录，见「部署一致性」）。`muyan-pilot doctor` 报告 CLI 源码一致性：`cli_source: clean source=...`（运行进程从配置的 checkout 导入）或 `cli_source: DRIFT` + 结构化 `cli_source_drift` 行（实际导入路径、期望 repo_dir、精确的 editable 重装命令）。发布包不携带第三方运行时依赖、token 或用户目录：配置（`muyan-pilot.toml`）和用户 systemd 目录保持机器本地。`muyan_pilot.py` 的直接执行入口（用解释器直接运行该文件）保留为开发/兼容路径，不是正式使用方式。
 
