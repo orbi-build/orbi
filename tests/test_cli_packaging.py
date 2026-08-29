@@ -49,6 +49,8 @@ RUNTIME_MODULES = (
     "progress",
     # Issue #152: the CLI source consistency check (doctor/setup).
     "cli_source",
+    # Issue #158: the pre-start editable CLI install refresh.
+    "cli_install",
 )
 
 # The docs pages that document user-facing commands (EN + ZH parity).

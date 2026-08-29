@@ -18,6 +18,7 @@ from unittest.mock import Mock
 import pytest
 
 import bootstrap_runner as runner
+import cli_install
 from tests.test_progress_wiring import make_fake_gh
 
 
@@ -678,7 +679,7 @@ def test_sync_base_checkout_lock_path_is_the_shared_state_dir_file(
     # Issue #149: the SAME lock file the ExecStartPre flock in the
     # service template uses (the shared state dir, never a per-process
     # temp file).
-    assert runner.base_sync_lock_path(tmp_path) == (
+    assert cli_install.base_sync_lock_path(tmp_path) == (
         tmp_path / ".muyan-pilot" / "base-sync.lock"
     )
 
@@ -690,7 +691,7 @@ def test_sync_base_checkout_fails_fast_while_the_lock_is_held(
     # Python-side sync must not run git while the ExecStartPre flock
     # (or another Runner's sync) holds the lock — it fails fast with a
     # useful error instead of racing the main worktree.
-    lock_path = runner.base_sync_lock_path(tmp_path)
+    lock_path = cli_install.base_sync_lock_path(tmp_path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
     fcntl.flock(fd, fcntl.LOCK_EX)
@@ -729,7 +730,7 @@ def test_sync_base_checkout_releases_the_lock_after_sync(
 
     # After the sync the lock is free: a non-blocking probe acquires
     # and releases it immediately.
-    lock_path = runner.base_sync_lock_path(checkout)
+    lock_path = cli_install.base_sync_lock_path(checkout)
     probe = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
     try:
         fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -763,7 +764,7 @@ def test_sync_base_checkout_releases_the_lock_on_failure(
     with pytest.raises(RuntimeError, match="cannot fast-forward"):
         runner.sync_base_checkout(checkout, "main")
 
-    lock_path = runner.base_sync_lock_path(checkout)
+    lock_path = cli_install.base_sync_lock_path(checkout)
     probe = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
     try:
         fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)

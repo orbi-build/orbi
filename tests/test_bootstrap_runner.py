@@ -6186,6 +6186,152 @@ def test_main_transport_preflight_receives_the_configured_args(
     assert seen["run_command"] is runner.run_command
 
 
+def test_main_cli_install_refresh_runs_before_slot_and_claim(
+    monkeypatch, tmp_path,
+):
+    """Issue #158: the editable CLI install refresh runs in the Runner
+    tick entry BEFORE any slot or claim, with the configured repo_dir
+    and the real run_command — so a stale editable finder (a merged
+    packaging change) is refreshed before the tick can claim work,
+    and the NEXT CLI process can import the new runtime modules."""
+    seen: dict = {}
+
+    def fake_refresh(repo_dir, *, run_command, lock_timeout_seconds=300.0):
+        seen["repo_dir"] = Path(repo_dir)
+        seen["run_command"] = run_command
+        seen["slot_existed_at_refresh"] = (
+            Path(repo_dir) / ".muyan-pilot" / "slots"
+        ).exists()
+        return "unchanged"
+
+    monkeypatch.setattr(runner, "refresh_cli_install", fake_refresh)
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\n', encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    assert seen["repo_dir"] == tmp_path
+    assert seen["run_command"] is runner.run_command
+    # BEFORE the slot: at the refresh moment no slot exists yet (the
+    # slot is taken only after every preflight passed).
+    assert seen["slot_existed_at_refresh"] is False
+    # ...and the tick proceeded to the normal claim flow (slot taken
+    # after the refresh).
+    assert (tmp_path / ".muyan-pilot" / "slots" / "slot-1").exists()
+
+
+def test_main_cli_install_failure_fails_fast_before_slot_and_claim(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #158: a failing editable install fails the start BEFORE
+    any slot or claim (non-zero exit, the structured
+    `cli_install_failed` line in the journal), nothing is claimed, no
+    slot is taken — no fallback, no skipped tick."""
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\n', encoding="utf-8",
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError(
+            "pick_next_delivery must not run on cli install failure"
+        )
+
+    monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
+    with pytest.raises(
+        AssertionError, match="must not run on cli install failure",
+    ):
+        fail_if_called()
+    monkeypatch.setattr(
+        runner, "refresh_cli_install",
+        lambda *a, **k: (_ for _ in ()).throw(
+            runner.CliInstallError(
+                "editable CLI install failed for /repo: uv exploded "
+                "(fix: uv tool install --force --reinstall --editable "
+                "--python /usr/bin/python3 /repo)"
+            ),
+        ),
+    )
+    with caplog.at_level("ERROR"):
+        with pytest.raises(
+            runner.CliInstallError, match="CLI install failed",
+        ):
+            runner.main(["--config", str(config)])
+    # No slot was taken and nothing was claimed.
+    assert not (tmp_path / ".muyan-pilot" / "slots").exists()
+
+
+def test_bootstrap_chain_loads_and_refreshes_when_cli_install_is_unmapped(
+    tmp_path,
+):
+    """Issue #158 acceptance (the incident itself, one module later):
+    the editable finder's module MAPPING is generated at INSTALL time
+    from `pyproject.toml`, so right after this PR merges, the INSTALLED
+    finder does not map `cli_install` yet — and the bootstrap chain
+    (`muyan_pilot` -> `bootstrap_runner`) must still LOAD in that tool
+    env, with the refresh REACHABLE: the refresh implementation lives
+    in `bootstrap_runner` itself (a separate new module would not be
+    importable in the stale-finder env, and the very refresh that
+    reinstalls the tool env could never run — the #158 incident, one
+    module later). Load a fresh `bootstrap_runner` with `cli_install`
+    blocked from the import system: it must import cleanly and its
+    `refresh_cli_install` gate must run (the unchanged path needs no
+    uv call and no other new module)."""
+    import importlib.util
+
+    bootstrap_file = Path(runner.__file__).resolve()
+
+    class _BlockCliInstall:
+        """Meta path finder that hides the `cli_install` module."""
+
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname == "cli_install":
+                raise ModuleNotFoundError(
+                    "No module named 'cli_install'", name=fullname,
+                )
+            return None
+
+    hook = _BlockCliInstall()
+    # The hook hides exactly the module under test and nothing else.
+    with pytest.raises(ModuleNotFoundError, match="cli_install"):
+        hook.find_spec("cli_install")
+    assert hook.find_spec("some_other_module") is None
+    saved = sys.modules.pop("bootstrap_runner")
+    sys.meta_path.insert(0, hook)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "bootstrap_runner_stale_finder", bootstrap_file,
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    finally:
+        sys.meta_path.remove(hook)
+        sys.modules["bootstrap_runner"] = saved
+    # The fresh module loaded with `cli_install` unmapped: the chain
+    # is importable in the stale-finder tool env, so the next systemd
+    # start reaches `main()` and the refresh can repair the finder.
+    assert module.main is not None
+    # The refresh gate itself runs in the stale env (unchanged path:
+    # no uv call, no other new module needed).
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "a"\n', encoding="utf-8",
+    )
+    module.write_install_state(
+        tmp_path, module.packaging_fingerprint(tmp_path),
+    )
+    calls = []
+    assert module.refresh_cli_install(
+        tmp_path, run_command=lambda *a, **k: calls.append(1),
+    ) == "unchanged"
+    assert calls == []
+
+
 # --- delivery lifecycle: slot held until merge or terminal failure ----------
 
 PR_URL = "https://github.com/owner/repo/pull/46"
