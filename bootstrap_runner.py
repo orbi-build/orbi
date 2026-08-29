@@ -42,7 +42,15 @@ import cli_install
 from cli_install import base_sync_lock_path, acquire_base_sync_lock
 from git_transport import TransportError, check_transport
 from pilot_slots import acquire_slot, slot_dir_for, slot_occupancy
-from pi_recovery import find_idle_descendants, pid_alive, signal_pid
+from pi_recovery import (
+    clk_tck,
+    find_idle_descendants,
+    pid_alive,
+    process_start_monotonic,
+    signal_pid,
+    timeout_duration,
+    upstream_alive,
+)
 from pi_activity import (
     SessionWatcher,
     activity_snapshot,
@@ -1294,6 +1302,41 @@ def _log_heartbeat(activity: dict, *, issue_ref: str,
     )
 
 
+def _pending_timeout_targets(targets: list[dict]) -> list[tuple[dict, float]]:
+    """The pre-idle descendants still INSIDE an explicit `timeout`
+    deadline (Issue #169): `[(target, deadline_epoch), ...]`.
+
+    A descendant whose command line carries a coreutils
+    `timeout <seconds>` wrapper and whose deadline is still in the
+    future is a legitimately running tool — the runner waits for the
+    deadline instead of signaling it. The age is measured CLOCK
+    CONSISTENTLY (Issue #169): the process's monotonic start offset
+    (stat field 22) against `time.monotonic()`, never the
+    realtime-flavoured `process_start_epoch` — a realtime step after
+    boot (NTP) must not make a tool look older than it is. A
+    descendant without a clear timeout, whose start time is unreadable,
+    or whose deadline already passed is not pending: the existing
+    escalation applies to it.
+    """
+    if not targets:
+        return []
+    hz = clk_tck()
+    now_mono = time.monotonic()
+    now = time.time()
+    pending: list[tuple[dict, float]] = []
+    for target in targets:
+        start_mono = process_start_monotonic(target["pid"], hz=hz)
+        if start_mono is None:
+            continue
+        duration = timeout_duration(target["cmdline"] or "")
+        if duration is None:
+            continue
+        remaining = duration - (now_mono - start_mono)
+        if remaining > 0:
+            pending.append((target, now + remaining))
+    return pending
+
+
 def stream_pi(
     command: list[str],
     *,
@@ -1426,6 +1469,10 @@ def stream_pi(
     recovery: str | None = None
     recovery_targets: list[dict] = []
     recovery_step = 0
+    # The `pi_idle_wait` decision is logged once per stall (Issue #169):
+    # the escalation re-evaluates every window while the tool is inside
+    # its `timeout` deadline, but the journal carries one decision line.
+    idle_wait_logged = False
     idle_recovery_failed = False
     try:
         while True:
@@ -1447,20 +1494,33 @@ def stream_pi(
             visible = (
                 activity["phase"], activity["action"], activity["result"],
             )
+            # The wait state rides on the activity/heartbeat lines
+            # (Issue #40). Once the model_wait silence crosses the dead
+            # threshold the wait is SLOW, not dead (Issue #169): the
+            # state is `model_wait_slow` — visible, but only the missing
+            # upstream connection (checked below) is a kill.
+            if activity["model_wait"]:
+                wait_state = (
+                    "model_wait_slow"
+                    if activity["stale_seconds"] >= model_wait_dead_seconds
+                    else "model_wait"
+                )
+            else:
+                wait_state = None
             if visible != last_visible:
                 # Only changed fields are repeated; an unchanged poll is a
                 # heartbeat (Issue #40).
                 _log_activity(
                     activity, issue_ref=issue_ref,
                     role=role,
-                    state="model_wait" if activity["model_wait"] else None,
+                    state=wait_state,
                 )
                 last_visible = visible
             else:
                 _log_heartbeat(
                     activity, issue_ref=issue_ref,
                     role=role, elapsed=time.monotonic() - start,
-                    state="model_wait" if activity["model_wait"] else None,
+                    state=wait_state,
                 )
             if activity["model_wait"] != last_model_wait:
                 # One transition line per state change: entering model_wait
@@ -1497,6 +1557,7 @@ def stream_pi(
                 recovery = None
                 recovery_targets = []
                 recovery_step = 0
+                idle_wait_logged = False
             elif (
                 not activity["model_wait"]
                 and not idle_warned
@@ -1551,7 +1612,35 @@ def stream_pi(
                     targets = find_idle_descendants(
                         process.pid, idle_start_epoch,
                     )
-                    if targets:
+                    # Evidence-based wait (Issue #169, the #105
+                    # regression): a pre-idle descendant that runs a
+                    # coreutils `timeout <seconds> ...` wrapper INSIDE
+                    # its deadline is a legitimately running tool, not a
+                    # hung one — the runner waits for the deadline
+                    # instead of TERMed it. The wait decision is logged
+                    # once and the escalation pauses (recovery_step stays
+                    # 0): every later window re-evaluates, and when the
+                    # deadline passes with the descendant still alive the
+                    # evidence flips and the TERM → KILL → session-kill
+                    # escalation runs unchanged (the slot is never held
+                    # forever).
+                    pending = _pending_timeout_targets(targets)
+                    if pending:
+                        if not idle_wait_logged:
+                            for target, deadline in pending:
+                                LOGGER.warning(
+                                    "pi_idle_wait run=%s issue=%s role=%s "
+                                    "pid=%s cmdline=%s deadline=%s",
+                                    run_id, issue_ref, role, target["pid"],
+                                    quote_value(target["cmdline"] or "-"),
+                                    time.strftime(
+                                        "%Y-%m-%dT%H:%M:%SZ",
+                                        time.gmtime(deadline),
+                                    ),
+                                )
+                            idle_wait_logged = True
+                        recovery = "wait"
+                    elif targets:
                         recovery_targets = targets
                         for target in targets:
                             result = signal_pid(
@@ -1573,7 +1662,14 @@ def stream_pi(
                             "result=no_target",
                             run_id, issue_ref, role,
                         )
-                    recovery_step = 1
+                        # The pre-idle descendants are gone (a waited
+                        # tool reached its own deadline): the wait state
+                        # is stale — clear it so the progress comment
+                        # does not keep showing `recovery: wait` while
+                        # the escalation runs (Issue #169).
+                        recovery = None
+                    if not pending:
+                        recovery_step = 1
                 elif cycle >= 2 and recovery_step == 1:
                     for target in recovery_targets:
                         if not pid_alive(target["pid"]):
@@ -1612,21 +1708,35 @@ def stream_pi(
                         "progress_publish_failed run=%s issue=%s role=%s",
                         run_id, issue_ref, role,
                     )
-            # Upstream-dead detection (Issue #75): the model is
-            # expected to reply next (model_wait) but the session file
-            # has been frozen for the dead threshold — the upstream
-            # (llama/proxy) is dead and Pi will never exit on its own.
-            # Kill Pi and fail fast: the normal failure path releases
-            # the slot so the next tick can resume or claim the next
-            # Issue. Never fires while events keep arriving (a slow
-            # generation is not a dead upstream).
+            # Upstream-dead detection (Issue #75, evidence-based since
+            # Issue #169): the model is expected to reply next
+            # (model_wait) and the session file has been frozen for the
+            # dead threshold — but the bare freeze is NOT evidence the
+            # upstream is dead: a slow local model generating for
+            # minutes keeps its connection open (a live TCP socket in
+            # the live states ESTABLISHED/SYN_SENT/SYN_RECV). Only the
+            # combination of the long silence AND no live upstream
+            # connection kills Pi and fails fast (the #158 regression:
+            # a healthy long generation must not be killed): the
+            # normal failure path releases the slot so the next tick
+            # can resume or claim the next Issue. Never fires while
+            # events keep arriving (a slow generation is not a dead
+            # upstream).
             if (
                 activity["model_wait"]
                 and activity["stale_seconds"] >= model_wait_dead_seconds
             ):
-                process.kill()
-                upstream_dead = True
-                break
+                if upstream_alive(process.pid):
+                    # The connection to the upstream is still alive:
+                    # the model is generating slowly, not dead
+                    # (Issue #169). The wait is visible as
+                    # `state=model_wait_slow` on the heartbeats — no
+                    # kill, the run continues.
+                    pass
+                else:
+                    process.kill()
+                    upstream_dead = True
+                    break
             if process.poll() is not None:
                 break
     finally:
