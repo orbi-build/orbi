@@ -14,8 +14,8 @@
 flowchart LR
   epic["Epic（ai-epic）— 只协调，从不被领取"]
   epic -.拆分为.-> ready
-  release["Release task — 普通 ai-ready Issue（release 对账）"]
-  release -.交付于.-> ready
+  release["Release task（ai-ready + ai-release）<br/>— Runner release 状态机，从不进 run_pi"]
+  release -.像普通任务领取.-> ready
   ready["ai-ready<br/>（领取顺序：P0 标签最先，然后 bug 标签，最后普通）"]
   ready -->|领取：加标签 + 建 worktree + 启动 Pi| progress["ai-in-progress"]
   progress -->|PR 验收：base 新鲜、run marker、Fixes #N| opened["ai-pr-opened"]
@@ -139,9 +139,22 @@ PR 验收时校验该关键词，缺失即 fail fast。
   遗留 `ai-in-progress`）确定；任一条件未满足时 Epic 保持 open：由人工
   或 release task 关闭（通常伴随最后一个 `Fixes #<epic>` commit/PR），
   绝不由 Runner 关闭。
-- **Release task**：一个普通 `ai-ready` Issue，职责是 release 对账——
-  检查子 Issue 已合并、版本 tag 在远端存在、release 证据完整。和任何
-  任务一样通过一个 PR 交付（或当证据已在远端时直接关闭 Epic）。
+- **Release task**：带 `ai-release` 标签的 `ai-ready` Issue（Issue
+  #98）。它**不是**开发任务：Runner 通过普通 ready 扫描领取，但
+  `process_issue` 把它路由到确定性的 release 状态机而不是 `run_pi`——
+  没有 Pi 会话、没有 PR。状态机幂等且可恢复（重启后恢复同一
+  run id/worktree）：严格解析 Issue 正文的 `## Release` 声明
+  （`version`、`base_branch`、`test_command`、`scope`），冻结 base
+  （release commit 就是 `origin/<base_branch>`），执行发布前门禁
+  （无遗留 `ai-in-progress` / `ai-pr-opened` / `ai-fix-needed`、release
+  commit 的 CI 全绿、base 分支无 open PR），用 `gh pr view` /
+  `gh issue view` 逐项验证 scope（绝不解析复选框），在 release commit
+  的干净 worktree 里跑声明的测试命令，然后在 release commit 上创建
+  annotated tag 并普通 push（已存在的 tag 必须精确指向 release commit——
+  绝不移动、覆盖或 force-push），最后发布带完整验证证据的 GitHub
+  Release。成功：`ai-merged`（终态）并关闭 Issue。任何失败：单独进入
+  `ai-blocked`（release 是人工决策点——不自动重试），Issue 上带 run
+  marker 和具体原因。
 - **P0 优先级**：普通 `p0` GitHub 标签标记紧急 Issue（生产故障）。它
   **不是**交付状态——只决定 ready 领取顺序，从不改变 Issue 粒度、任何
   交付状态或终态语义，Runner 也从不增删它。ready 领取顺序固定：

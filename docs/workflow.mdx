@@ -14,8 +14,8 @@ same PR — only its head may advance):
 flowchart LR
   epic["Epic (ai-epic) — coordination only, never claimed"]
   epic -.splits into.-> ready
-  release["Release task — a regular ai-ready Issue (release reconciliation)"]
-  release -.delivers through.-> ready
+  release["Release task (ai-ready + ai-release)<br/>— Runner release state machine, never run_pi"]
+  release -.claims like.-> ready
   ready["ai-ready<br/>(pickup order: P0-labeled first, then bug-labeled, then plain)"]
   ready -->|claim: label + worktree + Pi| progress["ai-in-progress"]
   progress -->|PR verified: base fresh, run marker, Fixes #N| opened["ai-pr-opened"]
@@ -160,11 +160,27 @@ DAG, no priority numbers, no separate queues:
   and while any condition is unmet the Epic stays open: it is closed by
   a human or a release task, typically with a final `Fixes #<epic>`
   commit/PR — never by the Runner.
-- **Release task**: a regular `ai-ready` Issue whose job is release
-  reconciliation — checking that the sub-Issues are merged, the version
-  tag exists on the remote, and the release evidence is complete. Like
-  any task it delivers through one PR (or closes the Epic when the
-  evidence is already on the remote).
+- **Release task**: an `ai-ready` Issue additionally marked with the
+  `ai-release` label (Issue #98). It is NOT a development task: the
+  Runner picks it up through the normal ready scan, but `process_issue`
+  routes it to the deterministic release state machine instead of
+  `run_pi` — no Pi session, no PR. The state machine is idempotent and
+  resumable (a restart resumes the same run id/worktree): strictly parse
+  the `## Release` declaration from the Issue body (`version`,
+  `base_branch`, `test_command`, `scope`), freeze the base (the release
+  commit is exactly `origin/<base_branch>`), enforce the pre-release
+  gates (no leftover `ai-in-progress` / `ai-pr-opened` / `ai-fix-needed`,
+  CI green on the release commit, no open PRs against the base branch),
+  verify the scope item by item with `gh pr view` / `gh issue view`
+  (never checkbox parsing), run the declared test command in a clean
+  worktree at the release commit, then create the annotated tag at the
+  release commit and push it with a plain push (an existing tag must
+  point exactly at the release commit — it is never moved, overwritten
+  or force-pushed), and finally publish the GitHub Release with the full
+  verification evidence. Success: `ai-merged` (terminal) and the Issue
+  is closed. Any failure: `ai-blocked` ALONE (a release is a human
+  decision point — no automatic retry) with the run marker and the
+  concrete reason on the Issue.
 - **P0 priority**: the plain `p0` GitHub label marks an urgent Issue
   (a production outage). It is NOT a delivery state — it only orders the
   ready pickup, never changes the Issue granularity, any delivery state,

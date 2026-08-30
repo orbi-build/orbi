@@ -428,12 +428,61 @@ acceptance criteria.
 - The Epic's completion is judged from GitHub evidence — sub-Issues
   done, their PRs merged, the release tag/artifacts on the remote, no
   leftover `ai-in-progress` — and the Epic is closed by a human or a
-  release task (a regular `ai-ready` Issue that reconciles that
-  evidence, typically with a final `Fixes #<epic>`). The Runner never
-  marks an Epic complete or closes it: while any completion condition
-  is unmet the Epic stays open. No database, queue or resident service
-  tracks the Epic — GitHub Issues/labels, native `blockedBy`, PRs and
-  the remote tag are the only state.
+  release task (an `ai-ready`+`ai-release` Issue, see Release tasks
+  below). The Runner never marks an Epic complete or closes it: while
+  any completion condition is unmet the Epic stays open. No database,
+  queue or resident service tracks the Epic — GitHub Issues/labels,
+  native `blockedBy`, PRs and the remote tag are the only state.
+
+## Release tasks (ai-release)
+
+- A Release task is an `ai-ready` Issue additionally marked with the
+  plain `ai-release` label (Issue #98). It is NOT a development task
+  and NEVER enters the `run_pi` path: the ready scan picks it up like
+  any task, but `process_issue` routes it to the Runner's deterministic
+  release state machine — no Pi session, no PR. The three task types
+  stay distinct: an Epic (`ai-epic`) is coordination only and never
+  claimed; a normal task (`ai-ready`) delivers through `run_pi` → PR
+  → review → merge; a Release task (`ai-ready`+`ai-release`) delivers
+  through the release state machine.
+- The state machine is idempotent and resumable (a restart resumes the
+  same run id/worktree, the same resume rule as normal tasks) and runs
+  these steps in order:
+  1. Strictly parse the `## Release` declaration from the Issue body:
+     `version`, `base_branch`, `test_command`, `scope` (a list of
+     `#N` items). Missing, duplicated or unknown fields fail fast.
+  2. Freeze the base — the release commit is exactly
+     `origin/<base_branch>` (fetched under the base-sync lock).
+  3. Enforce the pre-release gates: no leftover open
+     `ai-in-progress` / `ai-pr-opened` / `ai-fix-needed` Issues (the
+     release Issue itself excluded), CI green on the release commit
+     (no check runs passes with explicit evidence), and no open PRs
+     targeting the base branch. A gate that cannot be checked because
+     of a real `gh` failure is a failed gate.
+  4. Verify the scope item by item: `gh pr view` must report `MERGED`,
+     otherwise `gh issue view` must report `CLOSED`. Checkbox parsing
+     is forbidden — every scope item is checked against the live API.
+  5. Run the declared `test_command` in a clean worktree at the
+     release commit (`timeout`-wrapped, Issue #95).
+  6. Tag: when the remote tag is absent, create an annotated tag at
+     the release commit and push it with a plain push (never
+     `--force`). When it exists it must point EXACTLY at the release
+     commit — a mismatch fails fast. An existing tag is never moved,
+     overwritten or force-pushed.
+  7. Publish the GitHub Release (idempotent) whose notes carry the
+     full verification evidence: version, tag, release commit,
+     per-item scope evidence, gate evidence, test evidence and the run
+     marker.
+  8. Success: `ai-merged` (terminal) and the release Issue is closed,
+     with the success comment (release URL, tag, commit, evidence).
+     Any failure: `ai-blocked` ALONE (a release is a human decision
+     point — no automatic retry), the failure comment carries the run
+     marker and the concrete reason, and the exception propagates so
+     the tick fails fast.
+- The `ai-release` label is a type marker, NOT a delivery state: it is
+  not part of the delivery-state machine, not an exclusion of the
+  ready scan, and the Runner never adds or removes it — only the
+  human does (at dispatch time, together with `ai-ready`).
 
 ## Review, in-session fix and merge (same PR)
 
