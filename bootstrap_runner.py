@@ -33,6 +33,7 @@ import re
 import select
 import signal
 import subprocess
+import threading
 import time
 import tomllib
 import uuid
@@ -245,6 +246,109 @@ def current_run_id() -> str | None:
 def run_marker(run_id: str) -> str:
     """Return the stable machine-readable run marker for GitHub text."""
     return f"<!-- muyan-pilot:run={validate_run_id(run_id)} -->"
+
+# Stop scene (Issue #48): when systemd (or any caller) stops the Runner
+# with SIGTERM, the journal must show which Issue context was active
+# BEFORE systemd's generic "Stopped" line, and the live Pi child must be
+# shut down (no orphan Pi). The context is bound while a delivery is in
+# flight (after the claim, or after a resumed scene is bound) and cleared
+# when the delivery ends. It carries no new id: the run id is the
+# existing `_CURRENT_RUN_ID`, and the phase/session come from the
+# existing activity snapshot of the worktree's `.pi-session`.
+_ACTIVE_RUN: dict | None = None
+
+
+def set_active_run(issue: int, title: str, branch: str, worktree: str) -> None:
+    """Bind the in-flight delivery scene for the stop handler (Issue #48)."""
+    global _ACTIVE_RUN
+    _ACTIVE_RUN = {
+        "issue": int(issue),
+        "title": title,
+        "branch": branch,
+        "worktree": worktree,
+        "pi": None,
+    }
+
+
+def set_active_pi(process: subprocess.Popen | None) -> None:
+    """Track the live Pi child of the in-flight delivery (Issue #48).
+
+    `stream_pi` calls it after the child is spawned (and again with None
+    after the child is reaped), so the stop handler signals exactly the
+    child that is alive — never an already-exited process. Without a
+    bound run (unit tests call `stream_pi` directly) it is a no-op.
+    """
+    if _ACTIVE_RUN is not None:
+        _ACTIVE_RUN["pi"] = process
+
+
+def clear_active_run() -> None:
+    """No delivery in flight anymore (Issue #48)."""
+    global _ACTIVE_RUN
+    _ACTIVE_RUN = None
+
+
+def _stop_delivery(signum: int) -> None:
+    """Log the stop scene, shut down the live Pi child, exit (Issue #48).
+
+    Runs from the SIGTERM handler. With no run in flight the stop is
+    idle: one `run_stopped result=idle` line, no invented Issue fields.
+    With a run in flight the `run_stopping` line carries the full scene
+    (issue, title, signal, phase, branch, worktree, session —
+    phase/session from the existing activity snapshot, `-` when absent)
+    BEFORE the stop, the live Pi child is TERMed and waited for, then
+    the `run_stopped issue=N result=interrupted` line. The process then
+    exits with 128+signum (143 for SIGTERM) — the same value systemd
+    records for a signal-caused stop.
+    """
+    run = _ACTIVE_RUN
+    if run is None:
+        LOGGER.info("run_stopped result=idle")
+    else:
+        phase = "-"
+        session = "-"
+        try:
+            snapshot = activity_snapshot(Path(run["worktree"]) / ".pi-session")
+            if snapshot is not None:
+                phase = snapshot["phase"] or "-"
+                session = snapshot["session_id"] or "-"
+        except Exception:
+            LOGGER.exception("stop scene activity snapshot failed")
+        LOGGER.info(
+            "run_stopping issue=%s title=%s signal=%s phase=%s "
+            "branch=%s worktree=%s session=%s",
+            run["issue"], quote_value(run["title"]),
+            signal.Signals(signum).name, quote_value(phase),
+            quote_value(run["branch"]), quote_value(run["worktree"]),
+            quote_value(session),
+        )
+        child = run["pi"]
+        if child is not None and child.poll() is None:
+            child.terminate()
+            child.wait()
+        LOGGER.info(
+            "run_stopped issue=%s result=interrupted", run["issue"],
+        )
+    _die_from_signal(signum)
+
+
+def _die_from_signal(signum: int) -> None:
+    """Exit the process from the ORIGINAL signal (Issue #48).
+
+    `os._exit` never returns in production; the two lines after it
+    exist so a handler crash can never swallow the stop: restore the
+    default disposition and re-raise the ORIGINAL signal at ourselves,
+    so the process dies from the signal itself (systemd sees a
+    signal-caused stop, exit 128+signum).
+    """
+    os._exit(128 + signum)
+    signal.signal(signum, signal.SIG_DFL)
+    os.kill(os.getpid(), signum)
+
+
+def _handle_stop(signum: int, frame: object) -> None:
+    """SIGTERM handler: log the active Issue context, then exit (Issue #48)."""
+    _stop_delivery(signum)
 
 
 def _config_path(value: str, base: Path) -> Path:
@@ -1598,6 +1702,10 @@ def stream_pi(
         command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         env=None if pi_env is None else {**os.environ, **pi_env},
     )
+    # Track the live Pi child for the stop handler (Issue #48): a
+    # SIGTERM during this window must shut the child down, never
+    # orphan it. Cleared again once the child is reaped (finally).
+    set_active_pi(process)
     LOGGER.info(
         "run_start %s",
         format_run_scene(
@@ -1991,6 +2099,9 @@ def stream_pi(
             if process.poll() is not None:
                 break
     finally:
+        # The child is reaped (or dead): the stop handler must never
+        # signal an already-exited process (Issue #48).
+        set_active_pi(None)
         _drain_stream(process.stdout, stdout_chunks)
         _drain_stream(process.stderr, stderr_chunks)
     stdout = _decode_chunks(stdout_chunks)
@@ -3790,6 +3901,15 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         "issue=%s %s", number, run_info,
     )
     edit_issue(number, repo=source_repo, add=IN_PROGRESS_LABEL)
+    # The Issue is in flight from the claim label on: bind the stop
+    # scene (Issue #48) so a SIGTERM during this tick logs the active
+    # Issue context, not only systemd's generic "Stopped" line. The
+    # branch and worktree path are the same derived values the
+    # worktree creation below uses (bound before the worktree exists).
+    set_active_run(
+        number, title, branch,
+        str(worktree_path(config["repo_dir"], source_repo, number, run_id)),
+    )
     publisher = ProgressPublisher(
         number, source_repo, run_id, run_command=run_command,
     )
@@ -4557,6 +4677,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format=log_format())
+    # Stop scene (Issue #48): install the SIGTERM handler BEFORE any
+    # other step so every phase of the tick (pre-claim, claim,
+    # implement, delivery wait) stops with the active Issue context
+    # logged and the live Pi child shut down — never an orphan Pi and
+    # never only systemd's generic "Stopped" line. Python only allows
+    # signal handlers in the main thread (the CLI entry point always
+    # is; in-thread `main()` test calls skip the install).
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, _handle_stop)
 
     config = load_config(args.config)
     validate_config(config)
@@ -4661,6 +4790,19 @@ def main(argv: list[str] | None = None) -> int:
             # the progress failure of Issue #70, is reviewed the same
             # way).
             set_run_id(scene["run_id"])
+            # The resumed delivery is in flight: bind the stop scene
+            # (Issue #48) with the same derived branch/worktree the
+            # delivery wait uses (never read from a comment).
+            set_active_run(
+                int(issue["number"]), issue["title"],
+                task_branch(
+                    source_repo, int(issue["number"]), scene["run_id"],
+                ),
+                str(worktree_path(
+                    config["repo_dir"], source_repo,
+                    int(issue["number"]), scene["run_id"],
+                )),
+            )
             # Issue #89: verify the open PR BEFORE any git/Pi mutation
             # (head repo, base, run marker, exact URL of the recovered
             # scene — the pre-#82 resume_delivery check, restored):
@@ -4677,6 +4819,9 @@ def main(argv: list[str] | None = None) -> int:
         wait_for_delivery(pr_url, issue, config, source_repo)
     finally:
         slot.release()
+        # The delivery is over (merged, terminally failed, or the tick
+        # found no work): a stop from here on is idle again (Issue #48).
+        clear_active_run()
     return 0
 
 

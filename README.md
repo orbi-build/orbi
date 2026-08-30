@@ -276,6 +276,11 @@ Pi 长时间运行时，Runner 不再只留下启动命令和最终结果。`boo
 - `pi_resumed issue=... role=... phase=...`——idle 告警后第一条新 session 事件到达时输出一次（恢复后输出 resumed），整个 idle 恢复状态同时复位；
 - `run_failed run=... issue=... role=... branch=... worktree=... session=... session_file=... phase=... ... reason=pi_exit_N|timeout_...s|upstream_dead_stale_...s|idle_recovery_stale_...s`——进程异常退出、超时、上游已死（Issue #75）或连续 3 个 idle 窗口（`PI_IDLE_RECOVERY_CYCLES=3`）仍无新活动（Issue #94，Runner 杀掉 Pi 会话本身）时先记录完整现场再抛出错误；
 - `run_end run=... issue=... role=... result=pr_opened elapsed=...m pr=... commit=...`——验收通过后记录结果和完整排查入口。
+- `run_stopping issue=N title="..." signal=SIGTERM phase=... branch=... worktree=... session=...`——systemd 停止 service（SIGTERM）时若 run 正在进行，先记录完整停止现场（复用现有 run_id 前缀和 activity 快照的 phase/session，不引入新 id），再对活着的 Pi 子进程发 SIGTERM 并等待其退出，绝不留下孤儿 Pi；
+- `run_stopped issue=N result=interrupted`——Pi 子进程退出后记录停止结果；
+- `run_stopped result=idle`——在领取 Issue 之前被停止时只记录 idle 结果，不虚构任何 Issue 字段。
+
+停止顺序（Issue #48）：`run_stopping` → Pi 子进程退出 → `run_stopped` → 进程以 128+信号值（SIGTERM 为 143）退出。systemd 的 generic `Stopped` 行之后，journal 里始终能查到是哪个 Issue 在跑、跑到哪个 phase、branch/worktree/session 是什么。systemd unit 的 `Description` 保持静态，不做动态描述。
 
 上游已死检测（Issue #75，Issue #169 起基于证据）：`model_wait` 期间 session JSONL 冻结超过 `PI_MODEL_WAIT_DEAD_SECONDS`（默认 600 秒）**且** Pi 进程没有活的上游连接（fd 表里的 `socket:[...]` 在 `/proc/net/tcp`/`tcp6` 中没有处于 ESTABLISHED/SYN_SENT/SYN_RECV 状态且带远端地址的 socket；CLOSE_WAIT 等已断开状态不算）才判定上游（llama/proxy）已死——HTTP 超时或连接断开后 Pi 停在 epoll_wait 永不退出：Runner 杀掉 Pi 进程，记录 `run_failed ... reason=upstream_dead_stale_...s` 后 fail fast（Issue 标记 `ai-blocked`，现场留在 journal 和 Issue 评论，slot 随进程退出由内核释放，下一拍可 resume 或领取下一个 `ai-fix-needed`）。session 冻结本身不是证据：本地慢模型生成几分钟时连接仍然活着（heartbeat 显示 `state=model_wait_slow`），Runner 不杀（#158 回归）；事件持续到达时同样永不触发（慢模型不是死上游）。它也不是业务任务 timeout。
 

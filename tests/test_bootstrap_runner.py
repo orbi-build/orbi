@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -8987,3 +8988,416 @@ def test_prepare_pi_agent_dir_is_idempotent_on_resume(
     # The stale settings symlink is replaced by the real per-run file.
     assert not settings.is_symlink()
     assert json.loads(settings.read_text(encoding="utf-8")) == {}
+
+
+# ---------------------------------------------------------------------------
+# Issue #48: log the active Issue context when the Runner is stopped
+# (SIGTERM): `run_stopping` before the stop, `run_stopped` after the Pi
+# child exits, `result=idle` when no Issue was claimed yet.
+# ---------------------------------------------------------------------------
+
+def _write_session_file(worktree: Path, session_id: str = "sess-1") -> None:
+    """A session JSONL with a tool call so the snapshot shows phase=test."""
+    session_dir = worktree / ".pi-session"
+    session_dir.mkdir(exist_ok=True)
+    records = [
+        {"type": "session", "id": session_id,
+         "timestamp": fresh_timestamp(), "cwd": str(worktree)},
+        {"type": "message", "id": "a1", "timestamp": fresh_timestamp(),
+         "message": {"role": "assistant", "content": [
+             {"type": "toolCall", "id": "t1", "name": "bash",
+              "arguments": {"command": "pytest tests/"}}]}},
+    ]
+    with open(session_dir / f"{session_id}.jsonl", "w",
+              encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record) + "\n")
+
+
+def test_stop_handler_idle_logs_run_stopped_idle_and_exits(
+    monkeypatch, caplog,
+):
+    # No run in flight (before the claim): the stop logs result=idle
+    # WITHOUT any invented issue fields and exits 143.
+    monkeypatch.setattr(runner, "_ACTIVE_RUN", None)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    died = {}
+    monkeypatch.setattr(
+        runner, "_die_from_signal",
+        lambda signum: died.setdefault("signum", signum),
+    )
+    with caplog.at_level("INFO"):
+        runner._handle_stop(signal.SIGTERM, None)
+    assert 128 + died["signum"] == 143
+    lines = [line for line in caplog.text.splitlines()
+             if " run_stopped " in line]
+    assert len(lines) == 1
+    assert "result=idle" in lines[0]
+    assert "issue=" not in lines[0]
+    # No run was in flight: no run_stopping line either.
+    assert "run_stopping" not in caplog.text
+
+
+def test_stop_handler_active_run_logs_stopping_then_stopped_and_exits(
+    monkeypatch, caplog, tmp_path,
+):
+    # Run in flight: run_stopping carries the full scene BEFORE the
+    # stop, the live Pi child is TERMed and waited for, then
+    # run_stopped result=interrupted, then the process exits 143.
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    monkeypatch.setattr(runner, "_ACTIVE_RUN", None)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    runner.set_active_run(
+        48, "Log the stop scene", "muyan-pilot/owner-repo-issue-48-a1b2c3d4",
+        str(worktree),
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+    )
+    runner.set_active_pi(child)
+    died = {}
+    monkeypatch.setattr(
+        runner, "_die_from_signal",
+        lambda signum: died.setdefault("signum", signum),
+    )
+    with caplog.at_level("INFO"):
+        runner._handle_stop(signal.SIGTERM, None)
+    assert 128 + died["signum"] == 143
+    lines = caplog.text.splitlines()
+    stopping = [line for line in lines if " run_stopping " in line]
+    stopped = [line for line in lines if " run_stopped " in line]
+    assert len(stopping) == 1
+    assert len(stopped) == 1
+    # run_stopping comes BEFORE run_stopped (the child exit is in
+    # between).
+    assert lines.index(stopping[0]) < lines.index(stopped[0])
+    line = stopping[0]
+    assert "issue=48" in line
+    assert 'title="Log the stop scene"' in line
+    assert "signal=SIGTERM" in line
+    # No session file yet: the snapshot fields are '-' (never invented).
+    assert "phase=-" in line
+    assert "session=-" in line
+    assert "branch=muyan-pilot/owner-repo-issue-48-a1b2c3d4" in line
+    assert f"worktree={worktree}" in line
+    assert stopped[0].endswith("run_stopped issue=48 result=interrupted")
+    # The live Pi child was shut down: no orphan survives the stop.
+    assert child.wait(timeout=5) == -signal.SIGTERM
+
+
+def test_stop_handler_active_run_uses_activity_snapshot_for_scene(
+    monkeypatch, caplog, tmp_path,
+):
+    # With a session file the run_stopping line carries the phase and
+    # session of the existing activity snapshot (reused, not re-parsed
+    # ad hoc).
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    _write_session_file(worktree, session_id="sess-48")
+    monkeypatch.setattr(runner, "_ACTIVE_RUN", None)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    runner.set_active_run(48, "t", "b", str(worktree))
+    died = {}
+    monkeypatch.setattr(
+        runner, "_die_from_signal",
+        lambda signum: died.setdefault("signum", signum),
+    )
+    with caplog.at_level("INFO"):
+        runner._handle_stop(signal.SIGTERM, None)
+    line = [line for line in caplog.text.splitlines()
+            if " run_stopping " in line][0]
+    assert "phase=test" in line
+    assert "session=sess-48" in line
+    assert 128 + died["signum"] == 143
+
+
+def test_stop_handler_active_run_without_live_child_still_stops(
+    monkeypatch, caplog, tmp_path,
+):
+    # Run in flight but no live Pi child (between sessions): both lines
+    # are still logged and the process exits 143.
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    monkeypatch.setattr(runner, "_ACTIVE_RUN", None)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    runner.set_active_run(48, "t", "b", str(worktree))
+    died = {}
+    monkeypatch.setattr(
+        runner, "_die_from_signal",
+        lambda signum: died.setdefault("signum", signum),
+    )
+    with caplog.at_level("INFO"):
+        runner._handle_stop(signal.SIGTERM, None)
+    lines = caplog.text.splitlines()
+    assert any(" run_stopping " in line for line in lines)
+    assert any(
+        line.endswith("run_stopped issue=48 result=interrupted")
+        for line in lines
+    )
+    assert 128 + died["signum"] == 143
+
+
+def test_stop_handler_snapshot_failure_still_logs_and_exits(
+    monkeypatch, caplog,
+):
+    # A failing activity snapshot never swallows the stop: the scene
+    # falls back to `-` for phase/session and the stop still exits.
+    monkeypatch.setattr(
+        runner, "_ACTIVE_RUN",
+        {"issue": 48, "title": "t", "branch": "b", "worktree": "/w",
+         "pi": None},
+    )
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    died = {}
+    monkeypatch.setattr(
+        runner, "_die_from_signal",
+        lambda signum: died.setdefault("signum", signum),
+    )
+    def boom(_dir):
+        raise RuntimeError("snapshot exploded")
+    monkeypatch.setattr(runner, "activity_snapshot", boom)
+    with caplog.at_level("INFO"):
+        runner._stop_delivery(signal.SIGTERM)
+    assert died["signum"] == signal.SIGTERM
+    stopping = [
+        line for line in caplog.text.splitlines()
+        if " run_stopping " in line
+    ]
+    assert len(stopping) == 1
+    assert "phase=-" in stopping[0]
+    assert "session=-" in stopping[0]
+    assert "snapshot exploded" in caplog.text
+
+
+def test_stop_handler_reinstalls_default_disposition_and_raises_signal(
+    monkeypatch, caplog,
+):
+    # After the stop work the handler restores SIGTERM's default
+    # disposition and re-raises the signal at itself: the process dies
+    # from the ORIGINAL signal (systemd sees a signal-caused stop, exit
+    # 143) and a handler crash can never swallow the stop.
+    monkeypatch.setattr(runner, "_ACTIVE_RUN", None)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(runner.os, "_exit", lambda code: None)
+    raised = {}
+    monkeypatch.setattr(
+        runner.os, "kill",
+        lambda pid, sig: raised.setdefault("args", (pid, sig)),
+    )
+    runner._die_from_signal(signal.SIGTERM)
+    assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
+    assert raised["args"] == (os.getpid(), signal.SIGTERM)
+
+
+def test_set_active_run_binds_scene_and_pi_tracking(monkeypatch):
+    monkeypatch.setattr(runner, "_ACTIVE_RUN", None)
+    runner.set_active_run(7, "t", "b", "/w")
+    assert runner._ACTIVE_RUN == {
+        "issue": 7, "title": "t", "branch": "b", "worktree": "/w",
+        "pi": None,
+    }
+    child = object()
+    runner.set_active_pi(child)
+    assert runner._ACTIVE_RUN["pi"] is child
+    runner.set_active_pi(None)
+    assert runner._ACTIVE_RUN["pi"] is None
+    runner.clear_active_run()
+    assert runner._ACTIVE_RUN is None
+    # set_active_pi without a bound run is a no-op (never crashes).
+    runner.set_active_pi(child)
+    assert runner._ACTIVE_RUN is None
+
+
+def test_main_installs_the_stop_handler(monkeypatch, tmp_path):
+    # main() installs the SIGTERM handler right after logging is set up,
+    # so every phase of the tick (pre-claim, claim, implement, delivery
+    # wait) stops with the scene.
+    installed = {}
+    monkeypatch.setattr(
+        signal, "signal",
+        lambda sig, handler: installed.setdefault(sig, handler),
+    )
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n'
+        'workspace_root = ".."\nprompt = "prompt.md"\n'
+        'prompt_review = "prompt_review.md"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "prompt.md").write_text("p", encoding="utf-8")
+    (tmp_path / "prompt_review.md").write_text("p", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    monkeypatch.setattr(
+        runner, "pick_next_delivery", lambda *args: None,
+    )
+    monkeypatch.setattr(runner, "acquire_slot", lambda *args: Mock(release=lambda: None))
+    monkeypatch.setattr(runner, "refresh_cli_install", lambda *a, **k: "unchanged")
+    monkeypatch.setattr(runner, "check_unit_drift", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "check_transport", lambda *a, **k: {})
+    assert runner.main(["--config", str(config_path)]) == 0
+    assert installed[signal.SIGTERM] is runner._handle_stop
+
+
+# Issue #48 acceptance: a REAL subprocess SIGTERM test — the Runner
+# process is a real child of the test, stopped with a real SIGTERM, and
+# the journal (captured from its stderr) proves the ordering and fields.
+STOP_DRIVER = """
+import logging
+import signal
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, {repo!r})
+import bootstrap_runner as runner
+
+logging.basicConfig(level=logging.INFO, format=runner.log_format())
+# Exactly what main() does (Issue #48): install the stop handler first.
+signal.signal(signal.SIGTERM, runner._handle_stop)
+runner.set_run_id("a1b2c3d4")
+runner.set_active_run(
+    48, "Log the stop scene",
+    "muyan-pilot/owner-repo-issue-48-a1b2c3d4", {worktree!r},
+)
+# The real Pi-like child: a real long-running process (what stream_pi
+# tracks via set_active_pi). It lingers briefly on SIGTERM before
+# exiting (a slow shutdown), so the stop handler's child.wait() has a
+# real wait to do.
+child = subprocess.Popen(
+    [sys.executable, "-c",
+     "import os, signal, time\\n"
+     "signal.signal(signal.SIGTERM, lambda s, f: "
+     "(time.sleep(0.5), os._exit(0)))\\n"
+     "time.sleep(60)\\n"],
+)
+runner.set_active_pi(child)
+print("ready child=" + str(child.pid), flush=True)
+# Sit in the poll loop (like stream_pi) until stopped.
+time.sleep(120)
+"""
+
+
+def test_real_subprocess_sigterm_logs_stop_scene_and_shuts_down_pi(
+    tmp_path,
+):
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    _write_session_file(worktree, session_id="sess-48")
+    driver = tmp_path / "driver.py"
+    driver.write_text(
+        STOP_DRIVER.format(
+            repo=str(Path(__file__).resolve().parent.parent),
+            worktree=str(worktree),
+        ),
+        encoding="utf-8",
+    )
+    proc = subprocess.Popen(
+        [sys.executable, str(driver)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    ready = proc.stdout.readline()
+    assert ready.startswith("ready child=")
+    child_pid = int(ready.strip().split("=")[1])
+    # The Pi child is alive before the stop.
+    time.sleep(0.2)
+    assert _pid_alive(child_pid)
+    # The real SIGTERM that systemd would send on stop.
+    proc.send_signal(signal.SIGTERM)
+    stderr = proc.stderr.read()
+    # The process exits with 128+SIGTERM = 143 (the value systemd
+    # records for a signal-caused stop).
+    assert proc.wait(timeout=10) == 143
+    lines = [line for line in stderr.splitlines() if line]
+    stopping = [line for line in lines if " run_stopping " in line]
+    stopped = [line for line in lines if " run_stopped " in line]
+    assert len(stopping) == 1
+    assert len(stopped) == 1
+    # Ordering: run_stopping BEFORE run_stopped (the Pi child exit is
+    # in between), and both BEFORE the process termination (they are in
+    # the captured stderr of the already-exited process).
+    assert lines.index(stopping[0]) < lines.index(stopped[0])
+    # The [run_id] prefix (the existing run correlation, reused); the
+    # journal format is `LEVEL message`.
+    assert stopping[0].startswith("INFO [a1b2c3d4] run_stopping ")
+    assert stopped[0].startswith("INFO [a1b2c3d4] run_stopped ")
+    line = stopping[0]
+    assert "issue=48" in line
+    assert 'title="Log the stop scene"' in line
+    assert "signal=SIGTERM" in line
+    # phase/session from the existing activity snapshot of the
+    # worktree's .pi-session.
+    assert "phase=test" in line
+    assert "session=sess-48" in line
+    assert "branch=muyan-pilot/owner-repo-issue-48-a1b2c3d4" in line
+    assert f"worktree={worktree}" in line
+    assert stopped[0].endswith("run_stopped issue=48 result=interrupted")
+    # No orphan Pi: the stop handler waited for the child to exit
+    # BEFORE the process exited (driver exit implies the child was
+    # reaped), so the child must be gone now.
+    assert not _pid_alive(child_pid)
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The pid exists but belongs to another user: alive.
+        return True
+    return True
+
+
+def test_pid_alive_reports_zombie_and_foreign_pid(monkeypatch):
+    # A killed-but-unreaped child is a zombie: os.kill(pid, 0) succeeds
+    # on it, so it still counts as alive (the stop handler's
+    # child.poll() check is what distinguishes a zombie).
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+    )
+    child.kill()
+    time.sleep(0.2)
+    assert _pid_alive(child.pid) is True
+    child.wait(timeout=5)
+    # A pid that no longer exists (reaped).
+    assert _pid_alive(child.pid) is False
+    # A foreign pid (owned by another user) reports alive via
+    # PermissionError — exercise the branch by stubbing os.kill.
+    monkeypatch.setattr(
+        runner.os, "kill",
+        lambda pid, sig: (_ for _ in ()).throw(PermissionError()),
+    )
+    assert _pid_alive(1) is True
+
+
+def test_real_subprocess_sigterm_before_claim_logs_idle(tmp_path):
+    # Stopped before claiming an Issue: run_stopped result=idle, no
+    # invented Issue fields.
+    driver = tmp_path / "driver_idle.py"
+    driver.write_text(
+        "import logging, signal, sys, time\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parent.parent)!r})\n"
+        "import bootstrap_runner as runner\n"
+        "logging.basicConfig(level=logging.INFO, format=runner.log_format())\n"
+        "signal.signal(signal.SIGTERM, runner._handle_stop)\n"
+        "print('ready', flush=True)\n"
+        "time.sleep(120)\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.Popen(
+        [sys.executable, str(driver)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    assert proc.stdout.readline().strip() == "ready"
+    proc.send_signal(signal.SIGTERM)
+    stderr = proc.stderr.read()
+    assert proc.wait(timeout=10) == 143
+    lines = [line for line in stderr.splitlines() if line]
+    stopped = [line for line in lines if " run_stopped " in line]
+    assert len(stopped) == 1
+    assert stopped[0] == "INFO run_stopped result=idle"
+    assert "issue=" not in stderr
+    assert "run_stopping" not in stderr
