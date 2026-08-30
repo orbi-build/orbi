@@ -4837,18 +4837,161 @@ def test_stream_pi_timeout_tool_inside_deadline_not_killed(
     assert len(resumed) == 1
 
 
+def make_timeout_tool_pi_controlled(tmp_path, *, tool_seconds: float,
+                                    control: Path) -> list[str]:
+    """A timeout tool whose (delayed) deadline fire is controlled by
+    the TEST, not by scheduling (Issue #181): the command line carries
+    the nominal `timeout <tool_seconds>` (what the runner reads), but
+    a fake `timeout` on PATH first waits for `control` to appear — the
+    test's "the wrapper's deadline handling finished" signal — and
+    only then enforces the nominal duration. The tool's lifetime is
+    therefore `control_appeared + tool_seconds`, fully determined by
+    the test (no real-scheduling coincidence). The test that never
+    creates `control` gets a broken wrapper: the deadline handling
+    never finishes, the tool outlives the nominal deadline forever."""
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir(exist_ok=True)
+    import shutil as _shutil
+    # The real coreutils `timeout` is exec'd by ABSOLUTE path — the
+    # fake shadows it on PATH, so a bare `timeout` would re-enter the
+    # fake and loop forever. Coreutils `timeout` is a hard system
+    # dependency (the prompt contract requires it); a missing binary
+    # fails the generated script with a clear shell error.
+    real_timeout = _shutil.which("timeout")
+    fake_bin = session_dir / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    fake_timeout = fake_bin / "timeout"
+    fake_timeout.write_text(
+        "#!/bin/sh\n"
+        "duration=\"$1\"; shift\n"
+        f"while [ ! -e {str(control)!r} ]; do sleep 0.01; done\n"
+        f'exec {real_timeout!r} "$duration" "$@"\n', encoding="utf-8",
+    )
+    fake_timeout.chmod(0o755)
+    tool_command = (
+        f"PATH={fake_bin!s}:/usr/bin:/bin "
+        f"timeout {tool_seconds!r} sleep 300"
+    )
+    script = (
+        "import json, subprocess, sys, time\n"
+        "from datetime import datetime, timezone\n"
+        f"session = {str(session_dir / 'sess.jsonl')!r}\n"
+        "def ts():\n"
+        "    return datetime.now(timezone.utc).isoformat()\n"
+        "def write(record):\n"
+        "    with open(session, 'a') as handle:\n"
+        "        handle.write(json.dumps(record) + '\\n')\n"
+        "write({'type': 'session', 'id': 'sess-timeout', 'timestamp': ts(),\n"
+        "       'cwd': '/w'})\n"
+        "write({'type': 'message', 'id': 'a1', 'timestamp': ts(),\n"
+        "       'message': {'role': 'assistant', 'content': [\n"
+        "           {'type': 'toolCall', 'id': 't1', 'name': 'bash',\n"
+        f"            'arguments': {{'command': 'timeout {tool_seconds!r} sleep 300'}}}}]}}}})\n"
+        f"child = subprocess.Popen(['bash', '-c', {tool_command!r}])\n"
+        "while child.poll() is None:\n"
+        "    time.sleep(0.05)\n"
+        "write({'type': 'message', 'id': 'r1', 'timestamp': ts(),\n"
+        "       'message': {'role': 'toolResult', 'toolCallId': 't1',\n"
+        "                   'toolName': 'bash', 'isError': True,\n"
+        "                   'content': [{'type': 'text',\n"
+        "                                  'text': 'tool finished'}]}})\n"
+        "sys.exit(0)\n"
+    )
+    return [sys.executable, "-c", script]
+
+
+def test_stream_pi_timeout_tool_deadline_grace_window_not_killed(
+    tmp_path, caplog,
+):
+    """Issue #181 regression (deterministic): the nominal `timeout`
+    deadline is BEST-EFFORT — the wrapper's alarm fires at
+    `start + duration`, but the signal delivery and the exit take a
+    finite, under load unbounded, time. A single "past deadline and
+    still alive" observation must NOT escalate: the runner records the
+    target in the window its nominal deadline passes (the grace
+    window, nothing is signaled) and re-evaluates in the next window.
+
+    Deterministic margins (no real-scheduling coincidence, poll
+    0.1 s, idle window 0.3 s): the nominal deadline (0.2 s) has
+    passed at least 0.1 s before the first escalation window (the
+    window opens at 0.3 s of stale, the first escalation poll is at
+    t∈[0.35, 0.45)), so the grace window always sees a past-deadline
+    target that is still alive (the wrapper's deadline handling never
+    finishes: the control file is never created). The grace window
+    signals NOTHING; the flip window (one full idle window later, the
+    target still alive) TERMs it — the wrapper failed to end the
+    command, the evidence is confirmed, the escalation runs to the
+    bounded session kill. Without the grace window the runner TERMs
+    the tool in the FIRST escalation window (the CI flake this test
+    pins): the assertion below distinguishes the two — the first
+    `pi_idle_term` line must be the flip window's, i.e. at least one
+    full idle window after the window opened."""
+    # The control file is never created: the wrapper's deadline
+    # handling never finishes (the wrapper is broken), the tool
+    # outlives the nominal deadline forever.
+    control = tmp_path / "tool-deadline-fired"
+    command = make_timeout_tool_pi_controlled(
+        tmp_path, tool_seconds=0.2, control=control,
+    )
+    seen = []
+
+    def progress(activity):
+        seen.append(activity.get("recovery"))
+
+    with caplog.at_level("INFO"):
+        result = runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            idle_warn_seconds=0.3,
+            run_id="run1", issue=105, source_repo="xqliu/muyan-pilot",
+            branch="b", progress=progress,
+        )
+    # The tool was TERMed by the runner (the wrapper failed to end it:
+    # still alive one full idle window after the deadline), the fake
+    # Pi resumed when the tool died, and the run SUCCEEDED.
+    assert result == ""
+    # The `recovery` progress state is observable per poll: the grace
+    # window reports `wait` (nothing was signaled) BEFORE the flip
+    # window reports `term`. Without the grace window the first
+    # escalation window would report `term` directly (the CI flake
+    # this test pins).
+    assert "wait" in seen, seen
+    first_wait = seen.index("wait")
+    assert "term" in seen, seen
+    first_term = seen.index("term")
+    assert first_wait < first_term, seen
+    # No `term` before the first `wait` (the grace window never
+    # signaled).
+    assert not any(state == "term" for state in seen[:first_wait]), seen
+    lines = caplog.text.splitlines()
+    # The deadline had clearly passed when the window opened: no wait
+    # decision at all.
+    assert " pi_idle_wait " not in caplog.text
+    # The flip window delivered the signal (the wrapper failed to end
+    # the command: still alive one full idle window after the
+    # deadline).
+    terms = [line for line in lines if " pi_idle_term " in line]
+    assert len(terms) >= 1, lines
+    assert "result=sent" in terms[0], lines
+    # The session resumed when the tool's death reached the fake Pi.
+    resumed = [line for line in lines if " pi_resumed " in line]
+    assert len(resumed) >= 1, lines
+
+
 def test_stream_pi_timeout_tool_past_deadline_still_terminated(
     tmp_path, caplog,
 ):
-    """Issue #169 constraint: the wait is bounded — when the `timeout`
-    deadline passed but the descendant is STILL alive (the wrapper
-    failed to end the command), the evidence flips: the existing
-    TERM → KILL → session-kill escalation runs (the slot is never held
-    forever, no silent ignoring of the timeout). The tool deadline
-    (0.3 s) lands clearly BEFORE the idle window opens (0.6 s), so the
-    first escalation window already sees a past deadline."""
+    """Issue #169 constraint + Issue #181 grace: the wait is bounded —
+    when the `timeout` deadline passed but the descendant is STILL
+    alive one full idle window later (the wrapper failed to end the
+    command), the evidence is confirmed: the TERM → KILL →
+    session-kill escalation runs (the slot is never held forever, no
+    silent ignoring of the timeout). The tool deadline (0.1 s) lands
+    clearly BEFORE the idle window opens (0.3 s of stale), so the
+    first escalation window already sees a past deadline: it is the
+    grace window (no signal, Issue #181), and the NEXT window — the
+    target still alive — delivers the TERM."""
     command = make_timeout_tool_pi(
-        tmp_path, tool_seconds=0.3, react_on_tool_done=False,
+        tmp_path, tool_seconds=0.1, react_on_tool_done=False,
         wrapper_honors_deadline=False,
     )
     with caplog.at_level("INFO"), pytest.raises(
@@ -4864,8 +5007,10 @@ def test_stream_pi_timeout_tool_past_deadline_still_terminated(
     # The first escalation window already saw a past deadline (the
     # wrapper failed to end the command): no wait decision at all.
     assert " pi_idle_wait " not in caplog.text
-    # The existing escalation ran: the pre-idle descendants were TERMed
-    # (one line per target, at least one delivered)...
+    # The escalation ran: the grace window signaled nothing, and the
+    # next window (the target still alive one full idle window after
+    # the deadline) TERMed the pre-idle descendants (one line per
+    # target, at least one delivered)...
     terms = [line for line in lines if " pi_idle_term " in line]
     assert len(terms) >= 1
     assert any("result=sent" in line for line in terms)
