@@ -152,13 +152,21 @@ def test_helpers_handle_targets_without_expr_and_flag_disallowed_labels():
     bad = 'muyan_pilot_run_active{run_id="cf357f0e"}'
     with pytest.raises(AssertionError):
         _check_labels([bad])
-    _check_labels(["muyan_pilot_run_active{instance=\"1\"}"])
+    # The scraper-reserved `instance` label is flagged too: it would
+    # silently match the scrape target, not the Runner slot.
+    with pytest.raises(AssertionError):
+        _check_labels(['muyan_pilot_run_active{instance="1"}'])
+    _check_labels(["muyan_pilot_run_active{slot=\"1\"}"])
     _check_labels(["muyan_pilot_service_active"])
 
 
 def _check_labels(exprs):
+    # `instance` is deliberately NOT allowed: it is a Prometheus scraper
+    # label — a dashboard expr filtering on it would match the scrape
+    # target `127.0.0.1:9106`, not the Runner slot (the exporter emits
+    # the per-Runner dimension as `slot`, Issue #162).
     allowed = {
-        "instance", "repo", "issue", "role", "phase", "state",
+        "repo", "issue", "role", "phase", "state",
         "reason", "result", "slot",
     }
     label_re = re.compile(r"\{[^}]*?([a-zA-Z_][a-zA-Z0-9_]*)\s*=")

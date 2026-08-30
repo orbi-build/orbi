@@ -54,7 +54,7 @@
         {
           "refId": "A",
           "expr": "muyan_pilot_service_active",
-          "legendFormat": "{{instance}}",
+          "legendFormat": "{{slot}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
       ],
@@ -72,14 +72,14 @@
     {
       "id": 201,
       "type": "timeseries",
-      "title": "Active runs (legend = instance issue role phase state)",
+      "title": "Active runs (legend = slot issue role phase state)",
       "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" },
       "gridPos": { "x": 0, "y": 6, "w": 12, "h": 6 },
       "targets": [
         {
           "refId": "A",
           "expr": "muyan_pilot_run_active",
-          "legendFormat": "{{instance}} {{issue}} {{role}} {{phase}} {{state}}",
+          "legendFormat": "{{slot}} {{issue}} {{role}} {{phase}} {{state}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
       ],
@@ -102,7 +102,7 @@
         {
           "refId": "A",
           "expr": "muyan_pilot_run_idle_seconds",
-          "legendFormat": "{{instance}} {{issue}}",
+          "legendFormat": "{{slot}} {{issue}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
       ],
@@ -129,8 +129,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (instance, issue, reason) (increase(muyan_pilot_run_failed_total[1h]))",
-          "legendFormat": "{{instance}} {{issue}} {{reason}}",
+          "expr": "sum by (slot, issue, reason) (increase(muyan_pilot_run_failed_total[1h]))",
+          "legendFormat": "{{slot}} {{issue}} {{reason}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
       ],
@@ -146,20 +146,20 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (instance) (increase(muyan_pilot_pi_idle_total[1h]))",
-          "legendFormat": "pi_idle {{instance}}",
+          "expr": "sum by (slot) (increase(muyan_pilot_pi_idle_total[1h]))",
+          "legendFormat": "pi_idle {{slot}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         },
         {
           "refId": "B",
-          "expr": "sum by (instance) (increase(muyan_pilot_pi_idle_term_total[1h]))",
-          "legendFormat": "pi_idle_term {{instance}}",
+          "expr": "sum by (slot) (increase(muyan_pilot_pi_idle_term_total[1h]))",
+          "legendFormat": "pi_idle_term {{slot}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         },
         {
           "refId": "C",
-          "expr": "sum by (instance) (increase(muyan_pilot_pi_idle_kill_total[1h]))",
-          "legendFormat": "pi_idle_kill {{instance}}",
+          "expr": "sum by (slot) (increase(muyan_pilot_pi_idle_kill_total[1h]))",
+          "legendFormat": "pi_idle_kill {{slot}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
       ],
@@ -175,8 +175,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (instance, issue) (increase(muyan_pilot_progress_publish_failed_total[1h]))",
-          "legendFormat": "{{instance}} {{issue}}",
+          "expr": "sum by (slot, issue) (increase(muyan_pilot_progress_publish_failed_total[1h]))",
+          "legendFormat": "{{slot}} {{issue}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
       ],
@@ -192,8 +192,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (instance, issue) (increase(muyan_pilot_model_wait_total[1h]))",
-          "legendFormat": "{{instance}} {{issue}}",
+          "expr": "sum by (slot, issue) (increase(muyan_pilot_model_wait_total[1h]))",
+          "legendFormat": "{{slot}} {{issue}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
       ],
@@ -241,7 +241,7 @@
         {
           "refId": "A",
           "expr": "muyan_pilot_run_seconds",
-          "legendFormat": "{{instance}} {{issue}} {{role}}",
+          "legendFormat": "{{slot}} {{issue}} {{role}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
       ],

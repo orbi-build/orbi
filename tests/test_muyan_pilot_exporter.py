@@ -298,18 +298,18 @@ def test_build_metrics_live_run_gauges_and_counters():
     text = exporter.build_metrics(entries, now=300.0, service_active={"1": 1})
     lines = lines_of(text)
 
-    metric(lines, "muyan_pilot_service_active", 'instance="1"', 1.0)
+    metric(lines, "muyan_pilot_service_active", 'slot="1"', 1.0)
     metric(lines, "muyan_pilot_run_active",
-           'instance="1",repo="xqliu/orbi",issue="xqliu/orbi#162",'
+           'slot="1",repo="xqliu/orbi",issue="xqliu/orbi#162",'
            'role="implement",phase="read",state="model_wait"', 1.0)
     metric(lines, "muyan_pilot_run_idle_seconds",
-           'instance="1",issue="xqliu/orbi#162"', 20.0)
+           'slot="1",issue="xqliu/orbi#162"', 20.0)
     metric(lines, "muyan_pilot_run_seconds",
-           'instance="1",issue="xqliu/orbi#162",role="implement"', 60.0)
+           'slot="1",issue="xqliu/orbi#162",role="implement"', 60.0)
     metric(lines, "muyan_pilot_run_start_total",
-           'instance="1",issue="xqliu/orbi#162",role="implement"', 1.0)
+           'slot="1",issue="xqliu/orbi#162",role="implement"', 1.0)
     metric(lines, "muyan_pilot_model_wait_total",
-           'instance="1",issue="xqliu/orbi#162"', 1.0)
+           'slot="1",issue="xqliu/orbi#162"', 1.0)
 
 
 def test_build_metrics_finished_run_keeps_end_scene_and_zeroes_active():
@@ -335,21 +335,21 @@ def test_build_metrics_finished_run_keeps_end_scene_and_zeroes_active():
     text = exporter.build_metrics(entries, now=400.0, service_active={"1": 0})
     lines = lines_of(text)
 
-    metric(lines, "muyan_pilot_service_active", 'instance="1"', 0.0)
+    metric(lines, "muyan_pilot_service_active", 'slot="1"', 0.0)
     metric(lines, "muyan_pilot_run_active",
-           'instance="1",repo="xqliu/orbi",issue="xqliu/orbi#181",'
+           'slot="1",repo="xqliu/orbi",issue="xqliu/orbi#181",'
            'role="implement",phase="starting",state="-"', 1.0)
     metric(lines, "muyan_pilot_run_active",
-           'instance="1",repo="xqliu/orbi",issue="xqliu/orbi#50",'
+           'slot="1",repo="xqliu/orbi",issue="xqliu/orbi#50",'
            'role="implement",phase="test",state="-"', 0.0)
     metric(lines, "muyan_pilot_run_seconds",
-           'instance="1",issue="xqliu/orbi#50",role="implement"', 12600.0)
+           'slot="1",issue="xqliu/orbi#50",role="implement"', 12600.0)
     metric(lines, "muyan_pilot_run_end_total",
-           'instance="1",issue="xqliu/orbi#50",role="implement",'
+           'slot="1",issue="xqliu/orbi#50",role="implement",'
            'result="pr_opened"', 1.0)
     # The finished run's idle gauge is not re-emitted (no live state).
     assert not any(
-        ln.startswith('muyan_pilot_run_idle_seconds{instance="1",'
+        ln.startswith('muyan_pilot_run_idle_seconds{slot="1",'
                       'issue="xqliu/orbi#50"}')
         for ln in lines
     )
@@ -385,16 +385,16 @@ def test_build_metrics_failure_and_recovery_counters_by_reason():
     lines = lines_of(text)
 
     metric(lines, "muyan_pilot_pi_idle_total",
-           'instance="2",issue="xqliu/orbi#181"', 1.0)
+           'slot="2",issue="xqliu/orbi#181"', 1.0)
     metric(lines, "muyan_pilot_pi_idle_term_total",
-           'instance="2",issue="xqliu/orbi#181"', 1.0)
+           'slot="2",issue="xqliu/orbi#181"', 1.0)
     metric(lines, "muyan_pilot_pi_idle_kill_total",
-           'instance="2",issue="xqliu/orbi#181"', 1.0)
+           'slot="2",issue="xqliu/orbi#181"', 1.0)
     metric(lines, "muyan_pilot_run_failed_total",
-           'instance="2",issue="xqliu/orbi#181",'
+           'slot="2",issue="xqliu/orbi#181",'
            'reason="idle_recovery_stale_15m"', 1.0)
     metric(lines, "muyan_pilot_progress_publish_failed_total",
-           'instance="2",issue="xqliu/orbi#181"', 1.0)
+           'slot="2",issue="xqliu/orbi#181"', 1.0)
     # The failed run is no longer active.
     assert not any(
         ln.endswith('state="model_wait"} 1')
@@ -426,8 +426,13 @@ def test_build_metrics_labels_stay_within_allowlist():
         assert "prompt text" not in body, line
         for label in body.strip("}").split(","):
             name = label.split("=", 1)[0].strip()
+            # The allowlist deliberately excludes `instance` and `job`:
+            # the Prometheus scraper reserves both, so an emitted
+            # `instance` label would arrive as `exported_instance` and
+            # break every per-Runner grouping in the Dashboard (Issue
+            # #162, verified against the running Prometheus).
             assert name in {
-                "instance", "repo", "issue", "role", "phase", "state",
+                "slot", "repo", "issue", "role", "phase", "state",
                 "reason", "result",
             }, line
 
@@ -439,7 +444,7 @@ def test_build_metrics_unparseable_messages_are_skipped():
     ]
     text = exporter.build_metrics(entries, now=300.0, service_active={"1": 1})
     lines = lines_of(text)
-    assert metric(lines, "muyan_pilot_service_active", 'instance="1"') == 1.0
+    assert metric(lines, "muyan_pilot_service_active", 'slot="1"') == 1.0
     assert not any(
         ln.startswith("muyan_pilot_run_") for ln in lines
     )
@@ -472,7 +477,7 @@ def test_build_metrics_heartbeat_without_idle_or_elapsed_updates_combo_only():
     text = exporter.build_metrics(entries, now=300.0, service_active={"1": 1})
     lines = lines_of(text)
     metric(lines, "muyan_pilot_run_active",
-           'instance="1",repo="xqliu/orbi",issue="xqliu/orbi#162",'
+           'slot="1",repo="xqliu/orbi",issue="xqliu/orbi#162",'
            'role="implement",phase="read",state="model_wait"', 1.0)
     assert not any(ln.startswith("muyan_pilot_run_idle_seconds")
                    for ln in lines)
@@ -492,7 +497,7 @@ def test_build_metrics_run_end_without_elapsed_still_counts():
     text = exporter.build_metrics(entries, now=300.0, service_active={"1": 1})
     lines = lines_of(text)
     metric(lines, "muyan_pilot_run_end_total",
-           'instance="1",issue="xqliu/orbi#162",role="implement",'
+           'slot="1",issue="xqliu/orbi#162",role="implement",'
            'result="failed"', 1.0)
     assert not any(ln.startswith("muyan_pilot_run_seconds") for ln in lines)
 
@@ -523,8 +528,8 @@ def test_build_metrics_fails_fast_on_kind_outside_chain(monkeypatch):
 def test_build_metrics_empty_journal_emits_only_service_gauges():
     text = exporter.build_metrics([], now=10.0, service_active={"1": 1, "2": 0})
     lines = lines_of(text)
-    assert metric(lines, "muyan_pilot_service_active", 'instance="1"') == 1.0
-    assert metric(lines, "muyan_pilot_service_active", 'instance="2"') == 0.0
+    assert metric(lines, "muyan_pilot_service_active", 'slot="1"') == 1.0
+    assert metric(lines, "muyan_pilot_service_active", 'slot="2"') == 0.0
     assert not any(ln.startswith("muyan_pilot_run_") for ln in lines)
 
 
@@ -539,7 +544,7 @@ def test_build_metrics_unknown_scene_fields_are_ignored():
     text = exporter.build_metrics(entries, now=200.0, service_active={"1": 1})
     lines = lines_of(text)
     metric(lines, "muyan_pilot_run_active",
-           'instance="1",repo="xqliu/orbi",issue="xqliu/orbi#9",'
+           'slot="1",repo="xqliu/orbi",issue="xqliu/orbi#9",'
            'role="implement",phase="starting",state="-"', 1.0)
 
 
@@ -553,7 +558,7 @@ def test_build_metrics_missing_instance_falls_back_to_unknown():
     text = exporter.build_metrics(entries, now=200.0, service_active={})
     lines = lines_of(text)
     metric(lines, "muyan_pilot_run_start_total",
-           'instance="unknown",issue="xqliu/orbi#162",role="implement"', 1.0)
+           'slot="unknown",issue="xqliu/orbi#162",role="implement"', 1.0)
 
 
 # --- Exporter: TTL cache + service state ----------------------------------
@@ -582,7 +587,7 @@ def test_exporter_caches_journal_until_ttl_expires():
     second = exp.metrics()
     assert first == second
     assert len(calls) == 1  # second scrape served from the cache
-    assert 'muyan_pilot_service_active{instance="1"} 1' in first
+    assert 'muyan_pilot_service_active{slot="1"} 1' in first
 
 
 def test_exporter_refreshes_after_ttl_and_after_journal_error():
@@ -623,8 +628,8 @@ def test_exporter_service_active_maps_unit_instances():
     text = exp.metrics()
     assert seen == ["muyan-pilot@1.service", "muyan-pilot@2.service"]
     lines = lines_of(text)
-    metric(lines, "muyan_pilot_service_active", 'instance="1"', 1.0)
-    metric(lines, "muyan_pilot_service_active", 'instance="2"', 0.0)
+    metric(lines, "muyan_pilot_service_active", 'slot="1"', 1.0)
+    metric(lines, "muyan_pilot_service_active", 'slot="2"', 0.0)
 
 
 def test_exporter_default_systemctl_uses_systemctl_user_is_active():

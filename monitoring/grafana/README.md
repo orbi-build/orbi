@@ -18,9 +18,14 @@
   Prometheus / Grafana 任意一环挂掉都不影响 Issue 领取、Pi 运行、review、
   merge 或 fail fast。
 - 没有数据库、队列、新状态存储；journal 是唯一数据源。
-- 标签低基数：只用 `instance` / `repo` / `issue` / `role` / `phase` /
+- 标签低基数：只用 `slot` / `repo` / `issue` / `role` / `phase` /
   `state` / `reason` / `result`；**永不**输出 `run_id`、branch、worktree、
-  命令或 prompt 文本。
+  命令或 prompt 文本。每个 Runner 的维度用 `slot` 而不是 `instance`：
+  `instance` 是 Prometheus 抓取器自己的标签，exporter 若输出 `instance`
+  会被改名为 `exported_instance`，Dashboard 里所有 `sum by (instance)`
+  和 `{{instance}}` 图例会按抓取目标 `127.0.0.1:9106` 而不是 Runner
+  slot 分组（已对运行中的 Prometheus 验证：llama slot exporter 的
+  `slot` 标签原样保留）。
 - exporter 只读 journal 行契约（`LEVEL [run_id] <kind> key=value ...`，
   见 README「journal（本地，systemd）」）；未知 kind（`command=`、
   `stdout=` 等）跳过。journalctl 失败时 fail fast（带命令、rc、stderr），

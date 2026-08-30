@@ -25,9 +25,17 @@ with kinds `run_start`, `activity`, `heartbeat`, `model_wait`, `pi_idle`,
 `progress_publish_failed`. Other line kinds (`command=`, `stdout=`, ...)
 are skipped.
 
-Metric labels stay low-cardinality by contract: only `instance`, `repo`,
+Metric labels stay low-cardinality by contract: only `slot`, `repo`,
 `issue`, `role`, `phase`, `state`, `reason` and `result` are ever used —
-never `run_id`, never branch/worktree/command/prompt text.
+never `run_id`, never branch/worktree/command/prompt text. The per-Runner
+dimension is labeled `slot` (the Issue's own term for a Runner slot, the
+same convention as the machine's llama slot exporter), NOT `instance`:
+`instance` is a Prometheus scraper label, so a scraped `instance` label
+is renamed to `exported_instance` and every `sum by (instance)` /
+legend `{{instance}}` in the Dashboard would silently group by the scrape
+target `127.0.0.1:9106` instead of the Runner slot (verified against the
+running Prometheus, which stores the llama exporter's `slot` label
+unchanged).
 
 Stdlib only; no third-party runtime dependency. Fail fast: a journalctl
 failure is raised with the command, return code and stderr (no fallback,
@@ -223,10 +231,12 @@ def build_metrics(entries: list[dict], now: float,
     """Aggregate journal entries into the Prometheus text exposition.
 
     `entries` are chronological (the journal order); `service_active`
-    maps instance -> 1/0 for the configured service instances.
+    maps instance -> 1/0 for the configured service instances. The
+    emitted per-Runner label is `slot` (see the module docstring: the
+    `instance` label would be renamed by the Prometheus scraper).
     """
     live: dict[str, dict] = {}      # instance -> live run state
-    seen_combos: set[tuple] = set()  # (instance, repo, issue, role, phase, state)
+    seen_combos: set[tuple] = set()  # (slot, repo, issue, role, phase, state)
     idle_gauges: dict[tuple, float] = {}
     seconds_gauges: dict[tuple, float] = {}
     counters: dict[tuple, float] = {}
@@ -258,7 +268,7 @@ def build_metrics(entries: list[dict], now: float,
                 "role": role,
             }
             bump(("muyan_pilot_run_start_total",
-                  ("instance", instance), ("issue", issue),
+                  ("slot", instance), ("issue", issue),
                   ("role", role)))
         elif kind in ("activity", "heartbeat"):
             run = live.get(instance)
@@ -278,26 +288,26 @@ def build_metrics(entries: list[dict], now: float,
                 seconds_gauges[(instance, issue, role)] = elapsed
         elif kind == "model_wait":
             bump(("muyan_pilot_model_wait_total",
-                  ("instance", instance), ("issue", issue)))
+                  ("slot", instance), ("issue", issue)))
         elif kind == "pi_idle":
             bump(("muyan_pilot_pi_idle_total",
-                  ("instance", instance), ("issue", issue)))
+                  ("slot", instance), ("issue", issue)))
         elif kind == "pi_idle_term":
             bump(("muyan_pilot_pi_idle_term_total",
-                  ("instance", instance), ("issue", issue)))
+                  ("slot", instance), ("issue", issue)))
         elif kind == "pi_idle_kill":
             bump(("muyan_pilot_pi_idle_kill_total",
-                  ("instance", instance), ("issue", issue)))
+                  ("slot", instance), ("issue", issue)))
         elif kind == "run_failed":
             reason = _label_value(scene.get("reason"))
             bump(("muyan_pilot_run_failed_total",
-                  ("instance", instance), ("issue", issue),
+                  ("slot", instance), ("issue", issue),
                   ("reason", reason)))
             live.pop(instance, None)
         elif kind == "run_end":
             result = _label_value(scene.get("result"))
             bump(("muyan_pilot_run_end_total",
-                  ("instance", instance), ("issue", issue),
+                  ("slot", instance), ("issue", issue),
                   ("role", role), ("result", result)))
             elapsed = parse_duration(scene.get("elapsed"))
             if elapsed is not None:
@@ -305,7 +315,7 @@ def build_metrics(entries: list[dict], now: float,
             live.pop(instance, None)
         elif kind == "progress_publish_failed":
             bump(("muyan_pilot_progress_publish_failed_total",
-                  ("instance", instance), ("issue", issue)))
+                  ("slot", instance), ("issue", issue)))
         else:
             # Unreachable: parse_message only returns KNOWN_KINDS and the
             # chain above covers every one of them. Fail fast if a kind
@@ -325,7 +335,7 @@ def build_metrics(entries: list[dict], now: float,
 
     for instance in sorted(service_active):
         gauge("muyan_pilot_service_active", float(service_active[instance]),
-              [("instance", instance)])
+              [("slot", instance)])
 
     for combo in sorted(seen_combos):
         instance, repo, issue, role, phase, state = combo
@@ -335,7 +345,7 @@ def build_metrics(entries: list[dict], now: float,
         )
         gauge(
             "muyan_pilot_run_active", 1.0 if is_live else 0.0,
-            [("instance", instance), ("repo", repo), ("issue", issue),
+            [("slot", instance), ("repo", repo), ("issue", issue),
              ("role", role), ("phase", phase), ("state", state)],
         )
 
@@ -344,12 +354,12 @@ def build_metrics(entries: list[dict], now: float,
         if run is None or run["issue"] != issue:
             continue  # the idle gauge is a live-state gauge
         gauge("muyan_pilot_run_idle_seconds", idle_gauges[(instance, issue)],
-              [("instance", instance), ("issue", issue)])
+              [("slot", instance), ("issue", issue)])
 
     for (instance, issue, role) in sorted(seconds_gauges):
         gauge("muyan_pilot_run_seconds",
               seconds_gauges[(instance, issue, role)],
-              [("instance", instance), ("issue", issue), ("role", role)])
+              [("slot", instance), ("issue", issue), ("role", role)])
 
     for name in (
         "muyan_pilot_run_start_total",
