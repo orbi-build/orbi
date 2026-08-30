@@ -334,12 +334,18 @@ def test_pick_resumable_delivery_returns_newest_issue_with_scene(
     assert scene["pr_url"] == FAKE_PR_URL
     # Newest-first list, then the full comment history of that Issue.
     # Both opened-PR states are scanned (Issue #70): `label:a,b` is
-    # GitHub's OR within one label qualifier.
+    # GitHub's OR within one label qualifier. `ai-in-progress` is NOT
+    # excluded (Issue #178): a runner killed during review leaves the
+    # backfilled in-flight label behind, and the same scan must pick
+    # the delivery back up — the positive `label:ai-fix-needed,
+    # ai-pr-opened` qualifier already restricts the scan to opened-PR
+    # Issues (an implement-phase Issue has `ai-ready`+`ai-in-progress`
+    # but neither opened-PR label, so it never matches).
     assert calls[0] == [
         "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
         "--search",
         "label:ai-fix-needed,ai-pr-opened "
-        "-label:ai-blocked -label:ai-merged -label:ai-in-progress",
+        "-label:ai-blocked -label:ai-merged",
         # `labels` (Issue #101): a resumed P0 delivery keeps its
         # priority in the progress comment through review/merge.
         "--json", "number,title,state,url,labels", "--limit", "1",
@@ -357,10 +363,12 @@ def test_pick_resumable_delivery_scans_fix_needed_and_awaiting_review(
     (a review finding or base conflict — Fixer work) and
     `ai-pr-opened` (awaiting review — a stranded delivery whose runner
     died, or the progress 404 that used to block the Issue before the
-    review started). Blocked, merged and in-flight Issues are excluded.
-    A clean PR is still never sent to the Fixer: `main` routes an
-    `ai-pr-opened` resume to the independent review (Issue #45
-    round-5 contract, tested in test_bootstrap_runner)."""
+    review started). Blocked and merged Issues are excluded; a
+    delivery that carries the backfilled `ai-in-progress` label is NOT
+    excluded (Issue #178: a runner killed during review leaves it
+    behind). A clean PR is still never sent to the Fixer: `main`
+    routes an `ai-pr-opened` resume to the independent review (Issue
+    #45 round-5 contract, tested in test_bootstrap_runner)."""
     calls = []
 
     def counting(command, **kwargs):
@@ -375,11 +383,33 @@ def test_pick_resumable_delivery_scans_fix_needed_and_awaiting_review(
         "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
         "--search",
         "label:ai-fix-needed,ai-pr-opened "
-        "-label:ai-blocked -label:ai-merged -label:ai-in-progress",
+        "-label:ai-blocked -label:ai-merged",
         # `labels` (Issue #101): a resumed P0 delivery keeps its
         # priority in the progress comment through review/merge.
         "--json", "number,title,state,url,labels", "--limit", "1",
     ]]
+
+
+def test_pick_resumable_delivery_resumes_delivery_that_carries_in_progress_label(
+    monkeypatch, tmp_path,
+):
+    """Issue #178: a runner killed DURING review leaves the backfilled
+    `ai-in-progress` label behind on the opened-PR delivery (e.g.
+    `ai-pr-opened` + `ai-in-progress`). The resumable scan must still
+    find it and return the scene — otherwise the delivery is stranded
+    (the in-progress scan excludes `ai-pr-opened`/`ai-fix-needed`, the
+    ready scan excludes every delivery state)."""
+    fake = make_pick_fake(
+        issue_payload(),
+        gh_comments_payload(["human note", opened_pr_comment()]),
+    )
+    monkeypatch.setattr(runner, "run_command", fake)
+    issue, scene = runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+    )
+    assert issue["number"] == 9
+    assert scene["run_id"] == FAKE_RUN_ID
+    assert scene["pr_url"] == FAKE_PR_URL
 
 
 def test_pick_resumable_delivery_returns_none_when_queue_empty(
@@ -928,7 +958,13 @@ def test_verify_resumed_pr_verifies_scene_pr_and_returns_verified_url(
         })
         return verified_url
 
+    edits = []
+
+    def fake_edit(number, *, repo, add=None, remove=None):
+        edits.append((number, repo, add, remove))
+
     monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(runner, "edit_issue", fake_edit)
     # The derived worktree exists (a real delivery always has one).
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     url = runner.verify_resumed_pr(
@@ -938,6 +974,9 @@ def test_verify_resumed_pr_verifies_scene_pr_and_returns_verified_url(
     # The verified URL is returned, not the comment string.
     assert url == verified_url
     assert len(calls) == 1
+    # Issue #178: the in-flight label is backfilled before the resumed
+    # delivery continues (idempotent, the state label untouched).
+    assert edits == [(9, "owner/repo", "ai-in-progress", None)]
     call = calls[0]
     # Branch and worktree are DERIVED from config + Issue + run id.
     assert call["worktree"] == expected_resume_worktree(tmp_path)
@@ -1076,6 +1115,155 @@ def test_resume_failure_fake_answers_blocked_scene_and_rejects_other(
     assert len(captured["api"]) == 3
     assert captured["edits"] == []
     assert captured["comments"] == []
+
+
+def test_verify_resumed_pr_backfills_in_progress_label_before_continuing(
+    monkeypatch, tmp_path,
+):
+    """Issue #178: the resumed delivery is in flight from the verified
+    PR on — the Runner holds the slot and continues the review/merge
+    work — so the Issue must carry `ai-in-progress` BEFORE the work
+    continues. The backfill is an idempotent label projection repair:
+    the run, worktree and PR are the ones verify_pr verified — nothing
+    is recreated, and the opened-PR state label is untouched (the
+    transitions into `ai-pr-opened`/`ai-fix-needed`/`ai-merged`/
+    `ai-blocked` keep their existing add/remove pairs)."""
+    calls = []
+    edits = []
+
+    def fake_verify_pr(worktree, branch, base_branch, run_id, *, issue,
+                       repo_dir=None, pr_repo=None, expected_url=None,
+                       require_latest_base=True):
+        calls.append(1)
+        return FAKE_PR_URL
+
+    def fake_edit(number, *, repo, add=None, remove=None):
+        edits.append((number, repo, add, remove))
+
+    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(runner, "edit_issue", fake_edit)
+    expected_resume_worktree(tmp_path).mkdir(parents=True)
+    url = runner.verify_resumed_pr(
+        make_resume_scene(), make_resume_issue(),
+        make_resume_config(tmp_path), "owner/repo",
+    )
+    assert url == FAKE_PR_URL
+    assert len(calls) == 1
+    # The in-flight label is backfilled after the PR is verified, with
+    # the state label (ai-pr-opened / ai-fix-needed) untouched.
+    assert edits == [(9, "owner/repo", "ai-in-progress", None)]
+
+
+def test_verify_resumed_pr_repeated_resume_backfill_is_idempotent(
+    monkeypatch, tmp_path,
+):
+    """Issue #178: a repeated resume (two ticks, same scene) re-adds
+    the SAME single label edit each time and repairs the label
+    projection only — no new run id, no new worktree, no new PR. The
+    run, branch and worktree of the scene are the ones that continue."""
+    edits = []
+    verify_calls = []
+
+    def fake_verify_pr(worktree, branch, base_branch, run_id, *, issue,
+                       repo_dir=None, pr_repo=None, expected_url=None,
+                       require_latest_base=True):
+        verify_calls.append((worktree, branch, run_id))
+        return FAKE_PR_URL
+
+    def fake_edit(number, *, repo, add=None, remove=None):
+        edits.append((number, repo, add, remove))
+
+    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(runner, "edit_issue", fake_edit)
+    expected_resume_worktree(tmp_path).mkdir(parents=True)
+    # Two consecutive ticks resume the same scene.
+    for _ in range(2):
+        url = runner.verify_resumed_pr(
+            make_resume_scene(), make_resume_issue(),
+            make_resume_config(tmp_path), "owner/repo",
+        )
+        assert url == FAKE_PR_URL
+    # Exactly one idempotent backfill edit per tick, nothing else.
+    assert edits == [
+        (9, "owner/repo", "ai-in-progress", None),
+        (9, "owner/repo", "ai-in-progress", None),
+    ]
+    # Nothing was recreated: both ticks verified the SAME derived
+    # worktree, branch and run id of the scene — no new run, no new
+    # worktree, no new PR.
+    assert verify_calls == [
+        (expected_resume_worktree(tmp_path), FAKE_BRANCH, FAKE_RUN_ID),
+        (expected_resume_worktree(tmp_path), FAKE_BRANCH, FAKE_RUN_ID),
+    ]
+
+
+def test_verify_resumed_pr_backfill_label_api_failure_fails_fast(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #178: a label API failure during the resume backfill is a
+    RECOVERABLE resume failure (never `ai-blocked`): the Issue is
+    marked `ai-fix-needed`, the run-marked failure comment is posted to
+    the Issue AND the PR, the error is re-raised so the tick stops, and
+    the journal carries the concrete failure (fail fast, never
+    swallowed). No review Pi is started and nothing is merged."""
+    captured, _ = make_resume_failure_fake(monkeypatch)
+
+    def failing_edit(number, *, repo, add=None, remove=None):
+        if add == "ai-in-progress":
+            raise subprocess.CalledProcessError(
+                1, ["gh", "issue", "edit", str(number), "--repo", repo,
+                    "--add-label", add],
+                output="gh: HTTP 429: rate limited",
+                stderr="gh: HTTP 429: rate limited",
+            )
+        captured["edits"].append(
+            ((number,), {"repo": repo, "add": add, "remove": remove}),
+        )
+
+    monkeypatch.setattr(runner, "verify_pr", lambda *a, **kw: FAKE_PR_URL)
+    monkeypatch.setattr(runner, "edit_issue", failing_edit)
+    reviews: list = []
+    monkeypatch.setattr(
+        runner, "review_and_merge_if_clean",
+        lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
+    )
+    expected_resume_worktree(tmp_path).mkdir(parents=True)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    caplog.set_level("INFO")
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        runner.verify_resumed_pr(
+            make_resume_scene(), make_resume_issue(),
+            make_resume_config(tmp_path), "owner/repo",
+        )
+    # The label API failure itself is re-raised (tick stops) ...
+    assert "ai-in-progress" in str(excinfo.value)
+    assert "rate limited" in (excinfo.value.stderr or "")
+    # No review Pi was started and nothing was merged.
+    assert reviews == []
+    # The recoverable transition happened (ai-pr-opened removed) — the
+    # failed backfill edit itself is not a recorded edit, it raised.
+    assert captured["edits"] == [
+        ((9,), {"repo": "owner/repo", "add": "ai-fix-needed",
+                "remove": "ai-pr-opened"}),
+    ]
+    # The run-marked failure comment names the label API failure ...
+    assert len(captured["comments"]) == 1
+    body = captured["comments"][0][1]["body"]
+    assert "Muyan Pilot needs a fix:" in body
+    assert run_marker_body() in body
+    assert "rate limited" in body
+    # ... written to the Issue AND the PR (Issue #50) ...
+    assert len(captured["pr_comments"]) == 1
+    assert captured["pr_comments"][0] == body
+    # ... and the fix-needed milestone.
+    posted = [
+        command[command.index("--field") + 1][len("body="):]
+        for command in captured["api"]
+        if "--method" in command and "POST" in command
+    ]
+    assert any("Muyan Pilot: fix needed" in body for body in posted)
+    assert any("rate limited" in body for body in posted)
+    assert "resume_pr_verification_failed" in caplog.text
 
 
 def test_verify_resumed_pr_pr_url_mismatch_stays_fix_needed(

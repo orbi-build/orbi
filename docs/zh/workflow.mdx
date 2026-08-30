@@ -66,7 +66,9 @@ ai-ready                任务被派发（muyan-pilot add，或人工加标签�
   review/fix 循环期间 PR 编号永远不变；只有它的 head 可以前进。
 - 只有两个 opened-PR 状态会被自动拾取：`ai-pr-opened`（等待 review）
   和 `ai-fix-needed`（等待下一个审查会话）。`ai-ready` 作为新工作被
-  领取；`ai-blocked` 从不自动恢复。
+  领取；`ai-blocked` 从不自动恢复。携带回填的 `ai-in-progress` 标签的
+  交付仍会被拾取（Issue #178：review 中被杀的 Runner 会留下该标签——
+  正向的 opened-PR 限定已保证 implement 阶段的 Issue 不会匹配该扫描）。
 - review/fix 循环有界（5 轮）。超轮仍有 findings 时 Issue 标记
   `ai-blocked`（超轮是人工决策）；可恢复失败（Issue #50）保持
   `ai-fix-needed`。无论哪种，PR、branch 和 worktree 原样保留。
@@ -88,7 +90,7 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 | 标签 | 含义 |
 |---|---|
 | `ai-ready` | 明确派发给 Pilot；可以被领取 |
-| `ai-in-progress` | 已领取、正在执行（被杀后的残留由下一 tick 接回） |
+| `ai-in-progress` | 已领取、正在执行。resume opened-PR 交付时 Runner 先幂等回填该标签再继续（Issue #178）；被杀后的残留由下一 tick 接回 |
 | `ai-pr-opened` | PR 已创建并验收；等待独立审查 |
 | `ai-fix-needed` | PR head 尚不可合并，或已有 run/PR 的可恢复失败（Issue #50）；下一 tick 在同一 run、branch、worktree、PR 上继续 |
 | `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支 |

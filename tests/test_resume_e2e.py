@@ -559,7 +559,10 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
     base conflict) must NOT be sent to the Fixer. The next tick resumes
     the SAME delivery through the resumable scan (which now also
     covers `ai-pr-opened`) and sends it straight to the delivery wait
-    (independent review) — no fixer, no fresh claim, no second Pi."""
+    (independent review) — no fixer, no fresh claim, no second Pi.
+    Issue #178: the resumed delivery is in flight from the verified PR
+    on, so the tick idempotently backfills `ai-in-progress` before the
+    wait takes over — exactly one label edit, no comment."""
     comments: list[str] = []
     edits: list[list[str]] = []
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
@@ -585,11 +588,12 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
     # — no fixer, no fresh claim (Issue #82). The gh calls of the
     # awaiting-review tick: the opened-PR scan (fix-needed OR
     # pr-opened) finds the stranded delivery, the scene is recovered
-    # from the comment history, and the resume verification reads the
-    # open PR of the derived branch — and the wait (stubbed below)
-    # takes over. The in-flight and ready scans never run (the
-    # delivery is resumed, so nothing is claimed), and the fake
-    # rejects anything else.
+    # from the comment history, the resume verification reads the open
+    # PR of the derived branch, and the Issue #178 backfill re-adds
+    # `ai-in-progress` (the PR-opened transition removed it) — then
+    # the wait (stubbed below) takes over. The in-flight and ready
+    # scans never run (the delivery is resumed, so nothing is
+    # claimed), and the fake rejects anything else.
     def fake_run(command, **kwargs):
         if command[:1] == ["git"]:
             # The resume verification reads the derived worktree's
@@ -617,6 +621,11 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
                         for i, body in enumerate(comments)
                     ],
                 })
+            if command[2] == "edit":
+                # Issue #178: the idempotent `ai-in-progress`
+                # backfill of the resumed delivery.
+                edits.append(command)
+                return ""
         if command[:2] == ["gh", "pr"] and command[2] == "list":
             # The resume verification (Issue #89): exactly one open PR
             # of the derived branch, in the source repo, on the
@@ -672,10 +681,16 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
     # the URL that the resume verification (Issue #89) verified.
     assert waits[0][0][0] == PR_URL
     assert waits[0][0][1]["number"] == ISSUE_NUMBER
-    # No fixer ran: the delivery HEAD is unchanged and no label edit or
-    # comment touched the delivery Issue during the awaiting-review tick.
+    # No fixer ran: the delivery HEAD is unchanged and no comment
+    # touched the delivery Issue during the awaiting-review tick. The
+    # ONLY label edit is the Issue #178 idempotent `ai-in-progress`
+    # backfill (the PR-opened transition had removed it; the resumed
+    # delivery is in flight again) — the state label stays put.
     assert git(worktree, "rev-parse", "HEAD") == head_before
-    assert len(edits) == edits_before
+    assert edits[edits_before:] == [[
+        "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
+        "--add-label", "ai-in-progress",
+    ]]
     assert len(comments) == comments_before
     assert not any("fixed PR" in c for c in comments)
     # The awaiting-review fake rejects anything but the issue scans.

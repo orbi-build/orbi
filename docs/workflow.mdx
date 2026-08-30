@@ -77,7 +77,10 @@ Rules of the chain:
 - Only the two opened-PR states are picked up automatically:
   `ai-pr-opened` (awaiting review) and `ai-fix-needed` (awaiting the next
   review session). `ai-ready` is claimed as new work; `ai-blocked` is
-  never auto-recovered.
+  never auto-recovered. A delivery that carries the backfilled
+  `ai-in-progress` label is still picked up (Issue #178: a runner killed
+  during review leaves it behind — the positive opened-PR qualifier
+  already keeps implement-phase Issues out of the scan).
 - The review/fix loop is bounded (5 rounds). Exhausting rounds with
   findings marks the Issue `ai-blocked` (the bounded loop is a human
   decision); a recoverable failure (Issue #50) keeps it `ai-fix-needed`.
@@ -103,7 +106,7 @@ commits — initialize them per repository (see
 | Label | Meaning |
 |---|---|
 | `ai-ready` | Explicitly dispatched to the Pilot; may be claimed |
-| `ai-in-progress` | Claimed and running (a leftover after a kill is resumed by the next tick) |
+| `ai-in-progress` | Claimed and running. The Runner idempotently backfills it before continuing a resumed opened-PR delivery (Issue #178); a leftover after a kill is resumed by the next tick |
 | `ai-pr-opened` | PR created and verified; awaiting the independent review |
 | `ai-fix-needed` | The PR head is not mergeable yet, or an AI-recoverable failure of the run/PR (Issue #50); the next tick resumes the same run, branch, worktree and PR |
 | `ai-merged` | Success terminal state; the Runner merged the PR and confirmed the merge commit on the protected branch |
