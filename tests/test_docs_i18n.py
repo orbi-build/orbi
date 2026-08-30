@@ -65,6 +65,12 @@ KNOWN_CONFIG_FIELDS = frozenset({
     "max_concurrency",
     "skills",
     "context_files",
+    # Issue #119/#157: the optional Pi model selection keys (load_config
+    # plus the committed example, commented out).
+    "pi_provider",
+    "pi_model",
+    "pi_thinking",
+    "pi_providers",
 })
 
 CONFIG_FIELD_PATTERN = re.compile(r"^\s*([a-z][a-z_]+)\s*=", re.MULTILINE)
@@ -190,6 +196,67 @@ def test_chinese_getting_started_documents_prerequisites_and_smoke():
         "journalctl --user -u muyan-pilot@1.service -u "
         "muyan-pilot@2.service" in text
     ), "smoke must show the real journal command (both service instances)"
+
+
+def test_chinese_getting_started_documents_the_model_provider_configuration():
+    """Issue #179: the Chinese getting-started article carries the same
+    model provider facts as the English page — the optional
+    `pi_providers` file in Pi's `models.json` shape, the
+    OpenAI-compatible boundary (local llama.cpp or any compatible
+    API), the env-var API key reference, the gitignored env file the
+    systemd unit loads, and the explicit boundary that no
+    per-provider integration is claimed as complete."""
+    text = zh_page_text("getting-started")
+    for field in ("pi_providers", "pi_provider", "pi_model", "pi_thinking"):
+        assert field in text, f"Chinese getting-started must document {field}"
+    assert "models.json" in text, (
+        "the provider file must be named in Pi's models.json shape"
+    )
+    assert "baseUrl" in text and "apiKey" in text, (
+        "the provider file contract must name baseUrl and apiKey"
+    )
+    assert "$GROQ_API_KEY" in text, (
+        "the OpenAI-compatible example must reference the key as an env var"
+    )
+    assert ".muyan-pilot/env" in text, (
+        "the key value must live in the gitignored env file"
+    )
+    assert "EnvironmentFile" in text, (
+        "the systemd unit's EnvironmentFile must be named"
+    )
+    assert "127.0.0.1:8080/v1" in text, (
+        "the local example must use the real llama.cpp OpenAI-compatible URL"
+    )
+    assert "--alias" in text, ("the model id must be tied to the llama.cpp --alias")
+    assert "OpenAI-compatible" in text, (
+        "the documented provider boundary must be named"
+    )
+    assert "guarantee" in text.lower() or "tested" in text.lower() or "保证" in text, (
+        "the article must state what is and is not tested/guaranteed"
+    )
+    assert "fail" in text.lower() or "失败" in text, (
+        "the provider validation must be described as fail-fast"
+    )
+
+
+def test_chinese_getting_started_documents_the_full_chain_and_troubleshooting():
+    """Issue #179: the Chinese smoke walkthrough verifies the FULL chain
+    — picked up, implemented, tested, PR opened, independently
+    reviewed, merged — with the same concrete success criteria as the
+    English page (the real journal lines and the real `gh` checks), and
+    the article carries a troubleshooting section."""
+    text = zh_page_text("getting-started")
+    assert "ai-pr-opened" in text, "the chain must reach ai-pr-opened"
+    assert "ai-merged" in text, "the chain must reach ai-merged"
+    assert "result=pr_opened" in text, ("the PR stage must cite the real run_end journal line")
+    assert "verdict=pass" in text, ("the review stage must cite the real review journal line")
+    assert "merged pr=" in text, ("the merge stage must cite the real merged journal line")
+    assert "Fixes #" in text, "the PR body contract must be part of the success criteria"
+    assert "gh pr view" in text, ("the terminal state must be checked with the real gh command")
+    assert "mergedAt" in text, ("the gh PR check must use the real mergedAt field")
+    assert "ai-blocked" in text, ("the failure outcome must be named")
+    assert "run_failed" in text, ("the failure must cite the real journal line")
+    assert "故障排查" in text, ("the article must carry a troubleshooting section")
 
 
 def test_chinese_config_field_table_matches_the_implementation():
