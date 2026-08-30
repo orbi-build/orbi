@@ -303,6 +303,19 @@ journalctl --user -u 'muyan-pilot@*.service' -f
 elapsed、last activity、last action、session、branch。implementer、reviewer
 两种 Pi session 用同一个机制观测，role 由 Runner 在启动 session 时传入。
 
+### Prometheus / Grafana（可选，只读，独立）
+
+`monitoring/` 下是一套只读、独立、版本管理的观测栈（Issue #162）：
+`monitoring/prometheus/muyan-pilot-exporter.py` 只读 journal 和
+`systemctl --user is-active`，在 `127.0.0.1:9106/metrics` 暴露
+`muyan_pilot_*` 指标（service active、每 slot 当前
+issue/role/phase/state、idle 秒数、run 时长、`run_failed` by reason、
+idle 恢复、`progress_publish_failed`、model_wait）；
+`monitoring/grafana/dashboards/muyan-pilot.json` 是配套 Dashboard（复用
+已有 llama 指标）。Runner 完全不知道它存在：不 push、不写状态，观测栈
+任意一环挂掉不影响领取/运行/merge；标签只用低基数集合（无 `run_id`、
+无命令/prompt 文本）。安装与验证步骤见 `monitoring/grafana/README.md`。
+
 ### GitHub（手机，自动更新）
 
 领取任务后，Runner 在 source Issue 上创建一条带隐藏 run marker
