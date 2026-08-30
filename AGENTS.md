@@ -104,9 +104,17 @@ acceptance criteria.
   cannot skew it), it is a legitimate long-running command, not a hang:
   the Runner logs one `pi_idle_wait` line (run id, pid, cmdline,
   deadline), reports `recovery=wait` in the progress comment, and pauses
-  the escalation — every later window re-evaluates; when the deadline
-  passes with the descendant still alive (the wrapper failed to end the
-  command) the evidence flips and the escalation proceeds. Otherwise
+  the escalation — every later window re-evaluates. The nominal deadline
+  is BEST-EFFORT (Issue #181): the wrapper's own deadline handling
+  (alarm → signal delivery → exit) is best-effort and can be delayed by
+  scheduling, so a single "past deadline and still alive" observation is
+  not evidence the wrapper failed. The grace is measured in idle windows,
+  not polls: a target first observed past its deadline in cycle N is
+  recorded (the grace window — nothing is signaled, `recovery=wait` stays
+  visible) and signaled only if it is STILL alive in a LATER window (one
+  full idle window of grace, cycle > N) — that is when the wrapper failed
+  to end the command and the evidence flips and the escalation proceeds.
+  Otherwise
   window 1 SIGTERMs the descendants, so the tool gets a non-zero exit and
   the failure signal reaches the model; window 2 SIGKILLs a target that
   survived; after `PI_IDLE_RECOVERY_CYCLES` (default 3) consecutive idle

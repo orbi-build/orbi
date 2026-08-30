@@ -1637,6 +1637,17 @@ def stream_pi(
     recovery: str | None = None
     recovery_targets: list[dict] = []
     recovery_step = 0
+    # Past-deadline `timeout` targets first observed alive, mapped to
+    # the idle cycle they were first observed (Issue #181): the
+    # wrapper's own deadline handling (alarm -> signal delivery ->
+    # exit) is best-effort and can be delayed by scheduling, so ONE
+    # "past deadline and still alive" observation is not evidence the
+    # wrapper failed. The target is recorded in the cycle its nominal
+    # deadline passes (the grace cycle — nothing is signaled) and
+    # signaled only if it is STILL alive one full idle window later
+    # (cycle > recorded cycle); a pid that exits in the meantime is
+    # dropped (it simply stops being a target).
+    deadline_passed: dict[int, int] = {}
     # The `pi_idle_wait` decision is logged once per stall (Issue #169):
     # the escalation re-evaluates every window while the tool is inside
     # its `timeout` deadline, but the journal carries one decision line.
@@ -1726,6 +1737,7 @@ def stream_pi(
                 recovery_targets = []
                 recovery_step = 0
                 idle_wait_logged = False
+                deadline_passed.clear()
             elif (
                 not activity["model_wait"]
                 and not idle_warned
@@ -1808,36 +1820,107 @@ def stream_pi(
                                 )
                             idle_wait_logged = True
                         recovery = "wait"
-                    elif targets:
-                        recovery_targets = targets
-                        for target in targets:
-                            result = signal_pid(
-                                target["pid"], signal.SIGTERM,
-                            )
+                    else:
+                        # Past-deadline grace (Issue #181): a target
+                        # whose nominal `timeout` deadline passed is
+                        # NOT escalated in the window it is first
+                        # observed alive — the wrapper's own deadline
+                        # handling (alarm -> signal delivery -> exit)
+                        # is best-effort and can be delayed by
+                        # scheduling, so one "past deadline and still
+                        # alive" observation is not evidence the
+                        # wrapper failed. The pid is recorded (the
+                        # grace window, nothing is signaled) and
+                        # signaled only if it is STILL alive in a
+                        # later escalation window; a pid that exits in
+                        # the meantime is dropped. The `recovery=wait`
+                        # state stays visible while the grace runs
+                        # (the tool is still inside its own deadline
+                        # handling, not hung).
+                        # Issue #181: the grace is measured in idle
+                        # windows, not polls — a target first observed
+                        # past its deadline in cycle N is signaled only
+                        # if it is still alive in a LATER cycle (one
+                        # full idle window of grace for the wrapper's
+                        # own deadline handling).
+                        flipped = [
+                            target for target in targets
+                            if target["pid"] in deadline_passed
+                            and deadline_passed[target["pid"]] < cycle
+                        ]
+                        newly_passed = [
+                            target for target in targets
+                            if target["pid"] not in deadline_passed
+                        ]
+                        if flipped:
+                            # Still alive one full idle window after
+                            # the nominal deadline: the wrapper failed
+                            # to end the command — the evidence is
+                            # confirmed, the TERM -> KILL ->
+                            # session-kill escalation runs unchanged
+                            # (the slot is never held forever). A
+                            # target first observed past its deadline
+                            # in this same cycle is NOT recorded here:
+                            # it starts its own grace cycle next cycle
+                            # (one extra window of grace in this rare
+                            # concurrent case is harmless).
+                            for target in flipped:
+                                deadline_passed.pop(target["pid"], None)
+                            recovery_targets = flipped
+                            for target in flipped:
+                                result = signal_pid(
+                                    target["pid"], signal.SIGTERM,
+                                )
+                                LOGGER.warning(
+                                    "pi_idle_term run=%s issue=%s "
+                                    "role=%s pid=%s cmdline=%s "
+                                    "result=%s",
+                                    run_id, issue_ref, role,
+                                    target["pid"],
+                                    quote_value(target["cmdline"] or "-"),
+                                    result,
+                                )
+                            recovery = "term"
+                            # The TERM step ran (the grace window does
+                            # NOT advance the step: nothing was
+                            # signaled there, so the KILL escalation
+                            # still lands one full window after the
+                            # TERM, as before).
+                            recovery_step = 1
+                        elif newly_passed:
+                            # First observation past the deadline: the
+                            # grace window (no signal, the wait state
+                            # stays visible, the step does NOT advance
+                            # — nothing was signaled).
+                            for target in newly_passed:
+                                deadline_passed[target["pid"]] = cycle
+                            recovery = "wait"
+                        elif [t for t in targets
+                              if t["pid"] in deadline_passed]:
+                            # The target is inside its grace cycle
+                            # (recorded, still alive, one full idle
+                            # window not yet up): no signal, the wait
+                            # state stays visible, the step does NOT
+                            # advance.
+                            recovery = "wait"
+                        else:
+                            # No hung tool found (Pi itself is stuck):
+                            # the escalation continues, nothing is
+                            # signaled.
                             LOGGER.warning(
                                 "pi_idle_term run=%s issue=%s role=%s "
-                                "pid=%s cmdline=%s result=%s",
-                                run_id, issue_ref, role, target["pid"],
-                                quote_value(target["cmdline"] or "-"),
-                                result,
+                                "result=no_target",
+                                run_id, issue_ref, role,
                             )
-                        recovery = "term"
-                    else:
-                        # No hung tool found (Pi itself is stuck): the
-                        # escalation continues, nothing is signaled.
-                        LOGGER.warning(
-                            "pi_idle_term run=%s issue=%s role=%s "
-                            "result=no_target",
-                            run_id, issue_ref, role,
-                        )
-                        # The pre-idle descendants are gone (a waited
-                        # tool reached its own deadline): the wait state
-                        # is stale — clear it so the progress comment
-                        # does not keep showing `recovery: wait` while
-                        # the escalation runs (Issue #169).
-                        recovery = None
-                    if not pending:
-                        recovery_step = 1
+                            # The pre-idle descendants are gone (a
+                            # waited tool reached its own deadline):
+                            # the wait state is stale — clear it so the
+                            # progress comment does not keep showing
+                            # `recovery: wait` while the escalation
+                            # runs (Issue #169).
+                            recovery = None
+                            deadline_passed.clear()
+                            recovery_step = 1
                 elif cycle >= 2 and recovery_step == 1:
                     for target in recovery_targets:
                         if not pid_alive(target["pid"]):
