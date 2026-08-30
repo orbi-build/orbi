@@ -137,7 +137,8 @@ def test_service_fast_forwards_main_before_runner_starts():
     non-fast-forwardable state makes the preflight command fail: the
     service does not start and the reason lands in the systemd journal
     (fail fast). No new refresh service, worker or dispatcher: only the
-    existing service and timer exist."""
+    existing Runner service and timer exist. The independent exporter
+    service is not a Runner unit."""
     service = parse_unit(SERVICE_FILE)
     section = service["Service"]
     assert "ExecStartPre" in section
@@ -147,11 +148,11 @@ def test_service_fast_forwards_main_before_runner_starts():
     # The preflight runs in the main checkout (the unit's
     # WorkingDirectory), before the Python Runner.
     assert "WorkingDirectory" in section
-    systemd_files = sorted(
+    runner_units = sorted(
         path.name for path in (REPO_ROOT / "systemd").iterdir()
-        if path.is_file()
+        if path.is_file() and path.name.startswith("muyan-pilot@")
     )
-    assert systemd_files == ["muyan-pilot@.service", "muyan-pilot@.timer"]
+    assert runner_units == ["muyan-pilot@.service", "muyan-pilot@.timer"]
 
 
 def test_service_preflight_is_serialized_with_a_short_lived_flock():
