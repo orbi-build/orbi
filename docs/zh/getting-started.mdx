@@ -1,7 +1,9 @@
 # 快速开始
 
-这一页带你从全新 clone 走到第一个验证过的 tick。这里的所有命令在任何
-clone 路径下都能工作——不依赖任何特定机器布局。
+这一页带你从全新 clone 走到一次完整验证过的交付：前提、模型
+provider、一次性 setup，以及一个最小 smoke——证明完整闭环：GitHub
+Issue 被领取、实现、测试、开 PR、独立审查、合并。这里的所有命令在
+任何 clone 路径下都能工作——不依赖任何特定机器布局。
 
 ## 前提
 
@@ -18,7 +20,7 @@ clone 路径下都能工作——不依赖任何特定机器布局。
 | Git | worktree、分支、base 新鲜度 | `git --version` |
 | GitHub CLI（`gh`） | Issue、标签、PR、merge | `gh auth status` |
 | systemd（user session） | 每 5 分钟触发一个 tick 的 timer | `systemctl --user status` |
-| 可用的 OpenAI-compatible 模型 endpoint | Pi 的模型 provider——本地 llama.cpp server 或任意 OpenAI-compatible API | 一次真实 `pi --print` 调用（见下） |
+| 可用的模型 provider | Pi 能真正使用的模型——Pi 自身配置的 provider，或指向 OpenAI-compatible endpoint（本地 `llama.cpp` server 或任意兼容 API）的 `pi_providers` 文件 | 一次真实 `pi --print` 调用（见下）；第 4 步给出两条路径 |
 
 用官方安装器安装 `uv`（已对照
 [uv 官方文档](https://docs.astral.sh/uv/getting-started/installation/)）：
@@ -109,6 +111,10 @@ cp .muyan-pilot.example.toml muyan-pilot.toml
 | `max_concurrency` | 否 | `1` | 本机并发 Pilot 任务数（正整数；本地模型/GPU 通常只稳定服务一个任务） |
 | `skills` | 否 | `[]` | 可选 Pi skill 路径（绝对、`~`，或相对配置文件） |
 | `context_files` | 否 | `[]` | 可选 Markdown 上下文文件，以路径形式注入 prompt |
+| `pi_providers` | 否 | 未设置 | 指向 Pi `models.json` 形状 JSON 文件的路径，为每个 run 向 Pi 目录添加或覆盖 provider（Issue #157）。未设置 = Pi 原样使用自己的 agent 目录（第 4 步） |
+| `pi_provider` | 否 | 未设置 | 每个 run 选用的 provider id（Issue #119）——以 `--provider` 传给 Pi；设置 `pi_providers` 文件时必须已在其中定义 |
+| `pi_model` | 否 | 未设置 | 选中 provider 内的 model id——以 `--model` 传给 Pi；必须存在于该 provider 的 `models` 列表 |
+| `pi_thinking` | 否 | 未设置 | 以 `--thinking` 传给 Pi 的思考级别（`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`） |
 
 最小示例：
 
@@ -128,7 +134,129 @@ skills = []
 context_files = []
 ```
 
-## 4. 运行一次性 setup
+## 4. 配置模型 provider
+
+Runner 从不启动或管理模型进程——它启动 Pi，而 Pi 需要一个能真正
+使用的 provider。有两条路径，只需要其中一条：
+
+### 路径 A：Pi 自己的 provider（不配置 Muyan Pilot）
+
+`pi_providers` 不设，Runner 就和你手工运行 Pi 完全一样地启动它——
+Pi 用自己的 agent 目录和你在那里配置的 provider。派活之前先用 Pi
+自己的检查确认 provider 就绪：
+
+```bash
+pi auth check --provider <provider-id>
+pi --print "reply with the single word: ok"
+```
+
+### 路径 B：`pi_providers` 文件（由 Muyan Pilot 管理选择）
+
+把 `pi_providers` 指向一个 Pi 自己的 `models.json` 形状的 JSON 文件。
+每个 run 开始时 Runner 会物化一个 per-run agent 目录
+（`<worktree>/.muyan-pilot/pi-agent/`，gitignored），其 `models.json`
+把你的用户 provider 与文件的 provider 合并（id 冲突时文件胜）——你
+已有的 provider 继续可用，文件只做添加或覆盖——并为该 run 选中配置
+的 provider/model。
+
+一个 OpenAI-compatible 远程 endpoint（key 不进文件——引用环境变量）：
+
+```json
+{
+  "providers": {
+    "groq": {
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "api": "openai-completions",
+      "apiKey": "$GROQ_API_KEY",
+      "models": [
+        {
+          "id": "qwen/qwen3.8-27b",
+          "name": "Qwen 3.8 27B",
+          "contextWindow": 131072,
+          "maxTokens": 16384
+        }
+      ]
+    }
+  }
+}
+```
+
+一个本地 `llama.cpp` server（OpenAI-compatible 路由在 `/v1`，默认
+`127.0.0.1:8080`；`--alias` 设置 API 报告的模型名，所以下面 `id`
+必须与它一致）：
+
+```bash
+./llama-server -m /path/to/model.gguf --alias Qwen3.8-27B
+```
+
+```json
+{
+  "providers": {
+    "local": {
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "models": [
+        {
+          "id": "Qwen3.8-27B",
+          "name": "Qwen 3.8 27B (local)",
+          "contextWindow": 131072,
+          "maxTokens": 16384
+        }
+      ]
+    }
+  }
+}
+```
+
+然后在 `muyan-pilot.toml` 里选择 provider 和 model（Runner 会以
+`--provider groq --model qwen/qwen3.8-27b` 传给 Pi；设置
+`pi_thinking` 时再传 `--thinking <level>`）：
+
+```toml
+pi_providers = ".muyan-pilot/pi-providers.json"
+pi_provider = "groq"
+pi_model = "qwen/qwen3.8-27b"
+```
+
+#### 让 API key 不进仓库、不进文档
+
+文件里 key 以环境变量引用（`"$GROQ_API_KEY"`）；真实值放在
+gitignored 状态目录的 env 文件里，由 systemd unit 在 service 启动时
+加载：
+
+```bash
+mkdir -p .muyan-pilot
+cat > .muyan-pilot/env <<'EOF'
+GROQ_API_KEY=<your key value>
+EOF
+chmod 600 .muyan-pilot/env
+```
+
+提交的 unit 模板已带
+`EnvironmentFile=-%h/Documents/muyan/muyan-pilot/.muyan-pilot/env`
+（Issue #172）——如果你的 clone 在别处，像第 8 步的
+`WorkingDirectory` Note 一样，把**已安装** unit 的 `EnvironmentFile`
+指向**你的** `.muyan-pilot/env`。无 key 的本地 server 完全不需要 env
+文件（上面的 `"local"` 字面量占位即可通过形状检查）。
+
+#### Runner 校验什么（fail fast，在任何 slot/claim 之前）
+
+- 文件存在且是合法 JSON，`providers` 对象非空；
+- 每个列出 models 的 provider 都有非空 `baseUrl` 和 `api`（provider
+  级或 model 级）；
+- 选中的 `pi_provider` 和 `pi_model` 在文件里有定义；
+- 选中 provider 的 `apiKey` 环境变量引用能解析出非空值——变量缺失
+  或为空会让启动失败，错误里只报变量**名**（绝不报 key 值）。
+
+#### provider 边界
+
+文档化且经过测试的路径是 **OpenAI-compatible** endpoint
+（`api: "openai-completions"`）——本地 `llama.cpp` server 或任意
+兼容 API。文件原样传给 Pi，所以 Pi 目录里的其他 catalog 条目继续
+可用；Muyan Pilot 不测试、也不保证该边界之外的逐 provider 集成。
+
+## 5. 运行一次性 setup
 
 setup 入口用一条命令完成全部初始化：校验你安装好的前提（git、gh、
 python3、uv、systemd user session——缺失会 fail fast 并给出可执行的
@@ -146,9 +274,9 @@ muyan-pilot setup --config muyan-pilot.toml
 错误、权限不足、checkout 不干净或缺 systemd user bus 都会带具体原因
 停下）。完整输出契约、成功和失败示例见[一次性 setup](/zh/setup)。
 
-## 5. 手工运行一个 tick
+## 6. 手工运行一个 tick
 
-手工命令只用于首次验证和排查——正常运行由 timer 调度（第 7 步）：
+手工命令只用于首次验证和排查——正常运行由 timer 调度（第 8 步）：
 
 ```bash
 python3 bootstrap_runner.py --config muyan-pilot.toml
@@ -160,7 +288,7 @@ python3 bootstrap_runner.py --config muyan-pilot.toml
 Milestone 的 Issue——Issue #139），然后退出。ready 队列为空时干净
 退出，不领取任何东西。
 
-## 6. Smoke walkthrough（从零）
+## 7. Smoke walkthrough（从零）
 
 验证环境可用的最小端到端证明。在第 1 步的 clone 目录里运行；每条命令
 都相对该目录。
@@ -189,12 +317,53 @@ muyan-pilot session --follow --config muyan-pilot.toml
 gh issue list --repo OWNER/PILOT-REPO --label ai-pr-opened
 ```
 
-完成标志：Issue 走完 `ai-ready → ai-in-progress → ai-pr-opened →
-ai-merged`，存在一个 body 带 `Fixes #<issue>` 的 PR，journal 显示
-`run_end ... result=pr_opened`。任何一步失败，Issue 会被标记
-`ai-blocked` 并留下现场——恢复方法见[运维](/zh/operations)。
+### 验证完整链路
 
-## 7. 验证 timers
+交付不止于 PR——同一个 run（同一 run id、分支、worktree、PR）在后续
+tick（手工或 timer）里继续走独立审查和 merge。每个阶段都有具体、可
+检查的成功标准：
+
+| 阶段 | 成功标准 | 在哪里检查 |
+|---|---|---|
+| 被领取 | Issue 标签 `ai-ready → ai-in-progress`；任务 worktree 和分支存在（都带 run id） | `gh issue view <n> --json labels`；journal `run_start run=<run_id> ...` |
+| 实现并测试 | Pi 在 worktree 里跑 TDD 循环；Issue 上唯一的 progress comment 报告 tests milestone | `muyan-pilot session --follow`；Issue 上的 progress comment |
+| PR 打开 | journal `run_end ... result=pr_opened pr=<url> commit=<sha>`；Issue 标签 `ai-pr-opened`；PR body 含 `Fixes #<n>` 和 run marker | `gh pr view <n> --json url,body` |
+| 独立审查 | 下一个 tick 恢复同一个 run；journal `review pr=<n> round=1 verdict=pass blockers=0 majors=0` | journal；PR |
+| 合并 | journal `merged pr=<n> head=<sha>`；PR 为 `MERGED` 且有 merge commit；Issue 标签 `ai-merged`，Issue 上有 `Muyan Pilot merged PR: ...` 评论 | `gh pr view <n> --json state,mergedAt,mergeCommit`；`gh issue view <n> --json state,labels` |
+
+```bash
+# 终态的两个只读检查：
+gh pr view <n> --json state,mergedAt,mergeCommit
+gh issue view <n> --json state,labels
+```
+
+完成标志：Issue 走完 `ai-ready → ai-in-progress → ai-pr-opened →
+ai-merged`，PR 已合并且 body 带 `Fixes #<n>`（GitHub 在 merge 时原生
+关闭 Issue），journal 显示 `run_end ... result=pr_opened`、
+`review ... verdict=pass` 和 `merged pr=...`。任何一步失败，Issue 会
+被**单独**标记 `ai-blocked` 并留下现场（run id、分支、worktree、
+session、phase、last activity、具体错误），journal 显示
+`run_failed ... reason=...`——恢复方法见[运维](/zh/operations)。
+
+## 故障排查
+
+真实失败现场、证据在哪里、怎么修。它们全部 fail fast——没有静默重试。
+
+| 症状 | 证据 | 修复 |
+|---|---|---|
+| 启动在任何 slot/claim 前失败 | journal `API key for provider ... references missing environment variable GROQ_API_KEY`（只报变量**名**） | 把 key 值放进你的 `.muyan-pilot/env`（第 4 步），并确认已安装 unit 的 `EnvironmentFile` 指向它；手工 tick 则在 shell 里 export 该变量 |
+| 启动在 provider 文件上失败 | journal `pi_providers file ... is not valid JSON` / `is missing baseUrl` / `pi_provider ... is not defined` | 修 JSON（第 4 步契约：`providers` 对象、`baseUrl`、`api`、`models[].id`），重跑 `muyan-pilot setup` |
+| Pi 起来了但模型一直不响应 | session JSONL 停在 `model_wait`；死寂窗口后 journal 出现 `run_failed ... reason=upstream_dead_stale_...` | 上游（模型 server/proxy）挂了或连接断了——用一次真实 `pi --print` 调用检查 endpoint，重启后重新派活（Issue 带现场 `ai-blocked`） |
+| PR 打开了但一直不 merge | Issue 标签 `ai-fix-needed`；审查 findings 在 Issue 和 PR 上 | 审查发现会话内修不掉的 Blocker/Major findings——下一个审查 session 重试**同一个** PR（上限 5 轮）；读 Issue 和 PR 上的 findings |
+| 审查循环耗尽轮数 | journal `review_rounds_exhausted issue=<n> rounds=5`；Issue **单独** `ai-blocked` | 有界循环是人工决策——读 findings，手工修 PR 或关闭；见[运维](/zh/operations) |
+| PR 落后于最新 base | Issue `ai-fix-needed`，review 评论说 PR 落后于最新 base 或有 merge 冲突 | 自动：下一个审查 session 在会话内把最新 `origin/<base>` merge 进分支、解冲突、重跑全量测试 |
+| 重启后 service 起不来 | `systemctl --user status muyan-pilot@1.service`；journal `unit_drift` / `cli_install_failed` / `transport_check_failed` 行 | 按结构化行处理：重跑 `muyan-pilot install-units`（unit 漂移）、它打印的精确重装命令（editable 安装过期）、或修 SSH transport（见[运维](/zh/operations)） |
+| `muyan-pilot doctor` 报告 `cli_source: DRIFT` | 结构化 `cli_source_drift` 行带精确重装命令 | 跑它打印的 `uv tool install --force --reinstall --editable ...` 命令（或 `muyan-pilot setup`） |
+
+标签生命周期、journal 字段和恢复规则见[运维](/zh/operations)；
+review/merge 契约见[工作流](/zh/workflow)。
+
+## 8. 验证 timers
 
 setup 已经安装 unit 模板并 enable 了两个 timer 实例
 （`muyan-pilot@1.timer` 和 `muyan-pilot@2.timer`，各自触发自己的

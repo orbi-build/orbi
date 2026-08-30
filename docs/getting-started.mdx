@@ -1,8 +1,11 @@
 # Getting started
 
-This page takes you from a fresh clone to a first verified tick. Every
-command works at any clone path — nothing here depends on a specific
-machine layout.
+This page takes you from a fresh clone to a fully verified delivery:
+prerequisites, the model provider, the one-time setup, and a minimal
+smoke that proves the whole loop — a GitHub Issue picked up,
+implemented, tested, opened as a PR, independently reviewed, and
+merged. Every command works at any clone path — nothing here depends on
+a specific machine layout.
 
 ## Prerequisites
 
@@ -20,7 +23,7 @@ verifies the login).
 | Git | Worktrees, branches, base freshness | `git --version` |
 | GitHub CLI (`gh`) | Issues, labels, PRs, merge | `gh auth status` |
 | systemd (user session) | The timer that triggers one tick every 5 minutes | `systemctl --user status` |
-| A working OpenAI-compatible model endpoint | Pi's model provider — a local llama.cpp server or any OpenAI-compatible API | one real `pi --print` call (below) |
+| A working model provider | A model Pi can actually use — either a provider configured in Pi itself, or a `pi_providers` file pointing at an OpenAI-compatible endpoint (a local `llama.cpp` server or any compatible API) | one real `pi --print` call (below); step 4 shows both paths |
 
 Install `uv` with the official installer (verified against the [uv
 docs](https://docs.astral.sh/uv/getting-started/installation/)):
@@ -127,6 +130,10 @@ directory):
 | `max_concurrency` | no | `1` | Concurrent Pilot tasks on this machine (positive integer; a local model/GPU usually serves one stable task) |
 | `skills` | no | `[]` | Optional Pi skill paths (absolute, `~`, or relative to the config file) |
 | `context_files` | no | `[]` | Optional Markdown context files injected into the prompt as paths |
+| `pi_providers` | no | unset | Path to a JSON file in Pi's `models.json` shape that adds or overrides providers in Pi's catalog for every run (Issue #157). Unset = Pi uses its own agent dir unchanged (step 4) |
+| `pi_provider` | no | unset | The provider id selected for every run (Issue #119) — passed to Pi as `--provider`; must be defined when a `pi_providers` file is set |
+| `pi_model` | no | unset | The model id within the selected provider — passed to Pi as `--model`; must exist in the provider's `models` list |
+| `pi_thinking` | no | unset | Thinking level passed to Pi as `--thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) |
 
 Minimal example:
 
@@ -146,7 +153,136 @@ skills = []
 context_files = []
 ```
 
-## 4. Run the one-time setup
+## 4. Configure the model provider
+
+The Runner never starts or manages the model process — it launches Pi,
+and Pi needs a provider it can actually use. There are two paths, and
+you need only one:
+
+### Path A: Pi's own providers (no Muyan Pilot config)
+
+Leave `pi_providers` unset and the Runner launches Pi exactly as you
+would run it by hand — Pi uses its own agent directory and the
+providers you configured there. Verify the provider is ready with Pi's
+own check before dispatching work:
+
+```bash
+pi auth check --provider <provider-id>
+pi --print "reply with the single word: ok"
+```
+
+### Path B: a `pi_providers` file (Muyan Pilot manages the selection)
+
+Point `pi_providers` at a JSON file in Pi's own `models.json` shape.
+At every run the Runner materializes a per-run agent dir
+(`<worktree>/.muyan-pilot/pi-agent/`, gitignored) whose `models.json`
+merges your user providers with the file's providers (the file wins on
+an id collision) — your existing providers keep working, the file adds
+or overrides — and selects the configured provider/model for the run.
+
+An OpenAI-compatible remote endpoint (the key stays out of the file —
+it references an environment variable):
+
+```json
+{
+  "providers": {
+    "groq": {
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "api": "openai-completions",
+      "apiKey": "$GROQ_API_KEY",
+      "models": [
+        {
+          "id": "qwen/qwen3.8-27b",
+          "name": "Qwen 3.8 27B",
+          "contextWindow": 131072,
+          "maxTokens": 16384
+        }
+      ]
+    }
+  }
+}
+```
+
+A local `llama.cpp` server (OpenAI-compatible routes at `/v1`, default
+`127.0.0.1:8080`; `--alias` sets the model name the API reports, so the
+`id` below must match it):
+
+```bash
+./llama-server -m /path/to/model.gguf --alias Qwen3.8-27B
+```
+
+```json
+{
+  "providers": {
+    "local": {
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "models": [
+        {
+          "id": "Qwen3.8-27B",
+          "name": "Qwen 3.8 27B (local)",
+          "contextWindow": 131072,
+          "maxTokens": 16384
+        }
+      ]
+    }
+  }
+}
+```
+
+Then select the provider and model in `muyan-pilot.toml` (the Runner
+passes them to Pi as `--provider groq --model qwen/qwen3.8-27b`, and
+`--thinking <level>` when `pi_thinking` is set):
+
+```toml
+pi_providers = ".muyan-pilot/pi-providers.json"
+pi_provider = "groq"
+pi_model = "qwen/qwen3.8-27b"
+```
+
+#### Keeping the API key out of the repo and the docs
+
+The file references the key as an environment variable
+(`"$GROQ_API_KEY"`); the actual value lives in the gitignored state
+dir, in an env file the systemd unit loads at service start:
+
+```bash
+mkdir -p .muyan-pilot
+cat > .muyan-pilot/env <<'EOF'
+GROQ_API_KEY=<your key value>
+EOF
+chmod 600 .muyan-pilot/env
+```
+
+The committed unit template already carries
+`EnvironmentFile=-%h/Documents/muyan/muyan-pilot/.muyan-pilot/env`
+(Issue #172) — if your clone lives elsewhere, point the **installed**
+unit's `EnvironmentFile` at **your** `.muyan-pilot/env` like the
+`WorkingDirectory` Note in step 8. A keyless local server needs no env
+file at all (the literal `"local"` placeholder above satisfies the
+shape check).
+
+#### What the Runner validates (fail fast, before any slot or claim)
+
+- the file exists and is valid JSON with a non-empty `providers`
+  object;
+- every provider that lists models has a non-empty `baseUrl` and an
+  `api` (provider- or model-level);
+- the selected `pi_provider` and `pi_model` are defined in the file;
+- the selected provider's `apiKey` env-var reference resolves to a
+  non-empty value — a missing or empty variable fails the start with
+  the variable **name** only (never a key value).
+
+#### The provider boundary
+
+The documented and tested path is an **OpenAI-compatible** endpoint
+(`api: "openai-completions"`) — a local `llama.cpp` server or any
+compatible API. The file is passed to Pi verbatim, so other Pi catalog
+entries keep working through Pi's own agent dir; Muyan Pilot does not
+test or guarantee per-provider integrations beyond that boundary.
+
+## 5. Run the one-time setup
 
 The setup entry does the whole initialization in one command: it
 verifies the prerequisites you installed (git, gh, python3, uv, the
@@ -170,10 +306,10 @@ dirty checkout or a missing systemd user bus stops it with the concrete
 reason). See [One-time setup](/setup) for the full output contract,
 success and failure examples.
 
-## 5. Run one tick manually
+## 6. Run one tick manually
 
 The manual command is for first verification and troubleshooting only —
-normal operation is scheduled by the timer (step 7):
+normal operation is scheduled by the timer (step 8):
 
 ```bash
 python3 bootstrap_runner.py --config muyan-pilot.toml
@@ -186,7 +322,7 @@ only Issues of that Milestone are claimable — Issue #139), then it
 exits. With an empty ready queue it exits cleanly without claiming
 anything.
 
-## 6. Smoke walkthrough (from zero)
+## 7. Smoke walkthrough (from zero)
 
 The smallest end-to-end proof that your setup works. Run it in the clone
 directory from step 1; every command is relative to that directory.
@@ -216,13 +352,58 @@ muyan-pilot session --follow --config muyan-pilot.toml
 gh issue list --repo OWNER/PILOT-REPO --label ai-pr-opened
 ```
 
-You are done when: the Issue moves `ai-ready → ai-in-progress →
-ai-pr-opened → ai-merged`, a PR exists with `Fixes #<issue>` in its body,
-and the journal shows `run_end ... result=pr_opened`. If any step fails,
-the Issue is marked `ai-blocked` with the scene — see
-[Operations](/operations) for recovery.
+### Verify the full chain
 
-## 7. Verify the timers
+The delivery does not end at the PR — the same run (same run id,
+branch, worktree and PR) continues through an independent review and
+the merge on later ticks (manually or via the timer). Each stage has a
+concrete, checkable success criterion:
+
+| Stage | Success criterion | Where to check |
+|---|---|---|
+| Picked up | The Issue label moves `ai-ready → ai-in-progress`; the task worktree and branch exist (both carry the run id) | `gh issue view <n> --json labels`; journal `run_start run=<run_id> ...` |
+| Implemented and tested | Pi runs the TDD loop in the worktree; the single progress comment on the Issue reports the tests milestone | `muyan-pilot session --follow`; the progress comment on the Issue |
+| PR opened | Journal `run_end ... result=pr_opened pr=<url> commit=<sha>`; the Issue label is `ai-pr-opened`; the PR body contains `Fixes #<n>` and the run marker | `gh pr view <n> --json url,body` |
+| Reviewed | The next tick resumes the same run; journal `review pr=<n> round=1 verdict=pass blockers=0 majors=0` | the journal; the PR |
+| Merged | Journal `merged pr=<n> head=<sha>`; the PR is `MERGED` with a merge commit; the Issue label is `ai-merged` and the Issue carries the `Muyan Pilot merged PR: ...` comment | `gh pr view <n> --json state,mergedAt,mergeCommit`; `gh issue view <n> --json state,labels` |
+
+```bash
+# The two read-only checks for the terminal state:
+gh pr view <n> --json state,mergedAt,mergeCommit
+gh issue view <n> --json state,labels
+```
+
+You are done when the Issue has moved `ai-ready → ai-in-progress →
+ai-pr-opened → ai-merged`, the PR is merged with `Fixes #<n>` in its
+body (GitHub closes the Issue natively on merge), and the journal shows
+`run_end ... result=pr_opened`, `review ... verdict=pass` and
+`merged pr=...`. If any step fails, the Issue is marked `ai-blocked`
+**alone** with the scene (run id, branch, worktree, session, phase,
+last activity, the concrete error) and the journal shows
+`run_failed ... reason=...` — see [Operations](/operations) for
+recovery.
+
+## Troubleshooting
+
+Real failure scenes, where to find the evidence, and the fix. Every one
+of them fails fast — nothing is retried silently.
+
+| Symptom | Evidence | Fix |
+|---|---|---|
+| The start fails before any slot or claim | Journal `API key for provider ... references missing environment variable GROQ_API_KEY` (the variable **name** only) | Put the key value into your `.muyan-pilot/env` (step 4) and make sure the installed unit's `EnvironmentFile` points at it; for a manual tick, export the variable in the shell instead |
+| The start fails on the provider file | Journal `pi_providers file ... is not valid JSON` / `is missing baseUrl` / `pi_provider ... is not defined` | Fix the JSON (step 4 contract: `providers` object, `baseUrl`, `api`, `models[].id`) and re-run `muyan-pilot setup` |
+| Pi starts but the model never answers | The session JSONL stalls in `model_wait`; after the dead-silence window the journal shows `run_failed ... reason=upstream_dead_stale_...` | The upstream (model server/proxy) is down or its connection dropped — check the endpoint with one real `pi --print` call, restart it, and re-dispatch (the Issue is `ai-blocked` with the scene) |
+| The PR is opened but never merges | The Issue label is `ai-fix-needed`; the review findings are on the Issue and the PR | The review found Blocker/Major findings it could not fix in-session — the next review session retries the SAME PR (bounded to 5 rounds); read the findings on the Issue and the PR |
+| The review loop exhausts its rounds | Journal `review_rounds_exhausted issue=<n> rounds=5`; the Issue is `ai-blocked` **alone** | The bounded loop is a human decision — read the findings, fix or close the PR manually; see [Operations](/operations) |
+| The PR is behind the latest base | The Issue is `ai-fix-needed` with a review comment that the PR is behind the latest base or has a merge conflict | Automatic: the next review session merges the latest `origin/<base>` into the branch in-session, resolves conflicts, re-runs the full suite |
+| The service does not start after a restart | `systemctl --user status muyan-pilot@1.service`; journal `unit_drift` / `cli_install_failed` / `transport_check_failed` lines | Follow the structured line: re-run `muyan-pilot install-units` (unit drift), the exact reinstall command it prints (stale editable install), or fix the SSH transport (see [Operations](/operations)) |
+| `muyan-pilot doctor` reports `cli_source: DRIFT` | The structured `cli_source_drift` line with the exact reinstall command | Run the printed `uv tool install --force --reinstall --editable ...` command (or `muyan-pilot setup`) |
+
+For the label lifecycle, the journal fields and the recovery rules see
+[Operations](/operations); for the review/merge contract see
+[Workflow](/workflow).
+
+## 8. Verify the timers
 
 The setup step already installed the unit templates and enabled the two
 timer instances (`muyan-pilot@1.timer` and `muyan-pilot@2.timer`, each
