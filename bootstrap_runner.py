@@ -1190,7 +1190,8 @@ def parse_release_declaration(body: str) -> dict:
     }
 
 
-def verify_release_scope(repo: str, scope: list[int]) -> list[str]:
+def verify_release_scope(repo: str, scope: list[int], repo_dir: Path,
+                         release_commit: str) -> list[str]:
     """Verify every release scope item ONE BY ONE (Issue #98).
 
     The scope is verified against GitHub, never by parsing Issue-body
@@ -1198,10 +1199,13 @@ def verify_release_scope(repo: str, scope: list[int]) -> list[str]:
     which exits 1 with the real "Could not resolve to a PullRequest"
     error when the number is an Issue, verified against the live CLI)
     and, failing that, as an Issue (`gh issue view`). A PR must be
-    `MERGED` (its merge commit is the evidence); an Issue must be
-    `CLOSED`. An item that is neither, a PR that is not merged or an
-    Issue that is not closed fails fast with the concrete number and
-    state. A real `gh` failure (auth, rate limit) is re-raised, never
+    `MERGED` and its merge commit must be an ancestor of the frozen
+    release commit; an Issue must be `CLOSED`. This ancestor check proves
+    the scoped PR is actually contained in the tag, rather than merely
+    having been merged into some other branch. An item that is neither, a
+    PR that is not merged/in the release base, or an Issue that is not
+    closed fails fast with the concrete number and state. A real `gh` or
+    git failure (auth, rate limit, missing object) is re-raised, never
     misread as "not a PR".
     """
     evidence: list[str] = []
@@ -1229,6 +1233,19 @@ def verify_release_scope(repo: str, scope: list[int]) -> list[str]:
                     f"release scope PR #{number} is merged but has no "
                     "merge commit evidence"
                 )
+            try:
+                run_command(
+                    ["git", "merge-base", "--is-ancestor", merge_commit,
+                     release_commit],
+                    cwd=repo_dir,
+                )
+            except subprocess.CalledProcessError as exc:
+                if exc.returncode != 1:
+                    raise
+                raise RuntimeError(
+                    f"release scope PR #{number} merge commit {merge_commit} "
+                    f"is not contained in release commit {release_commit}"
+                ) from exc
             evidence.append(
                 f"PR #{number} merged (mergeCommit={merge_commit})"
             )
@@ -1343,12 +1360,20 @@ def run_release_tests(worktree: Path, test_command: str,
 
     The command is a shell string (it may chain steps with `&&`), so
     it runs through `bash -c` wrapped in `timeout <seconds>` (Issue
-    #95): a test that does not terminate within the deadline is a
-    broken path and fails fast with `timeout`'s exit 124 — never
-    ignorable noise, never a second unbounded attempt.
+    #95). Its success is followed by the repository's mandatory 100%
+    line-and-branch coverage gate: a declaration such as `true` or a
+    bare `pytest` must not let a release claim the coverage contract.
+    A test that does not terminate within the deadline fails fast with
+    `timeout`'s exit 124 — never ignorable noise or a second unbounded
+    attempt.
     """
+    coverage_gate = (
+        "/usr/bin/python3 -m coverage report --fail-under=100 "
+        "--show-missing"
+    )
     run_command(
-        ["timeout", str(timeout_seconds), "bash", "-c", test_command],
+        ["timeout", str(timeout_seconds), "bash", "-c",
+         f"{test_command} && {coverage_gate}"],
         cwd=worktree,
     )
 
@@ -1436,7 +1461,7 @@ def publish_release(*, repo: str, tag: str, version: str,
     ])
     run_command([
         "gh", "release", "create", tag, "--repo", repo,
-        "--title", version, "--notes", notes,
+        "--verify-tag", "--title", version, "--notes", notes,
     ])
     raw = run_command([
         "gh", "release", "view", tag, "--repo", repo,
@@ -1607,7 +1632,10 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
                 f"{'; '.join(gate_evidence)}",
             ),
         )
-        scope_evidence = verify_release_scope(source_repo, declaration["scope"])
+        scope_evidence = verify_release_scope(
+            source_repo, declaration["scope"], config["repo_dir"],
+            release_commit,
+        )
         _safe_publish(
             run_id=run_id, issue=number, source_repo=source_repo,
             role=ROLE_RELEASE,
@@ -1624,8 +1652,9 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             RELEASE_TEST_TIMEOUT_SECONDS,
         )
         test_evidence = (
-            f"declared test command passed in a clean worktree at "
-            f"{release_commit} (timeout {RELEASE_TEST_TIMEOUT_SECONDS}s)"
+            f"declared test command and 100% coverage gate passed in a "
+            f"clean worktree at {release_commit} "
+            f"(timeout {RELEASE_TEST_TIMEOUT_SECONDS}s)"
         )
         _safe_publish(
             run_id=run_id, issue=number, source_repo=source_repo,

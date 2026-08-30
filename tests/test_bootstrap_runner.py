@@ -9624,6 +9624,8 @@ def make_scope_gh(monkeypatch, *, pr_state_map=None, issue_state_map=None):
                     ),
                 )
             return json.dumps({"number": number, "state": issue_state_map[number]})
+        if command[:3] == ["git", "merge-base", "--is-ancestor"]:
+            return ""
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
@@ -9636,7 +9638,7 @@ def test_verify_release_scope_evidence_for_pr_and_issue(monkeypatch):
         pr_state_map={123: ("MERGED", "aaa111")},
         issue_state_map={124: "CLOSED"},
     )
-    evidence = runner.verify_release_scope("o/r", [123, 124])
+    evidence = runner.verify_release_scope("o/r", [123, 124], Path("/repo"), "release123")
     assert evidence == [
         "PR #123 merged (mergeCommit=aaa111)",
         "Issue #124 closed",
@@ -9646,13 +9648,45 @@ def test_verify_release_scope_evidence_for_pr_and_issue(monkeypatch):
 def test_verify_release_scope_fails_on_unmerged_pr(monkeypatch):
     make_scope_gh(monkeypatch, pr_state_map={123: ("OPEN", None)})
     with pytest.raises(RuntimeError, match="PR #123 is not merged"):
-        runner.verify_release_scope("o/r", [123])
+        runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
+
+
+def test_verify_release_scope_rejects_merged_pr_outside_release_base(
+        monkeypatch):
+    """A PR merged on another branch is not evidence for this tag."""
+    make_scope_gh(monkeypatch, pr_state_map={123: ("MERGED", "other123")})
+    original = runner.run_command
+
+    def not_an_ancestor(command, **kwargs):
+        if command[:3] == ["git", "merge-base", "--is-ancestor"]:
+            raise subprocess.CalledProcessError(1, command)
+        return original(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", not_an_ancestor)
+    with pytest.raises(RuntimeError, match="not contained in release commit"):
+        runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
+
+
+def test_verify_release_scope_reraises_git_ancestry_check_failure(
+        monkeypatch):
+    make_scope_gh(monkeypatch, pr_state_map={123: ("MERGED", "aaa111")})
+    original = runner.run_command
+
+    def git_failure(command, **kwargs):
+        if command[:3] == ["git", "merge-base", "--is-ancestor"]:
+            raise subprocess.CalledProcessError(128, command, stderr="bad object")
+        return original(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", git_failure)
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
+    assert excinfo.value.stderr == "bad object"
 
 
 def test_verify_release_scope_fails_on_unclosed_issue(monkeypatch):
     make_scope_gh(monkeypatch, issue_state_map={124: "OPEN"})
     with pytest.raises(RuntimeError, match="Issue #124 is not closed"):
-        runner.verify_release_scope("o/r", [124])
+        runner.verify_release_scope("o/r", [124], Path("/repo"), "release123")
 
 
 def test_verify_release_scope_fails_on_merged_pr_without_merge_commit(
@@ -9660,13 +9694,13 @@ def test_verify_release_scope_fails_on_merged_pr_without_merge_commit(
     # A MERGED PR without merge-commit evidence is not evidence.
     make_scope_gh(monkeypatch, pr_state_map={123: ("MERGED", None)})
     with pytest.raises(RuntimeError, match="no merge commit evidence"):
-        runner.verify_release_scope("o/r", [123])
+        runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
 
 
 def test_verify_release_scope_fails_on_unknown_item(monkeypatch):
     make_scope_gh(monkeypatch)
     with pytest.raises(RuntimeError, match="neither a PR nor an Issue"):
-        runner.verify_release_scope("o/r", [999])
+        runner.verify_release_scope("o/r", [999], Path("/repo"), "release123")
 
 
 def test_verify_release_scope_reraises_real_gh_failure(monkeypatch):
@@ -9679,7 +9713,7 @@ def test_verify_release_scope_reraises_real_gh_failure(monkeypatch):
         )
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.verify_release_scope("o/r", [123])
+        runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
 
 
 def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None,
@@ -9809,7 +9843,11 @@ def test_run_release_tests_wraps_the_command_in_timeout_bash(monkeypatch):
                         lambda c, **k: calls.append((c, k)) or "")
     runner.run_release_tests(Path("/wt"), "pytest -q", 120)
     (command, kwargs), = calls
-    assert command == ["timeout", "120", "bash", "-c", "pytest -q"]
+    assert command == [
+        "timeout", "120", "bash", "-c",
+        "pytest -q && /usr/bin/python3 -m coverage report "
+        "--fail-under=100 --show-missing",
+    ]
     assert kwargs == {"cwd": Path("/wt")}
 
 
@@ -9941,6 +9979,7 @@ def test_publish_release_creates_when_missing_and_returns_url(monkeypatch):
     create = creates[0]
     assert create[:3] == ["gh", "release", "create"]
     assert create[3] == "v0.3.0"
+    assert "--verify-tag" in create
     notes = create[create.index("--notes") + 1]
     assert "v0.3.0" in notes
     assert "abc123" in notes
@@ -10032,6 +10071,8 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             return ""
         if command[:2] == ["git", "tag"]:
             return ""
+        if command[:3] == ["git", "merge-base", "--is-ancestor"]:
+            return ""
         if command[:2] == ["git", "push"]:
             return ""
         if command[0] == "timeout":
@@ -10093,7 +10134,9 @@ def test_process_release_success_end_to_end(monkeypatch):
     assert (["timeout", str(runner.RELEASE_TEST_TIMEOUT_SECONDS),
              "bash", "-c",
              "/usr/bin/python3 -m coverage run --branch -m pytest tests/ -q "
-             "&& /usr/bin/python3 -m coverage report --show-missing"],
+             "&& /usr/bin/python3 -m coverage report --show-missing && "
+             "/usr/bin/python3 -m coverage report --fail-under=100 "
+             "--show-missing"],
             {"cwd": Path("/wt")}) in state["commands"]
     # The success comment carries the run marker and the release URL.
     (comment_number, comment_kwargs), = state["comments"]
@@ -10258,7 +10301,7 @@ def test_verify_release_scope_reraises_real_issue_gh_failure(monkeypatch):
 
     monkeypatch.setattr(runner, "run_command", fail)
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
-        runner.verify_release_scope("o/r", [7])
+        runner.verify_release_scope("o/r", [7], Path("/repo"), "release123")
     assert "HTTP 403: rate limited" in str(excinfo.value.stderr)
     # The fake rejects anything that is not pr/issue view traffic.
     with pytest.raises(AssertionError, match="unexpected command"):
