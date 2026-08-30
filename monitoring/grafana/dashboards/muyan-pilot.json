@@ -1,0 +1,364 @@
+{
+  "uid": "muyan-pilot",
+  "title": "Muyan Pilot — Runner observability",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "timezone": "browser",
+  "editable": true,
+  "panels": [
+    {
+      "id": 100,
+      "type": "row",
+      "title": "Runner services (systemd user units)",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 101,
+      "type": "stat",
+      "title": "muyan-pilot@N.service active (1 = active)",
+      "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" },
+      "gridPos": { "x": 0, "y": 1, "w": 12, "h": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "muyan_pilot_service_active",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "inactive", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "active", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "green", "value": 1 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "area" }
+    },
+    {
+      "id": 102,
+      "type": "timeseries",
+      "title": "Service active over time",
+      "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" },
+      "gridPos": { "x": 12, "y": 1, "w": 12, "h": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "muyan_pilot_service_active",
+          "legendFormat": "{{slot}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 200,
+      "type": "row",
+      "title": "Current run per slot (issue / role / phase / state)",
+      "gridPos": { "x": 0, "y": 5, "w": 24, "h": 1 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 201,
+      "type": "timeseries",
+      "title": "Active runs (legend = slot issue role phase state)",
+      "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" },
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "muyan_pilot_run_active",
+          "legendFormat": "{{slot}} {{issue}} {{role}} {{phase}} {{state}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "steps", "fillOpacity": 30 }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["last"] } }
+    },
+    {
+      "id": 202,
+      "type": "timeseries",
+      "title": "Run idle seconds (model/tool silence)",
+      "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" },
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "muyan_pilot_run_idle_seconds",
+          "legendFormat": "{{slot}} {{issue}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s", "max": null },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 300,
+      "type": "row",
+      "title": "Failures and idle recovery",
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 1 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 301,
+      "type": "timeseries",
+      "title": "run_failed by reason",
+      "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" },
+      "gridPos": { "x": 0, "y": 13, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (slot, issue, reason) (increase(muyan_pilot_run_failed_total[1h]))",
+          "legendFormat": "{{slot}} {{issue}} {{reason}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] } }
+    },
+    {
+      "id": 302,
+      "type": "timeseries",
+      "title": "Idle recovery steps (pi_idle / term / kill)",
+      "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" },
+      "gridPos": { "x": 12, "y": 13, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (slot) (increase(muyan_pilot_pi_idle_total[1h]))",
+          "legendFormat": "pi_idle {{slot}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (slot) (increase(muyan_pilot_pi_idle_term_total[1h]))",
+          "legendFormat": "pi_idle_term {{slot}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (slot) (increase(muyan_pilot_pi_idle_kill_total[1h]))",
+          "legendFormat": "pi_idle_kill {{slot}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 303,
+      "type": "timeseries",
+      "title": "progress_publish_failed (bypass errors only)",
+      "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" },
+      "gridPos": { "x": 0, "y": 19, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (slot, issue) (increase(muyan_pilot_progress_publish_failed_total[1h]))",
+          "legendFormat": "{{slot}} {{issue}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 304,
+      "type": "timeseries",
+      "title": "model_wait events",
+      "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" },
+      "gridPos": { "x": 12, "y": 19, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (slot, issue) (increase(muyan_pilot_model_wait_total[1h]))",
+          "legendFormat": "{{slot}} {{issue}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 400,
+      "type": "row",
+      "title": "Run throughput and durations",
+      "gridPos": { "x": 0, "y": 25, "w": 24, "h": 1 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 401,
+      "type": "timeseries",
+      "title": "Run starts / ends per hour",
+      "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" },
+      "gridPos": { "x": 0, "y": 26, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (issue) (increase(muyan_pilot_run_start_total[1h]))",
+          "legendFormat": "start {{issue}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (issue) (increase(muyan_pilot_run_end_total[1h]))",
+          "legendFormat": "end {{issue}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 402,
+      "type": "timeseries",
+      "title": "Run duration (last reported elapsed, seconds)",
+      "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" },
+      "gridPos": { "x": 12, "y": 26, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "muyan_pilot_run_seconds",
+          "legendFormat": "{{slot}} {{issue}} {{role}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 500,
+      "type": "row",
+      "title": "Model (existing llama exporter — reused, not re-implemented)",
+      "gridPos": { "x": 0, "y": 32, "w": 24, "h": 1 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 501,
+      "type": "timeseries",
+      "title": "Llama slots processing",
+      "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" },
+      "gridPos": { "x": 0, "y": 33, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (slot) (llama_slot_is_processing)",
+          "legendFormat": "slot {{slot}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        },
+        {
+          "refId": "B",
+          "expr": "llama_slots_processing",
+          "legendFormat": "processing",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        },
+        {
+          "refId": "C",
+          "expr": "llama_slots_total",
+          "legendFormat": "total",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 502,
+      "type": "timeseries",
+      "title": "Context: used vs max (n_ctx / n_tokens_max)",
+      "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" },
+      "gridPos": { "x": 12, "y": 33, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (slot) (llama_slot_n_ctx)",
+          "legendFormat": "used slot {{slot}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (slot) (llamacpp:n_tokens_max)",
+          "legendFormat": "max slot {{slot}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 503,
+      "type": "timeseries",
+      "title": "Tokens: prompt / predicted / cached per minute",
+      "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" },
+      "gridPos": { "x": 0, "y": 39, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (slot) (increase(llamacpp:prompt_tokens_total[1m]))",
+          "legendFormat": "prompt slot {{slot}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (slot) (increase(llamacpp:tokens_predicted_total[1m]))",
+          "legendFormat": "predicted slot {{slot}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (slot) (increase(llamacpp:prompt_tokens_cached_total[1m]))",
+          "legendFormat": "cached slot {{slot}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 504,
+      "type": "timeseries",
+      "title": "TPS: prompt / predicted (tokens per second)",
+      "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" },
+      "gridPos": { "x": 12, "y": 39, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (slot) (rate(llamacpp:prompt_tokens_total[1m]))",
+          "legendFormat": "prompt tps slot {{slot}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (slot) (rate(llamacpp:tokens_predicted_total[1m]))",
+          "legendFormat": "predicted tps slot {{slot}}",
+          "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    }
+  ]
+}
