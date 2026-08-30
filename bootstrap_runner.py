@@ -1319,8 +1319,14 @@ def pick_resumable_delivery(
     MERGEABLE PR with no owner. Without the scan such a delivery is
     picked up by no other scan (`pick_issue` excludes `ai-pr-opened`)
     and is stranded forever. `ai-blocked` Issues are excluded (they need
-    a human decision first), as are merged and in-flight Issues and
-    closed Issues. A scene that cannot
+    a human decision first), as are merged Issues and closed Issues.
+    `ai-in-progress` is NOT excluded (Issue #178): a runner killed
+    during review leaves the backfilled in-flight label behind on the
+    opened-PR delivery, and the same scan must pick it back up — the
+    positive `label:ai-fix-needed,ai-pr-opened` qualifier already
+    restricts the scan to opened-PR Issues (an implement-phase Issue
+    has `ai-ready`+`ai-in-progress` but neither opened-PR label, so it
+    never matches). A scene that cannot
     be recovered is an unresolvable state: the Issue is marked
     `ai-blocked` with the concrete reason and the error re-raised, so
     the tick stops instead of silently skipping the delivery while a
@@ -1345,10 +1351,12 @@ def pick_resumable_delivery(
         "--search",
         # `label:a,b` is GitHub's OR within one label qualifier
         # (verified live: repeating the qualifier matches only the
-        # first label).
+        # first label). `ai-in-progress` is intentionally NOT excluded
+        # (Issue #178): a killed review runner leaves the backfilled
+        # in-flight label behind, and the positive qualifier above
+        # already keeps implement-phase Issues out.
         f"label:{FIX_NEEDED_LABEL},{PR_OPENED_LABEL} "
-        f"-label:{BLOCKED_LABEL} -label:{MERGED_LABEL} "
-        f"-label:{IN_PROGRESS_LABEL}",
+        f"-label:{BLOCKED_LABEL} -label:{MERGED_LABEL}",
         # `labels` (Issue #101): a resumed P0 delivery keeps its
         # priority in the progress comment through review/merge.
         "--json", "number,title,state,url,labels", "--limit", "1",
@@ -2469,12 +2477,25 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
             # worktree can be recreated on the next resume), so the
             # handler below keeps the Issue in the automatic fix loop.
             raise RuntimeError(f"worktree missing: {worktree}")
-        return verify_pr(
+        verified_url = verify_pr(
             worktree, branch, config["base_branch"], run_id,
             issue=number, repo_dir=config["repo_dir"],
             pr_repo=source_repo,
             expected_url=scene["pr_url"], require_latest_base=False,
         )
+        # Issue #178: the resumed delivery is in flight from here on —
+        # the Runner holds the slot and continues the review/merge
+        # work — so the Issue must carry the in-flight label BEFORE
+        # the work continues. The backfill is an idempotent label
+        # projection repair: the run, worktree and PR are the ones
+        # verified above (nothing is recreated), and the opened-PR
+        # state label (ai-pr-opened / ai-fix-needed) is untouched. A
+        # label API failure falls into the failure handler below: it
+        # is a recoverable resume failure (ai-fix-needed, failure
+        # comment, tick stops) with the command evidence in the
+        # journal.
+        edit_issue(number, repo=source_repo, add=IN_PROGRESS_LABEL)
+        return verified_url
     except Exception as exc:
         LOGGER.exception(
             "issue=%s resume_pr_verification_failed pr=%s branch=%s",

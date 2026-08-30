@@ -608,8 +608,9 @@ def test_verify_resumed_pr_local_ahead_of_pr_head_continues_to_review(
     The resume verification must NOT fail: the real `verify_pr` logs
     the exact heads and returns the verified PR URL, so the delivery
     wait starts the next review session — which pushes the task branch
-    on the same PR before its verdict (prompt_review.md). No label
-    change, no ai-blocked, no replacement PR."""
+    on the same PR before its verdict (prompt_review.md). Only the
+    idempotent `ai-in-progress` backfill (Issue #178), no ai-blocked,
+    no replacement PR."""
     from tests.test_resume_pr import (
         FAKE_RUN_ID, make_resume_config, make_resume_issue,
         make_resume_scene, expected_resume_worktree,
@@ -621,7 +622,12 @@ def test_verify_resumed_pr_local_ahead_of_pr_head_continues_to_review(
     local_head = "18c78a2" * 5 + "18c78a2"
     pr_head = "ed72915" * 5 + "ed72915"
 
+    edits = []
+
     def fake_run(command, **kwargs):
+        if command[:3] == ["gh", "issue", "edit"]:
+            edits.append(command)
+            return ""
         if command[:3] == ["git", "branch", "--show-current"]:
             return branch
         if command[:3] == ["git", "merge-base", "--is-ancestor"]:
@@ -659,6 +665,12 @@ def test_verify_resumed_pr_local_ahead_of_pr_head_continues_to_review(
         make_resume_config(tmp_path), "owner/repo",
     )
     assert url == "https://github.com/owner/repo/pull/9"
+    # Issue #178: the resume backfills the in-flight label before the
+    # review continues — exactly one idempotent edit, nothing else.
+    assert edits == [
+        ["gh", "issue", "edit", "9", "--repo", "owner/repo",
+         "--add-label", "ai-in-progress"],
+    ]
     # The journal carries the commit/push phase: the exact local head
     # and remote PR head.
     assert "local_head_ahead_of_pr_head" in caplog.text
