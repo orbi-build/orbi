@@ -200,6 +200,9 @@ gh label create p0 --repo xqliu/muyan-pilot --force --color "fbca04" \
 # ai-epic 是 Epic 协调 label（不是交付状态，见「Epic Issue（ai-epic）」）
 gh label create ai-epic --repo xqliu/muyan-pilot --force --color "bfdadc" \
   --description "Epic coordination issue; not directly executable by Runner"
+# ai-release 是 Release task 标记（不是交付状态，见「Release task（ai-release）」）
+gh label create ai-release --repo xqliu/muyan-pilot --force --color "5319e7" \
+  --description "Release task: Runner runs the deterministic release state machine (tag + GitHub Release)"
 gh label list --repo xqliu/muyan-pilot
 ```
 
@@ -213,6 +216,7 @@ gh label list --repo xqliu/muyan-pilot
 | `ai-blocked` | Runner fail fast，需要人工处理；不会被自动拾取 | **只用于 AI 无法安全判断或修复的外部前置条件**（Issue #50）：无可恢复的 opened-PR 现场（缺少/不可信 `Muyan Pilot opened PR` 评论）、base 分支变更、审查超轮、PR 未合并被关闭；进入时 comment 必须写明为什么不能自动恢复。已有 run/PR 的可恢复失败**不**进入此状态（转 `ai-fix-needed`，见上） | 人工修复现场并重新转为 `ai-fix-needed`（同一 PR）或重新领取（新 run）；不自动恢复 |
 | `p0` | 紧急优先级（**不是交付状态**）：只改变领取顺序，不改变 Issue 粒度、交付状态或终态语义 | 人工加 label（生产链路出现高优先级故障时） | 人工移除；Runner 从不增删该 label |
 | `ai-epic` | Epic 协调 Issue（发布清单/多任务聚合，**不是可执行任务、不是交付状态**）：只负责聚合与发布门禁 | 人工加 label（创建 Epic 时） | 人工移除（Epic 完成并关闭时）；Runner 从不增删该 label，也从不领取带它的 Issue |
+| `ai-release` | Release task 标记（**不是交付状态**）：带它的 `ai-ready` Issue 由 Runner 的确定性 release 状态机处理（tag + GitHub Release），**从不进 `run_pi` 开发路径**（Issue #98） | 人工加 label（派发 release task 时，与 `ai-ready` 同时） | 成功发布后 Runner 加 `ai-merged`（终态）并关闭 Issue；任何失败单独转 `ai-blocked`（不自动重试，人工决策点）；Runner 从不增删该 label 本身 |
 
 ## 任务依赖（blockedBy）
 
@@ -250,7 +254,22 @@ Runner 行为（单 slot 串行，只做“读字段-跳过-等待”，不引�
 - **职责边界**：Epic 只负责聚合和发布门禁；实际开发项必须拆成独立的 `ai-ready` 子 Issue，每个子 Issue 一个 runtime outcome、一个 PR、一次独立审查、一次合并。子 Issue 之间的前置条件用 GitHub 原生 `blockedBy` 表达（见「任务依赖（blockedBy）」），Runner 不解析正文复选框或 `Depends on` 行；
 - **Runner 行为（Issue #93）**：普通领取扫描（P0/bug/普通三次扫描）**从不领取**带 `ai-epic` 的 Issue——不加 `ai-in-progress`、不改任何标签、不建 worktree、不启动 `run_pi`、不占执行 slot，记录结构化日志 `epic_not_claimed issue=N repo=...` 后继续检查下一个 ready Issue（Epic 检查先于 blockedBy 检查：「它是 Epic」才是被记录的原因）；重启恢复扫描同样排除 `ai-epic`——遗留 `ai-in-progress` 的 Epic（#80 场景）绝不会被恢复进 run；
 - **完成条件**：子 Issue 已完成、相关 PR 已合并、发布 tag/交付物已存在于远端、没有遗留 `ai-in-progress`。这些条件由 GitHub Issue/label、原生 `blockedBy`、PR 和远端 tag 证据确定；
-- **关闭门禁**：任一完成条件未满足时，Epic 不得被标记完成或自动关闭。Epic 由人工或 release task（一个普通 `ai-ready` Issue，职责是对账上述证据，通常伴随最后一个 `Fixes #<epic>` commit/PR）关闭——Runner 从不标记 Epic 完成，也从不自动关闭 Epic。
+- **关闭门禁**：任一完成条件未满足时，Epic 不得被标记完成或自动关闭。Epic 由人工或 release task（带 `ai-release` 标签的 `ai-ready` Issue，由 Runner 的 release 状态机执行，见「Release task（ai-release）」）关闭——Runner 的 release 状态机只关闭 release task 自己，从不标记 Epic 完成，也从不自动关闭 Epic。
+
+## Release task（ai-release）
+
+Release task 是 `ai-ready` + `ai-release` 双标签的 Issue（Issue #98）——**不是**开发任务：Runner 通过普通 ready 扫描领取，但 `process_issue` 把它路由到确定性的 release 状态机而不是 `run_pi`（没有 Pi 会话、没有 PR）。状态机幂等且可恢复（重启后恢复同一 run id/worktree），步骤：
+
+1. 严格解析 Issue 正文的 `## Release` 声明（`version`、`base_branch`、`test_command`、`scope`；缺失/重复/未知字段 fail fast）；
+2. 冻结 base——release commit 就是 `origin/<base_branch>`（base-sync 锁下 fetch）；
+3. 发布前门禁：无遗留 `ai-in-progress` / `ai-pr-opened` / `ai-fix-needed`（release Issue 自身除外）、release commit 的 CI 全绿（无 check run 时以证据放行）、base 分支无 open PR；
+4. 逐项验证 scope：`gh pr view` 必须 `MERGED`，否则 `gh issue view` 必须 `CLOSED`（绝不解析复选框）；
+5. 在 release commit 的干净 worktree 里跑声明的 `test_command`（`timeout` 包裹）；
+6. tag：远端 tag 不存在时在 release commit 上创建 annotated tag 并**普通 push**（绝不 `--force`）；已存在时必须精确指向 release commit（指向别处 fail fast——已存在的 tag 绝不移动/覆盖）；
+7. 发布 GitHub Release（幂等），notes 带完整验证证据（scope/门禁/测试/run marker）；
+8. 成功：`ai-merged`（终态）+ 关闭 Issue + 成功评论（release URL、tag、commit、证据）；任何失败：单独 `ai-blocked`（release 是人工决策点，不自动重试）+ 失败评论（run marker + 具体原因）+ fail fast。
+
+三类任务的边界：Epic（`ai-epic`）只协调、从不被领取；普通任务（`ai-ready`）走 `run_pi` → PR → review → merge；Release task（`ai-ready` + `ai-release`）走 Runner 的 release 状态机，不产生 PR。
 
 ## 自动可观测（正常运行不需要执行任何命令）
 

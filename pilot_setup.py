@@ -64,6 +64,11 @@ REQUIRED_LABELS = (
     # (`epic_not_claimed`), so the label is platform state the setup
     # entry must guarantee — same as every delivery-state label.
     "ai-epic",
+    # Release task marker (Issue #98): the ready scan picks up
+    # `ai-ready`+`ai-release` Issues and `process_issue` routes them to
+    # the deterministic release state machine (never `run_pi`), so the
+    # label is platform state the setup entry must guarantee.
+    "ai-release",
 )
 COLOR_PATTERN = re.compile(r"^[0-9a-fA-F]{6}$")
 

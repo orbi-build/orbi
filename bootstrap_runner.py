@@ -129,6 +129,7 @@ PI_IDLE_RECOVERY_CYCLES = 3
 # has at most two Pi sessions (implement, then review).
 ROLE_IMPLEMENT = "implement"
 ROLE_REVIEW = "review"
+ROLE_RELEASE = "release"
 
 # Run correlation (Issue #41): one task attempt generates one run_id and
 # every journal line of the attempt starts with `[run_id]`, so a single
@@ -171,6 +172,26 @@ P0_LABEL = "p0"
 # tag on the remote, no leftover `ai-in-progress`) and closed by a
 # human or a release task — never by the claim path.
 EPIC_LABEL = "ai-epic"
+# Release task marker (Issue #98): the plain `ai-release` label marks a
+# Release task — a first-class task type that the Runner picks up from
+# the ready scan and executes with its own deterministic release state
+# machine (scope verification, pre-release gates, tag, GitHub Release).
+# It is NOT a delivery state and NEVER enters the normal `run_pi`
+# development path: `process_issue` routes it to `process_release`
+# instead. On success the Issue gets `ai-merged` (terminal) and is
+# closed; on failure it gets `ai-blocked` ALONE (the `ai-ready` residue
+# is excluded by every ready scan, so no tick re-claims it).
+RELEASE_LABEL = "ai-release"
+# The machine-readable section a release Issue body must carry (Issue
+# #98): `- version:`, `- base_branch:`, `- test_command:` and
+# `- scope:` with `  - #N` items. Parsed strictly — a missing or
+# malformed declaration fails fast, never guessed.
+RELEASE_SECTION = "## Release"
+# The declared `test_command` runs in a clean worktree at the release
+# commit wrapped in `timeout <seconds> bash -c ...` (Issue #95): a test
+# that does not terminate within the deadline is a broken path, never
+# ignorable noise.
+RELEASE_TEST_TIMEOUT_SECONDS = 1800
 
 # Only comments posted by a repo maintainer are trusted to carry the
 # recovery scene: a public comment (authorAssociation=NONE) must never
@@ -1009,6 +1030,721 @@ def is_epic(issue: dict) -> bool:
         if isinstance(label, dict) and label.get("name") == EPIC_LABEL:
             return True
     return False
+
+
+def is_release(issue: dict) -> bool:
+    """Return True when one issue carries the `ai-release` label (#98).
+
+    A pure function of the issue's `labels` (the scans fetch `labels`,
+    so no extra gh call), the same style as `is_epic` and
+    `issue_priority`. A missing or malformed `labels` field fails open
+    to "not a release task": the scan always requests `labels`, so a
+    shape change only loses the release routing for one run — it must
+    never deadlock the queue.
+    """
+    labels = issue.get("labels")
+    if not isinstance(labels, list):
+        return False
+    for label in labels:
+        if isinstance(label, dict) and label.get("name") == RELEASE_LABEL:
+            return True
+    return False
+
+
+def parse_release_declaration(body: str) -> dict:
+    """Strictly parse the `## Release` section of a release Issue body.
+
+    The declaration is the machine-readable contract of a Release task
+    (Issue #98) — the only state a release run reads from the Issue
+    body (checkboxes are never parsed):
+
+    ```markdown
+    ## Release
+
+    - version: v0.3.0
+    - base_branch: main
+    - test_command: <shell command>
+    - scope:
+      - #123
+      - #124
+    ```
+
+    `version` is the exact tag name (no spaces), `base_branch` the
+    branch the release commit is frozen from, `test_command` the
+    shell command that must pass in a clean worktree at the release
+    commit, and `scope` the Issue/PR numbers verified one by one.
+    Every deviation fails fast with the concrete field: missing
+    section, missing or duplicated field, unknown key, empty value,
+    empty scope or a malformed scope item. No guessing.
+    """
+    if not isinstance(body, str):
+        raise ValueError("release declaration body must be a string")
+    lines = body.splitlines()
+    try:
+        start = next(
+            i for i, line in enumerate(lines)
+            if line.strip() == RELEASE_SECTION
+        )
+    except StopIteration:
+        raise ValueError(
+            f"release Issue body is missing the `{RELEASE_SECTION}` "
+            "section with version, base_branch, test_command and scope"
+        ) from None
+    section: list[str] = []
+    for line in lines[start + 1:]:
+        if line.lstrip().startswith("## "):
+            break
+        section.append(line)
+    fields: dict[str, str] = {}
+    scope: list[int] = []
+    scope_open = False
+    for line in section:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("- "):
+            content = stripped[2:].strip()
+            if scope_open and re.fullmatch(r"#\d+", content):
+                number = int(content[1:])
+                if number < 1:
+                    raise ValueError(
+                        f"release declaration scope item {content!r} "
+                        "must be a positive Issue or PR number"
+                    )
+                scope.append(number)
+                continue
+            if scope_open and ":" not in content:
+                raise ValueError(
+                    f"release declaration scope item {content!r} is "
+                    "malformed (expected `  - #N`)"
+                )
+            # A `- key: value` line closes the scope list (and a
+            # duplicated or unknown key is caught below).
+            scope_open = False
+            key, sep, value = content.partition(":")
+            if not sep:
+                raise ValueError(
+                    f"release declaration field {key.strip()!r} is "
+                    "malformed (expected `- key: value`)"
+                )
+            key = key.strip()
+            value = value.strip()
+            if key in fields:
+                raise ValueError(
+                    f"release declaration field {key!r} is duplicated"
+                )
+            if key == "scope":
+                if value:
+                    raise ValueError(
+                        "release declaration `scope` must be a list of "
+                        "`  - #N` items, not an inline value"
+                    )
+                scope_open = True
+                fields["scope"] = ""
+            elif key in ("version", "base_branch", "test_command"):
+                fields[key] = value
+            else:
+                raise ValueError(
+                    f"release declaration has the unknown field {key!r} "
+                    "(expected version, base_branch, test_command or scope)"
+                )
+        elif scope_open:
+            raise ValueError(
+                f"release declaration scope item {stripped!r} is "
+                "malformed (expected `  - #N`)"
+            )
+        else:
+            raise ValueError(
+                f"release declaration line {stripped!r} is not a "
+                "`- key: value` field or a scope item"
+            )
+    for key in ("version", "base_branch", "test_command"):
+        if key not in fields:
+            raise ValueError(
+                f"release declaration is missing the `{key}` field"
+            )
+        if not fields[key]:
+            raise ValueError(
+                f"release declaration field `{key}` is empty"
+            )
+    if "scope" not in fields:
+        raise ValueError(
+            "release declaration is missing the `scope` field"
+        )
+    if not scope:
+        raise ValueError(
+            "release declaration `scope` must list at least one "
+            "`  - #N` Issue or PR number"
+        )
+    for key in ("version", "base_branch"):
+        if any(ch.isspace() for ch in fields[key]):
+            raise ValueError(
+                f"release declaration field `{key}` must not contain "
+                "spaces"
+            )
+    return {
+        "version": fields["version"],
+        "base_branch": fields["base_branch"],
+        "test_command": fields["test_command"],
+        "scope": scope,
+    }
+
+
+def verify_release_scope(repo: str, scope: list[int], repo_dir: Path,
+                         release_commit: str) -> list[str]:
+    """Verify every release scope item ONE BY ONE (Issue #98).
+
+    The scope is verified against GitHub, never by parsing Issue-body
+    checkboxes: each number is probed as a PR first (`gh pr view` —
+    which exits 1 with the real "Could not resolve to a PullRequest"
+    error when the number is an Issue, verified against the live CLI)
+    and, failing that, as an Issue (`gh issue view`). A PR must be
+    `MERGED` and its merge commit must be an ancestor of the frozen
+    release commit; an Issue must be `CLOSED`. This ancestor check proves
+    the scoped PR is actually contained in the tag, rather than merely
+    having been merged into some other branch. An item that is neither, a
+    PR that is not merged/in the release base, or an Issue that is not
+    closed fails fast with the concrete number and state. A real `gh` or
+    git failure (auth, rate limit, missing object) is re-raised, never
+    misread as "not a PR".
+    """
+    evidence: list[str] = []
+    for number in scope:
+        try:
+            raw = run_command([
+                "gh", "pr", "view", str(number), "--repo", repo,
+                "--json", "number,state,mergeCommit",
+            ])
+        except subprocess.CalledProcessError as exc:
+            if "Could not resolve to a PullRequest" not in (exc.stderr or ""):
+                raise
+            raw = None
+        if raw is not None:
+            pr = json.loads(raw)
+            state = pr.get("state")
+            if state != "MERGED":
+                raise RuntimeError(
+                    f"release scope PR #{number} is not merged "
+                    f"(state={state})"
+                )
+            merge_commit = (pr.get("mergeCommit") or {}).get("oid")
+            if not merge_commit:
+                raise RuntimeError(
+                    f"release scope PR #{number} is merged but has no "
+                    "merge commit evidence"
+                )
+            try:
+                run_command(
+                    ["git", "merge-base", "--is-ancestor", merge_commit,
+                     release_commit],
+                    cwd=repo_dir,
+                )
+            except subprocess.CalledProcessError as exc:
+                if exc.returncode != 1:
+                    raise
+                raise RuntimeError(
+                    f"release scope PR #{number} merge commit {merge_commit} "
+                    f"is not contained in release commit {release_commit}"
+                ) from exc
+            evidence.append(
+                f"PR #{number} merged (mergeCommit={merge_commit})"
+            )
+            continue
+        try:
+            raw = run_command([
+                "gh", "issue", "view", str(number), "--repo", repo,
+                "--json", "number,state",
+            ])
+        except subprocess.CalledProcessError as exc:
+            if "Could not resolve to an Issue" not in (exc.stderr or ""):
+                raise
+            raise RuntimeError(
+                f"release scope item #{number} is neither a PR nor an "
+                "Issue"
+            ) from exc
+        issue = json.loads(raw)
+        state = issue.get("state")
+        if state != "CLOSED":
+            raise RuntimeError(
+                f"release scope Issue #{number} is not closed "
+                f"(state={state})"
+            )
+        evidence.append(f"Issue #{number} closed")
+    return evidence
+
+
+def check_release_gates(repo: str, base_branch: str, release_commit: str,
+                        release_number: int) -> list[str]:
+    """Enforce the pre-release gates (Issue #98) and return their evidence.
+
+    Three gates, each checked against GitHub (never against local
+    state), each failure raising with the concrete offender:
+
+    1. No open Issue still carries `ai-in-progress`, `ai-pr-opened`
+       or `ai-fix-needed` — the release Issue itself is excluded (it
+       carries `ai-in-progress` while the release runs).
+    2. CI on the release commit is green: every check run reported by
+       the GitHub API for the commit is `completed` with a
+       `success`/`neutral`/`skipped` conclusion (a pending, failing,
+       cancelled or error check fails the gate; no check runs at all
+       is recorded as such, not invented).
+    3. No open PR targets the base branch — an open PR against the
+       release base would make the released commit non-final.
+
+    A real `gh` failure (auth, rate limit, API error) propagates
+    unchanged — a gate that cannot be checked is a failed gate.
+    """
+    evidence: list[str] = []
+    for label in (IN_PROGRESS_LABEL, PR_OPENED_LABEL, FIX_NEEDED_LABEL):
+        raw = run_command([
+            "gh", "issue", "list", "--repo", repo, "--label", label,
+            "--state", "open", "--json", "number", "--limit", "50",
+        ])
+        for item in json.loads(raw):
+            number = int(item["number"])
+            if number == release_number:
+                continue
+            raise RuntimeError(
+                f"release gate: Issue #{number} still carries "
+                f"{label} — finish or block that delivery before "
+                "releasing"
+            )
+    evidence.append(
+        "no open Issue carries "
+        f"{IN_PROGRESS_LABEL} / {PR_OPENED_LABEL} / {FIX_NEEDED_LABEL}"
+    )
+    raw = run_command([
+        "gh", "api", f"repos/{repo}/commits/{release_commit}/check-runs",
+        "--jq", ".check_runs",
+    ])
+    check_runs = json.loads(raw)
+    for check in check_runs:
+        name = check.get("name")
+        status = check.get("status")
+        conclusion = check.get("conclusion")
+        if status != "completed" or conclusion not in (
+            "success", "neutral", "skipped",
+        ):
+            raise RuntimeError(
+                f"release gate: CI check '{name}' is {status}/{conclusion} "
+                f"on the release commit {release_commit}"
+            )
+    if check_runs:
+        evidence.append(
+            f"CI on the release commit: {len(check_runs)} check(s) all "
+            "success/neutral/skipped"
+        )
+    else:
+        evidence.append(
+            f"CI on the release commit: no check runs on "
+            f"{release_commit} (nothing to gate)"
+        )
+    raw = run_command([
+        "gh", "pr", "list", "--repo", repo,
+        "--search", f"is:pr is:open base:{base_branch}",
+        "--json", "number,headRefName", "--limit", "50",
+    ])
+    for pr in json.loads(raw):
+        raise RuntimeError(
+            f"release gate: PR #{pr.get('number')} "
+            f"(head {pr.get('headRefName')}) is still open against "
+            f"{base_branch}"
+        )
+    evidence.append(f"no open PR targets {base_branch}")
+    return evidence
+
+
+def run_release_tests(worktree: Path, test_command: str,
+                      timeout_seconds: int) -> None:
+    """Run the declared release test command in the release worktree.
+
+    The command is a shell string (it may chain steps with `&&`), so
+    it runs through `bash -c` wrapped in `timeout <seconds>` (Issue
+    #95). Its success is followed by the repository's mandatory 100%
+    line-and-branch coverage gate: a declaration such as `true` or a
+    bare `pytest` must not let a release claim the coverage contract.
+    A test that does not terminate within the deadline fails fast with
+    `timeout`'s exit 124 — never ignorable noise or a second unbounded
+    attempt.
+    """
+    coverage_gate = (
+        "/usr/bin/python3 -m coverage report --fail-under=100 "
+        "--show-missing"
+    )
+    run_command(
+        ["timeout", str(timeout_seconds), "bash", "-c",
+         f"{test_command} && {coverage_gate}"],
+        cwd=worktree,
+    )
+
+
+def release_tag_commit(repo_dir: Path, tag: str) -> str | None:
+    """Return the commit the tag points to on the remote, or None.
+
+    (Issue #98) The tag is fetched under the base-sync lock — a task
+    worktree shares the checkout's common dir, so an unlocked
+    concurrent fetch would race on `refs/tags/<tag>` exactly like the
+    shared remote-tracking ref of Issue #171. When the remote has no
+    such tag the fetch exits 128 (verified against the real CLI) and
+    None is returned; after a successful fetch the tag is resolved to
+    the commit it points to locally (annotated tags are peeled with
+    `^{commit}`). Any other fetch failure fails fast.
+    """
+    fd = acquire_base_sync_lock(repo_dir, 300.0)
+    try:
+        try:
+            run_command(
+                ["git", "fetch", "origin",
+                 f"refs/tags/{tag}:refs/tags/{tag}"],
+                cwd=repo_dir,
+            )
+        except subprocess.CalledProcessError as exc:
+            if exc.returncode != 128:
+                raise
+            return None
+        return run_command(
+            ["git", "rev-parse", "-q", "--verify",
+             f"refs/tags/{tag}^{{commit}}"],
+            cwd=repo_dir,
+        )
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def publish_release(*, repo: str, tag: str, version: str,
+                    release_commit: str, scope_evidence: list[str],
+                    gate_evidence: list[str], test_evidence: str,
+                    run_id: str, issue_number: int) -> str:
+    """Create the GitHub Release for the tag — idempotently (Issue #98).
+
+    When a Release for the tag already exists (a restart after a
+    successful `gh release create`) its URL is reused, never a second
+    Release is created. Otherwise the Release is created from the
+    EXISTING tag (the tag was created and pushed by the caller first —
+    `gh release create` never creates or moves the tag itself) with
+    notes carrying the full verification evidence: version, tag,
+    release commit, the per-item scope evidence, the gate evidence, the
+    test evidence and the run marker (the same stable machine-readable
+    marker every run comment carries).
+    """
+    try:
+        raw = run_command([
+            "gh", "release", "view", tag, "--repo", repo,
+            "--json", "tagName,url",
+        ])
+        return json.loads(raw)["url"]
+    except subprocess.CalledProcessError as exc:
+        if "not found" not in (exc.stderr or ""):
+            raise
+    notes = "\n".join([
+        f"# {version}",
+        "",
+        f"- tag: `{tag}`",
+        f"- release commit: `{release_commit}`",
+        f"- release task: Issue #{issue_number}",
+        "",
+        "## Scope (verified item by item)",
+        "",
+        *(f"- {item}" for item in scope_evidence),
+        "",
+        "## Pre-release gates",
+        "",
+        *(f"- {item}" for item in gate_evidence),
+        "",
+        "## Tests",
+        "",
+        f"- {test_evidence}",
+        "",
+        f"<!-- muyan-pilot:run={run_id} -->",
+        f"run_id={run_id}",
+    ])
+    run_command([
+        "gh", "release", "create", tag, "--repo", repo,
+        "--verify-tag", "--title", version, "--notes", notes,
+    ])
+    raw = run_command([
+        "gh", "release", "view", tag, "--repo", repo,
+        "--json", "tagName,url",
+    ])
+    return json.loads(raw)["url"]
+
+
+def release_success_comment_body(run_id: str, run_info: str,
+                                 release_url: str, tag: str,
+                                 release_commit: str,
+                                 scope_evidence: list[str],
+                                 gate_evidence: list[str],
+                                 test_evidence: str) -> str:
+    """The terminal success comment: the full verification evidence.
+
+    (Issue #98) The comment is the auditable record of the release:
+    run marker, release URL, version/tag/release commit, the
+    per-item scope evidence, the gate evidence and the test evidence.
+    """
+    return "\n".join([
+        run_marker(run_id),
+        f"Muyan Pilot released: {release_url}",
+        run_info,
+        f"tag={tag} release_commit={release_commit}",
+        "",
+        "## Scope (verified item by item)",
+        "",
+        *(f"- {item}" for item in scope_evidence),
+        "",
+        "## Pre-release gates",
+        "",
+        *(f"- {item}" for item in gate_evidence),
+        "",
+        "## Tests",
+        "",
+        f"- {test_evidence}",
+        "",
+        f"run_id={run_id}",
+    ])
+
+
+def release_failure_comment_body(run_id: str, run_info: str,
+                                 error: str) -> str:
+    """The terminal failure comment: the blocked scene (Issue #98).
+
+    A release failure is terminal (`ai-blocked` ALONE, no automatic
+    retry): the comment carries the run marker and the concrete
+    reason, so the recoverable scene is on GitHub, not only in the
+    journal.
+    """
+    return "\n".join([
+        run_marker(run_id),
+        "Muyan Pilot release failed (ai-blocked)",
+        run_info,
+        "",
+        f"failure: {error}",
+        "",
+        f"run_id={run_id}",
+    ])
+
+
+def process_release(issue: dict, config: dict, source_repo: str) -> str:
+    """Run the deterministic release state machine for one release Issue.
+
+    (Issue #98) A release task NEVER enters the normal `run_pi`
+    development path: the Runner executes the state machine itself,
+    step by step, each step idempotent so a restart resumes the same
+    run (same run id, same worktree) from the top:
+
+    1. Claim (`ai-in-progress`; a restart reuses the existing run id
+       from the worktree — the same resume rule as normal tasks).
+    2. Strictly parse the `## Release` declaration from the Issue
+       body (version, base_branch, test_command, scope).
+    3. Freeze the base — the release commit is exactly
+       `origin/<base_branch>` (fetched under the base-sync lock).
+    4. Enforce the pre-release gates (`check_release_gates`).
+    5. Verify the scope item by item (`verify_release_scope`).
+    6. Run the declared test command in a clean worktree at the
+       release commit (`timeout`-wrapped, Issue #95).
+    7. Tag: the remote tag must not exist or must point EXACTLY at
+       the release commit (a mismatch fails — an existing tag is
+       never moved); otherwise create an annotated tag at the release
+       commit and push it with a plain push (never `--force`).
+    8. Publish the GitHub Release (idempotent) with the full
+       verification evidence.
+    9. Success: `ai-merged` (terminal, the Issue is closed, the
+       success comment carries the evidence).
+    10. Any failure: `ai-blocked` ALONE (no automatic retry — a
+        release is a human decision point), the failure comment
+        carries the run marker and the concrete reason, and the
+        exception propagates so the tick fails fast.
+    """
+    number = int(issue["number"])
+    title = issue["title"]
+    run_id = new_run_id()
+    set_run_id(run_id)
+    if has_in_progress_label(number, source_repo):
+        existing_run_id = latest_run_id(
+            config["repo_dir"], source_repo, number,
+        )
+        if existing_run_id is not None:
+            run_id = existing_run_id
+            set_run_id(run_id)
+            LOGGER.info(
+                "issue=%s release_resuming_run run_id=%s", number, run_id,
+            )
+    priority = issue_priority(issue)
+    started = time.monotonic()
+    # Bound before the try: the failure comment needs it even when the
+    # declaration parse fails on the very first step.
+    run_info = f"run_id={run_id} priority={priority}"
+    publisher = ProgressPublisher(
+        number, source_repo, run_id, run_command=run_command,
+    )
+    branch = task_branch(source_repo, number, run_id)
+    worktree = worktree_path(
+        config["repo_dir"], source_repo, number, run_id,
+    )
+
+    def progress() -> dict:
+        return _progress_state(
+            issue=number, title=title, run_id=run_id, role=ROLE_RELEASE,
+            branch=branch, worktree=worktree, started=started,
+            pr_url=None, review_round=0, priority=priority,
+            activity={},
+        )
+
+    try:
+        declaration = parse_release_declaration(issue["body"])
+        base_branch = declaration["base_branch"]
+        run_info = (
+            f"base_branch={base_branch} run_id={run_id} "
+            f"priority={priority}"
+        )
+        LOGGER.info(
+            "issue=%s release_task %s", number, run_info,
+        )
+        edit_issue(number, repo=source_repo, add=IN_PROGRESS_LABEL)
+        set_active_run(
+            number, title, branch, str(worktree),
+        )
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_RELEASE,
+            action=lambda: publisher.ensure(progress_body(progress())),
+        )
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_RELEASE,
+            action=lambda: publisher.milestone(
+                f"**Muyan Pilot release started**: {run_info}",
+            ),
+        )
+        release_commit = freeze_base(config["repo_dir"], base_branch)
+        run_info = (
+            f"base_branch={base_branch} base_sha={release_commit} "
+            f"run_id={run_id} priority={priority}"
+        )
+        gate_evidence = check_release_gates(
+            source_repo, base_branch, release_commit, number,
+        )
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_RELEASE,
+            action=lambda: publisher.milestone(
+                f"**Muyan Pilot release gates passed**: "
+                f"{'; '.join(gate_evidence)}",
+            ),
+        )
+        scope_evidence = verify_release_scope(
+            source_repo, declaration["scope"], config["repo_dir"],
+            release_commit,
+        )
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_RELEASE,
+            action=lambda: publisher.milestone(
+                f"**Muyan Pilot release scope verified**: "
+                f"{'; '.join(scope_evidence)}",
+            ),
+        )
+        worktree = create_worktree(
+            config["repo_dir"], source_repo, number, run_id, release_commit,
+        )
+        run_release_tests(
+            worktree, declaration["test_command"],
+            RELEASE_TEST_TIMEOUT_SECONDS,
+        )
+        test_evidence = (
+            f"declared test command and 100% coverage gate passed in a "
+            f"clean worktree at {release_commit} "
+            f"(timeout {RELEASE_TEST_TIMEOUT_SECONDS}s)"
+        )
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_RELEASE,
+            action=lambda: publisher.milestone(
+                f"**Muyan Pilot release tests passed**: {test_evidence}",
+            ),
+        )
+        tag = declaration["version"]
+        existing_tag_commit = release_tag_commit(config["repo_dir"], tag)
+        if existing_tag_commit is not None:
+            if existing_tag_commit != release_commit:
+                raise RuntimeError(
+                    f"release tag {tag} already exists on the remote "
+                    f"and points at {existing_tag_commit}, not the "
+                    f"release commit {release_commit} — an existing "
+                    "tag is never moved or overwritten"
+                )
+            LOGGER.info(
+                "issue=%s release_tag_exists tag=%s commit=%s",
+                number, tag, existing_tag_commit,
+            )
+        else:
+            run_command(
+                ["git", "tag", "-a", tag, "-m", f"Release {tag}",
+                 release_commit],
+                cwd=config["repo_dir"],
+            )
+            run_command(
+                ["git", "push", "origin", f"refs/tags/{tag}"],
+                cwd=config["repo_dir"],
+            )
+            LOGGER.info(
+                "issue=%s release_tag_pushed tag=%s commit=%s",
+                number, tag, release_commit,
+            )
+        release_url = publish_release(
+            repo=source_repo, tag=tag, version=tag,
+            release_commit=release_commit,
+            scope_evidence=scope_evidence, gate_evidence=gate_evidence,
+            test_evidence=test_evidence, run_id=run_id, issue_number=number,
+        )
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_RELEASE,
+            action=lambda: publisher.milestone(
+                f"**Muyan Pilot released**: {release_url}",
+            ),
+        )
+        edit_issue(
+            number, repo=source_repo, add=MERGED_LABEL,
+            remove=IN_PROGRESS_LABEL,
+        )
+        run_command(
+            ["gh", "issue", "close", str(number), "--repo", source_repo],
+        )
+        comment_issue(
+            number, repo=source_repo,
+            body=release_success_comment_body(
+                run_id, run_info, release_url, tag, release_commit,
+                scope_evidence, gate_evidence, test_evidence,
+            ),
+        )
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_RELEASE,
+            action=lambda: publisher.finish(progress_body(progress())),
+        )
+        LOGGER.info(
+            "issue=%s run_end release_success tag=%s url=%s "
+            "elapsed=%.1fs", number, tag, release_url,
+            time.monotonic() - started,
+        )
+        return release_url
+    except Exception as exc:
+        LOGGER.exception("issue=%s release_failed", number)
+        edit_issue(
+            number, repo=source_repo, add=BLOCKED_LABEL,
+            remove=IN_PROGRESS_LABEL,
+        )
+        comment_issue(
+            number, repo=source_repo,
+            body=release_failure_comment_body(run_id, run_info, str(exc)),
+        )
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_RELEASE,
+            action=lambda: publisher.finish(progress_body(progress())),
+        )
+        raise
 
 
 def pick_issue(repo: str, active_milestone: str | None = None) -> dict | None:
@@ -3881,6 +4617,12 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     # or non-string title fails fast here (KeyError / ValueError in
     # `progress.issue_field`) — it is never fabricated.
     title = issue["title"]
+    # Release task (Issue #98): a first-class task type that NEVER
+    # enters the normal `run_pi` development path. The Runner executes
+    # its own deterministic release state machine instead (scope
+    # verification, gates, tests, tag, GitHub Release).
+    if is_release(issue):
+        return process_release(issue, config, source_repo)
     base_branch = config["base_branch"]
     # The run id is generated once per attempt and bound BEFORE any
     # other step is logged, so every journal line of the attempt

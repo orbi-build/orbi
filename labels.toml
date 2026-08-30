@@ -49,3 +49,8 @@ description = "Muyan Pilot urgent priority: picked up before bugs and features"
 name = "ai-epic"
 color = "bfdadc"
 description = "Epic coordination issue; not directly executable by Runner"
+
+[[label]]
+name = "ai-release"
+color = "5319e7"
+description = "Release task: Runner runs the deterministic release state machine (tag + GitHub Release)"
