@@ -55,18 +55,18 @@ systemd 启动及 exporter 意外退出后都会恢复。它独立于 `install-u
 unit drift 机制，绝不改变 Runner 的业务流程。
 
 ```bash
-install -Dm644 systemd/muyan-pilot-exporter.service \
+timeout 30s install -Dm644 systemd/muyan-pilot-exporter.service \
   ~/.config/systemd/user/muyan-pilot-exporter.service
-systemctl --user daemon-reload
-systemctl --user enable --now muyan-pilot-exporter.service
-systemctl --user status muyan-pilot-exporter.service --no-pager
+timeout 30s systemctl --user daemon-reload
+timeout 30s systemctl --user enable --now muyan-pilot-exporter.service
+timeout 30s systemctl --user status muyan-pilot-exporter.service --no-pager
 ```
 
 部署前可验证 unit 和它引用的真实文件：
 
 ```bash
-systemd-analyze --user verify systemd/muyan-pilot-exporter.service
-/usr/bin/test -f \
+timeout 30s systemd-analyze --user verify systemd/muyan-pilot-exporter.service
+timeout 15s /usr/bin/test -f \
   ~/Documents/muyan/muyan-pilot/monitoring/prometheus/muyan-pilot-exporter.py
 ```
 
@@ -90,30 +90,36 @@ service 实例，默认 `1,2`）、`--cache-ttl`（journal 重读间隔秒数，
 然后 `sudo systemctl reload prometheus`。验证 `muyan-pilot` target 为 UP：
 
 ```bash
-curl -fsS 'http://127.0.0.1:9090/api/v1/targets?state=active' |
+timeout 15s curl -fsS 'http://127.0.0.1:9090/api/v1/targets?state=active' |
   /usr/bin/python3 -c 'import json,sys; targets=json.load(sys.stdin)["data"]["activeTargets"]; target=next(t for t in targets if t["labels"].get("job")=="muyan-pilot"); assert target["health"]=="up" and not target["lastError"], target; print(target["scrapeUrl"], target["health"])'
 ```
 
 连续 10 分钟抓取验证（每 30 秒采样一次；任何非 UP 或 scrape error 都失败）：
 
 ```bash
-for _ in $(seq 1 20); do
-  curl -fsS 'http://127.0.0.1:9090/api/v1/targets?state=active' |
-    /usr/bin/python3 -c 'import json,sys; targets=json.load(sys.stdin)["data"]["activeTargets"]; target=next(t for t in targets if t["labels"].get("job")=="muyan-pilot"); assert target["health"]=="up" and not target["lastError"], target'
-  sleep 30
-done
+timeout 630s /usr/bin/python3 -c '
+import json
+import time
+from urllib.request import urlopen
+for _ in range(20):
+    with urlopen("http://127.0.0.1:9090/api/v1/targets?state=active", timeout=15) as response:
+        targets = json.load(response)["data"]["activeTargets"]
+    target = next(t for t in targets if t["labels"].get("job") == "muyan-pilot")
+    assert target["health"] == "up" and not target["lastError"], target
+    time.sleep(30)
+'
 ```
 
 重启恢复验证（先记录 PID，模拟 exporter 异常退出，再确认 systemd 给出新 PID，
 HTTP 和 Prometheus 均恢复）：
 
 ```bash
-before=$(systemctl --user show -p MainPID --value muyan-pilot-exporter.service)
+before=$(timeout 15s systemctl --user show -p MainPID --value muyan-pilot-exporter.service)
 kill -TERM "$before"
-sleep 6
-after=$(systemctl --user show -p MainPID --value muyan-pilot-exporter.service)
-test "$before" != "$after"
-curl -fsS http://127.0.0.1:9106/health
+timeout 10s sleep 6
+after=$(timeout 15s systemctl --user show -p MainPID --value muyan-pilot-exporter.service)
+timeout 15s test "$before" != "$after"
+timeout 15s curl -fsS http://127.0.0.1:9106/health
 # 再运行上面的 Prometheus target 验证命令
 ```
 
@@ -129,7 +135,7 @@ Grafana（本机 `127.0.0.1:3000`）→ Dashboards → Import → 上传
 ## 4. 测试
 
 ```bash
-/usr/bin/python3 -m pytest tests/test_muyan_pilot_exporter.py \
+timeout 120s /usr/bin/python3 -m pytest tests/test_muyan_pilot_exporter.py \
   tests/test_muyan_pilot_dashboard.py -q
 ```
 
