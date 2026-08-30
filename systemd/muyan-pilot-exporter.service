@@ -1,0 +1,14 @@
+[Unit]
+Description=Muyan Pilot Prometheus exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Documents/muyan/muyan-pilot
+ExecStart=/usr/bin/python3 %h/Documents/muyan/muyan-pilot/monitoring/prometheus/muyan-pilot-exporter.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

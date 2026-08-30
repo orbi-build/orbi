@@ -19,6 +19,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXPORTER_PATH = REPO_ROOT / "monitoring" / "prometheus" / "muyan-pilot-exporter.py"
+EXPORTER_UNIT_PATH = REPO_ROOT / "systemd" / "muyan-pilot-exporter.service"
 
 
 def load_exporter():
@@ -53,6 +54,25 @@ def metric(lines, name, labels=None, value=None):
 
 def lines_of(text):
     return [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
+
+
+# --- systemd deployment: persistent exporter contract ---------------------
+
+
+def test_exporter_unit_runs_the_deployed_exporter_and_restarts():
+    """The versioned user unit keeps the exporter available after boot/exit."""
+    unit = EXPORTER_UNIT_PATH.read_text(encoding="utf-8")
+    assert "[Service]" in unit
+    assert "WorkingDirectory=%h/Documents/muyan/muyan-pilot" in unit
+    assert (
+        "ExecStart=/usr/bin/python3 "
+        "%h/Documents/muyan/muyan-pilot/monitoring/prometheus/"
+        "muyan-pilot-exporter.py"
+    ) in unit
+    assert "Restart=always" in unit
+    assert "RestartSec=5" in unit
+    assert "[Install]" in unit
+    assert "WantedBy=default.target" in unit
 
 
 # --- parse_message: the journal line contract -----------------------------
