@@ -1837,9 +1837,6 @@ def stream_pi(
                         # state stays visible while the grace runs
                         # (the tool is still inside its own deadline
                         # handling, not hung).
-                        pending_pids = {
-                            target["pid"] for target in pending
-                        }
                         # Issue #181: the grace is measured in idle
                         # windows, not polls — a target first observed
                         # past its deadline in cycle N is signaled only
@@ -1854,7 +1851,6 @@ def stream_pi(
                         newly_passed = [
                             target for target in targets
                             if target["pid"] not in deadline_passed
-                            and target["pid"] not in pending_pids
                         ]
                         if flipped:
                             # Still alive one full idle window after
