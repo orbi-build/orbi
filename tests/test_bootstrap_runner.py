@@ -9932,16 +9932,11 @@ def test_release_tag_commit_reraises_real_fetch_failure(tmp_path, monkeypatch):
         runner.release_tag_commit(work, "v0.1.0")
 
 
-def make_release_gh(monkeypatch, *, release_exists=False):
-    """Answer `gh release view` / `gh release create`.
-
-    `release_exists=False` starts with "release not found" (the real
-    gh error, verified against the live CLI) and flips to found after
-    a `gh release create` — the same state transition the real remote
-    makes.
-    """
+def make_release_gh(monkeypatch, *, release_exists=False,
+                    release_body="## Changelog"):
+    """Answer `gh release view` / `gh release create` / `gh release edit`."""
     calls = []
-    state = {"exists": release_exists}
+    state = {"exists": release_exists, "body": release_body}
 
     def fake_run_command(command, **kwargs):
         calls.append(command)
@@ -9953,9 +9948,13 @@ def make_release_gh(monkeypatch, *, release_exists=False):
             return json.dumps({
                 "tagName": command[3],
                 "url": "https://github.com/o/r/releases/tag/" + command[3],
+                "body": state["body"],
             })
         if command[:3] == ["gh", "release", "create"]:
             state["exists"] = True
+            return ""
+        if command[:3] == ["gh", "release", "edit"]:
+            state["body"] = command[command.index("--notes") + 1]
             return ""
         raise AssertionError(f"unexpected command: {command}")
 
@@ -10090,6 +10089,23 @@ def test_publish_release_reuses_the_existing_release(monkeypatch):
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     assert not [c for c in calls if c[:3] == ["gh", "release", "create"]]
+    assert not [c for c in calls if c[:3] == ["gh", "release", "edit"]]
+
+
+def test_publish_release_upgrades_existing_notes_without_a_changelog(monkeypatch):
+    calls = make_release_gh(
+        monkeypatch, release_exists=True, release_body="# v0.2.0\n\nIssue #10 closed",
+    )
+    runner.publish_release(
+        repo="o/r", tag="v0.2.0", version="v0.2.0",
+        release_commit="abc123", changelog="## Changelog\n\n### Features\n\n- Useful change",
+        scope_evidence=[], gate_evidence=[], test_evidence="ok",
+        run_id="a1b2c3d4", issue_number=99,
+    )
+    edits = [c for c in calls if c[:3] == ["gh", "release", "edit"]]
+    assert len(edits) == 1
+    assert edits[0][:6] == ["gh", "release", "edit", "v0.2.0", "--repo", "o/r"]
+    assert "## Changelog" in edits[0][edits[0].index("--notes") + 1]
 
 
 def test_publish_release_reraises_real_gh_failure(monkeypatch):

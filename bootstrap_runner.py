@@ -1523,23 +1523,16 @@ def publish_release(*, repo: str, tag: str, version: str,
 
     When a Release for the tag already exists (a restart after a
     successful `gh release create`) its URL is reused, never a second
-    Release is created. Otherwise the Release is created from the
-    EXISTING tag (the tag was created and pushed by the caller first —
-    `gh release create` never creates or moves the tag itself) with
-    notes carrying the full verification evidence: version, tag,
+    Release is created. A legacy existing Release without this changelog
+    is upgraded in place; a Release that already contains it is unchanged.
+    Otherwise the Release is created from the EXISTING tag (the tag was
+    created and pushed by the caller first — `gh release create` never
+    creates or moves the tag itself) with notes carrying the full
+    verification evidence: version, tag,
     release commit, the per-item scope evidence, the gate evidence, the
     test evidence and the run marker (the same stable machine-readable
     marker every run comment carries).
     """
-    try:
-        raw = run_command([
-            "gh", "release", "view", tag, "--repo", repo,
-            "--json", "tagName,url",
-        ])
-        return json.loads(raw)["url"]
-    except subprocess.CalledProcessError as exc:
-        if "not found" not in (exc.stderr or ""):
-            raise
     notes = "\n".join([
         f"# {version}",
         "",
@@ -1564,6 +1557,21 @@ def publish_release(*, repo: str, tag: str, version: str,
         f"<!-- muyan-pilot:run={run_id} -->",
         f"run_id={run_id}",
     ])
+    try:
+        raw = run_command([
+            "gh", "release", "view", tag, "--repo", repo,
+            "--json", "tagName,url,body",
+        ])
+        release = json.loads(raw)
+        if changelog not in release.get("body", ""):
+            run_command([
+                "gh", "release", "edit", tag, "--repo", repo,
+                "--notes", notes,
+            ])
+        return release["url"]
+    except subprocess.CalledProcessError as exc:
+        if "not found" not in (exc.stderr or ""):
+            raise
     run_command([
         "gh", "release", "create", tag, "--repo", repo,
         "--verify-tag", "--title", version, "--notes", notes,
