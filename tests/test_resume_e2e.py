@@ -4,8 +4,9 @@ Real git (local bare origin + clone) plus a fake ``pi`` executable that
 behaves like the delivery agent in both modes:
 
 - implement mode (``Run id:`` in the system prompt): writes the
-  run-scoped plan artifact, commits and pushes — the first delivery
-  that opens the PR;
+  run-scoped plan artifact and commits — the first delivery (Issue
+  #186: the agent stops at the committed delivery; the Runner pushes
+  the task branch and opens the PR);
 - review mode (system prompt without the run id): Issue #82 — the
   independent review session fixes findings IN THE SAME SESSION: it
   absorbs the latest base (plain ``git merge origin/<base>``, resolves
@@ -82,7 +83,6 @@ with open(os.path.join(cwd, "plan.md"), "w", encoding="utf-8") as handle:
 for command in (
     ["git", "add", "."],
     ["git", "commit", "-m", f"plan for run {run_id}"],
-    ["git", "push", "origin", "HEAD"],
 ):
     subprocess.run(command, cwd=cwd, check=True, capture_output=True)
 """

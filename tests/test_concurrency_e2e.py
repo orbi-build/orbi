@@ -348,6 +348,29 @@ if "INDEPENDENT REVIEW" in system_prompt:
         "verdict": "pass", "blockers": 0, "majors": 0,
         "minors": 0, "findings": [],
     }))
+else:
+    # Implementer session (Issue #186): the agent commits the delivery;
+    # the Runner pushes the task branch and opens the PR (the fake pi
+    # must NOT push or create the PR). A killed runner can leave the
+    # first pi orphaned in its startup sleep, so the commit retries over
+    # a concurrent index.lock holder (the resumed run's own pi).
+    with open(os.path.join(os.getcwd(), f"plan-{os.getpid()}.md"), "w",
+              encoding="utf-8") as handle:
+        handle.write(f"plan (pid {os.getpid()})\\n")
+    for attempt in range(20):
+        try:
+            subprocess.run(["git", "add", "."], check=True)
+            subprocess.run(
+                ["git", "-c", "user.email=pilot@test.local",
+                 "-c", "user.name=Pilot", "commit",
+                 "-m", f"plan for the run (pid {os.getpid()})"],
+                check=True,
+            )
+            break
+        except subprocess.CalledProcessError:
+            if attempt == 19:
+                raise
+            time.sleep(0.1)
 """
 
 
@@ -573,9 +596,31 @@ def wait_for(predicate, timeout: float = 60.0, what: str = "condition") -> None:
     raise AssertionError(f"timed out waiting for {what}")
 
 
+def wait_for_pid_exit(pid: int, timeout: float = 30.0) -> None:
+    """Wait until `pid` is gone (reaped) — models the systemd cgroup
+    taking a killed runner's Pi child with it (a raw SIGKILL of the
+    runner alone orphans the child, which would otherwise commit into
+    the resumed run's worktree at an unpredictable moment)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"timed out waiting for pid {pid} to exit")
+
+
 def test_wait_for_raises_when_condition_never_holds():
     with pytest.raises(AssertionError, match="timed out waiting for the moon"):
         wait_for(lambda: False, timeout=0.1, what="the moon")
+
+
+def test_wait_for_pid_exit_times_out_on_a_live_pid():
+    # This test's own pid is alive: the wait must time out instead of
+    # hanging (the same contract as `wait_for`).
+    with pytest.raises(AssertionError, match="timed out waiting for pid"):
+        wait_for_pid_exit(os.getpid(), timeout=0.1)
 
 
 def test_cleanup_fixture_kills_a_leftover_runner(clone, tmp_path):
@@ -1087,6 +1132,12 @@ def test_killed_runner_is_resumed_by_the_next_claim_scan(clone, tmp_path):
     )
     first.kill()  # SIGKILL: no cleanup can run
     first.wait(timeout=10)
+    # The dead runner's Pi child was orphaned by the SIGKILL; in the
+    # systemd world the service cgroup takes it with the runner. Wait
+    # for the orphan to finish (its commit, if any, lands BEFORE the
+    # resumed run starts — never in the middle of it).
+    orphan_pid = int(pi_invocations(pi_log)[-1].split()[1])
+    wait_for_pid_exit(orphan_pid)
 
     # The kill left the claim label behind (the failure path never ran).
     snap = read_state(state)

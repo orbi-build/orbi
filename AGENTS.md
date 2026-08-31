@@ -40,7 +40,10 @@ acceptance criteria.
 
 ## Implement vs review
 
-- Implementer session: plan, TDD, tests, push one PR.
+- Implementer session: plan, TDD, tests, commit the delivery; the Runner
+  pushes the task branch and opens one PR (Issue #186: the deterministic
+  Git/GitHub closeout — base fetch and absorb, push, PR creation — is the
+  Runner's job, not the agent's).
 - After the PR exists, the Runner starts independent review: a new
   `pi --print` with `prompt_review.md` and a new JSONL on the same worktree.
 
@@ -168,10 +171,14 @@ acceptance criteria.
   (default `main`), never from the main worktree's current HEAD.
 - Branch and worktree names carry the unique run id, so a retried Issue gets
   a new independent run and the old scene is preserved.
-- Before creating the PR, re-fetch `origin/<base_branch>`; if the base
-  advanced, merge it into the task branch, resolve conflicts manually, rerun
-  the full tests, then push the task branch (the independent review runs
-  after the PR is opened and absorbs any further base advance in-session).
+- The Runner re-fetches `origin/<base_branch>` before creating the PR
+  (Issue #186: the agent stops at the committed delivery; the base fetch
+  and absorb, the push and the PR creation are the Runner's deterministic
+  closeout); if the base advanced, the Runner merges it into the task
+  branch with a plain `git merge` (a conflict is aborted and the PR opens
+  on the agent's head), then pushes the task branch (the independent review
+  runs after the PR is opened and absorbs any further base advance
+  in-session).
 - Every fetch that updates the shared remote-tracking ref
   (`refs/remotes/origin/<base_branch>`) runs under the SAME shared
   state-dir lock (`base-sync.lock`) that `ExecStartPre` uses (Issue #171):
