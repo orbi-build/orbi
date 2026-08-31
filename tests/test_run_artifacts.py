@@ -54,3 +54,69 @@ def test_run_artifacts_are_gitignored():
 def test_git_helper_fails_fast_on_nonzero_exit():
     with pytest.raises(AssertionError, match=r"git .* failed rc=128"):
         git("rev-parse", "no-such-ref")
+
+
+def test_pi_loop_state_is_gitignored():
+    """Issue #215: the pi-loop plugin writes `.pi/loops.json` into the
+    task worktree cwd at session shutdown (the #214 scene: `deliver_pr`
+    fail-fasted on `?? .pi/`). It is not part of the agent's commit
+    boundary, so the ignore rules must keep it out of
+    `git status --porcelain` — and `.pi-session/` stays ignored."""
+    # `git check-ignore -v` prints `<source>:<line>:<pattern>\t<path>`
+    # for an ignored path (exit 0); the git() helper fails fast on any
+    # other outcome, so reaching the assertions IS the "ignored" proof.
+    out = git("check-ignore", "-v", ".pi/loops.json")
+    assert out.splitlines()[0].endswith("\t.pi/loops.json")
+    # The matching pattern is the `.pi/` directory rule in .gitignore —
+    # not a coincidental substring of another pattern.
+    assert out.splitlines()[0].split("\t")[0].rsplit(":", 1)[-1] == ".pi/"
+    # `.pi-session/` remains ignored as before.
+    out2 = git("check-ignore", "-v", ".pi-session/sess.jsonl")
+    assert out2.splitlines()[0].split("\t")[0].rsplit(":", 1)[-1] == ".pi-session/"
+
+
+def test_worktree_with_only_pi_loop_state_is_clean_for_status(tmp_path):
+    """Issue #215 acceptance: a worktree whose only untracked entry is
+    the pi-loop state (`.pi/loops.json`) is clean for
+    `git status --porcelain` — the `deliver_pr` dirty-worktree gate
+    sees nothing. The repo's real `.gitignore` is inherited, exactly
+    like a new worktree created from the base. The gate is NOT
+    weakened: any other untracked file is still reported."""
+    repo = tmp_path / "wt"
+    repo.mkdir()
+
+    def git_in(*args: str) -> str:
+        result = subprocess.run(
+            ["git", *args], cwd=repo, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise AssertionError(
+                f"git {' '.join(args)} failed rc={result.returncode} "
+                f"stdout={result.stdout.strip()} "
+                f"stderr={result.stderr.strip()}"
+            )
+        return result.stdout.strip()
+
+    git_in("init", "-q")
+    git_in("config", "user.email", "pilot@test.local")
+    git_in("config", "user.name", "Pilot")
+    (repo / ".gitignore").write_text(
+        (REPO_ROOT / ".gitignore").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    # The base commit carries the tracked .gitignore — exactly the
+    # state of a new worktree created from the base SHA.
+    git_in("add", ".gitignore")
+    git_in("commit", "-q", "-m", "base")
+    (repo / ".pi").mkdir()
+    (repo / ".pi" / "loops.json").write_text('{"loops": []}\n', encoding="utf-8")
+    # Only the pi-loop state is untracked: the gate sees a clean tree.
+    assert git_in("status", "--porcelain") == ""
+    # Another untracked file is still reported: the dirty-worktree
+    # gate is not weakened for real leftovers.
+    (repo / "junk.txt").write_text("x", encoding="utf-8")
+    assert git_in("status", "--porcelain") == "?? junk.txt"
+    # The local helper fails fast on a nonzero git exit (same contract
+    # as the module-level git() helper).
+    with pytest.raises(AssertionError, match=r"git .* failed rc=128"):
+        git_in("rev-parse", "no-such-ref")
