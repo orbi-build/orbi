@@ -269,6 +269,8 @@ Release task 是 `ai-ready` + `ai-release` 双标签的 Issue（Issue #98）—�
 7. 发布 GitHub Release（幂等），notes 带完整验证证据（scope/门禁/测试/run marker）；
 8. 成功：`ai-merged`（终态）+ 关闭 Issue + 成功评论（release URL、tag、commit、证据）；任何失败：单独 `ai-blocked`（release 是人工决策点，不自动重试）+ 失败评论（run marker + 具体原因）+ fail fast。
 
+可选的 `auto_repair_issues = true` 只覆盖有捕获输出的 Release 测试命令失败：Runner 按 source Issue、run_id、commit、命令和输出生成稳定签名，在 Issue body 搜索该签名后创建或复用一个 `ai-ready` + `bug` 修复 Issue。新 Issue 包含可复现命令和原始输出，照常走 PR/review/merge；Release 仍保持 `ai-blocked`，不会自动重试或发布，必须在修复合并后显式重跑 gate。没有具体测试输出、其他歧义/外部失败或创建修复 Issue 失败时，Runner 记录该失败并保留原始 Release 失败。
+
 三类任务的边界：Epic（`ai-epic`）只协调、从不被领取；普通任务（`ai-ready`）走 `run_pi` → PR → review → merge；Release task（`ai-ready` + `ai-release`）走 Runner 的 release 状态机，不产生 PR。
 
 ## 自动可观测（正常运行不需要执行任何命令）

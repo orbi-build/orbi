@@ -400,6 +400,12 @@ def load_config(path: Path) -> dict:
         not isinstance(active_milestone, str) or not active_milestone
     ):
         raise ValueError("active_milestone must be a non-empty string")
+    # Repair-Issue creation (Issue #202) is deliberately opt-in. A
+    # release remains blocked either way; this merely dispatches a normal
+    # ai-ready bug Issue when a release test command reports evidence.
+    auto_repair_issues = data.get("auto_repair_issues", False)
+    if not isinstance(auto_repair_issues, bool):
+        raise ValueError("auto_repair_issues must be a boolean")
     # Concurrency cap (Issue #39): the local machine can only serve a
     # limited number of concurrent tasks, so the default is 1. Any other
     # value must be a positive integer; fail fast on anything else.
@@ -445,6 +451,7 @@ def load_config(path: Path) -> dict:
         ],
         "base_branch": base_branch,
         "active_milestone": active_milestone,
+        "auto_repair_issues": auto_repair_issues,
         "max_concurrency": max_concurrency,
         "slot_dir": slot_dir_for(repo_dir),
         "pi_provider": pi_provider,
@@ -1481,6 +1488,69 @@ def run_release_tests(worktree: Path, test_command: str,
     )
 
 
+def repair_signature(source_issue: int, run_id: str, release_commit: str,
+                     command: str, evidence: str) -> str:
+    """Return the stable identity for one evidenced release-test failure."""
+    scene = "\0".join((str(source_issue), run_id, release_commit, command, evidence))
+    return hashlib.sha256(scene.encode("utf-8")).hexdigest()[:16]
+
+
+def create_repair_issue(*, repo: str, source_issue: int, run_id: str,
+                        release_commit: str, command: str,
+                        evidence: str) -> str:
+    """Create or find one normal repair Issue for a release test failure.
+
+    GitHub Issue search's documented ``in:body`` qualifier searches the
+    stable signature written into every generated body. This makes the
+    deduplication external, auditable, and safe across process restarts.
+    """
+    signature = repair_signature(
+        source_issue, run_id, release_commit, command, evidence,
+    )
+    marker = f"muyan-pilot-repair-signature={signature}"
+    raw = run_command([
+        "gh", "issue", "list", "--repo", repo, "--state", "all",
+        "--search", f'in:body "{marker}"', "--json", "number,url", "--limit", "1",
+    ])
+    existing = parse_issue_array(raw)
+    if existing:
+        return existing[0]["url"]
+    body = "\n".join([
+        "## 自动生成的 Release 测试修复",
+        "",
+        f"- source Issue: #{source_issue}",
+        f"- run_id={run_id}",
+        f"- commit: `{release_commit}`",
+        f"- {marker}",
+        "",
+        "## Reproduce",
+        "",
+        "```bash",
+        command,
+        "```",
+        "",
+        "## Captured evidence",
+        "",
+        "```text",
+        evidence,
+        "```",
+        "",
+        "该 Issue 由正常 `ai-ready` → PR → review → merge 流程处理；原 Release "
+        "保持 `ai-blocked`，必须在修复合并后显式重新运行 Release gate。",
+    ])
+    return run_command([
+        "gh", "issue", "create", "--repo", repo,
+        "--title", f"修复 Release #{source_issue} 测试门禁失败",
+        "--body", body, "--label", "ai-ready", "--label", "bug",
+    ])
+
+
+def release_test_evidence(exc: subprocess.CalledProcessError) -> str | None:
+    """Extract concrete output from a failed release test command only."""
+    evidence = (exc.stderr or exc.stdout or "").strip()
+    return evidence or None
+
+
 def release_tag_commit(repo_dir: Path, tag: str) -> str | None:
     """Return the commit the tag points to on the remote, or None.
 
@@ -1703,6 +1773,9 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             activity={},
         )
 
+    release_commit: str | None = None
+    release_test_error: subprocess.CalledProcessError | None = None
+    declaration: dict | None = None
     try:
         declaration = parse_release_declaration(issue["body"])
         base_branch = declaration["base_branch"]
@@ -1761,10 +1834,14 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         worktree = create_worktree(
             config["repo_dir"], source_repo, number, run_id, release_commit,
         )
-        run_release_tests(
-            worktree, declaration["test_command"],
-            RELEASE_TEST_TIMEOUT_SECONDS,
-        )
+        try:
+            run_release_tests(
+                worktree, declaration["test_command"],
+                RELEASE_TEST_TIMEOUT_SECONDS,
+            )
+        except subprocess.CalledProcessError as exc:
+            release_test_error = exc
+            raise
         test_evidence = (
             f"declared test command and 100% coverage gate passed in a "
             f"clean worktree at {release_commit} "
@@ -1845,6 +1922,30 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         return release_url
     except Exception as exc:
         LOGGER.exception("issue=%s release_failed", number)
+        evidence = (
+            release_test_evidence(release_test_error)
+            if release_test_error is not None else None
+        )
+        if config.get("auto_repair_issues") and evidence is not None:
+            try:
+                repair_url = create_repair_issue(
+                    repo=source_repo, source_issue=number, run_id=run_id,
+                    release_commit=release_commit or "unknown",
+                    command=declaration["test_command"] if declaration else "unknown",
+                    evidence=evidence,
+                )
+                LOGGER.info(
+                    "repair_issue source_issue=%s run_id=%s url=%s",
+                    number, run_id, repair_url,
+                )
+            except Exception:
+                # A repair Issue is an auditable convenience only: failure to
+                # create it must be visible but cannot replace the original
+                # release-test failure or unblock/publish the release.
+                LOGGER.exception(
+                    "repair_issue_failed source_issue=%s run_id=%s",
+                    number, run_id,
+                )
         edit_issue(
             number, repo=source_repo, add=BLOCKED_LABEL,
             remove=IN_PROGRESS_LABEL,
