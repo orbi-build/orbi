@@ -44,9 +44,9 @@ setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下
 5. **Systemd units** — 仓库模板（`systemd/muyan-pilot@.service`、
    `systemd/muyan-pilot@.timer`）幂等安装到 user unit 目录（与
    `install-units` 相同的安装：复制、一次性迁移 #149 之前的非模板
-   unit、`daemon-reload`、enable 两个 timer 实例
-   `muyan-pilot@1.timer` / `muyan-pilot@2.timer`——从不启动、停止或
-   重启 service），然后报告每个 timer 实例的 enabled/active 状态和
+   unit、`daemon-reload`、按 `max_concurrency` 启用 `@1`（值为 `1`）或
+   `@1`/`@2`（值为 `2`），并停掉多余 timer——从不启动、停止或重启
+   service），然后报告每个 timer 实例的 enabled/active 状态和
    下次触发时间。
 6. **Checkout + git transport** — 检查配置的 `repo_dir`：`origin`
    remote 的**传输协议**（Issue #114）：git 数据操作（fetch、push——
@@ -90,7 +90,7 @@ cli=verified source=/path/to/checkout/muyan_pilot.py
 repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=8/8
 service=installed path=~/.config/systemd/user/muyan-pilot@.service sha256=9f2c...
 timer=muyan-pilot@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
-timer=muyan-pilot@2.timer enabled active=true next="Thu 2026-08-27 10:05:00 +08"
+timer=muyan-pilot@2.timer disabled active=false next="-"
 checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:xqliu/muyan-pilot.git protocol=ssh migrated=false ssh_reachable=true
 model_endpoint=optional optional_proxy=healthy url=http://127.0.0.1:18082/health
 ```
@@ -120,7 +120,7 @@ cli=verified source=/path/to/checkout/muyan_pilot.py
 repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=8/8
 service=installed path=~/.config/systemd/user/muyan-pilot@.service sha256=9f2c...
 timer=muyan-pilot@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
-timer=muyan-pilot@2.timer enabled active=true next="Thu 2026-08-27 10:05:00 +08"
+timer=muyan-pilot@2.timer disabled active=false next="-"
 checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:xqliu/muyan-pilot.git protocol=ssh migrated=false ssh_reachable=true
 model_endpoint=optional optional_proxy=unhealthy url=http://127.0.0.1:18082/health
 ```
@@ -148,7 +148,7 @@ setup_failed reason=checkout check failed for /path/to/checkout: ssh_unreachable
 ## 幂等性
 
 在已初始化的机器上重跑 setup，对外部状态是 no-op：已一致的标签不重写，
-unit 模板从仓库重新复制（漂移修复），timer 保持 enabled，不创建或修改
-任何 Issue 或业务数据。报告的 hash 和状态跨运行稳定。HTTPS→SSH 迁移
+unit 模板从仓库重新复制（漂移修复），配置的 timer 保持其 enabled 或
+disabled 状态，不创建或修改任何 Issue 或业务数据。报告的 hash 和状态跨运行稳定。HTTPS→SSH 迁移
 是一次性的：第一次运行后 `origin` remote 已是 SSH，重跑只重新验证
 （`migrated=false`）。

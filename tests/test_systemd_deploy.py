@@ -284,6 +284,37 @@ def test_install_units_copies_templates_and_reloads(monkeypatch, tmp_path):
         )
 
 
+def test_install_units_enables_only_configured_timer_instances(tmp_path):
+    """Issue #189: capacity one enables only @1 and stops surplus
+    timers without issuing any command for a service instance."""
+    repo = make_repo(tmp_path)
+    calls: list[list[str]] = []
+    systemd_deploy.install_units(
+        repo, tmp_path / "install", max_concurrency=1,
+        run_command=lambda command, **kwargs: calls.append(command) or "",
+    )
+    assert [
+        "systemctl", "--user", "enable", "--now", "muyan-pilot@1.timer",
+    ] in calls
+    assert [
+        "systemctl", "--user", "disable", "--now", "muyan-pilot@2.timer",
+    ] in calls
+    assert not any(".service" in command[-1] for command in calls)
+
+
+def test_install_units_rejects_capacity_without_a_timer_instance(tmp_path):
+    """Issue #189: configured capacity cannot silently exceed the
+    fixed template instance set."""
+    repo = make_repo(tmp_path)
+    calls: list[list[str]] = []
+    with pytest.raises(ValueError, match="max_concurrency"):
+        systemd_deploy.install_units(
+            repo, tmp_path / "install", max_concurrency=3,
+            run_command=lambda command, **kwargs: calls.append(command) or "",
+        )
+    assert calls == []
+
+
 def test_install_units_migrates_the_legacy_units_once(
     monkeypatch, tmp_path, caplog,
 ):

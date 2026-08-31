@@ -74,6 +74,7 @@ from pi_activity import (
 )
 from progress import ProgressPublisher, format_elapsed, progress_body
 from systemd_deploy import (
+    TIMER_INSTANCES,
     UnitDriftError,
     check_unit_drift,
     sync_drifted_units,
@@ -423,9 +424,12 @@ def load_config(path: Path) -> dict:
     if (
         isinstance(max_concurrency, bool)
         or not isinstance(max_concurrency, int)
-        or max_concurrency < 1
+        or not 1 <= max_concurrency <= len(TIMER_INSTANCES)
     ):
-        raise ValueError("max_concurrency must be a positive integer")
+        raise ValueError(
+            "max_concurrency must be a positive integer with a matching "
+            f"Runner timer instance (1..{len(TIMER_INSTANCES)})"
+        )
     # Optional Pi model selection (Issue #119): each key is absent -> None
     # (the Pi flag is not passed, Pi keeps its own default) or a non-empty
     # string passed to Pi verbatim. Anything else fails fast.
@@ -5852,7 +5856,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         check_unit_drift(config["repo_dir"])
     except UnitDriftError:
-        sync_drifted_units(config["repo_dir"], run_command=run_command)
+        sync_drifted_units(
+            config["repo_dir"], max_concurrency=config["max_concurrency"],
+            run_command=run_command,
+        )
     # Git transport preflight (Issue #114): BEFORE any slot or claim
     # the deployment checkout's git transport must be SSH and reachable
     # (the task worktrees share the checkout's single `origin` remote,

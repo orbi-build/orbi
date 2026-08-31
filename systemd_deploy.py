@@ -5,9 +5,9 @@ The repo templates ``systemd/muyan-pilot@.service`` and
 user-level units. This module provides:
 
 - an idempotent install (overwrite-copy the templates into the user
-  unit directory, ``systemctl --user daemon-reload``, enable the two
-  timer instances ``muyan-pilot@1.timer`` and ``muyan-pilot@2.timer``)
-  that NEVER starts/stops/restarts the service: a currently running
+  unit directory, ``systemctl --user daemon-reload``, enable timer
+  instances through the configured ``max_concurrency`` and disable
+  surplus timers) that NEVER starts/stops/restarts the service: a currently running
   Runner keeps running, and the new config takes effect at the next
   service start. The install also migrates the pre-#149
   non-templated units away once (stop the legacy timer — a timer stop
@@ -172,14 +172,15 @@ def check_unit_drift(repo_dir: Path,
 
 def sync_drifted_units(repo_dir: Path,
                        installed_dir: Path | None = None,
-                       *, run_command) -> list[dict]:
+                       *, max_concurrency: int = len(TIMER_INSTANCES),
+                       run_command) -> list[dict]:
     """Pre-start self-heal for drifted units (Issue #142).
 
     The normal scene: a template change merged to main, the
     ExecStartPre-synced checkout carries the new templates, and the
     installed units are still the old ones. Runs the SAME idempotent
     install (``install_units``: copy the templates, daemon-reload,
-    enable the timer — never start/stop/restart the service, so a
+    sync the configured timer instances — never start/stop/restart the service, so a
     currently running Runner is untouched) and re-verifies with the
     SAME hash check (``unit_status``). Clean after the sync: logs one
     structured ``unit_drift auto_synced`` line per unit (unit,
@@ -196,7 +197,10 @@ def sync_drifted_units(repo_dir: Path,
     before = unit_status(repo_dir, installed_dir)
     if not any(entry["drifted"] for entry in before):
         return []
-    result = install_units(repo_dir, installed_dir, run_command=run_command)
+    result = install_units(
+        repo_dir, installed_dir, max_concurrency=max_concurrency,
+        run_command=run_command,
+    )
     after = unit_status(repo_dir, installed_dir)
     lines = drift_lines(after)
     if lines:
@@ -257,20 +261,26 @@ def migrate_legacy_units(installed_dir: Path, *, run_command) -> bool:
 
 
 def install_units(repo_dir: Path, installed_dir: Path | None = None,
-                  *, run_command) -> dict:
+                  *, max_concurrency: int = len(TIMER_INSTANCES),
+                  run_command) -> dict:
     """Idempotently install the repo templates as the user units.
 
     Overwrites BOTH installed template units with the repo templates
     (the repo is the single source of truth), migrates the pre-#149
     non-templated units away once (see ``migrate_legacy_units``), runs
-    ``systemctl --user daemon-reload`` and enables the two timer
-    instances (``enable --now`` is idempotent and activates only the
-    timers, never the services). The services are NEVER started,
+    ``systemctl --user daemon-reload``, enables instances through
+    ``max_concurrency`` and disables surplus timers. These operations
+    activate or stop only timers, never services. The services are NEVER started,
     stopped or restarted: a currently running Runner keeps running,
     and the new config takes effect at the next service start.
     Returns the deployed commit (the deployment checkout's HEAD) and
     the installed units' hashes.
     """
+    if not 1 <= max_concurrency <= len(TIMER_INSTANCES):
+        raise ValueError(
+            "max_concurrency must have a matching Runner timer instance "
+            f"(1..{len(TIMER_INSTANCES)})"
+        )
     repo_dir = Path(repo_dir)
     if installed_dir is None:
         installed_dir = installed_unit_dir()
@@ -289,8 +299,10 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
             (repo_unit_dir(repo_dir) / name).read_bytes(),
         )
     run_command(["systemctl", "--user", "daemon-reload"])
-    for instance in TIMER_INSTANCES:
+    for instance in TIMER_INSTANCES[:max_concurrency]:
         run_command(["systemctl", "--user", "enable", "--now", instance])
+    for instance in TIMER_INSTANCES[max_concurrency:]:
+        run_command(["systemctl", "--user", "disable", "--now", instance])
     commit = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
     units = {
         name: {
@@ -303,7 +315,7 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
         "units_installed commit=%s installed_dir=%s units=%s "
         "instances=%s",
         commit, installed_dir, ",".join(UNIT_NAMES),
-        ",".join(TIMER_INSTANCES),
+        ",".join(TIMER_INSTANCES[:max_concurrency]),
     )
     return {
         "commit": commit,

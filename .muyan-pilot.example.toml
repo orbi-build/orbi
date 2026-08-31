@@ -32,8 +32,8 @@ base_branch = "main"
 # output creates (or deduplicates) an ai-ready + bug repair Issue. The Release
 # itself remains ai-blocked and must be explicitly re-run after review/merge.
 # auto_repair_issues = true
-# Maximum concurrent Pilot tasks on this machine. Must be a positive integer;
-# missing means 1. The local AI/GPU can only serve one stable task, so keep
+# Maximum concurrent Pilot tasks and enabled Runner timers on this machine.
+# Must be 1 or 2 (the fixed timer instance set); missing means 1. The local AI/GPU can only serve one stable task, so keep
 # the default. A slot (flock on <repo_dir>/.muyan-pilot/slots/slot-N) is
 # taken before any claim and held for the whole delivery lifecycle
 # (implement -> review -> fix -> merge); the kernel releases it when the

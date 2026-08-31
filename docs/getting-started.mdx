@@ -127,7 +127,7 @@ directory):
 | `prompt_review` | no | `prompt_review.md` | Review prompt template for the independent post-PR review session |
 | `base_branch` | no | `main` | Delivery base branch; every task worktree is created from the frozen `origin/<base_branch>` SHA |
 | `active_milestone` | no | unset | Claim scope for the fresh-claim scans (Issue #139): the active GitHub Milestone title (e.g. `v0.2.0`). Set it to restrict the p0/bug/plain ready scans to that Milestone (the `milestone:"<title>"` qualifier is part of the gh search query — an Issue of another or no Milestone never enters the queue); `ai-ready` stays the execution switch, the pickup order is unchanged, P0 does not cross milestones, and resume states (opened PRs, in-flight restarts) are never gated by it. Unset = every `ai-ready` Issue is claimable (pre-#139 behavior) |
-| `max_concurrency` | no | `1` | Concurrent Pilot tasks on this machine (positive integer; a local model/GPU usually serves one stable task) |
+| `max_concurrency` | no | `1` | Concurrent Pilot tasks and enabled Runner timers on this machine (`1` or `2`; the fixed template has two instances) |
 | `skills` | no | `[]` | Optional Pi skill paths (absolute, `~`, or relative to the config file) |
 | `context_files` | no | `[]` | Optional Markdown context files injected into the prompt as paths |
 | `pi_providers` | no | unset | Path to a JSON file in Pi's `models.json` shape that adds or overrides providers in Pi's catalog for every run (Issue #157). Unset = Pi uses its own agent dir unchanged (step 4) |
@@ -405,24 +405,24 @@ For the label lifecycle, the journal fields and the recovery rules see
 
 ## 8. Verify the timers
 
-The setup step already installed the unit templates and enabled the two
-timer instances (`muyan-pilot@1.timer` and `muyan-pilot@2.timer`, each
-triggering its own service instance — see [Operations](/operations));
-verify them:
+The setup step installed the unit templates and enabled timer instances
+through `max_concurrency`: `@1` for `1`, or `@1` and `@2` for `2` (each
+triggers its own service instance — see [Operations](/operations)); verify
+them:
 
 ```bash
 systemctl --user list-timers 'muyan-pilot@*.timer'
 ```
 
-The setup output carries one line per instance (`timer=muyan-pilot@1.timer
-enabled active=true next=...`, `timer=muyan-pilot@2.timer ...`) with the
-next trigger time. Each timer fires every 5 minutes, 24 hours a day
+The setup output carries one line per instance; enabled instances have an
+active state and next trigger time, while surplus instances report disabled
+and inactive. Each timer fires every 5 minutes, 24 hours a day
 (00:00–23:55). While one service instance is active, systemd ignores
 further starts of THAT instance; the next real start picks up the latest
 code (the service fast-forwards `main` before starting — see
-[Operations](/operations)). Two instances may run concurrently; the
-capacity is the Runner's flock slots (`max_concurrency`), not the
-instance count.
+[Operations](/operations)). At capacity `2`, two instances may run concurrently; the capacity and the
+enabled timer count are both `max_concurrency`, while the flock slots remain
+the final safety boundary.
 
 <Note>
 The committed unit templates reference the author's clone layout via

@@ -5946,7 +5946,7 @@ def test_load_config_derives_slot_dir_from_repo_dir(tmp_path):
 
 @pytest.mark.parametrize(
     "value",
-    ["0", "-1", "1.5", '"1"', "true", "false"],
+    ["0", "-1", "1.5", '"1"', "true", "false", "3"],
 )
 def test_load_config_rejects_invalid_max_concurrency(tmp_path, value):
     config_path = tmp_path / "muyan-pilot.toml"
@@ -6145,17 +6145,18 @@ def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
     with caplog.at_level("ERROR"):
         with pytest.raises(runner.UnitDriftError, match="unit_drift"):
             runner.main(["--config", str(config)])
-    # The self-heal ran the idempotent install (daemon-reload, enable
-    # the timer) before the re-verify failed — and never touched the
-    # service itself.
+    # The self-heal follows default capacity one: it enables @1 and
+    # stops only surplus @2.timer, never a service instance.
     assert ["systemctl", "--user", "daemon-reload"] in calls
-    for instance in systemd_deploy.TIMER_INSTANCES:
-        assert [
-            "systemctl", "--user", "enable", "--now", instance,
-        ] in calls
+    assert [
+        "systemctl", "--user", "enable", "--now", "muyan-pilot@1.timer",
+    ] in calls
+    assert [
+        "systemctl", "--user", "disable", "--now", "muyan-pilot@2.timer",
+    ] in calls
     for command in calls:
         if command[:2] == ["systemctl", "--user"]:
-            assert command[2] in ("daemon-reload", "enable")
+            assert command[2] in ("daemon-reload", "enable", "disable")
     # The structured line carries what the Issue requires.
     assert "unit_drift unit=muyan-pilot@.timer" in caplog.text
     assert f"repo={repo / 'systemd' / 'muyan-pilot@.timer'}" in caplog.text
@@ -6198,15 +6199,17 @@ def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
-    # The self-heal ran the idempotent install (and never the service).
+    # The self-heal follows default capacity one and never a service.
     assert ["systemctl", "--user", "daemon-reload"] in calls
-    for instance in systemd_deploy.TIMER_INSTANCES:
-        assert [
-            "systemctl", "--user", "enable", "--now", instance,
-        ] in calls
+    assert [
+        "systemctl", "--user", "enable", "--now", "muyan-pilot@1.timer",
+    ] in calls
+    assert [
+        "systemctl", "--user", "disable", "--now", "muyan-pilot@2.timer",
+    ] in calls
     for command in calls:
         if command[:2] == ["systemctl", "--user"]:
-            assert command[2] in ("daemon-reload", "enable")
+            assert command[2] in ("daemon-reload", "enable", "disable")
     # The repo template won: the installed unit matches it again.
     status = systemd_deploy.unit_status(repo, installed)
     assert all(entry["drifted"] is False for entry in status)

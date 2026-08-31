@@ -51,8 +51,8 @@ systemctl --user status 'muyan-pilot@*.service'
 unit 模板（`systemd/muyan-pilot@.service` 和 `systemd/muyan-pilot@.timer`）
 是部署配置，不是普通代码——但模板变更合并后**不需要任何人工步骤**。下一次 timer 触发时 `ExecStartPre` 同步 checkout，启动前
 `unit_drift` 检查自动自愈：用同一个幂等安装（把两个模板复制到用户
-unit 目录、daemon-reload、enable 两个 timer 实例——从不启动、停止或
-重启运行中的 Runner）、再用同一个哈希检查复核，tick 继续，每个 unit
+unit 目录、daemon-reload、按 `max_concurrency` enable 或 disable timer
+实例——从不启动、停止或重启运行中的 Runner）、再用同一个哈希检查复核，tick 继续，每个 unit
 记录一行结构化 `unit_drift auto_synced`（before/after sha256、部署
 commit）。不再出现“每 5 分钟重复同一个 `unit_drift` 错误直到人工
 介入”的循环（#131/#140 实例：每次启动都因 `unit_drift` 失败，直到
@@ -177,6 +177,7 @@ run 产物（plan、test log、session JSONL）留在任务 worktree 作为本�
 `<repo_dir>/.muyan-pilot/slots/slot-N` 上的排他 `flock(2)` 锁，在任何
 领取之前取得，整个交付生命周期（implement → review → merge）持有；
 进程无论如何退出，内核都会释放它。拿不到 slot 的 Runner 记录
-`capacity_full` 后退出，不领取 Issue。两个 timer 实例可能在同一 tick
-启动两个 Runner 实例，它们竞争同一组 slot——容量仍是
-`max_concurrency`（默认 1 时行为与 #149 之前完全一致），而不是实例数。
+`capacity_full` 后退出，不领取 Issue。`max_concurrency = 2` 时两个 timer
+实例可能在同一 tick 启动两个 Runner 实例；为 `1` 时只启用 `@1.timer`。
+它们竞争同一组 slot——容量和启用的 timer 数都由 `max_concurrency` 决定
+（固定模板只允许 `1` 或 `2`）。
