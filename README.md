@@ -65,7 +65,7 @@ systemctl --user list-timers 'muyan-pilot@*.timer'
 service 每次真正启动时，先由 `ExecStartPre` 在 Python Runner 进程外执行：
 
 ```bash
-git fetch origin main && git merge --ff-only origin/main
+git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main
 ```
 
 本地 main 被 fast-forward 到最新 `origin/main` 后，Runner 才用新代码启动。当前正在运行的长任务不会被热更新、不会被杀、也不会启动第二个 Runner（service active 时 systemd 忽略 timer 的 start 请求；下一次 service 真正启动时生效）。main 工作区不干净、fetch 失败或无法 fast-forward 时，preflight 命令失败，service 不启动，原因写入 systemd journal（fail fast）。不新增 refresh service、worker、dispatcher 或常驻进程；5 分钟 timer 配置保持不变。
