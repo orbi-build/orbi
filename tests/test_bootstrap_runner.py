@@ -3518,6 +3518,34 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     )
 
 
+def test_main_ticket_only_finishes_without_entering_pr_delivery_wait(
+    monkeypatch, tmp_path,
+):
+    """Ticket-only work has no PR, so the normal review/merge wait is invalid."""
+    issue = {
+        "number": 12, "title": "Launch copy", "body": "Write copy",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-ticket-only"}],
+    }
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+            "owner/repo", issue, None
+        ),
+    )
+    monkeypatch.setattr(runner, "process_issue", lambda *args: "ticket-only")
+    monkeypatch.setattr(
+        runner, "wait_for_delivery",
+        lambda *args: (_ for _ in ()).throw(
+            AssertionError("ticket-only work must not enter PR delivery wait")
+        ),
+    )
+
+    assert runner.main(["--config", str(config)]) == 0
+
+
 def test_main_routes_fix_needed_resume_to_delivery_wait(
     monkeypatch, tmp_path,
 ):
@@ -9588,6 +9616,9 @@ def test_run_ticket_agent_uses_a_temporary_session_without_git(monkeypatch, tmp_
     assert result == "copy"
     command, kwargs = calls[0]
     assert command[0] == "pi"
+    # `pi --no-tools` is the enforcement boundary: a prompt instruction
+    # alone cannot ensure the Agent never invokes git/gh or writes files.
+    assert "--no-tools" in command
     assert "git/gh tools" in command[command.index("--system-prompt") + 1]
     assert kwargs["cwd"] != tmp_path
     assert kwargs["cwd"].name.startswith("muyan-pilot-ticket-")

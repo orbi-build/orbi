@@ -3174,7 +3174,8 @@ def run_ticket_agent(issue: dict, config: dict, source_repo: str,
         ticket_dir = Path(directory)
         session_dir = ticket_dir / ".pi-session"
         command = [
-            "pi", *_skill_args(_skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)),
+            "pi", "--no-tools",
+            *_skill_args(_skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)),
             *_pi_model_args(config), "--print", "--session-dir", str(session_dir),
             "--system-prompt", system_prompt, context,
         ]
@@ -5941,6 +5942,11 @@ def main(argv: list[str] | None = None) -> int:
             pr_url = verify_resumed_pr(scene, issue, config, source_repo)
         else:
             pr_url = process_issue(issue, config, source_repo)
+            # Ticket-only delivery is complete when its Agent output is
+            # posted and the source Issue is closed; it has no PR to review
+            # or merge (Issue #209).
+            if is_ticket_only(issue):
+                return 0
         # The delivery is not done when the PR is open: hold the slot
         # through review -> merge and release it only after the PR is
         # merged or terminally failed (Issue #39).
