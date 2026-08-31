@@ -11,10 +11,22 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CONTRACT = REPO_ROOT / "AGENTS.md"
 
 REQUIRED_ITEMS = (
-    # 1. Read first: Issue, context files, README, relevant code.
-    ("read-first", "read the GitHub Issue"),
+    # 1. Read first: the Issue, then the task-relevant files in priority
+    #    order (Issue #180: narrowed reads — the old blanket read of
+    #    every context file, README, build files and history drove the
+    #    pointless compactions of long sessions); README, context files
+    #    and history only when the task is actually about them.
+    ("read-first", "read the github issue"),
+    ("read-first-agents", "agents.md"),
+    ("read-first-changed", "plus their callers"),
+    ("read-first-tests", "related tests"),
+    # The rest is read only when the task is actually about them — the
+    # needles must not span the file's line wraps (this test matches the
+    # raw text, unlike the whitespace-collapsed prompt contract tests).
+    ("read-first-only-when-relevant", "read only when"),
+    ("read-first-no-full-scan", "never requires a full"),
     ("read-first-context", "context files"),
-    ("read-first-readme", "README.md"),
+    ("read-first-readme", "readme.md"),
     # 2. TDD: test before implementation; assert externals against docs.
     ("tdd", "write a failing test first"),
     ("tdd-docs", "official docs"),

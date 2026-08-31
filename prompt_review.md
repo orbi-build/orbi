@@ -24,8 +24,24 @@ Runtime context supplied by the runner:
 
 Review the exact diff from base `{{BASE_SHA}}` to head `{{HEAD_SHA}}` (run
 `git diff {{BASE_SHA}}...{{HEAD_SHA}}` in the worktree; do not review a moving
-`HEAD`). Read the linked GitHub Issue, the repository `AGENTS.md`, `README.md`,
-build files, and the changed code plus its callers before judging.
+`HEAD`). Read only what the review needs, in this priority order (Issue
+#180): the linked GitHub Issue (body and comments), the repository
+`AGENTS.md`, the PR diff, the changed files plus their callers, and the
+related tests. `README.md`, build files and history are read only when the
+task is actually about them — a normal Issue never requires a full
+repository scan, and re-reading the same large files is what triggers the
+pointless compactions of long sessions.
+
+## Context recovery after compaction (Issue #180)
+
+When the session context is compacted, recover from the run artifacts —
+read the worktree's `plan.md` and `test.log`, the review findings
+comments of this run (the Issue and PR comments carrying the run marker)
+and the run's progress comment — and continue from there. Do not
+re-scan the whole repository and do not re-read every context file: the
+artifacts carry the current plan, the last test result and the open
+findings, and a full re-scan is what triggers the next pointless
+compaction.
 
 ## Checks (code-review R1–R9)
 
@@ -68,6 +84,33 @@ build files, and the changed code plus its callers before judging.
   concrete `file:line`, a reproducible trigger, actual vs expected, and a
   minimal fix direction. No speculative findings.
 
+## Test ladder (Issue #180)
+
+Verify with the smallest run that answers the question, in this order —
+and with the real exit code as the test evidence: a pipeline exits with
+the exit code of the last command, so `pytest ... | tail` exits 0 even
+when pytest fails and the failure is disguised as a shell success. Never
+pipe a test, build or smoke command through `tail`, `head`, `grep` or
+any other filter that drops the exit code — redirect to a file
+(`pytest ... > test.log 2>&1;` `echo "exit=$?" >> test.log`) and then
+`tail` the file, or run the pipeline with `set -o pipefail`. `test.log`
+must contain the real pytest output (the summary line), never a
+self-declared "tests passed": the Runner reads it for the progress
+comment and the `tests passed/failed` milestone, and it must stay
+consistent with CI.
+
+1. CI first: when the PR has CI failures, read the CI failure logs
+   BEFORE running any local test — `gh pr checks {{PR_NUMBER}}` (the
+   status of every check) and `gh run view <run-id> --log-failed` (the
+   failed steps; `gh run list -b {{HEAD_REF}}` finds the run of the
+   branch).
+2. Reproduce the failing cases locally (the exact tests CI failed on),
+   fix them, and rerun them until green.
+3. Run the related tests of the changed code.
+4. Run exactly one full suite with 100% line/branch coverage (when
+   Python changed) before emitting the verdict. Do not repeat the full
+   suite: it is the final gate of the round, not a debugging tool.
+
 ## Fix in this session
 
 When you find Blocker or Major issues, do **not** stop and hand the work to
@@ -94,9 +137,13 @@ another session: fix them here, in this same session.
   the same run, branch, worktree and PR continue).
 - After fixing, re-check the diff against R1–R9 and the Issue's acceptance
   items before emitting the verdict.
-- If you cannot make the PR mergeable (the fix is not verifiable, or the
-  finding is not yours to decide), do **not** emit `pass`: emit `findings`
-  so the loop escalates to a human instead of merging unreviewed work.
+- If you cannot make the PR mergeable (the fix is not verifiable in this
+  round, or the finding is not yours to decide), do **not** emit `pass`:
+  emit `findings` so the loop keeps the SAME PR in the existing
+  `ai-fix-needed` state — the next review session retries the same PR on
+  the same branch and worktree (the bounded review/fix loop, Issue #50).
+  Never create or close a PR, and do not give up: the fix continues in
+  the next round, it is not abandoned.
 
 ## Verdict
 

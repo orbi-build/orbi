@@ -49,8 +49,13 @@ acceptance criteria.
 
 ## Read first
 
-- Read the GitHub Issue, the configured context files, `README.md`, and the
-  relevant code before touching anything.
+- Read the GitHub Issue (body and comments) first. Then, in priority
+  order (Issue #180): the repository `AGENTS.md`, the files you will
+  change plus their callers, and the related tests. `README.md`, the
+  configured context files, build files and history are read only when
+  the task is actually about them — a normal Issue never requires a full
+  repository scan, and re-reading the same large files is what triggers
+  the pointless compactions of long sessions.
 
 ## TDD and coverage
 
@@ -65,6 +70,13 @@ acceptance criteria.
   function (`while True` poller) requires a termination guard (monkeypatched
   `time.sleep` raising on the Nth call, an injected iteration cap, or
   pytest-timeout): the red phase must fail fast and never hang.
+- Test exit codes (Issue #180): a pipeline exits with the exit code of
+  the last command, so `pytest ... | tail` exits 0 even when pytest
+  fails — never pipe a test, build or smoke command through `tail`,
+  `head`, `grep` or any other filter that drops the exit code; redirect
+  to a file and keep the real exit code (`set -o pipefail`, or
+  `> test.log 2>&1; echo "exit=$?"`), and `test.log` carries the real
+  pytest output, never a self-declared "tests passed".
 - Python code keeps 100% line and branch coverage:
 
   ```bash
