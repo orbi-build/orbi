@@ -203,6 +203,9 @@ gh label create ai-epic --repo xqliu/muyan-pilot --force --color "bfdadc" \
 # ai-release 是 Release task 标记（不是交付状态，见「Release task（ai-release）」）
 gh label create ai-release --repo xqliu/muyan-pilot --force --color "5319e7" \
   --description "Release task: Runner runs the deterministic release state machine (tag + GitHub Release)"
+# ai-ticket-only 是内容交付标记（不是 Git 交付状态）
+gh label create ai-ticket-only --repo xqliu/muyan-pilot --force --color "0e8a16" \
+  --description "Content task: Agent posts the deliverable directly to the Issue without Git delivery"
 gh label list --repo xqliu/muyan-pilot
 ```
 
@@ -217,6 +220,7 @@ gh label list --repo xqliu/muyan-pilot
 | `p0` | 紧急优先级（**不是交付状态**）：只改变领取顺序，不改变 Issue 粒度、交付状态或终态语义 | 人工加 label（生产链路出现高优先级故障时） | 人工移除；Runner 从不增删该 label |
 | `ai-epic` | Epic 协调 Issue（发布清单/多任务聚合，**不是可执行任务、不是交付状态**）：只负责聚合与发布门禁 | 人工加 label（创建 Epic 时） | 人工移除（Epic 完成并关闭时）；Runner 从不增删该 label，也从不领取带它的 Issue |
 | `ai-release` | Release task 标记（**不是交付状态**）：带它的 `ai-ready` Issue 由 Runner 的确定性 release 状态机处理（tag + GitHub Release），**从不进 `run_pi` 开发路径**（Issue #98） | 人工加 label（派发 release task 时，与 `ai-ready` 同时） | 成功发布后 Runner 加 `ai-merged`（终态）并关闭 Issue；任何失败单独转 `ai-blocked`（不自动重试，人工决策点）；Runner 从不增删该 label 本身 |
+| `ai-ticket-only` | 内容任务标记（**不是 Git 交付状态**）：Agent 仅生成最终内容并直接评论到 source Issue，绝不创建 worktree、branch、commit、PR 或内容文件（Issue #209） | 人工与 `ai-ready` 一起添加；任务类型只由此 label 明确指定，绝不从标题或正文推断 | 成功后 Runner 关闭 Issue 并移除 `ai-in-progress`；失败转 `ai-blocked`，评论保留 run_id 和具体失败现场；Runner 从不添加或移除此 type label |
 
 ## 任务依赖（blockedBy）
 

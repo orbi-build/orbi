@@ -33,6 +33,7 @@ import re
 import select
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 import tomllib
@@ -130,6 +131,7 @@ PI_IDLE_RECOVERY_CYCLES = 3
 ROLE_IMPLEMENT = "implement"
 ROLE_REVIEW = "review"
 ROLE_RELEASE = "release"
+ROLE_TICKET = "ticket"
 
 # Run correlation (Issue #41): one task attempt generates one run_id and
 # every journal line of the attempt starts with `[run_id]`, so a single
@@ -182,6 +184,10 @@ EPIC_LABEL = "ai-epic"
 # closed; on failure it gets `ai-blocked` ALONE (the `ai-ready` residue
 # is excluded by every ready scan, so no tick re-claims it).
 RELEASE_LABEL = "ai-release"
+# Ticket-only marker (Issue #209): an explicit type marker for content that
+# belongs in the source Issue. It is never inferred from arbitrary prose and
+# never enters the Git worktree/branch/PR delivery path.
+TICKET_ONLY_LABEL = "ai-ticket-only"
 # The machine-readable section a release Issue body must carry (Issue
 # #98): `- version:`, `- base_branch:`, `- test_command:` and
 # `- scope:` with `  - #N` items. Parsed strictly — a missing or
@@ -3140,6 +3146,133 @@ def stream_pi(
     return stdout.strip()
 
 
+def is_ticket_only(issue: dict) -> bool:
+    """Return True only for the explicit ticket-only task marker (#209)."""
+    labels = issue.get("labels", [])
+    return isinstance(labels, list) and any(
+        isinstance(label, dict) and label.get("name") == TICKET_ONLY_LABEL
+        for label in labels
+    )
+
+
+def run_ticket_agent(issue: dict, config: dict, source_repo: str,
+                     *, progress: Callable[[dict], None] | None = None) -> str:
+    """Generate one ticket-only deliverable without using Git state (#209)."""
+    system_prompt = (
+        "You are a ticket-only content agent. Produce the requested final "
+        "content as your complete stdout response. Do not create or modify "
+        "files, branches, commits, pull requests, tests, or use git/gh tools."
+    )
+    context = (
+        f"Issue #{issue['number']}: {issue['title']}\n\n"
+        f"Issue body:\n{issue.get('body', '')}\n\n"
+        "Return only the final content to post on this Issue."
+    )
+    # Pi's session is transient OS state, not a task worktree or repository
+    # artifact. Its output and all terminal evidence are kept on the Issue.
+    with tempfile.TemporaryDirectory(prefix="muyan-pilot-ticket-") as directory:
+        session_dir = Path(directory) / "session"
+        command = [
+            "pi", *_skill_args(_skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)),
+            *_pi_model_args(config), "--print", "--session-dir", str(session_dir),
+            "--system-prompt", system_prompt, context,
+        ]
+        return stream_pi(
+            command, cwd=config["repo_dir"],
+            log_command=[
+                "pi", *_pi_model_args(config), "--print", "--session-dir",
+                str(session_dir), "--system-prompt", "<redacted>",
+                "<issue-context-redacted>",
+            ],
+            run_id=config["run_id"], issue=int(issue["number"]),
+            source_repo=source_repo, branch="-", role=ROLE_TICKET,
+            progress=progress,
+        )
+
+
+def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
+    """Deliver explicit ticket-only Agent output to the source Issue (#209)."""
+    number = int(issue["number"])
+    title = issue["title"]
+    run_id = new_run_id()
+    set_run_id(run_id)
+    priority = issue_priority(issue)
+    run_info = f"run_id={run_id} priority={priority} task_type=ticket-only"
+    publisher = ProgressPublisher(number, source_repo, run_id, run_command=run_command)
+    started = time.monotonic()
+    edit_issue(number, repo=source_repo, add=IN_PROGRESS_LABEL)
+    set_active_run(number, title, "-", "-")
+    try:
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_TICKET,
+            action=lambda: publisher.ensure(_progress_body(_progress_state(
+                issue=number, title=title, run_id=run_id, role=ROLE_TICKET,
+                branch="-", worktree=Path("-"), started=started, pr_url=None,
+                review_round=0, priority=priority,
+            ))),
+        )
+        output = run_ticket_agent(
+            issue, {**config, "run_id": run_id}, source_repo,
+            progress=LiveProgressThrottle(
+                publisher, issue=number, title=title, run_id=run_id,
+                role=ROLE_TICKET, branch="-", worktree=Path("-"),
+                started=started, pr_url=None, review_round=0, priority=priority,
+            ),
+        )
+        if not output:
+            raise RuntimeError("ticket-only Agent returned no content")
+        comment_issue(
+            number, repo=source_repo,
+            body=(f"{run_marker(run_id)}\n"
+                  f"Muyan Pilot ticket-only delivery (run_id={run_id}):\n\n"
+                  f"{output}"),
+        )
+        run_command(["gh", "issue", "close", str(number), "--repo", source_repo])
+        edit_issue(number, repo=source_repo, remove=IN_PROGRESS_LABEL)
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_TICKET,
+            action=lambda: publisher.milestone(f"ticket-only delivered: {run_info}"),
+        )
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_TICKET,
+            action=lambda: publisher.finish(_progress_body(_progress_state(
+                issue=number, title=title, run_id=run_id, role=ROLE_TICKET,
+                branch="-", worktree=Path("-"), started=started, pr_url=None,
+                review_round=0, priority=priority,
+            ), outcome="**Muyan Pilot ticket-only delivered**")),
+        )
+        LOGGER.info("run_end run=%s issue=%s role=%s result=ticket_only elapsed=%s",
+                    run_id, issue_context(source_repo, number), ROLE_TICKET,
+                    format_duration(time.monotonic() - started))
+        return "ticket-only"
+    except Exception as exc:
+        LOGGER.exception("issue=%s ticket-only failed", number)
+        detail = _failure_detail(exc)
+        try:
+            edit_issue(number, repo=source_repo, add=BLOCKED_LABEL,
+                       remove=IN_PROGRESS_LABEL)
+            comment_issue(
+                number, repo=source_repo,
+                body=(f"{run_marker(run_id)}\n"
+                      f"Muyan Pilot ticket-only failed: {detail} ({run_info})\n"
+                      f"run_id={run_id}\n"
+                      "No Git branch, commit, or PR was created."),
+            )
+            _safe_publish(
+                run_id=run_id, issue=number, source_repo=source_repo,
+                role=ROLE_TICKET,
+                action=lambda: publisher.milestone(
+                    f"ticket-only blocked: {sanitize(detail)} ({run_info})"
+                ),
+            )
+        except Exception:
+            LOGGER.exception("issue=%s ticket-only failure reporting failed", number)
+        raise
+
+
 def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
            *, timeout: int | None = None, branch: str | None = None,
            progress: Callable[[dict], None] | None = None) -> str:
@@ -4852,6 +4985,8 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     # verification, gates, tests, tag, GitHub Release).
     if is_release(issue):
         return process_release(issue, config, source_repo)
+    if is_ticket_only(issue):
+        return process_ticket_only(issue, config, source_repo)
     base_branch = config["base_branch"]
     # The run id is generated once per attempt and bound BEFORE any
     # other step is logged, so every journal line of the attempt
