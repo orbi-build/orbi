@@ -63,8 +63,8 @@ The unit templates (`systemd/muyan-pilot@.service` and
 trigger's `ExecStartPre` fast-forwards the checkout, and the pre-start
 `unit_drift` check self-heals: it runs the SAME idempotent install
 (copy both templates into the user unit directory, daemon-reload,
-enable the two timer instances — it never starts, stops or restarts a
-running Runner), re-verifies with the SAME hash check, and the tick
+enable or disable timer instances through `max_concurrency` — it never
+starts, stops or restarts a running Runner), re-verifies with the SAME hash check, and the tick
 continues with one structured `unit_drift auto_synced` line per unit
 (before and after sha256, deployed commit). There is no per-tick drift
 loop until human intervention (the #131/#140 scene: every start failed
@@ -217,7 +217,7 @@ on the machine. A slot is an exclusive `flock(2)` lock on
 for the whole delivery lifecycle (implement → review → merge); the kernel
 releases it when the process exits, however it exits. A Runner that
 cannot take a slot logs `capacity_full` and exits without claiming an
-Issue. The two timer instances may start two Runner instances in the
-same tick; they compete for the SAME slots — the capacity is
-`max_concurrency` (with the default 1 the behavior is exactly the
-pre-#149 one), never the instance count.
+Issue. At `max_concurrency = 2`, both timer instances may start two Runner
+instances in the same tick; at `1`, only `@1.timer` is enabled. They compete
+for the SAME slots — the capacity and enabled timer count are both
+`max_concurrency` (the fixed template permits `1` or `2`).

@@ -18,8 +18,8 @@ initialization entry for a new machine or new task-pool repository:
   ever touched;
 - installs the repo's user systemd service/timer templates idempotently
   (reusing ``systemd_deploy.install_units``: copy, daemon-reload,
-  enable the two timer instances ``muyan-pilot@1.timer`` /
-  ``muyan-pilot@2.timer`` — never start/stop/restart the service) and
+  sync timer instances through ``max_concurrency`` — never start/stop/restart
+  the service) and
   reports each instance's enable/active state plus next trigger time;
 - checks the local checkout read-only (remote, current branch, clean
   status, base freshness);
@@ -431,7 +431,7 @@ def install_units_step(repo_dir: Path, installed_dir: Path | None,
 
     Reuses the idempotent ``systemd_deploy.install_units`` (copy the
     repo templates, migrate the pre-#149 non-templated units away,
-    ``daemon-reload``, enable the two timer instances — never
+    ``daemon-reload``, sync timer instances through ``max_concurrency`` — never
     start/stop/restart the service), then reports EACH timer
     instance's enabled state (``systemctl --user is-enabled``),
     active state (``show -p ActiveState``) and next trigger time

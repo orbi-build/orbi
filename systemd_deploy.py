@@ -180,7 +180,7 @@ def sync_drifted_units(repo_dir: Path,
     ExecStartPre-synced checkout carries the new templates, and the
     installed units are still the old ones. Runs the SAME idempotent
     install (``install_units``: copy the templates, daemon-reload,
-    enable the timer — never start/stop/restart the service, so a
+    sync the configured timer instances — never start/stop/restart the service, so a
     currently running Runner is untouched) and re-verifies with the
     SAME hash check (``unit_status``). Clean after the sync: logs one
     structured ``unit_drift auto_synced`` line per unit (unit,
@@ -315,7 +315,7 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
         "units_installed commit=%s installed_dir=%s units=%s "
         "instances=%s",
         commit, installed_dir, ",".join(UNIT_NAMES),
-        ",".join(TIMER_INSTANCES),
+        ",".join(TIMER_INSTANCES[:max_concurrency]),
     )
     return {
         "commit": commit,

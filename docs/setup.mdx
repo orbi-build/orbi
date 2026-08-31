@@ -55,9 +55,9 @@ non-zero exit code.
    (`systemd/muyan-pilot@.service`, `systemd/muyan-pilot@.timer`) are
    installed idempotently into the user unit directory (the same
    install `install-units` performs: copy, migrate the pre-#149
-   non-templated units away once, `daemon-reload`, enable the two timer
-   instances `muyan-pilot@1.timer` / `muyan-pilot@2.timer` — the
-   service is never started, stopped or restarted), then each timer
+   non-templated units away once, `daemon-reload`, then enables `@1` for
+   `max_concurrency = 1` or `@1` and `@2` for `2` (and disables surplus
+   timers) — the service is never started, stopped or restarted), then each timer
    instance's enabled/active state and next trigger time are reported.
 6. **Checkout + git transport** — check of the configured `repo_dir`:
    the `origin` remote's **transport** (Issue #114): git data
@@ -107,7 +107,7 @@ cli=verified source=/path/to/checkout/muyan_pilot.py
 repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=8/8
 service=installed path=~/.config/systemd/user/muyan-pilot@.service sha256=9f2c...
 timer=muyan-pilot@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
-timer=muyan-pilot@2.timer enabled active=true next="Thu 2026-08-27 10:05:00 +08"
+timer=muyan-pilot@2.timer disabled active=false next="-"
 checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:xqliu/muyan-pilot.git protocol=ssh migrated=false ssh_reachable=true
 model_endpoint=optional optional_proxy=healthy url=http://127.0.0.1:18082/health
 ```
@@ -140,7 +140,7 @@ cli=verified source=/path/to/checkout/muyan_pilot.py
 repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=8/8
 service=installed path=~/.config/systemd/user/muyan-pilot@.service sha256=9f2c...
 timer=muyan-pilot@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
-timer=muyan-pilot@2.timer enabled active=true next="Thu 2026-08-27 10:05:00 +08"
+timer=muyan-pilot@2.timer disabled active=false next="-"
 checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:xqliu/muyan-pilot.git protocol=ssh migrated=false ssh_reachable=true
 model_endpoint=optional optional_proxy=unhealthy url=http://127.0.0.1:18082/health
 ```
@@ -171,8 +171,9 @@ without a clear signal.
 
 Re-running setup on an already-initialized machine is a no-op for the
 external state: labels that already match are not rewritten, the unit
-templates are re-copied from the repo (drift repair), the timer stays
-enabled, and no Issues or business data are created or modified. The
+templates are re-copied from the repo (drift repair), the configured timers
+retain their enabled or disabled states, and no Issues or business data are
+created or modified. The
 reported hashes and states are stable across runs. The HTTPS→SSH
 migration is one-shot: after the first run the `origin` remote is SSH
 and re-runs only re-verify it (`migrated=false`).

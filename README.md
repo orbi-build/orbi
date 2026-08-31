@@ -76,7 +76,7 @@ Issue #171：两个 Runner（或 Runner 与 Pi 会话）并发 `git fetch` 会�
 
 ## 部署一致性（Issue #103）
 
-仓库中的 `systemd/muyan-pilot@.service` 和 `systemd/muyan-pilot@.timer`（模板 unit）是已安装 unit 的**唯一事实源**：代码和实际运行配置必须一致，漂移必须能被明确发现。Issue #149 起部署启用两个 timer 实例 `muyan-pilot@1.timer` / `muyan-pilot@2.timer`，各自触发自己的 service 实例。
+仓库中的 `systemd/muyan-pilot@.service` 和 `systemd/muyan-pilot@.timer`（模板 unit）是已安装 unit 的**唯一事实源**：代码和实际运行配置必须一致，漂移必须能被明确发现。两个可用 timer 实例 `muyan-pilot@1.timer` / `muyan-pilot@2.timer` 各自触发自己的 service 实例；安装按 `max_concurrency` 启用前 1 或 2 个实例。
 
 **幂等安装**：`muyan-pilot install-units` 把两个模板复制到用户 systemd 目录（`~/.config/systemd/user/`，可用 `--installed-dir` 覆盖）、执行 `systemctl --user daemon-reload`，并按 `max_concurrency` 启用 `@1` 或 `@1`/`@2` timer；降低并发时以 `disable --now` 停掉多余 **timer**，绝不停止 service。安装**不会**启动、停止或重启正在运行的 Runner：新配置从下一次 timer 调度生效；slot 锁语义不变。安装同时**一次性迁移** #149 之前的非模板 unit（`systemd/muyan-pilot.service` / `systemd/muyan-pilot.timer`）：`systemctl --user disable --now muyan-pilot.timer`（停的是 timer，绝不停/启/重启 service，运行中的 Runner 不受影响）并删除旧文件，旧单实例调度不会再拉起旧 service（模板变更即部署变更，无需人工步骤）；已迁移过的机器上这一步是 no-op。service 模板的 `ExecStart` 使用已安装 `muyan-pilot` CLI 的明确绝对入口（`%h/.local/bin/muyan-pilot`，即 `uv tool install` 之后 `~/.local/bin` 下的可执行文件；`WorkingDirectory` 仍是部署 checkout，`ExecStartPre` 在 Runner 启动前同步 `origin/main`）。
 
@@ -161,7 +161,7 @@ muyan-pilot session --follow --config muyan-pilot.toml
 `session` 是排查附件（日常仍看 journal / GitHub），不是日常入口：没有 session 文件时 fail fast（退出码非零，说明没有正在跑的 Pi），不猜路径；`--pretty` 把 JSONL 打一行摘要（timestamp / role / tool|text|thinking 截断），默认仍是原始 JSONL。不开 tmux、不新包装脚本、不新增 systemd unit（Issue #74）。
 
 ```bash
-# 幂等安装 systemd unit 模板 + 两个 timer 实例（见「部署一致性」）：
+# 幂等安装 systemd unit 模板 + 按 max_concurrency 同步 timer 实例（见「部署一致性」）：
 # 输出部署 commit 和每个 unit 的 sha256
 muyan-pilot install-units --config muyan-pilot.toml
 
@@ -406,7 +406,7 @@ Runner 每次处理一个 delivery：领取（或恢复）一个 Issue 后，在
 
 ## 并发限制（max_concurrency）
 
-本机允许的 Pilot 并发任务数由 `muyan-pilot.toml` 的 `max_concurrency` 配置：必须是正整数，缺失时默认 1（本地 AI/GPU 只能稳定服务一个任务）；非整数、布尔值、0 或负数启动即 fail fast。slot 状态在 `<repo_dir>/.muyan-pilot/slots/slot-N`（N = 1..max_concurrency）：每个 slot 文件是一个普通的锁目标，**文件上的排他 `flock(2)` 锁就是所有权**——内核保证同一时刻至多一个进程持有某个 slot 的锁。持有者 PID 只作为 `status` 展示的观察性元数据写入文件，不是所有权依据；没有 stale PID/超时回收启发式，没有 atexit/信号清理协议。
+本机允许的 Pilot 并发任务数由 `muyan-pilot.toml` 的 `max_concurrency` 配置：必须是 1 或 2 的整数，缺失时默认 1（固定模板只有两个实例）；非整数、布尔值、0、负数或大于 2 的值启动即 fail fast。slot 状态在 `<repo_dir>/.muyan-pilot/slots/slot-N`（N = 1..max_concurrency）：每个 slot 文件是一个普通的锁目标，**文件上的排他 `flock(2)` 锁就是所有权**——内核保证同一时刻至多一个进程持有某个 slot 的锁。持有者 PID 只作为 `status` 展示的观察性元数据写入文件，不是所有权依据；没有 stale PID/超时回收启发式，没有 atexit/信号清理协议。
 
 - 并发额度按完整任务生命周期计算：Runner 在领取 Issue 之前取得 slot，implement → review（会话内修复）→ merge 期间始终占用；PR 打开后任务没有结束，Runner 持有 slot 轮询 PR 状态（15 秒一次，与 Pi 活动轮询同频）：PR `MERGED` 或终态失败（PR 未合并被关闭 → Issue 标记 `ai-blocked`）才释放 slot 退出；期间 Issue 进入 `ai-fix-needed`（review finding、base 冲突，或已有 run/PR 的**可恢复失败**——Pi 执行失败、验证失败、未推送本地 commit、worktree 缺失等，Issue #50）时，**下一个 tick 在同一 run_id、同一 branch、同一 worktree、同一 PR 上启动下一个独立审查会话**（会话内吸收最新 base 并修复 finding，见下节），不会冷启动 Fixer，也不会让新 Runner 插队领取新 Issue；
 - 同一任务内部 implement/review 串行执行，共用同一个 slot，任意时刻最多一个 Pi 子进程；
