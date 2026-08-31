@@ -70,6 +70,23 @@ def test_load_config_defaults_base_branch_to_main(tmp_path):
     assert config["base_branch"] == "main"
 
 
+def test_load_config_repair_issue_creation_is_opt_in(tmp_path):
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    assert runner.load_config(config_path)["auto_repair_issues"] is False
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nauto_repair_issues = true\n',
+        encoding="utf-8",
+    )
+    assert runner.load_config(config_path)["auto_repair_issues"] is True
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nauto_repair_issues = "yes"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="auto_repair_issues must be a boolean"):
+        runner.load_config(config_path)
+
+
 def test_load_config_reads_explicit_base_branch(tmp_path):
     config_path = tmp_path / "muyan-pilot.toml"
     config_path.write_text(
@@ -10264,6 +10281,60 @@ def test_process_release_success_end_to_end(monkeypatch):
     assert state["run_ids"][0] == "a1b2c3d4"
 
 
+def test_create_repair_issue_deduplicates_a_matching_failure_signature(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:5] == ["timeout", "30", "gh", "issue", "list"]:
+            return json.dumps([{"number": 77, "url": "https://github.com/o/r/issues/77"}])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    url = runner.create_repair_issue(
+        repo="o/r", source_issue=99, run_id="a1b2c3d4",
+        release_commit="abc123", command="pytest -q", evidence="1 failed",
+    )
+    assert url == "https://github.com/o/r/issues/77"
+    assert calls[0][:5] == ["timeout", "30", "gh", "issue", "list"]
+    search = calls[0][calls[0].index("--search") + 1]
+    assert "muyan-pilot-repair-signature=" in search
+    assert "--label" not in calls[0]
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["unexpected"])
+
+
+def test_create_repair_issue_creates_a_reproducible_ready_bug(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:5] == ["timeout", "30", "gh", "issue", "list"]:
+            return "[]"
+        if command[:5] == ["timeout", "30", "gh", "issue", "create"]:
+            return "https://github.com/o/r/issues/77"
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    url = runner.create_repair_issue(
+        repo="o/r", source_issue=99, run_id="a1b2c3d4",
+        release_commit="abc123", command="pytest -q", evidence="1 failed",
+    )
+    assert url == "https://github.com/o/r/issues/77"
+    create = calls[1]
+    assert create[:5] == ["timeout", "30", "gh", "issue", "create"]
+    assert create.count("--label") == 2
+    assert "ai-ready" in create and "bug" in create
+    body = create[create.index("--body") + 1]
+    assert "source Issue: #99" in body
+    assert "run_id=a1b2c3d4" in body
+    assert "commit: `abc123`" in body
+    assert "pytest -q" in body and "1 failed" in body
+    assert "muyan-pilot-repair-signature=" in body
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["unexpected"])
+
+
 def test_process_release_reuses_the_run_id_on_resume(monkeypatch):
     state = make_release_process_env(
         monkeypatch, in_progress=True, existing_run_id="deadbeef",
@@ -10299,6 +10370,94 @@ def test_process_release_fails_on_malformed_declaration(monkeypatch):
     (comment_number, comment_kwargs), = state["comments"]
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in comment_kwargs["body"]
     assert "## Release" in comment_kwargs["body"]
+
+
+def test_release_test_evidence_keeps_stdout_and_stderr():
+    error = subprocess.CalledProcessError(
+        1, ["timeout"], output="tests/test_x.py::test_y FAILED\n",
+        stderr="coverage gate failed\n",
+    )
+    assert runner.release_test_evidence(error) == (
+        "[stdout]\ntests/test_x.py::test_y FAILED\n\n"
+        "[stderr]\ncoverage gate failed"
+    )
+
+
+def test_process_release_test_failure_creates_repair_and_keeps_release_blocked(monkeypatch):
+    state = make_release_process_env(monkeypatch)
+
+    def test_failure(*args, **kwargs):
+        raise subprocess.CalledProcessError(
+            1, ["timeout", "1800", "bash", "-c", "pytest -q"],
+            stderr="tests/test_x.py::test_y FAILED",
+        )
+
+    repairs = []
+    monkeypatch.setattr(runner, "run_release_tests", test_failure)
+    monkeypatch.setattr(
+        runner, "create_repair_issue",
+        lambda **kwargs: repairs.append(kwargs) or "https://github.com/o/r/issues/77",
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.process_release(
+            issue, {"repo_dir": Path("/r"), "base_branch": "main",
+                    "auto_repair_issues": True}, "o/r",
+        )
+    assert repairs == [{
+        "repo": "o/r", "source_issue": 99, "run_id": "a1b2c3d4",
+        "release_commit": "abc123",
+        "command": RELEASE_DECLARATION_BODY.split("- test_command: ")[1].split("\n")[0],
+        "evidence": "[stderr]\ntests/test_x.py::test_y FAILED",
+    }]
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+                                        "remove": "ai-in-progress"})
+    assert not any(k.get("add") == "ai-merged" for _, k in state["edits"])
+
+
+def test_process_release_test_failure_stays_blocked_when_repair_opt_in_is_disabled(monkeypatch):
+    state = make_release_process_env(monkeypatch)
+    monkeypatch.setattr(
+        runner, "run_release_tests",
+        lambda *args: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(1, ["timeout"], stderr="1 failed"),
+        ),
+    )
+    monkeypatch.setattr(
+        runner, "create_repair_issue",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("must remain opt-in")),
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.process_release(
+            issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        )
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+                                        "remove": "ai-in-progress"})
+
+
+def test_process_release_repair_creation_failure_is_observable_and_preserves_test_failure(monkeypatch, caplog):
+    make_release_process_env(monkeypatch)
+    monkeypatch.setattr(runner, "LOGGER", logging.getLogger("repair-test"))
+    original = subprocess.CalledProcessError(1, ["timeout"], stderr="1 failed")
+    monkeypatch.setattr(runner, "run_release_tests",
+                        lambda *args: (_ for _ in ()).throw(original))
+    monkeypatch.setattr(runner, "create_repair_issue",
+                        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("GitHub unavailable")))
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    with caplog.at_level("ERROR"), pytest.raises(subprocess.CalledProcessError) as excinfo:
+        runner.process_release(
+            issue, {"repo_dir": Path("/r"), "base_branch": "main",
+                    "auto_repair_issues": True}, "o/r",
+        )
+    assert excinfo.value is original
+    assert "repair_issue_failed source_issue=99 run_id=a1b2c3d4" in caplog.text
 
 
 def test_process_release_fails_on_tag_mismatch_without_moving_it(monkeypatch):
