@@ -299,6 +299,19 @@ if "INDEPENDENT REVIEW" in system_prompt:
              "-m", "fix: in-session review fix"],
             check=True,
         )
+    # The live-delivery regression test uses a bounded test-only gate:
+    # issue 7's reviewer waits until issue 8 has passed its initial PR
+    # verification, so a fake merge cannot advance main in that narrow
+    # interval and mask the resumable-scan contract.
+    review_gate = os.environ.get("MUYAN_FAKE_PI_REVIEW_GATE")
+    if review_gate:
+        with open(f"{review_gate}.waiting", "w", encoding="utf-8"):
+            pass
+        deadline = time.monotonic() + 30
+        while not os.path.exists(review_gate):
+            if time.monotonic() >= deadline:
+                raise SystemExit("timed out waiting for test review gate")
+            time.sleep(0.05)
     # A head behind the latest base is fixed in-session too (Issue
     # #82), on EVERY review round: the base may advance between rounds.
     # Absorb origin/main, resolve, retest, push. The fetch updates the
@@ -517,11 +530,14 @@ def start_runner(
     config_path: Path, bin_dir: Path,
     state_path: Path, pi_log: Path,
     unit_dir: Path | None = None,
+    review_gate: Path | None = None,
 ) -> subprocess.Popen:
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
     env["MUYAN_FAKE_GH_STATE"] = str(state_path)
     env["MUYAN_FAKE_PI_LOG"] = str(pi_log)
+    if review_gate is not None:
+        env["MUYAN_FAKE_PI_REVIEW_GATE"] = str(review_gate)
     # The pre-start drift check (Issue #103) reads the installed units
     # from here: a clean deployment by default (the templates as
     # installed), or an explicit dir for the drift scenarios.
@@ -1251,18 +1267,25 @@ def test_live_pr_opened_delivery_is_not_resumed_by_second_runner(
     second runner skips the resumable scan and claims the NEXT ready
     Issue.
 
-    The fake world carries one global PR state, so the second
-    runner's own delivery (issue 8) is only asserted up to the claim:
-    the guard under test is the resumable scan, not the second
-    delivery's merge (covered by
-    test_capacity_two_allows_two_runners_and_rejects_third)."""
+    The test-only review gate holds issue 7's fake review until issue 8
+    passes its own initial PR verification. This preserves the real
+    base-freshness check while eliminating an unrelated fake merge race
+    from the resumable-scan assertion."""
     bin_dir = install_fakes(tmp_path)
     state = tmp_path / "gh-state.json"
     write_state(state, {"7": ["ai-ready"], "8": ["ai-ready"]})
     pi_log = tmp_path / "pi.log"
     config = write_config(clone, tmp_path, 2)
 
-    first = start_runner(config, bin_dir, state, pi_log)
+    # Keep the first review from merging until issue 8 has completed
+    # its own PR verification. Without this causal boundary, the fake
+    # first merge can advance origin/main while issue 8 is between its
+    # base freeze and verify_pr, correctly triggering the real
+    # freshness gate instead of testing the resumable-scan contract.
+    review_gate = tmp_path / "review-gate"
+    first = start_runner(
+        config, bin_dir, state, pi_log, review_gate=review_gate,
+    )
     wait_for(
         lambda: "ai-pr-opened" in read_state(state)["issues"]["7"]["labels"],
         what="first runner to open the PR for issue 7",
@@ -1276,21 +1299,24 @@ def test_live_pr_opened_delivery_is_not_resumed_by_second_runner(
         ),
         what="opened-PR scene comment to be posted",
     )
+    review_waiting = review_gate.with_suffix(".waiting")
+    wait_for(
+        review_waiting.exists, timeout=5,
+        what="first review to wait at the test gate",
+    )
 
     # A second runner takes the free slot 2 while the first is live.
     # It must skip the resumable scan (another slot is held by a live
     # runner) and claim issue 8 instead of resuming issue 7's live
     # delivery.
     second = start_runner(config, bin_dir, state, pi_log)
-    # The second runner's implement comment proves it claimed issue 8
-    # (a fresh run) and not a resume of issue 7's live delivery (whose
-    # run already has its started comment).
+    # Wait for issue 8 to pass its initial base-freshness verification
+    # and open its own PR before allowing issue 7's review to merge.
+    # This leaves the Runner's real freshness gate enabled while making
+    # the fake schedule deterministic.
     wait_for(
-        lambda: any(
-            "Muyan Pilot started Pi:" in c["body"] and c["issue"] == "8"
-            for c in read_state(state)["comments"]
-        ),
-        what="second runner to claim the next ready issue",
+        lambda: "ai-pr-opened" in read_state(state)["issues"]["8"]["labels"],
+        what="second runner to open the PR for issue 8",
     )
     snap = read_state(state)
     # Issue 7's live delivery is untouched: still simply awaiting
@@ -1299,14 +1325,17 @@ def test_live_pr_opened_delivery_is_not_resumed_by_second_runner(
     assert "ai-pr-opened" in snap["issues"]["7"]["labels"]
     assert "ai-fix-needed" not in snap["issues"]["7"]["labels"]
     assert "ai-blocked" not in snap["issues"]["7"]["labels"]
-    # Issue 8 is claimed by the second runner.
-    assert "ai-in-progress" in snap["issues"]["8"]["labels"]
+    # Issue 8 was independently claimed and opened by the second runner.
+    assert "ai-pr-opened" in snap["issues"]["8"]["labels"]
     # Exactly one "started Pi" comment per Issue: issue 8's is the
     # second runner's implement — never a second review of issue 7.
     started = [
         c for c in snap["comments"] if "Muyan Pilot started Pi:" in c["body"]
     ]
     assert sorted(c["issue"] for c in started) == ["7", "8"]
+    # Release the first review only after the assertions above establish
+    # the intended two-delivery schedule.
+    review_gate.touch()
     # The second runner never entered the delivery wait of issue 7's
     # live PR (the finding's repro: it logged `issue=7
     # delivery_awaiting` for the live runner's PR).
@@ -1326,13 +1355,11 @@ def test_live_pr_opened_delivery_is_not_resumed_by_second_runner(
     snap = read_state(state)
     assert "ai-merged" in snap["issues"]["7"]["labels"]
     assert "ai-blocked" not in snap["issues"]["7"]["labels"]
-    # The second runner's Pi work is bounded: its implement plus at
-    # most its own review of issue 8 (the fake world's single global
-    # PR state ends its wait once the first runner merges). Crucially,
-    # none of it is a second review of issue 7's live delivery: the
-    # first run always uses exactly two invocations (implement,
-    # review — the review fixes in-session, Issue #82).
-    assert 3 <= len(pi_invocations(pi_log)) <= 4
+    # The two independent deliveries each run implement plus review;
+    # an additional review is possible when the concurrent merge makes
+    # one branch absorb the freshly advanced base. None is a second
+    # review of issue 7's live delivery.
+    assert 4 <= len(pi_invocations(pi_log)) <= 5
     assert slots_held(clone, 2) == [(1, None), (2, None)]
 
 
