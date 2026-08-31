@@ -15,7 +15,7 @@ service 实例（`muyan-pilot@1.timer` → `muyan-pilot@1.service`，
 两个独立的 Runner 实例。每个 tick 的 service 实例：
 
 1. **先 fast-forward 代码**（`ExecStartPre`，在 Python 进程外）：
-   `git fetch origin main && git merge --ff-only origin/main`。checkout
+   `timeout 90s git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main`。fetch 禁用自动维护，避免 Git 子进程脱离 preflight 和共享锁的生命周期。checkout
    不干净、fetch 失败或无法 fast-forward 时 preflight 失败：service 不
    启动，原因写入 systemd journal（fail fast）。正在运行的长任务从不被
    热更新或杀掉——一个 service 实例 active 时 systemd 忽略对**该实例**

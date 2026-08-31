@@ -29,7 +29,9 @@ TimeoutStartSec=infinity
 # fetch + fast-forward is wrapped in a short-lived flock on the shared
 # state-dir lock file (the Python-side sync in bootstrap_runner takes
 # the SAME lock): the main worktree is never written concurrently.
-ExecStartPre=/usr/bin/flock %h/Documents/muyan/muyan-pilot/.muyan-pilot/base-sync.lock -c 'git fetch origin main && git merge --ff-only origin/main'
+# Issue #191: disabling fetch's automatic maintenance prevents Git from
+# detaching a maintenance child beyond this preflight and flock lifetime.
+ExecStartPre=/usr/bin/timeout 90s /usr/bin/flock %h/Documents/muyan/muyan-pilot/.muyan-pilot/base-sync.lock -c 'git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main'
 # Issue #140: the Runner is the installed `muyan-pilot` CLI (the
 # uv-tool console script, `uv tool install` / `uv tool upgrade`; the
 # executable lands in the user bin dir `~/.local/bin`). The absolute
