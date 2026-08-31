@@ -8,6 +8,10 @@ dist/
 *.egg-info/
 .muyan-pilot/
 .pi-session/
+# pi-loop plugin state (Issue #215): written into the task worktree cwd at
+# session shutdown (.pi/loops.json); not part of the agent's commit
+# boundary, so deliver_pr's dirty-worktree gate must never see it.
+.pi/
 .worktrees/
 muyan-pilot.toml
 # Per-run artifacts written into the task worktree (prompt.md steps 2
