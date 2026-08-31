@@ -100,6 +100,14 @@ Stable `key=value` lines you will see:
 - `pi_idle` — one WARNING when there is no model/session activity for
   more than 5 minutes (`PI_IDLE_WARN_SECONDS=300`) and the model is not
   expected to reply; a slow active model (`model_wait`) never warns;
+- `model_wait_dead` — one WARNING plus the kill of the Pi session when
+  a frozen `model_wait` (the newest event is a tool result, no new
+  session events) crosses `PI_MODEL_WAIT_DEAD_SECONDS` (default 600 s):
+  the model request is HUNG — a live connection and an alive model
+  service process are evidence on the line (`upstream_alive=true|false`),
+  never a veto (process alive ≠ responding, Issue #218); the line
+  carries issue, role, idle seconds, threshold, `action=kill_pi`,
+  session, run id and `reason=hung_model_request`;
 - `pi_idle_term` / `pi_idle_kill` — the idle-stall recovery (Issue
   #94): while the session stays stalled the Runner SIGTERMs the Pi
   descendants that already existed before the idle window (the hung
@@ -108,13 +116,13 @@ Stable `key=value` lines you will see:
   target that survived; each line carries run id, pid, cmdline and
   result (`sent` / `already_dead` / `no_target` / `failed: ...`);
 - `run_failed` — the full scene plus the reason
-  (`pi_exit_N`, `timeout_...s`, `upstream_dead_stale_...s` when a
+  (`pi_exit_N`, `timeout_...s`, `model_wait_dead_stale_...s` when a
   frozen `model_wait` past `PI_MODEL_WAIT_DEAD_SECONDS` (default 600 s)
-  declares the upstream model dead, or `idle_recovery_stale_...s` when
+  declares the model request hung, or `idle_recovery_stale_...s` when
   the session stayed idle for `PI_IDLE_RECOVERY_CYCLES` (default 3)
   consecutive idle windows and the Runner kills the Pi session itself).
 
-The idle warning, the idle recovery and the upstream-dead kill are
+The idle warning, the idle recovery and the hung-model-request kill are
 log/health thresholds — they are not the 5-minute schedule and not a
 business task timeout. The idle recovery never holds the slot forever:
 a stalled session either resumes (the failure signal reached the model

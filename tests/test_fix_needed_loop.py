@@ -101,8 +101,9 @@ def test_is_unrecoverable_failure_true_only_for_explicit_error():
 
 @pytest.mark.parametrize("exc", [
     RuntimeError(
-        "Pi is stuck in model_wait with a frozen session for 10m: the "
-        "upstream (llama/proxy) is dead; Pi was killed (Issue #75)"
+        "Pi is stuck in model_wait with a frozen session for 10m: "
+        "the model request is hung (the model service process is alive "
+        "but the request never completes); Pi was killed (Issue #218)"
     ),
     RuntimeError(
         "Pi session stayed idle for 15m after idle recovery "
@@ -127,10 +128,11 @@ def test_is_unrecoverable_failure_false_for_recoverable_failures(exc):
 
 
 @pytest.mark.parametrize("exc", [
-    # Pi execution failure (upstream dead / idle recovery / pi exit).
+    # Pi execution failure (hung model request / pi exit).
     RuntimeError(
-        "Pi is stuck in model_wait with a frozen session for 10m: the "
-        "upstream (llama/proxy) is dead; Pi was killed (Issue #75)"
+        "Pi is stuck in model_wait with a frozen session for 10m: "
+        "the model request is hung (the model service process is alive "
+        "but the request never completes); Pi was killed (Issue #218)"
     ),
     subprocess.CalledProcessError(1, ["pi", "--print"]),
     # Missing/malformed verdict.

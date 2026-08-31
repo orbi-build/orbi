@@ -232,6 +232,13 @@ def upstream_alive(pid: int) -> bool:
     address — the evidence that a model request to the upstream
     (llama/proxy) is still connected (Issue #169).
 
+    Since Issue #218 this is EVIDENCE ONLY: a live connection proves
+    the request is connected, not that the model is answering (the
+    #183 scene: llama-server alive, the request hung, the slot held
+    for hours). The `model_wait_dead` kill of a frozen model_wait past
+    the threshold never vetoes on this value — it records it on the
+    structured `model_wait_dead` line (process alive ≠ responding).
+
     The process's fd table is scanned for `socket:[<inode>]` entries and
     each inode is matched against `/proc/net/tcp` and `/proc/net/tcp6`
     (the real kernel format: the state is field 4, the remote address
