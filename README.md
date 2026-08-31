@@ -4,7 +4,7 @@ Orbi 是本地 AI 开发 Worker（v0.3.0 起对外品牌为 Orbi，GitHub 项目
 
 **品牌与兼容（v0.3.0 rebrand，Issue #183）**：对外品牌统一为 Orbi（README、文档站、仓库描述、package metadata、对外链接）；但已有用户的使用方式不变——CLI 仍是 `muyan-pilot`（console script 与 `muyan_pilot.py` 入口）、配置文件仍是 `muyan-pilot.toml`、systemd unit 仍是 `muyan-pilot@*`、运行时 label（`ai-*`/`p0`）与 run marker（`<!-- muyan-pilot:run=... -->`）均不改动；旧 GitHub 地址（`xqliu/muyan-pilot`、`xqliu/orbi`）由 GitHub 自动 redirect 到 `orbi-build/orbi`。
 
-开发契约见 [AGENTS.md](AGENTS.md)：每次本地 Pi 自举开发前先读 Issue、context files、README 和相关代码，TDD、100% 覆盖率、UI 用 Playwright、失败 fail fast、不 merge、不 push 保护分支、不引入数据库/队列/daemon/fallback、不设业务任务 timeout。
+开发契约见 [AGENTS.md](AGENTS.md)：每次本地 Pi 自举开发前先读 Issue、AGENTS.md、变更文件及其调用方和相关测试（README、context files、构建文件与历史只在任务确实相关时读，Issue #180 收窄上下文读取、定义 compact 后恢复协议与 CI 失败优先的测试阶梯，并禁止 `tail` 等管道吞掉测试退出码），TDD、100% 覆盖率、UI 用 Playwright、失败 fail fast、不 merge、不 push 保护分支、不引入数据库/队列/daemon/fallback、不设业务任务 timeout。
 
 ## 文档站
 

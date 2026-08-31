@@ -1,5 +1,6 @@
-"""Guard the prompt contract for blocking commands (Issue #95) and the
-KISS/LEAN minimal-implementation contract (Issue #118).
+"""Guard the prompt contract for blocking commands (Issue #95), the
+KISS/LEAN minimal-implementation contract (Issue #118) and the
+context/test-evidence contract (Issue #180).
 
 Two real hangs (run cd855188 review session, run 9240f1e4 implement
 session) had the same pattern: a TDD red test driving a `while True`
@@ -16,6 +17,18 @@ abstractions, state or future features, so the implementer prompt must
 forbid scope expansion up front, the reviewer prompt must be able to
 report it as an out-of-scope finding, and the key wording is locked
 here so the constraint cannot be silently deleted or weakened.
+
+Issue #180 adds the guard for the context and test-evidence contract:
+long implement/review sessions re-read the same large context files and
+trigger pointless compactions, and `pytest ... | tail` swallows the real
+exit code (the pipeline exits with `tail`'s 0), so a failed run is
+reported as passed and the progress comment disagrees with CI. The
+contract is now: task-relevant files first (Issue, AGENTS.md, changed
+files + callers, related tests), a minimal post-compaction recovery
+protocol from the run artifacts, a CI-failure-first test ladder in the
+review session, and the real pytest exit code as the only test result.
+The key wording is locked here so it cannot be silently deleted or
+weakened.
 """
 from pathlib import Path
 
@@ -208,6 +221,189 @@ def test_prompt_review_md_fetches_the_base_under_the_base_sync_lock():
     )
 
 
+# --- Issue #180: narrowed context reads (both prompts) ------------------------
+
+# The old blanket instruction ("read every configured context file, the
+# target repository's AGENTS.md, README, build files, tests, and relevant
+# history") forced a full-context read on EVERY run and was the main
+# driver of the pointless compactions of long sessions. The contract is
+# now: the task-relevant files first, the rest only when the task is
+# actually about them.
+NARROW_READ_ITEMS = (
+    # The priority list names the task-relevant files.
+    ("read-priority-issue", "github issue"),
+    ("read-priority-agents", "agents.md"),
+    ("read-priority-changed", "plus their callers"),
+    ("read-priority-tests", "related tests"),
+    # The rest is read only when the task is actually about them.
+    ("read-only-when-relevant", "only when the task is actually about them"),
+    # A normal Issue never requires a full repository scan.
+    ("read-no-full-scan", "never requires a full repository scan"),
+)
+
+
+def test_prompt_md_narrows_the_context_reads():
+    text = _text(PROMPT)
+    missing = _missing(text, NARROW_READ_ITEMS)
+    assert not missing, (
+        f"prompt.md is missing the narrowed read list (Issue #180): {missing}"
+    )
+    # The old blanket instruction must be gone: it is what drove the
+    # full-context reads and the repeated compactions.
+    assert "read every configured context file" not in text
+
+
+def test_prompt_review_md_narrows_the_context_reads():
+    text = _text(PROMPT_REVIEW)
+    missing = _missing(text, NARROW_READ_ITEMS)
+    assert not missing, (
+        f"prompt_review.md is missing the narrowed read list (Issue #180): "
+        f"{missing}"
+    )
+    # The reviewer judges the diff, not the whole repository: the old
+    # "README.md, build files" blanket read must be gone.
+    assert "read the linked github issue, the repository agents.md, " \
+        "readme.md" not in text
+
+
+# --- Issue #180: post-compaction recovery protocol (both prompts) --------------
+
+COMPACT_RECOVERY_ITEMS = (
+    # The protocol names itself.
+    ("compact-section", "context recovery after compaction"),
+    # The recovery reads the run artifacts, not the repository.
+    ("compact-plan", "plan.md"),
+    ("compact-test-log", "test.log"),
+    ("compact-progress", "progress comment"),
+    # The implementer recovers its own plan; the reviewer recovers the
+    # findings of the run.
+    ("compact-findings", "findings"),
+    # No full re-scan of the repository and no re-read of every context
+    # file.
+    ("compact-no-rescan", "do not re-scan the whole repository"),
+    ("compact-no-reread", "do not re-read every context file"),
+)
+
+
+def test_prompt_md_keeps_the_compact_recovery_protocol():
+    missing = _missing(_text(PROMPT), COMPACT_RECOVERY_ITEMS)
+    assert not missing, (
+        f"prompt.md is missing the compact-recovery protocol (Issue #180): "
+        f"{missing}"
+    )
+
+
+def test_prompt_review_md_keeps_the_compact_recovery_protocol():
+    missing = _missing(_text(PROMPT_REVIEW), COMPACT_RECOVERY_ITEMS)
+    assert not missing, (
+        f"prompt_review.md is missing the compact-recovery protocol "
+        f"(Issue #180): {missing}"
+    )
+
+
+# --- Issue #180: the real test exit code is the result (both prompts) ----------
+
+# `pytest ... | tail` exits with `tail`'s code (0): without this rule a
+# failed run is disguised as a shell success and the progress comment
+# disagrees with CI. The rule locks the wording in both prompts.
+EXIT_CODE_ITEMS = (
+    ("exit-section", "test evidence"),
+    # The pipeline exit code is the LAST command's — the named bug.
+    ("exit-pipeline-last", "exit code of the last command"),
+    ("exit-tail-named", "pytest ... | tail"),
+    # The forbidden pipe family is explicit.
+    ("exit-no-pipe", "never pipe a test"),
+    ("exit-pipe-tail", "tail"),
+    ("exit-pipe-head", "head"),
+    ("exit-pipe-grep", "grep"),
+    # Truncation keeps the full output AND the real exit code.
+    ("exit-redirect-file", "> test.log 2>&1"),
+    ("exit-record-code", "exit=$?"),
+    ("exit-pipefail", "set -o pipefail"),
+    # test.log carries the real pytest output, never a self-declared
+    # "tests passed".
+    ("exit-real-output", "real pytest output"),
+    ("exit-no-claim", "self-declared"),
+)
+
+
+def test_prompt_md_keeps_the_test_exit_code_rule():
+    missing = _missing(_text(PROMPT), EXIT_CODE_ITEMS)
+    assert not missing, (
+        f"prompt.md is missing the test-exit-code rule (Issue #180): {missing}"
+    )
+
+
+def test_prompt_review_md_keeps_the_test_exit_code_rule():
+    missing = _missing(_text(PROMPT_REVIEW), EXIT_CODE_ITEMS)
+    assert not missing, (
+        f"prompt_review.md is missing the test-exit-code rule (Issue #180): "
+        f"{missing}"
+    )
+
+
+# --- Issue #180: the review test ladder (CI failures first) ---------------------
+
+# The review session used to re-run the full suite repeatedly instead of
+# converging on the CI failures. The ladder is: CI failure logs first,
+# then the failing cases, then the related tests, then EXACTLY ONE full
+# suite + coverage run before the verdict.
+TEST_LADDER_ITEMS = (
+    ("ladder-section", "test ladder"),
+    # Step 1: the CI failure logs are read BEFORE any local test run.
+    ("ladder-ci-first", "before running any local test"),
+    ("ladder-pr-checks", "gh pr checks"),
+    ("ladder-log-failed", "gh run view"),
+    ("ladder-log-failed-flag", "--log-failed"),
+    # Step 2: the failing cases are reproduced locally.
+    ("ladder-failing-cases", "failing cases"),
+    # Step 3: after the fix, the related tests run.
+    ("ladder-related-tests", "related tests"),
+    # Step 4: exactly ONE full suite + coverage run before the verdict.
+    ("ladder-full-once", "exactly one full"),
+    ("ladder-coverage", "coverage"),
+    ("ladder-before-verdict", "before emitting the verdict"),
+    # Repeated full-suite runs are the named anti-pattern.
+    ("ladder-no-repeat", "do not repeat the full suite"),
+)
+
+
+def test_prompt_review_md_keeps_the_test_ladder():
+    missing = _missing(_text(PROMPT_REVIEW), TEST_LADDER_ITEMS)
+    assert not missing, (
+        f"prompt_review.md is missing the test ladder (Issue #180): {missing}"
+    )
+
+
+# --- Issue #180: the review round keeps the same PR (bounded loop) --------------
+
+# The reviewer keeps its in-session fix duty (Issue #82); when the fix is
+# not verifiable in this round the SAME PR continues into the existing
+# ai-fix-needed / next-review-session flow — never a new PR, never a
+# given-up fix.
+REVIEW_ROUND_ITEMS = (
+    # The in-session fix duty is unchanged.
+    ("round-fix-in-session", "fix them here, in this same session"),
+    # Not verifiable this round -> the findings verdict, not pass.
+    ("round-findings-verdict", "emit `findings`"),
+    # The same PR continues; the bounded loop retries it.
+    ("round-same-pr", "same pr"),
+    ("round-fix-needed", "ai-fix-needed"),
+    ("round-next-session", "next review session"),
+    # Never a replacement PR, never a given-up fix.
+    ("round-no-new-pr", "never create or close a pr"),
+    ("round-no-give-up", "do not give up"),
+)
+
+
+def test_prompt_review_md_keeps_the_same_pr_round_behavior():
+    missing = _missing(_text(PROMPT_REVIEW), REVIEW_ROUND_ITEMS)
+    assert not missing, (
+        f"prompt_review.md is missing the same-PR round behavior "
+        f"(Issue #180): {missing}"
+    )
+
+
 # --- AGENTS.md (TDD section) ---------------------------------------------------
 
 AGENTS_TDD_ITEMS = (
@@ -216,6 +412,12 @@ AGENTS_TDD_ITEMS = (
     ("tdd-loop-guard", "termination guard"),
     ("tdd-while-true", "while true"),
     ("tdd-fail-fast", "fail fast"),
+    # Issue #180: the real test exit code is the result — a pipe through
+    # `tail`/`head`/`grep` swallows it and disguises a failed run as a
+    # shell success.
+    ("tdd-exit-code", "exit code of the last command"),
+    ("tdd-no-pipe", "never pipe a test"),
+    ("tdd-pipefail", "set -o pipefail"),
 )
 
 

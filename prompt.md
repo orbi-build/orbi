@@ -29,8 +29,13 @@ another id (no `trace_id`, no new UUID) for this run.
 - Keep all run artifacts (plan, test, verify, review report) inside the task
   worktree, whose path already carries `{{RUN_ID}}`.
 
-Read every configured context file, the target repository's `AGENTS.md`,
-README, build files, tests, and relevant history before changing code.
+Read only what the task needs, in this priority order (Issue #180): the
+GitHub Issue (body and comments), the target repository's `AGENTS.md`,
+the files you will change plus their callers, and the related tests.
+`README.md`, the configured context files, build files and history are
+read only when the task is actually about them — a normal Issue never
+requires a full repository scan, and re-reading the same large files is
+what triggers the pointless compactions of long sessions.
 
 This project is intentionally an MVP. Do not invent a task platform, database,
 queue framework, policy engine, risk model, multi-agent DAG, daemon loop, or fallback path.
@@ -77,6 +82,37 @@ Hard rules for blocking commands (Issue #95):
   parameter, or use pytest-timeout. The TDD red phase must fail fast —
   a hung test (a 99% CPU spin or a forever `next(g)` wait) is a broken
   test, not a red test.
+
+Hard rules for test evidence (Issue #180):
+
+- The real exit code is the result: a pipeline exits with the exit code
+  of the last command, so `pytest ... | tail` exits 0 even when pytest
+  fails and the failure is disguised as a shell success. Never pipe a
+  test, build or smoke command through `tail`, `head`, `grep` or any
+  other filter that drops the exit code.
+- When the output is too long to display, keep the full output AND the
+  real exit code: redirect to a file (`pytest ... > test.log 2>&1;`
+  `echo "exit=$?" >> test.log`) and then `tail` the file, or run the
+  pipeline with `set -o pipefail`. The pytest exit code — not the
+  pipeline's — is the result.
+- `test.log` must contain the real pytest output (the summary line, e.g.
+  `156 passed in 4.43s` or `1 failed, 155 passed in 4.43s`), never a
+  self-declared "tests passed": the Runner reads `test.log` for the
+  `tests passed/failed` milestone and the progress comment, and it must
+  stay consistent with CI.
+- A failed run must be fixed before the delivery is committed: a
+  delivery whose last test result in `test.log` is a failure is not a
+  delivery.
+
+Context recovery after compaction (Issue #180):
+
+When the session context is compacted, recover from the run artifacts —
+read `plan.md`, `test.log`, the run's progress comment (the hidden run
+marker) and, for a resumed delivery, the review findings comments — and
+continue from there. Do not re-scan the whole repository and do not
+re-read every context file: the artifacts carry the current plan, the
+last test result and the open findings, and a full re-scan is what
+triggers the next pointless compaction.
 
 Use the configured skills for implementation. Use TDD, 100% line and branch
 coverage for Python code. Do NOT run a review-fix loop or any independent
