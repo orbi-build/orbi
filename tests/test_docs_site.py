@@ -163,14 +163,18 @@ def language_page_entries(config: dict) -> list[tuple[str, list[str]]]:
     return entries
 
 
-def test_docs_config_is_a_mintlify_config_named_muyan_pilot():
+def test_docs_config_is_a_mintlify_config_named_orbi():
+    """Issue #183 (v0.3.0 rebrand): the docs site (docs.orbi.build) is
+    branded Orbi — the Mintlify config name is the site title shown in
+    the navigation and page headers."""
     config = load_docs_config()
     schema = str(config.get("$schema", ""))
     assert "mintlify" in schema.lower(), (
         f"docs.json must point at the Mintlify schema, got: {schema!r}"
     )
-    assert config.get("name") == "Muyan Pilot", (
-        f"docs.json name must be 'Muyan Pilot', got: {config.get('name')!r}"
+    assert config.get("name") == "Orbi", (
+        f"docs.json name must be 'Orbi' (v0.3.0 rebrand), "
+        f"got: {config.get('name')!r}"
     )
     # The official Mintlify schema (mintlify.com/docs.json) and settings
     # reference mark `theme` as required: a config without it does not
@@ -623,14 +627,43 @@ def test_docs_kv_cache_page_matches_the_upstream_port_contract():
 
 
 def test_readme_keeps_the_docs_site_entry():
-    """The root README stays the GitHub homepage and must carry the
-    documentation site entry (Mintlify default subdomain for this repo,
-    with the custom-domain caveat)."""
+    """Issue #183 (v0.3.0 rebrand): the root README stays the GitHub
+    homepage and must carry the documentation site entry — the bound
+    custom domain docs.orbi.build (Mintlify builds it from the in-repo
+    docs/ directory)."""
     text = README.read_text(encoding="utf-8")
-    assert "muyan-pilot.mintlify.site" in text, (
-        "README must link the Mintlify documentation site"
+    assert "docs.orbi.build" in text, (
+        "README must link the documentation site (docs.orbi.build)"
     )
     assert "docs/" in text, "README must point at the in-repo docs/ source"
+
+
+def test_readme_titles_the_project_orbi():
+    """Issue #183: the README (the GitHub homepage) no longer carries
+    Muyan Pilot as the primary brand — the title is Orbi."""
+    text = README.read_text(encoding="utf-8")
+    first_line = text.splitlines()[0]
+    assert first_line.strip() == "# Orbi", (
+        f"the README title must be '# Orbi' (v0.3.0 rebrand), "
+        f"got: {first_line!r}"
+    )
+
+
+def test_docs_getting_started_clones_the_orbi_build_org_repo():
+    """Issue #183: the repository moved to the orbi-build org — the
+    smoke walkthrough clone URL must be the new address, and no doc
+    page may keep the stale xqliu/muyan-pilot clone URL (the old
+    addresses still redirect on GitHub, but the docs must teach the
+    current one)."""
+    text = page_text("getting-started")
+    assert "git clone https://github.com/orbi-build/orbi.git" in text, (
+        "getting-started must clone the orbi-build/orbi repository"
+    )
+    for path in docs_files():
+        content = path.read_text(encoding="utf-8")
+        assert "xqliu/muyan-pilot" not in content, (
+            f"{path.name} keeps the stale xqliu/muyan-pilot reference"
+        )
 
 
 def test_docs_only_reference_existing_labels_everywhere():

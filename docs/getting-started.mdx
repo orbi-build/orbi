@@ -53,8 +53,8 @@ prefix reuse for local llama.cpp models), not a core prerequisite — see
 ## 1. Clone the repository
 
 ```bash
-git clone https://github.com/xqliu/muyan-pilot.git
-cd muyan-pilot
+git clone https://github.com/orbi-build/orbi.git
+cd orbi
 ```
 
 ## 2. Install the CLI
@@ -127,7 +127,7 @@ directory):
 | `prompt_review` | no | `prompt_review.md` | Review prompt template for the independent post-PR review session |
 | `base_branch` | no | `main` | Delivery base branch; every task worktree is created from the frozen `origin/<base_branch>` SHA |
 | `active_milestone` | no | unset | Claim scope for the fresh-claim scans (Issue #139): the active GitHub Milestone title (e.g. `v0.2.0`). Set it to restrict the p0/bug/plain ready scans to that Milestone (the `milestone:"<title>"` qualifier is part of the gh search query — an Issue of another or no Milestone never enters the queue); `ai-ready` stays the execution switch, the pickup order is unchanged, P0 does not cross milestones, and resume states (opened PRs, in-flight restarts) are never gated by it. Unset = every `ai-ready` Issue is claimable (pre-#139 behavior) |
-| `max_concurrency` | no | `1` | Concurrent Pilot tasks and enabled Runner timers on this machine (`1` or `2`; the fixed template has two instances) |
+| `max_concurrency` | no | `1` | Concurrent Orbi tasks and enabled Runner timers on this machine (`1` or `2`; the fixed template has two instances) |
 | `skills` | no | `[]` | Optional Pi skill paths (absolute, `~`, or relative to the config file) |
 | `context_files` | no | `[]` | Optional Markdown context files injected into the prompt as paths |
 | `pi_providers` | no | unset | Path to a JSON file in Pi's `models.json` shape that adds or overrides providers in Pi's catalog for every run (Issue #157). Unset = Pi uses its own agent dir unchanged (step 4) |
@@ -159,7 +159,7 @@ The Runner never starts or manages the model process — it launches Pi,
 and Pi needs a provider it can actually use. There are two paths, and
 you need only one:
 
-### Path A: Pi's own providers (no Muyan Pilot config)
+### Path A: Pi's own providers (no Orbi config)
 
 Leave `pi_providers` unset and the Runner launches Pi exactly as you
 would run it by hand — Pi uses its own agent directory and the
@@ -171,7 +171,7 @@ pi auth check --provider <provider-id>
 pi --print "reply with the single word: ok"
 ```
 
-### Path B: a `pi_providers` file (Muyan Pilot manages the selection)
+### Path B: a `pi_providers` file (Orbi manages the selection)
 
 Point `pi_providers` at a JSON file in Pi's own `models.json` shape.
 At every run the Runner materializes a per-run agent dir
@@ -279,7 +279,7 @@ shape check).
 The documented and tested path is an **OpenAI-compatible** endpoint
 (`api: "openai-completions"`) — a local `llama.cpp` server or any
 compatible API. The file is passed to Pi verbatim, so other Pi catalog
-entries keep working through Pi's own agent dir; Muyan Pilot does not
+entries keep working through Pi's own agent dir; Orbi does not
 test or guarantee per-provider integrations beyond that boundary.
 
 ## 5. Run the one-time setup

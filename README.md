@@ -1,12 +1,14 @@
-# Muyan Pilot
+# Orbi
 
-最小 bootstrap：从配置文件中的 source repos 按顺序领取一个 `ai-ready` Issue，启动 Pi，在隔离 worktree 中完成开发并创建 PR；随后 Runner 自动完成独立审查（会话内修复）和合并（见下方「自动审查、修复与合并」）。
+Orbi 是本地 AI 开发 Worker（v0.3.0 起对外品牌为 Orbi，GitHub 项目为 [`orbi-build/orbi`](https://github.com/orbi-build/orbi)，官网 <https://orbi.build>，文档站 <https://docs.orbi.build>）。最小 bootstrap：从配置文件中的 source repos 按顺序领取一个 `ai-ready` Issue，启动 Pi，在隔离 worktree 中完成开发并创建 PR；随后 Runner 自动完成独立审查（会话内修复）和合并（见下方「自动审查、修复与合并」）。
+
+**品牌与兼容（v0.3.0 rebrand，Issue #183）**：对外品牌统一为 Orbi（README、文档站、仓库描述、package metadata、对外链接）；但已有用户的使用方式不变——CLI 仍是 `muyan-pilot`（console script 与 `muyan_pilot.py` 入口）、配置文件仍是 `muyan-pilot.toml`、systemd unit 仍是 `muyan-pilot@*`、运行时 label（`ai-*`/`p0`）与 run marker（`<!-- muyan-pilot:run=... -->`）均不改动；旧 GitHub 地址（`xqliu/muyan-pilot`、`xqliu/orbi`）由 GitHub 自动 redirect 到 `orbi-build/orbi`。
 
 开发契约见 [AGENTS.md](AGENTS.md)：每次本地 Pi 自举开发前先读 Issue、context files、README 和相关代码，TDD、100% 覆盖率、UI 用 Playwright、失败 fail fast、不 merge、不 push 保护分支、不引入数据库/队列/daemon/fallback、不设业务任务 timeout。
 
 ## 文档站
 
-面向新用户的完整开源文档（安装前提、配置、首次启动、smoke walkthrough、工作流、运维、安全、测试、贡献）在仓库 [`docs/`](docs/) 目录：`docs/docs.json` + `docs/*.mdx`，由 Mintlify 构建和托管（连接默认分支 `main`，Git Settings 的 documentation path 配置为 `/docs`，每次合并后自动构建发布）。Mintlify 默认地址为 <https://muyan-pilot.mintlify.site>（若绑定了自定义域名，以 Mintlify 控制台配置的地址为准）。文档站提供英文（默认）和中文（[`docs/zh/`](docs/zh/)，Mintlify i18n 语言切换）两个语言版本，两种语言共享同一事实源（同一套命令、标签、配置字段和端口，不复制出互相漂移的实现说明）。仓库内的 Markdown/MDX 是唯一事实源，Mintlify 只负责构建、搜索和托管，不产生第二份内容；本 README 保留 GitHub 首页与运行契约概览。
+面向新用户的完整开源文档（安装前提、配置、首次启动、smoke walkthrough、工作流、运维、安全、测试、贡献）在仓库 [`docs/`](docs/) 目录：`docs/docs.json` + `docs/*.mdx`，由 Mintlify 构建和托管（连接默认分支 `main`，Git Settings 的 documentation path 配置为 `/docs`，每次合并后自动构建发布）。文档站地址为 <https://docs.orbi.build>（Mintlify 自定义域名，绑定到本仓库 `docs/`）；旧的 Mintlify 默认子域 <https://muyan-pilot.mintlify.site> 作为旧文档入口保留跳转（Mintlify 控制台自定义域名设置中保留默认子域并指向 `docs.orbi.build`，不制造失效链接）。文档站提供英文（默认）和中文（[`docs/zh/`](docs/zh/)，Mintlify i18n 语言切换）两个语言版本，两种语言共享同一事实源（同一套命令、标签、配置字段和端口，不复制出互相漂移的实现说明）。仓库内的 Markdown/MDX 是唯一事实源，Mintlify 只负责构建、搜索和托管，不产生第二份内容；本 README 保留 GitHub 首页与运行契约概览。
 
 两张总览图（Mintlify 渲染 Mermaid，仓库内保留可读源码）：
 
@@ -190,23 +192,23 @@ setup 不可用时的手工等价命令（已存在时 gh 会报错，可忽略�
 
 ```bash
 for l in ai-ready ai-in-progress ai-pr-opened ai-fix-needed ai-merged ai-blocked; do
-  gh label create "$l" --repo xqliu/muyan-pilot --force
-  gh label edit "$l" --repo xqliu/muyan-pilot \
-    --description "Muyan Pilot delivery state (see README)"
+  gh label create "$l" --repo orbi-build/orbi --force
+  gh label edit "$l" --repo orbi-build/orbi \
+    --description "Orbi delivery state (see README)"
 done
 # p0 是紧急优先级 label（不是交付状态，见「领取优先级（P0）」）
-gh label create p0 --repo xqliu/muyan-pilot --force --color "fbca04" \
-  --description "Muyan Pilot urgent priority: picked up before bugs and features"
+gh label create p0 --repo orbi-build/orbi --force --color "fbca04" \
+  --description "Orbi urgent priority: picked up before bugs and features"
 # ai-epic 是 Epic 协调 label（不是交付状态，见「Epic Issue（ai-epic）」）
-gh label create ai-epic --repo xqliu/muyan-pilot --force --color "bfdadc" \
+gh label create ai-epic --repo orbi-build/orbi --force --color "bfdadc" \
   --description "Epic coordination issue; not directly executable by Runner"
 # ai-release 是 Release task 标记（不是交付状态，见「Release task（ai-release）」）
-gh label create ai-release --repo xqliu/muyan-pilot --force --color "5319e7" \
+gh label create ai-release --repo orbi-build/orbi --force --color "5319e7" \
   --description "Release task: Runner runs the deterministic release state machine (tag + GitHub Release)"
 # ai-ticket-only 是内容交付标记（不是 Git 交付状态）
-gh label create ai-ticket-only --repo xqliu/muyan-pilot --force --color "0e8a16" \
+gh label create ai-ticket-only --repo orbi-build/orbi --force --color "0e8a16" \
   --description "Content task: Agent posts the deliverable directly to the Issue without Git delivery"
-gh label list --repo xqliu/muyan-pilot
+gh label list --repo orbi-build/orbi
 ```
 
 | Label | 含义 | 进入条件 | 离开条件 |
@@ -228,9 +230,9 @@ gh label list --repo xqliu/muyan-pilot
 
 ```bash
 # 派发新 Issue 后标注依赖（N = 新 Issue，M = 前置 Issue）
-gh issue edit N --repo xqliu/muyan-pilot --add-blocked-by M
+gh issue edit N --repo orbi-build/orbi --add-blocked-by M
 # 解除依赖
-gh issue edit N --repo xqliu/muyan-pilot --remove-blocked-by M
+gh issue edit N --repo orbi-build/orbi --remove-blocked-by M
 ```
 
 Runner 行为（单 slot 串行，只做“读字段-跳过-等待”，不引入 DAG、拓扑排序或多 worker 调度）：
@@ -317,18 +319,18 @@ idle 卡死自动恢复（Issue #94，Issue #169 起基于证据）：非 `model
 
 ```bash
 journalctl --user -u 'muyan-pilot@*.service' -f
-# Aug 25 14:30:01 host muyan-pilot[123]: INFO [e07383c2] run_start run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement branch=muyan-pilot/... worktree=/home/.../.worktrees/... session=sess-1 session_file=/home/.../.pi-session/sess-1.jsonl phase=starting last_activity=- action=- result=-
-# Aug 25 14:30:16 host muyan-pilot[123]: INFO [e07383c2] activity issue=xqliu/muyan-pilot#18 role=implement phase=test action="bash pytest tests/" result=- state=- idle=6s
-# Aug 25 14:30:31 host muyan-pilot[123]: INFO [e07383c2] heartbeat issue=xqliu/muyan-pilot#18 role=implement phase=test state=- elapsed=30s idle=15s
-# Aug 25 14:30:32 host muyan-pilot[123]: INFO [e07383c2] activity issue=xqliu/muyan-pilot#18 role=implement phase=test action="bash pytest tests/" result=ok state=- idle=0s
-# Aug 25 14:30:32 host muyan-pilot[123]: INFO [e07383c2] model_wait issue=xqliu/muyan-pilot#18 role=implement phase=test state=model_wait
-# Aug 25 14:39:40 host muyan-pilot[123]: INFO [e07383c2] heartbeat issue=xqliu/muyan-pilot#18 role=implement phase=test state=model_wait elapsed=9m idle=9m
-# Aug 25 14:40:19 host muyan-pilot[123]: INFO [e07383c2] activity issue=xqliu/muyan-pilot#18 role=implement phase=test action="assistant text" result=- state=- idle=0s
-# Aug 25 14:40:19 host muyan-pilot[123]: INFO [e07383c2] resumed issue=xqliu/muyan-pilot#18 role=implement phase=test state=resumed
-# Aug 25 16:02:10 host muyan-pilot[123]: WARNING [e07383c2] pi_idle issue=xqliu/muyan-pilot#18 role=implement phase=pr stale_seconds=5m
-# Aug 25 16:03:05 host muyan-pilot[123]: INFO [e07383c2] pi_idle_wait run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement pid=4242 cmdline="timeout 240 pytest tests/" deadline=2025-08-25T16:05:30Z
-# Aug 25 16:06:00 host muyan-pilot[123]: INFO [e07383c2] pi_resumed issue=xqliu/muyan-pilot#18 role=implement phase=pr
-# Aug 25 15:12:40 host muyan-pilot[123]: INFO [e07383c2] run_end run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement result=pr_opened elapsed=42m pr=https://github.com/xqliu/muyan-pilot/pull/19 commit=0123456789abcdef0123456789abcdef01234567
+# Aug 25 14:30:01 host muyan-pilot[123]: INFO [e07383c2] run_start run=e07383c2 issue=orbi-build/orbi#18 role=implement branch=muyan-pilot/... worktree=/home/.../.worktrees/... session=sess-1 session_file=/home/.../.pi-session/sess-1.jsonl phase=starting last_activity=- action=- result=-
+# Aug 25 14:30:16 host muyan-pilot[123]: INFO [e07383c2] activity issue=orbi-build/orbi#18 role=implement phase=test action="bash pytest tests/" result=- state=- idle=6s
+# Aug 25 14:30:31 host muyan-pilot[123]: INFO [e07383c2] heartbeat issue=orbi-build/orbi#18 role=implement phase=test state=- elapsed=30s idle=15s
+# Aug 25 14:30:32 host muyan-pilot[123]: INFO [e07383c2] activity issue=orbi-build/orbi#18 role=implement phase=test action="bash pytest tests/" result=ok state=- idle=0s
+# Aug 25 14:30:32 host muyan-pilot[123]: INFO [e07383c2] model_wait issue=orbi-build/orbi#18 role=implement phase=test state=model_wait
+# Aug 25 14:39:40 host muyan-pilot[123]: INFO [e07383c2] heartbeat issue=orbi-build/orbi#18 role=implement phase=test state=model_wait elapsed=9m idle=9m
+# Aug 25 14:40:19 host muyan-pilot[123]: INFO [e07383c2] activity issue=orbi-build/orbi#18 role=implement phase=test action="assistant text" result=- state=- idle=0s
+# Aug 25 14:40:19 host muyan-pilot[123]: INFO [e07383c2] resumed issue=orbi-build/orbi#18 role=implement phase=test state=resumed
+# Aug 25 16:02:10 host muyan-pilot[123]: WARNING [e07383c2] pi_idle issue=orbi-build/orbi#18 role=implement phase=pr stale_seconds=5m
+# Aug 25 16:03:05 host muyan-pilot[123]: INFO [e07383c2] pi_idle_wait run=e07383c2 issue=orbi-build/orbi#18 role=implement pid=4242 cmdline="timeout 240 pytest tests/" deadline=2025-08-25T16:05:30Z
+# Aug 25 16:06:00 host muyan-pilot[123]: INFO [e07383c2] pi_resumed issue=orbi-build/orbi#18 role=implement phase=pr
+# Aug 25 15:12:40 host muyan-pilot[123]: INFO [e07383c2] run_end run=e07383c2 issue=orbi-build/orbi#18 role=implement result=pr_opened elapsed=42m pr=https://github.com/orbi-build/orbi/pull/19 commit=0123456789abcdef0123456789abcdef01234567
 ```
 
 每行都带 issue、run id、role（implement / review / merge）、phase、
@@ -376,12 +378,12 @@ muyan-pilot status --config muyan-pilot.toml
 # capacity: 1
 # slots: 1/1
 #   slot-1: pid=4321
-# source: xqliu/muyan-pilot
+# source: orbi-build/orbi
 #   base: main abc123def456
-#   current: #24 Stream live Pi activity ... https://github.com/xqliu/muyan-pilot/issues/24
+#   current: #24 Stream live Pi activity ... https://github.com/orbi-build/orbi/issues/24
 #     live: phase=test last_activity=2026-08-25T02:30:00Z action=bash pytest tests/ result=ok
-#     session: .../.worktrees/muyan-pilot-xqliu-muyan-pilot-issue-24-<run-id>/.pi-session/<session>.jsonl
-#     worktree: .../.worktrees/muyan-pilot-xqliu-muyan-pilot-issue-24-<run-id>
+#     session: .../.worktrees/muyan-pilot-orbi-build-orbi-issue-24-<run-id>/.pi-session/<session>.jsonl
+#     worktree: .../.worktrees/muyan-pilot-orbi-build-orbi-issue-24-<run-id>
 #   ready: -
 #   result: -
 ```
@@ -471,7 +473,7 @@ pi_model = "qwen/qwen3.8-27b"
 
 - 该 attempt 的每条 journal 日志首字段：`[e07383c2] command=...`；
 - start / PR opened / failed 等 Issue 评论：可见字段 `run_id=e07383c2` + 隐藏 marker `<!-- muyan-pilot:run=e07383c2 -->`；
-- feature branch 与 worktree 名（例如 `.worktrees/muyan-pilot-xqliu-muyan-pilot-issue-14-a1b2c3d4`）；
+- feature branch 与 worktree 名（例如 `.worktrees/muyan-pilot-orbi-build-orbi-issue-14-a1b2c3d4`）；
 - Pi session 目录（worktree 内 `.pi-session/`）与 plan/test/verify/review 等 run artifacts 的路径；
 - 注入 Pi 的 prompt context（`Run id: ...`）；
 - PR body 的稳定 machine-readable marker `<!-- muyan-pilot:run=e07383c2 -->`——Runner 验收时校验，缺失即 fail fast，拒绝该 PR；
@@ -484,7 +486,7 @@ pi_model = "qwen/qwen3.8-27b"
 journalctl --user -u 'muyan-pilot@*.service' | grep e07383c2
 
 # GitHub 上搜索一个 run 的 progress / milestone / review / merge 记录
-gh search issues "e07383c2" --repo xqliu/muyan-pilot
+gh search issues "e07383c2" --repo orbi-build/orbi
 
 # 本地在 repo 中搜索 run_id 找到 worktree、session 和 run artifacts
 grep -r e07383c2 .worktrees/   # 在 clone 根目录执行
@@ -494,7 +496,7 @@ grep -r e07383c2 .worktrees/   # 在 clone 根目录执行
 
 ## 任务 base 与 worktree
 
-每次领取任务前，Runner 在配置 repo 中执行 `git fetch origin <base_branch>`，并冻结 `origin/<base_branch>` 的精确 SHA（`base_branch` 在 TOML 中配置，默认 `main`）。任务 worktree 和 feature branch 都从该 SHA 创建，绝不使用主工作区当前 HEAD；branch 和目录名都带唯一 run 标识（例如 `.worktrees/muyan-pilot-xqliu-muyan-pilot-issue-14-a1b2c3d4`），同一个 Issue 返工时会生成新的独立 run，旧现场原样保留。base branch、base SHA 和 run 标识会写入 Issue 评论和 `status` 输出。任务 worktree 共享部署 checkout 的单一 `origin` remote（Git transport 为 SSH，见「Git transport」），worktree 内的 fetch/push（包括 workflow 文件）都走这条 SSH 通道。
+每次领取任务前，Runner 在配置 repo 中执行 `git fetch origin <base_branch>`，并冻结 `origin/<base_branch>` 的精确 SHA（`base_branch` 在 TOML 中配置，默认 `main`）。任务 worktree 和 feature branch 都从该 SHA 创建，绝不使用主工作区当前 HEAD；branch 和目录名都带唯一 run 标识（例如 `.worktrees/muyan-pilot-orbi-build-orbi-issue-14-a1b2c3d4`），同一个 Issue 返工时会生成新的独立 run，旧现场原样保留。base branch、base SHA 和 run 标识会写入 Issue 评论和 `status` 输出。任务 worktree 共享部署 checkout 的单一 `origin` remote（Git transport 为 SSH，见「Git transport」），worktree 内的 fetch/push（包括 workflow 文件）都走这条 SSH 通道。
 
 ### 重启恢复（kill 后自动续跑）
 

@@ -1,10 +1,13 @@
-# Muyan Pilot platform labels — the single source of truth (Issue #117).
+# Orbi platform labels (CLI: `muyan-pilot`) — the single source of truth
+# (Issue #117; v0.3.0 rebrand Issue #183: the label NAMES are runtime
+# state and stay unchanged, only the visible descriptions carry the
+# Orbi brand).
 #
 # `muyan_pilot.py setup` aligns every configured source repo with this
 # file declaratively: a missing label is created and a drifted label is
 # updated (name, color, description); nothing is ever deleted and no
 # business label (bug, enhancement, ...) is touched. The values below
-# match the live xqliu/muyan-pilot labels (verified against the GitHub
+# match the live orbi-build/orbi labels (verified against the GitHub
 # API); a commit never creates labels — only the setup entry does.
 #
 # Color: 6-character hex (GitHub normalizes case). Description: one
@@ -13,12 +16,12 @@
 [[label]]
 name = "ai-ready"
 color = "1d76db"
-description = "Issue is explicitly dispatched to Muyan Pilot"
+description = "Issue is explicitly dispatched to Orbi"
 
 [[label]]
 name = "ai-in-progress"
 color = "fbca04"
-description = "Issue currently being handled by Muyan Pilot"
+description = "Issue currently being handled by Orbi"
 
 [[label]]
 name = "ai-pr-opened"
@@ -33,17 +36,17 @@ description = "Existing PR needs automatic review/fix continuation"
 [[label]]
 name = "ai-merged"
 color = "0e8a16"
-description = "Muyan Pilot automatically reviewed and merged the task PR"
+description = "Orbi automatically reviewed and merged the task PR"
 
 [[label]]
 name = "ai-blocked"
 color = "d73a4a"
-description = "Muyan Pilot stopped and needs human attention"
+description = "Orbi stopped and needs human attention"
 
 [[label]]
 name = "p0"
 color = "fbca04"
-description = "Muyan Pilot urgent priority: picked up before bugs and features"
+description = "Orbi urgent priority: picked up before bugs and features"
 
 [[label]]
 name = "ai-epic"

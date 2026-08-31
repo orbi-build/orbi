@@ -47,8 +47,8 @@ prefix 复用），不是核心前提——见[可选组件](/zh/optional-kv-cac
 ## 1. Clone 仓库
 
 ```bash
-git clone https://github.com/xqliu/muyan-pilot.git
-cd muyan-pilot
+git clone https://github.com/orbi-build/orbi.git
+cd orbi
 ```
 
 ## 2. 安装 CLI
@@ -108,7 +108,7 @@ cp .muyan-pilot.example.toml muyan-pilot.toml
 | `prompt_review` | 否 | `prompt_review.md` | PR 后独立审查 session 的 review prompt 模板 |
 | `base_branch` | 否 | `main` | 交付 base 分支；每个任务 worktree 都从冻结的 `origin/<base_branch>` SHA 创建 |
 | `active_milestone` | 否 | 未设置 | 新领取扫描的领取范围（Issue #139）：当前活跃的 GitHub Milestone 标题（如 `v0.2.0`）。设置后 p0/bug/普通三个 ready 扫描只领取该 Milestone 的 Issue（`milestone:"<title>"` 限定词直接进 gh 搜索查询——其他 Milestone 或无 Milestone 的 Issue 永远进不了队列）；`ai-ready` 仍是执行开关，领取顺序（p0 → bug → 普通）不变，P0 不跨 Milestone，恢复态（已开 PR、在途重启）不受 Milestone 限制。未设置 = 所有 `ai-ready` Issue 都可领取（#139 之前的行为） |
-| `max_concurrency` | 否 | `1` | 本机并发 Pilot 任务数和启用的 Runner timer 数（`1` 或 `2`；固定模板有两个实例） |
+| `max_concurrency` | 否 | `1` | 本机并发 Orbi 任务数和启用的 Runner timer 数（`1` 或 `2`；固定模板有两个实例） |
 | `skills` | 否 | `[]` | 可选 Pi skill 路径（绝对、`~`，或相对配置文件） |
 | `context_files` | 否 | `[]` | 可选 Markdown 上下文文件，以路径形式注入 prompt |
 | `pi_providers` | 否 | 未设置 | 指向 Pi `models.json` 形状 JSON 文件的路径，为每个 run 向 Pi 目录添加或覆盖 provider（Issue #157）。未设置 = Pi 原样使用自己的 agent 目录（第 4 步） |
@@ -139,7 +139,7 @@ context_files = []
 Runner 从不启动或管理模型进程——它启动 Pi，而 Pi 需要一个能真正
 使用的 provider。有两条路径，只需要其中一条：
 
-### 路径 A：Pi 自己的 provider（不配置 Muyan Pilot）
+### 路径 A：Pi 自己的 provider（不配置 Orbi）
 
 `pi_providers` 不设，Runner 就和你手工运行 Pi 完全一样地启动它——
 Pi 用自己的 agent 目录和你在那里配置的 provider。派活之前先用 Pi
@@ -150,7 +150,7 @@ pi auth check --provider <provider-id>
 pi --print "reply with the single word: ok"
 ```
 
-### 路径 B：`pi_providers` 文件（由 Muyan Pilot 管理选择）
+### 路径 B：`pi_providers` 文件（由 Orbi 管理选择）
 
 把 `pi_providers` 指向一个 Pi 自己的 `models.json` 形状的 JSON 文件。
 每个 run 开始时 Runner 会物化一个 per-run agent 目录
@@ -254,7 +254,7 @@ chmod 600 .muyan-pilot/env
 文档化且经过测试的路径是 **OpenAI-compatible** endpoint
 （`api: "openai-completions"`）——本地 `llama.cpp` server 或任意
 兼容 API。文件原样传给 Pi，所以 Pi 目录里的其他 catalog 条目继续
-可用；Muyan Pilot 不测试、也不保证该边界之外的逐 provider 集成。
+可用；Orbi 不测试、也不保证该边界之外的逐 provider 集成。
 
 ## 5. 运行一次性 setup
 

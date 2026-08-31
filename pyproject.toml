@@ -1,4 +1,8 @@
-# Standard Python packaging for the Muyan Pilot CLI (Issue #140).
+# Standard Python packaging for the Orbi CLI (Issue #140).
+#
+# v0.3.0 rebrand (Issue #183): the product brand is Orbi (GitHub
+# orbi-build/orbi, docs.orbi.build), but the distribution name and the
+# `muyan-pilot` console script stay unchanged for existing users.
 #
 # The official usage is the installed console script, installed as an
 # EDITABLE uv tool (Issue #152): the tool env imports the modules
@@ -25,7 +29,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "muyan-pilot"
 version = "0.2.0"
-description = "Local AI development worker: claims GitHub Issues, runs Pi in isolated worktrees, and delivers PRs (GitHub Issues + labels are the only state store)."
+description = "Orbi (CLI: muyan-pilot) — local AI development worker: claims GitHub Issues, runs Pi in isolated worktrees, and delivers PRs (GitHub Issues + labels are the only state store)."
 readme = "README.md"
 requires-python = ">=3.14"
 license = { text = "Apache-2.0" }
