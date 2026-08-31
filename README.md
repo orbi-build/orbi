@@ -8,7 +8,7 @@ Orbi 是本地 AI 开发 Worker（v0.3.0 起对外品牌为 Orbi，GitHub 项目
 
 ## 文档站
 
-面向新用户的完整开源文档（安装前提、配置、首次启动、smoke walkthrough、工作流、运维、安全、测试、贡献）在仓库 [`docs/`](docs/) 目录：`docs/docs.json` + `docs/*.mdx`，由 Mintlify 构建和托管（连接默认分支 `main`，Git Settings 的 documentation path 配置为 `/docs`，每次合并后自动构建发布）。文档站地址为 <https://docs.orbi.build>（Mintlify 自定义域名，绑定到本仓库 `docs/`）；旧的 Mintlify 默认子域 <https://muyan-pilot.mintlify.site> 作为旧文档入口保留跳转（Mintlify 控制台自定义域名设置中保留默认子域并指向 `docs.orbi.build`，不制造失效链接）。文档站提供英文（默认）和中文（[`docs/zh/`](docs/zh/)，Mintlify i18n 语言切换）两个语言版本，两种语言共享同一事实源（同一套命令、标签、配置字段和端口，不复制出互相漂移的实现说明）。仓库内的 Markdown/MDX 是唯一事实源，Mintlify 只负责构建、搜索和托管，不产生第二份内容；本 README 保留 GitHub 首页与运行契约概览。
+面向新用户的完整开源文档（安装前提、配置、首次启动、smoke walkthrough、工作流、运维、安全、测试、贡献）在仓库 [`docs/`](docs/) 目录：`docs/docs.json` + `docs/*.mdx`，由 Mintlify 构建和托管（连接默认分支 `main`，Git Settings 的 documentation path 配置为 `/docs`，每次合并后自动构建发布）。文档站地址为 <https://docs.orbi.build>（Mintlify 自定义域名，绑定到本仓库 `docs/`）；旧的 Mintlify 默认子域 <https://muyan-pilot.mintlify.site> 在绑定自定义域名后已停用（实测 404，2026-08-31），旧文档入口以 <https://docs.orbi.build> 为准；如需恢复旧子域跳转，在 Mintlify 控制台 Settings → Custom domain 保留默认子域并指向 `docs.orbi.build`（一次性控制台操作，无代码变更）。文档站提供英文（默认）和中文（[`docs/zh/`](docs/zh/)，Mintlify i18n 语言切换）两个语言版本，两种语言共享同一事实源（同一套命令、标签、配置字段和端口，不复制出互相漂移的实现说明）。仓库内的 Markdown/MDX 是唯一事实源，Mintlify 只负责构建、搜索和托管，不产生第二份内容；本 README 保留 GitHub 首页与运行契约概览。
 
 两张总览图（Mintlify 渲染 Mermaid，仓库内保留可读源码）：
 
