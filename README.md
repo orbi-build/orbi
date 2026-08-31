@@ -498,7 +498,7 @@ grep -r e07383c2 .worktrees/   # 在 clone 根目录执行
 
 Runner 被 SIGKILL 时无法执行任何清理：任务 worktree 和 `ai-in-progress` 领取标签会留在 GitHub 上（Issue 仍带 `ai-ready`）。下一个 tick 的领取扫描在 ready 队列之前先扫描 `ai-ready`+`ai-in-progress`（且未处于其他交付状态）的 open Issue——**仅当没有其他 Runner 活着时**（其他 slot 被占用证明有活着的 Runner 在处理，此时 `ai-in-progress` 是“进行中”而不是“孤儿”，绝不为活着的 run 启动第二个 Pi；flock 锁是唯一事实源）。找到后走 `process_issue` 的恢复分支：复用最新 worktree 的 run id（branch、worktree、进度评论都由它驱动），按隐藏 run marker 找回同一条进度评论继续 PATCH，不新建 run、不新建 worktree、不新建评论。已完成 run 的 worktree 保留为证据但标签已移除，重新领取永远新 run。
 
-Pi 创建 PR 前必须重新 fetch：若 `origin/<base_branch>` 已前进，需合入最新 base、手工解决冲突、重跑完整测试后再推送。Runner 在验收时用 `git merge-base --is-ancestor origin/<base_branch> HEAD` 验证最新远端 base 是交付 HEAD 的祖先；不满足则 fail fast，不接受 PR。不自动解决冲突，不 force push，不 merge 或 push 保护分支。
+Agent 在提交处停止（代码、测试、commit 都在 task branch 上）；创建 PR 前的 base 新鲜度是 Runner 的确定性收口（Issue #186，`deliver_pr`）：Runner 在 base-sync 锁下重新 fetch `origin/<base_branch>`，若已前进则用 plain `git merge` 合入最新 base（冲突时 abort，PR 在 Agent 的 head 上打开，由既有审查会话在会话内吸收 base），然后 plain push task branch 并创建 PR。不自动解决冲突，不 force push，不 merge 或 push 保护分支。
 
 同一 worktree 下 Pi 新旧 `.pi-session` 的识别：恢复的 run（同一 worktree）会创建**新的** session JSONL，journal 只跟踪当前这次调用的 session（启动前已存在的 JSONL 永不跟随），避免把上一个 run 的 session 报告成活着的会话（Issue #45）。
 
@@ -564,7 +564,7 @@ ai-in-progress → PR opened (ai-pr-opened) → review（会话内修复）
 
 ## 自动审查、修复与合并（Issue #34、#82）
 
-Pi 不直接 push 保护分支。实现 Agent 只 push feature branch 并创建 PR；PR 打开后由 **Runner** 在持有 slot 的交付等待循环中关闭闭环：
+Pi 不直接 push 保护分支。实现 Agent 在提交处停止（不 fetch、不 push、不创建 PR）；Runner 完成确定性收口（Issue #186：base fetch 与吸收、plain push task branch、创建 PR），PR 打开后由 **Runner** 在持有 slot 的交付等待循环中关闭闭环：
 
 1. **冻结 PR 的 base/head SHA**（`gh pr list` 取唯一 open PR 的 `baseRefOid`/`headRefOid`）。
 2. **独立审查（同时是修复者，Issue #82）**：启动一个独立的 Review Agent（code-review R1–R9，不附加 `review-fix-loop`/`tdd-dev` skill），对精确 base/head SHA 审查需求、diff、调用链、测试与运行证据；审查会话与 implementer 一样通过 live activity 管道输出（journal 中 `role=review`）。审查者**可以修改代码**：发现 Blocker/Major 时在同一会话内修复、重跑完整测试与 100% 行/分支覆盖率、commit 并只 push task branch，然后对修复后的 head 重新输出 verdict——没有冷启动 Fixer，也没有第三次 review。审查会话必须以一行机器可读的 `REVIEW_VERDICT {"verdict":"pass|findings","blockers":N,"majors":N,"minors":N,"findings":[...]}` 结尾；`pass` 表示**会话内修复之后**零 Blocker/Major；读不到合法 verdict 一律 fail fast，绝不当作通过。

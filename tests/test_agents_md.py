@@ -23,7 +23,7 @@ REQUIRED_ITEMS = (
     ("issue-one-outcome", "one runtime outcome"),
     ("issue-pin-root-cause", "root cause is pinned"),
     # 2c. Implement vs review: new review session after the PR.
-    ("implement-then-pr", "plan, tdd, tests, push one pr"),
+    ("implement-then-pr", "plan, tdd, tests, commit the delivery"),
     ("review-after-pr", "after the pr exists"),
     ("review-new-jsonl", "new jsonl"),
     ("review-prompt-review", "prompt_review.md"),
@@ -127,15 +127,16 @@ def test_agents_md_keeps_every_required_contract_item():
 
 
 def test_agents_md_does_not_require_implementer_review_fix_loop():
-    """Issue #78: the implementer only does plan -> TDD -> tests -> push
-    one PR; the independent review runs AFTER the PR is opened (the
-    Runner's review session). The implement-phase wording must not demand
-    a complete review — the old base-freshness bullet ("rerun the full
-    tests and the complete review-fix loop, then push the task branch")
-    made the local Pi self-review for hours (#18/#34)."""
+    """Issue #78: the implementer only does plan -> TDD -> tests -> commit
+    the delivery (the Runner pushes and opens the PR, Issue #186); the
+    independent review runs AFTER the PR is opened (the Runner's review
+    session). The implement-phase wording must not demand a complete
+    review — the old base-freshness bullet ("rerun the full tests and the
+    complete review-fix loop, then push the task branch") made the local
+    Pi self-review for hours (#18/#34)."""
     text = CONTRACT.read_text(encoding="utf-8").lower()
     assert "complete review" not in text
     # The implementer session is pinned to the delivery-only flow, and the
     # review is explicitly positioned after the PR exists.
-    assert "plan, tdd, tests, push one pr" in text
+    assert "plan, tdd, tests, commit the delivery" in text
     assert "after the pr exists" in text

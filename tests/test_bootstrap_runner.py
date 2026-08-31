@@ -361,9 +361,10 @@ def test_prompt_does_not_require_review_fix_loop_before_pr():
 
 
 def test_prompt_template_requires_fixes_keyword_for_the_source_issue():
-    """Issue #53: the Pi prompt must require `Fixes #<issue>` in the PR
-    body so GitHub closes the source Issue natively on merge; the
-    requirement renders with the real issue number."""
+    """Issue #53: the Pi prompt must carry `Fixes #<issue>` (the PR body
+    contract the Runner fulfils when it opens the PR, Issue #186) so
+    GitHub closes the source Issue natively on merge; the requirement
+    renders with the real issue number."""
     template = (
         Path(__file__).resolve().parent.parent / "prompt.md"
     ).read_text(encoding="utf-8")
@@ -383,7 +384,9 @@ def test_prompt_template_requires_fixes_keyword_for_the_source_issue():
         "BASE_SYNC_LOCK": "/checkout/.muyan-pilot/base-sync.lock",
     })
     assert "Fixes #53" in rendered
-    assert "/checkout/.muyan-pilot/base-sync.lock" in rendered
+    # Issue #186: the implementer prompt no longer carries the base-sync
+    # lock path — the base fetch is the Runner's operation.
+    assert "/checkout/.muyan-pilot/base-sync.lock" not in rendered
     assert "{{" not in rendered
 
 
@@ -3150,7 +3153,7 @@ def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, c
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
-    monkeypatch.setattr(runner, "verify_pr", lambda *args, **kwargs: "https://github.com/muyantech/muyan-pilot/pull/4")
+    monkeypatch.setattr(runner, "deliver_pr", lambda *args, **kwargs: "https://github.com/muyantech/muyan-pilot/pull/4")
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: None)
     gh_calls, posted = make_fake_gh(monkeypatch)
 
@@ -9736,7 +9739,7 @@ def test_process_issue_keeps_normal_flow_without_release_label(monkeypatch):
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
     monkeypatch.setattr(runner, "run_pi",
                         lambda *a, **k: "https://github.com/o/r/pull/1")
-    monkeypatch.setattr(runner, "verify_pr",
+    monkeypatch.setattr(runner, "deliver_pr",
                         lambda *a, **k: "https://github.com/o/r/pull/1")
     monkeypatch.setattr(runner, "run_command",
                         lambda c, **k: "abc123")
@@ -10840,3 +10843,294 @@ def test_release_process_env_fake_answers_the_real_tag_fetch(tmp_path,
 
     monkeypatch.setattr(runner, "run_command", fake)
     assert runner.release_tag_commit(tmp_path, "v0.3.0") == "abc123"
+
+
+# --- Issue #186: deliver_pr — the Runner owns the deterministic closeout ----
+
+DELIVER_BRANCH = f"muyan-pilot/issue-4-{FAKE_RUN_ID}"
+
+
+def fake_deliver_run(command, **kwargs):
+    """Complete fake for deliver_pr: git commands answered, gh returns
+    the PR of the task branch (the production `gh pr list` shape)."""
+    if command[:3] == ["git", "branch", "--show-current"]:
+        return DELIVER_BRANCH
+    if command[:3] == ["git", "status", "--porcelain"]:
+        return ""
+    if command[:3] == ["git", "rev-parse", "HEAD"]:
+        return FAKE_HEAD_SHA
+    if command[:3] == ["git", "fetch", "origin"]:
+        return ""
+    if command[:3] == ["git", "merge-base", "--is-ancestor"]:
+        return ""
+    if command[:3] == ["git", "merge", "origin/main"]:
+        return ""
+    if command[:3] == ["git", "merge", "--abort"]:
+        return ""
+    if command[:3] == ["git", "push", "origin"]:
+        return ""
+    if command[:3] == ["git", "rev-parse", f"origin/{DELIVER_BRANCH}"]:
+        return FAKE_HEAD_SHA
+    if command[:2] == ["gh", "pr"]:
+        return fake_verify_pr_payload()
+    raise AssertionError(f"unexpected command: {command}")
+
+
+def test_fake_deliver_run_rejects_unexpected_command():
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_deliver_run(["gh", "release", "list"])
+
+
+def test_deliver_pr_rejects_wrong_branch(monkeypatch, tmp_path):
+    def fake_run(command, **kwargs):
+        assert command[:3] == ["git", "branch", "--show-current"], command
+        return "other-branch"
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="Pi changed branch"):
+        runner.deliver_pr(
+            tmp_path, DELIVER_BRANCH, "main", FAKE_HEAD_SHA, FAKE_RUN_ID,
+            issue=4, issue_title="t", repo_dir=tmp_path,
+        )
+
+
+def test_deliver_pr_rejects_uncommitted_changes(monkeypatch, tmp_path):
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "status", "--porcelain"]:
+            return " M leaked.py\n?? junk.txt"
+        return fake_deliver_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="uncommitted changes"):
+        runner.deliver_pr(
+            tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
+            issue=4, issue_title="t", repo_dir=tmp_path,
+        )
+
+
+def test_deliver_pr_rejects_delivery_without_a_commit(monkeypatch, tmp_path):
+    # HEAD is still the frozen base: the agent delivered no commit.
+    base_sha = "9" * 40
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return base_sha
+        return fake_deliver_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="no commit"):
+        runner.deliver_pr(
+            tmp_path, DELIVER_BRANCH, "main", base_sha, FAKE_RUN_ID,
+            issue=4, issue_title="t", repo_dir=tmp_path,
+        )
+
+
+def test_deliver_pr_completes_the_closeout(monkeypatch, tmp_path):
+    """The happy path: clean commit boundary, base not advanced, plain
+    push, the PR of the branch is verified, the URL is returned."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return fake_deliver_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.deliver_pr(
+        tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
+        issue=4, issue_title="t", repo_dir=tmp_path,
+    ) == FAKE_PR_URL
+    # The closeout order: commit boundary, locked base fetch, ancestry,
+    # plain push, remote-head verification, PR list.
+    assert ["git", "status", "--porcelain"] in calls
+    assert ["git", "fetch", "origin", "main"] in calls
+    assert ["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"] in calls
+    assert ["git", "push", "origin", f"HEAD:{DELIVER_BRANCH}"] in calls
+    assert ["git", "rev-parse", f"origin/{DELIVER_BRANCH}"] in calls
+    assert any(
+        command[:2] == ["gh", "pr"] and command[2] == "list"
+        for command in calls
+    )
+    # The PR already exists (the fake answers pr list with it): the
+    # Runner never creates a second PR.
+    assert not any(
+        command[:3] == ["gh", "pr", "create"] for command in calls
+    )
+    # No merge: the base did not advance.
+    assert not any(
+        command[:3] == ["git", "merge", "origin/main"] for command in calls
+    )
+
+
+def test_deliver_pr_rolls_back_a_conflicting_base_absorb(
+    monkeypatch, tmp_path, caplog,
+):
+    """Base advanced and the plain merge conflicts: the Runner aborts
+    the merge (the worktree returns to the agent's exact commit
+    boundary), logs `base_merge_conflict`, and continues — the PR opens
+    on the agent's head and the existing review loop absorbs the base
+    in-session (the state machine is unchanged)."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["git", "merge-base", "--is-ancestor"]:
+            # origin/main is NOT an ancestor of HEAD: base advanced.
+            raise subprocess.CalledProcessError(1, command)
+        if command[:3] == ["git", "merge", "origin/main"]:
+            raise subprocess.CalledProcessError(
+                1, command, stderr="CONFLICT (content): Merge conflict",
+            )
+        return fake_deliver_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        assert runner.deliver_pr(
+            tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
+            issue=4, issue_title="t", repo_dir=tmp_path,
+        ) == FAKE_PR_URL
+    assert ["git", "merge", "origin/main"] in calls
+    assert ["git", "merge", "--abort"] in calls
+    # The abort happens before the push: the pushed head is the
+    # agent's exact commit boundary.
+    assert calls.index(["git", "merge", "--abort"]) < calls.index(
+        ["git", "push", "origin", f"HEAD:{DELIVER_BRANCH}"],
+    )
+    assert "base_merge_conflict" in caplog.text
+
+
+def test_deliver_pr_absorbs_an_advanced_base(monkeypatch, tmp_path, caplog):
+    """Base advanced and the plain merge succeeds: the absorbed base is
+    pushed with the delivery (`base_absorbed`), so the PR head contains
+    the latest remote base."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["git", "merge-base", "--is-ancestor"]:
+            # origin/main is NOT an ancestor of HEAD: base advanced.
+            raise subprocess.CalledProcessError(1, command)
+        return fake_deliver_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        assert runner.deliver_pr(
+            tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
+            issue=4, issue_title="t", repo_dir=tmp_path,
+        ) == FAKE_PR_URL
+    assert calls.index(["git", "merge", "origin/main"]) < calls.index(
+        ["git", "push", "origin", f"HEAD:{DELIVER_BRANCH}"],
+    )
+    assert "base_absorbed" in caplog.text
+
+
+def test_deliver_pr_creates_the_pr_when_absent(monkeypatch, tmp_path):
+    """No open PR of the branch: the Runner creates it with the run
+    marker and `Fixes #<issue>` in the body (the PR body contract is
+    the Runner's obligation now, Issue #186)."""
+    calls = []
+
+    created = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:2] == ["gh", "pr"] and command[2] == "list":
+            # Stateful: empty until the Runner creates the PR, then the
+            # created PR of the task branch (like the real GitHub state).
+            if not created:
+                return "[]"
+            return json.dumps([created[0]])
+        if command[:2] == ["gh", "pr"] and command[2] == "create":
+            created.append({
+                "url": FAKE_PR_URL,
+                "baseRefName": "main",
+                "headRefName": DELIVER_BRANCH,
+                "headRefOid": FAKE_HEAD_SHA,
+                "body": command[command.index("--body") + 1],
+            })
+            return FAKE_PR_URL
+        return fake_deliver_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.deliver_pr(
+        tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
+        issue=4, issue_title="Closeout title", repo_dir=tmp_path,
+    ) == FAKE_PR_URL
+    create = [
+        command for command in calls
+        if command[:3] == ["gh", "pr", "create"]
+    ]
+    assert len(create) == 1
+    command = create[0]
+    assert command[command.index("--base") + 1] == "main"
+    assert command[command.index("--head") + 1] == DELIVER_BRANCH
+    assert command[command.index("--title") + 1] == "Closeout title"
+    body = command[command.index("--body") + 1]
+    assert f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->" in body
+    assert "Fixes #4" in body
+
+
+def test_deliver_pr_fails_fast_when_pr_create_fails(monkeypatch, tmp_path):
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"] and command[2] == "list":
+            return "[]"
+        if command[:2] == ["gh", "pr"] and command[2] == "create":
+            raise subprocess.CalledProcessError(
+                1, command, stderr="no matching pull request",
+            )
+        return fake_deliver_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.deliver_pr(
+            tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
+            issue=4, issue_title="t", repo_dir=tmp_path,
+        )
+
+
+def test_deliver_pr_rejects_remote_head_mismatch_after_push(
+    monkeypatch, tmp_path,
+):
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "rev-parse", f"origin/{DELIVER_BRANCH}"]:
+            return "f" * 40
+        return fake_deliver_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="remote head"):
+        runner.deliver_pr(
+            tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
+            issue=4, issue_title="t", repo_dir=tmp_path,
+        )
+
+
+def test_deliver_pr_verifies_the_pr_with_the_latest_base_check_skipped(
+    monkeypatch, tmp_path,
+):
+    """deliver_pr just fetched and merged the base itself, so the
+    verify step must not fetch it again (require_latest_base=False):
+    no second `git fetch` after the push, and a delivery that is behind
+    the base (the conflict-rollback scene) still passes verification."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["git", "merge-base", "--is-ancestor"]:
+            # origin/main is NOT an ancestor of HEAD: base advanced.
+            raise subprocess.CalledProcessError(1, command)
+        if command[:3] == ["git", "merge", "origin/main"]:
+            raise subprocess.CalledProcessError(1, command)
+        return fake_deliver_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    runner.deliver_pr(
+        tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
+        issue=4, issue_title="t", repo_dir=tmp_path,
+    )
+    fetches = [
+        index for index, command in enumerate(calls)
+        if command[:3] == ["git", "fetch", "origin"]
+    ]
+    push = calls.index(["git", "push", "origin", f"HEAD:{DELIVER_BRANCH}"])
+    # Exactly one fetch (the deliver fetch); nothing after the push.
+    assert len(fetches) == 1
+    assert fetches[0] < push

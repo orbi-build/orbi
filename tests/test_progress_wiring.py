@@ -95,7 +95,9 @@ def patch_process_deps(monkeypatch, tmp_path, *, run_pi_side_effect=None):
     else:
         monkeypatch.setattr(runner, "run_pi",
                             Mock(return_value="done"))
-    monkeypatch.setattr(runner, "verify_pr",
+    # Issue #186: the fresh-claim closeout is `deliver_pr` (the Runner
+    # pushes the task branch and opens the PR); the agent no longer does.
+    monkeypatch.setattr(runner, "deliver_pr",
                         lambda *args, **kwargs:
                         "https://github.com/xqliu/muyan-pilot/pull/40")
 
@@ -526,26 +528,28 @@ def test_process_issue_fails_fast_on_missing_issue_title(
                              "xqliu/muyan-pilot")
 
 
-def test_process_issue_passes_issue_number_to_verify_pr(
+def test_process_issue_passes_issue_number_to_deliver_pr(
     monkeypatch, tmp_path,
 ):
     """The fresh path verifies the `Fixes #<issue>` keyword against the
-    source Issue number (Issue #53)."""
+    source Issue number (Issue #53) — now inside the Runner's
+    `deliver_pr` closeout (Issue #186), which forwards it to
+    `verify_pr`."""
     make_fake_gh(monkeypatch)
     patch_process_deps(monkeypatch, tmp_path)
-    verify_calls = []
+    deliver_calls = []
 
-    def fake_verify_pr(*args, **kwargs):
-        verify_calls.append((args, kwargs))
+    def fake_deliver_pr(*args, **kwargs):
+        deliver_calls.append((args, kwargs))
         return "https://github.com/xqliu/muyan-pilot/pull/40"
 
-    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(runner, "deliver_pr", fake_deliver_pr)
     runner.process_issue(make_issue(), make_config(tmp_path),
                          "xqliu/muyan-pilot")
-    assert len(verify_calls) == 1
-    args, kwargs = verify_calls[0]
+    assert len(deliver_calls) == 1
+    args, kwargs = deliver_calls[0]
     assert kwargs.get("issue") == 18, (
-        f"verify_pr must verify the Fixes keyword against the source "
+        f"deliver_pr must verify the Fixes keyword against the source "
         f"Issue number, got args={args} kwargs={kwargs}"
     )
 

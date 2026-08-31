@@ -2,8 +2,11 @@
 
 Real git (local bare origin + clone) plus a fake ``pi`` executable that
 behaves like the delivery agent: it reads the run id from the injected
-system prompt, writes a run-scoped plan artifact, commits and pushes. A fake
-``gh`` answers the runner's issue/PR calls and captures every comment.
+system prompt, writes a run-scoped plan artifact and commits (Issue #186:
+the agent stops at the committed delivery — the Runner pushes the task
+branch and opens the PR). A stateful fake ``gh`` answers the runner's
+issue/PR calls: ``pr list`` is empty until the Runner's ``pr create``
+lands, and every comment is captured.
 
 Together these prove the acceptance criteria:
 
@@ -29,7 +32,9 @@ PR_URL = "https://github.com/owner/repo/pull/41"
 
 # The fake pi behaves like the delivery agent: it extracts the run id from
 # the injected system prompt (exactly where the real runner puts it), writes
-# the plan artifact with the stable marker, then commits and pushes.
+# the plan artifact with the stable marker, then commits. It does NOT push
+# and does NOT create the PR (Issue #186: the Runner owns the push and the
+# PR creation — the e2e proves the closeout lands without agent help).
 FAKE_PI = """#!/usr/bin/env python3
 import os, re, subprocess, sys
 args = sys.argv[1:]
@@ -46,7 +51,6 @@ with open(os.path.join(cwd, "plan.md"), "w", encoding="utf-8") as handle:
 for command in (
     ["git", "add", "."],
     ["git", "commit", "-m", f"plan for run {run_id}"],
-    ["git", "push", "origin", "HEAD"],
 ):
     subprocess.run(command, cwd=cwd, check=True, capture_output=True)
 """
@@ -114,9 +118,12 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     labels: dict[int, list[str]] | None = None) -> None:
     """Answer the runner's ``gh`` calls; capture every Issue comment.
 
-    ``gh pr list`` answers with the local HEAD as ``headRefOid`` and a PR
-    body carrying the marker of the run id embedded in the task branch —
-    the same value the real delivery agent is told to use.
+    ``gh pr list`` / ``gh pr create`` are stateful (Issue #186): no PR
+    exists until the Runner's ``pr create`` lands, and the created PR
+    carries the local HEAD as ``headRefOid`` plus the exact body the
+    Runner passed (run marker + ``Fixes #<issue>``). This is what makes
+    the e2e prove the Runner — not the agent — completes the push/PR
+    closeout.
 
     ``labels`` (when given) tracks the Issue's labels: the runner's
     label edits are applied to it, and the restart-resume scan
@@ -124,6 +131,7 @@ def install_fake_gh(monkeypatch, comments: list[str],
     like the real GitHub state (Issue #18).
     """
     comment_ids: list[int] = []
+    created_prs: list[dict] = []
     real_run = runner.run_command
 
     def fake_run(command, **kwargs):
@@ -185,21 +193,36 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     for comment_id, body in zip(comment_ids, comments)
                 ])
             if command[1] == "pr":
-                branch = command[command.index("--head") + 1]
-                run_id = branch.rsplit("-", 1)[1]
-                head = real_run(
-                    ["git", "rev-parse", "HEAD"], cwd=kwargs["cwd"],
-                )
-                return json.dumps([{
-                    "url": PR_URL,
-                    "baseRefName": "main",
-                    "headRefOid": head,
-                    "body": (
-                        f"<!-- muyan-pilot:run={run_id} -->\n\n"
-                        f"Fixes #{ISSUE_NUMBER}\n\n"
-                        f"Plan for {branch}"
-                    ),
-                }])
+                if command[2] == "list":
+                    # The runner always scopes the list to the task
+                    # branch (`--head`), so a second delivery of the
+                    # same Issue (a retry) never sees the first
+                    # delivery's PR.
+                    head = command[command.index("--head") + 1]
+                    return json.dumps(
+                        [pr for pr in created_prs
+                         if pr["headRefName"] == head]
+                    )
+                if command[2] == "create":
+                    base = command[command.index("--base") + 1]
+                    branch = command[command.index("--head") + 1]
+                    title = command[command.index("--title") + 1]
+                    body = command[command.index("--body") + 1]
+                    head = real_run(
+                        ["git", "rev-parse", "HEAD"], cwd=kwargs["cwd"],
+                    )
+                    created_prs.append({
+                        "url": PR_URL,
+                        "baseRefName": base,
+                        "headRefName": branch,
+                        "headRefOid": head,
+                        "headRepository": {"name": "repo"},
+                        "headRepositoryOwner": {"login": "owner"},
+                        "body": body,
+                        "title": title,
+                    })
+                    return PR_URL
+                raise AssertionError(f"unexpected gh pr command: {command}")
             raise AssertionError(f"unexpected gh command: {command}")
         return real_run(command, **kwargs)
 
@@ -250,6 +273,14 @@ def test_fake_gh_rejects_unexpected_command(monkeypatch, tmp_path):
     install_fake_gh(monkeypatch, [])
     with pytest.raises(AssertionError, match="unexpected gh command"):
         runner.run_command(["gh", "release", "list"])
+
+
+def test_fake_gh_rejects_unexpected_pr_command(monkeypatch, tmp_path):
+    # The runner only ever lists and creates PRs (Issue #186): any
+    # other pr subcommand is a contract violation and fails fast.
+    install_fake_gh(monkeypatch, [])
+    with pytest.raises(AssertionError, match="unexpected gh pr command"):
+        runner.run_command(["gh", "pr", "view", "1", "--repo", REPO])
 
 
 def test_fake_gh_ignores_unknown_api_methods(monkeypatch):

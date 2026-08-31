@@ -13,7 +13,6 @@ Runtime context supplied by the runner:
   `{{SKILLS}}`
 - Delivery base branch: `{{BASE_BRANCH}}`
 - Delivery base SHA (frozen `origin/{{BASE_BRANCH}}` at claim time): `{{BASE_SHA}}`
-- Base sync lock: `{{BASE_SYNC_LOCK}}`
 - Run id: `{{RUN_ID}}`
 
 Run correlation (Issue #41):
@@ -22,9 +21,9 @@ Run correlation (Issue #41):
 it is already part of the feature branch and worktree names. Never create
 another id (no `trace_id`, no new UUID) for this run.
 
-- The PR you create must contain the stable machine-readable marker
-  `<!-- muyan-pilot:run={{RUN_ID}} -->` in its body; the runner rejects a PR
-  without it.
+- The PR the Runner opens for this run must contain the stable
+  machine-readable marker `<!-- muyan-pilot:run={{RUN_ID}} -->` in its
+  body; the runner rejects a delivery whose PR body is missing it.
 - Every Issue or PR comment you post (progress, review, fix, final) must
   contain the same marker and the visible field `run_id={{RUN_ID}}`.
 - Keep all run artifacts (plan, test, verify, review report) inside the task
@@ -93,26 +92,18 @@ Work through this exact loop:
 4. Add or update tests. For UI work, use Playwright against the real running application, assert the changed flow, check browser errors, and save screenshots under the run artifacts.
 5. Run the real project tests/build/smoke checks and record the commands and results in `test.log` inside the task worktree (the automatic `tests passed/failed` milestone and the progress comment's tests field read that file).
 6. Verify the result yourself.
-7. Commit the change, push only the current feature branch, and open exactly one draft or normal PR for this Issue. The PR body must contain `Fixes #{{ISSUE_NUMBER}}` (it may be on the first line) so GitHub natively closes the source Issue when the PR merges into the default branch — the runner rejects a PR whose body is missing it. After the PR is open, the Runner runs an independent review/fix loop and merges it itself; you do not review, fix, or merge.
+7. Commit the change on the task branch. Your job ends at the committed delivery: you do not fetch the base, push, or create the PR. The Runner then completes the deterministic closeout (Issue #186): it re-fetches the base under the shared base-sync lock, absorbs a base advance with a plain merge, pushes the task branch, and opens exactly one PR for this Issue whose body contains the run marker and `Fixes #{{ISSUE_NUMBER}}` (it may be on the first line) so GitHub natively closes the source Issue when the PR merges into the default branch. After the PR is open, the Runner runs an independent review/fix loop and merges it itself; you do not review, fix, or merge.
 
-Base freshness before creating the PR:
+Base freshness and the push are the Runner's job (Issue #186):
 
 Your worktree was created from `{{BASE_SHA}}` (the frozen
-`origin/{{BASE_BRANCH}}` at claim time). Before creating the PR:
-
-1. Run `flock {{BASE_SYNC_LOCK}} git fetch origin {{BASE_BRANCH}}` in the
-   worktree (Issue #171: the worktree shares the deployment checkout's git
-   common dir, so an unlocked concurrent fetch races on the shared
-   `refs/remotes/origin/{{BASE_BRANCH}}` ref and fails with `cannot lock
-   ref`; the Runner's own fetches hold the same lock). A fetch error or a
-   lock timeout fails fast — do not retry the bare fetch and do not bypass
-   the lock.
-2. If `git merge-base --is-ancestor origin/{{BASE_BRANCH}} HEAD` fails, the
-   base advanced while you worked: merge `origin/{{BASE_BRANCH}}` into your
-   task branch, resolve conflicts manually, rerun the full test suite, then
-   push the updated task branch.
-3. The runner rejects a delivery whose HEAD does not contain the latest
-   remote base, so do not create the PR until the check passes.
+`origin/{{BASE_BRANCH}}` at claim time). After your commit the Runner
+re-fetches `origin/{{BASE_BRANCH}}` under the shared base-sync lock, merges
+an advanced base into the task branch with a plain merge (a conflict is
+aborted and the review session absorbs the base in-session), pushes the
+task branch, and opens the PR. Do not fetch the base, push the task branch,
+or create the PR yourself — the Runner owns those deterministic operations
+and fails fast with the full command error when one of them fails.
 
 Post-PR fixes are NOT your job (Issue #82): once the PR is opened the
 runner runs the independent review session (`prompt_review.md`), which
@@ -123,8 +114,8 @@ PR` context is ever injected into this prompt.
 Rules:
 
 - Do not merge.
-- Do not push `main` or `master`.
+- Do not push `main` or `master` (you do not push at all — the Runner pushes the task branch).
 - Do not force push or auto-resolve conflicts.
-- Do not claim success without a real commit, successful verification, and a PR.
+- Do not claim success without a real commit and successful verification (the PR is opened by the Runner).
 - If the request is unclear or the environment cannot be verified, stop and explain the blocker.
-- The final response must summarize changed files, tests, UI screenshots when applicable, commit, and PR URL.
+- The final response must summarize changed files, tests, UI screenshots when applicable, and the commit (the PR is opened by the Runner).

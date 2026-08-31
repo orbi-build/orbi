@@ -191,12 +191,13 @@ checkout and every worktree inherits it: new bootstrap worktrees have
 an SSH `git remote -v` by construction, and their fetch/push —
 including `.github/workflows/*.yml` — go over SSH (Issue #114).
 
-Before creating the PR, the implementer re-fetches the base: if
-`origin/<base_branch>` advanced, it merges the latest base into the task
-branch, resolves conflicts manually, reruns the full test suite, and only
-then pushes. The Runner verifies with
-`git merge-base --is-ancestor origin/<base_branch> HEAD` and rejects a
-delivery whose head does not contain the latest remote base.
+The agent stops at the committed delivery; the base freshness before the
+PR is the Runner's deterministic closeout (Issue #186, `deliver_pr`):
+the Runner re-fetches `origin/<base_branch>` under the base-sync lock,
+absorbs an advanced base with a plain `git merge` (a conflict is aborted
+and the PR opens on the agent's head — the existing review session
+absorbs the base in-session), then pushes the task branch and creates the
+PR.
 
 ## Failure recovery
 

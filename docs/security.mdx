@@ -6,9 +6,11 @@ the delivery contract, local-only secrets, and no remote state store.
 
 ## The AI never merges or pushes protected branches
 
-- The implementer Pi **only pushes its feature branch** and opens one PR.
-  It does not merge, does not push `main`/`master`, does not force push,
-  and never auto-resolves conflicts.
+- The implementer Pi **stops at the committed delivery**: it does not
+  fetch the base, does not push, and does not create the PR — the Runner
+  pushes the task branch (plain push, never force) and opens one PR
+  (Issue #186). The Pi does not merge, does not push `main`/`master`,
+  does not force push, and never auto-resolves conflicts.
 - The **Runner is the only merge actor**, and it merges only through the
   reviewed PR: a clean `REVIEW_VERDICT`, the merge gate (PR head contains
   the latest remote base, PR mergeable, remote head still the reviewed

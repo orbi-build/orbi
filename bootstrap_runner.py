@@ -3305,9 +3305,9 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
             "BASE_BRANCH": config["base_branch"],
             "BASE_SHA": config["base_sha"],
             "RUN_ID": config["run_id"],
-            # Issue #171: the absolute path of the shared base-sync
-            # lock — the prompt's base freshness fetch must run under
-            # it (flock <lock> git fetch origin <base>).
+            # Issue #186: the implementer prompt no longer carries the
+            # base-sync lock (the base fetch is the Runner's operation);
+            # the value stays available for custom prompt templates.
             "BASE_SYNC_LOCK": str(base_sync_lock_path(config["repo_dir"])),
         },
     )
@@ -3513,6 +3513,148 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
             f"{expected_url}; the resume must keep the same PR number"
         )
     return url
+
+
+def deliver_pr(worktree: Path, branch: str, base_branch: str,
+               base_sha: str, run_id: str, *, issue: int,
+               issue_title: str, repo_dir: Path) -> str:
+    """The Runner completes the deterministic delivery closeout.
+
+    Issue #186: the Agent stops at the committed delivery (code, tests,
+    commit on the task branch). Everything after is deterministic and
+    owned by the Runner — the Agent no longer fetches the base, merges
+    it, pushes or creates the PR:
+
+    1. commit boundary: the worktree is clean and HEAD advanced past
+       the frozen base — the Runner never commits uncommitted changes
+       or expands the Agent's commit boundary (fail fast);
+    2. base freshness: fetch under the base-sync lock (Issue #171); when
+       the base advanced, a plain `git merge origin/<base>` absorbs it;
+       a conflict is aborted (the worktree returns to the Agent's exact
+       commit boundary) and the PR opens on the Agent's head — the
+       existing review loop absorbs the base in-session, the state
+       machine is unchanged;
+    3. push: a plain push of the task branch (never a force push),
+       verified against the remote head;
+    4. PR: exactly one open PR of the branch — created by the Runner
+       with the run marker and `Fixes #<issue>` in the body when absent,
+       verified by `verify_pr` with `require_latest_base=False` (this
+       function just fetched and merged the base itself).
+    """
+    current_branch = run_command(
+        ["git", "branch", "--show-current"], cwd=worktree,
+    )
+    if current_branch != branch:
+        raise RuntimeError(
+            f"Pi changed branch: expected={branch} actual={current_branch}"
+        )
+    # Commit boundary (Issue #186): the Agent's delivery is the
+    # committed worktree state. Uncommitted changes stay uncommitted —
+    # the Runner never commits them and never expands the Agent's
+    # commit boundary; a dirty worktree is a delivery failure.
+    dirty = run_command(["git", "status", "--porcelain"], cwd=worktree)
+    if dirty:
+        LOGGER.error(
+            "delivery_uncommitted_changes branch=%s status=%s",
+            branch, " ".join(dirty.splitlines()),
+        )
+        raise RuntimeError(
+            f"the agent left uncommitted changes in the worktree "
+            f"({dirty.strip()}); the runner never commits uncommitted "
+            "changes or expands the agent's commit boundary"
+        )
+    local_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
+    if local_head == base_sha:
+        LOGGER.error(
+            "delivery_no_commit branch=%s head=%s",
+            branch, local_head,
+        )
+        raise RuntimeError(
+            f"the agent delivered no commit on the task branch (HEAD "
+            f"{local_head} is still the frozen base {base_sha})"
+        )
+    # Base freshness (Issue #171): the fetch updates the shared
+    # remote-tracking ref, so it runs under the base-sync lock with the
+    # deployment checkout as the lock location. A lock timeout or a
+    # fetch error fails fast — no retry, no lock bypass.
+    fetch_base_ref(repo_dir, base_branch, cwd=worktree)
+    try:
+        run_command(
+            ["git", "merge-base", "--is-ancestor",
+             f"origin/{base_branch}", "HEAD"],
+            cwd=worktree,
+        )
+    except subprocess.CalledProcessError:
+        # The base advanced while the agent worked: absorb it with a
+        # plain merge (the same base update the old agent prompt
+        # required). A conflict is rolled back: the worktree returns
+        # to the agent's exact commit boundary, the PR opens on the
+        # agent's head, and the existing review loop (ai-fix-needed ->
+        # the review session absorbs the base in-session) handles the
+        # rest — the state machine is unchanged.
+        try:
+            run_command(
+                ["git", "merge", f"origin/{base_branch}"], cwd=worktree,
+            )
+            LOGGER.info(
+                "base_absorbed base_branch=%s branch=%s", base_branch,
+                branch,
+            )
+        except subprocess.CalledProcessError as exc:
+            run_command(["git", "merge", "--abort"], cwd=worktree)
+            LOGGER.error(
+                "base_merge_conflict base_branch=%s branch=%s "
+                "returncode=%s stderr=%s; the merge was aborted and the "
+                "PR opens on the agent's head — the review session "
+                "absorbs the base in-session",
+                base_branch, branch, exc.returncode,
+                (exc.stderr or "").strip(),
+            )
+    # Plain push of the task branch (never a force push), then verify
+    # the remote head: the PR must be created from exactly this head.
+    # The head is re-read after the absorb step: a successful base
+    # merge advanced it to the merge commit.
+    local_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
+    run_command(["git", "push", "origin", f"HEAD:{branch}"], cwd=worktree)
+    remote_head = run_command(
+        ["git", "rev-parse", f"origin/{branch}"], cwd=worktree,
+    )
+    if remote_head != local_head:
+        LOGGER.error(
+            "remote_head_mismatch expected=%s actual=%s branch=%s",
+            local_head, remote_head, branch,
+        )
+        raise RuntimeError(
+            f"remote head {remote_head} does not match the local head "
+            f"{local_head} after push origin {branch}"
+        )
+    # Exactly one open PR of the branch: create it when absent (the PR
+    # body contract is the Runner's obligation now, Issue #186) and
+    # verify it with the full PR contract (exactly one open PR, base,
+    # head, run marker, `Fixes #<issue>`, URL). The verify step skips
+    # its own base re-fetch: this function just fetched and merged it.
+    raw = run_command([
+        "gh", "pr", "list", "--state", "open", "--head", branch,
+        "--json", "url",
+    ], cwd=worktree)
+    if not json.loads(raw):
+        body = (
+            f"{run_marker(run_id)}\n\n"
+            f"Fixes #{issue}\n\n"
+            f"{issue_title} (run_id={run_id})\n"
+        )
+        run_command([
+            "gh", "pr", "create", "--base", base_branch, "--head", branch,
+            "--title", issue_title, "--body", body,
+        ], cwd=worktree)
+        LOGGER.info(
+            "pr_created branch=%s base_branch=%s issue=%s",
+            branch, base_branch, issue,
+        )
+    return verify_pr(
+        worktree, branch, base_branch, run_id, issue=issue,
+        repo_dir=repo_dir, require_latest_base=False,
+    )
 
 
 def verify_resumed_pr(scene: dict, issue: dict, config: dict,
@@ -5106,8 +5248,13 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             role=ROLE_IMPLEMENT,
             action=lambda: _publish_test_milestone(publisher, worktree),
         )
-        pr_url = verify_pr(
-            worktree, branch, base_branch, run_id, issue=number,
+        # Issue #186: the deterministic closeout (commit boundary, base
+        # freshness + absorb, plain push, PR creation, PR verification)
+        # is the Runner's job — the agent stopped at the committed
+        # delivery.
+        pr_url = deliver_pr(
+            worktree, branch, base_branch, base_sha, run_id,
+            issue=number, issue_title=title,
             repo_dir=config["repo_dir"],
         )
         commit = run_command(

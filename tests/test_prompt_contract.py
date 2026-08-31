@@ -181,12 +181,23 @@ LOCK_FETCH_ITEMS = (
 )
 
 
-def test_prompt_md_fetches_the_base_under_the_base_sync_lock():
-    missing = _missing(_text(PROMPT), LOCK_FETCH_ITEMS)
-    assert not missing, (
-        f"prompt.md is missing the locked base fetch (Issue #171): "
-        f"{missing}"
-    )
+def test_prompt_md_does_not_make_the_agent_run_the_git_github_lifecycle():
+    """Issue #186: the deterministic Git/GitHub lifecycle (base fetch and
+    absorb, push, PR creation) belongs to the Runner, not the agent. The
+    implementer prompt must state that the Runner owns the closeout and
+    must NOT carry the locked base fetch instruction or tell the agent to
+    push or create the PR — the agent's job ends at the committed
+    delivery. The PR body contract (`Fixes #<issue>`) stays, as the
+    Runner's obligation."""
+    text = _text(PROMPT)
+    # The Runner owns the closeout (the contract wording the agent sees).
+    assert "the runner owns" in text
+    # The agent must not be told to run the lifecycle operations itself.
+    assert "flock {{base_sync_lock}} git fetch origin {{base_branch}}" not in text
+    assert "git push" not in text
+    assert "gh pr create" not in text
+    # The PR body contract still exists — as the Runner's obligation.
+    assert "fixes #{{issue_number}}" in text
 
 
 def test_prompt_review_md_fetches_the_base_under_the_base_sync_lock():
