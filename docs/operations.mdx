@@ -18,7 +18,7 @@ queued) and starts its OWN service instance
 Runner instances can run concurrently. Each tick's service instance:
 
 1. **Fast-forwards the code first** (`ExecStartPre`, outside the Python
-   process): `git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main`. The fetch disables automatic maintenance so it cannot detach a Git child beyond the preflight and shared-lock lifetime.
+   process): `timeout 90s git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main`. The fetch disables automatic maintenance so it cannot detach a Git child beyond the preflight and shared-lock lifetime.
    A dirty checkout, a failed fetch or a non-fast-forwardable state fails
    the preflight: the service does not start and the reason lands in the
    systemd journal (fail fast). A currently running long task is never

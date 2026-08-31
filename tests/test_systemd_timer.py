@@ -143,6 +143,7 @@ def test_service_fast_forwards_main_before_runner_starts():
     section = service["Service"]
     assert "ExecStartPre" in section
     pre = section["ExecStartPre"][0]
+    assert pre.startswith("/usr/bin/timeout 90s /usr/bin/flock ")
     assert "git fetch --no-auto-maintenance origin main" in pre
     assert "git merge --ff-only origin/main" in pre
     # The preflight runs in the main checkout (the unit's
@@ -165,7 +166,7 @@ def test_service_preflight_is_serialized_with_a_short_lived_flock():
     non-zero preflight)."""
     service = parse_unit(SERVICE_FILE)
     pre = service["Service"]["ExecStartPre"][0]
-    assert pre.startswith("/usr/bin/flock ")
+    assert pre.startswith("/usr/bin/timeout 90s /usr/bin/flock ")
     assert "/.muyan-pilot/base-sync.lock" in pre
     assert (
         " -c 'git fetch --no-auto-maintenance origin main && "

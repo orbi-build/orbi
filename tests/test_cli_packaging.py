@@ -182,6 +182,7 @@ def test_service_keeps_working_directory_and_preflight():
         "%h/Documents/muyan/muyan-pilot",
     ]
     pre = section["ExecStartPre"][0]
+    assert pre.startswith("/usr/bin/timeout 90s /usr/bin/flock ")
     assert "git fetch --no-auto-maintenance origin main" in pre
     assert "git merge --ff-only origin/main" in pre
 
