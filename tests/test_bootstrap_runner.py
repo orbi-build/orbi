@@ -9589,10 +9589,12 @@ def test_run_ticket_agent_uses_a_temporary_session_without_git(monkeypatch, tmp_
     command, kwargs = calls[0]
     assert command[0] == "pi"
     assert "git/gh tools" in command[command.index("--system-prompt") + 1]
-    assert kwargs["cwd"] == tmp_path
+    assert kwargs["cwd"] != tmp_path
+    assert kwargs["cwd"].name.startswith("muyan-pilot-ticket-")
     assert kwargs["branch"] == "-"
     assert kwargs["role"] == runner.ROLE_TICKET
     assert str(tmp_path) not in command[command.index("--session-dir") + 1]
+    assert Path(command[command.index("--session-dir") + 1]).parent == kwargs["cwd"]
 
 
 def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch):

@@ -3171,14 +3171,15 @@ def run_ticket_agent(issue: dict, config: dict, source_repo: str,
     # Pi's session is transient OS state, not a task worktree or repository
     # artifact. Its output and all terminal evidence are kept on the Issue.
     with tempfile.TemporaryDirectory(prefix="muyan-pilot-ticket-") as directory:
-        session_dir = Path(directory) / "session"
+        ticket_dir = Path(directory)
+        session_dir = ticket_dir / ".pi-session"
         command = [
             "pi", *_skill_args(_skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)),
             *_pi_model_args(config), "--print", "--session-dir", str(session_dir),
             "--system-prompt", system_prompt, context,
         ]
         return stream_pi(
-            command, cwd=config["repo_dir"],
+            command, cwd=ticket_dir,
             log_command=[
                 "pi", *_pi_model_args(config), "--print", "--session-dir",
                 str(session_dir), "--system-prompt", "<redacted>",
