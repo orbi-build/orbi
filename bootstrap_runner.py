@@ -102,16 +102,21 @@ PI_HEARTBEAT_SECONDS = 30.0
 # warning; the first new session event after it logs `pi_resumed`.
 # A slow active model (model_wait, Issue #40) is never reported idle.
 PI_IDLE_WARN_SECONDS = 300.0
-# Upstream-dead detection (Issue #75): while the newest session event
-# is a tool result (model_wait) the model is expected to reply next.
-# A real (slow) model keeps producing session events; a dead upstream
-# (llama/proxy timeout, connection drop) freezes the session JSONL
-# while Pi sits in epoll_wait. Once the silence in model_wait reaches
-# this threshold the upstream is declared dead: Pi is killed and the
-# run fails fast through the normal failure path (the slot is released
-# by the kernel when the Runner exits). This is NOT a business timeout:
-# it only fires while the session file is frozen (stale seconds), never
-# while events keep arriving — a slow generation survives.
+# Hung-model-request detection (Issue #75, safe recovery since Issue
+# #218): while the newest session event is a tool result (model_wait)
+# the model is expected to reply next. A real (slow) model keeps
+# producing session events; a HUNG model request (the model service
+# process alive but the request never completes, or the upstream dead:
+# llama/proxy timeout, connection drop) freezes the session JSONL while
+# Pi sits in epoll_wait. Once the silence in model_wait reaches this
+# threshold the request is declared hung: Pi is killed (the connection
+# state is logged as `upstream_alive` evidence, never a veto — process
+# alive ≠ responding) and the run fails fast through the normal
+# failure path (the slot is released by the kernel when the Runner
+# exits, the next tick resumes the same run or claims the next
+# Issue). This is NOT a business timeout: it only fires while the
+# session file is frozen (stale seconds), never while events keep
+# arriving — a slow generation survives.
 PI_MODEL_WAIT_DEAD_SECONDS = 600.0
 # Idle-stall recovery (Issue #94): a stalled (non-model_wait) session
 # is recovered automatically instead of only warning. Measured in idle
@@ -2701,7 +2706,7 @@ def stream_pi(
     deadline = None if timeout is None else time.monotonic() + timeout
     activity = watcher.poll()
     timed_out = False
-    upstream_dead = False
+    model_wait_dead = False
     # model_wait transitions (Issue #40): one line when the state is
     # entered and one when it is left; unchanged polls are heartbeats
     # that carry the state, so a slow model never looks idle and no
@@ -2766,9 +2771,10 @@ def stream_pi(
             )
             # The wait state rides on the activity/heartbeat lines
             # (Issue #40). Once the model_wait silence crosses the dead
-            # threshold the wait is SLOW, not dead (Issue #169): the
-            # state is `model_wait_slow` — visible, but only the missing
-            # upstream connection (checked below) is a kill.
+            # threshold the wait is DEAD, not slow (Issue #218): the
+            # state is `model_wait_slow` on the last heartbeat before
+            # the kill below — visible, and the kill fires on this same
+            # poll regardless of the connection state.
             if activity["model_wait"]:
                 wait_state = (
                     "model_wait_slow"
@@ -3050,35 +3056,39 @@ def stream_pi(
                         "progress_publish_failed run=%s issue=%s role=%s",
                         run_id, issue_ref, role,
                     )
-            # Upstream-dead detection (Issue #75, evidence-based since
-            # Issue #169): the model is expected to reply next
+            # Hung-model-request detection (Issue #75, safe recovery
+            # since Issue #218): the model is expected to reply next
             # (model_wait) and the session file has been frozen for the
-            # dead threshold — but the bare freeze is NOT evidence the
-            # upstream is dead: a slow local model generating for
-            # minutes keeps its connection open (a live TCP socket in
-            # the live states ESTABLISHED/SYN_SENT/SYN_RECV). Only the
-            # combination of the long silence AND no live upstream
-            # connection kills Pi and fails fast (the #158 regression:
-            # a healthy long generation must not be killed): the
-            # normal failure path releases the slot so the next tick
-            # can resume or claim the next Issue. Never fires while
-            # events keep arriving (a slow generation is not a dead
-            # upstream).
+            # dead threshold: the model request is HUNG. A live
+            # connection to the upstream (a TCP socket in the live
+            # states ESTABLISHED/SYN_SENT/SYN_RECV) is evidence for the
+            # journal, never a veto (Issue #218: process alive ≠
+            # responding — the #183 scene: llama-server alive, the
+            # request hung, the slot held for hours). The runner kills
+            # the Pi session and fails fast through the normal failure
+            # path (the slot is released by the kernel when the tick
+            # exits, the next tick resumes the same run or claims the
+            # next Issue). Never fires while events keep arriving (a
+            # slow generation is not a hung request).
             if (
                 activity["model_wait"]
                 and activity["stale_seconds"] >= model_wait_dead_seconds
             ):
-                if upstream_alive(process.pid):
-                    # The connection to the upstream is still alive:
-                    # the model is generating slowly, not dead
-                    # (Issue #169). The wait is visible as
-                    # `state=model_wait_slow` on the heartbeats — no
-                    # kill, the run continues.
-                    pass
-                else:
-                    process.kill()
-                    upstream_dead = True
-                    break
+                alive = upstream_alive(process.pid)
+                LOGGER.warning(
+                    "model_wait_dead issue=%s role=%s idle_seconds=%s "
+                    "threshold=%s action=kill_pi session=%s run_id=%s "
+                    "upstream_alive=%s reason=hung_model_request",
+                    issue_ref, role,
+                    int(activity["stale_seconds"]),
+                    int(model_wait_dead_seconds),
+                    activity["session_id"] or "-",
+                    run_id,
+                    "true" if alive else "false",
+                )
+                process.kill()
+                model_wait_dead = True
+                break
             if process.poll() is not None:
                 break
     finally:
@@ -3104,10 +3114,10 @@ def stream_pi(
             f"(TERM/KILL of pre-idle descendants); Pi was killed "
             "(Issue #94)"
         )
-    if upstream_dead:
+    if model_wait_dead:
         stale = format_duration(activity["stale_seconds"])
         LOGGER.error(
-            "run_failed %s reason=upstream_dead_stale_%s",
+            "run_failed %s reason=model_wait_dead_stale_%s",
             format_run_scene(
                 activity, run_id=run_id, issue=issue_ref,
                 role=role, branch=branch, worktree=str(cwd),
@@ -3116,7 +3126,9 @@ def stream_pi(
         )
         raise RuntimeError(
             f"Pi is stuck in model_wait with a frozen session for {stale}: "
-            "the upstream (llama/proxy) is dead; Pi was killed (Issue #75)"
+            "the model request is hung (the model service process is "
+            "alive but the request never completes); Pi was killed "
+            "(Issue #218)"
         )
     if timed_out:
         reason = f"timeout_{format_duration(timeout)}"

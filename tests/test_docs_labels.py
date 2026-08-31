@@ -124,25 +124,33 @@ def test_readme_documents_review_verdict_on_github():
     assert "回写" in text or "写入" in text
 
 
-def test_readme_documents_upstream_dead_kill():
-    """Issue #75: the upstream-dead contract must be documented in the
-    README journal section: while the newest session event is a tool
-    result (model_wait) and the session JSONL is frozen for the dead
-    threshold (default 600 s, PI_MODEL_WAIT_DEAD_SECONDS), the Runner
-    kills Pi and fails fast with
-    `run_failed ... reason=upstream_dead_stale_...`; the kill never
-    fires while events keep arriving (a slow model is not a dead
-    upstream) and it is NOT a business-task timeout."""
+def test_readme_documents_model_wait_dead_kill():
+    """Issue #218 (supersedes the #75/#169 contract): the
+    hung-model-request contract must be documented in the README
+    journal section: while the newest session event is a tool result
+    (model_wait) and the session JSONL is frozen for the dead threshold
+    (default 600 s, PI_MODEL_WAIT_DEAD_SECONDS), the Runner logs the
+    structured `model_wait_dead` line (upstream_alive is evidence, never
+    a veto — process alive ≠ responding), kills Pi and fails fast with
+    `run_failed ... reason=model_wait_dead_stale_...`; the kill never
+    fires while events keep arriving (a slow generation is not a hung
+    request) and it is NOT a business-task timeout."""
     text = README.read_text(encoding="utf-8")
-    # The run_failed line carries the upstream-dead reason.
-    assert "upstream_dead_stale_" in text
+    # The run_failed line carries the hung-model-request reason.
+    assert "model_wait_dead_stale_" in text
+    # The structured model_wait_dead line is documented with its
+    # fields.
+    assert "model_wait_dead issue=" in text
+    assert "action=kill_pi" in text
+    assert "reason=hung_model_request" in text
+    assert "upstream_alive" in text
     # The kill is documented with its trigger (model_wait + frozen
     # session) and the default threshold.
     assert "PI_MODEL_WAIT_DEAD_SECONDS" in text
     assert "600" in text
     assert "model_wait" in text
-    # The slow-model boundary: events keep arriving -> no kill.
-    assert "慢模型" in text
+    # The slow-generation boundary: events keep arriving -> no kill.
+    assert "事件持续到达时永不触发" in text
     # It is not a business-task timeout.
     assert "业务" in text
 
@@ -187,17 +195,21 @@ def test_agents_md_documents_p0_priority():
     assert "no infinite retry" in text
 
 
-def test_agents_md_documents_upstream_dead_kill():
-    """Issue #75: the development contract (AGENTS.md) must document
-    the same upstream-dead behavior in its observability section: a
-    frozen model_wait past the dead threshold kills Pi and fails fast
-    (slot released via the normal failure path); a slow model that
-    keeps producing events is never killed; this is not a business
-    task timeout."""
+def test_agents_md_documents_model_wait_dead_kill():
+    """Issue #218 (supersedes the #75/#169 contract): the development
+    contract (AGENTS.md) must document the same hung-model-request
+    behavior in its observability section: a frozen model_wait past the
+    dead threshold kills Pi and fails fast (slot released via the
+    normal failure path); a live connection / alive model service
+    process is evidence, never a veto (process alive ≠ responding); a
+    slow generation that keeps producing events is never killed; this
+    is not a business task timeout."""
     text = AGENTS.read_text(encoding="utf-8").lower()
-    assert "upstream" in text
+    assert "model_wait_dead" in text
     assert "model_wait" in text
     assert "600" in text
+    assert "hung model request" in text
+    assert "upstream_alive" in text
     assert "slow" in text
     # The no-business-timeout scope rule must stay intact next to it.
     assert "no business task timeout" in text

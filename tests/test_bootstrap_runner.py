@@ -3221,18 +3221,21 @@ def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path)
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failure_body
 
 
-def test_process_issue_upstream_dead_failure_marks_blocked(
+def test_process_issue_model_wait_dead_failure_marks_blocked(
     monkeypatch, tmp_path,
 ):
-    """Issue #75 acceptance: the upstream-dead failure of the
-    implementer session (the proxy/llama timed out, the session JSONL
-    froze in model_wait, stream_pi killed Pi and raised) flows through
-    the NORMAL failure path: the Issue is marked `ai-blocked` (removing
+    """Issue #218 acceptance: the hung-model-request failure of the
+    implementer session (the model service process is alive but the
+    request never completes, the session JSONL froze in model_wait,
+    stream_pi killed Pi and raised) flows through the NORMAL failure
+    path: the Issue is marked `ai-blocked` (removing
     `ai-in-progress`), the `Muyan Pilot failed` comment carries the
-    upstream-dead reason and the run marker (the scene stays in the
-    Issue), and the error re-raises so the tick exits and the kernel
-    releases the slot — the next tick can then resume or claim the
-    next `ai-fix-needed`. No special handling, no fallback."""
+    hung-model-request reason and the run marker (the scene stays in
+    the Issue), and the error re-raises so the tick exits and the
+    kernel releases the slot — the slot is never held forever. The
+    next tick resumes the SAME run (the restart-resume scan reuses the
+    newest worktree's run id) or claims the next ready Issue. No
+    special handling, no fallback."""
     calls = []
     monkeypatch.setattr(
         runner, "edit_issue",
@@ -3245,13 +3248,14 @@ def test_process_issue_upstream_dead_failure_marks_blocked(
     monkeypatch.setattr(
         runner, "create_worktree", Mock(return_value=tmp_path),
     )
-    upstream_dead = RuntimeError(
+    model_wait_dead = RuntimeError(
         "Pi is stuck in model_wait with a frozen session for 10m: "
-        "the upstream (llama/proxy) is dead; Pi was killed (Issue #75)"
+        "the model request is hung (the model service process is alive "
+        "but the request never completes); Pi was killed (Issue #218)"
     )
 
     def dead_run_pi(*args, **kwargs):
-        raise upstream_dead
+        raise model_wait_dead
 
     monkeypatch.setattr(runner, "run_pi", dead_run_pi)
     monkeypatch.setattr(
@@ -3269,9 +3273,9 @@ def test_process_issue_upstream_dead_failure_marks_blocked(
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    with pytest.raises(RuntimeError, match="upstream"):
+    with pytest.raises(RuntimeError, match="hung"):
         runner.process_issue(
-            {"number": 75, "title": "Upstream dead", "body": ""},
+            {"number": 218, "title": "Model wait dead", "body": ""},
             {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
              "base_branch": "main"},
             "xqliu/muyan-pilot",
@@ -3294,13 +3298,14 @@ def test_process_issue_upstream_dead_failure_marks_blocked(
         if "Muyan Pilot failed:" in body
     ]
     assert len(failure) == 1
-    # The upstream-dead reason and the run marker stay in the Issue.
-    assert "the upstream (llama/proxy) is dead" in failure[0]
+    # The hung-model-request reason and the run marker stay in the
+    # Issue.
+    assert "the model request is hung" in failure[0]
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failure[0]
     # The blocked milestone notification carries the same scene.
     blocked = [body for body in posted if "Muyan Pilot: blocked" in body]
     assert blocked
-    assert "the upstream (llama/proxy) is dead" in blocked[0]
+    assert "the model request is hung" in blocked[0]
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked[0]
 
 
@@ -4513,16 +4518,17 @@ def test_stream_pi_drains_pipe_data_written_after_exit(
     assert "stderr=late stderr data" in caplog.text
 
 
-def test_stream_pi_kills_pi_when_upstream_dies_during_model_wait(
+def test_stream_pi_hung_model_request_killed_when_upstream_gone(
     tmp_path, caplog,
 ):
-    """Issue #75: the model is expected to reply next (model_wait) but
-    the session JSONL is frozen — the upstream (llama/proxy) is dead
-    (HTTP timeout, connection drop) and Pi sits in epoll_wait. The
-    runner must kill Pi and fail fast (the normal failure path releases
-    the slot): an infinite `model_wait` hang is not acceptable. This is
-    not a business timeout: it only fires while the session file is
-    frozen (stale seconds), never while events keep arriving."""
+    """Issue #218 (subsumes #75): the model is expected to reply next
+    (model_wait) and the session JSONL is frozen past the dead
+    threshold — the model request is hung (here the connection is even
+    gone: the old #75 dead-upstream scene). The runner must kill Pi and
+    fail fast (the normal failure path releases the slot): an infinite
+    `model_wait` hang is not acceptable. This is not a business timeout:
+    it only fires while the session file is frozen (stale seconds),
+    never while events keep arriving."""
     records = [
         (0.0, {"type": "session", "id": "sess-1",
                "timestamp": fresh_timestamp(), "cwd": "/w"}),
@@ -4538,8 +4544,8 @@ def test_stream_pi_kills_pi_when_upstream_dies_during_model_wait(
                            "content": [{"type": "text", "text": "ok"}]}}),
     ]
     command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
-    with caplog.at_level("ERROR"), pytest.raises(
-        RuntimeError, match="upstream",
+    with caplog.at_level("WARNING"), pytest.raises(
+        RuntimeError, match="hung",
     ) as excinfo:
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
@@ -4547,21 +4553,29 @@ def test_stream_pi_kills_pi_when_upstream_dies_during_model_wait(
             run_id="run1", issue=75, source_repo="xqliu/muyan-pilot",
             branch="b",
         )
-    # The failure message names the dead upstream and the stale time.
+    # The failure message names the hung model request and the stale
+    # time.
     assert "model_wait" in str(excinfo.value)
     lines = caplog.text.splitlines()
     failures = [line for line in lines if " run_failed " in line]
     assert len(failures) == 1
-    assert "reason=upstream_dead_stale_" in failures[0]
+    assert "reason=model_wait_dead_stale_" in failures[0]
     assert "issue=xqliu/muyan-pilot#75" in failures[0]
     assert f"worktree={tmp_path}" in failures[0]
+    # The structured model_wait_dead line carries the evidence: no
+    # live connection here.
+    dead = [line for line in lines if " model_wait_dead " in line]
+    assert len(dead) == 1
+    assert "upstream_alive=false" in dead[0]
+    assert "reason=hung_model_request" in dead[0]
     # The kill happened fast (well before the child's 10 s sleep).
-    assert "WARNING" not in caplog.text
+    assert "pi_idle" not in caplog.text
 
 
-def test_stream_pi_upstream_dead_default_is_ten_minutes():
-    # Issue #75 contract: a frozen model_wait of 10 minutes declares
-    # the upstream dead (the real incident hung for over an hour).
+def test_stream_pi_model_wait_dead_default_is_ten_minutes():
+    # Issue #75 contract (the threshold is unchanged by Issue #218):
+    # a frozen model_wait of 10 minutes kills the Pi session (the real
+    # #183 incident hung for over three hours).
     assert runner.PI_MODEL_WAIT_DEAD_SECONDS == 600.0
 
 
@@ -4601,7 +4615,7 @@ def test_stream_pi_slow_model_still_generating_is_not_killed(
             branch="b",
         )
     assert result == "final answer"
-    assert "upstream_dead" not in caplog.text
+    assert "model_wait_dead" not in caplog.text
 
 
 def test_stream_pi_no_upstream_kill_before_model_wait(tmp_path, caplog):
@@ -4626,7 +4640,7 @@ def test_stream_pi_no_upstream_kill_before_model_wait(tmp_path, caplog):
             run_id="run1", issue=75, source_repo="xqliu/muyan-pilot",
             branch="b",
         )
-    assert "upstream_dead" not in caplog.text
+    assert "model_wait_dead" not in caplog.text
 
 
 # --- Issue #169: evidence-based stall detection ------------------------------
@@ -4666,15 +4680,17 @@ def make_upstream_listener(drop: bool = False):
 
 def make_slow_model_pi(tmp_path, *, port: int, hold_seconds: float = 2.5,
                        drop_upstream: bool = False) -> list[str]:
-    """Build a command that mimics a SLOW Pi (Issue #169): it writes the
-    session toolCall + toolResult (the model is expected to reply next:
-    model_wait), opens a TCP connection to the local upstream listener
-    (the live model request) and holds it for `hold_seconds` — a long
-    generation that crosses the dead threshold. When `drop_upstream`
-    the listener closes the connection immediately (the upstream died:
-    the client socket leaves the live TCP states). After the hold it
-    writes the assistant reply and exits — the slow model that was NOT
-    killed gets to finish."""
+    """Build a command that mimics a Pi with a HUNG model request
+    (Issue #218): it writes the session toolCall + toolResult (the
+    model is expected to reply next: model_wait), opens a TCP
+    connection to the local upstream listener (the live model request)
+    and holds it for `hold_seconds` without ever replying — the model
+    service process is alive, the connection is alive, but the request
+    never completes (the session JSONL stays frozen past the dead
+    threshold). When `drop_upstream` the listener closes the connection
+    immediately (the old #169 dead-upstream scene: the client socket
+    leaves the live TCP states). After the hold it writes the assistant
+    reply and exits — a runner that does not kill it gets to finish."""
     session_dir = tmp_path / ".pi-session"
     session_dir.mkdir(exist_ok=True)
     script = (
@@ -4710,58 +4726,105 @@ def make_slow_model_pi(tmp_path, *, port: int, hold_seconds: float = 2.5,
     return [sys.executable, "-c", script]
 
 
-def test_stream_pi_slow_model_past_threshold_with_live_upstream_not_killed(
+def test_stream_pi_hung_model_request_killed_despite_live_upstream(
     tmp_path, caplog,
 ):
-    """Issue #169 acceptance 1 (the #158 regression): the model_wait
-    silence crosses the dead threshold while the model request is still
-    connected to the upstream (a live TCP connection: a slow local
-    model generating for minutes). The bare session freeze is NOT
-    evidence the upstream is dead — Pi must not be killed, the run
-    finishes, and the slow wait is visible as `state=model_wait_slow`
-    (slow, not dead) on the heartbeats."""
+    """Issue #218 (the #183 scene; supersedes the #169/#158
+    connection-alive exemption): the model_wait silence crosses the
+    dead threshold while the model request is still CONNECTED to the
+    upstream (a live TCP connection) — but the session JSONL is frozen
+    and the model service process is alive without ever answering
+    ("process alive ≠ responding"). A live connection is evidence for
+    the journal, never a veto: the runner kills Pi and fails fast with
+    the `model_wait_dead` reason — the slot is never held forever."""
     port, stop = make_upstream_listener(drop=False)
     try:
         command = make_slow_model_pi(
-            tmp_path, port=port, hold_seconds=2.5,
+            tmp_path, port=port, hold_seconds=30.0,
         )
-        with caplog.at_level("INFO"):
-            result = runner.stream_pi(
+        with caplog.at_level("WARNING"), pytest.raises(
+            RuntimeError, match="hung",
+        ) as excinfo:
+            runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
                 model_wait_dead_seconds=0.5,
-                run_id="run1", issue=158, source_repo="xqliu/muyan-pilot",
+                run_id="run1", issue=218, source_repo="xqliu/muyan-pilot",
                 branch="b",
             )
     finally:
         stop()
-    assert result == ""
-    assert "upstream_dead" not in caplog.text
-    assert "run_failed" not in caplog.text
-    # The slow wait is visible as a state, not a kill: heartbeats
-    # carried `state=model_wait_slow` once the silence crossed the
-    # threshold (the connection was still alive: slow, not dead).
-    slow = [line for line in caplog.text.splitlines()
-            if "state=model_wait_slow" in line]
-    assert len(slow) >= 1, caplog.text
-    for line in slow:
-        assert " heartbeat " in line
+    assert "model_wait" in str(excinfo.value)
+    lines = caplog.text.splitlines()
+    failures = [line for line in lines if " run_failed " in line]
+    assert len(failures) == 1
+    assert "reason=model_wait_dead_stale_" in failures[0]
+    assert "issue=xqliu/muyan-pilot#218" in failures[0]
+    # The structured model_wait_dead line carries the evidence: the
+    # connection was still alive (upstream_alive=true) — process
+    # alive ≠ responding.
+    dead = [line for line in lines if " model_wait_dead " in line]
+    assert len(dead) == 1
+    assert "upstream_alive=true" in dead[0]
+    assert "reason=hung_model_request" in dead[0]
+    # The kill is the failure path: no idle warning, no recovery.
+    assert " pi_idle " not in caplog.text
+    assert " pi_idle_term " not in caplog.text
 
 
-def test_stream_pi_dead_upstream_still_killed_during_model_wait(
+def test_stream_pi_model_wait_dead_line_fields(tmp_path, caplog):
+    """Issue #218 acceptance: the recovery logs ONE structured,
+    grep-able `model_wait_dead` line with the full scene (like
+    `unit_drift` / `transport_check_failed`): issue, idle seconds, the
+    threshold, the action, the session, the run id, the upstream
+    connection evidence and the reason. The line is parseable with
+    `pi_activity.parse_scene`."""
+    records = [
+        (0.0, {"type": "session", "id": "sess-218",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.1, {"type": "message", "id": "r1",
+               "timestamp": fresh_timestamp(1),
+               "message": {"role": "toolResult", "toolCallId": "t1",
+                           "toolName": "bash",
+                           "content": [{"type": "text", "text": "ok"}]}}),
+    ]
+    command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
+    with caplog.at_level("WARNING"), pytest.raises(RuntimeError):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            model_wait_dead_seconds=0.5,
+            run_id="ab12cd34", issue=218, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    dead = [line for line in lines if " model_wait_dead " in line]
+    assert len(dead) == 1
+    fields = pi_activity.parse_scene(dead[0])
+    assert fields["issue"] == "xqliu/muyan-pilot#218"
+    assert fields["role"] == "implement"
+    assert fields["action"] == "kill_pi"
+    assert fields["session"] == "sess-218"
+    assert fields["run_id"] == "ab12cd34"
+    assert fields["upstream_alive"] == "false"
+    assert fields["reason"] == "hung_model_request"
+    assert fields["threshold"] == "0"
+    assert int(fields["idle_seconds"]) >= 0
+
+
+def test_stream_pi_dropped_connection_model_wait_dead_upstream_false(
     tmp_path, caplog,
 ):
-    """Issue #169 acceptance 3: the upstream closed the connection
-    (the client socket left the live TCP states) and the model_wait
-    silence crossed the threshold — the evidence is sufficient: the
-    runner kills Pi and fails fast with the `upstream_dead` reason
-    (the #75 contract, now with evidence)."""
+    """Issue #218: the upstream closed the connection (the client
+    socket left the live TCP states — the old #169 dead-upstream
+    scene) and the model_wait silence crossed the threshold: the same
+    `model_wait_dead` path kills Pi and fails fast, with the
+    connection evidence recorded as `upstream_alive=false`."""
     port, stop = make_upstream_listener(drop=True)
     try:
         command = make_slow_model_pi(
             tmp_path, port=port, hold_seconds=3.0, drop_upstream=True,
         )
-        with caplog.at_level("ERROR"), pytest.raises(
-            RuntimeError, match="upstream",
+        with caplog.at_level("WARNING"), pytest.raises(
+            RuntimeError, match="hung",
         ):
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
@@ -4774,8 +4837,11 @@ def test_stream_pi_dead_upstream_still_killed_during_model_wait(
     lines = caplog.text.splitlines()
     failures = [line for line in lines if " run_failed " in line]
     assert len(failures) == 1
-    assert "reason=upstream_dead_stale_" in failures[0]
+    assert "reason=model_wait_dead_stale_" in failures[0]
     assert "issue=xqliu/muyan-pilot#169" in failures[0]
+    dead = [line for line in lines if " model_wait_dead " in line]
+    assert len(dead) == 1
+    assert "upstream_alive=false" in dead[0]
     # The kill is the failure path: no idle warning, no recovery.
     assert " pi_idle " not in caplog.text
     assert " pi_idle_term " not in caplog.text
@@ -5437,11 +5503,12 @@ def test_stream_pi_idle_recovery_never_fires_during_model_wait(
 ):
     """Issue #94: the recovery is the non-model_wait territory (same
     gate as the `pi_idle` warning). A frozen model_wait with a hung
-    descendant is the Issue #75 upstream-dead case: the runner kills
-    Pi via that path and never TERMs the descendant."""
+    descendant is the Issue #218 hung-model-request case: the runner
+    kills Pi via the `model_wait_dead` path and never TERMs the
+    descendant."""
     command = make_hung_pi(tmp_path, model_wait=True)
     with caplog.at_level("ERROR"), pytest.raises(
-        RuntimeError, match="upstream",
+        RuntimeError, match="hung",
     ):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
@@ -5454,7 +5521,7 @@ def test_stream_pi_idle_recovery_never_fires_during_model_wait(
     failures = [line for line in caplog.text.splitlines()
                 if " run_failed " in line]
     assert len(failures) == 1
-    assert "reason=upstream_dead_stale_" in failures[0]
+    assert "reason=model_wait_dead_stale_" in failures[0]
 
 
 def test_stream_pi_idle_recovery_state_visible_in_progress_callback(

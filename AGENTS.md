@@ -128,24 +128,26 @@ acceptance criteria.
   the recovery state via its `recovery` field (`wait` / `term` / `kill`);
   the first new activity resets the whole recovery state. A session frozen
   in `model_wait` (the newest event is a tool result) past
-  `PI_MODEL_WAIT_DEAD_SECONDS` (default 600 s) declares the upstream
-  (llama/proxy) dead ONLY when the Pi process has no live upstream
-  connection (Issue #169): the silence alone is not evidence — a slow
-  local model generating for minutes keeps its TCP connection alive and
-  must not be killed (the #158 regression). The evidence is the fd table:
-  a `socket:[...]` inode of the Pi process that appears in
-  `/proc/net/tcp` or `/proc/net/tcp6` in state ESTABLISHED, SYN_SENT or
-  SYN_RECV with a non-zero remote address is live; CLOSE_WAIT and all
-  other states are not. With the silence AND no live connection the HTTP
-  timeout or connection drop left Pi in epoll_wait and it will never exit
-  on its own: the Runner kills Pi, logs
-  `run_failed ... reason=upstream_dead_stale_...`, and fails fast through
-  the normal failure path (the Issue is marked `ai-blocked` with the
-  scene in the Issue comment, the slot is released by the kernel when the
-  process exits, and the next tick can resume or claim the next
-  `ai-fix-needed`) (Issue #75). It never fires while events keep arriving
-  (a slow model is not a dead upstream) and it is NOT a business task
-  timeout.
+  `PI_MODEL_WAIT_DEAD_SECONDS` (default 600 s) is a HUNG model request
+  (Issue #75, safe recovery since Issue #218): the model service process
+  being alive and the Pi connection to it still ESTABLISHED (a
+  `socket:[...]` inode of the Pi process in `/proc/net/tcp` or
+  `/proc/net/tcp6` in state ESTABLISHED, SYN_SENT or SYN_RECV with a
+  non-zero remote address) are NOT an exemption — process alive ≠
+  responding (the #183 scene: llama-server alive, `/health` ok, the
+  request hung, the slot held for hours). The Runner logs one structured
+  `model_wait_dead issue=... role=... idle_seconds=... threshold=...
+  action=kill_pi session=... run_id=... upstream_alive=true|false
+  reason=hung_model_request` line (`upstream_alive` is evidence for the
+  journal, never a veto), kills the Pi session, and fails fast through
+  the normal failure path with
+  `run_failed ... reason=model_wait_dead_stale_...` (the Issue is marked
+  `ai-blocked` in the implement phase and `ai-fix-needed` in the review
+  phase, with the scene in the Issue comment; the slot is released by the
+  kernel when the process exits, and the next tick resumes the same
+  run/branch/worktree/PR or claims the next `ai-fix-needed`). It never
+  fires while events keep arriving (a slow generation is not a hung
+  request) and it is NOT a business task timeout.
 - GitHub: exactly one progress comment per run, carrying a hidden run
   marker. It is PATCHed in place (at most every 30 seconds or on progress
   change) and never replaced by new heartbeat comments. Milestones (started,

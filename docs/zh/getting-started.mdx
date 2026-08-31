@@ -353,7 +353,7 @@ session、phase、last activity、具体错误），journal 显示
 |---|---|---|
 | 启动在任何 slot/claim 前失败 | journal `API key for provider ... references missing environment variable GROQ_API_KEY`（只报变量**名**） | 把 key 值放进你的 `.muyan-pilot/env`（第 4 步），并确认已安装 unit 的 `EnvironmentFile` 指向它；手工 tick 则在 shell 里 export 该变量 |
 | 启动在 provider 文件上失败 | journal `pi_providers file ... is not valid JSON` / `is missing baseUrl` / `pi_provider ... is not defined` | 修 JSON（第 4 步契约：`providers` 对象、`baseUrl`、`api`、`models[].id`），重跑 `muyan-pilot setup` |
-| Pi 起来了但模型一直不响应 | session JSONL 停在 `model_wait`；死寂窗口后 journal 出现 `run_failed ... reason=upstream_dead_stale_...` | 上游（模型 server/proxy）挂了或连接断了——用一次真实 `pi --print` 调用检查 endpoint，重启后重新派活（Issue 带现场 `ai-blocked`） |
+| Pi 起来了但模型一直不响应 | session JSONL 停在 `model_wait`；死寂窗口后 journal 出现 `model_wait_dead` 行和 `run_failed ... reason=model_wait_dead_stale_...` | 模型请求挂死——模型 server/proxy 挂了、连接断了，或进程还活着但请求被挂住（行上 `upstream_alive=true` 是证据，不是豁免）——用一次真实 `pi --print` 调用检查 endpoint，重启后重新派活（Issue 带现场 `ai-blocked`） |
 | PR 打开了但一直不 merge | Issue 标签 `ai-fix-needed`；审查 findings 在 Issue 和 PR 上 | 审查发现会话内修不掉的 Blocker/Major findings——下一个审查 session 重试**同一个** PR（上限 5 轮）；读 Issue 和 PR 上的 findings |
 | 审查循环耗尽轮数 | journal `review_rounds_exhausted issue=<n> rounds=5`；Issue **单独** `ai-blocked` | 有界循环是人工决策——读 findings，手工修 PR 或关闭；见[运维](/zh/operations) |
 | PR 落后于最新 base | Issue `ai-fix-needed`，review 评论说 PR 落后于最新 base 或有 merge 冲突 | 自动：下一个审查 session 在会话内把最新 `origin/<base>` merge 进分支、解冲突、重跑全量测试 |
