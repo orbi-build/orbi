@@ -271,7 +271,8 @@ Release task 是 `ai-ready` + `ai-release` 双标签的 Issue（Issue #98）—�
 5. 在 release commit 的干净 worktree 里跑声明的 `test_command`（`timeout` 包裹）；
 6. tag：远端 tag 不存在时在 release commit 上创建 annotated tag 并**普通 push**（绝不 `--force`）；已存在时必须精确指向 release commit（指向别处 fail fast——已存在的 tag 绝不移动/覆盖）；
 7. 发布 GitHub Release（幂等），notes 带完整验证证据（scope/门禁/测试/run marker）；
-8. 成功：`ai-merged`（终态）+ 关闭 Issue + 成功评论（release URL、tag、commit、证据）；任何失败：单独 `ai-blocked`（release 是人工决策点，不自动重试）+ 失败评论（run marker + 具体原因）+ fail fast。
+8. 关闭与发布 `version` **title 精确一致**的 GitHub Milestone（Issue #214）——在成功路径上、release Issue 已 `ai-merged` 关闭之后：open Issues 为 0 时关闭它（`state=closed`，官方 REST 契约 `PATCH /repos/{owner}/{repo}/milestones/{number}`）；已关闭则幂等成功（不重开）；找不到同名 Milestone 或仍有 open Issues 时 fail fast（带上 version、Milestone number/url 和 open issue 列表，不静默跳过、不误关别的 Milestone）；
+9. 成功：`ai-merged`（终态）+ 关闭 Issue + 成功评论（release URL、tag、commit、证据、Milestone 证据）；任何失败：单独 `ai-blocked`（release 是人工决策点，不自动重试）+ 失败评论（run marker + 具体原因）+ fail fast。
 
 可选的 `auto_repair_issues = true` 只覆盖有捕获输出的 Release 测试命令失败：Runner 按 source Issue、run_id、commit、命令和输出生成稳定签名，在 Issue body 搜索该签名后创建或复用一个 `ai-ready` + `bug` 修复 Issue。新 Issue 包含可复现命令和原始输出，照常走 PR/review/merge；Release 仍保持 `ai-blocked`，不会自动重试或发布，必须在修复合并后显式重跑 gate。没有具体测试输出、其他歧义/外部失败或创建修复 Issue 失败时，Runner 记录该失败并保留原始 Release 失败。
 

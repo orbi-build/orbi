@@ -1682,17 +1682,104 @@ def publish_release(*, repo: str, tag: str, version: str,
     return json.loads(raw)["url"]
 
 
+def close_release_milestone(repo: str, version: str) -> str:
+    """Close the Milestone whose title is exactly `version` (Issue #214).
+
+    Runs on the release success path (after the tag is pushed, the
+    GitHub Release is published and the release Issue is closed with
+    `ai-merged`). The Milestone is matched by EXACT title — never
+    guessed, never fuzzy-matched, never a different Milestone:
+
+    - no Milestone with that exact title -> fail fast (the release
+      must not be reported as fully successful);
+    - several Milestones with that exact title -> fail fast
+      (ambiguous — GitHub allows duplicate titles, so guessing one is
+      forbidden);
+    - already `closed` -> idempotent success (no mutation, no reopen);
+    - `open` with open issues -> fail fast with the version, the
+      Milestone number/url and the open issue list;
+    - `open` with 0 open issues -> closed via the official REST
+      contract `PATCH /repos/{owner}/{repo}/milestones/{number}`
+      with `state=closed` (OpenAPI `issues/update-milestone`).
+
+    The list query asks for `state=all`: the default `state=open`
+    would hide already-closed Milestones and break the idempotent
+    case. Returns a short evidence string for the success path. A
+    real `gh` failure (auth, rate limit, API error) propagates
+    unchanged — like the release gates, a check that cannot be made
+    is a failed check.
+    """
+    raw = run_command([
+        "gh", "api", f"repos/{repo}/milestones?state=all", "--paginate",
+    ])
+    milestones = parse_issue_array(raw)
+    matches = [
+        m for m in milestones
+        if isinstance(m, dict) and m.get("title") == version
+    ]
+    if not matches:
+        raise RuntimeError(
+            f"release {version}: no Milestone with the exact title "
+            f"{version!r} in {repo} — the Milestone is missing, never "
+            "guessed or fuzzy-matched"
+        )
+    if len(matches) > 1:
+        numbers = ", ".join(
+            f"#{m.get('number')} ({m.get('html_url') or m.get('url')})"
+            for m in matches
+        )
+        raise RuntimeError(
+            f"release {version}: {len(matches)} Milestones share the "
+            f"exact title {version!r} in {repo} — ambiguous, refusing "
+            f"to guess which to close: {numbers}"
+        )
+    milestone = matches[0]
+    number = milestone.get("number")
+    html_url = milestone.get("html_url") or milestone.get("url")
+    if milestone.get("state") == "closed":
+        return (
+            f"Milestone #{number} ({html_url}) already closed — "
+            "idempotent success, nothing to do"
+        )
+    open_issues = milestone.get("open_issues")
+    if not isinstance(open_issues, int) or open_issues > 0:
+        raw = run_command([
+            "gh", "issue", "list", "--repo", repo, "--milestone", version,
+            "--state", "open", "--json", "number,title", "--limit", "100",
+        ])
+        issues = parse_issue_array(raw)
+        listing = ", ".join(
+            f"#{i.get('number')} {i.get('title')}" for i in issues
+        ) or "(the API returned no list)"
+        raise RuntimeError(
+            f"release {version}: Milestone #{number} ({html_url}) still "
+            f"has {open_issues} open issue(s) — closing it would hide "
+            f"unfinished work; open issues: {listing}"
+        )
+    run_command([
+        "gh", "api", f"repos/{repo}/milestones/{number}",
+        "--method", "PATCH", "-f", "state=closed",
+    ])
+    return (
+        f"Milestone #{number} ({html_url}) closed after release "
+        f"{version} (0 open issues)"
+    )
+
+
 def release_success_comment_body(run_id: str, run_info: str,
                                  release_url: str, tag: str,
                                  release_commit: str,
                                  scope_evidence: list[str],
                                  gate_evidence: list[str],
-                                 test_evidence: str) -> str:
+                                 test_evidence: str,
+                                 milestone_evidence: str) -> str:
     """The terminal success comment: the full verification evidence.
 
     (Issue #98) The comment is the auditable record of the release:
     run marker, release URL, version/tag/release commit, the
-    per-item scope evidence, the gate evidence and the test evidence.
+    per-item scope evidence, the gate evidence, the test evidence and
+    the Milestone evidence (Issue #214: the Milestone whose title is
+    the released version is closed on the success path).
     """
     return "\n".join([
         run_marker(run_id),
@@ -1711,6 +1798,10 @@ def release_success_comment_body(run_id: str, run_info: str,
         "## Tests",
         "",
         f"- {test_evidence}",
+        "",
+        "## Milestone",
+        "",
+        f"- {milestone_evidence}",
         "",
         f"run_id={run_id}",
     ])
@@ -1762,7 +1853,12 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
        verification evidence.
     9. Success: `ai-merged` (terminal, the Issue is closed, the
        success comment carries the evidence).
-    10. Any failure: `ai-blocked` ALONE (no automatic retry — a
+    10. Close the Milestone whose title is EXACTLY the released
+       version (Issue #214): closed when it has 0 open Issues
+       (idempotent when already closed); fail fast — never a silent
+       skip, never a different Milestone — when no Milestone carries
+       that exact title or open Issues remain.
+    11. Any failure: `ai-blocked` ALONE (no automatic retry — a
         release is a human decision point), the failure comment
         carries the run marker and the concrete reason, and the
         exception propagates so the tick fails fast.
@@ -1931,11 +2027,15 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         run_command(
             ["gh", "issue", "close", str(number), "--repo", source_repo],
         )
+        milestone_evidence = close_release_milestone(
+            source_repo, tag,
+        )
         comment_issue(
             number, repo=source_repo,
             body=release_success_comment_body(
                 run_id, run_info, release_url, tag, release_commit,
                 scope_evidence, gate_evidence, test_evidence,
+                milestone_evidence,
             ),
         )
         _safe_publish(
