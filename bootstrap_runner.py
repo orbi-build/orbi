@@ -1273,6 +1273,109 @@ def verify_release_scope(repo: str, scope: list[int], repo_dir: Path,
     return evidence
 
 
+RELEASE_CHANGELOG_CATEGORIES = (
+    "Features", "Reliability and recovery", "Deployment and operations",
+    "Observability", "Documentation", "Bug fixes",
+)
+
+
+def release_changelog_category(item: dict) -> str:
+    """Classify one live scoped Issue into a stable reader-facing group."""
+    labels = item.get("labels")
+    label_names = {
+        label.get("name", "").lower() for label in labels
+        if isinstance(label, dict) and isinstance(label.get("name"), str)
+    } if isinstance(labels, list) else set()
+    title = item.get("title")
+    text = title.lower() if isinstance(title, str) else ""
+    if "documentation" in label_names or any(
+        term in text for term in ("documentation", "docs", "readme", "文档")
+    ):
+        return "Documentation"
+    if any(term in text for term in (
+        "deploy", "deployment", "systemd", "install", " cli", "ssh",
+        "service", "timer", "packaging", "setup",
+    )):
+        return "Deployment and operations"
+    if any(term in text for term in (
+        "recovery", "recover", "resume", "timeout", "concurren", "reliab",
+        "stale", "dead", "hang", "lock",
+    )):
+        return "Reliability and recovery"
+    if any(term in text for term in (
+        "observability", "prometheus", "grafana", "dashboard", "metrics",
+        "exporter", "journal", "progress",
+    )):
+        return "Observability"
+    if "bug" in label_names:
+        return "Bug fixes"
+    return "Features"
+
+
+def build_release_changelog(repo: str, scope: list[int]) -> str:
+    """Render deterministic readable notes from live scoped Issue evidence.
+
+    The official ``gh issue view --json`` contract supplies each Issue's
+    title, body, URL, labels, and closing PR references.  A title is the
+    concise change description; when it is absent, the first non-empty body
+    line is usable summary evidence.  Missing or malformed evidence is an
+    unsafe release input and fails before a tag or Release is created.
+    """
+    grouped: dict[str, list[tuple[int, str]]] = {
+        category: [] for category in RELEASE_CHANGELOG_CATEGORIES
+    }
+    for number in scope:
+        raw = run_command([
+            "gh", "issue", "view", str(number), "--repo", repo, "--json",
+            "number,title,body,url,labels,closedByPullRequestsReferences",
+        ])
+        item = json.loads(raw)
+        issue_url = item.get("url")
+        issue_path = f"https://github.com/{repo}/issues/{number}"
+        pull_path = f"https://github.com/{repo}/pull/{number}"
+        if item.get("number") != number or issue_url not in (issue_path, pull_path):
+            raise ValueError(
+                f"release changelog Issue #{number} has malformed Issue evidence"
+            )
+        title = item.get("title")
+        body = item.get("body")
+        summary = title.strip() if isinstance(title, str) else ""
+        if not summary and isinstance(body, str):
+            summary = next((line.strip() for line in body.splitlines()
+                            if line.strip()), "")
+        if not summary or re.fullmatch(r"Issue #\d+ closed", summary, re.I):
+            raise ValueError(
+                f"release changelog Issue #{number} has no usable title/summary evidence"
+            )
+        source_kind = "PR" if issue_url == pull_path else "Issue"
+        links = [f"[{source_kind} #{number}]({issue_url})"]
+        pull_requests = item.get("closedByPullRequestsReferences")
+        if not isinstance(pull_requests, list):
+            raise ValueError(
+                f"release changelog Issue #{number} has malformed PR evidence"
+            )
+        for pull_request in sorted(pull_requests, key=lambda pr: pr.get("number", 0)
+                                   if isinstance(pr, dict) else 0):
+            pr_number = pull_request.get("number") if isinstance(pull_request, dict) else None
+            pr_url = pull_request.get("url") if isinstance(pull_request, dict) else None
+            if (not isinstance(pr_number, int) or pr_number < 1 or
+                    pr_url != f"https://github.com/{repo}/pull/{pr_number}"):
+                raise ValueError(
+                    f"release changelog Issue #{number} has malformed PR evidence"
+                )
+            links.append(f"[PR #{pr_number}]({pr_url})")
+        grouped[release_changelog_category(item)].append(
+            (number, f"- {summary} ({'; '.join(links)})")
+        )
+    sections = ["## Changelog"]
+    for category in RELEASE_CHANGELOG_CATEGORIES:
+        entries = grouped[category]
+        if entries:
+            sections.extend(["", f"### {category}", "",
+                             *(entry for _, entry in sorted(entries))])
+    return "\n".join(sections)
+
+
 def check_release_gates(repo: str, base_branch: str, release_commit: str,
                         release_number: int) -> list[str]:
     """Enforce the pre-release gates (Issue #98) and return their evidence.
@@ -1413,8 +1516,8 @@ def release_tag_commit(repo_dir: Path, tag: str) -> str | None:
 
 
 def publish_release(*, repo: str, tag: str, version: str,
-                    release_commit: str, scope_evidence: list[str],
-                    gate_evidence: list[str], test_evidence: str,
+                    release_commit: str, changelog: str,
+                    scope_evidence: list[str], gate_evidence: list[str], test_evidence: str,
                     run_id: str, issue_number: int) -> str:
     """Create the GitHub Release for the tag — idempotently (Issue #98).
 
@@ -1439,6 +1542,8 @@ def publish_release(*, repo: str, tag: str, version: str,
             raise
     notes = "\n".join([
         f"# {version}",
+        "",
+        changelog,
         "",
         f"- tag: `{tag}`",
         f"- release commit: `{release_commit}`",
@@ -1636,6 +1741,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             source_repo, declaration["scope"], config["repo_dir"],
             release_commit,
         )
+        changelog = build_release_changelog(source_repo, declaration["scope"])
         _safe_publish(
             run_id=run_id, issue=number, source_repo=source_repo,
             role=ROLE_RELEASE,
@@ -1693,7 +1799,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             )
         release_url = publish_release(
             repo=source_repo, tag=tag, version=tag,
-            release_commit=release_commit,
+            release_commit=release_commit, changelog=changelog,
             scope_evidence=scope_evidence, gate_evidence=gate_evidence,
             test_evidence=test_evidence, run_id=run_id, issue_number=number,
         )
