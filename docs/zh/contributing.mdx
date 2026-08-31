@@ -1,6 +1,6 @@
 # 贡献
 
-Muyan Pilot 用和它运行一样的方式开发：任务是 GitHub Issue，交付是
+Orbi 用和它运行一样的方式开发：任务是 GitHub Issue，交付是
 PR，仓库契约（`AGENTS.md`）同样适用于人类贡献者。
 
 ## Issue 粒度
@@ -17,7 +17,7 @@ PR，仓库契约（`AGENTS.md`）同样适用于人类贡献者。
 
 ## 最小实现（KISS/LEAN）
 
-Pilot 只实现满足 Issue 验收标准的**最小完整变更**——KISS 和 LEAN 是
+Orbi 只实现满足 Issue 验收标准的**最小完整变更**——KISS 和 LEAN 是
 开发契约（`AGENTS.md`，Issue #118）：
 
 - 不做 speculative feature、无收益抽象、额外框架层、fallback、未来功能
@@ -30,7 +30,7 @@ Pilot 只实现满足 Issue 验收标准的**最小完整变更**——KISS 和 
 
 ## 创建 Issue
 
-通过创建 Issue 并加 `ai-ready` 标签来给 Pilot 派活（CLI 一步完成两
+通过创建 Issue 并加 `ai-ready` 标签来给 Orbi 派活（CLI 一步完成两
 件事）：
 
 ```bash
@@ -44,7 +44,7 @@ gh issue create --repo OWNER/PILOT-REPO --title "task title" --body "task body"
 gh issue edit <number> --repo OWNER/PILOT-REPO --add-label ai-ready
 ```
 
-好的 body 写清背景、期望行为、验收标准，（bug 时）复现步骤。Pilot 在
+好的 body 写清背景、期望行为、验收标准，（bug 时）复现步骤。Orbi 在
 改任何东西之前会读 Issue、仓库的 `AGENTS.md`、README 和代码。
 
 ## 报告 bug
@@ -79,7 +79,7 @@ gh issue edit <number> --repo OWNER/PILOT-REPO --add-label ai-ready
 
 5. 一个 Issue 一个 PR。PR 描述必须包含 `Fixes #<issue-number>`（可以
    放在首行），merge 时 GitHub 原生关闭 Issue。
-6. CI 必须绿（与本地同一契约）。Pilot 派发的任务由 Runner 执行独立
+6. CI 必须绿（与本地同一契约）。Orbi 派发的任务由 Runner 执行独立
    审查和合并；人类 PR 的 review 和 merge 走仓库正常的 GitHub 流程。
 
 ## 不要加什么

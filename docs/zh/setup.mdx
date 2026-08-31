@@ -66,7 +66,7 @@ setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下
    checkout fast-forward）。
 7. **可选模型 proxy** — 检查 `local-llm-kv-cache` proxy 的 health
    endpoint（`http://127.0.0.1:18082/health`），报告为**可选**：它的
-   缺失或不健康只是输出里的 warning，从不阻塞核心 GitHub/Pilot setup。
+   缺失或不健康只是输出里的 warning，从不阻塞核心 GitHub/Orbi setup。
 
 setup 从不创建业务 Issue、从不领取任务、从不启动 Pi、从不修改保护分支。
 
@@ -87,11 +87,11 @@ agent 和脚本可以解析：
 ```text
 setup=ok version=2 base_branch=main
 cli=verified source=/path/to/checkout/muyan_pilot.py
-repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=8/8
+repo=orbi-build/orbi permission=ADMIN default_branch=main labels=8/8
 service=installed path=~/.config/systemd/user/muyan-pilot@.service sha256=9f2c...
 timer=muyan-pilot@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
 timer=muyan-pilot@2.timer disabled active=false next="-"
-checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:xqliu/muyan-pilot.git protocol=ssh migrated=false ssh_reachable=true
+checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:orbi-build/orbi.git protocol=ssh migrated=false ssh_reachable=true
 model_endpoint=optional optional_proxy=healthy url=http://127.0.0.1:18082/health
 ```
 
@@ -117,11 +117,11 @@ muyan-pilot setup --config muyan-pilot.toml --json
 $ muyan-pilot setup --config muyan-pilot.toml
 setup=ok version=2 base_branch=main
 cli=verified source=/path/to/checkout/muyan_pilot.py
-repo=xqliu/muyan-pilot permission=ADMIN default_branch=main labels=8/8
+repo=orbi-build/orbi permission=ADMIN default_branch=main labels=8/8
 service=installed path=~/.config/systemd/user/muyan-pilot@.service sha256=9f2c...
 timer=muyan-pilot@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
 timer=muyan-pilot@2.timer disabled active=false next="-"
-checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:xqliu/muyan-pilot.git protocol=ssh migrated=false ssh_reachable=true
+checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:orbi-build/orbi.git protocol=ssh migrated=false ssh_reachable=true
 model_endpoint=optional optional_proxy=unhealthy url=http://127.0.0.1:18082/health
 ```
 

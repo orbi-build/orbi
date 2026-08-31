@@ -1,6 +1,6 @@
 # Contributing
 
-Muyan Pilot is developed the same way it runs: tasks are GitHub Issues,
+Orbi is developed the same way it runs: tasks are GitHub Issues,
 deliveries are PRs, and the repository contract (`AGENTS.md`) applies to
 human contributors too.
 
@@ -19,7 +19,7 @@ the desired behavior is pinned — not as a vague wish.
 
 ## Minimal implementation (KISS/LEAN)
 
-The Pilot implements the **smallest complete change** that satisfies the
+Orbi implements the **smallest complete change** that satisfies the
 Issue's acceptance criteria — KISS and LEAN are the development contract
 (`AGENTS.md`, Issue #118):
 
@@ -36,7 +36,7 @@ Issue's acceptance criteria — KISS and LEAN are the development contract
 
 ## Creating an Issue
 
-Dispatch a task for the Pilot by creating an Issue and labeling it
+Dispatch a task for Orbi by creating an Issue and labeling it
 `ai-ready` (the CLI does both in one step):
 
 ```bash
@@ -51,7 +51,7 @@ gh issue edit <number> --repo OWNER/PILOT-REPO --add-label ai-ready
 ```
 
 A good body states the background, the expected behavior, the acceptance
-criteria, and (for bugs) the reproduction. The Pilot reads the Issue, the
+criteria, and (for bugs) the reproduction. Orbi reads the Issue, the
 repository's `AGENTS.md`, README and code before changing anything.
 
 ## Reporting a bug
@@ -91,7 +91,7 @@ first.
    `Fixes #<issue-number>` (it may be on the first line) so GitHub closes
    the Issue natively on merge.
 6. CI must be green (same contract as local). The independent review and
-   merge are performed by the Runner for Pilot-dispatched work; for
+   merge are performed by the Runner for Orbi-dispatched work; for
    human PRs, review and merge follow the repository's normal GitHub
    flow.
 

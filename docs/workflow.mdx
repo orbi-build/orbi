@@ -1,6 +1,6 @@
 # Workflow
 
-One Muyan Pilot task is one runtime outcome: when X, should Y, actually Z.
+One Orbi task is one runtime outcome: when X, should Y, actually Z.
 A task starts as a GitHub Issue and ends as a merged PR (or an
 `ai-blocked` scene that needs a human). This page covers the complete
 automatic chain and the project's GitHub workflow vocabulary.
@@ -105,7 +105,7 @@ commits — initialize them per repository (see
 
 | Label | Meaning |
 |---|---|
-| `ai-ready` | Explicitly dispatched to the Pilot; may be claimed |
+| `ai-ready` | Explicitly dispatched to Orbi; may be claimed |
 | `ai-in-progress` | Claimed and running. The Runner idempotently backfills it before continuing a resumed opened-PR delivery (Issue #178); a leftover after a kill is resumed by the next tick |
 | `ai-pr-opened` | PR created and verified; awaiting the independent review |
 | `ai-fix-needed` | The PR head is not mergeable yet, or an AI-recoverable failure of the run/PR (Issue #50); the next tick resumes the same run, branch, worktree and PR |

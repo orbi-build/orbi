@@ -1,6 +1,6 @@
 # Security
 
-Muyan Pilot runs an autonomous coding agent with a GitHub token on your
+Orbi runs an autonomous coding agent with a GitHub token on your
 machine. The security model is deliberately simple: hard boundaries in
 the delivery contract, local-only secrets, and no remote state store.
 
@@ -30,7 +30,7 @@ the delivery contract, local-only secrets, and no remote state store.
 - **GitHub API operations** (Issue, PR, label, comment, merge)
   authenticate with `gh` (`gh auth status` must succeed). Use a
   **fine-grained personal access token** scoped to the repositories the
-  Pilot actually works on, with the minimum permissions: contents
+  Orbi actually works on, with the minimum permissions: contents
   (read/write), pull requests (read/write), issues (read/write), and
   metadata (read). Avoid organization-wide or classic broad-scope tokens.
 - **Git data operations** (fetch, push — including
@@ -54,7 +54,7 @@ the delivery contract, local-only secrets, and no remote state store.
 
 ## Local state files
 
-The Pilot keeps local state that never leaves the machine:
+Orbi keeps local state that never leaves the machine:
 
 - **Config** (`muyan-pilot.toml`): local, gitignored. The repository only
   ships the example (`.muyan-pilot.example.toml`).
@@ -69,6 +69,6 @@ The Pilot keeps local state that never leaves the machine:
   sensitive local data, keep it on the same machine, and delete it if you
   no longer need the cached sessions.
 
-If you run the Pilot on a shared machine, give the Runner user its own
+If you run Orbi on a shared machine, give the Runner user its own
 home directory so the config, worktrees and KV files stay private to that
 user.

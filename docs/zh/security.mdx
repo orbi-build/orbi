@@ -1,6 +1,6 @@
 # 安全
 
-Muyan Pilot 在你的机器上运行一个带 GitHub token 的自主 coding agent。
+Orbi 在你的机器上运行一个带 GitHub token 的自主 coding agent。
 安全模型刻意简单：交付契约里的硬边界、本地密钥、没有远端状态存储。
 
 ## AI 从不 merge 或 push 保护分支
@@ -23,7 +23,7 @@ Muyan Pilot 在你的机器上运行一个带 GitHub token 的自主 coding agen
 
 - **GitHub API 操作**（Issue、PR、label、comment、merge）用 `gh`
   认证（`gh auth status` 必须成功）。使用**细粒度 personal access
-  token**，限定在 Pilot 实际工作的仓库，最小权限：contents
+  token**，限定在 Orbi 实际工作的仓库，最小权限：contents
   （read/write）、pull requests（read/write）、issues（read/write）、
   metadata（read）。避免组织级或经典宽 scope token。
 - **Git 数据操作**（fetch、push——包括 `.github/workflows/*.yml`）用
@@ -42,7 +42,7 @@ Muyan Pilot 在你的机器上运行一个带 GitHub token 的自主 coding agen
 
 ## 本地状态文件
 
-Pilot 保留从不出机的本地状态：
+Orbi 保留从不出机的本地状态：
 
 - **配置**（`muyan-pilot.toml`）：本地、gitignored。仓库只提交
   example（`.muyan-pilot.example.toml`）。
@@ -56,5 +56,5 @@ Pilot 保留从不出机的本地状态：
   prompt 派生的序列化模型状态——当作敏感本地数据处理，留在同一台
   机器，不再需要缓存的 session 时删除。
 
-如果你在共享机器上运行 Pilot，给 Runner 用户独立的 home 目录，让
+如果你在共享机器上运行 Orbi，给 Runner 用户独立的 home 目录，让
 配置、worktree 和 KV 文件只属于该用户。

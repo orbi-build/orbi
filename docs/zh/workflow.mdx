@@ -1,6 +1,6 @@
 # 工作流
 
-一个 Muyan Pilot 任务是一个 runtime outcome：当 X，应该 Y，实际 Z。
+一个 Orbi 任务是一个 runtime outcome：当 X，应该 Y，实际 Z。
 任务从一个 GitHub Issue 开始，以一个已合并的 PR 结束（或一个需要人工
 的 `ai-blocked` 现场）。这一页覆盖完整的自动链路和项目的 GitHub 工作流
 词汇。
@@ -89,7 +89,7 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 
 | 标签 | 含义 |
 |---|---|
-| `ai-ready` | 明确派发给 Pilot；可以被领取 |
+| `ai-ready` | 明确派发给 Orbi；可以被领取 |
 | `ai-in-progress` | 已领取、正在执行。resume opened-PR 交付时 Runner 先幂等回填该标签再继续（Issue #178）；被杀后的残留由下一 tick 接回 |
 | `ai-pr-opened` | PR 已创建并验收；等待独立审查 |
 | `ai-fix-needed` | PR head 尚不可合并，或已有 run/PR 的可恢复失败（Issue #50）；下一 tick 在同一 run、branch、worktree、PR 上继续 |

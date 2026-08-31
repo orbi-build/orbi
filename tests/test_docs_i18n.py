@@ -140,9 +140,9 @@ def test_chinese_homepage_carries_a_real_frontmatter_title():
     assert title.lower() != "zh", (
         f"the title must not be the internal language code, got: {title!r}"
     )
-    assert "Muyan Pilot" in title, (
-        "the Chinese home title must name the project, "
-        f"got: {title!r}"
+    assert "Orbi" in title, (
+        "the Chinese home title must name the project (Orbi, the "
+        f"v0.3.0 rebrand name), got: {title!r}"
     )
 
 
@@ -478,11 +478,27 @@ def test_chinese_docs_only_reference_existing_labels_everywhere():
 def test_readme_points_at_the_chinese_docs_entry():
     """The README keeps the project home and the documentation site
     entry; since Issue #116 it must also point at the Chinese docs
-    (docs/zh/) so Chinese users find the entry from GitHub too."""
+    (docs/zh/) so Chinese users find the entry from GitHub too.
+    Issue #183: the site entry is the bound custom domain
+    docs.orbi.build."""
     text = README.read_text(encoding="utf-8")
     assert "docs/zh/" in text, (
         "README must point at the Chinese docs entry (docs/zh/)"
     )
-    assert "muyan-pilot.mintlify.site" in text, (
-        "README must keep the Mintlify documentation site entry"
+    assert "docs.orbi.build" in text, (
+        "README must keep the documentation site entry (docs.orbi.build)"
+    )
+
+
+def test_chinese_getting_started_clones_the_orbi_build_org_repo():
+    """Issue #183: same clone-URL contract as the English page — the
+    repository moved to the orbi-build org, and the Chinese smoke
+    walkthrough must clone the new address (the old one only survives
+    as a GitHub redirect)."""
+    text = zh_page_text("getting-started")
+    assert "git clone https://github.com/orbi-build/orbi.git" in text, (
+        "Chinese getting-started must clone the orbi-build/orbi repository"
+    )
+    assert "xqliu/muyan-pilot" not in text, (
+        "Chinese getting-started keeps the stale xqliu/muyan-pilot reference"
     )

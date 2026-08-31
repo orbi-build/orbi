@@ -6,10 +6,10 @@ a two-level KV cache (in-memory hot session cache + disk-backed cold
 prefix cache) so coding agents do not re-prefill the stable system prompt
 and tool schemas on every new session. It is a separate project with its
 own repository, tests and README — this page only records how it
-connects to Muyan Pilot. It is **not** a core prerequisite: the Pilot
-works directly against any OpenAI-compatible endpoint without it.
+connects to Orbi. It is **not** a core prerequisite: Orbi works
+directly against any OpenAI-compatible endpoint without it.
 
-## What it changes for the Pilot
+## What it changes for Orbi
 
 - The proxy listens on `127.0.0.1:18082` when installed with the
   committed systemd unit (the proxy's own code default port is `8081`)
@@ -17,7 +17,7 @@ works directly against any OpenAI-compatible endpoint without it.
   `127.0.0.1:8080`).
 - Point Pi's (and any other agent's) provider URL at the proxy
   (`http://127.0.0.1:18082/v1`) instead of the llama server directly.
-- The Pilot itself is unchanged: it only ever talks to the configured
+- Orbi itself is unchanged: it only ever talks to the configured
   OpenAI-compatible endpoint.
 
 ## Installation

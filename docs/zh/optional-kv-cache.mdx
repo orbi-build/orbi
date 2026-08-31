@@ -4,18 +4,18 @@
 是本地 llama.cpp 配置的**可选增强**：它加了两级 KV cache（内存热
 session cache + 磁盘冷 prefix cache），让 coding agent 不必在每个新
 session 重新 prefill 稳定的 system prompt 和 tool schemas。它是独立项
-目，有自己的仓库、测试和 README——这一页只记录它如何接入 Muyan
-Pilot。它**不是**核心前提：没有它，Pilot 直接对接任意
+目，有自己的仓库、测试和 README——这一页只记录它如何接入 Orbi。
+它**不是**核心前提：没有它，Orbi 直接对接任意
 OpenAI-compatible endpoint 就能工作。
 
-## 它改变了 Pilot 的什么
+## 它改变了 Orbi 的什么
 
 - proxy 用提交的 systemd unit 安装时监听 `127.0.0.1:18082`（proxy 自己
   代码的默认端口是 `8081`），转发到 llama.cpp server（默认 upstream
   `127.0.0.1:8080`）。
 - 把 Pi（和任何其他 agent）的 provider URL 指向 proxy
   （`http://127.0.0.1:18082/v1`），而不是直接指向 llama server。
-- Pilot 本身不变：它永远只和配置的 OpenAI-compatible endpoint 说话。
+- Orbi 本身不变：它永远只和配置的 OpenAI-compatible endpoint 说话。
 
 ## 安装
 
