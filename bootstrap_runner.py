@@ -3305,9 +3305,9 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
             "BASE_BRANCH": config["base_branch"],
             "BASE_SHA": config["base_sha"],
             "RUN_ID": config["run_id"],
-            # Issue #171: the absolute path of the shared base-sync
-            # lock — the prompt's base freshness fetch must run under
-            # it (flock <lock> git fetch origin <base>).
+            # Issue #186: the implementer prompt no longer carries the
+            # base-sync lock (the base fetch is the Runner's operation);
+            # the value stays available for custom prompt templates.
             "BASE_SYNC_LOCK": str(base_sync_lock_path(config["repo_dir"])),
         },
     )
