@@ -51,8 +51,10 @@ gh issue edit <number> --repo OWNER/PILOT-REPO --add-label ai-ready
 ```
 
 A good body states the background, the expected behavior, the acceptance
-criteria, and (for bugs) the reproduction. Orbi reads the Issue, the
-repository's `AGENTS.md`, README and code before changing anything.
+criteria, and (for bugs) the reproduction. Before changing anything Orbi
+reads the Issue, the repository's `AGENTS.md`, the files it will change
+plus their callers, and the related tests — the README and the rest of
+the repository only when the task is actually about them (Issue #180).
 
 ## Reporting a bug
 

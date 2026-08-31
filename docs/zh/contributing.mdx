@@ -45,7 +45,8 @@ gh issue edit <number> --repo OWNER/PILOT-REPO --add-label ai-ready
 ```
 
 好的 body 写清背景、期望行为、验收标准，（bug 时）复现步骤。Orbi 在
-改任何东西之前会读 Issue、仓库的 `AGENTS.md`、README 和代码。
+改任何东西之前会读 Issue、仓库的 `AGENTS.md`、要改的文件及其调用方和
+相关测试——README 和仓库其余部分只在任务确实相关时才读（Issue #180）。
 
 ## 报告 bug
 
