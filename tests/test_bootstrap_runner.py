@@ -9932,16 +9932,11 @@ def test_release_tag_commit_reraises_real_fetch_failure(tmp_path, monkeypatch):
         runner.release_tag_commit(work, "v0.1.0")
 
 
-def make_release_gh(monkeypatch, *, release_exists=False):
-    """Answer `gh release view` / `gh release create`.
-
-    `release_exists=False` starts with "release not found" (the real
-    gh error, verified against the live CLI) and flips to found after
-    a `gh release create` — the same state transition the real remote
-    makes.
-    """
+def make_release_gh(monkeypatch, *, release_exists=False,
+                    release_body="## Changelog"):
+    """Answer `gh release view` / `gh release create` / `gh release edit`."""
     calls = []
-    state = {"exists": release_exists}
+    state = {"exists": release_exists, "body": release_body}
 
     def fake_run_command(command, **kwargs):
         calls.append(command)
@@ -9953,9 +9948,13 @@ def make_release_gh(monkeypatch, *, release_exists=False):
             return json.dumps({
                 "tagName": command[3],
                 "url": "https://github.com/o/r/releases/tag/" + command[3],
+                "body": state["body"],
             })
         if command[:3] == ["gh", "release", "create"]:
             state["exists"] = True
+            return ""
+        if command[:3] == ["gh", "release", "edit"]:
+            state["body"] = command[command.index("--notes") + 1]
             return ""
         raise AssertionError(f"unexpected command: {command}")
 
@@ -9963,11 +9962,98 @@ def make_release_gh(monkeypatch, *, release_exists=False):
     return calls
 
 
+def test_build_release_changelog_groups_descriptions_links_and_orders(monkeypatch):
+    source = {
+        30: {
+            "number": 30, "title": "Deploy the exporter as a persistent service",
+            "body": "The service keeps metrics available after restart.",
+            "url": "https://github.com/o/r/issues/30",
+            "labels": [{"name": "bug"}],
+            "closedByPullRequestsReferences": [{
+                "number": 301, "url": "https://github.com/o/r/pull/301",
+            }],
+        },
+        10: {
+            "number": 10, "title": "Add Prometheus metrics dashboard",
+            "body": "Users can inspect delivery metrics.",
+            "url": "https://github.com/o/r/issues/10",
+            "labels": [{"name": "enhancement"}],
+            "closedByPullRequestsReferences": [],
+        },
+        20: {
+            "number": 20, "title": "Explain the full setup workflow",
+            "body": "Documentation covers first use.",
+            "url": "https://github.com/o/r/issues/20",
+            "labels": [{"name": "documentation"}],
+            "closedByPullRequestsReferences": [],
+        },
+    }
+
+    def fake_run_command(command, **kwargs):
+        assert command[:3] == ["gh", "issue", "view"]
+        return json.dumps(source[int(command[3])])
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    changelog = runner.build_release_changelog("o/r", [30, 10, 20])
+    assert changelog == """## Changelog
+
+### Deployment and operations
+
+- Deploy the exporter as a persistent service ([Issue #30](https://github.com/o/r/issues/30); [PR #301](https://github.com/o/r/pull/301))
+
+### Observability
+
+- Add Prometheus metrics dashboard ([Issue #10](https://github.com/o/r/issues/10))
+
+### Documentation
+
+- Explain the full setup workflow ([Issue #20](https://github.com/o/r/issues/20))"""
+
+
+def test_release_changelog_category_covers_reliability_bug_and_features():
+    assert runner.release_changelog_category({
+        "title": "Recover a stalled delivery", "labels": [],
+    }) == "Reliability and recovery"
+    assert runner.release_changelog_category({
+        "title": "Fix an unrelated failure", "labels": [{"name": "bug"}],
+    }) == "Bug fixes"
+    assert runner.release_changelog_category({
+        "title": "Add a provider setting", "labels": "malformed",
+    }) == "Features"
+
+
+def test_build_release_changelog_fails_on_empty_or_malformed_evidence(monkeypatch):
+    bad_items = [
+        {"number": 10, "title": "", "body": "", "url": "https://github.com/o/r/issues/10", "labels": [], "closedByPullRequestsReferences": []},
+        {"number": 10, "title": "Useful title", "body": "detail", "url": "not-a-url", "labels": [], "closedByPullRequestsReferences": []},
+        {"number": 10, "title": "Useful title", "body": "detail", "url": "https://github.com/o/r/issues/10", "labels": [], "closedByPullRequestsReferences": "malformed"},
+        {"number": 10, "title": "Useful title", "body": "detail", "url": "https://github.com/o/r/issues/10", "labels": [], "closedByPullRequestsReferences": [{"number": "bad", "url": "https://github.com/o/r/pull/20"}]},
+    ]
+    for item in bad_items:
+        monkeypatch.setattr(runner, "run_command", lambda *args, item=item, **kwargs: json.dumps(item))
+        with pytest.raises(ValueError, match="release changelog"):
+            runner.build_release_changelog("o/r", [10])
+    monkeypatch.setattr(runner, "run_command", lambda *args, **kwargs: json.dumps({
+        "number": 10, "title": "", "body": "\nConcrete summary\n",
+        "url": "https://github.com/o/r/issues/10", "labels": [],
+        "closedByPullRequestsReferences": [],
+    }))
+    assert "Concrete summary" in runner.build_release_changelog("o/r", [10])
+    monkeypatch.setattr(runner, "run_command", lambda *args, **kwargs: json.dumps({
+        "number": 10, "title": "Merge direct release work", "body": "",
+        "url": "https://github.com/o/r/pull/10", "labels": [],
+        "closedByPullRequestsReferences": [],
+    }))
+    assert "[PR #10](https://github.com/o/r/pull/10)" in (
+        runner.build_release_changelog("o/r", [10])
+    )
+
+
 def test_publish_release_creates_when_missing_and_returns_url(monkeypatch):
     calls = make_release_gh(monkeypatch, release_exists=False)
     url = runner.publish_release(
         repo="o/r", tag="v0.3.0", version="v0.3.0",
-        release_commit="abc123",
+        release_commit="abc123", changelog="## Changelog\n\n### Features\n\n- A useful change ([Issue #123](https://github.com/o/r/issues/123))",
         scope_evidence=["PR #123 merged (mergeCommit=aaa111)"],
         gate_evidence=["no open Issue carries ai-in-progress"],
         test_evidence="tests passed (exit 0)",
@@ -9982,6 +10068,8 @@ def test_publish_release_creates_when_missing_and_returns_url(monkeypatch):
     assert "--verify-tag" in create
     notes = create[create.index("--notes") + 1]
     assert "v0.3.0" in notes
+    assert "## Changelog" in notes
+    assert "A useful change" in notes
     assert "abc123" in notes
     assert "PR #123 merged (mergeCommit=aaa111)" in notes
     assert "no open Issue carries ai-in-progress" in notes
@@ -9995,12 +10083,29 @@ def test_publish_release_reuses_the_existing_release(monkeypatch):
     calls = make_release_gh(monkeypatch, release_exists=True)
     url = runner.publish_release(
         repo="o/r", tag="v0.3.0", version="v0.3.0",
-        release_commit="abc123",
+        release_commit="abc123", changelog="## Changelog",
         scope_evidence=[], gate_evidence=[], test_evidence="ok",
         run_id="a1b2c3d4", issue_number=99,
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     assert not [c for c in calls if c[:3] == ["gh", "release", "create"]]
+    assert not [c for c in calls if c[:3] == ["gh", "release", "edit"]]
+
+
+def test_publish_release_upgrades_existing_notes_without_a_changelog(monkeypatch):
+    calls = make_release_gh(
+        monkeypatch, release_exists=True, release_body="# v0.2.0\n\nIssue #10 closed",
+    )
+    runner.publish_release(
+        repo="o/r", tag="v0.2.0", version="v0.2.0",
+        release_commit="abc123", changelog="## Changelog\n\n### Features\n\n- Useful change",
+        scope_evidence=[], gate_evidence=[], test_evidence="ok",
+        run_id="a1b2c3d4", issue_number=99,
+    )
+    edits = [c for c in calls if c[:3] == ["gh", "release", "edit"]]
+    assert len(edits) == 1
+    assert edits[0][:6] == ["gh", "release", "edit", "v0.2.0", "--repo", "o/r"]
+    assert "## Changelog" in edits[0][edits[0].index("--notes") + 1]
 
 
 def test_publish_release_reraises_real_gh_failure(monkeypatch):
@@ -10012,7 +10117,7 @@ def test_publish_release_reraises_real_gh_failure(monkeypatch):
     with pytest.raises(subprocess.CalledProcessError):
         runner.publish_release(
             repo="o/r", tag="v0.3.0", version="v0.3.0",
-            release_commit="abc123",
+            release_commit="abc123", changelog="## Changelog",
             scope_evidence=[], gate_evidence=[], test_evidence="ok",
             run_id="a1b2c3d4", issue_number=99,
         )
@@ -10049,8 +10154,18 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             )
         if command[:3] == ["gh", "issue", "view"]:
             number = int(command[3])
-            if number == 124:
+            fields = command[command.index("--json") + 1]
+            if fields == "number,state" and number == 124:
                 return json.dumps({"number": 124, "state": "CLOSED"})
+            if fields.startswith("number,title,") and number in (123, 124):
+                return json.dumps({
+                    "number": number,
+                    "title": f"Deliver release scope item {number}",
+                    "body": "Concrete release behavior.",
+                    "url": f"https://github.com/o/r/issues/{number}",
+                    "labels": [],
+                    "closedByPullRequestsReferences": [],
+                })
             raise subprocess.CalledProcessError(
                 1, command,
                 stderr=(
