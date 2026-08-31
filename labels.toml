@@ -54,3 +54,8 @@ description = "Epic coordination issue; not directly executable by Runner"
 name = "ai-release"
 color = "5319e7"
 description = "Release task: Runner runs the deterministic release state machine (tag + GitHub Release)"
+
+[[label]]
+name = "ai-ticket-only"
+color = "0e8a16"
+description = "Content task: Agent posts the deliverable directly to the Issue without Git delivery"

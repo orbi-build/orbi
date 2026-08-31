@@ -69,6 +69,9 @@ REQUIRED_LABELS = (
     # the deterministic release state machine (never `run_pi`), so the
     # label is platform state the setup entry must guarantee.
     "ai-release",
+    # Ticket-only marker (Issue #209): content is delivered directly in
+    # the Issue, so setup must provision this explicit, auditable type.
+    "ai-ticket-only",
 )
 COLOR_PATTERN = re.compile(r"^[0-9a-fA-F]{6}$")
 
@@ -125,7 +128,7 @@ class SetupError(RuntimeError):
 def load_label_defs(path: Path) -> list[dict]:
     """Parse and validate the repo-managed label definitions.
 
-    The file must define EXACTLY the 8 platform labels (no more, no
+    The file must define EXACTLY the platform labels (no more, no
     less, no duplicates), each with a non-empty name, a 6-hex color and
     a non-empty description. Any deviation is a fail-fast SetupError:
     a typo'd or missing label would silently skip a delivery state.

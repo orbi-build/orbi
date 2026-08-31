@@ -29,6 +29,7 @@ KNOWN_LABELS = frozenset({
     runner.BLOCKED_LABEL,
     runner.EPIC_LABEL,
     runner.RELEASE_LABEL,
+    runner.TICKET_ONLY_LABEL,
 })
 
 LABEL_PATTERN = re.compile(r"\bai-[a-z][a-z-]*\b")

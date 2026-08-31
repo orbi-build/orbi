@@ -3518,6 +3518,34 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     )
 
 
+def test_main_ticket_only_finishes_without_entering_pr_delivery_wait(
+    monkeypatch, tmp_path,
+):
+    """Ticket-only work has no PR, so the normal review/merge wait is invalid."""
+    issue = {
+        "number": 12, "title": "Launch copy", "body": "Write copy",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-ticket-only"}],
+    }
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+            "owner/repo", issue, None
+        ),
+    )
+    monkeypatch.setattr(runner, "process_issue", lambda *args: "ticket-only")
+    monkeypatch.setattr(
+        runner, "wait_for_delivery",
+        lambda *args: (_ for _ in ()).throw(
+            AssertionError("ticket-only work must not enter PR delivery wait")
+        ),
+    )
+
+    assert runner.main(["--config", str(config)]) == 0
+
+
 def test_main_routes_fix_needed_resume_to_delivery_wait(
     monkeypatch, tmp_path,
 ):
@@ -9565,6 +9593,128 @@ def test_process_issue_routes_release_to_process_release(monkeypatch):
     result = runner.process_issue(issue, {"base_branch": "main"}, "o/r")
     assert result == "rel-url"
     assert calls == ["release"]
+
+
+def test_is_ticket_only_requires_the_explicit_label():
+    assert runner.is_ticket_only({"labels": [{"name": "ai-ticket-only"}]}) is True
+    assert runner.is_ticket_only({"labels": [{"name": "marketing"}]}) is False
+    assert runner.is_ticket_only({"labels": "ai-ticket-only"}) is False
+
+
+def test_run_ticket_agent_uses_a_temporary_session_without_git(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "copy",
+    )
+    result = runner.run_ticket_agent(
+        {"number": 99, "title": "Launch thread", "body": "Write copy"},
+        {"repo_dir": tmp_path, "run_id": "a1b2c3d4", "skills": [],
+         "pi_provider": None, "pi_model": None, "pi_thinking": None},
+        "o/r",
+    )
+    assert result == "copy"
+    command, kwargs = calls[0]
+    assert command[0] == "pi"
+    # `pi --no-tools` is the enforcement boundary: a prompt instruction
+    # alone cannot ensure the Agent never invokes git/gh or writes files.
+    assert "--no-tools" in command
+    assert "git/gh tools" in command[command.index("--system-prompt") + 1]
+    assert kwargs["cwd"] != tmp_path
+    assert kwargs["cwd"].name.startswith("muyan-pilot-ticket-")
+    assert kwargs["branch"] == "-"
+    assert kwargs["role"] == runner.ROLE_TICKET
+    assert str(tmp_path) not in command[command.index("--session-dir") + 1]
+    assert Path(command[command.index("--session-dir") + 1]).parent == kwargs["cwd"]
+
+
+def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch):
+    """A labeled content task is delivered in its Issue, never through Git."""
+    issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
+             "labels": [{"name": "ai-ready"}, {"name": "ai-ticket-only"}]}
+    edits = []
+    comments = []
+    commands = []
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
+    monkeypatch.setattr(runner, "edit_issue",
+                        lambda number, **kwargs: edits.append((number, kwargs)))
+    monkeypatch.setattr(runner, "comment_issue",
+                        lambda number, **kwargs: comments.append((number, kwargs)))
+    monkeypatch.setattr(runner, "run_ticket_agent",
+                        lambda *args, **kwargs: "\u53ef\u4ee5\u76f4\u63a5\u53d1\u5e03\u7684\u5e16\u5b50")
+    monkeypatch.setattr(runner, "ProgressPublisher", Mock())
+    monkeypatch.setattr(runner, "_safe_publish", lambda **kwargs: None)
+    monkeypatch.setattr(runner, "run_command",
+                        lambda command, **kwargs: commands.append(command) or "")
+
+    result = runner.process_issue(issue, {"repo_dir": Path("/repo")}, "o/r")
+
+    assert result == "ticket-only"
+    assert edits == [
+        (99, {"repo": "o/r", "add": "ai-in-progress"}),
+        (99, {"repo": "o/r", "remove": "ai-in-progress"}),
+    ]
+    assert comments and "\u53ef\u4ee5\u76f4\u63a5\u53d1\u5e03\u7684\u5e16\u5b50" in comments[0][1]["body"]
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in comments[0][1]["body"]
+    assert "run_id=a1b2c3d4" in comments[0][1]["body"]
+    assert commands == [["gh", "issue", "close", "99", "--repo", "o/r"]]
+
+
+def test_process_ticket_only_rejects_empty_agent_content(monkeypatch):
+    issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
+             "labels": [{"name": "ai-ticket-only"}]}
+    edits = []
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
+    monkeypatch.setattr(runner, "edit_issue",
+                        lambda number, **kwargs: edits.append((number, kwargs)))
+    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "run_ticket_agent", lambda *args, **kwargs: "")
+    monkeypatch.setattr(runner, "ProgressPublisher", Mock())
+    monkeypatch.setattr(runner, "_safe_publish", lambda **kwargs: None)
+    with pytest.raises(RuntimeError, match="returned no content"):
+        runner.process_ticket_only(issue, {"repo_dir": Path("/repo")}, "o/r")
+    assert edits[-1][1]["add"] == "ai-blocked"
+
+
+def test_process_ticket_only_failure_marks_blocked_without_git_delivery(monkeypatch):
+    issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
+             "labels": [{"name": "ai-ticket-only"}]}
+    edits = []
+    comments = []
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
+    monkeypatch.setattr(runner, "edit_issue",
+                        lambda number, **kwargs: edits.append((number, kwargs)))
+    monkeypatch.setattr(runner, "comment_issue",
+                        lambda number, **kwargs: comments.append((number, kwargs)))
+    monkeypatch.setattr(runner, "run_ticket_agent",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Pi failed")))
+    monkeypatch.setattr(runner, "ProgressPublisher", Mock())
+    monkeypatch.setattr(runner, "_safe_publish", lambda **kwargs: None)
+    with pytest.raises(RuntimeError, match="Pi failed"):
+        runner.process_ticket_only(issue, {"repo_dir": Path("/repo")}, "o/r")
+    assert edits[-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+                              "remove": "ai-in-progress"})
+    assert "No Git branch, commit, or PR was created." in comments[-1][1]["body"]
+    assert "run_id=a1b2c3d4" in comments[-1][1]["body"]
+
+
+def test_process_ticket_only_keeps_original_error_when_failure_reporting_fails(monkeypatch):
+    issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
+             "labels": [{"name": "ai-ticket-only"}]}
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "comment_issue",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("comment failed")))
+    monkeypatch.setattr(runner, "run_ticket_agent",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Pi failed")))
+    monkeypatch.setattr(runner, "ProgressPublisher", Mock())
+    monkeypatch.setattr(runner, "_safe_publish", lambda **kwargs: None)
+    with pytest.raises(RuntimeError, match="Pi failed"):
+        runner.process_ticket_only(issue, {"repo_dir": Path("/repo")}, "o/r")
 
 
 def test_process_issue_keeps_normal_flow_without_release_label(monkeypatch):
