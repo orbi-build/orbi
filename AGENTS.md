@@ -482,12 +482,20 @@ acceptance criteria.
      full verification evidence: version, tag, release commit,
      per-item scope evidence, gate evidence, test evidence and the run
      marker.
-  8. Success: `ai-merged` (terminal) and the release Issue is closed,
-     with the success comment (release URL, tag, commit, evidence).
-     Any failure: `ai-blocked` ALONE (a release is a human decision
-     point — no automatic retry), the failure comment carries the run
-     marker and the concrete reason, and the exception propagates so
-     the tick fails fast.
+  8. Close the Milestone whose title is EXACTLY the released version
+     (Issue #214) — on the success path, after the release Issue is
+     closed with `ai-merged`. Exact title match only (no guessing, no
+     fuzzy match, never a different Milestone): closed when it has 0
+     open Issues; already-closed is an idempotent success (no reopen);
+     a missing Milestone or remaining open Issues fail fast with the
+     version, the Milestone number/url and the open issue list (never a
+     silent skip).
+  9. Success: `ai-merged` (terminal) and the release Issue is closed,
+     with the success comment (release URL, tag, commit, evidence,
+     Milestone evidence). Any failure: `ai-blocked` ALONE (a release is
+     a human decision point — no automatic retry), the failure comment
+     carries the run marker and the concrete reason, and the exception
+     propagates so the tick fails fast.
 - The `ai-release` label is a type marker, NOT a delivery state: it is
   not part of the delivery-state machine, not an exclusion of the
   ready scan, and the Runner never adds or removes it — only the

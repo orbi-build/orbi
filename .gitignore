@@ -19,3 +19,4 @@ muyan-pilot.toml
 # frozen base never inherits the previous run's plan or test log.
 plan.md
 test.log
+verify.md

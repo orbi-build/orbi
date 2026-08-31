@@ -1,7 +1,7 @@
 """Run artifacts stay out of version control (Issue #80 review round 1).
 
-`plan.md` and `test.log` are per-run artifacts written into the task
-worktree (prompt.md steps 2 and 5). A worktree is created from the
+`plan.md`, `test.log` and `verify.md` are per-run artifacts written
+into the task worktree (prompt.md steps 2 and 5). A worktree is created from the
 frozen base SHA (`git worktree add ... <base_sha>`): if these files
 were tracked in the base, every new worktree would inherit the
 PREVIOUS run's plan and test log, and a run that did not overwrite
@@ -49,6 +49,7 @@ def test_run_artifacts_are_gitignored():
     ]
     assert "plan.md" in patterns
     assert "test.log" in patterns
+    assert "verify.md" in patterns
 
 
 def test_git_helper_fails_fast_on_nonzero_exit():

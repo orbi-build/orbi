@@ -10415,6 +10415,22 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             )
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
+        if command == ["gh", "api",
+                       "repos/o/r/milestones?state=all", "--paginate"]:
+            return json.dumps([
+                {"number": 1, "title": "v0.2.0", "state": "closed",
+                 "open_issues": 0, "closed_issues": 28,
+                 "url": "https://api.github.com/repos/o/r/milestones/1",
+                 "html_url": "https://github.com/o/r/milestone/1"},
+                {"number": 5, "title": "v0.3.0", "state": "open",
+                 "open_issues": 0, "closed_issues": 2,
+                 "url": "https://api.github.com/repos/o/r/milestones/5",
+                 "html_url": "https://github.com/o/r/milestone/5"},
+            ])
+        if command == ["gh", "api", "repos/o/r/milestones/5",
+                       "--method", "PATCH", "-f", "state=closed"]:
+            return json.dumps({"number": 5, "title": "v0.3.0",
+                               "state": "closed", "open_issues": 0})
         if command[:2] == ["gh", "api"]:
             return json.dumps([
                 {"name": "tests", "status": "completed",
@@ -10485,6 +10501,17 @@ def test_process_release_success_end_to_end(monkeypatch):
     assert not any("--force" in c or "-f" == c for c in commands)
     # The release Issue is closed.
     assert ["gh", "issue", "close", "99", "--repo", "o/r"] in commands
+    # Issue #214: the Milestone whose title is EXACTLY the released
+    # version (v0.3.0 here) is closed via the official REST contract
+    # AFTER the release Issue is closed — and no other Milestone is
+    # touched.
+    close_milestone = ["gh", "api", "repos/o/r/milestones/5",
+                       "--method", "PATCH", "-f", "state=closed"]
+    assert close_milestone in commands
+    assert commands.index(close_milestone) > commands.index(
+        ["gh", "issue", "close", "99", "--repo", "o/r"])
+    assert not [c for c in commands
+                if c[:2] == ["gh", "api"] and "milestones/1" in c[2]]
     # The declared test command ran timeout-wrapped in the worktree.
     assert (["timeout", str(runner.RELEASE_TEST_TIMEOUT_SECONDS),
              "bash", "-c",
@@ -10556,6 +10583,51 @@ def test_create_repair_issue_creates_a_reproducible_ready_bug(monkeypatch):
     assert "muyan-pilot-repair-signature=" in body
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["unexpected"])
+
+
+def test_process_release_milestone_failure_fails_fast_and_blocks(monkeypatch):
+    state = make_release_process_env(monkeypatch)
+    real = runner.run_command
+
+    def milestone_failing(command, **kwargs):
+        # The v0.3.0 Milestone still has an open Issue: the close must
+        # fail fast and the release must not be reported as successful.
+        if command[:2] == ["gh", "api"] and "?state=all" in command[2]:
+            return json.dumps([
+                {"number": 5, "title": "v0.3.0", "state": "open",
+                 "open_issues": 1, "closed_issues": 2,
+                 "url": "https://api.github.com/repos/o/r/milestones/5",
+                 "html_url": "https://github.com/o/r/milestone/5"},
+            ])
+        if command[:3] == ["gh", "issue", "list"] and "--milestone" in command:
+            return json.dumps(
+                [{"number": 101, "title": "leftover"}],
+            )
+        return real(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", milestone_failing)
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    with pytest.raises(RuntimeError, match="Milestone #5"):
+        runner.process_release(
+            issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        )
+    commands = [c for c, _ in state["commands"]]
+    # The release itself succeeded (tag pushed, Release published,
+    # Issue closed with ai-merged)...
+    assert ["gh", "issue", "close", "99", "--repo", "o/r"] in commands
+    assert any(k.get("add") == "ai-merged" for _, k in state["edits"])
+    # ...but the Milestone close failed: no PATCH was issued, the run
+    # failed fast and the terminal state is ai-blocked with the
+    # concrete reason on the Issue.
+    assert not [c for c in commands if "PATCH" in c]
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+                                       "remove": "ai-in-progress"})
+    (comment_number, comment_kwargs), = state["comments"]
+    assert "Muyan Pilot release failed (ai-blocked)" in comment_kwargs["body"]
+    assert "Milestone #5" in comment_kwargs["body"]
+    assert "#101" in comment_kwargs["body"]
 
 
 def test_process_release_reuses_the_run_id_on_resume(monkeypatch):
@@ -10736,6 +10808,177 @@ def test_process_release_fails_on_scope_violation(monkeypatch):
         )
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
+
+
+MILESTONE_LIST_COMMAND = [
+    "gh", "api", "repos/o/r/milestones?state=all", "--paginate",
+]
+
+
+def _milestone(number, title, state, open_issues):
+    return {
+        "number": number, "title": title, "state": state,
+        "open_issues": open_issues, "closed_issues": 0,
+        "url": f"https://api.github.com/repos/o/r/milestones/{number}",
+        "html_url": f"https://github.com/o/r/milestone/{number}",
+    }
+
+
+def test_close_release_milestone_closes_an_open_empty_milestone(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([
+                _milestone(4, "v0.2.0", "closed", 0),
+                _milestone(5, "v0.3.0", "open", 0),
+                _milestone(6, "v0.4.0", "open", 3),
+            ])
+        if command == ["gh", "api", "repos/o/r/milestones/5",
+                       "--method", "PATCH", "-f", "state=closed"]:
+            return json.dumps(_milestone(5, "v0.3.0", "closed", 0))
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    evidence = runner.close_release_milestone("o/r", "v0.3.0")
+    # The close uses the official REST contract
+    # (PATCH /repos/{owner}/{repo}/milestones/{number}, state=closed)
+    # and the list query asks for ALL states (the idempotent case needs
+    # the closed Milestones too).
+    assert calls[-1] == ["gh", "api", "repos/o/r/milestones/5",
+                        "--method", "PATCH", "-f", "state=closed"]
+    assert calls[0] == MILESTONE_LIST_COMMAND
+    assert "Milestone #5" in evidence
+    assert "https://github.com/o/r/milestone/5" in evidence
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["unexpected"])
+
+
+def test_close_release_milestone_is_idempotent_when_already_closed(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([
+                _milestone(1, "v0.2.0", "closed", 0),
+                _milestone(2, "v0.3.0", "closed", 0),
+            ])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    evidence = runner.close_release_milestone("o/r", "v0.3.0")
+    # Already closed: no mutation at all (no PATCH, no reopen).
+    assert calls == [MILESTONE_LIST_COMMAND]
+    assert "already closed" in evidence
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["unexpected"])
+
+
+def test_close_release_milestone_fails_fast_without_a_matching_title(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([
+                _milestone(1, "v0.2.0", "closed", 0),
+                _milestone(3, "v0.4.0", "open", 7),
+            ])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="no Milestone with the exact title"):
+        runner.close_release_milestone("o/r", "v0.3.0")
+    # No mutation, no fuzzy match against a different Milestone.
+    assert calls == [MILESTONE_LIST_COMMAND]
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["unexpected"])
+
+
+def test_close_release_milestone_fails_fast_when_open_issues_remain(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([
+                _milestone(5, "v0.3.0", "open", 2),
+            ])
+        if command == ["gh", "issue", "list", "--repo", "o/r",
+                       "--milestone", "v0.3.0", "--state", "open",
+                       "--json", "number,title", "--limit", "100"]:
+            return json.dumps([
+                {"number": 101, "title": "leftover one"},
+                {"number": 102, "title": "leftover two"},
+            ])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="Milestone #5") as excinfo:
+        runner.close_release_milestone("o/r", "v0.3.0")
+    # The error carries the version, the Milestone number/url and the
+    # open issue list — never a silent skip.
+    assert "v0.3.0" in str(excinfo.value)
+    assert "https://github.com/o/r/milestone/5" in str(excinfo.value)
+    assert "#101" in str(excinfo.value)
+    assert "#102" in str(excinfo.value)
+    # No close was attempted.
+    assert not [c for c in calls if "PATCH" in c]
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["unexpected"])
+
+
+def test_close_release_milestone_fails_fast_on_duplicate_titles(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([
+                _milestone(5, "v0.3.0", "open", 0),
+                _milestone(7, "v0.3.0", "open", 0),
+            ])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="ambiguous") as excinfo:
+        runner.close_release_milestone("o/r", "v0.3.0")
+    # Both candidates are named; neither is closed.
+    assert "#5" in str(excinfo.value)
+    assert "#7" in str(excinfo.value)
+    assert calls == [MILESTONE_LIST_COMMAND]
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["unexpected"])
+
+
+def test_close_release_milestone_rejects_a_non_array_milestone_list(monkeypatch):
+    def fake_run(command, **kwargs):
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps({"number": 5, "title": "v0.3.0"})
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(ValueError, match="must be a JSON array"):
+        runner.close_release_milestone("o/r", "v0.3.0")
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["unexpected"])
+
+
+def test_close_release_milestone_reraises_a_real_gh_failure(monkeypatch):
+    def fake_run(command, **kwargs):
+        if command == MILESTONE_LIST_COMMAND:
+            raise subprocess.CalledProcessError(
+                1, command, stderr="HTTP 403: rate limit exceeded",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.close_release_milestone("o/r", "v0.3.0")
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["unexpected"])
 
 
 def test_parse_release_declaration_rejects_non_string_body():
