@@ -10286,7 +10286,7 @@ def test_create_repair_issue_deduplicates_a_matching_failure_signature(monkeypat
 
     def fake_run(command, **kwargs):
         calls.append(command)
-        if command[:3] == ["gh", "issue", "list"]:
+        if command[:5] == ["timeout", "30", "gh", "issue", "list"]:
             return json.dumps([{"number": 77, "url": "https://github.com/o/r/issues/77"}])
         raise AssertionError(f"unexpected command: {command}")
 
@@ -10296,6 +10296,7 @@ def test_create_repair_issue_deduplicates_a_matching_failure_signature(monkeypat
         release_commit="abc123", command="pytest -q", evidence="1 failed",
     )
     assert url == "https://github.com/o/r/issues/77"
+    assert calls[0][:5] == ["timeout", "30", "gh", "issue", "list"]
     search = calls[0][calls[0].index("--search") + 1]
     assert "muyan-pilot-repair-signature=" in search
     assert "--label" not in calls[0]
@@ -10308,9 +10309,9 @@ def test_create_repair_issue_creates_a_reproducible_ready_bug(monkeypatch):
 
     def fake_run(command, **kwargs):
         calls.append(command)
-        if command[:3] == ["gh", "issue", "list"]:
+        if command[:5] == ["timeout", "30", "gh", "issue", "list"]:
             return "[]"
-        if command[:3] == ["gh", "issue", "create"]:
+        if command[:5] == ["timeout", "30", "gh", "issue", "create"]:
             return "https://github.com/o/r/issues/77"
         raise AssertionError(f"unexpected command: {command}")
 
@@ -10321,7 +10322,7 @@ def test_create_repair_issue_creates_a_reproducible_ready_bug(monkeypatch):
     )
     assert url == "https://github.com/o/r/issues/77"
     create = calls[1]
-    assert create[:3] == ["gh", "issue", "create"]
+    assert create[:5] == ["timeout", "30", "gh", "issue", "create"]
     assert create.count("--label") == 2
     assert "ai-ready" in create and "bug" in create
     body = create[create.index("--body") + 1]
@@ -10371,6 +10372,17 @@ def test_process_release_fails_on_malformed_declaration(monkeypatch):
     assert "## Release" in comment_kwargs["body"]
 
 
+def test_release_test_evidence_keeps_stdout_and_stderr():
+    error = subprocess.CalledProcessError(
+        1, ["timeout"], output="tests/test_x.py::test_y FAILED\n",
+        stderr="coverage gate failed\n",
+    )
+    assert runner.release_test_evidence(error) == (
+        "[stdout]\ntests/test_x.py::test_y FAILED\n\n"
+        "[stderr]\ncoverage gate failed"
+    )
+
+
 def test_process_release_test_failure_creates_repair_and_keeps_release_blocked(monkeypatch):
     state = make_release_process_env(monkeypatch)
 
@@ -10398,7 +10410,7 @@ def test_process_release_test_failure_creates_repair_and_keeps_release_blocked(m
         "repo": "o/r", "source_issue": 99, "run_id": "a1b2c3d4",
         "release_commit": "abc123",
         "command": RELEASE_DECLARATION_BODY.split("- test_command: ")[1].split("\n")[0],
-        "evidence": "tests/test_x.py::test_y FAILED",
+        "evidence": "[stderr]\ntests/test_x.py::test_y FAILED",
     }]
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
                                         "remove": "ai-in-progress"})

@@ -192,6 +192,10 @@ RELEASE_SECTION = "## Release"
 # that does not terminate within the deadline is a broken path, never
 # ignorable noise.
 RELEASE_TEST_TIMEOUT_SECONDS = 1800
+# Repair-Issue GitHub operations are a convenience path, but they still run
+# during terminal failure handling. Bound them so an unavailable API cannot
+# hold the Runner indefinitely (Issue #95).
+REPAIR_ISSUE_TIMEOUT_SECONDS = 30
 
 # Only comments posted by a repo maintainer are trusted to carry the
 # recovery scene: a public comment (authorAssociation=NONE) must never
@@ -1509,6 +1513,7 @@ def create_repair_issue(*, repo: str, source_issue: int, run_id: str,
     )
     marker = f"muyan-pilot-repair-signature={signature}"
     raw = run_command([
+        "timeout", str(REPAIR_ISSUE_TIMEOUT_SECONDS),
         "gh", "issue", "list", "--repo", repo, "--state", "all",
         "--search", f'in:body "{marker}"', "--json", "number,url", "--limit", "1",
     ])
@@ -1539,6 +1544,7 @@ def create_repair_issue(*, repo: str, source_issue: int, run_id: str,
         "保持 `ai-blocked`，必须在修复合并后显式重新运行 Release gate。",
     ])
     return run_command([
+        "timeout", str(REPAIR_ISSUE_TIMEOUT_SECONDS),
         "gh", "issue", "create", "--repo", repo,
         "--title", f"修复 Release #{source_issue} 测试门禁失败",
         "--body", body, "--label", "ai-ready", "--label", "bug",
@@ -1546,8 +1552,16 @@ def create_repair_issue(*, repo: str, source_issue: int, run_id: str,
 
 
 def release_test_evidence(exc: subprocess.CalledProcessError) -> str | None:
-    """Extract concrete output from a failed release test command only."""
-    evidence = (exc.stderr or exc.stdout or "").strip()
+    """Extract every concrete output stream from a failed release test."""
+    streams = [
+        ("stdout", exc.stdout),
+        ("stderr", exc.stderr),
+    ]
+    evidence = "\n\n".join(
+        f"[{name}]\n{output.strip()}"
+        for name, output in streams
+        if output and output.strip()
+    )
     return evidence or None
 
 
