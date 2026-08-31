@@ -425,7 +425,8 @@ def timer_next_trigger(list_timers_output: str, unit_name: str) -> str:
 
 
 def install_units_step(repo_dir: Path, installed_dir: Path | None,
-                       *, run_command) -> dict:
+                       *, max_concurrency: int = len(systemd_deploy.TIMER_INSTANCES),
+                       run_command) -> dict:
     """Install the repo's user units and report their live state.
 
     Reuses the idempotent ``systemd_deploy.install_units`` (copy the
@@ -438,7 +439,8 @@ def install_units_step(repo_dir: Path, installed_dir: Path | None,
     """
     try:
         result = systemd_deploy.install_units(
-            repo_dir, installed_dir, run_command=run_command,
+            repo_dir, installed_dir, max_concurrency=max_concurrency,
+            run_command=run_command,
         )
     except Exception as exc:
         raise SetupError(
@@ -615,7 +617,10 @@ def run_setup(config: dict, installed_dir: Path | None, *,
             **info,
             "labels": {"aligned": labels["aligned"], "total": labels["total"]},
         })
-    units = install_units_step(repo_dir, installed_dir, run_command=run_command)
+    units = install_units_step(
+        repo_dir, installed_dir, max_concurrency=config["max_concurrency"],
+        run_command=run_command,
+    )
     checkout = check_checkout(
         repo_dir, config["base_branch"], config["source_repos"],
         run_command=run_command,

@@ -349,7 +349,8 @@ def install_units_command(config: dict, installed_dir: Path | None) -> str:
     installed sha256 of each unit (Issue #103).
     """
     result = systemd_deploy.install_units(
-        config["repo_dir"], installed_dir, run_command=run_command,
+        config["repo_dir"], installed_dir,
+        max_concurrency=config["max_concurrency"], run_command=run_command,
     )
     lines = [
         (

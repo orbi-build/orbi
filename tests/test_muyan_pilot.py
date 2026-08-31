@@ -1138,9 +1138,10 @@ def test_install_units_command_reports_commit_and_hashes(monkeypatch,
     installed = tmp_path / "elsewhere"
     captured = {}
 
-    def fake_install(repo_dir, installed_dir, *, run_command):
+    def fake_install(repo_dir, installed_dir, *, max_concurrency, run_command):
         captured["repo_dir"] = repo_dir
         captured["installed_dir"] = installed_dir
+        captured["max_concurrency"] = max_concurrency
         captured["run_command"] = run_command
         return {
             "commit": "0123456789abcdef0123456789abcdef01234567",
@@ -1156,6 +1157,7 @@ def test_install_units_command_reports_commit_and_hashes(monkeypatch,
     report = muyan_pilot.install_units_command(config, installed)
     assert captured["repo_dir"] == config["repo_dir"]
     assert captured["installed_dir"] == installed
+    assert captured["max_concurrency"] == 1
     assert captured["run_command"] is muyan_pilot.run_command
     lines = report.splitlines()
     assert lines[0] == (

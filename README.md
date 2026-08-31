@@ -51,12 +51,12 @@ python3 bootstrap_runner.py --config muyan-pilot.toml
 
 ```bash
 # 幂等安装用户级 service/timer 模板（仓库模板复制到用户 systemd 目录、
-# daemon-reload、enable 两个 timer 实例），并输出部署 commit/hash：
+# daemon-reload，并按 max_concurrency 启用对应的 timer 实例），并输出部署 commit/hash：
 muyan-pilot install-units --config muyan-pilot.toml
 systemctl --user list-timers 'muyan-pilot@*.timer'
 ```
 
-两个 timer 实例 `muyan-pilot@1.timer` 和 `muyan-pilot@2.timer` 各自触发自己的 service 实例（`muyan-pilot@1.timer` → `muyan-pilot@1.service`，`muyan-pilot@2.timer` → `muyan-pilot@2.service`），所以可以同时运行两个独立的 Runner 实例；容量仍由 Runner 内的 flock slot（`max_concurrency`）决定，而不是实例数（Issue #149）。
+安装按 `max_concurrency` 同步 timer：`1` 只启用 `muyan-pilot@1.timer`，`2` 启用 `muyan-pilot@1.timer` 和 `muyan-pilot@2.timer`。降低并发只停止多余 timer，不触碰正在运行的 service；两个实例各自仍触发自己的 service，slot 仍是最终并发安全边界（Issue #189）。
 
 `install-units` 是幂等的：重复执行只会把仓库模板重新复制到位并 `daemon-reload`，**不会**启动、停止或重启正在运行的 Runner（新配置从下一次 service 启动生效）。手工命令只用于首次验证或立即执行一个 tick，不是日常调度方式。
 
@@ -78,9 +78,9 @@ Issue #171：两个 Runner（或 Runner 与 Pi 会话）并发 `git fetch` 会�
 
 仓库中的 `systemd/muyan-pilot@.service` 和 `systemd/muyan-pilot@.timer`（模板 unit）是已安装 unit 的**唯一事实源**：代码和实际运行配置必须一致，漂移必须能被明确发现。Issue #149 起部署启用两个 timer 实例 `muyan-pilot@1.timer` / `muyan-pilot@2.timer`，各自触发自己的 service 实例。
 
-**幂等安装**：`muyan-pilot install-units` 把两个模板复制到用户 systemd 目录（`~/.config/systemd/user/`，可用 `--installed-dir` 覆盖）、执行 `systemctl --user daemon-reload`、`systemctl --user enable --now` 两个 timer 实例，并输出部署 commit（部署 checkout 的 HEAD，即模板来源）和每个 unit 的 sha256。安装**不会**启动、停止或重启 service：当前运行中的 Runner 不被中断，新配置从下一次 service 启动生效。安装同时**一次性迁移** #149 之前的非模板 unit（`systemd/muyan-pilot.service` / `systemd/muyan-pilot.timer`）：`systemctl --user disable --now muyan-pilot.timer`（停的是 timer，绝不停/启/重启 service，运行中的 Runner 不受影响）并删除旧文件，旧单实例调度不会再拉起旧 service（模板变更即部署变更，无需人工步骤）；已迁移过的机器上这一步是 no-op。service 模板的 `ExecStart` 使用已安装 `muyan-pilot` CLI 的明确绝对入口（`%h/.local/bin/muyan-pilot`，即 `uv tool install` 之后 `~/.local/bin` 下的可执行文件；`WorkingDirectory` 仍是部署 checkout，`ExecStartPre` 在 Runner 启动前同步 `origin/main`）。
+**幂等安装**：`muyan-pilot install-units` 把两个模板复制到用户 systemd 目录（`~/.config/systemd/user/`，可用 `--installed-dir` 覆盖）、执行 `systemctl --user daemon-reload`，并按 `max_concurrency` 启用 `@1` 或 `@1`/`@2` timer；降低并发时以 `disable --now` 停掉多余 **timer**，绝不停止 service。安装**不会**启动、停止或重启正在运行的 Runner：新配置从下一次 timer 调度生效；slot 锁语义不变。安装同时**一次性迁移** #149 之前的非模板 unit（`systemd/muyan-pilot.service` / `systemd/muyan-pilot.timer`）：`systemctl --user disable --now muyan-pilot.timer`（停的是 timer，绝不停/启/重启 service，运行中的 Runner 不受影响）并删除旧文件，旧单实例调度不会再拉起旧 service（模板变更即部署变更，无需人工步骤）；已迁移过的机器上这一步是 no-op。service 模板的 `ExecStart` 使用已安装 `muyan-pilot` CLI 的明确绝对入口（`%h/.local/bin/muyan-pilot`，即 `uv tool install` 之后 `~/.local/bin` 下的可执行文件；`WorkingDirectory` 仍是部署 checkout，`ExecStartPre` 在 Runner 启动前同步 `origin/main`）。
 
-**启动前漂移检查（含自愈，Issue #142）**：Runner 每次启动时（`ExecStartPre` 同步完 checkout 之后、领取任何 Issue 之前）对比已安装 unit 与仓库模板（service 和 timer 模板都覆盖）。一致时记录 `unit_drift clean`；发现漂移时用**同一个幂等安装**自愈（复制模板、`daemon-reload`、enable 两个 timer 实例——不启动、停止或重启 service，运行中的 Runner 不受影响），再用**同一个哈希检查**复核：复核通过时每个 unit 记录一行结构化 `unit_drift auto_synced`（before/after sha256、部署 commit），本次启动继续；复核后仍然漂移（或安装步骤本身失败）时记录结构化日志并 fail fast（非零退出，不取 slot、不领取 Issue、不改任何标签）：
+**启动前漂移检查（含自愈，Issue #142）**：Runner 每次启动时（`ExecStartPre` 同步完 checkout 之后、领取任何 Issue 之前）对比已安装 unit 与仓库模板（service 和 timer 模板都覆盖）。一致时记录 `unit_drift clean`；发现漂移时用**同一个幂等安装**自愈（复制模板、`daemon-reload`，按 `max_concurrency` 同步 timer——不启动、停止或重启 service，运行中的 Runner 不受影响），再用**同一个哈希检查**复核：复核通过时每个 unit 记录一行结构化 `unit_drift auto_synced`（before/after sha256、部署 commit），本次启动继续；复核后仍然漂移（或安装步骤本身失败）时记录结构化日志并 fail fast（非零退出，不取 slot、不领取 Issue、不改任何标签）：
 
 ```text
 unit_drift auto_synced unit=muyan-pilot@.timer before_sha256=... after_sha256=... commit=<deployed HEAD>
@@ -402,7 +402,7 @@ cp .muyan-pilot.example.toml muyan-pilot.toml
 # 编辑 muyan-pilot.toml
 ```
 
-Runner 每次处理一个 delivery：领取（或恢复）一个 Issue 后，在整个 implement → review（会话内修复）→ merge 期间持有并发 slot，PR 合并或终态失败后退出，由 systemd timer 再次触发；不在 Python 内实现 daemon，不引入数据库、队列、重试或复杂恢复。没有人为的任务时长上限；命令错误立即失败，真正卡死时通过 systemd/journal 排查并人工停止。并发上限见下一节 `max_concurrency`：拿不到 slot 的 Runner 记录 `capacity_full` 后正常退出，不领取 Issue。Issue #149 起两个 timer 实例（`muyan-pilot@1.timer` / `muyan-pilot@2.timer`）可能同时触发两个 Runner 实例，它们竞争同一组 flock slot：容量仍是 `max_concurrency`（默认 1 时行为与之前完全一致），实例数不是容量。
+Runner 每次处理一个 delivery：领取（或恢复）一个 Issue 后，在整个 implement → review（会话内修复）→ merge 期间持有并发 slot，PR 合并或终态失败后退出，由 systemd timer 再次触发；不在 Python 内实现 daemon，不引入数据库、队列、重试或复杂恢复。没有人为的任务时长上限；命令错误立即失败，真正卡死时通过 systemd/journal 排查并人工停止。`max_concurrency` 同时决定已启用 timer 的数量（1 或 2）；slot 仍是最终安全边界，拿不到 slot 的 Runner 仍记录 `capacity_full` 后正常退出，不领取 Issue。
 
 ## 并发限制（max_concurrency）
 

@@ -106,12 +106,14 @@ def make_repo(tmp_path: Path) -> Path:
 
 
 def make_config(tmp_path: Path, repo_dir: Path,
-                source_repos: list[str] | None = None) -> Path:
+                source_repos: list[str] | None = None,
+                max_concurrency: int = 1) -> Path:
     config = tmp_path / "muyan-pilot.toml"
     config.write_text(
         "source_repos = ["
         + ", ".join(f'"{r}"' for r in (source_repos or ["xqliu/muyan-pilot"]))
-        + f']\nrepo_dir = "{repo_dir}"\nbase_branch = "main"\n',
+        + f']\nrepo_dir = "{repo_dir}"\nbase_branch = "main"\n'
+        + f'max_concurrency = {max_concurrency}\n',
         encoding="utf-8",
     )
     return config
@@ -166,6 +168,14 @@ def fake_run_factory(state: dict):
                     f"active_state:{unit}", state.get("active_state", "active"),
                 )
             return "loaded"
+        if head[:3] == ["systemctl", "--user", "enable"]:
+            state[f"is_enabled:{command[-1]}"] = "enabled"
+            state[f"active_state:{command[-1]}"] = "active"
+            return ""
+        if head[:3] == ["systemctl", "--user", "disable"]:
+            state[f"is_enabled:{command[-1]}"] = "disabled"
+            state[f"active_state:{command[-1]}"] = "inactive"
+            return ""
         if head[:3] == ["systemctl", "--user", "is-enabled"]:
             unit = command[-1]
             return state.get(
@@ -531,7 +541,7 @@ def test_install_units_step_reports_install_state(tmp_path):
     repo = make_repo(tmp_path)
     installed = tmp_path / "units"
     result = pilot_setup.install_units_step(
-        repo, installed, run_command=fake_run,
+        repo, installed, max_concurrency=1, run_command=fake_run,
     )
     assert result["service"]["installed"] is True
     assert result["service"]["installed_path"] == str(
@@ -540,11 +550,13 @@ def test_install_units_step_reports_install_state(tmp_path):
     assert result["service"]["sha256"] == systemd_deploy.sha256_hex(
         installed / "muyan-pilot@.service",
     )
-    # Issue #149: EACH timer instance is reported.
+    # Issue #189: setup follows the configured default capacity (one).
     instances = result["timer"]["instances"]
     assert sorted(instances) == sorted(systemd_deploy.TIMER_INSTANCES)
     assert instances["muyan-pilot@1.timer"]["enabled"] is True
     assert instances["muyan-pilot@1.timer"]["active"] is True
+    assert instances["muyan-pilot@2.timer"]["enabled"] is False
+    assert instances["muyan-pilot@2.timer"]["active"] is False
     assert instances["muyan-pilot@1.timer"]["next"] == (
         "Thu 2026-08-27 10:00:00 +08"
     )
@@ -553,42 +565,29 @@ def test_install_units_step_reports_install_state(tmp_path):
     )
     # The install itself is the systemd_deploy idempotent install.
     assert ["systemctl", "--user", "daemon-reload"] in calls
-    for instance in systemd_deploy.TIMER_INSTANCES:
-        assert [
-            "systemctl", "--user", "enable", "--now", instance,
-        ] in calls
+    assert [
+        "systemctl", "--user", "enable", "--now", "muyan-pilot@1.timer",
+    ] in calls
+    assert [
+        "systemctl", "--user", "disable", "--now", "muyan-pilot@2.timer",
+    ] in calls
 
 
-def test_install_units_step_reports_a_disabled_inactive_timer(tmp_path):
-    state = {"is_enabled": "disabled", "active_state": "inactive"}
+def test_install_units_step_reports_the_disabled_surplus_timer(tmp_path):
+    state = {}
     fake_run, calls = fake_run_factory(state)
     repo = make_repo(tmp_path)
     result = pilot_setup.install_units_step(
-        repo, tmp_path / "units", run_command=fake_run,
-    )
-    instances = result["timer"]["instances"]
-    for instance in systemd_deploy.TIMER_INSTANCES:
-        assert instances[instance]["enabled"] is False
-        assert instances[instance]["active"] is False
-
-
-def test_install_units_step_reports_per_instance_state(tmp_path):
-    # Issue #149: one instance can be enabled/active while the other
-    # is not — the per-instance report must not collapse them.
-    state = {
-        "is_enabled:muyan-pilot@2.timer": "disabled",
-        "active_state:muyan-pilot@2.timer": "inactive",
-    }
-    fake_run, calls = fake_run_factory(state)
-    repo = make_repo(tmp_path)
-    result = pilot_setup.install_units_step(
-        repo, tmp_path / "units", run_command=fake_run,
+        repo, tmp_path / "units", max_concurrency=1, run_command=fake_run,
     )
     instances = result["timer"]["instances"]
     assert instances["muyan-pilot@1.timer"]["enabled"] is True
     assert instances["muyan-pilot@1.timer"]["active"] is True
     assert instances["muyan-pilot@2.timer"]["enabled"] is False
     assert instances["muyan-pilot@2.timer"]["active"] is False
+    assert [
+        "systemctl", "--user", "disable", "--now", "muyan-pilot@2.timer",
+    ] in calls
 
 
 def test_install_units_step_reports_a_missing_next_trigger(tmp_path):
@@ -1017,12 +1016,14 @@ def test_run_setup_success_reports_all_steps(tmp_path):
         },
     ]
     assert result["service"]["installed"] is True
-    # Issue #149: the timer report is per instance.
+    # Issue #189: setup reports the configured timer set, not merely
+    # the fixed template instance list.
     instances = result["timer"]["instances"]
     assert sorted(instances) == sorted(systemd_deploy.TIMER_INSTANCES)
-    for instance in systemd_deploy.TIMER_INSTANCES:
-        assert instances[instance]["enabled"] is True
-        assert instances[instance]["active"] is True
+    assert instances["muyan-pilot@1.timer"]["enabled"] is True
+    assert instances["muyan-pilot@1.timer"]["active"] is True
+    assert instances["muyan-pilot@2.timer"]["enabled"] is False
+    assert instances["muyan-pilot@2.timer"]["active"] is False
     assert result["checkout"]["clean"] is True
     assert result["checkout"]["base_fresh"] is True
     assert result["optional_proxy"]["optional"] is True
@@ -1034,6 +1035,19 @@ def test_run_setup_success_reports_all_steps(tmp_path):
     )
     # No uv call: an existing editable install is never reinstalled.
     assert [c for c in calls if c[:2] == ["uv", "tool"]] == []
+
+
+def test_run_setup_capacity_two_enables_both_timers(tmp_path):
+    repo, installed, state = make_run_state(tmp_path)
+    fake_run, calls = fake_run_factory(state)
+    config = runner.load_config(make_config(tmp_path, repo, max_concurrency=2))
+    result = pilot_setup.run_setup(config, installed, run_command=fake_run)
+    for instance in systemd_deploy.TIMER_INSTANCES:
+        assert result["timer"]["instances"][instance]["enabled"] is True
+        assert result["timer"]["instances"][instance]["active"] is True
+        assert ["systemctl", "--user", "enable", "--now", instance] in calls
+    assert not any(command[2] == "disable" for command in calls
+                   if command[:2] == ["systemctl", "--user"])
 
 
 def test_run_setup_repo_override_limits_the_target(tmp_path):
