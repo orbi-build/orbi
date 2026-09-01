@@ -223,6 +223,93 @@ def test_load_config_rejects_invalid_model_wait_dead_seconds(
     assert reason in str(excinfo.value)
 
 
+# --- Issue #233: the /slots swallow probe is configurable --------------------
+
+def test_load_config_defaults_swallow_probe_disabled(tmp_path):
+    """Issue #233: omitted -> the probe is disabled (None) and the grace
+    defaults to 60 s: the run is bounded by model_wait_dead_seconds only
+    (the exact pre-#233 behavior)."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    config = runner.load_config(config_path)
+    assert config["model_wait_probe_url"] is None
+    assert config["model_wait_probe_seconds"] == 60.0
+
+
+def test_load_config_reads_explicit_swallow_probe(tmp_path):
+    """Issue #233: an explicit /slots URL and grace are accepted as-is."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\n'
+        'model_wait_probe_url = "http://127.0.0.1:18082/slots"\n'
+        "model_wait_probe_seconds = 90\n",
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["model_wait_probe_url"] == "http://127.0.0.1:18082/slots"
+    assert config["model_wait_probe_seconds"] == 90.0
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        ('""', "non-empty"),
+        ("123", "non-empty"),
+        ("true", "non-empty"),
+        ('"ftp://x/slots"', "http:// or https://"),
+        ('"file:///tmp"', "http:// or https://"),
+        ('"x://y"', "http:// or https://"),
+    ],
+)
+def test_load_config_rejects_invalid_swallow_probe_url(
+    tmp_path, value, reason,
+):
+    """Issue #233: a present probe URL must be a non-empty http(s) URL;
+    anything else fails fast at config load with the field name and the
+    concrete reason."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\n'
+        f"model_wait_probe_url = {value}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError) as excinfo:
+        runner.load_config(config_path)
+    assert "model_wait_probe_url" in str(excinfo.value)
+    assert reason in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        ("true", "not a boolean"),
+        ("false", "not a boolean"),
+        ("0", "positive"),
+        ("-5", "positive"),
+        ("nan", "finite"),
+        ("inf", "finite"),
+        ("-inf", "finite"),
+        ('"300"', "number"),
+    ],
+)
+def test_load_config_rejects_invalid_swallow_probe_seconds(
+    tmp_path, value, reason,
+):
+    """Issue #233: booleans, zero, negative, NaN/infinity and non-numeric
+    values are rejected at config load with the field name and the
+    concrete reason."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\n'
+        f"model_wait_probe_seconds = {value}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError) as excinfo:
+        runner.load_config(config_path)
+    assert "model_wait_probe_seconds" in str(excinfo.value)
+    assert reason in str(excinfo.value)
+
+
 def test_load_config_parses_repositories_registry(tmp_path):
     """Issue #134: an explicit [[repositories]] section parses into a
     registry of name/path/github/base_branch, with each path resolved
@@ -5031,6 +5118,173 @@ def test_stream_pi_dropped_connection_model_wait_dead_upstream_false(
     # The kill is the failure path: no idle warning, no recovery.
     assert " pi_idle " not in caplog.text
     assert " pi_idle_term " not in caplog.text
+
+
+# --- Issue #233: the /slots swallow probe kills fast -------------------------
+
+def test_stream_pi_swallowed_model_request_killed_fast(tmp_path, caplog,
+                                                        monkeypatch):
+    """Issue #233 (the #231 scene): the model is expected to reply next
+    (model_wait) and the /slots probe reports EVERY slot idle for the
+    sustained grace — the request was accepted but never scheduled (the
+    model process is alive, the connection ESTABLISHED, nothing
+    generating). The runner kills Pi FAST (well before the
+    model_wait_dead_seconds bound) and fails fast with the
+    model_wait_swallowed reason."""
+    monkeypatch.setattr(runner, "slots_idle", lambda url: True)
+    records = _frozen_model_wait_records(0.0)
+    command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
+    with caplog.at_level("WARNING"), pytest.raises(
+        RuntimeError, match="swallowed",
+    ) as excinfo:
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            model_wait_dead_seconds=10.0,
+            model_wait_probe_url="http://127.0.0.1:18082/slots",
+            model_wait_probe_seconds=0.5,
+            run_id="run1", issue=233, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    assert "model_wait" in str(excinfo.value)
+    lines = caplog.text.splitlines()
+    failures = [line for line in lines if " run_failed " in line]
+    assert len(failures) == 1
+    assert "reason=model_wait_swallowed_idle_" in failures[0]
+    assert "issue=xqliu/muyan-pilot#233" in failures[0]
+    # The structured model_wait_swallowed line carries the evidence.
+    swallowed = [line for line in lines if " model_wait_swallowed " in line]
+    assert len(swallowed) == 1
+    assert "reason=swallowed_model_request" in swallowed[0]
+    assert "action=kill_pi" in swallowed[0]
+    assert "probe_seconds=0" in swallowed[0]
+    assert "upstream_alive=" in swallowed[0]
+    # The fast path fired: the dead-request bound never did.
+    assert " model_wait_dead " not in caplog.text
+
+
+def test_stream_pi_swallow_line_fields(tmp_path, caplog, monkeypatch):
+    """Issue #233 acceptance: the recovery logs ONE structured,
+    grep-able `model_wait_swallowed` line with the full scene (like
+    `model_wait_dead`): issue, idle seconds, the probe grace, the action,
+    the session, the run id, the upstream connection evidence and the
+    reason. The line is parseable with `pi_activity.parse_scene`."""
+    monkeypatch.setattr(runner, "slots_idle", lambda url: True)
+    records = [
+        (0.0, {"type": "session", "id": "sess-233",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.1, {"type": "message", "id": "r1",
+               "timestamp": fresh_timestamp(1),
+               "message": {"role": "toolResult", "toolCallId": "t1",
+                           "toolName": "bash",
+                           "content": [{"type": "text", "text": "ok"}]}}),
+    ]
+    command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
+    with caplog.at_level("WARNING"), pytest.raises(RuntimeError):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            model_wait_dead_seconds=10.0,
+            model_wait_probe_url="http://127.0.0.1:18082/slots",
+            model_wait_probe_seconds=1.0,
+            run_id="ab12cd34", issue=233, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    swallowed = [line for line in lines if " model_wait_swallowed " in line]
+    assert len(swallowed) == 1
+    fields = pi_activity.parse_scene(swallowed[0])
+    assert fields["issue"] == "xqliu/muyan-pilot#233"
+    assert fields["role"] == "implement"
+    assert fields["action"] == "kill_pi"
+    assert fields["session"] == "sess-233"
+    assert fields["run_id"] == "ab12cd34"
+    assert fields["reason"] == "swallowed_model_request"
+    assert fields["probe_seconds"] == "1"
+    assert int(fields["idle_seconds"]) >= 0
+
+
+def test_stream_pi_swallow_not_fired_while_a_slot_is_processing(
+    tmp_path, caplog, monkeypatch,
+):
+    """Issue #233: the /slots probe reports a slot is processing
+    (is_processing=true — the model is generating, a slow model, NOT a
+    swallow): the swallow path never fires and the existing
+    model_wait_dead_seconds bound still applies."""
+    monkeypatch.setattr(runner, "slots_idle", lambda url: False)
+    records = _frozen_model_wait_records(0.0)
+    command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
+    with caplog.at_level("WARNING"), pytest.raises(
+        RuntimeError, match="hung",
+    ):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            model_wait_dead_seconds=0.5,
+            model_wait_probe_url="http://127.0.0.1:18082/slots",
+            model_wait_probe_seconds=0.2,
+            run_id="run1", issue=233, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    # The dead-request bound fired, not the swallow probe.
+    dead = [line for line in lines if " model_wait_dead " in line]
+    assert len(dead) == 1
+    assert " model_wait_swallowed " not in caplog.text
+    failures = [line for line in lines if " run_failed " in line]
+    assert len(failures) == 1
+    assert "reason=model_wait_dead_stale_" in failures[0]
+
+
+def test_stream_pi_swallow_probe_failure_is_inconclusive(
+    tmp_path, caplog, monkeypatch,
+):
+    """Issue #233 (bypass, Issue #79): the /slots probe fails (returns
+    None — network/JSON error): the probe is inconclusive, never an
+    error, and the existing model_wait_dead_seconds bound still applies
+    (the delivery is not failed by the probe)."""
+    monkeypatch.setattr(runner, "slots_idle", lambda url: None)
+    records = _frozen_model_wait_records(0.0)
+    command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
+    with caplog.at_level("WARNING"), pytest.raises(
+        RuntimeError, match="hung",
+    ):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            model_wait_dead_seconds=0.5,
+            model_wait_probe_url="http://127.0.0.1:18082/slots",
+            model_wait_probe_seconds=0.2,
+            run_id="run1", issue=233, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    dead = [line for line in lines if " model_wait_dead " in line]
+    assert len(dead) == 1
+    assert " model_wait_swallowed " not in caplog.text
+
+
+def test_stream_pi_unconfigured_probe_keeps_dead_bound(
+    tmp_path, caplog, monkeypatch,
+):
+    """Issue #233: with no probe URL configured the swallow path is a
+    no-op (the exact pre-#233 behavior) — the run is bounded by
+    model_wait_dead_seconds only, and the probe is never called."""
+    probe = Mock(return_value=True)
+    monkeypatch.setattr(runner, "slots_idle", probe)
+    records = _frozen_model_wait_records(0.0)
+    command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
+    with caplog.at_level("WARNING"), pytest.raises(
+        RuntimeError, match="hung",
+    ):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            model_wait_dead_seconds=0.5,
+            run_id="run1", issue=233, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    # The probe was never called (no URL configured).
+    probe.assert_not_called()
+    lines = caplog.text.splitlines()
+    dead = [line for line in lines if " model_wait_dead " in line]
+    assert len(dead) == 1
+    assert " model_wait_swallowed " not in caplog.text
 
 
 def make_timeout_tool_pi(tmp_path, *, tool_seconds: float = 0.6,

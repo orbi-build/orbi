@@ -67,6 +67,10 @@ KNOWN_CONFIG_FIELDS = frozenset({
     # Issue #228: the configurable model_wait dead-request threshold
     # (finite positive number, default 1800 s).
     "model_wait_dead_seconds",
+    # Issue #233: the /slots swallowed-model-request probe (optional
+    # http(s) URL + sustained-idle grace, default 60 s).
+    "model_wait_probe_url",
+    "model_wait_probe_seconds",
     "skills",
     "context_files",
     # Issue #119/#157: the optional Pi model selection keys (load_config

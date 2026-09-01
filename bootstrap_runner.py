@@ -61,6 +61,7 @@ from pi_recovery import (
     pid_alive,
     process_start_monotonic,
     signal_pid,
+    slots_idle,
     timeout_duration,
     upstream_alive,
 )
@@ -126,6 +127,21 @@ PI_IDLE_WARN_SECONDS = 300.0
 # must survive a 10-minute complete message; the pre-#228 default of
 # 600 s killed them at exactly 10 minutes, #176/#175/#173/#168).
 PI_MODEL_WAIT_DEAD_SECONDS = 1800.0
+# Swallowed-model-request probe (Issue #233): while Pi is frozen in
+# model_wait the Runner probes the model's /slots endpoint (the
+# `model_wait_probe_url` config). When EVERY slot reports idle
+# (is_processing=false) for this sustained grace the request was
+# SWALLOWED (the model process is alive and the connection ESTABLISHED,
+# but nothing is generating — the #231 scene) and the Pi session is
+# killed fast, well before the `model_wait_dead_seconds` bound. The
+# grace is short (60 s) compared to the dead-request threshold (30 min
+# default) so a swallow is recovered in ~1 minute, not ~30; it is long
+# enough that a request still being scheduled into the slot (the brief
+# accept->schedule window) is never misread as a swallow. The probe is
+# a pure bypass (Issue #79): a probe failure is inconclusive and the
+# `model_wait_dead_seconds` bound still applies. The TOML field
+# `model_wait_probe_seconds` overrides this default.
+PI_MODEL_WAIT_PROBE_SECONDS = 60.0
 # Idle-stall recovery (Issue #94): a stalled (non-model_wait) session
 # is recovered automatically instead of only warning. Measured in idle
 # windows of `idle_warn_seconds`: at the first window the pre-idle
@@ -484,6 +500,12 @@ def load_config(path: Path) -> dict:
     # (default 1800 s, 30 minutes). It measures silence between
     # complete session events, never token-level model progress.
     model_wait_dead_seconds = _model_wait_dead_seconds(data)
+    # Swallowed-model-request probe (Issue #233): the /slots endpoint
+    # (optional) and its sustained-idle grace (default 60 s). Absent URL
+    # -> the probe is disabled (the exact pre-#233 behavior: the run is
+    # bounded by model_wait_dead_seconds only).
+    model_wait_probe_url = _model_wait_probe_url(data)
+    model_wait_probe_seconds = _model_wait_probe_seconds(data)
     # Optional Pi provider file (Issue #157): the provider metadata
     # (baseUrl / api / apiKey / models) lives in a separate JSON file in
     # Pi's own `models.json` shape; `muyan-pilot.toml` only selects the
@@ -520,6 +542,8 @@ def load_config(path: Path) -> dict:
         "pi_model": pi_model,
         "pi_thinking": pi_thinking,
         "model_wait_dead_seconds": model_wait_dead_seconds,
+        "model_wait_probe_url": model_wait_probe_url,
+        "model_wait_probe_seconds": model_wait_probe_seconds,
         "pi_providers": pi_providers_path,
         "pi_providers_data": pi_providers_data,
         # Multi-repo registry (Issue #134): the explicit per-repo entries
@@ -542,6 +566,73 @@ def _optional_pi_string(data: dict, key: str) -> str | None:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{key} must be a non-empty string")
     return value
+
+
+def _model_wait_probe_url(data: dict) -> str | None:
+    """Load and validate the optional `model_wait_probe_url`
+    (Issue #233).
+
+    Omitted -> None (the /slots probe is disabled: the run is bounded by
+    `model_wait_dead_seconds` only, the exact pre-#233 behavior). Present
+    -> must be a non-empty `http://` or `https://` URL (the model's
+    `/slots` endpoint, e.g. `http://127.0.0.1:18082/slots`); anything else
+    fails fast at config load with the field name and the concrete reason.
+    """
+    value = data.get("model_wait_probe_url")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            "model_wait_probe_url must be a non-empty string "
+            f"(got {type(value).__name__} {value!r})"
+        )
+    if not value.startswith(("http://", "https://")):
+        raise ValueError(
+            "model_wait_probe_url must be an http:// or https:// URL "
+            f"(got {value!r})"
+        )
+    return value
+
+
+def _model_wait_probe_seconds(data: dict) -> float:
+    """Load and validate the optional `model_wait_probe_seconds`
+    (Issue #233).
+
+    Omitted -> `PI_MODEL_WAIT_PROBE_SECONDS` (default 60 s). Present ->
+    must be a finite positive number (int or float); booleans, zero,
+    negative, NaN/infinity and non-numeric values fail fast at config
+    load with the field name and the concrete reason.
+    """
+    value = data.get(
+        "model_wait_probe_seconds", PI_MODEL_WAIT_PROBE_SECONDS,
+    )
+    if isinstance(value, bool):
+        raise ValueError(
+            "model_wait_probe_seconds must be a number, not a boolean "
+            f"(got {value!r})"
+        )
+    if not isinstance(value, (int, float)):
+        raise ValueError(
+            "model_wait_probe_seconds must be a number "
+            f"(got {type(value).__name__} {value!r})"
+        )
+    number = float(value)
+    if math.isnan(number):
+        raise ValueError(
+            "model_wait_probe_seconds must be a finite number of seconds "
+            f"(got {value!r})"
+        )
+    if math.isinf(number):
+        raise ValueError(
+            "model_wait_probe_seconds must be a finite number of seconds "
+            f"(got {value!r})"
+        )
+    if number <= 0:
+        raise ValueError(
+            "model_wait_probe_seconds must be a positive number of seconds "
+            f"(got {value!r})"
+        )
+    return number
 
 
 def _model_wait_dead_seconds(data: dict) -> float:
@@ -2789,6 +2880,8 @@ def stream_pi(
     poll_interval: float = PI_POLL_INTERVAL,
     idle_warn_seconds: float = PI_IDLE_WARN_SECONDS,
     model_wait_dead_seconds: float = PI_MODEL_WAIT_DEAD_SECONDS,
+    model_wait_probe_url: str | None = None,
+    model_wait_probe_seconds: float = PI_MODEL_WAIT_PROBE_SECONDS,
     run_id: str,
     issue: int,
     source_repo: str,
@@ -2891,6 +2984,15 @@ def stream_pi(
     activity = watcher.poll()
     timed_out = False
     model_wait_dead = False
+    # Swallowed-model-request probe state (Issue #233): the monotonic
+    # moment the /slots probe first reported every slot idle while Pi was
+    # in model_wait (None until then). Reset whenever a slot is processing,
+    # the probe is inconclusive, or model_wait is left. When the idle
+    # state has been sustained for `model_wait_probe_seconds` the request
+    # is declared swallowed and Pi is killed fast (well before the
+    # model_wait_dead_seconds bound).
+    probe_first_idle: float | None = None
+    model_wait_swallowed = False
     # model_wait transitions (Issue #40): one line when the state is
     # entered and one when it is left; unchanged polls are heartbeats
     # that carry the state, so a slow model never looks idle and no
@@ -2996,6 +3098,11 @@ def stream_pi(
                     "model_wait" if activity["model_wait"] else "resumed",
                 )
                 last_model_wait = activity["model_wait"]
+                # Leaving model_wait (the next session event arrived):
+                # the swallow-probe window is over — reset it so a later
+                # model_wait starts a fresh window (Issue #233).
+                if not activity["model_wait"]:
+                    probe_first_idle = None
             # Idle warning (Issue #18): a stalled session (no model/
             # session event for `idle_warn_seconds`, and the model is
             # not expected to reply next) logs ONE `pi_idle` warning
@@ -3240,6 +3347,54 @@ def stream_pi(
                         "progress_publish_failed run=%s issue=%s role=%s",
                         run_id, issue_ref, role,
                     )
+            # Swallowed-model-request detection (Issue #233): the model
+            # is expected to reply next (model_wait) and the /slots probe
+            # (when configured) reports that EVERY slot is idle for the
+            # sustained grace — the request was accepted by the upstream
+            # but never scheduled into the slot (the #231 scene: process
+            # alive, connection ESTABLISHED, slot idle, nothing
+            # generating). This is a real hang that the
+            # model_wait_dead_seconds bound would only catch minutes
+            # later, so the runner kills Pi FAST and fails fast through
+            # the normal failure path. The probe is a pure bypass
+            # (Issue #79): an inconclusive probe (None) is simply "no
+            # evidence" and the model_wait_dead_seconds bound still
+            # applies; a slot that is processing (False) resets the idle
+            # window (a slow model is not a swallow). Never fires while
+            # events keep arriving (a slow generation is not a swallow).
+            if (
+                model_wait_probe_url is not None
+                and activity["model_wait"]
+            ):
+                idle = slots_idle(model_wait_probe_url)
+                if idle is True:
+                    if probe_first_idle is None:
+                        probe_first_idle = time.monotonic()
+                    elif (
+                        time.monotonic() - probe_first_idle
+                        >= model_wait_probe_seconds
+                    ):
+                        alive = upstream_alive(process.pid)
+                        LOGGER.warning(
+                            "model_wait_swallowed issue=%s role=%s "
+                            "idle_seconds=%s probe_seconds=%s "
+                            "action=kill_pi session=%s run_id=%s "
+                            "upstream_alive=%s reason=swallowed_model_request",
+                            issue_ref, role,
+                            int(activity["stale_seconds"]),
+                            int(model_wait_probe_seconds),
+                            activity["session_id"] or "-",
+                            run_id,
+                            "true" if alive else "false",
+                        )
+                        process.kill()
+                        model_wait_swallowed = True
+                        break
+                else:
+                    # A slot is processing (False) or the probe is
+                    # inconclusive (None): no swallow evidence — reset
+                    # the idle window so it must be sustained again.
+                    probe_first_idle = None
             # Hung-model-request detection (Issue #75, safe recovery
             # since Issue #218): the model is expected to reply next
             # (model_wait) and the session file has been frozen for the
@@ -3297,6 +3452,24 @@ def stream_pi(
             f"Pi session stayed idle for {stale} after idle recovery "
             f"(TERM/KILL of pre-idle descendants); Pi was killed "
             "(Issue #94)"
+        )
+    if model_wait_swallowed:
+        idle = format_duration(activity["stale_seconds"])
+        LOGGER.error(
+            "run_failed %s reason=model_wait_swallowed_idle_%s",
+            format_run_scene(
+                activity, run_id=run_id, issue=issue_ref,
+                role=role, branch=branch, worktree=str(cwd),
+            ),
+            idle,
+        )
+        raise RuntimeError(
+            f"Pi is stuck in model_wait and the model /slots probe "
+            f"reported every slot idle for the sustained grace "
+            f"(session frozen {idle}): the model request was swallowed "
+            "(the model service process is alive and the connection is "
+            "established, but nothing is generating); Pi was killed "
+            "(Issue #233)"
         )
     if model_wait_dead:
         stale = format_duration(activity["stale_seconds"])
@@ -3547,6 +3720,12 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         # constant stays the fallback for hand-built configs).
         model_wait_dead_seconds=config.get(
             "model_wait_dead_seconds", PI_MODEL_WAIT_DEAD_SECONDS,
+        ),
+        # Issue #233: the /slots swallow probe (absent URL -> disabled,
+        # the exact pre-#233 behavior).
+        model_wait_probe_url=config.get("model_wait_probe_url"),
+        model_wait_probe_seconds=config.get(
+            "model_wait_probe_seconds", PI_MODEL_WAIT_PROBE_SECONDS,
         ),
         **extra,
     )
@@ -4288,6 +4467,12 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
         # stays the fallback for hand-built configs).
         model_wait_dead_seconds=config.get(
             "model_wait_dead_seconds", PI_MODEL_WAIT_DEAD_SECONDS,
+        ),
+        # Issue #233: the review session uses the SAME /slots swallow
+        # probe as the implementer (absent URL -> disabled).
+        model_wait_probe_url=config.get("model_wait_probe_url"),
+        model_wait_probe_seconds=config.get(
+            "model_wait_probe_seconds", PI_MODEL_WAIT_PROBE_SECONDS,
         ),
         **extra,
     )

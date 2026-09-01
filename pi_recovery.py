@@ -23,12 +23,22 @@ called from the existing `stream_pi` poll loop.
 """
 from __future__ import annotations
 
+import json
 import os
 import signal
+import urllib
+import urllib.request
 from pathlib import Path
 
 # The real procfs; the unit tests point this at a fake directory.
 PROC = Path("/proc")
+
+# The /slots probe timeout (Issue #233): the probe runs inside the poll
+# loop and must never block it — a bounded, short request. The model
+# endpoint is local (127.0.0.1) in the documented deployment, so 5 s is
+# generous for a healthy endpoint and short compared to the dead-request
+# threshold it protects.
+SLOTS_PROBE_TIMEOUT = 5.0
 
 
 def _read_stat(pid: int) -> str | None:
@@ -365,6 +375,50 @@ def pid_alive(pid: int) -> bool:
     except PermissionError:
         # The process exists but is owned by another user: alive.
         return True
+
+
+def slots_idle(url: str, timeout: float = SLOTS_PROBE_TIMEOUT) -> bool | None:
+    """Probe the model's `/slots` endpoint (Issue #233).
+
+    The fast path for the #231 swallow scene: the model service process is
+    alive and the connection is ESTABLISHED, but the request was accepted
+    and never scheduled into the slot — the slot reports idle while Pi waits
+    forever. The probe asks the model endpoint directly whether any slot is
+    actually generating, which `upstream_alive` (a socket-state check) cannot
+    see (process alive ≠ responding, Issue #218).
+
+    The endpoint contract is verified against the real llama-server: `GET
+    /slots` returns a JSON **list** of slot objects, each carrying an
+    `is_processing` bool (the local-llm-kv-cache proxy passes it through
+    unchanged). The result:
+
+    - `True`  — the endpoint is reachable and EVERY slot has
+      `is_processing=false`: the model is NOT generating (the swallow
+      evidence).
+    - `False` — at least one slot has `is_processing=true`: the model is
+      generating (a slow model, NOT a swallow).
+    - `None`  — inconclusive: a probe error (network / non-200 / timeout),
+      invalid JSON, or a payload that is not a non-empty list of slot
+      objects. The caller treats `None` as "no evidence" — the probe is a
+      pure bypass (Issue #79) and never fails the delivery.
+    """
+    try:
+        # urlopen raises HTTPError for a non-2xx status (caught below),
+        # so a reachable endpoint here returned a 2xx body.
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            payload = json.loads(response.read())
+    except Exception:
+        # Any probe failure (URLError / HTTPError / timeout / JSON / I/O)
+        # is inconclusive — the probe is a bypass, never an error.
+        return None
+    if not isinstance(payload, list) or not payload:
+        return None
+    for slot in payload:
+        if not isinstance(slot, dict):
+            return None
+        if slot.get("is_processing") is True:
+            return False
+    return True
 
 
 def signal_pid(pid: int, sig: int) -> str:

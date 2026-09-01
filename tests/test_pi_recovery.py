@@ -756,6 +756,140 @@ def test_upstream_alive_skips_unreadable_net_tables(
     assert pi_recovery.upstream_alive(42) is False
 
 
+# --- slots_idle (Issue #233: request-level liveness probe) ---------------
+# The probe is the fast path for the #231 swallow scene: the model process
+# is alive and the connection ESTABLISHED, but the slot is idle (the request
+# was accepted and never scheduled). It reads the model's /slots endpoint
+# (verified against the real llama-server: a JSON LIST of slot objects, each
+# with an `is_processing` bool). It is a pure bypass: any probe failure is
+# inconclusive (None), never an error.
+
+
+class _FakeSlotsResponse:
+    def __init__(self, status: int, body: bytes):
+        self.status = status
+        self._body = body
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _patch_urlopen(monkeypatch, *, result=None, exc=None):
+    calls = {}
+
+    def fake_urlopen(url, timeout=None):
+        calls["url"] = url
+        calls["timeout"] = timeout
+        if exc is not None:
+            raise exc
+        return result
+
+    monkeypatch.setattr(pi_recovery.urllib.request, "urlopen", fake_urlopen)
+    return calls
+
+
+def test_slots_idle_true_when_every_slot_is_idle(monkeypatch):
+    # The #231 scene: the endpoint is reachable and every slot reports
+    # is_processing=false — the model is NOT generating, the request was
+    # swallowed. This is the swallow evidence (True).
+    body = (
+        b'[{"id": 0, "is_processing": false, "id_task": 561412, '
+        b'"n_decoded_tokens": null}]'
+    )
+    _patch_urlopen(
+        monkeypatch, result=_FakeSlotsResponse(200, body),
+    )
+    assert pi_recovery.slots_idle("http://127.0.0.1:18082/slots") is True
+
+
+def test_slots_idle_true_with_multiple_idle_slots(monkeypatch):
+    # --parallel N: every slot idle is still the swallow evidence.
+    body = b'[{"id": 0, "is_processing": false}, {"id": 1, "is_processing": false}]'
+    _patch_urlopen(monkeypatch, result=_FakeSlotsResponse(200, body))
+    assert pi_recovery.slots_idle("http://x/slots") is True
+
+
+def test_slots_idle_false_when_a_slot_is_processing(monkeypatch):
+    # A slot is generating (is_processing=true): the model is working (a
+    # slow model), NOT a swallow. The probe says "not idle" (False).
+    body = b'[{"id": 0, "is_processing": true, "n_decoded_tokens": 42}]'
+    _patch_urlopen(monkeypatch, result=_FakeSlotsResponse(200, body))
+    assert pi_recovery.slots_idle("http://x/slots") is False
+
+
+def test_slots_idle_false_when_any_of_many_slots_processing(monkeypatch):
+    # One of several slots is busy: the model is working, not a swallow.
+    body = b'[{"id": 0, "is_processing": false}, {"id": 1, "is_processing": true}]'
+    _patch_urlopen(monkeypatch, result=_FakeSlotsResponse(200, body))
+    assert pi_recovery.slots_idle("http://x/slots") is False
+
+
+def test_slots_idle_none_on_network_error(monkeypatch):
+    # The endpoint is unreachable (connection refused / timeout): the probe
+    # is inconclusive (None) — a pure bypass, never an error.
+    import urllib.error
+    _patch_urlopen(
+        monkeypatch, exc=urllib.error.URLError("refused"),
+    )
+    assert pi_recovery.slots_idle("http://x/slots") is None
+
+
+def test_slots_idle_none_on_http_error(monkeypatch):
+    # A non-200 (urlopen raises HTTPError): inconclusive (None).
+    import urllib.error
+    err = urllib.error.HTTPError(
+        "http://x/slots", 500, "boom", {}, None,
+    )
+    _patch_urlopen(monkeypatch, exc=err)
+    assert pi_recovery.slots_idle("http://x/slots") is None
+
+
+def test_slots_idle_none_on_invalid_json(monkeypatch):
+    # A reachable endpoint that returns non-JSON: inconclusive (None).
+    _patch_urlopen(
+        monkeypatch, result=_FakeSlotsResponse(200, b"not json"),
+    )
+    assert pi_recovery.slots_idle("http://x/slots") is None
+
+
+def test_slots_idle_none_on_empty_list(monkeypatch):
+    # An empty slot list is not evidence of a swallow (no slot to be
+    # idle): inconclusive (None).
+    _patch_urlopen(monkeypatch, result=_FakeSlotsResponse(200, b"[]"))
+    assert pi_recovery.slots_idle("http://x/slots") is None
+
+
+def test_slots_idle_none_on_non_list_payload(monkeypatch):
+    # A JSON object (not the /slots list shape): inconclusive (None).
+    _patch_urlopen(
+        monkeypatch, result=_FakeSlotsResponse(200, b'{"status": "ok"}'),
+    )
+    assert pi_recovery.slots_idle("http://x/slots") is None
+
+
+def test_slots_idle_none_on_non_dict_slot(monkeypatch):
+    # A list whose entry is not a slot object: inconclusive (None).
+    _patch_urlopen(monkeypatch, result=_FakeSlotsResponse(200, b'["idle"]'))
+    assert pi_recovery.slots_idle("http://x/slots") is None
+
+
+def test_slots_idle_uses_the_given_timeout(monkeypatch):
+    # The probe is bounded (a short timeout): it never blocks the poll loop.
+    calls = _patch_urlopen(
+        monkeypatch,
+        result=_FakeSlotsResponse(200, b'[{"id": 0, "is_processing": false}]'),
+    )
+    pi_recovery.slots_idle("http://x/slots", timeout=2.5)
+    assert calls["timeout"] == 2.5
+    assert calls["url"] == "http://x/slots"
+
+
 def test_upstream_alive_false_for_live_state_without_remote_ip(
     tmp_path, monkeypatch,
 ):

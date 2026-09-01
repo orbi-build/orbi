@@ -86,6 +86,19 @@ journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service | grep e0738
 - `pi_idle` — 超过 300 秒（`PI_IDLE_WARN_SECONDS=300`）没有
   model/session 活动且模型不期望回复时的一次 WARNING；活跃的慢模型
   （`model_wait`）从不告警；
+- `model_wait_swallowed` — 冻结的 `model_wait` 被 `/slots` 探针确认
+  吞请求（Issue #233）时的一次 WARNING + 杀掉 Pi 会话：
+  `model_wait_probe_url` 端点报告**所有** slot 持续
+  `model_wait_probe_seconds` 宽限（默认 60 秒）都空闲
+  （`is_processing=false`）——请求被上游接受但从未被调度进 slot，
+  模型进程活着、连接 ESTABLISHED，但没有东西在生成（#231 现场）；
+  行带 issue、role、idle 秒数、探针宽限、`action=kill_pi`、session、
+  run id、`upstream_alive=true|false` 和
+  `reason=swallowed_model_request`。它快速触发（远早于
+  `model_wait_dead_seconds`），吞请求约 1 分钟就能恢复而不是约 30
+  分钟。探针是纯旁路（Issue #79）：探测失败视为无证据（无此行，
+  `model_wait_dead` 兜底仍生效），有 slot 在处理会重置空闲窗口（慢
+  模型不是吞请求）；未设置 `model_wait_probe_url` 时禁用；
 - `model_wait_dead` — 冻结的 `model_wait`（最近一条事件是 tool
   result，无新事件）超过配置的 `model_wait_dead_seconds`（默认
   1800 秒，`PI_MODEL_WAIT_DEAD_SECONDS`，Issue #228）时的一次 WARNING
@@ -98,9 +111,10 @@ journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service | grep e0738
   触发（慢本地模型，如 ~17 tokens/s 的 Qwen 27B、llama-server 请求
   超时 1200 秒，在默认配置下可以存活超过 10 分钟的完整消息）；
 - `run_failed` — 完整现场加原因（`pi_exit_N`、`timeout_...s`，或
-  `model_wait_dead_stale_...s`——冻结的 `model_wait` 超过配置的
-  `model_wait_dead_seconds`（默认 1800 秒，Issue #228）判定模型请求
-  挂死，Runner 杀掉 Pi）。
+  `model_wait_swallowed_idle_...s`——`/slots` 探针确认所有 slot 持续
+  空闲（Issue #233）Runner 快速杀掉 Pi，或 `model_wait_dead_stale_...s`
+  ——冻结的 `model_wait` 超过配置的 `model_wait_dead_seconds`（默认
+  1800 秒，Issue #228）判定模型请求挂死，Runner 杀掉 Pi）。
 
 idle 告警和模型请求挂死 kill 是日志/健康阈值——它们不是每 5 分钟
 调度，也不是业务任务 timeout。
