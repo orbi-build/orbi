@@ -110,6 +110,11 @@ journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service | grep e0738
   token 级进度），不是 token 级模型进度——持续追加事件的慢生成永不
   触发（慢本地模型，如 ~17 tokens/s 的 Qwen 27B、llama-server 请求
   超时 1200 秒，在默认配置下可以存活超过 10 分钟的完整消息）；
+- `pi_idle_wait` — idle-stall 恢复的宽限行（Issue #181）：仍在
+  deadline 内的 coreutils `timeout <seconds> ...` 包裹是合法的长命令，
+  不是 hang。Runner 每次 stall 记一条 `pi_idle_wait` 行（run id、
+  pid、cmdline、deadline），并在 progress 评论里报告 `recovery=wait`；
+  先过一个完整 idle 窗口的宽限再升级，之后每个窗口重新评估；
 - `run_failed` — 完整现场加原因（`pi_exit_N`、`timeout_...s`，或
   `model_wait_swallowed_idle_...s`——`/slots` 探针确认所有 slot 持续
   空闲（Issue #233）Runner 快速杀掉 Pi，或 `model_wait_dead_stale_...s`

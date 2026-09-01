@@ -131,6 +131,13 @@ Stable `key=value` lines you will see:
   keeps appending events never trips it (a slow local model, e.g. Qwen
   27B at ~17 tokens/s behind a llama-server with a 1200 s request
   timeout, survives a 10-minute complete message under the default);
+- `pi_idle_wait` — the grace line of the idle-stall recovery (Issue
+  #181): a coreutils `timeout <seconds> ...` wrapper still inside its
+  deadline is a legitimate long-running command, not a hang. The
+  Runner logs one `pi_idle_wait` line per stall (run id, pid, cmdline,
+  deadline) and reports `recovery=wait` in the progress comment; one
+  full idle window of grace passes before escalation, and every later
+  window re-evaluates;
 - `pi_idle_term` / `pi_idle_kill` — the idle-stall recovery (Issue
   #94): while the session stays stalled the Runner SIGTERMs the Pi
   descendants that already existed before the idle window (the hung
