@@ -74,20 +74,14 @@ Issue #152）。editable 安装下 tool 环境直接从 clone 目录导入
 merge 后的代码：**普通 Python 源码与 systemd 模板/迁移代码变更不需要
 任何重装或升级命令**。
 当**打包输入**变化（`py-modules` 新增运行时模块、依赖、入口点、包名、
-构建后端或 Python 版本）时，editable finder 的模块映射会过期，下一个
-CLI 进程在 Runner 启动前就 `ModuleNotFoundError`（Issue #158）——现在
-Runner 自动刷新：每次启动（在任何 slot/claim 之前）比较 checkout
-`pyproject.toml` 的 sha256 与**上次成功安装**记录的指纹（共享状态目录
-`.muyan-pilot/cli-install.json`）：未变 → 完全不跑 `uv`（不做每 tick
-重装）；变更或首次安装 → 在 base-sync flock 保护下跑一次上面的 force
-editable 重装（与服务 `ExecStartPre` 同一把锁，两个 instance 同 tick
-启动时串行化，第二个复用第一个的结果）；安装失败 → fail fast（结构化
-`cli_install_failed` 行：原因 + 精确修复命令）。`muyan-pilot doctor`
-报告一致性（`cli_source: clean` 或 `cli_source: DRIFT` + 结构化
-`cli_source_drift` 行），`muyan-pilot setup` 幂等地校验或重装。发布包
-不携带第三方运行时依赖、token 或用户目录——配置文件和用户 systemd 目录
-保持机器本地。`muyan_pilot.py` 的直接执行入口（用解释器直接运行该文件）
-保留为开发/兼容路径。
+构建后端或 Python 版本）时，Runner 每次启动（在任何 slot/claim 之前）
+自动刷新安装——刷新失败会 fail fast（结构化 `cli_install_failed`
+行：原因 + 精确修复命令）。`muyan-pilot doctor` 报告一致性
+（`cli_source: clean` 或 `cli_source: DRIFT` + 结构化 `cli_source_drift`
+行），`muyan-pilot setup` 幂等地校验或重装。发布包不携带第三方运行时
+依赖、token 或用户目录——配置文件和用户 systemd 目录保持机器本地。
+`muyan_pilot.py` 的直接执行入口（用解释器直接运行该文件）保留为
+开发/兼容路径。
 
 ## 3. 创建配置
 

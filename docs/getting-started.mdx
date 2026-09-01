@@ -84,27 +84,17 @@ code automatically: **ordinary Python source and systemd
 template/migration changes need NO reinstall and no upgrade command**.
 When the PACKAGING inputs change (a new runtime module in
 `py-modules`, a dependency, the entry point, the package name, the
-build backend or the Python version), the editable finder's module
-mapping is stale and the next CLI process dies with
-`ModuleNotFoundError` before the Runner can start (Issue #158) — the
-Runner now refreshes this automatically: at every start (before any
-slot or claim) it compares the sha256 of the checkout's
-`pyproject.toml` with the fingerprint of the last successful install
-(recorded in the shared state dir, `.muyan-pilot/cli-install.json`):
-unchanged → no `uv` call at all (no per-tick reinstall); changed or
-first install → ONE lock-protected run of the exact force editable
-reinstall command above (the same base-sync flock the service
-`ExecStartPre` uses, so two instances starting in the same tick
-serialize and the second reuses the first's result); a failing install
-fails the start fast with the structured `cli_install_failed` line
-(reason + the exact fix command). `muyan-pilot
-doctor` reports the consistency (`cli_source: clean` or
-`cli_source: DRIFT` with the structured `cli_source_drift` line), and
-`muyan-pilot setup` verifies or reinstalls it idempotently. The release
-package carries no third-party runtime dependency, no token and no user
-directory — the config file and the user systemd dir stay
-machine-local. The direct-execution entry of `muyan_pilot.py` (running
-the file with the interpreter) stays a development/compatibility path.
+build backend or the Python version), the Runner refreshes the install
+automatically at every start (before any slot or claim) — a failing
+refresh fails the start fast with the structured `cli_install_failed`
+line (reason + the exact fix command). `muyan-pilot doctor` reports the
+consistency (`cli_source: clean` or `cli_source: DRIFT` with the
+structured `cli_source_drift` line), and `muyan-pilot setup` verifies or
+reinstalls it idempotently. The release package carries no third-party
+runtime dependency, no token and no user directory — the config file
+and the user systemd dir stay machine-local. The direct-execution entry
+of `muyan_pilot.py` (running the file with the interpreter) stays a
+development/compatibility path.
 
 ## 3. Create the configuration
 
