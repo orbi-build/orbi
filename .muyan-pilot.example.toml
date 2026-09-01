@@ -44,6 +44,25 @@ base_branch = "main"
 # 1200 s request timeout) survives a 10-minute complete message. Must
 # be a finite positive number; anything else fails the start fast.
 # model_wait_dead_seconds = 1800
+# Swallowed-model-request probe (Issue #233): the model's /slots
+# endpoint (the agent-facing port — the local-llm-kv-cache proxy passes
+# it through from llama.cpp). While Pi is frozen in model_wait the
+# Runner probes it; when EVERY slot reports idle (is_processing=false)
+# for the sustained model_wait_probe_seconds grace the request was
+# SWALLOWED (the model process is alive and the connection ESTABLISHED,
+# but nothing is generating — the #231 scene) and the Pi session is
+# killed fast, well before model_wait_dead_seconds. Omit to disable the
+# probe (the run is bounded by model_wait_dead_seconds only, the
+# pre-#233 behavior). Must be a non-empty http:// or https:// URL.
+# The probe is a pure bypass: a probe failure is inconclusive and never
+# fails the delivery.
+# model_wait_probe_url = "http://127.0.0.1:18082/slots"
+# The sustained-idle grace for the probe (seconds): how long the
+# "every slot idle" state must hold before the request is declared
+# swallowed. Default: 60 — short compared to the dead-request threshold
+# so a swallow is recovered in ~1 minute, not ~30. Must be a finite
+# positive number.
+# model_wait_probe_seconds = 60
 # Maximum concurrent Pilot tasks and enabled Runner timers on this machine.
 # Must be 1 or 2 (the fixed timer instance set); missing means 1. The local AI/GPU can only serve one stable task, so keep
 # the default. A slot (flock on <repo_dir>/.muyan-pilot/slots/slot-N) is

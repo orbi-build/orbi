@@ -100,6 +100,22 @@ Stable `key=value` lines you will see:
 - `pi_idle` — one WARNING when there is no model/session activity for
   more than 5 minutes (`PI_IDLE_WARN_SECONDS=300`) and the model is not
   expected to reply; a slow active model (`model_wait`) never warns;
+- `model_wait_swallowed` — one WARNING plus the kill of the Pi session
+  when the frozen `model_wait` is confirmed SWALLOWED by the `/slots`
+  probe (Issue #233): the `model_wait_probe_url` endpoint reports that
+  EVERY slot is idle (`is_processing=false`) for the sustained
+  `model_wait_probe_seconds` grace (default 60 s). The model request was
+  accepted by the upstream but never scheduled into the slot — the model
+  process is alive and the connection ESTABLISHED, but nothing is
+  generating (the #231 scene). The line carries issue, role, idle
+  seconds, the probe grace, `action=kill_pi`, session, run id,
+  `upstream_alive=true|false` and
+  `reason=swallowed_model_request`. It fires FAST (well before
+  `model_wait_dead_seconds`) so a swallow is recovered in ~1 minute, not
+  ~30. The probe is a pure bypass (Issue #79): a probe failure is
+  inconclusive (no line, the `model_wait_dead` bound still applies) and
+  a slot that is processing resets the idle window (a slow model is not
+  a swallow); disabled when `model_wait_probe_url` is unset;
 - `model_wait_dead` — one WARNING plus the kill of the Pi session when
   a frozen `model_wait` (the newest event is a tool result, no new
   session events) crosses the configured `model_wait_dead_seconds`
@@ -123,12 +139,14 @@ Stable `key=value` lines you will see:
   target that survived; each line carries run id, pid, cmdline and
   result (`sent` / `already_dead` / `no_target` / `failed: ...`);
 - `run_failed` — the full scene plus the reason
-  (`pi_exit_N`, `timeout_...s`, `model_wait_dead_stale_...s` when a
-  frozen `model_wait` past the configured `model_wait_dead_seconds`
-  (default 1800 s, Issue #228) declares the model request hung, or
-  `idle_recovery_stale_...s` when the session stayed idle for
-  `PI_IDLE_RECOVERY_CYCLES` (default 3) consecutive idle windows and
-  the Runner kills the Pi session itself).
+  (`pi_exit_N`, `timeout_...s`, `model_wait_swallowed_idle_...s` when
+  the `/slots` probe confirms every slot idle for the sustained grace
+  (Issue #233) and the Runner kills the Pi session fast,
+  `model_wait_dead_stale_...s` when a frozen `model_wait` past the
+  configured `model_wait_dead_seconds` (default 1800 s, Issue #228)
+  declares the model request hung, or `idle_recovery_stale_...s` when
+  the session stayed idle for `PI_IDLE_RECOVERY_CYCLES` (default 3)
+  consecutive idle windows and the Runner kills the Pi session itself).
 
 The idle warning, the idle recovery and the hung-model-request kill are
 log/health thresholds — they are not the 5-minute schedule and not a
