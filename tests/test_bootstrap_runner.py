@@ -2091,24 +2091,307 @@ def test_latest_run_id_returns_none_without_task_worktrees(tmp_path):
 
 def test_latest_run_id_returns_the_run_id_of_the_newest_worktree(tmp_path):
     slug = "owner-repo"
-    first = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-3-old11111"
-    second = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-3-new22222"
+    first = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-3-0d111111"
+    second = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-3-2e222222"
     first.mkdir(parents=True)
     second.mkdir(parents=True)
     # The newest by mtime wins, even when it was created first by name.
     os.utime(first, (200, 200))
     os.utime(second, (100, 100))
-    assert runner.latest_run_id(tmp_path, "owner/repo", 3) == "old11111"
+    assert runner.latest_run_id(tmp_path, "owner/repo", 3) == "0d111111"
     os.utime(second, (300, 300))
-    assert runner.latest_run_id(tmp_path, "owner/repo", 3) == "new22222"
+    assert runner.latest_run_id(tmp_path, "owner/repo", 3) == "2e222222"
     # A worktree of another issue (or another source repo) never counts.
     other_issue = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-4-ffff0000"
-    other_repo = tmp_path / ".worktrees" / f"muyan-pilot-other-repo-issue-3-ffff1111"
+    other_repo = tmp_path / ".worktrees" / f"muyan-pilot-other-other-issue-3-ffff1111"
     other_issue.mkdir()
     other_repo.mkdir()
     os.utime(other_issue, (400, 400))
     os.utime(other_repo, (400, 400))
-    assert runner.latest_run_id(tmp_path, "owner/repo", 3) == "new22222"
+    assert runner.latest_run_id(tmp_path, "owner/repo", 3) == "2e222222"
+
+
+# --- Issue #219: continue the interrupted run, never a fresh redo ---------
+
+
+def test_run_state_path_lives_in_the_gitignored_muyan_pilot_dir(tmp_path):
+    worktree = tmp_path / ".worktrees" / "muyan-pilot-owner-repo-issue-3-run1"
+    assert runner.run_state_path(worktree) == (
+        worktree / ".muyan-pilot" / "run-state.json"
+    )
+
+
+def test_write_run_state_writes_the_run_identity(tmp_path):
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    runner.write_run_state(
+        worktree, run_id="a1b2c3d4", issue=3, source_repo="owner/repo",
+        branch="muyan-pilot/owner-repo-issue-3-a1b2c3d4",
+    )
+    state = json.loads(runner.run_state_path(worktree).read_text())
+    assert state["run_id"] == "a1b2c3d4"
+    assert state["issue"] == 3
+    assert state["repo"] == "owner/repo"
+    assert state["branch"] == "muyan-pilot/owner-repo-issue-3-a1b2c3d4"
+    assert state["worktree"] == str(worktree)
+    assert isinstance(state["created_at"], str) and state["created_at"]
+
+
+def test_write_run_state_is_idempotent_for_a_resumed_run(tmp_path):
+    """A resumed run refreshes the SAME state file (same run id) — the
+    file is the same-run marker, never a per-session artifact."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    runner.write_run_state(
+        worktree, run_id="a1b2c3d4", issue=3, source_repo="owner/repo",
+        branch="muyan-pilot/owner-repo-issue-3-a1b2c3d4",
+    )
+    runner.write_run_state(
+        worktree, run_id="a1b2c3d4", issue=3, source_repo="owner/repo",
+        branch="muyan-pilot/owner-repo-issue-3-a1b2c3d4",
+    )
+    state = json.loads(runner.run_state_path(worktree).read_text())
+    assert state["run_id"] == "a1b2c3d4"
+
+
+def test_read_run_state_returns_none_without_the_file(tmp_path):
+    assert runner.read_run_state(tmp_path) is None
+
+
+def test_read_run_state_round_trips_the_written_state(tmp_path):
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    runner.write_run_state(
+        worktree, run_id="a1b2c3d4", issue=3, source_repo="owner/repo",
+        branch="muyan-pilot/owner-repo-issue-3-a1b2c3d4",
+    )
+    state = runner.read_run_state(worktree)
+    assert state["run_id"] == "a1b2c3d4"
+    assert state["issue"] == 3
+    assert state["repo"] == "owner/repo"
+
+
+def test_read_run_state_fails_fast_on_unreadable_or_malformed_state(tmp_path):
+    """A corrupt state file is a delivery failure, never a guess: the
+    resume must continue the SAME run (Issue #219)."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    path = runner.run_state_path(worktree)
+    path.parent.mkdir(parents=True)
+    path.write_text("not json", encoding="utf-8")
+    with pytest.raises(ValueError, match="run state"):
+        runner.read_run_state(worktree)
+    path.write_text("[1, 2]", encoding="utf-8")
+    with pytest.raises(ValueError, match="run state"):
+        runner.read_run_state(worktree)
+    path.write_text(json.dumps({"run_id": "a1b2c3d4"}), encoding="utf-8")
+    with pytest.raises(ValueError, match="run state"):
+        runner.read_run_state(worktree)
+
+
+def make_session_jsonl(worktree: Path, session_id: str = "sess-1") -> Path:
+    """A minimal previous session file (Issue #219 resume context)."""
+    session_dir = worktree / ".pi-session"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    path = session_dir / f"{session_id}.jsonl"
+    path.write_text(
+        json.dumps({"type": "session", "id": session_id}) + "\n"
+        + json.dumps({
+            "type": "message", "timestamp": "2026-09-02T04:00:00Z",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "toolCall", "name": "bash",
+                             "arguments": {"command": "pytest tests/"}}],
+            },
+        }) + "\n"
+        + json.dumps({
+            "type": "message", "timestamp": "2026-09-02T04:01:00Z",
+            "message": {"role": "toolResult", "toolName": "bash",
+                        "isError": False},
+        }) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_changed_files_lists_uncommitted_changes(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        # The third line has a blank XY column: it is not a change.
+        return " M src/a.py\n?? src/b.py\n   src/c.py\n"
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.changed_files(tmp_path) == ["src/a.py", "src/b.py"]
+    assert calls == [(
+        ["git", "status", "--porcelain"], {"cwd": tmp_path},
+    )]
+
+
+def test_resume_context_is_none_for_a_fresh_worktree(tmp_path, monkeypatch):
+    """No uncommitted changes and no previous session: the agent starts
+    from the Issue alone (the exact pre-#219 prompt)."""
+    monkeypatch.setattr(runner, "run_command", lambda *a, **k: "")
+    monkeypatch.setattr(runner, "activity_snapshot", lambda *a, **k: None)
+    assert runner.resume_context(tmp_path) is None
+
+
+def test_resume_context_carries_changes_and_session_progress(
+    tmp_path, monkeypatch,
+):
+    """The new session starts from the existing work: the instruction to
+    continue, the previous session's progress and the changed files —
+    never a fresh redo (Issue #219)."""
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda *a, **k: " M src/a.py\n?? src/b.py\n",
+    )
+    monkeypatch.setattr(
+        runner, "activity_snapshot",
+        lambda *a, **k: {
+            "session_id": "sess-1", "session_file": "x.jsonl",
+            "events": 7, "phase": "test", "last_activity": "2026-09-02T04:01:00Z",
+            "action": "bash pytest tests/", "result": "ok",
+            "model_wait": False, "changed": False, "stale_seconds": 1.0,
+        },
+    )
+    context = runner.resume_context(tmp_path)
+    assert "Continue" in context or "continue" in context
+    assert "redo" in context.lower() or "scratch" in context.lower()
+    assert "sess-1" in context
+    assert "7" in context
+    assert "test" in context
+    assert "bash pytest tests/" in context
+    assert "src/a.py" in context
+    assert "src/b.py" in context
+    assert "2" in context
+
+
+def test_resume_context_without_changes_carries_the_session_progress(
+    tmp_path, monkeypatch,
+):
+    """A clean worktree with a previous session (the agent committed
+    mid-run before the interruption) still continues the same run."""
+    monkeypatch.setattr(runner, "run_command", lambda *a, **k: "")
+    monkeypatch.setattr(
+        runner, "activity_snapshot",
+        lambda *a, **k: {
+            "session_id": "sess-2", "session_file": "x.jsonl",
+            "events": 3, "phase": "commit", "last_activity": None,
+            "action": "git commit -m x", "result": None,
+            "model_wait": False, "changed": False, "stale_seconds": 1.0,
+        },
+    )
+    context = runner.resume_context(tmp_path)
+    assert context is not None
+    assert "sess-2" in context
+    assert "src/a.py" not in context
+
+
+def test_resume_run_id_returns_none_without_candidates(tmp_path):
+    assert runner.resume_run_id(tmp_path, "owner/repo", 3) is None
+    (tmp_path / ".worktrees").mkdir()
+    (tmp_path / ".worktrees" / "other").mkdir()
+    assert runner.resume_run_id(tmp_path, "owner/repo", 3) is None
+
+
+def test_resume_run_id_matches_by_issue_and_repo_name_across_a_rename(
+    tmp_path,
+):
+    """The repo was renamed (slug `xqliu-orbi` -> `orbi-build-orbi`):
+    the old worktree is found by issue number + repo NAME (the stable
+    identity) and the SAME run continues — no second run/branch/
+    worktree (Issue #219)."""
+    old = tmp_path / ".worktrees" / "muyan-pilot-xqliu-orbi-issue-42-aaaa1111"
+    old.mkdir(parents=True)
+    runner.write_run_state(
+        old, run_id="aaaa1111", issue=42, source_repo="xqliu/orbi",
+        branch="muyan-pilot/xqliu-orbi-issue-42-aaaa1111",
+    )
+    assert runner.resume_run_id(
+        tmp_path, "orbi-build/orbi", 42,
+    ) == "aaaa1111"
+    # A different repo name never matches, even with the same issue.
+    assert runner.resume_run_id(
+        tmp_path, "orbi-build/other", 42,
+    ) is None
+
+
+def test_resume_run_id_returns_newest_matching_worktree(tmp_path):
+    slug = "owner-repo"
+    first = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-3-0d111111"
+    second = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-3-2e222222"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    runner.write_run_state(
+        first, run_id="0d111111", issue=3, source_repo="owner/repo",
+        branch="b1",
+    )
+    runner.write_run_state(
+        second, run_id="2e222222", issue=3, source_repo="owner/repo",
+        branch="b2",
+    )
+    os.utime(first, (300, 300))
+    os.utime(second, (100, 100))
+    assert runner.resume_run_id(tmp_path, "owner/repo", 3) == "0d111111"
+    os.utime(second, (400, 400))
+    assert runner.resume_run_id(tmp_path, "owner/repo", 3) == "2e222222"
+
+
+def test_resume_run_id_excludes_other_issues_and_repos(tmp_path):
+    slug = "owner-repo"
+    other_issue = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-4-ffff0000"
+    other_repo = tmp_path / ".worktrees" / f"muyan-pilot-other-other-issue-3-ffff1111"
+    other_issue.mkdir(parents=True)
+    other_repo.mkdir(parents=True)
+    runner.write_run_state(
+        other_issue, run_id="ffff0000", issue=4, source_repo="owner/repo",
+        branch="b1",
+    )
+    runner.write_run_state(
+        other_repo, run_id="ffff1111", issue=3, source_repo="other/other",
+        branch="b2",
+    )
+    assert runner.resume_run_id(tmp_path, "owner/repo", 3) is None
+
+
+def test_resume_run_id_fails_fast_on_missing_state_file(tmp_path):
+    """A worktree that claims the issue number but has NO run state file
+    cannot be verified as the same run: fail fast with the exact reason,
+    never a silent fresh redo (Issue #219)."""
+    worktree = tmp_path / ".worktrees" / "muyan-pilot-owner-repo-issue-3-aaaa1111"
+    worktree.mkdir(parents=True)
+    with pytest.raises(RuntimeError, match="run state"):
+        runner.resume_run_id(tmp_path, "owner/repo", 3)
+
+
+def test_resume_run_id_fails_fast_on_corrupt_state_file(tmp_path):
+    worktree = tmp_path / ".worktrees" / "muyan-pilot-owner-repo-issue-3-aaaa1111"
+    worktree.mkdir(parents=True)
+    state = runner.run_state_path(worktree)
+    state.parent.mkdir(parents=True)
+    state.write_text("corrupt", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="run state"):
+        runner.resume_run_id(tmp_path, "owner/repo", 3)
+
+
+def test_resume_run_id_skips_unrelated_worktrees_without_a_state_file(
+    tmp_path,
+):
+    """A worktree of ANOTHER issue without a state file (a legacy
+    completed run) is not the resume scene of this issue — it is
+    skipped, not a fail-fast (only a worktree claiming THIS issue
+    number must be verifiable)."""
+    other = tmp_path / ".worktrees" / "muyan-pilot-owner-repo-issue-4-ffff0000"
+    other.mkdir(parents=True)
+    mine = tmp_path / ".worktrees" / "muyan-pilot-owner-repo-issue-3-aaaa1111"
+    mine.mkdir(parents=True)
+    runner.write_run_state(
+        mine, run_id="aaaa1111", issue=3, source_repo="owner/repo",
+        branch="b1",
+    )
+    assert runner.resume_run_id(tmp_path, "owner/repo", 3) == "aaaa1111"
 
 
 def test_has_in_progress_label_checks_the_issue_label(monkeypatch, tmp_path):
@@ -2206,12 +2489,12 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     # the newest worktree's run id.
     monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
     monkeypatch.setattr(
-        runner, "latest_run_id", lambda repo_dir, source_repo, number:
-        "a1b2c3d4",
+        runner, "worktree_resume_scene", lambda repo_dir, source_repo, number:
+        ("a1b2c3d4", tmp_path / "wt"),
     )
     monkeypatch.setattr(
         runner, "create_worktree",
-        lambda *args: tmp_path / "wt",
+        lambda *args, **kwargs: tmp_path / "wt",
     )
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     issue = {"number": 4, "title": "Fix", "body": "Body"}
@@ -2297,11 +2580,11 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
     # of this attempt (generated, then replaced by the resumed run).
     monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
     monkeypatch.setattr(
-        runner, "latest_run_id", lambda repo_dir, source_repo, number:
-        "a1b2c3d4",
+        runner, "worktree_resume_scene", lambda repo_dir, source_repo, number:
+        ("a1b2c3d4", tmp_path / "wt"),
     )
     monkeypatch.setattr(
-        runner, "create_worktree", lambda *args: tmp_path / "wt",
+        runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
     )
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     with caplog.at_level("INFO"):
@@ -2365,13 +2648,13 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
         runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
     monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
-    latest_calls = []
+    scene_calls = []
     monkeypatch.setattr(
-        runner, "latest_run_id",
-        lambda repo_dir, source_repo, number: latest_calls.append(1) or "a1b2c3d4",
+        runner, "worktree_resume_scene",
+        lambda repo_dir, source_repo, number: scene_calls.append(1) or None,
     )
     monkeypatch.setattr(
-        runner, "create_worktree", lambda *args: tmp_path / "wt",
+        runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
     )
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     runner.process_issue(
@@ -2382,7 +2665,7 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
     )
     # The fresh run id is used and the old worktree's run id is never
     # consulted (the label is the gate).
-    assert latest_calls == []
+    assert scene_calls == []
     progress_posts = [
         body for body in posted if "**Muyan Pilot progress**" in body
     ]
@@ -2433,9 +2716,9 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
     )
     monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
     # The label is on, but no task worktree survived the kill.
-    monkeypatch.setattr(runner, "latest_run_id", lambda *a: None)
+    monkeypatch.setattr(runner, "worktree_resume_scene", lambda *a: None)
     monkeypatch.setattr(
-        runner, "create_worktree", lambda *args: tmp_path / "wt",
+        runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
     )
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     with caplog.at_level("INFO"):
@@ -2452,6 +2735,208 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
     ]
     assert len(progress_posts) == 1
     assert "- run_id=ffffeeee" in progress_posts[0]
+
+
+def _resume_wiring_setup(monkeypatch, tmp_path, *, in_progress: bool,
+                          latest_run_id_result="a1b2c3d4",
+                          git_status: str = ""):
+    """Shared fake-gh/git wiring for the Issue #219 process_issue tests.
+
+    Returns `(gh_calls, posted, worktree, comment_bodies)`: `posted`
+    carries the progress-comment bodies (`gh api` POST), `comment_bodies`
+    the plain `gh issue comment` bodies (scene + failure comments).
+    `git_status` is the `git status --porcelain` answer (the
+    worktree's uncommitted changes).
+    """
+    gh_calls, posted = make_fake_gh(monkeypatch, in_progress=in_progress)
+    # The branch carries the run id the attempt actually uses: the
+    # resumed one (label on + a worktree to resume) or the fresh one.
+    run_id = ("a1b2c3d4"
+              if in_progress and latest_run_id_result else "ffffeeee")
+    branch = f"muyan-pilot/xqliu-muyan-ceo-issue-4-{run_id}"
+    comment_bodies = []
+
+    def fake_run(command, **kwargs):
+        gh_calls.append(command)
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps(
+                [{"number": 4}] if in_progress else [],
+            )
+        if command[:3] == ["gh", "issue", "comment"]:
+            comment_bodies.append(command[-1])
+            return ""
+        if command[:3] == ["git", "status", "--porcelain"]:
+            return git_status
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return branch
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
+    worktree = tmp_path / "wt"
+    worktree.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        runner, "worktree_resume_scene",
+        lambda repo_dir, source_repo, number: (
+            (latest_run_id_result, worktree)
+            if latest_run_id_result else None
+        ),
+    )
+    monkeypatch.setattr(
+        runner, "create_worktree", lambda *args, **kwargs: worktree,
+    )
+    return gh_calls, posted, worktree, comment_bodies
+
+
+def test_process_issue_writes_run_state_and_resume_context(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #219: the interrupted run continues on the EXISTING work —
+    the run state file is written (the same-run marker), the resume
+    context (uncommitted changes + previous session progress) reaches
+    the new session, and the `resume_continue` line is logged."""
+    gh_calls, posted, worktree, comment_bodies = _resume_wiring_setup(
+        monkeypatch, tmp_path, in_progress=True,
+        git_status="?? src/a.py\n",
+    )
+    # The interrupted work: uncommitted changes + a previous session.
+    (worktree / "src").mkdir()
+    (worktree / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    make_session_jsonl(worktree, "sess-1")
+    resume_contexts = []
+    monkeypatch.setattr(
+        runner, "run_pi",
+        lambda *args, **kwargs: resume_contexts.append(
+            kwargs.get("resume_context"),
+        ) or "done",
+    )
+    monkeypatch.setattr(
+        runner, "deliver_pr",
+        lambda *args, **kwargs:
+        "https://github.com/muyantech/muyan-pilot/pull/4",
+    )
+    caplog.set_level("INFO")
+    runner.process_issue(
+        {"number": 4, "title": "Fix", "body": "Body"},
+        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+         "base_branch": "main"},
+        "xqliu/muyan-ceo",
+    )
+    # The run state file marks the worktree as the same run.
+    state = runner.read_run_state(worktree)
+    assert state["run_id"] == "a1b2c3d4"
+    assert state["issue"] == 4
+    assert state["repo"] == "xqliu/muyan-ceo"
+    # The new session starts from the existing work.
+    assert len(resume_contexts) == 1
+    assert resume_contexts[0] is not None
+    assert "src/a.py" in resume_contexts[0]
+    assert "sess-1" in resume_contexts[0]
+    # The structured resume line is logged (auditable, Issue #219).
+    lines = [
+        m for m in caplog.messages if "resume_continue" in m
+    ]
+    assert len(lines) == 1
+    assert f"worktree={worktree}" in lines[0]
+    assert "changed_files=1" in lines[0]
+    assert "reused_runs=1" in lines[0]
+    assert "previous_session=sess-1" in lines[0]
+
+
+def test_process_issue_fresh_run_has_no_resume_context(
+    monkeypatch, tmp_path, caplog,
+):
+    """A fresh claim (no `ai-in-progress`) gets a run state file too
+    (so a later interruption can resume), but NO resume context and NO
+    `resume_continue` line — the prompt is the exact pre-#219 shape."""
+    gh_calls, posted, worktree, comment_bodies = _resume_wiring_setup(
+        monkeypatch, tmp_path, in_progress=False,
+    )
+    resume_contexts = []
+    monkeypatch.setattr(
+        runner, "run_pi",
+        lambda *args, **kwargs: resume_contexts.append(
+            kwargs.get("resume_context"),
+        ) or "done",
+    )
+    monkeypatch.setattr(
+        runner, "deliver_pr",
+        lambda *args, **kwargs:
+        "https://github.com/muyantech/muyan-pilot/pull/4",
+    )
+    caplog.set_level("INFO")
+    runner.process_issue(
+        {"number": 4, "title": "Fix", "body": "Body"},
+        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+         "base_branch": "main"},
+        "xqliu/muyan-ceo",
+    )
+    state = runner.read_run_state(worktree)
+    assert state["run_id"] == "ffffeeee"
+    assert resume_contexts == [None]
+    assert "resume_continue" not in caplog.text
+
+
+def test_process_issue_fails_fast_when_the_run_state_is_missing(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #219: the worktree of this issue exists but its run state
+    file is gone — the same run cannot be verified. The attempt fails
+    fast through the terminal failure path (`ai-blocked` + the reason
+    comment): no fresh run, no silent redo."""
+    gh_calls, posted, worktree, comment_bodies = _resume_wiring_setup(
+        monkeypatch, tmp_path, in_progress=True,
+    )
+
+    def failing_resume_scene(repo_dir, source_repo, number):
+        raise RuntimeError(
+            f"worktree {worktree} has no run state file "
+            "(.muyan-pilot/run-state.json): the same run cannot be "
+            "verified (Issue #219)"
+        )
+
+    monkeypatch.setattr(runner, "worktree_resume_scene", failing_resume_scene)
+    run_pi_calls = []
+    monkeypatch.setattr(
+        runner, "run_pi",
+        lambda *args, **kwargs: run_pi_calls.append(1) or "done",
+    )
+    edits = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: edits.append((args, kwargs)),
+    )
+    caplog.set_level("INFO")
+    with pytest.raises(RuntimeError, match="run state"):
+        runner.process_issue(
+            {"number": 4, "title": "Fix", "body": "Body"},
+            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+             "base_branch": "main"},
+            "xqliu/muyan-ceo",
+        )
+    # No fresh run was started.
+    assert run_pi_calls == []
+    # The terminal state is `ai-blocked` (the claim label removed).
+    assert edits[-1] == ((4,), {
+        "repo": "xqliu/muyan-ceo", "add": "ai-blocked",
+        "remove": "ai-in-progress",
+    })
+    # The failure comment carries the reason and the run marker.
+    failed = [
+        body for body in comment_bodies
+        if body.startswith("<!-- muyan-pilot:run=")
+        and "Muyan Pilot failed" in body
+    ]
+    assert len(failed) == 1
+    assert "cannot continue the interrupted run" in failed[0]
+    assert "run state" in failed[0]
+    assert "resume_continue_failed" in caplog.text
 
 
 def test_worktree_path_lives_inside_repo_worktrees_and_includes_run_id():
@@ -2654,6 +3139,77 @@ def test_run_pi_redacts_prompt_and_issue_from_command_log(monkeypatch, tmp_path)
         str(tmp_path / ".pi-session"),
         "--system-prompt", "<redacted>", "<issue-context-redacted>",
     ]
+
+
+def test_run_pi_keeps_the_fresh_context_without_a_resume_context(
+    monkeypatch, tmp_path,
+):
+    """No resume context: the context argument is byte-identical to the
+    pre-#219 shape (a fresh claim is untouched)."""
+    prompt_path = tmp_path / "prompt.md"
+    prompt_path.write_text("SYSTEM", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(command) or "done",
+    )
+    config = {
+        "prompt": prompt_path, "repo_dir": tmp_path,
+        "source_repos": ["owner/repo"], "workspace_root": tmp_path,
+        "context_files": [], "skills": [], "base_branch": "main",
+        "base_sha": "abc123def456", "run_id": "run1",
+    }
+    runner.run_pi(
+        {"number": 5, "title": "t", "body": "b"}, tmp_path, config,
+        "owner/repo", branch="muyan-pilot/owner-repo-issue-5-run1",
+    )
+    command = calls[0]
+    assert command[-1] == (
+        "Issue #5: t\n\nIssue body:\nb\n\nWorktree: "
+        + str(tmp_path) + "\n"
+        "Complete the delivery process in the system prompt."
+    )
+
+
+def test_run_pi_appends_the_resume_context_to_the_context_argument(
+    monkeypatch, tmp_path,
+):
+    """Issue #219: the continued run's new session starts from the
+    existing work — the resume context is appended to the context
+    argument (the prompt template itself is untouched)."""
+    prompt_path = tmp_path / "prompt.md"
+    prompt_path.write_text("SYSTEM", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(command) or "done",
+    )
+    config = {
+        "prompt": prompt_path, "repo_dir": tmp_path,
+        "source_repos": ["owner/repo"], "workspace_root": tmp_path,
+        "context_files": [], "skills": [], "base_branch": "main",
+        "base_sha": "abc123def456", "run_id": "run1",
+    }
+    resume = (
+        "Resume context (Issue #219): this worktree already carries "
+        "work from an earlier session of the SAME run. Continue that "
+        "work — do not start from scratch, do not discard or rewrite "
+        "the existing changes, and do not create a new plan from "
+        "nothing.\nPrevious session progress: session=sess-1 "
+        "events=7 phase=test last_action=bash pytest last_result=ok\n"
+        "Uncommitted changed files (2):\n- src/a.py\n- src/b.py"
+    )
+    runner.run_pi(
+        {"number": 5, "title": "t", "body": "b"}, tmp_path, config,
+        "owner/repo", branch="muyan-pilot/owner-repo-issue-5-run1",
+        resume_context=resume,
+    )
+    command = calls[0]
+    context = command[-1]
+    assert context.startswith(
+        "Issue #5: t\n\nIssue body:\nb\n\nWorktree: " + str(tmp_path),
+    )
+    assert context.endswith(resume)
 
 
 def test_verify_pr_rejects_wrong_branch(monkeypatch, tmp_path):
@@ -3240,7 +3796,7 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
+    monkeypatch.setattr(runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     issue = {"number": 4, "title": "Fix", "body": "Body"}
     config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}
@@ -3306,7 +3862,7 @@ def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, c
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
+    monkeypatch.setattr(runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     monkeypatch.setattr(runner, "deliver_pr", lambda *args, **kwargs: "https://github.com/muyantech/muyan-pilot/pull/4")
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: None)
@@ -3834,7 +4390,7 @@ def test_process_issue_failure_without_session_still_carries_scene(
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
+    monkeypatch.setattr(runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
     monkeypatch.setattr(
         runner, "run_pi",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("pi died")),
@@ -3868,7 +4424,7 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
+    monkeypatch.setattr(runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
     monkeypatch.setattr(
         runner, "run_pi",
         lambda *args, **kwargs: (_ for _ in ()).throw(
@@ -3914,7 +4470,7 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "create_worktree", lambda *args: tmp_path / "wt")
+    monkeypatch.setattr(runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
     monkeypatch.setattr(
         runner, "run_pi",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("git failed")),
@@ -3931,10 +4487,17 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(
-        runner, "activity_snapshot",
-        lambda session_dir: (_ for _ in ()).throw(OSError("disk error")),
-    )
+    # The main-path resume-context read (Issue #219) succeeds; the
+    # failure-scene lookup is the one that dies on the disk error.
+    snapshot_calls = []
+
+    def flaky_snapshot(session_dir):
+        snapshot_calls.append(1)
+        if len(snapshot_calls) == 1:
+            return None
+        raise OSError("disk error")
+
+    monkeypatch.setattr(runner, "activity_snapshot", flaky_snapshot)
     with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="git failed"):
         runner.process_issue({"number": 9, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo")
     assert "activity scene failed" in caplog.text
@@ -10368,7 +10931,9 @@ def test_process_ticket_only_keeps_original_error_when_failure_reporting_fails(m
         runner.process_ticket_only(issue, {"repo_dir": Path("/repo")}, "o/r")
 
 
-def test_process_issue_keeps_normal_flow_without_release_label(monkeypatch):
+def test_process_issue_keeps_normal_flow_without_release_label(
+    monkeypatch, tmp_path,
+):
     issue = {"number": 99, "title": "Normal", "body": "",
              "labels": [{"name": "ai-ready"}]}
     monkeypatch.setattr(runner, "is_release", lambda i: False)
@@ -10378,16 +10943,18 @@ def test_process_issue_keeps_normal_flow_without_release_label(monkeypatch):
     monkeypatch.setattr(runner, "freeze_base", lambda r, b: "abc123")
     monkeypatch.setattr(runner, "edit_issue", Mock())
     monkeypatch.setattr(runner, "set_active_run", Mock())
-    monkeypatch.setattr(runner, "create_worktree",
-                        lambda *a: Path("/wt"))
+    # The worktree exists: `create_worktree` always returns a real
+    # directory (the run state file is written into it, Issue #219).
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    monkeypatch.setattr(runner, "create_worktree", lambda *a, **kwargs: worktree)
     monkeypatch.setattr(runner, "comment_issue", Mock())
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
     monkeypatch.setattr(runner, "run_pi",
                         lambda *a, **k: "https://github.com/o/r/pull/1")
     monkeypatch.setattr(runner, "deliver_pr",
                         lambda *a, **k: "https://github.com/o/r/pull/1")
-    monkeypatch.setattr(runner, "run_command",
-                        lambda c, **k: "abc123")
+    monkeypatch.setattr(runner, "run_command", lambda c, **k: "")
     monkeypatch.setattr(runner, "wait_for_delivery", Mock())
     monkeypatch.setattr(runner, "edit_issue", Mock())
     monkeypatch.setattr(runner, "LOGGER", Mock())
@@ -10397,7 +10964,9 @@ def test_process_issue_keeps_normal_flow_without_release_label(monkeypatch):
     monkeypatch.setattr(runner, "issue_context", lambda r, n: "#n")
     monkeypatch.setattr(runner, "format_run_scene", lambda *a, **k: "scene")
     monkeypatch.setattr(runner, "_finish_blocked_progress", Mock())
-    runner.process_issue(issue, {"base_branch": "main", "repo_dir": Path("/r")}, "o/r")
+    runner.process_issue(
+        issue, {"base_branch": "main", "repo_dir": tmp_path}, "o/r",
+    )
 
 
 def make_scope_gh(monkeypatch, *, pr_state_map=None, issue_state_map=None):

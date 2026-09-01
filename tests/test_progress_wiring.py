@@ -68,7 +68,7 @@ def patch_process_deps(monkeypatch, tmp_path, *, run_pi_side_effect=None):
                         lambda repo_dir, base_branch: "abc123def456")
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
 
-    def fake_create_worktree(*args):
+    def fake_create_worktree(*args, **kwargs):
         path = tmp_path / "wt"
         path.mkdir(parents=True, exist_ok=True)
         return path

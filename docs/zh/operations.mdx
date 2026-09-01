@@ -83,6 +83,16 @@ journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service | grep e0738
   session 文件），结束时的结果（PR URL、commit）；
 - `activity` / `heartbeat` / `model_wait` / `resumed` — session 运行
   期间的实时 Pi 活动（phase、最近动作、elapsed、idle）；
+- `resume_continue` — 恢复的 run 继续中断的工作（Issue #219）时的一次
+  INFO：worktree 的 run state 文件（`.muyan-pilot/run-state.json`）
+  验证了同一个 run（issue 编号 + 仓库名——仓库改名后 slug 变了也能
+  找到旧 worktree），且 worktree 带有未提交改动或之前的 session；
+  行带 worktree、`changed_files`（未提交路径）、`reused_runs`
+  （之前的 session 文件数）和 `previous_session`（session id 或 `-`）；
+  新 session 在 prompt 里收到 resume context（继续既有工作——从不
+  重做、从不丢弃）。同一个 run 无法验证（state 文件缺失或损坏）时
+  行是 `resume_continue_failed`：fail fast，Issue 进入 `ai-blocked`
+  并带原因——从不静默 fresh 重做；
 - `pi_idle` — 超过 300 秒（`PI_IDLE_WARN_SECONDS=300`）没有
   model/session 活动且模型不期望回复时的一次 WARNING；活跃的慢模型
   （`model_wait`）从不告警；
