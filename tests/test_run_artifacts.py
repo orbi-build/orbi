@@ -57,6 +57,123 @@ def test_git_helper_fails_fast_on_nonzero_exit():
         git("rev-parse", "no-such-ref")
 
 
+def git_in(repo: Path, *args: str) -> str:
+    """`git()` bound to an arbitrary repo dir (same fail-fast contract)."""
+    result = subprocess.run(
+        ["git", *args], cwd=repo, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"git {' '.join(args)} failed rc={result.returncode} "
+            f"stdout={result.stdout.strip()} stderr={result.stderr.strip()}"
+        )
+    return result.stdout.strip()
+
+
+def test_git_in_helper_fails_fast_on_nonzero_exit(tmp_path):
+    repo = tmp_path / "empty"
+    repo.mkdir()
+    with pytest.raises(AssertionError, match=r"git .* failed rc=128"):
+        git_in(repo, "rev-parse", "no-such-ref")
+
+
+def make_repo_with_real_gitignore(tmp_path: Path, pre_tracked=()) -> Path:
+    """A fresh repo whose base commit carries the repository's real
+    `.gitignore` — exactly the state of a new task worktree created
+    from the frozen base SHA. `pre_tracked` is a sequence of
+    (relative path, content) pairs committed BEFORE the ignore rules
+    land, i.e. files already under version control."""
+    repo = tmp_path / "wt"
+    repo.mkdir()
+    git_in(repo, "init", "-q")
+    git_in(repo, "config", "user.email", "pilot@test.local")
+    git_in(repo, "config", "user.name", "Pilot")
+    for name, content in pre_tracked:
+        (repo / name).write_text(content, encoding="utf-8")
+        git_in(repo, "add", name)
+    (repo / ".gitignore").write_text(
+        (REPO_ROOT / ".gitignore").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    git_in(repo, "add", ".gitignore")
+    git_in(repo, "commit", "-q", "-m", "base")
+    return repo
+
+
+def test_log_and_coverage_artifacts_are_gitignored():
+    """Issue #235: a normal test run leaves `coverage.log` (and other
+    `*.log` / coverage artifacts) in the task worktree; the
+    `deliver_pr` dirty-worktree gate must never see them. `git
+    check-ignore` exits 0 only for ignored paths — the git() helper
+    fails fast on any other outcome, so reaching the assertion IS the
+    "ignored" proof. Tracked files are unaffected by ignore rules,
+    so this only proves the untracked-file contract."""
+    for path in [
+        "coverage.log",
+        "test.log",
+        "some-other.log",
+        ".coverage",
+        ".coverage.host123",
+        "coverage.xml",
+        "htmlcov/index.html",
+    ]:
+        out = git("check-ignore", "-v", path)
+        assert out.splitlines()[0].endswith("\t" + path)
+    # The coverage-file rule is the glob `.coverage*` (the old exact
+    # `.coverage` line was replaced), not a coincidental match.
+    out = git("check-ignore", "-v", ".coverage.host123")
+    assert out.splitlines()[0].split("\t")[0].rsplit(":", 1)[-1] == ".coverage*"
+
+
+def test_common_dev_artifacts_are_gitignored():
+    """Issue #235: the common local development artifacts are ignored
+    too — none of these patterns can mask source, config, credentials
+    or delivery files (no tracked path matches them)."""
+    for path in [
+        ".mypy_cache/cache.db",
+        ".ruff_cache/CACHEDIR.TAG",
+        ".hypothesis/unicode_data/13.0.0/data.txt",
+        ".venv/bin/python",
+        "module.pyc",
+        "module.pyo",
+        "module.pyd",
+        ".DS_Store",
+        "edit.swp",
+        "scratch.tmp",
+    ]:
+        out = git("check-ignore", "-v", path)
+        assert out.splitlines()[0].endswith("\t" + path)
+
+
+def test_tracked_log_file_stays_tracked(tmp_path):
+    """Issue #235 acceptance: `*.log` only affects untracked files —
+    a log file already in the index is not removed from the index and
+    not deleted from disk by the ignore rule; a NEW untracked log in
+    the same repo is ignored, so the gate sees a clean tree."""
+    repo = make_repo_with_real_gitignore(
+        tmp_path, pre_tracked=[("tracked.log", "old log\n")],
+    )
+    # The ignore rule is in place and the tracked log survives it:
+    # `git ls-files` still lists it and the file is still on disk.
+    assert "tracked.log" in git_in(repo, "ls-files").splitlines()
+    assert (repo / "tracked.log").exists()
+    # A new untracked log is ignored: the gate sees a clean tree.
+    (repo / "fresh.log").write_text("new log\n", encoding="utf-8")
+    assert git_in(repo, "status", "--porcelain") == ""
+
+
+def test_untracked_source_and_docs_still_reported(tmp_path):
+    """Issue #235 acceptance: the ignore rules must not widen the
+    dirty-worktree gate — a real leftover (untracked source and docs)
+    is still reported by `git status --porcelain`."""
+    repo = make_repo_with_real_gitignore(tmp_path)
+    (repo / "unexpected.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "notes.md").write_text("notes\n", encoding="utf-8")
+    lines = git_in(repo, "status", "--porcelain").splitlines()
+    assert "?? unexpected.py" in lines
+    assert "?? notes.md" in lines
+
+
 def test_pi_loop_state_is_gitignored():
     """Issue #215: the pi-loop plugin writes `.pi/loops.json` into the
     task worktree cwd at session shutdown (the #214 scene: `deliver_pr`

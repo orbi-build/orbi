@@ -1,6 +1,12 @@
 __pycache__/
 .pytest_cache/
-.coverage
+# Test/coverage artifacts (Issue #235): local generated files from a
+# normal test run must never reach the dirty-worktree gate. Ignore
+# rules only affect untracked files — a tracked log stays tracked.
+*.log
+coverage.log
+.coverage*
+coverage.xml
 htmlcov/
 # Python packaging build artifacts (Issue #140: pyproject.toml builds)
 build/
@@ -20,3 +26,13 @@ muyan-pilot.toml
 plan.md
 test.log
 verify.md
+# Common local development artifacts (Issue #235): none of these
+# patterns can mask source, config, credentials or delivery files.
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.venv/
+*.py[cod]
+.DS_Store
+*.swp
+*.tmp
