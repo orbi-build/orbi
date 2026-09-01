@@ -155,6 +155,74 @@ def test_load_config_rejects_non_string_active_milestone(tmp_path):
         runner.load_config(config_path)
 
 
+# --- Issue #228: model_wait_dead_seconds is configurable ---------------------
+
+def test_load_config_defaults_model_wait_dead_seconds_to_thirty_minutes(
+    tmp_path,
+):
+    """Issue #228: omitted -> 1800 seconds (30 minutes): a slow local
+    model (Qwen 27B, ~17 tokens/s, llama-server request timeout 1200 s)
+    must not be killed merely because one complete assistant message
+    takes more than 10 minutes."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    config = runner.load_config(config_path)
+    assert config["model_wait_dead_seconds"] == 1800.0
+
+
+def test_load_config_reads_explicit_model_wait_dead_seconds_int(tmp_path):
+    """Issue #228: an explicit integer override is accepted as-is."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nmodel_wait_dead_seconds = 900\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["model_wait_dead_seconds"] == 900.0
+
+
+def test_load_config_reads_explicit_model_wait_dead_seconds_float(tmp_path):
+    """Issue #228: an explicit float override is accepted as-is."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nmodel_wait_dead_seconds = 1234.5\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["model_wait_dead_seconds"] == 1234.5
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        ("true", "not a boolean"),
+        ("false", "not a boolean"),
+        ("0", "positive"),
+        ("-5", "positive"),
+        ("nan", "finite"),
+        ("inf", "finite"),
+        ("-inf", "finite"),
+        ('"300"', "number"),
+    ],
+)
+def test_load_config_rejects_invalid_model_wait_dead_seconds(
+    tmp_path, value, reason,
+):
+    """Issue #228: booleans, zero, negative, NaN/infinity and
+    non-numeric values are rejected at config load with the field name
+    and the concrete reason."""
+    config_path = tmp_path / "muyan-pilot.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\n'
+        f"model_wait_dead_seconds = {value}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError) as excinfo:
+        runner.load_config(config_path)
+    assert "model_wait_dead_seconds" in str(excinfo.value)
+    assert reason in str(excinfo.value)
+
+
 def test_load_config_parses_repositories_registry(tmp_path):
     """Issue #134: an explicit [[repositories]] section parses into a
     registry of name/path/github/base_branch, with each path resolved
@@ -4572,11 +4640,129 @@ def test_stream_pi_hung_model_request_killed_when_upstream_gone(
     assert "pi_idle" not in caplog.text
 
 
-def test_stream_pi_model_wait_dead_default_is_ten_minutes():
-    # Issue #75 contract (the threshold is unchanged by Issue #218):
-    # a frozen model_wait of 10 minutes kills the Pi session (the real
-    # #183 incident hung for over three hours).
-    assert runner.PI_MODEL_WAIT_DEAD_SECONDS == 600.0
+def test_stream_pi_model_wait_dead_default_is_thirty_minutes():
+    # Issue #228: the default dead-request threshold is 30 minutes
+    # (1800 s) — a slow local model (Qwen 27B, ~17 tokens/s,
+    # llama-server request timeout 1200 s) must survive a 10-minute
+    # complete-message silence under the default; a genuinely frozen
+    # request is still bounded and releases the slot.
+    assert runner.PI_MODEL_WAIT_DEAD_SECONDS == 1800.0
+
+
+def _frozen_model_wait_records(stale_seconds: float):
+    """Session records whose newest event (a toolResult) is
+    `stale_seconds` in the PAST: the session JSONL is frozen in
+    model_wait for that long without any real waiting (the watcher
+    measures stale against the record timestamps, Issue #169)."""
+    return [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(-stale_seconds), "cwd": "/w"}),
+        (0.0, {"type": "message", "id": "a1",
+               "timestamp": fresh_timestamp(-stale_seconds),
+               "message": {"role": "assistant", "content": [
+                   {"type": "toolCall", "id": "t1", "name": "bash",
+                    "arguments": {"command": "pytest tests/"}}]}}),
+        (0.0, {"type": "message", "id": "r1",
+               "timestamp": fresh_timestamp(-stale_seconds),
+               "message": {"role": "toolResult", "toolCallId": "t1",
+                           "toolName": "bash",
+                           "content": [{"type": "text", "text": "ok"}]}}),
+    ]
+
+
+def test_stream_pi_frozen_model_wait_just_before_default_survives(
+    tmp_path, caplog,
+):
+    """Issue #228: a frozen model_wait of just under the 1800 s default
+    (the #176/#175/#173/#168 scene: 10-minute complete messages on a
+    slow local model) must NOT be killed under the default
+    configuration — the Runner keeps waiting and the session finishes
+    normally."""
+    records = _frozen_model_wait_records(1799.0)
+    command = make_fake_pi(
+        tmp_path, session_records=records, stdout="final answer",
+        sleep=0.3,
+    )
+    with caplog.at_level("INFO"):
+        result = runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=228, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    assert result == "final answer"
+    assert "model_wait_dead" not in caplog.text
+    assert "model_wait_slow" not in caplog.text
+
+
+def test_stream_pi_frozen_model_wait_at_default_kills_with_configured_threshold(
+    tmp_path, caplog,
+):
+    """Issue #228: a frozen model_wait AT the 1800 s default still
+    kills (the bound is inclusive) — and the structured line and the
+    failure scene report the ACTUAL configured threshold (1800)."""
+    records = _frozen_model_wait_records(1800.5)
+    command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
+    with caplog.at_level("WARNING"), pytest.raises(
+        RuntimeError, match="hung",
+    ):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=228, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    dead = [line for line in lines if " model_wait_dead " in line]
+    assert len(dead) == 1
+    assert "threshold=1800" in dead[0]
+    assert "upstream_alive=" in dead[0]
+    failures = [line for line in lines if " run_failed " in line]
+    assert len(failures) == 1
+    assert "reason=model_wait_dead_stale_" in failures[0]
+
+
+def test_stream_pi_explicit_short_override_kills_before_default(
+    tmp_path, caplog,
+):
+    """Issue #228: an explicit short override (a test setting) kills at
+    the configured value, well before the 1800 s default — no real
+    waiting, and the line reports the configured threshold."""
+    records = _frozen_model_wait_records(1.5)
+    command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
+    with caplog.at_level("WARNING"), pytest.raises(
+        RuntimeError, match="hung",
+    ):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            model_wait_dead_seconds=1.0,
+            run_id="run1", issue=228, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    dead = [line for line in lines if " model_wait_dead " in line]
+    assert len(dead) == 1
+    assert "threshold=1" in dead[0]
+
+
+def test_stream_pi_frozen_model_wait_at_ten_minutes_survives_default(
+    tmp_path, caplog,
+):
+    """Issue #228 regression: the #176/#175/#173/#168 scene — a frozen
+    model_wait at 600 seconds (10 minutes, the pre-#228 default that
+    marked those Issues ai-blocked) survives under the new 1800 s
+    default: the Runner keeps waiting and does not signal Pi."""
+    records = _frozen_model_wait_records(600.0)
+    command = make_fake_pi(
+        tmp_path, session_records=records, stdout="final answer",
+        sleep=0.3,
+    )
+    with caplog.at_level("INFO"):
+        result = runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=228, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    assert result == "final answer"
+    assert "model_wait_dead" not in caplog.text
 
 
 def test_stream_pi_slow_model_still_generating_is_not_killed(
@@ -5837,6 +6023,108 @@ def test_run_review_passes_progress_callback_to_stream_pi(
     )
     assert seen["progress"] is callback
     assert seen["role"] == "review"
+
+
+# --- Issue #228: the configured model_wait threshold reaches stream_pi ------
+
+def test_run_pi_passes_configured_model_wait_dead_seconds(
+    monkeypatch, tmp_path,
+):
+    """Issue #228 wiring: the implement session uses the CONFIGURED
+    threshold, not the module constant."""
+    seen = {}
+
+    def fake_stream(command, **kwargs):
+        seen.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(runner, "stream_pi", fake_stream)
+    monkeypatch.setattr(runner, "render_prompt", lambda template, values: "sp")
+    (tmp_path / "prompt.md").write_text("p", encoding="utf-8")
+    runner.run_pi(
+        {"number": 4, "title": "Fix", "body": "b"}, tmp_path,
+        {
+            "prompt": tmp_path / "prompt.md",
+            "repo_dir": tmp_path,
+            "source_repos": ["owner/repo"],
+            "workspace_root": tmp_path,
+            "base_branch": "main",
+            "base_sha": "abc123",
+            "run_id": "a1b2c3d4",
+            "skills": [],
+            "context_files": [],
+            "model_wait_dead_seconds": 1234.5,
+        },
+        "owner/repo", branch="b",
+    )
+    assert seen["model_wait_dead_seconds"] == 1234.5
+    assert seen["model_wait_dead_seconds"] != runner.PI_MODEL_WAIT_DEAD_SECONDS
+
+
+def test_run_review_passes_configured_model_wait_dead_seconds(
+    monkeypatch, tmp_path,
+):
+    """Issue #228 wiring: the review session uses the CONFIGURED
+    threshold, not the module constant."""
+    seen = {}
+
+    def fake_stream(command, **kwargs):
+        seen.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(runner, "stream_pi", fake_stream)
+    monkeypatch.setattr(runner, "render_prompt", lambda template, values: "sp")
+    (tmp_path / "prompt_review.md").write_text("p", encoding="utf-8")
+    runner.run_review(
+        tmp_path,
+        {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"},
+        {
+            "prompt_review": tmp_path / "prompt_review.md",
+            "repo_dir": tmp_path,
+            "source_repos": ["owner/repo"],
+            "base_branch": "main",
+            "run_id": "a1b2c3d4",
+            "skills": [],
+            "model_wait_dead_seconds": 1234.5,
+        },
+        "owner/repo", 4, "branch", 1,
+    )
+    assert seen["model_wait_dead_seconds"] == 1234.5
+    assert seen["model_wait_dead_seconds"] != runner.PI_MODEL_WAIT_DEAD_SECONDS
+
+
+def test_run_pi_keeps_module_default_without_config_key(
+    monkeypatch, tmp_path,
+):
+    """Issue #228: a caller config without the key (the pre-#228 shape)
+    keeps the module constant — the real `load_config` always provides
+    the key, this only pins the fallback."""
+    seen = {}
+
+    def fake_stream(command, **kwargs):
+        seen.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(runner, "stream_pi", fake_stream)
+    monkeypatch.setattr(runner, "render_prompt", lambda template, values: "sp")
+    (tmp_path / "prompt.md").write_text("p", encoding="utf-8")
+    runner.run_pi(
+        {"number": 4, "title": "Fix", "body": "b"}, tmp_path,
+        {
+            "prompt": tmp_path / "prompt.md",
+            "repo_dir": tmp_path,
+            "source_repos": ["owner/repo"],
+            "workspace_root": tmp_path,
+            "base_branch": "main",
+            "base_sha": "abc123",
+            "run_id": "a1b2c3d4",
+            "skills": [],
+            "context_files": [],
+        },
+        "owner/repo", branch="b",
+    )
+    assert seen["model_wait_dead_seconds"] == runner.PI_MODEL_WAIT_DEAD_SECONDS
 
 
 # --- role-specific --skill lists (Issue #83) ---------------------------------

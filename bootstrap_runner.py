@@ -28,6 +28,7 @@ import fcntl
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import select
@@ -116,8 +117,15 @@ PI_IDLE_WARN_SECONDS = 300.0
 # exits, the next tick resumes the same run or claims the next
 # Issue). This is NOT a business timeout: it only fires while the
 # session file is frozen (stale seconds), never while events keep
-# arriving — a slow generation survives.
-PI_MODEL_WAIT_DEAD_SECONDS = 600.0
+# arriving — a slow generation survives. It measures silence between
+# COMPLETE session events (Pi does not stream token-level progress
+# into the JSONL), not token-level model progress. Configurable since
+# Issue #228: the TOML field `model_wait_dead_seconds` overrides this
+# default (1800 s, 30 minutes — a slow local model, e.g. Qwen 27B at
+# ~17 tokens/s behind a llama-server with a 1200 s request timeout,
+# must survive a 10-minute complete message; the pre-#228 default of
+# 600 s killed them at exactly 10 minutes, #176/#175/#173/#168).
+PI_MODEL_WAIT_DEAD_SECONDS = 1800.0
 # Idle-stall recovery (Issue #94): a stalled (non-model_wait) session
 # is recovered automatically instead of only warning. Measured in idle
 # windows of `idle_warn_seconds`: at the first window the pre-idle
@@ -471,6 +479,11 @@ def load_config(path: Path) -> dict:
     pi_provider = _optional_pi_string(data, "pi_provider")
     pi_model = _optional_pi_string(data, "pi_model")
     pi_thinking = _optional_pi_string(data, "pi_thinking")
+    # Hung-model-request threshold (Issue #228): the model_wait dead
+    # silence is configurable; omitted -> PI_MODEL_WAIT_DEAD_SECONDS
+    # (default 1800 s, 30 minutes). It measures silence between
+    # complete session events, never token-level model progress.
+    model_wait_dead_seconds = _model_wait_dead_seconds(data)
     # Optional Pi provider file (Issue #157): the provider metadata
     # (baseUrl / api / apiKey / models) lives in a separate JSON file in
     # Pi's own `models.json` shape; `muyan-pilot.toml` only selects the
@@ -506,6 +519,7 @@ def load_config(path: Path) -> dict:
         "pi_provider": pi_provider,
         "pi_model": pi_model,
         "pi_thinking": pi_thinking,
+        "model_wait_dead_seconds": model_wait_dead_seconds,
         "pi_providers": pi_providers_path,
         "pi_providers_data": pi_providers_data,
         # Multi-repo registry (Issue #134): the explicit per-repo entries
@@ -528,6 +542,46 @@ def _optional_pi_string(data: dict, key: str) -> str | None:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{key} must be a non-empty string")
     return value
+
+
+def _model_wait_dead_seconds(data: dict) -> float:
+    """Load and validate the optional `model_wait_dead_seconds`
+    (Issue #228).
+
+    Omitted -> `PI_MODEL_WAIT_DEAD_SECONDS` (default 1800 s, 30
+    minutes). Present -> must be a finite positive number (int or
+    float); booleans, zero, negative, NaN/infinity and non-numeric
+    values fail fast at config load with the field name and the
+    concrete reason.
+    """
+    value = data.get("model_wait_dead_seconds", PI_MODEL_WAIT_DEAD_SECONDS)
+    if isinstance(value, bool):
+        raise ValueError(
+            "model_wait_dead_seconds must be a number, not a boolean "
+            f"(got {value!r})"
+        )
+    if not isinstance(value, (int, float)):
+        raise ValueError(
+            "model_wait_dead_seconds must be a number "
+            f"(got {type(value).__name__} {value!r})"
+        )
+    number = float(value)
+    if math.isnan(number):
+        raise ValueError(
+            "model_wait_dead_seconds must be a finite number of seconds "
+            f"(got {value!r})"
+        )
+    if math.isinf(number):
+        raise ValueError(
+            "model_wait_dead_seconds must be a finite number of seconds "
+            f"(got {value!r})"
+        )
+    if number <= 0:
+        raise ValueError(
+            "model_wait_dead_seconds must be a positive number of seconds "
+            f"(got {value!r})"
+        )
+    return number
 
 
 def _load_pi_providers(path: Path, pi_provider: str | None,
@@ -3488,6 +3542,12 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         source_repo=source_repo,
         branch=branch,
         progress=progress,
+        # Issue #228: the configured model_wait dead threshold (the
+        # real load_config always provides the key; the module
+        # constant stays the fallback for hand-built configs).
+        model_wait_dead_seconds=config.get(
+            "model_wait_dead_seconds", PI_MODEL_WAIT_DEAD_SECONDS,
+        ),
         **extra,
     )
 
@@ -4222,6 +4282,13 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
         branch=branch,
         role=ROLE_REVIEW,
         progress=progress,
+        # Issue #228: the review session uses the SAME configured
+        # model_wait dead threshold as the implementer (the real
+        # load_config always provides the key; the module constant
+        # stays the fallback for hand-built configs).
+        model_wait_dead_seconds=config.get(
+            "model_wait_dead_seconds", PI_MODEL_WAIT_DEAD_SECONDS,
+        ),
         **extra,
     )
 

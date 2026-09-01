@@ -64,6 +64,9 @@ KNOWN_CONFIG_FIELDS = frozenset({
     # Issue #139: the active Milestone claim scope (optional string).
     "active_milestone",
     "max_concurrency",
+    # Issue #228: the configurable model_wait dead-request threshold
+    # (finite positive number, default 1800 s).
+    "model_wait_dead_seconds",
     "skills",
     "context_files",
     # Issue #119/#157: the optional Pi model selection keys (load_config
