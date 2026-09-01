@@ -143,19 +143,44 @@ PR 验收时校验该关键词，缺失即 fail fast。
   #98）。它**不是**开发任务：Runner 通过普通 ready 扫描领取，但
   `process_issue` 把它路由到确定性的 release 状态机而不是 `run_pi`——
   没有 Pi 会话、没有 PR。状态机幂等且可恢复（重启后恢复同一
-  run id/worktree）：严格解析 Issue 正文的 `## Release` 声明
-  （`version`、`base_branch`、`test_command`、`scope`），冻结 base
-  （release commit 就是 `origin/<base_branch>`），执行发布前门禁
-  （无遗留 open 交付状态 Issue、release commit 的 CI 全绿、base 分支
-  无 open PR），对照 live API 逐项验证 scope（绝不解析复选框），在
-  release commit 的干净 worktree 里跑声明的测试命令，然后在 release
-  commit 上创建 annotated tag 并普通 push（已存在的 tag 必须精确指向
-  release commit——绝不移动、覆盖或 force-push），发布带完整验证证据
-  的 GitHub Release，最后关闭 title 与发布 version 精确一致的
-  Milestone（Issue #214——只按 title 精确匹配）。成功：`ai-merged`
-  （终态）并关闭 Issue。任何失败：单独进入 `ai-blocked`（release 是
-  人工决策点——不自动重试），Issue 上带 run marker 和具体原因。完整
-  的逐步契约见 `AGENTS.md`（Release tasks 一节）。
+  run id/worktree），按顺序执行这些步骤：
+
+  1. 严格解析 Issue 正文的 `## Release` 声明：`version`、
+     `base_branch`、`test_command`、`scope`（`#N` 列表）。字段缺失、
+     重复或未知都 fail fast。
+  2. 冻结 base——release commit 就是 `origin/<base_branch>`（在
+     base-sync 锁下 fetch）。
+  3. 执行发布前门禁：无遗留 open 的 `ai-in-progress` /
+     `ai-pr-opened` / `ai-fix-needed` Issue（release Issue 本身除外）、
+     release commit 的 CI 全绿（no check runs passes 带明确证据）、
+     base 分支无 open PR。因真实 `gh` 失败而查不了的门禁算失败门禁。
+  4. 逐项验证 scope：`gh pr view` 必须报告 `MERGED`，否则
+     `gh issue view` 必须报告 `CLOSED`。禁止解析复选框——每个 scope
+     项都对照 live API 检查。
+  5. 在 release commit 的干净 worktree 里跑声明的 `test_command`
+     （`timeout` 包裹，Issue #95）。
+  6. 打 tag：远端 tag 不存在时，在 release commit 上创建 annotated
+     tag 并普通 push（绝不 `--force`）。已存在时必须精确指向 release
+     commit——不匹配 fail fast。已存在的 tag 绝不移动、覆盖或
+     force-push。
+  7. 发布 GitHub Release（幂等），notes 带完整验证证据：version、
+     tag、release commit、逐项 scope 证据、门禁证据、测试证据和 run
+     marker。
+  8. 关闭 title 与发布 version 精确一致的 Milestone（Issue #214）——
+     成功路径上、release Issue 以 `ai-merged` 关闭之后。只按 title
+     精确匹配（不猜测、不模糊匹配、绝不关别的 Milestone）：0 个 open
+     Issue 时关闭；已关闭是幂等成功（不重开）；Milestone 缺失或仍有
+     open Issue 则 fail fast，带上 version、Milestone 编号/链接和 open
+     issue 列表（绝不静默跳过）。
+  9. 成功：`ai-merged`（终态）并关闭 release Issue，附成功评论
+     （release URL、tag、commit、证据、Milestone 证据）。任何失败：
+     单独进入 `ai-blocked`（release 是人工决策点——不自动重试），
+     失败评论带 run marker 和具体原因，异常向上传播让 tick fail
+     fast。
+
+  `ai-release` 标签是类型标记，**不是**交付状态：它不属于交付状态机、
+  不是 ready 扫描的排除条件，Runner 从不增删它——只有人在派发时
+  （与 `ai-ready` 一起）添加。
 - **P0 优先级**：普通 `p0` GitHub 标签标记紧急 Issue（生产故障）。它
   **不是**交付状态——只决定 ready 领取顺序，从不改变 Issue 粒度、任何
   交付状态或终态语义，Runner 也从不增删它。ready 领取顺序固定：

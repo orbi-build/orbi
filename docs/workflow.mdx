@@ -165,24 +165,52 @@ DAG, no priority numbers, no separate queues:
   Runner picks it up through the normal ready scan, but `process_issue`
   routes it to the deterministic release state machine instead of
   `run_pi` — no Pi session, no PR. The state machine is idempotent and
-  resumable (a restart resumes the same run id/worktree): it strictly
-  parses the `## Release` declaration from the Issue body (`version`,
-  `base_branch`, `test_command`, `scope`), freezes the base (the release
-  commit is exactly `origin/<base_branch>`), enforces the pre-release
-  gates (no leftover open delivery-state Issues, CI green on the release
-  commit, no open PRs against the base branch), verifies the scope item
-  by item against the live API (never checkbox parsing), runs the
-  declared test command in a clean worktree at the release commit, then
-  creates the annotated tag at the release commit and pushes it with a
-  plain push (an existing tag must point exactly at the release commit —
-  it is never moved, overwritten or force-pushed), publishes the GitHub
-  Release with the full verification evidence, and closes the Milestone
-  whose title is EXACTLY the released version (Issue #214 — exact title
-  match only). Success: `ai-merged` (terminal) and the Issue is closed.
-  Any failure: `ai-blocked` ALONE (a release is a human decision point —
-  no automatic retry) with the run marker and the concrete reason on the
-  Issue. The full step-by-step contract lives in `AGENTS.md` (Release
-  tasks section).
+  resumable (a restart resumes the same run id/worktree) and runs these
+  steps in order:
+
+  1. Strictly parse the `## Release` declaration from the Issue body:
+     `version`, `base_branch`, `test_command`, `scope` (a list of `#N`
+     items). Missing, duplicated or unknown fields fail fast.
+  2. Freeze the base — the release commit is exactly
+     `origin/<base_branch>` (fetched under the base-sync lock).
+  3. Enforce the pre-release gates: no leftover open `ai-in-progress` /
+     `ai-pr-opened` / `ai-fix-needed` Issues (the release Issue itself
+     excluded), CI green on the release commit (no check runs passes
+     with explicit evidence), and no open PRs targeting the base
+     branch. A gate that cannot be checked because of a real `gh`
+     failure is a failed gate.
+  4. Verify the scope item by item: `gh pr view` must report `MERGED`,
+     otherwise `gh issue view` must report `CLOSED`. Checkbox parsing
+     is forbidden — every scope item is checked against the live API.
+  5. Run the declared `test_command` in a clean worktree at the release
+     commit (`timeout`-wrapped, Issue #95).
+  6. Tag: when the remote tag is absent, create an annotated tag at the
+     release commit and push it with a plain push (never `--force`).
+     When it exists it must point EXACTLY at the release commit — a
+     mismatch fails fast. An existing tag is never moved, overwritten
+     or force-pushed.
+  7. Publish the GitHub Release (idempotent) whose notes carry the full
+     verification evidence: version, tag, release commit, per-item
+     scope evidence, gate evidence, test evidence and the run marker.
+  8. Close the Milestone whose title is EXACTLY the released version
+     (Issue #214) — on the success path, after the release Issue is
+     closed with `ai-merged`. Exact title match only (no guessing, no
+     fuzzy match, never a different Milestone): closed when it has 0
+     open Issues; already-closed is an idempotent success (no reopen);
+     a missing Milestone or remaining open Issues fail fast with the
+     version, the Milestone number/url and the open issue list (never a
+     silent skip).
+  9. Success: `ai-merged` (terminal) and the release Issue is closed,
+     with the success comment (release URL, tag, commit, evidence,
+     Milestone evidence). Any failure: `ai-blocked` ALONE (a release is
+     a human decision point — no automatic retry), the failure comment
+     carries the run marker and the concrete reason, and the exception
+     propagates so the tick fails fast.
+
+  The `ai-release` label is a type marker, NOT a delivery state: it is
+  not part of the delivery-state machine, not an exclusion of the ready
+  scan, and the Runner never adds or removes it — only the human does
+  (at dispatch time, together with `ai-ready`).
 - **P0 priority**: the plain `p0` GitHub label marks an urgent Issue
   (a production outage). It is NOT a delivery state — it only orders the
   ready pickup, never changes the Issue granularity, any delivery state,
