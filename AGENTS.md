@@ -139,9 +139,15 @@ acceptance criteria.
   pid, cmdline, deadline/TERM/KILL, result) and the progress comment shows
   the recovery state via its `recovery` field (`wait` / `term` / `kill`);
   the first new activity resets the whole recovery state. A session frozen
-  in `model_wait` (the newest event is a tool result) past
-  `PI_MODEL_WAIT_DEAD_SECONDS` (default 600 s) is a HUNG model request
-  (Issue #75, safe recovery since Issue #218): the model service process
+  in `model_wait` (the newest event is a tool result) past the
+  configured `model_wait_dead_seconds` (default
+  `PI_MODEL_WAIT_DEAD_SECONDS` = 1800 s, Issue #228: the TOML field
+  overrides the default — the threshold measures silence between
+  COMPLETE session events, never token-level model progress, so a slow
+  local model survives a 10-minute complete message under the default;
+  the pre-#228 default of 600 s killed them at exactly 10 minutes)
+  is a HUNG model request (Issue #75, safe recovery since Issue #218):
+  the model service process
   being alive and the Pi connection to it still ESTABLISHED (a
   `socket:[...]` inode of the Pi process in `/proc/net/tcp` or
   `/proc/net/tcp6` in state ESTABLISHED, SYN_SENT or SYN_RECV with a

@@ -32,6 +32,18 @@ base_branch = "main"
 # output creates (or deduplicates) an ai-ready + bug repair Issue. The Release
 # itself remains ai-blocked and must be explicitly re-run after review/merge.
 # auto_repair_issues = true
+# Hung-model-request threshold (Issue #228): seconds of silence in
+# `model_wait` (the newest COMPLETE Pi session event is a tool result
+# and no new event arrives) after which the Runner declares the model
+# request hung, kills the Pi session and fails fast. This measures
+# silence between complete session events — Pi does not stream
+# token-level progress into the session JSONL, so it is NOT a
+# token-level model timeout and a slow generation that keeps appending
+# events never trips it. Default: 1800 (30 minutes) — a slow local
+# model (e.g. Qwen 27B at ~17 tokens/s behind a llama-server with a
+# 1200 s request timeout) survives a 10-minute complete message. Must
+# be a finite positive number; anything else fails the start fast.
+# model_wait_dead_seconds = 1800
 # Maximum concurrent Pilot tasks and enabled Runner timers on this machine.
 # Must be 1 or 2 (the fixed timer instance set); missing means 1. The local AI/GPU can only serve one stable task, so keep
 # the default. A slot (flock on <repo_dir>/.muyan-pilot/slots/slot-N) is

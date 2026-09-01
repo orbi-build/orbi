@@ -102,12 +102,19 @@ Stable `key=value` lines you will see:
   expected to reply; a slow active model (`model_wait`) never warns;
 - `model_wait_dead` — one WARNING plus the kill of the Pi session when
   a frozen `model_wait` (the newest event is a tool result, no new
-  session events) crosses `PI_MODEL_WAIT_DEAD_SECONDS` (default 600 s):
-  the model request is HUNG — a live connection and an alive model
-  service process are evidence on the line (`upstream_alive=true|false`),
-  never a veto (process alive ≠ responding, Issue #218); the line
-  carries issue, role, idle seconds, threshold, `action=kill_pi`,
-  session, run id and `reason=hung_model_request`;
+  session events) crosses the configured `model_wait_dead_seconds`
+  (default 1800 s, `PI_MODEL_WAIT_DEAD_SECONDS`, Issue #228): the model
+  request is HUNG — a live connection and an alive model service
+  process are evidence on the line (`upstream_alive=true|false`), never
+  a veto (process alive ≠ responding, Issue #218); the line carries
+  issue, role, idle seconds, the actual configured threshold,
+  `action=kill_pi`, session, run id and
+  `reason=hung_model_request`. The threshold measures silence between
+  COMPLETE session events (Pi does not stream token-level progress into
+  the JSONL), never token-level model progress — a slow generation that
+  keeps appending events never trips it (a slow local model, e.g. Qwen
+  27B at ~17 tokens/s behind a llama-server with a 1200 s request
+  timeout, survives a 10-minute complete message under the default);
 - `pi_idle_term` / `pi_idle_kill` — the idle-stall recovery (Issue
   #94): while the session stays stalled the Runner SIGTERMs the Pi
   descendants that already existed before the idle window (the hung
@@ -117,10 +124,11 @@ Stable `key=value` lines you will see:
   result (`sent` / `already_dead` / `no_target` / `failed: ...`);
 - `run_failed` — the full scene plus the reason
   (`pi_exit_N`, `timeout_...s`, `model_wait_dead_stale_...s` when a
-  frozen `model_wait` past `PI_MODEL_WAIT_DEAD_SECONDS` (default 600 s)
-  declares the model request hung, or `idle_recovery_stale_...s` when
-  the session stayed idle for `PI_IDLE_RECOVERY_CYCLES` (default 3)
-  consecutive idle windows and the Runner kills the Pi session itself).
+  frozen `model_wait` past the configured `model_wait_dead_seconds`
+  (default 1800 s, Issue #228) declares the model request hung, or
+  `idle_recovery_stale_...s` when the session stayed idle for
+  `PI_IDLE_RECOVERY_CYCLES` (default 3) consecutive idle windows and
+  the Runner kills the Pi session itself).
 
 The idle warning, the idle recovery and the hung-model-request kill are
 log/health thresholds — they are not the 5-minute schedule and not a
