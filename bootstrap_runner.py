@@ -127,6 +127,15 @@ PI_MODEL_WAIT_DEAD_SECONDS = 600.0
 # the Pi session itself is killed and the run fails fast through the
 # normal `ai-blocked` path — the slot is never held forever.
 PI_IDLE_RECOVERY_CYCLES = 3
+# Stop-handler grace (Issue #48): when the Runner is stopped with SIGTERM
+# while a Pi delivery is in flight, the handler must not wait forever for
+# the Pi child to exit. systemd gives `TimeoutStopSec` (default 90s) before
+# it SIGKILLs the whole cgroup, so an unbounded `child.wait()` on a child
+# stuck in a model/network call leaves `Result=timeout` after the grace.
+# The handler TERMs the child, waits at most this long, then KILLs it so
+# it always reaps the child and exits with 128+SIGTERM before systemd's
+# own deadline — a clean signal stop, never `failed`/`timeout`.
+STOP_CHILD_GRACE_SECONDS = 15.0
 
 # The bootstrap runner streams every Pi session of a run through the same
 # live activity pipeline (Issue #24/#40); implement/review share the same
@@ -360,13 +369,34 @@ def _stop_delivery(signum: int) -> None:
             quote_value(session),
         )
         child = run["pi"]
-        if child is not None and child.poll() is None:
-            child.terminate()
-            child.wait()
+        _shutdown_child(child)
         LOGGER.info(
             "run_stopped issue=%s result=interrupted", run["issue"],
         )
     _die_from_signal(signum)
+
+
+def _shutdown_child(child: subprocess.Popen | None,
+                   grace: float = STOP_CHILD_GRACE_SECONDS) -> None:
+    """Terminate and reap a live child without blocking past `grace`.
+
+    Issue #48 root cause: the stop handler previously called
+    ``child.wait()`` with no timeout. A Pi child stuck in a model/network
+    call that does not exit on SIGTERM left the handler blocked; systemd
+    then SIGKILLed the whole unit after ``TimeoutStopSec`` and recorded
+    ``Result=timeout``/failed. This TERMs the child, waits at most
+    ``grace`` seconds, then KILLs and reaps it, so the Runner always
+    exits with the ORIGINAL signal (128+signum) before systemd's own
+    deadline. A child that exits on TERM (cooperative) is unaffected; a
+    child that already exited is a no-op."""
+    if child is None or child.poll() is not None:
+        return
+    child.terminate()
+    try:
+        child.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait()
 
 
 def _die_from_signal(signum: int) -> None:

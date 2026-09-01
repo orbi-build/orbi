@@ -9398,6 +9398,42 @@ time.sleep(120)
 """
 
 
+def test_shutdown_child_kills_a_child_that_ignores_sigterm(tmp_path):
+    """Root cause (Issue #48): the stop handler must not block past the
+    grace when the Pi child ignores SIGTERM (e.g. a model/network call).
+    It TERMs, waits at most `grace`, then KILLs and reaps the child so
+    the Runner exits with the original signal before systemd's own
+    stop deadline — never leaving `Result=timeout`/failed."""
+    child = subprocess.Popen(
+        [sys.executable, "-c",
+         "import signal, time, sys\n"
+         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+         "print(\"ready\", flush=True)\n"
+         "time.sleep(60)\n"],
+        stdout=subprocess.PIPE, text=True,
+    )
+    # Wait until the child has INSTALLED SIG_IGN: else a
+    # terminate() before the handler is set would exit the child
+    # on SIGTERM and never exercise the grace/kill path.
+    assert child.stdout.readline().strip() == "ready"
+    # The child ignores SIGTERM: a bare terminate()+wait() would
+    # block forever. `_shutdown_child` with a short grace must
+    # escalate to SIGKILL and reap it within that grace.
+    runner._shutdown_child(child, grace=0.5)
+    assert child.poll() is not None
+    # Reaped with a kill signal, not a clean SIGTERM exit.
+    assert child.returncode is not None and child.returncode < 0
+
+
+def test_shutdown_child_noop_for_exited_or_none_child():
+    """A None or already-exited child is a no-op (no hang, no signal)."""
+    runner._shutdown_child(None)
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait(timeout=5)
+    runner._shutdown_child(child)
+    assert child.poll() is not None
+
+
 def test_real_subprocess_sigterm_logs_stop_scene_and_shuts_down_pi(
     tmp_path,
 ):
