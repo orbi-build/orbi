@@ -15,7 +15,7 @@ when the README stops pointing at the Chinese docs entry.
 import re
 from pathlib import Path
 
-import bootstrap_runner as runner
+import muyan_pilot.runner as runner
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
@@ -199,7 +199,10 @@ def test_chinese_getting_started_documents_prerequisites_and_smoke():
     )
     assert "smoke" in text.lower(), "getting-started must contain the smoke walkthrough"
     assert "muyan-pilot add" in text, "smoke must use the real add command"
-    assert "bootstrap_runner.py" in text, "smoke must run the real one-tick command"
+    assert (
+        "PYTHONPATH=src python3 -m muyan_pilot.runner "
+        "--config muyan-pilot.toml"
+    ) in text, "smoke must run the real one-tick command (Issue #168 src layout)"
     assert (
         "journalctl --user -u muyan-pilot@1.service -u "
         "muyan-pilot@2.service" in text

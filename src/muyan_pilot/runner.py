@@ -42,20 +42,21 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-# NOTE (Issue #158): the editable CLI install refresh below lives in
-# THIS module on purpose: the bootstrap chain (`muyan_pilot` ->
-# `bootstrap_runner`) must still LOAD in a tool env whose installed
-# editable finder predates this PR's packaging change (the STALE-finder
-# scene of #158 itself — the finder's module mapping is generated at
-# install time, so a merged new runtime module is not mapped by the
-# installed finder). A separate new module for the refresh would not be
-# importable there, and the very refresh that reinstalls the tool env
-# could never run (the #158 incident, one module later). `cli_install`
-# is a thin re-export of this implementation for the tests only — the
-# bootstrap chain never imports it.
-from git_transport import TransportError, check_transport
-from pilot_slots import acquire_slot, slot_dir_for, slot_occupancy
-from pi_recovery import (
+# NOTE (Issue #158, root-caused by Issue #168): the editable CLI
+# install refresh below lives in THIS module: the bootstrap chain
+# (`muyan_pilot.cli` -> `muyan_pilot.runner`) must still LOAD in a
+# tool env whose installed editable finder predates a packaging
+# change. Since the src layout (Issue #168) the finder maps the WHOLE
+# package directory `src/muyan_pilot/`, so a newly added package
+# module is importable WITHOUT any reinstall — the #158 incident
+# class is fixed at the root. The refresh remains the safety net for
+# packaging-metadata changes (version, dependencies, entry points in
+# `pyproject.toml`). `cli_install` is a thin re-export of this
+# implementation for the tests only — the bootstrap chain never
+# imports it.
+from muyan_pilot.git_transport import TransportError, check_transport
+from muyan_pilot.pilot_slots import acquire_slot, slot_dir_for, slot_occupancy
+from muyan_pilot.pi_recovery import (
     clk_tck,
     find_idle_descendants,
     pid_alive,
@@ -65,7 +66,7 @@ from pi_recovery import (
     timeout_duration,
     upstream_alive,
 )
-from pi_activity import (
+from muyan_pilot.pi_activity import (
     SessionWatcher,
     activity_snapshot,
     format_duration,
@@ -74,8 +75,8 @@ from pi_activity import (
     quote_value,
     sanitize,
 )
-from progress import ProgressPublisher, format_elapsed, progress_body
-from systemd_deploy import (
+from muyan_pilot.progress import ProgressPublisher, format_elapsed, progress_body
+from muyan_pilot.systemd_deploy import (
     TIMER_INSTANCES,
     UnitDriftError,
     check_unit_drift,
@@ -5048,16 +5049,17 @@ def review_rounds_so_far(comments: list[dict]) -> int:
 # ---------------------------------------------------------------------------
 #
 # The official local deployment is the EDITABLE uv tool install (Issue
-# #152): the tool env imports the runtime modules directly from the
-# deployment checkout through a setuptools editable finder. The
-# finder's module MAPPING is generated at INSTALL time from the
-# checkout's `pyproject.toml` (`py-modules`, entry points, version,
-# dependencies) — so when the packaging inputs change (a new runtime
-# module is added to `py-modules`, a dependency or entry point
-# changes), the installed finder is STALE: the next CLI process dies
-# with `ModuleNotFoundError` before the Runner can even start (the
-# #158 incident: `cli_source` merged to main, the installed finder
-# still mapped the pre-#152 module set, the systemd start failed).
+# #152): the tool env imports the runtime package directly from the
+# deployment checkout through a setuptools editable finder. Since the
+# src layout (Issue #168) the finder maps the WHOLE package directory
+# `src/muyan_pilot/` — a newly added package module needs NO reinstall
+# (the #158 stale-module-list incident class is gone at the root). The
+# remaining packaging inputs come from the checkout's `pyproject.toml`
+# (entry points, version, dependencies): when THEY change the installed
+# tool env is STALE and the next CLI process can die before the Runner
+# starts (the #158 incident shape: `cli_source` merged to main, the
+# installed finder still mapped the pre-#152 module set, the systemd
+# start failed).
 #
 # This section refreshes the editable install at the Runner start,
 # BEFORE any slot or claim:
@@ -5085,12 +5087,11 @@ def review_rounds_so_far(comments: list[dict]) -> int:
 #   `cli_install_failed` line (reason + the exact fix command) and
 #   records NO state (the next start retries).
 #
-# The implementation lives in `bootstrap_runner` itself (see the NOTE
-# at the top of this file): a separate new module would not be
-# importable in the stale-finder tool env, and the refresh that
-# repairs the finder could never run. `cli_source` is imported lazily
-# inside `refresh_cli_install`: the reinstall argv is the single
-# cross-module dependency (Issue #152's verified command).
+# The implementation lives in `runner` itself (see the NOTE at the top
+# of this file): the bootstrap chain must stay loadable in a tool env
+# whose installed finder predates the packaging change. `cli_source` is
+# imported lazily inside `refresh_cli_install`: the reinstall argv is
+# the single cross-module dependency (Issue #152's verified command).
 
 CLI_INSTALL_LOGGER = logging.getLogger("muyan_pilot.cli_install")
 
@@ -5200,13 +5201,14 @@ def packaging_fingerprint(repo_dir: Path) -> str:
     """The sha256 of the checkout's `pyproject.toml`.
 
     `pyproject.toml` is the packaging input that decides the editable
-    metadata (the finder's module mapping from `py-modules`, the entry
-    points, the version, the dependencies) — so its content hash is
-    the refresh trigger. Ordinary Python source content is NOT part
-    of it: the editable finder maps the live files, a content change
-    needs no reinstall (the whole point of the editable install,
-    Issue #152). A checkout without `pyproject.toml` cannot be
-    tool-installed: fail fast, never guess a fingerprint.
+    metadata (the entry points, the version, the dependencies) — so
+    its content hash is the refresh trigger. Ordinary Python source
+    content is NOT part of it: since the src layout (Issue #168) the
+    editable finder maps the WHOLE `src/muyan_pilot/` package
+    directory, so a newly added package module needs no reinstall
+    (the whole point of the editable install, Issue #152). A checkout
+    without `pyproject.toml` cannot be tool-installed: fail fast,
+    never guess a fingerprint.
     """
     pyproject = Path(repo_dir) / "pyproject.toml"
     if not pyproject.is_file():
@@ -5314,7 +5316,7 @@ def refresh_cli_install(
         reason = "first_install" if (
             read_install_state(repo_dir) is None
         ) else "packaging_changed"
-        import cli_source  # lazy: the single cross-module dependency
+        from muyan_pilot import cli_source  # lazy: the single cross-module dependency
         try:
             run_command(
                 cli_source.reinstall_args(repo_dir),
@@ -6888,11 +6890,11 @@ def main(argv: list[str] | None = None) -> int:
     validate_config(config)
     # Editable CLI install refresh (Issue #158): BEFORE any slot or
     # claim the tool env's editable metadata must match the checkout's
-    # packaging inputs — the finder's module mapping is generated at
-    # install time from `pyproject.toml`, so a merged packaging change
-    # (e.g. a new runtime module in `py-modules`) would otherwise make
-    # the NEXT CLI process die with `ModuleNotFoundError` before the
-    # Runner can start (the #158 incident). Unchanged: no uv call (no
+    # packaging inputs — a merged packaging change (entry point,
+    # version or dependency in `pyproject.toml`) would otherwise make
+    # the NEXT CLI process die before the Runner can start (the #158
+    # incident shape; since the src layout, Issue #168, a new package
+    # module needs no reinstall). Unchanged: no uv call (no
     # per-tick reinstall); changed or first install: ONE lock-
     # protected editable force reinstall (the SAME base-sync flock the
     # service template's ExecStartPre uses — two instances starting in

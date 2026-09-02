@@ -21,7 +21,7 @@ import json
 import re
 from pathlib import Path
 
-import bootstrap_runner as runner
+import muyan_pilot.runner as runner
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"

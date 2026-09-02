@@ -33,7 +33,7 @@ cp .muyan-pilot.example.toml muyan-pilot.toml
 # 4. 一次性 setup（gh auth、labels、systemd units、checkout 检查；幂等）
 muyan-pilot setup --config muyan-pilot.toml
 # 5. 手动跑一个 tick（首次验证；日常由 timer 调度）
-python3 bootstrap_runner.py --config muyan-pilot.toml
+PYTHONPATH=src python3 -m muyan_pilot.runner --config muyan-pilot.toml
 # 6. 验证部署健康
 muyan-pilot doctor --config muyan-pilot.toml
 ```
@@ -76,8 +76,11 @@ GitHub Issue（ai-ready）
 ## 开发与贡献
 
 开发契约见 [AGENTS.md](AGENTS.md)；如何派 Issue、报 bug、提 PR 见
-[Contributing](docs/contributing.mdx)。`muyan_pilot.py` 的直接执行入口保留为
-开发/兼容路径，不是正式使用方式。
+[Contributing](docs/contributing.mdx)。runtime 代码在 `src/muyan_pilot/`
+package（Issue #168 src layout，editable finder 映射整个 package 目录，
+新增模块无需重装）；checkout 根目录没有 `muyan_pilot.py`（避免遮蔽已安装
+package），直接执行兼容入口是 `python3 -m muyan_pilot.cli`，不是正式使用
+方式。
 
 ## 许可证
 

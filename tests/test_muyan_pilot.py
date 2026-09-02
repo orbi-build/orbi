@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-import bootstrap_runner as runner
-import muyan_pilot
+import muyan_pilot.runner as runner
+import muyan_pilot.cli as muyan_pilot
 
 
 def _write_prompts(tmp_path):
@@ -1011,7 +1011,7 @@ def test_status_report_shows_capacity_and_free_slots(monkeypatch, tmp_path):
 
 
 def test_status_report_shows_occupied_slots_with_pids(monkeypatch, tmp_path):
-    import pilot_slots
+    from muyan_pilot import pilot_slots
 
     slot_dir = tmp_path / ".muyan-pilot" / "slots"
     # A slot is occupied only while its flock lock is held: hold it in
@@ -1135,7 +1135,7 @@ def _fake_doctor_commands(monkeypatch, ssh_down: bool = False) -> list:
 
 def test_install_units_command_reports_commit_and_hashes(monkeypatch,
                                                         tmp_path):
-    import systemd_deploy
+    from muyan_pilot import systemd_deploy
 
     config, _ = _deploy_world(tmp_path)
     installed = tmp_path / "elsewhere"
@@ -1345,7 +1345,7 @@ def test_doctor_report_clean(tmp_path, monkeypatch):
     assert lines[1] == "commit: 0123456789abcdef0123456789abcdef01234567"
     assert "unit_drift: clean" in lines
     # Both units are reported with their installed hash.
-    import systemd_deploy
+    from muyan_pilot import systemd_deploy
     status = systemd_deploy.unit_status(config["repo_dir"], installed)
     for entry in status:
         assert (
@@ -1416,7 +1416,7 @@ def test_doctor_report_drift_carries_paths_hashes_and_fix(
     config, installed = _deploy_world(tmp_path, drift=True)
     _fake_doctor_commands(monkeypatch)
     monkeypatch.setattr(muyan_pilot, "current_issue", lambda repo: None)
-    import systemd_deploy
+    from muyan_pilot import systemd_deploy
     report = muyan_pilot.doctor_report(config, installed)
     lines = report.splitlines()
     assert "unit_drift: DRIFT" in lines
@@ -1445,7 +1445,7 @@ def _fake_cli_source(monkeypatch, drifted: bool = False) -> dict:
     if drifted:
         actual = Path(
             "/home/u/.local/share/uv/tools/muyan-pilot/"
-            "lib/python3.14/site-packages/muyan_pilot.py",
+            "lib/python3.14/site-packages/muyan_pilot/__init__.py",
         )
     else:
         actual = None  # filled per-world below
@@ -1453,7 +1453,10 @@ def _fake_cli_source(monkeypatch, drifted: bool = False) -> dict:
 
     def fake_cli_source(expected_repo_dir):
         if state["actual"] is None:
-            state["actual"] = Path(expected_repo_dir) / "muyan_pilot.py"
+            state["actual"] = (
+                Path(expected_repo_dir)
+                / "src" / "muyan_pilot" / "__init__.py"
+            )
         return {
             "actual": Path(state["actual"]),
             "expected": Path(expected_repo_dir).resolve(),
@@ -1467,7 +1470,7 @@ def _fake_cli_source(monkeypatch, drifted: bool = False) -> dict:
     def fake_drift_line(source):
         if source["editable"]:
             return None
-        from pi_activity import quote_value
+        from muyan_pilot.pi_activity import quote_value
 
         return (
             "cli_source_drift "
@@ -1497,7 +1500,8 @@ def test_doctor_report_cli_source_clean(tmp_path, monkeypatch):
         line.startswith("cli_source: clean") for line in lines
     ), report
     assert (
-        f"cli_source: clean source={config['repo_dir'] / 'muyan_pilot.py'}"
+        "cli_source: clean source="
+        f"{config['repo_dir'] / 'src' / 'muyan_pilot' / '__init__.py'}"
     ) in lines
     assert "cli_source_drift" not in report
 

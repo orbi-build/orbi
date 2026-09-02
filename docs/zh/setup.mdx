@@ -85,7 +85,7 @@ agent 和脚本可以解析：
 
 ```text
 setup=ok version=2 base_branch=main
-cli=verified source=/path/to/checkout/muyan_pilot.py
+cli=verified source=/path/to/checkout/src/muyan_pilot/__init__.py
 repo=orbi-build/orbi permission=ADMIN default_branch=main labels=8/8
 service=installed path=~/.config/systemd/user/muyan-pilot@.service sha256=9f2c...
 timer=muyan-pilot@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
@@ -115,7 +115,7 @@ muyan-pilot setup --config muyan-pilot.toml --json
 ```bash
 $ muyan-pilot setup --config muyan-pilot.toml
 setup=ok version=2 base_branch=main
-cli=verified source=/path/to/checkout/muyan_pilot.py
+cli=verified source=/path/to/checkout/src/muyan_pilot/__init__.py
 repo=orbi-build/orbi permission=ADMIN default_branch=main labels=8/8
 service=installed path=~/.config/systemd/user/muyan-pilot@.service sha256=9f2c...
 timer=muyan-pilot@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
@@ -136,7 +136,7 @@ setup_failed reason=editable tool install failed for /path/to/checkout: ... (fix
 setup_failed reason=repo not accessible: nobody/no-such (gh repo view failed: ...)
 setup_failed reason=insufficient permission for owner/repo: viewerPermission='READ' (one of ['ADMIN', 'MAINTAIN', 'WRITE'] required to manage labels)
 setup_failed reason=label alignment failed for owner/repo: ai-ready (gh label create failed: ...)
-setup_failed reason=checkout is not clean: /path/to/checkout (uncommitted changes: ' M bootstrap_runner.py') — commit or stash them first: ...
+setup_failed reason=checkout is not clean: /path/to/checkout (uncommitted changes: ' M src/muyan_pilot/runner.py') — commit or stash them first: ...
 setup_failed reason=checkout check failed for /path/to/checkout: ssh_unreachable: git ls-remote git@github.com:owner/repo.git failed: ... stderr=git@github.com: Permission denied (publickey). — fix SSH and retry
 ```
 

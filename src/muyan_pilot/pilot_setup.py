@@ -40,11 +40,11 @@ import shutil
 import tomllib
 from pathlib import Path
 
-import bootstrap_runner
-import cli_source
-import git_transport
-import systemd_deploy
-from pi_activity import quote_value
+from muyan_pilot import runner
+from muyan_pilot import cli_source
+from muyan_pilot import git_transport
+from muyan_pilot import systemd_deploy
+from muyan_pilot.pi_activity import quote_value
 
 # Bumped whenever the setup output contract changes shape.
 # Issue #152 added the `cli=` line (the editable install step).
@@ -203,23 +203,25 @@ def install_cli_step(repo_dir: Path, module_file: Path, *,
     """Install or verify the editable uv tool install (Issue #152).
 
     The official local deployment is the EDITABLE tool install: the
-    tool env imports ``muyan_pilot`` from the deployment checkout, so
-    the ``ExecStartPre`` checkout sync is picked up by the NEXT CLI
-    process automatically (no per-version reinstall, no second copy
-    of the source in site-packages). ``module_file`` is the RUNNING
-    process's import source (``cli_source.module_file()`` in the real
-    CLI): when it already sits directly inside ``repo_dir`` the
-    editable install is verified WITHOUT any uv call (idempotent
-    re-run); otherwise the exact editable force reinstall from
-    ``repo_dir`` runs via ``run_command`` (``uv tool install --force
-    --reinstall --editable --python /usr/bin/python3 <repo_dir>``).
-    A failing install raises ``SetupError`` (fail fast, no fallback,
-    no half-initialized state). The step NEVER touches a running
-    Runner process — the new source is loaded by the next CLI start.
+    tool env imports the ``muyan_pilot`` package from the deployment
+    checkout (the editable finder maps the whole ``src/muyan_pilot/``
+    package directory, Issue #168), so the ``ExecStartPre`` checkout
+    sync is picked up by the NEXT CLI process automatically (no
+    per-version reinstall, no second copy of the source in
+    site-packages). ``module_file`` is the RUNNING process's import
+    source (``cli_source.module_file()`` in the real CLI): when it
+    already sits inside ``repo_dir``'s package directory the editable
+    install is verified WITHOUT any uv call (idempotent re-run);
+    otherwise the exact editable force reinstall from ``repo_dir``
+    runs via ``run_command`` (``uv tool install --force --reinstall
+    --editable --python /usr/bin/python3 <repo_dir>``). A failing
+    install raises ``SetupError`` (fail fast, no fallback, no
+    half-initialized state). The step NEVER touches a running Runner
+    process — the new source is loaded by the next CLI start.
     """
     repo_dir = Path(repo_dir).resolve()
     actual = Path(module_file).resolve()
-    if actual.parent == repo_dir:
+    if actual.is_relative_to(repo_dir / cli_source.PACKAGE_DIR):
         return {
             "action": "verified",
             "source": str(actual),
@@ -233,7 +235,7 @@ def install_cli_step(repo_dir: Path, module_file: Path, *,
         ) from exc
     return {
         "action": "installed",
-        "source": str(repo_dir / "muyan_pilot.py"),
+        "source": str(repo_dir / cli_source.PACKAGE_DIR),
     }
 
 
@@ -518,7 +520,7 @@ def check_checkout(repo_dir: Path, base_branch: str,
         # remote-tracking ref, so it runs under the SAME base-sync
         # lock the Runner and the Pi prompt-side fetches use (no
         # unlocked fetch path exists).
-        bootstrap_runner.fetch_base_ref(
+        runner.fetch_base_ref(
             repo_dir, base_branch, command_runner=run_command,
         )
         head = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)

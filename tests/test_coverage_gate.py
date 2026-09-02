@@ -641,8 +641,8 @@ def test_diff_gate_main_passes_when_every_changed_line_is_covered_in_process(
 # other pragma would hide a branch from the report and is a contract
 # violation.
 ALLOWED_PRAGMA_FILES = (
-    "bootstrap_runner.py",
-    "muyan_pilot.py",
+    "src/muyan_pilot/runner.py",
+    "src/muyan_pilot/cli.py",
     "monitoring/prometheus/muyan-pilot-exporter.py",
     "coverage_gate.py",
     "diff_coverage_gate.py",

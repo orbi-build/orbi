@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-import pi_recovery
+from muyan_pilot import pi_recovery
 
 
 # Fake clock constants: btime=1_000_000 s, CLK_TCK=100 -> one tick = 0.01 s.

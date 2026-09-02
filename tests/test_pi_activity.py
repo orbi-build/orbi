@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-import pi_activity
+from muyan_pilot import pi_activity
 
 
 def write_records(path: Path, records: list[dict]) -> None:

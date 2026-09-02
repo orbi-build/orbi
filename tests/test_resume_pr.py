@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-import bootstrap_runner as runner
+import muyan_pilot.runner as runner
 from tests.test_progress_wiring import make_fake_gh
 
 

@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-import bootstrap_runner as runner
-import pilot_setup
-import systemd_deploy
+import muyan_pilot.runner as runner
+from muyan_pilot import pilot_setup
+from muyan_pilot import systemd_deploy
 
 @pytest.fixture(autouse=True)
 def _default_command_lookup(monkeypatch):
@@ -41,9 +41,10 @@ def _cli_source_world(monkeypatch, tmp_path):
     `run_setup`."""
     import types
 
-    world = {"module_file": tmp_path / "repo" / "muyan_pilot.py"}
+    world = {"module_file": tmp_path / "repo" / "src" / "muyan_pilot" / "__init__.py"}
     stub = types.SimpleNamespace(
         module_file=lambda: world["module_file"],
+        PACKAGE_DIR=Path("src") / "muyan_pilot",
         reinstall_args=lambda repo_dir: [
             "uv", "tool", "install", "--force", "--reinstall",
             "--editable", "--python", "/usr/bin/python3", str(repo_dir),
@@ -926,13 +927,13 @@ def test_install_cli_step_verifies_an_existing_editable_install(tmp_path):
     repo.mkdir()
     calls: list = []
     result = pilot_setup.install_cli_step(
-        repo, repo / "muyan_pilot.py",
+        repo, repo / "src" / "muyan_pilot" / "__init__.py",
         run_command=lambda command, **kwargs: calls.append(command) or "",
     )
     assert calls == []
     assert result == {
         "action": "verified",
-        "source": str((repo / "muyan_pilot.py").resolve()),
+        "source": str((repo / "src" / "muyan_pilot" / "__init__.py").resolve()),
     }
 
 
@@ -961,7 +962,7 @@ def test_install_cli_step_installs_the_editable_tool_when_drifted(tmp_path):
     ]]
     assert result == {
         "action": "installed",
-        "source": str((repo / "muyan_pilot.py").resolve()),
+        "source": str((repo / "src" / "muyan_pilot").resolve()),
     }
 
 
@@ -1031,7 +1032,7 @@ def test_run_setup_success_reports_all_steps(tmp_path):
     # (the test process imports muyan_pilot from the repo world).
     assert result["cli"]["action"] == "verified"
     assert result["cli"]["source"] == str(
-        (repo / "muyan_pilot.py").resolve(),
+        (repo / "src" / "muyan_pilot" / "__init__.py").resolve(),
     )
     # No uv call: an existing editable install is never reinstalled.
     assert [c for c in calls if c[:2] == ["uv", "tool"]] == []
@@ -1139,7 +1140,7 @@ def test_run_setup_installs_the_editable_cli_when_drifted(tmp_path,
     assert result["setup"] == "ok"
     assert result["cli"]["action"] == "installed"
     assert result["cli"]["source"] == str(
-        (repo / "muyan_pilot.py").resolve(),
+        (repo / "src" / "muyan_pilot").resolve(),
     )
     uv_calls = [c for c in calls if c[:2] == ["uv", "tool"]]
     assert uv_calls == [[
@@ -1296,7 +1297,7 @@ def sample_result() -> dict:
         # Issue #152: the CLI editable-install step result.
         "cli": {
             "action": "verified",
-            "source": "/home/u/repo/muyan_pilot.py",
+            "source": "/home/u/repo/src/muyan_pilot/__init__.py",
         },
     }
 
@@ -1305,9 +1306,9 @@ def test_format_setup_renders_stable_key_value_lines():
     lines = pilot_setup.format_setup(sample_result())
     assert lines[0] == "setup=ok version=2 base_branch=main"
     # Issue #152: the CLI line reports the editable install state and
-    # the import source (the checkout root `muyan_pilot.py`).
+    # the import source (the checkout package `src/muyan_pilot/`).
     assert lines[1] == (
-        "cli=verified source=/home/u/repo/muyan_pilot.py"
+        "cli=verified source=/home/u/repo/src/muyan_pilot/__init__.py"
     )
     assert (
         "repo=xqliu/muyan-pilot permission=ADMIN "

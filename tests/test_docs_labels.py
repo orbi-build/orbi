@@ -12,7 +12,7 @@ marker) is documented in docs/security.mdx / docs/workflow.mdx.
 import re
 from pathlib import Path
 
-import bootstrap_runner as runner
+import muyan_pilot.runner as runner
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 README = REPO_ROOT / "README.md"
@@ -139,7 +139,7 @@ def test_operations_documents_the_session_record():
     assert "JSONL" in text
     # The real session directory the code passes to Pi.
     assert ".pi-session" in text or ".pi-session" in (
-        (REPO_ROOT / "bootstrap_runner.py").read_text(encoding="utf-8")
+        (REPO_ROOT / "src" / "muyan_pilot" / "runner.py").read_text(encoding="utf-8")
     )
 
 

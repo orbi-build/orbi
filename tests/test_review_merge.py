@@ -17,8 +17,8 @@ from unittest.mock import Mock
 
 import pytest
 
-import bootstrap_runner as runner
-import cli_install
+import muyan_pilot.runner as runner
+from muyan_pilot import cli_install
 from tests.test_progress_wiring import make_fake_gh
 
 
