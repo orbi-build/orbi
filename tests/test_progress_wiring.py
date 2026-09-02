@@ -922,8 +922,8 @@ def test_process_issue_scene_comment_failure_fails_delivery(
     stays fail-fast (the resume contract is unchanged); only the
     `ProgressPublisher` steps around it (milestone, delivered finish)
     are bypasses. The failure happens AFTER the opened-PR transition,
-    so the terminal state is `ai-blocked` ALONE (the README label
-    lifecycle removes `ai-pr-opened` on terminal failure) — never
+    so the terminal state is `ai-blocked` ALONE (the docs/workflow.mdx
+    label lifecycle removes `ai-pr-opened` on terminal failure) — never
     `ai-pr-opened` + `ai-blocked`, which no scan would own."""
     calls, posted = make_failing_gh(
         monkeypatch,
