@@ -57,8 +57,20 @@ REQUIRED_ITEMS = (
     ("kiss-occam", "如无必要勿增实体"),
     ("kiss-entity-mapping", "to an acceptance criterion"),
     ("kiss-simpler", "fewer concepts, fewer files"),
-    # 3. 100% line and branch coverage for Python code.
-    ("coverage", "100% line and branch coverage"),
+    # 3. Tiered coverage gate (Issue #234): whole repository line >=
+    #    95% and branch >= 95% checked separately (never a merged
+    #    single percentage); changed Python code 100% line/branch; core
+    #    state machines and critical failure paths 100%; exceptions
+    #    stay locatable, no unjustified pragma; pointer to the docs.
+    ("coverage", "coverage gate (issue #234)"),
+    ("coverage-line", "line >= 95%"),
+    ("coverage-branch", "branch >= 95%"),
+    ("coverage-separated", "never a merged single percentage"),
+    ("coverage-changed-100", "changed in the current pr keep 100%"),
+    ("coverage-core", "core state machines"),
+    ("coverage-core-100", "keep 100% line/branch"),
+    ("coverage-pragma-rule", "# pragma: no cover"),
+    ("coverage-docs-pointer", "docs/testing.mdx"),
     # 4. UI work: real Playwright interaction, assertions, console/network
     #    checks, screenshots.
     ("playwright", "Playwright"),

@@ -65,8 +65,10 @@ gh issue edit <number> --repo OWNER/PILOT-REPO --add-label ai-ready
 
 ## 贡献代码
 
-1. 读 `AGENTS.md`——它是开发契约（TDD、100% 行/分支覆盖、fail fast、
-   无数据库/队列/daemon/fallback、无业务任务 timeout）。
+1. 读 `AGENTS.md`——它是开发契约（TDD、分层覆盖率门禁（Issue #234）：
+   全仓库 line >= 95% 且 branch >= 95% 分别检查、变更 Python 代码与核心
+   路径 100% 行/分支覆盖、fail fast、无数据库/队列/daemon/fallback、
+   无业务任务 timeout）。
 2. 在 feature branch 上工作；从不直接 push 保护分支。
 3. 先写失败测试，再写最小实现，再重构。外部接口（CLI flag、HTTP
    path、配置字段）对照官方文档或一次真实调用断言——从不对照猜出来的
@@ -75,7 +77,9 @@ gh issue edit <number> --repo OWNER/PILOT-REPO --add-label ai-ready
 
    ```bash
    /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
-   /usr/bin/python3 -m coverage report --fail-under=100 --show-missing
+   /usr/bin/python3 -m coverage report --show-missing
+   /usr/bin/python3 coverage_gate.py
+   /usr/bin/python3 diff_coverage_gate.py origin/main
    ```
 
 5. 一个 Issue 一个 PR。PR 描述必须包含 `Fixes #<issue-number>`（可以

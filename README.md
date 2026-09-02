@@ -307,8 +307,9 @@ run marker 校验同级。开发契约见 `AGENTS.md`（Git 一节）。
 1. **冻结 PR 的 base/head SHA**；
 2. **独立审查（同时是修复者，Issue #82）**：独立的 Review Agent
    （code-review R1–R9）对精确 base/head SHA 审查；发现 Blocker/Major 时在同一
-   会话内修复、重跑完整测试与 100% 行/分支覆盖率、commit 并只 push task
-   branch，然后对修复后的 head 重新输出 verdict——没有冷启动 Fixer，也没有
+   会话内修复、重跑完整测试与分层覆盖率门禁（Issue #234）、commit 并只
+   push task branch，然后对修复后的 head 重新输出 verdict——没有冷启动
+   Fixer，也没有
    第三次 review。审查会话必须以一行机器可读的 `REVIEW_VERDICT` 结尾；`pass`
    表示**会话内修复之后**零 Blocker/Major；读不到合法 verdict 一律 fail fast，
    绝不当作通过；
@@ -435,9 +436,11 @@ gh search issues "e07383c2" --repo orbi-build/orbi
 
 ## 远程 CI（GitHub Actions）
 
-仓库契约（全量 pytest + 100% line/branch coverage）不只在本机 Runner 上跑：
+仓库契约（全量 pytest + 分层覆盖率门禁：全仓库 line/branch >= 95% 分别
+检查、变更 Python 代码 100%，Issue #234）不只在本机 Runner 上跑：
 `.github/workflows/ci.yml` 让 GitHub Actions 在每次 `pull_request` 和每次
-`push` 到 `main` 时跑同一份契约，测试失败或覆盖率低于 100% 时 CI 变红。单个
+`push` 到 `main` 时跑同一份契约，测试失败、line 或 branch 任一层级低于
+95%、或变更代码未达 100% 时 CI 变红。单个
 job，不加 lint、矩阵或缓存（Issue #56）。生产运行时是 Runner 机器的
 `/usr/bin/python3`（3.14.6），GitHub-hosted runner 没有这个解释器，所以
 workflow 用 `actions/setup-python` 固定同一 minor 版本 `3.14`，契约命令通过

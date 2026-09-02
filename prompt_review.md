@@ -78,8 +78,10 @@ compaction.
   finding. Every such finding states the minimal fix direction: delete or
   shrink the out-of-scope part until only the acceptance criteria remain.
 - Verify the run evidence: the real test/build commands were run and pass in
-  the repository's declared runtime; Python business code keeps 100% line and
-  branch coverage when Python changed.
+  the repository's declared runtime; Python business code keeps the tiered
+  coverage gate (Issue #234: whole repository line >= 95% and branch >= 95%
+  checked separately, changed Python code at 100% line/branch) when Python
+  changed.
 - Only report findings this diff introduces or exposes. Every finding needs a
   concrete `file:line`, a reproducible trigger, actual vs expected, and a
   minimal fix direction. No speculative findings.
@@ -107,8 +109,8 @@ consistent with CI.
 2. Reproduce the failing cases locally (the exact tests CI failed on),
    fix them, and rerun them until green.
 3. Run the related tests of the changed code.
-4. Run exactly one full suite with 100% line/branch coverage (when
-   Python changed) before emitting the verdict. Do not repeat the full
+4. Run exactly one full suite with the tiered coverage gate (Issue #234)
+   (when Python changed) before emitting the verdict. Do not repeat the full
    suite: it is the final gate of the round, not a debugging tool.
 
 ## Fix in this session
@@ -116,8 +118,8 @@ consistent with CI.
 When you find Blocker or Major issues, do **not** stop and hand the work to
 another session: fix them here, in this same session.
 
-- Modify the code on the task branch, rerun the full test suite with 100%
-  line/branch coverage (when Python changed), and commit the fix.
+- Modify the code on the task branch, rerun the full test suite with the
+  tiered coverage gate (Issue #234) (when Python changed), and commit the fix.
 - Push ONLY the task branch (the PR head branch); never force push, never
   push the protected branch, never create or close a PR.
 - If the head is behind the latest remote base or has a merge conflict,

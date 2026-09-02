@@ -11233,7 +11233,7 @@ def test_run_release_tests_wraps_the_command_in_timeout_bash(monkeypatch):
     assert command == [
         "timeout", "120", "bash", "-c",
         "pytest -q && /usr/bin/python3 -m coverage report "
-        "--fail-under=100 --show-missing",
+        "--show-missing && /usr/bin/python3 coverage_gate.py",
     ]
     assert kwargs == {"cwd": Path("/wt")}
 
@@ -11664,8 +11664,8 @@ def test_process_release_success_end_to_end(monkeypatch):
              "bash", "-c",
              "/usr/bin/python3 -m coverage run --branch -m pytest tests/ -q "
              "&& /usr/bin/python3 -m coverage report --show-missing && "
-             "/usr/bin/python3 -m coverage report --fail-under=100 "
-             "--show-missing"],
+             "/usr/bin/python3 -m coverage report --show-missing && "
+             "/usr/bin/python3 coverage_gate.py"],
             {"cwd": Path("/wt")}) in state["commands"]
     # The success comment carries the run marker and the release URL.
     (comment_number, comment_kwargs), = state["comments"]

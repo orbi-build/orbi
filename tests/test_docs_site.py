@@ -438,14 +438,26 @@ def test_docs_document_the_security_boundary():
 
 
 def test_docs_document_tests_and_coverage_commands():
-    """Testing must show the exact contract commands (full pytest with
-    branch coverage + 100% report) and the remote CI gate."""
+    """Testing must show the tiered coverage policy (Issue #234): whole
+    repository line >= 95% and branch >= 95% checked separately, changed
+    Python code at 100%, core paths at 100%, the contract commands
+    (full pytest with branch coverage, the report, and the two gate
+    scripts) and the remote CI gate."""
     text = page_text("testing")
     assert "coverage run --branch -m pytest tests/" in text, (
         "testing must show the contract coverage-run command"
     )
     assert "coverage report" in text, "testing must show the coverage report command"
-    assert "100%" in text, "testing must state the 100% line/branch coverage requirement"
+    assert "coverage_gate.py" in text, (
+        "testing must show the tiered global gate command"
+    )
+    assert "diff_coverage_gate.py" in text, (
+        "testing must show the changed-code gate command"
+    )
+    assert "95%" in text, "testing must state the 95% line/branch tiers"
+    assert "100%" in text, (
+        "testing must state the 100% changed-code and core-path tiers"
+    )
     assert "GitHub Actions" in text, "testing must name the remote CI gate"
 
 

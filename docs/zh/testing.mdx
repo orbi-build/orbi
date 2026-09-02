@@ -1,8 +1,21 @@
 # 测试
 
 仓库契约（见 `AGENTS.md`）：Python 代码的完整 pytest 套件，
-**100% 行和分支覆盖**。同一契约在 Runner 机器本地和 GitHub 远端
-运行。
+**分层覆盖率门禁**（Issue #234）。同一契约在 Runner 机器本地和
+GitHub 远端运行。
+
+## 分层覆盖率策略
+
+| 层级 | 要求 |
+|---|---|
+| 全仓库 | **line >= 95% 且 branch >= 95%**，分别检查——绝不使用合并后的单一百分比 |
+| 变更 Python 代码 | 本 PR 新增/修改的行与分支 **100% 行/分支覆盖**；纯文档变更没有变更的 Python，直接通过 |
+| 核心路径 | 核心状态机与关键失败路径 **100% 行/分支覆盖**：model_wait/idle 恢复、Issue/label 生命周期、Git/PR/merge 门禁、配置校验、部署失败路径——由现有测试保证，绝不为了凑数字删除测试 |
+
+低于 95% 的代码只允许是非核心、可明确解释的历史/防御性分支；每个例外
+必须在覆盖率报告中可定位。无理由的 `# pragma: no cover` 是契约违规
+（静态测试钉住少数正当位置：`__main__` 入口守卫和测试里一个防御性
+`except` 守卫）。
 
 ## 本地契约命令
 
@@ -10,11 +23,17 @@
 
 ```bash
 /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
-/usr/bin/python3 -m coverage report --fail-under=100 --show-missing
+/usr/bin/python3 -m coverage report --show-missing
+/usr/bin/python3 coverage_gate.py
+/usr/bin/python3 diff_coverage_gate.py origin/main
 ```
 
-第二条命令在任何行或分支低于 100% 时退出非零，所以这对命令是门禁，
-不是报告。
+报告逐文件给出两个真实数字（行和分支）。两个门禁脚本才是门禁，不是
+报告：`coverage_gate.py` 在行层级或分支层级任一低于 95% 时退出非零
+（它分别读取 coverage JSON 的 `percent_statements_covered` 和
+`percent_branches_covered`——JSON 字段 `percent_covered` 是行+分支合并
+百分比，绝不作为门禁），`diff_coverage_gate.py` 在 base ref 之后变更的
+Python 行或分支未达 100% 覆盖时退出非零。
 
 ## 远端 CI（GitHub Actions）
 
@@ -22,8 +41,9 @@
 `main` 时运行同一契约：单个 job，`actions/setup-python` 固定 Python
 3.14（GitHub-hosted runner 没有生产路径上的生产解释器，所以 workflow
 固定同一 minor 版本，通过 PATH 上的 `python3` 运行相同命令），安装
-`requirements.txt`，然后运行上面两条契约命令。没有 lint、没有矩阵、
-没有缓存。
+`requirements.txt`，然后运行上面的契约命令——报告、`coverage_gate.py`
+和 `diff_coverage_gate.py origin/main`（变更代码层级对照 PR base；纯
+文档 PR 没有变更的 Python，直接通过）。没有 lint、没有矩阵、没有缓存。
 
 Checkout 用 `fetch-depth: 0`（完整历史 + 全部 tags）：发布对账测试
 （`tests/test_release_v01.py`）用 `git cat-file` / `git rev-parse` 对

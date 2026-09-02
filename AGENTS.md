@@ -35,11 +35,13 @@ each section points at the owning page instead of restating it.
 - Blocking commands (Issue #95): any shell command that can block (running tests, generator/polling verification, network waits, interactive tools) is wrapped in `timeout <seconds> ...`; a timeout is the signal that the path needs a fix, never ignorable noise.
 - Testing an unbounded-loop function (`while True` poller) requires a termination guard (monkeypatched `time.sleep` raising on the Nth call, an injected iteration cap, or pytest-timeout): the red phase must fail fast and never hang.
 - Test exit codes (Issue #180): a pipeline exits with the exit code of the last command, so `pytest ... | tail` exits 0 even when pytest fails — never pipe a test, build or smoke command through `tail`, `head`, `grep` or any other filter that drops the exit code; redirect to a file and keep the real exit code (`set -o pipefail`, or `> test.log 2>&1; echo "exit=$?"`); `test.log` carries the real pytest output, never a self-declared "tests passed".
-- Python code keeps 100% line and branch coverage:
+- Coverage gate (Issue #234), tiered: the whole repository keeps line >= 95% and branch >= 95% (checked separately, never a merged single percentage); the Python lines and branches changed in the current PR keep 100% line/branch; the core state machines and critical failure paths (model_wait/idle recovery, Issue/label lifecycle, Git/PR/merge gate, config validation, deployment failure paths) keep 100% line/branch through their existing tests. Code below 95% is only allowed for non-core, clearly explainable legacy/defensive branches and must stay locatable in the coverage report — no unjustified `# pragma: no cover`. Full policy: `docs/testing.mdx` (EN) / `docs/zh/testing.mdx` (ZH):
 
   ```bash
   /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
   /usr/bin/python3 -m coverage report --show-missing
+  /usr/bin/python3 coverage_gate.py
+  /usr/bin/python3 diff_coverage_gate.py origin/main
   ```
 
 ## UI work
@@ -105,7 +107,7 @@ each section points at the owning page instead of restating it.
 
 ## Review, fix and merge (same PR)
 
-- The review session is independent (a new Pi process, `prompt_review.md`, a new JSONL) and ALSO the fixer: it may modify code, run the full suite with 100% line/branch coverage, commit, and push ONLY the task branch, then re-emit the `REVIEW_VERDICT` for the fixed head. A `pass` verdict means zero Blocker/Major findings AFTER the in-session fixes; a missing or malformed verdict fails fast and is never treated as a pass.
+- The review session is independent (a new Pi process, `prompt_review.md`, a new JSONL) and ALSO the fixer: it may modify code, run the full suite with the tiered coverage gate (Issue #234: whole repository line/branch >= 95% checked separately, changed Python code at 100%), commit, and push ONLY the task branch, then re-emit the `REVIEW_VERDICT` for the fixed head. A `pass` verdict means zero Blocker/Major findings AFTER the in-session fixes; a missing or malformed verdict fails fast and is never treated as a pass.
 - `ai-pr-opened` means awaiting review; `ai-fix-needed` marks a delivery whose head is not mergeable yet (a finding the session could not fix, a PR behind the latest base / with a merge conflict, or an AI-recoverable failure of the existing run/PR): the NEXT tick resumes the SAME run_id, branch, worktree and PR and runs the next independent review session, which absorbs the latest base in-session. Never a replacement PR, never a re-claim.
 - The merge gate re-fetches the latest remote base and requires the PR head to contain it, the PR to be mergeable, and the remote head to still be the reviewed head; the merge lands exactly that head (`gh pr merge --match-head-commit`).
 - The review loop is bounded (5 rounds); exhausting rounds with findings fails fast and marks the Issue `ai-blocked`.

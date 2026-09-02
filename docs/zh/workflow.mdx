@@ -35,9 +35,9 @@ ai-ready                任务被派发（muyan-pilot add，或人工加标签�
   -> ai-pr-opened       PR 验收通过（base 新鲜度、run marker、Fixes #N）；
                         交付现在等待 review
   -> review             独立 Pi session 审查精确的 base/head SHA，并
-                        在会话内修复 findings（代码、完整测试、100%
-                        覆盖率、只 push task branch），然后输出
-                        REVIEW_VERDICT
+                        在会话内修复 findings（代码、完整测试、分层
+                        覆盖率门禁（Issue #234）、只 push task
+                        branch），然后输出 REVIEW_VERDICT
   -> ai-fix-needed      会话内未能修复 finding，PR 落后最新 base / 有
                         merge conflict，或已有 run/PR 的**可恢复失败**
                         （Issue #50：Pi 执行失败、验证失败、未推送本地
