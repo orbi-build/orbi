@@ -11,8 +11,9 @@ Chinese mirror under `docs/zh/` (same slugs), so every rule below is
 checked in BOTH languages.
 
 Matching is whitespace-normalized (line wraps do not matter): a
-marker names the characteristic phrase of the RESTATED mechanism
-prose, so a legitimate one-sentence summary + link never contains it.
+marker names the characteristic phrase of the mechanism prose as it
+is DEFINED on its authoritative page, so a legitimate one-sentence
+summary + link on another page never contains it.
 
 These tests fail when a mechanism prose block reappears on a second
 page (the duplication this Issue removes), or when the Chinese pages
@@ -52,8 +53,8 @@ ZH = pages(ZH_DIR)
 #    CLI preamble and the setup step-2 used to restate the same
 #    ExecStartPre/sync mechanism.
 EDITABLE_INSTALL_MARKERS = (
-    "picked up by the next CLI process automatically",  # EN restatement
-    "会被下一个 CLI 进程自动取到",  # ZH restatement
+    "picks up the merged code automatically",  # EN definition (step 2)
+    "自动取到 merge 后的代码",  # ZH definition (step 2)
 )
 
 # B. Git transport boundary (SSH git data vs gh-token API, no HTTPS
@@ -62,8 +63,8 @@ EDITABLE_INSTALL_MARKERS = (
 #    workflow rules bullet used to restate the full two-channel
 #    boundary with its label list.
 TRANSPORT_MARKERS = (
-    "GitHub API operations (Issue, PR, label, comment, merge) stay on the `gh` token",  # EN workflow bullet
-    "GitHub API 操作（Issue、PR、label、comment、merge）留在 `gh` token 上",  # ZH workflow bullet
+    "(Issue, PR, label, comment, merge)",  # EN definition (security credential framing)
+    "（Issue、PR、label、comment、merge）",  # ZH definition (安全 credential framing)
 )
 
 # C. Timer mechanics (5-minute cadence, the per-instance start
@@ -71,8 +72,8 @@ TRANSPORT_MARKERS = (
 #    getting-started step 8 used to restate the cadence and the
 #    fast-forward instead of pointing at Operations.
 TIMER_MARKERS = (
-    "Each timer fires every 5 minutes",  # EN step-8 restatement
-    "每个 timer 每 5 分钟触发一次",  # ZH step-8 restatement
+    "OnCalendar=*-*-* *:00/5",  # EN definition (The timers)
+    "OnCalendar=*-*-* *:00/5",  # ZH definition (Timers)
 )
 
 # D. `model_wait` field semantics (silence between COMPLETE session
