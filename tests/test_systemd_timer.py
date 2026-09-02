@@ -211,22 +211,46 @@ def test_analyze_verify_skips_without_systemd_analyze(monkeypatch):
         )
 
 
-def test_readme_documents_code_update_at_next_runner_start():
-    """Issue #52: the README must explain that code updates take effect
-    at the next Runner start (the preflight fetch + ff-only merge), not
-    while a task is running."""
-    readme = README_FILE.read_text(encoding="utf-8")
-    assert "ExecStartPre" in readme
-    assert "git merge --ff-only origin/main" in readme
+DOCS_DIR = REPO_ROOT / "docs"
 
 
-def test_readme_documents_same_schedule_as_timer():
+def docs_page(slug: str) -> str:
+    path = DOCS_DIR / slug
+    assert path.is_file(), f"missing docs page: {path}"
+    return path.read_text(encoding="utf-8")
+
+
+def test_operations_documents_code_update_at_next_runner_start():
+    """Issue #52/#241: docs/operations.mdx must explain that code
+    updates take effect at the next Runner start (the ExecStartPre
+    fetch + ff-only merge), not while a task is running."""
+    operations = docs_page("operations.mdx")
+    assert "ExecStartPre" in operations
+    assert "git merge --ff-only origin/main" in operations
+
+
+def test_operations_documents_same_schedule_as_timer():
+    """Issue #241: the docs (EN + ZH operations pages) document the same
+    schedule as the unit files — the README homepage only summarizes
+    it in one sentence plus the docs link."""
     timer = parse_unit(TIMER_FILE)
     on_calendar = timer["Timer"]["OnCalendar"][0]
     match = re.match(r"\*-\*-\* \*:\d+/(?P<minutes>\d+)", on_calendar)
     assert match is not None, f"unexpected OnCalendar format: {on_calendar}"
-    readme = README_FILE.read_text(encoding="utf-8")
-    assert f"每 {match['minutes']} 分钟自动执行一次" in readme
+    minutes = match["minutes"]
+    en = docs_page("operations.mdx")
+    assert f"every {minutes} minutes" in en, (
+        "English operations must document the same idle polling "
+        f"interval as the timer unit (every {minutes} minutes)"
+    )
+    assert on_calendar in en, (
+        "English operations must document the real OnCalendar expression"
+    )
+    zh = docs_page("zh/operations.mdx")
+    assert f"每 {minutes} 分钟" in zh, (
+        "Chinese operations must document the same idle polling "
+        f"interval as the timer unit (每 {minutes} 分钟)"
+    )
 
 
 def test_parse_unit_rejects_unparseable_line(tmp_path):
@@ -246,78 +270,81 @@ def test_parse_unit_rejects_key_before_any_section(tmp_path):
 # --- deployment consistency contract (Issue #103) ---------------------------
 
 
-def test_readme_documents_the_idempotent_install_command():
-    """Issue #103: the README must document the idempotent install
-    command (repo templates -> user systemd dir, daemon-reload,
-    enable timer, deployed commit/hash output) and the guarantee that
-    it never kills or restarts a running Runner (the new config takes
-    effect at the next service start)."""
-    readme = README_FILE.read_text(encoding="utf-8")
-    assert "muyan-pilot install-units" in readme
-    assert "daemon-reload" in readme
+def test_operations_documents_the_idempotent_install_command():
+    """Issue #103/#241: docs/operations.mdx must document the
+    idempotent install command (repo templates -> user systemd dir,
+    daemon-reload, enable timer, deployed commit/hash output) and the
+    guarantee that it never kills or restarts a running Runner (the
+    new config takes effect at the next service start)."""
+    operations = docs_page("operations.mdx")
+    assert "muyan-pilot install-units" in operations
+    assert "daemon-reload" in operations
     # The manual cp is no longer the documented install path.
-    assert "cp systemd/muyan-pilot.service" not in readme
+    assert "cp systemd/muyan-pilot.service" not in operations
     # Deployed commit/hash output.
-    assert "commit" in readme
-    assert "sha256" in readme
+    assert "commit" in operations
+    assert "sha256" in operations
     # The no-kill guarantee.
-    assert "不会" in readme
-    assert "重启" in readme
+    assert "never" in operations and ("restart" in operations or "restarted" in operations)
 
 
-def test_readme_documents_the_unit_drift_fail_fast():
-    """Issue #103: the README must document the pre-start drift check:
-    both units are compared against the repo templates, drift logs a
-    structured `unit_drift` line (repo path, installed path, hashes,
-    fix command) and fails fast without claiming any Issue until the
-    units are synced. Issue #149: the templates are the INSTANTIATED
-    units and the README documents the one-time legacy migration away
-    from the pre-#149 non-templated units."""
-    readme = README_FILE.read_text(encoding="utf-8")
-    assert "unit_drift" in readme
+def test_operations_documents_the_unit_drift_fail_fast():
+    """Issue #103/#241: docs/operations.mdx must document the pre-start
+    drift check: both units are compared against the repo templates,
+    drift fails fast without claiming any Issue (no slot, no claim) and
+    the self-heal re-verifies with the same hash check. The exact
+    structured failure line's fields are the code contract
+    (systemd_deploy.drift_lines). Issue #149: the templates are the
+    INSTANTIATED units and the docs document the one-time legacy
+    migration away from the pre-#149 non-templated units."""
+    operations = docs_page("operations.mdx")
+    assert "unit_drift" in operations
     # Both template units are covered.
-    assert "muyan-pilot@.service" in readme
-    assert "muyan-pilot@.timer" in readme
+    assert "muyan-pilot@.service" in operations
+    assert "muyan-pilot@.timer" in operations
     # The two enabled timer instances.
-    assert "muyan-pilot@1.timer" in readme
-    assert "muyan-pilot@2.timer" in readme
+    assert "muyan-pilot@1.timer" in operations
+    assert "muyan-pilot@2.timer" in operations
     # The one-time legacy migration names the old units.
-    assert "muyan-pilot.service" in readme
-    assert "muyan-pilot.timer" in readme
-    # The structured line's fields.
-    assert "repo_sha256=" in readme
-    assert "installed_sha256=" in readme
-    assert "fix=muyan-pilot install-units" in readme
+    assert "muyan-pilot.service" in operations
+    assert "muyan-pilot.timer" in operations
     # No claim while drifted.
-    assert "不领取" in readme
-    # The repo templates are the single source of truth.
-    assert "唯一事实源" in readme
+    assert "no slot, no claim" in operations
+    # The exact structured failure line's fields are the code contract.
+    import systemd_deploy
+    line = systemd_deploy.drift_lines([
+        {"unit": "muyan-pilot@.timer", "repo_path": "r", "installed_path": "i",
+         "repo_sha256": "a", "installed_sha256": "b", "drifted": True},
+    ])[0]
+    assert "repo_sha256=a" in line
+    assert "installed_sha256=b" in line
+    assert "fix=muyan-pilot install-units" in line
 
 
-def test_readme_documents_the_doctor_command():
-    """Issue #103: the README must document the read-only `doctor`
-    report: repo commit, unit drift, timer/service active state,
-    current Issue, Runner/Pi and recent journal activity."""
-    readme = README_FILE.read_text(encoding="utf-8")
-    assert "muyan-pilot doctor" in readme
-    assert "journal" in readme
+def test_operations_documents_the_doctor_command():
+    """Issue #103/#241: docs/operations.mdx must document the read-only
+    `doctor` report: repo commit, unit drift, timer/service active
+    state, current Issue, Runner/Pi and recent journal activity."""
+    operations = docs_page("operations.mdx")
+    assert "muyan-pilot doctor" in operations
+    assert "journal" in operations
     # doctor is read-only.
-    assert "只读" in readme
+    assert "Read-only" in operations
 
 
-def test_readme_documents_the_full_deployment_sequence():
-    """Issue #103/#142: the README must show the complete sequence from
-    code merge to the next Runner start: merge (template changes need
-    no human step) -> timer next trigger -> ExecStartPre syncs
-    origin/main -> pre-start drift check (self-heal + re-verify when
-    drifted) -> Runner starts one Issue."""
-    readme = README_FILE.read_text(encoding="utf-8")
-    sequence = readme.split("完整部署时序", 1)[-1]
-    assert "git merge 到 main" in sequence
-    assert "timer 下一次触发" in sequence
-    assert "ExecStartPre 同步 origin/main" in sequence
-    assert "启动前 unit 漂移检查" in sequence
-    assert "Runner 启动并执行一个 Issue" in sequence
+def test_operations_documents_the_full_deployment_sequence():
+    """Issue #103/#142/#241: docs/operations.mdx must show the complete
+    sequence from a template change to the next Runner start: a
+    template change needs NO human step after the merge -> the next
+    timer trigger's ExecStartPre fast-forwards the checkout -> the
+    pre-start unit_drift check self-heals (same idempotent install +
+    re-verify, `unit_drift auto_synced`) -> the tick continues."""
+    operations = docs_page("operations.mdx")
+    assert "NO human step" in operations
+    assert "next timer" in operations
+    assert "ExecStartPre" in operations
+    assert "unit_drift" in operations
+    assert "unit_drift auto_synced" in operations
 
 
 def test_agents_md_documents_the_deployment_consistency_contract():
@@ -348,13 +375,15 @@ def test_template_change_pins_the_self_healing_contract():
     a human ran the fix command — a per-tick drift loop.
 
     The contract must therefore be pinned in EVERY place it is
-    documented — README, AGENTS.md and the EN/ZH operations pages —
-    so a future template change cannot merge and strand the
-    deployment again: the change takes effect WITHOUT a human step
-    (the pre-start drift check self-heals with the same idempotent
-    install and re-verifies, `unit_drift auto_synced`), `install-units`
-    stays the manual entry, and the fail-fast canary is unchanged for
-    a drift the self-heal cannot resolve."""
+    documented — AGENTS.md and the EN/ZH operations pages (Issue #241
+    moved the mechanism detail off the README homepage, which keeps a
+    one-sentence summary plus the docs link) — so a future template
+    change cannot merge and strand the deployment again: the change
+    takes effect WITHOUT a human step (the pre-start drift check
+    self-heals with the same idempotent install and re-verifies,
+    `unit_drift auto_synced`), `install-units` stays the manual entry,
+    and the fail-fast canary is unchanged for a drift the self-heal
+    cannot resolve."""
     def template_change_contract(text: str) -> None:
         # The trigger: a change of either repo unit template
         # (templated units since Issue #149).
@@ -367,12 +396,6 @@ def test_template_change_pins_the_self_healing_contract():
         # The drift check stays fail-fast for an unresolvable drift.
         assert "unit_drift" in text
         assert "fail fast" in text
-
-    readme = README_FILE.read_text(encoding="utf-8")
-    # The README pins it in the deployment-consistency section (the
-    # section that carries the full deployment sequence).
-    section = readme.split("部署一致性", 1)[-1]
-    template_change_contract(section)
 
     agents = AGENTS_FILE.read_text(encoding="utf-8")
     # AGENTS.md pins it inside the Base freshness / deployment

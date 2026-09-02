@@ -10,7 +10,8 @@
 # GitHub-hosted runners do not have that interpreter at that path, so this
 # workflow pins the same minor version (3.14) via actions/setup-python and
 # runs the contract commands through the pinned `python3` on PATH. The
-# difference is documented in the README section "远程 CI（GitHub Actions）".
+# difference is documented in docs/testing.mdx (the README homepage keeps
+# the summary plus the link, Issue #241).
 name: CI
 
 on:

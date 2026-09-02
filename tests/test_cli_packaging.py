@@ -12,9 +12,9 @@ not a hand-written `python3 muyan_pilot.py`. These tests pin:
   WorkingDirectory and ExecStartPre);
 - the CLI command strings the failure scenes carry (the unit_drift
   fix command, the HTTPS-remote migration entry);
-- the documentation contract: README, AGENTS.md and the EN/ZH docs
-  use `muyan-pilot` and no longer require the user to hand-write
-  `python3 muyan_pilot.py`;
+- the documentation contract: the README quickstart, AGENTS.md and
+  the EN/ZH docs use `muyan-pilot` and no longer require the user to
+  hand-write `python3 muyan_pilot.py`;
 - the compatibility path: `muyan_pilot.py` keeps its direct-execution
   entry (development/compatibility, still asserted against one real
   call).
@@ -248,16 +248,19 @@ def test_setup_requires_the_installed_cli():
 
 
 def test_readme_uses_the_cli_and_the_editable_uv_tool_install():
+    """Issue #241: the README homepage quickstart uses the installed
+    CLI (setup + doctor) and the EDITABLE uv tool install (Issue #152:
+    the tool env imports the source from the deployment checkout, so
+    ordinary source/template changes need no reinstall); the full
+    command set (add, install-units, session, ...) is documented in
+    the docs pages."""
     readme = README_FILE.read_text(encoding="utf-8")
-    # The official commands are the installed CLI.
-    assert "muyan-pilot install-units" in readme
-    assert "muyan-pilot doctor" in readme
+    # The quickstart commands are the installed CLI.
     assert "muyan-pilot setup" in readme
+    assert "muyan-pilot doctor" in readme
     assert "muyan-pilot add" in readme
     # Issue #152: the official local deployment is the EDITABLE uv
-    # tool install (the tool env imports the source from the
-    # deployment checkout; the ExecStartPre sync is picked up by the
-    # next CLI process — no per-version reinstall).
+    # tool install.
     assert "uv tool install" in readme
     assert "--editable" in readme
     assert "uv tool install --force --reinstall --editable" in readme
@@ -265,6 +268,20 @@ def test_readme_uses_the_cli_and_the_editable_uv_tool_install():
     assert "python3 muyan_pilot.py" not in readme
     # The compatibility path stays documented (development use only).
     assert "muyan_pilot.py" in readme
+
+
+def test_docs_document_the_full_cli_command_set():
+    """Issue #241: the full CLI command set (add, status, session,
+    install-units, doctor) is documented in the docs pages — the
+    README homepage keeps the quickstart plus a one-sentence summary.
+    """
+    operations = (REPO_ROOT / "docs" / "operations.mdx").read_text(encoding="utf-8")
+    for command in ("muyan-pilot add", "muyan-pilot status",
+                    "muyan-pilot session", "muyan-pilot install-units",
+                    "muyan-pilot doctor", "muyan-pilot setup"):
+        assert command in operations, (
+            f"docs/operations.mdx must document the {command} command"
+        )
 
 
 def test_docs_make_the_editable_install_the_official_deployment():
@@ -277,7 +294,6 @@ def test_docs_make_the_editable_install_the_official_deployment():
     force-reinstall command is documented as the fix for a
     non-editable/stale CLI source."""
     pages = {
-        "README.md": README_FILE,
         "AGENTS.md": AGENTS_FILE,
     }
     for slug in DOC_PAGES:

@@ -12,7 +12,9 @@ These tests fail when the workflow file is missing, when it stops
 enforcing the contract (triggers, pinned Python, requirements install,
 contract test commands, tiered coverage gate), or when it drifts into
 the extras the Issue explicitly forbids (lint, matrix, cache). The
-README must keep documenting what the remote CI is and when it runs.
+docs (docs/testing.mdx — the README homepage keeps only the summary
+plus the link, Issue #241) must keep documenting what the remote CI is
+and when it runs.
 """
 import re
 from pathlib import Path
@@ -21,7 +23,6 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_FILE = REPO_ROOT / ".github" / "workflows" / "ci.yml"
-README_FILE = REPO_ROOT / "README.md"
 
 # The contract commands (AGENTS.md) run through the pinned interpreter on
 # PATH in CI; the local machine uses the same commands with /usr/bin/python3.
@@ -336,11 +337,15 @@ def test_ci_workflow_runs_the_mintlify_docs_build_smoke():
     )
 
 
-def test_readme_documents_remote_ci():
-    readme = README_FILE.read_text(encoding="utf-8")
-    assert "GitHub Actions" in readme, "README must name the remote CI"
-    assert "pull_request" in readme, "README must say CI runs on pull requests"
-    assert re.search(r"push[^\n]*main|main[^\n]*push", readme), (
-        "README must say CI runs on push to main"
+def test_testing_documents_remote_ci():
+    """Issue #241: the remote CI contract lives in docs/testing.mdx
+    (the README homepage keeps only the summary plus the docs link):
+    GitHub Actions runs the same contract on every pull request and
+    every push to main, with the pinned Python 3.14."""
+    testing = (REPO_ROOT / "docs" / "testing.mdx").read_text(encoding="utf-8")
+    assert "GitHub Actions" in testing, "testing must name the remote CI"
+    assert "pull_request" in testing, "testing must say CI runs on pull requests"
+    assert re.search(r"push[^\n]*main|main[^\n]*push", testing), (
+        "testing must say CI runs on push to main"
     )
-    assert "3.14" in readme, "README must document the pinned CI Python version"
+    assert "3.14" in testing, "testing must document the pinned CI Python version"
