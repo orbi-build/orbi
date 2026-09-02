@@ -5847,8 +5847,8 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     # Issue #79: the `Muyan Pilot opened PR:` scene comment is the first
     # delivery step AFTER the opened-PR label transition that can still
     # fail; when it does, the failure path below must leave the Issue in
-    # the terminal state `ai-blocked` ALONE (README label lifecycle:
-    # `ai-pr-opened` is removed on terminal failure) — the same
+    # the terminal state `ai-blocked` ALONE (docs/workflow.mdx label
+    # lifecycle: `ai-pr-opened` is removed on terminal failure) — the same
     # convention as every other terminal failure path (verify_resumed_pr,
     # wait_for_delivery).
     pr_opened = False
@@ -6022,8 +6022,8 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             # delivery already made the opened-PR transition (the
             # scene-comment failure of Issue #79), the opened-PR label
             # is removed too, so the terminal state is `ai-blocked`
-            # ALONE — never `ai-pr-opened` + `ai-blocked` (README label
-            # lifecycle: `ai-pr-opened` is removed on terminal failure).
+            # ALONE — never `ai-pr-opened` + `ai-blocked` (docs/workflow.mdx
+            # label lifecycle: `ai-pr-opened` is removed on terminal failure).
             edit_issue(
                 number, repo=source_repo, add=BLOCKED_LABEL,
                 remove=(

@@ -57,7 +57,7 @@ each section points at the owning page instead of restating it.
 - Progress is automatic: no human status command, no polling, no supervision; `muyan-pilot status` is a debug attachment only.
 - The journal is the record: a heartbeat at most every 30 seconds, every line prefixed `[run_id]`; a stalled session is recovered automatically, and a frozen `model_wait` past `PI_MODEL_WAIT_DEAD_SECONDS` (default 1800 s; the pre-#228 default was 600 s) is a hung model request — the Runner logs `model_wait_dead` (`upstream_alive` is evidence, never a veto) and kills the Pi session. It never fires while events keep arriving: a slow generation is not a hung request, and none of this is a business task timeout.
 - GitHub: exactly one progress comment per run, PATCHed in place, with short milestone comments; it is a pure bypass — a `progress_publish_failed` never fails the delivery, never marks the Issue `ai-blocked`, and never skips `run_pi` / `wait_for_delivery`. The `Muyan Pilot opened PR:` scene comment is NOT a bypass: the next tick's resume parses it, so a failure there fails the delivery fail-fast.
-- Field reference and full mechanics: `docs/operations.mdx` (EN) / `docs/zh/operations.mdx` (ZH) and the README 自动可观测 section.
+- Field reference and full mechanics: `docs/operations.mdx` (EN) / `docs/zh/operations.mdx` (ZH) (the README homepage keeps a one-sentence summary plus the link, Issue #241).
 
 ## Base freshness and deployment (contract)
 
@@ -111,7 +111,7 @@ each section points at the owning page instead of restating it.
 - `ai-pr-opened` means awaiting review; `ai-fix-needed` marks a delivery whose head is not mergeable yet (a finding the session could not fix, a PR behind the latest base / with a merge conflict, or an AI-recoverable failure of the existing run/PR): the NEXT tick resumes the SAME run_id, branch, worktree and PR and runs the next independent review session, which absorbs the latest base in-session. Never a replacement PR, never a re-claim.
 - The merge gate re-fetches the latest remote base and requires the PR head to contain it, the PR to be mergeable, and the remote head to still be the reviewed head; the merge lands exactly that head (`gh pr merge --match-head-commit`).
 - The review loop is bounded (5 rounds); exhausting rounds with findings fails fast and marks the Issue `ai-blocked`.
-- Chain, state semantics and label lifecycle: `docs/workflow.mdx` (EN/ZH); the recovery scene contract: the README 自动 loop 与恢复现场 section.
+- Chain, state semantics and label lifecycle: `docs/workflow.mdx` (EN/ZH); the recovery scene contract (trusted-maintainer comment, derived branch/worktree, PR body run marker): `docs/security.mdx` + `docs/workflow.mdx` (EN/ZH).
 
 ## Run correlation
 
