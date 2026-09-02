@@ -173,6 +173,17 @@ class SessionWatcher:
         self.start_time = now()
         self._offset = 0
         self._last_activity_epoch: float | None = None
+        # Startup milestones (Issue #176): the provider/model Pi ACTUALLY
+        # selected (from the session's `model_change` record, written
+        # right after the session record), the first request (the first
+        # user message record — Pi writes it when the first request goes
+        # out) and the first response (the first assistant message
+        # record). Identifiers only: the prompt and model output are
+        # never summarized here.
+        self.provider: str | None = None
+        self.model: str | None = None
+        self.first_request = False
+        self.first_response = False
 
     def poll(self) -> dict:
         """Read new session records; return the current activity state."""
@@ -215,6 +226,13 @@ class SessionWatcher:
         self.start_time = self._now()
         self._offset = 0
         self._last_activity_epoch = None
+        # The startup milestones belong to the session that is followed
+        # (Issue #176): a resumed invocation's first request/response are
+        # the NEW session's, never the previous one's.
+        self.provider = None
+        self.model = None
+        self.first_request = False
+        self.first_response = False
 
     def state(self, changed: bool = False) -> dict:
         """Return the activity state as a plain dict (no file access)."""
@@ -224,12 +242,25 @@ class SessionWatcher:
         else:
             stale = now - self.start_time
         in_model_wait = self.last_role == "toolResult"
+        # Startup sub-phase (Issue #176): the generic `starting` splits
+        # into `session_pending` (no session file yet — Pi is spawned
+        # but has not created its session) and `request_pending` (the
+        # session exists but the first response has not arrived). After
+        # the first response the tool-based phase applies as before.
+        if self.phase:
+            phase = self.phase
+        elif self.session_file is None:
+            phase = "session_pending"
+        elif not self.first_response:
+            phase = "request_pending"
+        else:
+            phase = "starting"
         return {
             "session_id": self.session_id,
             "session_file": str(self.session_file) if self.session_file
             else None,
             "events": self.events,
-            "phase": self.phase or "starting",
+            "phase": phase,
             "last_activity": self.last_activity,
             "action": self.action,
             "result": self.result,
@@ -241,6 +272,13 @@ class SessionWatcher:
             "model_wait": in_model_wait,
             "changed": changed,
             "stale_seconds": max(0.0, stale),
+            # Startup milestones (Issue #176): the selected provider/model
+            # (None until the `model_change` record is read) and the
+            # first request/response observed in the session file.
+            "provider": self.provider,
+            "model": self.model,
+            "first_request": self.first_request,
+            "first_response": self.first_response,
         }
 
     def _apply(self, record: dict) -> None:
@@ -251,6 +289,17 @@ class SessionWatcher:
             if isinstance(session_id, str) and session_id:
                 self.session_id = session_id
             return
+        if record_type == "model_change":
+            # The provider/model Pi actually selected (Issue #176): the
+            # identifiers are non-sensitive and visible on every startup
+            # line; a missing/invalid field stays unselected (None).
+            provider = record.get("provider")
+            if isinstance(provider, str) and provider:
+                self.provider = provider
+            model = record.get("modelId")
+            if isinstance(model, str) and model:
+                self.model = model
+            return
         if record_type != "message":
             return
         message = record.get("message")
@@ -259,8 +308,14 @@ class SessionWatcher:
         role = message.get("role")
         if role == "assistant":
             self._apply_assistant(message)
+            # The first response from the model arrived (Issue #176).
+            self.first_response = True
         elif role == "toolResult":
             self._apply_tool_result(message)
+        elif role == "user":
+            # The first request to the model went out (Issue #176): the
+            # milestone only — the prompt content is never summarized.
+            self.first_request = True
         self.last_role = role
         timestamp = record.get("timestamp")
         if isinstance(timestamp, str) and timestamp:

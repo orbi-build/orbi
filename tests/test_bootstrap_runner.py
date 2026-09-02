@@ -3018,6 +3018,111 @@ def test_run_pi_renders_base_sync_lock_into_prompt(monkeypatch, tmp_path):
     )
 
 
+def test_run_pi_logs_provider_config_loaded_with_selection(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #176: run_pi logs `provider_config_loaded` with the
+    configured provider/model identifiers (the same non-sensitive
+    values as the redacted command line) before Pi is spawned."""
+    prompt_path = tmp_path / "prompt.md"
+    prompt_path.write_text("SYSTEM", encoding="utf-8")
+    monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: "done")
+    issue = {"number": 4, "title": "t", "body": "b"}
+    config = {
+        "prompt": prompt_path,
+        "repo_dir": tmp_path / "checkout",
+        "source_repos": ["owner/repo"],
+        "workspace_root": tmp_path,
+        "context_files": [],
+        "skills": [],
+        "base_branch": "main",
+        "base_sha": "abc123def456",
+        "run_id": "run1",
+        "pi_provider": "local-qwen",
+        "pi_model": "qwen3.8:27b",
+    }
+    with caplog.at_level("INFO"):
+        runner.run_pi(
+            issue, tmp_path, config, "owner/repo",
+            branch="muyan-pilot/owner-repo-issue-4-run1",
+        )
+    lines = [line for line in caplog.text.splitlines()
+             if " provider_config_loaded " in line]
+    assert len(lines) == 1
+    line = lines[0]
+    assert "issue=owner/repo#4" in line
+    assert "role=implement" in line
+    assert "provider=local-qwen" in line
+    assert "model=qwen3.8:27b" in line
+    assert "elapsed=" in line
+
+
+def test_run_pi_logs_provider_config_loaded_unconfigured(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #176: without a configured provider/model the line still
+    fires (Pi keeps its own agent dir) with `-` placeholders."""
+    prompt_path = tmp_path / "prompt.md"
+    prompt_path.write_text("SYSTEM", encoding="utf-8")
+    monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: "done")
+    issue = {"number": 4, "title": "t", "body": "b"}
+    config = {
+        "prompt": prompt_path,
+        "repo_dir": tmp_path / "checkout",
+        "source_repos": ["owner/repo"],
+        "workspace_root": tmp_path,
+        "context_files": [],
+        "skills": [],
+        "base_branch": "main",
+        "base_sha": "abc123def456",
+        "run_id": "run1",
+    }
+    with caplog.at_level("INFO"):
+        runner.run_pi(
+            issue, tmp_path, config, "owner/repo", branch="b",
+        )
+    lines = [line for line in caplog.text.splitlines()
+             if " provider_config_loaded " in line]
+    assert len(lines) == 1
+    assert "provider=-" in lines[0]
+    assert "model=-" in lines[0]
+    assert "role=implement" in lines[0]
+
+
+def test_run_review_logs_provider_config_loaded_with_review_role(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #176: the review session logs the same line with
+    role=review (one run_id, the roles are steps of the same run)."""
+    prompt_path = tmp_path / "prompt_review.md"
+    prompt_path.write_text("REVIEW", encoding="utf-8")
+    monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: "ok")
+    with caplog.at_level("INFO"):
+        runner.run_review(
+            tmp_path,
+            {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+             "head_oid": "h1", "head_ref": "h"},
+            {
+                "prompt_review": prompt_path,
+                "repo_dir": tmp_path / "checkout",
+                "source_repos": ["owner/repo"],
+                "base_branch": "main",
+                "run_id": "a1b2c3d4",
+                "skills": [],
+                "pi_provider": "local-qwen",
+                "pi_model": "qwen3.8:27b",
+            },
+            "owner/repo", 4, "branch", 1,
+        )
+    lines = [line for line in caplog.text.splitlines()
+             if " provider_config_loaded " in line]
+    assert len(lines) == 1
+    assert "role=review" in lines[0]
+    assert "issue=owner/repo#4" in lines[0]
+    assert "provider=local-qwen" in lines[0]
+    assert "model=qwen3.8:27b" in lines[0]
+
+
 def test_run_review_renders_base_sync_lock_into_prompt(monkeypatch, tmp_path):
     # Issue #171: the review prompt carries the SAME lock path (the
     # review session's base merge fetch must not race the shared ref).
@@ -4595,7 +4700,10 @@ def test_stream_pi_logs_run_start_once_with_full_scene(tmp_path, caplog):
     # record they are '-' (the full entry reappears on run_failed).
     assert "session=-" in start
     assert "session_file=-" in start
-    assert "phase=starting" in start
+    # Issue #176: the scene at start shows the startup sub-phase — no
+    # session file yet, so `session_pending` (not the generic
+    # `starting`).
+    assert "phase=session_pending" in start
     # The user message (full prompt / Issue body) never reaches the journal.
     assert "SECRET ISSUE BODY" not in caplog.text
 
@@ -4643,10 +4751,12 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     lines = caplog.text.splitlines()
     activities = [line for line in lines if " activity " in line]
     heartbeats = [line for line in lines if " heartbeat " in line]
-    # The visible fields change once (starting -> test): exactly one
-    # activity line; unchanged polls must not repeat it (Issue #40).
-    assert len(activities) == 1
-    line = activities[0]
+    # Issue #176: the visible fields change twice (request_pending ->
+    # test): the startup sub-phase line, then the tool-call line;
+    # unchanged polls must not repeat them (Issue #40).
+    assert len(activities) == 2
+    assert "phase=request_pending" in activities[0]
+    line = activities[1]
     # No redundant `run=` field on the high-frequency lines (Issue #57);
     # the `[run_id]` prefix is the run-id carrier (bound-run tests and
     # the e2e suite cover the prefix itself).
@@ -4667,7 +4777,8 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     for line in heartbeats:
         assert "run=run1" not in line
         assert "role=implement" in line
-        assert "phase=starting" in line or "phase=test" in line
+        assert ("phase=request_pending" in line
+                or "phase=test" in line)
         assert "elapsed=" in line
         assert "idle=" in line
         assert "branch=" not in line
@@ -4819,12 +4930,15 @@ def test_stream_pi_activity_keeps_action_after_tool_result(tmp_path, caplog):
         )
     lines = caplog.text.splitlines()
     activities = [line for line in lines if " activity " in line]
-    # One activity line for the tool call, one for the result=ok update;
-    # the action (the real command) is preserved on both.
-    assert len(activities) == 2
-    assert all('action="bash pytest tests/"' in line for line in activities)
-    assert "result=-" in activities[0]
-    assert "result=ok" in activities[1]
+    # Issue #176: one activity line for the startup sub-phase, one for
+    # the tool call, one for the result=ok update; the action (the real
+    # command) is preserved on the tool lines.
+    assert len(activities) == 3
+    assert "phase=request_pending" in activities[0]
+    assert all('action="bash pytest tests/"' in line
+               for line in activities[1:])
+    assert "result=-" in activities[1]
+    assert "result=ok" in activities[2]
     assert "tool_result" not in caplog.text
 
 
@@ -4844,9 +4958,10 @@ def test_stream_pi_heartbeat_interval_is_stable(tmp_path, caplog):
     activities = [line for line in lines if " activity " in line]
     assert activities == []
     # ~1s of idleness at a 0.1s interval: several heartbeats, one per poll.
+    # Issue #176: with no session file the sub-phase is session_pending.
     assert len(heartbeats) >= 4
     for line in heartbeats:
-        assert "phase=starting" in line
+        assert "phase=session_pending" in line
         assert "session=-" not in line  # session fields are not repeated
 
 
@@ -4938,6 +5053,9 @@ def test_stream_pi_heartbeats_when_session_is_idle(tmp_path, caplog):
 
 
 def test_stream_pi_heartbeats_when_no_session_file_appears(tmp_path, caplog):
+    # Issue #176: with no session file the startup sub-phase is
+    # `session_pending` (Pi is spawned but has not created its session
+    # yet) — the generic `starting` is gone from the live lines.
     command = make_fake_pi(tmp_path, session_records=[], sleep=1.0)
     with caplog.at_level("INFO"):
         runner.stream_pi(
@@ -4948,7 +5066,321 @@ def test_stream_pi_heartbeats_when_no_session_file_appears(tmp_path, caplog):
     heartbeats = [line for line in caplog.text.splitlines()
                   if " heartbeat " in line]
     assert len(heartbeats) >= 1
-    assert all("phase=starting" in line for line in heartbeats)
+    assert all("phase=session_pending" in line for line in heartbeats)
+
+
+# ------------------------------------ startup phases (Issue #176)
+
+def startup_records():
+    """A full healthy startup: session, the model Pi selected, the first
+    request (user message) and the first response (assistant message)."""
+    return [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.05, {"type": "model_change", "id": "m1",
+                "timestamp": fresh_timestamp(),
+                "provider": "local-qwen", "modelId": "qwen3.8:27b"}),
+        (0.1, {"type": "message", "id": "u1",
+               "timestamp": fresh_timestamp(),
+               "message": {"role": "user", "content": [
+                   {"type": "text", "text": "SECRET ISSUE BODY"}]}}),
+        (0.2, {"type": "message", "id": "a1",
+               "timestamp": fresh_timestamp(1),
+               "message": {"role": "assistant", "content": [
+                   {"type": "toolCall", "id": "t1", "name": "bash",
+                    "arguments": {"command": "pytest tests/"}}]}}),
+    ]
+
+
+def test_stream_pi_logs_process_spawned_after_popen(tmp_path, caplog):
+    """`process_spawned` is logged exactly once, right after the Pi
+    process is spawned, and carries the pid (Issue #176)."""
+    command = make_fake_pi(
+        tmp_path, session_records=startup_records(), stdout="ok",
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = [line for line in caplog.text.splitlines()
+             if " process_spawned " in line]
+    assert len(lines) == 1
+    line = lines[0]
+    assert "issue=xqliu/muyan-pilot#24" in line
+    assert "role=implement" in line
+    # Before the session file exists the selection is unknown.
+    assert "provider=-" in line
+    assert "model=-" in line
+    assert "elapsed=" in line
+    # The pid is a real integer and the raw prompt never reaches the log.
+    pid = int(line.split("pid=")[1].split()[0])
+    assert pid > 0
+    assert "SECRET ISSUE BODY" not in caplog.text
+
+
+def test_stream_pi_logs_startup_milestones_in_order(tmp_path, caplog):
+    """A healthy startup logs `session_created`, `first_request_started`
+    and `first_response_received` exactly once each, in order, and the
+    lines carry the provider/model Pi actually selected (Issue #176)."""
+    command = make_fake_pi(
+        tmp_path, session_records=startup_records(), stdout="ok",
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    created = [line for line in lines if " session_created " in line]
+    requested = [line for line in lines if " first_request_started " in line]
+    responded = [line for line in lines if " first_response_received " in line]
+    assert len(created) == 1
+    assert len(requested) == 1
+    assert len(responded) == 1
+    # The milestones appear in the order the session records arrive.
+    assert (lines.index(created[0]) < lines.index(requested[0])
+            < lines.index(responded[0]))
+    # The real selection (from the session's model_change record) is
+    # visible on the request/response lines.
+    assert "provider=local-qwen" in requested[0]
+    assert "model=qwen3.8:27b" in requested[0]
+    assert "provider=local-qwen" in responded[0]
+    assert "model=qwen3.8:27b" in responded[0]
+    for line in (created[0], requested[0], responded[0]):
+        assert "issue=xqliu/muyan-pilot#24" in line
+        assert "role=implement" in line
+        assert "elapsed=" in line
+
+
+def test_stream_pi_activity_lines_show_startup_sub_phase(tmp_path, caplog):
+    """The live activity/heartbeat lines show the startup sub-phase
+    instead of the generic `starting` (Issue #176): `session_pending`
+    until the session file exists, `request_pending` until the first
+    response, then the tool-based phase. The records are delayed so
+    each sub-phase is visible for at least one poll."""
+    records = [
+        (0.3, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.45, {"type": "model_change", "id": "m1",
+                "timestamp": fresh_timestamp(),
+                "provider": "local-qwen", "modelId": "qwen3.8:27b"}),
+        (0.6, {"type": "message", "id": "u1",
+               "timestamp": fresh_timestamp(),
+               "message": {"role": "user", "content": [
+                   {"type": "text", "text": "SECRET ISSUE BODY"}]}}),
+        (0.9, {"type": "message", "id": "a1",
+               "timestamp": fresh_timestamp(1),
+               "message": {"role": "assistant", "content": [
+                   {"type": "toolCall", "id": "t1", "name": "bash",
+                    "arguments": {"command": "pytest tests/"}}]}}),
+    ]
+    command = make_fake_pi(
+        tmp_path, session_records=records, stdout="ok",
+        sleep=0.3,
+    )
+    with caplog.at_level("INFO"):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.1,
+            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            branch="b",
+        )
+    lines = caplog.text.splitlines()
+    live = [line for line in lines
+            if " activity " in line or " heartbeat " in line]
+    assert any("phase=session_pending" in line for line in live)
+    assert any("phase=request_pending" in line for line in live)
+    # After the first response the tool-based phase applies as before.
+    assert any("phase=test" in line for line in live)
+
+
+def test_stream_pi_startup_failed_without_session_file(tmp_path, caplog):
+    """Pi exits before creating its session file: `startup_failed`
+    carries `reason=session_not_created` (and the existing `run_failed`
+    line is unchanged, Issue #176)."""
+    command = make_fake_pi(
+        tmp_path, session_records=[], stdout="", stderr="boom", exit_code=3,
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(subprocess.CalledProcessError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.1,
+                run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+                branch="b",
+            )
+    lines = [line for line in caplog.text.splitlines()
+             if " startup_failed " in line]
+    assert len(lines) == 1
+    line = lines[0]
+    assert "reason=session_not_created" in line
+    assert "session_created=false" in line
+    assert "first_request=false" in line
+    assert "issue=xqliu/muyan-pilot#24" in line
+    assert "role=implement" in line
+    assert "elapsed=" in line
+    # The existing fail-fast scene line is unchanged.
+    failed = [line for line in caplog.text.splitlines()
+              if " run_failed " in line]
+    assert len(failed) == 1
+    assert "reason=pi_exit_3" in failed[0]
+
+
+def test_stream_pi_startup_failed_without_first_request(tmp_path, caplog):
+    """The session file exists but Pi never sent its first request:
+    `reason=no_first_request` (Issue #176)."""
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+    ]
+    command = make_fake_pi(
+        tmp_path, session_records=records, stderr="boom", exit_code=1,
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(subprocess.CalledProcessError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.1,
+                run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+                branch="b",
+            )
+    lines = [line for line in caplog.text.splitlines()
+             if " startup_failed " in line]
+    assert len(lines) == 1
+    assert "reason=no_first_request" in lines[0]
+    assert "session_created=true" in lines[0]
+    assert "first_request=false" in lines[0]
+
+
+def test_stream_pi_startup_failed_early_exit_after_first_request(
+        tmp_path, caplog,
+):
+    """The first request went out but Pi exited early without a first
+    response (unclassifiable stderr): `reason=pi_exit_<N>` with the
+    stuck-point fields (Issue #176)."""
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.1, {"type": "message", "id": "u1",
+               "timestamp": fresh_timestamp(),
+               "message": {"role": "user", "content": [
+                   {"type": "text", "text": "SECRET ISSUE BODY"}]}}),
+    ]
+    command = make_fake_pi(
+        tmp_path, session_records=records, stderr="boom", exit_code=1,
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(subprocess.CalledProcessError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.1,
+                run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+                branch="b",
+            )
+    lines = [line for line in caplog.text.splitlines()
+             if " startup_failed " in line]
+    assert len(lines) == 1
+    assert "reason=pi_exit_1" in lines[0]
+    assert "session_created=true" in lines[0]
+    assert "first_request=true" in lines[0]
+    # The prompt never reaches the journal.
+    assert "SECRET ISSUE BODY" not in caplog.text
+
+
+def test_startup_failed_reason_maps_hung_first_request_to_timeout():
+    """A frozen model_wait killed before the first response is the
+    first-response timeout (Issue #176): the request was in flight and
+    the response never arrived."""
+    activity = {
+        "session_file": "/w/.pi-session/s.jsonl",
+        "first_request": True,
+        "first_response": False,
+    }
+    assert runner._startup_failed_reason(
+        activity, returncode=0, stderr="",
+        timed_out=False, model_wait_dead=True,
+        model_wait_swallowed=False, idle_recovery_failed=False,
+    ) == "first_response_timeout"
+    assert runner._startup_failed_reason(
+        activity, returncode=0, stderr="",
+        timed_out=False, model_wait_dead=False,
+        model_wait_swallowed=True, idle_recovery_failed=False,
+    ) == "model_wait_swallowed"
+    # The other failure classes keep their own reasons.
+    assert runner._startup_failed_reason(
+        activity, returncode=0, stderr="",
+        timed_out=True, model_wait_dead=False,
+        model_wait_swallowed=False, idle_recovery_failed=False,
+    ) == "timeout"
+    assert runner._startup_failed_reason(
+        activity, returncode=0, stderr="",
+        timed_out=False, model_wait_dead=False,
+        model_wait_swallowed=False, idle_recovery_failed=True,
+    ) == "idle_recovery_stale"
+
+
+def test_stream_pi_startup_failed_auth_failure(tmp_path, caplog):
+    """A provider authentication failure in Pi's stderr is classified as
+    `reason=auth_failure` (Issue #176)."""
+    command = make_fake_pi(
+        tmp_path, session_records=[], stderr="Error: 401 Unauthorized",
+        exit_code=1,
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(subprocess.CalledProcessError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.1,
+                run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+                branch="b",
+            )
+    lines = [line for line in caplog.text.splitlines()
+             if " startup_failed " in line]
+    assert len(lines) == 1
+    assert "reason=auth_failure" in lines[0]
+    assert "session_created=false" in lines[0]
+
+
+def test_stream_pi_startup_failed_network_timeout(tmp_path, caplog):
+    """A network timeout in Pi's stderr is classified as
+    `reason=network_timeout` (Issue #176)."""
+    command = make_fake_pi(
+        tmp_path, session_records=[],
+        stderr='Error: connect ETIMEDOUT (request timed out)',
+        exit_code=1,
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(subprocess.CalledProcessError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.1,
+                run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+                branch="b",
+            )
+    lines = [line for line in caplog.text.splitlines()
+             if " startup_failed " in line]
+    assert len(lines) == 1
+    assert "reason=network_timeout" in lines[0]
+
+
+def test_stream_pi_no_startup_failed_after_first_response(tmp_path, caplog):
+    """A failure AFTER the first response is a mid-run failure, not a
+    startup failure: no `startup_failed` line (Issue #176)."""
+    command = make_fake_pi(
+        tmp_path, session_records=startup_records(),
+        stderr="boom", exit_code=1,
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(subprocess.CalledProcessError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.1,
+                run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+                branch="b",
+            )
+    assert not any(" startup_failed " in line
+                   for line in caplog.text.splitlines())
+    # The existing run_failed scene line still carries the reason.
+    failed = [line for line in caplog.text.splitlines()
+              if " run_failed " in line]
+    assert len(failed) == 1
+    assert "reason=pi_exit_1" in failed[0]
 
 
 def test_stream_pi_model_wait_then_resumed_no_warning_spam(
@@ -5071,7 +5503,9 @@ def test_stream_pi_logs_idle_warning_once_when_session_stalls(
     assert "run=run1" not in idle
     assert "issue=xqliu/muyan-pilot#24" in idle
     assert "role=implement" in idle
-    assert "phase=starting" in idle
+    # Issue #176: no session file was ever created, so the sub-phase is
+    # session_pending (the stall is visible with its stuck point).
+    assert "phase=session_pending" in idle
     assert "stale_seconds=" in idle
     # The warning is a WARNING (visible in journalctl without -p info).
     assert any(
@@ -5208,6 +5642,9 @@ def test_stream_pi_drains_pipe_data_written_after_exit(
             self._out_writer = os.fdopen(self._out_w, "wb")
             self._err_writer = os.fdopen(self._err_w, "wb")
             self.returncode = 0
+            # A real Popen always carries the child pid (the
+            # process_spawned line, Issue #176, logs it).
+            self.pid = os.getpid()
 
         def poll(self):
             return self.returncode
@@ -6609,8 +7046,11 @@ def test_stream_pi_invokes_progress_callback_while_child_is_running(
     # ...and it saw the activity change (starting -> test) live, before
     # the child exited: the tool call is visible in an early snapshot,
     # not only in a final state.
+    # Issue #176: the first live snapshot shows the startup sub-phase
+    # (request_pending: the session exists, the first response has not
+    # arrived yet), not the generic `starting`.
     phases = [entry["phase"] for entry in seen]
-    assert phases[0] == "starting"
+    assert phases[0] == "request_pending"
     assert "test" in phases
     assert phases.index("test") < len(phases) - 1
     test_entries = [entry for entry in seen if entry["phase"] == "test"]
@@ -10840,6 +11280,53 @@ def test_run_ticket_agent_uses_a_temporary_session_without_git(monkeypatch, tmp_
     assert kwargs["role"] == runner.ROLE_TICKET
     assert str(tmp_path) not in command[command.index("--session-dir") + 1]
     assert Path(command[command.index("--session-dir") + 1]).parent == kwargs["cwd"]
+
+
+def test_run_ticket_agent_logs_provider_config_loaded(monkeypatch, tmp_path, caplog):
+    """Issue #176: the ticket-only session logs the provider config
+    line too (role=ticket) — every Pi session has the same startup
+    sequence."""
+    monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: "copy")
+    with caplog.at_level("INFO"):
+        runner.run_ticket_agent(
+            {"number": 99, "title": "Launch thread", "body": "Write copy"},
+            {"repo_dir": tmp_path, "run_id": "a1b2c3d4", "skills": [],
+             "pi_provider": "local-qwen", "pi_model": "qwen3.8:27b",
+             "pi_thinking": None},
+            "o/r",
+        )
+    lines = [line for line in caplog.text.splitlines()
+             if " provider_config_loaded " in line]
+    assert len(lines) == 1
+    assert "role=ticket" in lines[0]
+    assert "issue=o/r#99" in lines[0]
+    assert "provider=local-qwen" in lines[0]
+    assert "model=qwen3.8:27b" in lines[0]
+
+
+def test_progress_state_passes_startup_sub_phase_to_comment(tmp_path):
+    """Issue #176: the progress comment's `phase` carries the watcher's
+    startup sub-phase (session_pending / request_pending) instead of
+    the generic `starting` while the first response is outstanding."""
+    for sub_phase in ("session_pending", "request_pending"):
+        state = runner._progress_state(
+            issue=176, title="t", run_id="a1b2c3d4", role="implement",
+            branch="b", worktree=tmp_path, started=time.monotonic(),
+            pr_url=None, review_round=0, priority="normal",
+            activity={"phase": sub_phase, "last_activity": None,
+                      "action": None, "session_id": None},
+        )
+        assert state["phase"] == sub_phase
+    # The tool-based phase passes through unchanged once the first
+    # response arrived.
+    state = runner._progress_state(
+        issue=176, title="t", run_id="a1b2c3d4", role="implement",
+        branch="b", worktree=tmp_path, started=time.monotonic(),
+        pr_url=None, review_round=0, priority="normal",
+        activity={"phase": "test", "last_activity": None,
+                  "action": "bash pytest tests/", "session_id": "s1"},
+    )
+    assert state["phase"] == "test"
 
 
 def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch):

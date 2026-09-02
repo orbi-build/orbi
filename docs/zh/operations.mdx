@@ -82,7 +82,32 @@ journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service | grep e0738
 - `run_start` / `run_end` — 开始时的完整现场（branch、worktree、
   session 文件），结束时的结果（PR URL、commit）；
 - `activity` / `heartbeat` / `model_wait` / `resumed` — session 运行
-  期间的实时 Pi 活动（phase、最近动作、elapsed、idle）；
+  期间的实时 Pi 活动（phase、最近动作、elapsed、idle）。首个响应到达
+  前 `phase` 是启动子阶段：`session_pending`（Pi 已启动但还没创建
+  session 文件）和 `request_pending`（session 已存在、首个响应还没
+  到）；首个响应到达后按原规则用工具 phase（`test`、`pr`、`bash`…）；
+- `process_spawned` / `provider_config_loaded` / `session_created` /
+  `first_request_started` / `first_response_received` — 启动阶段行
+  （Issue #176）：每个阶段一行、按顺序，每行带 issue、role、Pi 实际
+  选择的 provider/model（session 的 `model_change` 记录出现前为
+  `-`）、距 spawn 的 elapsed（`process_spawned` 另带 pid）。
+  `provider_config_loaded` 由 Runner 在 spawn 前记录（provider 文件已
+  加载并物化；未配置时用 Pi 自己的 agent dir）；其余四行由 streamer
+  在 session JSONL 跨过每个里程碑时记录（session 记录、第一条 user
+  消息——首个请求发出——第一条 assistant 消息——首个响应到达）。卡在
+  `starting` 的 run 只靠这些行加 progress 评论的 `phase` 就能定位到
+  启动阶段；只记录标识符——从不记录 key、prompt 或模型输出；
+- `startup_failed` — run 在首个响应之前失败时的一行（Issue #176）：
+  说明启动卡在哪（`session_created=true|false`、
+  `first_request=true|false`）加可区分的 `reason=`——
+  `session_not_created`（Pi 退出前没创建 session 文件）、
+  `no_first_request`（session 存在但没有首个请求）、`auth_failure` /
+  `network_timeout`（从 Pi 的 stderr 分类——只记类别、从不记文本）、
+  `pi_exit_<N>`（提前退出码）、`timeout`（run deadline）、
+  `first_response_timeout`（冻结的 `model_wait` 在响应前被杀——挂死的
+  首个请求）、`model_wait_swallowed` 和 `idle_recovery_stale`
+  （既有 kill 路径）。既有的 `run_failed` 现场行和抛出的失败不变——
+  `startup_failed` 是额外的可观测性，不是新的失败路径；
 - `resume_continue` — 恢复的 run 继续中断的工作（Issue #219）时的一次
   INFO：worktree 的 run state 文件（`.muyan-pilot/run-state.json`）
   验证了同一个 run（issue 编号 + 仓库名——仓库改名后 slug 变了也能
