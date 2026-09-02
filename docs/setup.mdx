@@ -29,17 +29,16 @@ non-zero exit code.
    and a reachable `systemctl --user` user bus (a container or headless
    session without a user bus fails with the bus error).
 2. **CLI editable install** (Issue #152) — the official local
-   deployment is the EDITABLE `uv tool` install: the tool env imports
-   `muyan_pilot` from the deployment checkout, so the `ExecStartPre`
-   checkout sync is picked up by the next CLI process automatically.
-   When the running process already imports from the configured
-   `repo_dir` the step verifies it (no uv call, `cli=verified`);
-   otherwise it runs the exact force editable reinstall
-   (`uv tool install --force --reinstall --editable --python
-   /usr/bin/python3 <repo_dir>`, `cli=installed`). A failing install
-   fails fast — no unit install, no half-initialized state. The step
-   never touches a running Runner process (the new source is loaded by
-   the next CLI start).
+   deployment is the EDITABLE `uv tool` install (the why — the
+   `ExecStartPre` checkout sync — is defined in [Getting
+   started](/getting-started) step 2). When the running process
+   already imports from the configured `repo_dir` the step verifies it
+   (no uv call, `cli=verified`); otherwise it runs the exact force
+   editable reinstall (`uv tool install --force --reinstall --editable
+   --python /usr/bin/python3 <repo_dir>`, `cli=installed`). A failing
+   install fails fast — no unit install, no half-initialized state. The
+   step never touches a running Runner process (the new source is
+   loaded by the next CLI start).
 3. **Auth** — `gh auth status` (logged in with a usable token).
 4. **Per target repository** (every configured `source_repos` entry by
    default; exactly one with `--repo OWNER/REPO`):

@@ -137,15 +137,12 @@ idle 告警和模型请求挂死 kill 是日志/健康阈值——它们不是�
 ## CLI（`muyan-pilot`）
 
 正式入口是安装后的 `muyan-pilot` console script，以 **editable**
-`uv tool` 安装（官方本地部署——tool 环境直接从 clone 目录导入
-`muyan_pilot`，`ExecStartPre` 的 checkout 同步会被下一个 CLI 进程自动
-取到，普通源码/模板变更无需重装或升级；`uv tool install --force
---reinstall --editable --python /usr/bin/python3 <clone 目录>`——见
-[快速开始](/zh/getting-started)）。`muyan-pilot doctor` 报告一致性
-（`cli_source: clean` 或 `cli_source: DRIFT` + 结构化
-`cli_source_drift` 行：实际导入路径、期望 repo_dir、精确的 editable
-重装命令），`muyan-pilot setup` 校验或重装。
-`muyan_pilot.py` 的直接执行入口保留为开发/兼容路径。
+`uv tool` 安装——为什么必须 editable（`ExecStartPre` checkout 同步、
+免重装的源码变更、打包输入刷新）定义在[快速开始](/zh/getting-started)
+第 2 步。`muyan-pilot doctor` 报告一致性（`cli_source: clean` 或
+`cli_source: DRIFT` + 结构化 `cli_source_drift` 行：实际导入路径、
+期望 repo_dir、精确的 editable 重装命令），`muyan-pilot setup` 校验或
+重装。`muyan_pilot.py` 的直接执行入口保留为开发/兼容路径。
 
 ```bash
 # 在配置的 source repo 创建 Issue 并加 ai-ready 标签
@@ -189,16 +186,15 @@ branch 和 worktree 名带 run id（例如
 `.worktrees/<...>-issue-14-e07383c2`），所以重试的 Issue 得到新的独立
 run，旧现场保留。`.worktrees/` 已 gitignore。
 
-任务 worktree 共享部署 checkout 的单一 `origin` remote（`git worktree
-add` 创建的 worktree 继承主仓库的 remote 配置），所以 git transport 只
-在 checkout 上配置一次，所有 worktree 继承：新 bootstrap worktree
-天然有 SSH `git remote -v`，它们的 fetch/push——包括
-`.github/workflows/*.yml`——走 SSH（Issue #114）。
+任务 worktree 继承部署 checkout 的单一 `origin` remote，所以 git
+transport 只配置一次、所有 worktree 继承（Issue #114——双通道边界与
+启动前检查：见上文 Timers 第 2 条；凭据：[安全](/zh/security)）。
 
-创建 PR 前，实现者重新 fetch base：如果 `origin/<base_branch>` 前进了，
-它把最新 base 合入 task branch、手工解决冲突、重跑完整测试，然后才
-推送。Runner 用 `git merge-base --is-ancestor origin/<base_branch>
-HEAD` 验证，拒绝 head 不包含最新远端 base 的交付。
+agent 在提交的交付处停止；PR 前的 base 新鲜度是 Runner 的确定性收口
+（Issue #186，`deliver_pr`）：Runner 在 base-sync 锁下重新 fetch
+`origin/<base_branch>`，用普通 `git merge` 吸收前进的 base（冲突时
+中止，PR 在 agent 的 head 上打开——已有的审查会话在会话内吸收
+base），然后推送 task branch 并创建 PR。
 
 ## 故障恢复
 

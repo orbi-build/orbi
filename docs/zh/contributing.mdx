@@ -82,8 +82,9 @@ gh issue edit <number> --repo OWNER/PILOT-REPO --add-label ai-ready
    /usr/bin/python3 diff_coverage_gate.py origin/main
    ```
 
-5. 一个 Issue 一个 PR。PR 描述必须包含 `Fixes #<issue-number>`（可以
-   放在首行），merge 时 GitHub 原生关闭 Issue。
+5. 一个 Issue 一个 PR。PR 描述必须包含 `Fixes #<issue-number>`，
+   merge 时 GitHub 原生关闭 Issue（完整契约：[工作流](/zh/workflow)，
+   PR body 契约）。
 6. CI 必须绿（与本地同一契约）。Orbi 派发的任务由 Runner 执行独立
    审查和合并；人类 PR 的 review 和 merge 走仓库正常的 GitHub 流程。
 

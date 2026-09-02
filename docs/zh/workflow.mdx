@@ -75,12 +75,9 @@ ai-ready                任务被派发（muyan-pilot add，或人工加标签�
 - base 前进由 task branch 上对最新 `origin/<base>` 的普通 `git merge`
   吸收（冲突手工解决），然后重跑完整测试。不 force push、不自动解决
   冲突、不 push 保护分支。
-- Git transport（Issue #114）：git 数据操作（fetch、push——包括
-  `.github/workflows/*.yml`）走 SSH（`git@github.com:owner/repo.git`）；
-  GitHub API 操作（Issue、PR、label、comment、merge）留在 `gh` token 上。
-  任务 worktree 继承部署 checkout 的单一 `origin` remote，所以新
-  bootstrap worktree 天然有 SSH `git remote -v`；传输损坏会让启动前
-  检查失败（没有 HTTPS 回退）。
+- Git transport（Issue #114）：git 数据操作走 SSH，GitHub API 操作留在
+  `gh` token 上——完整的双通道边界与启动前检查见[运维](/zh/operations)；
+  凭据见[安全](/zh/security)。
 
 ## 交付标签
 
