@@ -1,16 +1,18 @@
 """Regression tests for the GitHub Actions CI workflow (Issue #56).
 
 The repository contract (AGENTS.md) says the full pytest suite must run
-with 100% line/branch coverage via the coverage commands. Until now that
-only happened on the local Runner machine. The workflow in
-`.github/workflows/ci.yml` runs the same contract remotely on every
-`pull_request` and `push` to `main`, so the gate is visible on GitHub.
+with the tiered coverage gate (Issue #234: whole repository line >= 95%
+and branch >= 95% checked separately, changed Python code at 100%
+line/branch). Until now that only happened on the local Runner machine.
+The workflow in `.github/workflows/ci.yml` runs the same contract
+remotely on every `pull_request` and `push` to `main`, so the gate is
+visible on GitHub.
 
 These tests fail when the workflow file is missing, when it stops
 enforcing the contract (triggers, pinned Python, requirements install,
-contract test commands, 100% coverage), or when it drifts into the extras
-the Issue explicitly forbids (lint, matrix, cache). The README must keep
-documenting what the remote CI is and when it runs.
+contract test commands, tiered coverage gate), or when it drifts into
+the extras the Issue explicitly forbids (lint, matrix, cache). The
+README must keep documenting what the remote CI is and when it runs.
 """
 import re
 from pathlib import Path
@@ -273,18 +275,43 @@ def test_ci_workflow_runs_the_contract_test_command():
     ), f"CI must run the contract test command {CONTRACT_RUN!r}, steps run: {commands!r}"
 
 
-def test_ci_workflow_enforces_full_line_and_branch_coverage():
+def test_ci_workflow_enforces_the_tiered_coverage_gate():
+    """Issue #234: the CI gate is tiered — the whole repository keeps
+    line >= 95% and branch >= 95% (coverage_gate.py checks the two tiers
+    SEPARATELY from the coverage JSON totals, never a merged single
+    percentage), and the changed Python code keeps 100% line/branch
+    (diff_coverage_gate.py against origin/main; a doc-only PR has no
+    changed Python and passes). The old --fail-under=100 gate checked
+    only the merged percentage and is gone."""
     commands = step_commands(steps_of(load_workflow()))
-    enforcing = [
+    global_gate = [
         command for command in commands
-        if CONTRACT_REPORT in command and "--fail-under=100" in command
+        if "coverage_gate.py" in command
     ]
-    assert enforcing, (
-        "CI must enforce 100% line/branch coverage "
-        f"({CONTRACT_REPORT} --fail-under=100), steps run: {commands!r}"
+    assert global_gate, (
+        "CI must enforce the tiered global gate (coverage_gate.py: line "
+        f">= 95% and branch >= 95% checked separately), steps run: "
+        f"{commands!r}"
     )
-    assert any("--show-missing" in command for command in enforcing), (
-        "coverage report must keep the local --show-missing shape"
+    diff_gate = [
+        command for command in commands
+        if "diff_coverage_gate.py origin/main" in command
+    ]
+    assert diff_gate, (
+        "CI must enforce the changed-code gate (diff_coverage_gate.py "
+        f"origin/main: changed Python at 100% line/branch), steps run: "
+        f"{commands!r}"
+    )
+    assert not any("--fail-under" in command for command in commands), (
+        "CI must not keep the old --fail-under merged-percentage gate "
+        f"(Issue #234), steps run: {commands!r}"
+    )
+    assert any(
+        CONTRACT_REPORT in command and "--show-missing" in command
+        for command in commands
+    ), (
+        "CI must keep the coverage report with --show-missing as "
+        f"evidence (both real numbers), steps run: {commands!r}"
     )
 
 

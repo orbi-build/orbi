@@ -37,8 +37,9 @@ ai-ready                a task is dispatched (muyan-pilot add, or a human
                         marker, Fixes #N); the delivery now awaits review
   -> review             an independent Pi session reviews the exact
                         base/head SHAs and FIXES findings in-session
-                        (code, full test suite, 100% coverage, push only
-                        the task branch), then emits a REVIEW_VERDICT
+                        (code, full test suite, tiered coverage gate
+                        (Issue #234), push only the task branch), then
+                        emits a REVIEW_VERDICT
   -> ai-fix-needed      a finding could not be fixed in-session, the PR is
                         behind the latest base / has a merge conflict, or
                         an AI-recoverable failure of the existing run/PR

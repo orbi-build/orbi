@@ -1664,16 +1664,17 @@ def run_release_tests(worktree: Path, test_command: str,
 
     The command is a shell string (it may chain steps with `&&`), so
     it runs through `bash -c` wrapped in `timeout <seconds>` (Issue
-    #95). Its success is followed by the repository's mandatory 100%
-    line-and-branch coverage gate: a declaration such as `true` or a
-    bare `pytest` must not let a release claim the coverage contract.
-    A test that does not terminate within the deadline fails fast with
-    `timeout`'s exit 124 — never ignorable noise or a second unbounded
-    attempt.
+    #95). Its success is followed by the repository's tiered coverage
+    gate (Issue #234: the report shows both real numbers, and
+    coverage_gate.py enforces line >= 95% and branch >= 95% checked
+    separately): a declaration such as `true` or a bare `pytest` must
+    not let a release claim the coverage contract. A test that does not
+    terminate within the deadline fails fast with `timeout`'s exit 124
+    — never ignorable noise or a second unbounded attempt.
     """
     coverage_gate = (
-        "/usr/bin/python3 -m coverage report --fail-under=100 "
-        "--show-missing"
+        "/usr/bin/python3 -m coverage report --show-missing && "
+        "/usr/bin/python3 coverage_gate.py"
     )
     run_command(
         ["timeout", str(timeout_seconds), "bash", "-c",
@@ -2143,8 +2144,9 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             release_test_error = exc
             raise
         test_evidence = (
-            f"declared test command and 100% coverage gate passed in a "
-            f"clean worktree at {release_commit} "
+            f"declared test command and tiered coverage gate "
+            f"(line/branch >= 95%, Issue #234) passed in a clean "
+            f"worktree at {release_commit} "
             f"(timeout {RELEASE_TEST_TIMEOUT_SECONDS}s)"
         )
         _safe_publish(

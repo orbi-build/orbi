@@ -357,15 +357,26 @@ def test_chinese_security_documents_the_boundaries():
 
 
 def test_chinese_testing_documents_the_contract_commands():
-    """The Chinese testing page must show the exact contract commands
-    (full pytest with branch coverage + 100% report) and the remote CI
-    gate — same facts as the English page."""
+    """The Chinese testing page must show the tiered coverage policy
+    (Issue #234: whole repository line >= 95% and branch >= 95% checked
+    separately, changed Python code at 100%, core paths at 100%), the
+    contract commands and the remote CI gate — same facts and numbers as
+    the English page."""
     text = zh_page_text("testing")
     assert "coverage run --branch -m pytest tests/" in text, (
         "testing must show the contract coverage-run command"
     )
     assert "coverage report" in text, "testing must show the coverage report command"
-    assert "100%" in text, "testing must state the 100% line/branch coverage requirement"
+    assert "coverage_gate.py" in text, (
+        "testing must show the tiered global gate command"
+    )
+    assert "diff_coverage_gate.py" in text, (
+        "testing must show the changed-code gate command"
+    )
+    assert "95%" in text, "testing must state the 95% line/branch tiers"
+    assert "100%" in text, (
+        "testing must state the 100% changed-code and core-path tiers"
+    )
     assert "GitHub Actions" in text, "testing must name the remote CI gate"
 
 

@@ -1,8 +1,22 @@
 # Testing
 
 The repository contract (see `AGENTS.md`) is: the full pytest suite with
-**100% line and branch coverage** for the Python code. The same contract
-runs locally on the Runner machine and remotely on GitHub.
+the **tiered coverage gate** (Issue #234) for the Python code. The same
+contract runs locally on the Runner machine and remotely on GitHub.
+
+## The tiered coverage policy
+
+| Tier | Requirement |
+|---|---|
+| Whole repository | **line >= 95% and branch >= 95%**, checked separately — never a merged single percentage |
+| Changed Python code | **100% line/branch** on the lines and branches this PR adds or modifies; a doc-only change has no changed Python and passes |
+| Core paths | **100% line/branch** for the core state machines and critical failure paths: model_wait/idle recovery, Issue/label lifecycle, Git/PR/merge gate, config validation, deployment failure paths — enforced by the existing tests, which are never removed to satisfy a number |
+
+Code below 95% is only allowed for non-core, clearly explainable
+legacy/defensive branches; every such exception must stay locatable in
+the coverage report. Unjustified `# pragma: no cover` is a contract
+violation (a static test pins the few justified sites: the `__main__`
+entry guards and one defensive `except` guard in a test).
 
 ## Local contract commands
 
@@ -11,11 +25,19 @@ Run them from the repository root (production interpreter
 
 ```bash
 /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
-/usr/bin/python3 -m coverage report --fail-under=100 --show-missing
+/usr/bin/python3 -m coverage report --show-missing
+/usr/bin/python3 coverage_gate.py
+/usr/bin/python3 diff_coverage_gate.py origin/main
 ```
 
-The second command exits non-zero when any line or branch is below 100%,
-so the pair is a gate, not a report.
+The report shows both real numbers (line and branch) per file. The two
+gate scripts are the gate, not a report: `coverage_gate.py` exits
+non-zero when the line tier OR the branch tier is below 95% (it reads
+the coverage JSON totals `percent_statements_covered` and
+`percent_branches_covered` separately — the JSON field `percent_covered`
+is the merged line+branch percentage and is never the gate), and
+`diff_coverage_gate.py` exits non-zero when a Python line or branch
+changed since the base ref is not 100% covered.
 
 ## Remote CI (GitHub Actions)
 
@@ -24,8 +46,10 @@ and every push to `main`: one job, Python 3.14 pinned via
 `actions/setup-python` (GitHub-hosted runners do not have the production
 interpreter at the production path, so the workflow pins the same minor
 version and runs the identical commands through `python3` on PATH),
-`requirements.txt` installed, then the two contract commands above. No
-lint, no matrix, no cache.
+`requirements.txt` installed, then the contract commands above — the
+report, `coverage_gate.py`, and `diff_coverage_gate.py origin/main`
+(the changed-code tier against the PR base; a doc-only PR has no
+changed Python and passes). No lint, no matrix, no cache.
 
 The checkout uses `fetch-depth: 0` (full history + all tags): the release
 reconciliation tests (`tests/test_release_v01.py`) verify the REAL annotated

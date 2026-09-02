@@ -1,6 +1,8 @@
 # Remote CI gate for the repository contract (AGENTS.md): the full pytest
-# suite with 100% line/branch coverage, run on GitHub for every pull
-# request and every push to main (Issue #56).
+# suite with the tiered coverage gate (Issue #234: whole repository
+# line >= 95% and branch >= 95% checked separately, changed Python code
+# at 100% line/branch), run on GitHub for every pull request and every
+# push to main (Issue #56).
 #
 # KISS: one job, no lint, no matrix, no cache.
 #
@@ -101,8 +103,18 @@ jobs:
       - name: Run the full test suite with branch coverage (contract)
         run: python3 -m coverage run --branch -m pytest tests/ -q
 
-      - name: Enforce 100% line/branch coverage (contract)
-        run: python3 -m coverage report --fail-under=100 --show-missing
+      # Tiered coverage gate (Issue #234): the whole repository keeps
+      # line >= 95% AND branch >= 95% (coverage_gate.py checks the two
+      # tiers SEPARATELY from the coverage JSON totals — never a merged
+      # single percentage), and the Python lines/branches changed in
+      # this PR keep 100% (diff_coverage_gate.py against origin/main;
+      # a doc-only PR has no changed Python and passes). The report
+      # keeps showing both real numbers as evidence.
+      - name: Enforce the tiered coverage gate (contract, Issue #234)
+        run: |
+          python3 -m coverage report --show-missing
+          python3 coverage_gate.py
+          python3 diff_coverage_gate.py origin/main
 
       # Mintlify docs build smoke (Issue #116): the official `mint` CLI
       # validates the docs/ build (docs.json config, pages, links) in

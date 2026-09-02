@@ -74,8 +74,10 @@ first.
 
 ## Contributing code
 
-1. Read `AGENTS.md` — it is the development contract (TDD, 100% line and
-   branch coverage, fail fast, no database/queue/daemon/fallback, no
+1. Read `AGENTS.md` — it is the development contract (TDD, the tiered
+   coverage gate (Issue #234): whole repository line >= 95% and branch
+   >= 95% checked separately, changed Python code and core paths at
+   100% line/branch, fail fast, no database/queue/daemon/fallback, no
    business task timeout).
 2. Work on a feature branch; never push the protected branch directly.
 3. Write the failing test first, then the smallest implementation, then
@@ -86,7 +88,9 @@ first.
 
    ```bash
    /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
-   /usr/bin/python3 -m coverage report --fail-under=100 --show-missing
+   /usr/bin/python3 -m coverage report --show-missing
+   /usr/bin/python3 coverage_gate.py
+   /usr/bin/python3 diff_coverage_gate.py origin/main
    ```
 
 5. Open one PR per Issue. The PR description must contain
