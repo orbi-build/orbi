@@ -3031,6 +3031,133 @@ def _log_heartbeat(activity: dict, *, issue_ref: str,
     )
 
 
+def _log_startup(event: str, *, issue_ref: str, role: str, activity: dict,
+                 elapsed: float, extra: str = "") -> None:
+    """Log one startup phase line (Issue #176).
+
+    Every startup phase (`process_spawned`, `session_created`,
+    `first_request_started`, `first_response_received`,
+    `startup_failed`) is one stable `key=value` line carrying the issue,
+    role, the provider/model Pi selected (`-` until the session's
+    `model_change` record says otherwise), the elapsed time since the
+    Pi process was spawned, and any extra fields of the phase (`pid=`,
+    `reason=`, `session_created=`, `first_request=`). No `run=` field
+    (Issue #57): the `[run_id]` prefix is the single run-id carrier.
+    Identifiers only — never a key, the prompt or model output.
+    """
+    LOGGER.info(
+        "%s issue=%s role=%s provider=%s model=%s elapsed=%s%s",
+        event, issue_ref, role, activity.get("provider") or "-",
+        activity.get("model") or "-", format_duration(elapsed),
+        f" {extra}" if extra else "",
+    )
+
+
+def _classify_startup_exit(stderr: str, returncode: int) -> str:
+    """The distinguishable `startup_failed` reason for an early Pi exit
+    (Issue #176).
+
+    The classification is evidence-based on Pi's own stderr (the
+    minimal correlation the Issue asks for): a provider authentication
+    failure (`401`/`403`, `unauthorized`, `forbidden`, `api key`) is
+    `auth_failure`; a network timeout (`timed out`, `timeout`,
+    `etimedout`, `econnrefused`, `econnreset`, `enotfound`) is
+    `network_timeout`; anything else is the raw exit code
+    (`pi_exit_<N>`). The stderr text itself is NOT echoed into the
+    reason — only the class — so no sensitive response content can
+    leak into the journal.
+    """
+    lowered = stderr.lower()
+    if ("401" in lowered or "403" in lowered or "unauthorized" in lowered
+            or "forbidden" in lowered or "api key" in lowered):
+        return "auth_failure"
+    if ("timed out" in lowered or "timeout" in lowered
+            or "etimedout" in lowered or "econnrefused" in lowered
+            or "econnreset" in lowered or "enotfound" in lowered):
+        return "network_timeout"
+    return f"pi_exit_{returncode}"
+
+
+def _log_provider_config_loaded(*, issue_ref: str, role: str, config: dict,
+                                elapsed: float) -> None:
+    """Log the `provider_config_loaded` startup line (Issue #176).
+
+    The provider file has been loaded and validated (at config load)
+    and materialized for this run — or resolved to Pi's own agent dir
+    when unconfigured. The provider/model fields are the configured
+    identifiers (the same non-sensitive values already on the redacted
+    command line, Issue #119) or `-` when Pi keeps its own defaults.
+    """
+    _log_startup(
+        "provider_config_loaded", issue_ref=issue_ref, role=role,
+        activity={"provider": config.get("pi_provider"),
+                  "model": config.get("pi_model")},
+        elapsed=elapsed,
+    )
+
+
+def _log_startup_failed(*, issue_ref: str, role: str, activity: dict,
+                        elapsed: float, returncode: int, stderr: str,
+                        timed_out: bool, model_wait_dead: bool,
+                        model_wait_swallowed: bool,
+                        idle_recovery_failed: bool) -> None:
+    """Log one `startup_failed` line (Issue #176): the run failed
+    BEFORE the first response, so the line says WHERE the startup was
+    stuck (`session_created=`, `first_request=`) plus the
+    distinguishable `reason=`. The existing `run_failed` scene line and
+    the raised exception are unchanged (fail-fast semantics preserved).
+    """
+    reason = _startup_failed_reason(
+        activity, returncode=returncode, stderr=stderr,
+        timed_out=timed_out, model_wait_dead=model_wait_dead,
+        model_wait_swallowed=model_wait_swallowed,
+        idle_recovery_failed=idle_recovery_failed,
+    )
+    _log_startup(
+        "startup_failed", issue_ref=issue_ref, role=role,
+        activity=activity, elapsed=elapsed,
+        extra=(
+            f"session_created="
+            f"{'true' if activity['session_file'] else 'false'} "
+            f"first_request="
+            f"{'true' if activity['first_request'] else 'false'} "
+            f"reason={reason}"
+        ),
+    )
+
+
+def _startup_failed_reason(activity: dict, *, returncode: int,
+                           stderr: str, timed_out: bool,
+                           model_wait_dead: bool,
+                           model_wait_swallowed: bool,
+                           idle_recovery_failed: bool) -> str:
+    """The `startup_failed` reason for a failure before the first
+    response (Issue #176): the kill-path class first, then the
+    root-cause evidence from Pi's stderr (`auth_failure` /
+    `network_timeout` — the missing session file is usually the
+    CONSEQUENCE of the auth/network failure, never the cause), then
+    WHERE the startup was stuck (`session_not_created` /
+    `no_first_request` / the raw early exit). `first_response_timeout`
+    is the frozen `model_wait` killed before any response (the hung
+    first request)."""
+    if idle_recovery_failed:
+        return "idle_recovery_stale"
+    if model_wait_swallowed:
+        return "model_wait_swallowed"
+    if model_wait_dead:
+        return "first_response_timeout"
+    if timed_out:
+        return "timeout"
+    classified = _classify_startup_exit(stderr, returncode)
+    if classified != f"pi_exit_{returncode}":
+        return classified
+    if not activity["session_file"]:
+        return "session_not_created"
+    if not activity["first_request"]:
+        return "no_first_request"
+    return classified
+
+
 def _pending_timeout_targets(targets: list[dict]) -> list[tuple[dict, float]]:
     """The pre-idle descendants still INSIDE an explicit `timeout`
     deadline (Issue #169): `[(target, deadline_epoch), ...]`.
@@ -3101,6 +3228,24 @@ def stream_pi(
     as the complete local record; the full prompt and Issue body are
     never logged.
 
+    Startup phases (Issue #176): `process_spawned` is logged right
+    after the spawn (with the pid); `session_created`,
+    `first_request_started` and `first_response_received` are logged
+    once each as the session JSONL crosses the milestones (the session
+    record, the first user message, the first assistant message) — each
+    line carries the provider/model Pi selected by that point and the
+    elapsed time since the spawn. The live lines' `phase` is the
+    startup sub-phase while the first response is outstanding
+    (`session_pending` / `request_pending`), so a run stuck at
+    `starting` is locatable to its startup phase from the journal and
+    the progress comment alone. A failure before the first response
+    additionally logs `startup_failed` with the distinguishable reason
+    (`session_not_created`, `no_first_request`, `auth_failure`,
+    `network_timeout`, `pi_exit_<N>`, `timeout`,
+    `first_response_timeout`, `model_wait_swallowed`,
+    `idle_recovery_stale`); the existing `run_failed` line and the
+    raised failure are unchanged (fail-fast semantics preserved).
+
     `progress` (Issue #18) is invoked on EVERY poll — an activity change
     or a heartbeat — with the current activity state, while the Pi
     process is still running: the caller renders the live GitHub
@@ -3165,6 +3310,15 @@ def stream_pi(
     # SIGTERM during this window must shut the child down, never
     # orphan it. Cleared again once the child is reaped (finally).
     set_active_pi(process)
+    # Startup phase (Issue #176): the process is spawned — the first
+    # sub-phase of `starting` is now observable (pid, elapsed since
+    # spawn). The run_start scene line below carries the same
+    # pre-session state (phase=session_pending); from here the live
+    # lines and the milestone lines carry the startup sub-phases.
+    _log_startup(
+        "process_spawned", issue_ref=issue_ref, role=role,
+        activity=initial, elapsed=0.0, extra=f"pid={process.pid}",
+    )
     LOGGER.info(
         "run_start %s",
         format_run_scene(
@@ -3178,6 +3332,12 @@ def stream_pi(
     activity = watcher.poll()
     timed_out = False
     model_wait_dead = False
+    # Startup milestones already reported (Issue #176): each flips once
+    # per session file (a resumed run creates a NEW file, and its
+    # first request/response are the new session's — the watcher
+    # resets the flags on the switch, so the lines fire again for the
+    # new session, exactly once each).
+    startup_seen = (False, False, False)
     # Swallowed-model-request probe state (Issue #233): the monotonic
     # moment the /slots probe first reported every slot idle while Pi was
     # in model_wait (None until then). Reset whenever a slot is processing,
@@ -3246,6 +3406,37 @@ def stream_pi(
                     else:
                         stderr_chunks.append(data)
             activity = watcher.poll()
+            # Startup milestones (Issue #176): one line per flip — the
+            # session file appeared, the first request went out, the
+            # first response arrived. Each carries the provider/model
+            # selected by that point and the elapsed time since spawn.
+            # A session switch resets the watcher flags, so a resumed
+            # invocation reports its NEW session's milestones once each.
+            seen = (
+                activity["session_file"] is not None,
+                activity["first_request"],
+                activity["first_response"],
+            )
+            if seen != startup_seen:
+                if seen[0] and not startup_seen[0]:
+                    _log_startup(
+                        "session_created", issue_ref=issue_ref,
+                        role=role, activity=activity,
+                        elapsed=time.monotonic() - start,
+                    )
+                if seen[1] and not startup_seen[1]:
+                    _log_startup(
+                        "first_request_started", issue_ref=issue_ref,
+                        role=role, activity=activity,
+                        elapsed=time.monotonic() - start,
+                    )
+                if seen[2] and not startup_seen[2]:
+                    _log_startup(
+                        "first_response_received", issue_ref=issue_ref,
+                        role=role, activity=activity,
+                        elapsed=time.monotonic() - start,
+                    )
+                startup_seen = seen
             visible = (
                 activity["phase"], activity["action"], activity["result"],
             )
@@ -3632,6 +3823,20 @@ def stream_pi(
         _drain_stream(process.stderr, stderr_chunks)
     stdout = _decode_chunks(stdout_chunks)
     stderr = _decode_chunks(stderr_chunks)
+    # Startup failure (Issue #176): a failure before the first response
+    # is a STARTUP failure — the line says where the startup was stuck
+    # with a distinguishable reason. After the first response the
+    # existing `run_failed` scene line alone describes the mid-run
+    # failure (no `startup_failed` line).
+    if not activity["first_response"]:
+        _log_startup_failed(
+            issue_ref=issue_ref, role=role, activity=activity,
+            elapsed=time.monotonic() - start,
+            returncode=process.returncode or 0, stderr=stderr,
+            timed_out=timed_out, model_wait_dead=model_wait_dead,
+            model_wait_swallowed=model_wait_swallowed,
+            idle_recovery_failed=idle_recovery_failed,
+        )
     if idle_recovery_failed:
         stale = format_duration(activity["stale_seconds"])
         LOGGER.error(
@@ -3725,6 +3930,7 @@ def is_ticket_only(issue: dict) -> bool:
 def run_ticket_agent(issue: dict, config: dict, source_repo: str,
                      *, progress: Callable[[dict], None] | None = None) -> str:
     """Generate one ticket-only deliverable without using Git state (#209)."""
+    started = time.monotonic()
     system_prompt = (
         "You are a ticket-only content agent. Produce the requested final "
         "content as your complete stdout response. Do not create or modify "
@@ -3746,6 +3952,14 @@ def run_ticket_agent(issue: dict, config: dict, source_repo: str,
             *_pi_model_args(config), "--print", "--session-dir", str(session_dir),
             "--system-prompt", system_prompt, context,
         ]
+        # Startup phase (Issue #176): the ticket-only session keeps Pi's
+        # own agent dir (no per-run materialization) — the provider
+        # config is still loaded and resolved before the spawn.
+        _log_provider_config_loaded(
+            issue_ref=issue_context(source_repo, int(issue["number"])),
+            role=ROLE_TICKET, config=config,
+            elapsed=time.monotonic() - started,
+        )
         return stream_pi(
             command, cwd=ticket_dir,
             log_command=[
@@ -3859,6 +4073,7 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
     prompt template itself is untouched; absent -> the exact
     pre-#219 context.
     """
+    started = time.monotonic()
     system_prompt = render_prompt(
         config["prompt"].read_text(encoding="utf-8"),
         {
@@ -3902,6 +4117,15 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
     # only the #119 provider/model/thinking identifiers). Unconfigured
     # -> the stream_pi call keeps its exact pre-#157 shape.
     agent_dir = prepare_pi_agent_dir(worktree, config)
+    # Startup phase (Issue #176): the provider config is loaded and
+    # materialized for this run (or resolved to Pi's own agent dir when
+    # unconfigured) — the first startup line, before the process is
+    # spawned.
+    _log_provider_config_loaded(
+        issue_ref=issue_context(source_repo, int(issue["number"])),
+        role=ROLE_IMPLEMENT, config=config,
+        elapsed=time.monotonic() - started,
+    )
     extra = {}
     if agent_dir is not None:
         extra["pi_env"] = {"PI_CODING_AGENT_DIR": str(agent_dir)}
@@ -4613,6 +4837,7 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
     Issue #41: one run_id end to end, the roles are steps of the same
     run).
     """
+    started = time.monotonic()
     system_prompt = render_prompt(
         config["prompt_review"].read_text(encoding="utf-8"),
         {
@@ -4647,6 +4872,13 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
     # Issue #157: the review session uses the SAME provider config as
     # the implementer (one materialized dir per worktree, re-used).
     agent_dir = prepare_pi_agent_dir(worktree, config)
+    # Startup phase (Issue #176): the review session's provider config
+    # is loaded and materialized too (same line shape, role=review).
+    _log_provider_config_loaded(
+        issue_ref=issue_context(source_repo, issue),
+        role=ROLE_REVIEW, config=config,
+        elapsed=time.monotonic() - started,
+    )
     extra = {}
     if agent_dir is not None:
         extra["pi_env"] = {"PI_CODING_AGENT_DIR": str(agent_dir)}

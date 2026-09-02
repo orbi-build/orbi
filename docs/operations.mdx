@@ -96,7 +96,41 @@ Stable `key=value` lines you will see:
 - `run_start` / `run_end` — the full scene (branch, worktree, session
   file) at start, and the result (PR URL, commit) at the end;
 - `activity` / `heartbeat` / `model_wait` / `resumed` — live Pi activity
-  while a session runs (phase, last action, elapsed, idle);
+  while a session runs (phase, last action, elapsed, idle). The
+  `phase` is the startup sub-phase while the first response is
+  outstanding: `session_pending` (Pi is spawned but has not created its
+  session file yet) and `request_pending` (the session exists, the
+  first response has not arrived); after the first response the
+  tool-based phase (`test`, `pr`, `bash`, …) applies as before;
+- `process_spawned` / `provider_config_loaded` / `session_created` /
+  `first_request_started` / `first_response_received` — the startup
+  phase lines (Issue #176): one line per phase, in order, each
+  carrying issue, role, the provider/model Pi selected (`-` until the
+  session's `model_change` record says otherwise), and the elapsed
+  time since the spawn (`process_spawned` additionally carries the
+  pid). `provider_config_loaded` is logged by the Runner before the
+  spawn (the provider file is loaded and materialized, or Pi's own
+  agent dir when unconfigured); the other four are logged by the
+  streamer as the session JSONL crosses each milestone (the session
+  record, the first user message — the first request goes out — and
+  the first assistant message — the first response arrives). A run
+  stuck at `starting` is locatable to its startup phase from these
+  lines plus the progress comment's `phase` alone; only identifiers
+  are logged — never a key, the prompt or model output;
+- `startup_failed` — one line when the run fails BEFORE the first
+  response (Issue #176): it says WHERE the startup was stuck
+  (`session_created=true|false`, `first_request=true|false`) plus the
+  distinguishable `reason=` — `session_not_created` (Pi exited before
+  creating its session file), `no_first_request` (session exists, no
+  first request), `auth_failure` / `network_timeout` (classified from
+  Pi's stderr — the class only, never the text), `pi_exit_<N>` (the
+  early exit code), `timeout` (the run deadline),
+  `first_response_timeout` (a frozen `model_wait` killed before any
+  response — the hung first request), `model_wait_swallowed` and
+  `idle_recovery_stale` (the existing kill paths). The existing
+  `run_failed` scene line and the raised failure are unchanged —
+  `startup_failed` is the extra observability, not a new failure
+  path;
 - `resume_continue` — one INFO when a resumed run continues the
   interrupted work (Issue #219): the worktree's run state file
   (`.muyan-pilot/run-state.json`) verified the SAME run (issue number

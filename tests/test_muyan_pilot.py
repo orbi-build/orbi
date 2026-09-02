@@ -961,7 +961,10 @@ def test_status_report_includes_live_lines_for_current_issue(monkeypatch, tmp_pa
         "slot_dir": tmp_path / ".muyan-pilot" / "slots",
     })
     assert "current: #3 now u3" in report
-    assert "    live: phase=starting last_activity=- action=- result=-" in report
+    # Issue #176: the session file exists but no first response has
+    # arrived, so the live line shows the request_pending sub-phase.
+    assert ("    live: phase=request_pending last_activity=- action=- "
+            "result=-") in report
     assert f"    session: {session_dir / 's.jsonl'}" in report
     assert f"    worktree: {worktree}" in report
     assert "ready: -" in report

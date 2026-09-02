@@ -62,6 +62,50 @@ sys.stderr.write("pi exploded")
 sys.exit(3)
 """
 
+# The startup-scene fake pi (Issue #176): like FAKE_PI it plans and
+# commits, but it ALSO writes a full session JSONL (session, the model
+# Pi selected, the first request, the first response) with fresh
+# timestamps — the real record order of Pi 0.84.3 — so the runner's
+# startup milestones fire on the real Runner path.
+FAKE_PI_STARTUP = """#!/usr/bin/env python3
+import json, os, re, subprocess, sys
+from datetime import datetime, timezone
+args = sys.argv[1:]
+prompt = args[args.index("--system-prompt") + 1]
+run_id = re.search(r"Run id: `([0-9a-f]{8})`", prompt).group(1)
+cwd = os.getcwd()
+session_dir = os.path.join(cwd, ".pi-session")
+os.makedirs(session_dir, exist_ok=True)
+now = datetime.now(timezone.utc).isoformat()
+records = [
+    {"type": "session", "id": f"e2e-{run_id}", "timestamp": now,
+     "cwd": cwd},
+    {"type": "model_change", "id": "m1", "timestamp": now,
+     "provider": "local-qwen", "modelId": "qwen3.8:27b"},
+    {"type": "message", "id": "u1", "timestamp": now,
+     "message": {"role": "user",
+                 "content": [{"type": "text", "text": "prompt"}]}},
+    {"type": "message", "id": "a1", "timestamp": now,
+     "message": {"role": "assistant",
+                 "content": [{"type": "text", "text": "done"}]}},
+]
+with open(os.path.join(session_dir, "s.jsonl"), "a", encoding="utf-8") as handle:
+    for record in records:
+        handle.write(json.dumps(record) + "\\n")
+plan = (
+    f"<!-- muyan-pilot:run={run_id} -->\\n"
+    f"# Plan\\n\\nrun_id={run_id}\\n"
+)
+with open(os.path.join(cwd, "plan.md"), "w", encoding="utf-8") as handle:
+    handle.write(plan)
+for command in (
+    ["git", "add", "."],
+    ["git", "commit", "-m", f"plan for run {run_id}"],
+):
+    subprocess.run(command, cwd=cwd, check=True, capture_output=True)
+sys.stdout.write("done")
+"""
+
 
 def git(repo: Path, *args: str) -> str:
     result = subprocess.run(
@@ -489,6 +533,54 @@ def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
     # The delivery finished: the in-progress label is gone.
     assert "ai-in-progress" not in labels[ISSUE_NUMBER]
     assert "ai-pr-opened" in labels[ISSUE_NUMBER]
+
+
+def test_e2e_startup_sequence_visible_in_journal(
+    clone, tmp_path, monkeypatch, caplog,
+):
+    """Issue #176: a run stuck at `starting` must be locatable to its
+    startup sub-phase from the journal alone. The REAL Runner path
+    (process_issue -> run_pi -> stream_pi) logs the full startup
+    sequence in order — every line carrying the run id — and a healthy
+    run never logs `startup_failed`."""
+    comments: list[str] = []
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI_STARTUP)
+    install_fake_gh(monkeypatch, comments)
+    caplog.set_level("INFO")
+
+    pr_url = runner.process_issue(issue(), config_for(clone, tmp_path), REPO)
+    assert pr_url == PR_URL
+    run_id = runner.current_run_id()
+
+    lines = [m for m in caplog.messages if m.startswith(f"[{run_id}]")]
+    kinds = (
+        "provider_config_loaded", "process_spawned", "run_start",
+        "session_created", "first_request_started",
+        "first_response_received",
+    )
+    positions = {}
+    for kind in kinds:
+        matches = [i for i, m in enumerate(lines) if f" {kind} " in m]
+        assert len(matches) == 1, f"{kind}: {matches}"
+        positions[kind] = matches[0]
+    # The sequence is strictly ordered: the provider config is resolved
+    # before the spawn, the session milestones follow the scene line.
+    assert (positions["provider_config_loaded"]
+            < positions["process_spawned"]
+            < positions["run_start"]
+            < positions["session_created"]
+            < positions["first_request_started"]
+            < positions["first_response_received"])
+    # The real selection (the session's model_change record) is visible
+    # on the milestone lines.
+    requested = lines[positions["first_request_started"]]
+    responded = lines[positions["first_response_received"]]
+    assert "provider=local-qwen" in requested
+    assert "model=qwen3.8:27b" in requested
+    assert "provider=local-qwen" in responded
+    assert "model=qwen3.8:27b" in responded
+    # A healthy startup never reports a startup failure.
+    assert not any(" startup_failed " in m for m in lines)
 
 
 def test_fake_gh_tracks_labels_for_the_resume_scan(monkeypatch, tmp_path):
