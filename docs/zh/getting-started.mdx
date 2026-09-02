@@ -103,9 +103,9 @@ cp .muyan-pilot.example.toml muyan-pilot.toml
 | `base_branch` | 否 | `main` | 交付 base 分支；每个任务 worktree 都从冻结的 `origin/<base_branch>` SHA 创建 |
 | `active_milestone` | 否 | 未设置 | 新领取扫描的领取范围（Issue #139）：当前活跃的 GitHub Milestone 标题（如 `v0.2.0`）。设置后 p0/bug/普通三个 ready 扫描只领取该 Milestone 的 Issue（`milestone:"<title>"` 限定词直接进 gh 搜索查询——其他 Milestone 或无 Milestone 的 Issue 永远进不了队列）；`ai-ready` 仍是执行开关，领取顺序（p0 → bug → 普通）不变，P0 不跨 Milestone，恢复态（已开 PR、在途重启）不受 Milestone 限制。未设置 = 所有 `ai-ready` Issue 都可领取（#139 之前的行为） |
 | `max_concurrency` | 否 | `1` | 本机并发 Orbi 任务数和启用的 Runner timer 数（`1` 或 `2`；固定模板有两个实例） |
-| `model_wait_dead_seconds` | 否 | `1800` | 模型请求挂死阈值（Issue #228）：`model_wait` 静默（最近一条**完整** session 事件是 tool result 且无新事件）多少秒后 Runner 杀掉 Pi 会话并 fail fast。它度量的是完整 session 事件之间的静默——Pi 不向 JSONL 写 token 级进度，所以不是 token 级模型 timeout，持续追加事件的慢生成永不触发。默认 1800（30 分钟）——慢本地模型（如 ~17 tokens/s 的 Qwen 27B，llama-server 请求超时 1200 秒）可以存活超过 10 分钟的完整消息。必须是有限正数，否则启动 fail fast |
-| `model_wait_probe_url` | 否 | 未设置 | 模型吞请求探针（Issue #233）：模型的 `/slots` 端点（如 `http://127.0.0.1:18082/slots`，agent 面向的端口——local-llm-kv-cache 代理从 llama.cpp 透传该端点）。Pi 冻结在 `model_wait` 时 Runner 探测它；当**所有** slot 持续 `model_wait_probe_seconds` 宽限都报告空闲（`is_processing=false`）时，请求被吞（模型进程活着、连接 ESTABLISHED，但没有东西在生成——#231 现场），Pi 会话被快速杀掉，远早于 `model_wait_dead_seconds`。未设置 = 探针禁用（run 只由 `model_wait_dead_seconds` 兜底，#233 之前的行为）。必须是非空 `http://`/`https://` URL，否则启动 fail fast。探针是纯旁路：探测失败视为无证据，永不导致交付失败 |
-| `model_wait_probe_seconds` | 否 | `60` | 吞请求探针的持续空闲宽限（Issue #233）：`model_wait` 期间“所有 slot 空闲”状态需持续多少秒才判定请求被吞并杀掉 Pi。相比挂死阈值（30 分钟）很短（60 秒），吞请求约 1 分钟就能恢复而不是约 30 分钟；又足够长，正在被调度进 slot 的请求不会被误判为吞请求。必须是有限正数，否则启动 fail fast |
+| `model_wait_dead_seconds` | 否 | `1800` | 模型请求挂死阈值（Issue #228）：`model_wait` 静默多少秒后 Runner 杀掉 Pi 会话并 fail fast。字段语义（完整事件之间的静默、慢生成边界）：[运维](/zh/operations) 的 `model_wait_dead` journal 行。必须是有限正数，否则启动 fail fast |
+| `model_wait_probe_url` | 否 | 未设置 | 模型吞请求探针（Issue #233）：模型的 `/slots` 端点（如 `http://127.0.0.1:18082/slots`，agent 面向的端口——local-llm-kv-cache 代理从 llama.cpp 透传该端点）。Pi 冻结在 `model_wait` 时 Runner 探测它，所有 slot 持续 `model_wait_probe_seconds` 宽限空闲时快速杀掉 Pi 会话。字段语义（吞请求现场、旁路边界）：[运维](/zh/operations) 的 `model_wait_swallowed` journal 行。未设置 = 探针禁用（#233 之前的行为）。必须是非空 `http://`/`https://` URL，否则启动 fail fast |
+| `model_wait_probe_seconds` | 否 | `60` | 吞请求探针的持续空闲宽限（Issue #233）：`model_wait` 期间“所有 slot 空闲”状态需持续多少秒才判定请求被吞并杀掉 Pi。必须是有限正数，否则启动 fail fast |
 | `skills` | 否 | `[]` | 可选 Pi skill 路径（绝对、`~`，或相对配置文件） |
 | `context_files` | 否 | `[]` | 可选 Markdown 上下文文件，以路径形式注入 prompt |
 | `pi_providers` | 否 | 未设置 | 指向 Pi `models.json` 形状 JSON 文件的路径，为每个 run 向 Pi 目录添加或覆盖 provider（Issue #157）。未设置 = Pi 原样使用自己的 agent 目录（第 4 步） |
@@ -350,7 +350,7 @@ session、phase、last activity、具体错误），journal 显示
 |---|---|---|
 | 启动在任何 slot/claim 前失败 | journal `API key for provider ... references missing environment variable GROQ_API_KEY`（只报变量**名**） | 把 key 值放进你的 `.muyan-pilot/env`（第 4 步），并确认已安装 unit 的 `EnvironmentFile` 指向它；手工 tick 则在 shell 里 export 该变量 |
 | 启动在 provider 文件上失败 | journal `pi_providers file ... is not valid JSON` / `is missing baseUrl` / `pi_provider ... is not defined` | 修 JSON（第 4 步契约：`providers` 对象、`baseUrl`、`api`、`models[].id`），重跑 `muyan-pilot setup` |
-| Pi 起来了但模型一直不响应 | session JSONL 停在 `model_wait`；死寂窗口（`model_wait_dead_seconds`，默认 1800 秒——完整 session 事件之间的静默，不是 token 级进度）后 journal 出现 `model_wait_dead` 行和 `run_failed ... reason=model_wait_dead_stale_...` | 模型请求挂死——模型 server/proxy 挂了、连接断了，或进程还活着但请求被挂住（行上 `upstream_alive=true` 是证据，不是豁免）——用一次真实 `pi --print` 调用检查 endpoint，重启后重新派活（Issue 带现场 `ai-blocked`）；仍在生成的慢本地模型会存活过窗口（只有模型确实需要超过 30 分钟完整事件静默时才调大 `model_wait_dead_seconds`） |
+| Pi 起来了但模型一直不响应 | session JSONL 停在 `model_wait`；死寂窗口（`model_wait_dead_seconds`，默认 1800 秒）后 journal 出现 `model_wait_dead` 行和 `run_failed ... reason=model_wait_dead_stale_...`（字段语义：[运维](/zh/operations)） | 模型请求挂死——模型 server/proxy 挂了、连接断了，或进程还活着但请求被挂住——用一次真实 `pi --print` 调用检查 endpoint，重启后重新派活（Issue 带现场 `ai-blocked`）；仍在生成的慢本地模型会存活过窗口（只有模型确实需要超过 30 分钟完整事件静默时才调大 `model_wait_dead_seconds`） |
 | PR 打开了但一直不 merge | Issue 标签 `ai-fix-needed`；审查 findings 在 Issue 和 PR 上 | 审查发现会话内修不掉的 Blocker/Major findings——下一个审查 session 重试**同一个** PR（上限 5 轮）；读 Issue 和 PR 上的 findings |
 | 审查循环耗尽轮数 | journal `review_rounds_exhausted issue=<n> rounds=5`；Issue **单独** `ai-blocked` | 有界循环是人工决策——读 findings，手工修 PR 或关闭；见[运维](/zh/operations) |
 | PR 落后于最新 base | Issue `ai-fix-needed`，review 评论说 PR 落后于最新 base 或有 merge 冲突 | 自动：下一个审查 session 在会话内把最新 `origin/<base>` merge 进分支、解冲突、重跑全量测试 |
@@ -371,11 +371,10 @@ systemctl --user list-timers 'muyan-pilot@*.timer'
 ```
 
 setup 输出每个实例一行；启用的实例有 active 状态和下次触发时间，
-多余实例报告 disabled 和 inactive。每个 timer 每 5 分钟触发一次，全天 24 小时（00:00–23:55）。一个
-service 实例 active 时，systemd 忽略对**该实例**的后续启动请求；下一
-次真正启动会取到最新代码（service 启动前先 fast-forward `main`——见
-[运维](/zh/operations)）。容量为 `2` 时两个实例可以同时运行；容量和
-启用的 timer 数都由 `max_concurrency` 决定，flock slot 仍是最终安全边界。
+多余实例报告 disabled 和 inactive。触发周期、`ExecStartPre`
+fast-forward 和每实例启动语义定义在[运维](/zh/operations)（Timers）。
+容量为 `2` 时两个实例可以同时运行；容量和启用的 timer 数都由
+`max_concurrency` 决定，flock slot 仍是最终安全边界。
 
 <Note>
 提交的 unit 模板通过 `%h` 占位符引用作者的 clone 布局

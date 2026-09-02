@@ -90,13 +90,10 @@ Rules of the chain:
   `origin/<base>` on the task branch (conflicts resolved manually),
   followed by a full test rerun. No force push, no auto conflict
   resolution, no push of the protected branch.
-- Git transport (Issue #114): git data operations (fetch, push —
-  including `.github/workflows/*.yml`) go over SSH
-  (`git@github.com:owner/repo.git`); GitHub API operations (Issue, PR,
-  label, comment, merge) stay on the `gh` token. The task worktree
-  inherits the deployment checkout's single `origin` remote, so a new
-  bootstrap worktree has an SSH `git remote -v` by construction; a
-  broken transport fails the pre-start check (no HTTPS fallback).
+- Git transport (Issue #114): git data operations go over SSH, GitHub
+  API operations stay on the `gh` token — the full two-channel boundary
+  and the pre-start check: [Operations](/operations); the credentials:
+  [Security](/security).
 
 ## Delivery labels
 

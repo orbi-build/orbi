@@ -5,8 +5,10 @@ Orbi 在你的机器上运行一个带 GitHub token 的自主 coding agent。
 
 ## AI 从不 merge 或 push 保护分支
 
-- 实现者 Pi **只 push 自己的 feature branch** 并开一个 PR。不 merge、
-  不 push `main`/`master`、不 force push、从不自动解决冲突。
+- 实现者 Pi **在提交的交付处停止**：不 fetch base、不 push、不创建
+  PR——Runner 推送 task branch（普通 push，从不 force）并开一个 PR
+  （Issue #186）。Pi 不 merge、不 push `main`/`master`、不 force
+  push、从不自动解决冲突。
 - **Runner 是唯一 merge actor**，且只通过已审查的 PR merge：clean
   `REVIEW_VERDICT`、merge 门禁（PR head 包含最新远端 base、PR
   mergeable、远端 head 仍是被审查的 head）、`gh pr merge
