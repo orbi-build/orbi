@@ -311,7 +311,7 @@ def test_operations_documents_the_unit_drift_fail_fast():
     # No claim while drifted.
     assert "no slot, no claim" in operations
     # The exact structured failure line's fields are the code contract.
-    import systemd_deploy
+    from muyan_pilot import systemd_deploy
     line = systemd_deploy.drift_lines([
         {"unit": "muyan-pilot@.timer", "repo_path": "r", "installed_path": "i",
          "repo_sha256": "a", "installed_sha256": "b", "drifted": True},

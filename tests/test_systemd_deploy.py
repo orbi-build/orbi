@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-import systemd_deploy
+from muyan_pilot import systemd_deploy
 
 
 def make_repo(tmp_path: Path) -> Path:

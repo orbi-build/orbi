@@ -167,7 +167,9 @@ idle 告警和模型请求挂死 kill 是日志/健康阈值——它们不是�
 第 2 步。`muyan-pilot doctor` 报告一致性（`cli_source: clean` 或
 `cli_source: DRIFT` + 结构化 `cli_source_drift` 行：实际导入路径、
 期望 repo_dir、精确的 editable 重装命令），`muyan-pilot setup` 校验或
-重装。`muyan_pilot.py` 的直接执行入口保留为开发/兼容路径。
+重装。checkout 根目录**没有** `muyan_pilot.py`（与 package 同名的 flat
+文件会遮蔽已安装 package）；直接执行入口 `python3 -m muyan_pilot.cli`
+运行与 console script 完全相同的代码，保留为开发/兼容路径。
 
 ```bash
 # 在配置的 source repo 创建 Issue 并加 ai-ready 标签

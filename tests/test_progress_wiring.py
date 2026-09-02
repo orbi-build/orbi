@@ -13,8 +13,8 @@ from unittest.mock import Mock, call as mock_call
 
 import pytest
 
-import bootstrap_runner as runner
-import progress
+import muyan_pilot.runner as runner
+from muyan_pilot import progress
 
 
 def make_fake_gh(monkeypatch, comments=None, in_progress=False):

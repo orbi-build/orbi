@@ -1,6 +1,6 @@
 """E2E concurrency tests (Issue #39).
 
-Real runner processes (``bootstrap_runner.py``) run against a local bare
+Real runner processes (``muyan_pilot.runner``) run against a local bare
 origin plus a stateful fake ``gh`` executable on PATH, while a fake ``pi``
 executable records every invocation. These prove the acceptance criteria:
 
@@ -35,7 +35,11 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REPO = "owner/repo"
-RUNNER = REPO_ROOT / "bootstrap_runner.py"
+# Issue #168 src layout: the Runner is the package module
+# `muyan_pilot.runner`, started with `-m` and the checkout's `src/`
+# on PYTHONPATH (the same seam the pytest `pythonpath` ini uses for
+# the in-process tests).
+RUNNER_MODULE = "muyan_pilot.runner"
 
 # Stateful fake ``gh``: one JSON file (MUYAN_FAKE_GH_STATE) holds the Issue
 # labels, the comments (with author association) and the PR state. It
@@ -568,8 +572,9 @@ def start_runner(
         unit_dir = config_path.parent / "unit-dir"
         install_deployed_units(unit_dir)
     env["MUYAN_PILOT_UNIT_DIR"] = str(unit_dir)
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")
     process = subprocess.Popen(
-        ["/usr/bin/python3", str(RUNNER), "--config", str(config_path)],
+        ["/usr/bin/python3", "-m", RUNNER_MODULE, "--config", str(config_path)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
         cwd=REPO_ROOT,
     )
@@ -654,7 +659,7 @@ def slot_files(clone: Path) -> list[Path]:
 
 def slots_held(clone: Path, capacity: int = 1) -> list:
     """Return the lock-state occupancy: the lock, not the file, is held."""
-    import pilot_slots
+    from muyan_pilot import pilot_slots
 
     return pilot_slots.slot_occupancy(
         clone / ".muyan-pilot" / "slots", capacity,
@@ -916,7 +921,7 @@ def _run_ref_hammer(
     import os
     import threading
 
-    import bootstrap_runner as runner
+    import muyan_pilot.runner as runner
 
     # The fake `gh` on PATH answers the PR commands of the verify path
     # (the state file carries the default OPEN PR state, which is

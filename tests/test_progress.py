@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-import progress
+from muyan_pilot import progress
 
 
 def test_run_marker_is_hidden_html_comment_with_run_id():

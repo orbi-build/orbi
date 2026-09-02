@@ -1,15 +1,15 @@
 """Auto-refresh tests for the editable CLI install (Issue #158).
 
 The official local deployment is the EDITABLE uv tool install (Issue
-#152): the tool env imports the runtime modules from the deployment
-checkout through a setuptools editable finder whose module MAPPING is
-generated at INSTALL time from the checkout's ``pyproject.toml``.
-When the packaging inputs change (a new runtime module is added to
-``py-modules``, a dependency or entry point changes), the installed
-finder is stale and the next CLI process dies with
-``ModuleNotFoundError`` before the Runner can even start (the #158
-incident: ``cli_source`` merged to main, the installed finder still
-mapped the pre-#152 module set, systemd start failed).
+#152): the tool env imports the runtime package from the deployment
+checkout through a setuptools editable finder. Since the src layout
+(Issue #168) the finder maps the WHOLE package directory
+``src/muyan_pilot/`` — a newly added package module needs NO reinstall
+(the #158 stale-module-list incident class is fixed at the root). The
+remaining packaging inputs come from the checkout's ``pyproject.toml``
+(entry points, version, dependencies): when they change the installed
+tool env is stale and the next CLI process can die before the Runner
+even starts (the #158 incident shape).
 
 These tests pin the pre-start refresh contract:
 
@@ -41,13 +41,13 @@ from pathlib import Path
 
 import pytest
 
-import cli_install
-import cli_source
+from muyan_pilot import cli_install
+from muyan_pilot import cli_source
 
 # `cli_install` is a thin re-export of the implementation in
-# `bootstrap_runner` (see the NOTE there): these tests exercise the
+# `muyan_pilot.runner` (see the NOTE there): these tests exercise the
 # real refresh through that single import point. The suite's default
-# no-op stub (conftest) patches `bootstrap_runner.refresh_cli_install`
+# no-op stub (conftest) patches `runner.refresh_cli_install`
 # — the call `main()` makes — and never touches this import point.
 
 
@@ -77,7 +77,9 @@ def _recorder(calls):
 def test_packaging_fingerprint_is_the_sha256_of_pyproject(tmp_path):
     """The fingerprint is the sha256 of the checkout's
     ``pyproject.toml`` content — the packaging input that decides the
-    editable metadata (py-modules, entry points, version, deps)."""
+    editable metadata (entry points, version, deps; since Issue #168
+    the module mapping is the whole `src/muyan_pilot/` package
+    directory, not a pyproject list)."""
     repo = tmp_path / "checkout"
     content = b'[project]\nname = "muyan-pilot"\nversion = "0.2.0"\n'
     _write_pyproject(repo, content.decode("utf-8"))
@@ -87,14 +89,14 @@ def test_packaging_fingerprint_is_the_sha256_of_pyproject(tmp_path):
 
 
 def test_packaging_fingerprint_changes_with_pyproject_content(tmp_path):
-    """A changed ``pyproject.toml`` (e.g. a new runtime module added to
-    ``py-modules``) changes the fingerprint — that is the refresh
+    """A changed ``pyproject.toml`` (e.g. an entry point, version or
+    dependency change) changes the fingerprint — that is the refresh
     trigger."""
     repo = tmp_path / "checkout"
     _write_pyproject(repo, '[project]\nname = "a"\n')
     first = cli_install.packaging_fingerprint(repo)
     _write_pyproject(
-        repo, '[project]\nname = "a"\n[tool.setuptools]\npy-modules = ["x"]\n',
+        repo, '[project]\nname = "a"\nversion = "0.3.0"\n',
     )
     assert cli_install.packaging_fingerprint(repo) != first
 
@@ -105,9 +107,11 @@ def test_packaging_fingerprint_ignores_python_source_content(tmp_path):
     reinstall (the editable finder maps the live file anyway)."""
     repo = tmp_path / "checkout"
     _write_pyproject(repo, '[project]\nname = "a"\n')
-    (repo / "muyan_pilot.py").write_text("old\n", encoding="utf-8")
+    package_dir = repo / "src" / "muyan_pilot"
+    package_dir.mkdir(parents=True)
+    (package_dir / "runner.py").write_text("old\n", encoding="utf-8")
     first = cli_install.packaging_fingerprint(repo)
-    (repo / "muyan_pilot.py").write_text("new content\n", encoding="utf-8")
+    (package_dir / "runner.py").write_text("new content\n", encoding="utf-8")
     assert cli_install.packaging_fingerprint(repo) == first
 
 
@@ -224,7 +228,7 @@ def test_refresh_installs_on_the_first_install(tmp_path, caplog):
 
 def test_refresh_installs_when_the_packaging_input_changed(tmp_path, caplog):
     """Acceptance: ``pyproject.toml`` changed relative to the last
-    install (e.g. a new runtime module was added to ``py-modules``) ->
+    install (e.g. an entry point, version or dependency change) ->
     the editable metadata is refreshed and the next CLI process
     imports the new module."""
     _write_pyproject(tmp_path, '[project]\nname = "a"\n')

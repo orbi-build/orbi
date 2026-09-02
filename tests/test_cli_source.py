@@ -23,8 +23,8 @@ from types import ModuleType
 
 import pytest
 
-import cli_source
-from pi_activity import quote_value
+from muyan_pilot import cli_source
+from muyan_pilot.pi_activity import quote_value
 
 
 def _fake_module_file(path: str) -> ModuleType:
@@ -67,10 +67,10 @@ def test_cli_source_clean_for_the_checkout_source(tmp_path, monkeypatch):
     checkout) imports `muyan_pilot` from the checkout root: clean."""
     repo = tmp_path / "checkout"
     repo.mkdir()
-    _patch_module_file(monkeypatch, str(repo / "muyan_pilot.py"))
+    _patch_module_file(monkeypatch, str(repo / "src" / "muyan_pilot" / "__init__.py"))
     source = cli_source.cli_source(repo)
     assert source["editable"] is True
-    assert source["actual"] == (repo / "muyan_pilot.py").resolve()
+    assert source["actual"] == (repo / "src" / "muyan_pilot" / "__init__.py").resolve()
     assert source["expected"] == repo.resolve()
     assert source["fix"] == cli_source.reinstall_command(repo)
 
@@ -85,10 +85,10 @@ def test_cli_source_clean_when_the_expected_dir_is_a_symlink(
     real.mkdir()
     link = tmp_path / "link"
     link.symlink_to(real)
-    _patch_module_file(monkeypatch, str(real / "muyan_pilot.py"))
+    _patch_module_file(monkeypatch, str(real / "src" / "muyan_pilot" / "__init__.py"))
     source = cli_source.cli_source(link)
     assert source["editable"] is True
-    assert source["actual"] == (real / "muyan_pilot.py").resolve()
+    assert source["actual"] == (real / "src" / "muyan_pilot" / "__init__.py").resolve()
 
 
 def test_cli_source_drifts_for_a_site_packages_source(tmp_path, monkeypatch):
@@ -103,11 +103,11 @@ def test_cli_source_drifts_for_a_site_packages_source(tmp_path, monkeypatch):
     )
     site_packages.mkdir(parents=True)
     _patch_module_file(
-        monkeypatch, str(site_packages / "muyan_pilot.py"),
+        monkeypatch, str(site_packages / "muyan_pilot" / "__init__.py"),
     )
     source = cli_source.cli_source(repo)
     assert source["editable"] is False
-    assert source["actual"] == (site_packages / "muyan_pilot.py").resolve()
+    assert source["actual"] == (site_packages / "muyan_pilot" / "__init__.py").resolve()
     assert source["fix"] == cli_source.reinstall_command(repo)
 
 
@@ -118,10 +118,10 @@ def test_cli_source_drifts_for_a_stale_other_checkout(tmp_path, monkeypatch):
     repo.mkdir()
     stale = tmp_path / "old-clone"
     stale.mkdir()
-    _patch_module_file(monkeypatch, str(stale / "muyan_pilot.py"))
+    _patch_module_file(monkeypatch, str(stale / "src" / "muyan_pilot" / "__init__.py"))
     source = cli_source.cli_source(repo)
     assert source["editable"] is False
-    assert source["actual"] == (stale / "muyan_pilot.py").resolve()
+    assert source["actual"] == (stale / "src" / "muyan_pilot" / "__init__.py").resolve()
 
 
 def test_cli_source_drifts_for_a_nested_copy(tmp_path, monkeypatch):
@@ -132,7 +132,7 @@ def test_cli_source_drifts_for_a_nested_copy(tmp_path, monkeypatch):
     repo = tmp_path / "checkout"
     (repo / ".worktrees" / "wt").mkdir(parents=True)
     _patch_module_file(
-        monkeypatch, str(repo / ".worktrees" / "wt" / "muyan_pilot.py"),
+        monkeypatch, str(repo / ".worktrees" / "wt" / "src" / "muyan_pilot" / "__init__.py"),
     )
     source = cli_source.cli_source(repo)
     assert source["editable"] is False
@@ -146,7 +146,7 @@ def test_drift_line_carries_source_expected_and_fix(tmp_path, monkeypatch):
     repo.mkdir()
     stale = tmp_path / "old-clone"
     stale.mkdir()
-    _patch_module_file(monkeypatch, str(stale / "muyan_pilot.py"))
+    _patch_module_file(monkeypatch, str(stale / "src" / "muyan_pilot" / "__init__.py"))
     source = cli_source.cli_source(repo)
     line = cli_source.drift_line(source)
     assert line is not None
@@ -163,7 +163,7 @@ def test_drift_line_carries_source_expected_and_fix(tmp_path, monkeypatch):
 def test_drift_line_is_none_when_clean(tmp_path, monkeypatch):
     repo = tmp_path / "checkout"
     repo.mkdir()
-    _patch_module_file(monkeypatch, str(repo / "muyan_pilot.py"))
+    _patch_module_file(monkeypatch, str(repo / "src" / "muyan_pilot" / "__init__.py"))
     source = cli_source.cli_source(repo)
     assert cli_source.drift_line(source) is None
 

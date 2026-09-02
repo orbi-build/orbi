@@ -15,19 +15,18 @@ not a hand-written `python3 muyan_pilot.py`. These tests pin:
 - the documentation contract: the README quickstart, AGENTS.md and
   the EN/ZH docs use `muyan-pilot` and no longer require the user to
   hand-write `python3 muyan_pilot.py`;
-- the compatibility path: `muyan_pilot.py` keeps its direct-execution
-  entry (development/compatibility, still asserted against one real
-  call).
+- the direct-execution path: `python3 -m muyan_pilot.cli` runs the
+  exact same code as the console script (development/compatibility,
+  asserted against one real call).
 """
-import re
 import tomllib
 from pathlib import Path
 
 import pytest
 
-import git_transport
-import pilot_setup
-import systemd_deploy
+from muyan_pilot import git_transport
+from muyan_pilot import pilot_setup
+from muyan_pilot import systemd_deploy
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = REPO_ROOT / "pyproject.toml"
@@ -35,11 +34,14 @@ SERVICE_FILE = REPO_ROOT / "systemd" / "muyan-pilot@.service"
 README_FILE = REPO_ROOT / "README.md"
 AGENTS_FILE = REPO_ROOT / "AGENTS.md"
 
-# Every runtime module the installed console script imports (the
-# flat-module layout of this repository).
+# The runtime package (Issue #168 src layout): the installed console
+# script imports `muyan_pilot.cli`, and every runtime module lives in
+# this package — setuptools discovers it automatically, no hand-
+# maintained module list.
+RUNTIME_PACKAGE = "src/muyan_pilot"
 RUNTIME_MODULES = (
-    "muyan_pilot",
-    "bootstrap_runner",
+    "cli",
+    "runner",
     "git_transport",
     "systemd_deploy",
     "pilot_setup",
@@ -94,10 +96,12 @@ def parse_unit(path: Path) -> dict[str, dict[str, list[str]]]:
 
 
 def test_pyproject_declares_the_muyan_pilot_console_script():
-    """Issue #140: the console script is exactly
-    `muyan-pilot = muyan_pilot:main`."""
+    """Issue #140/#168: the console script is exactly
+    `muyan-pilot = muyan_pilot.cli:main` (the src-layout package)."""
     data = load_pyproject()
-    assert data["project"]["scripts"]["muyan-pilot"] == "muyan_pilot:main"
+    assert data["project"]["scripts"]["muyan-pilot"] == (
+        "muyan_pilot.cli:main"
+    )
 
 
 def test_pyproject_project_metadata():
@@ -128,13 +132,28 @@ def test_pyproject_builds_with_the_setuptools_backend():
     assert data["build-system"]["build-backend"] == "setuptools.build_meta"
 
 
-def test_pyproject_ships_every_runtime_module():
-    """The installed console script imports the flat runtime modules;
-    all of them must be listed so the `uv tool` install is complete."""
+def test_pyproject_discovers_the_src_package():
+    """Issue #168: setuptools discovers the runtime package from
+    `src/` automatically — the hand-maintained `py-modules` list is
+    gone (the #158 stale-finder root cause)."""
     data = load_pyproject()
-    modules = data["tool"]["setuptools"]["py-modules"]
+    find = data["tool"]["setuptools"]["packages"]["find"]
+    assert find["where"] == ["src"]
+    assert "py-modules" not in data["tool"]["setuptools"], (
+        "the flat-module py-modules list must stay removed (Issue #168)"
+    )
+
+
+def test_every_runtime_module_lives_in_the_package():
+    """The installed console script imports the runtime package; every
+    runtime module must exist under `src/muyan_pilot/` so the `uv
+    tool` install is complete (no module left behind at the repo
+    root)."""
+    package_dir = REPO_ROOT / RUNTIME_PACKAGE
+    assert package_dir.is_dir(), f"missing package dir: {package_dir}"
     for module in RUNTIME_MODULES:
-        assert module in modules, f"runtime module missing: {module}"
+        path = package_dir / f"{module}.py"
+        assert path.is_file(), f"runtime module missing: {path}"
 
 
 def test_packaging_files_hardcode_no_user_dirs_or_tokens():
@@ -266,8 +285,10 @@ def test_readme_uses_the_cli_and_the_editable_uv_tool_install():
     assert "uv tool install --force --reinstall --editable" in readme
     # The user is no longer required to hand-write the Python entry.
     assert "python3 muyan_pilot.py" not in readme
-    # The compatibility path stays documented (development use only).
-    assert "muyan_pilot.py" in readme
+    # Issue #168: the runtime package lives in `src/muyan_pilot/` and
+    # the checkout root carries no `muyan_pilot.py` that could shadow
+    # the installed package.
+    assert "src/muyan_pilot" in readme
 
 
 def test_docs_document_the_full_cli_command_set():
@@ -365,7 +386,7 @@ def test_bare_cli_runs_the_runner_tick(monkeypatch, tmp_path):
     `the following arguments are required: command` (the pre-fix
     failure mode that made every timer tick exit 2 without ever
     starting the Runner)."""
-    import muyan_pilot
+    import muyan_pilot.cli as muyan_pilot
 
     calls = []
 
@@ -374,7 +395,7 @@ def test_bare_cli_runs_the_runner_tick(monkeypatch, tmp_path):
         return 0
 
     monkeypatch.setattr(
-        muyan_pilot.bootstrap_runner, "main", fake_runner_main,
+        muyan_pilot.runner, "main", fake_runner_main,
     )
     config = tmp_path / "muyan-pilot.toml"
     assert muyan_pilot.main(["--config", str(config)]) == 0
@@ -388,11 +409,11 @@ def test_bare_cli_default_config_delegates_to_the_runner(monkeypatch):
     """`muyan-pilot` with no arguments at all uses the default config
     path (MUYAN_PILOT_CONFIG / muyan-pilot.toml) and still delegates
     to the Runner tick."""
-    import muyan_pilot
+    import muyan_pilot.cli as muyan_pilot
 
     calls = []
     monkeypatch.setattr(
-        muyan_pilot.bootstrap_runner, "main",
+        muyan_pilot.runner, "main",
         lambda argv: calls.append(argv) or 7,
     )
     monkeypatch.delenv("MUYAN_PILOT_CONFIG", raising=False)
@@ -436,10 +457,28 @@ def test_bare_cli_real_call_reaches_the_runner_not_argparse(tmp_path):
 
 
 def test_direct_execution_entry_stays():
-    """Issue #140: `muyan_pilot.py` keeps its `__main__` entry as the
-    development/compatibility path."""
-    text = (REPO_ROOT / "muyan_pilot.py").read_text(encoding="utf-8")
-    assert re.search(r'if __name__ == "__main__":', text)
+    """Issue #140/#168: the direct-execution compatibility entry is
+    `python3 -m muyan_pilot.cli` — the exact same code the console
+    script runs (the src-layout package, no fallback copy at the
+    checkout root that could shadow the installed package)."""
+    import os
+    import subprocess
+    import sys
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    result = subprocess.run(
+        [sys.executable, "-m", "muyan_pilot.cli", "--help"],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, (
+        f"-m muyan_pilot.cli --help failed rc={result.returncode} "
+        f"stderr={result.stderr.strip()}"
+    )
+    for command in ("add", "status", "session", "install-units",
+                    "doctor", "setup"):
+        assert command in result.stdout
 
 
 def test_installed_cli_help_and_version_match_real_calls():
@@ -476,14 +515,18 @@ def test_installed_cli_help_and_version_match_real_calls():
 
 def test_compat_entry_help_matches_one_real_call():
     """The compatibility entry is asserted against one real call
-    (`python3 muyan_pilot.py --help`), not a guessed shape: it must
-    still expose the same subcommands as the installed CLI."""
+    (`python3 -m muyan_pilot.cli --help`), not a guessed shape: it must
+    expose the same subcommands as the installed CLI."""
     import subprocess
     import sys
 
+    import os
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")
     result = subprocess.run(
-        [sys.executable, str(REPO_ROOT / "muyan_pilot.py"), "--help"],
-        cwd=REPO_ROOT, capture_output=True, text=True,
+        [sys.executable, "-m", "muyan_pilot.cli", "--help"],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True,
         timeout=60,
     )
     assert result.returncode == 0, (

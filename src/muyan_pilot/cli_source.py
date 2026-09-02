@@ -5,9 +5,10 @@ The official local deployment is the EDITABLE uv tool install:
     uv tool install --force --reinstall --editable \\
         --python /usr/bin/python3 <deployment checkout>
 
-The tool env's Python imports ``muyan_pilot`` directly from the
-deployment checkout (the setuptools editable finder maps every runtime
-module onto the checkout), so the ``ExecStartPre`` checkout sync
+The tool env's Python imports the ``muyan_pilot`` package directly from
+the deployment checkout (the setuptools editable finder maps the WHOLE
+package directory ``src/muyan_pilot/`` onto the checkout — Issue #168),
+so the ``ExecStartPre`` checkout sync
 (``git fetch origin main && git merge --ff-only origin/main``) is
 picked up by the NEXT CLI process automatically: there is no second
 copy of the source in site-packages and no per-version reinstall.
@@ -34,12 +35,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import muyan_pilot
-from pi_activity import quote_value
+from muyan_pilot.pi_activity import quote_value
 
 # The production interpreter pinned by the documented install command
 # (docs/getting-started.mdx: `--python` pins the production
 # interpreter, 3.14).
 PYTHON_INTERPRETER = "/usr/bin/python3"
+
+# The runtime package directory inside a checkout (Issue #168 src
+# layout): the editable install maps this WHOLE directory, so a newly
+# added package module is importable without regenerating any module
+# list (the #158 stale-finder root cause).
+PACKAGE_DIR = Path("src") / "muyan_pilot"
 
 
 def reinstall_args(repo_dir: Path) -> list[str]:
@@ -72,13 +79,14 @@ def reinstall_command(repo_dir: Path) -> str:
 
 
 def module_file() -> Path:
-    """The running process's ``muyan_pilot`` import source (resolved).
+    """The running process's ``muyan_pilot`` package import source
+    (resolved).
 
     This is the ground truth for "which source is this CLI process
     executing": the console script imports ``muyan_pilot`` at start,
     so ``__file__`` is the file the interpreter actually loaded —
-    the checkout file for an editable install, a site-packages copy
-    for a non-editable one.
+    ``<checkout>/src/muyan_pilot/__init__.py`` for an editable install,
+    a site-packages copy for a non-editable one.
     """
     file = getattr(muyan_pilot, "__file__", None)
     if not isinstance(file, str) or not file:
@@ -97,20 +105,19 @@ def cli_source(expected_repo_dir: Path) -> dict:
     (:func:`module_file`); ``expected`` is the configured ``repo_dir``
     (both resolved: a symlinked checkout path is the same source as
     the resolved one). ``editable`` is True exactly when the import
-    source sits DIRECTLY inside the checkout root — an editable
-    install (or the compat entry run inside the checkout) imports
-    ``<repo_dir>/muyan_pilot.py``; a non-editable install imports a
-    site-packages copy, a stale install a different checkout, and a
-    nested copy (e.g. a worktree's own file) is not the configured
-    source either. ``fix`` is the exact reinstall command for the
-    expected checkout.
+    source sits INSIDE the checkout's package directory — an editable
+    install imports ``<repo_dir>/src/muyan_pilot/__init__.py``; a
+    non-editable install imports a site-packages copy, a stale install
+    a different checkout, and a nested copy (e.g. a worktree's own
+    package) is not the configured source either. ``fix`` is the exact
+    reinstall command for the expected checkout.
     """
     expected = Path(expected_repo_dir).resolve()
     actual = module_file()
     return {
         "actual": actual,
         "expected": expected,
-        "editable": actual.parent == expected,
+        "editable": actual.is_relative_to(expected / PACKAGE_DIR),
         "fix": reinstall_command(expected_repo_dir),
     }
 

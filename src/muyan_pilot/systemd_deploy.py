@@ -28,7 +28,7 @@ import logging
 import os
 from pathlib import Path
 
-from pi_activity import quote_value
+from muyan_pilot.pi_activity import quote_value
 
 LOGGER = logging.getLogger("muyan_pilot.systemd_deploy")
 

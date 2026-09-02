@@ -16,25 +16,29 @@ import sys
 import threading
 from pathlib import Path
 
-import pilot_slots
+from muyan_pilot import pilot_slots
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def run_slot_script(code: str) -> subprocess.Popen:
-    """Start a child process that imports pilot_slots from the repo root."""
+    """Start a child process that imports pilot_slots from the
+    checkout's `src/` layout (Issue #168). The cwd is NEUTRAL: with the
+    checkout root as cwd, the repo-root `muyan_pilot.py` compat shim
+    would shadow the `muyan_pilot` package on sys.path."""
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT)
+    env["PYTHONPATH"] = str(REPO_ROOT / "src")
     return subprocess.Popen(
         [sys.executable, "-c", code],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+        cwd="/",
     )
 
 
 def slot_script_code(state: Path, extra: str = "") -> str:
     return (
         "import os, sys\n"
-        "import pilot_slots\n"
+        "from muyan_pilot import pilot_slots\n"
         f"state = {str(state)!r}\n"
         "slot = pilot_slots.acquire_slot(state, 1, os.getpid())\n"
         "if slot is None:\n"

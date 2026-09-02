@@ -169,8 +169,8 @@ def test_first_screen_says_what_orbi_is_and_how_to_start():
     assert "muyan-pilot setup" in head, (
         "the first screen must carry the one-time setup command"
     )
-    assert "bootstrap_runner.py" in head, (
-        "the first screen must carry the first-tick command"
+    assert "muyan_pilot.runner" in head, (
+        "the first screen must carry the first-tick command (Issue #168 src layout)"
     )
 
 

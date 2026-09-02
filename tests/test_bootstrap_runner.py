@@ -15,8 +15,8 @@ from unittest.mock import Mock
 
 import pytest
 
-import bootstrap_runner as runner
-import pi_activity
+import muyan_pilot.runner as runner
+from muyan_pilot import pi_activity
 from tests.test_progress_wiring import make_fake_gh
 
 
@@ -7580,7 +7580,7 @@ def test_main_capacity_full_does_not_pick_issue_or_call_pi(
     monkeypatch, tmp_path, caplog,
 ):
     """A full slot stops the runner before any claim or Pi invocation."""
-    import pilot_slots
+    from muyan_pilot import pilot_slots
 
     config = tmp_path / "muyan-pilot.toml"
     config.write_text(
@@ -7617,7 +7617,7 @@ def test_main_capacity_full_does_not_pick_issue_or_call_pi(
 
 def test_main_holds_slot_while_processing_issue(monkeypatch, tmp_path):
     """The slot is acquired before the pick and held for the whole task."""
-    import pilot_slots
+    from muyan_pilot import pilot_slots
 
     issue = {"number": 12, "title": "task", "body": "body"}
     config = tmp_path / "muyan-pilot.toml"
@@ -7640,7 +7640,7 @@ def test_main_holds_slot_while_processing_issue(monkeypatch, tmp_path):
 
 def test_main_reacquires_slot_after_previous_release(monkeypatch, tmp_path):
     """After the holder releases (process exit), the next run takes the slot."""
-    import pilot_slots
+    from muyan_pilot import pilot_slots
 
     config = tmp_path / "muyan-pilot.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
@@ -7719,7 +7719,7 @@ def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
     (non-zero exit), no slot is taken and nothing is claimed — while
     a currently RUNNING task is never interrupted (only the next
     start is blocked)."""
-    import systemd_deploy
+    from muyan_pilot import systemd_deploy
 
     repo, installed = _drift_world(tmp_path, drift=True)
     monkeypatch.setenv("MUYAN_PILOT_UNIT_DIR", str(installed))
@@ -7794,7 +7794,7 @@ def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
     clean, the structured `auto_synced` line is logged and the tick
     proceeds to the normal claim flow (slot taken, queue scanned).
     No more per-tick drift loop until a human intervenes."""
-    import systemd_deploy
+    from muyan_pilot import systemd_deploy
 
     repo, installed = _drift_world(tmp_path, drift=True)
     monkeypatch.setenv("MUYAN_PILOT_UNIT_DIR", str(installed))
@@ -7840,7 +7840,7 @@ def test_main_unit_drift_auto_sync_failure_blocks_claim(
     """Issue #142: a failing self-heal (e.g. daemon-reload fails) fails
     fast BEFORE any slot or claim — the install error propagates,
     nothing is claimed, and the scene stays in the journal."""
-    import systemd_deploy
+    from muyan_pilot import systemd_deploy
 
     repo, installed = _drift_world(tmp_path, drift=True)
     monkeypatch.setenv("MUYAN_PILOT_UNIT_DIR", str(installed))
@@ -7879,7 +7879,7 @@ def test_main_unit_drift_clean_proceeds_to_claim(monkeypatch, tmp_path,
                                                  caplog):
     """Issue #103: matching units log `unit_drift clean` and the tick
     proceeds to the normal claim flow (slot taken, queue scanned)."""
-    import systemd_deploy
+    from muyan_pilot import systemd_deploy
 
     repo, installed = _drift_world(tmp_path, drift=False)
     monkeypatch.setenv("MUYAN_PILOT_UNIT_DIR", str(installed))
@@ -7935,7 +7935,7 @@ def test_main_transport_check_blocks_claim_before_slot(
     slot or claim: the structured transport reason is raised (non-zero
     exit), no slot is taken and nothing is claimed — no HTTPS fallback,
     no silent skip."""
-    import git_transport
+    from muyan_pilot import git_transport
 
     _write_prompts(tmp_path)
     config = tmp_path / "muyan-pilot.toml"
@@ -8128,45 +8128,46 @@ def test_bootstrap_chain_loads_and_refreshes_when_cli_install_is_unmapped(
     the editable finder's module MAPPING is generated at INSTALL time
     from `pyproject.toml`, so right after this PR merges, the INSTALLED
     finder does not map `cli_install` yet — and the bootstrap chain
-    (`muyan_pilot` -> `bootstrap_runner`) must still LOAD in that tool
-    env, with the refresh REACHABLE: the refresh implementation lives
-    in `bootstrap_runner` itself (a separate new module would not be
+    (`muyan_pilot.cli` -> `muyan_pilot.runner`) must still LOAD in that
+    tool env, with the refresh REACHABLE: the refresh implementation
+    lives in `runner` itself (a separate new module would not be
     importable in the stale-finder env, and the very refresh that
     reinstalls the tool env could never run — the #158 incident, one
-    module later). Load a fresh `bootstrap_runner` with `cli_install`
-    blocked from the import system: it must import cleanly and its
-    `refresh_cli_install` gate must run (the unchanged path needs no
-    uv call and no other new module)."""
-    import importlib.util
-
-    bootstrap_file = Path(runner.__file__).resolve()
-
+    module later). Load a fresh `muyan_pilot.runner` with
+    `muyan_pilot.cli_install` blocked from the import system: it must
+    import cleanly and its `refresh_cli_install` gate must run (the
+    unchanged path needs no uv call and no other new module)."""
     class _BlockCliInstall:
-        """Meta path finder that hides the `cli_install` module."""
+        """Meta path finder that hides the `muyan_pilot.cli_install`
+        module."""
 
         def find_spec(self, fullname, path=None, target=None):
-            if fullname == "cli_install":
+            if fullname == "muyan_pilot.cli_install":
                 raise ModuleNotFoundError(
-                    "No module named 'cli_install'", name=fullname,
+                    "No module named 'muyan_pilot.cli_install'",
+                    name=fullname,
                 )
             return None
 
     hook = _BlockCliInstall()
     # The hook hides exactly the module under test and nothing else.
     with pytest.raises(ModuleNotFoundError, match="cli_install"):
-        hook.find_spec("cli_install")
+        hook.find_spec("muyan_pilot.cli_install")
     assert hook.find_spec("some_other_module") is None
-    saved = sys.modules.pop("bootstrap_runner")
+    import muyan_pilot
+    saved = sys.modules.pop("muyan_pilot.runner")
     sys.meta_path.insert(0, hook)
     try:
-        spec = importlib.util.spec_from_file_location(
-            "bootstrap_runner_stale_finder", bootstrap_file,
-        )
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        import muyan_pilot.runner as fresh_runner
     finally:
         sys.meta_path.remove(hook)
-        sys.modules["bootstrap_runner"] = saved
+        # Restore BOTH the sys.modules entry and the package attribute:
+        # the fresh import binds `muyan_pilot.runner` to the new module
+        # instance, and leaving it would shadow the original for every
+        # later test in the session.
+        sys.modules["muyan_pilot.runner"] = saved
+        muyan_pilot.runner = saved
+    module = fresh_runner
     # The fresh module loaded with `cli_install` unmapped: the chain
     # is importable in the stale-finder tool env, so the next systemd
     # start reaches `main()` and the refresh can repair the finder.
@@ -9442,7 +9443,7 @@ def test_wait_for_delivery_logs_awaiting_without_bound_run_id(monkeypatch, caplo
 def test_main_holds_slot_through_delivery_wait(monkeypatch, tmp_path):
     """The slot stays occupied while the delivery awaits review: a second
     concurrent runner must see capacity_full until the PR is merged."""
-    import pilot_slots
+    from muyan_pilot import pilot_slots
 
     issue = {"number": 12, "title": "task", "body": "body"}
     config = tmp_path / "muyan-pilot.toml"
@@ -10914,8 +10915,8 @@ import subprocess
 import sys
 import time
 
-sys.path.insert(0, {repo!r})
-import bootstrap_runner as runner
+sys.path.insert(0, {repo!r} + "/src")
+import muyan_pilot.runner as runner
 
 logging.basicConfig(level=logging.INFO, format=runner.log_format())
 # Exactly what main() does (Issue #48): install the stop handler first.
@@ -11078,8 +11079,8 @@ def test_real_subprocess_sigterm_before_claim_logs_idle(tmp_path):
     driver = tmp_path / "driver_idle.py"
     driver.write_text(
         "import logging, signal, sys, time\n"
-        f"sys.path.insert(0, {str(Path(__file__).resolve().parent.parent)!r})\n"
-        "import bootstrap_runner as runner\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parent.parent / 'src')!r})\n"
+        "import muyan_pilot.runner as runner\n"
         "logging.basicConfig(level=logging.INFO, format=runner.log_format())\n"
         "signal.signal(signal.SIGTERM, runner._handle_stop)\n"
         "print('ready', flush=True)\n"

@@ -73,15 +73,19 @@ Issue #152）。editable 安装下 tool 环境直接从 clone 目录导入
 `muyan_pilot`，下一个 CLI 进程（下一个 timer 启动的 Runner）自动取到
 merge 后的代码：**普通 Python 源码与 systemd 模板/迁移代码变更不需要
 任何重装或升级命令**。
-当**打包输入**变化（`py-modules` 新增运行时模块、依赖、入口点、包名、
-构建后端或 Python 版本）时，Runner 每次启动（在任何 slot/claim 之前）
-自动刷新安装——刷新失败会 fail fast（结构化 `cli_install_failed`
-行：原因 + 精确修复命令）。`muyan-pilot doctor` 报告一致性
+自 src layout（Issue #168）起，editable finder 映射**整个**
+`src/muyan_pilot/` package 目录——新增 package 模块**不需要重装**
+（#158 的 stale 模块清单问题已在根上修复）。当其余**打包输入**变化
+（`pyproject.toml` 的依赖、入口点、包名、构建后端或 Python 版本）时，
+Runner 每次启动（在任何 slot/claim 之前）自动刷新安装——刷新失败会
+fail fast（结构化 `cli_install_failed` 行：原因 + 精确修复命令）。`muyan-pilot doctor` 报告一致性
 （`cli_source: clean` 或 `cli_source: DRIFT` + 结构化 `cli_source_drift`
 行），`muyan-pilot setup` 幂等地校验或重装。发布包不携带第三方运行时
 依赖、token 或用户目录——配置文件和用户 systemd 目录保持机器本地。
-`muyan_pilot.py` 的直接执行入口（用解释器直接运行该文件）保留为
-开发/兼容路径。
+checkout 根目录**没有** `muyan_pilot.py`（与 package 同名的 flat 文件
+会遮蔽 checkout 根目录在 sys.path 上的一切进程的已安装 package）；
+直接执行入口 `python3 -m muyan_pilot.cli` 运行与 console script 完全
+相同的代码，保留为开发/兼容路径。
 
 ## 3. 创建配置
 
@@ -96,7 +100,7 @@ cp .muyan-pilot.example.toml muyan-pilot.toml
 | 字段 | 必填 | 默认 | 含义 |
 |---|---|---|---|
 | `source_repos` | 是 | — | 每个 tick 按顺序扫描的 `owner/repo` 任务池列表（例如先你的 pilot 仓库，再你的 backlog 仓库） |
-| `repo_dir` | 否 | `.` | service 启动的 Runner checkout（`bootstrap_runner.py` 所在目录） |
+| `repo_dir` | 否 | `.` | service 启动的 Runner checkout（`src/muyan_pilot/` package 所在目录） |
 | `workspace_root` | 否 | `..` | 包含任务 worktree 和 agent 可修改仓库的目录 |
 | `prompt` | 否 | `prompt.md` | 实现者 prompt 模板（`{{SOURCE_REPO}}` 等占位符由 Runner 渲染） |
 | `prompt_review` | 否 | `prompt_review.md` | PR 后独立审查 session 的 review prompt 模板 |
@@ -276,8 +280,12 @@ muyan-pilot setup --config muyan-pilot.toml
 手工命令只用于首次验证和排查——正常运行由 timer 调度（第 8 步）：
 
 ```bash
-python3 bootstrap_runner.py --config muyan-pilot.toml
+PYTHONPATH=src python3 -m muyan_pilot.runner --config muyan-pilot.toml
 ```
+
+（`PYTHONPATH=src` 把 checkout 的 `src/` layout 放进 import 路径；
+`-m` 运行 Runner package 模块——已安装的 `muyan-pilot` console script
+运行的是同一个 tick。）
 
 一个 tick 最多做一件事：恢复一个已打开的 PR（review/fix/merge），或
 领取一个 `ai-ready` Issue（带 `p0` 标签的 Issue 最先被领取，然后是
@@ -302,7 +310,7 @@ muyan-pilot status --config muyan-pilot.toml
 
 # c. 跑一个 tick：Runner 领取 Issue，在全新 worktree 里启动 Pi，
 #    朝 PR 推进。
-python3 bootstrap_runner.py --config muyan-pilot.toml
+PYTHONPATH=src python3 -m muyan_pilot.runner --config muyan-pilot.toml
 
 # d. tick 运行期间跟实时活动（第二个终端）：
 journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service -f

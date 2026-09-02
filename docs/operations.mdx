@@ -218,9 +218,12 @@ is defined in [Getting started](/getting-started) step 2.
 `muyan-pilot doctor` reports the consistency (`cli_source: clean` or
 `cli_source: DRIFT` with the structured `cli_source_drift` line: actual
 import path, expected repo_dir, the exact editable reinstall command),
-and `muyan-pilot setup` verifies or reinstalls it. The
-direct-execution entry of `muyan_pilot.py` stays a development/
-compatibility path.
+and `muyan-pilot setup` verifies or reinstalls it. The checkout root
+carries no `muyan_pilot.py`: a flat file named like the package would
+shadow the installed package for every process with the checkout root
+on sys.path. The direct-execution entry `python3 -m muyan_pilot.cli`
+runs the exact same code as the console script and stays a
+development/compatibility path.
 
 ```bash
 # Create an Issue in a configured source repo and label it ai-ready

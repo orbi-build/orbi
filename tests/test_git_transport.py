@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-import git_transport
+from muyan_pilot import git_transport
 
 
 # --- ssh_url_for -------------------------------------------------------------

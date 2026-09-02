@@ -5,17 +5,25 @@
 # `muyan-pilot` console script stay unchanged for existing users.
 #
 # The official usage is the installed console script, installed as an
-# EDITABLE uv tool (Issue #152): the tool env imports the modules
-# directly from the deployment checkout, so the ExecStartPre checkout
-# sync is picked up by the next CLI process automatically (no
+# EDITABLE uv tool (Issue #152): the tool env imports the `muyan_pilot`
+# package directly from the deployment checkout, so the ExecStartPre
+# checkout sync is picked up by the next CLI process automatically (no
 # per-version reinstall):
 #
 #     uv tool install --force --reinstall --editable \
 #         --python /usr/bin/python3 <this repo>
 #     muyan-pilot --help
 #
-# The direct-execution entry `python3 muyan_pilot.py` stays as a
-# development/compatibility path.
+# src layout (Issue #168): the runtime code lives in `src/muyan_pilot/`
+# and setuptools discovers the package automatically (no hand-maintained
+# module list). The editable finder maps the WHOLE package directory, so
+# a newly added package module is importable by the next CLI process
+# without regenerating any module list (the #158 stale-finder root
+# cause). The checkout root carries NO `muyan_pilot.py` — a flat file
+# named like the package would shadow it for every process with the
+# checkout root on sys.path; the direct-execution compatibility entry is
+# `python3 -m muyan_pilot.cli` (the exact same code as the console
+# script).
 #
 # The release package is machine-independent: no third-party runtime
 # dependency (the bootstrap intentionally has none), no token, no user
@@ -37,23 +45,17 @@ authors = [{ name = "xqliu" }]
 dependencies = []
 
 [project.scripts]
-muyan-pilot = "muyan_pilot:main"
+muyan-pilot = "muyan_pilot.cli:main"
 
-# Flat-module layout: the console script imports these top-level
-# modules, so every one of them ships with the distribution.
-[tool.setuptools]
-py-modules = [
-    "muyan_pilot",
-    "bootstrap_runner",
-    "git_transport",
-    "systemd_deploy",
-    "pilot_setup",
-    "pilot_slots",
-    "pi_activity",
-    "pi_recovery",
-    "progress",
-    # Issue #152: the CLI source consistency check (doctor/setup).
-    "cli_source",
-    # Issue #158: the pre-start editable CLI install refresh.
-    "cli_install",
-]
+# src layout: setuptools discovers the `muyan_pilot` package under
+# `src/` automatically (Issue #168) — the old hand-maintained
+# `py-modules` list is gone with it.
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# The contract test command (`python3 -m coverage run --branch -m pytest
+# tests/ -q`) runs WITHOUT installing the package: pytest puts `src/` on
+# sys.path so the suite imports `muyan_pilot.*` straight from the
+# checkout (Issue #168).
+[tool.pytest.ini_options]
+pythonpath = ["src"]

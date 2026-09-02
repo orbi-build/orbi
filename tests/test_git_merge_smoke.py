@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-import bootstrap_runner as runner
+import muyan_pilot.runner as runner
 
 
 def git(repo: Path, *args: str) -> str:

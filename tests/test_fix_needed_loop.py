@@ -15,7 +15,7 @@ import subprocess
 
 import pytest
 
-import bootstrap_runner as runner
+import muyan_pilot.runner as runner
 
 PR_URL = "https://github.com/owner/repo/pull/46"
 RUN_ID = "a1b2c3d4"

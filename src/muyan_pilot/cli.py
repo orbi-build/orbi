@@ -2,10 +2,10 @@
 """Muyan Pilot task dispatch and status CLI.
 
 With NO subcommand the CLI IS the Runner entry (Issue #140): it runs one
-tick, exactly like the legacy `python3 bootstrap_runner.py` — this is
-what the systemd service's `ExecStart` (the installed `muyan-pilot`)
-invokes on every timer trigger. The named subcommands are the dispatch
-and debug entries on top of that:
+tick, exactly like `python3 -m muyan_pilot.runner` — this is what the
+systemd service's `ExecStart` (the installed `muyan-pilot`) invokes on
+every timer trigger. The named subcommands are the dispatch and debug
+entries on top of that:
 
 `add` creates an Issue in a configured source repo and labels it
 `ai-ready`.
@@ -17,7 +17,7 @@ Issue, and the most recent result (`ai-pr-opened` / `ai-fix-needed` /
 
 GitHub Issues and labels are the only state store. There is no database,
 queue, or web UI. Command failures are logged and raised by the reused
-bootstrap_runner.run_command; there is no fallback.
+runner.run_command; there is no fallback.
 """
 from __future__ import annotations
 
@@ -31,12 +31,9 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
-import bootstrap_runner
-import cli_source
-import git_transport
-import systemd_deploy
+from muyan_pilot import __version__, cli_source, git_transport, runner, systemd_deploy
 
-from bootstrap_runner import (
+from muyan_pilot.runner import (
     RunIdFilter,
     freeze_base,
     load_config,
@@ -45,19 +42,19 @@ from bootstrap_runner import (
     run_command,
     validate_config,
 )
-import pilot_setup
-from pilot_slots import slot_occupancy
-from pi_activity import activity_snapshot
+from muyan_pilot import pilot_setup
+from muyan_pilot.pilot_slots import slot_occupancy
+from muyan_pilot.pi_activity import activity_snapshot
 
 LOGGER = logging.getLogger("muyan_pilot.cli")
 # Same run correlation mechanism as the runner (Issue #41): when a run id is
 # bound, every journal line of this process starts with `[run_id]`.
 LOGGER.addFilter(RunIdFilter())
 
-# The CLI version (Issue #140): the single source of truth for the
-# `--version` output. tests/test_cli_packaging.py pins it against the
-# PEP 621 `version` in pyproject.toml, so the two cannot drift.
-__version__ = "0.2.0"
+# The CLI version (Issue #140): the single source of truth is the
+# package `muyan_pilot.__version__` (imported above). tests/
+# test_cli_packaging.py pins it against the PEP 621 `version` in
+# pyproject.toml, so the two cannot drift.
 
 ISSUE_URL_PATTERN = re.compile(r"/issues/(\d+)$")
 READY_LABEL = "ai-ready"
@@ -504,8 +501,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     # Issue #140: the subcommand is OPTIONAL — with no subcommand the
     # installed CLI runs one Runner tick (the systemd ExecStart is the
-    # bare `muyan-pilot`), exactly like the legacy
-    # `python3 bootstrap_runner.py`.
+    # bare `muyan-pilot`), exactly like `python3 -m
+    # muyan_pilot.runner`.
     subparsers = parser.add_subparsers(dest="command")
     add_parser = subparsers.add_parser(
         "add", parents=[common],
@@ -577,9 +574,9 @@ def main(argv: list[str] | None = None) -> int:
         # Issue #140: no subcommand = the Runner tick. Delegate to the
         # Runner's own main: it re-parses `--config` and owns the whole
         # tick contract (unit-drift preflight, transport preflight,
-        # slot, claim, fail-fast) — the same behavior the legacy
-        # `python3 bootstrap_runner.py` entry had.
-        return bootstrap_runner.main(["--config", str(args.config)])
+        # slot, claim, fail-fast) — the same behavior the
+        # `python3 -m muyan_pilot.runner` entry has.
+        return runner.main(["--config", str(args.config)])
 
     config = load_config(args.config)
     validate_config(config)

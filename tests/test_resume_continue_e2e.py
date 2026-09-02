@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-import bootstrap_runner as runner
+import muyan_pilot.runner as runner
 
 REPO = "owner/repo"
 RENAME_OLD = "xqliu/orbi"

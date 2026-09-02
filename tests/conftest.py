@@ -12,7 +12,7 @@ over this default).
 """
 import pytest
 
-import bootstrap_runner as runner
+import muyan_pilot.runner as runner
 
 
 @pytest.fixture(autouse=True)
@@ -23,7 +23,7 @@ def _default_cli_install_preflight(monkeypatch):
     install` must never run in them. The refresh's own tests and the
     wiring tests stub or exercise it explicitly (a ``monkeypatch``
     always wins over this default). The implementation lives in
-    `bootstrap_runner` itself (see the NOTE there), so the stub
+    `muyan_pilot.runner` itself (see the NOTE there), so the stub
     patches ITS module global — the call `main()` makes."""
     monkeypatch.setattr(
         runner, "refresh_cli_install", lambda *a, **k: "unchanged",

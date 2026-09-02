@@ -10,7 +10,7 @@ passed/failed, review findings, PR opened, merged, blocked)
 are published as short standalone comments so GitHub Mobile pushes a
 notification for each one.
 
-All GitHub traffic goes through the reused `bootstrap_runner.run_command`
+All GitHub traffic goes through the reused `runner.run_command`
 (`gh api`), which logs the command and fails fast on any error. There is
 no fallback or retry.
 """
