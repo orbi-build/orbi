@@ -2735,13 +2735,19 @@ def worktree_path(repo_dir: Path, source_repo: str, number: int,
 
 
 def create_worktree(repo_dir: Path, source_repo: str, number: int,
-                    run_id: str, base_sha: str) -> Path:
+                    run_id: str, base_sha: str,
+                    existing: Path | None = None) -> Path:
     """Create the task worktree from the frozen base SHA, never HEAD.
 
     An existing path is reused: only a resumed run (same run id after a
     process restart) reaches that state, and its worktree is the scene
-    the run continues in (Issue #18).
+    the run continues in (Issue #18). `existing` is the VERIFIED resume
+    scene (Issue #219): after a repo rename the scene's path carries
+    the OLD slug, so the derived path would miss it and a second
+    worktree would be created — the verified scene is returned as-is.
     """
+    if existing is not None and existing.is_dir():
+        return existing
     path = worktree_path(repo_dir, source_repo, number, run_id)
     if path.exists():
         return path
@@ -2752,12 +2758,198 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
     return path
 
 
+def run_state_path(worktree: Path) -> Path:
+    """The run state file of one task worktree (Issue #219).
+
+    It lives in the gitignored `.muyan-pilot/` directory, so it never
+    dirties the commit boundary (Issue #186) and never reaches the
+    delivery commit.
+    """
+    return worktree / ".muyan-pilot" / "run-state.json"
+
+
+def write_run_state(worktree: Path, *, run_id: str, issue: int,
+                    source_repo: str, branch: str) -> None:
+    """Write (or refresh) the run state file of one task worktree.
+
+    The file is the explicit "same run" marker (Issue #219): the
+    worktree directory name alone is not stable across a repo rename
+    (the slug changes), but the state file carries the issue number
+    and the repo — the identity the next tick matches on. A resumed
+    run refreshes the SAME file (same run id): the file is per-run,
+    never per-session.
+    """
+    state = {
+        "run_id": run_id,
+        "issue": issue,
+        "repo": source_repo,
+        "branch": branch,
+        "worktree": str(worktree),
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    path = run_state_path(worktree)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+
+def read_run_state(worktree: Path) -> dict | None:
+    """Read the run state file; None when absent, fail fast when corrupt.
+
+    A corrupt state file is a delivery failure, never a guess: the
+    resume must continue the SAME run, and a wrong continuation is
+    worse than a blocked Issue (Issue #219).
+    """
+    path = run_state_path(worktree)
+    if not path.is_file():
+        return None
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"run state file {path} is unreadable: {exc}"
+        ) from exc
+    if not isinstance(state, dict):
+        raise ValueError(
+            f"run state file {path} must be a JSON object"
+        )
+    required: dict[str, type] = {
+        "run_id": str, "issue": int, "repo": str,
+        "branch": str, "worktree": str,
+    }
+    for key, expected in required.items():
+        value = state.get(key)
+        if expected is int:
+            valid = isinstance(value, int) and not isinstance(value, bool)
+        else:
+            valid = isinstance(value, expected) and bool(value)
+        if not valid:
+            raise ValueError(
+                f"run state file {path} is malformed: missing or "
+                f"invalid field {key!r}"
+            )
+    return state
+
+
+def changed_files(worktree: Path) -> list[str]:
+    """The worktree's uncommitted changes (tracked + untracked paths)."""
+    raw = run_command(["git", "status", "--porcelain"], cwd=worktree)
+    files: list[str] = []
+    for line in raw.splitlines():
+        if len(line) > 3 and line[:2].strip():
+            files.append(line[3:].strip())
+    return files
+
+
+def resume_context(worktree: Path) -> str | None:
+    """The resume context for a continued run (Issue #219), or None.
+
+    A worktree without uncommitted changes and without a previous
+    session is a fresh scene: the agent starts from the Issue alone
+    (the exact pre-#219 prompt). Otherwise the new session must
+    continue the existing work: the context carries the instruction
+    to continue (never redo, never discard), the previous session's
+    progress and the list of changed files — the agent inspects the
+    actual diff itself, it runs inside the worktree.
+    """
+    files = changed_files(worktree)
+    snapshot = activity_snapshot(worktree / ".pi-session")
+    if not files and snapshot is None:
+        return None
+    lines = [
+        "Resume context (Issue #219): this worktree already carries "
+        "work from an earlier session of the SAME run. Continue that "
+        "work — do not start from scratch, do not discard or rewrite "
+        "the existing changes, and do not create a new plan from "
+        "nothing.",
+    ]
+    if snapshot is not None:
+        lines.append(
+            "Previous session progress: "
+            f"session={snapshot.get('session_id') or '-'} "
+            f"events={snapshot.get('events', 0)} "
+            f"phase={snapshot.get('phase') or '-'} "
+            f"last_action={snapshot.get('action') or '-'} "
+            f"last_result={snapshot.get('result') or '-'}"
+        )
+    if files:
+        lines.append(
+            f"Uncommitted changed files ({len(files)}):"
+        )
+        lines.extend(f"- {path}" for path in files)
+    return "\n".join(lines)
+
+
+def worktree_resume_scene(repo_dir: Path, source_repo: str,
+                 number: int) -> tuple[str, Path] | None:
+    """Return the resume scene `(run_id, worktree)` for one Issue, or None.
+
+    The worktrees are matched by the RUN STATE FILE (Issue #219), not
+    by the directory name alone: the directory name carries the
+    source-repo slug, which changes when the repo is renamed, while
+    the state file carries the issue number and the repo NAME (the
+    part after the slash — stable across a rename). The newest
+    matching worktree (by mtime) wins, as before (Issue #18). The
+    scene's worktree path may carry the OLD slug (a rename): it is
+    the scene the run continues in, never a reason for a second
+    worktree.
+
+    A worktree that claims THIS issue number but has a MISSING or
+    CORRUPT run state file cannot be verified as the same run: it
+    fails fast with the exact reason — never a silent fresh redo
+    (Issue #219). A worktree of another issue without a state file
+    (a legacy completed run) is unrelated and skipped.
+    """
+    name = source_repo.rsplit("/", 1)[-1]
+    pattern = re.compile(
+        r"^muyan-pilot-.+-issue-" + str(number) + r"-[0-9a-f]{8}$",
+    )
+    candidates: list[Path] = []
+    worktrees = repo_dir / ".worktrees"
+    if worktrees.is_dir():
+        for path in worktrees.iterdir():
+            if not path.is_dir() or not pattern.match(path.name):
+                continue
+            try:
+                state = read_run_state(path)
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"worktree {path} has a corrupt run state file "
+                    f"({exc}): the same run cannot be verified "
+                    "(Issue #219)"
+                ) from exc
+            if state is None:
+                raise RuntimeError(
+                    f"worktree {path} has no run state file "
+                    f"({run_state_path(path)}): the same run cannot "
+                    "be verified (Issue #219)"
+                )
+            if str(state["repo"]).rsplit("/", 1)[-1] != name:
+                continue
+            candidates.append(path)
+    if not candidates:
+        return None
+    newest = max(candidates, key=lambda path: path.stat().st_mtime)
+    return str(read_run_state(newest)["run_id"]), newest
+
+
+def resume_run_id(repo_dir: Path, source_repo: str,
+                  number: int) -> str | None:
+    """Return the run id to resume for one Issue, or None.
+
+    Delegates to `worktree_resume_scene` (the worktree is matched by its run
+    state file, not the directory name alone — Issue #219).
+    """
+    scene = worktree_resume_scene(repo_dir, source_repo, number)
+    return scene[0] if scene is not None else None
+
+
 def latest_run_id(repo_dir: Path, source_repo: str, number: int) -> str | None:
     """Return the run id of the newest task worktree for the issue.
 
-    The worktree directory name carries the run id — the only state
-    needed to resume the same GitHub progress comment (hidden run
-    marker) instead of creating a second one (Issue #18).
+    The worktree directory name carries the run id — the state the
+    release state machine (Issue #98) reuses to resume the same run
+    after a restart. Development runs use the stricter state-file
+    discovery (`worktree_resume_scene`, Issue #219) instead.
     """
     slug = source_repo.replace("/", "-")
     pattern = f".worktrees/muyan-pilot-{slug}-issue-{number}-*"
@@ -3650,12 +3842,20 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
 
 def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
            *, timeout: int | None = None, branch: str | None = None,
-           progress: Callable[[dict], None] | None = None) -> str:
+           progress: Callable[[dict], None] | None = None,
+           resume_context: str | None = None) -> str:
     """Run the implementer Pi session for a freshly claimed Issue.
 
     Issue #82 removed the fixer reuse of this function: findings are
     fixed by the review session in the same session, so the implementer
     is the only user of `prompt.md` now.
+
+    `resume_context` (Issue #219): when the worktree already carries
+    the interrupted run's work (uncommitted changes and/or a previous
+    session), the context argument gains the resume section so the NEW
+    session continues the existing work instead of a fresh redo. The
+    prompt template itself is untouched; absent -> the exact
+    pre-#219 context.
     """
     system_prompt = render_prompt(
         config["prompt"].read_text(encoding="utf-8"),
@@ -3686,6 +3886,8 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         f"Worktree: {worktree}\n"
     )
     context += "Complete the delivery process in the system prompt."
+    if resume_context:
+        context += f"\n{resume_context}"
     command = [
         "pi", *_skill_args(_skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)),
         *_pi_model_args(config),
@@ -5513,6 +5715,31 @@ class LiveProgressThrottle:
         self._publish(activity)
 
 
+def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
+                           error: Exception) -> None:
+    """Report a failed resume decision through the terminal path.
+
+    The worktree of this issue exists but its run state cannot be
+    verified (Issue #219): continuing on a guessed identity risks a
+    silent fresh redo on top of unknown work, and a fresh run would
+    lose the existing work. The Issue goes `ai-blocked` ALONE (the
+    claim label removed) with the exact reason in the failure comment
+    — a human decides (restore or remove the worktree, then re-label).
+    """
+    edit_issue(
+        number, repo=source_repo, add=BLOCKED_LABEL,
+        remove=IN_PROGRESS_LABEL,
+    )
+    comment_issue(
+        number, repo=source_repo,
+        body=(
+            f"{run_marker(run_id)}\n"
+            f"Muyan Pilot failed: cannot continue the interrupted run: "
+            f"{_failure_detail(error)} (run_id={run_id})"
+        ),
+    )
+
+
 def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     number = int(issue["number"])
     # Issue #100: the progress comment's issue line shows the number
@@ -5542,12 +5769,28 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     # progress comment is found and kept instead of a second one.
     # Completed runs keep their worktrees as evidence but lose the
     # label, so re-claiming an issue always starts a fresh run.
+    existing_worktree: Path | None = None
     if has_in_progress_label(number, source_repo):
-        existing_run_id = latest_run_id(
-            config["repo_dir"], source_repo, number,
-        )
-        if existing_run_id is not None:
-            run_id = existing_run_id
+        try:
+            scene = worktree_resume_scene(
+                config["repo_dir"], source_repo, number,
+            )
+        except Exception as exc:
+            # Issue #219: the worktree of this issue exists but its run
+            # state is missing or corrupt: the same run cannot be
+            # verified. Fail fast through the terminal failure path
+            # (`ai-blocked` + the reason comment) — never a silent
+            # fresh redo on top of unknown work.
+            LOGGER.exception(
+                "issue=%s resume_continue_failed", number,
+            )
+            _report_resume_failure(
+                number=number, source_repo=source_repo, run_id=run_id,
+                error=exc,
+            )
+            raise
+        if scene is not None:
+            run_id, existing_worktree = scene
             # The attempt continues the dead run: re-bind the reused
             # id so every later line (including resuming_run) carries
             # it.
@@ -5558,6 +5801,16 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
             )
     base_sha = freeze_base(config["repo_dir"], base_branch)
     branch = task_branch(source_repo, number, run_id)
+    if existing_worktree is not None:
+        # Issue #219: the resumed run keeps its ORIGINAL branch —
+        # after a repo rename the re-derived name would carry the NEW
+        # slug and no longer match the branch the worktree is on (a
+        # second branch would be a second delivery). The worktree's
+        # current branch IS the scene's branch.
+        branch = run_command(
+            ["git", "branch", "--show-current"],
+            cwd=existing_worktree,
+        )
     # Pickup priority (Issue #101): derived from the scanned issue's
     # labels (no extra gh call) and carried on every journal line and
     # scene comment of the attempt via `run_info`.
@@ -5577,7 +5830,12 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     # worktree creation below uses (bound before the worktree exists).
     set_active_run(
         number, title, branch,
-        str(worktree_path(config["repo_dir"], source_repo, number, run_id)),
+        # The verified resume scene keeps its own path (after a repo
+        # rename it carries the OLD slug — Issue #219); otherwise the
+        # derived path (the same value the worktree creation uses).
+        str(existing_worktree or worktree_path(
+            config["repo_dir"], source_repo, number, run_id,
+        )),
     )
     publisher = ProgressPublisher(
         number, source_repo, run_id, run_command=run_command,
@@ -5595,7 +5853,37 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
     try:
         worktree = create_worktree(
             config["repo_dir"], source_repo, number, run_id, base_sha,
+            existing=existing_worktree,
         )
+        # Issue #219: the run state file is the same-run marker —
+        # written for EVERY run (a fresh one included, so a later
+        # interruption can be verified and resumed), refreshed for a
+        # resumed one (same run id, never a second marker).
+        write_run_state(
+            worktree, run_id=run_id, issue=number,
+            source_repo=source_repo, branch=branch,
+        )
+        # Issue #219: the new session starts from the existing work —
+        # the uncommitted changes and the previous session's progress —
+        # instead of a fresh redo. A clean worktree without a previous
+        # session is a fresh scene (None, the pre-#219 prompt).
+        resume_ctx = resume_context(worktree)
+        if resume_ctx is not None:
+            session_dir = worktree / ".pi-session"
+            previous_sessions = (
+                len([p for p in session_dir.glob("*.jsonl")
+                    if p.is_file()])
+                if session_dir.is_dir() else 0
+            )
+            snapshot = activity_snapshot(session_dir)
+            LOGGER.info(
+                "issue=%s resume_continue worktree=%s changed_files=%s "
+                "reused_runs=%s previous_session=%s",
+                number, worktree,
+                len(changed_files(worktree)),
+                previous_sessions,
+                (snapshot.get("session_id") if snapshot else None) or "-",
+            )
         config = {**config, "base_sha": base_sha, "run_id": run_id}
         comment_issue(
             number, repo=source_repo,
@@ -5625,6 +5913,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
         )
         run_pi(
             issue, worktree, config, source_repo, branch=branch,
+            resume_context=resume_ctx,
             progress=LiveProgressThrottle(
                 publisher, issue=number, title=title, run_id=run_id,
                 role=ROLE_IMPLEMENT, branch=branch, worktree=worktree,

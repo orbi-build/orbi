@@ -97,6 +97,19 @@ Stable `key=value` lines you will see:
   file) at start, and the result (PR URL, commit) at the end;
 - `activity` / `heartbeat` / `model_wait` / `resumed` — live Pi activity
   while a session runs (phase, last action, elapsed, idle);
+- `resume_continue` — one INFO when a resumed run continues the
+  interrupted work (Issue #219): the worktree's run state file
+  (`.muyan-pilot/run-state.json`) verified the SAME run (issue number
+  + repo NAME — stable across a repo rename, so the old worktree is
+  found even when the slug changed) and the worktree carries
+  uncommitted changes or a previous session. The line carries the
+  worktree, `changed_files` (uncommitted paths), `reused_runs`
+  (previous session files) and `previous_session` (session id or `-`);
+  the new session receives the resume context in its prompt (continue
+  the existing work — never redo, never discard). When the same run
+  cannot be verified (the state file is missing or corrupt) the line
+  is `resume_continue_failed` instead: fail fast, the Issue goes
+  `ai-blocked` with the reason — never a silent fresh redo;
 - `pi_idle` — one WARNING when there is no model/session activity for
   more than 5 minutes (`PI_IDLE_WARN_SECONDS=300`) and the model is not
   expected to reply; a slow active model (`model_wait`) never warns;
