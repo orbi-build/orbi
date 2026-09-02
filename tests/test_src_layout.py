@@ -56,9 +56,18 @@ def _editable_checkout(tmp_path: Path) -> Path:
 
 def _venv_python(tmp_path: Path, checkout: Path) -> Path:
     """One real editable install into a throwaway venv (never the
-    machine's uv tool env)."""
+    machine's uv tool env).
+
+    The interpreter is pinned to the PRODUCTION MINOR VERSION (3.14),
+    the same pin the CI workflow uses (actions/setup-python): the
+    package's ``requires-python = ">=3.14"`` rejects the GitHub runner's
+    ``/usr/bin/python3`` (3.12), so the machine path must not be
+    hardcoded — uv resolves ``3.14`` from whatever 3.14 interpreter is
+    available (the production machine's ``/usr/bin/python3``, the CI
+    runner's setup-python 3.14).
+    """
     venv = tmp_path / "venv"
-    result = _run([UV, "venv", str(venv), "--python", "/usr/bin/python3"])
+    result = _run([UV, "venv", str(venv), "--python", "3.14"])
     assert result.returncode == 0, (
         f"uv venv failed rc={result.returncode} "
         f"stderr={result.stderr.strip()}"

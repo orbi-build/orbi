@@ -13,9 +13,9 @@ The runtime entry points:
   muyan_pilot.runner --config ...`), the systemd ExecStart target
   through the installed console script.
 
-The repo-root `muyan_pilot.py` is a thin direct-execution compatibility
-shim (development path only); it is a flat file, never a package, and
-the package lives in `src/`, so the checkout root cannot shadow the
-installed package.
+The checkout root carries NO `muyan_pilot.py`: a flat file named like
+the package would shadow the installed package for every process with
+the checkout root on sys.path. The direct-execution compatibility entry
+is `python3 -m muyan_pilot.cli` (development path only).
 """
 __version__ = "0.2.0"

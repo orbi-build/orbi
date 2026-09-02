@@ -1,6 +1,6 @@
 """One-time setup for Muyan Pilot (Issue #117).
 
-`muyan_pilot.py setup` is the config-driven, idempotent, fail-fast
+`muyan-pilot setup` is the config-driven, idempotent, fail-fast
 initialization entry for a new machine or new task-pool repository:
 
 - verifies ``gh auth status`` and the viewer's read/write permission on
