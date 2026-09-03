@@ -78,7 +78,13 @@ merge 后的代码：**普通 Python 源码与 systemd 模板/迁移代码变更
 （#158 的 stale 模块清单问题已在根上修复）。当其余**打包输入**变化
 （`pyproject.toml` 的依赖、入口点、包名、构建后端或 Python 版本）时，
 Runner 每次启动（在任何 slot/claim 之前）自动刷新安装——刷新失败会
-fail fast（结构化 `cli_install_failed` 行：原因 + 精确修复命令）。`muyan-pilot doctor` 报告一致性
+fail fast（结构化 `cli_install_failed` 行：原因 + 精确修复命令）。这个
+Runner 内刷新在 console script 连 `import muyan_pilot` 都失败时不可达
+（#248 现场：#168 的 src 布局迁移让已安装的 editable finder 过期，Runner
+在 import 阶段就死了，刷新根本没机会运行）——这类损坏由 service 的第二个
+`ExecStartPre` 步骤在 Python 进程外自愈：它探测 `muyan-pilot --version`，
+探测失败时执行同一条 editable 强制重装（完整机制见[运维](/zh/operations)）。
+`muyan-pilot doctor` 报告一致性
 （`cli_source: clean` 或 `cli_source: DRIFT` + 结构化 `cli_source_drift`
 行），`muyan-pilot setup` 幂等地校验或重装。发布包不携带第三方运行时
 依赖、token 或用户目录——配置文件和用户 systemd 目录保持机器本地。

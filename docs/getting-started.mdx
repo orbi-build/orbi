@@ -90,7 +90,14 @@ entry point, the package name, the build backend or the Python version
 in `pyproject.toml`), the Runner refreshes the install automatically at
 every start (before any slot or claim) — a failing refresh fails the
 start fast with the structured `cli_install_failed` line (reason + the
-exact fix command). `muyan-pilot doctor` reports the
+exact fix command). That in-Runner refresh is unreachable when the
+console script cannot even `import muyan_pilot` (the #248 scene: the
+src-layout migration of #168 left the installed editable finder stale,
+so the Runner died at the import stage before the refresh could run) —
+for that class of breakage the service's SECOND `ExecStartPre` step
+self-heals OUTSIDE Python: it probes `muyan-pilot --version` and, on
+probe failure, runs the same editable force-reinstall (see
+[Operations](/operations) for the full mechanics). `muyan-pilot doctor` reports the
 consistency (`cli_source: clean` or `cli_source: DRIFT` with the
 structured `cli_source_drift` line), and `muyan-pilot setup` verifies or
 reinstalls it idempotently. The release package carries no third-party

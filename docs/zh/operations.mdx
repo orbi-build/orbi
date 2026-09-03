@@ -30,7 +30,17 @@ service 实例（`muyan-pilot@1.timer` → `muyan-pilot@1.service`，
    `flock <BASE_SYNC_LOCK> git fetch origin <base_branch>` 执行 base
    新鲜度 fetch（锁路径从配置的 `repo_dir` 渲染进两个 prompt）。两个并发
    Runner（或 Runner 与 Pi 会话）因此不再争抢共享 ref（不会出现
-   `cannot lock ref ... is at <X> but expected <Y>` 失败）。
+   `cannot lock ref ... is at <X> but expected <Y>` 失败）。第二个
+   `ExecStartPre` 步骤在 Python 进程外自愈 editable CLI 安装（Issue
+   #248）：它探测已安装的 console script（`muyan-pilot --version` 当且仅当
+   包可导入时成功），探测失败时在同一把 `base-sync.lock` flock 下执行
+   精确的 editable 强制重装（`uv tool install --force --reinstall
+   --editable --python /usr/bin/python3 <repo_dir>`）。这是 console script
+   连 `import muyan_pilot` 都失败时唯一能动手的地方——#248 现场：#168 的
+   src 布局迁移让已安装的 editable finder 过期，而 #158 的 Runner 内刷新
+   （在 Runner **内部**运行）根本不可达。健康的 CLI 退出 0，其余什么都不做
+   （不逐 tick 重装）；重装失败则 preflight 失败、service 不启动（fail
+   fast，无回退）。
 2. **运行一个 tick**：恢复一个已打开的 PR（review/fix/merge），或领取
    一个 `ai-ready` Issue，然后退出。在任何 slot 或领取之前，tick 还
    运行启动前 **git transport 检查**（Issue #114）：部署 checkout 的
