@@ -252,6 +252,22 @@ TRUSTED_COMMENT_ASSOCIATIONS = frozenset({
 })
 
 
+class ModelWaitDeadError(RuntimeError):
+    """The hung-model-request recovery (Issue #218/#228) killed the Pi
+    session: the model request is HUNG (the model service process is alive
+    but the request never completes, the session JSONL froze in
+    `model_wait` past `model_wait_dead_seconds`).
+
+    This is a CLASSIFIED, AI-recoverable delivery failure (Issue #227):
+    the worktree keeps the interrupted work and the run state file is
+    intact, so `process_issue` keeps the Issue `ai-in-progress` and the
+    next tick's in-flight restart scan resumes the SAME run (same run id,
+    branch, worktree, progress comment). It is never `ai-blocked` and
+    never an unclassified top-level exception: the recovery stays
+    fail-fast (Pi killed, the slot released by the tick ending) but its
+    terminal outcome goes through the recoverable delivery path."""
+
+
 class UnrecoverableDeliveryError(RuntimeError):
     """A delivery failure that is an EXTERNAL precondition the AI cannot
     safely judge or fix (Issue #50).
@@ -3881,7 +3897,10 @@ def stream_pi(
             ),
             stale,
         )
-        raise RuntimeError(
+        # Issue #227: the classified hung-model-request failure —
+        # `process_issue` keeps the Issue `ai-in-progress` (the next tick
+        # resumes the same run) instead of the terminal `ai-blocked`.
+        raise ModelWaitDeadError(
             f"Pi is stuck in model_wait with a frozen session for {stale}: "
             "the model request is hung (the model service process is "
             "alive but the request never completes); Pi was killed "
@@ -6230,6 +6249,46 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
             ),
         )
         return pr_url
+    except ModelWaitDeadError as exc:
+        # Issue #227: the hung-model-request recovery is a CLASSIFIED,
+        # AI-recoverable failure — NOT the terminal `ai-blocked`. The
+        # worktree keeps the interrupted work and the run state file is
+        # intact, so the Issue keeps `ai-in-progress`: the next tick's
+        # in-flight restart scan (`pick_in_progress_issue`) resumes the
+        # SAME run (same run id, branch, worktree, progress comment).
+        # The recovery stays fail-fast (Pi was killed, the tick ends
+        # cleanly below, the slot is released by `main`'s `finally`);
+        # only the label outcome changes — never `ai-blocked`.
+        LOGGER.exception("issue=%s model_wait_dead_recovered", number)
+        detail = _failure_detail(exc)
+        body = (
+            f"{run_marker(run_id)}\n"
+            f"Muyan Pilot model_wait recovered: {detail}; the run is "
+            "recoverable — the Issue stays ai-in-progress and the next "
+            f"tick resumes the same run ({run_info})"
+        )
+        # The scene comment is the main delivery record (not a bypass):
+        # a failure here propagates to the generic handler below, which
+        # still ends the tick cleanly (the recovery label outcome — keep
+        # `ai-in-progress`, never `ai-blocked` — is already the contract).
+        comment_issue(number, repo=source_repo, body=body)
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_IMPLEMENT,
+            action=lambda: publisher.finish(_progress_body(_progress_state(
+                issue=number, title=title, run_id=run_id,
+                role=ROLE_IMPLEMENT, branch=branch,
+                worktree=worktree, started=started,
+                pr_url=None, review_round=0, priority=priority,
+            ), outcome=(
+                "**Muyan Pilot model_wait recovered**\n\n"
+                f"failure: {detail}\n"
+                "next step: nothing — the Issue stays ai-in-progress "
+                "and the next tick resumes the same run (same run id, "
+                "branch, worktree)"
+            ))),
+        )
+        return None
     except Exception as exc:
         LOGGER.exception("issue=%s failed", number)
         scene = ""
