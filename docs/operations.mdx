@@ -38,7 +38,19 @@ Runner instances can run concurrently. Each tick's service instance:
    is rendered into both prompts from the configured `repo_dir`). Two
    concurrent Runners — or a Runner and a Pi session — therefore never
    race the shared ref (no `cannot lock ref ... is at <X> but expected
-   <Y>` failures).
+   <Y>` failures). A SECOND `ExecStartPre` step self-heals the editable
+   CLI install OUTSIDE Python (Issue #248): it probes the installed
+   console script (`muyan-pilot --version` succeeds iff the package
+   imports) and, on probe failure, runs the exact editable
+   force-reinstall (`uv tool install --force --reinstall --editable
+   --python /usr/bin/python3 <repo_dir>`) under the SAME `base-sync.lock`
+   flock. This is the only place that can act when the console script
+   cannot even `import muyan_pilot` — the #248 scene, where the
+   src-layout migration of #168 left the installed editable finder
+   stale and the #158 in-Runner refresh (which runs INSIDE the Runner)
+   was unreachable. A healthy CLI exits 0 and nothing else runs (no
+   per-tick reinstall); a failing reinstall fails the preflight, the
+   service does not start (fail fast, no fallback).
 2. **Runs one tick**: resume an opened PR (review/fix/merge) or claim one
    `ai-ready` Issue, then exit. Before any slot or claim the tick also
    runs the pre-start **git transport check** (Issue #114): the

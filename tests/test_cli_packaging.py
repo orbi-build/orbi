@@ -206,6 +206,52 @@ def test_service_keeps_working_directory_and_preflight():
     assert "git merge --ff-only origin/main" in pre
 
 
+def test_service_preflight_self_heals_the_editable_cli():
+    """Issue #248: the #158 in-Runner refresh is unreachable when the
+    console script cannot even `import muyan_pilot` (the src-layout
+    migration of #168 left the installed editable finder stale, so the
+    Runner died at the import stage before the refresh could run). The
+    fix is a SECOND ExecStartPre line that self-heals OUTSIDE Python:
+    it probes the installed CLI (`muyan-pilot --version` succeeds iff
+    the package imports) and, on probe failure, runs the exact editable
+    force-reinstall (cli_source.reinstall_command) under the SAME
+    base-sync flock the git sync uses."""
+    service = parse_unit(SERVICE_FILE)
+    pre = service["Service"]["ExecStartPre"]
+    # Two preflight steps: the git sync (unchanged) then the CLI self-heal.
+    assert len(pre) == 2
+    heal = pre[1]
+    # The same timeout wrapper + shared lock as the git sync step.
+    assert heal.startswith("/usr/bin/timeout 300s /usr/bin/flock ")
+    assert (
+        "%h/Documents/muyan/muyan-pilot/.muyan-pilot/base-sync.lock"
+        in heal
+    )
+    # The probe: the installed console script's `--version` succeeds iff
+    # the package imports; its stdout/stderr are discarded.
+    assert "%h/.local/bin/muyan-pilot --version >/dev/null 2>&1" in heal
+    # The `||` fallback fires ONLY when the probe fails.
+    assert " || " in heal
+    # The fallback is the exact editable force-reinstall (the single
+    # source of truth is cli_source.reinstall_command).
+    from muyan_pilot import cli_source
+
+    # The systemd `%h` specifier is expanded by systemd before the
+    # command runs, so the template carries the specifier, not the
+    # expanded home dir — assert the reinstall argv minus the path.
+    heal_argv = heal.split("'")[1]
+    reinstall_part = heal_argv.split("||", 1)[1].strip()
+    assert reinstall_part == (
+        "uv tool install --force --reinstall --editable "
+        "--python /usr/bin/python3 %h/Documents/muyan/muyan-pilot"
+    )
+    # The reinstall argv is the same as the Python-side source of truth
+    # (the path is the only difference: the template uses the %h
+    # specifier, the Python command the resolved repo_dir).
+    py_args = cli_source.reinstall_args(Path("%h/Documents/muyan/muyan-pilot"))
+    assert reinstall_part == " ".join(py_args)
+
+
 def test_service_path_carries_the_uv_tool_bin_dir():
     """The installed console script lives in the uv tool bin dir
     (`~/.local/bin`); the unit PATH must carry it so the Runner's

@@ -32,6 +32,21 @@ TimeoutStartSec=infinity
 # Issue #191: disabling fetch's automatic maintenance prevents Git from
 # detaching a maintenance child beyond this preflight and flock lifetime.
 ExecStartPre=/usr/bin/timeout 90s /usr/bin/flock %h/Documents/muyan/muyan-pilot/.muyan-pilot/base-sync.lock -c 'git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main'
+# Issue #248: self-heal the editable CLI install OUTSIDE Python. The #158
+# in-Runner refresh (runner.refresh_cli_install) is unreachable when the
+# console script cannot even `import muyan_pilot` (the #248 scene: the
+# src-layout migration of #168 left the installed editable finder stale,
+# so `from muyan_pilot import main` died before the Runner started). This
+# preflight probes the installed CLI (`muyan-pilot --version` succeeds iff
+# the package imports); a healthy CLI exits 0 and nothing else runs (no
+# per-tick reinstall). A broken CLI makes the probe fail, so `||` runs the
+# exact editable force-reinstall (cli_source.reinstall_command) that
+# regenerates the finder against the current src/ layout. The step takes
+# the SAME base-sync flock the git sync and the #158 refresh use (two
+# instances starting in the same tick never race the tool env), and the
+# timeout matches runner.UV_INSTALL_TIMEOUT_SECONDS: a failing reinstall
+# fails this preflight, the service does not start (fail fast), no fallback.
+ExecStartPre=/usr/bin/timeout 300s /usr/bin/flock %h/Documents/muyan/muyan-pilot/.muyan-pilot/base-sync.lock -c '%h/.local/bin/muyan-pilot --version >/dev/null 2>&1 || uv tool install --force --reinstall --editable --python /usr/bin/python3 %h/Documents/muyan/muyan-pilot'
 # Issue #140: the Runner is the installed `muyan-pilot` CLI (the
 # uv-tool console script, `uv tool install` / `uv tool upgrade`; the
 # executable lands in the user bin dir `~/.local/bin`). The absolute
