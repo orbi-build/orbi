@@ -4216,6 +4216,81 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
     )
 
 
+def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
+    monkeypatch, tmp_path,
+):
+    """Issue #227: the recovery scene comment is the delivery record,
+    but the resume does not parse it (the run state file, the worktree
+    and the `ai-in-progress` label carry the resume —
+    `worktree_resume_scene`): a failure of the comment must only log.
+    Falling through to the generic failure handler would mark the
+    Issue `ai-blocked` — exactly the unrecoverable state Issue #227
+    forbids for the model_wait recovery."""
+    calls = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(
+        runner, "create_worktree", Mock(return_value=tmp_path),
+    )
+    model_wait_dead = runner.ModelWaitDeadError(
+        "Pi is stuck in model_wait with a frozen session for 10m: "
+        "the model request is hung (the model service process is alive "
+        "but the request never completes); Pi was killed (Issue #218)"
+    )
+
+    def dead_run_pi(*args, **kwargs):
+        raise model_wait_dead
+
+    monkeypatch.setattr(runner, "run_pi", dead_run_pi)
+    monkeypatch.setattr(
+        runner, "activity_snapshot", lambda session_dir: None,
+    )
+    posted = []
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            # Restart-resume scan (Issue #18): fresh claim, no label.
+            return "[]"
+        if (command[:3] == ["gh", "issue", "comment"]
+                and "model_wait recovered" in command[-1]):
+            raise RuntimeError(
+                "gh issue comment failed: API rate limit exceeded",
+            )
+        calls.append(("comment", (), {"body": command[-1]}))
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.process_issue(
+        {"number": 218, "title": "Model wait dead", "body": ""},
+        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+         "base_branch": "main"},
+        "xqliu/muyan-pilot",
+    ) is None
+    # The Issue keeps `ai-in-progress`: the ONLY label edit is the claim
+    # at the start — the failed recovery comment must NOT fall through
+    # to the generic handler's terminal `ai-blocked` (Issue #227).
+    edits = [entry for entry in calls if isinstance(entry, dict)]
+    assert edits == [
+        {"repo": "xqliu/muyan-pilot", "add": "ai-in-progress"},
+    ]
+    # No terminal failure comment was posted.
+    comment_bodies = [
+        entry[2]["body"] for entry in calls
+        if isinstance(entry, tuple) and entry[0] == "comment"
+    ]
+    assert not any(
+        "Muyan Pilot failed:" in body for body in comment_bodies
+    )
+
+
 def test_process_issue_idle_recovery_failure_marks_blocked(
     monkeypatch, tmp_path,
 ):

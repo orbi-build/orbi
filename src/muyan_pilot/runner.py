@@ -6267,11 +6267,19 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
             "recoverable — the Issue stays ai-in-progress and the next "
             f"tick resumes the same run ({run_info})"
         )
-        # The scene comment is the main delivery record (not a bypass):
-        # a failure here propagates to the generic handler below, which
-        # still ends the tick cleanly (the recovery label outcome — keep
-        # `ai-in-progress`, never `ai-blocked` — is already the contract).
-        comment_issue(number, repo=source_repo, body=body)
+        # The recovery comment is the delivery record, but the resume
+        # does not parse it (the run state file, the worktree and the
+        # `ai-in-progress` label carry the resume —
+        # `worktree_resume_scene`): a failure here must only log.
+        # Falling through to the generic handler below would mark the
+        # Issue `ai-blocked` — exactly the unrecoverable state Issue
+        # #227 forbids for this recovery.
+        try:
+            comment_issue(number, repo=source_repo, body=body)
+        except Exception:
+            LOGGER.exception(
+                "issue=%s model_wait_recovered_comment_failed", number,
+            )
         _safe_publish(
             run_id=run_id, issue=number, source_repo=source_repo,
             role=ROLE_IMPLEMENT,
