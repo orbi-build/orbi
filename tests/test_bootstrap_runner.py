@@ -3997,7 +3997,12 @@ def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, c
     assert "commit=0123456789abcdef0123456789abcdef01234567" in ends[0]
 
 
-def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path):
+def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_path):
+    """Issue #239: a delivery failure is terminal — `process_issue` marks
+    the Issue `ai-blocked`, posts the `Muyan Pilot failed` comment, and
+    RETURNS `None` instead of re-raising. The service must not crash on
+    an already-handled failure; the tick ends cleanly and `main` skips
+    the delivery wait."""
     calls = []
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
@@ -4016,8 +4021,9 @@ def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path)
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    with pytest.raises(RuntimeError, match="git failed"):
-        runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo")
+    # The failure is terminal: `process_issue` returns `None` (no PR) and
+    # does NOT re-raise — the service must not crash on it (Issue #239).
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo") is None
     assert calls[1][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-blocked", "remove": "ai-in-progress"}
     assert calls[2][0] == "comment"
     failure_body = calls[2][2]["body"]
@@ -4037,6 +4043,89 @@ def test_process_issue_failure_marks_blocked_and_reraises(monkeypatch, tmp_path)
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failure_body
 
 
+def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
+    monkeypatch, tmp_path,
+):
+    """Issue #239 regression: the commit-boundary failure of `deliver_pr`
+    (the agent delivered no commit — HEAD is still the frozen base) flows
+    through the NORMAL terminal failure path: the Issue is marked
+    `ai-blocked` (removing `ai-in-progress`), the `Muyan Pilot failed`
+    comment carries the no-commit reason and the run marker, and
+    `process_issue` RETURNS `None` instead of re-raising — the failure is
+    already terminal, so the tick must end cleanly and the service must
+    not crash on the unhandled `RuntimeError` (the #239 scene). The
+    Runner never auto-commits or expands the agent's commit boundary."""
+    calls = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    worktree = tmp_path / "wt"
+    worktree.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        runner, "create_worktree", lambda *args, **kwargs: worktree,
+    )
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    no_commit = RuntimeError(
+        "the agent delivered no commit on the task branch (HEAD "
+        "abc123def456 is still the frozen base abc123def456)"
+    )
+
+    def dead_deliver_pr(*args, **kwargs):
+        raise no_commit
+
+    monkeypatch.setattr(runner, "deliver_pr", dead_deliver_pr)
+    monkeypatch.setattr(
+        runner, "activity_snapshot", lambda session_dir: None,
+    )
+    posted = []
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            # Restart-resume scan (Issue #18): fresh claim, no label.
+            return "[]"
+        calls.append(("comment", (), {"body": command[-1]}))
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    # The failure is terminal: `process_issue` returns `None` (no PR) and
+    # does NOT re-raise — the service must not crash on it.
+    assert runner.process_issue(
+        {"number": 239, "title": "No commit", "body": ""},
+        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+         "base_branch": "main"},
+        "xqliu/muyan-pilot",
+    ) is None
+    edits = [entry for entry in calls if isinstance(entry, dict)]
+    assert edits == [
+        {"repo": "xqliu/muyan-pilot", "add": "ai-in-progress"},
+        {"repo": "xqliu/muyan-pilot", "add": "ai-blocked",
+         "remove": "ai-in-progress"},
+    ]
+    comment_bodies = [
+        entry[2]["body"] for entry in calls
+        if isinstance(entry, tuple) and entry[0] == "comment"
+    ]
+    failure = [
+        body for body in comment_bodies
+        if "Muyan Pilot failed:" in body
+    ]
+    assert len(failure) == 1
+    assert "delivered no commit" in failure[0]
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failure[0]
+    # The blocked milestone notification carries the same scene.
+    blocked = [body for body in posted if "Muyan Pilot: blocked" in body]
+    assert blocked
+    assert "delivered no commit" in blocked[0]
+    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked[0]
+
+
 def test_process_issue_model_wait_dead_failure_marks_blocked(
     monkeypatch, tmp_path,
 ):
@@ -4047,8 +4136,9 @@ def test_process_issue_model_wait_dead_failure_marks_blocked(
     path: the Issue is marked `ai-blocked` (removing
     `ai-in-progress`), the `Muyan Pilot failed` comment carries the
     hung-model-request reason and the run marker (the scene stays in
-    the Issue), and the error re-raises so the tick exits and the
-    kernel releases the slot — the slot is never held forever. The
+    the Issue), and `process_issue` returns `None` so the tick ends
+    cleanly and the slot is released by `main`'s `finally` (Issue
+    #239: the handled failure never re-raises to crash the service). The
     next tick resumes the SAME run (the restart-resume scan reuses the
     newest worktree's run id) or claims the next ready Issue. No
     special handling, no fallback."""
@@ -4089,13 +4179,14 @@ def test_process_issue_model_wait_dead_failure_marks_blocked(
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    with pytest.raises(RuntimeError, match="hung"):
-        runner.process_issue(
-            {"number": 218, "title": "Model wait dead", "body": ""},
-            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-             "base_branch": "main"},
-            "xqliu/muyan-pilot",
-        )
+    # The failure is terminal: `process_issue` returns `None` (no PR) and
+    # does NOT re-raise — the service must not crash on it (Issue #239).
+    assert runner.process_issue(
+        {"number": 218, "title": "Model wait dead", "body": ""},
+        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+         "base_branch": "main"},
+        "xqliu/muyan-pilot",
+    ) is None
     # The failure happened BEFORE the opened-PR transition: the
     # terminal state removes the claim label (the edit calls are the
     # dict entries; the `gh issue comment` traffic is tuple entries).
@@ -4134,9 +4225,10 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
     `ai-blocked`/recoverable failure path exactly like the Issue #75
     upstream-dead failure: the Issue is marked `ai-blocked` (removing
     `ai-in-progress`), the `Muyan Pilot failed` comment carries the
-    idle-recovery reason and the run marker, and the error re-raises
-    so the tick exits and the kernel releases the slot — the slot is
-    never held forever. No special handling, no fallback."""
+    idle-recovery reason and the run marker, and `process_issue` returns
+    `None` so the tick ends cleanly and the slot is released by `main`
+    's `finally` (Issue #239: the handled failure never re-raises to
+    crash the service). No special handling, no fallback."""
     calls = []
     monkeypatch.setattr(
         runner, "edit_issue",
@@ -4173,13 +4265,14 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    with pytest.raises(RuntimeError, match="idle recovery"):
-        runner.process_issue(
-            {"number": 94, "title": "Idle recovery", "body": ""},
-            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-             "base_branch": "main"},
-            "xqliu/muyan-pilot",
-        )
+    # The failure is terminal: `process_issue` returns `None` (no PR) and
+    # does NOT re-raise — the service must not crash on it (Issue #239).
+    assert runner.process_issue(
+        {"number": 94, "title": "Idle recovery", "body": ""},
+        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+         "base_branch": "main"},
+        "xqliu/muyan-pilot",
+    ) is None
     edits = [entry for entry in calls if isinstance(entry, dict)]
     assert edits == [
         {"repo": "xqliu/muyan-pilot", "add": "ai-in-progress"},
@@ -4206,7 +4299,14 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
     assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked[0]
 
 
-def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypatch, tmp_path, caplog):
+def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, caplog):
+    """Issue #239: when the failure reporting itself fails (the `Muyan
+    Pilot failed` comment POST dies), `process_issue` still RETURNS
+    `None` instead of re-raising the original failure — the service must
+    not crash. The `ai-blocked` edit already landed (it precedes the
+    comment POST), so the Issue is terminal; the missing failure comment
+    is logged (`failure reporting failed`) and the blocked scene is
+    degraded, not fatal."""
     edit_calls = []
 
     monkeypatch.setattr(
@@ -4222,10 +4322,11 @@ def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypat
         if command[:2] == ["gh", "issue"] and "comment" in command:
             # The `Muyan Pilot failed` comment POST is the only
             # non-bypass traffic of this scenario: it fails, the
-            # failure report is broken, the original failure must
-            # still be re-raised. (Issue #79: the progress traffic —
-            # the blocked milestone POST — is bypass, so a failure
-            # there no longer breaks the failure report; see
+            # failure report is broken, but `process_issue` still ends
+            # cleanly (returns `None`) instead of crashing the service
+            # (Issue #239). (Issue #79: the progress traffic — the
+            # blocked milestone POST — is bypass, so a failure there
+            # no longer breaks the failure report; see
             # test_progress_wiring.
             # test_process_issue_failure_path_progress_failure_keeps_
             # blocked_transition.)
@@ -4239,8 +4340,11 @@ def test_process_issue_preserves_original_failure_when_reporting_fails(monkeypat
     # The fake rejects anything that is not issue-comment/list traffic.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "list"])
-    with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="git failed"):
-        runner.process_issue({"number": 13, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo")
+    with caplog.at_level("ERROR"):
+        # The failure is terminal: `process_issue` returns `None` (no PR)
+        # and does NOT re-raise — the service must not crash on it
+        # (Issue #239).
+        assert runner.process_issue({"number": 13, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo") is None
     assert "failure reporting failed" in caplog.text
     # No progress comment was posted (the failure report died on the
     # failure-comment POST before the bypass steps).
@@ -4340,6 +4444,35 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     assert waits[0][0][:2] == (
         "https://github.com/x/y/pull/12", issue,
     )
+
+
+def test_main_ends_tick_when_process_issue_delivers_nothing(
+    monkeypatch, tmp_path,
+):
+    """Issue #239: when `process_issue` returns `None` (a terminal
+    delivery failure it already handled — the Issue is `ai-blocked` and
+    the failure comment is posted), `main` ends the tick cleanly: it
+    returns 0 and NEVER calls `wait_for_delivery` (there is no PR to
+    wait for). The service must not crash on the handled failure."""
+    issue = {"number": 239, "title": "task", "body": "body"}
+    waits = []
+    _write_prompts(tmp_path)
+    config = tmp_path / "muyan-pilot.toml"
+    config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+            "owner/repo", issue, None
+        ),
+    )
+    monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        runner, "wait_for_delivery",
+        lambda *args, **kwargs: waits.append((args, kwargs)),
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    # No PR was delivered: the delivery wait must not run.
+    assert waits == []
 
 
 def test_main_ticket_only_finishes_without_entering_pr_delivery_wait(
@@ -4513,8 +4646,9 @@ def test_process_issue_failure_without_session_still_carries_scene(
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    with pytest.raises(RuntimeError, match="pi died"):
-        runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo")
+    # Issue #239: the failure is terminal — `process_issue` returns `None`
+    # instead of re-raising; the scene assertions below are unchanged.
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo") is None
     failure_body = calls[-1][2]["body"]
     # No session file yet: the scene still carries the full debug entry
     # (worktree, branch) with '-' session fields.
@@ -4556,8 +4690,9 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
         "action": "bash pytest tests/",
         "result": "ok",
     })
-    with pytest.raises(subprocess.CalledProcessError):
-        runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo")
+    # Issue #239: the failure is terminal — `process_issue` returns `None`
+    # instead of re-raising; the scene assertions below are unchanged.
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo") is None
     failure_body = calls[-1][2]["body"]
     assert "Muyan Pilot failed:" in failure_body
     assert "session=sess-9" in failure_body
@@ -4603,8 +4738,11 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
         raise OSError("disk error")
 
     monkeypatch.setattr(runner, "activity_snapshot", flaky_snapshot)
-    with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="git failed"):
-        runner.process_issue({"number": 9, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo")
+    with caplog.at_level("ERROR"):
+        # Issue #239: the failure is terminal — `process_issue` returns
+        # `None` instead of re-raising; the scene-isolation assertions
+        # below are unchanged.
+        assert runner.process_issue({"number": 9, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo") is None
     assert "activity scene failed" in caplog.text
     failure_body = calls[-1][2]["body"]
     assert "Muyan Pilot failed: git failed" in failure_body

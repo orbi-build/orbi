@@ -475,9 +475,11 @@ def test_process_issue_p0_failure_enters_ai_blocked_terminal_state(
     monkeypatch.setattr(runner, "edit_issue", edit)
     issue = make_issue()
     issue["labels"] = [{"name": "p0"}, {"name": "ai-ready"}]
-    with pytest.raises(subprocess.CalledProcessError):
-        runner.process_issue(issue, make_config(tmp_path),
-                             "xqliu/muyan-pilot")
+    # Issue #239: the failure is terminal — `process_issue` returns `None`
+    # instead of re-raising; the terminal-state assertions below are
+    # unchanged.
+    assert runner.process_issue(issue, make_config(tmp_path),
+                                "xqliu/muyan-pilot") is None
     # Claim first, then the terminal state: `ai-blocked` added,
     # `ai-in-progress` removed.
     assert edit.call_args_list[0] == mock_call(
@@ -617,9 +619,11 @@ def test_process_issue_failure_updates_progress_comment_with_blocked_scene(
             3, ["pi"], stderr="pi exploded",
         ),
     )
-    with pytest.raises(subprocess.CalledProcessError):
-        runner.process_issue(make_issue(), make_config(tmp_path),
-                             "xqliu/muyan-pilot")
+    # Issue #239: the failure is terminal — `process_issue` returns `None`
+    # instead of re-raising; the blocked-scene assertions below are
+    # unchanged.
+    assert runner.process_issue(make_issue(), make_config(tmp_path),
+                                "xqliu/muyan-pilot") is None
     milestones = [
         body for body in posted
         if any(line.startswith(progress.MILESTONE_PREFIX)
@@ -917,14 +921,16 @@ def test_process_issue_scene_comment_failure_fails_delivery(
     """Issue #79: the `Muyan Pilot opened PR:` scene comment is NOT a
     bypass — the next tick's resume (Issue #45/#89) parses it to recover
     run_id, base and PR, so a failure there is a real delivery failure:
-    the error propagates, the Issue is marked `ai-blocked` with a
-    `Muyan Pilot failed` comment, and the tick stops. The scene comment
-    stays fail-fast (the resume contract is unchanged); only the
-    `ProgressPublisher` steps around it (milestone, delivered finish)
-    are bypasses. The failure happens AFTER the opened-PR transition,
-    so the terminal state is `ai-blocked` ALONE (the docs/workflow.mdx
-    label lifecycle removes `ai-pr-opened` on terminal failure) — never
-    `ai-pr-opened` + `ai-blocked`, which no scan would own."""
+    the Issue is marked `ai-blocked` with a `Muyan Pilot failed`
+    comment, and `process_issue` returns `None` so the tick ends cleanly
+    (Issue #239: the handled failure never re-raises to crash the
+    service). The scene comment stays fail-fast (the resume contract is
+    unchanged); only the `ProgressPublisher` steps around it (milestone,
+    delivered finish) are bypasses. The failure happens AFTER the
+    opened-PR transition, so the terminal state is `ai-blocked` ALONE
+    (the docs/workflow.mdx label lifecycle removes `ai-pr-opened` on
+    terminal failure) — never `ai-pr-opened` + `ai-blocked`, which no
+    scan would own."""
     calls, posted = make_failing_gh(
         monkeypatch,
         lambda command: (
@@ -943,9 +949,11 @@ def test_process_issue_scene_comment_failure_fails_delivery(
                         edits.append(kwargs))
     caplog.set_level("ERROR")
 
-    with pytest.raises(subprocess.CalledProcessError):
-        runner.process_issue(make_issue(), make_config(tmp_path),
-                             "xqliu/muyan-pilot")
+    # Issue #239: the failure is terminal — `process_issue` returns
+    # `None` instead of re-raising; the terminal-state assertions below
+    # are unchanged.
+    assert runner.process_issue(make_issue(), make_config(tmp_path),
+                                "xqliu/muyan-pilot") is None
 
     # The delivery failed: the opened-PR transition is undone and the
     # Issue is marked ai-blocked ALONE (the failure happened after the
@@ -1169,10 +1177,11 @@ def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(
     """Issue #79: on a REAL delivery failure (Pi exploded), the
     failure-path progress publishing (blocked milestone, blocked-scene
     finish) is bypass too: a 404 there must not abort the `ai-blocked`
-    label transition, the `Muyan Pilot failed` comment, or the
-    re-raise — the progress failure only logs
-    `progress_publish_failed` (a bypass failure never decides whether
-    the delivery succeeded, Issue #79)."""
+    label transition or the `Muyan Pilot failed` comment — the progress
+    failure only logs `progress_publish_failed` (a bypass failure never
+    decides whether the delivery succeeded, Issue #79). Issue #239: the
+    handled failure returns `None` from `process_issue` instead of
+    re-raising."""
     calls, posted = make_failing_gh(
         monkeypatch,
         lambda command: (
@@ -1198,9 +1207,11 @@ def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(
                         edits.append(kwargs))
     caplog.set_level("ERROR")
 
-    with pytest.raises(subprocess.CalledProcessError):
-        runner.process_issue(make_issue(), make_config(tmp_path),
-                             "xqliu/muyan-pilot")
+    # Issue #239: the failure is terminal — `process_issue` returns
+    # `None` instead of re-raising; the bypass assertions below are
+    # unchanged.
+    assert runner.process_issue(make_issue(), make_config(tmp_path),
+                                "xqliu/muyan-pilot") is None
 
     # The `ai-blocked` transition completed even though the progress
     # publishing 404'd...
