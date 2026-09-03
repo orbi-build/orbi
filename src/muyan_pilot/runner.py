@@ -5976,7 +5976,7 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
     )
 
 
-def process_issue(issue: dict, config: dict, source_repo: str) -> str:
+def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
     number = int(issue["number"])
     # Issue #100: the progress comment's issue line shows the number
     # AND the title in every scene. The scanned issue dict always
@@ -6307,7 +6307,17 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str:
                 )
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
-        raise
+        # Issue #239: the failure is terminal — the Issue is `ai-blocked`
+        # and the `Muyan Pilot failed` comment is posted above. Returning
+        # `None` ends the tick cleanly: `main` skips the delivery wait
+        # (there is no PR) and the slot is released by its `finally`.
+        # Re-raising here would escape `main` and crash the service on an
+        # already-handled delivery failure (the #239 scene: the
+        # `delivery_no_commit` RuntimeError killed the tick). When the
+        # reporting itself failed the Issue keeps `ai-in-progress`, and
+        # the next tick's restart-resume scan recovers it — no crash
+        # needed for either outcome.
+        return None
 
 
 def _pr_number(pr_url: str) -> int:
@@ -7019,6 +7029,13 @@ def main(argv: list[str] | None = None) -> int:
             # posted and the source Issue is closed; it has no PR to review
             # or merge (Issue #209).
             if is_ticket_only(issue):
+                return 0
+            # Issue #239: a terminal delivery failure — `process_issue`
+            # already marked the Issue `ai-blocked` and posted the failure
+            # comment; there is no PR to wait for, so the tick ends
+            # cleanly instead of crashing the service on the handled
+            # failure.
+            if pr_url is None:
                 return 0
         # The delivery is not done when the PR is open: hold the slot
         # through review -> merge and release it only after the PR is

@@ -317,10 +317,12 @@ def run_first_attempt(monkeypatch, tmp_path: Path, clone: Path,
             real_edit_issue(number, **kwargs)
 
     monkeypatch.setattr(runner, "edit_issue", claiming_edit)
-    with pytest.raises(subprocess.CalledProcessError):
-        runner.process_issue(issue(), config_for(clone, tmp_path,
-                                                 source_repo),
-                             source_repo)
+    # Issue #239: the failure path runs (the `claiming_edit` above
+    # suppresses its label transition, simulating the kill) and
+    # `process_issue` returns `None` instead of re-raising.
+    assert runner.process_issue(issue(), config_for(clone, tmp_path,
+                                                    source_repo),
+                                source_repo) is None
     # The runner is back: label transitions work again.
     monkeypatch.setattr(runner, "edit_issue", real_edit_issue)
     worktree = worktree_for(clone, source_repo, "a1b2c3d4")

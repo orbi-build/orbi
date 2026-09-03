@@ -433,8 +433,11 @@ def test_e2e_failed_attempt_marks_blocked_with_same_run_id(
     install_fake_gh(monkeypatch, comments)
     caplog.set_level("INFO")
 
-    with pytest.raises(subprocess.CalledProcessError):
-        runner.process_issue(issue(), config_for(clone, tmp_path), REPO)
+    # Issue #239: the failure is terminal — `process_issue` returns
+    # `None` instead of re-raising; the run-id assertions below are
+    # unchanged.
+    assert runner.process_issue(issue(), config_for(clone, tmp_path),
+                                REPO) is None
 
     # The failure report carries the same run id as the start comment
     # (progress + started milestone + started Pi + failure + blocked
@@ -490,8 +493,10 @@ def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
 
     monkeypatch.setattr(runner, "edit_issue", claiming_edit)
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    with pytest.raises(subprocess.CalledProcessError):
-        runner.process_issue(issue(), config, REPO)
+    # Issue #239: the failure path runs (the `claiming_edit` above
+    # suppresses its label transition, simulating the kill) and
+    # `process_issue` returns `None` instead of re-raising.
+    assert runner.process_issue(issue(), config, REPO) is None
     first_worktree = worktree_for(clone, "a1b2c3d4")
     assert first_worktree.is_dir()
     # The kill left the label behind: the fake state still carries it.
