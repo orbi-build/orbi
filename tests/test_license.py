@@ -1,17 +1,20 @@
-"""Guard the public repository license (Issue #81).
+"""Guard the public repository license.
 
-`xqliu/muyan-pilot` is public, so the repository root must carry a license
-file GitHub can recognize. The Issue fixes Apache License 2.0 (SPDX
-identifier `Apache-2.0`) as the default and requires the README to link to
-the file. These tests fail when the file is missing, when it stops carrying
-the canonical Apache-2.0 markers GitHub's detector relies on, or when the
-README loses the link.
+`orbi-build/orbi` is public, so the repository root must carry a license file
+GitHub can surface. The project is fair-code under the Sustainable Use License
+v1.0: free for internal and non-commercial use, commercial licence required
+only to sell Orbi itself.
+
+These tests fail when the file is missing, when the licence text drifts into a
+home-grown variant (the limitation and patent clauses are what actually bind,
+so they are asserted verbatim), or when the README stops explaining the terms
+in plain language.
 """
 import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-LICENSE_FILE = REPO_ROOT / "LICENSE"
+LICENSE_FILE = REPO_ROOT / "LICENSE.md"
 README_FILE = REPO_ROOT / "README.md"
 
 
@@ -22,50 +25,74 @@ def read_license() -> str:
 
 
 def test_license_exists_at_repo_root() -> None:
-    """GitHub only detects a license from a root-level LICENSE file."""
-    assert LICENSE_FILE.is_file(), "no LICENSE file at the repository root"
+    """GitHub only surfaces a license from a root-level LICENSE file."""
+    assert LICENSE_FILE.is_file(), "no LICENSE.md at the repository root"
 
 
-def test_license_is_canonical_apache_2() -> None:
-    """The file must be the canonical Apache License 2.0 text.
-
-    GitHub's license detection recognizes the exact canonical markers;
-    these are the ones the detector keys on, so the file cannot drift
-    into a home-grown variant.
-    """
+def test_license_is_the_sustainable_use_license() -> None:
+    """The file must carry the canonical Sustainable Use License v1.0."""
     text = read_license()
-    assert "Apache License" in text, "missing the Apache License title"
-    assert "Version 2.0, January 2004" in text, "missing the version line"
-    assert "http://www.apache.org/licenses/" in text, (
-        "missing the license URL header"
-    )
-    assert "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION" in text, (
-        "missing the terms section"
-    )
-    assert "8. Limitation of Liability" in text, "missing the liability clause"
-    assert "9. Accepting Warranty or Additional Liability" in text, (
-        "missing the accepting-warranty clause"
-    )
+    assert "Sustainable Use License" in text, "missing the licence title"
+    assert "Version 1.0" in text, "missing the version line"
+    for clause in (
+        "### Acceptance",
+        "### Copyright License",
+        "### Limitations",
+        "### Patents",
+        "### Notices",
+        "### Termination",
+        "### No Liability",
+        "### Definitions",
+    ):
+        assert clause in text, f"missing licence section: {clause}"
+
+
+def test_license_keeps_the_binding_limitation_verbatim() -> None:
+    """The limitation clause is the whole point; it must not be reworded.
+
+    Everything else in the licence is boilerplate shared with other fair-code
+    projects. This sentence is what separates free internal use from a sale.
+    """
+    text = " ".join(read_license().split())
+    assert (
+        "You may use or modify the software only for your own internal business "
+        "purposes or for non-commercial or personal use."
+    ) in text, "the internal-use limitation has been altered"
+    assert (
+        "You may distribute the software or provide it to others only if you do "
+        "so free of charge for non-commercial purposes."
+    ) in text, "the distribution limitation has been altered"
 
 
 def test_license_names_the_copyright_owner() -> None:
-    """The placeholder copyright must be replaced with the real owner."""
+    """The licence must name a real copyright holder, not a placeholder."""
     text = read_license()
-    assert "Copyright [yyyy] [name of copyright owner]" not in text, (
-        "the template copyright placeholder is still in the license"
+    assert "[name of copyright owner]" not in text, (
+        "a template copyright placeholder is still in the licence"
     )
     assert re.search(r"Copyright \d{4} xqliu", text), (
         "no real copyright notice for the repository owner"
     )
 
 
-def test_readme_links_to_the_license() -> None:
-    """The README must link to the LICENSE file and name Apache License 2.0."""
+def test_readme_explains_the_terms_in_plain_language() -> None:
+    """A fair-code licence surprises people; the README must pre-empt that.
+
+    Linking the file is not enough — the two questions every reader has are
+    "can I use this at work for free" and "when do I owe you money".
+    """
     assert README_FILE.is_file(), f"missing README: {README_FILE}"
     readme = README_FILE.read_text(encoding="utf-8")
-    assert re.search(r"\]\(LICENSE\)", readme), (
-        "README does not link to the LICENSE file"
+    assert re.search(r"\]\(LICENSE\.md\)", readme), (
+        "README does not link to the LICENSE.md file"
     )
-    assert "Apache License 2.0" in readme, (
-        "README does not name the Apache License 2.0"
+    assert "Sustainable Use License" in readme, (
+        "README does not name the Sustainable Use License"
+    )
+    assert "fair-code" in readme, "README does not say the project is fair-code"
+    assert "永久免费" in readme, (
+        "README does not state that self-hosted use stays free"
+    )
+    assert "商业授权" in readme, (
+        "README does not say when a commercial licence is required"
     )

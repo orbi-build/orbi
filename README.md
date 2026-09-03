@@ -84,5 +84,16 @@ package），直接执行兼容入口是 `python3 -m muyan_pilot.cli`，不是�
 
 ## 许可证
 
-本项目以 [Apache License 2.0](LICENSE)（SPDX 标识 `Apache-2.0`）发布，完整
-文本见根目录 [LICENSE](LICENSE) 文件。
+本项目是 [fair-code](https://faircode.io)，以 **Sustainable Use License**
+（v1.0）发布，完整文本见根目录 [LICENSE.md](LICENSE.md)。
+
+实际含义：
+
+- **在自己的仓库上跑 Orbi 永久免费** —— 个人用、公司内部用都一样，不限规模，
+  改代码、自托管、跑一千个仓库都不需要向我们申请授权。
+- **可以分享**，前提是免费且用于非商业目的。
+- **只有把 Orbi 本身卖出去才需要商业授权** —— 即托管成服务卖给你的客户，
+  或嵌入你收费的产品里。
+
+不确定自己的用法算哪一边，来
+[Discussions](https://github.com/orbi-build/orbi/discussions) 问，我们直说。

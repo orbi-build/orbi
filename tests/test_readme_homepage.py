@@ -217,15 +217,16 @@ def test_readme_capability_overview_keeps_the_delivery_chain():
 
 
 def test_readme_keeps_the_license_and_contributing_entries():
-    """Issue #241: the homepage keeps the License (Apache-2.0, linked to
-    the root LICENSE file) and the contributing entry (the contributing
-    docs page plus the in-repo development contract)."""
+    """Issue #241: the homepage keeps the License (fair-code under the
+    Sustainable Use License, linked to the root LICENSE.md) and the
+    contributing entry (the contributing docs page plus the in-repo
+    development contract)."""
     text = readme_text()
-    assert re.search(r"\]\(LICENSE\)", text), (
-        "README must link to the LICENSE file"
+    assert re.search(r"\]\(LICENSE\.md\)", text), (
+        "README must link to the LICENSE.md file"
     )
-    assert "Apache License 2.0" in text, (
-        "README must name the Apache License 2.0"
+    assert "Sustainable Use License" in text, (
+        "README must name the Sustainable Use License"
     )
     assert "docs/contributing.mdx" in text, (
         "README must point at the contributing docs"

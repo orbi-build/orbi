@@ -40,7 +40,7 @@ version = "0.2.0"
 description = "Orbi (CLI: muyan-pilot) — local AI development worker: claims GitHub Issues, runs Pi in isolated worktrees, and delivers PRs (GitHub Issues + labels are the only state store)."
 readme = "README.md"
 requires-python = ">=3.14"
-license = { text = "Apache-2.0" }
+license = { file = "LICENSE.md" }
 authors = [{ name = "xqliu" }]
 dependencies = []
 
