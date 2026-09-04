@@ -115,6 +115,7 @@ def test_log_and_coverage_artifacts_are_gitignored():
         ".coverage",
         ".coverage.host123",
         "coverage.xml",
+        "coverage.json",
         "htmlcov/index.html",
     ]:
         out = git("check-ignore", "-v", path)
@@ -123,6 +124,11 @@ def test_log_and_coverage_artifacts_are_gitignored():
     # `.coverage` line was replaced), not a coincidental match.
     out = git("check-ignore", "-v", ".coverage.host123")
     assert out.splitlines()[0].split("\t")[0].rsplit(":", 1)[-1] == ".coverage*"
+    # Issue #301: `coverage.json` (the tiered gate's `coverage json -o`
+    # artifact) is ignored by its own explicit rule — `.coverage*` does
+    # not match it because it does not start with `.coverage`.
+    out = git("check-ignore", "-v", "coverage.json")
+    assert out.splitlines()[0].split("\t")[0].rsplit(":", 1)[-1] == "coverage.json"
 
 
 def test_common_dev_artifacts_are_gitignored():
@@ -191,6 +197,21 @@ def test_pi_loop_state_is_gitignored():
     # `.pi-session/` remains ignored as before.
     out2 = git("check-ignore", "-v", ".pi-session/sess.jsonl")
     assert out2.splitlines()[0].split("\t")[0].rsplit(":", 1)[-1] == ".pi-session/"
+
+
+def test_worktree_with_only_coverage_json_is_clean_for_status(tmp_path):
+    """Issue #301 acceptance: the tiered coverage gate (#234) writes
+    `coverage.json` at the worktree root (`coverage json -o ...`), and
+    `.coverage*` does not match it — every gate run hit the dirty-worktree
+    gate with `?? coverage.json`. With the explicit rule a worktree whose
+    only untracked entry is `coverage.json` is clean for
+    `git status --porcelain`, while a real leftover is still reported."""
+    repo = make_repo_with_real_gitignore(tmp_path)
+    (repo / "coverage.json").write_text('{"totals": {}}\n', encoding="utf-8")
+    assert git_in(repo, "status", "--porcelain") == ""
+    # The gate is NOT weakened: untracked source is still reported.
+    (repo / "unexpected.py").write_text("x = 1\n", encoding="utf-8")
+    assert git_in(repo, "status", "--porcelain") == "?? unexpected.py"
 
 
 def test_worktree_with_only_pi_loop_state_is_clean_for_status(tmp_path):
