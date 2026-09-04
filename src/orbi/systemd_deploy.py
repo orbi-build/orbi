@@ -49,6 +49,26 @@ SERVICE_INSTANCES = (
 LEGACY_TIMER_UNIT = "orbi.timer"
 LEGACY_UNIT_NAMES = ("orbi.service", "orbi.timer")
 
+# Issue #262: the unit templates are machine-independent. The single
+# machine-specific value (the deployment checkout path) is carried as
+# this placeholder and substituted at install time with the checkout's
+# resolved absolute path — the templates no longer hardcode
+# ``%h/Documents/orbi/orbi``, so a checkout at ANY path deploys cleanly.
+REPO_DIR_PLACEHOLDER = "{{ORBI_REPO_DIR}}"
+
+# Issue #262: the pre-#246 renamed units. The brand rename (#246/#261)
+# changed the unit names from ``muyan-pilot@*`` to ``orbi@*``; a machine
+# deployed before the rename still carries the OLD installed units, whose
+# ExecStartPre self-heal probes ``muyan-pilot --version`` and reinstalls
+# from the (now ``orbi``) checkout — a guaranteed probe → reinstall →
+# probe dead loop. install_units migrates them away once.
+RENAMED_TEMPLATE_UNITS = (
+    "muyan-pilot@.service", "muyan-pilot@.timer",
+)
+RENAMED_TIMER_INSTANCES = (
+    "muyan-pilot@1.timer", "muyan-pilot@2.timer",
+)
+
 # The idempotent install command that repairs any drift (carried on
 # every unit_drift line as the fix command). Issue #140: the official
 # entry is the installed `orbi` CLI (the uv-tool console
@@ -87,6 +107,20 @@ def sha256_hex(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def render_unit_template(template_text: str, repo_dir: Path) -> str:
+    """Substitute the deployment checkout path into a unit template.
+
+    The repo templates are machine-independent: the single
+    machine-specific value (the deployment checkout path) is carried as
+    the ``{{ORBI_REPO_DIR}}`` placeholder and replaced here with the
+    checkout's resolved absolute path. A template without the placeholder
+    is returned unchanged.
+    """
+    return template_text.replace(
+        REPO_DIR_PLACEHOLDER, str(Path(repo_dir).resolve()),
+    )
+
+
 def unit_status(repo_dir: Path, installed_dir: Path) -> list[dict]:
     """Compare the installed units against the repo templates.
 
@@ -101,7 +135,19 @@ def unit_status(repo_dir: Path, installed_dir: Path) -> list[dict]:
     for name in UNIT_NAMES:
         repo_path = repo_unit_dir(repo_dir) / name
         installed_path = installed_dir / name
-        repo_sha = sha256_hex(repo_path) if repo_path.is_file() else None
+        if repo_path.is_file():
+            # Issue #262: the installed unit is the RENDERED template
+            # (the checkout path substituted), so the drift check must
+            # compare against the rendered form — otherwise a clean
+            # install would always look drifted.
+            rendered = render_unit_template(
+                repo_path.read_text(encoding="utf-8"), repo_dir,
+            )
+            repo_sha = hashlib.sha256(
+                rendered.encode("utf-8"),
+            ).hexdigest()
+        else:
+            repo_sha = None
         installed_sha = (
             sha256_hex(installed_path) if installed_path.is_file() else None
         )
@@ -260,6 +306,38 @@ def migrate_legacy_units(installed_dir: Path, *, run_command) -> bool:
     return True
 
 
+def migrate_renamed_units(installed_dir: Path, *, run_command) -> bool:
+    """One-time migration away from the pre-#246 renamed units (#262).
+
+    The brand rename (#246/#261) changed the unit names from
+    ``muyan-pilot@*`` to ``orbi@*``, but a machine deployed before the
+    rename still carries the OLD installed units. Their ``ExecStartPre``
+    self-heal probes ``muyan-pilot --version`` and, on failure, reinstalls
+    from the checkout — but the checkout's package is now ``orbi``, so the
+    reinstall produces ``orbi``, never ``muyan-pilot``: a guaranteed probe
+    → reinstall → probe dead loop, one crash per timer tick. This
+    migration breaks the loop: it disables the old timer instances (TIMER
+    stops — the service is never started/stopped/restarted, so a running
+    Runner keeps running) and removes the old unit files, so the old
+    schedule cannot keep firing. One-time and idempotent: no old timer
+    file → no-op (a fresh or already-migrated machine). A failing step
+    propagates unchanged (fail fast).
+    """
+    if not (installed_dir / "muyan-pilot@.timer").is_file():
+        return False
+    for instance in RENAMED_TIMER_INSTANCES:
+        run_command(["systemctl", "--user", "disable", "--now", instance])
+    for name in RENAMED_TEMPLATE_UNITS:
+        legacy = installed_dir / name
+        if legacy.is_file():
+            legacy.unlink()
+    LOGGER.info(
+        "renamed_units_migrated installed_dir=%s removed=%s",
+        installed_dir, ",".join(RENAMED_TEMPLATE_UNITS),
+    )
+    return True
+
+
 def install_units(repo_dir: Path, installed_dir: Path | None = None,
                   *, max_concurrency: int = len(TIMER_INSTANCES),
                   run_command) -> dict:
@@ -294,10 +372,17 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
             )
     installed_dir.mkdir(parents=True, exist_ok=True)
     migrate_legacy_units(installed_dir, run_command=run_command)
+    migrate_renamed_units(installed_dir, run_command=run_command)
     for name in UNIT_NAMES:
-        (installed_dir / name).write_bytes(
-            (repo_unit_dir(repo_dir) / name).read_bytes(),
-        )
+        # Issue #262: render the template (substitute the deployment
+        # checkout path for the {{ORBI_REPO_DIR}} placeholder) so the
+        # installed unit points at THIS checkout regardless of where it
+        # lives. A template without the placeholder is written unchanged.
+        template_text = (
+            repo_unit_dir(repo_dir) / name
+        ).read_text(encoding="utf-8")
+        rendered = render_unit_template(template_text, repo_dir)
+        (installed_dir / name).write_bytes(rendered.encode("utf-8"))
     run_command(["systemctl", "--user", "daemon-reload"])
     for instance in TIMER_INSTANCES[:max_concurrency]:
         run_command(["systemctl", "--user", "enable", "--now", instance])

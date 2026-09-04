@@ -197,8 +197,11 @@ def test_service_keeps_working_directory_and_preflight():
     Issue #52 preflight are unchanged by the CLI switch."""
     service = parse_unit(SERVICE_FILE)
     section = service["Service"]
+    # Issue #262: the deployment checkout path is NOT hardcoded; the
+    # template carries the {{ORBI_REPO_DIR}} placeholder, substituted
+    # with the checkout's resolved path at install time.
     assert section["WorkingDirectory"] == [
-        "%h/Documents/orbi/orbi",
+        "{{ORBI_REPO_DIR}}",
     ]
     pre = section["ExecStartPre"][0]
     assert pre.startswith("/usr/bin/timeout 90s /usr/bin/flock ")
@@ -224,7 +227,7 @@ def test_service_preflight_self_heals_the_editable_cli():
     # The same timeout wrapper + shared lock as the git sync step.
     assert heal.startswith("/usr/bin/timeout 300s /usr/bin/flock ")
     assert (
-        "%h/Documents/orbi/orbi/.orbi/base-sync.lock"
+        "{{ORBI_REPO_DIR}}/.orbi/base-sync.lock"
         in heal
     )
     # The probe: the installed console script's `--version` succeeds iff
@@ -243,12 +246,13 @@ def test_service_preflight_self_heals_the_editable_cli():
     reinstall_part = heal_argv.split("||", 1)[1].strip()
     assert reinstall_part == (
         "uv tool install --force --reinstall --editable "
-        "--python /usr/bin/python3 %h/Documents/orbi/orbi"
+        "--python /usr/bin/python3 {{ORBI_REPO_DIR}}"
     )
     # The reinstall argv is the same as the Python-side source of truth
-    # (the path is the only difference: the template uses the %h
-    # specifier, the Python command the resolved repo_dir).
-    py_args = cli_source.reinstall_args(Path("%h/Documents/orbi/orbi"))
+    # (the path is the only difference: the template carries the
+    # {{ORBI_REPO_DIR}} placeholder, substituted at install time with
+    # the resolved repo_dir).
+    py_args = cli_source.reinstall_args(Path("{{ORBI_REPO_DIR}}"))
     assert reinstall_part == " ".join(py_args)
 
 
@@ -274,13 +278,26 @@ def test_service_template_passes_systemd_analyze_verify():
     resolves the unit's absolute ExecStart against a real executable
     on both — no skip needed (a missing executable is exactly the
     failure this check must catch, never skippable noise)."""
-    import os
     import subprocess
+    import tempfile
 
-    result = subprocess.run(
-        ["systemd-analyze", "--user", "verify", str(SERVICE_FILE)],
-        capture_output=True, text=True, timeout=60,
-    )
+    # Issue #262: the template carries the {{ORBI_REPO_DIR}} placeholder,
+    # so it is rendered with a real checkout path before verify — the raw
+    # template is a machine-independent source, not a runnable unit.
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".service", delete=False,
+    ) as handle:
+        handle.write(systemd_deploy.render_unit_template(
+            SERVICE_FILE.read_text(encoding="utf-8"), REPO_ROOT,
+        ))
+        rendered_path = handle.name
+    try:
+        result = subprocess.run(
+            ["systemd-analyze", "--user", "verify", rendered_path],
+            capture_output=True, text=True, timeout=60,
+        )
+    finally:
+        Path(rendered_path).unlink(missing_ok=True)
     assert result.returncode == 0, (
         f"systemd-analyze verify failed rc={result.returncode} "
         f"stdout={result.stdout.strip()} stderr={result.stderr.strip()}"
