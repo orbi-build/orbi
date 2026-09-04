@@ -10278,6 +10278,165 @@ def test_prepare_pi_agent_dir_repo_providers_win_on_collision(
     )
 
 
+def test_prepare_pi_agent_dir_expands_api_key_env_reference(
+    tmp_path, monkeypatch,
+):
+    """The per-run catalog carries the REAL key (Issue #303).
+
+    `_load_pi_providers` validates that the selected provider's
+    `$VAR` reference resolves; the materialized per-run `models.json`
+    must close the validate/use gap and write the resolved value,
+    otherwise the provider has no usable credential and the run
+    cannot authenticate. The loaded config data keeps the literal
+    reference (only the gitignored per-run copy materializes it).
+    """
+    home = tmp_path / "home"
+    _user_agent_dir(home)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("GROQ_API_KEY", "sk-real-key-value")
+    config = _model_config(
+        tmp_path, pi_providers_data=GROQ_PROVIDERS,
+        pi_provider="groq", pi_model="qwen/qwen3.8-27b",
+    )
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    merged = json.loads(
+        (agent_dir / "models.json").read_text(encoding="utf-8"),
+    )
+    assert merged["providers"]["groq"]["apiKey"] == "sk-real-key-value"
+    # The loaded provider data (and the user's file behind it) keeps
+    # the env-var reference: only the per-run copy materializes it.
+    assert config["pi_providers_data"]["providers"]["groq"][
+        "apiKey"
+    ] == "$GROQ_API_KEY"
+
+
+def test_prepare_pi_agent_dir_expands_braced_and_embedded_references(
+    tmp_path, monkeypatch,
+):
+    """`${VAR}` and references embedded in larger literals expand too
+    (Pi's documented interpolation syntax, `docs/models.md`)."""
+    home = tmp_path / "home"
+    _user_agent_dir(home)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("TEST_PREFIX", "alpha")
+    monkeypatch.setenv("TEST_SUFFIX", "omega")
+    providers = {
+        "providers": {
+            "local": {
+                "baseUrl": "http://127.0.0.1:18082/v1",
+                "api": "openai-completions",
+                "apiKey": "${TEST_PREFIX}_mid_$TEST_SUFFIX",
+                "models": [{"id": "Qwen3.8-27B"}],
+            },
+        }
+    }
+    config = _model_config(
+        tmp_path, pi_providers_data=providers,
+        pi_provider="local", pi_model="Qwen3.8-27B",
+    )
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    merged = json.loads(
+        (agent_dir / "models.json").read_text(encoding="utf-8"),
+    )
+    assert merged["providers"]["local"]["apiKey"] == "alpha_mid_omega"
+
+
+def test_prepare_pi_agent_dir_unresolved_reference_stays_verbatim(
+    tmp_path, monkeypatch,
+):
+    """Only the SELECTED provider's key must resolve: an unselected
+    provider whose variable is missing keeps the literal reference and
+    stays unavailable in Pi (the pre-#303 behavior, never an error)."""
+    home = tmp_path / "home"
+    _user_agent_dir(home)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("MISSING_PROVIDER_KEY", raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "sk-real-key-value")
+    providers = {
+        "providers": {
+            "groq": GROQ_PROVIDERS["providers"]["groq"],
+            "other": {
+                "baseUrl": "http://127.0.0.1:18083/v1",
+                "api": "openai-completions",
+                "apiKey": "$MISSING_PROVIDER_KEY",
+                "models": [{"id": "m"}],
+            },
+        }
+    }
+    config = _model_config(
+        tmp_path, pi_providers_data=providers,
+        pi_provider="groq", pi_model="qwen/qwen3.8-27b",
+    )
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    merged = json.loads(
+        (agent_dir / "models.json").read_text(encoding="utf-8"),
+    )
+    assert merged["providers"]["groq"]["apiKey"] == "sk-real-key-value"
+    assert merged["providers"]["other"]["apiKey"] == "$MISSING_PROVIDER_KEY"
+
+
+def test_prepare_pi_agent_dir_leaves_non_string_api_keys_untouched(
+    tmp_path, monkeypatch,
+):
+    """Entries without a string `apiKey` (absent, or a malformed
+    non-object entry from the user's own models.json) pass through
+    unchanged — expansion never invents or crashes on them."""
+    home = tmp_path / "home"
+    _user_agent_dir(
+        home,
+        models={"providers": {
+            "nokey": {"baseUrl": "http://u:1/v1", "api": "x"},
+            "junk": "not-an-object",
+        }},
+    )
+    monkeypatch.setenv("HOME", str(home))
+    config = _model_config(
+        tmp_path, pi_providers_data=GROQ_PROVIDERS,
+        pi_provider="groq", pi_model="qwen/qwen3.8-27b",
+    )
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    merged = json.loads(
+        (agent_dir / "models.json").read_text(encoding="utf-8"),
+    )
+    assert "apiKey" not in merged["providers"]["nokey"]
+    assert merged["providers"]["junk"] == "not-an-object"
+
+
+def test_prepare_pi_agent_dir_expands_zai_scene_from_load_config(
+    tmp_path, monkeypatch,
+):
+    """The Issue #303 scene end to end: a z.ai-shaped provider file
+    (`apiKey: "$ZAI_API_KEY"`) loaded through `load_config` then
+    materialized must carry the real key in the per-run catalog."""
+    home = tmp_path / "home"
+    _user_agent_dir(home)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ZAI_API_KEY", "sk-zai-real-key")
+    providers = {
+        "providers": {
+            "z-ai": {
+                "baseUrl": "https://api.z.ai/api/paas/v4",
+                "api": "openai-completions",
+                "apiKey": "$ZAI_API_KEY",
+                "models": [{"id": "glm-5.3-flash"}],
+            },
+        }
+    }
+    config_path = _providers_config(
+        tmp_path, providers,
+        pi_provider='"z-ai"', pi_model='"glm-5.3-flash"',
+    )
+    config = runner.load_config(config_path)
+    agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
+    merged = json.loads(
+        (agent_dir / "models.json").read_text(encoding="utf-8"),
+    )
+    assert merged["providers"]["z-ai"]["apiKey"] == "sk-zai-real-key"
+    assert merged["providers"]["z-ai"]["baseUrl"] == (
+        "https://api.z.ai/api/paas/v4"
+    )
+
+
 def test_prepare_pi_agent_dir_auth_symlink_settings_real_file(
     tmp_path, monkeypatch,
 ):
