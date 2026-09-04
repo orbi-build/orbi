@@ -843,7 +843,7 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: (
             "owner/repo", issue, scene
         ),
     )
@@ -884,7 +884,7 @@ def test_main_still_claims_new_issue_when_no_resumable(monkeypatch, tmp_path):
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: (
             "owner/repo", issue, None
         ),
     )

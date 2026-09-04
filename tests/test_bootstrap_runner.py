@@ -4444,7 +4444,7 @@ def _write_prompts(tmp_path):
 def test_main_returns_zero_when_queue_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: None,
     )
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
@@ -4466,11 +4466,17 @@ def test_main_passes_configured_active_milestone_to_the_claim_scan(
     )
     seen = {}
 
-    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None):
+    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None,
+                  stale_repos=None):
         seen["milestone"] = active_milestone
         return None
 
     monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
+    # Issue #270: the tick validates the configured Milestone before the
+    # claim scan; stub it as open so no gh call is made.
+    monkeypatch.setattr(
+        runner, "check_active_milestone", lambda repo, title: "open",
+    )
     assert runner.main(["--config", str(config)]) == 0
     assert seen["milestone"] == "v0.2.0"
 
@@ -4485,7 +4491,7 @@ def test_main_passes_none_active_milestone_when_unconfigured(
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     seen = {}
 
-    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None):
+    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None):
         seen["milestone"] = active_milestone
         return None
 
@@ -4503,7 +4509,7 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: (
             "xqliu/orbi", issue, None
         ),
     )
@@ -4536,7 +4542,7 @@ def test_main_ends_tick_when_process_issue_delivers_nothing(
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: (
             "owner/repo", issue, None
         ),
     )
@@ -4563,7 +4569,7 @@ def test_main_ticket_only_finishes_without_entering_pr_delivery_wait(
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: (
             "owner/repo", issue, None
         ),
     )
@@ -4599,7 +4605,7 @@ def test_main_release_success_ends_tick_without_pr_delivery_wait(
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: (
             "owner/repo", issue, None
         ),
     )
@@ -4641,7 +4647,7 @@ def test_main_routes_fix_needed_resume_to_delivery_wait(
     }
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: (
             "owner/repo", issue, scene,
         ),
     )
@@ -4687,7 +4693,7 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
     }
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: (
             "owner/repo", issue, scene,
         ),
     )
@@ -4717,7 +4723,7 @@ def test_main_accepts_repeated_source_repo(monkeypatch, tmp_path):
     config.write_text("source_repos = [\"xqliu/orbi\", \"xqliu/muyan-ceo\"]\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: (
             seen.append(repos) or (repos[0], issue, None)
         ),
     )
@@ -7887,7 +7893,7 @@ def test_main_holds_slot_while_processing_issue(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     seen = {}
 
-    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None):
+    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None):
         seen["occupancy"] = pilot_slots.slot_occupancy(
             tmp_path / ".orbi" / "slots", 1,
         )
@@ -7909,7 +7915,7 @@ def test_main_reacquires_slot_after_previous_release(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: None,
     )
 
     assert runner.main(["--config", str(config)]) == 0
@@ -8072,7 +8078,7 @@ def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: None,
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
@@ -8156,7 +8162,7 @@ def test_main_unit_drift_clean_proceeds_to_claim(monkeypatch, tmp_path,
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: None,
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
@@ -8181,7 +8187,7 @@ def test_main_preflight_receives_the_configured_repo_dir(
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: None,
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen == [tmp_path]
@@ -8260,7 +8266,7 @@ def test_main_transport_check_clean_proceeds_to_claim(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: None,
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
@@ -8293,7 +8299,7 @@ def test_main_transport_preflight_receives_the_configured_args(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: None,
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen["repo_dir"] == tmp_path
@@ -8328,7 +8334,7 @@ def test_main_cli_install_refresh_runs_before_slot_and_claim(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: None,
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen["repo_dir"] == tmp_path
@@ -9708,7 +9714,7 @@ def test_main_holds_slot_through_delivery_wait(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, stale_repos=None: (
             "owner/repo", issue, None
         ),
     )
@@ -11152,7 +11158,7 @@ def test_main_installs_the_stop_handler(monkeypatch, tmp_path):
     repo.mkdir()
     (repo / ".git").mkdir()
     monkeypatch.setattr(
-        runner, "pick_next_delivery", lambda *args: None,
+        runner, "pick_next_delivery", lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(runner, "acquire_slot", lambda *args: Mock(release=lambda: None))
     monkeypatch.setattr(runner, "refresh_cli_install", lambda *a, **k: "unchanged")
@@ -13623,3 +13629,399 @@ def test_apply_runner_runtime_excludes_creates_a_missing_exclude_file(
     runner.apply_runner_runtime_excludes(wt)
     lines = exclude.read_text(encoding="utf-8").splitlines()
     assert lines == list(runner.RUNNER_RUNTIME_EXCLUDES)
+
+
+# ---------------------------------------------------------------------------
+# Issue #270: active_milestone staleness — a distinguishable reason instead
+# of an indiscriminate no_ready_issue (B), and auto-advance after a release
+# closes its milestone (A).
+# ---------------------------------------------------------------------------
+
+
+def test_parse_milestone_version_parses_semver_titles():
+    assert runner.parse_milestone_version("v0.3.0") == (0, 3, 0)
+    assert runner.parse_milestone_version("0.3.0") == (0, 3, 0)
+    assert runner.parse_milestone_version("v1.10.2") == (1, 10, 2)
+
+
+def test_parse_milestone_version_rejects_non_semver_titles():
+    assert runner.parse_milestone_version("latest") is None
+    assert runner.parse_milestone_version("v0.3") is None
+    assert runner.parse_milestone_version("v0.3.0-rc1") is None
+    assert runner.parse_milestone_version("") is None
+
+
+def test_check_active_milestone_returns_open_state(monkeypatch):
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return json.dumps([
+            {"number": 5, "title": "v0.3.0", "state": "open",
+             "open_issues": 3},
+        ])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.check_active_milestone("o/r", "v0.3.0") == "open"
+    assert commands == [["gh", "api", "repos/o/r/milestones?state=all",
+                         "--paginate"]]
+
+
+def test_check_active_milestone_returns_closed_state(monkeypatch):
+    def fake_run(command, **kwargs):
+        return json.dumps([
+            {"number": 5, "title": "v0.3.0", "state": "closed",
+             "open_issues": 0},
+        ])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.check_active_milestone("o/r", "v0.3.0") == "closed"
+
+
+def test_check_active_milestone_returns_missing_for_unknown_title(
+    monkeypatch,
+):
+    def fake_run(command, **kwargs):
+        return json.dumps([
+            {"number": 5, "title": "v0.3.0", "state": "open",
+             "open_issues": 0},
+        ])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.check_active_milestone("o/r", "v9.9.9") == "missing"
+
+
+def test_check_active_milestone_fails_fast_on_ambiguous_titles(monkeypatch):
+    def fake_run(command, **kwargs):
+        return json.dumps([
+            {"number": 5, "title": "v0.3.0", "state": "open"},
+            {"number": 6, "title": "v0.3.0", "state": "open"},
+        ])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="ambiguous"):
+        runner.check_active_milestone("o/r", "v0.3.0")
+
+
+def test_check_active_milestone_propagates_gh_failure(monkeypatch):
+    def fake_run(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            1, command, stderr="rate limit exceeded"
+        )
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.check_active_milestone("o/r", "v0.3.0")
+
+
+def test_pick_next_delivery_skips_ready_scan_for_stale_repos(monkeypatch):
+    """Issue #270: a repo whose active_milestone is closed/missing is
+    skipped by the fresh-claim scan — a closed Milestone with leftover
+    open Issues must never be claimed."""
+    picked = []
+
+    def fake_pick(repo, active_milestone=None):
+        picked.append(repo)
+        return {"number": 1, "title": "t", "body": "b"}
+
+    monkeypatch.setattr(runner, "pick_issue", fake_pick)
+    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *a: None)
+    monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *a: None)
+    result = runner.pick_next_delivery(
+        ["o/stale", "o/fresh"], Path("/slots"), 1,
+        active_milestone="v0.3.0", stale_repos={"o/stale"},
+    )
+    assert result == ("o/fresh", {"number": 1, "title": "t", "body": "b"},
+                      None)
+    assert picked == ["o/fresh"]
+
+
+def test_pick_next_delivery_scans_every_repo_without_stale_repos(
+    monkeypatch,
+):
+    """Issue #270 compat: without `stale_repos` the ready scan is
+    byte-identical to the pre-#270 behavior."""
+    picked = []
+
+    def fake_pick(repo, active_milestone=None):
+        picked.append(repo)
+        return None
+
+    monkeypatch.setattr(runner, "pick_issue", fake_pick)
+    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *a: None)
+    monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *a: None)
+    assert runner.pick_next_delivery(
+        ["o/a", "o/b"], Path("/slots"), 1, active_milestone="v0.3.0",
+    ) is None
+    assert picked == ["o/a", "o/b"]
+
+
+def test_main_stale_milestone_logs_reason_instead_of_no_ready_issue(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #270 regression: with a closed active_milestone the tick must
+    log `active_milestone_stale` and must NOT log the indiscriminate
+    `outcome=no_ready_issue`."""
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = "v0.3.0"\n',
+        encoding="utf-8",
+    )
+    seen = {}
+
+    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None,
+                  stale_repos=None):
+        seen["stale"] = stale_repos
+        return None
+
+    monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
+    monkeypatch.setattr(
+        runner, "check_active_milestone", lambda repo, title: "closed",
+    )
+    with caplog.at_level("WARNING"):
+        assert runner.main(["--config", str(config)]) == 0
+    assert seen["stale"] == {"owner/repo"}
+    assert "active_milestone_stale" in caplog.text
+    assert "state=closed" in caplog.text
+    assert "outcome=no_ready_issue" not in caplog.text
+
+
+def test_main_missing_milestone_logs_reason_instead_of_no_ready_issue(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #270: a configured milestone that does not exist is reported
+    as `state=missing`, never as an ordinary empty queue."""
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = "v9.9.9"\n',
+        encoding="utf-8",
+    )
+
+    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None,
+                  stale_repos=None):
+        return None
+
+    monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
+    monkeypatch.setattr(
+        runner, "check_active_milestone", lambda repo, title: "missing",
+    )
+    with caplog.at_level("WARNING"):
+        assert runner.main(["--config", str(config)]) == 0
+    assert "active_milestone_stale" in caplog.text
+    assert "state=missing" in caplog.text
+    assert "outcome=no_ready_issue" not in caplog.text
+
+
+def test_main_valid_milestone_keeps_no_ready_issue_outcome(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #270: an open milestone with no ready issues keeps the exact
+    pre-change outcome — no stale warning, plain no_ready_issue."""
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = "v0.3.0"\n',
+        encoding="utf-8",
+    )
+
+    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None,
+                  stale_repos=None):
+        assert stale_repos == set()
+        return None
+
+    monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
+    monkeypatch.setattr(
+        runner, "check_active_milestone", lambda repo, title: "open",
+    )
+    with caplog.at_level("INFO"):
+        assert runner.main(["--config", str(config)]) == 0
+    assert "outcome=no_ready_issue" in caplog.text
+    assert "active_milestone_stale" not in caplog.text
+
+
+def test_set_config_active_milestone_rewrites_only_the_milestone_line(
+    tmp_path,
+):
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\n'
+        'active_milestone = "v0.3.0"\n'
+        'base_branch = "main"\n',
+        encoding="utf-8",
+    )
+    runner.set_config_active_milestone(config, "v0.3.1")
+    text = config.read_text(encoding="utf-8")
+    assert 'active_milestone = "v0.3.1"' in text
+    assert 'active_milestone = "v0.3.0"' not in text
+    assert 'source_repos = ["owner/repo"]' in text
+    assert 'base_branch = "main"' in text
+
+
+def test_set_config_active_milestone_handles_single_quoted_line(tmp_path):
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        "source_repos = [\"owner/repo\"]\n"
+        "active_milestone = 'v0.3.0'\n",
+        encoding="utf-8",
+    )
+    runner.set_config_active_milestone(config, "v0.3.1")
+    assert 'active_milestone = "v0.3.1"' in config.read_text(encoding="utf-8")
+
+
+def test_set_config_active_milestone_fails_fast_without_the_line(tmp_path):
+    config = tmp_path / "orbi.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="no active_milestone line"):
+        runner.set_config_active_milestone(config, "v0.3.1")
+    assert 'active_milestone' not in config.read_text(encoding="utf-8")
+
+
+def _open_milestones_payload() -> str:
+    return json.dumps([
+        {"number": 2, "title": "v0.3.1", "state": "open", "open_issues": 8},
+        {"number": 3, "title": "v0.4.0", "state": "open", "open_issues": 0},
+        {"number": 4, "title": "latest", "state": "open", "open_issues": 0},
+    ])
+
+
+def test_advance_active_milestone_moves_to_nearest_open_semver(
+    monkeypatch, tmp_path,
+):
+    config_file = tmp_path / "orbi.toml"
+    config_file.write_text(
+        'source_repos = ["o/r"]\nactive_milestone = "v0.3.0"\n',
+        encoding="utf-8",
+    )
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return _open_milestones_payload()
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    config = {"active_milestone": "v0.3.0", "config_path": config_file}
+    assert runner.advance_active_milestone(config, "o/r", "v0.3.0") == (
+        "v0.3.1"
+    )
+    assert commands == [["gh", "api", "repos/o/r/milestones?state=open",
+                         "--paginate"]]
+    assert 'active_milestone = "v0.3.1"' in config_file.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_advance_active_milestone_logs_none_when_there_is_no_next(
+    monkeypatch, tmp_path, caplog,
+):
+    config_file = tmp_path / "orbi.toml"
+    config_file.write_text(
+        'source_repos = ["o/r"]\nactive_milestone = "v0.3.0"\n',
+        encoding="utf-8",
+    )
+
+    def fake_run(command, **kwargs):
+        return json.dumps([
+            {"number": 1, "title": "v0.2.0", "state": "open"},
+            {"number": 2, "title": "latest", "state": "open"},
+        ])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    config = {"active_milestone": "v0.3.0", "config_path": config_file}
+    assert runner.advance_active_milestone(config, "o/r", "v0.3.0") is None
+    # The config is untouched: the next tick's stale check keeps reporting
+    # the closed Milestone until a human acts.
+    assert 'active_milestone = "v0.3.0"' in config_file.read_text(
+        encoding="utf-8"
+    )
+    assert "active_milestone_advance_none" in caplog.text
+
+
+def test_advance_active_milestone_is_a_noop_when_scope_is_unset(
+    monkeypatch,
+):
+    def fake_run(command, **kwargs):
+        raise AssertionError("no milestone query expected")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.advance_active_milestone(
+        {"active_milestone": None, "config_path": None}, "o/r", "v0.3.0",
+    ) is None
+
+
+def test_advance_active_milestone_is_a_noop_when_active_differs(
+    monkeypatch, tmp_path,
+):
+    config_file = tmp_path / "orbi.toml"
+    config_file.write_text(
+        'source_repos = ["o/r"]\nactive_milestone = "v0.3.1"\n',
+        encoding="utf-8",
+    )
+
+    def fake_run(command, **kwargs):
+        raise AssertionError("no milestone query expected")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    config = {"active_milestone": "v0.3.1", "config_path": config_file}
+    assert runner.advance_active_milestone(config, "o/r", "v0.3.0") is None
+    assert 'active_milestone = "v0.3.1"' in config_file.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_advance_active_milestone_fails_fast_on_non_semver_release(
+    monkeypatch,
+):
+    def fake_run(command, **kwargs):
+        raise AssertionError("no milestone query expected")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    config = {"active_milestone": "v0.3.0-rc1", "config_path": None}
+    with pytest.raises(RuntimeError, match="not a plain"):
+        runner.advance_active_milestone(config, "o/r", "v0.3.0-rc1")
+
+
+def test_advance_active_milestone_fails_fast_without_config_path(monkeypatch):
+    def fake_run(command, **kwargs):
+        return _open_milestones_payload()
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    config = {"active_milestone": "v0.3.0", "config_path": None}
+    with pytest.raises(RuntimeError, match="no config path"):
+        runner.advance_active_milestone(config, "o/r", "v0.3.0")
+
+
+def test_process_release_advances_active_milestone_after_closing_it(
+    monkeypatch, tmp_path,
+):
+    """Issue #270 A: the release success path writes the next open
+    milestone into the config file, so the next tick claims from it
+    without a human config edit."""
+    make_release_process_env(monkeypatch)
+    config_file = tmp_path / "orbi.toml"
+    config_file.write_text(
+        'source_repos = ["o/r"]\nactive_milestone = "v0.3.0"\n',
+        encoding="utf-8",
+    )
+    real_run = runner.run_command
+
+    def run_with_open_milestones(command, **kwargs):
+        if command == ["gh", "api", "repos/o/r/milestones?state=open",
+                       "--paginate"]:
+            return json.dumps([
+                {"number": 6, "title": "v0.3.1", "state": "open",
+                 "open_issues": 8},
+            ])
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", run_with_open_milestones)
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    config = {"repo_dir": Path("/r"), "base_branch": "main",
+              "active_milestone": "v0.3.0", "config_path": config_file}
+    runner.process_release(issue, config, "o/r")
+    assert 'active_milestone = "v0.3.1"' in config_file.read_text(
+        encoding="utf-8"
+    )
