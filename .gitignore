@@ -7,6 +7,9 @@ __pycache__/
 coverage.log
 .coverage*
 coverage.xml
+# Issue #301: the tiered coverage gate writes `coverage json -o ...`
+# at the worktree root; `.coverage*` does not match it.
+coverage.json
 htmlcov/
 # Python packaging build artifacts (Issue #140: pyproject.toml builds)
 build/
