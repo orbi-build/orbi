@@ -4578,6 +4578,46 @@ def test_main_ticket_only_finishes_without_entering_pr_delivery_wait(
     assert runner.main(["--config", str(config)]) == 0
 
 
+def test_main_release_success_ends_tick_without_pr_delivery_wait(
+    monkeypatch, tmp_path,
+):
+    """Issue #269: a release delivery returns a Release URL, not a PR URL.
+
+    `process_release` already closed the delivery (tag pushed, GitHub
+    Release published, Issue `ai-merged` and closed), so `main` must end
+    the tick with exit code 0 and NEVER enter the PR delivery wait —
+    `_pr_number` on `.../releases/tag/v0.3.0` raises `ValueError` and
+    crashed the Runner (run_id=37216af5)."""
+    issue = {
+        "number": 254, "title": "Release v0.3.0", "body": "Release v0.3.0",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+    }
+    release_url = "https://github.com/orbi-build/orbi/releases/tag/v0.3.0"
+    waits = []
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+            "owner/repo", issue, None
+        ),
+    )
+    monkeypatch.setattr(runner, "process_issue", lambda *args: release_url)
+    monkeypatch.setattr(
+        runner, "wait_for_delivery",
+        lambda *args: waits.append(args) or (
+            _ for _ in ()
+        ).throw(AssertionError(
+            "release delivery must not enter PR delivery wait"
+        )),
+    )
+
+    assert runner.main(["--config", str(config)]) == 0
+    # No PR was delivered: the delivery wait must not run.
+    assert waits == []
+
+
 def test_main_routes_fix_needed_resume_to_delivery_wait(
     monkeypatch, tmp_path,
 ):

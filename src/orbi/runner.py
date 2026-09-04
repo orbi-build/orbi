@@ -7286,6 +7286,14 @@ def main(argv: list[str] | None = None) -> int:
             # or merge (Issue #209).
             if is_ticket_only(issue):
                 return 0
+            # Issue #269: a release delivery returns a Release URL, not a
+            # PR URL. `process_release` already closed the delivery (tag
+            # pushed, GitHub Release published, Issue `ai-merged` and
+            # closed), so the tick ends here — entering the PR wait made
+            # `_pr_number` raise `ValueError` on the tag name and crashed
+            # the Runner (run_id=37216af5).
+            if is_release(issue):
+                return 0
             # Issue #239: a terminal delivery failure — `process_issue`
             # already marked the Issue `ai-blocked` and posted the failure
             # comment; there is no PR to wait for, so the tick ends
