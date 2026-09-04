@@ -4017,9 +4017,6 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
-        if command[:3] == ["git", "worktree", "prune"]:
-            # Issue #256 terminal cleanup — not a delivery comment.
-            return ""
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
@@ -4093,9 +4090,6 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
-        if command[:3] == ["git", "worktree", "prune"]:
-            # Issue #256 terminal cleanup — not a delivery comment.
-            return ""
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
@@ -4179,9 +4173,6 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
-        if command[:3] == ["git", "worktree", "prune"]:
-            # Issue #256 terminal cleanup — not a delivery comment.
-            return ""
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
@@ -4345,9 +4336,6 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
-        if command[:3] == ["git", "worktree", "prune"]:
-            # Issue #256 terminal cleanup — not a delivery comment.
-            return ""
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
@@ -13541,3 +13529,18 @@ def test_cleanup_task_worktree_logs_failure_and_keeps_the_scene(
         runner.cleanup_task_worktree(wt, tmp_path, run_id="abc12345", issue=4)
     assert "worktree_cleanup_failed" in caplog.text
     assert wt.exists(), "a failed cleanup must never claim the scene is gone"
+
+
+def test_exclude_path_rejects_a_pointer_without_gitdir(tmp_path):
+    wt = tmp_path / "wt"
+    (wt / ".git").parent.mkdir(parents=True, exist_ok=True)
+    (wt / ".git").write_text("# not a real pointer\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="no gitdir entry"):
+        runner.runner_runtime_exclude_path(wt)
+
+
+def test_runner_runtime_only_accepts_quoted_runner_paths():
+    # Porcelain quotes paths with special characters; the runner paths
+    # are plain ASCII, so the unquoted match is exact.
+    assert runner._is_runner_runtime_only('?? ".muyan-pilot/"\n')
+    assert runner._is_runner_runtime_only('?? ".pi-session/"\n')
