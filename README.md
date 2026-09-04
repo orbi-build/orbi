@@ -7,7 +7,8 @@ Pi 在隔离 worktree 中完成开发、测试并创建 PR，再经过独立审�
 这个仓库自己就是证据：最近 106 个已合并 PR 里，99 个是 Orbi 自己交付的。
 
 - 官网 <https://orbi.build> ｜ 文档 <https://docs.orbi.build/>（仓库内
-  [`docs/`](docs/) 是唯一事实源，中文入口 [`docs/zh/`](docs/zh/)）
+  [`docs/`](docs/) 是唯一事实源，中文入口 [`docs/zh/`](docs/zh/)）｜ 进展
+  [@xqliu](https://x.com/xqliu)
 - **[报名首批共建](https://orbi.build/apply)**：卡在环境、模型接入或工作流上的
   话，我们帮你跑通第一个 Issue，你踩的坑会变成优先修的 Issue。
 
