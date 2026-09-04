@@ -4017,6 +4017,9 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
+        if command[:3] == ["git", "worktree", "prune"]:
+            # Issue #256 terminal cleanup — not a delivery comment.
+            return ""
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
@@ -4090,6 +4093,9 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
+        if command[:3] == ["git", "worktree", "prune"]:
+            # Issue #256 terminal cleanup — not a delivery comment.
+            return ""
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
@@ -4173,6 +4179,9 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
+        if command[:3] == ["git", "worktree", "prune"]:
+            # Issue #256 terminal cleanup — not a delivery comment.
+            return ""
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
@@ -4336,6 +4345,9 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
+        if command[:3] == ["git", "worktree", "prune"]:
+            # Issue #256 terminal cleanup — not a delivery comment.
+            return ""
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
@@ -4717,6 +4729,9 @@ def test_process_issue_failure_without_session_still_carries_scene(
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
+        if command[:3] == ["git", "worktree", "prune"]:
+            # Issue #256 terminal cleanup — not a delivery comment.
+            return ""
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
@@ -4753,6 +4768,9 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
+        if command[:3] == ["git", "worktree", "prune"]:
+            # Issue #256 terminal cleanup — not a delivery comment.
+            return ""
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
@@ -4798,6 +4816,9 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
+        if command[:3] == ["git", "worktree", "prune"]:
+            # Issue #256 terminal cleanup — not a delivery comment.
+            return ""
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
@@ -13292,3 +13313,231 @@ def test_deliver_pr_verifies_the_pr_with_the_latest_base_check_skipped(
     # Exactly one fetch (the deliver fetch); nothing after the push.
     assert len(fetches) == 1
     assert fetches[0] < push
+
+
+# --- Issue #256: Runner-owned runtime state isolation ----------------------
+
+
+def _make_linked_worktree(tmp_path: Path) -> tuple[Path, Path]:
+    """A real git repo plus one linked task worktree (the exact shape
+    `create_worktree` produces: `.git` is a pointer file)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "t@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.name", "test"], check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "--allow-empty", "-m", "base"],
+        check=True,
+    )
+    wt = tmp_path / "wt"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-b", "task",
+         str(wt), "HEAD"],
+        check=True,
+    )
+    return repo, wt
+
+
+def test_exclude_path_resolves_the_linked_worktree_gitdir(tmp_path):
+    repo, wt = _make_linked_worktree(tmp_path)
+    exclude = runner.runner_runtime_exclude_path(wt)
+    assert exclude.name == "exclude"
+    assert exclude.parts[-2] == "info"
+    # The linked worktree's exclude lives in the shared repo's gitdir,
+    # never in the worktree checkout itself.
+    assert exclude.is_relative_to(repo / ".git")
+    assert not exclude.is_relative_to(wt)
+
+
+def test_apply_runner_runtime_excludes_writes_all_patterns(tmp_path):
+    _, wt = _make_linked_worktree(tmp_path)
+    runner.apply_runner_runtime_excludes(wt)
+    lines = runner.runner_runtime_exclude_path(wt).read_text(
+        encoding="utf-8",
+    ).splitlines()
+    for pattern in runner.RUNNER_RUNTIME_EXCLUDES:
+        assert pattern in lines
+
+
+def test_apply_runner_runtime_excludes_is_idempotent(tmp_path):
+    _, wt = _make_linked_worktree(tmp_path)
+    runner.apply_runner_runtime_excludes(wt)
+    first = runner.runner_runtime_exclude_path(wt).read_text(encoding="utf-8")
+    runner.apply_runner_runtime_excludes(wt)
+    second = runner.runner_runtime_exclude_path(wt).read_text(encoding="utf-8")
+    assert first == second
+    lines = second.splitlines()
+    assert len(lines) == len(set(lines)), "patterns must not be duplicated"
+
+
+def test_apply_runner_runtime_excludes_preserves_user_content(tmp_path):
+    _, wt = _make_linked_worktree(tmp_path)
+    exclude = runner.runner_runtime_exclude_path(wt)
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    exclude.write_text("# my custom exclude\nsecrets-local/\n", encoding="utf-8")
+    runner.apply_runner_runtime_excludes(wt)
+    text = exclude.read_text(encoding="utf-8")
+    assert "# my custom exclude" in text
+    assert "secrets-local/" in text
+    assert ".muyan-pilot/" in text
+    assert ".pi-session/" in text
+
+
+def test_apply_runner_runtime_excludes_without_git_is_a_noop(tmp_path):
+    wt = tmp_path / "not-a-worktree"
+    wt.mkdir()
+    runner.apply_runner_runtime_excludes(wt)  # must not raise
+    assert not (wt / ".git").exists()
+    assert not list(wt.iterdir())
+
+
+def test_run_pi_applies_runner_runtime_excludes_before_pi(monkeypatch, tmp_path):
+    prompt_path = tmp_path / "prompt.md"
+    prompt_path.write_text("SYSTEM", encoding="utf-8")
+    applied: list[Path] = []
+    monkeypatch.setattr(
+        runner, "apply_runner_runtime_excludes",
+        lambda worktree: applied.append(worktree),
+    )
+    monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: "done")
+    config = {
+        "prompt": prompt_path, "repo_dir": tmp_path,
+        "source_repos": ["owner/repo"], "workspace_root": tmp_path,
+        "context_files": [], "skills": [], "base_branch": "main",
+        "base_sha": "abc123def456", "run_id": "run1",
+    }
+    runner.run_pi(
+        {"number": 5, "title": "t", "body": "b"}, tmp_path, config,
+        "owner/repo",
+    )
+    assert applied == [tmp_path]
+
+
+def test_run_review_applies_runner_runtime_excludes_before_pi(
+    monkeypatch, tmp_path,
+):
+    prompt_path = tmp_path / "prompt_review.md"
+    prompt_path.write_text("REVIEW", encoding="utf-8")
+    applied: list[Path] = []
+    monkeypatch.setattr(
+        runner, "apply_runner_runtime_excludes",
+        lambda worktree: applied.append(worktree),
+    )
+    monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: "ok")
+    runner.run_review(
+        tmp_path,
+        {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"},
+        {
+            "prompt_review": prompt_path, "repo_dir": tmp_path / "checkout",
+            "source_repos": ["owner/repo"], "base_branch": "main",
+            "run_id": "a1b2c3d4", "skills": [],
+        },
+        "owner/repo", 4, "branch", 1,
+    )
+    assert applied == [tmp_path]
+
+
+def test_deliver_pr_repairs_runner_runtime_leftovers(monkeypatch, tmp_path,
+                                                     caplog):
+    """The #246 scene: the task renamed the tracked .gitignore away from
+    `.muyan-pilot/`, but the parent Runner still created it. The delivery
+    applies the local exclude, repairs, logs
+    `runner_runtime_exclude_repaired`, and continues — no
+    `delivery_uncommitted_changes`."""
+    status_calls = {"n": 0}
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "status", "--porcelain"]:
+            status_calls["n"] += 1
+            # First check: the Runner's own state looks untracked. After
+            # the exclude repair the re-check is clean.
+            return "?? .muyan-pilot/\n" if status_calls["n"] == 1 else ""
+        return fake_deliver_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level(logging.INFO, logger="muyan_pilot.bootstrap"):
+        url = runner.deliver_pr(
+            tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
+            issue=4, issue_title="t", repo_dir=tmp_path,
+        )
+    assert url == FAKE_PR_URL
+    assert "runner_runtime_exclude_repaired" in caplog.text
+    assert "delivery_uncommitted_changes" not in caplog.text
+    assert status_calls["n"] == 2
+
+
+def test_deliver_pr_repairs_the_renamed_state_dir_too(monkeypatch, tmp_path,
+                                                      caplog):
+    """Migration window: the renamed state dir `.orbi/` is Runner-owned
+    as well and must be repaired, not failed."""
+    status_calls = {"n": 0}
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "status", "--porcelain"]:
+            status_calls["n"] += 1
+            return "?? .orbi/\n" if status_calls["n"] == 1 else ""
+        return fake_deliver_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level(logging.INFO, logger="muyan_pilot.bootstrap"):
+        url = runner.deliver_pr(
+            tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
+            issue=4, issue_title="t", repo_dir=tmp_path,
+        )
+    assert url == FAKE_PR_URL
+    assert "runner_runtime_exclude_repaired" in caplog.text
+
+
+def test_deliver_pr_still_fails_on_agent_leftovers_alongside_runner_state(
+    monkeypatch, tmp_path,
+):
+    """Runner state plus a REAL agent leftover: the repair must not mask
+    the agent's uncommitted code — `delivery_uncommitted_changes` stands."""
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "status", "--porcelain"]:
+            return " M src/app.py\n?? .muyan-pilot/\n?? foo.py\n"
+        return fake_deliver_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="uncommitted changes"):
+        runner.deliver_pr(
+            tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
+            issue=4, issue_title="t", repo_dir=tmp_path,
+        )
+
+
+def test_cleanup_task_worktree_removes_the_scene_and_prunes(tmp_path):
+    repo, wt = _make_linked_worktree(tmp_path)
+    (wt / ".muyan-pilot").mkdir(parents=True)
+    (wt / ".pi-session").mkdir(parents=True)
+    runner.cleanup_task_worktree(wt, repo, run_id="abc12345", issue=4)
+    assert not wt.exists()
+    listing = subprocess.run(
+        ["git", "-C", str(repo), "worktree", "list"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert str(wt) not in listing
+
+
+def test_cleanup_task_worktree_logs_failure_and_keeps_the_scene(
+    monkeypatch, tmp_path, caplog,
+):
+    wt = tmp_path / "wt"
+    wt.mkdir()
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(runner.shutil, "rmtree", boom)
+    with caplog.at_level(logging.ERROR, logger="muyan_pilot.bootstrap"):
+        runner.cleanup_task_worktree(wt, tmp_path, run_id="abc12345", issue=4)
+    assert "worktree_cleanup_failed" in caplog.text
+    assert wt.exists(), "a failed cleanup must never claim the scene is gone"

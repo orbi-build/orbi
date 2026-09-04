@@ -457,10 +457,11 @@ def test_e2e_failed_attempt_marks_blocked_with_same_run_id(
     for message in caplog.messages:
         assert message.startswith("[a1b2c3d4]"), message
 
-    # The run-scoped worktree (session scene) is preserved for inspection.
+    # Issue #256: the attempt is terminally `ai-blocked` — the scene is
+    # never needed again (a retry gets a new run id and worktree), so
+    # the run-scoped worktree is cleaned, not preserved.
     worktree = worktree_for(clone, "a1b2c3d4")
-    assert worktree.is_dir()
-    assert (worktree / ".pi-session").is_dir()
+    assert not worktree.is_dir()
 
 
 def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
@@ -486,10 +487,15 @@ def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
 
     def claiming_edit(number, **kwargs):
         # Only the claim edit reaches GitHub before the kill; the
-        # failure path's label removal never happens.
+        # failure path's label removal never happens. The blocked edit
+        # RAISING (Issue #256) is what keeps the Issue recoverable
+        # (ai-in-progress) — the terminal worktree cleanup is gated on
+        # the ai-blocked transition actually landing.
         if kwargs.get("add") == "ai-in-progress" \
                 and kwargs.get("remove") is None:
             real_edit_issue(number, **kwargs)
+            return
+        raise AssertionError("kill simulation: label edit must not land")
 
     monkeypatch.setattr(runner, "edit_issue", claiming_edit)
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
