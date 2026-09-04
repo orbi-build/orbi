@@ -32,6 +32,7 @@ import math
 import os
 import re
 import select
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -4093,6 +4094,10 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
     prompt template itself is untouched; absent -> the exact
     pre-#219 context.
     """
+    # Issue #256: pin the Runner-owned runtime paths in the worktree's
+    # local exclude BEFORE Pi starts (covers create, resume and
+    # implement) — the tracked .gitignore is the agent's to rename.
+    apply_runner_runtime_excludes(worktree)
     started = time.monotonic()
     system_prompt = render_prompt(
         config["prompt"].read_text(encoding="utf-8"),
@@ -4344,6 +4349,129 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
     return url
 
 
+# Runner-owned runtime paths inside a task worktree (Issue #256): created
+# by the parent Runner and the Pi session machinery, never by the agent's
+# delivery. The task branch's tracked `.gitignore` must NOT be the thing
+# that keeps them out of the delivery commit boundary — a task may legally
+# rename that file (the #246 brand-rename scene, run `b879a88c`), so the
+# Runner pins its own runtime paths in the worktree's LOCAL git exclude
+# (`.git/info/exclude`): git metadata that never enters an agent commit and
+# never depends on the task branch's content. The migration window keeps
+# BOTH the legacy state dir (`.muyan-pilot/`) and the renamed one
+# (`.orbi/`) excluded until the old runner/unit can no longer write the
+# legacy path.
+RUNNER_RUNTIME_EXCLUDES = (".muyan-pilot/", ".orbi/", ".pi-session/")
+
+
+def runner_runtime_exclude_path(worktree: Path) -> Path:
+    """The task worktree's local git exclude file (`.git/info/exclude`).
+
+    A linked worktree's `.git` is a pointer file (`gitdir: <path>`) that
+    resolves to `<common-gitdir>/worktrees/<name>`. Git applies the
+    exclude file of the COMMON gitdir to every worktree of the repo (the
+    worktree-specific gitdir carries no exclude of its own — verified
+    against real git), so the exclude is written to
+    `<common-gitdir>/info/exclude`. That is repository-local metadata:
+    it never enters an agent commit and never touches the user's global
+    excludes (`core.excludesFile`).
+    """
+    git_entry = worktree / ".git"
+    if git_entry.is_file():
+        for line in git_entry.read_text(encoding="utf-8").splitlines():
+            if line.startswith("gitdir:"):
+                git_dir = Path(line.split(":", 1)[1].strip())
+                # <common-gitdir>/worktrees/<name> -> <common-gitdir>
+                common_gitdir = git_dir.parent.parent
+                return common_gitdir / "info" / "exclude"
+        raise ValueError(
+            f"worktree .git pointer {git_entry} has no gitdir entry"
+        )
+    return git_entry / "info" / "exclude"
+
+
+def apply_runner_runtime_excludes(worktree: Path) -> None:
+    """Idempotently pin the Runner-owned runtime paths in the worktree's
+    local git exclude (Issue #256).
+
+    Existing exclude content (including user-written patterns) is
+    preserved verbatim; a pattern already present is never written twice.
+    Called before every Pi launch (implement, resume, review) and before
+    the delivery commit-boundary check. A directory without a `.git`
+    entry (unit-test tmp dirs) is a no-op: the delivery commit boundary
+    still fails fast on a real corrupted scene.
+    """
+    git_entry = worktree / ".git"
+    if not git_entry.exists():
+        LOGGER.debug(
+            "runner_runtime_exclude_skipped worktree=%s (no .git entry)",
+            worktree,
+        )
+        return
+    exclude_path = runner_runtime_exclude_path(worktree)
+    existing = ""
+    if exclude_path.is_file():
+        existing = exclude_path.read_text(encoding="utf-8")
+    present = {line.strip() for line in existing.splitlines()}
+    missing = [p for p in RUNNER_RUNTIME_EXCLUDES if p not in present]
+    if not missing:
+        return
+    exclude_path.parent.mkdir(parents=True, exist_ok=True)
+    prefix = "\n" if existing and not existing.endswith("\n") else ""
+    exclude_path.write_text(
+        existing + prefix + "\n".join(missing) + "\n", encoding="utf-8",
+    )
+
+
+def _is_runner_runtime_only(status: str) -> bool:
+    """True when EVERY non-empty porcelain entry is a Runner-owned runtime
+    path (Issue #256): the delivery repair may then continue; any
+    agent-owned entry keeps the `delivery_uncommitted_changes` fail fast."""
+    entries = [line for line in status.splitlines() if line.strip()]
+    if not entries:
+        return False
+    for line in entries:
+        path = line[3:].strip()
+        if path.startswith('"') and path.endswith('"'):
+            # Porcelain quotes paths with special characters; the runner
+            # paths are plain ASCII, so an unquoted match is exact.
+            path = path[1:-1]
+        if not any(
+            path == pattern.strip("/") or path.startswith(pattern)
+            for pattern in RUNNER_RUNTIME_EXCLUDES
+        ):
+            return False
+    return True
+
+
+def cleanup_task_worktree(worktree: Path, repo_dir: Path, *, run_id: str,
+                          issue: int) -> None:
+    """Remove a terminally failed task's worktree and Runner state
+    (Issue #256).
+
+    Called ONLY on the terminal `ai-blocked` outcome AFTER the Issue
+    evidence (journal line + `Muyan Pilot failed` comment) is recorded.
+    A retry generates a NEW run id and a NEW worktree, so the terminal
+    scene is never needed again; the recoverable `ai-fix-needed` /
+    model_wait paths keep the worktree for the same-run resume and must
+    never call this. A cleanup failure is logged as
+    `worktree_cleanup_failed` — never swallowed, never re-raised (the
+    tick already handled the delivery failure).
+    """
+    try:
+        if worktree.is_dir():
+            shutil.rmtree(worktree)
+        run_command(["git", "worktree", "prune"], cwd=repo_dir)
+        LOGGER.info(
+            "worktree_cleaned issue=%s run_id=%s worktree=%s",
+            issue, run_id, worktree,
+        )
+    except Exception as exc:
+        LOGGER.exception(
+            "worktree_cleanup_failed issue=%s run_id=%s worktree=%s: %s",
+            issue, run_id, worktree, exc,
+        )
+
+
 def deliver_pr(worktree: Path, branch: str, base_branch: str,
                base_sha: str, run_id: str, *, issue: int,
                issue_title: str, repo_dir: Path) -> str:
@@ -4377,11 +4505,24 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
         raise RuntimeError(
             f"Pi changed branch: expected={branch} actual={current_branch}"
         )
-    # Commit boundary (Issue #186): the Agent's delivery is the
-    # committed worktree state. Uncommitted changes stay uncommitted —
-    # the Runner never commits them and never expands the Agent's
-    # commit boundary; a dirty worktree is a delivery failure.
+    # Commit boundary (Issue #186 + #256): the Agent's delivery is the
+    # committed worktree state. The Runner-owned runtime paths are
+    # pinned in the worktree's LOCAL exclude BEFORE the check, so a task
+    # that renamed the tracked .gitignore (the #246 scene) cannot make
+    # the Runner's own state look like agent leftovers.
+    apply_runner_runtime_excludes(worktree)
     dirty = run_command(["git", "status", "--porcelain"], cwd=worktree)
+    if dirty and _is_runner_runtime_only(dirty):
+        # Only Runner-owned runtime paths remain (the exclude write raced
+        # or the path appeared after it): re-write the exclude and
+        # re-check. The repair is deterministic — no git add, no
+        # deletion, no arbitrary whitelisting.
+        apply_runner_runtime_excludes(worktree)
+        LOGGER.info(
+            "runner_runtime_exclude_repaired branch=%s status=%s",
+            branch, " ".join(dirty.splitlines()),
+        )
+        dirty = run_command(["git", "status", "--porcelain"], cwd=worktree)
     if dirty:
         LOGGER.error(
             "delivery_uncommitted_changes branch=%s status=%s",
@@ -4857,6 +4998,9 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
     Issue #41: one run_id end to end, the roles are steps of the same
     run).
     """
+    # Issue #256: the review/fix session gets the SAME local-exclude
+    # preflight as the implementer (one idempotent helper, Pi 前).
+    apply_runner_runtime_excludes(worktree)
     started = time.monotonic()
     system_prompt = render_prompt(
         config["prompt_review"].read_text(encoding="utf-8"),
@@ -6318,6 +6462,12 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
                 )
             except Exception:
                 LOGGER.exception("issue=%s activity scene failed", number)
+        # Issue #256: the terminal worktree cleanup is gated on the
+        # `ai-blocked` transition ACTUALLY reaching GitHub — a simulated
+        # kill (the failure path's label edit never lands) leaves the
+        # Issue recoverable (ai-in-progress), so the scene must be kept
+        # for the same-run resume.
+        blocked_transition_done = False
         try:
             # The claim label is removed on every failure; when the
             # delivery already made the opened-PR transition (the
@@ -6331,6 +6481,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
                     PR_OPENED_LABEL if pr_opened else IN_PROGRESS_LABEL
                 ),
             )
+            blocked_transition_done = True
             detail = _failure_detail(exc)
             body = (
                 f"{run_marker(run_id)}\n"
@@ -6374,6 +6525,20 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
                 )
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
+        else:
+            # Issue #256: the terminal evidence is recorded (journal +
+            # `Muyan Pilot failed` comment) and the Issue is genuinely
+            # `ai-blocked` — the scene is never needed again (a retry
+            # gets a new run id and worktree), so clean it up. The
+            # recoverable paths (ModelWaitDeadError, ai-fix-needed) and
+            # the simulated-kill scene (blocked transition never landed)
+            # never reach this branch — the worktree is kept for the
+            # same-run resume.
+            if worktree is not None and blocked_transition_done:
+                cleanup_task_worktree(
+                    worktree, config["repo_dir"], run_id=run_id,
+                    issue=number,
+                )
         # Issue #239: the failure is terminal — the Issue is `ai-blocked`
         # and the `Muyan Pilot failed` comment is posted above. Returning
         # `None` ends the tick cleanly: `main` skips the delivery wait

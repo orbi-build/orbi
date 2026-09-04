@@ -311,10 +311,15 @@ def run_first_attempt(monkeypatch, tmp_path: Path, clone: Path,
 
     def claiming_edit(number, **kwargs):
         # Only the claim edit reaches GitHub before the kill; the
-        # failure path's label transition never happens.
+        # failure path's label transition never happens. The blocked
+        # edit RAISING (Issue #256) is what keeps the Issue recoverable
+        # (ai-in-progress) — the terminal worktree cleanup is gated on
+        # the ai-blocked transition actually landing.
         if kwargs.get("add") == "ai-in-progress" \
                 and kwargs.get("remove") is None:
             real_edit_issue(number, **kwargs)
+            return
+        raise AssertionError("kill simulation: label edit must not land")
 
     monkeypatch.setattr(runner, "edit_issue", claiming_edit)
     # Issue #239: the failure path runs (the `claiming_edit` above
