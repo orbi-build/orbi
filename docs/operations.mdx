@@ -8,13 +8,13 @@ verification, troubleshooting and recovery.
 
 ## The timers
 
-The timer template `systemd/muyan-pilot@.timer` is deployed as TWO
-instances, `muyan-pilot@1.timer` and `muyan-pilot@2.timer`. Each fires
+The timer template `systemd/orbi@.timer` is deployed as TWO
+instances, `orbi@1.timer` and `orbi@2.timer`. Each fires
 every 5 minutes, 24 hours a day (`OnCalendar=*-*-* *:00/5`,
 `AccuracySec=30s`, `Persistent=false` — a missed tick is dropped, never
 queued) and starts its OWN service instance
-(`muyan-pilot@1.timer` → `muyan-pilot@1.service`,
-`muyan-pilot@2.timer` → `muyan-pilot@2.service`), so two independent
+(`orbi@1.timer` → `orbi@1.service`,
+`orbi@2.timer` → `orbi@2.service`), so two independent
 Runner instances can run concurrently. Each tick's service instance:
 
 1. **Fast-forwards the code first** (`ExecStartPre`, outside the Python
@@ -40,12 +40,12 @@ Runner instances can run concurrently. Each tick's service instance:
    race the shared ref (no `cannot lock ref ... is at <X> but expected
    <Y>` failures). A SECOND `ExecStartPre` step self-heals the editable
    CLI install OUTSIDE Python (Issue #248): it probes the installed
-   console script (`muyan-pilot --version` succeeds iff the package
+   console script (`orbi --version` succeeds iff the package
    imports) and, on probe failure, runs the exact editable
    force-reinstall (`uv tool install --force --reinstall --editable
    --python /usr/bin/python3 <repo_dir>`) under the SAME `base-sync.lock`
    flock. This is the only place that can act when the console script
-   cannot even `import muyan_pilot` — the #248 scene, where the
+   cannot even `import orbi` — the #248 scene, where the
    src-layout migration of #168 left the installed editable finder
    stale and the #158 in-Runner refresh (which runs INSIDE the Runner)
    was unreachable. A healthy CLI exits 0 and nothing else runs (no
@@ -63,14 +63,14 @@ Runner instances can run concurrently. Each tick's service instance:
    always go over SSH; GitHub API operations stay on the `gh` token).
 
 ```bash
-systemctl --user list-timers 'muyan-pilot@*.timer'
-systemctl --user status 'muyan-pilot@*.service'
+systemctl --user list-timers 'orbi@*.timer'
+systemctl --user status 'orbi@*.service'
 ```
 
 ## After a unit template changes (Issue #131, #142)
 
-The unit templates (`systemd/muyan-pilot@.service` and
-`systemd/muyan-pilot@.timer`) are deployment config, not ordinary code
+The unit templates (`systemd/orbi@.service` and
+`systemd/orbi@.timer`) are deployment config, not ordinary code
 — but a template change needs NO human step after the merge. The next timer
 trigger's `ExecStartPre` fast-forwards the checkout, and the pre-start
 `unit_drift` check self-heals: it runs the SAME idempotent install
@@ -81,12 +81,12 @@ continues with one structured `unit_drift auto_synced` line per unit
 (before and after sha256, deployed commit). There is no per-tick drift
 loop until human intervention (the #131/#140 scene: every start failed
 with `unit_drift` until a human ran the sync command). The same install
-also migrates the pre-#149 non-templated units (`muyan-pilot.service` /
-`muyan-pilot.timer`) away once: it stops the legacy timer (a timer stop
+also migrates the pre-#149 non-templated units (`orbi.service` /
+`orbi.timer`) away once: it stops the legacy timer (a timer stop
 — never the service) and removes the legacy files, so the old
 single-instance schedule cannot keep firing the old service.
 
-`muyan-pilot install-units --config muyan-pilot.toml` stays the manual
+`orbi install-units --config orbi.toml` stays the manual
 entry (first setup, or an immediate sync). A drift the self-heal cannot
 resolve — a failing install step, a missing template, a unit that
 drifts again before the re-verify — still fails the start (structured
@@ -99,8 +99,8 @@ The journal is the local record. Every line of a run starts with the run
 id prefix `[<run_id>]`, so one grep reconstructs the full timeline:
 
 ```bash
-journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service -f
-journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service | grep e07383c2
+journalctl --user -u orbi@1.service -u orbi@2.service -f
+journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 ```
 
 Stable `key=value` lines you will see:
@@ -145,7 +145,7 @@ Stable `key=value` lines you will see:
   path;
 - `resume_continue` — one INFO when a resumed run continues the
   interrupted work (Issue #219): the worktree's run state file
-  (`.muyan-pilot/run-state.json`) verified the SAME run (issue number
+  (`.orbi/run-state.json`) verified the SAME run (issue number
   + repo NAME — stable across a repo rename, so the old worktree is
   found even when the slug changed) and the worktree carries
   uncommitted changes or a previous session. The line carries the
@@ -221,31 +221,31 @@ a stalled session either resumes (the failure signal reached the model
 and the first new event resets the recovery state) or the run fails
 fast through the normal `ai-blocked` path.
 
-## The CLI (`muyan-pilot`)
+## The CLI (`orbi`)
 
-The official entry is the installed `muyan-pilot` console script, as an
+The official entry is the installed `orbi` console script, as an
 **editable** `uv tool` install — the why (the `ExecStartPre` checkout
 sync, the reinstall-free source changes, the packaging-input refresh)
 is defined in [Getting started](/getting-started) step 2.
-`muyan-pilot doctor` reports the consistency (`cli_source: clean` or
+`orbi doctor` reports the consistency (`cli_source: clean` or
 `cli_source: DRIFT` with the structured `cli_source_drift` line: actual
 import path, expected repo_dir, the exact editable reinstall command),
-and `muyan-pilot setup` verifies or reinstalls it. The checkout root
-carries no `muyan_pilot.py`: a flat file named like the package would
+and `orbi setup` verifies or reinstalls it. The checkout root
+carries no `orbi.py`: a flat file named like the package would
 shadow the installed package for every process with the checkout root
-on sys.path. The direct-execution entry `python3 -m muyan_pilot.cli`
+on sys.path. The direct-execution entry `python3 -m orbi.cli`
 runs the exact same code as the console script and stays a
 development/compatibility path.
 
 ```bash
 # Create an Issue in a configured source repo and label it ai-ready
-muyan-pilot add "task title" --body "task body" --config muyan-pilot.toml
-muyan-pilot add "task title" --repo OWNER/BACKLOG-REPO --config muyan-pilot.toml
+orbi add "task title" --body "task body" --config orbi.toml
+orbi add "task title" --repo OWNER/BACKLOG-REPO --config orbi.toml
 
 # Read-only queue view: current (ai-in-progress) task with live Pi
 # activity, the next ready Issue, and the most recent result per source
 # repo (ai-pr-opened / ai-fix-needed / ai-merged / ai-blocked)
-muyan-pilot status --config muyan-pilot.toml
+orbi status --config orbi.toml
 
 # Read-only deployment/health report: repo commit, unit drift, CLI
 # source (cli_source: clean / DRIFT + the structured cli_source_drift
@@ -253,7 +253,7 @@ muyan-pilot status --config muyan-pilot.toml
 # URL, SSH probe — a failed transport is reported as `transport:
 # FAILED ...`, not raised), timer/service instance state, slots, Pi
 # session, current Issue, recent journal
-muyan-pilot doctor --config muyan-pilot.toml
+orbi doctor --config orbi.toml
 
 # One-time, idempotent initialization (new machine / new repo): gh
 # auth + repo permissions, platform labels, systemd user units, and
@@ -262,17 +262,17 @@ muyan-pilot doctor --config muyan-pilot.toml
 # human-authorized migration path; the Runner itself never rewrites a
 # remote) and the SSH connectivity is probed (fail fast, no HTTPS
 # fallback)
-muyan-pilot setup --config muyan-pilot.toml
+orbi setup --config orbi.toml
 
 # Print the live Pi session JSONL path (fail fast when no session exists)
-muyan-pilot session --config muyan-pilot.toml
-muyan-pilot session --follow --config muyan-pilot.toml   # tail -f
-muyan-pilot session --pretty --config muyan-pilot.toml   # one-line summaries
+orbi session --config orbi.toml
+orbi session --follow --config orbi.toml   # tail -f
+orbi session --pretty --config orbi.toml   # one-line summaries
 ```
 
 All commands accept the config via `--config` or the
-`MUYAN_PILOT_CONFIG` environment variable (default
-`muyan-pilot.toml`). `status` and `session` are debug attachments — the
+`ORBI_CONFIG` environment variable (default
+`orbi.toml`). `status` and `session` are debug attachments — the
 journal and GitHub remain the normal observability path.
 
 ## Worktrees and base freshness
@@ -312,7 +312,7 @@ worktree as the local record; GitHub carries the delivery record.
 
 `max_concurrency` (default 1) bounds the number of concurrent deliveries
 on the machine. A slot is an exclusive `flock(2)` lock on
-`<repo_dir>/.muyan-pilot/slots/slot-N`, taken before any claim and held
+`<repo_dir>/.orbi/slots/slot-N`, taken before any claim and held
 for the whole delivery lifecycle (implement → review → merge); the kernel
 releases it when the process exits, however it exits. A Runner that
 cannot take a slot logs `capacity_full` and exits without claiming an

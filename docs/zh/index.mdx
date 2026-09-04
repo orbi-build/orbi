@@ -18,9 +18,9 @@ flowchart LR
     prs["PR（Fixes #N、run marker）+ review/merge"]
   end
   subgraph machine["Runner 机器（systemd user session）"]
-    timer["muyan-pilot@1.timer + @2.timer（每 5 分钟 tick）"]
-    service["muyan-pilot@.service（ExecStartPre：flock + fast-forward main）"]
-    runner["Runner（muyan-pilot CLI）：领取 → worktree → Pi → PR → review → merge"]
+    timer["orbi@1.timer + @2.timer（每 5 分钟 tick）"]
+    service["orbi@.service（ExecStartPre：flock + fast-forward main）"]
+    runner["Runner（orbi CLI）：领取 → worktree → Pi → PR → review → merge"]
     worktree["任务 worktree + feature branch（冻结 origin/main SHA，名字带 run id）"]
     pi["Pi session（implement + 独立 review）"]
     model["llama-server（核心：任意 OpenAI-compatible endpoint）"]

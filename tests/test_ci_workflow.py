@@ -145,13 +145,13 @@ def test_ci_workflow_installs_requirements_txt():
 
 def test_ci_workflow_installs_the_cli_and_verifies_the_entry():
     """Issue #140: the CI gate includes a clean-environment install of
-    the console script and a real entry check (`muyan-pilot --help` /
-    `muyan-pilot --version`, exit 0) — the acceptance `muyan-pilot
+    the console script and a real entry check (`orbi --help` /
+    `orbi --version`, exit 0) — the acceptance `orbi
     --help` in a clean environment is a permanent gate, not a one-time
     local check. The install must use the DOCUMENTED production flow
     (`uv tool install`, the uv-tool console script): it places the
     self-contained executable at the unit's ExecStart path
-    (`~/.local/bin/muyan-pilot`), so the real `systemd-analyze --user
+    (`~/.local/bin/orbi`), so the real `systemd-analyze --user
     verify` test resolves the unit's absolute ExecStart against the
     real executable on the runner (a plain `pip install .` would put
     the script in the venv bin, where the unit's %h path does not
@@ -190,29 +190,29 @@ def test_ci_workflow_installs_the_cli_and_verifies_the_entry():
     )
     entry = [
         command for command in commands
-        if "muyan-pilot --help" in command
+        if "orbi --help" in command
     ]
     assert entry, (
-        "CI must verify the installed CLI entry (muyan-pilot --help), "
+        "CI must verify the installed CLI entry (orbi --help), "
         f"steps run: {commands!r}"
     )
     assert any(
-        "muyan-pilot --version" in command for command in entry
-    ), "CI must also check the version entry (muyan-pilot --version)"
+        "orbi --version" in command for command in entry
+    ), "CI must also check the version entry (orbi --version)"
     assert any(
-        "~/.local/bin/muyan-pilot" in command for command in entry
+        "~/.local/bin/orbi" in command for command in entry
     ), (
         "CI must verify the entry at the unit's ExecStart path "
-        "(~/.local/bin/muyan-pilot), not a venv bin copy: "
+        "(~/.local/bin/orbi), not a venv bin copy: "
         f"{entry!r}"
     )
 
 
 def test_ci_workflow_installs_the_cli_editable_and_verifies_the_import_source():
     """Issue #152: the CI install is the REAL editable uv tool install
-    (`--editable`: the tool env imports `muyan_pilot` from the
+    (`--editable`: the tool env imports `orbi` from the
     checkout, the official local deployment) and the CI verifies the
-    IMPORT SOURCE (`muyan_pilot.__file__` inside the checkout path) —
+    IMPORT SOURCE (`orbi.__file__` inside the checkout path) —
     a non-editable install would silently copy the source into
     site-packages and the ExecStartPre sync could never reach it."""
     commands = step_commands(steps_of(load_workflow()))
@@ -229,15 +229,15 @@ def test_ci_workflow_installs_the_cli_editable_and_verifies_the_import_source():
         "(uv tool install --editable), steps run: {commands!r}"
     )
     # The import-source verification: the tool env's python must report
-    # `muyan_pilot.__file__` and the step must check it against the
+    # `orbi.__file__` and the step must check it against the
     # checkout path (GITHUB_WORKSPACE).
     source_checks = [
         command for command in commands
-        if "muyan_pilot.__file__" in command
+        if "orbi.__file__" in command
     ]
     assert source_checks, (
         "CI must verify the editable import source "
-        "(muyan_pilot.__file__), steps run: {commands!r}"
+        "(orbi.__file__), steps run: {commands!r}"
     )
     assert any(
         "GITHUB_WORKSPACE" in command for command in source_checks
@@ -247,7 +247,7 @@ def test_ci_workflow_installs_the_cli_editable_and_verifies_the_import_source():
     )
     # The probe must run from a NEUTRAL cwd: `python -c` puts the cwd
     # first on sys.path, so run from the checkout the checkout's own
-    # `muyan_pilot.py` shadows the tool env's import (editable finder
+    # `orbi.py` shadows the tool env's import (editable finder
     # and site-packages alike) and the check would pass even for a
     # non-editable install (verified against a real non-editable
     # install). The probe line must `cd /` before the interpreter.
@@ -255,15 +255,15 @@ def test_ci_workflow_installs_the_cli_editable_and_verifies_the_import_source():
         line
         for command in source_checks
         for line in command.splitlines()
-        if "muyan_pilot.__file__" in line
+        if "orbi.__file__" in line
     ]
     assert probe_lines, (
-        f"no probe line for muyan_pilot.__file__ in: {source_checks!r}"
+        f"no probe line for orbi.__file__ in: {source_checks!r}"
     )
     for line in probe_lines:
         assert "cd / &&" in line, (
             "the import-source probe must run from a neutral cwd "
-            "(`cd / &&`), otherwise the checkout's own muyan_pilot.py "
+            "(`cd / &&`), otherwise the checkout's own orbi.py "
             f"shadows the tool env's import and the check is a no-op: "
             f"{line!r}"
         )

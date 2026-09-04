@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-import muyan_pilot.runner as runner
+import orbi.runner as runner
 
 
 def git(repo: Path, *args: str) -> str:
@@ -89,7 +89,7 @@ def test_task_created_from_latest_origin_base_when_main_worktree_on_side_branch(
     assert path.exists()
     # The worktree HEAD is the frozen origin/main, not the side-branch HEAD.
     assert git(path, "rev-parse", "HEAD") == origin_main
-    assert git(path, "branch", "--show-current") == "muyan-pilot/owner-repo-issue-3-run1"
+    assert git(path, "branch", "--show-current") == "orbi/owner-repo-issue-3-run1"
 
 
 def test_retry_of_same_issue_gets_new_independent_run(clone):
@@ -106,7 +106,7 @@ def test_retry_of_same_issue_gets_new_independent_run(clone):
 
 def test_verify_pr_rejects_delivery_behind_latest_remote_base(clone, caplog):
     # Delivery branch is based on the first commit only.
-    git(clone, "checkout", "-b", "muyan-pilot/owner-repo-issue-3-a1b2c3d4",
+    git(clone, "checkout", "-b", "orbi/owner-repo-issue-3-a1b2c3d4",
         git(clone, "rev-parse", "origin/main~1"))
     commit_file(clone, "delivery.txt", "delivery")
     # Remote main advances after the delivery was created.
@@ -114,20 +114,20 @@ def test_verify_pr_rejects_delivery_behind_latest_remote_base(clone, caplog):
     commit_file(clone, "advance.txt", "main advanced")
     git(clone, "push", "origin", "main")
     # The delivery worktree stays on the task branch.
-    git(clone, "checkout", "muyan-pilot/owner-repo-issue-3-a1b2c3d4")
+    git(clone, "checkout", "orbi/owner-repo-issue-3-a1b2c3d4")
 
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="behind latest remote base",
     ):
         runner.verify_pr(
-            clone, "muyan-pilot/owner-repo-issue-3-a1b2c3d4", "main",
+            clone, "orbi/owner-repo-issue-3-a1b2c3d4", "main",
             "a1b2c3d4", issue=3, repo_dir=clone,
         )
     assert "base_branch=main" in caplog.text
 
 
 def test_verify_pr_accepts_delivery_that_contains_latest_remote_base(clone, monkeypatch):
-    git(clone, "checkout", "-b", "muyan-pilot/owner-repo-issue-3-a1b2c3d4")
+    git(clone, "checkout", "-b", "orbi/owner-repo-issue-3-a1b2c3d4")
     commit_file(clone, "delivery.txt", "delivery")
     # Remote main is unchanged, so the delivery contains it.
     local_head = git(clone, "rev-parse", "HEAD")
@@ -138,13 +138,13 @@ def test_verify_pr_accepts_delivery_that_contains_latest_remote_base(clone, monk
             "baseRefName": "main",
             "headRefOid": local_head,
             "body": (
-                "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+                "<!-- orbi:run=a1b2c3d4 -->\n\n"
                 "Fixes #3\n\nPlan"
             ),
         }]),
     )
     assert runner.verify_pr(
-        clone, "muyan-pilot/owner-repo-issue-3-a1b2c3d4", "main",
+        clone, "orbi/owner-repo-issue-3-a1b2c3d4", "main",
         "a1b2c3d4", issue=3, repo_dir=clone,
     ) == "https://github.com/owner/repo/pull/3"
 
@@ -158,7 +158,7 @@ def test_verify_pr_passes_through_when_local_head_ahead_of_pr_head(
     the exact heads (local ahead of the PR head) and returns the PR URL
     so the next review session can push the task branch on the same
     PR (no replacement PR, no discarded commit, no force push)."""
-    git(clone, "checkout", "-b", "muyan-pilot/owner-repo-issue-3-a1b2c3d4")
+    git(clone, "checkout", "-b", "orbi/owner-repo-issue-3-a1b2c3d4")
     commit_file(clone, "delivery-a.txt", "commit A")
     pushed_head = git(clone, "rev-parse", "HEAD")
     commit_file(clone, "delivery-b.txt", "commit B")
@@ -171,14 +171,14 @@ def test_verify_pr_passes_through_when_local_head_ahead_of_pr_head(
             "baseRefName": "main",
             "headRefOid": pushed_head,
             "body": (
-                "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+                "<!-- orbi:run=a1b2c3d4 -->\n\n"
                 "Fixes #3\n\nPlan"
             ),
         }]),
     )
     with caplog.at_level("INFO"):
         url = runner.verify_pr(
-            clone, "muyan-pilot/owner-repo-issue-3-a1b2c3d4", "main",
+            clone, "orbi/owner-repo-issue-3-a1b2c3d4", "main",
             "a1b2c3d4", issue=3, repo_dir=clone,
         )
     assert url == "https://github.com/owner/repo/pull/3"

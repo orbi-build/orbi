@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-import muyan_pilot.runner as runner
+import orbi.runner as runner
 
 REPO = "owner/repo"
 RENAME_OLD = "xqliu/orbi"
@@ -289,7 +289,7 @@ def issue() -> dict:
 def worktree_for(clone: Path, source_repo: str, run_id: str) -> Path:
     return (
         clone / ".worktrees"
-        / f"muyan-pilot-{source_repo.replace('/', '-')}"
+        / f"orbi-{source_repo.replace('/', '-')}"
         f"-issue-{ISSUE_NUMBER}-{run_id}"
     )
 
@@ -368,7 +368,7 @@ def test_e2e_restart_continues_on_the_uncommitted_work(
     assert not worktree_for(clone, REPO, "b2c3d4e5").exists()
     assert git(
         worktree, "branch", "--show-current",
-    ) == f"muyan-pilot/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-a1b2c3d4"
+    ) == f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-a1b2c3d4"
 
     # The new session RECEIVED the resume context (the existing work),
     # and the agent continued it: the committed work.txt carries BOTH
@@ -407,7 +407,7 @@ def test_e2e_repo_rename_finds_the_old_worktree_by_issue_and_name(
         monkeypatch, tmp_path, clone, comments, labels, RENAME_OLD,
     )
     assert worktree.name == (
-        f"muyan-pilot-{RENAME_OLD.replace('/', '-')}"
+        f"orbi-{RENAME_OLD.replace('/', '-')}"
         f"-issue-{ISSUE_NUMBER}-a1b2c3d4"
     )
 
@@ -432,7 +432,7 @@ def test_e2e_repo_rename_finds_the_old_worktree_by_issue_and_name(
     # continues, never a second one.
     assert git(
         worktree, "branch", "--show-current",
-    ) == f"muyan-pilot/{RENAME_OLD.replace('/', '-')}-issue-{ISSUE_NUMBER}-a1b2c3d4"
+    ) == f"orbi/{RENAME_OLD.replace('/', '-')}-issue-{ISSUE_NUMBER}-a1b2c3d4"
     # The continued work landed on the ORIGINAL branch.
     committed = git(worktree, "show", "HEAD:work.txt")
     assert committed == "part-1\npart-2"
@@ -453,7 +453,7 @@ def test_e2e_missing_run_state_fails_fast_without_a_fresh_run(
         monkeypatch, tmp_path, clone, comments, labels, REPO,
     )
     # The state file is lost (e.g. a partial cleanup).
-    state = worktree / ".muyan-pilot" / "run-state.json"
+    state = worktree / ".orbi" / "run-state.json"
     assert state.is_file()
     state.unlink()
 
@@ -471,12 +471,12 @@ def test_e2e_missing_run_state_fails_fast_without_a_fresh_run(
     # The failure comment carries the reason and the run marker.
     failed = [
         body for body in comments
-        if "Muyan Pilot failed" in body
+        if "Orbi failed" in body
         and "cannot continue the interrupted run" in body
     ]
     assert len(failed) == 1
     assert "run state" in failed[0]
-    assert "<!-- muyan-pilot:run=" in failed[0]
+    assert "<!-- orbi:run=" in failed[0]
     # No fresh run was started: the existing work is untouched.
     assert (worktree / "work.txt").read_text() == "part-1\n"
     assert git(worktree, "status", "--porcelain") != ""
@@ -494,7 +494,7 @@ def test_e2e_corrupt_run_state_fails_fast_without_a_fresh_run(
     worktree = run_first_attempt(
         monkeypatch, tmp_path, clone, comments, labels, REPO,
     )
-    state = worktree / ".muyan-pilot" / "run-state.json"
+    state = worktree / ".orbi" / "run-state.json"
     state.write_text("corrupt", encoding="utf-8")
 
     caplog.set_level("INFO")
@@ -508,7 +508,7 @@ def test_e2e_corrupt_run_state_fails_fast_without_a_fresh_run(
     assert labels[ISSUE_NUMBER] == ["ai-ready", "ai-blocked"]
     failed = [
         body for body in comments
-        if "Muyan Pilot failed" in body
+        if "Orbi failed" in body
         and "cannot continue the interrupted run" in body
     ]
     assert len(failed) == 1

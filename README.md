@@ -29,13 +29,13 @@ git clone https://github.com/orbi-build/orbi.git && cd orbi
 # 2. 安装 CLI（editable uv tool 安装，官方本地部署方式）
 uv tool install --force --reinstall --editable --python /usr/bin/python3 .
 # 3. 创建配置（仓库只提交 example，真实配置本地维护）
-cp .muyan-pilot.example.toml muyan-pilot.toml
+cp .orbi.example.toml orbi.toml
 # 4. 一次性 setup（gh auth、labels、systemd units、checkout 检查；幂等）
-muyan-pilot setup --config muyan-pilot.toml
+orbi setup --config orbi.toml
 # 5. 手动跑一个 tick（首次验证；日常由 timer 调度）
-PYTHONPATH=src python3 -m muyan_pilot.runner --config muyan-pilot.toml
+PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
 # 6. 验证部署健康
-muyan-pilot doctor --config muyan-pilot.toml
+orbi doctor --config orbi.toml
 ```
 
 完整前提（Python 3.14、Pi、git + gh、systemd、模型端点）与从 0 开始的 smoke
@@ -57,7 +57,7 @@ GitHub Issue（ai-ready）
   关联，重试生成新 run，旧现场原样保留；
 - 失败分类明确：可恢复失败回到同一 PR 继续修复，不可恢复失败标记
   `ai-blocked` 交给人；
-- 支持 `muyan-pilot add` 派活、`status` 查看队列、`session` 跟随 Pi 会话，
+- 支持 `orbi add` 派活、`status` 查看队列、`session` 跟随 Pi 会话，
   `install-units` 幂等安装 systemd units，`doctor` 只读诊断。
 
 ## 文档入口
@@ -76,10 +76,10 @@ GitHub Issue（ai-ready）
 ## 开发与贡献
 
 开发契约见 [AGENTS.md](AGENTS.md)；如何派 Issue、报 bug、提 PR 见
-[Contributing](docs/contributing.mdx)。runtime 代码在 `src/muyan_pilot/`
+[Contributing](docs/contributing.mdx)。runtime 代码在 `src/orbi/`
 package（Issue #168 src layout，editable finder 映射整个 package 目录，
-新增模块无需重装）；checkout 根目录没有 `muyan_pilot.py`（避免遮蔽已安装
-package），直接执行兼容入口是 `python3 -m muyan_pilot.cli`，不是正式使用
+新增模块无需重装）；checkout 根目录没有 `orbi.py`（避免遮蔽已安装
+package），直接执行兼容入口是 `python3 -m orbi.cli`，不是正式使用
 方式。
 
 ## 许可证

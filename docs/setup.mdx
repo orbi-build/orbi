@@ -1,6 +1,6 @@
 # One-time setup
 
-`muyan-pilot setup` is the one-time, config-driven initialization
+`orbi setup` is the one-time, config-driven initialization
 entry for a new machine or a new task-pool repository. It verifies or
 reinstalls the editable CLI install, verifies the local prerequisites,
 aligns the platform labels, installs the systemd user units, checks
@@ -8,7 +8,7 @@ the checkout, and reports the optional model proxy — in one command,
 with a stable machine-readable result.
 
 ```bash
-muyan-pilot setup --config muyan-pilot.toml
+orbi setup --config orbi.toml
 ```
 
 Run it once per machine (and once per new task-pool repository). It is
@@ -22,7 +22,7 @@ before any later mutation, with the concrete reason on stderr and a
 non-zero exit code.
 
 1. **Commands** — `git`, `gh`, `python3`, `uv` and the installed
-   `muyan-pilot` CLI on the PATH (you install these yourself — setup
+   `orbi` CLI on the PATH (you install these yourself — setup
    only checks them; a missing one fails fast with the actionable
    install guidance, e.g. `required command missing: uv (not on PATH)
    — install uv first: curl -LsSf https://astral.sh/uv/install.sh | sh`),
@@ -51,7 +51,7 @@ non-zero exit code.
      created, a drifted label is updated, nothing is deleted, and
      business labels (`bug`, `enhancement`, ...) are never touched.
 5. **Systemd units** — the repo templates
-   (`systemd/muyan-pilot@.service`, `systemd/muyan-pilot@.timer`) are
+   (`systemd/orbi@.service`, `systemd/orbi@.timer`) are
    installed idempotently into the user unit directory (the same
    install `install-units` performs: copy, migrate the pre-#149
    non-templated units away once, `daemon-reload`, then enables `@1` for
@@ -90,7 +90,7 @@ Pi, and never modifies a protected branch.
 
 | Option | Meaning |
 |---|---|
-| `--config PATH` | The `muyan-pilot.toml` configuration (default: `$MUYAN_PILOT_CONFIG` or `muyan-pilot.toml`) |
+| `--config PATH` | The `orbi.toml` configuration (default: `$ORBI_CONFIG` or `orbi.toml`) |
 | `--repo OWNER/REPO` | Initialize exactly this configured source repo (default: every configured source repo) |
 | `--installed-dir PATH` | User unit directory (default: the standard `~/.config/systemd/user`) |
 | `--json` | Print the result as JSON instead of `key=value` lines |
@@ -102,16 +102,16 @@ containing spaces are quoted), so agents and scripts can parse it:
 
 ```text
 setup=ok version=2 base_branch=main
-cli=verified source=/path/to/checkout/src/muyan_pilot/__init__.py
+cli=verified source=/path/to/checkout/src/orbi/__init__.py
 repo=orbi-build/orbi permission=ADMIN default_branch=main labels=8/8
-service=installed path=~/.config/systemd/user/muyan-pilot@.service sha256=9f2c...
-timer=muyan-pilot@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
-timer=muyan-pilot@2.timer disabled active=false next="-"
+service=installed path=~/.config/systemd/user/orbi@.service sha256=9f2c...
+timer=orbi@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
+timer=orbi@2.timer disabled active=false next="-"
 checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:orbi-build/orbi.git protocol=ssh migrated=false ssh_reachable=true
 model_endpoint=optional optional_proxy=healthy url=http://127.0.0.1:18082/health
 ```
 
-`cli=verified` means the running CLI already imports `muyan_pilot`
+`cli=verified` means the running CLI already imports `orbi`
 from the deployment checkout (the editable install is in place);
 `cli=installed` means the force editable reinstall ran. `labels=8/8`
 means all eight platform labels match `labels.toml`;
@@ -125,7 +125,7 @@ changes the exit code. `migrated=true` means setup rewrote an HTTPS
 `--json` prints the equivalent JSON document:
 
 ```bash
-muyan-pilot setup --config muyan-pilot.toml --json
+orbi setup --config orbi.toml --json
 ```
 
 ## Success and failure examples
@@ -133,13 +133,13 @@ muyan-pilot setup --config muyan-pilot.toml --json
 Success (exit code `0`):
 
 ```bash
-$ muyan-pilot setup --config muyan-pilot.toml
+$ orbi setup --config orbi.toml
 setup=ok version=2 base_branch=main
-cli=verified source=/path/to/checkout/src/muyan_pilot/__init__.py
+cli=verified source=/path/to/checkout/src/orbi/__init__.py
 repo=orbi-build/orbi permission=ADMIN default_branch=main labels=8/8
-service=installed path=~/.config/systemd/user/muyan-pilot@.service sha256=9f2c...
-timer=muyan-pilot@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
-timer=muyan-pilot@2.timer disabled active=false next="-"
+service=installed path=~/.config/systemd/user/orbi@.service sha256=9f2c...
+timer=orbi@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
+timer=orbi@2.timer disabled active=false next="-"
 checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:orbi-build/orbi.git protocol=ssh migrated=false ssh_reachable=true
 model_endpoint=optional optional_proxy=unhealthy url=http://127.0.0.1:18082/health
 ```
@@ -156,7 +156,7 @@ setup_failed reason=editable tool install failed for /path/to/checkout: ... (fix
 setup_failed reason=repo not accessible: nobody/no-such (gh repo view failed: ...)
 setup_failed reason=insufficient permission for owner/repo: viewerPermission='READ' (one of ['ADMIN', 'MAINTAIN', 'WRITE'] required to manage labels)
 setup_failed reason=label alignment failed for owner/repo: ai-ready (gh label create failed: ...)
-setup_failed reason=checkout is not clean: /path/to/checkout (uncommitted changes: ' M src/muyan_pilot/runner.py') — commit or stash them first: ...
+setup_failed reason=checkout is not clean: /path/to/checkout (uncommitted changes: ' M src/orbi/runner.py') — commit or stash them first: ...
 setup_failed reason=checkout check failed for /path/to/checkout: ssh_unreachable: git ls-remote git@github.com:owner/repo.git failed: ... stderr=git@github.com: Permission denied (publickey). — fix SSH and retry
 ```
 

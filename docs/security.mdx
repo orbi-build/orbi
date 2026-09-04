@@ -56,12 +56,12 @@ the delivery contract, local-only secrets, and no remote state store.
 
 Orbi keeps local state that never leaves the machine:
 
-- **Config** (`muyan-pilot.toml`): local, gitignored. The repository only
-  ships the example (`.muyan-pilot.example.toml`).
+- **Config** (`orbi.toml`): local, gitignored. The repository only
+  ships the example (`.orbi.example.toml`).
 - **Run artifacts**: plan, test log, session JSONL and review evidence
   live in the task worktree (`.worktrees/...`, gitignored).
-- **Slots**: `<repo_dir>/.muyan-pilot/slots/slot-N` lock files (gitignored
-  via the `.muyan-pilot/` directory convention of the checkout).
+- **Slots**: `<repo_dir>/.orbi/slots/slot-N` lock files (gitignored
+  via the `.orbi/` directory convention of the checkout).
 - **KV cache files** (only if you run the optional
   [local-llm-kv-cache](/optional-kv-cache) proxy): the disk-backed prefix
   and session KV state (e.g. `~/.llama-slot-cache/*.bin`) contains

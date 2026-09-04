@@ -1,6 +1,6 @@
 """One-time setup tests (Issue #117).
 
-`muyan_pilot.py setup` is the config-driven, idempotent, fail-fast
+`orbi.py setup` is the config-driven, idempotent, fail-fast
 initialization entry: it verifies gh auth and repo permissions, aligns
 the platform labels from the repo-managed `labels.toml` (the single
 source of truth for name/color/description), installs the repo's
@@ -15,13 +15,13 @@ from pathlib import Path
 
 import pytest
 
-import muyan_pilot.runner as runner
-from muyan_pilot import pilot_setup
-from muyan_pilot import systemd_deploy
+import orbi.runner as runner
+from orbi import pilot_setup
+from orbi import systemd_deploy
 
 @pytest.fixture(autouse=True)
 def _default_command_lookup(monkeypatch):
-    """Issue #140: the installed `muyan-pilot` CLI is a required
+    """Issue #140: the installed `orbi` CLI is a required
     command; the orchestration tests must not depend on whether the
     CLI happens to be installed on the test machine. The dedicated
     `check_commands` tests re-stub `shutil.which` themselves."""
@@ -34,17 +34,17 @@ def _default_command_lookup(monkeypatch):
 @pytest.fixture(autouse=True)
 def _cli_source_world(monkeypatch, tmp_path):
     """Issue #152: the setup's CLI step checks the RUNNING process's
-    `muyan_pilot` import source. The test world simulates a CLI
+    `orbi` import source. The test world simulates a CLI
     running from its own checkout (an editable install of
     `make_repo`'s `tmp_path/repo`); a test that needs a drifted
     source re-points `world["module_file"]` before calling
     `run_setup`."""
     import types
 
-    world = {"module_file": tmp_path / "repo" / "src" / "muyan_pilot" / "__init__.py"}
+    world = {"module_file": tmp_path / "repo" / "src" / "orbi" / "__init__.py"}
     stub = types.SimpleNamespace(
         module_file=lambda: world["module_file"],
-        PACKAGE_DIR=Path("src") / "muyan_pilot",
+        PACKAGE_DIR=Path("src") / "orbi",
         reinstall_args=lambda repo_dir: [
             "uv", "tool", "install", "--force", "--reinstall",
             "--editable", "--python", "/usr/bin/python3", str(repo_dir),
@@ -95,11 +95,11 @@ def make_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     systemd = repo / "systemd"
     systemd.mkdir(parents=True)
-    (systemd / "muyan-pilot@.service").write_text(
+    (systemd / "orbi@.service").write_text(
         "[Service]\nExecStart=/usr/bin/python3 bootstrap_runner.py\n",
         encoding="utf-8",
     )
-    (systemd / "muyan-pilot@.timer").write_text(
+    (systemd / "orbi@.timer").write_text(
         "[Timer]\nOnCalendar=*-*-* *:00/5\n", encoding="utf-8",
     )
     write_labels_toml(repo, VALID_DEFS)
@@ -109,10 +109,10 @@ def make_repo(tmp_path: Path) -> Path:
 def make_config(tmp_path: Path, repo_dir: Path,
                 source_repos: list[str] | None = None,
                 max_concurrency: int = 1) -> Path:
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text(
         "source_repos = ["
-        + ", ".join(f'"{r}"' for r in (source_repos or ["xqliu/muyan-pilot"]))
+        + ", ".join(f'"{r}"' for r in (source_repos or ["xqliu/orbi"]))
         + f']\nrepo_dir = "{repo_dir}"\nbase_branch = "main"\n'
         + f'max_concurrency = {max_concurrency}\n',
         encoding="utf-8",
@@ -131,7 +131,7 @@ def fake_run_factory(state: dict):
             return "0123456789abcdef0123456789abcdef01234567"
         if head[:2] == ["git", "config"]:
             return state.get(
-                "origin_url", "git@github.com:xqliu/muyan-pilot.git",
+                "origin_url", "git@github.com:xqliu/orbi.git",
             )
         if head[:2] == ["git", "ls-remote"]:
             if state.get("ssh_down"):
@@ -154,7 +154,7 @@ def fake_run_factory(state: dict):
             return ""
         if head[:3] == ["gh", "repo", "view"]:
             return (
-                '{"nameWithOwner":"xqliu/muyan-pilot",'
+                '{"nameWithOwner":"xqliu/orbi",'
                 '"viewerPermission":"ADMIN",'
                 '"defaultBranchRef":{"name":"main"}}'
             )
@@ -188,10 +188,10 @@ def fake_run_factory(state: dict):
                 "NEXT\n"
                 "Thu 2026-08-27 10:00:00 +08        1min "
                 "Thu 2026-08-27 09:45:00 +08    15min ago "
-                "muyan-pilot@1.timer                muyan-pilot@1.service\n"
+                "orbi@1.timer                orbi@1.service\n"
                 "Fri 2026-08-27 10:05:00 +08        6min "
                 "Thu 2026-08-27 10:00:00 +08     5min ago "
-                "muyan-pilot@2.timer                muyan-pilot@2.service\n",
+                "orbi@2.timer                orbi@2.service\n",
             )
         if head[:1] == ["curl"]:
             if state.get("proxy_down"):
@@ -314,7 +314,7 @@ def test_check_commands_reports_the_required_commands(monkeypatch):
         "uv": "/usr/bin/uv",
         # Issue #140: the installed CLI is a prerequisite too (the
         # systemd entry it documents must exist on the machine).
-        "muyan-pilot": "/usr/bin/muyan-pilot",
+        "orbi": "/usr/bin/orbi",
         "systemctl": "user-bus-ok",
     }
 
@@ -393,17 +393,17 @@ def test_check_auth_fails_fast_when_gh_is_not_logged_in():
 
 def test_check_repo_reports_permission_and_default_branch():
     result = pilot_setup.check_repo(
-        "xqliu/muyan-pilot",
+        "xqliu/orbi",
         run_command=lambda command, **kwargs: (
             json.dumps({
-                "nameWithOwner": "xqliu/muyan-pilot",
+                "nameWithOwner": "xqliu/orbi",
                 "viewerPermission": "WRITE",
                 "defaultBranchRef": {"name": "main"},
             })
         ),
     )
     assert result == {
-        "repo": "xqliu/muyan-pilot",
+        "repo": "xqliu/orbi",
         "permission": "WRITE",
         "default_branch": "main",
     }
@@ -412,10 +412,10 @@ def test_check_repo_reports_permission_and_default_branch():
 def test_check_repo_fails_fast_on_a_read_only_repo():
     with pytest.raises(pilot_setup.SetupError, match="permission"):
         pilot_setup.check_repo(
-            "xqliu/muyan-pilot",
+            "xqliu/orbi",
             run_command=lambda command, **kwargs: (
                 json.dumps({
-                    "nameWithOwner": "xqliu/muyan-pilot",
+                    "nameWithOwner": "xqliu/orbi",
                     "viewerPermission": "READ",
                     "defaultBranchRef": {"name": "main"},
                 })
@@ -441,7 +441,7 @@ def test_check_repo_fails_fast_when_the_repo_is_missing():
 def test_check_repo_fails_fast_on_unparseable_output():
     with pytest.raises(pilot_setup.SetupError, match="parse"):
         pilot_setup.check_repo(
-            "xqliu/muyan-pilot",
+            "xqliu/orbi",
             run_command=lambda command, **kwargs: "not-json",
         )
 
@@ -467,11 +467,11 @@ def test_align_labels_creates_missing_and_edits_drifted(tmp_path):
     fake_run, calls = fake_run_factory(state)
     repo = make_repo(tmp_path)
     result = pilot_setup.align_labels(
-        "xqliu/muyan-pilot",
+        "xqliu/orbi",
         pilot_setup.load_label_defs(repo / "labels.toml"),
         run_command=fake_run,
     )
-    assert result["repo"] == "xqliu/muyan-pilot"
+    assert result["repo"] == "xqliu/orbi"
     assert result["aligned"] == 10
     assert result["total"] == 10
     # Only the drifted p0 label is written; ai-ready already matches and
@@ -491,7 +491,7 @@ def test_align_labels_is_idempotent_when_everything_matches(tmp_path):
     fake_run, calls = fake_run_factory(state)
     repo = make_repo(tmp_path)
     result = pilot_setup.align_labels(
-        "xqliu/muyan-pilot",
+        "xqliu/orbi",
         pilot_setup.load_label_defs(repo / "labels.toml"),
         run_command=fake_run,
     )
@@ -504,7 +504,7 @@ def test_align_labels_reports_partial_alignment(tmp_path):
     fake_run, calls = fake_run_factory(state)
     repo = make_repo(tmp_path)
     result = pilot_setup.align_labels(
-        "xqliu/muyan-pilot",
+        "xqliu/orbi",
         pilot_setup.load_label_defs(repo / "labels.toml"),
         run_command=fake_run,
     )
@@ -527,7 +527,7 @@ def test_align_labels_fails_fast_on_a_label_write_error(tmp_path):
     repo = make_repo(tmp_path)
     with pytest.raises(pilot_setup.SetupError, match="label"):
         pilot_setup.align_labels(
-            "xqliu/muyan-pilot",
+            "xqliu/orbi",
             pilot_setup.load_label_defs(repo / "labels.toml"),
             run_command=failing,
         )
@@ -546,31 +546,31 @@ def test_install_units_step_reports_install_state(tmp_path):
     )
     assert result["service"]["installed"] is True
     assert result["service"]["installed_path"] == str(
-        installed / "muyan-pilot@.service",
+        installed / "orbi@.service",
     )
     assert result["service"]["sha256"] == systemd_deploy.sha256_hex(
-        installed / "muyan-pilot@.service",
+        installed / "orbi@.service",
     )
     # Issue #189: setup follows the configured default capacity (one).
     instances = result["timer"]["instances"]
     assert sorted(instances) == sorted(systemd_deploy.TIMER_INSTANCES)
-    assert instances["muyan-pilot@1.timer"]["enabled"] is True
-    assert instances["muyan-pilot@1.timer"]["active"] is True
-    assert instances["muyan-pilot@2.timer"]["enabled"] is False
-    assert instances["muyan-pilot@2.timer"]["active"] is False
-    assert instances["muyan-pilot@1.timer"]["next"] == (
+    assert instances["orbi@1.timer"]["enabled"] is True
+    assert instances["orbi@1.timer"]["active"] is True
+    assert instances["orbi@2.timer"]["enabled"] is False
+    assert instances["orbi@2.timer"]["active"] is False
+    assert instances["orbi@1.timer"]["next"] == (
         "Thu 2026-08-27 10:00:00 +08"
     )
-    assert instances["muyan-pilot@2.timer"]["next"] == (
+    assert instances["orbi@2.timer"]["next"] == (
         "Fri 2026-08-27 10:05:00 +08"
     )
     # The install itself is the systemd_deploy idempotent install.
     assert ["systemctl", "--user", "daemon-reload"] in calls
     assert [
-        "systemctl", "--user", "enable", "--now", "muyan-pilot@1.timer",
+        "systemctl", "--user", "enable", "--now", "orbi@1.timer",
     ] in calls
     assert [
-        "systemctl", "--user", "disable", "--now", "muyan-pilot@2.timer",
+        "systemctl", "--user", "disable", "--now", "orbi@2.timer",
     ] in calls
 
 
@@ -582,12 +582,12 @@ def test_install_units_step_reports_the_disabled_surplus_timer(tmp_path):
         repo, tmp_path / "units", max_concurrency=1, run_command=fake_run,
     )
     instances = result["timer"]["instances"]
-    assert instances["muyan-pilot@1.timer"]["enabled"] is True
-    assert instances["muyan-pilot@1.timer"]["active"] is True
-    assert instances["muyan-pilot@2.timer"]["enabled"] is False
-    assert instances["muyan-pilot@2.timer"]["active"] is False
+    assert instances["orbi@1.timer"]["enabled"] is True
+    assert instances["orbi@1.timer"]["active"] is True
+    assert instances["orbi@2.timer"]["enabled"] is False
+    assert instances["orbi@2.timer"]["active"] is False
     assert [
-        "systemctl", "--user", "disable", "--now", "muyan-pilot@2.timer",
+        "systemctl", "--user", "disable", "--now", "orbi@2.timer",
     ] in calls
 
 
@@ -622,16 +622,16 @@ def test_timer_next_trigger_parses_the_list_timers_row():
         "NEXT                                   LEFT LAST\n"
         "Thu 2026-08-27 10:00:00 +08        1min 46s "
         "Thu 2026-08-27 09:18:18 +08    28min ago "
-        "muyan-pilot@1.timer                muyan-pilot@1.service\n"
+        "orbi@1.timer                orbi@1.service\n"
     )
     assert pilot_setup.timer_next_trigger(
-        raw, "muyan-pilot@1.timer",
+        raw, "orbi@1.timer",
     ) == "Thu 2026-08-27 10:00:00 +08"
 
 
 def test_timer_next_trigger_returns_dash_when_the_timer_is_absent():
     assert pilot_setup.timer_next_trigger(
-        "NEXT\n", "muyan-pilot@1.timer",
+        "NEXT\n", "orbi@1.timer",
     ) == "-"
 
 
@@ -643,7 +643,7 @@ def test_timer_next_trigger_ignores_other_timers():
         "other.timer                         other.service\n"
     )
     assert pilot_setup.timer_next_trigger(
-        raw, "muyan-pilot@1.timer",
+        raw, "orbi@1.timer",
     ) == "-"
 
 
@@ -653,16 +653,16 @@ def test_timer_next_trigger_distinguishes_the_two_instances():
         "NEXT                                   LEFT LAST\n"
         "Thu 2026-08-27 10:00:00 +08        1min 46s "
         "Thu 2026-08-27 09:18:18 +08    28min ago "
-        "muyan-pilot@1.timer                muyan-pilot@1.service\n"
+        "orbi@1.timer                orbi@1.service\n"
         "Fri 2026-08-27 10:05:00 +08        6min 46s "
         "Thu 2026-08-27 10:00:00 +08     5min ago "
-        "muyan-pilot@2.timer                muyan-pilot@2.service\n"
+        "orbi@2.timer                orbi@2.service\n"
     )
     assert pilot_setup.timer_next_trigger(
-        raw, "muyan-pilot@1.timer",
+        raw, "orbi@1.timer",
     ) == "Thu 2026-08-27 10:00:00 +08"
     assert pilot_setup.timer_next_trigger(
-        raw, "muyan-pilot@2.timer",
+        raw, "orbi@2.timer",
     ) == "Fri 2026-08-27 10:05:00 +08"
 
 
@@ -675,7 +675,7 @@ def test_check_checkout_reports_remote_branch_clean_and_fresh(tmp_path):
 
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
-            return "git@github.com:xqliu/muyan-pilot.git"
+            return "git@github.com:xqliu/orbi.git"
         if command[:2] == ["git", "ls-remote"]:
             return "abc\tHEAD"
         if command[:3] == ["git", "rev-parse", "origin/main"]:
@@ -687,14 +687,14 @@ def test_check_checkout_reports_remote_branch_clean_and_fresh(tmp_path):
         return ""
 
     result = pilot_setup.check_checkout(
-        repo, "main", ["xqliu/muyan-pilot"], run_command=fake_run,
+        repo, "main", ["xqliu/orbi"], run_command=fake_run,
     )
     assert result == {
         "remote": "origin",
         "branch": "main",
         "clean": True,
         "base_fresh": True,
-        "remote_url": "git@github.com:xqliu/muyan-pilot.git",
+        "remote_url": "git@github.com:xqliu/orbi.git",
         "remote_protocol": "ssh",
         "migrated": False,
         "ssh_reachable": True,
@@ -707,7 +707,7 @@ def test_check_checkout_fails_fast_on_a_dirty_checkout(tmp_path):
 
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
-            return "git@github.com:xqliu/muyan-pilot.git"
+            return "git@github.com:xqliu/orbi.git"
         if command[:2] == ["git", "ls-remote"]:
             return "abc\tHEAD"
         if command[:2] == ["git", "status"]:
@@ -716,7 +716,7 @@ def test_check_checkout_fails_fast_on_a_dirty_checkout(tmp_path):
 
     with pytest.raises(pilot_setup.SetupError, match="not clean"):
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/muyan-pilot"], run_command=fake_run,
+            repo, "main", ["xqliu/orbi"], run_command=fake_run,
         )
 
 
@@ -726,7 +726,7 @@ def test_check_checkout_reports_a_stale_base(tmp_path):
 
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
-            return "git@github.com:xqliu/muyan-pilot.git"
+            return "git@github.com:xqliu/orbi.git"
         if command[:2] == ["git", "ls-remote"]:
             return "abc\tHEAD"
         if command[:3] == ["git", "rev-parse", "origin/main"]:
@@ -736,7 +736,7 @@ def test_check_checkout_reports_a_stale_base(tmp_path):
         return ""
 
     result = pilot_setup.check_checkout(
-        repo, "main", ["xqliu/muyan-pilot"], run_command=fake_run,
+        repo, "main", ["xqliu/orbi"], run_command=fake_run,
     )
     assert result["base_fresh"] is False
 
@@ -746,7 +746,7 @@ def test_check_checkout_fails_fast_without_an_origin_remote(tmp_path):
     repo.mkdir()
     with pytest.raises(pilot_setup.SetupError, match="remote"):
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/muyan-pilot"],
+            repo, "main", ["xqliu/orbi"],
             run_command=lambda command, **kwargs: (
                 (_ for _ in ()).throw(
                     subprocess.CalledProcessError(1, command, stderr="no remote")
@@ -760,7 +760,7 @@ def test_check_checkout_fails_fast_on_a_git_error(tmp_path):
     repo.mkdir()
     with pytest.raises(pilot_setup.SetupError, match="checkout"):
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/muyan-pilot"],
+            repo, "main", ["xqliu/orbi"],
             run_command=lambda command, **kwargs: (
                 (_ for _ in ()).throw(
                     subprocess.CalledProcessError(1, command, stderr="boom")
@@ -780,7 +780,7 @@ def test_check_checkout_migrates_an_https_remote_to_ssh(tmp_path):
     comment or Issue)."""
     repo = tmp_path / "checkout"
     repo.mkdir()
-    state = {"url": "https://github.com/xqliu/muyan-pilot.git"}
+    state = {"url": "https://github.com/xqliu/orbi.git"}
 
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
@@ -795,10 +795,10 @@ def test_check_checkout_migrates_an_https_remote_to_ssh(tmp_path):
         return ""
 
     result = pilot_setup.check_checkout(
-        repo, "main", ["xqliu/muyan-pilot"], run_command=fake_run,
+        repo, "main", ["xqliu/orbi"], run_command=fake_run,
     )
-    assert state["url"] == "git@github.com:xqliu/muyan-pilot.git"
-    assert result["remote_url"] == "git@github.com:xqliu/muyan-pilot.git"
+    assert state["url"] == "git@github.com:xqliu/orbi.git"
+    assert result["remote_url"] == "git@github.com:xqliu/orbi.git"
     assert result["remote_protocol"] == "ssh"
     assert result["migrated"] is True
     assert result["ssh_reachable"] is True
@@ -813,7 +813,7 @@ def test_check_checkout_fails_fast_when_ssh_is_unreachable(tmp_path):
 
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
-            return "git@github.com:xqliu/muyan-pilot.git"
+            return "git@github.com:xqliu/orbi.git"
         if command[:2] == ["git", "ls-remote"]:
             raise subprocess.CalledProcessError(
                 128, command,
@@ -825,10 +825,10 @@ def test_check_checkout_fails_fast_when_ssh_is_unreachable(tmp_path):
         pilot_setup.SetupError, match="ssh_unreachable",
     ) as exc:
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/muyan-pilot"], run_command=fake_run,
+            repo, "main", ["xqliu/orbi"], run_command=fake_run,
         )
     message = str(exc.value)
-    assert "git ls-remote git@github.com:xqliu/muyan-pilot.git" in message
+    assert "git ls-remote git@github.com:xqliu/orbi.git" in message
     assert "Permission denied (publickey)" in message
     # The fake is strict: an unexpected command fails loudly.
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -843,7 +843,7 @@ def test_check_checkout_fails_fast_on_a_generic_git_error(tmp_path):
 
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
-            return "git@github.com:xqliu/muyan-pilot.git"
+            return "git@github.com:xqliu/orbi.git"
         if command[:2] == ["git", "ls-remote"]:
             return "abc\tHEAD"
         if command[:3] == ["git", "branch", "--show-current"]:
@@ -852,7 +852,7 @@ def test_check_checkout_fails_fast_on_a_generic_git_error(tmp_path):
 
     with pytest.raises(pilot_setup.SetupError, match="checkout"):
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/muyan-pilot"], run_command=fake_run,
+            repo, "main", ["xqliu/orbi"], run_command=fake_run,
         )
     # The fake is strict: an unexpected command fails loudly.
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -873,7 +873,7 @@ def test_check_checkout_fails_fast_on_a_remote_repo_mismatch(tmp_path):
 
     with pytest.raises(pilot_setup.SetupError, match="mismatch"):
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/muyan-pilot"], run_command=fake_run,
+            repo, "main", ["xqliu/orbi"], run_command=fake_run,
         )
     # The fake is strict: an unexpected command fails loudly.
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -920,20 +920,20 @@ def test_check_optional_proxy_reports_a_missing_curl_without_raising():
 
 
 def test_install_cli_step_verifies_an_existing_editable_install(tmp_path):
-    """The running CLI already imports `muyan_pilot` from the
+    """The running CLI already imports `orbi` from the
     configured checkout (the editable install): setup verifies it
     WITHOUT any uv call (idempotent re-run, no per-setup reinstall)."""
     repo = tmp_path / "checkout"
     repo.mkdir()
     calls: list = []
     result = pilot_setup.install_cli_step(
-        repo, repo / "src" / "muyan_pilot" / "__init__.py",
+        repo, repo / "src" / "orbi" / "__init__.py",
         run_command=lambda command, **kwargs: calls.append(command) or "",
     )
     assert calls == []
     assert result == {
         "action": "verified",
-        "source": str((repo / "src" / "muyan_pilot" / "__init__.py").resolve()),
+        "source": str((repo / "src" / "orbi" / "__init__.py").resolve()),
     }
 
 
@@ -952,8 +952,8 @@ def test_install_cli_step_installs_the_editable_tool_when_drifted(tmp_path):
 
     result = pilot_setup.install_cli_step(
         repo,
-        "/home/u/.local/share/uv/tools/muyan-pilot/"
-        "lib/python3.14/site-packages/muyan_pilot.py",
+        "/home/u/.local/share/uv/tools/orbi/"
+        "lib/python3.14/site-packages/orbi.py",
         run_command=fake_run,
     )
     assert calls == [[
@@ -962,7 +962,7 @@ def test_install_cli_step_installs_the_editable_tool_when_drifted(tmp_path):
     ]]
     assert result == {
         "action": "installed",
-        "source": str((repo / "src" / "muyan_pilot").resolve()),
+        "source": str((repo / "src" / "orbi").resolve()),
     }
 
 
@@ -981,7 +981,7 @@ def test_install_cli_step_fails_fast_on_a_failed_reinstall(tmp_path):
         pilot_setup.SetupError, match="editable tool install",
     ):
         pilot_setup.install_cli_step(
-            repo, "/elsewhere/muyan_pilot.py", run_command=failing,
+            repo, "/elsewhere/orbi.py", run_command=failing,
         )
 
 
@@ -1010,7 +1010,7 @@ def test_run_setup_success_reports_all_steps(tmp_path):
     assert result["base_branch"] == "main"
     assert result["repos"] == [
         {
-            "repo": "xqliu/muyan-pilot",
+            "repo": "xqliu/orbi",
             "permission": "ADMIN",
             "default_branch": "main",
             "labels": {"aligned": 10, "total": 10},
@@ -1021,18 +1021,18 @@ def test_run_setup_success_reports_all_steps(tmp_path):
     # the fixed template instance list.
     instances = result["timer"]["instances"]
     assert sorted(instances) == sorted(systemd_deploy.TIMER_INSTANCES)
-    assert instances["muyan-pilot@1.timer"]["enabled"] is True
-    assert instances["muyan-pilot@1.timer"]["active"] is True
-    assert instances["muyan-pilot@2.timer"]["enabled"] is False
-    assert instances["muyan-pilot@2.timer"]["active"] is False
+    assert instances["orbi@1.timer"]["enabled"] is True
+    assert instances["orbi@1.timer"]["active"] is True
+    assert instances["orbi@2.timer"]["enabled"] is False
+    assert instances["orbi@2.timer"]["active"] is False
     assert result["checkout"]["clean"] is True
     assert result["checkout"]["base_fresh"] is True
     assert result["optional_proxy"]["optional"] is True
     # Issue #152: the CLI step reports the editable install verified
-    # (the test process imports muyan_pilot from the repo world).
+    # (the test process imports orbi from the repo world).
     assert result["cli"]["action"] == "verified"
     assert result["cli"]["source"] == str(
-        (repo / "src" / "muyan_pilot" / "__init__.py").resolve(),
+        (repo / "src" / "orbi" / "__init__.py").resolve(),
     )
     # No uv call: an existing editable install is never reinstalled.
     assert [c for c in calls if c[:2] == ["uv", "tool"]] == []
@@ -1056,15 +1056,15 @@ def test_run_setup_repo_override_limits_the_target(tmp_path):
     fake_run, calls = fake_run_factory(state)
     config = runner.load_config(make_config(
         tmp_path, repo,
-        source_repos=["xqliu/muyan-pilot", "xqliu/muyan-ceo"],
+        source_repos=["xqliu/orbi", "xqliu/muyan-ceo"],
     ))
     result = pilot_setup.run_setup(
         config, installed,
-        repos=["xqliu/muyan-pilot"],
+        repos=["xqliu/orbi"],
         run_command=fake_run,
     )
     assert [entry["repo"] for entry in result["repos"]] == [
-        "xqliu/muyan-pilot",
+        "xqliu/orbi",
     ]
     views = [
         c for c in calls if c[:3] == ["gh", "repo", "view"]
@@ -1129,8 +1129,8 @@ def test_run_setup_installs_the_editable_cli_when_drifted(tmp_path,
     work."""
     repo, installed, state = make_run_state(tmp_path)
     _cli_source_world["module_file"] = (
-        "/home/u/.local/share/uv/tools/muyan-pilot/"
-        "lib/python3.14/site-packages/muyan_pilot.py"
+        "/home/u/.local/share/uv/tools/orbi/"
+        "lib/python3.14/site-packages/orbi.py"
     )
     fake_run, calls = fake_run_factory(state)
     config = runner.load_config(make_config(tmp_path, repo))
@@ -1140,7 +1140,7 @@ def test_run_setup_installs_the_editable_cli_when_drifted(tmp_path,
     assert result["setup"] == "ok"
     assert result["cli"]["action"] == "installed"
     assert result["cli"]["source"] == str(
-        (repo / "src" / "muyan_pilot").resolve(),
+        (repo / "src" / "orbi").resolve(),
     )
     uv_calls = [c for c in calls if c[:2] == ["uv", "tool"]]
     assert uv_calls == [[
@@ -1162,7 +1162,7 @@ def test_run_setup_fails_fast_on_a_failed_cli_reinstall(
     """Issue #152: a failing editable reinstall fails the setup
     before any unit install (fail fast, no half-initialized state)."""
     repo, installed, state = make_run_state(tmp_path)
-    _cli_source_world["module_file"] = "/elsewhere/muyan_pilot.py"
+    _cli_source_world["module_file"] = "/elsewhere/orbi.py"
     fake_run, calls = fake_run_factory(state)
 
     def failing(command, **kwargs):
@@ -1197,21 +1197,21 @@ def test_run_setup_migrates_an_https_checkout_remote(tmp_path):
     checkout's HTTPS `origin` to SSH (the human-authorized path) and
     reports it in the checkout result."""
     repo, installed, state = make_run_state(tmp_path)
-    state["origin_url"] = "https://github.com/xqliu/muyan-pilot.git"
+    state["origin_url"] = "https://github.com/xqliu/orbi.git"
     fake_run, calls = fake_run_factory(state)
     config = runner.load_config(make_config(tmp_path, repo))
     result = pilot_setup.run_setup(
         config, installed, run_command=fake_run,
     )
     assert result["checkout"]["remote_url"] == (
-        "git@github.com:xqliu/muyan-pilot.git"
+        "git@github.com:xqliu/orbi.git"
     )
     assert result["checkout"]["remote_protocol"] == "ssh"
     assert result["checkout"]["migrated"] is True
     assert result["checkout"]["ssh_reachable"] is True
     assert [
         "git", "remote", "set-url", "origin",
-        "git@github.com:xqliu/muyan-pilot.git",
+        "git@github.com:xqliu/orbi.git",
     ] in calls
 
 
@@ -1252,7 +1252,7 @@ def sample_result() -> dict:
         "base_branch": "main",
         "repos": [
             {
-                "repo": "xqliu/muyan-pilot",
+                "repo": "xqliu/orbi",
                 "permission": "ADMIN",
                 "default_branch": "main",
                 "labels": {"aligned": 10, "total": 10},
@@ -1261,18 +1261,18 @@ def sample_result() -> dict:
         "service": {
             "installed": True,
             "installed_path": (
-                "/home/u/.config/systemd/user/muyan-pilot@.service"
+                "/home/u/.config/systemd/user/orbi@.service"
             ),
             "sha256": "ab" * 32,
         },
         "timer": {
             "instances": {
-                "muyan-pilot@1.timer": {
+                "orbi@1.timer": {
                     "enabled": True,
                     "active": True,
                     "next": "Thu 2026-08-27 10:00:00 +08",
                 },
-                "muyan-pilot@2.timer": {
+                "orbi@2.timer": {
                     "enabled": True,
                     "active": True,
                     "next": "Fri 2026-08-27 10:05:00 +08",
@@ -1284,7 +1284,7 @@ def sample_result() -> dict:
             "branch": "main",
             "clean": True,
             "base_fresh": True,
-            "remote_url": "git@github.com:xqliu/muyan-pilot.git",
+            "remote_url": "git@github.com:xqliu/orbi.git",
             "remote_protocol": "ssh",
             "migrated": False,
             "ssh_reachable": True,
@@ -1297,7 +1297,7 @@ def sample_result() -> dict:
         # Issue #152: the CLI editable-install step result.
         "cli": {
             "action": "verified",
-            "source": "/home/u/repo/src/muyan_pilot/__init__.py",
+            "source": "/home/u/repo/src/orbi/__init__.py",
         },
     }
 
@@ -1306,31 +1306,31 @@ def test_format_setup_renders_stable_key_value_lines():
     lines = pilot_setup.format_setup(sample_result())
     assert lines[0] == "setup=ok version=2 base_branch=main"
     # Issue #152: the CLI line reports the editable install state and
-    # the import source (the checkout package `src/muyan_pilot/`).
+    # the import source (the checkout package `src/orbi/`).
     assert lines[1] == (
-        "cli=verified source=/home/u/repo/src/muyan_pilot/__init__.py"
+        "cli=verified source=/home/u/repo/src/orbi/__init__.py"
     )
     assert (
-        "repo=xqliu/muyan-pilot permission=ADMIN "
+        "repo=xqliu/orbi permission=ADMIN "
         "default_branch=main labels=10/10" in lines
     )
     assert (
         "service=installed path=/home/u/.config/systemd/user/"
-        "muyan-pilot@.service sha256=" + "ab" * 32 in lines
+        "orbi@.service sha256=" + "ab" * 32 in lines
     )
     # Issue #149: one line per timer instance; the NEXT field carries
     # spaces, so it is quoted (quote_value).
     assert (
-        'timer=muyan-pilot@1.timer enabled active=true '
+        'timer=orbi@1.timer enabled active=true '
         'next="Thu 2026-08-27 10:00:00 +08"'
     ) in lines
     assert (
-        'timer=muyan-pilot@2.timer enabled active=true '
+        'timer=orbi@2.timer enabled active=true '
         'next="Fri 2026-08-27 10:05:00 +08"'
     ) in lines
     assert (
         "checkout=remote=origin branch=main clean=true base_fresh=true "
-        "remote_url=git@github.com:xqliu/muyan-pilot.git protocol=ssh "
+        "remote_url=git@github.com:xqliu/orbi.git protocol=ssh "
         "migrated=false ssh_reachable=true"
     ) in lines
     assert (
@@ -1341,12 +1341,12 @@ def test_format_setup_renders_stable_key_value_lines():
 
 def test_format_setup_quotes_values_with_spaces():
     result = sample_result()
-    result["timer"]["instances"]["muyan-pilot@1.timer"]["next"] = (
+    result["timer"]["instances"]["orbi@1.timer"]["next"] = (
         "Thu 2026 08-27 10:00:00"
     )
     lines = pilot_setup.format_setup(result)
     assert (
-        'timer=muyan-pilot@1.timer enabled active=true '
+        'timer=orbi@1.timer enabled active=true '
         'next="Thu 2026 08-27 10:00:00"'
     ) in lines
 
@@ -1428,7 +1428,7 @@ def test_load_label_defs_rejects_an_entry_without_a_name(tmp_path):
 def test_check_repo_fails_fast_on_non_object_json():
     with pytest.raises(pilot_setup.SetupError, match="parse"):
         pilot_setup.check_repo(
-            "xqliu/muyan-pilot",
+            "xqliu/orbi",
             run_command=lambda command, **kwargs: "[1, 2]",
         )
 
@@ -1436,7 +1436,7 @@ def test_check_repo_fails_fast_on_non_object_json():
 def test_check_repo_fails_fast_without_name_with_owner():
     with pytest.raises(pilot_setup.SetupError, match="nameWithOwner"):
         pilot_setup.check_repo(
-            "xqliu/muyan-pilot",
+            "xqliu/orbi",
             run_command=lambda command, **kwargs: (
                 json.dumps({
                     "viewerPermission": "WRITE",
@@ -1449,10 +1449,10 @@ def test_check_repo_fails_fast_without_name_with_owner():
 def test_check_repo_fails_fast_without_default_branch():
     with pytest.raises(pilot_setup.SetupError, match="defaultBranchRef"):
         pilot_setup.check_repo(
-            "xqliu/muyan-pilot",
+            "xqliu/orbi",
             run_command=lambda command, **kwargs: (
                 json.dumps({
-                    "nameWithOwner": "xqliu/muyan-pilot",
+                    "nameWithOwner": "xqliu/orbi",
                     "viewerPermission": "WRITE",
                 })
             ),
@@ -1462,7 +1462,7 @@ def test_check_repo_fails_fast_without_default_branch():
 def test_align_labels_fails_fast_on_unparseable_label_list():
     with pytest.raises(pilot_setup.SetupError, match="label list"):
         pilot_setup.align_labels(
-            "xqliu/muyan-pilot",
+            "xqliu/orbi",
             VALID_DEFS,
             run_command=lambda command, **kwargs: "not-json",
         )
@@ -1471,7 +1471,7 @@ def test_align_labels_fails_fast_on_unparseable_label_list():
 def test_align_labels_fails_fast_on_non_array_label_list():
     with pytest.raises(pilot_setup.SetupError, match="label list"):
         pilot_setup.align_labels(
-            "xqliu/muyan-pilot",
+            "xqliu/orbi",
             VALID_DEFS,
             run_command=lambda command, **kwargs: '{"name": "bug"}',
         )
@@ -1480,9 +1480,9 @@ def test_align_labels_fails_fast_on_non_array_label_list():
 def test_timer_next_trigger_falls_back_to_the_first_column():
     # A timer row without the two-space column separator (defensive
     # fallback): the first column is reported as-is.
-    raw = "X muyan-pilot@1.timer muyan-pilot@1.service\n"
+    raw = "X orbi@1.timer orbi@1.service\n"
     assert pilot_setup.timer_next_trigger(
-        raw, "muyan-pilot@1.timer",
+        raw, "orbi@1.timer",
     ) == "X"
 
 
@@ -1491,7 +1491,7 @@ def test_check_checkout_fails_fast_when_origin_is_missing(tmp_path):
     repo.mkdir()
     with pytest.raises(pilot_setup.SetupError, match="origin remote"):
         pilot_setup.check_checkout(
-            repo, "main", ["xqliu/muyan-pilot"],
+            repo, "main", ["xqliu/orbi"],
             run_command=lambda command, **kwargs: (
                 (_ for _ in ()).throw(
                     subprocess.CalledProcessError(

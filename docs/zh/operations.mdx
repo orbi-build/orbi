@@ -6,12 +6,12 @@ journal 和 GitHub。正常路径永远不需要 status 命令、轮询或督工
 
 ## Timers
 
-timer 模板 `systemd/muyan-pilot@.timer` 部署为**两个实例**：
-`muyan-pilot@1.timer` 和 `muyan-pilot@2.timer`。每个实例每 5 分钟触发
+timer 模板 `systemd/orbi@.timer` 部署为**两个实例**：
+`orbi@1.timer` 和 `orbi@2.timer`。每个实例每 5 分钟触发
 一次，全天 24 小时（`OnCalendar=*-*-* *:00/5`、`AccuracySec=30s`、
 `Persistent=false`——错过的 tick 被丢弃，从不排队），并各自启动自己的
-service 实例（`muyan-pilot@1.timer` → `muyan-pilot@1.service`，
-`muyan-pilot@2.timer` → `muyan-pilot@2.service`），所以可以同时运行
+service 实例（`orbi@1.timer` → `orbi@1.service`，
+`orbi@2.timer` → `orbi@2.service`），所以可以同时运行
 两个独立的 Runner 实例。每个 tick 的 service 实例：
 
 1. **先 fast-forward 代码**（`ExecStartPre`，在 Python 进程外）：
@@ -32,11 +32,11 @@ service 实例（`muyan-pilot@1.timer` → `muyan-pilot@1.service`，
    Runner（或 Runner 与 Pi 会话）因此不再争抢共享 ref（不会出现
    `cannot lock ref ... is at <X> but expected <Y>` 失败）。第二个
    `ExecStartPre` 步骤在 Python 进程外自愈 editable CLI 安装（Issue
-   #248）：它探测已安装的 console script（`muyan-pilot --version` 当且仅当
+   #248）：它探测已安装的 console script（`orbi --version` 当且仅当
    包可导入时成功），探测失败时在同一把 `base-sync.lock` flock 下执行
    精确的 editable 强制重装（`uv tool install --force --reinstall
    --editable --python /usr/bin/python3 <repo_dir>`）。这是 console script
-   连 `import muyan_pilot` 都失败时唯一能动手的地方——#248 现场：#168 的
+   连 `import orbi` 都失败时唯一能动手的地方——#248 现场：#168 的
    src 布局迁移让已安装的 editable finder 过期，而 #158 的 Runner 内刷新
    （在 Runner **内部**运行）根本不可达。健康的 CLI 退出 0，其余什么都不做
    （不逐 tick 重装）；重装失败则 preflight 失败、service 不启动（fail
@@ -52,13 +52,13 @@ service 实例（`muyan-pilot@1.timer` → `muyan-pilot@1.service`，
    API 操作留在 `gh` token 上）。
 
 ```bash
-systemctl --user list-timers 'muyan-pilot@*.timer'
-systemctl --user status 'muyan-pilot@*.service'
+systemctl --user list-timers 'orbi@*.timer'
+systemctl --user status 'orbi@*.service'
 ```
 
 ## Unit 模板变更后（Issue #131、#142）
 
-unit 模板（`systemd/muyan-pilot@.service` 和 `systemd/muyan-pilot@.timer`）
+unit 模板（`systemd/orbi@.service` 和 `systemd/orbi@.timer`）
 是部署配置，不是普通代码——但模板变更合并后**不需要任何人工步骤**。下一次 timer 触发时 `ExecStartPre` 同步 checkout，启动前
 `unit_drift` 检查自动自愈：用同一个幂等安装（把两个模板复制到用户
 unit 目录、daemon-reload、按 `max_concurrency` enable 或 disable timer
@@ -67,11 +67,11 @@ unit 目录、daemon-reload、按 `max_concurrency` enable 或 disable timer
 commit）。不再出现“每 5 分钟重复同一个 `unit_drift` 错误直到人工
 介入”的循环（#131/#140 实例：每次启动都因 `unit_drift` 失败，直到
 人工运行同步命令）。同一个安装还会**一次性迁移** #149 之前的非模板
-unit（`muyan-pilot.service` / `muyan-pilot.timer`）：停掉旧 timer（停
+unit（`orbi.service` / `orbi.timer`）：停掉旧 timer（停
 的是 timer，绝不停 service）并删除旧文件，旧单实例调度不会再拉起旧
 service。
 
-`muyan-pilot install-units --config muyan-pilot.toml` 保留为手工入口
+`orbi install-units --config orbi.toml` 保留为手工入口
 （首次 setup、需要立即同步时）。自愈后仍漂移（安装步骤失败、模板
 缺失、复核前 unit 再次漂移）时，启动仍然 fail fast（结构化
 `unit_drift` 行、非零退出、不取 slot、不领取 Issue）：哈希校验和
@@ -83,8 +83,8 @@ journal 是本地记录。一个 run 的每行都以 run id 前缀 `[<run_id>]` 
 一条 grep 还原完整时间线：
 
 ```bash
-journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service -f
-journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service | grep e07383c2
+journalctl --user -u orbi@1.service -u orbi@2.service -f
+journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 ```
 
 你会看到的稳定 `key=value` 行：
@@ -119,7 +119,7 @@ journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service | grep e0738
   （既有 kill 路径）。既有的 `run_failed` 现场行和抛出的失败不变——
   `startup_failed` 是额外的可观测性，不是新的失败路径；
 - `resume_continue` — 恢复的 run 继续中断的工作（Issue #219）时的一次
-  INFO：worktree 的 run state 文件（`.muyan-pilot/run-state.json`）
+  INFO：worktree 的 run state 文件（`.orbi/run-state.json`）
   验证了同一个 run（issue 编号 + 仓库名——仓库改名后 slug 变了也能
   找到旧 worktree），且 worktree 带有未提交改动或之前的 session；
   行带 worktree、`changed_files`（未提交路径）、`reused_runs`
@@ -169,50 +169,50 @@ journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service | grep e0738
 idle 告警和模型请求挂死 kill 是日志/健康阈值——它们不是每 5 分钟
 调度，也不是业务任务 timeout。
 
-## CLI（`muyan-pilot`）
+## CLI（`orbi`）
 
-正式入口是安装后的 `muyan-pilot` console script，以 **editable**
+正式入口是安装后的 `orbi` console script，以 **editable**
 `uv tool` 安装——为什么必须 editable（`ExecStartPre` checkout 同步、
 免重装的源码变更、打包输入刷新）定义在[快速开始](/zh/getting-started)
-第 2 步。`muyan-pilot doctor` 报告一致性（`cli_source: clean` 或
+第 2 步。`orbi doctor` 报告一致性（`cli_source: clean` 或
 `cli_source: DRIFT` + 结构化 `cli_source_drift` 行：实际导入路径、
-期望 repo_dir、精确的 editable 重装命令），`muyan-pilot setup` 校验或
-重装。checkout 根目录**没有** `muyan_pilot.py`（与 package 同名的 flat
-文件会遮蔽已安装 package）；直接执行入口 `python3 -m muyan_pilot.cli`
+期望 repo_dir、精确的 editable 重装命令），`orbi setup` 校验或
+重装。checkout 根目录**没有** `orbi.py`（与 package 同名的 flat
+文件会遮蔽已安装 package）；直接执行入口 `python3 -m orbi.cli`
 运行与 console script 完全相同的代码，保留为开发/兼容路径。
 
 ```bash
 # 在配置的 source repo 创建 Issue 并加 ai-ready 标签
-muyan-pilot add "task title" --body "task body" --config muyan-pilot.toml
-muyan-pilot add "task title" --repo OWNER/BACKLOG-REPO --config muyan-pilot.toml
+orbi add "task title" --body "task body" --config orbi.toml
+orbi add "task title" --repo OWNER/BACKLOG-REPO --config orbi.toml
 
 # 只读队列视图：当前（ai-in-progress）任务带实时 Pi 活动、下一个 ready
 # Issue、每个 source repo 的最近结果（ai-pr-opened / ai-fix-needed /
 # ai-merged / ai-blocked）
-muyan-pilot status --config muyan-pilot.toml
+orbi status --config orbi.toml
 
 # 只读部署/健康报告：repo commit、unit drift、CLI 源码（cli_source:
 # clean / DRIFT + 结构化 cli_source_drift 行）、git transport（配置的
 # origin URL、protocol、期望 SSH URL、SSH 探测——传输失败报告为
 # `transport: FAILED ...`，不抛出）、timer/service 实例状态、slots、
 # Pi session、当前 Issue、最近 journal
-muyan-pilot doctor --config muyan-pilot.toml
+orbi doctor --config orbi.toml
 
 # 一次性、幂等初始化（新机器/新仓库）：gh auth + 仓库权限、平台 labels、
 # systemd user units、checkout 检查（含 git transport：已有 HTTPS
 # `origin` 迁移为 `git@github.com:owner/repo.git`（人工授权的迁移路径；
 # Runner 本身从不改写 remote），并探测 SSH 连通性（fail fast，没有
 # HTTPS 回退））
-muyan-pilot setup --config muyan-pilot.toml
+orbi setup --config orbi.toml
 
 # 打印当前 run 的 Pi session JSONL 路径（没有 session 时 fail fast）
-muyan-pilot session --config muyan-pilot.toml
-muyan-pilot session --follow --config muyan-pilot.toml   # tail -f
-muyan-pilot session --pretty --config muyan-pilot.toml   # 一行摘要
+orbi session --config orbi.toml
+orbi session --follow --config orbi.toml   # tail -f
+orbi session --pretty --config orbi.toml   # 一行摘要
 ```
 
-所有命令通过 `--config` 或 `MUYAN_PILOT_CONFIG` 环境变量接收配置
-（默认 `muyan-pilot.toml`）。`status` 和 `session` 是调试附件——
+所有命令通过 `--config` 或 `ORBI_CONFIG` 环境变量接收配置
+（默认 `orbi.toml`）。`status` 和 `session` 是调试附件——
 journal 和 GitHub 仍是正常可观测路径。
 
 ## Worktree 与 base 新鲜度
@@ -247,7 +247,7 @@ run 产物（plan、test log、session JSONL）留在任务 worktree 作为本�
 ## 并发
 
 `max_concurrency`（默认 1）限定本机并发交付数。slot 是
-`<repo_dir>/.muyan-pilot/slots/slot-N` 上的排他 `flock(2)` 锁，在任何
+`<repo_dir>/.orbi/slots/slot-N` 上的排他 `flock(2)` 锁，在任何
 领取之前取得，整个交付生命周期（implement → review → merge）持有；
 进程无论如何退出，内核都会释放它。拿不到 slot 的 Runner 记录
 `capacity_full` 后退出，不领取 Issue。`max_concurrency = 2` 时两个 timer

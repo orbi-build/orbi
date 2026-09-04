@@ -113,14 +113,14 @@ REQUIRED_ITEMS = (
     ("git-transport-preflight", "transport_check_failed"),
     ("git-transport-no-fallback", "no https fallback"),
     ("git-transport-probe", "git ls-remote"),
-    ("git-transport-migration-entry", "muyan-pilot setup"),
+    ("git-transport-migration-entry", "orbi setup"),
     ("git-transport-migration-command", "git remote set-url origin"),
     # 6c. Run correlation: one run_id per attempt is the single
     #     end-to-end correlation id; every journal line and GitHub text of
     #     the run carries it; a run-scoped event includes a valid run id.
     ("run-single-id", "one run_id"),
     ("run-journal-prefix", "[run_id]"),
-    ("run-github-marker", "muyan-pilot:run="),
+    ("run-github-marker", "orbi:run="),
     ("run-no-new-id", "no new id"),
     ("run-fail-fast", "fails fast"),
     # 7. Keep the MVP scope explicit: no extra stateful infrastructure.

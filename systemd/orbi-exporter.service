@@ -1,0 +1,14 @@
+[Unit]
+Description=Orbi Prometheus exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Documents/orbi/orbi
+ExecStart=/usr/bin/python3 %h/Documents/orbi/orbi/monitoring/prometheus/orbi-exporter.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,7 +1,7 @@
-"""Systemd deployment consistency for Muyan Pilot (Issue #103, #149).
+"""Systemd deployment consistency for Orbi (Issue #103, #149).
 
-The repo templates ``systemd/muyan-pilot@.service`` and
-``systemd/muyan-pilot@.timer`` are the single source of truth for the
+The repo templates ``systemd/orbi@.service`` and
+``systemd/orbi@.timer`` are the single source of truth for the
 user-level units. This module provides:
 
 - an idempotent install (overwrite-copy the templates into the user
@@ -28,32 +28,32 @@ import logging
 import os
 from pathlib import Path
 
-from muyan_pilot.pi_activity import quote_value
+from orbi.pi_activity import quote_value
 
-LOGGER = logging.getLogger("muyan_pilot.systemd_deploy")
+LOGGER = logging.getLogger("orbi.systemd_deploy")
 
-SERVICE_UNIT = "muyan-pilot@.service"
-TIMER_UNIT = "muyan-pilot@.timer"
+SERVICE_UNIT = "orbi@.service"
+TIMER_UNIT = "orbi@.timer"
 UNIT_NAMES = (SERVICE_UNIT, TIMER_UNIT)
 # Issue #149: the two enabled timer instances. Each instance triggers
-# its own service instance (muyan-pilot@1.timer ->
-# muyan-pilot@1.service, ...@2 -> ...@2), so two independent Runner
+# its own service instance (orbi@1.timer ->
+# orbi@1.service, ...@2 -> ...@2), so two independent Runner
 # instances can run concurrently; the capacity is still the flock
 # slots in the Runner (max_concurrency), never the instance count.
-TIMER_INSTANCES = ("muyan-pilot@1.timer", "muyan-pilot@2.timer")
+TIMER_INSTANCES = ("orbi@1.timer", "orbi@2.timer")
 SERVICE_INSTANCES = (
-    "muyan-pilot@1.service", "muyan-pilot@2.service",
+    "orbi@1.service", "orbi@2.service",
 )
 # The pre-#149 non-templated units: install_units migrates them away
 # once (a template change is a deployment change, no human step).
-LEGACY_TIMER_UNIT = "muyan-pilot.timer"
-LEGACY_UNIT_NAMES = ("muyan-pilot.service", "muyan-pilot.timer")
+LEGACY_TIMER_UNIT = "orbi.timer"
+LEGACY_UNIT_NAMES = ("orbi.service", "orbi.timer")
 
 # The idempotent install command that repairs any drift (carried on
 # every unit_drift line as the fix command). Issue #140: the official
-# entry is the installed `muyan-pilot` CLI (the uv-tool console
+# entry is the installed `orbi` CLI (the uv-tool console
 # script), not a hand-written Python file entry.
-FIX_COMMAND = "muyan-pilot install-units"
+FIX_COMMAND = "orbi install-units"
 
 
 class UnitDriftError(RuntimeError):
@@ -68,12 +68,12 @@ def repo_unit_dir(repo_dir: Path) -> Path:
 def installed_unit_dir(unit_dir: str | None = None) -> Path:
     """The user unit directory of this machine.
 
-    An explicit ``unit_dir`` (or ``$MUYAN_PILOT_UNIT_DIR``, the
+    An explicit ``unit_dir`` (or ``$ORBI_UNIT_DIR``, the
     test/e2e seam) wins; then ``$XDG_CONFIG_HOME/systemd/user``; then
     ``~/.config/systemd/user`` (the standard systemd user unit
     location).
     """
-    override = unit_dir or os.environ.get("MUYAN_PILOT_UNIT_DIR")
+    override = unit_dir or os.environ.get("ORBI_UNIT_DIR")
     if override:
         return Path(override).expanduser()
     xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
@@ -236,10 +236,10 @@ def migrate_legacy_units(installed_dir: Path, *, run_command) -> bool:
     migrated), False when there was nothing to migrate (a fresh
     install or an already-migrated machine — idempotent).
 
-    The legacy ``muyan-pilot.timer`` is stopped with ``disable --now``
+    The legacy ``orbi.timer`` is stopped with ``disable --now``
     (a TIMER stop: it never starts, stops or restarts the SERVICE — a
     currently running Runner keeps running) and the legacy
-    ``muyan-pilot.service``/``muyan-pilot.timer`` files are removed,
+    ``orbi.service``/``orbi.timer`` files are removed,
     so the old single-instance schedule cannot keep firing the old
     service (a third Runner without the ExecStartPre flock, Issue
     #149). A failing step propagates unchanged (fail fast).

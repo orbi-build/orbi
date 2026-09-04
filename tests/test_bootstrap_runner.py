@@ -15,8 +15,8 @@ from unittest.mock import Mock
 
 import pytest
 
-import muyan_pilot.runner as runner
-from muyan_pilot import pi_activity
+import orbi.runner as runner
+from orbi import pi_activity
 from tests.test_progress_wiring import make_fake_gh
 
 
@@ -35,7 +35,7 @@ def test_parse_issue_list_rejects_non_list():
 
 
 def test_load_config_resolves_relative_paths_and_values(tmp_path):
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         """source_repos = [\"owner/pilot\", \"owner/backlog\"]\nrepo_dir = \"repo\"\nworkspace_root = \"..\"\nprompt = \"prompt.md\"\nskills = [\"skill.md\"]\ncontext_files = [\"context.md\"]\n""",
         encoding="utf-8",
@@ -50,28 +50,28 @@ def test_load_config_resolves_relative_paths_and_values(tmp_path):
 
 
 def test_load_config_requires_source_repos(tmp_path):
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text("prompt = \"prompt.md\"\n", encoding="utf-8")
     with pytest.raises(ValueError, match="source_repos must be a non-empty list"):
         runner.load_config(config_path)
 
 
 def test_load_config_rejects_empty_source_repo_name(tmp_path):
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo", ""]\n', encoding="utf-8")
     with pytest.raises(ValueError, match="source_repos must contain non-empty strings"):
         runner.load_config(config_path)
 
 
 def test_load_config_defaults_base_branch_to_main(tmp_path):
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
     assert config["base_branch"] == "main"
 
 
 def test_load_config_repair_issue_creation_is_opt_in(tmp_path):
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     assert runner.load_config(config_path)["auto_repair_issues"] is False
     config_path.write_text(
@@ -88,7 +88,7 @@ def test_load_config_repair_issue_creation_is_opt_in(tmp_path):
 
 
 def test_load_config_reads_explicit_base_branch(tmp_path):
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\nbase_branch = "develop"\n',
         encoding="utf-8",
@@ -98,7 +98,7 @@ def test_load_config_reads_explicit_base_branch(tmp_path):
 
 
 def test_load_config_rejects_empty_base_branch(tmp_path):
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\nbase_branch = ""\n', encoding="utf-8",
     )
@@ -109,7 +109,7 @@ def test_load_config_rejects_empty_base_branch(tmp_path):
 def test_load_config_defaults_active_milestone_to_none(tmp_path):
     """Issue #139: without an active_milestone the config keeps the
     current compat behavior (no milestone filter on the ready scans)."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
     assert config["active_milestone"] is None
@@ -118,7 +118,7 @@ def test_load_config_defaults_active_milestone_to_none(tmp_path):
 def test_load_config_reads_explicit_active_milestone(tmp_path):
     """Issue #139: the active Milestone is an explicit claim scope —
     it is never guessed from the repo's Milestone list."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\nactive_milestone = "v0.2.0"\n',
         encoding="utf-8",
@@ -130,7 +130,7 @@ def test_load_config_reads_explicit_active_milestone(tmp_path):
 def test_load_config_rejects_empty_active_milestone(tmp_path):
     """Issue #139: an empty active_milestone is a misconfiguration —
     fail fast instead of silently disabling the scope."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\nactive_milestone = ""\n',
         encoding="utf-8",
@@ -144,7 +144,7 @@ def test_load_config_rejects_empty_active_milestone(tmp_path):
 def test_load_config_rejects_non_string_active_milestone(tmp_path):
     """Issue #139: a non-string active_milestone is a misconfiguration —
     fail fast."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\nactive_milestone = 1\n',
         encoding="utf-8",
@@ -164,7 +164,7 @@ def test_load_config_defaults_model_wait_dead_seconds_to_thirty_minutes(
     model (Qwen 27B, ~17 tokens/s, llama-server request timeout 1200 s)
     must not be killed merely because one complete assistant message
     takes more than 10 minutes."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
     assert config["model_wait_dead_seconds"] == 1800.0
@@ -172,7 +172,7 @@ def test_load_config_defaults_model_wait_dead_seconds_to_thirty_minutes(
 
 def test_load_config_reads_explicit_model_wait_dead_seconds_int(tmp_path):
     """Issue #228: an explicit integer override is accepted as-is."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\nmodel_wait_dead_seconds = 900\n',
         encoding="utf-8",
@@ -183,7 +183,7 @@ def test_load_config_reads_explicit_model_wait_dead_seconds_int(tmp_path):
 
 def test_load_config_reads_explicit_model_wait_dead_seconds_float(tmp_path):
     """Issue #228: an explicit float override is accepted as-is."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\nmodel_wait_dead_seconds = 1234.5\n',
         encoding="utf-8",
@@ -211,7 +211,7 @@ def test_load_config_rejects_invalid_model_wait_dead_seconds(
     """Issue #228: booleans, zero, negative, NaN/infinity and
     non-numeric values are rejected at config load with the field name
     and the concrete reason."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\n'
         f"model_wait_dead_seconds = {value}\n",
@@ -229,7 +229,7 @@ def test_load_config_defaults_swallow_probe_disabled(tmp_path):
     """Issue #233: omitted -> the probe is disabled (None) and the grace
     defaults to 60 s: the run is bounded by model_wait_dead_seconds only
     (the exact pre-#233 behavior)."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
     assert config["model_wait_probe_url"] is None
@@ -238,7 +238,7 @@ def test_load_config_defaults_swallow_probe_disabled(tmp_path):
 
 def test_load_config_reads_explicit_swallow_probe(tmp_path):
     """Issue #233: an explicit /slots URL and grace are accepted as-is."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\n'
         'model_wait_probe_url = "http://127.0.0.1:18082/slots"\n'
@@ -267,7 +267,7 @@ def test_load_config_rejects_invalid_swallow_probe_url(
     """Issue #233: a present probe URL must be a non-empty http(s) URL;
     anything else fails fast at config load with the field name and the
     concrete reason."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\n'
         f"model_wait_probe_url = {value}\n",
@@ -298,7 +298,7 @@ def test_load_config_rejects_invalid_swallow_probe_seconds(
     """Issue #233: booleans, zero, negative, NaN/infinity and non-numeric
     values are rejected at config load with the field name and the
     concrete reason."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\n'
         f"model_wait_probe_seconds = {value}\n",
@@ -316,7 +316,7 @@ def test_load_config_parses_repositories_registry(tmp_path):
     relative to the config file."""
     (tmp_path / "checkouts" / "pilot").mkdir(parents=True)
     (tmp_path / "checkouts" / "ceo").mkdir(parents=True)
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/pilot"]\n'
         "[[repositories]]\n"
@@ -351,7 +351,7 @@ def test_load_config_parses_repositories_registry(tmp_path):
 def test_load_config_defaults_repositories_to_empty_list(tmp_path):
     """Issue #134: without a repositories section the config keeps the
     exact single-repo shape (empty registry, all existing keys intact)."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/pilot"]\nrepo_dir = "repo"\n',
         encoding="utf-8",
@@ -376,7 +376,7 @@ def test_load_config_rejects_repository_missing_field(tmp_path, field):
     del entry[field]
     lines = ["source_repos = [\"owner/pilot\"]\n", "[[repositories]]\n"]
     lines += [f'{key} = "{value}"\n' for key, value in entry.items()]
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text("".join(lines), encoding="utf-8")
     with pytest.raises(ValueError, match=field):
         runner.load_config(config_path)
@@ -384,7 +384,7 @@ def test_load_config_rejects_repository_missing_field(tmp_path, field):
 
 def test_load_config_rejects_repository_empty_field(tmp_path):
     """Issue #134: an empty required field counts as missing."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/pilot"]\n'
         "[[repositories]]\n"
@@ -400,7 +400,7 @@ def test_load_config_rejects_repository_empty_field(tmp_path):
 
 def test_load_config_rejects_repository_non_string_field(tmp_path):
     """Issue #134: a required field with a non-string type is rejected."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/pilot"]\n'
         "[[repositories]]\n"
@@ -416,7 +416,7 @@ def test_load_config_rejects_repository_non_string_field(tmp_path):
 
 def test_load_config_rejects_repository_non_table_entry(tmp_path):
     """Issue #134: a repositories entry that is not a table is rejected."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/pilot"]\n'
         'repositories = ["pilot"]\n',
@@ -428,7 +428,7 @@ def test_load_config_rejects_repository_non_table_entry(tmp_path):
 
 def test_load_config_rejects_repositories_not_a_list(tmp_path):
     """Issue #134: a repositories section that is not a list is rejected."""
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/pilot"]\n'
         'repositories = "pilot"\n',
@@ -448,7 +448,7 @@ def test_load_config_rejects_duplicate_repository_name(tmp_path):
         'github = "owner/pilot"\n'
         'base_branch = "main"\n'
     )
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/pilot"]\n' + entry + entry,
         encoding="utf-8",
@@ -525,8 +525,8 @@ def test_prompt_template_requires_fixes_keyword_for_the_source_issue():
     ).read_text(encoding="utf-8")
     assert "Fixes #{{ISSUE_NUMBER}}" in template
     rendered = runner.render_prompt(template, {
-        "SOURCE_REPO": "xqliu/muyan-pilot",
-        "SOURCE_REPOS": "xqliu/muyan-pilot",
+        "SOURCE_REPO": "xqliu/orbi",
+        "SOURCE_REPOS": "xqliu/orbi",
         "ISSUE_NUMBER": "53",
         "ISSUE_TITLE": "t",
         "ISSUE_BODY": "b",
@@ -536,12 +536,12 @@ def test_prompt_template_requires_fixes_keyword_for_the_source_issue():
         "BASE_BRANCH": "main",
         "BASE_SHA": "abc123",
         "RUN_ID": "a2241189",
-        "BASE_SYNC_LOCK": "/checkout/.muyan-pilot/base-sync.lock",
+        "BASE_SYNC_LOCK": "/checkout/.orbi/base-sync.lock",
     })
     assert "Fixes #53" in rendered
     # Issue #186: the implementer prompt no longer carries the base-sync
     # lock path — the base fetch is the Runner's operation.
-    assert "/checkout/.muyan-pilot/base-sync.lock" not in rendered
+    assert "/checkout/.orbi/base-sync.lock" not in rendered
     assert "{{" not in rendered
 
 
@@ -767,8 +767,8 @@ def test_run_command_logs_multiline_body_as_one_journal_line(
     # The progress comment body (progress.py) is multi-line; it reaches
     # the journal through the `command=` log of the gh api call.
     body = (
-        "<!-- muyan-pilot:run=e6f5ec8a -->\n"
-        "**Muyan Pilot progress**\n"
+        "<!-- orbi:run=e6f5ec8a -->\n"
+        "**Orbi progress**\n"
         "- run_id=e6f5ec8a\n"
         "- role: implement\n"
         "- priority: normal\n"
@@ -776,7 +776,7 @@ def test_run_command_logs_multiline_body_as_one_journal_line(
         "- elapsed: 8m 2s"
     )
     command = [
-        "gh", "api", "repos/xqliu/muyan-pilot/issues/143/comments",
+        "gh", "api", "repos/xqliu/orbi/issues/143/comments",
         "--method", "POST", "--field", f"body={body}",
     ]
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
@@ -910,7 +910,7 @@ def test_pick_issue_skips_blocked_issue_and_claims_next(monkeypatch, caplog):
         lambda command, **kwargs: json.dumps([blocked, ready]),
     )
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/muyan-pilot") == ready
+        assert runner.pick_issue("xqliu/orbi") == ready
     assert "blocked_by" in caplog.text
     assert "54" in caplog.text
     assert "31" in caplog.text
@@ -933,7 +933,7 @@ def test_pick_issue_returns_none_when_all_ready_issues_blocked(
         lambda command, **kwargs: json.dumps([blocked_a, blocked_b]),
     )
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/muyan-pilot") is None
+        assert runner.pick_issue("xqliu/orbi") is None
     assert caplog.text.count("blocked_by") >= 2
 
 
@@ -952,7 +952,7 @@ def test_pick_issue_claims_issue_whose_blocker_is_closed(monkeypatch):
         runner, "run_command",
         lambda command, **kwargs: json.dumps([issue]),
     )
-    assert runner.pick_issue("xqliu/muyan-pilot") == issue
+    assert runner.pick_issue("xqliu/orbi") == issue
 
 
 def test_pick_issue_claims_issue_with_empty_blocked_by(monkeypatch):
@@ -964,7 +964,7 @@ def test_pick_issue_claims_issue_with_empty_blocked_by(monkeypatch):
         runner, "run_command",
         lambda command, **kwargs: json.dumps([issue]),
     )
-    assert runner.pick_issue("xqliu/muyan-pilot") == issue
+    assert runner.pick_issue("xqliu/orbi") == issue
 
 
 def test_pick_issue_stays_blocked_while_any_blocker_is_open(monkeypatch):
@@ -979,7 +979,7 @@ def test_pick_issue_stays_blocked_while_any_blocker_is_open(monkeypatch):
         runner, "run_command",
         lambda command, **kwargs: json.dumps([blocked]),
     )
-    assert runner.pick_issue("xqliu/muyan-pilot") is None
+    assert runner.pick_issue("xqliu/orbi") is None
 
 
 def test_pick_issue_fails_open_when_blocked_by_field_missing(monkeypatch):
@@ -990,7 +990,7 @@ def test_pick_issue_fails_open_when_blocked_by_field_missing(monkeypatch):
         runner, "run_command",
         lambda command, **kwargs: json.dumps([issue]),
     )
-    assert runner.pick_issue("xqliu/muyan-pilot") == issue
+    assert runner.pick_issue("xqliu/orbi") == issue
 
 
 def test_pick_issue_fails_open_when_blocked_by_query_fails(
@@ -1007,7 +1007,7 @@ def test_pick_issue_fails_open_when_blocked_by_query_fails(
         lambda command, **kwargs: (_ for _ in ()).throw(error),
     )
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/muyan-pilot") is None
+        assert runner.pick_issue("xqliu/orbi") is None
     assert "blocked_by_check_failed" in caplog.text
 
 
@@ -1136,7 +1136,7 @@ def test_pick_issue_keeps_epic_and_blocked_by_guards_with_milestone(
     )
     with caplog.at_level("INFO"):
         assert runner.pick_issue(
-            "xqliu/muyan-pilot", active_milestone="v0.2.0",
+            "xqliu/orbi", active_milestone="v0.2.0",
         ) == ready
     assert "epic_not_claimed" in caplog.text
     assert "blocked_by" in caplog.text
@@ -1158,7 +1158,7 @@ def test_pick_issue_fails_open_when_milestone_query_fails(
     )
     with caplog.at_level("INFO"):
         assert runner.pick_issue(
-            "xqliu/muyan-pilot", active_milestone="v0.2.0",
+            "xqliu/orbi", active_milestone="v0.2.0",
         ) is None
     assert "blocked_by_check_failed" in caplog.text
 
@@ -1185,7 +1185,7 @@ def test_pick_issue_prefers_bug_labeled_issues(monkeypatch):
         return json.dumps([])
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    assert runner.pick_issue("xqliu/muyan-pilot") == bug
+    assert runner.pick_issue("xqliu/orbi") == bug
     # The P0 scan ran first and found nothing; the bug scan found the
     # bug: the plain ready scan never ran.
     assert len(searches) == 2
@@ -1212,7 +1212,7 @@ def test_pick_issue_bug_scan_keeps_existing_exclusions(monkeypatch):
         return json.dumps([])
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    assert runner.pick_issue("xqliu/muyan-pilot") == bug
+    assert runner.pick_issue("xqliu/orbi") == bug
     assert searches[0] == (
         "label:ai-ready label:p0 -label:ai-in-progress "
         "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
@@ -1242,7 +1242,7 @@ def test_pick_issue_falls_back_to_ready_scan_when_no_bug(monkeypatch):
         return json.dumps([feature])
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    assert runner.pick_issue("xqliu/muyan-pilot") == feature
+    assert runner.pick_issue("xqliu/orbi") == feature
     assert len(searches) == 3
     assert "label:p0" in searches[0]
     assert "label:bug" in searches[1]
@@ -1275,7 +1275,7 @@ def test_pick_issue_bug_blocked_by_open_blocker_falls_back(monkeypatch):
         return json.dumps([feature])
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    assert runner.pick_issue("xqliu/muyan-pilot") == feature
+    assert runner.pick_issue("xqliu/orbi") == feature
     assert len(searches) == 3
 
 
@@ -1289,7 +1289,7 @@ def test_pick_issue_bug_scan_failure_fails_open(monkeypatch, caplog):
         lambda command, **kwargs: (_ for _ in ()).throw(error),
     )
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/muyan-pilot") is None
+        assert runner.pick_issue("xqliu/orbi") is None
     assert "blocked_by_check_failed" in caplog.text
 
 
@@ -1327,7 +1327,7 @@ def test_pick_issue_prefers_p0_over_bug_and_plain(monkeypatch, caplog):
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/muyan-pilot") == p0
+        assert runner.pick_issue("xqliu/orbi") == p0
     # The P0 scan ran first and found the P0: the bug and plain ready
     # scans never ran.
     assert len(searches) == 1
@@ -1357,7 +1357,7 @@ def test_pick_issue_p0_scan_keeps_existing_exclusions(monkeypatch):
         return json.dumps([p0])
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    assert runner.pick_issue("xqliu/muyan-pilot") == p0
+    assert runner.pick_issue("xqliu/orbi") == p0
     assert searches[0] == (
         "label:ai-ready label:p0 -label:ai-in-progress "
         "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
@@ -1393,7 +1393,7 @@ def test_pick_issue_p0_blocked_by_open_blocker_falls_back_to_bug(
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/muyan-pilot") == bug
+        assert runner.pick_issue("xqliu/orbi") == bug
     # The blocked P0 was skipped with the structured blocked_by line;
     # the bug was claimed with priority=normal (it is not a P0).
     assert "blocked_by" in caplog.text
@@ -1413,7 +1413,7 @@ def test_pick_issue_p0_scan_failure_fails_open(monkeypatch, caplog):
         lambda command, **kwargs: (_ for _ in ()).throw(error),
     )
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/muyan-pilot") is None
+        assert runner.pick_issue("xqliu/orbi") is None
     assert "blocked_by_check_failed" in caplog.text
 
 
@@ -1437,7 +1437,7 @@ def test_pick_issue_logs_priority_normal_for_plain_pickup(
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/muyan-pilot") == feature
+        assert runner.pick_issue("xqliu/orbi") == feature
     assert "priority=normal" in caplog.text
     assert "issue=10" in caplog.text
 
@@ -1511,10 +1511,10 @@ def test_pick_issue_skips_epic_and_claims_next(monkeypatch, caplog):
         lambda command, **kwargs: json.dumps([epic, ready]),
     )
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/muyan-pilot") == ready
+        assert runner.pick_issue("xqliu/orbi") == ready
     assert "epic_not_claimed" in caplog.text
     assert "issue=80" in caplog.text
-    assert "repo=xqliu/muyan-pilot" in caplog.text
+    assert "repo=xqliu/orbi" in caplog.text
     # The Epic was skipped for being an Epic — not for blockers — so
     # no `blocked_by` line is logged for it.
     assert "blocked_by" not in caplog.text
@@ -1547,7 +1547,7 @@ def test_pick_issue_returns_none_when_only_epics_are_ready(
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/muyan-pilot") is None
+        assert runner.pick_issue("xqliu/orbi") is None
     assert caplog.text.count("epic_not_claimed") == 2
     assert "issue=80" in caplog.text
     assert "issue=133" in caplog.text
@@ -1570,7 +1570,7 @@ def test_pick_issue_epic_check_precedes_blocker_check(monkeypatch, caplog):
         lambda command, **kwargs: json.dumps([epic]),
     )
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/muyan-pilot") is None
+        assert runner.pick_issue("xqliu/orbi") is None
     assert "epic_not_claimed" in caplog.text
     assert "issue=80" in caplog.text
     assert "blocked_by" not in caplog.text
@@ -1611,7 +1611,7 @@ def test_pick_issue_skips_epic_in_p0_and_bug_scans(monkeypatch, caplog):
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     with caplog.at_level("INFO"):
-        assert runner.pick_issue("xqliu/muyan-pilot") == feature
+        assert runner.pick_issue("xqliu/orbi") == feature
     assert caplog.text.count("epic_not_claimed") == 2
     assert "issue=80" in caplog.text
     assert "issue=81" in caplog.text
@@ -1630,10 +1630,10 @@ def test_pick_in_progress_issue_scan_excludes_epics(monkeypatch, tmp_path):
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.pick_in_progress_issue(
-        "xqliu/muyan-pilot", tmp_path / "slots", 1,
+        "xqliu/orbi", tmp_path / "slots", 1,
     ) is None
     assert calls == [[
-        "gh", "issue", "list", "--repo", "xqliu/muyan-pilot",
+        "gh", "issue", "list", "--repo", "xqliu/orbi",
         "--state", "open", "--search",
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
@@ -1650,7 +1650,7 @@ def test_main_epic_only_queue_ends_idle_without_process_issue(
     worktree, no `run_pi` — an Epic never enters the delivery
     pipeline and never occupies a slot through a delivery."""
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     epic = {
         "number": 80, "title": "v0.1 release checklist", "body": "",
@@ -1706,10 +1706,10 @@ def test_pick_in_progress_issue_scan_fetches_labels(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", fake_run)
     # No slot dir yet: every slot is free, so the scan runs.
     assert runner.pick_in_progress_issue(
-        "xqliu/muyan-pilot", tmp_path / "slots", 1,
+        "xqliu/orbi", tmp_path / "slots", 1,
     ) == issue
     assert calls == [[
-        "gh", "issue", "list", "--repo", "xqliu/muyan-pilot",
+        "gh", "issue", "list", "--repo", "xqliu/orbi",
         "--state", "open", "--search",
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
@@ -1737,10 +1737,10 @@ def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", fake_run)
     # No slot dir yet: every slot is free, so the scan runs.
     assert runner.pick_in_progress_issue(
-        "xqliu/muyan-pilot", tmp_path / "slots", 1,
+        "xqliu/orbi", tmp_path / "slots", 1,
     ) == issue
     assert calls == [[
-        "gh", "issue", "list", "--repo", "xqliu/muyan-pilot",
+        "gh", "issue", "list", "--repo", "xqliu/orbi",
         "--state", "open", "--search",
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
@@ -1756,7 +1756,7 @@ def test_pick_in_progress_issue_returns_none_when_idle(
         runner, "run_command", lambda command, **kwargs: "[]",
     )
     assert runner.pick_in_progress_issue(
-        "xqliu/muyan-pilot", tmp_path / "slots", 1,
+        "xqliu/orbi", tmp_path / "slots", 1,
     ) is None
 
 
@@ -1775,14 +1775,14 @@ def test_pick_in_progress_issue_skips_when_another_runner_is_live(
     monkeypatch.setattr(runner, "slot_occupancy",
                         lambda slot_dir, capacity: [(1, 4242)])
     assert runner.pick_in_progress_issue(
-        "xqliu/muyan-pilot", tmp_path / "slots", 1,
+        "xqliu/orbi", tmp_path / "slots", 1,
     ) is None
     assert gh_calls == [], "no gh traffic while another runner is live"
     # Own PID: the scan still runs (this runner holds its own slot).
     monkeypatch.setattr(runner, "slot_occupancy",
                         lambda slot_dir, capacity: [(1, os.getpid())])
     assert runner.pick_in_progress_issue(
-        "xqliu/muyan-pilot", tmp_path / "slots", 1,
+        "xqliu/orbi", tmp_path / "slots", 1,
     ) is None
     assert len(gh_calls) == 1
 
@@ -1879,7 +1879,7 @@ def test_pick_next_issue_returns_first_ready_source(monkeypatch):
         return issue if repo == "xqliu/muyan-ceo" else None
 
     monkeypatch.setattr(runner, "pick_issue", pick)
-    assert runner.pick_next_issue(["xqliu/muyan-ceo", "xqliu/muyan-pilot"]) == (
+    assert runner.pick_next_issue(["xqliu/muyan-ceo", "xqliu/orbi"]) == (
         "xqliu/muyan-ceo", issue,
     )
     assert calls == ["xqliu/muyan-ceo"]
@@ -1891,18 +1891,18 @@ def test_pick_next_issue_falls_through_to_second_source(monkeypatch):
 
     def pick(repo, active_milestone=None):
         calls.append(repo)
-        return issue if repo == "xqliu/muyan-pilot" else None
+        return issue if repo == "xqliu/orbi" else None
 
     monkeypatch.setattr(runner, "pick_issue", pick)
-    assert runner.pick_next_issue(["xqliu/muyan-ceo", "xqliu/muyan-pilot"]) == (
-        "xqliu/muyan-pilot", issue,
+    assert runner.pick_next_issue(["xqliu/muyan-ceo", "xqliu/orbi"]) == (
+        "xqliu/orbi", issue,
     )
-    assert calls == ["xqliu/muyan-ceo", "xqliu/muyan-pilot"]
+    assert calls == ["xqliu/muyan-ceo", "xqliu/orbi"]
 
 
 def test_pick_next_issue_returns_none_when_all_sources_empty(monkeypatch):
     monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: None)
-    assert runner.pick_next_issue(["xqliu/muyan-ceo", "xqliu/muyan-pilot"]) is None
+    assert runner.pick_next_issue(["xqliu/muyan-ceo", "xqliu/orbi"]) is None
 
 
 def test_edit_issue_builds_add_and_remove_command(monkeypatch):
@@ -1945,7 +1945,7 @@ def test_validate_run_id_rejects_non_string():
 
 
 def test_run_marker_is_stable_machine_readable_comment():
-    assert runner.run_marker("e07383c2") == "<!-- muyan-pilot:run=e07383c2 -->"
+    assert runner.run_marker("e07383c2") == "<!-- orbi:run=e07383c2 -->"
 
 
 def test_run_marker_rejects_missing_or_invalid_run_id():
@@ -2057,7 +2057,7 @@ def test_create_worktree_reuses_existing_path_for_a_resumed_run(
     """Only a resumed run (same run id after a process restart) reaches
     an existing worktree path; it is the scene the run continues in
     (Issue #18), so it is reused, never recreated."""
-    existing = tmp_path / ".worktrees" / "muyan-pilot-owner-repo-issue-3-run1"
+    existing = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-run1"
     existing.mkdir(parents=True)
     calls = []
     monkeypatch.setattr(
@@ -2071,12 +2071,12 @@ def test_create_worktree_reuses_existing_path_for_a_resumed_run(
 
 
 def test_create_worktree_adds_branch_from_frozen_base_sha(monkeypatch, tmp_path):
-    path = tmp_path / ".worktrees" / "muyan-pilot-owner-repo-issue-3-run1"
+    path = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-run1"
     calls = []
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)))
     assert runner.create_worktree(tmp_path, "owner/repo", 3, "run1", "abc123def456") == path
     assert calls == [(
-        ["git", "worktree", "add", "-b", "muyan-pilot/owner-repo-issue-3-run1", str(path), "abc123def456"],
+        ["git", "worktree", "add", "-b", "orbi/owner-repo-issue-3-run1", str(path), "abc123def456"],
         {"cwd": tmp_path},
     )]
 
@@ -2091,8 +2091,8 @@ def test_latest_run_id_returns_none_without_task_worktrees(tmp_path):
 
 def test_latest_run_id_returns_the_run_id_of_the_newest_worktree(tmp_path):
     slug = "owner-repo"
-    first = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-3-0d111111"
-    second = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-3-2e222222"
+    first = tmp_path / ".worktrees" / f"orbi-{slug}-issue-3-0d111111"
+    second = tmp_path / ".worktrees" / f"orbi-{slug}-issue-3-2e222222"
     first.mkdir(parents=True)
     second.mkdir(parents=True)
     # The newest by mtime wins, even when it was created first by name.
@@ -2102,8 +2102,8 @@ def test_latest_run_id_returns_the_run_id_of_the_newest_worktree(tmp_path):
     os.utime(second, (300, 300))
     assert runner.latest_run_id(tmp_path, "owner/repo", 3) == "2e222222"
     # A worktree of another issue (or another source repo) never counts.
-    other_issue = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-4-ffff0000"
-    other_repo = tmp_path / ".worktrees" / f"muyan-pilot-other-other-issue-3-ffff1111"
+    other_issue = tmp_path / ".worktrees" / f"orbi-{slug}-issue-4-ffff0000"
+    other_repo = tmp_path / ".worktrees" / f"orbi-other-other-issue-3-ffff1111"
     other_issue.mkdir()
     other_repo.mkdir()
     os.utime(other_issue, (400, 400))
@@ -2114,10 +2114,10 @@ def test_latest_run_id_returns_the_run_id_of_the_newest_worktree(tmp_path):
 # --- Issue #219: continue the interrupted run, never a fresh redo ---------
 
 
-def test_run_state_path_lives_in_the_gitignored_muyan_pilot_dir(tmp_path):
-    worktree = tmp_path / ".worktrees" / "muyan-pilot-owner-repo-issue-3-run1"
+def test_run_state_path_lives_in_the_gitignored_orbi_dir(tmp_path):
+    worktree = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-run1"
     assert runner.run_state_path(worktree) == (
-        worktree / ".muyan-pilot" / "run-state.json"
+        worktree / ".orbi" / "run-state.json"
     )
 
 
@@ -2126,13 +2126,13 @@ def test_write_run_state_writes_the_run_identity(tmp_path):
     worktree.mkdir()
     runner.write_run_state(
         worktree, run_id="a1b2c3d4", issue=3, source_repo="owner/repo",
-        branch="muyan-pilot/owner-repo-issue-3-a1b2c3d4",
+        branch="orbi/owner-repo-issue-3-a1b2c3d4",
     )
     state = json.loads(runner.run_state_path(worktree).read_text())
     assert state["run_id"] == "a1b2c3d4"
     assert state["issue"] == 3
     assert state["repo"] == "owner/repo"
-    assert state["branch"] == "muyan-pilot/owner-repo-issue-3-a1b2c3d4"
+    assert state["branch"] == "orbi/owner-repo-issue-3-a1b2c3d4"
     assert state["worktree"] == str(worktree)
     assert isinstance(state["created_at"], str) and state["created_at"]
 
@@ -2144,11 +2144,11 @@ def test_write_run_state_is_idempotent_for_a_resumed_run(tmp_path):
     worktree.mkdir()
     runner.write_run_state(
         worktree, run_id="a1b2c3d4", issue=3, source_repo="owner/repo",
-        branch="muyan-pilot/owner-repo-issue-3-a1b2c3d4",
+        branch="orbi/owner-repo-issue-3-a1b2c3d4",
     )
     runner.write_run_state(
         worktree, run_id="a1b2c3d4", issue=3, source_repo="owner/repo",
-        branch="muyan-pilot/owner-repo-issue-3-a1b2c3d4",
+        branch="orbi/owner-repo-issue-3-a1b2c3d4",
     )
     state = json.loads(runner.run_state_path(worktree).read_text())
     assert state["run_id"] == "a1b2c3d4"
@@ -2163,7 +2163,7 @@ def test_read_run_state_round_trips_the_written_state(tmp_path):
     worktree.mkdir()
     runner.write_run_state(
         worktree, run_id="a1b2c3d4", issue=3, source_repo="owner/repo",
-        branch="muyan-pilot/owner-repo-issue-3-a1b2c3d4",
+        branch="orbi/owner-repo-issue-3-a1b2c3d4",
     )
     state = runner.read_run_state(worktree)
     assert state["run_id"] == "a1b2c3d4"
@@ -2303,11 +2303,11 @@ def test_resume_run_id_matches_by_issue_and_repo_name_across_a_rename(
     the old worktree is found by issue number + repo NAME (the stable
     identity) and the SAME run continues — no second run/branch/
     worktree (Issue #219)."""
-    old = tmp_path / ".worktrees" / "muyan-pilot-xqliu-orbi-issue-42-aaaa1111"
+    old = tmp_path / ".worktrees" / "orbi-xqliu-orbi-issue-42-aaaa1111"
     old.mkdir(parents=True)
     runner.write_run_state(
         old, run_id="aaaa1111", issue=42, source_repo="xqliu/orbi",
-        branch="muyan-pilot/xqliu-orbi-issue-42-aaaa1111",
+        branch="orbi/xqliu-orbi-issue-42-aaaa1111",
     )
     assert runner.resume_run_id(
         tmp_path, "orbi-build/orbi", 42,
@@ -2320,8 +2320,8 @@ def test_resume_run_id_matches_by_issue_and_repo_name_across_a_rename(
 
 def test_resume_run_id_returns_newest_matching_worktree(tmp_path):
     slug = "owner-repo"
-    first = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-3-0d111111"
-    second = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-3-2e222222"
+    first = tmp_path / ".worktrees" / f"orbi-{slug}-issue-3-0d111111"
+    second = tmp_path / ".worktrees" / f"orbi-{slug}-issue-3-2e222222"
     first.mkdir(parents=True)
     second.mkdir(parents=True)
     runner.write_run_state(
@@ -2341,8 +2341,8 @@ def test_resume_run_id_returns_newest_matching_worktree(tmp_path):
 
 def test_resume_run_id_excludes_other_issues_and_repos(tmp_path):
     slug = "owner-repo"
-    other_issue = tmp_path / ".worktrees" / f"muyan-pilot-{slug}-issue-4-ffff0000"
-    other_repo = tmp_path / ".worktrees" / f"muyan-pilot-other-other-issue-3-ffff1111"
+    other_issue = tmp_path / ".worktrees" / f"orbi-{slug}-issue-4-ffff0000"
+    other_repo = tmp_path / ".worktrees" / f"orbi-other-other-issue-3-ffff1111"
     other_issue.mkdir(parents=True)
     other_repo.mkdir(parents=True)
     runner.write_run_state(
@@ -2360,14 +2360,14 @@ def test_resume_run_id_fails_fast_on_missing_state_file(tmp_path):
     """A worktree that claims the issue number but has NO run state file
     cannot be verified as the same run: fail fast with the exact reason,
     never a silent fresh redo (Issue #219)."""
-    worktree = tmp_path / ".worktrees" / "muyan-pilot-owner-repo-issue-3-aaaa1111"
+    worktree = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-aaaa1111"
     worktree.mkdir(parents=True)
     with pytest.raises(RuntimeError, match="run state"):
         runner.resume_run_id(tmp_path, "owner/repo", 3)
 
 
 def test_resume_run_id_fails_fast_on_corrupt_state_file(tmp_path):
-    worktree = tmp_path / ".worktrees" / "muyan-pilot-owner-repo-issue-3-aaaa1111"
+    worktree = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-aaaa1111"
     worktree.mkdir(parents=True)
     state = runner.run_state_path(worktree)
     state.parent.mkdir(parents=True)
@@ -2383,9 +2383,9 @@ def test_resume_run_id_skips_unrelated_worktrees_without_a_state_file(
     completed run) is not the resume scene of this issue — it is
     skipped, not a fail-fast (only a worktree claiming THIS issue
     number must be verifiable)."""
-    other = tmp_path / ".worktrees" / "muyan-pilot-owner-repo-issue-4-ffff0000"
+    other = tmp_path / ".worktrees" / "orbi-owner-repo-issue-4-ffff0000"
     other.mkdir(parents=True)
-    mine = tmp_path / ".worktrees" / "muyan-pilot-owner-repo-issue-3-aaaa1111"
+    mine = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-aaaa1111"
     mine.mkdir(parents=True)
     runner.write_run_state(
         mine, run_id="aaaa1111", issue=3, source_repo="owner/repo",
@@ -2435,14 +2435,14 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     existing_comment = {
         "id": 77,
         "body": (
-            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
-            "**Muyan Pilot progress**\n\nstale state from the dead run"
+            "<!-- orbi:run=a1b2c3d4 -->\n\n"
+            "**Orbi progress**\n\nstale state from the dead run"
         ),
     }
     gh_calls, posted = make_fake_gh(
         monkeypatch, comments=[existing_comment], in_progress=True,
     )
-    branch = "muyan-pilot/xqliu-muyan-ceo-issue-4-a1b2c3d4"
+    branch = "orbi/xqliu-muyan-ceo-issue-4-a1b2c3d4"
     head = "0123456789abcdef0123456789abcdef01234567"
 
     def fake_run(command, **kwargs):
@@ -2459,14 +2459,14 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
             return ""
         if command[:2] == ["gh", "pr"]:
             return json.dumps([{
-                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
+                "url": "https://github.com/muyantech/orbi/pull/4",
                 "baseRefName": "main",
                 "headRefName": branch,
                 "headRefOid": head,
-                "headRepository": {"name": "muyan-pilot"},
+                "headRepository": {"name": "orbi"},
                 "headRepositoryOwner": {"login": "muyantech"},
                 "body": (
-                    "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+                    "<!-- orbi:run=a1b2c3d4 -->\n\n"
                     "Fixes #4\n\nPlan"
                 ),
             }])
@@ -2502,7 +2502,7 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
               "base_branch": "main"}
     assert runner.process_issue(
         issue, config, "xqliu/muyan-ceo",
-    ) == "https://github.com/muyantech/muyan-pilot/pull/4"
+    ) == "https://github.com/muyantech/orbi/pull/4"
     # The reused run id drives the branch and the scene comments.
     assert calls[0] == ("edit", (4,), {"repo": "xqliu/muyan-ceo",
                                        "add": "ai-in-progress"})
@@ -2511,12 +2511,12 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
         if call[:2] == ["gh", "issue"] and "comment" in call
     ]
     for call in scene_comments:
-        assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in call[-1]
+        assert "<!-- orbi:run=a1b2c3d4 -->" in call[-1]
         assert "ffffeeee" not in call[-1]
     # No new progress comment: the restarted run PATCHed the existing
     # one (id 77) found by its run marker.
     progress_posts = [
-        body for body in posted if "**Muyan Pilot progress**" in body
+        body for body in posted if "**Orbi progress**" in body
     ]
     assert progress_posts == [], (
         f"restart must not create a second progress comment: {posted}"
@@ -2529,8 +2529,8 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     ]
     assert patches, "the existing progress comment was not updated"
     last_body = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Muyan Pilot delivered" in last_body
-    assert "- branch: muyan-pilot/xqliu-muyan-ceo-issue-4-a1b2c3d4" in last_body
+    assert "Orbi delivered" in last_body
+    assert "- branch: orbi/xqliu-muyan-ceo-issue-4-a1b2c3d4" in last_body
 
 
 def test_process_issue_binds_run_id_before_the_resume_scan(
@@ -2542,7 +2542,7 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
     which run before the resume decision (review round 3, PR #42)."""
     gh_calls, posted = make_fake_gh(monkeypatch, in_progress=True)
     head = "0123456789abcdef0123456789abcdef01234567"
-    branch = "muyan-pilot/xqliu-muyan-ceo-issue-4-a1b2c3d4"
+    branch = "orbi/xqliu-muyan-ceo-issue-4-a1b2c3d4"
 
     def fake_run(command, **kwargs):
         gh_calls.append(command)
@@ -2554,14 +2554,14 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
             return ""
         if command[:2] == ["gh", "pr"]:
             return json.dumps([{
-                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
+                "url": "https://github.com/muyantech/orbi/pull/4",
                 "baseRefName": "main",
                 "headRefName": branch,
                 "headRefOid": head,
-                "headRepository": {"name": "muyan-pilot"},
+                "headRepository": {"name": "orbi"},
                 "headRepositoryOwner": {"login": "muyantech"},
                 "body": (
-                    "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+                    "<!-- orbi:run=a1b2c3d4 -->\n\n"
                     "Fixes #4\n\nPlan"
                 ),
             }])
@@ -2625,19 +2625,19 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
             return ""
         if command[:2] == ["gh", "pr"]:
             return json.dumps([{
-                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
+                "url": "https://github.com/muyantech/orbi/pull/4",
                 "baseRefName": "main",
-                "headRefName": "muyan-pilot/xqliu-muyan-ceo-issue-4-ffffeeee",
+                "headRefName": "orbi/xqliu-muyan-ceo-issue-4-ffffeeee",
                 "headRefOid": head,
-                "headRepository": {"name": "muyan-pilot"},
+                "headRepository": {"name": "orbi"},
                 "headRepositoryOwner": {"login": "muyantech"},
                 "body": (
-                    "<!-- muyan-pilot:run=ffffeeee -->\n\n"
+                    "<!-- orbi:run=ffffeeee -->\n\n"
                     "Fixes #4\n\nPlan"
                 ),
             }])
         if command[:3] == ["git", "branch", "--show-current"]:
-            return "muyan-pilot/xqliu-muyan-ceo-issue-4-ffffeeee"
+            return "orbi/xqliu-muyan-ceo-issue-4-ffffeeee"
         if command[:2] == ["git", "rev-parse"]:
             return head
         return ""
@@ -2667,7 +2667,7 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
     # consulted (the label is the gate).
     assert scene_calls == []
     progress_posts = [
-        body for body in posted if "**Muyan Pilot progress**" in body
+        body for body in posted if "**Orbi progress**" in body
     ]
     assert len(progress_posts) == 1
     assert "- run_id=ffffeeee" in progress_posts[0]
@@ -2692,19 +2692,19 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
             return ""
         if command[:2] == ["gh", "pr"]:
             return json.dumps([{
-                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
+                "url": "https://github.com/muyantech/orbi/pull/4",
                 "baseRefName": "main",
-                "headRefName": "muyan-pilot/xqliu-muyan-ceo-issue-4-ffffeeee",
+                "headRefName": "orbi/xqliu-muyan-ceo-issue-4-ffffeeee",
                 "headRefOid": head,
-                "headRepository": {"name": "muyan-pilot"},
+                "headRepository": {"name": "orbi"},
                 "headRepositoryOwner": {"login": "muyantech"},
                 "body": (
-                    "<!-- muyan-pilot:run=ffffeeee -->\n\n"
+                    "<!-- orbi:run=ffffeeee -->\n\n"
                     "Fixes #4\n\nPlan"
                 ),
             }])
         if command[:3] == ["git", "branch", "--show-current"]:
-            return "muyan-pilot/xqliu-muyan-ceo-issue-4-ffffeeee"
+            return "orbi/xqliu-muyan-ceo-issue-4-ffffeeee"
         if command[:2] == ["git", "rev-parse"]:
             return head
         return ""
@@ -2731,7 +2731,7 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
     # No resume happened: the fresh run id drives the delivery.
     assert "resuming_run" not in caplog.text
     progress_posts = [
-        body for body in posted if "**Muyan Pilot progress**" in body
+        body for body in posted if "**Orbi progress**" in body
     ]
     assert len(progress_posts) == 1
     assert "- run_id=ffffeeee" in progress_posts[0]
@@ -2753,7 +2753,7 @@ def _resume_wiring_setup(monkeypatch, tmp_path, *, in_progress: bool,
     # resumed one (label on + a worktree to resume) or the fresh one.
     run_id = ("a1b2c3d4"
               if in_progress and latest_run_id_result else "ffffeeee")
-    branch = f"muyan-pilot/xqliu-muyan-ceo-issue-4-{run_id}"
+    branch = f"orbi/xqliu-muyan-ceo-issue-4-{run_id}"
     comment_bodies = []
 
     def fake_run(command, **kwargs):
@@ -2819,7 +2819,7 @@ def test_process_issue_writes_run_state_and_resume_context(
     monkeypatch.setattr(
         runner, "deliver_pr",
         lambda *args, **kwargs:
-        "https://github.com/muyantech/muyan-pilot/pull/4",
+        "https://github.com/muyantech/orbi/pull/4",
     )
     caplog.set_level("INFO")
     runner.process_issue(
@@ -2868,7 +2868,7 @@ def test_process_issue_fresh_run_has_no_resume_context(
     monkeypatch.setattr(
         runner, "deliver_pr",
         lambda *args, **kwargs:
-        "https://github.com/muyantech/muyan-pilot/pull/4",
+        "https://github.com/muyantech/orbi/pull/4",
     )
     caplog.set_level("INFO")
     runner.process_issue(
@@ -2897,7 +2897,7 @@ def test_process_issue_fails_fast_when_the_run_state_is_missing(
     def failing_resume_scene(repo_dir, source_repo, number):
         raise RuntimeError(
             f"worktree {worktree} has no run state file "
-            "(.muyan-pilot/run-state.json): the same run cannot be "
+            "(.orbi/run-state.json): the same run cannot be "
             "verified (Issue #219)"
         )
 
@@ -2930,8 +2930,8 @@ def test_process_issue_fails_fast_when_the_run_state_is_missing(
     # The failure comment carries the reason and the run marker.
     failed = [
         body for body in comment_bodies
-        if body.startswith("<!-- muyan-pilot:run=")
-        and "Muyan Pilot failed" in body
+        if body.startswith("<!-- orbi:run=")
+        and "Orbi failed" in body
     ]
     assert len(failed) == 1
     assert "cannot continue the interrupted run" in failed[0]
@@ -2940,32 +2940,32 @@ def test_process_issue_fails_fast_when_the_run_state_is_missing(
 
 
 def test_worktree_path_lives_inside_repo_worktrees_and_includes_run_id():
-    repo_dir = Path("/srv/muyan/muyan-pilot")
+    repo_dir = Path("/srv/muyan/orbi")
     path = runner.worktree_path(repo_dir, "owner/repo", 3, "run1")
-    assert path == repo_dir / ".worktrees" / "muyan-pilot-owner-repo-issue-3-run1"
+    assert path == repo_dir / ".worktrees" / "orbi-owner-repo-issue-3-run1"
     assert Path(tempfile.gettempdir()) not in path.parents
 
 
 def test_worktree_path_keeps_source_repo_in_name_to_avoid_same_number_collision():
-    repo_dir = Path("/srv/muyan/muyan-pilot")
-    pilot = runner.worktree_path(repo_dir, "xqliu/muyan-pilot", 14, "run1")
+    repo_dir = Path("/srv/muyan/orbi")
+    pilot = runner.worktree_path(repo_dir, "xqliu/orbi", 14, "run1")
     ceo = runner.worktree_path(repo_dir, "xqliu/muyan-ceo", 14, "run1")
-    assert pilot == repo_dir / ".worktrees" / "muyan-pilot-xqliu-muyan-pilot-issue-14-run1"
-    assert ceo == repo_dir / ".worktrees" / "muyan-pilot-xqliu-muyan-ceo-issue-14-run1"
+    assert pilot == repo_dir / ".worktrees" / "orbi-xqliu-orbi-issue-14-run1"
+    assert ceo == repo_dir / ".worktrees" / "orbi-xqliu-muyan-ceo-issue-14-run1"
     assert pilot != ceo
 
 
 def test_worktree_path_and_task_branch_differ_per_run_for_same_issue():
-    repo_dir = Path("/srv/muyan/muyan-pilot")
+    repo_dir = Path("/srv/muyan/orbi")
     first_path = runner.worktree_path(repo_dir, "owner/repo", 3, "run1")
     retry_path = runner.worktree_path(repo_dir, "owner/repo", 3, "run2")
     assert first_path != retry_path
     assert runner.task_branch("owner/repo", 3, "run1") != runner.task_branch("owner/repo", 3, "run2")
-    assert runner.task_branch("owner/repo", 3, "run1") == "muyan-pilot/owner-repo-issue-3-run1"
+    assert runner.task_branch("owner/repo", 3, "run1") == "orbi/owner-repo-issue-3-run1"
 
 
 def test_task_branch_includes_source_repo_to_avoid_same_number_collision():
-    assert runner.task_branch("owner/pilot", 1, "run1") == "muyan-pilot/owner-pilot-issue-1-run1"
+    assert runner.task_branch("owner/pilot", 1, "run1") == "orbi/owner-pilot-issue-1-run1"
     assert runner.task_branch("owner/pilot", 1, "run1") != runner.task_branch("owner/ceo", 1, "run1")
 
 
@@ -2980,8 +2980,8 @@ def test_comment_issue_runs_gh_comment(monkeypatch):
 
 
 def test_issue_context_uses_owner_repo_number_form():
-    assert runner.issue_context("xqliu/muyan-pilot", 40) == (
-        "xqliu/muyan-pilot#40"
+    assert runner.issue_context("xqliu/orbi", 40) == (
+        "xqliu/orbi#40"
     )
 
 
@@ -3010,11 +3010,11 @@ def test_run_pi_renders_base_sync_lock_into_prompt(monkeypatch, tmp_path):
     }
     runner.run_pi(
         issue, tmp_path, config, "owner/repo",
-        branch="muyan-pilot/owner-repo-issue-4-run1",
+        branch="orbi/owner-repo-issue-4-run1",
     )
     command = calls[0]
     assert command[command.index("--system-prompt") + 1] == "SYSTEM " + str(
-        tmp_path / "checkout" / ".muyan-pilot" / "base-sync.lock",
+        tmp_path / "checkout" / ".orbi" / "base-sync.lock",
     )
 
 
@@ -3044,7 +3044,7 @@ def test_run_pi_logs_provider_config_loaded_with_selection(
     with caplog.at_level("INFO"):
         runner.run_pi(
             issue, tmp_path, config, "owner/repo",
-            branch="muyan-pilot/owner-repo-issue-4-run1",
+            branch="orbi/owner-repo-issue-4-run1",
         )
     lines = [line for line in caplog.text.splitlines()
              if " provider_config_loaded " in line]
@@ -3149,7 +3149,7 @@ def test_run_review_renders_base_sync_lock_into_prompt(monkeypatch, tmp_path):
     )
     command = calls[0]
     assert command[command.index("--system-prompt") + 1] == "REVIEW " + str(
-        tmp_path / "checkout" / ".muyan-pilot" / "base-sync.lock",
+        tmp_path / "checkout" / ".orbi" / "base-sync.lock",
     )
 
 
@@ -3177,7 +3177,7 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
     }
     assert runner.run_pi(
         issue, tmp_path, config, "owner/repo",
-        branch="muyan-pilot/owner-repo-issue-4-run1",
+        branch="orbi/owner-repo-issue-4-run1",
     ) == "done"
     command, kwargs = calls[0]
     assert command[:4] == ["pi", "--skill", "skill.md", "--print"]
@@ -3189,7 +3189,7 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
     assert "skill.md" in command[7]
     assert command[7].endswith(
         "main abc123def456 run1 "
-        + str(tmp_path / "checkout" / ".muyan-pilot" / "base-sync.lock"),
+        + str(tmp_path / "checkout" / ".orbi" / "base-sync.lock"),
     )
     assert command[8] == "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: " + str(tmp_path) + "\nComplete the delivery process in the system prompt."
     assert kwargs["cwd"] == tmp_path
@@ -3197,7 +3197,7 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
     assert kwargs["run_id"] == "run1"
     assert kwargs["issue"] == 4
     assert kwargs["source_repo"] == "owner/repo"
-    assert kwargs["branch"] == "muyan-pilot/owner-repo-issue-4-run1"
+    assert kwargs["branch"] == "orbi/owner-repo-issue-4-run1"
     assert kwargs["log_command"][-2:] == ["<redacted>", "<issue-context-redacted>"]
 
 
@@ -3220,9 +3220,9 @@ def test_run_pi_passes_task_branch_to_stream_pi(monkeypatch, tmp_path):
     }
     runner.run_pi(
         issue, tmp_path, config, "owner/repo",
-        timeout=7, branch="muyan-pilot/owner-repo-issue-5-run1",
+        timeout=7, branch="orbi/owner-repo-issue-5-run1",
     )
-    assert calls[0]["branch"] == "muyan-pilot/owner-repo-issue-5-run1"
+    assert calls[0]["branch"] == "orbi/owner-repo-issue-5-run1"
     assert calls[0]["timeout"] == 7
 
 
@@ -3234,7 +3234,7 @@ def test_run_pi_redacts_prompt_and_issue_from_command_log(monkeypatch, tmp_path)
     runner.run_pi(
         {"number": 5, "title": "secret", "body": "token"}, tmp_path,
         {"prompt": prompt_path, "repo_dir": tmp_path, "source_repos": ["owner/repo"], "workspace_root": tmp_path, "context_files": [], "skills": [], "base_branch": "main", "base_sha": "abc123def456", "run_id": "run1"},
-        "owner/repo", branch="muyan-pilot/owner-repo-issue-5-run1",
+        "owner/repo", branch="orbi/owner-repo-issue-5-run1",
     )
     command, kwargs = calls[0]
     assert "PRIVATE SYSTEM" in command[5]
@@ -3266,7 +3266,7 @@ def test_run_pi_keeps_the_fresh_context_without_a_resume_context(
     }
     runner.run_pi(
         {"number": 5, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="muyan-pilot/owner-repo-issue-5-run1",
+        "owner/repo", branch="orbi/owner-repo-issue-5-run1",
     )
     command = calls[0]
     assert command[-1] == (
@@ -3306,7 +3306,7 @@ def test_run_pi_appends_the_resume_context_to_the_context_argument(
     )
     runner.run_pi(
         {"number": 5, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="muyan-pilot/owner-repo-issue-5-run1",
+        "owner/repo", branch="orbi/owner-repo-issue-5-run1",
         resume_context=resume,
     )
     command = calls[0]
@@ -3321,7 +3321,7 @@ def test_verify_pr_rejects_wrong_branch(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "other-branch")
     with pytest.raises(RuntimeError, match="Pi changed branch"):
         runner.verify_pr(
-            tmp_path, "muyan-pilot/issue-4", "main", "e07383c2", issue=4, repo_dir=tmp_path,
+            tmp_path, "orbi/issue-4", "main", "e07383c2", issue=4, repo_dir=tmp_path,
         )
 
 
@@ -3329,8 +3329,8 @@ FAKE_HEAD_SHA = "0123456789abcdef0123456789abcdef01234567"
 FAKE_RUN_ID = "e07383c2"
 
 
-FAKE_PR_URL = "https://github.com/muyantech/muyan-pilot/pull/4"
-FAKE_PR_REPO = "muyantech/muyan-pilot"
+FAKE_PR_URL = "https://github.com/muyantech/orbi/pull/4"
+FAKE_PR_REPO = "muyantech/orbi"
 
 
 def fake_verify_pr_payload(**overrides) -> str:
@@ -3338,12 +3338,12 @@ def fake_verify_pr_payload(**overrides) -> str:
     payload = {
         "url": FAKE_PR_URL,
         "baseRefName": "main",
-        "headRefName": f"muyan-pilot/issue-4-{FAKE_RUN_ID}",
+        "headRefName": f"orbi/issue-4-{FAKE_RUN_ID}",
         "headRefOid": FAKE_HEAD_SHA,
-        "headRepository": {"name": "muyan-pilot"},
+        "headRepository": {"name": "orbi"},
         "headRepositoryOwner": {"login": "muyantech"},
         "body": (
-            f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\n"
+            f"<!-- orbi:run={FAKE_RUN_ID} -->\n\n"
             "Fixes #4\n\nPlan"
         ),
     }
@@ -3354,7 +3354,7 @@ def fake_verify_pr_payload(**overrides) -> str:
 def fake_verify_run(command, **kwargs):
     """Complete fake for verify_pr: git commands answered, gh returns a PR."""
     if command[:3] == ["git", "branch", "--show-current"]:
-        return f"muyan-pilot/issue-4-{FAKE_RUN_ID}"
+        return f"orbi/issue-4-{FAKE_RUN_ID}"
     if command[:3] == ["git", "fetch", "origin"]:
         return ""
     if command[:3] == ["git", "merge-base", "--is-ancestor"]:
@@ -3377,7 +3377,7 @@ def test_verify_pr_rejects_delivery_behind_latest_remote_base(monkeypatch, tmp_p
         RuntimeError, match="behind latest remote base",
     ):
         runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
     assert "base_branch=main" in caplog.text
@@ -3390,24 +3390,24 @@ def test_fake_verify_run_rejects_unexpected_command():
 
 def test_verify_pr_rejects_missing_pr(monkeypatch, tmp_path):
     outputs = iter([
-        f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA, "[]",
+        f"orbi/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA, "[]",
     ])
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="exactly one open PR"):
         runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
 
 
 def test_verify_pr_rejects_non_array(monkeypatch, tmp_path):
     outputs = iter([
-        f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA, "{}",
+        f"orbi/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA, "{}",
     ])
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="exactly one open PR"):
         runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
 
@@ -3421,9 +3421,9 @@ def test_verify_pr_returns_url_when_delivery_contains_latest_base(monkeypatch, t
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.verify_pr(
-        tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+        tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path,
-    ) == "https://github.com/muyantech/muyan-pilot/pull/4"
+    ) == "https://github.com/muyantech/orbi/pull/4"
     assert ["git", "fetch", "origin", "main"] in calls
     assert ["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"] in calls
 
@@ -3437,7 +3437,7 @@ def test_verify_pr_requires_the_repo_dir_lock_location(
     monkeypatch.setattr(runner, "run_command", fake_verify_run)
     with pytest.raises(TypeError):
         runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4,
         )
 
@@ -3457,7 +3457,7 @@ def test_verify_pr_fetches_under_the_base_sync_lock(
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     runner.verify_pr(
-        tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+        tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
         FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
     )
     assert held == [True]
@@ -3466,12 +3466,12 @@ def test_verify_pr_fetches_under_the_base_sync_lock(
 
 def test_verify_pr_rejects_pr_without_url(monkeypatch, tmp_path):
     outputs = iter([
-        f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA, "[{}]",
+        f"orbi/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA, "[{}]",
     ])
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="open PR has no URL"):
         runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
 
@@ -3487,7 +3487,7 @@ def test_verify_pr_rejects_pr_based_on_wrong_branch(monkeypatch, tmp_path):
         RuntimeError, match="PR base is develop, expected main",
     ):
         runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
 
@@ -3517,7 +3517,7 @@ def test_verify_pr_rejects_diverged_remote_pr_head(monkeypatch, tmp_path,
         match="PR head deadbeef.* is not local HEAD 01234567.*diverged",
     ):
         runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
     assert "pr_head_diverged" in caplog.text
@@ -3546,7 +3546,7 @@ def test_verify_pr_passes_through_when_local_head_ahead_of_pr_head(
     monkeypatch.setattr(runner, "run_command", fake_run)
     with caplog.at_level("INFO"):
         url = runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
     assert url == FAKE_PR_URL
@@ -3566,7 +3566,7 @@ def test_verify_pr_rejects_pr_body_without_run_marker(monkeypatch, tmp_path, cap
         RuntimeError, match="missing the stable run marker",
     ):
         runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
     assert "pr_run_marker_missing" in caplog.text
@@ -3583,7 +3583,7 @@ def test_verify_pr_rejects_pr_body_missing_field(monkeypatch, tmp_path):
         RuntimeError, match="missing the stable run marker",
     ):
         runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
 
@@ -3597,13 +3597,13 @@ def test_verify_pr_accepts_pr_body_with_fixes_keyword(monkeypatch, tmp_path):
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"]:
             return fake_verify_pr_payload(
-                body=f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\nFixes #4",
+                body=f"<!-- orbi:run={FAKE_RUN_ID} -->\n\nFixes #4",
             )
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.verify_pr(
-        tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+        tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path,
     ) == FAKE_PR_URL
 
@@ -3616,7 +3616,7 @@ def test_verify_pr_rejects_pr_body_without_fixes_keyword(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"]:
             return fake_verify_pr_payload(
-                body=f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\nPlan",
+                body=f"<!-- orbi:run={FAKE_RUN_ID} -->\n\nPlan",
             )
         return fake_verify_run(command, **kwargs)
 
@@ -3625,7 +3625,7 @@ def test_verify_pr_rejects_pr_body_without_fixes_keyword(
         RuntimeError, match=r"missing `Fixes #4`",
     ):
         runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
     assert "pr_fixes_missing" in caplog.text
@@ -3641,7 +3641,7 @@ def test_verify_pr_rejects_pr_body_with_wrong_issue_number(
         if command[:2] == ["gh", "pr"]:
             return fake_verify_pr_payload(
                 body=(
-                    f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\n"
+                    f"<!-- orbi:run={FAKE_RUN_ID} -->\n\n"
                     "Fixes #9"
                 ),
             )
@@ -3652,7 +3652,7 @@ def test_verify_pr_rejects_pr_body_with_wrong_issue_number(
         RuntimeError, match=r"missing `Fixes #4`",
     ):
         runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
     assert "pr_fixes_missing" in caplog.text
@@ -3667,7 +3667,7 @@ def test_verify_pr_rejects_pr_body_with_longer_issue_number(
         if command[:2] == ["gh", "pr"]:
             return fake_verify_pr_payload(
                 body=(
-                    f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\n"
+                    f"<!-- orbi:run={FAKE_RUN_ID} -->\n\n"
                     "Fixes #41"
                 ),
             )
@@ -3678,7 +3678,7 @@ def test_verify_pr_rejects_pr_body_with_longer_issue_number(
         RuntimeError, match=r"missing `Fixes #4`",
     ):
         runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
         )
     assert "pr_fixes_missing" in caplog.text
@@ -3695,13 +3695,13 @@ def test_verify_pr_queries_base_head_and_accepts_matching_pr(
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.verify_pr(
-        tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+        tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path,
-    ) == "https://github.com/muyantech/muyan-pilot/pull/4"
+    ) == "https://github.com/muyantech/orbi/pull/4"
     assert ["git", "rev-parse", "HEAD"] in calls
     assert [
         "gh", "pr", "list", "--state", "open", "--head",
-        f"muyan-pilot/issue-4-{FAKE_RUN_ID}",
+        f"orbi/issue-4-{FAKE_RUN_ID}",
         "--json", (
             "url,baseRefName,headRefName,headRefOid,"
             "headRepository,headRepositoryOwner,body"
@@ -3716,7 +3716,7 @@ def test_verify_pr_queries_base_head_and_accepts_matching_pr(
 def test_verify_pr_accepts_pr_in_expected_repo_and_url(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", fake_verify_run)
     assert runner.verify_pr(
-        tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+        tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path, pr_repo=FAKE_PR_REPO, expected_url=FAKE_PR_URL,
     ) == FAKE_PR_URL
 
@@ -3733,10 +3733,10 @@ def test_verify_pr_rejects_pr_head_in_another_repo(monkeypatch, tmp_path, caplog
     monkeypatch.setattr(runner, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="PR head repo is attacker/other, expected "
-                            "muyantech/muyan-pilot",
+                            "muyantech/orbi",
     ):
         runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4, repo_dir=tmp_path, pr_repo=FAKE_PR_REPO,
         )
     assert "pr_repo_mismatch" in caplog.text
@@ -3753,10 +3753,10 @@ def test_verify_pr_rejects_pr_head_repo_missing_fields(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(
         RuntimeError, match="PR head repo is <missing>, expected "
-                            "muyantech/muyan-pilot",
+                            "muyantech/orbi",
     ):
         runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4, repo_dir=tmp_path, pr_repo=FAKE_PR_REPO,
         )
 
@@ -3772,10 +3772,10 @@ def test_verify_pr_rejects_pr_head_repo_empty_fields(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(
         RuntimeError, match="PR head repo is <missing>, expected "
-                            "muyantech/muyan-pilot",
+                            "muyantech/orbi",
     ):
         runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4, repo_dir=tmp_path, pr_repo=FAKE_PR_REPO,
         )
 
@@ -3791,7 +3791,7 @@ def test_verify_pr_skips_repo_check_when_pr_repo_not_given(monkeypatch,
                 "baseRefName": "main",
                 "headRefOid": FAKE_HEAD_SHA,
                 "body": (
-                    f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\n"
+                    f"<!-- orbi:run={FAKE_RUN_ID} -->\n\n"
                     "Fixes #4\n\nPlan"
                 ),
             }])
@@ -3799,7 +3799,7 @@ def test_verify_pr_skips_repo_check_when_pr_repo_not_given(monkeypatch,
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.verify_pr(
-        tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+        tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path,
     ) == FAKE_PR_URL
 
@@ -3808,20 +3808,20 @@ def test_verify_pr_rejects_url_different_from_expected(monkeypatch, tmp_path, ca
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"]:
             return fake_verify_pr_payload(
-                url="https://github.com/muyantech/muyan-pilot/pull/99",
+                url="https://github.com/muyantech/orbi/pull/99",
             )
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match=(
-            "PR URL https://github.com/muyantech/muyan-pilot/pull/99 is "
+            "PR URL https://github.com/muyantech/orbi/pull/99 is "
             "not the recovered original PR "
-            "https://github.com/muyantech/muyan-pilot/pull/4"
+            "https://github.com/muyantech/orbi/pull/4"
         ),
     ):
         runner.verify_pr(
-            tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main",
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
             FAKE_RUN_ID, issue=4, repo_dir=tmp_path, expected_url=FAKE_PR_URL,
         )
     assert "pr_url_mismatch" in caplog.text
@@ -3832,7 +3832,7 @@ def test_verify_pr_skips_url_check_when_expected_url_not_given(
 ):
     monkeypatch.setattr(runner, "run_command", fake_verify_run)
     assert runner.verify_pr(
-        tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+        tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path,
     ) == FAKE_PR_URL
 
@@ -3851,7 +3851,7 @@ def test_verify_pr_skips_latest_base_check_when_not_required(
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.verify_pr(
-        tmp_path, f"muyan-pilot/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+        tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path, require_latest_base=False,
     ) == FAKE_PR_URL
     assert not any(c[:3] == ["git", "fetch", "origin"] for c in calls)
@@ -3863,7 +3863,7 @@ def test_verify_pr_skips_latest_base_check_when_not_required(
 def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_path):
     calls = []
     gh_calls, posted = make_fake_gh(monkeypatch)
-    branch = "muyan-pilot/xqliu-muyan-ceo-issue-4-a1b2c3d4"
+    branch = "orbi/xqliu-muyan-ceo-issue-4-a1b2c3d4"
     head = "0123456789abcdef0123456789abcdef01234567"
 
     def fake_run(command, **kwargs):
@@ -3879,14 +3879,14 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
             return ""
         if command[:2] == ["gh", "pr"]:
             return json.dumps([{
-                "url": "https://github.com/muyantech/muyan-pilot/pull/4",
+                "url": "https://github.com/muyantech/orbi/pull/4",
                 "baseRefName": "main",
                 "headRefName": branch,
                 "headRefOid": head,
-                "headRepository": {"name": "muyan-pilot"},
+                "headRepository": {"name": "orbi"},
                 "headRepositoryOwner": {"login": "muyantech"},
                 "body": (
-                    "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
+                    "<!-- orbi:run=a1b2c3d4 -->\n\n"
                     "Fixes #4\n\nPlan"
                 ),
             }])
@@ -3905,29 +3905,29 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     issue = {"number": 4, "title": "Fix", "body": "Body"}
     config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}
-    assert runner.process_issue(issue, config, "xqliu/muyan-ceo") == "https://github.com/muyantech/muyan-pilot/pull/4"
+    assert runner.process_issue(issue, config, "xqliu/muyan-ceo") == "https://github.com/muyantech/orbi/pull/4"
     assert calls[0] == ("edit", (4,), {"repo": "xqliu/muyan-ceo", "add": "ai-in-progress"})
     # The run state is published automatically: exactly one progress
     # comment (hidden run marker) plus the started / PR opened milestones.
     progress_posts = [
         body for body in posted
-        if "**Muyan Pilot progress**" in body
+        if "**Orbi progress**" in body
     ]
     assert len(progress_posts) == 1
-    assert "- branch: muyan-pilot/xqliu-muyan-ceo-issue-4-a1b2c3d4" in progress_posts[0]
+    assert "- branch: orbi/xqliu-muyan-ceo-issue-4-a1b2c3d4" in progress_posts[0]
     # The PR URL is only known after verify_pr: the initial POST shows
     # `- PR: -`, the final delivery PATCH carries the URL.
     assert "- PR: -" in progress_posts[0]
-    assert any("Muyan Pilot: started" in body for body in posted)
-    started = [body for body in posted if "Muyan Pilot: started" in body][0]
+    assert any("Orbi: started" in body for body in posted)
+    started = [body for body in posted if "Orbi: started" in body][0]
     assert "base_branch=main" in started
     assert "base_sha=abc123def456" in started
     assert "run_id=a1b2c3d4" in started
-    assert "branch=muyan-pilot/xqliu-muyan-ceo-issue-4-a1b2c3d4" in started
+    assert "branch=orbi/xqliu-muyan-ceo-issue-4-a1b2c3d4" in started
     assert "worktree=" + str(tmp_path / "wt") in started
-    pr_opened = [body for body in posted if "Muyan Pilot: PR opened" in body]
+    pr_opened = [body for body in posted if "Orbi: PR opened" in body]
     assert pr_opened
-    assert "https://github.com/muyantech/muyan-pilot/pull/4" in pr_opened[0]
+    assert "https://github.com/muyantech/orbi/pull/4" in pr_opened[0]
     assert "run_id=a1b2c3d4" in pr_opened[0]
     # The scene comments (started Pi / opened PR) still carry the run scene.
     scene_comments = [
@@ -3936,11 +3936,11 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     ]
     assert len(scene_comments) == 2
     start_body = scene_comments[0][-1]
-    assert "Muyan Pilot started Pi:" in start_body
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in start_body
+    assert "Orbi started Pi:" in start_body
+    assert "<!-- orbi:run=a1b2c3d4 -->" in start_body
     opened_body = scene_comments[1][-1]
-    assert "Muyan Pilot opened PR: https://github.com/muyantech/muyan-pilot/pull/4" in opened_body
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in opened_body
+    assert "Orbi opened PR: https://github.com/muyantech/orbi/pull/4" in opened_body
+    assert "<!-- orbi:run=a1b2c3d4 -->" in opened_body
     # The final delivery summary PATCHed the same progress comment.
     patches = [
         command for command in gh_calls
@@ -3948,7 +3948,7 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     ]
     assert patches
     last_body = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Muyan Pilot delivered" in last_body
+    assert "Orbi delivered" in last_body
 
 
 def _gh_api(command, posted):
@@ -3969,7 +3969,7 @@ def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, c
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
-    monkeypatch.setattr(runner, "deliver_pr", lambda *args, **kwargs: "https://github.com/muyantech/muyan-pilot/pull/4")
+    monkeypatch.setattr(runner, "deliver_pr", lambda *args, **kwargs: "https://github.com/muyantech/orbi/pull/4")
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: None)
     gh_calls, posted = make_fake_gh(monkeypatch)
 
@@ -3993,13 +3993,13 @@ def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, c
     assert "run=a1b2c3d4" in ends[0]
     assert "issue=xqliu/muyan-ceo#4" in ends[0]
     assert "result=pr_opened" in ends[0]
-    assert "pr=https://github.com/muyantech/muyan-pilot/pull/4" in ends[0]
+    assert "pr=https://github.com/muyantech/orbi/pull/4" in ends[0]
     assert "commit=0123456789abcdef0123456789abcdef01234567" in ends[0]
 
 
 def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_path):
     """Issue #239: a delivery failure is terminal — `process_issue` marks
-    the Issue `ai-blocked`, posts the `Muyan Pilot failed` comment, and
+    the Issue `ai-blocked`, posts the `Orbi failed` comment, and
     RETURNS `None` instead of re-raising. The service must not crash on
     an already-handled failure; the tick ends cleanly and `main` skips
     the delivery wait."""
@@ -4030,17 +4030,17 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     # The failure is also published as the blocked milestone (Issue
     # #18). The worktree was never created, so no progress comment
     # exists to PATCH: the milestone alone carries the notification.
-    assert any("Muyan Pilot: blocked" in body for body in posted)
+    assert any("Orbi: blocked" in body for body in posted)
     blocked = [
-        body for body in posted if "Muyan Pilot: blocked" in body
+        body for body in posted if "Orbi: blocked" in body
     ][0]
     assert "git failed" in blocked
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked
-    assert "Muyan Pilot failed: git failed" in failure_body
+    assert "<!-- orbi:run=a1b2c3d4 -->" in blocked
+    assert "Orbi failed: git failed" in failure_body
     assert "base_branch=main" in failure_body
     assert "base_sha=abc123def456" in failure_body
     assert "run_id=a1b2c3d4" in failure_body
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failure_body
+    assert "<!-- orbi:run=a1b2c3d4 -->" in failure_body
 
 
 def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
@@ -4049,7 +4049,7 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     """Issue #239 regression: the commit-boundary failure of `deliver_pr`
     (the agent delivered no commit — HEAD is still the frozen base) flows
     through the NORMAL terminal failure path: the Issue is marked
-    `ai-blocked` (removing `ai-in-progress`), the `Muyan Pilot failed`
+    `ai-blocked` (removing `ai-in-progress`), the `Orbi failed`
     comment carries the no-commit reason and the run marker, and
     `process_issue` RETURNS `None` instead of re-raising — the failure is
     already terminal, so the tick must end cleanly and the service must
@@ -4100,12 +4100,12 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
         {"number": 239, "title": "No commit", "body": ""},
         {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
          "base_branch": "main"},
-        "xqliu/muyan-pilot",
+        "xqliu/orbi",
     ) is None
     edits = [entry for entry in calls if isinstance(entry, dict)]
     assert edits == [
-        {"repo": "xqliu/muyan-pilot", "add": "ai-in-progress"},
-        {"repo": "xqliu/muyan-pilot", "add": "ai-blocked",
+        {"repo": "xqliu/orbi", "add": "ai-in-progress"},
+        {"repo": "xqliu/orbi", "add": "ai-blocked",
          "remove": "ai-in-progress"},
     ]
     comment_bodies = [
@@ -4114,16 +4114,16 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     ]
     failure = [
         body for body in comment_bodies
-        if "Muyan Pilot failed:" in body
+        if "Orbi failed:" in body
     ]
     assert len(failure) == 1
     assert "delivered no commit" in failure[0]
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failure[0]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in failure[0]
     # The blocked milestone notification carries the same scene.
-    blocked = [body for body in posted if "Muyan Pilot: blocked" in body]
+    blocked = [body for body in posted if "Orbi: blocked" in body]
     assert blocked
     assert "delivered no commit" in blocked[0]
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked[0]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in blocked[0]
 
 
 def test_process_issue_model_wait_dead_failure_stays_in_progress(
@@ -4134,7 +4134,7 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
     request never completes, the session JSONL froze in model_wait,
     stream_pi killed Pi and raised the classified `ModelWaitDeadError`)
     is RECOVERABLE: the Issue keeps `ai-in-progress` (never `ai-blocked`),
-    the `Muyan Pilot model_wait recovered` comment carries the
+    the `Orbi model_wait recovered` comment carries the
     hung-model-request reason and the run marker, and `process_issue`
     returns `None` so the tick ends cleanly and the slot is released by
     `main`'s `finally`. The next tick's in-flight restart scan resumes
@@ -4184,7 +4184,7 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
         {"number": 218, "title": "Model wait dead", "body": ""},
         {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
          "base_branch": "main"},
-        "xqliu/muyan-pilot",
+        "xqliu/orbi",
     ) is None
     # The Issue keeps `ai-in-progress`: the ONLY label edit is the claim
     # at the start — no `ai-blocked`, no removal of `ai-in-progress`
@@ -4192,7 +4192,7 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
     # traffic is tuple entries).
     edits = [entry for entry in calls if isinstance(entry, dict)]
     assert edits == [
-        {"repo": "xqliu/muyan-pilot", "add": "ai-in-progress"},
+        {"repo": "xqliu/orbi", "add": "ai-in-progress"},
     ]
     comment_bodies = [
         entry[2]["body"] for entry in calls
@@ -4200,19 +4200,19 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
     ]
     recovered = [
         body for body in comment_bodies
-        if "Muyan Pilot model_wait recovered:" in body
+        if "Orbi model_wait recovered:" in body
     ]
     assert len(recovered) == 1
     # The hung-model-request reason and the run marker stay in the
     # Issue.
     assert "the model request is hung" in recovered[0]
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in recovered[0]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in recovered[0]
     # The resumable scene is explicit: the Issue stays ai-in-progress
     # and the next tick resumes the same run.
     assert "stays ai-in-progress" in recovered[0]
     # No terminal failure comment was posted.
     assert not any(
-        "Muyan Pilot failed:" in body for body in comment_bodies
+        "Orbi failed:" in body for body in comment_bodies
     )
 
 
@@ -4272,14 +4272,14 @@ def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
         {"number": 218, "title": "Model wait dead", "body": ""},
         {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
          "base_branch": "main"},
-        "xqliu/muyan-pilot",
+        "xqliu/orbi",
     ) is None
     # The Issue keeps `ai-in-progress`: the ONLY label edit is the claim
     # at the start — the failed recovery comment must NOT fall through
     # to the generic handler's terminal `ai-blocked` (Issue #227).
     edits = [entry for entry in calls if isinstance(entry, dict)]
     assert edits == [
-        {"repo": "xqliu/muyan-pilot", "add": "ai-in-progress"},
+        {"repo": "xqliu/orbi", "add": "ai-in-progress"},
     ]
     # No terminal failure comment was posted.
     comment_bodies = [
@@ -4287,7 +4287,7 @@ def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
         if isinstance(entry, tuple) and entry[0] == "comment"
     ]
     assert not any(
-        "Muyan Pilot failed:" in body for body in comment_bodies
+        "Orbi failed:" in body for body in comment_bodies
     )
 
 
@@ -4299,7 +4299,7 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
     stream_pi killed Pi and raised) flows through the EXISTING
     `ai-blocked`/recoverable failure path exactly like the Issue #75
     upstream-dead failure: the Issue is marked `ai-blocked` (removing
-    `ai-in-progress`), the `Muyan Pilot failed` comment carries the
+    `ai-in-progress`), the `Orbi failed` comment carries the
     idle-recovery reason and the run marker, and `process_issue` returns
     `None` so the tick ends cleanly and the slot is released by `main`
     's `finally` (Issue #239: the handled failure never re-raises to
@@ -4346,12 +4346,12 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
         {"number": 94, "title": "Idle recovery", "body": ""},
         {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
          "base_branch": "main"},
-        "xqliu/muyan-pilot",
+        "xqliu/orbi",
     ) is None
     edits = [entry for entry in calls if isinstance(entry, dict)]
     assert edits == [
-        {"repo": "xqliu/muyan-pilot", "add": "ai-in-progress"},
-        {"repo": "xqliu/muyan-pilot", "add": "ai-blocked",
+        {"repo": "xqliu/orbi", "add": "ai-in-progress"},
+        {"repo": "xqliu/orbi", "add": "ai-blocked",
          "remove": "ai-in-progress"},
     ]
     comment_bodies = [
@@ -4360,23 +4360,23 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
     ]
     failure = [
         body for body in comment_bodies
-        if "Muyan Pilot failed:" in body
+        if "Orbi failed:" in body
     ]
     assert len(failure) == 1
     # The idle-recovery reason and the run marker stay in the Issue.
     assert "idle recovery" in failure[0]
     assert "(Issue #94)" in failure[0]
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failure[0]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in failure[0]
     # The blocked milestone notification carries the same scene.
-    blocked = [body for body in posted if "Muyan Pilot: blocked" in body]
+    blocked = [body for body in posted if "Orbi: blocked" in body]
     assert blocked
     assert "idle recovery" in blocked[0]
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked[0]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in blocked[0]
 
 
 def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, caplog):
-    """Issue #239: when the failure reporting itself fails (the `Muyan
-    Pilot failed` comment POST dies), `process_issue` still RETURNS
+    """Issue #239: when the failure reporting itself fails (the `Orbi
+    failed` comment POST dies), `process_issue` still RETURNS
     `None` instead of re-raising the original failure — the service must
     not crash. The `ai-blocked` edit already landed (it precedes the
     comment POST), so the Issue is terminal; the missing failure comment
@@ -4395,7 +4395,7 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "issue"] and "comment" in command:
-            # The `Muyan Pilot failed` comment POST is the only
+            # The `Orbi failed` comment POST is the only
             # non-bypass traffic of this scenario: it fails, the
             # failure report is broken, but `process_issue` still ends
             # cleanly (returns `None`) instead of crashing the service
@@ -4447,7 +4447,7 @@ def test_main_returns_zero_when_queue_empty(monkeypatch, tmp_path):
         lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
     )
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     assert runner.main(["--config", str(config)]) == 0
 
@@ -4459,7 +4459,7 @@ def test_main_passes_configured_active_milestone_to_the_claim_scan(
     scan (the fresh-claim scope), and an unconfigured one passes None
     (the compat behavior — no milestone filter)."""
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text(
         'source_repos = ["owner/repo"]\nactive_milestone = "v0.2.0"\n',
         encoding="utf-8",
@@ -4481,7 +4481,7 @@ def test_main_passes_none_active_milestone_when_unconfigured(
     """Issue #139 compat: without the config field the claim scan
     receives None and keeps the pre-#139 scans."""
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     seen = {}
 
@@ -4499,12 +4499,12 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     calls = []
     waits = []
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None: (
-            "xqliu/muyan-pilot", issue, None
+            "xqliu/orbi", issue, None
         ),
     )
     monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: calls.append((args, kwargs)) or "https://github.com/x/y/pull/12")
@@ -4532,7 +4532,7 @@ def test_main_ends_tick_when_process_issue_delivers_nothing(
     issue = {"number": 239, "title": "task", "body": "body"}
     waits = []
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
@@ -4559,7 +4559,7 @@ def test_main_ticket_only_finishes_without_entering_pr_delivery_wait(
         "labels": [{"name": "ai-ready"}, {"name": "ai-ticket-only"}],
     }
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
@@ -4590,7 +4590,7 @@ def test_main_routes_fix_needed_resume_to_delivery_wait(
     comment string."""
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     issue = {"number": 12, "title": "task", "body": "body"}
     scene = {
@@ -4636,7 +4636,7 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
     comment string."""
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     issue = {"number": 12, "title": "task", "body": "body"}
     scene = {
@@ -4673,8 +4673,8 @@ def test_main_accepts_repeated_source_repo(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     seen = []
     issue = {"number": 14, "title": "task"}
-    config = tmp_path / "muyan-pilot.toml"
-    config.write_text("source_repos = [\"xqliu/muyan-pilot\", \"xqliu/muyan-ceo\"]\n", encoding="utf-8")
+    config = tmp_path / "orbi.toml"
+    config.write_text("source_repos = [\"xqliu/orbi\", \"xqliu/muyan-ceo\"]\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
         lambda repos, slot_dir, max_concurrency, active_milestone=None: (
@@ -4686,11 +4686,11 @@ def test_main_accepts_repeated_source_repo(monkeypatch, tmp_path):
     assert runner.main([
         "--config", str(config),
     ]) == 0
-    assert seen == [["xqliu/muyan-pilot", "xqliu/muyan-ceo"]]
+    assert seen == [["xqliu/orbi", "xqliu/muyan-ceo"]]
 
 
 def test_main_requires_prompt_file(monkeypatch, tmp_path):
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     with pytest.raises(FileNotFoundError):
         runner.main(["--config", str(config)])
@@ -4731,7 +4731,7 @@ def test_process_issue_failure_without_session_still_carries_scene(
     # No session file yet: the scene still carries the full debug entry
     # (worktree, branch) with '-' session fields.
     assert f"worktree={tmp_path / 'wt'}" in failure_body
-    assert "branch=muyan-pilot/xqliu-muyan-ceo-issue-8-a1b2c3d4" in failure_body
+    assert "branch=orbi/xqliu-muyan-ceo-issue-8-a1b2c3d4" in failure_body
     assert "session=-" in failure_body
     assert "session_file=-" in failure_body
 
@@ -4775,7 +4775,7 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     # instead of re-raising; the scene assertions below are unchanged.
     assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo") is None
     failure_body = calls[-1][2]["body"]
-    assert "Muyan Pilot failed:" in failure_body
+    assert "Orbi failed:" in failure_body
     assert "session=sess-9" in failure_body
     assert "phase=test" in failure_body
     assert "last_activity=2026-08-25T02:30:00Z" in failure_body
@@ -4783,7 +4783,7 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     assert "result=ok" in failure_body
     # The full scene on the failure comment carries the debug entry.
     assert f"worktree={tmp_path / 'wt'}" in failure_body
-    assert "branch=muyan-pilot/xqliu-muyan-ceo-issue-8-a1b2c3d4" in failure_body
+    assert "branch=orbi/xqliu-muyan-ceo-issue-8-a1b2c3d4" in failure_body
 
 
 def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, caplog):
@@ -4829,7 +4829,7 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
         assert runner.process_issue({"number": 9, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo") is None
     assert "activity scene failed" in caplog.text
     failure_body = calls[-1][2]["body"]
-    assert "Muyan Pilot failed: git failed" in failure_body
+    assert "Orbi failed: git failed" in failure_body
     assert "session=" not in failure_body
 
 
@@ -4890,7 +4890,7 @@ def test_log_format_has_no_python_timestamp():
     # Python logger must not print a second timestamp.
     formatter = logging.Formatter(runner.log_format())
     record = logging.LogRecord(
-        "muyan_pilot.bootstrap", logging.INFO, "file", 1, "message", None, None,
+        "orbi.bootstrap", logging.INFO, "file", 1, "message", None, None,
     )
     assert formatter.format(record) == "INFO message"
 
@@ -4903,8 +4903,8 @@ def test_stream_pi_logs_run_start_once_with_full_scene(tmp_path, caplog):
     with caplog.at_level("INFO"):
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
-            branch="muyan-pilot/xqliu-muyan-pilot-issue-24-run1",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            branch="orbi/xqliu-orbi-issue-24-run1",
         )
     assert result == "final answer"
     # Without an explicit log_command the raw command is never logged.
@@ -4914,9 +4914,9 @@ def test_stream_pi_logs_run_start_once_with_full_scene(tmp_path, caplog):
     assert len(starts) == 1
     start = starts[0]
     assert "run=run1" in start
-    assert "issue=xqliu/muyan-pilot#24" in start
+    assert "issue=xqliu/orbi#24" in start
     assert "role=implement" in start
-    assert "branch=muyan-pilot/xqliu-muyan-pilot-issue-24-run1" in start
+    assert "branch=orbi/xqliu-orbi-issue-24-run1" in start
     assert f"worktree={tmp_path}" in start
     # The session fields are part of the scene; before Pi writes its first
     # record they are '-' (the full entry reappears on run_failed).
@@ -4947,7 +4947,7 @@ def test_stream_pi_run_start_never_follows_pre_existing_session_file(
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     starts = [line for line in caplog.text.splitlines()
@@ -4967,7 +4967,7 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -4983,7 +4983,7 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     # the `[run_id]` prefix is the run-id carrier (bound-run tests and
     # the e2e suite cover the prefix itself).
     assert "run=run1" not in line
-    assert "issue=xqliu/muyan-pilot#24" in line
+    assert "issue=xqliu/orbi#24" in line
     assert "role=implement" in line
     assert "phase=test" in line
     assert 'action="bash pytest tests/"' in line
@@ -5037,7 +5037,7 @@ def test_stream_pi_high_frequency_lines_carry_run_id_exactly_once(
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="a1b2c3d4", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="a1b2c3d4", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     kinds = (
@@ -5088,7 +5088,7 @@ def test_stream_pi_idle_lines_carry_run_id_exactly_once(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.5,
-            run_id="a1b2c3d4", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="a1b2c3d4", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     idles = [m for m in caplog.messages if " pi_idle " in m]
@@ -5118,7 +5118,7 @@ def test_stream_pi_scene_lines_keep_run_field_for_parse_scene(
     ):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="a1b2c3d4", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="a1b2c3d4", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     starts = [m for m in caplog.messages if " run_start " in m]
@@ -5128,7 +5128,7 @@ def test_stream_pi_scene_lines_keep_run_field_for_parse_scene(
         assert "run=a1b2c3d4" in message, message
         fields = pi_activity.parse_scene(message)
         assert fields["run"] == "a1b2c3d4"
-        assert fields["issue"] == "xqliu/muyan-pilot#24"
+        assert fields["issue"] == "xqliu/orbi#24"
 
 
 def test_stream_pi_activity_keeps_action_after_tool_result(tmp_path, caplog):
@@ -5147,7 +5147,7 @@ def test_stream_pi_activity_keeps_action_after_tool_result(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -5172,7 +5172,7 @@ def test_stream_pi_heartbeat_interval_is_stable(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -5197,7 +5197,7 @@ def test_stream_pi_success_logs_no_run_end(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     assert " run_end " not in caplog.text
@@ -5211,7 +5211,7 @@ def test_stream_pi_logs_command_redacted_and_stderr(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b", log_command=["pi", "--print", "<redacted>"],
         )
     assert "command=pi --print <redacted>" in caplog.text
@@ -5230,7 +5230,7 @@ def test_stream_pi_logs_run_failed_with_full_scene_and_reraises(
     ) as excinfo:
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     assert excinfo.value.returncode == 3
@@ -5242,7 +5242,7 @@ def test_stream_pi_logs_run_failed_with_full_scene_and_reraises(
     assert len(failures) == 1
     failure = failures[0]
     assert "run=run1" in failure
-    assert "issue=xqliu/muyan-pilot#24" in failure
+    assert "issue=xqliu/orbi#24" in failure
     assert "role=implement" in failure
     assert "phase=test" in failure
     assert "reason=pi_exit_3" in failure
@@ -5264,7 +5264,7 @@ def test_stream_pi_heartbeats_when_session_is_idle(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     heartbeats = [line for line in caplog.text.splitlines()
@@ -5282,7 +5282,7 @@ def test_stream_pi_heartbeats_when_no_session_file_appears(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     heartbeats = [line for line in caplog.text.splitlines()
@@ -5323,14 +5323,14 @@ def test_stream_pi_logs_process_spawned_after_popen(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = [line for line in caplog.text.splitlines()
              if " process_spawned " in line]
     assert len(lines) == 1
     line = lines[0]
-    assert "issue=xqliu/muyan-pilot#24" in line
+    assert "issue=xqliu/orbi#24" in line
     assert "role=implement" in line
     # Before the session file exists the selection is unknown.
     assert "provider=-" in line
@@ -5352,7 +5352,7 @@ def test_stream_pi_logs_startup_milestones_in_order(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -5372,7 +5372,7 @@ def test_stream_pi_logs_startup_milestones_in_order(tmp_path, caplog):
     assert "provider=local-qwen" in responded[0]
     assert "model=qwen3.8:27b" in responded[0]
     for line in (created[0], requested[0], responded[0]):
-        assert "issue=xqliu/muyan-pilot#24" in line
+        assert "issue=xqliu/orbi#24" in line
         assert "role=implement" in line
         assert "elapsed=" in line
 
@@ -5406,7 +5406,7 @@ def test_stream_pi_activity_lines_show_startup_sub_phase(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -5429,7 +5429,7 @@ def test_stream_pi_startup_failed_without_session_file(tmp_path, caplog):
         with pytest.raises(subprocess.CalledProcessError):
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
-                run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+                run_id="run1", issue=24, source_repo="xqliu/orbi",
                 branch="b",
             )
     lines = [line for line in caplog.text.splitlines()
@@ -5439,7 +5439,7 @@ def test_stream_pi_startup_failed_without_session_file(tmp_path, caplog):
     assert "reason=session_not_created" in line
     assert "session_created=false" in line
     assert "first_request=false" in line
-    assert "issue=xqliu/muyan-pilot#24" in line
+    assert "issue=xqliu/orbi#24" in line
     assert "role=implement" in line
     assert "elapsed=" in line
     # The existing fail-fast scene line is unchanged.
@@ -5463,7 +5463,7 @@ def test_stream_pi_startup_failed_without_first_request(tmp_path, caplog):
         with pytest.raises(subprocess.CalledProcessError):
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
-                run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+                run_id="run1", issue=24, source_repo="xqliu/orbi",
                 branch="b",
             )
     lines = [line for line in caplog.text.splitlines()
@@ -5495,7 +5495,7 @@ def test_stream_pi_startup_failed_early_exit_after_first_request(
         with pytest.raises(subprocess.CalledProcessError):
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
-                run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+                run_id="run1", issue=24, source_repo="xqliu/orbi",
                 branch="b",
             )
     lines = [line for line in caplog.text.splitlines()
@@ -5551,7 +5551,7 @@ def test_stream_pi_startup_failed_auth_failure(tmp_path, caplog):
         with pytest.raises(subprocess.CalledProcessError):
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
-                run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+                run_id="run1", issue=24, source_repo="xqliu/orbi",
                 branch="b",
             )
     lines = [line for line in caplog.text.splitlines()
@@ -5573,7 +5573,7 @@ def test_stream_pi_startup_failed_network_timeout(tmp_path, caplog):
         with pytest.raises(subprocess.CalledProcessError):
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
-                run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+                run_id="run1", issue=24, source_repo="xqliu/orbi",
                 branch="b",
             )
     lines = [line for line in caplog.text.splitlines()
@@ -5593,7 +5593,7 @@ def test_stream_pi_no_startup_failed_after_first_response(tmp_path, caplog):
         with pytest.raises(subprocess.CalledProcessError):
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
-                run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+                run_id="run1", issue=24, source_repo="xqliu/orbi",
                 branch="b",
             )
     assert not any(" startup_failed " in line
@@ -5631,7 +5631,7 @@ def test_stream_pi_model_wait_then_resumed_no_warning_spam(
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -5644,7 +5644,7 @@ def test_stream_pi_model_wait_then_resumed_no_warning_spam(
     # The transition lines carry no redundant `run=` field (Issue #57);
     # the `[run_id]` prefix is the run-id carrier.
     assert "run=run1" not in wait
-    assert "issue=xqliu/muyan-pilot#24" in wait
+    assert "issue=xqliu/orbi#24" in wait
     assert "role=implement" in wait
     assert "phase=test" in wait
     assert "state=model_wait" in wait
@@ -5688,7 +5688,7 @@ def test_stream_pi_no_model_wait_after_assistant_text(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     assert " model_wait " not in caplog.text
@@ -5713,7 +5713,7 @@ def test_stream_pi_logs_idle_warning_once_when_session_stalls(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.5,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -5723,7 +5723,7 @@ def test_stream_pi_logs_idle_warning_once_when_session_stalls(
     # No redundant `run=` field (Issue #57); the `[run_id]` prefix is
     # the run-id carrier.
     assert "run=run1" not in idle
-    assert "issue=xqliu/muyan-pilot#24" in idle
+    assert "issue=xqliu/orbi#24" in idle
     assert "role=implement" in idle
     # Issue #176: no session file was ever created, so the sub-phase is
     # session_pending (the stall is visible with its stuck point).
@@ -5755,7 +5755,7 @@ def test_stream_pi_logs_pi_resumed_after_idle_warning(tmp_path, caplog):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.4,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -5767,7 +5767,7 @@ def test_stream_pi_logs_pi_resumed_after_idle_warning(tmp_path, caplog):
     # field (Issue #57).
     assert lines.index(resumed[0]) > lines.index(idles[0])
     assert "run=run1" not in resumed[0]
-    assert "issue=xqliu/muyan-pilot#24" in resumed[0]
+    assert "issue=xqliu/orbi#24" in resumed[0]
     assert "role=implement" in resumed[0]
     assert "phase=starting" in resumed[0]
 
@@ -5797,7 +5797,7 @@ def test_stream_pi_no_idle_warning_during_model_wait(tmp_path, caplog):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.5,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     assert " pi_idle " not in caplog.text
@@ -5837,8 +5837,8 @@ def test_stream_pi_resumed_run_follows_new_session_file(tmp_path, caplog):
     with caplog.at_level("INFO"):
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run45", issue=45, source_repo="xqliu/muyan-pilot",
-            branch="muyan-pilot/xqliu-muyan-pilot-issue-45-run45",
+            run_id="run45", issue=45, source_repo="xqliu/orbi",
+            branch="orbi/xqliu-orbi-issue-45-run45",
         )
     assert result == "fixed"
     # The journal follows the NEW session created by this invocation: its
@@ -5888,7 +5888,7 @@ def test_stream_pi_drains_pipe_data_written_after_exit(
     with caplog.at_level("INFO"):
         result = runner.stream_pi(
             ["fake"], cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     assert result == "late stdout data"
@@ -5927,7 +5927,7 @@ def test_stream_pi_hung_model_request_killed_when_upstream_gone(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             model_wait_dead_seconds=0.5,
-            run_id="run1", issue=75, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=75, source_repo="xqliu/orbi",
             branch="b",
         )
     # The failure message names the hung model request and the stale
@@ -5937,7 +5937,7 @@ def test_stream_pi_hung_model_request_killed_when_upstream_gone(
     failures = [line for line in lines if " run_failed " in line]
     assert len(failures) == 1
     assert "reason=model_wait_dead_stale_" in failures[0]
-    assert "issue=xqliu/muyan-pilot#75" in failures[0]
+    assert "issue=xqliu/orbi#75" in failures[0]
     assert f"worktree={tmp_path}" in failures[0]
     # The structured model_wait_dead line carries the evidence: no
     # live connection here.
@@ -5995,7 +5995,7 @@ def test_stream_pi_frozen_model_wait_just_before_default_survives(
     with caplog.at_level("INFO"):
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=228, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=228, source_repo="xqliu/orbi",
             branch="b",
         )
     assert result == "final answer"
@@ -6016,7 +6016,7 @@ def test_stream_pi_frozen_model_wait_at_default_kills_with_configured_threshold(
     ):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=228, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=228, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -6043,7 +6043,7 @@ def test_stream_pi_explicit_short_override_kills_before_default(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             model_wait_dead_seconds=1.0,
-            run_id="run1", issue=228, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=228, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -6067,7 +6067,7 @@ def test_stream_pi_frozen_model_wait_at_ten_minutes_survives_default(
     with caplog.at_level("INFO"):
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=228, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=228, source_repo="xqliu/orbi",
             branch="b",
         )
     assert result == "final answer"
@@ -6106,7 +6106,7 @@ def test_stream_pi_slow_model_still_generating_is_not_killed(
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             model_wait_dead_seconds=0.4,
-            run_id="run1", issue=75, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=75, source_repo="xqliu/orbi",
             branch="b",
         )
     assert result == "final answer"
@@ -6132,7 +6132,7 @@ def test_stream_pi_no_upstream_kill_before_model_wait(tmp_path, caplog):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             model_wait_dead_seconds=0.5,
-            run_id="run1", issue=75, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=75, source_repo="xqliu/orbi",
             branch="b",
         )
     assert "model_wait_dead" not in caplog.text
@@ -6243,7 +6243,7 @@ def test_stream_pi_hung_model_request_killed_despite_live_upstream(
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
                 model_wait_dead_seconds=0.5,
-                run_id="run1", issue=218, source_repo="xqliu/muyan-pilot",
+                run_id="run1", issue=218, source_repo="xqliu/orbi",
                 branch="b",
             )
     finally:
@@ -6253,7 +6253,7 @@ def test_stream_pi_hung_model_request_killed_despite_live_upstream(
     failures = [line for line in lines if " run_failed " in line]
     assert len(failures) == 1
     assert "reason=model_wait_dead_stale_" in failures[0]
-    assert "issue=xqliu/muyan-pilot#218" in failures[0]
+    assert "issue=xqliu/orbi#218" in failures[0]
     # The structured model_wait_dead line carries the evidence: the
     # connection was still alive (upstream_alive=true) — process
     # alive ≠ responding.
@@ -6287,14 +6287,14 @@ def test_stream_pi_model_wait_dead_line_fields(tmp_path, caplog):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             model_wait_dead_seconds=0.5,
-            run_id="ab12cd34", issue=218, source_repo="xqliu/muyan-pilot",
+            run_id="ab12cd34", issue=218, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
     dead = [line for line in lines if " model_wait_dead " in line]
     assert len(dead) == 1
     fields = pi_activity.parse_scene(dead[0])
-    assert fields["issue"] == "xqliu/muyan-pilot#218"
+    assert fields["issue"] == "xqliu/orbi#218"
     assert fields["role"] == "implement"
     assert fields["action"] == "kill_pi"
     assert fields["session"] == "sess-218"
@@ -6324,7 +6324,7 @@ def test_stream_pi_dropped_connection_model_wait_dead_upstream_false(
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
                 model_wait_dead_seconds=0.5,
-                run_id="run1", issue=169, source_repo="xqliu/muyan-pilot",
+                run_id="run1", issue=169, source_repo="xqliu/orbi",
                 branch="b",
             )
     finally:
@@ -6333,7 +6333,7 @@ def test_stream_pi_dropped_connection_model_wait_dead_upstream_false(
     failures = [line for line in lines if " run_failed " in line]
     assert len(failures) == 1
     assert "reason=model_wait_dead_stale_" in failures[0]
-    assert "issue=xqliu/muyan-pilot#169" in failures[0]
+    assert "issue=xqliu/orbi#169" in failures[0]
     dead = [line for line in lines if " model_wait_dead " in line]
     assert len(dead) == 1
     assert "upstream_alive=false" in dead[0]
@@ -6364,7 +6364,7 @@ def test_stream_pi_swallowed_model_request_killed_fast(tmp_path, caplog,
             model_wait_dead_seconds=10.0,
             model_wait_probe_url="http://127.0.0.1:18082/slots",
             model_wait_probe_seconds=0.5,
-            run_id="run1", issue=233, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=233, source_repo="xqliu/orbi",
             branch="b",
         )
     assert "model_wait" in str(excinfo.value)
@@ -6372,7 +6372,7 @@ def test_stream_pi_swallowed_model_request_killed_fast(tmp_path, caplog,
     failures = [line for line in lines if " run_failed " in line]
     assert len(failures) == 1
     assert "reason=model_wait_swallowed_idle_" in failures[0]
-    assert "issue=xqliu/muyan-pilot#233" in failures[0]
+    assert "issue=xqliu/orbi#233" in failures[0]
     # The structured model_wait_swallowed line carries the evidence.
     swallowed = [line for line in lines if " model_wait_swallowed " in line]
     assert len(swallowed) == 1
@@ -6407,14 +6407,14 @@ def test_stream_pi_swallow_line_fields(tmp_path, caplog, monkeypatch):
             model_wait_dead_seconds=10.0,
             model_wait_probe_url="http://127.0.0.1:18082/slots",
             model_wait_probe_seconds=1.0,
-            run_id="ab12cd34", issue=233, source_repo="xqliu/muyan-pilot",
+            run_id="ab12cd34", issue=233, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
     swallowed = [line for line in lines if " model_wait_swallowed " in line]
     assert len(swallowed) == 1
     fields = pi_activity.parse_scene(swallowed[0])
-    assert fields["issue"] == "xqliu/muyan-pilot#233"
+    assert fields["issue"] == "xqliu/orbi#233"
     assert fields["role"] == "implement"
     assert fields["action"] == "kill_pi"
     assert fields["session"] == "sess-233"
@@ -6442,7 +6442,7 @@ def test_stream_pi_swallow_not_fired_while_a_slot_is_processing(
             model_wait_dead_seconds=0.5,
             model_wait_probe_url="http://127.0.0.1:18082/slots",
             model_wait_probe_seconds=0.2,
-            run_id="run1", issue=233, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=233, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -6473,7 +6473,7 @@ def test_stream_pi_swallow_probe_failure_is_inconclusive(
             model_wait_dead_seconds=0.5,
             model_wait_probe_url="http://127.0.0.1:18082/slots",
             model_wait_probe_seconds=0.2,
-            run_id="run1", issue=233, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=233, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -6498,7 +6498,7 @@ def test_stream_pi_unconfigured_probe_keeps_dead_bound(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             model_wait_dead_seconds=0.5,
-            run_id="run1", issue=233, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=233, source_repo="xqliu/orbi",
             branch="b",
         )
     # The probe was never called (no URL configured).
@@ -6589,7 +6589,7 @@ def test_stream_pi_timeout_tool_inside_deadline_not_killed(
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.3,
-            run_id="run1", issue=105, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=105, source_repo="xqliu/orbi",
             branch="b",
         )
     assert result == ""
@@ -6598,7 +6598,7 @@ def test_stream_pi_timeout_tool_inside_deadline_not_killed(
     assert len(waits) == 1, f"exactly one wait decision: {lines}"
     wait = waits[0]
     assert "run=run1" in wait
-    assert "issue=xqliu/muyan-pilot#105" in wait
+    assert "issue=xqliu/orbi#105" in wait
     assert "pid=" in wait
     assert "cmdline=" in wait
     assert "deadline=" in wait
@@ -6719,7 +6719,7 @@ def test_stream_pi_timeout_tool_deadline_grace_window_not_killed(
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.3,
-            run_id="run1", issue=105, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=105, source_repo="xqliu/orbi",
             branch="b", progress=progress,
         )
     # The tool was TERMed by the runner (the wrapper failed to end it:
@@ -6777,7 +6777,7 @@ def test_stream_pi_timeout_tool_past_deadline_still_terminated(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.3,
-            run_id="run1", issue=105, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=105, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -6812,7 +6812,7 @@ def test_stream_pi_idle_recovery_state_wait_visible_in_progress_callback(
     runner.stream_pi(
         command, cwd=tmp_path, poll_interval=0.1,
         idle_warn_seconds=0.3,
-        run_id="run1", issue=105, source_repo="xqliu/muyan-pilot",
+        run_id="run1", issue=105, source_repo="xqliu/orbi",
         branch="b", progress=progress,
     )
     assert "wait" in seen
@@ -6843,7 +6843,7 @@ def test_stream_pi_wait_state_cleared_when_waited_tool_exits(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.3,
-            run_id="run1", issue=105, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=105, source_repo="xqliu/orbi",
             branch="b", progress=progress,
         )
     lines = caplog.text.splitlines()
@@ -6991,7 +6991,7 @@ def test_stream_pi_idle_recovery_terms_hung_descendant_and_resumes(
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.3,
-            run_id="run1", issue=94, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=94, source_repo="xqliu/orbi",
             branch="b",
         )
     assert result == ""
@@ -7002,7 +7002,7 @@ def test_stream_pi_idle_recovery_terms_hung_descendant_and_resumes(
     assert len(terms) == 1, f"exactly one TERM step: {lines}"
     term = terms[0]
     assert "run=run1" in term
-    assert "issue=xqliu/muyan-pilot#94" in term
+    assert "issue=xqliu/orbi#94" in term
     assert "role=implement" in term
     assert "pid=" in term
     assert "cmdline=" in term
@@ -7035,7 +7035,7 @@ def test_stream_pi_idle_recovery_kills_descendant_that_ignores_term(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.3,
-            run_id="run1", issue=94, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=94, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -7073,7 +7073,7 @@ def test_stream_pi_idle_recovery_kills_pi_session_after_three_idle_cycles(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.3,
-            run_id="run1", issue=94, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=94, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -7089,7 +7089,7 @@ def test_stream_pi_idle_recovery_kills_pi_session_after_three_idle_cycles(
     failure = failures[0]
     assert "reason=idle_recovery_stale_" in failure
     assert "run=run1" in failure
-    assert "issue=xqliu/muyan-pilot#94" in failure
+    assert "issue=xqliu/orbi#94" in failure
     assert f"worktree={tmp_path}" in failure
 
 
@@ -7116,7 +7116,7 @@ def test_stream_pi_idle_recovery_without_descendants_still_terminates(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.3,
-            run_id="run1", issue=94, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=94, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -7146,7 +7146,7 @@ def test_stream_pi_idle_recovery_never_signals_non_descendants(
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
                 idle_warn_seconds=0.3,
-                run_id="run1", issue=94, source_repo="xqliu/muyan-pilot",
+                run_id="run1", issue=94, source_repo="xqliu/orbi",
                 branch="b",
             )
         # The bystander is untouched: still running, and its pid never
@@ -7175,7 +7175,7 @@ def test_stream_pi_idle_recovery_never_fires_during_model_wait(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             model_wait_dead_seconds=0.5,
-            run_id="run1", issue=94, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=94, source_repo="xqliu/orbi",
             branch="b",
         )
     assert " pi_idle_term " not in caplog.text
@@ -7202,7 +7202,7 @@ def test_stream_pi_idle_recovery_state_visible_in_progress_callback(
     runner.stream_pi(
         command, cwd=tmp_path, poll_interval=0.1,
         idle_warn_seconds=0.3,
-        run_id="run1", issue=94, source_repo="xqliu/muyan-pilot",
+        run_id="run1", issue=94, source_repo="xqliu/orbi",
         branch="b", progress=progress,
     )
     assert "term" in seen
@@ -7219,7 +7219,7 @@ def test_stream_pi_times_out_and_kills_process(tmp_path, caplog):
     ) as excinfo:
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1, timeout=0.5,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     assert excinfo.value.timeout == 0.5
@@ -7229,7 +7229,7 @@ def test_stream_pi_times_out_and_kills_process(tmp_path, caplog):
                 if " run_failed " in line]
     assert len(failures) == 1
     assert "reason=timeout_0.5s" in failures[0]
-    assert "issue=xqliu/muyan-pilot#24" in failures[0]
+    assert "issue=xqliu/orbi#24" in failures[0]
 
 
 # --- live GitHub progress while Pi runs (Issue #18, review Major fix) ------
@@ -7258,7 +7258,7 @@ def test_stream_pi_invokes_progress_callback_while_child_is_running(
 
     result = runner.stream_pi(
         command, cwd=tmp_path, poll_interval=0.1,
-        run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+        run_id="run1", issue=24, source_repo="xqliu/orbi",
         branch="b", progress=progress,
     )
     assert result == "final answer"
@@ -7311,7 +7311,7 @@ def test_stream_pi_live_progress_patches_github_before_child_exits(
     )
     result = runner.stream_pi(
         command, cwd=tmp_path, poll_interval=0.1,
-        run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+        run_id="run1", issue=24, source_repo="xqliu/orbi",
         branch="b", progress=throttle,
     )
     assert result == "done"
@@ -7320,7 +7320,7 @@ def test_stream_pi_live_progress_patches_github_before_child_exits(
     assert len(patches) >= 2
     # The live comment carries the run marker and the live phase.
     assert all(
-        body.startswith("<!-- muyan-pilot:run=run1 -->")
+        body.startswith("<!-- orbi:run=run1 -->")
         for body in patches
     )
     assert any("- phase: test" in body for body in patches)
@@ -7343,7 +7343,7 @@ def test_stream_pi_progress_callback_error_never_interrupts_run(
     with caplog.at_level("ERROR"):
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+            run_id="run1", issue=24, source_repo="xqliu/orbi",
             branch="b", progress=boom,
         )
     assert result == "final answer"
@@ -7656,7 +7656,7 @@ def test_run_pi_keeps_tdd_dev_and_code_review_drops_review_fix_loop(
     )
     runner.run_pi(
         {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+        "owner/repo", branch="orbi/owner-repo-issue-4-a1b2c3d4",
     )
     skills = _command_skills(calls[0])
     assert any("tdd-dev" in skill for skill in skills)
@@ -7705,7 +7705,7 @@ def test_run_pi_and_run_review_skill_lists_differ(monkeypatch, tmp_path):
     )
     runner.run_pi(
         {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+        "owner/repo", branch="orbi/owner-repo-issue-4-a1b2c3d4",
     )
     runner.run_review(
         tmp_path,
@@ -7755,14 +7755,14 @@ def test_run_review_keeps_non_delivery_skill_names(monkeypatch, tmp_path):
 
 
 def test_load_config_defaults_max_concurrency_to_one(tmp_path):
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
     assert config["max_concurrency"] == 1
 
 
 def test_load_config_reads_explicit_max_concurrency(tmp_path):
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\nmax_concurrency = 2\n',
         encoding="utf-8",
@@ -7772,13 +7772,13 @@ def test_load_config_reads_explicit_max_concurrency(tmp_path):
 
 
 def test_load_config_derives_slot_dir_from_repo_dir(tmp_path):
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n',
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["slot_dir"] == (tmp_path / "repo").resolve() / ".muyan-pilot" / "slots"
+    assert config["slot_dir"] == (tmp_path / "repo").resolve() / ".orbi" / "slots"
 
 
 @pytest.mark.parametrize(
@@ -7786,7 +7786,7 @@ def test_load_config_derives_slot_dir_from_repo_dir(tmp_path):
     ["0", "-1", "1.5", '"1"', "true", "false", "3"],
 )
 def test_load_config_rejects_invalid_max_concurrency(tmp_path, value):
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         f'source_repos = ["owner/repo"]\nmax_concurrency = {value}\n',
         encoding="utf-8",
@@ -7802,9 +7802,9 @@ def test_main_capacity_full_does_not_pick_issue_or_call_pi(
     monkeypatch, tmp_path, caplog,
 ):
     """A full slot stops the runner before any claim or Pi invocation."""
-    from muyan_pilot import pilot_slots
+    from orbi import pilot_slots
 
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text(
         'source_repos = ["owner/repo"]\nmax_concurrency = 1\n',
         encoding="utf-8",
@@ -7812,7 +7812,7 @@ def test_main_capacity_full_does_not_pick_issue_or_call_pi(
     _write_prompts(tmp_path)
     # The single slot is already HELD (lock) by this live process: a
     # file on disk alone is not a held slot (flock is the token).
-    slot_dir = tmp_path / ".muyan-pilot" / "slots"
+    slot_dir = tmp_path / ".orbi" / "slots"
     held = pilot_slots.acquire_slot(slot_dir, 1, os.getpid())
     assert held is not None
 
@@ -7839,17 +7839,17 @@ def test_main_capacity_full_does_not_pick_issue_or_call_pi(
 
 def test_main_holds_slot_while_processing_issue(monkeypatch, tmp_path):
     """The slot is acquired before the pick and held for the whole task."""
-    from muyan_pilot import pilot_slots
+    from orbi import pilot_slots
 
     issue = {"number": 12, "title": "task", "body": "body"}
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     _write_prompts(tmp_path)
     seen = {}
 
     def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None):
         seen["occupancy"] = pilot_slots.slot_occupancy(
-            tmp_path / ".muyan-pilot" / "slots", 1,
+            tmp_path / ".orbi" / "slots", 1,
         )
         return ("owner/repo", issue, None)
 
@@ -7862,9 +7862,9 @@ def test_main_holds_slot_while_processing_issue(monkeypatch, tmp_path):
 
 def test_main_reacquires_slot_after_previous_release(monkeypatch, tmp_path):
     """After the holder releases (process exit), the next run takes the slot."""
-    from muyan_pilot import pilot_slots
+    from orbi import pilot_slots
 
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     _write_prompts(tmp_path)
     monkeypatch.setattr(
@@ -7873,7 +7873,7 @@ def test_main_reacquires_slot_after_previous_release(monkeypatch, tmp_path):
     )
 
     assert runner.main(["--config", str(config)]) == 0
-    slot_dir = tmp_path / ".muyan-pilot" / "slots"
+    slot_dir = tmp_path / ".orbi" / "slots"
     # The slot file exists and was released when main() returned ...
     assert (slot_dir / "slot-1").exists()
     assert pilot_slots.slot_occupancy(slot_dir, 1) == [(1, None)]
@@ -7896,16 +7896,16 @@ def _drift_world(tmp_path, drift: bool) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
     (repo / "systemd").mkdir(parents=True)
     for name, body in (
-        ("muyan-pilot@.service", "[Service]\nExecStart=/usr/bin/python3 bootstrap_runner.py\n"),
-        ("muyan-pilot@.timer", "[Timer]\nOnCalendar=*-*-* *:00/5\n"),
+        ("orbi@.service", "[Service]\nExecStart=/usr/bin/python3 bootstrap_runner.py\n"),
+        ("orbi@.timer", "[Timer]\nOnCalendar=*-*-* *:00/5\n"),
     ):
         (repo / "systemd" / name).write_text(body, encoding="utf-8")
     installed = tmp_path / "units"
     installed.mkdir()
-    for name in ("muyan-pilot@.service", "muyan-pilot@.timer"):
+    for name in ("orbi@.service", "orbi@.timer"):
         target = installed / name
         shutil.copyfile(repo / "systemd" / name, target)
-        if drift and name == "muyan-pilot@.timer":
+        if drift and name == "orbi@.timer":
             with target.open("a", encoding="utf-8") as handle:
                 handle.write("# drift\n")
     return repo, installed
@@ -7941,10 +7941,10 @@ def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
     (non-zero exit), no slot is taken and nothing is claimed — while
     a currently RUNNING task is never interrupted (only the next
     start is blocked)."""
-    from muyan_pilot import systemd_deploy
+    from orbi import systemd_deploy
 
     repo, installed = _drift_world(tmp_path, drift=True)
-    monkeypatch.setenv("MUYAN_PILOT_UNIT_DIR", str(installed))
+    monkeypatch.setenv("ORBI_UNIT_DIR", str(installed))
     # The real preflight (overrides the conftest default no-op).
     monkeypatch.setattr(
         runner, "check_unit_drift", systemd_deploy.check_unit_drift,
@@ -7957,14 +7957,14 @@ def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
 
     def re_tamper(self, data):
         real_write_bytes(self, data)
-        if self.name == "muyan-pilot@.timer" and str(self).startswith(
+        if self.name == "orbi@.timer" and str(self).startswith(
             str(installed),
         ):
             real_write_bytes(self, data + b"# drift\n")
 
     monkeypatch.setattr(Path, "write_bytes", re_tamper)
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text(
         f'source_repos = ["owner/repo"]\nrepo_dir = "{repo}"\n',
         encoding="utf-8",
@@ -7986,23 +7986,23 @@ def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
     # stops only surplus @2.timer, never a service instance.
     assert ["systemctl", "--user", "daemon-reload"] in calls
     assert [
-        "systemctl", "--user", "enable", "--now", "muyan-pilot@1.timer",
+        "systemctl", "--user", "enable", "--now", "orbi@1.timer",
     ] in calls
     assert [
-        "systemctl", "--user", "disable", "--now", "muyan-pilot@2.timer",
+        "systemctl", "--user", "disable", "--now", "orbi@2.timer",
     ] in calls
     for command in calls:
         if command[:2] == ["systemctl", "--user"]:
             assert command[2] in ("daemon-reload", "enable", "disable")
     # The structured line carries what the Issue requires.
-    assert "unit_drift unit=muyan-pilot@.timer" in caplog.text
-    assert f"repo={repo / 'systemd' / 'muyan-pilot@.timer'}" in caplog.text
-    assert f"installed={installed / 'muyan-pilot@.timer'}" in caplog.text
+    assert "unit_drift unit=orbi@.timer" in caplog.text
+    assert f"repo={repo / 'systemd' / 'orbi@.timer'}" in caplog.text
+    assert f"installed={installed / 'orbi@.timer'}" in caplog.text
     assert "repo_sha256=" in caplog.text
     assert "installed_sha256=" in caplog.text
-    assert "fix=muyan-pilot install-units" in caplog.text
+    assert "fix=orbi install-units" in caplog.text
     # No slot was taken and nothing was claimed.
-    assert not (repo / ".muyan-pilot" / "slots").exists()
+    assert not (repo / ".orbi" / "slots").exists()
 
 
 def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
@@ -8016,16 +8016,16 @@ def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
     clean, the structured `auto_synced` line is logged and the tick
     proceeds to the normal claim flow (slot taken, queue scanned).
     No more per-tick drift loop until a human intervenes."""
-    from muyan_pilot import systemd_deploy
+    from orbi import systemd_deploy
 
     repo, installed = _drift_world(tmp_path, drift=True)
-    monkeypatch.setenv("MUYAN_PILOT_UNIT_DIR", str(installed))
+    monkeypatch.setenv("ORBI_UNIT_DIR", str(installed))
     monkeypatch.setattr(
         runner, "check_unit_drift", systemd_deploy.check_unit_drift,
     )
     calls = _fake_preflight_run(monkeypatch, installed)
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text(
         f'source_repos = ["owner/repo"]\nrepo_dir = "{repo}"\n',
         encoding="utf-8",
@@ -8039,10 +8039,10 @@ def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
     # The self-heal follows default capacity one and never a service.
     assert ["systemctl", "--user", "daemon-reload"] in calls
     assert [
-        "systemctl", "--user", "enable", "--now", "muyan-pilot@1.timer",
+        "systemctl", "--user", "enable", "--now", "orbi@1.timer",
     ] in calls
     assert [
-        "systemctl", "--user", "disable", "--now", "muyan-pilot@2.timer",
+        "systemctl", "--user", "disable", "--now", "orbi@2.timer",
     ] in calls
     for command in calls:
         if command[:2] == ["systemctl", "--user"]:
@@ -8050,10 +8050,10 @@ def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
     # The repo template won: the installed unit matches it again.
     status = systemd_deploy.unit_status(repo, installed)
     assert all(entry["drifted"] is False for entry in status)
-    assert "unit_drift auto_synced unit=muyan-pilot@.timer" in caplog.text
+    assert "unit_drift auto_synced unit=orbi@.timer" in caplog.text
     assert "commit=0123456789abcdef0123456789abcdef01234567" in caplog.text
     # The tick proceeded: the slot was taken AFTER the preflight passed.
-    assert (repo / ".muyan-pilot" / "slots" / "slot-1").exists()
+    assert (repo / ".orbi" / "slots" / "slot-1").exists()
 
 
 def test_main_unit_drift_auto_sync_failure_blocks_claim(
@@ -8062,10 +8062,10 @@ def test_main_unit_drift_auto_sync_failure_blocks_claim(
     """Issue #142: a failing self-heal (e.g. daemon-reload fails) fails
     fast BEFORE any slot or claim — the install error propagates,
     nothing is claimed, and the scene stays in the journal."""
-    from muyan_pilot import systemd_deploy
+    from orbi import systemd_deploy
 
     repo, installed = _drift_world(tmp_path, drift=True)
-    monkeypatch.setenv("MUYAN_PILOT_UNIT_DIR", str(installed))
+    monkeypatch.setenv("ORBI_UNIT_DIR", str(installed))
     monkeypatch.setattr(
         runner, "check_unit_drift", systemd_deploy.check_unit_drift,
     )
@@ -8077,7 +8077,7 @@ def test_main_unit_drift_auto_sync_failure_blocks_claim(
 
     monkeypatch.setattr(runner, "run_command", failing_run)
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text(
         f'source_repos = ["owner/repo"]\nrepo_dir = "{repo}"\n',
         encoding="utf-8",
@@ -8094,22 +8094,22 @@ def test_main_unit_drift_auto_sync_failure_blocks_claim(
         fail_if_called()
     with pytest.raises(subprocess.CalledProcessError):
         runner.main(["--config", str(config)])
-    assert not (repo / ".muyan-pilot" / "slots").exists()
+    assert not (repo / ".orbi" / "slots").exists()
 
 
 def test_main_unit_drift_clean_proceeds_to_claim(monkeypatch, tmp_path,
                                                  caplog):
     """Issue #103: matching units log `unit_drift clean` and the tick
     proceeds to the normal claim flow (slot taken, queue scanned)."""
-    from muyan_pilot import systemd_deploy
+    from orbi import systemd_deploy
 
     repo, installed = _drift_world(tmp_path, drift=False)
-    monkeypatch.setenv("MUYAN_PILOT_UNIT_DIR", str(installed))
+    monkeypatch.setenv("ORBI_UNIT_DIR", str(installed))
     monkeypatch.setattr(
         runner, "check_unit_drift", systemd_deploy.check_unit_drift,
     )
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text(
         f'source_repos = ["owner/repo"]\nrepo_dir = "{repo}"\n',
         encoding="utf-8",
@@ -8122,7 +8122,7 @@ def test_main_unit_drift_clean_proceeds_to_claim(monkeypatch, tmp_path,
         assert runner.main(["--config", str(config)]) == 0
     assert "unit_drift clean" in caplog.text
     # The slot was taken AFTER the preflight passed.
-    assert (repo / ".muyan-pilot" / "slots" / "slot-1").exists()
+    assert (repo / ".orbi" / "slots" / "slot-1").exists()
 
 
 def test_main_preflight_receives_the_configured_repo_dir(
@@ -8137,7 +8137,7 @@ def test_main_preflight_receives_the_configured_repo_dir(
 
     monkeypatch.setattr(runner, "check_unit_drift", fake_check)
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
@@ -8157,10 +8157,10 @@ def test_main_transport_check_blocks_claim_before_slot(
     slot or claim: the structured transport reason is raised (non-zero
     exit), no slot is taken and nothing is claimed — no HTTPS fallback,
     no silent skip."""
-    from muyan_pilot import git_transport
+    from orbi import git_transport
 
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text(
         'source_repos = ["owner/repo"]\n', encoding="utf-8",
     )
@@ -8195,7 +8195,7 @@ def test_main_transport_check_blocks_claim_before_slot(
     assert "transport_check_failed" in caplog.text
     assert "ssh_unreachable" in caplog.text
     # No slot was taken and nothing was claimed.
-    assert not (tmp_path / ".muyan-pilot" / "slots").exists()
+    assert not (tmp_path / ".orbi" / "slots").exists()
 
 
 def test_main_transport_check_clean_proceeds_to_claim(
@@ -8205,7 +8205,7 @@ def test_main_transport_check_clean_proceeds_to_claim(
     the tick proceeds to the normal claim flow (slot taken, queue
     scanned)."""
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text(
         'source_repos = ["owner/repo"]\n', encoding="utf-8",
     )
@@ -8226,7 +8226,7 @@ def test_main_transport_check_clean_proceeds_to_claim(
         assert runner.main(["--config", str(config)]) == 0
     assert "transport clean" in caplog.text
     # The slot was taken AFTER the preflight passed.
-    assert (tmp_path / ".muyan-pilot" / "slots" / "slot-1").exists()
+    assert (tmp_path / ".orbi" / "slots" / "slot-1").exists()
 
 
 def test_main_transport_preflight_receives_the_configured_args(
@@ -8246,7 +8246,7 @@ def test_main_transport_preflight_receives_the_configured_args(
 
     monkeypatch.setattr(runner, "check_transport", fake_check)
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text(
         'source_repos = ["owner/repo", "owner/backlog"]\n',
         encoding="utf-8",
@@ -8276,13 +8276,13 @@ def test_main_cli_install_refresh_runs_before_slot_and_claim(
         seen["repo_dir"] = Path(repo_dir)
         seen["run_command"] = run_command
         seen["slot_existed_at_refresh"] = (
-            Path(repo_dir) / ".muyan-pilot" / "slots"
+            Path(repo_dir) / ".orbi" / "slots"
         ).exists()
         return "unchanged"
 
     monkeypatch.setattr(runner, "refresh_cli_install", fake_refresh)
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text(
         'source_repos = ["owner/repo"]\n', encoding="utf-8",
     )
@@ -8298,7 +8298,7 @@ def test_main_cli_install_refresh_runs_before_slot_and_claim(
     assert seen["slot_existed_at_refresh"] is False
     # ...and the tick proceeded to the normal claim flow (slot taken
     # after the refresh).
-    assert (tmp_path / ".muyan-pilot" / "slots" / "slot-1").exists()
+    assert (tmp_path / ".orbi" / "slots" / "slot-1").exists()
 
 
 def test_main_cli_install_failure_fails_fast_before_slot_and_claim(
@@ -8309,7 +8309,7 @@ def test_main_cli_install_failure_fails_fast_before_slot_and_claim(
     `cli_install_failed` line in the journal), nothing is claimed, no
     slot is taken — no fallback, no skipped tick."""
     _write_prompts(tmp_path)
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text(
         'source_repos = ["owner/repo"]\n', encoding="utf-8",
     )
@@ -8340,7 +8340,7 @@ def test_main_cli_install_failure_fails_fast_before_slot_and_claim(
         ):
             runner.main(["--config", str(config)])
     # No slot was taken and nothing was claimed.
-    assert not (tmp_path / ".muyan-pilot" / "slots").exists()
+    assert not (tmp_path / ".orbi" / "slots").exists()
 
 
 def test_bootstrap_chain_loads_and_refreshes_when_cli_install_is_unmapped(
@@ -8350,23 +8350,23 @@ def test_bootstrap_chain_loads_and_refreshes_when_cli_install_is_unmapped(
     the editable finder's module MAPPING is generated at INSTALL time
     from `pyproject.toml`, so right after this PR merges, the INSTALLED
     finder does not map `cli_install` yet — and the bootstrap chain
-    (`muyan_pilot.cli` -> `muyan_pilot.runner`) must still LOAD in that
+    (`orbi.cli` -> `orbi.runner`) must still LOAD in that
     tool env, with the refresh REACHABLE: the refresh implementation
     lives in `runner` itself (a separate new module would not be
     importable in the stale-finder env, and the very refresh that
     reinstalls the tool env could never run — the #158 incident, one
-    module later). Load a fresh `muyan_pilot.runner` with
-    `muyan_pilot.cli_install` blocked from the import system: it must
+    module later). Load a fresh `orbi.runner` with
+    `orbi.cli_install` blocked from the import system: it must
     import cleanly and its `refresh_cli_install` gate must run (the
     unchanged path needs no uv call and no other new module)."""
     class _BlockCliInstall:
-        """Meta path finder that hides the `muyan_pilot.cli_install`
+        """Meta path finder that hides the `orbi.cli_install`
         module."""
 
         def find_spec(self, fullname, path=None, target=None):
-            if fullname == "muyan_pilot.cli_install":
+            if fullname == "orbi.cli_install":
                 raise ModuleNotFoundError(
-                    "No module named 'muyan_pilot.cli_install'",
+                    "No module named 'orbi.cli_install'",
                     name=fullname,
                 )
             return None
@@ -8374,21 +8374,21 @@ def test_bootstrap_chain_loads_and_refreshes_when_cli_install_is_unmapped(
     hook = _BlockCliInstall()
     # The hook hides exactly the module under test and nothing else.
     with pytest.raises(ModuleNotFoundError, match="cli_install"):
-        hook.find_spec("muyan_pilot.cli_install")
+        hook.find_spec("orbi.cli_install")
     assert hook.find_spec("some_other_module") is None
-    import muyan_pilot
-    saved = sys.modules.pop("muyan_pilot.runner")
+    import orbi
+    saved = sys.modules.pop("orbi.runner")
     sys.meta_path.insert(0, hook)
     try:
-        import muyan_pilot.runner as fresh_runner
+        import orbi.runner as fresh_runner
     finally:
         sys.meta_path.remove(hook)
         # Restore BOTH the sys.modules entry and the package attribute:
-        # the fresh import binds `muyan_pilot.runner` to the new module
+        # the fresh import binds `orbi.runner` to the new module
         # instance, and leaving it would shadow the original for every
         # later test in the session.
-        sys.modules["muyan_pilot.runner"] = saved
-        muyan_pilot.runner = saved
+        sys.modules["orbi.runner"] = saved
+        orbi.runner = saved
     module = fresh_runner
     # The fresh module loaded with `cli_install` unmapped: the chain
     # is importable in the stale-finder tool env, so the next systemd
@@ -8507,10 +8507,10 @@ def test_finish_blocked_progress_creates_the_comment_when_missing(
     ]
     assert len(posts) == 1
     body = posts[0][posts[0].index("--field") + 1][len("body="):]
-    assert "Muyan Pilot blocked" in body
+    assert "Orbi blocked" in body
     assert "the failure" in body
     assert "the next step" in body
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in body
+    assert "<!-- orbi:run=a1b2c3d4 -->" in body
     # Issue #100: the blocked scene shows the number AND the title.
     assert "- issue: #39 Blocked task" in body
 
@@ -8603,8 +8603,8 @@ def test_wait_for_delivery_keeps_waiting_while_pr_open(
                 return json.dumps({"comments": [
                     {
                         "body": (
-                            "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                            "Muyan Pilot opened PR: "
+                            "<!-- orbi:run=a1b2c3d4 -->\n"
+                            "Orbi opened PR: "
                             f"{PR_URL} (base_branch=main "
                             "base_sha=abc123def456 run_id=a1b2c3d4)"
                         ),
@@ -8621,7 +8621,7 @@ def test_wait_for_delivery_keeps_waiting_while_pr_open(
     # The derived worktree exists: a normal resume reaches the review
     # (Issue #90 fails fast only when the directory is missing).
     (tmp_path / ".worktrees"
-     / "muyan-pilot-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
+     / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
     # Awaiting review triggers the independent review (Issue #34); the
     # mock reports findings so the wait keeps polling.
     reviews = []
@@ -8637,7 +8637,7 @@ def test_wait_for_delivery_keeps_waiting_while_pr_open(
     assert len(reviews) == 2
     # The review ran on the derived worktree/branch of the same run.
     worktree, branch, base_branch, review_config, repo, number = reviews[0][0]
-    assert branch == "muyan-pilot/owner-repo-issue-39-a1b2c3d4"
+    assert branch == "orbi/owner-repo-issue-39-a1b2c3d4"
     assert base_branch == "main"
     assert review_config["run_id"] == "a1b2c3d4"
     assert review_config["base_sha"] == "abc123def456"
@@ -8666,8 +8666,8 @@ def test_wait_for_delivery_auto_merges_on_clean_review(
                 return json.dumps({"comments": [
                     {
                         "body": (
-                            "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                            "Muyan Pilot opened PR: "
+                            "<!-- orbi:run=a1b2c3d4 -->\n"
+                            "Orbi opened PR: "
                             f"{PR_URL} (base_branch=main "
                             "base_sha=abc123def456 run_id=a1b2c3d4)"
                         ),
@@ -8688,7 +8688,7 @@ def test_wait_for_delivery_auto_merges_on_clean_review(
     # The derived worktree exists: a normal resume reaches the review
     # (Issue #90 fails fast only when the directory is missing).
     (tmp_path / ".worktrees"
-     / "muyan-pilot-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
+     / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
     issue = {"number": 39, "title": "task", "body": ""}
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
@@ -8720,8 +8720,8 @@ def test_wait_for_delivery_passes_p0_priority_to_the_review(
                 return json.dumps({"comments": [
                     {
                         "body": (
-                            "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                            "Muyan Pilot opened PR: "
+                            "<!-- orbi:run=a1b2c3d4 -->\n"
+                            "Orbi opened PR: "
                             f"{PR_URL} (base_branch=main "
                             "base_sha=abc123def456 run_id=a1b2c3d4)"
                         ),
@@ -8744,7 +8744,7 @@ def test_wait_for_delivery_passes_p0_priority_to_the_review(
 
     monkeypatch.setattr(runner, "review_and_merge_if_clean", fake_review)
     (tmp_path / ".worktrees"
-     / "muyan-pilot-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
+     / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
     issue = {
         "number": 39, "title": "p0 task", "body": "",
         "labels": [{"name": "ai-pr-opened"}, {"name": "p0"}],
@@ -8773,8 +8773,8 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
     existing = {
         "id": 77,
         "body": (
-            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
-            "**Muyan Pilot progress**\n\nawaiting review"
+            "<!-- orbi:run=a1b2c3d4 -->\n\n"
+            "**Orbi progress**\n\nawaiting review"
         ),
     }
 
@@ -8793,7 +8793,7 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
                                    "url": "https://x/78"})
             return ""
         if command[-1] == "comments":
-            # No trusted `Muyan Pilot opened PR:` comment: the scene
+            # No trusted `Orbi opened PR:` comment: the scene
             # cannot be recovered. The trusted review-round comments
             # still count for the blocked scene's round field (review
             # round 2, PR #42).
@@ -8801,15 +8801,15 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
                 {"body": "public comment", "authorAssociation": "NONE"},
                 {
                     "body": (
-                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                        "Muyan Pilot review round 1 for PR #46: clean"
+                        "<!-- orbi:run=a1b2c3d4 -->\n"
+                        "Orbi review round 1 for PR #46: clean"
                     ),
                     "authorAssociation": "OWNER",
                 },
                 {
                     "body": (
-                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                        "Muyan Pilot review round 2 for PR #46: findings"
+                        "<!-- orbi:run=a1b2c3d4 -->\n"
+                        "Orbi review round 2 for PR #46: findings"
                     ),
                     "authorAssociation": "OWNER",
                 },
@@ -8841,7 +8841,7 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
     }
     body = comments[0][1]["body"]
     assert "the independent review of" in body
-    assert f"<!-- muyan-pilot:run=a1b2c3d4 -->" in body
+    assert f"<!-- orbi:run=a1b2c3d4 -->" in body
     assert "delivery_review_failed" in caplog.text
     # The terminal failure also posts the blocked milestone (Issue #18)
     # AND the tracked progress comment becomes the blocked scene.
@@ -8850,14 +8850,14 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
         for command in api_calls
         if "--method" in command and "POST" in command
     ]
-    assert any("Muyan Pilot: blocked" in body for body in posted_bodies)
+    assert any("Orbi: blocked" in body for body in posted_bodies)
     assert any(
         ("the independent review of" in body for body in posted_bodies),
     )
     # No second progress comment: the tracked one (id 77) is PATCHed
     # into the blocked scene in place.
     assert not any(
-        "**Muyan Pilot progress**" in body for body in posted_bodies
+        "**Orbi progress**" in body for body in posted_bodies
     )
     patches = [
         command for command in api_calls
@@ -8867,10 +8867,10 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
     ]
     assert patches, "the tracked progress comment was not updated"
     blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Muyan Pilot blocked" in blocked
+    assert "Orbi blocked" in blocked
     assert "the independent review of" in blocked
     assert "next step:" in blocked
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked
+    assert "<!-- orbi:run=a1b2c3d4 -->" in blocked
     # The blocked scene carries the actual role (the failure happened
     # during the independent review) and the completed review rounds
     # (review round 2, PR #42) — not the hardcoded fix/0.
@@ -8890,8 +8890,8 @@ def test_wait_for_delivery_marks_blocked_when_review_fails_while_fix_needed(
     existing = {
         "id": 77,
         "body": (
-            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
-            "**Muyan Pilot progress**\n\nawaiting review"
+            "<!-- orbi:run=a1b2c3d4 -->\n\n"
+            "**Orbi progress**\n\nawaiting review"
         ),
     }
 
@@ -8910,7 +8910,7 @@ def test_wait_for_delivery_marks_blocked_when_review_fails_while_fix_needed(
                                    "url": "https://x/78"})
             return ""
         if command[-1] == "comments":
-            # No trusted `Muyan Pilot opened PR:` comment: the scene
+            # No trusted `Orbi opened PR:` comment: the scene
             # cannot be recovered, so the review fails fast.
             return json.dumps({"comments": [
                 {"body": "public comment", "authorAssociation": "NONE"},
@@ -8953,7 +8953,7 @@ def test_wait_for_delivery_marks_blocked_when_review_fails_while_fix_needed(
     assert len(edits) == 2
     body = comments[0][1]["body"]
     assert "the independent review of" in body
-    assert f"<!-- muyan-pilot:run=a1b2c3d4 -->" in body
+    assert f"<!-- orbi:run=a1b2c3d4 -->" in body
     assert "delivery_review_failed" in caplog.text
     # The terminal failure also posts the blocked milestone AND the
     # tracked progress comment becomes the blocked scene.
@@ -8962,7 +8962,7 @@ def test_wait_for_delivery_marks_blocked_when_review_fails_while_fix_needed(
         for command in api_calls
         if "--method" in command and "POST" in command
     ]
-    assert any("Muyan Pilot: blocked" in body for body in posted_bodies)
+    assert any("Orbi: blocked" in body for body in posted_bodies)
     assert any(
         ("the independent review of" in body for body in posted_bodies),
     )
@@ -8974,7 +8974,7 @@ def test_wait_for_delivery_marks_blocked_when_review_fails_while_fix_needed(
     ]
     assert patches, "the tracked progress comment was not updated"
     blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Muyan Pilot blocked" in blocked
+    assert "Orbi blocked" in blocked
     assert "the independent review of" in blocked
     assert "- role: review" in blocked
 
@@ -8993,8 +8993,8 @@ def test_wait_for_delivery_blocks_when_scene_base_differs_from_config(
     existing = {
         "id": 77,
         "body": (
-            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
-            "**Muyan Pilot progress**\n\nawaiting review"
+            "<!-- orbi:run=a1b2c3d4 -->\n\n"
+            "**Orbi progress**\n\nawaiting review"
         ),
     }
 
@@ -9021,8 +9021,8 @@ def test_wait_for_delivery_blocks_when_scene_base_differs_from_config(
             return json.dumps({"comments": [
                 {
                     "body": (
-                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                        "Muyan Pilot opened PR: "
+                        "<!-- orbi:run=a1b2c3d4 -->\n"
+                        "Orbi opened PR: "
                         f"{PR_URL} (base_branch=develop "
                         "base_sha=abc123def456 run_id=a1b2c3d4)"
                     ),
@@ -9072,8 +9072,8 @@ def test_wait_for_delivery_blocks_when_scene_base_differs_from_config(
     # ... with a failure comment that names BOTH base values and carries
     # the run marker.
     body = comments[0][1]["body"]
-    assert "Muyan Pilot failed:" in body
-    assert f"<!-- muyan-pilot:run=a1b2c3d4 -->" in body
+    assert "Orbi failed:" in body
+    assert f"<!-- orbi:run=a1b2c3d4 -->" in body
     assert "base_branch=develop" in body
     assert "base_branch=main" in body
     assert "delivery_review_failed" in caplog.text
@@ -9084,7 +9084,7 @@ def test_wait_for_delivery_blocks_when_scene_base_differs_from_config(
         for command in api_calls
         if "--method" in command and "POST" in command
     ]
-    assert any("Muyan Pilot: blocked" in body for body in posted_bodies)
+    assert any("Orbi: blocked" in body for body in posted_bodies)
     assert any(
         "base_branch=develop" in body and "base_branch=main" in body
         for body in posted_bodies
@@ -9099,7 +9099,7 @@ def test_wait_for_delivery_blocks_when_scene_base_differs_from_config(
     ]
     assert patches, "the tracked progress comment was not updated"
     blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Muyan Pilot blocked" in blocked
+    assert "Orbi blocked" in blocked
     assert "base_branch=develop" in blocked
     assert "base_branch=main" in blocked
     assert "next step:" in blocked
@@ -9122,8 +9122,8 @@ def test_wait_for_delivery_worktree_missing_stays_fix_needed(
     existing = {
         "id": 77,
         "body": (
-            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
-            "**Muyan Pilot progress**\n\nawaiting review"
+            "<!-- orbi:run=a1b2c3d4 -->\n\n"
+            "**Orbi progress**\n\nawaiting review"
         ),
     }
 
@@ -9153,8 +9153,8 @@ def test_wait_for_delivery_worktree_missing_stays_fix_needed(
             return json.dumps({"comments": [
                 {
                     "body": (
-                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                        "Muyan Pilot opened PR: "
+                        "<!-- orbi:run=a1b2c3d4 -->\n"
+                        "Orbi opened PR: "
                         f"{PR_URL} (base_branch=main "
                         "base_sha=abc123def456 run_id=a1b2c3d4)"
                     ),
@@ -9208,12 +9208,12 @@ def test_wait_for_delivery_worktree_missing_stays_fix_needed(
     # The failure comment names the missing worktree and carries the
     # run marker.
     body = comments[0][1]["body"]
-    assert "Muyan Pilot needs a fix:" in body
-    assert f"<!-- muyan-pilot:run=a1b2c3d4 -->" in body
-    assert "muyan-pilot-owner-repo-issue-39-a1b2c3d4" in body
+    assert "Orbi needs a fix:" in body
+    assert f"<!-- orbi:run=a1b2c3d4 -->" in body
+    assert "orbi-owner-repo-issue-39-a1b2c3d4" in body
     # The full scene carries the ACTUAL branch (derived before the
     # worktree check, Issue #50) — never a `branch=None` placeholder.
-    assert "branch=muyan-pilot/owner-repo-issue-39-a1b2c3d4" in body
+    assert "branch=orbi/owner-repo-issue-39-a1b2c3d4" in body
     assert "branch=None" not in body
     assert "delivery_review_failed" in caplog.text
     # The failure comment is written to the Issue AND the PR
@@ -9227,13 +9227,13 @@ def test_wait_for_delivery_worktree_missing_stays_fix_needed(
         for command in api_calls
         if "--method" in command and "POST" in command
     ]
-    assert any("Muyan Pilot: fix needed" in body for body in posted_bodies)
+    assert any("Orbi: fix needed" in body for body in posted_bodies)
     assert any(
-        "muyan-pilot-owner-repo-issue-39-a1b2c3d4" in body
+        "orbi-owner-repo-issue-39-a1b2c3d4" in body
         for body in posted_bodies
     )
     assert not any(
-        "Muyan Pilot: blocked" in body for body in posted_bodies
+        "Orbi: blocked" in body for body in posted_bodies
     )
     # No second progress comment: the tracked one (id 77) is PATCHed
     # into the fix-needed scene in place.
@@ -9245,8 +9245,8 @@ def test_wait_for_delivery_worktree_missing_stays_fix_needed(
     ]
     assert patches, "the tracked progress comment was not updated"
     fix_needed = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Muyan Pilot fix needed" in fix_needed
-    assert "muyan-pilot-owner-repo-issue-39-a1b2c3d4" in fix_needed
+    assert "Orbi fix needed" in fix_needed
+    assert "orbi-owner-repo-issue-39-a1b2c3d4" in fix_needed
     assert "next step:" in fix_needed
 
 
@@ -9262,8 +9262,8 @@ def test_wait_for_delivery_worktree_missing_while_fix_needed_keeps_label(
     existing = {
         "id": 77,
         "body": (
-            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
-            "**Muyan Pilot progress**\n\nawaiting review"
+            "<!-- orbi:run=a1b2c3d4 -->\n\n"
+            "**Orbi progress**\n\nawaiting review"
         ),
     }
 
@@ -9286,8 +9286,8 @@ def test_wait_for_delivery_worktree_missing_while_fix_needed_keeps_label(
             return json.dumps({"comments": [
                 {
                     "body": (
-                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                        "Muyan Pilot opened PR: "
+                        "<!-- orbi:run=a1b2c3d4 -->\n"
+                        "Orbi opened PR: "
                         f"{PR_URL} (base_branch=main "
                         "base_sha=abc123def456 run_id=a1b2c3d4)"
                     ),
@@ -9332,8 +9332,8 @@ def test_wait_for_delivery_worktree_missing_while_fix_needed_keeps_label(
     }
     assert len(edits) == 1
     body = comments[0][1]["body"]
-    assert "Muyan Pilot needs a fix:" in body
-    assert "muyan-pilot-owner-repo-issue-39-a1b2c3d4" in body
+    assert "Orbi needs a fix:" in body
+    assert "orbi-owner-repo-issue-39-a1b2c3d4" in body
 
 
 def test_wait_for_delivery_runs_review_when_fix_needed(
@@ -9362,8 +9362,8 @@ def test_wait_for_delivery_runs_review_when_fix_needed(
             return json.dumps({"comments": [
                 {
                     "body": (
-                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                        "Muyan Pilot opened PR: "
+                        "<!-- orbi:run=a1b2c3d4 -->\n"
+                        "Orbi opened PR: "
                         f"{PR_URL} (base_branch=main "
                         "base_sha=abc123def456 run_id=a1b2c3d4)"
                     ),
@@ -9380,7 +9380,7 @@ def test_wait_for_delivery_runs_review_when_fix_needed(
     # The derived worktree exists: a normal resume reaches the review
     # (Issue #90 fails fast only when the directory is missing).
     (tmp_path / ".worktrees"
-     / "muyan-pilot-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
+     / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
     # The independent review runs for the fix-needed state too (Issue
     # #82) and reports findings, so the wait continues to the MERGED
     # poll.
@@ -9399,7 +9399,7 @@ def test_wait_for_delivery_runs_review_when_fix_needed(
     # No fixer: the review ran on the derived worktree/branch of the
     # same run.
     worktree, branch, base_branch, review_config, repo, number = reviews[0][0]
-    assert branch == "muyan-pilot/owner-repo-issue-39-a1b2c3d4"
+    assert branch == "orbi/owner-repo-issue-39-a1b2c3d4"
     assert base_branch == "main"
     assert review_config["run_id"] == "a1b2c3d4"
     assert review_config["base_sha"] == "abc123def456"
@@ -9445,8 +9445,8 @@ def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
     existing = {
         "id": 77,
         "body": (
-            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
-            "**Muyan Pilot progress**\n\nawaiting review"
+            "<!-- orbi:run=a1b2c3d4 -->\n\n"
+            "**Orbi progress**\n\nawaiting review"
         ),
     }
 
@@ -9462,15 +9462,15 @@ def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
             return json.dumps({"comments": [
                 {
                     "body": (
-                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                        "Muyan Pilot review round 1 for PR #46: clean"
+                        "<!-- orbi:run=a1b2c3d4 -->\n"
+                        "Orbi review round 1 for PR #46: clean"
                     ),
                     "authorAssociation": "OWNER",
                 },
                 {
                     "body": (
-                        "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                        "Muyan Pilot review round 2 for PR #46: findings"
+                        "<!-- orbi:run=a1b2c3d4 -->\n"
+                        "Orbi review round 2 for PR #46: findings"
                     ),
                     "authorAssociation": "OWNER",
                 },
@@ -9516,8 +9516,8 @@ def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
     }
     # ... with a failure comment carrying the run marker and run_id.
     body = comments[0][1]["body"]
-    assert "Muyan Pilot failed:" in body
-    assert f"<!-- muyan-pilot:run=a1b2c3d4 -->" in body
+    assert "Orbi failed:" in body
+    assert f"<!-- orbi:run=a1b2c3d4 -->" in body
     assert f"pr={PR_URL}" in caplog.text
     assert "delivery_closed_unmerged" in caplog.text
     # The terminal failure also posts the blocked milestone (Issue #18)
@@ -9527,14 +9527,14 @@ def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
         for command in api_calls
         if "--method" in command and "POST" in command
     ]
-    assert any("Muyan Pilot: blocked" in body for body in posted_bodies)
+    assert any("Orbi: blocked" in body for body in posted_bodies)
     assert any(
         ("closed without a merge" in body for body in posted_bodies),
     )
     # No second progress comment: the tracked one (id 77) is PATCHed
     # into the blocked scene in place.
     assert not any(
-        "**Muyan Pilot progress**" in body for body in posted_bodies
+        "**Orbi progress**" in body for body in posted_bodies
     )
     patches = [
         command for command in api_calls
@@ -9544,10 +9544,10 @@ def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
     ]
     assert patches, "the tracked progress comment was not updated"
     blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Muyan Pilot blocked" in blocked
+    assert "Orbi blocked" in blocked
     assert "closed without a merge" in blocked
     assert "next step:" in blocked
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked
+    assert "<!-- orbi:run=a1b2c3d4 -->" in blocked
     # The blocked scene carries the actual role (Issue #82: both
     # opened-PR states are review states, so always `review`) and the
     # completed review rounds (review round 2, PR #42).
@@ -9597,7 +9597,7 @@ def test_wait_for_delivery_review_failure_without_bound_run_id(
     }
     body = comments[0][1]["body"]
     assert "the independent review of" in body
-    assert "muyan-pilot:run=" not in body
+    assert "orbi:run=" not in body
 
 
 def test_wait_for_delivery_keeps_holding_when_no_delivery_label(
@@ -9658,17 +9658,17 @@ def test_wait_for_delivery_logs_awaiting_without_bound_run_id(monkeypatch, caplo
     runner.wait_for_delivery(
         PR_URL, {"number": 39, "title": "t", "body": ""}, {}, "owner/repo",
     )
-    assert "Muyan Pilot failed:" in comments[0][1]["body"]
-    assert "muyan-pilot:run=" not in comments[0][1]["body"]
+    assert "Orbi failed:" in comments[0][1]["body"]
+    assert "orbi:run=" not in comments[0][1]["body"]
 
 
 def test_main_holds_slot_through_delivery_wait(monkeypatch, tmp_path):
     """The slot stays occupied while the delivery awaits review: a second
     concurrent runner must see capacity_full until the PR is merged."""
-    from muyan_pilot import pilot_slots
+    from orbi import pilot_slots
 
     issue = {"number": 12, "title": "task", "body": "body"}
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     _write_prompts(tmp_path)
     monkeypatch.setattr(
@@ -9696,7 +9696,7 @@ def test_main_holds_slot_through_delivery_wait(monkeypatch, tmp_path):
     assert started.wait(timeout=10)
     # While the delivery awaits review, the slot is still held: a second
     # take (another runner) is denied.
-    slot_dir = tmp_path / ".muyan-pilot" / "slots"
+    slot_dir = tmp_path / ".orbi" / "slots"
     assert pilot_slots.acquire_slot(slot_dir, 1, os.getpid()) is None
     assert pilot_slots.slot_occupancy(slot_dir, 1) == [(1, os.getpid())]
     release.set()
@@ -9737,7 +9737,7 @@ def _command_model_args(command):
 
 
 def test_load_config_defaults_pi_model_keys_to_none(tmp_path):
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
     assert config["pi_provider"] is None
@@ -9746,7 +9746,7 @@ def test_load_config_defaults_pi_model_keys_to_none(tmp_path):
 
 
 def test_load_config_reads_pi_model_keys(tmp_path):
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\n'
         'pi_provider = "openai"\n'
@@ -9775,7 +9775,7 @@ def test_load_config_reads_pi_model_keys(tmp_path):
     ],
 )
 def test_load_config_rejects_invalid_pi_model_keys(tmp_path, key, value):
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         f'source_repos = ["owner/repo"]\n{key} = {value}\n',
         encoding="utf-8",
@@ -9797,7 +9797,7 @@ def test_run_pi_passes_configured_model_args(monkeypatch, tmp_path):
     )
     runner.run_pi(
         {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+        "owner/repo", branch="orbi/owner-repo-issue-4-a1b2c3d4",
     )
     command, kwargs = calls[0]
     assert _command_model_args(command) == [
@@ -9826,7 +9826,7 @@ def test_run_pi_passes_partial_model_args(monkeypatch, tmp_path):
     config = _model_config(tmp_path, pi_provider="openai")
     runner.run_pi(
         {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+        "owner/repo", branch="orbi/owner-repo-issue-4-a1b2c3d4",
     )
     command, kwargs = calls[0]
     assert _command_model_args(command) == [("--provider", "openai")]
@@ -9847,7 +9847,7 @@ def test_run_pi_omits_model_args_when_not_configured(monkeypatch, tmp_path):
     config = _model_config(tmp_path)
     runner.run_pi(
         {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+        "owner/repo", branch="orbi/owner-repo-issue-4-a1b2c3d4",
     )
     command, kwargs = calls[0]
     assert "--provider" not in command
@@ -9950,13 +9950,13 @@ def _providers_config(tmp_path, providers, **toml_keys):
     toml = 'source_repos = ["owner/repo"]\n' + "\n".join(
         f"{key} = {value}" for key, value in keys.items()
     ) + "\n"
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(toml, encoding="utf-8")
     return config_path
 
 
 def test_load_config_pi_providers_absent_defaults_to_none(tmp_path):
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
     assert config["pi_providers"] is None
@@ -10175,7 +10175,7 @@ def test_prepare_pi_agent_dir_none_when_not_configured(tmp_path):
     config = _model_config(tmp_path)
     assert config.get("pi_providers_data") is None
     assert runner.prepare_pi_agent_dir(tmp_path, config) is None
-    assert not (tmp_path / ".muyan-pilot" / "pi-agent").exists()
+    assert not (tmp_path / ".orbi" / "pi-agent").exists()
 
 
 def test_prepare_pi_agent_dir_materializes_merged_models_json(
@@ -10195,7 +10195,7 @@ def test_prepare_pi_agent_dir_materializes_merged_models_json(
     monkeypatch.setenv("HOME", str(home))
     config = _model_config(tmp_path, pi_providers_data=GROQ_PROVIDERS)
     agent_dir = runner.prepare_pi_agent_dir(tmp_path, config)
-    assert agent_dir == tmp_path / ".muyan-pilot" / "pi-agent"
+    assert agent_dir == tmp_path / ".orbi" / "pi-agent"
     merged = json.loads(
         (agent_dir / "models.json").read_text(encoding="utf-8"),
     )
@@ -10586,24 +10586,24 @@ def test_stream_pi_sets_pi_env_on_the_process(tmp_path):
     result = runner.stream_pi(
         [sys.executable, "-c", script],
         cwd=tmp_path, poll_interval=0.1,
-        run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+        run_id="run1", issue=24, source_repo="xqliu/orbi",
         branch="b", pi_env={"PI_CODING_AGENT_DIR": "/agent-dir"},
     )
     assert result == "/agent-dir"
 
 
 def test_stream_pi_without_pi_env_keeps_inherited_env(tmp_path, monkeypatch):
-    monkeypatch.setenv("MUYAN_TEST_ENV_MARKER", "inherited")
+    monkeypatch.setenv("ORBI_TEST_ENV_MARKER", "inherited")
     session_dir = tmp_path / ".pi-session"
     session_dir.mkdir()
     script = (
         "import os, sys\n"
-        "sys.stdout.write(os.environ.get('MUYAN_TEST_ENV_MARKER', ''))\n"
+        "sys.stdout.write(os.environ.get('ORBI_TEST_ENV_MARKER', ''))\n"
     )
     result = runner.stream_pi(
         [sys.executable, "-c", script],
         cwd=tmp_path, poll_interval=0.1,
-        run_id="run1", issue=24, source_repo="xqliu/muyan-pilot",
+        run_id="run1", issue=24, source_repo="xqliu/orbi",
         branch="b",
     )
     assert result == "inherited"
@@ -10626,10 +10626,10 @@ def test_run_pi_materializes_provider_dir_and_env(monkeypatch, tmp_path):
     )
     runner.run_pi(
         {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+        "owner/repo", branch="orbi/owner-repo-issue-4-a1b2c3d4",
     )
     kwargs = calls[0]
-    agent_dir = tmp_path / ".muyan-pilot" / "pi-agent"
+    agent_dir = tmp_path / ".orbi" / "pi-agent"
     assert kwargs["pi_env"] == {"PI_CODING_AGENT_DIR": str(agent_dir)}
     assert (agent_dir / "models.json").is_file()
     # The redacted command is unchanged: no baseUrl, no apiKey, no dir.
@@ -10650,11 +10650,11 @@ def test_run_pi_without_providers_keeps_pre_157_env(monkeypatch, tmp_path):
     config = _model_config(tmp_path)
     runner.run_pi(
         {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+        "owner/repo", branch="orbi/owner-repo-issue-4-a1b2c3d4",
     )
     kwargs = calls[0]
     assert "pi_env" not in kwargs
-    assert not (tmp_path / ".muyan-pilot" / "pi-agent").exists()
+    assert not (tmp_path / ".orbi" / "pi-agent").exists()
 
 
 def test_run_review_materializes_provider_dir_and_env(monkeypatch, tmp_path):
@@ -10679,7 +10679,7 @@ def test_run_review_materializes_provider_dir_and_env(monkeypatch, tmp_path):
         config, "owner/repo", 4, "branch", 1,
     )
     kwargs = calls[0]
-    agent_dir = tmp_path / ".muyan-pilot" / "pi-agent"
+    agent_dir = tmp_path / ".orbi" / "pi-agent"
     assert kwargs["pi_env"] == {"PI_CODING_AGENT_DIR": str(agent_dir)}
     merged = json.loads(
         (agent_dir / "models.json").read_text(encoding="utf-8"),
@@ -10847,7 +10847,7 @@ def test_e2e_provider_endpoint_reaches_pi_process(monkeypatch, tmp_path):
     )
     result = runner.run_pi(
         {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="muyan-pilot/owner-repo-issue-4-a1b2c3d4",
+        "owner/repo", branch="orbi/owner-repo-issue-4-a1b2c3d4",
     )
     assert result == "https://api.groq.com/openai/v1"
 
@@ -10935,7 +10935,7 @@ def test_stop_handler_active_run_logs_stopping_then_stopped_and_exits(
     monkeypatch.setattr(runner, "_ACTIVE_RUN", None)
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
     runner.set_active_run(
-        48, "Log the stop scene", "muyan-pilot/owner-repo-issue-48-a1b2c3d4",
+        48, "Log the stop scene", "orbi/owner-repo-issue-48-a1b2c3d4",
         str(worktree),
     )
     child = subprocess.Popen(
@@ -10965,7 +10965,7 @@ def test_stop_handler_active_run_logs_stopping_then_stopped_and_exits(
     # No session file yet: the snapshot fields are '-' (never invented).
     assert "phase=-" in line
     assert "session=-" in line
-    assert "branch=muyan-pilot/owner-repo-issue-48-a1b2c3d4" in line
+    assert "branch=orbi/owner-repo-issue-48-a1b2c3d4" in line
     assert f"worktree={worktree}" in line
     assert stopped[0].endswith("run_stopped issue=48 result=interrupted")
     # The live Pi child was shut down: no orphan survives the stop.
@@ -11104,7 +11104,7 @@ def test_main_installs_the_stop_handler(monkeypatch, tmp_path):
         signal, "signal",
         lambda sig, handler: installed.setdefault(sig, handler),
     )
-    config_path = tmp_path / "muyan-pilot.toml"
+    config_path = tmp_path / "orbi.toml"
     config_path.write_text(
         'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n'
         'workspace_root = ".."\nprompt = "prompt.md"\n'
@@ -11138,7 +11138,7 @@ import sys
 import time
 
 sys.path.insert(0, {repo!r} + "/src")
-import muyan_pilot.runner as runner
+import orbi.runner as runner
 
 logging.basicConfig(level=logging.INFO, format=runner.log_format())
 # Exactly what main() does (Issue #48): install the stop handler first.
@@ -11146,7 +11146,7 @@ signal.signal(signal.SIGTERM, runner._handle_stop)
 runner.set_run_id("a1b2c3d4")
 runner.set_active_run(
     48, "Log the stop scene",
-    "muyan-pilot/owner-repo-issue-48-a1b2c3d4", {worktree!r},
+    "orbi/owner-repo-issue-48-a1b2c3d4", {worktree!r},
 )
 # The real Pi-like child: a real long-running process (what stream_pi
 # tracks via set_active_pi). It lingers briefly on SIGTERM before
@@ -11253,7 +11253,7 @@ def test_real_subprocess_sigterm_logs_stop_scene_and_shuts_down_pi(
     # worktree's .pi-session.
     assert "phase=test" in line
     assert "session=sess-48" in line
-    assert "branch=muyan-pilot/owner-repo-issue-48-a1b2c3d4" in line
+    assert "branch=orbi/owner-repo-issue-48-a1b2c3d4" in line
     assert f"worktree={worktree}" in line
     assert stopped[0].endswith("run_stopped issue=48 result=interrupted")
     # No orphan Pi: the stop handler waited for the child to exit
@@ -11302,7 +11302,7 @@ def test_real_subprocess_sigterm_before_claim_logs_idle(tmp_path):
     driver.write_text(
         "import logging, signal, sys, time\n"
         f"sys.path.insert(0, {str(Path(__file__).resolve().parent.parent / 'src')!r})\n"
-        "import muyan_pilot.runner as runner\n"
+        "import orbi.runner as runner\n"
         "logging.basicConfig(level=logging.INFO, format=runner.log_format())\n"
         "signal.signal(signal.SIGTERM, runner._handle_stop)\n"
         "print('ready', flush=True)\n"
@@ -11498,7 +11498,7 @@ def test_run_ticket_agent_uses_a_temporary_session_without_git(monkeypatch, tmp_
     assert "--no-tools" in command
     assert "git/gh tools" in command[command.index("--system-prompt") + 1]
     assert kwargs["cwd"] != tmp_path
-    assert kwargs["cwd"].name.startswith("muyan-pilot-ticket-")
+    assert kwargs["cwd"].name.startswith("orbi-ticket-")
     assert kwargs["branch"] == "-"
     assert kwargs["role"] == runner.ROLE_TICKET
     assert str(tmp_path) not in command[command.index("--session-dir") + 1]
@@ -11580,7 +11580,7 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
         (99, {"repo": "o/r", "remove": "ai-in-progress"}),
     ]
     assert comments and "\u53ef\u4ee5\u76f4\u63a5\u53d1\u5e03\u7684\u5e16\u5b50" in comments[0][1]["body"]
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in comments[0][1]["body"]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in comments[0][1]["body"]
     assert "run_id=a1b2c3d4" in comments[0][1]["body"]
     assert commands == [["gh", "issue", "close", "99", "--repo", "o/r"]]
 
@@ -12171,7 +12171,7 @@ def test_publish_release_creates_when_missing_and_returns_url(monkeypatch):
     assert "PR #123 merged (mergeCommit=aaa111)" in notes
     assert "no open Issue carries ai-in-progress" in notes
     assert "tests passed (exit 0)" in notes
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in notes
+    assert "<!-- orbi:run=a1b2c3d4 -->" in notes
     assert "run_id=a1b2c3d4" in notes
     assert "Issue #99" in notes
 
@@ -12380,7 +12380,7 @@ def test_process_release_success_end_to_end(monkeypatch):
     # The success comment carries the run marker and the release URL.
     (comment_number, comment_kwargs), = state["comments"]
     assert comment_number == 99
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in comment_kwargs["body"]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in comment_kwargs["body"]
     assert "run_id=a1b2c3d4" in comment_kwargs["body"]
     assert "https://github.com/o/r/releases/tag/v0.3.0" in comment_kwargs["body"]
     assert "PR #123 merged (mergeCommit=aaa111)" in comment_kwargs["body"]
@@ -12405,7 +12405,7 @@ def test_create_repair_issue_deduplicates_a_matching_failure_signature(monkeypat
     assert url == "https://github.com/o/r/issues/77"
     assert calls[0][:5] == ["timeout", "30", "gh", "issue", "list"]
     search = calls[0][calls[0].index("--search") + 1]
-    assert "muyan-pilot-repair-signature=" in search
+    assert "orbi-repair-signature=" in search
     assert "--label" not in calls[0]
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["unexpected"])
@@ -12437,7 +12437,7 @@ def test_create_repair_issue_creates_a_reproducible_ready_bug(monkeypatch):
     assert "run_id=a1b2c3d4" in body
     assert "commit: `abc123`" in body
     assert "pytest -q" in body and "1 failed" in body
-    assert "muyan-pilot-repair-signature=" in body
+    assert "orbi-repair-signature=" in body
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["unexpected"])
 
@@ -12482,7 +12482,7 @@ def test_process_release_milestone_failure_fails_fast_and_blocks(monkeypatch):
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
     (comment_number, comment_kwargs), = state["comments"]
-    assert "Muyan Pilot release failed (ai-blocked)" in comment_kwargs["body"]
+    assert "Orbi release failed (ai-blocked)" in comment_kwargs["body"]
     assert "Milestone #5" in comment_kwargs["body"]
     assert "#101" in comment_kwargs["body"]
 
@@ -12502,7 +12502,7 @@ def test_process_release_reuses_the_run_id_on_resume(monkeypatch):
     # resumed run id wins — the terminal comment carries the resumed id.
     assert state["run_ids"] == ["a1b2c3d4", "deadbeef"]
     (comment_number, comment_kwargs), = state["comments"]
-    assert "<!-- muyan-pilot:run=deadbeef -->" in comment_kwargs["body"]
+    assert "<!-- orbi:run=deadbeef -->" in comment_kwargs["body"]
 
 
 def test_process_release_fails_on_malformed_declaration(monkeypatch):
@@ -12520,7 +12520,7 @@ def test_process_release_fails_on_malformed_declaration(monkeypatch):
     commands = [c for c, _ in state["commands"]]
     assert not [c for c in commands if c[:3] == ["gh", "issue", "close"]]
     (comment_number, comment_kwargs), = state["comments"]
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in comment_kwargs["body"]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in comment_kwargs["body"]
     assert "## Release" in comment_kwargs["body"]
 
 
@@ -12920,7 +12920,7 @@ def test_process_release_keeps_the_fresh_id_when_no_run_id_is_recoverable(
     )
     assert state["run_ids"] == ["a1b2c3d4"]
     (comment_number, comment_kwargs), = state["comments"]
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in comment_kwargs["body"]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in comment_kwargs["body"]
 
 
 def test_process_release_publishes_the_release_role_progress_body(
@@ -12948,10 +12948,10 @@ def test_process_release_publishes_the_release_role_progress_body(
     publisher = runner.ProgressPublisher.return_value
     assert publisher.ensure.call_count == 1
     body = publisher.ensure.call_args[0][0]
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in body
+    assert "<!-- orbi:run=a1b2c3d4 -->" in body
     assert "- role: release" in body
     assert "- priority: normal" in body
-    assert "- branch: muyan-pilot/o-r-issue-99-a1b2c3d4" in body
+    assert "- branch: orbi/o-r-issue-99-a1b2c3d4" in body
 
 
 def test_process_release_fails_on_scope_item_that_is_neither(monkeypatch):
@@ -13014,7 +13014,7 @@ def test_release_process_env_fake_answers_the_real_tag_fetch(tmp_path,
 
 # --- Issue #186: deliver_pr — the Runner owns the deterministic closeout ----
 
-DELIVER_BRANCH = f"muyan-pilot/issue-4-{FAKE_RUN_ID}"
+DELIVER_BRANCH = f"orbi/issue-4-{FAKE_RUN_ID}"
 
 
 def fake_deliver_run(command, **kwargs):
@@ -13232,7 +13232,7 @@ def test_deliver_pr_creates_the_pr_when_absent(monkeypatch, tmp_path):
     assert command[command.index("--head") + 1] == DELIVER_BRANCH
     assert command[command.index("--title") + 1] == "Closeout title"
     body = command[command.index("--body") + 1]
-    assert f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->" in body
+    assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in body
     assert "Fixes #4" in body
 
 
@@ -13375,7 +13375,7 @@ def test_apply_runner_runtime_excludes_preserves_user_content(tmp_path):
     text = exclude.read_text(encoding="utf-8")
     assert "# my custom exclude" in text
     assert "secrets-local/" in text
-    assert ".muyan-pilot/" in text
+    assert ".orbi/" in text
     assert ".pi-session/" in text
 
 
@@ -13437,7 +13437,7 @@ def test_run_review_applies_runner_runtime_excludes_before_pi(
 def test_deliver_pr_repairs_runner_runtime_leftovers(monkeypatch, tmp_path,
                                                      caplog):
     """The #246 scene: the task renamed the tracked .gitignore away from
-    `.muyan-pilot/`, but the parent Runner still created it. The delivery
+    `.orbi/`, but the parent Runner still created it. The delivery
     applies the local exclude, repairs, logs
     `runner_runtime_exclude_repaired`, and continues — no
     `delivery_uncommitted_changes`."""
@@ -13448,11 +13448,11 @@ def test_deliver_pr_repairs_runner_runtime_leftovers(monkeypatch, tmp_path,
             status_calls["n"] += 1
             # First check: the Runner's own state looks untracked. After
             # the exclude repair the re-check is clean.
-            return "?? .muyan-pilot/\n" if status_calls["n"] == 1 else ""
+            return "?? .orbi/\n" if status_calls["n"] == 1 else ""
         return fake_deliver_run(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    with caplog.at_level(logging.INFO, logger="muyan_pilot.bootstrap"):
+    with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
         url = runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
             issue=4, issue_title="t", repo_dir=tmp_path,
@@ -13476,7 +13476,7 @@ def test_deliver_pr_repairs_the_renamed_state_dir_too(monkeypatch, tmp_path,
         return fake_deliver_run(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    with caplog.at_level(logging.INFO, logger="muyan_pilot.bootstrap"):
+    with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
         url = runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
             issue=4, issue_title="t", repo_dir=tmp_path,
@@ -13493,7 +13493,7 @@ def test_deliver_pr_still_fails_on_agent_leftovers_alongside_runner_state(
 
     def fake_run(command, **kwargs):
         if command[:3] == ["git", "status", "--porcelain"]:
-            return " M src/app.py\n?? .muyan-pilot/\n?? foo.py\n"
+            return " M src/app.py\n?? .orbi/\n?? foo.py\n"
         return fake_deliver_run(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -13506,7 +13506,7 @@ def test_deliver_pr_still_fails_on_agent_leftovers_alongside_runner_state(
 
 def test_cleanup_task_worktree_removes_the_scene_and_prunes(tmp_path):
     repo, wt = _make_linked_worktree(tmp_path)
-    (wt / ".muyan-pilot").mkdir(parents=True)
+    (wt / ".orbi").mkdir(parents=True)
     (wt / ".pi-session").mkdir(parents=True)
     runner.cleanup_task_worktree(wt, repo, run_id="abc12345", issue=4)
     assert not wt.exists()
@@ -13527,7 +13527,7 @@ def test_cleanup_task_worktree_logs_failure_and_keeps_the_scene(
         raise OSError("disk full")
 
     monkeypatch.setattr(runner.shutil, "rmtree", boom)
-    with caplog.at_level(logging.ERROR, logger="muyan_pilot.bootstrap"):
+    with caplog.at_level(logging.ERROR, logger="orbi.bootstrap"):
         runner.cleanup_task_worktree(wt, tmp_path, run_id="abc12345", issue=4)
     assert "worktree_cleanup_failed" in caplog.text
     assert wt.exists(), "a failed cleanup must never claim the scene is gone"
@@ -13544,7 +13544,7 @@ def test_exclude_path_rejects_a_pointer_without_gitdir(tmp_path):
 def test_runner_runtime_only_accepts_quoted_runner_paths():
     # Porcelain quotes paths with special characters; the runner paths
     # are plain ASCII, so the unquoted match is exact.
-    assert runner._is_runner_runtime_only('?? ".muyan-pilot/"\n')
+    assert runner._is_runner_runtime_only('?? ".orbi/"\n')
     assert runner._is_runner_runtime_only('?? ".pi-session/"\n')
 
 

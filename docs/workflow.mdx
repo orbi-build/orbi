@@ -29,7 +29,7 @@ flowchart LR
 ```
 
 ```text
-ai-ready                a task is dispatched (muyan-pilot add, or a human
+ai-ready                a task is dispatched (orbi add, or a human
                         adds the label)
   -> ai-in-progress     the Runner claims it: label added, worktree created
                         from the frozen origin/<base> SHA, Pi session starts
@@ -118,16 +118,16 @@ same Issue generates a new one. The same id appears in:
 
 - every journal line of the attempt (prefix `[e07383c2]`);
 - the Issue/PR comments: visible field `run_id=e07383c2` plus the hidden
-  machine-readable marker `<!-- muyan-pilot:run=e07383c2 -->`;
+  machine-readable marker `<!-- orbi:run=e07383c2 -->`;
 - the feature branch and worktree name
   (`.worktrees/<...>-issue-<n>-e07383c2`);
-- the PR body — the stable marker `<!-- muyan-pilot:run=e07383c2 -->` is
+- the PR body — the stable marker `<!-- orbi:run=e07383c2 -->` is
   part of the PR contract; the Runner rejects a PR without it.
 
 Reconstruct a full timeline with one grep:
 
 ```bash
-journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service | grep e07383c2
+journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 gh search issues "e07383c2" --repo OWNER/PILOT-REPO
 ```
 

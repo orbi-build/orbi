@@ -1,4 +1,4 @@
-# Copy this file to muyan-pilot.toml and edit it for your machine.
+# Copy this file to orbi.toml and edit it for your machine.
 source_repos = [
   "OWNER/PILOT-REPO",
   "OWNER/BACKLOG-REPO",
@@ -65,7 +65,7 @@ base_branch = "main"
 # model_wait_probe_seconds = 60
 # Maximum concurrent Pilot tasks and enabled Runner timers on this machine.
 # Must be 1 or 2 (the fixed timer instance set); missing means 1. The local AI/GPU can only serve one stable task, so keep
-# the default. A slot (flock on <repo_dir>/.muyan-pilot/slots/slot-N) is
+# the default. A slot (flock on <repo_dir>/.orbi/slots/slot-N) is
 # taken before any claim and held for the whole delivery lifecycle
 # (implement -> review -> fix -> merge); the kernel releases it when the
 # Runner exits, however it exits. A Runner that cannot take a slot logs
@@ -87,7 +87,7 @@ max_concurrency = 1
 # missing baseUrl, a selected provider/model that does not exist, or a
 # missing env var for the selected provider's key) and passes the
 # catalog to Pi through a per-run agent dir (PI_CODING_AGENT_DIR).
-# pi_providers = ".muyan-pilot/pi-providers.json"
+# pi_providers = ".orbi/pi-providers.json"
 
 # Optional Pi skills. Paths may be absolute, use ~, or be relative to this file.
 skills = []

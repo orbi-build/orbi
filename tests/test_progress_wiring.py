@@ -13,8 +13,8 @@ from unittest.mock import Mock, call as mock_call
 
 import pytest
 
-import muyan_pilot.runner as runner
-from muyan_pilot import progress
+import orbi.runner as runner
+from orbi import progress
 
 
 def make_fake_gh(monkeypatch, comments=None, in_progress=False):
@@ -99,7 +99,7 @@ def patch_process_deps(monkeypatch, tmp_path, *, run_pi_side_effect=None):
     # pushes the task branch and opens the PR); the agent no longer does.
     monkeypatch.setattr(runner, "deliver_pr",
                         lambda *args, **kwargs:
-                        "https://github.com/xqliu/muyan-pilot/pull/40")
+                        "https://github.com/xqliu/orbi/pull/40")
 
 
 # --- helpers ------------------------------------------------------------------
@@ -403,10 +403,10 @@ def test_process_issue_creates_progress_comment_with_marker(monkeypatch, tmp_pat
     calls, posted = make_fake_gh(monkeypatch)
     patch_process_deps(monkeypatch, tmp_path)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/muyan-pilot")
+                         "xqliu/orbi")
     progress_posts = [
         body for body in posted
-        if "**Muyan Pilot progress**" in body
+        if "**Orbi progress**" in body
     ]
     assert len(progress_posts) == 1, (
         f"expected exactly one progress comment, got: {posted}"
@@ -415,7 +415,7 @@ def test_process_issue_creates_progress_comment_with_marker(monkeypatch, tmp_pat
     # Issue #100: the issue line shows the number AND the title.
     assert "- issue: #18 Publish progress" in body
     assert "- role: implement" in body
-    assert "- branch: muyan-pilot/xqliu-muyan-pilot-issue-18-a1b2c3d4" in body
+    assert "- branch: orbi/xqliu-orbi-issue-18-a1b2c3d4" in body
     assert "- PR: -" in body
 
 
@@ -433,9 +433,9 @@ def test_process_issue_p0_progress_comment_and_milestones_carry_priority(
     monkeypatch.setattr(runner, "edit_issue", edit)
     issue = make_issue()
     issue["labels"] = [{"name": "p0"}, {"name": "ai-ready"}]
-    runner.process_issue(issue, make_config(tmp_path), "xqliu/muyan-pilot")
+    runner.process_issue(issue, make_config(tmp_path), "xqliu/orbi")
     progress_posts = [
-        body for body in posted if "**Muyan Pilot progress**" in body
+        body for body in posted if "**Orbi progress**" in body
     ]
     assert len(progress_posts) == 1
     assert "- priority: p0" in progress_posts[0]
@@ -444,7 +444,7 @@ def test_process_issue_p0_progress_comment_and_milestones_carry_priority(
         if any(line.startswith(progress.MILESTONE_PREFIX)
                for line in body.splitlines())
     ]
-    started = [b for b in milestones if "Muyan Pilot: started" in b]
+    started = [b for b in milestones if "Orbi: started" in b]
     assert started, f"no started milestone: {milestones}"
     assert "priority=p0" in started[0]
     # The started-Pi scene comment (run_info) carries the priority too.
@@ -479,37 +479,37 @@ def test_process_issue_p0_failure_enters_ai_blocked_terminal_state(
     # instead of re-raising; the terminal-state assertions below are
     # unchanged.
     assert runner.process_issue(issue, make_config(tmp_path),
-                                "xqliu/muyan-pilot") is None
+                                "xqliu/orbi") is None
     # Claim first, then the terminal state: `ai-blocked` added,
     # `ai-in-progress` removed.
     assert edit.call_args_list[0] == mock_call(
-        18, repo="xqliu/muyan-pilot", add="ai-in-progress",
+        18, repo="xqliu/orbi", add="ai-in-progress",
     )
     assert edit.call_args_list[1] == mock_call(
-        18, repo="xqliu/muyan-pilot", add="ai-blocked",
+        18, repo="xqliu/orbi", add="ai-blocked",
         remove="ai-in-progress",
     )
     # The failure comment carries the run marker and the reason.
     failure_comments = [
         call for call in calls
         if call[:2] == ["gh", "issue"] and "comment" in call
-        and "Muyan Pilot failed" in call[-1]
+        and "Orbi failed" in call[-1]
     ]
     assert failure_comments, f"no failure comment: {calls}"
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failure_comments[0][-1]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in failure_comments[0][-1]
     assert "pi exploded" in failure_comments[0][-1]
     # The blocked progress scene keeps the priority visible.
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
+        and command[2] == "repos/xqliu/orbi/issues/comments/77"
         and "PATCH" in command
     ]
     assert final_patches, "no PATCH of the progress comment"
     last_body = final_patches[-1][
         final_patches[-1].index("--field") + 1
     ][len("body="):] if final_patches else ""
-    assert "Muyan Pilot blocked" in last_body
+    assert "Orbi blocked" in last_body
     assert "- priority: p0" in last_body
     assert "pi exploded" in last_body
     # Issue #100: the P0 blocked scene shows the number AND the title.
@@ -527,7 +527,7 @@ def test_process_issue_fails_fast_on_missing_issue_title(
     issue = {"number": 18, "body": "body"}  # no "title"
     with pytest.raises(KeyError):
         runner.process_issue(issue, make_config(tmp_path),
-                             "xqliu/muyan-pilot")
+                             "xqliu/orbi")
 
 
 def test_process_issue_passes_issue_number_to_deliver_pr(
@@ -543,11 +543,11 @@ def test_process_issue_passes_issue_number_to_deliver_pr(
 
     def fake_deliver_pr(*args, **kwargs):
         deliver_calls.append((args, kwargs))
-        return "https://github.com/xqliu/muyan-pilot/pull/40"
+        return "https://github.com/xqliu/orbi/pull/40"
 
     monkeypatch.setattr(runner, "deliver_pr", fake_deliver_pr)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/muyan-pilot")
+                         "xqliu/orbi")
     assert len(deliver_calls) == 1
     args, kwargs = deliver_calls[0]
     assert kwargs.get("issue") == 18, (
@@ -562,16 +562,16 @@ def test_process_issue_posts_started_and_pr_opened_milestones(
     calls, posted = make_fake_gh(monkeypatch)
     patch_process_deps(monkeypatch, tmp_path)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/muyan-pilot")
+                         "xqliu/orbi")
     milestones = [
         body for body in posted
         if any(line.startswith(progress.MILESTONE_PREFIX)
                for line in body.splitlines())
     ]
-    assert any("Muyan Pilot: started" in body for body in milestones)
+    assert any("Orbi: started" in body for body in milestones)
     assert any(
-        "Muyan Pilot: PR opened" in body
-        and "https://github.com/xqliu/muyan-pilot/pull/40" in body
+        "Orbi: PR opened" in body
+        and "https://github.com/xqliu/orbi/pull/40" in body
         for body in milestones
     )
 
@@ -590,12 +590,12 @@ def test_process_issue_finishes_progress_comment_with_delivery_summary(
 
     monkeypatch.setattr(runner, "run_pi", fake_run_pi)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/muyan-pilot")
+                         "xqliu/orbi")
     # The final PATCH of comment 77 must carry the delivery summary.
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
+        and command[2] == "repos/xqliu/orbi/issues/comments/77"
         and "--method" in command
         and "PATCH" in command
     ]
@@ -603,10 +603,10 @@ def test_process_issue_finishes_progress_comment_with_delivery_summary(
     last_body = final_patches[-1][
         final_patches[-1].index("--field") + 1
     ][len("body="):]
-    assert "Muyan Pilot delivered" in last_body
-    assert "https://github.com/xqliu/muyan-pilot/pull/40" in last_body
+    assert "Orbi delivered" in last_body
+    assert "https://github.com/xqliu/orbi/pull/40" in last_body
     assert "156 passed" in last_body
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in last_body
+    assert "<!-- orbi:run=a1b2c3d4 -->" in last_body
 
 
 def test_process_issue_failure_updates_progress_comment_with_blocked_scene(
@@ -623,26 +623,26 @@ def test_process_issue_failure_updates_progress_comment_with_blocked_scene(
     # instead of re-raising; the blocked-scene assertions below are
     # unchanged.
     assert runner.process_issue(make_issue(), make_config(tmp_path),
-                                "xqliu/muyan-pilot") is None
+                                "xqliu/orbi") is None
     milestones = [
         body for body in posted
         if any(line.startswith(progress.MILESTONE_PREFIX)
                for line in body.splitlines())
     ]
-    assert any("Muyan Pilot: blocked" in body for body in milestones)
+    assert any("Orbi: blocked" in body for body in milestones)
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
+        and command[2] == "repos/xqliu/orbi/issues/comments/77"
         and "PATCH" in command
     ]
     assert final_patches, "no PATCH of the progress comment"
     last_body = final_patches[-1][
         final_patches[-1].index("--field") + 1
     ][len("body="):]
-    assert "Muyan Pilot blocked" in last_body
+    assert "Orbi blocked" in last_body
     assert "pi exploded" in last_body
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in last_body
+    assert "<!-- orbi:run=a1b2c3d4 -->" in last_body
 
 
 def test_process_issue_resumes_existing_progress_comment_after_restart(
@@ -651,18 +651,18 @@ def test_process_issue_resumes_existing_progress_comment_after_restart(
     existing = {
         "id": 77,
         "body": (
-            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
-            "**Muyan Pilot progress**\n\nstale implementer state"
+            "<!-- orbi:run=a1b2c3d4 -->\n\n"
+            "**Orbi progress**\n\nstale implementer state"
         ),
     }
     calls, posted = make_fake_gh(monkeypatch, comments=[existing])
     patch_process_deps(monkeypatch, tmp_path)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/muyan-pilot")
+                         "xqliu/orbi")
     # No new progress comment is posted: the restarted run reuses id 77.
     progress_posts = [
         body for body in posted
-        if "**Muyan Pilot progress**" in body
+        if "**Orbi progress**" in body
     ]
     assert progress_posts == [], (
         f"restart must not create a second progress comment: {posted}"
@@ -670,13 +670,13 @@ def test_process_issue_resumes_existing_progress_comment_after_restart(
     patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
+        and command[2] == "repos/xqliu/orbi/issues/comments/77"
         and "PATCH" in command
     ]
     assert patches, "existing progress comment was not updated"
     # And the final summary still lands in the same comment.
     last_body = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Muyan Pilot delivered" in last_body
+    assert "Orbi delivered" in last_body
 
 
 def test_process_issue_posts_plan_ready_milestone_when_plan_written(
@@ -693,14 +693,14 @@ def test_process_issue_posts_plan_ready_milestone_when_plan_written(
 
     monkeypatch.setattr(runner, "run_pi", fake_run_pi)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/muyan-pilot")
+                         "xqliu/orbi")
     milestones = [
         body for body in posted
         if any(line.startswith(progress.MILESTONE_PREFIX)
                for line in body.splitlines())
     ]
     assert any(
-        "Muyan Pilot: plan ready" in body for body in milestones
+        "Orbi: plan ready" in body for body in milestones
     )
 
 
@@ -718,13 +718,13 @@ def test_process_issue_posts_tests_passed_milestone_when_test_log_ok(
 
     monkeypatch.setattr(runner, "run_pi", fake_run_pi)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/muyan-pilot")
+                         "xqliu/orbi")
     milestones = [
         body for body in posted
         if any(line.startswith(progress.MILESTONE_PREFIX)
                for line in body.splitlines())
     ]
-    assert any("Muyan Pilot: tests passed" in body for body in milestones)
+    assert any("Orbi: tests passed" in body for body in milestones)
 
 
 def test_process_issue_posts_tests_failed_milestone_when_test_log_fails(
@@ -741,13 +741,13 @@ def test_process_issue_posts_tests_failed_milestone_when_test_log_fails(
 
     monkeypatch.setattr(runner, "run_pi", fake_run_pi)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/muyan-pilot")
+                         "xqliu/orbi")
     milestones = [
         body for body in posted
         if any(line.startswith(progress.MILESTONE_PREFIX)
                for line in body.splitlines())
     ]
-    assert any("Muyan Pilot: tests failed" in body for body in milestones)
+    assert any("Orbi: tests failed" in body for body in milestones)
 
 
 def test_process_issue_never_posts_fix_pushed_on_a_fresh_claim(
@@ -763,7 +763,7 @@ def test_process_issue_never_posts_fix_pushed_on_a_fresh_claim(
     patch_process_deps(monkeypatch, tmp_path)
     monkeypatch.setattr(runner, "delivery_head_advanced", lambda *args: True)
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/muyan-pilot")
+                         "xqliu/orbi")
     milestones = [
         body for body in posted
         if any(line.startswith(progress.MILESTONE_PREFIX)
@@ -812,7 +812,7 @@ def _progress_patch_of(command) -> bool:
     return (
         command[:2] == ["gh", "api"]
         # GitHub update route (Issue #58): no issue number.
-        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
+        and command[2] == "repos/xqliu/orbi/issues/comments/77"
         and "--method" in command
         and "PATCH" in command
     )
@@ -827,7 +827,7 @@ def _delivery_record_of(command) -> bool:
     stays fail-fast (Issue #79)."""
     if command[:2] == ["gh", "api"]:
         if "--method" in command and "POST" in command:
-            return "Muyan Pilot: PR opened" in command[-1]
+            return "Orbi: PR opened" in command[-1]
         return _progress_patch_of(command)
     return False
 
@@ -848,13 +848,13 @@ def test_process_issue_delivered_patch_failure_does_not_fail_delivery(
     caplog.set_level("ERROR")
 
     pr_url = runner.process_issue(make_issue(), make_config(tmp_path),
-                                  "xqliu/muyan-pilot")
+                                  "xqliu/orbi")
 
-    assert pr_url == "https://github.com/xqliu/muyan-pilot/pull/40"
+    assert pr_url == "https://github.com/xqliu/orbi/pull/40"
     # The state transition happened (the Issue awaits review)...
     assert edits == [{
-        "repo": "xqliu/muyan-pilot", "add": "ai-in-progress"},
-        {"repo": "xqliu/muyan-pilot", "add": "ai-pr-opened",
+        "repo": "xqliu/orbi", "add": "ai-in-progress"},
+        {"repo": "xqliu/orbi", "add": "ai-pr-opened",
          "remove": "ai-in-progress"},
     ]
     # ...and the delivery was NOT marked blocked.
@@ -863,7 +863,7 @@ def test_process_issue_delivered_patch_failure_does_not_fail_delivery(
     assert any(
         "progress_publish_failed" in line
         and "run=a1b2c3d4" in line
-        and "issue=xqliu/muyan-pilot#18" in line
+        and "issue=xqliu/orbi#18" in line
         and "role=implement" in line
         for line in caplog.text.splitlines()
     ), caplog.text
@@ -873,7 +873,7 @@ def test_process_issue_delivered_patch_failure_does_not_fail_delivery(
     last_body = delivered_patches[-1][
         delivered_patches[-1].index("--field") + 1
     ][len("body="):]
-    assert "Muyan Pilot delivered" in last_body
+    assert "Orbi delivered" in last_body
 
 
 def test_process_issue_pr_opened_milestone_failure_does_not_fail_delivery(
@@ -888,7 +888,7 @@ def test_process_issue_pr_opened_milestone_failure_does_not_fail_delivery(
             command[:2] == ["gh", "api"]
             and "--method" in command
             and "POST" in command
-            and "Muyan Pilot: PR opened" in command[-1]
+            and "Orbi: PR opened" in command[-1]
         ),
     )
     patch_process_deps(monkeypatch, tmp_path)
@@ -898,9 +898,9 @@ def test_process_issue_pr_opened_milestone_failure_does_not_fail_delivery(
     caplog.set_level("ERROR")
 
     pr_url = runner.process_issue(make_issue(), make_config(tmp_path),
-                                  "xqliu/muyan-pilot")
+                                  "xqliu/orbi")
 
-    assert pr_url == "https://github.com/xqliu/muyan-pilot/pull/40"
+    assert pr_url == "https://github.com/xqliu/orbi/pull/40"
     assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
     assert any("progress_publish_failed" in line
                for line in caplog.text.splitlines()), caplog.text
@@ -910,18 +910,18 @@ def test_process_issue_pr_opened_milestone_failure_does_not_fail_delivery(
     last_body = delivered_patches[-1][
         delivered_patches[-1].index("--field") + 1
     ][len("body="):]
-    assert "Muyan Pilot delivered" in last_body
+    assert "Orbi delivered" in last_body
     # ...and the failed milestone was not posted.
-    assert not any("Muyan Pilot: PR opened" in body for body in posted)
+    assert not any("Orbi: PR opened" in body for body in posted)
 
 
 def test_process_issue_scene_comment_failure_fails_delivery(
     monkeypatch, tmp_path, caplog,
 ):
-    """Issue #79: the `Muyan Pilot opened PR:` scene comment is NOT a
+    """Issue #79: the `Orbi opened PR:` scene comment is NOT a
     bypass — the next tick's resume (Issue #45/#89) parses it to recover
     run_id, base and PR, so a failure there is a real delivery failure:
-    the Issue is marked `ai-blocked` with a `Muyan Pilot failed`
+    the Issue is marked `ai-blocked` with a `Orbi failed`
     comment, and `process_issue` returns `None` so the tick ends cleanly
     (Issue #239: the handled failure never re-raises to crash the
     service). The scene comment stays fail-fast (the resume contract is
@@ -936,11 +936,11 @@ def test_process_issue_scene_comment_failure_fails_delivery(
         lambda command: (
             command[:2] == ["gh", "issue"]
             and "comment" in command
-            # Only the scene comment POST fails: the `Muyan Pilot
+            # Only the scene comment POST fails: the `Orbi
             # failed` comment embeds the scene body in its error
             # detail, so it must not 404 in the fake.
-            and "Muyan Pilot opened PR:" in command[-1]
-            and "Muyan Pilot failed" not in command[-1]
+            and "Orbi opened PR:" in command[-1]
+            and "Orbi failed" not in command[-1]
         ),
     )
     patch_process_deps(monkeypatch, tmp_path)
@@ -953,30 +953,30 @@ def test_process_issue_scene_comment_failure_fails_delivery(
     # `None` instead of re-raising; the terminal-state assertions below
     # are unchanged.
     assert runner.process_issue(make_issue(), make_config(tmp_path),
-                                "xqliu/muyan-pilot") is None
+                                "xqliu/orbi") is None
 
     # The delivery failed: the opened-PR transition is undone and the
     # Issue is marked ai-blocked ALONE (the failure happened after the
     # `ai-pr-opened` label was added, so the terminal state removes it
     # instead of the already-removed claim label)...
     assert edits == [{
-        "repo": "xqliu/muyan-pilot", "add": "ai-in-progress"},
-        {"repo": "xqliu/muyan-pilot", "add": "ai-pr-opened",
+        "repo": "xqliu/orbi", "add": "ai-in-progress"},
+        {"repo": "xqliu/orbi", "add": "ai-pr-opened",
          "remove": "ai-in-progress"},
-        {"repo": "xqliu/muyan-pilot", "add": "ai-blocked",
+        {"repo": "xqliu/orbi", "add": "ai-blocked",
          "remove": "ai-pr-opened"},
     ]
-    # ...with a run-marked `Muyan Pilot failed` comment naming the
+    # ...with a run-marked `Orbi failed` comment naming the
     # scene-comment failure...
     comment_bodies = [
         command[-1] for command in calls
         if command[:2] == ["gh", "issue"] and "comment" in command
     ]
     failed = [body for body in comment_bodies
-              if "Muyan Pilot failed" in body]
+              if "Orbi failed" in body]
     assert failed, comment_bodies
-    assert "Muyan Pilot opened PR:" in failed[0]
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failed[0]
+    assert "Orbi opened PR:" in failed[0]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in failed[0]
     # ...and the failure is NOT logged as a progress bypass (the scene
     # comment is delivery, not observability).
     assert not any("progress_publish_failed" in line
@@ -985,14 +985,14 @@ def test_process_issue_scene_comment_failure_fails_delivery(
     # the first delivery-record step and its failure interrupts the
     # flow before the bypass steps (a PR without a resumable scene must
     # not be announced as delivered).
-    assert not any("Muyan Pilot: PR opened" in body for body in posted)
+    assert not any("Orbi: PR opened" in body for body in posted)
     # The terminal blocked scene landed in the progress comment (the
     # failure-path publishing, like the rest of the failure report).
-    assert any("Muyan Pilot: blocked" in body for body in posted)
+    assert any("Orbi: blocked" in body for body in posted)
     last_patch = [c for c in calls if _progress_patch_of(c)][-1]
     last_body = last_patch[last_patch.index("--field") + 1][len("body="):]
-    assert "Muyan Pilot blocked" in last_body
-    assert "Muyan Pilot opened PR:" in last_body
+    assert "Orbi blocked" in last_body
+    assert "Orbi opened PR:" in last_body
 
 
 def test_process_issue_publishing_failure_still_logs_run_end(
@@ -1006,40 +1006,40 @@ def test_process_issue_publishing_failure_still_logs_run_end(
     caplog.set_level("INFO")
 
     runner.process_issue(make_issue(), make_config(tmp_path),
-                         "xqliu/muyan-pilot")
+                         "xqliu/orbi")
 
     ends = [line for line in caplog.text.splitlines()
             if " run_end " in line]
     assert len(ends) == 1
     assert "result=pr_opened" in ends[0]
-    assert "pr=https://github.com/xqliu/muyan-pilot/pull/40" in ends[0]
+    assert "pr=https://github.com/xqliu/orbi/pull/40" in ends[0]
 
 
 def test_process_issue_publishing_failure_is_never_blocked_scene(
     monkeypatch, tmp_path,
 ):
     """The failure report (blocked milestone, blocked progress scene,
-    `Muyan Pilot failed` comment) must NOT run for a progress failure
+    `Orbi failed` comment) must NOT run for a progress failure
     after the PR open: the delivery succeeded."""
     calls, posted = make_failing_gh(monkeypatch, _delivery_record_of)
     patch_process_deps(monkeypatch, tmp_path)
 
     pr_url = runner.process_issue(make_issue(), make_config(tmp_path),
-                                  "xqliu/muyan-pilot")
+                                  "xqliu/orbi")
 
-    assert pr_url == "https://github.com/xqliu/muyan-pilot/pull/40"
+    assert pr_url == "https://github.com/xqliu/orbi/pull/40"
     # No blocked milestone...
-    assert not any("Muyan Pilot: blocked" in body for body in posted)
-    # ...no `Muyan Pilot failed` comment...
+    assert not any("Orbi: blocked" in body for body in posted)
+    # ...no `Orbi failed` comment...
     comment_bodies = [
         command[-1] for command in calls
         if command[:2] == ["gh", "issue"] and "comment" in command
     ]
-    assert not any("Muyan Pilot failed" in body
+    assert not any("Orbi failed" in body
                    for body in comment_bodies)
     # ...and no blocked progress scene.
     assert not any(
-        "Muyan Pilot blocked" in body
+        "Orbi blocked" in body
         for command in calls if _progress_patch_of(command)
         for body in [command[command.index("--field") + 1][len("body="):]]
     )
@@ -1068,10 +1068,10 @@ def test_process_issue_ensure_failure_does_not_fail_delivery(
     caplog.set_level("ERROR")
 
     pr_url = runner.process_issue(make_issue(), make_config(tmp_path),
-                                  "xqliu/muyan-pilot")
+                                  "xqliu/orbi")
 
     # The delivery completed: the PR is open and awaits review...
-    assert pr_url == "https://github.com/xqliu/muyan-pilot/pull/40"
+    assert pr_url == "https://github.com/xqliu/orbi/pull/40"
     assert any(
         kwargs.get("add") == "ai-pr-opened"
         for kwargs in edits
@@ -1084,12 +1084,12 @@ def test_process_issue_ensure_failure_does_not_fail_delivery(
     assert any(
         "progress_publish_failed" in line
         and "run=a1b2c3d4" in line
-        and "issue=xqliu/muyan-pilot#18" in line
+        and "issue=xqliu/orbi#18" in line
         and "role=implement" in line
         for line in caplog.text.splitlines()
     ), caplog.text
     # No blocked scene was published.
-    assert not any("Muyan Pilot: blocked" in body for body in posted)
+    assert not any("Orbi: blocked" in body for body in posted)
 
 
 def test_process_issue_started_milestone_failure_does_not_fail_delivery(
@@ -1104,7 +1104,7 @@ def test_process_issue_started_milestone_failure_does_not_fail_delivery(
             command[:2] == ["gh", "api"]
             and "--method" in command
             and "POST" in command
-            and "Muyan Pilot: started" in command[-1]
+            and "Orbi: started" in command[-1]
         ),
     )
     patch_process_deps(monkeypatch, tmp_path)
@@ -1114,17 +1114,17 @@ def test_process_issue_started_milestone_failure_does_not_fail_delivery(
     caplog.set_level("ERROR")
 
     pr_url = runner.process_issue(make_issue(), make_config(tmp_path),
-                                  "xqliu/muyan-pilot")
+                                  "xqliu/orbi")
 
-    assert pr_url == "https://github.com/xqliu/muyan-pilot/pull/40"
+    assert pr_url == "https://github.com/xqliu/orbi/pull/40"
     assert runner.run_pi.called
     assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
     assert any("progress_publish_failed" in line
                for line in caplog.text.splitlines()), caplog.text
     # The ensure itself succeeded (only the milestone failed)...
-    assert any("Muyan Pilot progress" in body for body in posted)
+    assert any("Orbi progress" in body for body in posted)
     # ...and the failed milestone was not posted.
-    assert not any("Muyan Pilot: started" in body for body in posted)
+    assert not any("Orbi: started" in body for body in posted)
 
 
 def test_process_issue_plan_test_milestone_failures_do_not_fail_delivery(
@@ -1139,8 +1139,8 @@ def test_process_issue_plan_test_milestone_failures_do_not_fail_delivery(
             command[:2] == ["gh", "api"]
             and "--method" in command
             and "POST" in command
-            and ("Muyan Pilot: plan ready" in command[-1]
-                 or "Muyan Pilot: tests passed" in command[-1])
+            and ("Orbi: plan ready" in command[-1]
+                 or "Orbi: tests passed" in command[-1])
         ),
     )
     patch_process_deps(monkeypatch, tmp_path)
@@ -1159,16 +1159,16 @@ def test_process_issue_plan_test_milestone_failures_do_not_fail_delivery(
     )
 
     pr_url = runner.process_issue(make_issue(), make_config(tmp_path),
-                                  "xqliu/muyan-pilot")
+                                  "xqliu/orbi")
 
-    assert pr_url == "https://github.com/xqliu/muyan-pilot/pull/40"
+    assert pr_url == "https://github.com/xqliu/orbi/pull/40"
     assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
     assert caplog.text.count("progress_publish_failed") >= 2, caplog.text
     # The failed milestones were not posted...
-    assert not any("Muyan Pilot: plan ready" in body for body in posted)
-    assert not any("Muyan Pilot: tests passed" in body for body in posted)
+    assert not any("Orbi: plan ready" in body for body in posted)
+    assert not any("Orbi: tests passed" in body for body in posted)
     # ...but the delivery record still completed.
-    assert any("Muyan Pilot: PR opened" in body for body in posted)
+    assert any("Orbi: PR opened" in body for body in posted)
 
 
 def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(
@@ -1177,7 +1177,7 @@ def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(
     """Issue #79: on a REAL delivery failure (Pi exploded), the
     failure-path progress publishing (blocked milestone, blocked-scene
     finish) is bypass too: a 404 there must not abort the `ai-blocked`
-    label transition or the `Muyan Pilot failed` comment — the progress
+    label transition or the `Orbi failed` comment — the progress
     failure only logs `progress_publish_failed` (a bypass failure never
     decides whether the delivery succeeded, Issue #79). Issue #239: the
     handled failure returns `None` from `process_issue` instead of
@@ -1190,7 +1190,7 @@ def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(
             and (
                 # The blocked milestone POST...
                 ("POST" in command
-                 and "Muyan Pilot: blocked" in command[-1])
+                 and "Orbi: blocked" in command[-1])
                 # ...and the blocked-scene finish PATCH.
                 or "PATCH" in command
             )
@@ -1211,17 +1211,17 @@ def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(
     # `None` instead of re-raising; the bypass assertions below are
     # unchanged.
     assert runner.process_issue(make_issue(), make_config(tmp_path),
-                                "xqliu/muyan-pilot") is None
+                                "xqliu/orbi") is None
 
     # The `ai-blocked` transition completed even though the progress
     # publishing 404'd...
     assert any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
-    # ...the `Muyan Pilot failed` comment was posted...
+    # ...the `Orbi failed` comment was posted...
     comment_bodies = [
         command[-1] for command in calls
         if command[:2] == ["gh", "issue"] and "comment" in command
     ]
-    assert any("Muyan Pilot failed" in body for body in comment_bodies)
+    assert any("Orbi failed" in body for body in comment_bodies)
     # ...and the progress failures were logged as bypass, not re-raised
     # out of the failure report.
     assert any(
@@ -1244,7 +1244,7 @@ def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(
     # ...both bypass steps failed (two logged failures)...
     assert caplog.text.count("progress_publish_failed") >= 2, caplog.text
     # ...and the blocked milestone was never posted.
-    assert not any("Muyan Pilot: blocked" in body for body in posted)
+    assert not any("Orbi: blocked" in body for body in posted)
 
 
 # --- review_and_merge_if_clean wiring (the reviewer stays observable) ---------
@@ -1266,19 +1266,19 @@ def test_review_and_merge_posts_review_findings_milestone(monkeypatch, tmp_path)
         if any(line.startswith(progress.MILESTONE_PREFIX)
                for line in body.splitlines())
     ]
-    assert any("Muyan Pilot: review findings" in body for body in milestones)
+    assert any("Orbi: review findings" in body for body in milestones)
     assert any("round 1" in body for body in milestones)
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
+        and command[2] == "repos/xqliu/orbi/issues/comments/77"
         and "PATCH" in command
     ]
     assert final_patches
     last_body = final_patches[-1][
         final_patches[-1].index("--field") + 1
     ][len("body="):]
-    assert "Muyan Pilot review findings" in last_body
+    assert "Orbi review findings" in last_body
     assert "- review/fix round: 1" in last_body
 
 
@@ -1299,19 +1299,19 @@ def test_review_and_merge_posts_merged_milestone_and_final_summary(
         if any(line.startswith(progress.MILESTONE_PREFIX)
                for line in body.splitlines())
     ]
-    assert any("Muyan Pilot: merged" in body for body in milestones)
+    assert any("Orbi: merged" in body for body in milestones)
     assert any("merge_commit=m1" in body for body in milestones)
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-pilot/issues/comments/77"
+        and command[2] == "repos/xqliu/orbi/issues/comments/77"
         and "PATCH" in command
     ]
     assert final_patches
     last_body = final_patches[-1][
         final_patches[-1].index("--field") + 1
     ][len("body="):]
-    assert "Muyan Pilot delivered" in last_body
+    assert "Orbi delivered" in last_body
     assert "merge_commit=m1" in last_body
 
 
@@ -1359,7 +1359,7 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: {
-        "number": 4, "url": "https://github.com/xqliu/muyan-pilot/pull/40",
+        "number": 4, "url": "https://github.com/xqliu/orbi/pull/40",
         "base_ref": "main", "base_oid": "b1",
         "head_ref": "h", "head_oid": "h1",
     })
@@ -1373,7 +1373,7 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
     monkeypatch.setattr(runner, "comment_pr", Mock())
     if "pass" in verdict:
         monkeypatch.setattr(runner, "merge_gate", lambda *a, **k: {
-            "number": 4, "url": "https://github.com/xqliu/muyan-pilot/pull/40",
+            "number": 4, "url": "https://github.com/xqliu/orbi/pull/40",
             "base_ref": "main", "base_oid": "b1",
             "head_ref": "h", "head_oid": "h1", "merged": True,
         })
@@ -1391,7 +1391,7 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
         tmp_path, "branch", "main",
         {"repo_dir": tmp_path, "base_branch": "main", "base_sha": "b1",
          "run_id": "a1b2c3d4"},
-        "xqliu/muyan-pilot", 18, title="Publish progress",
+        "xqliu/orbi", 18, title="Publish progress",
         priority="normal",
     )
     return merged, edits, calls, posted
@@ -1429,7 +1429,7 @@ def test_review_and_merge_ensure_failure_does_not_block_issue(
     assert any(
         "progress_publish_failed" in line
         and "run=a1b2c3d4" in line
-        and "issue=xqliu/muyan-pilot#18" in line
+        and "issue=xqliu/orbi#18" in line
         and "role=review" in line
         for line in caplog.text.splitlines()
     ), caplog.text
@@ -1442,7 +1442,7 @@ def test_review_and_merge_ensure_failure_does_not_block_issue(
         if command[:2] == ["gh", "api"]
         and "--method" in command
         and "POST" in command
-        and "Muyan Pilot: review findings" in command[-1]
+        and "Orbi: review findings" in command[-1]
     ]
     assert attempted_milestones, "the findings milestone was not attempted"
     # ...and the findings finish was attempted too (it raises
@@ -1505,7 +1505,7 @@ def test_review_and_merge_findings_publish_failure_does_not_block_issue(
             and "--method" in command
             and (
                 ("POST" in command
-                 and "Muyan Pilot: review findings" in command[-1])
+                 and "Orbi: review findings" in command[-1])
                 or "PATCH" in command
             )
         ),
@@ -1516,9 +1516,9 @@ def test_review_and_merge_findings_publish_failure_does_not_block_issue(
     assert any("progress_publish_failed" in line
                for line in caplog.text.splitlines()), caplog.text
     # The ensure succeeded (only the findings milestone/finish 404'd)...
-    assert any("Muyan Pilot progress" in body for body in posted)
+    assert any("Orbi progress" in body for body in posted)
     # ...the failed milestone was not posted...
-    assert not any("Muyan Pilot: review findings" in body
+    assert not any("Orbi: review findings" in body
                    for body in posted)
     # ...and the findings finish was still attempted (independent
     # bypass step).
@@ -1564,14 +1564,14 @@ def test_wait_for_delivery_closed_unmerged_posts_blocked_milestone(
         if "--method" in command and "POST" in command
     ]
     # The blocked milestone carries the mobile notification...
-    assert any("Muyan Pilot: blocked" in body for body in posted_bodies)
+    assert any("Orbi: blocked" in body for body in posted_bodies)
     assert any(
         ("closed without a merge" in body for body in posted_bodies),
     )
     # ...and the tracked progress comment becomes the blocked scene
     # (Issue #18): the same terminal body the other failure paths write.
     assert not any(
-        "**Muyan Pilot progress**" in body for body in posted_bodies
+        "**Orbi progress**" in body for body in posted_bodies
     )
     patches = [
         command for command in api_calls
@@ -1581,10 +1581,10 @@ def test_wait_for_delivery_closed_unmerged_posts_blocked_milestone(
     ]
     assert patches, "the tracked progress comment was not updated"
     blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Muyan Pilot blocked" in blocked
+    assert "Orbi blocked" in blocked
     assert "closed without a merge" in blocked
     assert "next step:" in blocked
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked
+    assert "<!-- orbi:run=a1b2c3d4 -->" in blocked
     # Issue #100: the wait-loop blocked scene shows the number AND
     # the title, consistent with the other scenes.
     assert "- issue: #39 t" in blocked
@@ -1629,7 +1629,7 @@ def test_wait_for_delivery_review_failure_finishes_progress_comment_with_blocked
         for command in api_calls
         if "--method" in command and "POST" in command
     ]
-    assert any("Muyan Pilot: blocked" in body for body in posted_bodies)
+    assert any("Orbi: blocked" in body for body in posted_bodies)
     assert any(
         "independent review" in body and "failed" in body
         for body in posted_bodies
@@ -1642,10 +1642,10 @@ def test_wait_for_delivery_review_failure_finishes_progress_comment_with_blocked
     ]
     assert patches, "the tracked progress comment was not updated"
     last_body = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Muyan Pilot blocked" in last_body
+    assert "Orbi blocked" in last_body
     assert "independent review" in last_body
     assert "next step:" in last_body
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in last_body
+    assert "<!-- orbi:run=a1b2c3d4 -->" in last_body
     # The blocked scene carries the actual role (the failure happened
     # during the independent review) and the completed review rounds
     # (review round 2, PR #42) — not the hardcoded fix/0.
@@ -1653,7 +1653,7 @@ def test_wait_for_delivery_review_failure_finishes_progress_comment_with_blocked
     assert "- review/fix round: 2" in last_body
     # No second progress comment was created.
     assert not any(
-        "**Muyan Pilot progress**" in body for body in posted_bodies
+        "**Orbi progress**" in body for body in posted_bodies
     )
 
 
@@ -1671,8 +1671,8 @@ def _wait_delivery_fake_gh(monkeypatch, *, pr_state, labels, comments,
     existing = {
         "id": 77,
         "body": (
-            "<!-- muyan-pilot:run=a1b2c3d4 -->\n\n"
-            "**Muyan Pilot progress**\n\nawaiting review"
+            "<!-- orbi:run=a1b2c3d4 -->\n\n"
+            "**Orbi progress**\n\nawaiting review"
         ),
     }
 
@@ -1705,15 +1705,15 @@ def _review_round_comments():
     return [
         {
             "body": (
-                "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                "Muyan Pilot review round 1 for PR #46: clean"
+                "<!-- orbi:run=a1b2c3d4 -->\n"
+                "Orbi review round 1 for PR #46: clean"
             ),
             "authorAssociation": "OWNER",
         },
         {
             "body": (
-                "<!-- muyan-pilot:run=a1b2c3d4 -->\n"
-                "Muyan Pilot review round 2 for PR #46: findings"
+                "<!-- orbi:run=a1b2c3d4 -->\n"
+                "Orbi review round 2 for PR #46: findings"
             ),
             "authorAssociation": "OWNER",
         },
@@ -1728,7 +1728,7 @@ def _blocked_progress_failures(command) -> bool:
         and "--method" in command
         and (
             ("POST" in command
-             and "Muyan Pilot: blocked" in command[-1])
+             and "Orbi: blocked" in command[-1])
             or "PATCH" in command
         )
     )
@@ -1793,14 +1793,14 @@ def test_wait_for_delivery_closed_unmerged_progress_failure_still_releases(
         if "progress_publish_failed" in line
     ), caplog.text
     # Nothing was posted (the fake 404s the blocked milestone POST)...
-    assert not any("Muyan Pilot: blocked" in body for body in posted)
+    assert not any("Orbi: blocked" in body for body in posted)
     # ...but the blocked milestone was attempted...
     attempted_milestones = [
         command for command in api_calls
         if command[:2] == ["gh", "api"]
         and "--method" in command
         and "POST" in command
-        and "Muyan Pilot: blocked" in command[-1]
+        and "Orbi: blocked" in command[-1]
     ]
     assert attempted_milestones, "the blocked milestone was not attempted"
     # ...and the blocked-scene finish was still attempted (independent

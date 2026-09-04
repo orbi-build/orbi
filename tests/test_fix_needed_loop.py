@@ -15,13 +15,13 @@ import subprocess
 
 import pytest
 
-import muyan_pilot.runner as runner
+import orbi.runner as runner
 
 PR_URL = "https://github.com/owner/repo/pull/46"
 RUN_ID = "a1b2c3d4"
-MARKER = f"<!-- muyan-pilot:run={RUN_ID} -->"
-WORKTREE = "/srv/repo/.worktrees/muyan-pilot-owner-repo-issue-39-a1b2c3d4"
-BRANCH = "muyan-pilot/owner-repo-issue-39-a1b2c3d4"
+MARKER = f"<!-- orbi:run={RUN_ID} -->"
+WORKTREE = "/srv/repo/.worktrees/orbi-owner-repo-issue-39-a1b2c3d4"
+BRANCH = "orbi/owner-repo-issue-39-a1b2c3d4"
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +35,7 @@ def _scene_comments():
         {
             "body": (
                 f"{MARKER}\n"
-                f"Muyan Pilot opened PR: {PR_URL} (base_branch=main "
+                f"Orbi opened PR: {PR_URL} (base_branch=main "
                 f"base_sha=abc123def456 run_id={RUN_ID})"
             ),
             "authorAssociation": "OWNER",
@@ -54,7 +54,7 @@ def make_wait_failure_fake(monkeypatch, *, labels=("ai-pr-opened",),
         progress_comments = [
             {
                 "id": 77,
-                "body": f"{MARKER}\n\n**Muyan Pilot progress**\n\nawaiting",
+                "body": f"{MARKER}\n\n**Orbi progress**\n\nawaiting",
             },
         ]
     if scene is None:
@@ -152,7 +152,7 @@ def test_wait_for_delivery_recoverable_review_failure_stays_fix_needed(
     worktree and PR."""
     # The worktree exists (created at claim time) so the review runs.
     (tmp_path / ".worktrees"
-     / f"muyan-pilot-owner-repo-issue-39-{RUN_ID}").mkdir(parents=True)
+     / f"orbi-owner-repo-issue-39-{RUN_ID}").mkdir(parents=True)
     api_calls = make_wait_failure_fake(monkeypatch)
     edits = []
     issue_comments = []
@@ -195,14 +195,14 @@ def test_wait_for_delivery_recoverable_review_failure_stays_fix_needed(
     # phase, last activity).
     assert len(issue_comments) == 1
     body = issue_comments[0][1]["body"]
-    assert "Muyan Pilot needs a fix:" in body
+    assert "Orbi needs a fix:" in body
     assert MARKER in body
     assert PR_URL in body
     assert str(exc).split(" (Issue")[0] in body
     assert f"branch={BRANCH}" in body
     expected_worktree = (
         tmp_path / ".worktrees"
-        / f"muyan-pilot-owner-repo-issue-39-{RUN_ID}"
+        / f"orbi-owner-repo-issue-39-{RUN_ID}"
     )
     assert f"worktree={expected_worktree}" in body
     assert "session=" in body
@@ -222,7 +222,7 @@ def test_wait_for_delivery_recoverable_review_failure_stays_fix_needed(
     ]
     assert patches, "the tracked progress comment was not updated"
     finished = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Muyan Pilot fix needed" in finished
+    assert "Orbi fix needed" in finished
     assert "next step:" in finished
     assert "ai-blocked" not in finished
     # ... and the fix-needed milestone is posted (mobile notification).
@@ -231,7 +231,7 @@ def test_wait_for_delivery_recoverable_review_failure_stays_fix_needed(
         for command in api_calls
         if "--method" in command and "POST" in command
     ]
-    assert any("Muyan Pilot: fix needed" in body for body in posted)
+    assert any("Orbi: fix needed" in body for body in posted)
     # The failure is logged with the run-scene marker.
     assert "delivery_review_failed" in caplog.text
 
@@ -244,7 +244,7 @@ def test_wait_for_delivery_recoverable_failure_while_fix_needed_keeps_label(
     `ai-fix-needed` label (the opened-PR state label is removed, the
     fix-needed label is the one the next tick scans for)."""
     (tmp_path / ".worktrees"
-     / f"muyan-pilot-owner-repo-issue-39-{RUN_ID}").mkdir(parents=True)
+     / f"orbi-owner-repo-issue-39-{RUN_ID}").mkdir(parents=True)
     make_wait_failure_fake(
         monkeypatch, labels=("ai-fix-needed",), progress_comments=[],
     )
@@ -290,7 +290,7 @@ def test_wait_for_delivery_recoverable_failure_with_session_file_includes_sessio
     placeholder): the full debug entry a human needs to continue."""
     worktree = (
         tmp_path / ".worktrees"
-        / f"muyan-pilot-owner-repo-issue-39-{RUN_ID}"
+        / f"orbi-owner-repo-issue-39-{RUN_ID}"
     )
     worktree.mkdir(parents=True)
     _write_session(worktree)
@@ -323,7 +323,7 @@ def test_wait_for_delivery_recoverable_failure_scene_snapshot_failure_is_logged(
     completes the fix-needed transition."""
     worktree = (
         tmp_path / ".worktrees"
-        / f"muyan-pilot-owner-repo-issue-39-{RUN_ID}"
+        / f"orbi-owner-repo-issue-39-{RUN_ID}"
     )
     worktree.mkdir(parents=True)
     make_wait_failure_fake(monkeypatch)
@@ -352,7 +352,7 @@ def test_wait_for_delivery_recoverable_failure_scene_snapshot_failure_is_logged(
     runner.wait_for_delivery(PR_URL, _issue(), _config(tmp_path), "owner/repo")
     assert "activity scene failed" in caplog.text
     body = issue_comments[0][1]["body"]
-    assert "Muyan Pilot needs a fix:" in body
+    assert "Orbi needs a fix:" in body
     assert "session=-" in body
     assert edits == [
         ((39,), {"repo": "owner/repo", "add": "ai-fix-needed",
@@ -373,7 +373,7 @@ def test_wait_for_delivery_recoverable_failure_without_bound_run_id(
     shows `run=-`, and the milestone / progress scene are skipped (no
     run id to bind them to)."""
     (tmp_path / ".worktrees"
-     / f"muyan-pilot-owner-repo-issue-39-{RUN_ID}").mkdir(parents=True)
+     / f"orbi-owner-repo-issue-39-{RUN_ID}").mkdir(parents=True)
     api_calls = make_wait_failure_fake(monkeypatch)
     issue_comments = []
     edits = []
@@ -399,8 +399,8 @@ def test_wait_for_delivery_recoverable_failure_without_bound_run_id(
                  "remove": "ai-pr-opened"}),
     ]
     body = issue_comments[0][1]["body"]
-    assert "Muyan Pilot needs a fix:" in body
-    assert "<!-- muyan-pilot:run=" not in body
+    assert "Orbi needs a fix:" in body
+    assert "<!-- orbi:run=" not in body
     assert "run=-" in body
     # No run id: no milestone, no progress scene at all.
     assert api_calls == []
@@ -415,7 +415,7 @@ def test_wait_for_delivery_unrecoverable_failure_marks_blocked_with_reason(
     ALONE, and the failure comment states the explicit reason why
     automatic recovery is impossible."""
     (tmp_path / ".worktrees"
-     / f"muyan-pilot-owner-repo-issue-39-{RUN_ID}").mkdir(parents=True)
+     / f"orbi-owner-repo-issue-39-{RUN_ID}").mkdir(parents=True)
     api_calls = make_wait_failure_fake(monkeypatch)
     edits = []
     issue_comments = []
@@ -450,7 +450,7 @@ def test_wait_for_delivery_unrecoverable_failure_marks_blocked_with_reason(
     # ... with a failure comment that carries the run marker, the PR
     # and the EXPLICIT reason why automatic recovery is impossible.
     body = issue_comments[0][1]["body"]
-    assert "Muyan Pilot failed:" in body
+    assert "Orbi failed:" in body
     assert MARKER in body
     assert PR_URL in body
     assert reason in body
@@ -462,8 +462,8 @@ def test_wait_for_delivery_unrecoverable_failure_marks_blocked_with_reason(
         for command in api_calls
         if "--method" in command and "POST" in command
     ]
-    assert any("Muyan Pilot: blocked" in body for body in posted)
-    assert not any("Muyan Pilot: fix needed" in body for body in posted)
+    assert any("Orbi: blocked" in body for body in posted)
+    assert not any("Orbi: fix needed" in body for body in posted)
     patches = [
         command for command in api_calls
         if command[:2] == ["gh", "api"]
@@ -471,7 +471,7 @@ def test_wait_for_delivery_unrecoverable_failure_marks_blocked_with_reason(
         and "PATCH" in command
     ]
     finished = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Muyan Pilot blocked" in finished
+    assert "Orbi blocked" in finished
     assert reason in finished
 
 
@@ -490,7 +490,7 @@ def test_wait_for_delivery_base_branch_mismatch_marks_blocked_with_reason(
             {
                 "body": (
                     f"{MARKER}\n"
-                    f"Muyan Pilot opened PR: {PR_URL} (base_branch=develop "
+                    f"Orbi opened PR: {PR_URL} (base_branch=develop "
                     f"base_sha=abc123def456 run_id={RUN_ID})"
                 ),
                 "authorAssociation": "OWNER",
@@ -526,7 +526,7 @@ def test_wait_for_delivery_base_branch_mismatch_marks_blocked_with_reason(
                  "remove": "ai-pr-opened"}),
     ]
     body = issue_comments[0][1]["body"]
-    assert "Muyan Pilot failed:" in body
+    assert "Orbi failed:" in body
     assert "base_branch=develop" in body
     assert "base_branch=main" in body
     # The blocked comment states why automatic recovery is impossible.
@@ -585,10 +585,10 @@ def test_verify_resumed_pr_diverged_pr_head_stays_fix_needed(
     # the worktree and the concrete error ...
     assert len(captured["comments"]) == 1
     body = captured["comments"][0][1]["body"]
-    assert "Muyan Pilot needs a fix:" in body
-    assert f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->" in body
+    assert "Orbi needs a fix:" in body
+    assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in body
     assert FAKE_PR_URL in body
-    assert "muyan-pilot/owner-repo-issue-9-a1b2c3d4" in body
+    assert "orbi/owner-repo-issue-9-a1b2c3d4" in body
     assert str(expected_resume_worktree(tmp_path)) in body
     assert "the branch diverged" in body
     # ... and the fix-needed milestone (not the blocked one).
@@ -597,8 +597,8 @@ def test_verify_resumed_pr_diverged_pr_head_stays_fix_needed(
         for command in captured["api"]
         if "--method" in command and "POST" in command
     ]
-    assert any("Muyan Pilot: fix needed" in body for body in posted)
-    assert not any("Muyan Pilot: blocked" in body for body in posted)
+    assert any("Orbi: fix needed" in body for body in posted)
+    assert not any("Orbi: blocked" in body for body in posted)
     assert "resume_pr_verification_failed" in caplog.text
 
 
@@ -620,7 +620,7 @@ def test_verify_resumed_pr_local_ahead_of_pr_head_continues_to_review(
 
     worktree = expected_resume_worktree(tmp_path)
     worktree.mkdir(parents=True)
-    branch = f"muyan-pilot/owner-repo-issue-9-{FAKE_RUN_ID}"
+    branch = f"orbi/owner-repo-issue-9-{FAKE_RUN_ID}"
     local_head = "18c78a2" * 5 + "18c78a2"
     pr_head = "ed72915" * 5 + "ed72915"
 
@@ -647,7 +647,7 @@ def test_verify_resumed_pr_local_ahead_of_pr_head_continues_to_review(
                 "headRepository": {"name": "repo"},
                 "headRepositoryOwner": {"login": "owner"},
                 "body": (
-                    f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n\n"
+                    f"<!-- orbi:run={FAKE_RUN_ID} -->\n\n"
                     "Fixes #9\n\nPlan"
                 ),
             }])
@@ -715,7 +715,7 @@ def test_verify_resumed_pr_unrecoverable_failure_marks_blocked_with_reason(
                 "remove": "ai-pr-opened"}),
     ]
     body = captured["comments"][0][1]["body"]
-    assert "Muyan Pilot failed:" in body
+    assert "Orbi failed:" in body
     assert "not authorized" in body
     assert "cannot be recovered automatically" in body
     posted = [
@@ -723,8 +723,8 @@ def test_verify_resumed_pr_unrecoverable_failure_marks_blocked_with_reason(
         for command in captured["api"]
         if "--method" in command and "POST" in command
     ]
-    assert any("Muyan Pilot: blocked" in body for body in posted)
-    assert not any("Muyan Pilot: fix needed" in body for body in posted)
+    assert any("Orbi: blocked" in body for body in posted)
+    assert not any("Orbi: fix needed" in body for body in posted)
 
 
 def test_verify_resumed_pr_recoverable_failure_with_session_file_includes_session_scene(
@@ -790,7 +790,7 @@ def test_verify_resumed_pr_recoverable_failure_scene_snapshot_failure_is_logged(
         )
     assert "activity scene failed" in caplog.text
     body = captured["comments"][0][1]["body"]
-    assert "Muyan Pilot needs a fix:" in body
+    assert "Orbi needs a fix:" in body
     assert "session=-" in body
 
 
@@ -852,7 +852,7 @@ def test_block_scene_failure_states_why_not_auto_recoverable(
         monkeypatch, caplog,
 ):
     """Issue #50: a scene that cannot be recovered (no trusted
-    `Muyan Pilot opened PR:` comment) is an external precondition the
+    `Orbi opened PR:` comment) is an external precondition the
     AI cannot fix by itself (the runner cannot derive run_id/branch/
     worktree/PR without it and cannot start a review session): the
     Issue is marked ai-blocked and the comment states the EXPLICIT
@@ -883,11 +883,11 @@ def test_block_scene_failure_states_why_not_auto_recoverable(
     ]
     assert len(posted) == 1
     body = posted[0]
-    assert "Muyan Pilot failed:" in body
+    assert "Orbi failed:" in body
     assert "cannot be recovered automatically" in body
     # The reason names what is missing (the trusted scene) and what a
     # human must do (restore the scene or relabel).
-    assert "Muyan Pilot opened PR" in body
+    assert "Orbi opened PR" in body
     assert "ai-fix-needed" in body
     assert "resume_scene_failed" in caplog.text or \
         "resume scene is malformed" in caplog.text
@@ -909,8 +909,8 @@ def test_review_rounds_exhausted_raises_unrecoverable(monkeypatch, tmp_path):
         lambda number, repo: [
             {
                 "body": (
-                    f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n"
-                    f"Muyan Pilot review round {i} for PR #46: findings"
+                    f"<!-- orbi:run={FAKE_RUN_ID} -->\n"
+                    f"Orbi review round {i} for PR #46: findings"
                 ),
                 "authorAssociation": "OWNER",
             }

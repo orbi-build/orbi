@@ -40,7 +40,7 @@ Dispatch a task for Orbi by creating an Issue and labeling it
 `ai-ready` (the CLI does both in one step):
 
 ```bash
-muyan-pilot add "task title" --body "task body" --config muyan-pilot.toml
+orbi add "task title" --body "task body" --config orbi.toml
 ```
 
 or manually:
@@ -61,8 +61,8 @@ the repository only when the task is actually about them (Issue #180).
 Open an Issue with the `bug` label and include:
 
 - the command that failed and its return code / stdout / stderr;
-- the journal scene (`journalctl --user -u muyan-pilot@1.service -u
-  muyan-pilot@2.service` around the failure, or the `run_failed` line
+- the journal scene (`journalctl --user -u orbi@1.service -u
+  orbi@2.service` around the failure, or the `run_failed` line
   with its run id);
 - the Issue/PR state (labels) and the run id from the progress comment;
 - the environment: OS, Python version, Pi version, model endpoint type.

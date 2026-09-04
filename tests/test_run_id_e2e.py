@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-import muyan_pilot.runner as runner
+import orbi.runner as runner
 
 REPO = "owner/repo"
 ISSUE_NUMBER = 41
@@ -43,7 +43,7 @@ run_id = re.search(r"Run id: `([0-9a-f]{8})`", prompt).group(1)
 cwd = os.getcwd()
 os.makedirs(os.path.join(cwd, ".pi-session"), exist_ok=True)
 plan = (
-    f"<!-- muyan-pilot:run={run_id} -->\\n"
+    f"<!-- orbi:run={run_id} -->\\n"
     f"# Plan\\n\\nrun_id={run_id}\\n"
 )
 with open(os.path.join(cwd, "plan.md"), "w", encoding="utf-8") as handle:
@@ -93,7 +93,7 @@ with open(os.path.join(session_dir, "s.jsonl"), "a", encoding="utf-8") as handle
     for record in records:
         handle.write(json.dumps(record) + "\\n")
 plan = (
-    f"<!-- muyan-pilot:run={run_id} -->\\n"
+    f"<!-- orbi:run={run_id} -->\\n"
     f"# Plan\\n\\nrun_id={run_id}\\n"
 )
 with open(os.path.join(cwd, "plan.md"), "w", encoding="utf-8") as handle:
@@ -304,7 +304,7 @@ def issue() -> dict:
 def worktree_for(clone: Path, run_id: str) -> Path:
     return (
         clone / ".worktrees"
-        / f"muyan-pilot-{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-{run_id}"
+        / f"orbi-{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-{run_id}"
     )
 
 
@@ -364,19 +364,19 @@ def test_e2e_one_run_id_carries_every_event_of_the_attempt(
     assert len(comments) == 6
     for body in comments:
         assert f"run_id={run_id}" in body
-        assert f"<!-- muyan-pilot:run={run_id} -->" in body
+        assert f"<!-- orbi:run={run_id} -->" in body
 
     # 3. Branch and worktree names carry the run_id.
     worktree = worktree_for(clone, run_id)
     assert worktree.is_dir()
     assert git(worktree, "branch", "--show-current") == (
-        f"muyan-pilot/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-{run_id}"
+        f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-{run_id}"
     )
 
     # 4. Run artifacts live inside the run-scoped worktree and carry the
     #    marker; the Pi session dir is under the same run-scoped path.
     plan = (worktree / "plan.md").read_text(encoding="utf-8")
-    assert f"<!-- muyan-pilot:run={run_id} -->" in plan
+    assert f"<!-- orbi:run={run_id} -->" in plan
     assert (worktree / ".pi-session").is_dir()
 
 
@@ -406,12 +406,12 @@ def test_e2e_retry_of_same_issue_gets_new_run_id_and_keeps_old_scene(
     # id (six comments per attempt: started Pi, progress, started
     # milestone, plan ready milestone, opened PR, PR opened milestone).
     assert len(comments) == 12
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in comments[0]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in comments[0]
     assert "b2c3d4e5" not in comments[0]
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in comments[1]
-    assert "<!-- muyan-pilot:run=b2c3d4e5 -->" in comments[6]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in comments[1]
+    assert "<!-- orbi:run=b2c3d4e5 -->" in comments[6]
     assert "a1b2c3d4" not in comments[6]
-    assert "<!-- muyan-pilot:run=b2c3d4e5 -->" in comments[7]
+    assert "<!-- orbi:run=b2c3d4e5 -->" in comments[7]
 
     # The journal timeline splits cleanly into the two runs.
     first_lines = [
@@ -443,15 +443,15 @@ def test_e2e_failed_attempt_marks_blocked_with_same_run_id(
     # (progress + started milestone + started Pi + failure + blocked
     # milestone).
     assert len(comments) == 5
-    start = [c for c in comments if "Muyan Pilot started Pi:" in c][0]
-    failure = [c for c in comments if "Muyan Pilot failed:" in c][0]
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in start
-    assert "Muyan Pilot failed:" in failure
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in failure
+    start = [c for c in comments if "Orbi started Pi:" in c][0]
+    failure = [c for c in comments if "Orbi failed:" in c][0]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in start
+    assert "Orbi failed:" in failure
+    assert "<!-- orbi:run=a1b2c3d4 -->" in failure
     assert "run_id=a1b2c3d4" in failure
-    blocked = [c for c in comments if "Muyan Pilot: blocked" in c]
+    blocked = [c for c in comments if "Orbi: blocked" in c]
     assert blocked
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in blocked[0]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in blocked[0]
 
     # Every journal line of the failed attempt carries the same run id.
     for message in caplog.messages:
@@ -508,7 +508,7 @@ def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
     # The kill left the label behind: the fake state still carries it.
     assert "ai-in-progress" in labels[ISSUE_NUMBER]
     first_progress = [
-        body for body in comments if "**Muyan Pilot progress**" in body
+        body for body in comments if "**Orbi progress**" in body
     ]
     assert len(first_progress) == 1
 
@@ -527,18 +527,18 @@ def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
     assert not worktree_for(clone, "b2c3d4e5").exists()
     assert git(
         first_worktree, "branch", "--show-current",
-    ) == f"muyan-pilot/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-a1b2c3d4"
+    ) == f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-a1b2c3d4"
 
     # Exactly ONE progress comment: the restarted run PATCHed the
     # existing one (found by its run marker), never a second one.
     progress_bodies = [
-        body for body in comments if "**Muyan Pilot progress**" in body
+        body for body in comments if "**Orbi progress**" in body
     ]
     assert len(progress_bodies) == 1, (
         f"restart must not create a second progress comment: {comments}"
     )
-    assert "Muyan Pilot delivered" in progress_bodies[0]
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in progress_bodies[0]
+    assert "Orbi delivered" in progress_bodies[0]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in progress_bodies[0]
     assert "b2c3d4e5" not in progress_bodies[0]
 
     # The delivery finished: the in-progress label is gone.

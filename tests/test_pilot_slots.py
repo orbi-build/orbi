@@ -16,7 +16,7 @@ import sys
 import threading
 from pathlib import Path
 
-from muyan_pilot import pilot_slots
+from orbi import pilot_slots
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -24,8 +24,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 def run_slot_script(code: str) -> subprocess.Popen:
     """Start a child process that imports pilot_slots from the
     checkout's `src/` layout (Issue #168). The cwd is NEUTRAL: with the
-    checkout root as cwd, the repo-root `muyan_pilot.py` compat shim
-    would shadow the `muyan_pilot` package on sys.path."""
+    checkout root as cwd, the repo-root `orbi.py` compat shim
+    would shadow the `orbi` package on sys.path."""
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO_ROOT / "src")
     return subprocess.Popen(
@@ -38,7 +38,7 @@ def run_slot_script(code: str) -> subprocess.Popen:
 def slot_script_code(state: Path, extra: str = "") -> str:
     return (
         "import os, sys\n"
-        "from muyan_pilot import pilot_slots\n"
+        "from orbi import pilot_slots\n"
         f"state = {str(state)!r}\n"
         "slot = pilot_slots.acquire_slot(state, 1, os.getpid())\n"
         "if slot is None:\n"
@@ -442,7 +442,7 @@ def test_read_pid_returns_none_for_non_numeric_content(tmp_path):
 def test_slot_dir_for_derives_state_directory():
     assert (
         pilot_slots.slot_dir_for(Path("/srv/repo"))
-        == Path("/srv/repo") / ".muyan-pilot" / "slots"
+        == Path("/srv/repo") / ".orbi" / "slots"
     )
 
 

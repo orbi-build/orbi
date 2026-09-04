@@ -1,6 +1,6 @@
 {
-  "uid": "muyan-pilot",
-  "title": "Muyan Pilot — Runner observability",
+  "uid": "orbi",
+  "title": "Orbi — Runner observability",
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",
@@ -19,13 +19,13 @@
     {
       "id": 101,
       "type": "stat",
-      "title": "muyan-pilot@N.service active (1 = active)",
+      "title": "orbi@N.service active (1 = active)",
       "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" },
       "gridPos": { "x": 0, "y": 1, "w": 12, "h": 4 },
       "targets": [
         {
           "refId": "A",
-          "expr": "muyan_pilot_service_active",
+          "expr": "orbi_service_active",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
       ],
@@ -53,7 +53,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "muyan_pilot_service_active",
+          "expr": "orbi_service_active",
           "legendFormat": "{{slot}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
@@ -78,7 +78,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "muyan_pilot_run_active",
+          "expr": "orbi_run_active",
           "legendFormat": "{{slot}} {{issue}} {{role}} {{phase}} {{state}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
@@ -101,7 +101,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "muyan_pilot_run_idle_seconds",
+          "expr": "orbi_run_idle_seconds",
           "legendFormat": "{{slot}} {{issue}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
@@ -129,7 +129,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (slot, issue, reason) (increase(muyan_pilot_run_failed_total[1h]))",
+          "expr": "sum by (slot, issue, reason) (increase(orbi_run_failed_total[1h]))",
           "legendFormat": "{{slot}} {{issue}} {{reason}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
@@ -146,19 +146,19 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (slot) (increase(muyan_pilot_pi_idle_total[1h]))",
+          "expr": "sum by (slot) (increase(orbi_pi_idle_total[1h]))",
           "legendFormat": "pi_idle {{slot}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         },
         {
           "refId": "B",
-          "expr": "sum by (slot) (increase(muyan_pilot_pi_idle_term_total[1h]))",
+          "expr": "sum by (slot) (increase(orbi_pi_idle_term_total[1h]))",
           "legendFormat": "pi_idle_term {{slot}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         },
         {
           "refId": "C",
-          "expr": "sum by (slot) (increase(muyan_pilot_pi_idle_kill_total[1h]))",
+          "expr": "sum by (slot) (increase(orbi_pi_idle_kill_total[1h]))",
           "legendFormat": "pi_idle_kill {{slot}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
@@ -175,7 +175,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (slot, issue) (increase(muyan_pilot_progress_publish_failed_total[1h]))",
+          "expr": "sum by (slot, issue) (increase(orbi_progress_publish_failed_total[1h]))",
           "legendFormat": "{{slot}} {{issue}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
@@ -192,7 +192,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (slot, issue) (increase(muyan_pilot_model_wait_total[1h]))",
+          "expr": "sum by (slot, issue) (increase(orbi_model_wait_total[1h]))",
           "legendFormat": "{{slot}} {{issue}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
@@ -217,13 +217,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (issue) (increase(muyan_pilot_run_start_total[1h]))",
+          "expr": "sum by (issue) (increase(orbi_run_start_total[1h]))",
           "legendFormat": "start {{issue}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         },
         {
           "refId": "B",
-          "expr": "sum by (issue) (increase(muyan_pilot_run_end_total[1h]))",
+          "expr": "sum by (issue) (increase(orbi_run_end_total[1h]))",
           "legendFormat": "end {{issue}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }
@@ -240,7 +240,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "muyan_pilot_run_seconds",
+          "expr": "orbi_run_seconds",
           "legendFormat": "{{slot}} {{issue}} {{role}}",
           "datasource": { "type": "prometheus", "uid": "eflztqehr89a8c" }
         }

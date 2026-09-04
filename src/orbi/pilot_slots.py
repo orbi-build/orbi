@@ -1,8 +1,8 @@
-"""Cross-process concurrency slots for Muyan Pilot (Issue #39).
+"""Cross-process concurrency slots for Orbi (Issue #39).
 
 The local machine can only serve a limited number of concurrent Pilot
 tasks, so the configured ``max_concurrency`` is enforced with one slot
-file per allowed task under ``<repo_dir>/.muyan-pilot/slots/``.
+file per allowed task under ``<repo_dir>/.orbi/slots/``.
 
 Each slot file is a plain file whose exclusive ``flock(2)`` lock is the
 ownership token:
@@ -30,7 +30,7 @@ import fcntl
 import os
 from pathlib import Path
 
-SLOT_DIRNAME = ".muyan-pilot/slots"
+SLOT_DIRNAME = ".orbi/slots"
 
 
 class Slot:

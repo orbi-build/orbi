@@ -4,7 +4,7 @@ The #158 incident class: the uv editable finder's module mapping was
 generated at install time from the hand-maintained ``pyproject.toml``
 ``py-modules`` list, so a newly added runtime module was invisible to
 the installed finder until a reinstall. Since the src layout the
-finder maps the WHOLE package directory ``src/muyan_pilot/`` — these
+finder maps the WHOLE package directory ``src/orbi/`` — these
 tests pin the acceptance against REAL installs (``uv venv`` +
 ``uv pip install --editable`` in a throwaway venv, never the machine's
 tool env):
@@ -12,9 +12,9 @@ tool env):
 - a newly added package module is importable by the NEXT process with
   NO reinstall (the root-cause fix);
 - the checkout root cannot shadow the installed package (no flat
-  ``muyan_pilot.py`` at the root; the import source resolves to the
+  ``orbi.py`` at the root; the import source resolves to the
   checkout's ``src/`` package from a neutral cwd);
-- the direct-execution entry ``python3 -m muyan_pilot.cli`` runs the
+- the direct-execution entry ``python3 -m orbi.cli`` runs the
   exact console-script code and FAILS FAST (no fallback) when the
   package is not importable.
 """
@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PACKAGE_DIR = "src/muyan_pilot"
+PACKAGE_DIR = "src/orbi"
 
 UV = shutil.which("uv")
 
@@ -101,7 +101,7 @@ def test_new_package_module_is_importable_without_reinstall(tmp_path):
 
     # The installed import source is the checkout's package.
     probe = _import_probe(
-        python, "import muyan_pilot; print(muyan_pilot.__file__)",
+        python, "import orbi; print(orbi.__file__)",
     )
     assert probe.returncode == 0, probe.stderr
     assert probe.stdout.strip() == str(
@@ -115,7 +115,7 @@ def test_new_package_module_is_importable_without_reinstall(tmp_path):
     )
     probe = _import_probe(
         python,
-        "from muyan_pilot.issue168_sentinel import SENTINEL; "
+        "from orbi.issue168_sentinel import SENTINEL; "
         "print(SENTINEL)",
     )
     assert probe.returncode == 0, (
@@ -127,12 +127,12 @@ def test_new_package_module_is_importable_without_reinstall(tmp_path):
 
 def test_console_script_works_from_the_editable_install(tmp_path):
     """Acceptance: the formal editable install produces a working
-    `muyan-pilot` console script (`muyan_pilot.cli:main`), asserted
+    `orbi` console script (`orbi.cli:main`), asserted
     against one real call — the same entry the systemd ExecStart
     uses."""
     checkout = _editable_checkout(tmp_path)
     python = _venv_python(tmp_path, checkout)
-    cli = python.parent / "muyan-pilot"
+    cli = python.parent / "orbi"
     assert cli.is_file(), "the editable install must create the console script"
     result = _run([str(cli), "--help"])
     assert result.returncode == 0, result.stderr
@@ -141,7 +141,7 @@ def test_console_script_works_from_the_editable_install(tmp_path):
         assert command in result.stdout
     result = _run([str(cli), "--version"])
     assert result.returncode == 0, result.stderr
-    assert "muyan-pilot 0.2.0" in result.stdout
+    assert "orbi 0.2.0" in result.stdout
 
 
 # --- the checkout root cannot shadow the installed package ------------------
@@ -151,13 +151,13 @@ def test_checkout_root_cannot_shadow_the_installed_package(tmp_path):
     """Acceptance: with the editable install in place, a fresh process
     from a NEUTRAL cwd imports the package from the checkout's
     ``src/`` — and the real checkout root carries no flat
-    ``muyan_pilot.py`` that could shadow the package for processes
+    ``orbi.py`` that could shadow the package for processes
     with the checkout root on sys.path."""
     checkout = _editable_checkout(tmp_path)
     python = _venv_python(tmp_path, checkout)
 
     probe = _import_probe(
-        python, "import muyan_pilot; print(muyan_pilot.__file__)",
+        python, "import orbi; print(orbi.__file__)",
     )
     assert probe.returncode == 0, probe.stderr
     assert probe.stdout.strip().startswith(
@@ -167,8 +167,8 @@ def test_checkout_root_cannot_shadow_the_installed_package(tmp_path):
         f"{probe.stdout.strip()!r}"
     )
 
-    assert not (REPO_ROOT / "muyan_pilot.py").is_file(), (
-        "a flat muyan_pilot.py at the checkout root would shadow the "
+    assert not (REPO_ROOT / "orbi.py").is_file(), (
+        "a flat orbi.py at the checkout root would shadow the "
         "installed package for every process with the checkout root on "
         "sys.path (Issue #168)"
     )
@@ -178,13 +178,13 @@ def test_checkout_root_cannot_shadow_the_installed_package(tmp_path):
 
 
 def test_direct_execution_entry_runs_the_console_script_code(tmp_path):
-    """`python3 -m muyan_pilot.cli --help` (the direct-execution
+    """`python3 -m orbi.cli --help` (the direct-execution
     compatibility entry) is the exact console-script code: it exposes
     the same subcommands (one real call)."""
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO_ROOT / "src")
     result = _run(
-        [sys.executable, "-m", "muyan_pilot.cli", "--help"],
+        [sys.executable, "-m", "orbi.cli", "--help"],
         cwd=str(REPO_ROOT), env=env,
     )
     assert result.returncode == 0, result.stderr
@@ -200,7 +200,7 @@ def test_direct_execution_entry_fails_fast_without_the_package(tmp_path):
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
     result = _run(
-        [sys.executable, "-m", "muyan_pilot.cli", "--help"],
+        [sys.executable, "-m", "orbi.cli", "--help"],
         cwd="/", env=env,
     )
     assert result.returncode != 0

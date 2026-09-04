@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Muyan Pilot task dispatch and status CLI.
+"""Orbi task dispatch and status CLI.
 
 With NO subcommand the CLI IS the Runner entry (Issue #140): it runs one
-tick, exactly like `python3 -m muyan_pilot.runner` — this is what the
-systemd service's `ExecStart` (the installed `muyan-pilot`) invokes on
+tick, exactly like `python3 -m orbi.runner` — this is what the
+systemd service's `ExecStart` (the installed `orbi`) invokes on
 every timer trigger. The named subcommands are the dispatch and debug
 entries on top of that:
 
@@ -31,9 +31,9 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
-from muyan_pilot import __version__, cli_source, git_transport, runner, systemd_deploy
+from orbi import __version__, cli_source, git_transport, runner, systemd_deploy
 
-from muyan_pilot.runner import (
+from orbi.runner import (
     RunIdFilter,
     freeze_base,
     load_config,
@@ -42,17 +42,17 @@ from muyan_pilot.runner import (
     run_command,
     validate_config,
 )
-from muyan_pilot import pilot_setup
-from muyan_pilot.pilot_slots import slot_occupancy
-from muyan_pilot.pi_activity import activity_snapshot
+from orbi import pilot_setup
+from orbi.pilot_slots import slot_occupancy
+from orbi.pi_activity import activity_snapshot
 
-LOGGER = logging.getLogger("muyan_pilot.cli")
+LOGGER = logging.getLogger("orbi.cli")
 # Same run correlation mechanism as the runner (Issue #41): when a run id is
 # bound, every journal line of this process starts with `[run_id]`.
 LOGGER.addFilter(RunIdFilter())
 
 # The CLI version (Issue #140): the single source of truth is the
-# package `muyan_pilot.__version__` (imported above). tests/
+# package `orbi.__version__` (imported above). tests/
 # test_cli_packaging.py pins it against the PEP 621 `version` in
 # pyproject.toml, so the two cannot drift.
 
@@ -149,7 +149,7 @@ SESSION_LINE_MAX = 200
 def find_session_file(repo_dir: Path) -> Path | None:
     """Return the newest `.pi-session/*.jsonl` under `repo_dir/.worktrees`.
 
-    Task worktrees live in `<repo_dir>/.worktrees/muyan-pilot-...` and
+    Task worktrees live in `<repo_dir>/.worktrees/orbi-...` and
     each Pi session appends its JSONL under the worktree's
     `.pi-session` directory; the newest file by mtime is the live one.
     Returns None when no session file exists (no Pi is running).
@@ -281,7 +281,7 @@ def latest_task_worktree(repo_dir: Path, source_repo: str,
                          number: int) -> Path | None:
     """Return the newest task worktree for an Issue, or None."""
     slug = source_repo.replace("/", "-")
-    pattern = f".worktrees/muyan-pilot-{slug}-issue-{number}-*"
+    pattern = f".worktrees/orbi-{slug}-issue-{number}-*"
     candidates = [
         path for path in repo_dir.glob(pattern) if path.is_dir()
     ]
@@ -328,11 +328,11 @@ def slot_lines(state_dir: Path, capacity: int) -> list[str]:
 
 
 # Deployment consistency (Issue #103, #149): the repo templates
-# (systemd/muyan-pilot@.service + @.timer) are the single source of
+# (systemd/orbi@.service + @.timer) are the single source of
 # truth. `install-units` deploys them idempotently (it never
 # starts/stops/restarts the service — a running Runner keeps running,
 # the new config takes effect at the next service start) and enables
-# the two timer instances (muyan-pilot@1.timer / @2.timer); `doctor`
+# the two timer instances (orbi@1.timer / @2.timer); `doctor`
 # is the read-only report (repo commit, unit drift, timer/service
 # instance state, slots, Pi session, current Issue, recent journal).
 JOURNAL_LINES = 20
@@ -418,14 +418,14 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
                 f"  {entry['unit']}: sha256={entry['installed_sha256']}"
             )
     # CLI source (Issue #152): the official local deployment is the
-    # editable uv tool install — the tool env imports `muyan_pilot`
+    # editable uv tool install — the tool env imports `orbi`
     # from the deployment checkout, so the ExecStartPre sync is picked
     # up by the next CLI process. A non-editable (site-packages) or
     # stale (different checkout) source is REPORTED with the
     # structured `cli_source_drift` line (actual path, expected
     # repo_dir, the exact editable reinstall command — the fix leads
     # with the editable reinstall, never with
-    # `muyan-pilot install-units` alone). Read-only: the report stays
+    # `orbi install-units` alone). Read-only: the report stays
     # readable and the rest of the health report is still produced.
     source = cli_source.cli_source(repo_dir)
     line = cli_source.drift_line(source)
@@ -492,17 +492,17 @@ def main(argv: list[str] | None = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
         "--config", type=Path,
-        default=Path(os.environ.get("MUYAN_PILOT_CONFIG", "muyan-pilot.toml")),
+        default=Path(os.environ.get("ORBI_CONFIG", "orbi.toml")),
     )
     parser = argparse.ArgumentParser(description=__doc__, parents=[common])
     parser.add_argument(
         "--version", action="version",
-        version=f"muyan-pilot {__version__}",
+        version=f"orbi {__version__}",
     )
     # Issue #140: the subcommand is OPTIONAL — with no subcommand the
     # installed CLI runs one Runner tick (the systemd ExecStart is the
-    # bare `muyan-pilot`), exactly like `python3 -m
-    # muyan_pilot.runner`.
+    # bare `orbi`), exactly like `python3 -m
+    # orbi.runner`.
     subparsers = parser.add_subparsers(dest="command")
     add_parser = subparsers.add_parser(
         "add", parents=[common],
@@ -575,7 +575,7 @@ def main(argv: list[str] | None = None) -> int:
         # Runner's own main: it re-parses `--config` and owns the whole
         # tick contract (unit-drift preflight, transport preflight,
         # slot, claim, fail-fast) — the same behavior the
-        # `python3 -m muyan_pilot.runner` entry has.
+        # `python3 -m orbi.runner` entry has.
         return runner.main(["--config", str(args.config)])
 
     config = load_config(args.config)

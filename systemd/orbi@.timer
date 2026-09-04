@@ -1,15 +1,15 @@
 [Unit]
-Description=Muyan Pilot — poll both GitHub Issue sources (instance %i)
+Description=Orbi — poll both GitHub Issue sources (instance %i)
 
 [Timer]
 OnCalendar=*-*-* *:00/5
 AccuracySec=30s
 Persistent=false
 # Issue #149: each timer instance triggers its own service instance
-# (muyan-pilot@1.timer -> muyan-pilot@1.service, ...@2 -> ...@2), so
+# (orbi@1.timer -> orbi@1.service, ...@2 -> ...@2), so
 # two independent Runner instances can run concurrently; the capacity
 # is still the flock slots in the Runner.
-Unit=muyan-pilot@%i.service
+Unit=orbi@%i.service
 
 [Install]
 WantedBy=timers.target

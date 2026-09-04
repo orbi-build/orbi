@@ -15,27 +15,27 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DASHBOARD_PATH = (
-    REPO_ROOT / "monitoring" / "grafana" / "dashboards" / "muyan-pilot.json"
+    REPO_ROOT / "monitoring" / "grafana" / "dashboards" / "orbi.json"
 )
 
 # The machine's Prometheus datasource (verified against the running
 # Grafana 13.1.2 data_source table).
 PROMETHEUS_DS = {"type": "prometheus", "uid": "eflztqehr89a8c"}
 
-# The exporter's metric family (monitoring/prometheus/muyan-pilot-exporter.py).
+# The exporter's metric family (monitoring/prometheus/orbi-exporter.py).
 MUYAN_METRICS = (
-    "muyan_pilot_service_active",
-    "muyan_pilot_run_active",
-    "muyan_pilot_run_seconds",
-    "muyan_pilot_run_idle_seconds",
-    "muyan_pilot_run_start_total",
-    "muyan_pilot_run_end_total",
-    "muyan_pilot_run_failed_total",
-    "muyan_pilot_progress_publish_failed_total",
-    "muyan_pilot_model_wait_total",
-    "muyan_pilot_pi_idle_total",
-    "muyan_pilot_pi_idle_term_total",
-    "muyan_pilot_pi_idle_kill_total",
+    "orbi_service_active",
+    "orbi_run_active",
+    "orbi_run_seconds",
+    "orbi_run_idle_seconds",
+    "orbi_run_start_total",
+    "orbi_run_end_total",
+    "orbi_run_failed_total",
+    "orbi_progress_publish_failed_total",
+    "orbi_model_wait_total",
+    "orbi_pi_idle_total",
+    "orbi_pi_idle_term_total",
+    "orbi_pi_idle_kill_total",
 )
 
 # Existing llama metrics the dashboard REUSES (never re-implemented).
@@ -74,7 +74,7 @@ def all_exprs(dashboard):
 
 def test_dashboard_file_is_valid_json_with_stable_uid():
     dashboard = load_dashboard()
-    assert dashboard["uid"] == "muyan-pilot"
+    assert dashboard["uid"] == "orbi"
     assert dashboard["title"]
     assert dashboard["schemaVersion"] >= 39
     assert dashboard["panels"], "the dashboard must have panels"
@@ -134,14 +134,14 @@ def test_helpers_handle_targets_without_expr_and_flag_disallowed_labels():
                 "title": "p",
                 "datasource": PROMETHEUS_DS,
                 "targets": [
-                    {"refId": "A", "expr": "muyan_pilot_service_active",
+                    {"refId": "A", "expr": "orbi_service_active",
                      "datasource": PROMETHEUS_DS},
                     {"refId": "B"},
                 ],
             },
         ],
     }
-    assert all_exprs(dashboard) == ["muyan_pilot_service_active"]
+    assert all_exprs(dashboard) == ["orbi_service_active"]
 
     # The datasource check tolerates a target without `expr` and accepts
     # the Prometheus datasource on panel and expr targets.
@@ -149,15 +149,15 @@ def test_helpers_handle_targets_without_expr_and_flag_disallowed_labels():
 
     # The label allowlist check flags a disallowed label (run_id) in an
     # expr and accepts the allowed ones.
-    bad = 'muyan_pilot_run_active{run_id="cf357f0e"}'
+    bad = 'orbi_run_active{run_id="cf357f0e"}'
     with pytest.raises(AssertionError):
         _check_labels([bad])
     # The scraper-reserved `instance` label is flagged too: it would
     # silently match the scrape target, not the Runner slot.
     with pytest.raises(AssertionError):
-        _check_labels(['muyan_pilot_run_active{instance="1"}'])
-    _check_labels(["muyan_pilot_run_active{slot=\"1\"}"])
-    _check_labels(["muyan_pilot_service_active"])
+        _check_labels(['orbi_run_active{instance="1"}'])
+    _check_labels(["orbi_run_active{slot=\"1\"}"])
+    _check_labels(["orbi_service_active"])
 
 
 def _check_labels(exprs):

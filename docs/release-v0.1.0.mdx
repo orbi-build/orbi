@@ -29,12 +29,12 @@ the review-round-1 fix commit — which is NOT reachable from the
 `v0.1.0` target. `git diff 335fa274 f82969e9` shows the fixes the
 original tag misses:
 
-- `muyan_pilot.py`: session-follow line handling (the `follow_session_file`
+- `orbi.py`: session-follow line handling (the `follow_session_file`
   contract: only follow the file it was given, no re-discovery mid-follow,
   no fragmented/dropped lines for the `--pretty` parser);
 - `.gitignore`: run-artifact ignore entries;
 - `README.md`: wording aligned with the session contract;
-- `tests/test_muyan_pilot.py`, `tests/test_run_artifacts.py`: the pinning
+- `tests/test_orbi.py`, `tests/test_run_artifacts.py`: the pinning
   tests for the above;
 - removal of the run artifacts `plan.md`/`test.log` from the tree.
 
@@ -53,11 +53,11 @@ verified incomplete, or excluded.
 | #78 | Implementer does not run the independent review-fix loop before the PR | MERGED | PR #109 (merge commit `678c72f91ffc18f8bf79c09a6ccbec28c1f57d0f`); guard test `tests/test_agents_md.py` |
 | #79 | `ProgressPublisher` is a pure bypass, never blocks the main delivery | MERGED | PR #107 (merge commit `e2cc6dca5b66e5a6b16df38fc9819a2c13a78fa7`); code: `progress_publish_failed` log-only path |
 | #82 | Reviewer fixes findings in the same session before the verdict | MERGED | PR #87 (merge commit `724892763f90eaa166ee20f26157335b51111222`); `prompt_review.md` in-session fix contract |
-| #52 | Start the Runner from the latest `origin/main` | MERGED | PR #92 (ExecStartPre `git fetch origin main && git merge --ff-only origin/main` in `systemd/muyan-pilot.service`); Epic #80's "(PR #112)" reference is inaccurate — PR #112 is #103's deployment consistency; the #52 code landed in PR #92 |
+| #52 | Start the Runner from the latest `origin/main` | MERGED | PR #92 (ExecStartPre `git fetch origin main && git merge --ff-only origin/main` in `systemd/orbi.service`); Epic #80's "(PR #112)" reference is inaccurate — PR #112 is #103's deployment consistency; the #52 code landed in PR #92 |
 | #53 | PR body uses `Fixes #N` so GitHub closes the Issue natively | MERGED | PR #69 (merge commit `133786e391a3eec9c23f73c5172f6dedd6faea4c`) |
 | #71 | Pick `ai-ready` bugs before new features | MERGED | PR #92 (`BUG_READY_SEARCH` in `bootstrap_runner.py`; later extended by #101's P0 scan) |
 | #73 | Prompt/skill/harness: verify against docs and reality, do not guess | MERGED | PR #92 (prompt.md "Hard rules for external behavior (Issue #73)", prompt_review.md verification rules, bypass-log-only rule; pinned by `tests/test_bootstrap_runner.py` prompt-contract tests). Issue was still OPEN with no terminal label — closed by this run with an evidence comment and the `ai-merged` label |
-| #74 | `muyan_pilot.py session [--follow] [--pretty]` | MERGED | PR #92 (`session` subcommand in `muyan_pilot.py`); real call `muyan_pilot.py session --help` exits 0 and shows `--follow`/`--pretty` (asserted in `tests/test_release_v01.py`) |
+| #74 | `orbi.py session [--follow] [--pretty]` | MERGED | PR #92 (`session` subcommand in `orbi.py`); real call `orbi.py session --help` exits 0 and shows `--follow`/`--pretty` (asserted in `tests/test_release_v01.py`) |
 | #49 | Document GitHub labels, run markers, and recovery state | MERGED | PR #111 (docs site) + contract test `tests/test_docs_labels.py`; closed by the #76 cleanup run |
 | #76 | Close leftover Issues that already have `ai-merged` and a merged PR | MERGED | Cleanup run closed #49/#52/#71/#74 (2026-08-27T01:56Z) and itself, with an evidence comment |
 | #81 | Root-directory LICENSE | MERGED | PR #88 (merge commit `b9a7e1fe9021629bb14f2b36ea1302d818a5981c`) |

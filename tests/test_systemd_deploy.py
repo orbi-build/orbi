@@ -1,11 +1,11 @@
 """Systemd deployment consistency tests (Issue #103, #149).
 
-The repo templates (``systemd/muyan-pilot@.service`` and
-``muyan-pilot@.timer``) are the single source of truth. The install
+The repo templates (``systemd/orbi@.service`` and
+``orbi@.timer``) are the single source of truth. The install
 command is idempotent and must never start/stop/restart the service:
 a currently running Runner keeps running, and the new config takes
 effect at the next service start. The install enables the two timer
-instances (``muyan-pilot@1.timer``, ``muyan-pilot@2.timer``) and
+instances (``orbi@1.timer``, ``orbi@2.timer``) and
 migrates the pre-#149 non-templated units away once. The pre-start
 check compares the installed units against the templates and fails
 fast with a structured ``unit_drift`` line when they drift.
@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from muyan_pilot import systemd_deploy
+from orbi import systemd_deploy
 
 
 def make_repo(tmp_path: Path) -> Path:
@@ -24,11 +24,11 @@ def make_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     systemd = repo / "systemd"
     systemd.mkdir(parents=True)
-    (systemd / "muyan-pilot@.service").write_text(
+    (systemd / "orbi@.service").write_text(
         "[Service]\nExecStart=/usr/bin/python3 bootstrap_runner.py\n",
         encoding="utf-8",
     )
-    (systemd / "muyan-pilot@.timer").write_text(
+    (systemd / "orbi@.timer").write_text(
         "[Timer]\nOnCalendar=*-*-* *:00/5\n", encoding="utf-8",
     )
     return repo
@@ -56,7 +56,7 @@ def test_unit_names_cover_service_and_timer():
     # The check must cover BOTH template units (Issue #103
     # requirement, the instantiated names since Issue #149).
     assert systemd_deploy.UNIT_NAMES == (
-        "muyan-pilot@.service", "muyan-pilot@.timer",
+        "orbi@.service", "orbi@.timer",
     )
 
 
@@ -65,10 +65,10 @@ def test_instance_names_cover_two_timers_and_two_services():
     # service instance (the capacity is the flock slots, not the
     # instance count).
     assert systemd_deploy.TIMER_INSTANCES == (
-        "muyan-pilot@1.timer", "muyan-pilot@2.timer",
+        "orbi@1.timer", "orbi@2.timer",
     )
     assert systemd_deploy.SERVICE_INSTANCES == (
-        "muyan-pilot@1.service", "muyan-pilot@2.service",
+        "orbi@1.service", "orbi@2.service",
     )
 
 
@@ -80,7 +80,7 @@ def test_repo_unit_dir_points_at_the_systemd_directory(tmp_path):
 def test_installed_unit_dir_defaults_to_the_user_config_dir(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.delenv("MUYAN_PILOT_UNIT_DIR", raising=False)
+    monkeypatch.delenv("ORBI_UNIT_DIR", raising=False)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     assert systemd_deploy.installed_unit_dir() == (
@@ -89,7 +89,7 @@ def test_installed_unit_dir_defaults_to_the_user_config_dir(
 
 
 def test_installed_unit_dir_respects_xdg_config_home(monkeypatch, tmp_path):
-    monkeypatch.delenv("MUYAN_PILOT_UNIT_DIR", raising=False)
+    monkeypatch.delenv("ORBI_UNIT_DIR", raising=False)
     xdg = tmp_path / "xdg"
     monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
     assert systemd_deploy.installed_unit_dir() == (
@@ -98,14 +98,14 @@ def test_installed_unit_dir_respects_xdg_config_home(monkeypatch, tmp_path):
 
 
 def test_installed_unit_dir_explicit_argument_wins(monkeypatch, tmp_path):
-    monkeypatch.delenv("MUYAN_PILOT_UNIT_DIR", raising=False)
+    monkeypatch.delenv("ORBI_UNIT_DIR", raising=False)
     target = tmp_path / "elsewhere"
     assert systemd_deploy.installed_unit_dir(str(target)) == target
 
 
 def test_installed_unit_dir_env_override_wins(monkeypatch, tmp_path):
     target = tmp_path / "override"
-    monkeypatch.setenv("MUYAN_PILOT_UNIT_DIR", str(target))
+    monkeypatch.setenv("ORBI_UNIT_DIR", str(target))
     assert systemd_deploy.installed_unit_dir() == target
 
 
@@ -134,51 +134,51 @@ def test_unit_status_reports_clean_when_templates_match(tmp_path):
 
 def test_unit_status_reports_drift_for_a_changed_unit(tmp_path):
     repo = make_repo(tmp_path)
-    installed = make_installed(tmp_path, repo, mutate="muyan-pilot@.timer")
+    installed = make_installed(tmp_path, repo, mutate="orbi@.timer")
     status = systemd_deploy.unit_status(repo, installed)
     by_unit = {entry["unit"]: entry for entry in status}
-    assert by_unit["muyan-pilot@.service"]["drifted"] is False
-    assert by_unit["muyan-pilot@.timer"]["drifted"] is True
-    assert by_unit["muyan-pilot@.timer"]["missing"] is False
+    assert by_unit["orbi@.service"]["drifted"] is False
+    assert by_unit["orbi@.timer"]["drifted"] is True
+    assert by_unit["orbi@.timer"]["missing"] is False
     assert (
-        by_unit["muyan-pilot@.timer"]["repo_sha256"]
-        != by_unit["muyan-pilot@.timer"]["installed_sha256"]
+        by_unit["orbi@.timer"]["repo_sha256"]
+        != by_unit["orbi@.timer"]["installed_sha256"]
     )
 
 
 def test_unit_status_reports_missing_installed_unit_as_drift(tmp_path):
     repo = make_repo(tmp_path)
     installed = make_installed(tmp_path, repo)
-    (installed / "muyan-pilot@.service").unlink()
+    (installed / "orbi@.service").unlink()
     status = systemd_deploy.unit_status(repo, installed)
     by_unit = {entry["unit"]: entry for entry in status}
-    assert by_unit["muyan-pilot@.service"]["drifted"] is True
-    assert by_unit["muyan-pilot@.service"]["missing"] is True
-    assert by_unit["muyan-pilot@.service"]["installed_sha256"] is None
-    assert by_unit["muyan-pilot@.timer"]["drifted"] is False
+    assert by_unit["orbi@.service"]["drifted"] is True
+    assert by_unit["orbi@.service"]["missing"] is True
+    assert by_unit["orbi@.service"]["installed_sha256"] is None
+    assert by_unit["orbi@.timer"]["drifted"] is False
 
 
 def test_unit_status_reports_missing_template_as_drift(tmp_path):
     repo = make_repo(tmp_path)
     installed = make_installed(tmp_path, repo)
-    (repo / "systemd" / "muyan-pilot@.timer").unlink()
+    (repo / "systemd" / "orbi@.timer").unlink()
     status = systemd_deploy.unit_status(repo, installed)
     by_unit = {entry["unit"]: entry for entry in status}
-    assert by_unit["muyan-pilot@.timer"]["drifted"] is True
-    assert by_unit["muyan-pilot@.timer"]["repo_sha256"] is None
-    assert by_unit["muyan-pilot@.service"]["drifted"] is False
+    assert by_unit["orbi@.timer"]["drifted"] is True
+    assert by_unit["orbi@.timer"]["repo_sha256"] is None
+    assert by_unit["orbi@.service"]["drifted"] is False
 
 
 def test_drift_lines_carry_paths_hashes_and_fix_command(tmp_path):
     repo = make_repo(tmp_path)
-    installed = make_installed(tmp_path, repo, mutate="muyan-pilot@.service")
+    installed = make_installed(tmp_path, repo, mutate="orbi@.service")
     status = systemd_deploy.unit_status(repo, installed)
     lines = systemd_deploy.drift_lines(status)
     assert len(lines) == 1
     line = lines[0]
-    assert line.startswith("unit_drift unit=muyan-pilot@.service ")
-    assert f"repo={repo / 'systemd' / 'muyan-pilot@.service'}" in line
-    assert f"installed={installed / 'muyan-pilot@.service'}" in line
+    assert line.startswith("unit_drift unit=orbi@.service ")
+    assert f"repo={repo / 'systemd' / 'orbi@.service'}" in line
+    assert f"installed={installed / 'orbi@.service'}" in line
     drifted = [e for e in status if e["drifted"]][0]
     assert f"repo_sha256={drifted['repo_sha256']}" in line
     assert f"installed_sha256={drifted['installed_sha256']}" in line
@@ -192,11 +192,11 @@ def test_drift_lines_quote_values_with_spaces(tmp_path):
     # stays parseable.
     spaced = tmp_path / "my repo"
     repo = make_repo(spaced)
-    installed = make_installed(spaced, repo, mutate="muyan-pilot@.timer")
+    installed = make_installed(spaced, repo, mutate="orbi@.timer")
     status = systemd_deploy.unit_status(repo, installed)
     lines = systemd_deploy.drift_lines(status)
-    assert f'repo="{repo / "systemd" / "muyan-pilot@.timer"}"' in lines[0]
-    assert f'installed="{installed / "muyan-pilot@.timer"}"' in lines[0]
+    assert f'repo="{repo / "systemd" / "orbi@.timer"}"' in lines[0]
+    assert f'installed="{installed / "orbi@.timer"}"' in lines[0]
 
 
 def test_drift_lines_is_empty_when_clean(tmp_path):
@@ -208,20 +208,20 @@ def test_drift_lines_is_empty_when_clean(tmp_path):
 
 def test_check_unit_drift_raises_with_all_drifted_units(tmp_path, caplog):
     repo = make_repo(tmp_path)
-    installed = make_installed(tmp_path, repo, mutate="muyan-pilot@.service")
-    (installed / "muyan-pilot@.timer").unlink()
+    installed = make_installed(tmp_path, repo, mutate="orbi@.service")
+    (installed / "orbi@.timer").unlink()
     with caplog.at_level("ERROR"):
         with pytest.raises(
             systemd_deploy.UnitDriftError, match="unit_drift",
         ) as excinfo:
             systemd_deploy.check_unit_drift(repo, installed)
     message = str(excinfo.value)
-    assert "muyan-pilot@.service" in message
-    assert "muyan-pilot@.timer" in message
+    assert "orbi@.service" in message
+    assert "orbi@.timer" in message
     assert "install-units" in message
     # Every drifted unit is logged as a structured line.
-    assert "unit_drift unit=muyan-pilot@.service" in caplog.text
-    assert "unit_drift unit=muyan-pilot@.timer" in caplog.text
+    assert "unit_drift unit=orbi@.service" in caplog.text
+    assert "unit_drift unit=orbi@.timer" in caplog.text
 
 
 def test_check_unit_drift_logs_clean_and_returns(tmp_path, caplog):
@@ -235,10 +235,10 @@ def test_check_unit_drift_logs_clean_and_returns(tmp_path, caplog):
 def test_check_unit_drift_uses_the_default_installed_dir(monkeypatch,
                                                         tmp_path):
     """Without an explicit dir the check reads the standard user dir
-    (the MUYAN_PILOT_UNIT_DIR override is honored)."""
+    (the ORBI_UNIT_DIR override is honored)."""
     repo = make_repo(tmp_path)
     installed = make_installed(tmp_path, repo)
-    monkeypatch.setenv("MUYAN_PILOT_UNIT_DIR", str(installed))
+    monkeypatch.setenv("ORBI_UNIT_DIR", str(installed))
     systemd_deploy.check_unit_drift(repo)  # clean: must not raise
 
 
@@ -294,10 +294,10 @@ def test_install_units_enables_only_configured_timer_instances(tmp_path):
         run_command=lambda command, **kwargs: calls.append(command) or "",
     )
     assert [
-        "systemctl", "--user", "enable", "--now", "muyan-pilot@1.timer",
+        "systemctl", "--user", "enable", "--now", "orbi@1.timer",
     ] in calls
     assert [
-        "systemctl", "--user", "disable", "--now", "muyan-pilot@2.timer",
+        "systemctl", "--user", "disable", "--now", "orbi@2.timer",
     ] in calls
     assert not any(".service" in command[-1] for command in calls)
 
@@ -327,10 +327,10 @@ def test_install_units_migrates_the_legacy_units_once(
     installed = tmp_path / "install"
     installed.mkdir()
     # The pre-#149 installed units (the non-templated names).
-    (installed / "muyan-pilot.service").write_text(
+    (installed / "orbi.service").write_text(
         "[Service]\nExecStart=old\n", encoding="utf-8",
     )
-    (installed / "muyan-pilot.timer").write_text(
+    (installed / "orbi.timer").write_text(
         "[Timer]\nOnCalendar=old\n", encoding="utf-8",
     )
     calls: list[list[str]] = []
@@ -348,10 +348,10 @@ def test_install_units_migrates_the_legacy_units_once(
     # The legacy timer is stopped (disable --now: a timer stop, never
     # a service stop) and the legacy files are removed.
     assert [
-        "systemctl", "--user", "disable", "--now", "muyan-pilot.timer",
+        "systemctl", "--user", "disable", "--now", "orbi.timer",
     ] in calls
-    assert not (installed / "muyan-pilot.service").exists()
-    assert not (installed / "muyan-pilot.timer").exists()
+    assert not (installed / "orbi.service").exists()
+    assert not (installed / "orbi.timer").exists()
     # The new templates are installed and both instances enabled.
     for name in systemd_deploy.UNIT_NAMES:
         assert (installed / name).is_file()
@@ -365,7 +365,7 @@ def test_install_units_migrates_the_legacy_units_once(
         if command[:2] == ["systemctl", "--user"]:
             assert command[2] in ("daemon-reload", "enable", "disable")
             if command[2] == "disable":
-                assert command[4] == "muyan-pilot.timer"
+                assert command[4] == "orbi.timer"
     assert "legacy_units_migrated" in caplog.text
 
 
@@ -379,10 +379,10 @@ def test_install_units_legacy_migration_is_idempotent(
     repo = make_repo(tmp_path)
     installed = tmp_path / "install"
     installed.mkdir()
-    (installed / "muyan-pilot.service").write_text(
+    (installed / "orbi.service").write_text(
         "[Service]\nExecStart=old\n", encoding="utf-8",
     )
-    (installed / "muyan-pilot.timer").write_text(
+    (installed / "orbi.timer").write_text(
         "[Timer]\nOnCalendar=old\n", encoding="utf-8",
     )
     calls: list[list[str]] = []
@@ -398,9 +398,9 @@ def test_install_units_legacy_migration_is_idempotent(
     calls.clear()
     systemd_deploy.install_units(repo, installed, run_command=fake_run)
     assert ["systemctl", "--user", "disable", "--now",
-            "muyan-pilot.timer"] in first_calls
+            "orbi.timer"] in first_calls
     assert ["systemctl", "--user", "disable", "--now",
-            "muyan-pilot.timer"] not in calls
+            "orbi.timer"] not in calls
 
 
 def test_migrate_legacy_units_removes_only_the_files_that_exist(
@@ -412,7 +412,7 @@ def test_migrate_legacy_units_removes_only_the_files_that_exist(
     file is fabricated or raised)."""
     installed = tmp_path / "install"
     installed.mkdir()
-    (installed / "muyan-pilot.timer").write_text(
+    (installed / "orbi.timer").write_text(
         "[Timer]\nOnCalendar=old\n", encoding="utf-8",
     )
     calls: list[list[str]] = []
@@ -426,9 +426,9 @@ def test_migrate_legacy_units_removes_only_the_files_that_exist(
     )
     assert migrated is True
     assert ["systemctl", "--user", "disable", "--now",
-            "muyan-pilot.timer"] in calls
-    assert not (installed / "muyan-pilot.timer").exists()
-    assert not (installed / "muyan-pilot.service").exists()
+            "orbi.timer"] in calls
+    assert not (installed / "orbi.timer").exists()
+    assert not (installed / "orbi.service").exists()
 
 
 def test_migrate_legacy_units_returns_false_without_legacy_files(
@@ -453,7 +453,7 @@ def test_install_units_is_idempotent_and_overwrites_drift(
         repo, installed, run_command=lambda command, **kwargs: "",
     )
     # Simulate drift after the first install.
-    (installed / "muyan-pilot@.service").write_text(
+    (installed / "orbi@.service").write_text(
         "tampered\n", encoding="utf-8",
     )
     second = systemd_deploy.install_units(
@@ -470,10 +470,10 @@ def test_install_units_defaults_to_the_standard_installed_dir(
     monkeypatch, tmp_path,
 ):
     """Without an explicit dir the install targets the standard user
-    dir (here pointed at the test world via MUYAN_PILOT_UNIT_DIR)."""
+    dir (here pointed at the test world via ORBI_UNIT_DIR)."""
     repo = make_repo(tmp_path)
     target = tmp_path / "std"
-    monkeypatch.setenv("MUYAN_PILOT_UNIT_DIR", str(target))
+    monkeypatch.setenv("ORBI_UNIT_DIR", str(target))
     result = systemd_deploy.install_units(
         repo, run_command=lambda command, **kwargs: "",
     )
@@ -501,8 +501,8 @@ def test_install_units_fails_fast_when_a_systemctl_step_fails(
 
 def test_install_units_fails_fast_on_missing_template(tmp_path):
     repo = make_repo(tmp_path)
-    (repo / "systemd" / "muyan-pilot@.timer").unlink()
-    with pytest.raises(FileNotFoundError, match="muyan-pilot@.timer"):
+    (repo / "systemd" / "orbi@.timer").unlink()
+    with pytest.raises(FileNotFoundError, match="orbi@.timer"):
         systemd_deploy.install_units(
             repo, tmp_path / "install",
             run_command=lambda command, **kwargs: "",
@@ -524,8 +524,8 @@ def test_sync_drifted_units_installs_and_reverifies_clean(
     (copy, daemon-reload, enable the timer — never start/stop/restart
     the service) and re-verified: the tick can continue."""
     repo = make_repo(tmp_path)
-    installed = make_installed(tmp_path, repo, mutate="muyan-pilot@.timer")
-    before_sha = systemd_deploy.sha256_hex(installed / "muyan-pilot@.timer")
+    installed = make_installed(tmp_path, repo, mutate="orbi@.timer")
+    before_sha = systemd_deploy.sha256_hex(installed / "orbi@.timer")
     calls: list[list[str]] = []
 
     def fake_run(command, **kwargs):
@@ -559,11 +559,11 @@ def test_sync_drifted_units_installs_and_reverifies_clean(
     timer = report[1]
     assert timer["before_sha256"] == before_sha
     assert timer["after_sha256"] == systemd_deploy.sha256_hex(
-        repo / "systemd" / "muyan-pilot@.timer",
+        repo / "systemd" / "orbi@.timer",
     )
     assert timer["commit"] == "0123456789abcdef0123456789abcdef01234567"
     # The structured auto_synced line is logged for the synced unit.
-    assert "unit_drift auto_synced unit=muyan-pilot@.timer" in caplog.text
+    assert "unit_drift auto_synced unit=orbi@.timer" in caplog.text
     assert f"before_sha256={before_sha}" in caplog.text
     assert "after_sha256=" in caplog.text
     assert "commit=0123456789abcdef0123456789abcdef01234567" in caplog.text
@@ -588,7 +588,7 @@ def test_sync_drifted_units_install_failure_propagates(
     """Issue #142: a failing install step (here: enabling the timer)
     fails fast — the error propagates, no auto_synced claim is made."""
     repo = make_repo(tmp_path)
-    installed = make_installed(tmp_path, repo, mutate="muyan-pilot@.service")
+    installed = make_installed(tmp_path, repo, mutate="orbi@.service")
 
     def fake_run(command, **kwargs):
         if command[:3] == ["systemctl", "--user", "enable"]:
@@ -609,14 +609,14 @@ def test_sync_drifted_units_still_drifted_after_sync_fails_fast(
     idempotent install), the preflight fails fast with the structured
     `unit_drift` lines and `UnitDriftError` (no slot, no claim)."""
     repo = make_repo(tmp_path)
-    installed = make_installed(tmp_path, repo, mutate="muyan-pilot@.timer")
+    installed = make_installed(tmp_path, repo, mutate="orbi@.timer")
     # A second process overwrites the installed unit right after the
     # copy: the re-verify sees the drift again.
     real_write_bytes = Path.write_bytes
 
     def overwrite_after_copy(self, data):
         real_write_bytes(self, data)
-        if self.name == "muyan-pilot@.timer" and str(self).startswith(
+        if self.name == "orbi@.timer" and str(self).startswith(
             str(installed),
         ):
             real_write_bytes(self, data + b"# drift\n")
@@ -629,6 +629,6 @@ def test_sync_drifted_units_still_drifted_after_sync_fails_fast(
             systemd_deploy.sync_drifted_units(
                 repo, installed, run_command=lambda command, **kwargs: "",
             )
-    assert "unit_drift unit=muyan-pilot@.timer" in caplog.text
-    assert "fix=muyan-pilot install-units" in caplog.text
+    assert "unit_drift unit=orbi@.timer" in caplog.text
+    assert "fix=orbi install-units" in caplog.text
     assert "unit_drift auto_synced" not in caplog.text

@@ -29,7 +29,7 @@ flowchart LR
 ```
 
 ```text
-ai-ready                任务被派发（muyan-pilot add，或人工加标签）
+ai-ready                任务被派发（orbi add，或人工加标签）
   -> ai-in-progress     Runner 领取：加标签，从冻结的 origin/<base> SHA
                         创建 worktree，启动 Pi session
   -> ai-pr-opened       PR 验收通过（base 新鲜度、run marker、Fixes #N）；
@@ -101,15 +101,15 @@ attempt 的每一步复用同一个值；同一 Issue 的 retry 生成新的。�
 
 - 该 attempt 的每条 journal 行（前缀 `[e07383c2]`）；
 - Issue/PR 评论：可见字段 `run_id=e07383c2` + 隐藏机器可读 marker
-  `<!-- muyan-pilot:run=e07383c2 -->`；
+  `<!-- orbi:run=e07383c2 -->`；
 - feature branch 和 worktree 名（`.worktrees/<...>-issue-<n>-e07383c2`）；
-- PR body——稳定 marker `<!-- muyan-pilot:run=e07383c2 -->` 是 PR 契约
+- PR body——稳定 marker `<!-- orbi:run=e07383c2 -->` 是 PR 契约
   的一部分；Runner 拒绝没有它的 PR。
 
 一条 grep 还原完整时间线：
 
 ```bash
-journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service | grep e07383c2
+journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 gh search issues "e07383c2" --repo OWNER/PILOT-REPO
 ```
 

@@ -4,7 +4,7 @@ The official local deployment is the EDITABLE uv tool install (Issue
 #152): the tool env imports the runtime package from the deployment
 checkout through a setuptools editable finder. Since the src layout
 (Issue #168) the finder maps the WHOLE package directory
-``src/muyan_pilot/`` — a newly added package module needs NO reinstall
+``src/orbi/`` — a newly added package module needs NO reinstall
 (the #158 stale-module-list incident class is fixed at the root). The
 remaining packaging inputs come from the checkout's ``pyproject.toml``
 (entry points, version, dependencies): when they change the installed
@@ -17,7 +17,7 @@ These tests pin the pre-start refresh contract:
   ``pyproject.toml`` (the packaging input that decides the editable
   metadata) — ordinary Python source content is NOT part of it;
 - the last-install fingerprint lives in the shared state dir
-  (``.muyan-pilot/cli-install.json``, the same gitignored dir as
+  (``.orbi/cli-install.json``, the same gitignored dir as
   ``base-sync.lock`` and the slots) — not a second release state;
 - unchanged fingerprint: NO uv call at all (no per-tick reinstall);
 - changed or missing state (first install): ONE lock-protected
@@ -41,11 +41,11 @@ from pathlib import Path
 
 import pytest
 
-from muyan_pilot import cli_install
-from muyan_pilot import cli_source
+from orbi import cli_install
+from orbi import cli_source
 
 # `cli_install` is a thin re-export of the implementation in
-# `muyan_pilot.runner` (see the NOTE there): these tests exercise the
+# `orbi.runner` (see the NOTE there): these tests exercise the
 # real refresh through that single import point. The suite's default
 # no-op stub (conftest) patches `runner.refresh_cli_install`
 # — the call `main()` makes — and never touches this import point.
@@ -78,10 +78,10 @@ def test_packaging_fingerprint_is_the_sha256_of_pyproject(tmp_path):
     """The fingerprint is the sha256 of the checkout's
     ``pyproject.toml`` content — the packaging input that decides the
     editable metadata (entry points, version, deps; since Issue #168
-    the module mapping is the whole `src/muyan_pilot/` package
+    the module mapping is the whole `src/orbi/` package
     directory, not a pyproject list)."""
     repo = tmp_path / "checkout"
-    content = b'[project]\nname = "muyan-pilot"\nversion = "0.2.0"\n'
+    content = b'[project]\nname = "orbi"\nversion = "0.2.0"\n'
     _write_pyproject(repo, content.decode("utf-8"))
     assert cli_install.packaging_fingerprint(repo) == (
         hashlib.sha256(content).hexdigest()
@@ -107,7 +107,7 @@ def test_packaging_fingerprint_ignores_python_source_content(tmp_path):
     reinstall (the editable finder maps the live file anyway)."""
     repo = tmp_path / "checkout"
     _write_pyproject(repo, '[project]\nname = "a"\n')
-    package_dir = repo / "src" / "muyan_pilot"
+    package_dir = repo / "src" / "orbi"
     package_dir.mkdir(parents=True)
     (package_dir / "runner.py").write_text("old\n", encoding="utf-8")
     first = cli_install.packaging_fingerprint(repo)
@@ -130,12 +130,12 @@ def test_packaging_fingerprint_fails_fast_without_pyproject(tmp_path):
 
 
 def test_install_state_path_is_in_the_shared_state_dir(tmp_path):
-    """The state lives in ``<repo_dir>/.muyan-pilot/`` — the EXISTING
+    """The state lives in ``<repo_dir>/.orbi/`` — the EXISTING
     shared state dir (gitignored, next to ``base-sync.lock`` and the
     slots; it survives the ``git merge --ff-only`` checkout sync).
     Not a second release state, not a per-process temp file."""
     assert cli_install.install_state_path(tmp_path) == (
-        tmp_path / ".muyan-pilot" / "cli-install.json"
+        tmp_path / ".orbi" / "cli-install.json"
     )
 
 
@@ -458,7 +458,7 @@ def test_base_sync_lock_path_is_the_shared_state_dir_file(tmp_path):
     flock in the service template uses (the shared state dir, next to
     the slots — never a per-process temp file)."""
     assert cli_install.base_sync_lock_path(tmp_path) == (
-        tmp_path / ".muyan-pilot" / "base-sync.lock"
+        tmp_path / ".orbi" / "base-sync.lock"
     )
 
 

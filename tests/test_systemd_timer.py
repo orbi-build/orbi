@@ -6,9 +6,9 @@ across the full day (00:00, 00:05, ..., 23:55). The timer must not add a
 task duration limit, must not queue catch-up ticks, and the README must
 document the same schedule as the unit files.
 
-Issue #149: the units are TEMPLATES (`muyan-pilot@.service` /
-`muyan-pilot@.timer`) and the deployment enables two timer instances
-(`muyan-pilot@1.timer`, `muyan-pilot@2.timer`), each triggering its own
+Issue #149: the units are TEMPLATES (`orbi@.service` /
+`orbi@.timer`) and the deployment enables two timer instances
+(`orbi@1.timer`, `orbi@2.timer`), each triggering its own
 service instance, so two independent Runner instances can run
 concurrently. The service `ExecStartPre` wraps the fetch +
 fast-forward in a short-lived `flock` so two instances starting in the
@@ -23,8 +23,8 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TIMER_FILE = REPO_ROOT / "systemd" / "muyan-pilot@.timer"
-SERVICE_FILE = REPO_ROOT / "systemd" / "muyan-pilot@.service"
+TIMER_FILE = REPO_ROOT / "systemd" / "orbi@.timer"
+SERVICE_FILE = REPO_ROOT / "systemd" / "orbi@.service"
 README_FILE = REPO_ROOT / "README.md"
 AGENTS_FILE = REPO_ROOT / "AGENTS.md"
 
@@ -93,12 +93,12 @@ def test_timer_does_not_queue_catch_up_ticks_or_second_service():
 
 def test_timer_template_triggers_its_own_service_instance():
     """Issue #149: the timer template must name the service instance of
-    the SAME instance argument (`%i`): `muyan-pilot@1.timer` starts
-    `muyan-pilot@1.service`, `muyan-pilot@2.timer` starts
-    `muyan-pilot@2.service` — two independent Runner instances, no
+    the SAME instance argument (`%i`): `orbi@1.timer` starts
+    `orbi@1.service`, `orbi@2.timer` starts
+    `orbi@2.service` — two independent Runner instances, no
     dispatcher."""
     timer = parse_unit(TIMER_FILE)
-    assert timer["Timer"]["Unit"] == ["muyan-pilot@%i.service"]
+    assert timer["Timer"]["Unit"] == ["orbi@%i.service"]
 
 
 def test_service_keeps_running_task_without_duration_limit():
@@ -109,24 +109,24 @@ def test_service_keeps_running_task_without_duration_limit():
     assert section["TimeoutStartSec"] == ["infinity"]
     assert "RuntimeMaxSec" not in section
     assert "TimeoutStopSec" not in section
-    # Issue #140: the service starts the installed `muyan-pilot` CLI
+    # Issue #140: the service starts the installed `orbi` CLI
     # (the uv-tool console script, explicit deployable absolute entry),
     # not a hand-written Python file entry.
-    assert section["ExecStart"] == ["%h/.local/bin/muyan-pilot"]
+    assert section["ExecStart"] == ["%h/.local/bin/orbi"]
 
 
 def test_service_loads_optional_provider_env_file():
     """Issue #172: the systemd-launched Runner must be able to obtain
     the provider API keys referenced by the provider file. The service
     loads the user-local env file from the gitignored state dir
-    (`.muyan-pilot/env`, next to `base-sync.lock`) with the `-` optional
+    (`.orbi/env`, next to `base-sync.lock`) with the `-` optional
     prefix: a deployment without provider files starts unchanged, and
     the key itself lives only in that local file — never in the
     template, the repo, or the journal."""
     service = parse_unit(SERVICE_FILE)
     section = service["Service"]
     assert section["EnvironmentFile"] == [
-        "-%h/Documents/muyan/muyan-pilot/.muyan-pilot/env"
+        "-%h/Documents/orbi/orbi/.orbi/env"
     ]
 
 
@@ -151,9 +151,9 @@ def test_service_fast_forwards_main_before_runner_starts():
     assert "WorkingDirectory" in section
     runner_units = sorted(
         path.name for path in (REPO_ROOT / "systemd").iterdir()
-        if path.is_file() and path.name.startswith("muyan-pilot@")
+        if path.is_file() and path.name.startswith("orbi@")
     )
-    assert runner_units == ["muyan-pilot@.service", "muyan-pilot@.timer"]
+    assert runner_units == ["orbi@.service", "orbi@.timer"]
 
 
 def test_service_preflight_is_serialized_with_a_short_lived_flock():
@@ -167,7 +167,7 @@ def test_service_preflight_is_serialized_with_a_short_lived_flock():
     service = parse_unit(SERVICE_FILE)
     pre = service["Service"]["ExecStartPre"][0]
     assert pre.startswith("/usr/bin/timeout 90s /usr/bin/flock ")
-    assert "/.muyan-pilot/base-sync.lock" in pre
+    assert "/.orbi/base-sync.lock" in pre
     assert (
         " -c 'git fetch --no-auto-maintenance origin main && "
         "git merge --ff-only origin/main'"
@@ -187,12 +187,12 @@ def test_templates_and_instances_pass_systemd_analyze_verify(
         pytest.skip("systemd-analyze not available on this machine")
     unit_dir = tmp_path / "systemd" / "user"
     unit_dir.mkdir(parents=True)
-    for name in ("muyan-pilot@.service", "muyan-pilot@.timer"):
+    for name in ("orbi@.service", "orbi@.timer"):
         shutil.copyfile(REPO_ROOT / "systemd" / name, unit_dir / name)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    for name in ("muyan-pilot@.service", "muyan-pilot@.timer",
-                 "muyan-pilot@1.service", "muyan-pilot@1.timer",
-                 "muyan-pilot@2.timer"):
+    for name in ("orbi@.service", "orbi@.timer",
+                 "orbi@1.service", "orbi@1.timer",
+                 "orbi@2.timer"):
         result = subprocess.run(
             [analyze, "--user", "verify", str(unit_dir / name)],
             capture_output=True, text=True, timeout=60,
@@ -277,10 +277,10 @@ def test_operations_documents_the_idempotent_install_command():
     guarantee that it never kills or restarts a running Runner (the
     new config takes effect at the next service start)."""
     operations = docs_page("operations.mdx")
-    assert "muyan-pilot install-units" in operations
+    assert "orbi install-units" in operations
     assert "daemon-reload" in operations
     # The manual cp is no longer the documented install path.
-    assert "cp systemd/muyan-pilot.service" not in operations
+    assert "cp systemd/orbi.service" not in operations
     # Deployed commit/hash output.
     assert "commit" in operations
     assert "sha256" in operations
@@ -300,25 +300,25 @@ def test_operations_documents_the_unit_drift_fail_fast():
     operations = docs_page("operations.mdx")
     assert "unit_drift" in operations
     # Both template units are covered.
-    assert "muyan-pilot@.service" in operations
-    assert "muyan-pilot@.timer" in operations
+    assert "orbi@.service" in operations
+    assert "orbi@.timer" in operations
     # The two enabled timer instances.
-    assert "muyan-pilot@1.timer" in operations
-    assert "muyan-pilot@2.timer" in operations
+    assert "orbi@1.timer" in operations
+    assert "orbi@2.timer" in operations
     # The one-time legacy migration names the old units.
-    assert "muyan-pilot.service" in operations
-    assert "muyan-pilot.timer" in operations
+    assert "orbi.service" in operations
+    assert "orbi.timer" in operations
     # No claim while drifted.
     assert "no slot, no claim" in operations
     # The exact structured failure line's fields are the code contract.
-    from muyan_pilot import systemd_deploy
+    from orbi import systemd_deploy
     line = systemd_deploy.drift_lines([
-        {"unit": "muyan-pilot@.timer", "repo_path": "r", "installed_path": "i",
+        {"unit": "orbi@.timer", "repo_path": "r", "installed_path": "i",
          "repo_sha256": "a", "installed_sha256": "b", "drifted": True},
     ])[0]
     assert "repo_sha256=a" in line
     assert "installed_sha256=b" in line
-    assert "fix=muyan-pilot install-units" in line
+    assert "fix=orbi install-units" in line
 
 
 def test_operations_documents_the_doctor_command():
@@ -326,7 +326,7 @@ def test_operations_documents_the_doctor_command():
     `doctor` report: repo commit, unit drift, timer/service active
     state, current Issue, Runner/Pi and recent journal activity."""
     operations = docs_page("operations.mdx")
-    assert "muyan-pilot doctor" in operations
+    assert "orbi doctor" in operations
     assert "journal" in operations
     # doctor is read-only.
     assert "Read-only" in operations
@@ -387,8 +387,8 @@ def test_template_change_pins_the_self_healing_contract():
     def template_change_contract(text: str) -> None:
         # The trigger: a change of either repo unit template
         # (templated units since Issue #149).
-        assert "systemd/muyan-pilot@.timer" in text
-        assert "systemd/muyan-pilot@.service" in text
+        assert "systemd/orbi@.timer" in text
+        assert "systemd/orbi@.service" in text
         # The self-heal: the structured auto_synced line.
         assert "unit_drift auto_synced" in text
         # install-units stays the manual entry (setup, immediate sync).

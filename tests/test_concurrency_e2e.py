@@ -1,6 +1,6 @@
 """E2E concurrency tests (Issue #39).
 
-Real runner processes (``muyan_pilot.runner``) run against a local bare
+Real runner processes (``orbi.runner``) run against a local bare
 origin plus a stateful fake ``gh`` executable on PATH, while a fake ``pi``
 executable records every invocation. These prove the acceptance criteria:
 
@@ -36,19 +36,19 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REPO = "owner/repo"
 # Issue #168 src layout: the Runner is the package module
-# `muyan_pilot.runner`, started with `-m` and the checkout's `src/`
+# `orbi.runner`, started with `-m` and the checkout's `src/`
 # on PYTHONPATH (the same seam the pytest `pythonpath` ini uses for
 # the in-process tests).
-RUNNER_MODULE = "muyan_pilot.runner"
+RUNNER_MODULE = "orbi.runner"
 
-# Stateful fake ``gh``: one JSON file (MUYAN_FAKE_GH_STATE) holds the Issue
+# Stateful fake ``gh``: one JSON file (ORBI_FAKE_GH_STATE) holds the Issue
 # labels, the comments (with author association) and the PR state. It
 # answers exactly the commands the runner runs.
 FAKE_GH = """#!/usr/bin/env python3
 import fcntl, json, os, subprocess, sys, tempfile
 from pathlib import Path
 
-state_path = Path(os.environ["MUYAN_FAKE_GH_STATE"])
+state_path = Path(os.environ["ORBI_FAKE_GH_STATE"])
 args = sys.argv[1:]
 
 # All state access (this fake, and the test process) serializes on this
@@ -144,7 +144,7 @@ elif args[:2] == ["issue", "view"]:
 elif args[:2] == ["pr", "list"]:
     branch = args[args.index("--head") + 1]
     head = git("rev-parse", "HEAD")
-    # Branch shape: muyan-pilot-owner-repo-issue-<n>-<run_id>.
+    # Branch shape: orbi-owner-repo-issue-<n>-<run_id>.
     issue_num = branch.rsplit("-", 2)[1]
     run_id = branch.rsplit("-", 1)[1]
     print(json.dumps([{
@@ -156,7 +156,7 @@ elif args[:2] == ["pr", "list"]:
         "headRefOid": head,
         "headRepository": {"name": "repo"},
         "headRepositoryOwner": {"login": "owner"},
-        "body": f"<!-- muyan-pilot:run={run_id} -->\\n\\nFixes #{issue_num}\\n\\nPlan for {branch}",
+        "body": f"<!-- orbi:run={run_id} -->\\n\\nFixes #{issue_num}\\n\\nPlan for {branch}",
     }]))
 elif args[:2] == ["pr", "comment"]:
     state.setdefault("pr_comments", []).append(
@@ -265,7 +265,7 @@ else:
 # simply clean.
 FAKE_PI = """#!/usr/bin/env python3
 import json, os, subprocess, sys, time
-log = os.environ.get("MUYAN_FAKE_PI_LOG")
+log = os.environ.get("ORBI_FAKE_PI_LOG")
 if log:
     with open(log, "a", encoding="utf-8") as handle:
         handle.write(f"pi {os.getpid()}\\n")
@@ -273,7 +273,7 @@ time.sleep(1.0)
 system_prompt = sys.argv[sys.argv.index("--system-prompt") + 1]
 if "INDEPENDENT REVIEW" in system_prompt:
     run_id = system_prompt.split("run_id=")[1].split()[0]
-    marker = os.path.join(os.getcwd(), f".muyan-pilot-review-{run_id}")
+    marker = os.path.join(os.getcwd(), f".orbi-review-{run_id}")
     first_review = not os.path.exists(marker)
     if first_review:
         with open(marker, "w", encoding="utf-8") as handle:
@@ -307,7 +307,7 @@ if "INDEPENDENT REVIEW" in system_prompt:
     # issue 7's reviewer waits until issue 8 has passed its initial PR
     # verification, so a fake merge cannot advance main in that narrow
     # interval and mask the resumable-scan contract.
-    review_gate = os.environ.get("MUYAN_FAKE_PI_REVIEW_GATE")
+    review_gate = os.environ.get("ORBI_FAKE_PI_REVIEW_GATE")
     if review_gate:
         with open(f"{review_gate}.waiting", "w", encoding="utf-8"):
             pass
@@ -439,7 +439,7 @@ def clone(tmp_path: Path) -> Path:
     fingerprint = hashlib.sha256(
         (clone / "pyproject.toml").read_bytes(),
     ).hexdigest()
-    state_dir = clone / ".muyan-pilot"
+    state_dir = clone / ".orbi"
     state_dir.mkdir()
     (state_dir / "cli-install.json").write_text(
         json.dumps({"pyproject_sha256": fingerprint}), encoding="utf-8",
@@ -528,7 +528,7 @@ def write_config(
         "INDEPENDENT REVIEW\nrun_id={{RUN_ID}}\n"
         "lock={{BASE_SYNC_LOCK}}\n", encoding="utf-8",
     )
-    config = tmp_path / f"muyan-pilot-{max_concurrency}.toml"
+    config = tmp_path / f"orbi-{max_concurrency}.toml"
     config.write_text(
         f'source_repos = ["{REPO}"]\n'
         f'repo_dir = "{clone}"\n'
@@ -549,7 +549,7 @@ def install_deployed_units(unit_dir: Path) -> None:
     """Simulate the deployed machine: the repo templates installed as
     the user units (the idempotent install the README documents)."""
     unit_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("muyan-pilot@.service", "muyan-pilot@.timer"):
+    for name in ("orbi@.service", "orbi@.timer"):
         shutil.copyfile(REPO_ROOT / "systemd" / name, unit_dir / name)
 
 
@@ -561,17 +561,17 @@ def start_runner(
 ) -> subprocess.Popen:
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
-    env["MUYAN_FAKE_GH_STATE"] = str(state_path)
-    env["MUYAN_FAKE_PI_LOG"] = str(pi_log)
+    env["ORBI_FAKE_GH_STATE"] = str(state_path)
+    env["ORBI_FAKE_PI_LOG"] = str(pi_log)
     if review_gate is not None:
-        env["MUYAN_FAKE_PI_REVIEW_GATE"] = str(review_gate)
+        env["ORBI_FAKE_PI_REVIEW_GATE"] = str(review_gate)
     # The pre-start drift check (Issue #103) reads the installed units
     # from here: a clean deployment by default (the templates as
     # installed), or an explicit dir for the drift scenarios.
     if unit_dir is None:
         unit_dir = config_path.parent / "unit-dir"
         install_deployed_units(unit_dir)
-    env["MUYAN_PILOT_UNIT_DIR"] = str(unit_dir)
+    env["ORBI_UNIT_DIR"] = str(unit_dir)
     env["PYTHONPATH"] = str(REPO_ROOT / "src")
     process = subprocess.Popen(
         ["/usr/bin/python3", "-m", RUNNER_MODULE, "--config", str(config_path)],
@@ -653,16 +653,16 @@ def pi_invocations(pi_log: Path) -> list[str]:
 
 
 def slot_files(clone: Path) -> list[Path]:
-    slot_dir = clone / ".muyan-pilot" / "slots"
+    slot_dir = clone / ".orbi" / "slots"
     return sorted(slot_dir.glob("slot-*")) if slot_dir.is_dir() else []
 
 
 def slots_held(clone: Path, capacity: int = 1) -> list:
     """Return the lock-state occupancy: the lock, not the file, is held."""
-    from muyan_pilot import pilot_slots
+    from orbi import pilot_slots
 
     return pilot_slots.slot_occupancy(
-        clone / ".muyan-pilot" / "slots", capacity,
+        clone / ".orbi" / "slots", capacity,
     )
 
 
@@ -713,7 +713,7 @@ def test_capacity_one_slot_held_through_review_merge(
     wait_for(
         lambda: (
             "ai-merged" in read_state(state)["issues"]["7"]["labels"]
-            and any("Muyan Pilot merged PR:" in c["body"]
+            and any("Orbi merged PR:" in c["body"]
                     for c in read_state(state)["comments"])
         ),
         timeout=180,
@@ -728,11 +728,11 @@ def test_capacity_one_slot_held_through_review_merge(
     assert len(pi_invocations(pi_log)) == 2
     assert snap["issues"]["8"]["labels"] == ["ai-ready"]
     started = [
-        c for c in snap["comments"] if "Muyan Pilot started Pi:" in c["body"]
+        c for c in snap["comments"] if "Orbi started Pi:" in c["body"]
     ]
     assert [c["issue"] for c in started] == ["7"]
     bodies = [c["body"] for c in snap["comments"]]
-    assert any("Muyan Pilot merged PR:" in b for b in bodies)
+    assert any("Orbi merged PR:" in b for b in bodies)
     # The in-session fix landed on the delivery branch: origin/main
     # carries the review fix file, so the runner merged the RE-FROZEN
     # head (the fixed one), not the frozen head (Issue #82).
@@ -762,7 +762,7 @@ def test_capacity_one_slot_held_through_review_merge(
     assert "ai-merged" in snap["issues"]["8"]["labels"]
     # Two different Issues were processed; none was claimed twice.
     started = [
-        c for c in snap["comments"] if "Muyan Pilot started Pi:" in c["body"]
+        c for c in snap["comments"] if "Orbi started Pi:" in c["body"]
     ]
     assert sorted(c["issue"] for c in started) == ["7", "8"]
     out, err = third.communicate(timeout=120)
@@ -800,7 +800,7 @@ def test_capacity_one_closed_unmerged_pr_releases_slot_and_blocks_issue(
     assert "ai-blocked" in snap["issues"]["7"]["labels"]
     assert "ai-pr-opened" not in snap["issues"]["7"]["labels"]
     failure = [
-        c for c in snap["comments"] if "Muyan Pilot failed:" in c["body"]
+        c for c in snap["comments"] if "Orbi failed:" in c["body"]
     ]
     assert len(failure) == 1
     assert "closed without a merge" in failure[0]["body"]
@@ -896,7 +896,7 @@ def test_capacity_two_allows_two_runners_and_rejects_third(clone, tmp_path):
     assert 4 <= len(pi_invocations(pi_log)) <= 6
     started = [
         c for c in read_state(state)["comments"]
-        if "Muyan Pilot started Pi:" in c["body"]
+        if "Orbi started Pi:" in c["body"]
     ]
     assert sorted(c["issue"] for c in started) == ["7", "8"]
 
@@ -921,7 +921,7 @@ def _run_ref_hammer(
     import os
     import threading
 
-    import muyan_pilot.runner as runner
+    import orbi.runner as runner
 
     # The fake `gh` on PATH answers the PR commands of the verify path
     # (the state file carries the default OPEN PR state, which is
@@ -935,14 +935,14 @@ def _run_ref_hammer(
     monkeypatch.setenv(
         "PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
     )
-    monkeypatch.setenv("MUYAN_FAKE_GH_STATE", str(state))
+    monkeypatch.setenv("ORBI_FAKE_GH_STATE", str(state))
 
     # A task worktree of the deployment checkout (shared refstore),
     # the same shape the runner creates for a delivery.
     worktree = clone / ".worktrees" / \
-        "muyan-pilot-owner-repo-issue-9-01234567"
+        "orbi-owner-repo-issue-9-01234567"
     git(clone, "worktree", "add", "-b",
-        "muyan-pilot/owner-repo-issue-9-01234567", str(worktree), "HEAD")
+        "orbi/owner-repo-issue-9-01234567", str(worktree), "HEAD")
     if base_sha is None:
         base_sha = git(clone, "rev-parse", "HEAD")
 
@@ -989,7 +989,7 @@ def _run_ref_hammer(
                     clone, "owner/repo", number, "01234567", base_sha,
                 )
                 runner.verify_pr(
-                    worktree, "muyan-pilot/owner-repo-issue-9-01234567",
+                    worktree, "orbi/owner-repo-issue-9-01234567",
                     "main", "01234567", repo_dir=clone, issue=9,
                     require_latest_base=False,
                 )
@@ -1150,7 +1150,7 @@ def test_killed_runner_is_resumed_by_the_next_claim_scan(clone, tmp_path):
     assert "ai-ready" in snap["issues"]["7"]["labels"]
     # The dead run's task worktree survives; its name carries the run id.
     worktrees = sorted(
-        (clone / ".worktrees").glob("muyan-pilot-owner-repo-issue-7-*"),
+        (clone / ".worktrees").glob("orbi-owner-repo-issue-7-*"),
     )
     assert len(worktrees) == 1
     dead_worktree = worktrees[0]
@@ -1158,10 +1158,10 @@ def test_killed_runner_is_resumed_by_the_next_claim_scan(clone, tmp_path):
     # The dead run's progress comment (hidden run marker) exists.
     progress_bodies = [
         c["body"] for c in snap["comments"]
-        if "**Muyan Pilot progress**" in c["body"]
+        if "**Orbi progress**" in c["body"]
     ]
     assert len(progress_bodies) == 1
-    assert f"<!-- muyan-pilot:run={dead_run_id} -->" in progress_bodies[0]
+    assert f"<!-- orbi:run={dead_run_id} -->" in progress_bodies[0]
 
     # The NEXT runner (a fresh main() tick) resumes the SAME run through
     # the claim scan and delivers: the PR opens ...
@@ -1175,7 +1175,7 @@ def test_killed_runner_is_resumed_by_the_next_claim_scan(clone, tmp_path):
     snap = read_state(state)
     # ... on the SAME worktree (no second worktree for the Issue) ...
     worktrees = sorted(
-        (clone / ".worktrees").glob("muyan-pilot-owner-repo-issue-7-*"),
+        (clone / ".worktrees").glob("orbi-owner-repo-issue-7-*"),
     )
     assert [path.name for path in worktrees] == [dead_worktree.name]
     # ... re-running Pi in it (one more invocation, same run) ...
@@ -1184,13 +1184,13 @@ def test_killed_runner_is_resumed_by_the_next_claim_scan(clone, tmp_path):
     # the original run marker.
     progress_bodies = [
         c["body"] for c in snap["comments"]
-        if "**Muyan Pilot progress**" in c["body"]
+        if "**Orbi progress**" in c["body"]
     ]
     assert len(progress_bodies) == 1, (
         f"restart must not create a second progress comment: "
         f"{snap['comments']}"
     )
-    assert f"<!-- muyan-pilot:run={dead_run_id} -->" in progress_bodies[0]
+    assert f"<!-- orbi:run={dead_run_id} -->" in progress_bodies[0]
     # The delivery finished: the in-progress label is gone.
     assert "ai-in-progress" not in snap["issues"]["7"]["labels"]
     assert "ai-pr-opened" in snap["issues"]["7"]["labels"]
@@ -1207,11 +1207,11 @@ def test_killed_runner_is_resumed_by_the_next_claim_scan(clone, tmp_path):
     snap = read_state(state)
     progress_bodies = [
         c["body"] for c in snap["comments"]
-        if "**Muyan Pilot progress**" in c["body"]
+        if "**Orbi progress**" in c["body"]
     ]
     assert len(progress_bodies) == 1
-    assert f"<!-- muyan-pilot:run={dead_run_id} -->" in progress_bodies[0]
-    assert "Muyan Pilot delivered" in progress_bodies[0]
+    assert f"<!-- orbi:run={dead_run_id} -->" in progress_bodies[0]
+    assert "Orbi delivered" in progress_bodies[0]
     out, err = second.communicate(timeout=120)
     assert second.returncode == 0, err
     assert "no_ready_issue" not in err
@@ -1247,7 +1247,7 @@ def test_stranded_pr_opened_delivery_is_resumed_to_review_and_merge(
     # `ai-pr-opened` — a stranded delivery with no owner.
     wait_for(
         lambda: any(
-            "Muyan Pilot opened PR:" in c["body"]
+            "Orbi opened PR:" in c["body"]
             for c in read_state(state)["comments"]
         ),
         what="opened-PR scene comment to be posted",
@@ -1259,7 +1259,7 @@ def test_stranded_pr_opened_delivery_is_resumed_to_review_and_merge(
     assert "ai-blocked" not in snap["issues"]["7"]["labels"]
     assert "ai-fix-needed" not in snap["issues"]["7"]["labels"]
     worktrees = sorted(
-        (clone / ".worktrees").glob("muyan-pilot-owner-repo-issue-7-*"),
+        (clone / ".worktrees").glob("orbi-owner-repo-issue-7-*"),
     )
     assert len(worktrees) == 1
     dead_run_id = worktrees[0].name.rsplit("-", 1)[-1]
@@ -1289,7 +1289,7 @@ def test_stranded_pr_opened_delivery_is_resumed_to_review_and_merge(
     assert "ai-pr-opened" not in labels
     # Same run, same worktree: nothing was recreated.
     worktrees = sorted(
-        (clone / ".worktrees").glob("muyan-pilot-owner-repo-issue-7-*"),
+        (clone / ".worktrees").glob("orbi-owner-repo-issue-7-*"),
     )
     assert len(worktrees) == 1
     assert worktrees[0].name.rsplit("-", 1)[-1] == dead_run_id
@@ -1298,12 +1298,12 @@ def test_stranded_pr_opened_delivery_is_resumed_to_review_and_merge(
     # — never a second implement, never a cold-start fixer.
     assert len(pi_invocations(pi_log)) == 2
     started = [
-        c for c in snap["comments"] if "Muyan Pilot started Pi:" in c["body"]
+        c for c in snap["comments"] if "Orbi started Pi:" in c["body"]
     ]
     assert [c["issue"] for c in started] == ["7"]
     # The review actually ran on the resumed delivery.
     bodies = [c["body"] for c in snap["comments"]]
-    assert any("Muyan Pilot merged PR:" in b for b in bodies)
+    assert any("Orbi merged PR:" in b for b in bodies)
     assert slots_held(clone) == [(1, None)], (
         "slot must be released after the merge"
     )
@@ -1350,7 +1350,7 @@ def test_live_pr_opened_delivery_is_not_resumed_by_second_runner(
     # PR open and unmerged).
     wait_for(
         lambda: any(
-            "Muyan Pilot opened PR:" in c["body"]
+            "Orbi opened PR:" in c["body"]
             for c in read_state(state)["comments"]
         ),
         what="opened-PR scene comment to be posted",
@@ -1386,7 +1386,7 @@ def test_live_pr_opened_delivery_is_not_resumed_by_second_runner(
     # Exactly one "started Pi" comment per Issue: issue 8's is the
     # second runner's implement — never a second review of issue 7.
     started = [
-        c for c in snap["comments"] if "Muyan Pilot started Pi:" in c["body"]
+        c for c in snap["comments"] if "Orbi started Pi:" in c["body"]
     ]
     assert sorted(c["issue"] for c in started) == ["7", "8"]
     # Release the first review only after the assertions above establish
@@ -1438,7 +1438,7 @@ def test_unit_drift_auto_syncs_and_claims_without_human_intervention(
     # A drifted deployment: the installed timer carries one extra line.
     unit_dir = tmp_path / "drifted-units"
     install_deployed_units(unit_dir)
-    with (unit_dir / "muyan-pilot@.timer").open(
+    with (unit_dir / "orbi@.timer").open(
         "a", encoding="utf-8",
     ) as handle:
         handle.write("# drift\n")
@@ -1468,13 +1468,13 @@ def test_unit_drift_auto_syncs_and_claims_without_human_intervention(
     runner_proc.kill()
     out, err = runner_proc.communicate(timeout=30)
     # The self-heal is logged with the structured auto_synced line.
-    assert "unit_drift auto_synced unit=muyan-pilot@.timer" in err
+    assert "unit_drift auto_synced unit=orbi@.timer" in err
     assert "before_sha256=" in err
     assert "after_sha256=" in err
     assert "commit=" in err
     # The repo template won: the installed unit matches it again.
-    assert (unit_dir / "muyan-pilot@.timer").read_bytes() == (
-        clone / "systemd" / "muyan-pilot@.timer"
+    assert (unit_dir / "orbi@.timer").read_bytes() == (
+        clone / "systemd" / "orbi@.timer"
     ).read_bytes()
     assert "ai-in-progress" in read_state(state)["issues"]["7"]["labels"]
 
@@ -1513,7 +1513,7 @@ def test_unit_drift_unresolvable_blocks_the_start_without_claiming(
     # A drifted deployment: the installed timer carries one extra line.
     unit_dir = tmp_path / "unresolvable-units"
     install_deployed_units(unit_dir)
-    with (unit_dir / "muyan-pilot@.timer").open(
+    with (unit_dir / "orbi@.timer").open(
         "a", encoding="utf-8",
     ) as handle:
         handle.write("# drift\n")
@@ -1525,7 +1525,7 @@ def test_unit_drift_unresolvable_blocks_the_start_without_claiming(
     fake_systemctl.write_text(
         "#!/bin/sh\n"
         "if [ \"$1\" = '--user' ] && [ \"$2\" = 'daemon-reload' ]; then\n"
-        f"    printf '# drift\\n' >> {unit_dir / 'muyan-pilot@.timer'}\n"
+        f"    printf '# drift\\n' >> {unit_dir / 'orbi@.timer'}\n"
         "fi\n"
         "exit 0\n",
         encoding="utf-8",
@@ -1537,12 +1537,12 @@ def test_unit_drift_unresolvable_blocks_the_start_without_claiming(
     )
     out, err = runner_proc.communicate(timeout=60)
     assert runner_proc.returncode != 0, err
-    assert "unit_drift unit=muyan-pilot@.timer" in err
-    assert f"repo={clone / 'systemd' / 'muyan-pilot@.timer'}" in err
-    assert f"installed={unit_dir / 'muyan-pilot@.timer'}" in err
+    assert "unit_drift unit=orbi@.timer" in err
+    assert f"repo={clone / 'systemd' / 'orbi@.timer'}" in err
+    assert f"installed={unit_dir / 'orbi@.timer'}" in err
     assert "repo_sha256=" in err
     assert "installed_sha256=" in err
-    assert "fix=muyan-pilot install-units" in err
+    assert "fix=orbi install-units" in err
     assert "unit_drift auto_synced" not in err
     # Nothing was claimed: no labels, no comments, no Pi, no slot.
     snap = read_state(state)
