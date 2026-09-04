@@ -4366,17 +4366,23 @@ RUNNER_RUNTIME_EXCLUDES = (".muyan-pilot/", ".orbi/", ".pi-session/")
 def runner_runtime_exclude_path(worktree: Path) -> Path:
     """The task worktree's local git exclude file (`.git/info/exclude`).
 
-    A linked worktree's `.git` is a pointer file (`gitdir: <path>`); the
-    exclude must live in THAT worktree-specific gitdir, so each task
-    worktree gets its own exclude file. The main checkout and the user's
-    global excludes are never touched.
+    A linked worktree's `.git` is a pointer file (`gitdir: <path>`) that
+    resolves to `<common-gitdir>/worktrees/<name>`. Git applies the
+    exclude file of the COMMON gitdir to every worktree of the repo (the
+    worktree-specific gitdir carries no exclude of its own — verified
+    against real git), so the exclude is written to
+    `<common-gitdir>/info/exclude`. That is repository-local metadata:
+    it never enters an agent commit and never touches the user's global
+    excludes (`core.excludesFile`).
     """
     git_entry = worktree / ".git"
     if git_entry.is_file():
         for line in git_entry.read_text(encoding="utf-8").splitlines():
             if line.startswith("gitdir:"):
                 git_dir = Path(line.split(":", 1)[1].strip())
-                return git_dir / "info" / "exclude"
+                # <common-gitdir>/worktrees/<name> -> <common-gitdir>
+                common_gitdir = git_dir.parent.parent
+                return common_gitdir / "info" / "exclude"
         raise ValueError(
             f"worktree .git pointer {git_entry} has no gitdir entry"
         )

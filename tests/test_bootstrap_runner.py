@@ -13332,14 +13332,16 @@ def _make_linked_worktree(tmp_path: Path) -> tuple[Path, Path]:
     return repo, wt
 
 
-def test_exclude_path_resolves_the_linked_worktree_gitdir(tmp_path):
+def test_exclude_path_resolves_the_common_gitdir(tmp_path):
     repo, wt = _make_linked_worktree(tmp_path)
     exclude = runner.runner_runtime_exclude_path(wt)
     assert exclude.name == "exclude"
     assert exclude.parts[-2] == "info"
-    # The linked worktree's exclude lives in the shared repo's gitdir,
-    # never in the worktree checkout itself.
-    assert exclude.is_relative_to(repo / ".git")
+    # Git applies the exclude of the COMMON gitdir to every worktree of
+    # the repo (the worktree-specific gitdir carries none of its own):
+    # the exclude is the shared repo's `.git/info/exclude`, never inside
+    # the worktree checkout.
+    assert exclude == repo / ".git" / "info" / "exclude"
     assert not exclude.is_relative_to(wt)
 
 
