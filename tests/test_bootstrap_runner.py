@@ -8937,20 +8937,17 @@ def test_wait_for_delivery_marks_blocked_when_review_fails_while_fix_needed(
         PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
         "owner/repo",
     )
-    # The Issue is marked ai-blocked (removing ai-pr-opened) ...
+    # The Issue is marked ai-blocked; the blocked patch clears every
+    # delivery-state label that is present — here only `ai-fix-needed`
+    # (the delivery was awaiting the next review session) — so the
+    # terminal state is ai-blocked alone (never ai-blocked + ai-fix-needed).
+    # One deterministic patch, not two hardcoded removes.
     assert edits[0][1] == {
         "repo": "owner/repo",
         "add": "ai-blocked",
-        "remove": "ai-pr-opened",
-    }
-    # ... and the leftover ai-fix-needed label is removed too, so the
-    # terminal state is ai-blocked alone (never
-    # ai-blocked + ai-fix-needed).
-    assert edits[1][1] == {
-        "repo": "owner/repo",
         "remove": "ai-fix-needed",
     }
-    assert len(edits) == 2
+    assert len(edits) == 1
     body = comments[0][1]["body"]
     assert "the independent review of" in body
     assert f"<!-- orbi:run=a1b2c3d4 -->" in body
@@ -9501,19 +9498,17 @@ def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
     runner.wait_for_delivery(PR_URL, issue, {}, "owner/repo")
-    # The Issue is marked ai-blocked (removing ai-pr-opened) ...
+    # The Issue is marked ai-blocked; the blocked patch clears every
+    # delivery-state label that is present — here only `ai-fix-needed`
+    # (the delivery was awaiting the next review session) — so the
+    # terminal state is ai-blocked alone. One deterministic patch,
+    # not two hardcoded removes.
     assert edits[0][1] == {
         "repo": "owner/repo",
         "add": "ai-blocked",
-        "remove": "ai-pr-opened",
-    }
-    # ... and the leftover ai-fix-needed label (the delivery was
-    # awaiting the next review session) is removed too, so the
-    # terminal state is ai-blocked alone.
-    assert edits[1][1] == {
-        "repo": "owner/repo",
         "remove": "ai-fix-needed",
     }
+    assert len(edits) == 1
     # ... with a failure comment carrying the run marker and run_id.
     body = comments[0][1]["body"]
     assert "Orbi failed:" in body

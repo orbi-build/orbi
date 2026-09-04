@@ -76,6 +76,25 @@ from orbi.pi_activity import (
     quote_value,
     sanitize,
 )
+from orbi.delivery_labels import (
+    BLOCKED_LABEL,
+    EPIC_LABEL,
+    FIX_NEEDED_LABEL,
+    IN_PROGRESS_LABEL,
+    MERGED_LABEL,
+    P0_LABEL,
+    PR_OPENED_LABEL,
+    RELEASE_LABEL,
+    TICKET_ONLY_LABEL,
+    EVENT_BLOCKED,
+    EVENT_CLAIM,
+    EVENT_FIX_NEEDED,
+    EVENT_MERGED,
+    EVENT_PR_OPENED,
+    is_resumable,
+    label_patch,
+    needs_human_intervention,
+)
 from orbi.progress import ProgressPublisher, format_elapsed, progress_body
 from orbi.systemd_deploy import (
     TIMER_INSTANCES,
@@ -181,54 +200,14 @@ ROLE_TICKET = "ticket"
 RUN_ID_PATTERN = re.compile(r"^[0-9a-f]{8}$")
 _CURRENT_RUN_ID: str | None = None
 
-# GitHub labels are the only state store (Issue #45). After a PR is
-# opened the Issue is in a recoverable review state: `ai-pr-opened`
-# means awaiting review, and the explicit `ai-fix-needed` state (a review
-# finding the reviewer could not fix in-session, or a base conflict)
-# means awaiting the next review session — Issue #82: the review session
-# itself fixes findings in the same session, so both labels resume into
-# the same independent review (no cold-start fixer). The next tick
-# resumes that same run on the same branch, worktree and PR instead of
-# claiming a new Issue. `ai-merged` is the success terminal state the
-# Runner sets after it merges the PR itself (Issue #34).
-IN_PROGRESS_LABEL = "ai-in-progress"
-PR_OPENED_LABEL = "ai-pr-opened"
-FIX_NEEDED_LABEL = "ai-fix-needed"
-MERGED_LABEL = "ai-merged"
-BLOCKED_LABEL = "ai-blocked"
-# P0 urgent priority (Issue #101): a plain GitHub label, not a delivery
-# state. It only orders the ready pickup (`ai-ready`+`p0` first); it
-# never changes the delivery states, the blockedBy semantics or the
-# terminal states. A failed P0 run enters `ai-blocked` like every other
-# failed run — the ready scans exclude `ai-blocked`, so the `ai-ready`
-# residue never re-enters the queue (no infinite retry).
-P0_LABEL = "p0"
-# Epic marker (Issue #93): the plain `ai-epic` label marks a
-# coordination Issue (a release checklist or a multi-task grouping).
-# An Epic is NOT an executable task: the ready claim scan skips it
-# (structured `epic_not_claimed` line — no claim, no label change, no
-# worktree, no run, no slot) and the restart-resume scan excludes it
-# (a legacy Epic left behind with `ai-in-progress` must never be
-# resumed into a run). The actual work lives in independent `ai-ready`
-# sub-Issues (one runtime outcome, one PR each); the Epic's completion
-# is judged from GitHub evidence (sub-Issues done, PRs merged, release
-# tag on the remote, no leftover `ai-in-progress`) and closed by a
-# human or a release task — never by the claim path.
-EPIC_LABEL = "ai-epic"
-# Release task marker (Issue #98): the plain `ai-release` label marks a
-# Release task — a first-class task type that the Runner picks up from
-# the ready scan and executes with its own deterministic release state
-# machine (scope verification, pre-release gates, tag, GitHub Release).
-# It is NOT a delivery state and NEVER enters the normal `run_pi`
-# development path: `process_issue` routes it to `process_release`
-# instead. On success the Issue gets `ai-merged` (terminal) and is
-# closed; on failure it gets `ai-blocked` ALONE (the `ai-ready` residue
-# is excluded by every ready scan, so no tick re-claims it).
-RELEASE_LABEL = "ai-release"
-# Ticket-only marker (Issue #209): an explicit type marker for content that
-# belongs in the source Issue. It is never inferred from arbitrary prose and
-# never enters the Git worktree/branch/PR delivery path.
-TICKET_ONLY_LABEL = "ai-ticket-only"
+# GitHub labels are the only state store (Issue #45). The delivery
+# lifecycle states (`ai-in-progress`, `ai-pr-opened`, `ai-fix-needed`,
+# `ai-merged`, `ai-blocked`), the scheduling-metadata labels (`p0`,
+# `bug`, `ai-epic`, `ai-release`, `ai-ticket-only`), the event → label
+# patch transition rules, and the pickup/resume/human-intervention
+# decisions all live in `orbi.delivery_labels` (Issue #175) — the single
+# source of truth. They are imported above; `p0`/`bug`/`ai-epic` are
+# scheduling metadata, never delivery lifecycle states.
 # The machine-readable section a release Issue body must carry (Issue
 # #98): `- version:`, `- base_branch:`, `- test_command:` and
 # `- scope:` with `  - #N` items. Parsed strictly — a missing or
@@ -2105,7 +2084,9 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         LOGGER.info(
             "issue=%s release_task %s", number, run_info,
         )
-        edit_issue(number, repo=source_repo, add=IN_PROGRESS_LABEL)
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_CLAIM, current_labels=(),
+        )
         set_active_run(
             number, title, branch, str(worktree),
         )
@@ -2215,9 +2196,9 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
                 f"**Orbi released**: {release_url}",
             ),
         )
-        edit_issue(
-            number, repo=source_repo, add=MERGED_LABEL,
-            remove=IN_PROGRESS_LABEL,
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_MERGED,
+            current_labels={IN_PROGRESS_LABEL},
         )
         run_command(
             ["gh", "issue", "close", str(number), "--repo", source_repo],
@@ -2270,9 +2251,9 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
                     "repair_issue_failed source_issue=%s run_id=%s",
                     number, run_id,
                 )
-        edit_issue(
-            number, repo=source_repo, add=BLOCKED_LABEL,
-            remove=IN_PROGRESS_LABEL,
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_BLOCKED,
+            current_labels={IN_PROGRESS_LABEL},
         )
         comment_issue(
             number, repo=source_repo,
@@ -2421,6 +2402,33 @@ def edit_issue(number: int, *, repo: str, add: str | None = None,
     if remove:
         command += ["--remove-label", remove]
     run_command(command)
+
+
+def apply_label_patch(number: int, *, repo: str, event: str,
+                      current_labels) -> None:
+    """Compute the deterministic label patch for `event` and apply it.
+
+    `current_labels` is the Issue's current label names (read once by the
+    caller). The patch comes from `delivery_labels.label_patch` — the
+    single source of truth for the transition rules (Issue #175) — so the
+    same current labels and event always produce the same idempotent
+    patch. The patch is applied through `edit_issue`: one call for the
+    add plus the first remove, then one call per extra remove (the exact
+    same `edit_issue` kwargs the pre-#175 code emitted). A no-op patch
+    (nothing to add or remove) applies nothing.
+    """
+    to_add, to_remove = label_patch(event, current_labels)
+    if not to_add and not to_remove:
+        return
+    first_remove = to_remove[0] if to_remove else None
+    kwargs: dict = {"repo": repo}
+    if to_add:
+        kwargs["add"] = to_add[0]
+    if first_remove is not None:
+        kwargs["remove"] = first_remove
+    edit_issue(number, **kwargs)
+    for label in to_remove[1:]:
+        edit_issue(number, repo=repo, remove=label)
 
 
 def comment_issue(number: int, *, repo: str, body: str) -> None:
@@ -2675,8 +2683,9 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
             marker = run_marker(match.group(1))
             break
     try:
-        edit_issue(
-            number, repo=repo, add=BLOCKED_LABEL, remove=FIX_NEEDED_LABEL,
+        apply_label_patch(
+            number, repo=repo, event=EVENT_BLOCKED,
+            current_labels={FIX_NEEDED_LABEL},
         )
         # Issue #50: a scene that cannot be recovered is an external
         # precondition the AI cannot fix by itself (the runner cannot
@@ -4004,7 +4013,9 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
     run_info = f"run_id={run_id} priority={priority} task_type=ticket-only"
     publisher = ProgressPublisher(number, source_repo, run_id, run_command=run_command)
     started = time.monotonic()
-    edit_issue(number, repo=source_repo, add=IN_PROGRESS_LABEL)
+    apply_label_patch(
+        number, repo=source_repo, event=EVENT_CLAIM, current_labels=(),
+    )
     set_active_run(number, title, "-", "-")
     try:
         _safe_publish(
@@ -4033,6 +4044,9 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
                   f"{output}"),
         )
         run_command(["gh", "issue", "close", str(number), "--repo", source_repo])
+        # The ticket-only delivery never enters the PR/review states: it
+        # clears the claim label directly (no `ai-merged` terminal state —
+        # the Issue is closed, not merged).
         edit_issue(number, repo=source_repo, remove=IN_PROGRESS_LABEL)
         _safe_publish(
             run_id=run_id, issue=number, source_repo=source_repo,
@@ -4056,8 +4070,10 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
         LOGGER.exception("issue=%s ticket-only failed", number)
         detail = _failure_detail(exc)
         try:
-            edit_issue(number, repo=source_repo, add=BLOCKED_LABEL,
-                       remove=IN_PROGRESS_LABEL)
+            apply_label_patch(
+                number, repo=source_repo, event=EVENT_BLOCKED,
+                current_labels={IN_PROGRESS_LABEL},
+            )
             comment_issue(
                 number, repo=source_repo,
                 body=(f"{run_marker(run_id)}\n"
@@ -4709,7 +4725,9 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
         # is a recoverable resume failure (ai-fix-needed, failure
         # comment, tick stops) with the command evidence in the
         # journal.
-        edit_issue(number, repo=source_repo, add=IN_PROGRESS_LABEL)
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_CLAIM, current_labels=(),
+        )
         return verified_url
     except Exception as exc:
         LOGGER.exception(
@@ -4724,14 +4742,16 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
                 # (the opened-PR state label is removed, and a leftover
                 # `ai-fix-needed` too) with the explicit reason why
                 # automatic recovery is impossible.
-                edit_issue(
-                    number, repo=source_repo, add=BLOCKED_LABEL,
-                    remove=PR_OPENED_LABEL,
+                # The current labels are read ONCE before the
+                # transition: the blocked patch clears every
+                # delivery-state label that is present (`ai-pr-opened`,
+                # and a leftover `ai-fix-needed` too), so the terminal
+                # state is `ai-blocked` alone.
+                labels = issue_labels(number, source_repo)
+                apply_label_patch(
+                    number, repo=source_repo, event=EVENT_BLOCKED,
+                    current_labels=labels,
                 )
-                if FIX_NEEDED_LABEL in issue_labels(number, source_repo):
-                    edit_issue(
-                        number, repo=source_repo, remove=FIX_NEEDED_LABEL,
-                    )
                 body = (
                     f"Orbi failed: the resume verification of "
                     f"PR {scene['pr_url']} failed: {detail}; this is an "
@@ -4750,9 +4770,9 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
                 # local commit and continues on the same PR), never
                 # `ai-blocked`. The failure comment carries the full
                 # scene and is written to the Issue AND the PR.
-                edit_issue(
-                    number, repo=source_repo, add=FIX_NEEDED_LABEL,
-                    remove=PR_OPENED_LABEL,
+                apply_label_patch(
+                    number, repo=source_repo, event=EVENT_FIX_NEEDED,
+                    current_labels=(),
                 )
                 body = (
                     f"Orbi needs a fix: the resume verification "
@@ -5709,9 +5729,9 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                 ),
             )),
         )
-        edit_issue(
-            number, repo=source_repo, add=FIX_NEEDED_LABEL,
-            remove=PR_OPENED_LABEL,
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_FIX_NEEDED,
+            current_labels=(),
         )
         return False
     # Issue #82: the reviewer fixes findings in the same session and
@@ -5751,9 +5771,9 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         )
         comment_issue(number, repo=source_repo, body=body)
         comment_pr(pr["number"], body=body)
-        edit_issue(
-            number, repo=source_repo, add=FIX_NEEDED_LABEL,
-            remove=PR_OPENED_LABEL,
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_FIX_NEEDED,
+            current_labels=(),
         )
         return False
     confirmed = confirm_merged(
@@ -5792,9 +5812,11 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     # The GitHub merge already landed. Record ai-merged before touching
     # the local systemd checkout: a checkout that cannot fast-forward is
     # runner ops, not a failed delivery (must not become ai-blocked).
-    edit_issue(
-        number, repo=source_repo, add=MERGED_LABEL,
-        remove=PR_OPENED_LABEL,
+    # The current delivery-state label is `ai-pr-opened` (set by the PR
+    # opened transition) — the merged patch clears it.
+    apply_label_patch(
+        number, repo=source_repo, event=EVENT_MERGED,
+        current_labels={PR_OPENED_LABEL},
     )
     comment_issue(
         number, repo=source_repo,
@@ -6124,9 +6146,9 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
     claim label removed) with the exact reason in the failure comment
     — a human decides (restore or remove the worktree, then re-label).
     """
-    edit_issue(
-        number, repo=source_repo, add=BLOCKED_LABEL,
-        remove=IN_PROGRESS_LABEL,
+    apply_label_patch(
+        number, repo=source_repo, event=EVENT_BLOCKED,
+        current_labels={IN_PROGRESS_LABEL},
     )
     comment_issue(
         number, repo=source_repo,
@@ -6220,7 +6242,9 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
     LOGGER.info(
         "issue=%s %s", number, run_info,
     )
-    edit_issue(number, repo=source_repo, add=IN_PROGRESS_LABEL)
+    apply_label_patch(
+        number, repo=source_repo, event=EVENT_CLAIM, current_labels=(),
+    )
     # The Issue is in flight from the claim label on: bind the stop
     # scene (Issue #48) so a SIGTERM during this tick logs the active
     # Issue context, not only systemd's generic "Stopped" line. The
@@ -6346,9 +6370,9 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
         # base, so the head always advanced. (Issue #82 removed the
         # fixer's `fix pushed` milestone: findings are fixed by the
         # review session, which records its own round comments.)
-        edit_issue(
-            number, repo=source_repo, add=PR_OPENED_LABEL,
-            remove=IN_PROGRESS_LABEL,
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_PR_OPENED,
+            current_labels=(),
         )
         pr_opened = True
         # The scene comment is NOT a bypass (Issue #79): the next
@@ -6474,10 +6498,14 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
             # is removed too, so the terminal state is `ai-blocked`
             # ALONE — never `ai-pr-opened` + `ai-blocked` (docs/workflow.mdx
             # label lifecycle: `ai-pr-opened` is removed on terminal failure).
-            edit_issue(
-                number, repo=source_repo, add=BLOCKED_LABEL,
-                remove=(
-                    PR_OPENED_LABEL if pr_opened else IN_PROGRESS_LABEL
+            # The current delivery-state label is derived from the
+            # `pr_opened` flag (the only label present at this point):
+            # `ai-pr-opened` when the PR transition landed, otherwise
+            # `ai-in-progress` (the claim label).
+            apply_label_patch(
+                number, repo=source_repo, event=EVENT_BLOCKED,
+                current_labels=(
+                    {PR_OPENED_LABEL} if pr_opened else {IN_PROGRESS_LABEL}
                 ),
             )
             blocked_transition_done = True
@@ -6747,17 +6775,16 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 "Issue ai-blocked and releasing the slot",
                 number, pr_url,
             )
-            edit_issue(
-                number, repo=source_repo, add=BLOCKED_LABEL,
-                remove=PR_OPENED_LABEL,
+            # The current labels are read ONCE before the transition:
+            # the blocked patch clears every delivery-state label that
+            # is present (`ai-pr-opened`, and `ai-fix-needed` when the PR
+            # was closed while awaiting the next review session), so the
+            # terminal state is `ai-blocked` alone.
+            labels = issue_labels(number, source_repo)
+            apply_label_patch(
+                number, repo=source_repo, event=EVENT_BLOCKED,
+                current_labels=labels,
             )
-            # A PR closed while in `ai-fix-needed` (awaiting the next
-            # review session) leaves that label behind: remove it too,
-            # so the terminal state is `ai-blocked` alone.
-            if FIX_NEEDED_LABEL in issue_labels(number, source_repo):
-                edit_issue(
-                    number, repo=source_repo, remove=FIX_NEEDED_LABEL,
-                )
             body = (
                 f"Orbi failed: PR {pr_url} was closed without "
                 "a merge; the delivery is terminally failed"
@@ -6812,8 +6839,8 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 )
             return
         labels = issue_labels(number, source_repo)
-        if ((PR_OPENED_LABEL in labels or FIX_NEEDED_LABEL in labels)
-                and BLOCKED_LABEL not in labels
+        if (is_resumable(labels)
+                and not needs_human_intervention(labels)
                 and MERGED_LABEL not in labels):
             # The PR is in an opened-PR review state: run the
             # independent review of the frozen PR on the same run
@@ -6932,20 +6959,18 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     # removed) and the failure comment states the
                     # explicit reason why automatic recovery is
                     # impossible.
-                    edit_issue(
-                        number, repo=source_repo, add=BLOCKED_LABEL,
-                        remove=PR_OPENED_LABEL,
+                    # The current labels are read ONCE before the
+                    # transition: the blocked patch clears every
+                    # delivery-state label that is present (`ai-pr-opened`,
+                    # and `ai-fix-needed` when the failure happened while
+                    # awaiting the next review session — Issue #82 routes
+                    # both opened-PR states into the same review), so the
+                    # terminal state is `ai-blocked` alone.
+                    labels = issue_labels(number, source_repo)
+                    apply_label_patch(
+                        number, repo=source_repo, event=EVENT_BLOCKED,
+                        current_labels=labels,
                     )
-                    # A failure while the Issue is in `ai-fix-needed`
-                    # (awaiting the next review session) leaves that
-                    # label behind: remove it too, so the terminal
-                    # state is `ai-blocked` alone (Issue #82 routes
-                    # both opened-PR states into the same review).
-                    if FIX_NEEDED_LABEL in issue_labels(number, source_repo):
-                        edit_issue(
-                            number, repo=source_repo,
-                            remove=FIX_NEEDED_LABEL,
-                        )
                     body = (
                         f"Orbi failed: the independent review of "
                         f"PR {pr_url} failed: {detail}; this is an "
@@ -7014,9 +7039,9 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 # ai-blocked, never a replacement PR). The failure
                 # comment carries the full scene and is written to the
                 # Issue AND the PR.
-                edit_issue(
-                    number, repo=source_repo, add=FIX_NEEDED_LABEL,
-                    remove=PR_OPENED_LABEL,
+                apply_label_patch(
+                    number, repo=source_repo, event=EVENT_FIX_NEEDED,
+                    current_labels=(),
                 )
                 body = (
                     f"Orbi needs a fix: the independent review of "

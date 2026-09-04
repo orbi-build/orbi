@@ -1772,13 +1772,13 @@ def test_wait_for_delivery_closed_unmerged_progress_failure_still_releases(
         {"number": 39, "title": "t", "body": ""}, {}, "owner/repo",
     )
 
-    # The `ai-blocked` transition (plus the leftover-label cleanup)
+    # The `ai-blocked` transition (the blocked patch clears every
+    # delivery-state label that is present — here only `ai-fix-needed`)
     # completed even though the progress publishing 404'd...
     assert {
         "repo": "owner/repo", "add": "ai-blocked",
-        "remove": "ai-pr-opened",
+        "remove": "ai-fix-needed",
     } in edits
-    assert {"repo": "owner/repo", "remove": "ai-fix-needed"} in edits
     # ...the failure comment was posted...
     assert any(
         "closed without a merge" in kwargs.get("body", "")
