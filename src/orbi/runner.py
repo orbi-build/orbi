@@ -532,9 +532,6 @@ def load_config(path: Path) -> dict:
         ],
         "base_branch": base_branch,
         "active_milestone": active_milestone,
-        # Issue #270: the resolved config file path, so the release
-        # success path can write an advanced `active_milestone` back.
-        "config_path": path,
         "auto_repair_issues": auto_repair_issues,
         "max_concurrency": max_concurrency,
         "slot_dir": slot_dir_for(repo_dir),
@@ -1194,16 +1191,22 @@ def ready_searches(active_milestone: str | None = None) -> tuple[str, str, str]:
     )
 
 
-def check_active_milestone(repo: str, active_milestone: str) -> str:
-    """Return the state of the configured Milestone (Issue #270).
+def check_active_milestone(repo: str, active_milestone: str) -> None:
+    """Validate the configured Milestone before the fresh-claim scan.
 
-    Lists the repo's Milestones with `state=all` (the default
-    `state=open` would hide already-closed ones) and matches the EXACT
-    title — never guessed, never fuzzy-matched:
+    Lists the repo's Milestones with `state=all` (reusing the SAME query
+    as `close_release_milestone` — the default `state=open` would hide
+    already-closed ones) and matches the EXACT title — never guessed,
+    never fuzzy-matched:
 
-    - exactly one Milestone with that title -> its `state` (`"open"`
-      or `"closed"`);
-    - no Milestone with that exact title -> `"missing"`;
+    - exactly one Milestone with that title and `state=open` -> valid
+      scope, nothing to do (the existing scan proceeds);
+    - no Milestone with that exact title -> fail fast with the
+      structured `active_milestone_missing current=<name>` line;
+    - the Milestone is `closed` -> fail fast with the structured
+      `active_milestone_closed current=<name>` line, listing every open
+      Milestone with its open issue count so a human sees at a glance
+      which scope to switch to;
     - several Milestones with that exact title -> fail fast (ambiguous,
       the same rule as `close_release_milestone`).
 
@@ -1219,7 +1222,15 @@ def check_active_milestone(repo: str, active_milestone: str) -> str:
         if isinstance(m, dict) and m.get("title") == active_milestone
     ]
     if not matches:
-        return "missing"
+        LOGGER.error(
+            "active_milestone_missing repo=%s current=%s — no Milestone "
+            "with that exact title; the fresh-claim scope is invalid",
+            repo, active_milestone,
+        )
+        raise RuntimeError(
+            f"active_milestone_missing repo={repo} "
+            f"current={active_milestone}"
+        )
     if len(matches) > 1:
         numbers = ", ".join(
             f"#{m.get('number')}" for m in matches
@@ -1229,7 +1240,22 @@ def check_active_milestone(repo: str, active_milestone: str) -> str:
             f"Milestones share the exact title in {repo} — ambiguous, "
             f"refusing to guess which one is active: {numbers}"
         )
-    return str(matches[0].get("state"))
+    if matches[0].get("state") != "closed":
+        return
+    candidates = ", ".join(
+        f"{m.get('title')}({m.get('open_issues', '?')})"
+        for m in milestones
+        if isinstance(m, dict) and m.get("state") == "open"
+    ) or "(no open Milestones)"
+    LOGGER.error(
+        "active_milestone_closed repo=%s current=%s — open milestones: "
+        "%s",
+        repo, active_milestone, candidates,
+    )
+    raise RuntimeError(
+        f"active_milestone_closed repo={repo} "
+        f"current={active_milestone} — open milestones: {candidates}"
+    )
 
 
 def issue_priority(issue: dict) -> str:
@@ -1980,112 +2006,6 @@ def close_release_milestone(repo: str, version: str) -> str:
     )
 
 
-SEMVER_MILESTONE_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
-
-
-def parse_milestone_version(title: str) -> tuple[int, int, int] | None:
-    """Parse a `v<major>.<minor>.<patch>` Milestone title (Issue #270).
-
-    Returns the numeric triple used for semantic-version ordering, or
-    None when the title is not a plain semantic version — such titles
-    are never guessed at.
-    """
-    match = SEMVER_MILESTONE_RE.match(title)
-    if match is None:
-        return None
-    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
-
-
-def set_config_active_milestone(path: Path, value: str) -> None:
-    """Write `active_milestone = "<value>"` back into the TOML config.
-
-    Only the existing `active_milestone` line (double- or single-quoted)
-    is rewritten; every other byte of the file is untouched. A config
-    without that line is a misconfiguration — fail fast, never guess
-    where to write it.
-    """
-    text = path.read_text(encoding="utf-8")
-    pattern = re.compile(
-        r"""(?m)^active_milestone\s*=\s*['"][^'"]*['"]\s*$"""
-    )
-    if not pattern.search(text):
-        raise RuntimeError(
-            f"config {path}: no active_milestone line to update — "
-            "refusing to guess where to write it"
-        )
-    path.write_text(
-        pattern.sub(f'active_milestone = "{value}"', text, count=1),
-        encoding="utf-8",
-    )
-
-
-def advance_active_milestone(
-    config: dict, repo: str, released_version: str,
-) -> str | None:
-    """Advance the configured `active_milestone` past a release (Issue #270).
-
-    Called on the release success path right after the released
-    Milestone is closed. It acts only when the config's
-    `active_milestone` is EXACTLY the released version — an unset scope
-    (unscoped scans) or a different active Milestone is left untouched.
-
-    The next scope is the nearest OPEN Milestone strictly above the
-    released version in semantic-version order (`v0.3.0` < `v0.3.1` <
-    `v0.4.0`); non-semver titles are never guessed. The new value is
-    written back to the config file so the NEXT tick claims from the new
-    Milestone without a human config edit.
-
-    Returns the new value, or None when nothing was advanced. "No next
-    open Milestone" is logged explicitly (`active_milestone_advance_none`)
-    — never silent.
-    """
-    current = config.get("active_milestone")
-    if current is None or current != released_version:
-        return None
-    released = parse_milestone_version(released_version)
-    if released is None:
-        raise RuntimeError(
-            f"release {released_version!r}: the released version is not "
-            "a plain v<major>.<minor>.<patch> — refusing to guess the "
-            "next Milestone"
-        )
-    raw = run_command([
-        "gh", "api", f"repos/{repo}/milestones?state=open", "--paginate",
-    ])
-    milestones = parse_issue_array(raw)
-    candidates = []
-    for milestone in milestones:
-        if not isinstance(milestone, dict):
-            continue
-        title = milestone.get("title")
-        if not isinstance(title, str):
-            continue
-        version = parse_milestone_version(title)
-        if version is not None and version > released:
-            candidates.append((version, title))
-    if not candidates:
-        LOGGER.warning(
-            "active_milestone_advance_none repo=%s current=%s — no open "
-            "Milestone above %s; the claim scope stays %s until a human "
-            "updates it",
-            repo, current, released_version, current,
-        )
-        return None
-    _, next_title = min(candidates)
-    config_path = config.get("config_path")
-    if config_path is None:
-        raise RuntimeError(
-            f"release {released_version}: no config path available to "
-            "write the advanced active_milestone — refusing to guess"
-        )
-    set_config_active_milestone(Path(config_path), next_title)
-    LOGGER.info(
-        "active_milestone_advanced repo=%s from=%s to=%s config=%s",
-        repo, current, next_title, config_path,
-    )
-    return next_title
-
-
 def release_success_comment_body(run_id: str, run_info: str,
                                  release_url: str, tag: str,
                                  release_commit: str,
@@ -2178,12 +2098,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
        (idempotent when already closed); fail fast — never a silent
        skip, never a different Milestone — when no Milestone carries
        that exact title or open Issues remain.
-    11. Advance the configured `active_milestone` past the released
-       version (Issue #270): only when it is exactly the released
-       version, the nearest open Milestone above it is written back to
-       the config file; "no next open Milestone" is logged, never
-       silent.
-    12. Any failure: `ai-blocked` ALONE (no automatic retry — a
+    11. Any failure: `ai-blocked` ALONE (no automatic retry — a
         release is a human decision point), the failure comment
         carries the run marker and the concrete reason, and the
         exception propagates so the tick fails fast.
@@ -2358,7 +2273,6 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         milestone_evidence = close_release_milestone(
             source_repo, tag,
         )
-        advance_active_milestone(config, source_repo, tag)
         comment_issue(
             number, repo=source_repo,
             body=release_success_comment_body(
@@ -2868,7 +2782,6 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
 def pick_next_delivery(
     repos: list[str], slot_dir: Path, max_concurrency: int,
     active_milestone: str | None = None,
-    stale_repos: set[str] | None = None,
 ) -> tuple[str, dict, dict | None] | None:
     """Scan sources in order: resumable PRs, in-flight restarts, ready.
 
@@ -2886,11 +2799,6 @@ def pick_next_delivery(
     (`pick_issue`) — the resumable-PR and in-flight restart scans are
     resume states, and running an in-flight or opened-PR delivery to
     completion is never gated by a Milestone change.
-
-    Issue #270: `stale_repos` are repos whose configured Milestone is
-    closed or missing (validated by the tick loop before the call); their
-    fresh-claim scan is skipped — a closed Milestone with leftover open
-    Issues must never be claimed — while their resume scans still run.
     """
     for repo in repos:
         selected = pick_resumable_delivery(
@@ -2906,8 +2814,6 @@ def pick_next_delivery(
         if issue is not None:
             return repo, issue, None
     for repo in repos:
-        if stale_repos is not None and repo in stale_repos:
-            continue
         issue = pick_issue(repo, active_milestone)
         if issue is not None:
             return repo, issue, None
@@ -7394,34 +7300,22 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     try:
         # Issue #270: a stale `active_milestone` (closed or missing) must
-        # never masquerade as "no ready issue". Validate the fresh-claim
-        # scope BEFORE the claim scan; resumes are never gated by it (the
-        # resumable-PR and in-flight scans run inside pick_next_delivery
-        # regardless).
-        stale_repos: set[str] = set()
+        # never masquerade as "no ready issue". Validate the configured
+        # scope BEFORE any delivery work; a stale scope fails the tick
+        # fast (the structured `active_milestone_missing` /
+        # `active_milestone_closed` line is the recorded reason). An unset
+        # `active_milestone` is never validated (unscoped scans).
         if config["active_milestone"] is not None:
             for repo in config["source_repos"]:
-                state = check_active_milestone(
+                check_active_milestone(
                     repo, config["active_milestone"],
                 )
-                if state != "open":
-                    LOGGER.warning(
-                        "active_milestone_stale repo=%s current=%s "
-                        "state=%s",
-                        repo, config["active_milestone"], state,
-                    )
-                    stale_repos.add(repo)
         selected = pick_next_delivery(
             config["source_repos"], config["slot_dir"],
             config["max_concurrency"],
             config["active_milestone"],
-            stale_repos=stale_repos,
         )
         if selected is None:
-            if stale_repos:
-                # The active_milestone_stale warning above is the
-                # recorded reason — no indiscriminate no_ready_issue.
-                return 0
             LOGGER.info(
                 "source_repos=%s outcome=no_ready_issue",
                 config["source_repos"],
