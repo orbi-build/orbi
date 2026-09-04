@@ -13941,13 +13941,12 @@ def test_advance_active_milestone_logs_none_when_there_is_no_next(
 def test_advance_active_milestone_is_a_noop_when_scope_is_unset(
     monkeypatch,
 ):
-    def fake_run(command, **kwargs):
-        raise AssertionError("no milestone query expected")
-
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    calls = []
+    monkeypatch.setattr(runner, "run_command", calls.append)
     assert runner.advance_active_milestone(
         {"active_milestone": None, "config_path": None}, "o/r", "v0.3.0",
     ) is None
+    assert calls == []
 
 
 def test_advance_active_milestone_is_a_noop_when_active_differs(
@@ -13959,27 +13958,51 @@ def test_advance_active_milestone_is_a_noop_when_active_differs(
         encoding="utf-8",
     )
 
-    def fake_run(command, **kwargs):
-        raise AssertionError("no milestone query expected")
-
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    calls = []
+    monkeypatch.setattr(runner, "run_command", calls.append)
     config = {"active_milestone": "v0.3.1", "config_path": config_file}
     assert runner.advance_active_milestone(config, "o/r", "v0.3.0") is None
     assert 'active_milestone = "v0.3.1"' in config_file.read_text(
         encoding="utf-8"
     )
+    assert calls == []
 
 
 def test_advance_active_milestone_fails_fast_on_non_semver_release(
     monkeypatch,
 ):
-    def fake_run(command, **kwargs):
-        raise AssertionError("no milestone query expected")
-
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    calls = []
+    monkeypatch.setattr(runner, "run_command", calls.append)
     config = {"active_milestone": "v0.3.0-rc1", "config_path": None}
     with pytest.raises(RuntimeError, match="not a plain"):
         runner.advance_active_milestone(config, "o/r", "v0.3.0-rc1")
+    assert calls == []
+
+
+def test_advance_active_milestone_ignores_malformed_milestone_entries(
+    monkeypatch, tmp_path,
+):
+    """Issue #270: a non-dict entry or a non-string title in the
+    Milestone list is skipped, never guessed at."""
+    config_file = tmp_path / "orbi.toml"
+    config_file.write_text(
+        'source_repos = ["o/r"]\nactive_milestone = "v0.3.0"\n',
+        encoding="utf-8",
+    )
+
+    def fake_run(command, **kwargs):
+        return json.dumps([
+            "not-a-dict",
+            {"number": 7, "title": None},
+            {"number": 8, "title": 42},
+            {"number": 2, "title": "v0.3.1", "state": "open"},
+        ])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    config = {"active_milestone": "v0.3.0", "config_path": config_file}
+    assert runner.advance_active_milestone(config, "o/r", "v0.3.0") == (
+        "v0.3.1"
+    )
 
 
 def test_advance_active_milestone_fails_fast_without_config_path(monkeypatch):
