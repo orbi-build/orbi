@@ -261,13 +261,13 @@ EOF
 chmod 600 .orbi/env
 ```
 
-The committed unit template already carries
-`EnvironmentFile=-%h/Documents/orbi/orbi/.orbi/env`
-(Issue #172) — if your clone lives elsewhere, point the **installed**
-unit's `EnvironmentFile` at **your** `.orbi/env` like the
-`WorkingDirectory` Note in step 8. A keyless local server needs no env
-file at all (the literal `"local"` placeholder above satisfies the
-shape check).
+The committed unit template carries
+`EnvironmentFile=-{{ORBI_REPO_DIR}}/.orbi/env` (Issue #172); the
+`{{ORBI_REPO_DIR}}` placeholder is substituted with your checkout path
+at install time (Issue #262), so the installed unit's `EnvironmentFile`
+points at **your** `.orbi/env` automatically — no manual edit. A
+keyless local server needs no env file at all (the literal `"local"`
+placeholder above satisfies the shape check).
 
 #### What the Runner validates (fail fast, before any slot or claim)
 
@@ -433,14 +433,13 @@ capacity and the enabled timer count are both `max_concurrency`, while the
 flock slots remain the final safety boundary.
 
 <Note>
-The committed unit templates reference the author's clone layout via
-`%h` specifiers (`%h/Documents/orbi/orbi`). If your clone lives
-elsewhere, install the CLI from **your** clone path (step 2) and edit
-the **installed** units in your user unit directory
-(`~/.config/systemd/user/`) to point `WorkingDirectory` and
-`ORBI_CONFIG` at **your** clone path, then
-`systemctl --user daemon-reload`. `ExecStart` is the installed
-`orbi` CLI and stays relative. The repo templates stay the single
-source of truth for everything else — see [Operations](/operations) on
-drift detection.
+The committed unit templates are machine-independent: they carry the
+`{{ORBI_REPO_DIR}}` placeholder instead of a hardcoded checkout path
+(Issue #262). `orbi install-units` (and `orbi setup`) substitute it
+with **your** deployment checkout's resolved path at install time, so
+a clone at ANY location deploys cleanly — no manual edit of the
+installed units. `ExecStart` is the installed `orbi` CLI and stays
+home-relative (`%h/.local/bin/orbi`). The repo templates stay the
+single source of truth for everything else — see [Operations](/operations)
+on drift detection.
 </Note>

@@ -240,12 +240,12 @@ EOF
 chmod 600 .orbi/env
 ```
 
-提交的 unit 模板已带
-`EnvironmentFile=-%h/Documents/orbi/orbi/.orbi/env`
-（Issue #172）——如果你的 clone 在别处，像第 8 步的
-`WorkingDirectory` Note 一样，把**已安装** unit 的 `EnvironmentFile`
-指向**你的** `.orbi/env`。无 key 的本地 server 完全不需要 env
-文件（上面的 `"local"` 字面量占位即可通过形状检查）。
+提交的 unit 模板带
+`EnvironmentFile=-{{ORBI_REPO_DIR}}/.orbi/env`（Issue #172）；
+`{{ORBI_REPO_DIR}}` 占位符在安装时被替换为你的 checkout 路径
+（Issue #262），所以已安装 unit 的 `EnvironmentFile` 自动指向
+**你的** `.orbi/env`——无需手工编辑。无 key 的本地 server 完全
+不需要 env 文件（上面的 `"local"` 字面量占位即可通过形状检查）。
 
 #### Runner 校验什么（fail fast，在任何 slot/claim 之前）
 
@@ -391,12 +391,11 @@ fast-forward 和每实例启动语义定义在[运维](/zh/operations)（Timers�
 `max_concurrency` 决定，flock slot 仍是最终安全边界。
 
 <Note>
-提交的 unit 模板通过 `%h` 占位符引用作者的 clone 布局
-（`%h/Documents/orbi/orbi`）。如果你的 clone 在别处，从**你**
-的 clone 路径安装 CLI（第 2 步），并编辑你 user unit 目录
-（`~/.config/systemd/user/`）里**已安装**的 units，把
-`WorkingDirectory` 和 `ORBI_CONFIG` 指向**你的** clone 路径，
-然后 `systemctl --user daemon-reload`。`ExecStart` 是已安装的
-`orbi` CLI，保持相对名。仓库模板仍是其余一切的唯一事实源——
+提交的 unit 模板与机器无关：它们携带 `{{ORBI_REPO_DIR}}` 占位符
+而不是硬编码的 checkout 路径（Issue #262）。`orbi install-units`
+（以及 `orbi setup`）在安装时用**你的**部署 checkout 的解析后
+路径替换它，因此任何位置的 clone 都能干净部署——无需手工编辑
+已安装的 units。`ExecStart` 是已安装的 `orbi` CLI，保持 home 相对
+（`%h/.local/bin/orbi`）。仓库模板仍是其余一切的唯一事实源——
 漂移检测见[运维](/zh/operations)。
 </Note>

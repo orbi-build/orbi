@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from orbi import systemd_deploy
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TIMER_FILE = REPO_ROOT / "systemd" / "orbi@.timer"
 SERVICE_FILE = REPO_ROOT / "systemd" / "orbi@.service"
@@ -126,7 +128,7 @@ def test_service_loads_optional_provider_env_file():
     service = parse_unit(SERVICE_FILE)
     section = service["Service"]
     assert section["EnvironmentFile"] == [
-        "-%h/Documents/orbi/orbi/.orbi/env"
+        "-{{ORBI_REPO_DIR}}/.orbi/env"
     ]
 
 
@@ -187,8 +189,14 @@ def test_templates_and_instances_pass_systemd_analyze_verify(
         pytest.skip("systemd-analyze not available on this machine")
     unit_dir = tmp_path / "systemd" / "user"
     unit_dir.mkdir(parents=True)
+    # Issue #262: the templates carry the {{ORBI_REPO_DIR}} placeholder;
+    # render them with a real checkout path (as `orbi install-units`
+    # does) before verify — the raw template is machine-independent and
+    # not a runnable unit.
     for name in ("orbi@.service", "orbi@.timer"):
-        shutil.copyfile(REPO_ROOT / "systemd" / name, unit_dir / name)
+        template = (REPO_ROOT / "systemd" / name).read_text(encoding="utf-8")
+        rendered = systemd_deploy.render_unit_template(template, REPO_ROOT)
+        (unit_dir / name).write_bytes(rendered.encode("utf-8"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     for name in ("orbi@.service", "orbi@.timer",
                  "orbi@1.service", "orbi@1.timer",

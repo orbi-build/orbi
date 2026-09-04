@@ -33,6 +33,8 @@ from pathlib import Path
 
 import pytest
 
+from orbi import systemd_deploy
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REPO = "owner/repo"
 # Issue #168 src layout: the Runner is the package module
@@ -545,12 +547,18 @@ def write_config(
 _RUNNING: list[subprocess.Popen] = []
 
 
-def install_deployed_units(unit_dir: Path) -> None:
+def install_deployed_units(unit_dir: Path, repo_dir: Path) -> None:
     """Simulate the deployed machine: the repo templates installed as
-    the user units (the idempotent install the README documents)."""
+    the user units (the idempotent install the README documents). The
+    templates are rendered exactly as `orbi install-units` does — the
+    {{ORBI_REPO_DIR}} placeholder replaced with the checkout path — so
+    the pre-start drift check (which compares against the rendered
+    template) sees a clean deployment."""
     unit_dir.mkdir(parents=True, exist_ok=True)
     for name in ("orbi@.service", "orbi@.timer"):
-        shutil.copyfile(REPO_ROOT / "systemd" / name, unit_dir / name)
+        template = (REPO_ROOT / "systemd" / name).read_text(encoding="utf-8")
+        rendered = systemd_deploy.render_unit_template(template, repo_dir)
+        (unit_dir / name).write_bytes(rendered.encode("utf-8"))
 
 
 def start_runner(
@@ -570,7 +578,7 @@ def start_runner(
     # installed), or an explicit dir for the drift scenarios.
     if unit_dir is None:
         unit_dir = config_path.parent / "unit-dir"
-        install_deployed_units(unit_dir)
+        install_deployed_units(unit_dir, config_path.parent / "clone")
     env["ORBI_UNIT_DIR"] = str(unit_dir)
     env["PYTHONPATH"] = str(REPO_ROOT / "src")
     process = subprocess.Popen(
@@ -1437,7 +1445,7 @@ def test_unit_drift_auto_syncs_and_claims_without_human_intervention(
 
     # A drifted deployment: the installed timer carries one extra line.
     unit_dir = tmp_path / "drifted-units"
-    install_deployed_units(unit_dir)
+    install_deployed_units(unit_dir, clone)
     with (unit_dir / "orbi@.timer").open(
         "a", encoding="utf-8",
     ) as handle:
@@ -1512,7 +1520,7 @@ def test_unit_drift_unresolvable_blocks_the_start_without_claiming(
 
     # A drifted deployment: the installed timer carries one extra line.
     unit_dir = tmp_path / "unresolvable-units"
-    install_deployed_units(unit_dir)
+    install_deployed_units(unit_dir, clone)
     with (unit_dir / "orbi@.timer").open(
         "a", encoding="utf-8",
     ) as handle:

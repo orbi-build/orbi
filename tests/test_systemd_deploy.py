@@ -632,3 +632,207 @@ def test_sync_drifted_units_still_drifted_after_sync_fails_fast(
     assert "unit_drift unit=orbi@.timer" in caplog.text
     assert "fix=orbi install-units" in caplog.text
     assert "unit_drift auto_synced" not in caplog.text
+
+
+# --- Issue #262: template path placeholder + renamed-unit migration ----------
+
+
+def test_render_unit_template_substitutes_the_repo_dir(tmp_path):
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    template = (
+        "[Service]\n"
+        "WorkingDirectory={{ORBI_REPO_DIR}}\n"
+        'ExecStartPre=flock {{ORBI_REPO_DIR}}/.orbi/base-sync.lock -c "x"\n'
+    )
+    rendered = systemd_deploy.render_unit_template(template, repo)
+    assert "{{ORBI_REPO_DIR}}" not in rendered
+    assert f"WorkingDirectory={repo}" in rendered
+    assert f"flock {repo}/.orbi/base-sync.lock" in rendered
+
+
+def test_render_unit_template_no_placeholder_is_unchanged(tmp_path):
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    template = "WorkingDirectory=/fixed/path\n"
+    assert systemd_deploy.render_unit_template(template, repo) == template
+
+
+def test_install_units_writes_the_rendered_unit_with_the_real_path(tmp_path):
+    repo = tmp_path / "checkout"
+    (repo / "systemd").mkdir(parents=True)
+    (repo / "systemd" / "orbi@.service").write_text(
+        "[Service]\n"
+        "WorkingDirectory={{ORBI_REPO_DIR}}\n"
+        'Environment="ORBI_CONFIG={{ORBI_REPO_DIR}}/orbi.toml"\n'
+        "EnvironmentFile=-{{ORBI_REPO_DIR}}/.orbi/env\n"
+        'ExecStartPre=/usr/bin/flock {{ORBI_REPO_DIR}}/.orbi/base-sync.lock '
+        '-c \'git fetch\'\n'
+        'ExecStartPre=/usr/bin/flock {{ORBI_REPO_DIR}}/.orbi/base-sync.lock '
+        "-c '%h/.local/bin/orbi --version || uv tool install --force "
+        "--reinstall --editable --python /usr/bin/python3 "
+        "{{ORBI_REPO_DIR}}'\n"
+        "ExecStart=%h/.local/bin/orbi\n",
+        encoding="utf-8",
+    )
+    (repo / "systemd" / "orbi@.timer").write_text(
+        "[Timer]\nOnCalendar=*-*-* *:00/5\n", encoding="utf-8",
+    )
+    installed = tmp_path / "install"
+    systemd_deploy.install_units(
+        repo, installed, run_command=lambda command, **kwargs: "",
+    )
+    service = (installed / "orbi@.service").read_text(encoding="utf-8")
+    # No placeholder or hardcoded path survives; the real checkout path is
+    # substituted everywhere, while the home-relative bits stay %h.
+    assert "{{ORBI_REPO_DIR}}" not in service
+    assert "%h/Documents/orbi/orbi" not in service
+    assert f"WorkingDirectory={repo}" in service
+    assert f'ORBI_CONFIG={repo}/orbi.toml' in service
+    assert f"EnvironmentFile=-{repo}/.orbi/env" in service
+    assert f"flock {repo}/.orbi/base-sync.lock" in service
+    assert f"python3 {repo}'" in service
+    assert "ExecStart=%h/.local/bin/orbi" in service
+
+
+def test_unit_status_is_clean_when_installed_matches_the_rendered_template(
+    tmp_path,
+):
+    repo = tmp_path / "checkout"
+    (repo / "systemd").mkdir(parents=True)
+    (repo / "systemd" / "orbi@.service").write_text(
+        "WorkingDirectory={{ORBI_REPO_DIR}}\n", encoding="utf-8",
+    )
+    (repo / "systemd" / "orbi@.timer").write_text(
+        "[Timer]\nOnCalendar=*-*-* *:00/5\n", encoding="utf-8",
+    )
+    installed = tmp_path / "install"
+    systemd_deploy.install_units(
+        repo, installed, run_command=lambda command, **kwargs: "",
+    )
+    status = systemd_deploy.unit_status(repo, installed)
+    for entry in status:
+        assert entry["drifted"] is False
+        assert entry["missing"] is False
+        assert entry["repo_sha256"] == entry["installed_sha256"]
+
+
+def test_unit_status_drifts_when_installed_differs_from_the_rendered_template(
+    tmp_path,
+):
+    repo = tmp_path / "checkout"
+    (repo / "systemd").mkdir(parents=True)
+    (repo / "systemd" / "orbi@.service").write_text(
+        "WorkingDirectory={{ORBI_REPO_DIR}}\n", encoding="utf-8",
+    )
+    (repo / "systemd" / "orbi@.timer").write_text(
+        "[Timer]\nOnCalendar=*-*-* *:00/5\n", encoding="utf-8",
+    )
+    installed = tmp_path / "install"
+    systemd_deploy.install_units(
+        repo, installed, run_command=lambda command, **kwargs: "",
+    )
+    # Tamper the installed unit so it no longer matches the rendered
+    # template (e.g. a hand edit to a different path).
+    (installed / "orbi@.service").write_text(
+        "WorkingDirectory=/somewhere/else\n", encoding="utf-8",
+    )
+    status = systemd_deploy.unit_status(repo, installed)
+    service = [e for e in status if e["unit"] == "orbi@.service"][0]
+    assert service["drifted"] is True
+    assert service["repo_sha256"] != service["installed_sha256"]
+
+
+def test_migrate_renamed_units_disables_instances_and_removes_files(
+    tmp_path, caplog,
+):
+    installed = tmp_path / "install"
+    installed.mkdir()
+    (installed / "muyan-pilot@.service").write_text(
+        "[Service]\nExecStart=old\n", encoding="utf-8",
+    )
+    (installed / "muyan-pilot@.timer").write_text(
+        "[Timer]\nOnCalendar=old\n", encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return ""
+
+    with caplog.at_level("INFO"):
+        migrated = systemd_deploy.migrate_renamed_units(
+            installed, run_command=fake_run,
+        )
+    assert migrated is True
+    # Both old timer instances are stopped (TIMER stops — the service is
+    # never started/stopped/restarted).
+    for instance in ("muyan-pilot@1.timer", "muyan-pilot@2.timer"):
+        assert [
+            "systemctl", "--user", "disable", "--now", instance,
+        ] in calls
+    # The old unit files are removed.
+    assert not (installed / "muyan-pilot@.service").exists()
+    assert not (installed / "muyan-pilot@.timer").exists()
+    assert "renamed_units_migrated" in caplog.text
+
+
+def test_migrate_renamed_units_is_a_noop_without_the_old_files(tmp_path):
+    installed = tmp_path / "install"
+    installed.mkdir()
+    calls: list[list[str]] = []
+    assert systemd_deploy.migrate_renamed_units(
+        installed, run_command=lambda command, **kwargs:
+        calls.append(command) or "",
+    ) is False
+    assert calls == []
+
+
+def test_migrate_renamed_units_removes_only_the_files_that_exist(tmp_path):
+    installed = tmp_path / "install"
+    installed.mkdir()
+    (installed / "muyan-pilot@.timer").write_text(
+        "[Timer]\nOnCalendar=old\n", encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+    migrated = systemd_deploy.migrate_renamed_units(
+        installed, run_command=lambda command, **kwargs:
+        calls.append(command) or "",
+    )
+    assert migrated is True
+    assert not (installed / "muyan-pilot@.timer").exists()
+    assert not (installed / "muyan-pilot@.service").exists()
+
+
+def test_install_units_migrates_the_renamed_units_when_present(tmp_path):
+    repo = make_repo(tmp_path)
+    installed = tmp_path / "install"
+    installed.mkdir()
+    (installed / "muyan-pilot@.service").write_text(
+        "[Service]\nExecStart=old\n", encoding="utf-8",
+    )
+    (installed / "muyan-pilot@.timer").write_text(
+        "[Timer]\nOnCalendar=old\n", encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "0123456789abcdef0123456789abcdef01234567"
+        return ""
+
+    systemd_deploy.install_units(repo, installed, run_command=fake_run)
+    for instance in ("muyan-pilot@1.timer", "muyan-pilot@2.timer"):
+        assert [
+            "systemctl", "--user", "disable", "--now", instance,
+        ] in calls
+    assert not (installed / "muyan-pilot@.service").exists()
+    assert not (installed / "muyan-pilot@.timer").exists()
+    # The new templates are installed and both new instances enabled.
+    for name in systemd_deploy.UNIT_NAMES:
+        assert (installed / name).is_file()
+    for instance in systemd_deploy.TIMER_INSTANCES:
+        assert [
+            "systemctl", "--user", "enable", "--now", instance,
+        ] in calls
