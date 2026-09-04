@@ -13544,3 +13544,30 @@ def test_runner_runtime_only_accepts_quoted_runner_paths():
     # are plain ASCII, so the unquoted match is exact.
     assert runner._is_runner_runtime_only('?? ".muyan-pilot/"\n')
     assert runner._is_runner_runtime_only('?? ".pi-session/"\n')
+
+
+def test_exclude_path_for_a_plain_checkout_uses_its_own_git_dir(tmp_path):
+    # A worktree whose `.git` is a DIRECTORY (a plain checkout, not a
+    # linked worktree): the exclude is its own `.git/info/exclude`.
+    wt = tmp_path / "checkout"
+    (wt / ".git").mkdir(parents=True)
+    exclude = runner.runner_runtime_exclude_path(wt)
+    assert exclude == wt / ".git" / "info" / "exclude"
+
+
+def test_runner_runtime_only_rejects_an_empty_status():
+    # An empty status is not "runner-only" — the repair must not fire on
+    # a clean worktree.
+    assert runner._is_runner_runtime_only("") is False
+    assert runner._is_runner_runtime_only("\n") is False
+
+
+def test_cleanup_task_worktree_prunes_without_a_scene(tmp_path):
+    # The worktree directory is already gone (a partial failure): the
+    # cleanup still prunes the git metadata and logs success.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    missing = tmp_path / "already-gone"
+    runner.cleanup_task_worktree(missing, repo, run_id="abc12345", issue=4)
+    assert not missing.exists()
