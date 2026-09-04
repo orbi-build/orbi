@@ -823,10 +823,12 @@ def test_verify_resumed_pr_unrecoverable_failure_removes_leftover_fix_needed_lab
             make_resume_scene(), make_resume_issue(),
             make_resume_config(tmp_path), "owner/repo",
         )
+    # The blocked patch clears every delivery-state label that is
+    # present — here only `ai-fix-needed` (the delivery was awaiting the
+    # next review session) — in one deterministic patch.
     assert captured["edits"] == [
         ((9,), {"repo": "owner/repo", "add": "ai-blocked",
-                "remove": "ai-pr-opened"}),
-        ((9,), {"repo": "owner/repo", "remove": "ai-fix-needed"}),
+                "remove": "ai-fix-needed"}),
     ]
 
 

@@ -844,16 +844,13 @@ def test_e2e_pr_closed_while_fix_needed_removes_leftover_label(
         pr_url, issue(), config, REPO, poll_interval=0.01,
     )
 
-    # The Issue is marked ai-blocked (leaving the opened-PR state)...
+    # The Issue is marked ai-blocked; the blocked patch clears every
+    # delivery-state label that is present — here only `ai-fix-needed`
+    # (the delivery was awaiting the next review session) — in one
+    # deterministic patch, leaving the terminal state ai-blocked alone.
     assert [
         "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
-        "--add-label", "ai-blocked", "--remove-label", "ai-pr-opened",
-    ] in edits
-    # ...and the leftover ai-fix-needed label is removed too (a
-    # remove-only edit).
-    assert [
-        "gh", "issue", "edit", str(ISSUE_NUMBER), "--repo", REPO,
-        "--remove-label", "ai-fix-needed",
+        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
     ] in edits
     # The terminal state is ai-blocked alone.
     assert labels == ["ai-blocked"]
