@@ -4471,6 +4471,20 @@ def test_main_passes_configured_active_milestone_to_the_claim_scan(
         return None
 
     monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
+    # Issue #274: the no_ready_issue tick also checks the milestone
+    # state — the Milestone is open, so nothing is written.
+    def fake_run(command, **kwargs):
+        if command == [
+            "gh", "api", "repos/owner/repo/milestones?state=all",
+            "--paginate",
+        ]:
+            return json.dumps([
+                {"number": 5, "title": "v0.2.0", "state": "open",
+                 "open_issues": 2},
+            ])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.main(["--config", str(config)]) == 0
     assert seen["milestone"] == "v0.2.0"
 
@@ -13623,3 +13637,416 @@ def test_apply_runner_runtime_excludes_creates_a_missing_exclude_file(
     runner.apply_runner_runtime_excludes(wt)
     lines = exclude.read_text(encoding="utf-8").splitlines()
     assert lines == list(runner.RUNNER_RUNTIME_EXCLUDES)
+
+
+# ---------------------------------------------------------------------------
+# Issue #274: auto-advance `active_milestone` on `no_ready_issue`
+# ---------------------------------------------------------------------------
+
+ACTIVE_MILESTONE_CONFIG = (
+    "# orbi config — comments must survive the auto-advance write-back\n"
+    "source_repos = [\"owner/repo\"]\n"
+    "\n"
+    'active_milestone = "v0.3.0"\n'
+    'base_branch = "main"\n'
+    "# trailing comment\n"
+)
+
+
+def test_parse_version_title_accepts_semver_titles():
+    assert runner._parse_version_title("v0.3.1") == (0, 3, 1)
+    assert runner._parse_version_title("v1.0.0") == (1, 0, 0)
+    assert runner._parse_version_title("v10.2.3") == (10, 2, 3)
+
+
+def test_parse_version_title_rejects_non_semver_titles():
+    for title in (
+        "v0.3", "0.3.1", "v0.3.1.2", "v0.3.x", "v0.3.1-beta",
+        "V0.3.1", "v-0.3.1", "v0.3.-1", "v0.3.1 ", "v00.3.1",
+        "release v0.3.1", "", None, 5,
+    ):
+        assert runner._parse_version_title(title) is None, title
+
+
+def test_rewrite_active_milestone_line_changes_only_that_line(tmp_path):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(ACTIVE_MILESTONE_CONFIG, encoding="utf-8")
+    runner.rewrite_active_milestone_line(config_path, "v0.3.1")
+    expected = ACTIVE_MILESTONE_CONFIG.replace(
+        'active_milestone = "v0.3.0"', 'active_milestone = "v0.3.1"',
+    )
+    assert config_path.read_text(encoding="utf-8") == expected
+    # Every byte outside the active_milestone line is untouched.
+    original_lines = ACTIVE_MILESTONE_CONFIG.splitlines()
+    updated_lines = config_path.read_text(encoding="utf-8").splitlines()
+    assert len(original_lines) == len(updated_lines)
+    for old, new in zip(original_lines, updated_lines):
+        if old.startswith("active_milestone"):
+            assert new == 'active_milestone = "v0.3.1"'
+        else:
+            assert old == new
+
+
+def test_rewrite_active_milestone_line_fails_fast_when_line_absent(
+    tmp_path,
+):
+    """Issue #274: without the line the write-back fails fast — never
+    guess an insertion position."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(ACTIVE_MILESTONE_CONFIG, encoding="utf-8")
+    # The active_milestone line is absent from this config.
+    config_path.write_text(
+        ACTIVE_MILESTONE_CONFIG.replace(
+            'active_milestone = "v0.3.0"\n', "",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="active_milestone"):
+        runner.rewrite_active_milestone_line(config_path, "v0.3.1")
+    # The file is untouched.
+    assert config_path.read_text(encoding="utf-8") == (
+        ACTIVE_MILESTONE_CONFIG.replace(
+            'active_milestone = "v0.3.0"\n', "",
+        )
+    )
+
+
+def test_advance_active_milestone_keeps_open_milestone(monkeypatch, tmp_path):
+    """Case A: the milestone is still open — the existing
+    `no_ready_issue` behavior is kept, nothing is written."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(ACTIVE_MILESTONE_CONFIG, encoding="utf-8")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([
+                _milestone(4, "v0.2.0", "closed", 0),
+                _milestone(5, "v0.3.0", "open", 2),
+            ])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    state, _ = runner.advance_active_milestone_on_idle(
+        "o/r", "v0.3.0", config_path,
+    )
+    assert state == "open"
+    assert calls == [MILESTONE_LIST_COMMAND]
+    assert config_path.read_text(encoding="utf-8") == ACTIVE_MILESTONE_CONFIG
+
+
+def test_advance_active_milestone_advances_to_smallest_higher_open(
+    monkeypatch, tmp_path, caplog,
+):
+    """Case B (the #274 scene): v0.3.0 closed, open candidates v0.3.1 /
+    v0.4.0 / v0.5.0 / v0.6.0 -> v0.3.1 is selected and written back."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(ACTIVE_MILESTONE_CONFIG, encoding="utf-8")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([
+                _milestone(4, "v0.2.0", "closed", 0),
+                _milestone(5, "v0.3.0", "closed", 0),
+                _milestone(6, "v0.3.1", "open", 8),
+                _milestone(7, "v0.4.0", "open", 3),
+                _milestone(8, "v0.5.0", "open", 2),
+                _milestone(9, "v0.6.0", "open", 5),
+            ])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        state, new_value = runner.advance_active_milestone_on_idle(
+            "o/r", "v0.3.0", config_path,
+        )
+    assert state == "closed"
+    assert new_value == "v0.3.1"
+    assert calls == [MILESTONE_LIST_COMMAND]
+    assert 'active_milestone = "v0.3.1"' in config_path.read_text(
+        encoding="utf-8"
+    )
+    assert "active_milestone_advanced" in caplog.text
+    assert "old=v0.3.0" in caplog.text
+    assert "new=v0.3.1" in caplog.text
+    assert "closed=v0.3.0" in caplog.text
+
+
+def test_advance_active_milestone_ignores_non_semver_candidates(
+    monkeypatch, tmp_path,
+):
+    """Issue #274: non-`v<major>.<minor>.<patch>` titles are not
+    candidates and never cause a failure."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(ACTIVE_MILESTONE_CONFIG, encoding="utf-8")
+
+    def fake_run(command, **kwargs):
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([
+                _milestone(5, "v0.3.0", "closed", 0),
+                _milestone(6, "backlog", "open", 4),
+                _milestone(7, "v0.3", "open", 1),
+                _milestone(8, "v0.3.2", "open", 2),
+            ])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    state, new_value = runner.advance_active_milestone_on_idle(
+        "o/r", "v0.3.0", config_path,
+    )
+    assert state == "closed"
+    assert new_value == "v0.3.2"
+
+
+def test_advance_active_milestone_none_when_no_higher_candidate(
+    monkeypatch, tmp_path, caplog,
+):
+    """Case B, no candidate: `active_milestone_advance_none` is logged,
+    the value is kept, and nothing is written."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(ACTIVE_MILESTONE_CONFIG, encoding="utf-8")
+
+    def fake_run(command, **kwargs):
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([
+                _milestone(4, "v0.2.0", "closed", 0),
+                _milestone(5, "v0.3.0", "closed", 0),
+                _milestone(6, "v0.2.1", "open", 1),
+                _milestone(7, "backlog", "open", 9),
+            ])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        state, new_value = runner.advance_active_milestone_on_idle(
+            "o/r", "v0.3.0", config_path,
+        )
+    assert state == "closed"
+    assert new_value is None
+    assert "active_milestone_advance_none" in caplog.text
+    assert "current=v0.3.0" in caplog.text
+    assert config_path.read_text(encoding="utf-8") == ACTIVE_MILESTONE_CONFIG
+
+
+def test_advance_active_milestone_fails_fast_when_missing(
+    monkeypatch, tmp_path,
+):
+    """Case C: EXACT title not found -> fail fast, and the error lists
+    every open milestone with its open issue count."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(ACTIVE_MILESTONE_CONFIG, encoding="utf-8")
+
+    def fake_run(command, **kwargs):
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([
+                _milestone(4, "v0.2.0", "closed", 0),
+                _milestone(6, "v0.3.1", "open", 8),
+                _milestone(7, "v0.4.0", "open", 3),
+                _milestone(8, "v0.5.0", "open", 2),
+                _milestone(9, "v0.6.0", "open", 5),
+            ])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="active_milestone_missing") as exc:
+        runner.advance_active_milestone_on_idle(
+            "o/r", "v0.3.0", config_path,
+        )
+    message = str(exc.value)
+    assert "current=v0.3.0" in message
+    assert "v0.3.1(8)" in message
+    assert "v0.4.0(3)" in message
+    assert "v0.5.0(2)" in message
+    assert "v0.6.0(5)" in message
+    # The closed milestone is not listed.
+    assert "v0.2.0" not in message
+    # Nothing was written back.
+    assert config_path.read_text(encoding="utf-8") == ACTIVE_MILESTONE_CONFIG
+
+
+def test_advance_active_milestone_fails_fast_on_duplicate_titles(
+    monkeypatch, tmp_path,
+):
+    """Case D: two milestones share the EXACT title -> ambiguous, refuse
+    to guess (same rule as `close_release_milestone`)."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(ACTIVE_MILESTONE_CONFIG, encoding="utf-8")
+
+    def fake_run(command, **kwargs):
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([
+                _milestone(5, "v0.3.0", "closed", 0),
+                _milestone(6, "v0.3.0", "open", 0),
+            ])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="ambiguous") as exc:
+        runner.advance_active_milestone_on_idle(
+            "o/r", "v0.3.0", config_path,
+        )
+    assert "#5" in str(exc.value)
+    assert "#6" in str(exc.value)
+
+
+def test_main_no_ready_issue_advances_closed_milestone_and_next_tick_claims(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #274 regression of the real scene: v0.3.0 released and
+    closed -> tick 1 gets no_ready_issue, checks the milestone, advances
+    the config to v0.3.1; tick 2 claims from v0.3.1 — no human edit."""
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        ACTIVE_MILESTONE_CONFIG.replace("owner/repo", "o/r"),
+        encoding="utf-8",
+    )
+    issue = {
+        "number": 275, "title": "v0.3.1 task", "body": "",
+        "labels": [{"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["gh", "issue", "list"]:
+            search = command[command.index("--search") + 1]
+            assert 'milestone:"v0.3.1"' in search
+            return json.dumps([issue])
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([
+                _milestone(5, "v0.3.0", "closed", 0),
+                _milestone(6, "v0.3.1", "open", 8),
+                _milestone(7, "v0.4.0", "open", 3),
+            ])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    picked = {}
+
+    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None):
+        picked["milestone"] = active_milestone
+        if active_milestone == "v0.3.0":
+            return None
+        return "owner/repo", issue, None
+
+    monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
+    monkeypatch.setattr(
+        runner, "process_issue", lambda *args, **kwargs: "https://pr",
+    )
+    monkeypatch.setattr(
+        runner, "wait_for_delivery", lambda *args, **kwargs: None,
+    )
+    with caplog.at_level("INFO"):
+        assert runner.main(["--config", str(config)]) == 0
+    # Tick 1: idle + advance.
+    assert picked["milestone"] == "v0.3.0"
+    assert "no_ready_issue" in caplog.text
+    assert "active_milestone_advanced" in caplog.text
+    assert 'active_milestone = "v0.3.1"' in config.read_text(encoding="utf-8")
+    # Tick 2: the fresh-claim scan is scoped to v0.3.1 and claims.
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        assert runner.main(["--config", str(config)]) == 0
+    assert picked["milestone"] == "v0.3.1"
+    assert "no_ready_issue" not in caplog.text
+
+
+def test_main_no_ready_issue_open_milestone_makes_no_extra_api_call(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #274 case A: while the milestone is open the tick makes
+    ZERO milestone queries — the log is exactly the current
+    `no_ready_issue` behavior."""
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        ACTIVE_MILESTONE_CONFIG.replace("owner/repo", "o/r"),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["gh", "issue", "list"]:
+            return "[]"
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([
+                _milestone(5, "v0.3.0", "open", 2),
+            ])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+    )
+    with caplog.at_level("INFO"):
+        assert runner.main(["--config", str(config)]) == 0
+    assert "no_ready_issue" in caplog.text
+    # Exactly one extra call: the milestone state query (case A).
+    assert calls[-1] == MILESTONE_LIST_COMMAND
+    assert all(
+        c[:3] == ["gh", "issue", "list"] or c == MILESTONE_LIST_COMMAND
+        for c in calls
+    )
+    assert config.read_text(encoding="utf-8") == (
+        ACTIVE_MILESTONE_CONFIG.replace("owner/repo", "o/r")
+    )
+
+
+def test_main_no_ready_issue_unconfigured_milestone_never_checks(
+    monkeypatch, tmp_path,
+):
+    """Issue #274 case E: without `active_milestone` the check never
+    runs — no milestone query, no write-back, exact current behavior."""
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["gh", "issue", "list"]:
+            return "[]"
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    assert config.read_text(encoding="utf-8") == (
+        "source_repos = [\"owner/repo\"]\n"
+    )
+
+
+def test_main_no_ready_issue_missing_milestone_fails_fast(
+    monkeypatch, tmp_path,
+):
+    """Issue #274 case C through `main`: the fail fast propagates — the
+    tick dies loudly instead of looping silently."""
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        ACTIVE_MILESTONE_CONFIG.replace("owner/repo", "o/r"),
+        encoding="utf-8",
+    )
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["gh", "issue", "list"]:
+            return "[]"
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([
+                _milestone(6, "v0.3.1", "open", 8),
+            ])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+    )
+    with pytest.raises(RuntimeError, match="active_milestone_missing"):
+        runner.main(["--config", str(config)])

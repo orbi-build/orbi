@@ -519,6 +519,9 @@ def load_config(path: Path) -> dict:
     )
     repo_dir = _config_path(data.get("repo_dir", "."), base)
     return {
+        # Issue #274: the config file itself — the `active_milestone`
+        # auto-advance rewrites that one line in place.
+        "config_path": path.resolve(),
         "source_repos": source_repos,
         "repo_dir": repo_dir,
         "workspace_root": _config_path(data.get("workspace_root", ".."), base),
@@ -2710,6 +2713,123 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
     except Exception:
         LOGGER.exception("issue=%s failure reporting failed", number)
     raise error
+
+
+def _parse_version_title(title: object) -> tuple[int, int, int] | None:
+    """Parse a `v<major>.<minor>.<patch>` Milestone title (Issue #274).
+
+    Anything else — a different prefix, missing/extra segments, non-numeric
+    or negative parts, non-string input — returns None: such titles are
+    never auto-advance candidates and never a failure.
+    """
+    if not isinstance(title, str):
+        return None
+    match = re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", title)
+    if match is None:
+        return None
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
+def rewrite_active_milestone_line(config_path: Path, new_value: str) -> None:
+    """Rewrite ONLY the `active_milestone` line of the TOML config.
+
+    Issue #274: the write-back after an auto-advance must leave every
+    other byte of the file untouched (comments, blank lines, other
+    fields, quote style). The line is matched exactly; when it is
+    absent the write-back fails fast — never guessing an insertion
+    position.
+    """
+    text = config_path.read_text(encoding="utf-8")
+    pattern = re.compile(r'(?m)^active_milestone[ \t]*=[ \t]*.+$')
+    if not pattern.search(text):
+        raise RuntimeError(
+            f"active_milestone line not found in {config_path} — the "
+            "write-back never guesses an insertion position"
+        )
+    updated, count = pattern.subn(
+        f'active_milestone = "{new_value}"', text, count=1,
+    )
+    assert count == 1
+    config_path.write_text(updated, encoding="utf-8")
+
+
+def advance_active_milestone_on_idle(
+    repo: str, active_milestone: str, config_path: Path,
+) -> tuple[str, str | None]:
+    """Handle a `no_ready_issue` tick for a configured active milestone.
+
+    Issue #274: the ONLY trigger point is `no_ready_issue` — this runs
+    after the ready scan found nothing, and only when `active_milestone`
+    is configured. The Milestone is matched by EXACT title with the same
+    query (`gh api repos/{repo}/milestones?state=all --paginate`) and the
+    same missing/duplicate rules as `close_release_milestone` (Issue
+    #214):
+
+    - `open` -> ("open", None): the existing `no_ready_issue` behavior is
+      kept, nothing is written ("truly no work");
+    - `closed` -> advance to the smallest OPEN Milestone whose title is
+      `v<major>.<minor>.<patch>` and semver-strictly-greater than the
+      current one; the value is written back to the config and the tick
+      returns ("closed", new_value) with a structured
+      `active_milestone_advanced` log line. No candidate ->
+      `active_milestone_advance_none`, the value is kept, never silent;
+    - missing -> fail fast `active_milestone_missing` listing every open
+      Milestone with its open issue count;
+    - duplicate titles -> fail fast (ambiguous, refuse to guess).
+    """
+    raw = run_command([
+        "gh", "api", f"repos/{repo}/milestones?state=all", "--paginate",
+    ])
+    milestones = parse_issue_array(raw)
+    matches = [
+        m for m in milestones
+        if isinstance(m, dict) and m.get("title") == active_milestone
+    ]
+    if not matches:
+        open_list = ", ".join(
+            f"{m.get('title')}({m.get('open_issues')})"
+            for m in milestones
+            if isinstance(m, dict) and m.get("state") == "open"
+        ) or "(none)"
+        raise RuntimeError(
+            f"active_milestone_missing current={active_milestone}; "
+            f"open milestones: {open_list}"
+        )
+    if len(matches) > 1:
+        numbers = ", ".join(
+            f"#{m.get('number')} ({m.get('html_url') or m.get('url')})"
+            for m in matches
+        )
+        raise RuntimeError(
+            f"active_milestone {active_milestone}: {len(matches)} "
+            f"Milestones share the exact title in {repo} — ambiguous, "
+            f"refusing to guess which to advance from: {numbers}"
+        )
+    if matches[0].get("state") == "open":
+        return "open", None
+    current = _parse_version_title(active_milestone)
+    candidates = []
+    for m in milestones:
+        if not isinstance(m, dict) or m.get("state") != "open":
+            continue
+        version = _parse_version_title(m.get("title"))
+        if version is None or current is None or version <= current:
+            continue
+        candidates.append((version, m.get("title")))
+    if not candidates:
+        LOGGER.info(
+            "active_milestone_advance_none current=%s closed=%s repo=%s",
+            active_milestone, active_milestone, repo,
+        )
+        return "closed", None
+    candidates.sort()
+    new_value = candidates[0][1]
+    rewrite_active_milestone_line(config_path, new_value)
+    LOGGER.info(
+        "active_milestone_advanced old=%s new=%s closed=%s repo=%s",
+        active_milestone, new_value, active_milestone, repo,
+    )
+    return "closed", new_value
 
 
 def pick_next_delivery(
@@ -7238,6 +7358,17 @@ def main(argv: list[str] | None = None) -> int:
             config["active_milestone"],
         )
         if selected is None:
+            # Issue #274: the ONLY trigger point for the active-milestone
+            # auto-advance is `no_ready_issue` — only after the ready scan
+            # found nothing is the Milestone state checked. Unconfigured
+            # `active_milestone` -> no check, no advance, no error (the
+            # exact pre-#274 behavior).
+            if config["active_milestone"] is not None:
+                advance_active_milestone_on_idle(
+                    config["source_repos"][0],
+                    config["active_milestone"],
+                    config["config_path"],
+                )
             LOGGER.info(
                 "source_repos=%s outcome=no_ready_issue",
                 config["source_repos"],
