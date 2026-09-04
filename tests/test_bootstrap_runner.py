@@ -13582,7 +13582,9 @@ def test_apply_runner_runtime_excludes_creates_a_missing_exclude_file(
     # creates the file with exactly the runner-owned patterns.
     repo, wt = _make_linked_worktree(tmp_path)
     exclude = repo / ".git" / "info" / "exclude"
-    assert not exclude.exists()
+    # `git init` ships a default exclude file (comments only); remove it
+    # so this drives the file-creation branch.
+    exclude.unlink()
     runner.apply_runner_runtime_excludes(wt)
     lines = exclude.read_text(encoding="utf-8").splitlines()
     assert lines == list(runner.RUNNER_RUNTIME_EXCLUDES)
