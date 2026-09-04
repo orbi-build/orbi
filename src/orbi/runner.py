@@ -787,6 +787,25 @@ def _check_pi_provider_api_key(path: Path, provider_id: str,
             )
 
 
+def _expand_pi_api_key_refs(api_key: str) -> str:
+    """Resolve `$VAR` / `${VAR}` references in an `apiKey` (Issue #303).
+
+    Same reference syntax `_check_pi_provider_api_key` validates (Pi's
+    `docs/models.md`): every reference whose environment variable is
+    set and non-empty is replaced by the real value; a reference whose
+    variable is missing or empty — only possible for a non-selected
+    provider, the selected one already failed config load otherwise —
+    stays verbatim (that provider stays unavailable in Pi, the exact
+    pre-#303 behavior). The value itself is never logged.
+    """
+    return re.sub(
+        r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)",
+        lambda match: os.environ.get(match.group(1) or match.group(2))
+        or match.group(0),
+        api_key,
+    )
+
+
 def prepare_pi_agent_dir(worktree: Path, config: dict) -> Path | None:
     """Materialize the per-run Pi agent dir (Issue #157).
 
@@ -829,9 +848,18 @@ def prepare_pi_agent_dir(worktree: Path, config: dict) -> Path | None:
 
     `auth.json` stays a SYMLINK to the user agent dir's file when it
     exists: stored auth for providers present in the merged catalog is
-    still valid. The dir holds no secrets: the API key stays an
-    env-var reference in the provider file and never a materialized
-    value.
+    still valid.
+
+    `apiKey` env-var references (`$VAR` / `${VAR}`) are resolved into
+    the per-run copy (Issue #303): config load already required the
+    SELECTED provider's references to resolve, so the materialized
+    catalog carries a usable real credential — without it Pi would
+    hold the literal `$VAR` string and the request could never
+    authenticate. References whose variable is missing or empty (only
+    possible for non-selected providers) stay verbatim. The user's
+    provider file and user agent dir are never modified, and the
+    resolved key never reaches the journal, a comment, or a commit:
+    the per-run dir is the gitignored `<worktree>/.orbi/pi-agent/`.
     """
     providers_data = config.get("pi_providers_data")
     if providers_data is None:
@@ -856,8 +884,17 @@ def prepare_pi_agent_dir(worktree: Path, config: dict) -> Path | None:
             user_providers = {}
         merged_providers.update(user_providers)
     merged_providers.update(providers_data["providers"])
+    # Issue #303: the per-run copy carries the resolved `apiKey` values
+    # (entries with a string key are copied, so the loaded config data
+    # keeps its literal references).
+    resolved_providers: dict = {}
+    for provider_id, entry in merged_providers.items():
+        api_key = entry.get("apiKey") if isinstance(entry, dict) else None
+        if isinstance(api_key, str) and api_key:
+            entry = {**entry, "apiKey": _expand_pi_api_key_refs(api_key)}
+        resolved_providers[provider_id] = entry
     (agent_dir / "models.json").write_text(
-        json.dumps({"providers": merged_providers}, indent=2),
+        json.dumps({"providers": resolved_providers}, indent=2),
         encoding="utf-8",
     )
     # Per-run settings.json (Issue #172): a real file consistent with

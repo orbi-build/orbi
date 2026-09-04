@@ -185,6 +185,11 @@ At every run the Runner materializes a per-run agent dir
 merges your user providers with the file's providers (the file wins on
 an id collision) — your existing providers keep working, the file adds
 or overrides — and selects the configured provider/model for the run.
+The materialized copy resolves `$VAR` / `${VAR}` references in an
+`apiKey` into the real environment values (Issue #303), so the selected
+provider has a usable credential; your file itself is never modified,
+unresolved references (non-selected providers only) stay verbatim, and
+the resolved value exists only inside the gitignored per-run dir.
 
 An OpenAI-compatible remote endpoint (the key stays out of the file —
 it references an environment variable):
