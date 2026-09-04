@@ -13573,3 +13573,16 @@ def test_cleanup_task_worktree_prunes_without_a_scene(tmp_path):
     missing = tmp_path / "already-gone"
     runner.cleanup_task_worktree(missing, repo, run_id="abc12345", issue=4)
     assert not missing.exists()
+
+
+def test_apply_runner_runtime_excludes_creates_a_missing_exclude_file(
+    tmp_path,
+):
+    # The common gitdir exists but has no info/exclude yet: the helper
+    # creates the file with exactly the runner-owned patterns.
+    repo, wt = _make_linked_worktree(tmp_path)
+    exclude = repo / ".git" / "info" / "exclude"
+    assert not exclude.exists()
+    runner.apply_runner_runtime_excludes(wt)
+    lines = exclude.read_text(encoding="utf-8").splitlines()
+    assert lines == list(runner.RUNNER_RUNTIME_EXCLUDES)
