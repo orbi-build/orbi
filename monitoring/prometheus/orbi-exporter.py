@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Muyan Pilot Prometheus exporter (Issue #162).
+"""Orbi Prometheus exporter (Issue #162).
 
 Read-only bridge from the structured user systemd journal of the
-`muyan-pilot@*` Runner services to Prometheus:
+`orbi@*` Runner services to Prometheus:
 
     systemd journal (user units)
-          |  journalctl --user -u 'muyan-pilot@*' -o json
+          |  journalctl --user -u 'orbi@*' -o json
           v
     this exporter  --GET /metrics-->  Prometheus  -->  Grafana
 
@@ -75,7 +75,7 @@ DURATION_RE = re.compile(
 
 DEFAULT_PORT = 9106
 DEFAULT_BIND = "127.0.0.1"
-DEFAULT_UNITS = "muyan-pilot@*"
+DEFAULT_UNITS = "orbi@*"
 DEFAULT_INSTANCES = ("1", "2")
 DEFAULT_CACHE_TTL = 5.0
 
@@ -267,7 +267,7 @@ def build_metrics(entries: list[dict], now: float,
                 "issue": issue,
                 "role": role,
             }
-            bump(("muyan_pilot_run_start_total",
+            bump(("orbi_run_start_total",
                   ("slot", instance), ("issue", issue),
                   ("role", role)))
         elif kind in ("activity", "heartbeat"):
@@ -287,26 +287,26 @@ def build_metrics(entries: list[dict], now: float,
             if elapsed is not None:
                 seconds_gauges[(instance, issue, role)] = elapsed
         elif kind == "model_wait":
-            bump(("muyan_pilot_model_wait_total",
+            bump(("orbi_model_wait_total",
                   ("slot", instance), ("issue", issue)))
         elif kind == "pi_idle":
-            bump(("muyan_pilot_pi_idle_total",
+            bump(("orbi_pi_idle_total",
                   ("slot", instance), ("issue", issue)))
         elif kind == "pi_idle_term":
-            bump(("muyan_pilot_pi_idle_term_total",
+            bump(("orbi_pi_idle_term_total",
                   ("slot", instance), ("issue", issue)))
         elif kind == "pi_idle_kill":
-            bump(("muyan_pilot_pi_idle_kill_total",
+            bump(("orbi_pi_idle_kill_total",
                   ("slot", instance), ("issue", issue)))
         elif kind == "run_failed":
             reason = _label_value(scene.get("reason"))
-            bump(("muyan_pilot_run_failed_total",
+            bump(("orbi_run_failed_total",
                   ("slot", instance), ("issue", issue),
                   ("reason", reason)))
             live.pop(instance, None)
         elif kind == "run_end":
             result = _label_value(scene.get("result"))
-            bump(("muyan_pilot_run_end_total",
+            bump(("orbi_run_end_total",
                   ("slot", instance), ("issue", issue),
                   ("role", role), ("result", result)))
             elapsed = parse_duration(scene.get("elapsed"))
@@ -314,7 +314,7 @@ def build_metrics(entries: list[dict], now: float,
                 seconds_gauges[(instance, issue, role)] = elapsed
             live.pop(instance, None)
         elif kind == "progress_publish_failed":
-            bump(("muyan_pilot_progress_publish_failed_total",
+            bump(("orbi_progress_publish_failed_total",
                   ("slot", instance), ("issue", issue)))
         else:
             # Unreachable: parse_message only returns KNOWN_KINDS and the
@@ -334,7 +334,7 @@ def build_metrics(entries: list[dict], now: float,
             gauge(name, counters[labels], list(labels[1:]))
 
     for instance in sorted(service_active):
-        gauge("muyan_pilot_service_active", float(service_active[instance]),
+        gauge("orbi_service_active", float(service_active[instance]),
               [("slot", instance)])
 
     for combo in sorted(seen_combos):
@@ -344,7 +344,7 @@ def build_metrics(entries: list[dict], now: float,
             and live[instance]["combo"] == combo
         )
         gauge(
-            "muyan_pilot_run_active", 1.0 if is_live else 0.0,
+            "orbi_run_active", 1.0 if is_live else 0.0,
             [("slot", instance), ("repo", repo), ("issue", issue),
              ("role", role), ("phase", phase), ("state", state)],
         )
@@ -353,23 +353,23 @@ def build_metrics(entries: list[dict], now: float,
         run = live.get(instance)
         if run is None or run["issue"] != issue:
             continue  # the idle gauge is a live-state gauge
-        gauge("muyan_pilot_run_idle_seconds", idle_gauges[(instance, issue)],
+        gauge("orbi_run_idle_seconds", idle_gauges[(instance, issue)],
               [("slot", instance), ("issue", issue)])
 
     for (instance, issue, role) in sorted(seconds_gauges):
-        gauge("muyan_pilot_run_seconds",
+        gauge("orbi_run_seconds",
               seconds_gauges[(instance, issue, role)],
               [("slot", instance), ("issue", issue), ("role", role)])
 
     for name in (
-        "muyan_pilot_run_start_total",
-        "muyan_pilot_run_end_total",
-        "muyan_pilot_run_failed_total",
-        "muyan_pilot_progress_publish_failed_total",
-        "muyan_pilot_model_wait_total",
-        "muyan_pilot_pi_idle_total",
-        "muyan_pilot_pi_idle_term_total",
-        "muyan_pilot_pi_idle_kill_total",
+        "orbi_run_start_total",
+        "orbi_run_end_total",
+        "orbi_run_failed_total",
+        "orbi_progress_publish_failed_total",
+        "orbi_model_wait_total",
+        "orbi_pi_idle_total",
+        "orbi_pi_idle_term_total",
+        "orbi_pi_idle_kill_total",
     ):
         counter(name)
 
@@ -405,7 +405,7 @@ class Exporter:
         states = {
             instance: (
                 1 if self._service_active(
-                    f"muyan-pilot@{instance}.service"
+                    f"orbi@{instance}.service"
                 ) == 0 else 0
             )
             for instance in self.instances
@@ -463,7 +463,7 @@ def make_handler(exporter_instance: Exporter):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Muyan Pilot Prometheus exporter (Issue #162)",
+        description="Orbi Prometheus exporter (Issue #162)",
     )
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--bind", default=DEFAULT_BIND)
@@ -495,7 +495,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     print(
-        f"muyan-pilot-exporter listening on {args.bind}:{args.port} "
+        f"orbi-exporter listening on {args.bind}:{args.port} "
         f"units={args.units} instances={','.join(instances)} "
         f"cache_ttl={args.cache_ttl}",
         flush=True,

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from muyan_pilot import pi_activity
+from orbi import pi_activity
 
 
 def write_records(path: Path, records: list[dict]) -> None:
@@ -919,13 +919,13 @@ def test_format_run_scene_is_the_full_scene_logged_once():
     }
     scene = pi_activity.format_run_scene(
         snapshot, run_id="e07383c2",
-        issue="xqliu/muyan-pilot#18", role="implement",
-        branch="muyan-pilot/xqliu-muyan-pilot-issue-18-e07383c2",
+        issue="xqliu/orbi#18", role="implement",
+        branch="orbi/xqliu-orbi-issue-18-e07383c2",
         worktree="/w",
     )
     assert scene == (
-        "run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement "
-        "branch=muyan-pilot/xqliu-muyan-pilot-issue-18-e07383c2 worktree=/w "
+        "run=e07383c2 issue=xqliu/orbi#18 role=implement "
+        "branch=orbi/xqliu-orbi-issue-18-e07383c2 worktree=/w "
         "session=sess-1 session_file=/w/.pi-session/sess-1.jsonl phase=test "
         "last_activity=2026-01-01T00:00:02Z action=\"bash pytest tests/\" "
         "result=ok"
@@ -954,27 +954,27 @@ def test_format_run_scene_marks_missing_fields():
 
 def test_format_end_scene_carries_result_and_pr_entry():
     scene = pi_activity.format_end_scene(
-        run_id="e07383c2", issue="xqliu/muyan-pilot#18", role="implement",
+        run_id="e07383c2", issue="xqliu/orbi#18", role="implement",
         result="pr_opened", elapsed=2520,
-        pr="https://github.com/xqliu/muyan-pilot/pull/40",
+        pr="https://github.com/xqliu/orbi/pull/40",
         commit="0123456789abcdef0123456789abcdef01234567",
     )
     assert scene == (
-        "run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement "
+        "run=e07383c2 issue=xqliu/orbi#18 role=implement "
         "result=pr_opened elapsed=42m "
-        "pr=https://github.com/xqliu/muyan-pilot/pull/40 "
+        "pr=https://github.com/xqliu/orbi/pull/40 "
         "commit=0123456789abcdef0123456789abcdef01234567"
     )
 
 
 def test_parse_scene_handles_quoted_values_and_equals_inside_values():
     scene = (
-        'run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement phase=test '
+        'run=e07383c2 issue=xqliu/orbi#18 role=implement phase=test '
         'action="git commit -m \'a=b c\'" result=ok idle=6s'
     )
     fields = pi_activity.parse_scene(scene)
     assert fields["run"] == "e07383c2"
-    assert fields["issue"] == "xqliu/muyan-pilot#18"
+    assert fields["issue"] == "xqliu/orbi#18"
     assert fields["action"] == "git commit -m 'a=b c'"
     assert fields["result"] == "ok"
     assert fields["idle"] == "6s"
@@ -984,7 +984,7 @@ def test_parse_scene_skips_line_kind_prefix():
     # Journal lines start with the line kind (activity / heartbeat /
     # run_start / run_failed / run_end) before the key=value fields.
     fields = pi_activity.parse_scene(
-        'activity run=e07383c2 issue=xqliu/muyan-pilot#18 role=implement '
+        'activity run=e07383c2 issue=xqliu/orbi#18 role=implement '
         'phase=test action="bash pytest tests/" result=ok idle=6s'
     )
     assert fields["run"] == "e07383c2"
@@ -1036,15 +1036,15 @@ def test_parse_scene_round_trips_run_scene():
     }
     scene = pi_activity.format_run_scene(
         snapshot, run_id="e07383c2",
-        issue="xqliu/muyan-pilot#18", role="implement",
-        branch="muyan-pilot/xqliu-muyan-pilot-issue-18-e07383c2",
+        issue="xqliu/orbi#18", role="implement",
+        branch="orbi/xqliu-orbi-issue-18-e07383c2",
         worktree="/w",
     )
     fields = pi_activity.parse_scene(scene)
     assert fields["run"] == "e07383c2"
-    assert fields["issue"] == "xqliu/muyan-pilot#18"
+    assert fields["issue"] == "xqliu/orbi#18"
     assert fields["branch"] == (
-        "muyan-pilot/xqliu-muyan-pilot-issue-18-e07383c2"
+        "orbi/xqliu-orbi-issue-18-e07383c2"
     )
     assert fields["session_file"] == "/w/.pi-session/sess-1.jsonl"
     assert fields["action"] == "bash pytest tests/"

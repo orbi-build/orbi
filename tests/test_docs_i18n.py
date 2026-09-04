@@ -15,13 +15,13 @@ when the README stops pointing at the Chinese docs entry.
 import re
 from pathlib import Path
 
-import muyan_pilot.runner as runner
+import orbi.runner as runner
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
 ZH_DIR = DOCS_DIR / "zh"
 README = REPO_ROOT / "README.md"
-EXAMPLE_CONFIG = REPO_ROOT / ".muyan-pilot.example.toml"
+EXAMPLE_CONFIG = REPO_ROOT / ".orbi.example.toml"
 
 # One page per English topic page (same structure, same slugs).
 REQUIRED_ZH_PAGES = (
@@ -198,14 +198,14 @@ def test_chinese_getting_started_documents_prerequisites_and_smoke():
         "the KV cache proxy must not be presented as a core prerequisite"
     )
     assert "smoke" in text.lower(), "getting-started must contain the smoke walkthrough"
-    assert "muyan-pilot add" in text, "smoke must use the real add command"
+    assert "orbi add" in text, "smoke must use the real add command"
     assert (
-        "PYTHONPATH=src python3 -m muyan_pilot.runner "
-        "--config muyan-pilot.toml"
+        "PYTHONPATH=src python3 -m orbi.runner "
+        "--config orbi.toml"
     ) in text, "smoke must run the real one-tick command (Issue #168 src layout)"
     assert (
-        "journalctl --user -u muyan-pilot@1.service -u "
-        "muyan-pilot@2.service" in text
+        "journalctl --user -u orbi@1.service -u "
+        "orbi@2.service" in text
     ), "smoke must show the real journal command (both service instances)"
 
 
@@ -229,7 +229,7 @@ def test_chinese_getting_started_documents_the_model_provider_configuration():
     assert "$GROQ_API_KEY" in text, (
         "the OpenAI-compatible example must reference the key as an env var"
     )
-    assert ".muyan-pilot/env" in text, (
+    assert ".orbi/env" in text, (
         "the key value must live in the gitignored env file"
     )
     assert "EnvironmentFile" in text, (
@@ -300,7 +300,7 @@ def test_chinese_workflow_documents_the_full_issue_to_merge_chain():
         assert state in text, f"Chinese workflow page misses the {state} state"
     assert "REVIEW_VERDICT" in text, "workflow must document the review verdict"
     assert "Fixes #" in text, "workflow must document the PR body Fixes #N contract"
-    assert "muyan-pilot:run=" in text, "workflow must document the run marker"
+    assert "orbi:run=" in text, "workflow must document the run marker"
     assert "ai-epic" in text, "workflow must explain Epic issues (ai-epic)"
     assert "Release" in text, "workflow must explain Release tasks"
     assert "P0" in text, "workflow must explain the P0 priority"
@@ -322,17 +322,17 @@ def test_chinese_operations_documents_the_real_commands_and_recovery():
     code-update preflight, and the transport check without an HTTPS
     fallback — same facts as the English page."""
     text = zh_page_text("operations")
-    assert "muyan-pilot@.timer" in text, (
+    assert "orbi@.timer" in text, (
         "operations must document the timer template"
     )
-    assert "muyan-pilot@1.timer" in text, (
+    assert "orbi@1.timer" in text, (
         "operations must document the two timer instances (Issue #149)"
     )
     assert "OnCalendar=*-*-* *:00/5" in text, (
         "operations must document the 5-minute idle polling interval"
     )
     assert "journalctl" in text, "operations must show the journal command"
-    assert "muyan-pilot" in text, "operations must name the CLI"
+    assert "orbi" in text, "operations must name the CLI"
     for command in ("status", "session", "add"):
         assert command in text, f"operations must document the {command} command"
     assert "worktree" in text.lower(), "operations must explain the task worktree"
@@ -520,6 +520,6 @@ def test_chinese_getting_started_clones_the_orbi_build_org_repo():
     assert "git clone https://github.com/orbi-build/orbi.git" in text, (
         "Chinese getting-started must clone the orbi-build/orbi repository"
     )
-    assert "xqliu/muyan-pilot" not in text, (
-        "Chinese getting-started keeps the stale xqliu/muyan-pilot reference"
+    assert "xqliu/orbi" not in text, (
+        "Chinese getting-started keeps the stale xqliu/orbi reference"
     )

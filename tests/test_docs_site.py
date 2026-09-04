@@ -21,13 +21,13 @@ import json
 import re
 from pathlib import Path
 
-import muyan_pilot.runner as runner
+import orbi.runner as runner
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
 DOCS_CONFIG = DOCS_DIR / "docs.json"
 README = REPO_ROOT / "README.md"
-EXAMPLE_CONFIG = REPO_ROOT / ".muyan-pilot.example.toml"
+EXAMPLE_CONFIG = REPO_ROOT / ".orbi.example.toml"
 
 # The pages the v0.1.0 docs must ship (one page per topic).
 REQUIRED_PAGES = (
@@ -311,7 +311,7 @@ def test_docs_getting_started_documents_the_model_provider_configuration():
     assert "$GROQ_API_KEY" in text, (
         "the OpenAI-compatible example must reference the key as an env var"
     )
-    assert ".muyan-pilot/env" in text, (
+    assert ".orbi/env" in text, (
         "the key value must live in the gitignored env file"
     )
     assert "EnvironmentFile" in text, (
@@ -373,7 +373,7 @@ def test_docs_document_the_full_issue_to_merge_workflow():
         assert state in text, f"workflow page misses the {state} state"
     assert "REVIEW_VERDICT" in text, "workflow must document the review verdict"
     assert "Fixes #" in text, "workflow must document the PR body Fixes #N contract"
-    assert "muyan-pilot:run=" in text, "workflow must document the run marker"
+    assert "orbi:run=" in text, "workflow must document the run marker"
 
 
 def test_docs_document_labels_run_marker_epic_release_task_and_p0():
@@ -405,17 +405,17 @@ def test_docs_document_operations_commands():
     logs, the status/session/add CLI, worktrees and failure recovery —
     with the commands the implementation actually provides."""
     text = page_text("operations")
-    assert "muyan-pilot@.timer" in text, (
+    assert "orbi@.timer" in text, (
         "operations must document the timer template"
     )
-    assert "muyan-pilot@1.timer" in text, (
+    assert "orbi@1.timer" in text, (
         "operations must document the two timer instances (Issue #149)"
     )
     assert "OnCalendar=*-*-* *:00/5" in text, (
         "operations must document the 5-minute idle polling interval"
     )
     assert "journalctl" in text, "operations must show the journal command"
-    assert "muyan-pilot" in text, "operations must name the CLI"
+    assert "orbi" in text, "operations must name the CLI"
     for command in ("status", "session", "add"):
         assert command in text, f"operations must document the {command} command"
     assert "worktree" in text.lower(), "operations must explain the task worktree"
@@ -513,7 +513,7 @@ def test_docs_document_the_minimal_implementation_principle():
 def test_docs_document_the_uv_prerequisite_boundary():
     """Issue #156: the docs must draw the initialization boundary — the
     USER installs git/gh/python3/systemd user session/uv (uv with the
-    official installer command), while `muyan-pilot setup` only checks
+    official installer command), while `orbi setup` only checks
     auth, repos, the CLI editable install, units and timers; setup never
     installs system packages, never installs gh, never runs
     `gh auth login`. The setup page must list uv in the command step and
@@ -652,7 +652,7 @@ def test_readme_keeps_the_docs_site_entry():
 
 def test_readme_titles_the_project_orbi():
     """Issue #183: the README (the GitHub homepage) no longer carries
-    Muyan Pilot as the primary brand — the title is Orbi."""
+    Orbi as the primary brand — the title is Orbi."""
     text = README.read_text(encoding="utf-8")
     first_line = text.splitlines()[0]
     assert first_line.strip() == "# Orbi", (
@@ -664,7 +664,7 @@ def test_readme_titles_the_project_orbi():
 def test_docs_getting_started_clones_the_orbi_build_org_repo():
     """Issue #183: the repository moved to the orbi-build org — the
     smoke walkthrough clone URL must be the new address, and no doc
-    page may keep the stale xqliu/muyan-pilot clone URL (the old
+    page may keep the stale xqliu/orbi clone URL (the old
     addresses still redirect on GitHub, but the docs must teach the
     current one)."""
     text = page_text("getting-started")
@@ -673,8 +673,8 @@ def test_docs_getting_started_clones_the_orbi_build_org_repo():
     )
     for path in docs_files():
         content = path.read_text(encoding="utf-8")
-        assert "xqliu/muyan-pilot" not in content, (
-            f"{path.name} keeps the stale xqliu/muyan-pilot reference"
+        assert "xqliu/orbi" not in content, (
+            f"{path.name} keeps the stale xqliu/orbi reference"
         )
 
 

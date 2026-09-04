@@ -16,26 +16,26 @@ from pathlib import Path
 
 import pytest
 
-from muyan_pilot import git_transport
+from orbi import git_transport
 
 
 # --- ssh_url_for -------------------------------------------------------------
 
 
 def test_ssh_url_for_builds_the_github_ssh_url():
-    assert git_transport.ssh_url_for("xqliu/muyan-pilot") == (
-        "git@github.com:xqliu/muyan-pilot.git"
+    assert git_transport.ssh_url_for("xqliu/orbi") == (
+        "git@github.com:xqliu/orbi.git"
     )
 
 
 def test_ssh_url_for_rejects_a_repo_without_a_slash():
     with pytest.raises(git_transport.TransportError, match="malformed"):
-        git_transport.ssh_url_for("muyan-pilot")
+        git_transport.ssh_url_for("orbi")
 
 
 def test_ssh_url_for_rejects_an_empty_segment():
     with pytest.raises(git_transport.TransportError, match="malformed"):
-        git_transport.ssh_url_for("/muyan-pilot")
+        git_transport.ssh_url_for("/orbi")
     with pytest.raises(git_transport.TransportError, match="malformed"):
         git_transport.ssh_url_for("xqliu/")
 
@@ -50,32 +50,32 @@ def test_ssh_url_for_rejects_an_extra_slash():
 
 def test_remote_protocol_classifies_ssh_scp_style():
     assert git_transport.remote_protocol(
-        "git@github.com:xqliu/muyan-pilot.git"
+        "git@github.com:xqliu/orbi.git"
     ) == "ssh"
 
 
 def test_remote_protocol_classifies_ssh_scheme():
     assert git_transport.remote_protocol(
-        "ssh://git@github.com/xqliu/muyan-pilot.git"
+        "ssh://git@github.com/xqliu/orbi.git"
     ) == "ssh"
 
 
 def test_remote_protocol_classifies_https():
     assert git_transport.remote_protocol(
-        "https://github.com/xqliu/muyan-pilot.git"
+        "https://github.com/xqliu/orbi.git"
     ) == "https"
 
 
 def test_remote_protocol_classifies_http():
     assert git_transport.remote_protocol(
-        "http://github.com/xqliu/muyan-pilot.git"
+        "http://github.com/xqliu/orbi.git"
     ) == "http"
 
 
 def test_remote_protocol_classifies_everything_else_other():
     assert git_transport.remote_protocol("origin") == "other"
     assert git_transport.remote_protocol(
-        "/home/u/repos/muyan-pilot"
+        "/home/u/repos/orbi"
     ) == "other"
 
 
@@ -94,7 +94,7 @@ def ok_run_factory(state: dict):
                     1, command, stderr="",
                 )
             return state.get("origin_url",
-                             "git@github.com:xqliu/muyan-pilot.git")
+                             "git@github.com:xqliu/orbi.git")
         if command[:2] == ["git", "ls-remote"]:
             if state.get("ssh_down"):
                 raise subprocess.CalledProcessError(
@@ -115,36 +115,36 @@ def test_check_transport_passes_for_a_matching_ssh_remote(tmp_path):
     state = {}
     fake_run, calls, _ = ok_run_factory(state)
     result = git_transport.check_transport(
-        tmp_path, ["xqliu/muyan-pilot"], run_command=fake_run,
+        tmp_path, ["xqliu/orbi"], run_command=fake_run,
     )
     assert result == {
         "remote": "origin",
         "protocol": "ssh",
-        "url": "git@github.com:xqliu/muyan-pilot.git",
-        "expected": "git@github.com:xqliu/muyan-pilot.git",
+        "url": "git@github.com:xqliu/orbi.git",
+        "expected": "git@github.com:xqliu/orbi.git",
         "migrated": False,
         "ssh_reachable": True,
     }
     # Read-only: no set-url, one probe of the exact SSH URL.
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
     assert [
-        "git", "ls-remote", "git@github.com:xqliu/muyan-pilot.git",
+        "git", "ls-remote", "git@github.com:xqliu/orbi.git",
     ] in calls
 
 
 def test_check_transport_accepts_an_ssh_url_without_the_dot_git_suffix(
     tmp_path,
 ):
-    state = {"origin_url": "git@github.com:xqliu/muyan-pilot"}
+    state = {"origin_url": "git@github.com:xqliu/orbi"}
     fake_run, calls, _ = ok_run_factory(state)
     result = git_transport.check_transport(
-        tmp_path, ["xqliu/muyan-pilot"], run_command=fake_run,
+        tmp_path, ["xqliu/orbi"], run_command=fake_run,
     )
     assert result["protocol"] == "ssh"
     assert result["ssh_reachable"] is True
     # The probe uses the normalized .git form.
     assert [
-        "git", "ls-remote", "git@github.com:xqliu/muyan-pilot.git",
+        "git", "ls-remote", "git@github.com:xqliu/orbi.git",
     ] in calls
 
 
@@ -155,7 +155,7 @@ def test_check_transport_fails_fast_on_a_missing_origin(tmp_path):
         git_transport.TransportError, match="no origin remote",
     ):
         git_transport.check_transport(
-            tmp_path, ["xqliu/muyan-pilot"], run_command=fake_run,
+            tmp_path, ["xqliu/orbi"], run_command=fake_run,
         )
     # No probe, no migration after the missing remote.
     assert [c for c in calls if c[:2] == ["git", "ls-remote"]] == []
@@ -165,37 +165,37 @@ def test_check_transport_diagnoses_an_https_remote_without_migrating(
     tmp_path,
 ):
     state = {
-        "origin_url": "https://github.com/xqliu/muyan-pilot.git",
+        "origin_url": "https://github.com/xqliu/orbi.git",
     }
     fake_run, calls, _ = ok_run_factory(state)
     with pytest.raises(git_transport.TransportError, match="HTTPS") as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/muyan-pilot"], run_command=fake_run,
+            tmp_path, ["xqliu/orbi"], run_command=fake_run,
         )
     message = str(exc.value)
     # The failure carries the exact migration command and the setup
     # entry that performs it — never a silent rewrite, never a remote
     # read from a comment or Issue.
-    assert "git remote set-url origin git@github.com:xqliu/muyan-pilot.git" in message
-    assert "muyan-pilot setup" in message
+    assert "git remote set-url origin git@github.com:xqliu/orbi.git" in message
+    assert "orbi setup" in message
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
     # No HTTPS fallback: no ls-remote of the HTTPS URL either.
     assert [c for c in calls if c[:2] == ["git", "ls-remote"]] == []
 
 
 def test_check_transport_migrates_an_https_remote_when_authorized(tmp_path):
-    state = {"origin_url": "https://github.com/xqliu/muyan-pilot.git"}
+    state = {"origin_url": "https://github.com/xqliu/orbi.git"}
     fake_run, calls, _ = ok_run_factory(state)
     result = git_transport.check_transport(
-        tmp_path, ["xqliu/muyan-pilot"],
+        tmp_path, ["xqliu/orbi"],
         run_command=fake_run, migrate=True,
     )
     assert result["protocol"] == "ssh"
     assert result["migrated"] is True
-    assert result["url"] == "git@github.com:xqliu/muyan-pilot.git"
+    assert result["url"] == "git@github.com:xqliu/orbi.git"
     assert result["ssh_reachable"] is True
     assert state["migrations"] == [
-        "git@github.com:xqliu/muyan-pilot.git",
+        "git@github.com:xqliu/orbi.git",
     ]
 
 
@@ -206,22 +206,22 @@ def test_check_transport_fails_fast_on_an_ssh_repo_mismatch(tmp_path):
         git_transport.TransportError, match="mismatch",
     ) as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/muyan-pilot"], run_command=fake_run,
+            tmp_path, ["xqliu/orbi"], run_command=fake_run,
         )
     message = str(exc.value)
     assert "git@github.com:other/repo.git" in message
-    assert "git@github.com:xqliu/muyan-pilot.git" in message
+    assert "git@github.com:xqliu/orbi.git" in message
     # A mismatching remote is not probed and not migrated.
     assert [c for c in calls if c[:2] == ["git", "ls-remote"]] == []
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
 
 
 def test_check_transport_fails_fast_on_an_unsupported_protocol(tmp_path):
-    state = {"origin_url": "http://github.com/xqliu/muyan-pilot.git"}
+    state = {"origin_url": "http://github.com/xqliu/orbi.git"}
     fake_run, calls, _ = ok_run_factory(state)
     with pytest.raises(git_transport.TransportError, match="http"):
         git_transport.check_transport(
-            tmp_path, ["xqliu/muyan-pilot"], run_command=fake_run,
+            tmp_path, ["xqliu/orbi"], run_command=fake_run,
         )
 
 
@@ -232,11 +232,11 @@ def test_check_transport_fails_fast_when_ssh_is_unreachable(tmp_path):
         git_transport.TransportError, match="ssh_unreachable",
     ) as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/muyan-pilot"], run_command=fake_run,
+            tmp_path, ["xqliu/orbi"], run_command=fake_run,
         )
     message = str(exc.value)
     # The structured scene: the exact probe command and the git stderr.
-    assert "git ls-remote git@github.com:xqliu/muyan-pilot.git" in message
+    assert "git ls-remote git@github.com:xqliu/orbi.git" in message
     assert "Permission denied (publickey)" in message
     # No HTTPS fallback: the probe is never retried over HTTPS.
     probes = [c for c in calls if c[:2] == ["git", "ls-remote"]]
@@ -248,7 +248,7 @@ def test_check_transport_skips_the_probe_when_disabled(tmp_path):
     state = {}
     fake_run, calls, _ = ok_run_factory(state)
     result = git_transport.check_transport(
-        tmp_path, ["xqliu/muyan-pilot"],
+        tmp_path, ["xqliu/orbi"],
         run_command=fake_run, probe=False,
     )
     assert result["ssh_reachable"] is None
@@ -270,11 +270,11 @@ def test_check_transport_uses_the_first_configured_source_repo(tmp_path):
     state = {}
     fake_run, calls, _ = ok_run_factory(state)
     git_transport.check_transport(
-        tmp_path, ["xqliu/muyan-pilot", "xqliu/muyan-ceo"],
+        tmp_path, ["xqliu/orbi", "xqliu/muyan-ceo"],
         run_command=fake_run,
     )
     assert [
-        "git", "ls-remote", "git@github.com:xqliu/muyan-pilot.git",
+        "git", "ls-remote", "git@github.com:xqliu/orbi.git",
     ] in calls
 
 
@@ -282,16 +282,16 @@ def test_check_transport_accepts_an_ssh_scheme_url(tmp_path):
     """Both SSH forms are the same transport: the `ssh://` scheme URL
     matches the expected repo and is probed in the normalized SCP form."""
     state = {
-        "origin_url": "ssh://git@github.com/xqliu/muyan-pilot.git",
+        "origin_url": "ssh://git@github.com/xqliu/orbi.git",
     }
     fake_run, calls, _ = ok_run_factory(state)
     result = git_transport.check_transport(
-        tmp_path, ["xqliu/muyan-pilot"], run_command=fake_run,
+        tmp_path, ["xqliu/orbi"], run_command=fake_run,
     )
     assert result["protocol"] == "ssh"
     assert result["ssh_reachable"] is True
     assert [
-        "git", "ls-remote", "git@github.com:xqliu/muyan-pilot.git",
+        "git", "ls-remote", "git@github.com:xqliu/orbi.git",
     ] in calls
 
 
@@ -306,7 +306,7 @@ def test_check_transport_fails_fast_on_a_generic_config_error(tmp_path):
         git_transport.TransportError, match="no origin remote",
     ):
         git_transport.check_transport(
-            tmp_path, ["xqliu/muyan-pilot"], run_command=fake_run,
+            tmp_path, ["xqliu/orbi"], run_command=fake_run,
         )
 
 
@@ -316,17 +316,17 @@ def test_check_transport_reports_a_probe_failure_without_stderr(tmp_path):
     never incomplete."""
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
-            return "git@github.com:xqliu/muyan-pilot.git"
+            return "git@github.com:xqliu/orbi.git"
         raise subprocess.CalledProcessError(128, command)
 
     with pytest.raises(
         git_transport.TransportError, match="ssh_unreachable",
     ) as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/muyan-pilot"], run_command=fake_run,
+            tmp_path, ["xqliu/orbi"], run_command=fake_run,
         )
     message = str(exc.value)
-    assert "git ls-remote git@github.com:xqliu/muyan-pilot.git" in message
+    assert "git ls-remote git@github.com:xqliu/orbi.git" in message
     assert "stderr=" not in message
 
 
@@ -335,14 +335,14 @@ def test_check_transport_fails_fast_on_a_generic_probe_error(tmp_path):
     fast as ssh_unreachable — no HTTPS fallback."""
     def fake_run(command, **kwargs):
         if command[:2] == ["git", "config"]:
-            return "git@github.com:xqliu/muyan-pilot.git"
+            return "git@github.com:xqliu/orbi.git"
         raise OSError("spawn failed")
 
     with pytest.raises(
         git_transport.TransportError, match="ssh_unreachable",
     ) as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/muyan-pilot"], run_command=fake_run,
+            tmp_path, ["xqliu/orbi"], run_command=fake_run,
         )
     assert "spawn failed" in str(exc.value)
 
@@ -358,17 +358,17 @@ def test_remote_repo_path_extracts_the_repo_from_every_github_form():
     http) yield the `owner/name` path; the optional `.git` suffix is
     stripped."""
     assert git_transport._remote_repo_path(
-        "git@github.com:xqliu/muyan-pilot"
-    ) == "xqliu/muyan-pilot"
+        "git@github.com:xqliu/orbi"
+    ) == "xqliu/orbi"
     assert git_transport._remote_repo_path(
-        "ssh://git@github.com/xqliu/muyan-pilot.git"
-    ) == "xqliu/muyan-pilot"
+        "ssh://git@github.com/xqliu/orbi.git"
+    ) == "xqliu/orbi"
     assert git_transport._remote_repo_path(
-        "https://github.com/xqliu/muyan-pilot.git"
-    ) == "xqliu/muyan-pilot"
+        "https://github.com/xqliu/orbi.git"
+    ) == "xqliu/orbi"
     assert git_transport._remote_repo_path(
-        "http://github.com/xqliu/muyan-pilot"
-    ) == "xqliu/muyan-pilot"
+        "http://github.com/xqliu/orbi"
+    ) == "xqliu/orbi"
 
 
 def test_remote_repo_path_returns_none_for_a_non_github_url():
@@ -379,7 +379,7 @@ def test_remote_repo_path_returns_none_for_a_non_github_url():
         "git@gitlab.com:other/repo.git"
     ) is None
     assert git_transport._remote_repo_path(
-        "/home/u/repos/muyan-pilot"
+        "/home/u/repos/orbi"
     ) is None
 
 
@@ -401,12 +401,12 @@ def test_check_transport_never_migrates_a_remote_pointing_at_a_different_repo(
         git_transport.TransportError, match="mismatch",
     ) as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/muyan-pilot"],
+            tmp_path, ["xqliu/orbi"],
             run_command=fake_run, migrate=True,
         )
     message = str(exc.value)
     assert "https://github.com/other/repo.git" in message
-    assert "git@github.com:xqliu/muyan-pilot.git" in message
+    assert "git@github.com:xqliu/orbi.git" in message
     # No rewrite of the mismatching remote, no probe.
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
     assert [c for c in calls if c[:2] == ["git", "ls-remote"]] == []
@@ -423,7 +423,7 @@ def test_check_transport_never_migrates_a_non_github_remote(tmp_path):
         git_transport.TransportError, match="mismatch",
     ) as exc:
         git_transport.check_transport(
-            tmp_path, ["xqliu/muyan-pilot"],
+            tmp_path, ["xqliu/orbi"],
             run_command=fake_run, migrate=True,
         )
     assert "repo=None" in str(exc.value)
@@ -468,7 +468,7 @@ def test_real_worktree_inherits_the_checkout_origin_remote(tmp_path):
     git(clone, "commit", "--allow-empty", "-m", "first")
     # The checkout's origin is a local path (the stand-in for the
     # remote); the transport is configured by rewriting it.
-    ssh_style = "git@github.com:xqliu/muyan-pilot.git"
+    ssh_style = "git@github.com:xqliu/orbi.git"
     git(clone, "remote", "set-url", "origin", ssh_style)
     assert git(clone, "remote", "get-url", "origin") == ssh_style
     worktree = tmp_path / "wt"
@@ -502,7 +502,7 @@ def test_real_workflow_file_push_goes_over_the_ssh_transport(tmp_path):
     git(clone, "commit", "--allow-empty", "-m", "first")
     # The transport: SSH URL on the remote, local data plane (the
     # e2e mechanism, git-config(1) `url.<base>.insteadOf`).
-    ssh_style = "git@github.com:xqliu/muyan-pilot.git"
+    ssh_style = "git@github.com:xqliu/orbi.git"
     git(clone, "remote", "set-url", "origin", ssh_style)
     git(clone, "config", f"url.{origin}.insteadOf", ssh_style)
     worktree = tmp_path / "wt"
@@ -541,7 +541,7 @@ def test_real_set_url_migration_rewrites_only_the_origin_remote(tmp_path):
     git(clone, "config", "user.email", "pilot@test.local")
     git(clone, "config", "user.name", "Pilot")
     git(clone, "commit", "--allow-empty", "-m", "first")
-    https_style = "https://github.com/xqliu/muyan-pilot.git"
+    https_style = "https://github.com/xqliu/orbi.git"
     git(clone, "remote", "set-url", "origin", https_style)
     assert git(clone, "remote", "get-url", "origin") == https_style
     assert git_transport.remote_protocol(
@@ -549,9 +549,9 @@ def test_real_set_url_migration_rewrites_only_the_origin_remote(tmp_path):
     ) == "https"
     # The migration (the exact command the failure message reports).
     git(clone, "remote", "set-url", "origin",
-        "git@github.com:xqliu/muyan-pilot.git")
+        "git@github.com:xqliu/orbi.git")
     assert git(clone, "remote", "get-url", "origin") == (
-        "git@github.com:xqliu/muyan-pilot.git"
+        "git@github.com:xqliu/orbi.git"
     )
     assert git_transport.remote_protocol(
         git(clone, "remote", "get-url", "origin")

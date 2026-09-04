@@ -9,7 +9,7 @@ a specific machine layout.
 
 ## Prerequisites
 
-You install these yourself — `muyan-pilot setup` only **checks** them
+You install these yourself — `orbi setup` only **checks** them
 (it verifies `git`, `gh`, `python3`, `uv` and the systemd user session
 on the machine); it never installs system packages, never installs
 `gh`, and never runs `gh auth login` (you log in first, setup only
@@ -18,7 +18,7 @@ verifies the login).
 | Requirement | What it is used for | Check |
 |---|---|---|
 | Python 3.14 | The Runner and the test contract (CI pins the same minor version) | `python3 --version` |
-| [uv](https://docs.astral.sh/uv/) | Installs the `muyan-pilot` CLI into an isolated tool environment (setup's CLI editable step calls `uv tool install`) | `uv --version` |
+| [uv](https://docs.astral.sh/uv/) | Installs the `orbi` CLI into an isolated tool environment (setup's CLI editable step calls `uv tool install`) | `uv --version` |
 | [Pi](https://github.com/earendil-works/pi) CLI | The development agent; one full session per task | `pi --version` |
 | Git | Worktrees, branches, base freshness | `git --version` |
 | GitHub CLI (`gh`) | Issues, labels, PRs, merge | `gh auth status` |
@@ -59,15 +59,15 @@ cd orbi
 
 ## 2. Install the CLI
 
-The official usage is the installed `muyan-pilot` console script (the
+The official usage is the installed `orbi` console script (the
 PEP 621 packaging in `pyproject.toml` maps
-`muyan-pilot = muyan_pilot:main`), installed as an **editable**
+`orbi = orbi:main`), installed as an **editable**
 `uv tool` install — the official local deployment (Issue #152). From
 the clone directory, `--python` pins the production interpreter (3.14):
 
 ```bash
 uv tool install --force --reinstall --editable --python /usr/bin/python3 .
-muyan-pilot --help
+orbi --help
 ```
 
 `uv tool` keeps the CLI in an isolated tool environment; the executable
@@ -78,12 +78,12 @@ into the tool environment's site-packages. The service's `ExecStartPre`
 fast-forwards the checkout to the latest `main` before every start —
 with a copied source the CLI would keep executing the stale copy
 (bootstrap deadlock: Issue #152). With the editable install the tool
-env imports `muyan_pilot` directly from the clone directory, so the
+env imports `orbi` directly from the clone directory, so the
 next CLI process (the next timer-triggered Runner) picks up the merged
 code automatically: **ordinary Python source and systemd
 template/migration changes need NO reinstall and no upgrade command**.
 Since the src layout (Issue #168) the editable finder maps the WHOLE
-`src/muyan_pilot/` package directory — a newly added package module
+`src/orbi/` package directory — a newly added package module
 needs NO reinstall (the #158 stale-module-list incident is fixed at the
 root). When the remaining PACKAGING inputs change (a dependency, the
 entry point, the package name, the build backend or the Python version
@@ -91,21 +91,21 @@ in `pyproject.toml`), the Runner refreshes the install automatically at
 every start (before any slot or claim) — a failing refresh fails the
 start fast with the structured `cli_install_failed` line (reason + the
 exact fix command). That in-Runner refresh is unreachable when the
-console script cannot even `import muyan_pilot` (the #248 scene: the
+console script cannot even `import orbi` (the #248 scene: the
 src-layout migration of #168 left the installed editable finder stale,
 so the Runner died at the import stage before the refresh could run) —
 for that class of breakage the service's SECOND `ExecStartPre` step
-self-heals OUTSIDE Python: it probes `muyan-pilot --version` and, on
+self-heals OUTSIDE Python: it probes `orbi --version` and, on
 probe failure, runs the same editable force-reinstall (see
-[Operations](/operations) for the full mechanics). `muyan-pilot doctor` reports the
+[Operations](/operations) for the full mechanics). `orbi doctor` reports the
 consistency (`cli_source: clean` or `cli_source: DRIFT` with the
-structured `cli_source_drift` line), and `muyan-pilot setup` verifies or
+structured `cli_source_drift` line), and `orbi setup` verifies or
 reinstalls it idempotently. The release package carries no third-party
 runtime dependency, no token and no user directory — the config file
 and the user systemd dir stay machine-local. The checkout root carries
-no `muyan_pilot.py` (a flat file named like the package would shadow
+no `orbi.py` (a flat file named like the package would shadow
 the installed package for every process with the checkout root on
-sys.path); the direct-execution entry `python3 -m muyan_pilot.cli`
+sys.path); the direct-execution entry `python3 -m orbi.cli`
 runs the exact same code as the console script and stays a
 development/compatibility path.
 
@@ -115,7 +115,7 @@ The repository ships a committed example; the real config is local state
 (gitignored). Copy it and edit it:
 
 ```bash
-cp .muyan-pilot.example.toml muyan-pilot.toml
+cp .orbi.example.toml orbi.toml
 ```
 
 All fields (TOML, relative paths resolve against the config file's
@@ -124,7 +124,7 @@ directory):
 | Field | Required | Default | Meaning |
 |---|---|---|---|
 | `source_repos` | yes | — | Ordered list of `owner/repo` task pools scanned each tick (e.g. your pilot repo first, then your backlog repo) |
-| `repo_dir` | no | `.` | The Runner checkout the service starts from (where the `src/muyan_pilot/` package lives) |
+| `repo_dir` | no | `.` | The Runner checkout the service starts from (where the `src/orbi/` package lives) |
 | `workspace_root` | no | `..` | Directory that contains the task worktrees and the repositories the agent may modify |
 | `prompt` | no | `prompt.md` | Implementer prompt template (placeholders like `{{SOURCE_REPO}}` are rendered by the Runner) |
 | `prompt_review` | no | `prompt_review.md` | Review prompt template for the independent post-PR review session |
@@ -181,7 +181,7 @@ pi --print "reply with the single word: ok"
 
 Point `pi_providers` at a JSON file in Pi's own `models.json` shape.
 At every run the Runner materializes a per-run agent dir
-(`<worktree>/.muyan-pilot/pi-agent/`, gitignored) whose `models.json`
+(`<worktree>/.orbi/pi-agent/`, gitignored) whose `models.json`
 merges your user providers with the file's providers (the file wins on
 an id collision) — your existing providers keep working, the file adds
 or overrides — and selects the configured provider/model for the run.
@@ -237,12 +237,12 @@ A local `llama.cpp` server (OpenAI-compatible routes at `/v1`, default
 }
 ```
 
-Then select the provider and model in `muyan-pilot.toml` (the Runner
+Then select the provider and model in `orbi.toml` (the Runner
 passes them to Pi as `--provider groq --model qwen/qwen3.8-27b`, and
 `--thinking <level>` when `pi_thinking` is set):
 
 ```toml
-pi_providers = ".muyan-pilot/pi-providers.json"
+pi_providers = ".orbi/pi-providers.json"
 pi_provider = "groq"
 pi_model = "qwen/qwen3.8-27b"
 ```
@@ -254,17 +254,17 @@ The file references the key as an environment variable
 dir, in an env file the systemd unit loads at service start:
 
 ```bash
-mkdir -p .muyan-pilot
-cat > .muyan-pilot/env <<'EOF'
+mkdir -p .orbi
+cat > .orbi/env <<'EOF'
 GROQ_API_KEY=<your key value>
 EOF
-chmod 600 .muyan-pilot/env
+chmod 600 .orbi/env
 ```
 
 The committed unit template already carries
-`EnvironmentFile=-%h/Documents/muyan/muyan-pilot/.muyan-pilot/env`
+`EnvironmentFile=-%h/Documents/orbi/orbi/.orbi/env`
 (Issue #172) — if your clone lives elsewhere, point the **installed**
-unit's `EnvironmentFile` at **your** `.muyan-pilot/env` like the
+unit's `EnvironmentFile` at **your** `.orbi/env` like the
 `WorkingDirectory` Note in step 8. A keyless local server needs no env
 file at all (the literal `"local"` placeholder above satisfies the
 shape check).
@@ -303,7 +303,7 @@ state), installs the systemd user units and enables the timer, checks
 the checkout, and reports the optional model proxy:
 
 ```bash
-muyan-pilot setup --config muyan-pilot.toml
+orbi setup --config orbi.toml
 ```
 
 It is idempotent (re-running it never creates duplicate labels, units
@@ -318,11 +318,11 @@ The manual command is for first verification and troubleshooting only —
 normal operation is scheduled by the timer (step 8):
 
 ```bash
-PYTHONPATH=src python3 -m muyan_pilot.runner --config muyan-pilot.toml
+PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
 ```
 
 (`PYTHONPATH=src` puts the checkout's `src/` layout on the import path;
-`-m` runs the Runner package module — the installed `muyan-pilot`
+`-m` runs the Runner package module — the installed `orbi`
 console script runs the same tick.)
 
 One tick does at most one thing: resume an opened PR (review/fix/merge) or
@@ -340,21 +340,21 @@ directory from step 1; every command is relative to that directory.
 ```bash
 # a. Dispatch a tiny task into the first configured source repo.
 #    `add` creates the Issue and labels it ai-ready in one step.
-muyan-pilot add "Docs: verify smoke walkthrough" \
+orbi add "Docs: verify smoke walkthrough" \
   --body "Read README.md and confirm the smoke walkthrough commands exist." \
-  --config muyan-pilot.toml
+  --config orbi.toml
 
 # b. Watch the queue: the new Issue is ready.
-muyan-pilot status --config muyan-pilot.toml
+orbi status --config orbi.toml
 
 # c. Run one tick: the Runner claims the Issue, starts Pi in a fresh
 #    worktree, and works toward a PR.
-PYTHONPATH=src python3 -m muyan_pilot.runner --config muyan-pilot.toml
+PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
 
 # d. Follow the live activity while the tick runs (second terminal):
-journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service -f
+journalctl --user -u orbi@1.service -u orbi@2.service -f
 # or, for a manual tick, follow the session JSONL directly:
-muyan-pilot session --follow --config muyan-pilot.toml
+orbi session --follow --config orbi.toml
 
 # e. After the PR is opened, the Issue carries ai-pr-opened and the
 #    delivery continues (independent review, in-session fix, merge) on
@@ -372,10 +372,10 @@ concrete, checkable success criterion:
 | Stage | Success criterion | Where to check |
 |---|---|---|
 | Picked up | The Issue label moves `ai-ready → ai-in-progress`; the task worktree and branch exist (both carry the run id) | `gh issue view <n> --json labels`; journal `run_start run=<run_id> ...` |
-| Implemented and tested | Pi runs the TDD loop in the worktree; the single progress comment on the Issue reports the tests milestone | `muyan-pilot session --follow`; the progress comment on the Issue |
+| Implemented and tested | Pi runs the TDD loop in the worktree; the single progress comment on the Issue reports the tests milestone | `orbi session --follow`; the progress comment on the Issue |
 | PR opened | Journal `run_end ... result=pr_opened pr=<url> commit=<sha>`; the Issue label is `ai-pr-opened`; the PR body contains `Fixes #<n>` and the run marker | `gh pr view <n> --json url,body` |
 | Reviewed | The next tick resumes the same run; journal `review pr=<n> round=1 verdict=pass blockers=0 majors=0` | the journal; the PR |
-| Merged | Journal `merged pr=<n> head=<sha>`; the PR is `MERGED` with a merge commit; the Issue label is `ai-merged` and the Issue carries the `Muyan Pilot merged PR: ...` comment | `gh pr view <n> --json state,mergedAt,mergeCommit`; `gh issue view <n> --json state,labels` |
+| Merged | Journal `merged pr=<n> head=<sha>`; the PR is `MERGED` with a merge commit; the Issue label is `ai-merged` and the Issue carries the `Orbi merged PR: ...` comment | `gh pr view <n> --json state,mergedAt,mergeCommit`; `gh issue view <n> --json state,labels` |
 
 ```bash
 # The two read-only checks for the terminal state:
@@ -400,14 +400,14 @@ of them fails fast — nothing is retried silently.
 
 | Symptom | Evidence | Fix |
 |---|---|---|
-| The start fails before any slot or claim | Journal `API key for provider ... references missing environment variable GROQ_API_KEY` (the variable **name** only) | Put the key value into your `.muyan-pilot/env` (step 4) and make sure the installed unit's `EnvironmentFile` points at it; for a manual tick, export the variable in the shell instead |
-| The start fails on the provider file | Journal `pi_providers file ... is not valid JSON` / `is missing baseUrl` / `pi_provider ... is not defined` | Fix the JSON (step 4 contract: `providers` object, `baseUrl`, `api`, `models[].id`) and re-run `muyan-pilot setup` |
+| The start fails before any slot or claim | Journal `API key for provider ... references missing environment variable GROQ_API_KEY` (the variable **name** only) | Put the key value into your `.orbi/env` (step 4) and make sure the installed unit's `EnvironmentFile` points at it; for a manual tick, export the variable in the shell instead |
+| The start fails on the provider file | Journal `pi_providers file ... is not valid JSON` / `is missing baseUrl` / `pi_provider ... is not defined` | Fix the JSON (step 4 contract: `providers` object, `baseUrl`, `api`, `models[].id`) and re-run `orbi setup` |
 | Pi starts but the model never answers | The session JSONL stalls in `model_wait`; after the dead-silence window (`model_wait_dead_seconds`, default 1800 s) the journal shows the `model_wait_dead` line and `run_failed ... reason=model_wait_dead_stale_...` (the field semantics: [Operations](/operations)) | The model request is hung — the model server/proxy is down, its connection dropped, or the request is stuck while the process is still alive — check the endpoint with one real `pi --print` call, restart it, and re-dispatch (the Issue is `ai-blocked` with the scene); a slow local model that is still generating survives the window (raise `model_wait_dead_seconds` only if your model legitimately needs more than 30 minutes of complete-event silence) |
 | The PR is opened but never merges | The Issue label is `ai-fix-needed`; the review findings are on the Issue and the PR | The review found Blocker/Major findings it could not fix in-session — the next review session retries the SAME PR (bounded to 5 rounds); read the findings on the Issue and the PR |
 | The review loop exhausts its rounds | Journal `review_rounds_exhausted issue=<n> rounds=5`; the Issue is `ai-blocked` **alone** | The bounded loop is a human decision — read the findings, fix or close the PR manually; see [Operations](/operations) |
 | The PR is behind the latest base | The Issue is `ai-fix-needed` with a review comment that the PR is behind the latest base or has a merge conflict | Automatic: the next review session merges the latest `origin/<base>` into the branch in-session, resolves conflicts, re-runs the full suite |
-| The service does not start after a restart | `systemctl --user status muyan-pilot@1.service`; journal `unit_drift` / `cli_install_failed` / `transport_check_failed` lines | Follow the structured line: re-run `muyan-pilot install-units` (unit drift), the exact reinstall command it prints (stale editable install), or fix the SSH transport (see [Operations](/operations)) |
-| `muyan-pilot doctor` reports `cli_source: DRIFT` | The structured `cli_source_drift` line with the exact reinstall command | Run the printed `uv tool install --force --reinstall --editable ...` command (or `muyan-pilot setup`) |
+| The service does not start after a restart | `systemctl --user status orbi@1.service`; journal `unit_drift` / `cli_install_failed` / `transport_check_failed` lines | Follow the structured line: re-run `orbi install-units` (unit drift), the exact reinstall command it prints (stale editable install), or fix the SSH transport (see [Operations](/operations)) |
+| `orbi doctor` reports `cli_source: DRIFT` | The structured `cli_source_drift` line with the exact reinstall command | Run the printed `uv tool install --force --reinstall --editable ...` command (or `orbi setup`) |
 
 For the label lifecycle, the journal fields and the recovery rules see
 [Operations](/operations); for the review/merge contract see
@@ -421,7 +421,7 @@ triggers its own service instance — see [Operations](/operations)); verify
 them:
 
 ```bash
-systemctl --user list-timers 'muyan-pilot@*.timer'
+systemctl --user list-timers 'orbi@*.timer'
 ```
 
 The setup output carries one line per instance; enabled instances have an
@@ -434,13 +434,13 @@ flock slots remain the final safety boundary.
 
 <Note>
 The committed unit templates reference the author's clone layout via
-`%h` specifiers (`%h/Documents/muyan/muyan-pilot`). If your clone lives
+`%h` specifiers (`%h/Documents/orbi/orbi`). If your clone lives
 elsewhere, install the CLI from **your** clone path (step 2) and edit
 the **installed** units in your user unit directory
 (`~/.config/systemd/user/`) to point `WorkingDirectory` and
-`MUYAN_PILOT_CONFIG` at **your** clone path, then
+`ORBI_CONFIG` at **your** clone path, then
 `systemctl --user daemon-reload`. `ExecStart` is the installed
-`muyan-pilot` CLI and stays relative. The repo templates stay the single
+`orbi` CLI and stays relative. The repo templates stay the single
 source of truth for everything else — see [Operations](/operations) on
 drift detection.
 </Note>

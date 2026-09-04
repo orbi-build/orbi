@@ -1,33 +1,34 @@
 # Standard Python packaging for the Orbi CLI (Issue #140).
 #
-# v0.3.0 rebrand (Issue #183): the product brand is Orbi (GitHub
-# orbi-build/orbi, docs.orbi.build), but the distribution name and the
-# `muyan-pilot` console script stay unchanged for existing users.
+# Rebrand (Issues #183 + #246): the product brand is Orbi (GitHub
+# orbi-build/orbi, docs.orbi.build); #246 converged the distribution
+# name and the `orbi` console script onto the same brand — no old-name
+# compatibility alias remains.
 #
 # The official usage is the installed console script, installed as an
-# EDITABLE uv tool (Issue #152): the tool env imports the `muyan_pilot`
+# EDITABLE uv tool (Issue #152): the tool env imports the `orbi`
 # package directly from the deployment checkout, so the ExecStartPre
 # checkout sync is picked up by the next CLI process automatically (no
 # per-version reinstall):
 #
 #     uv tool install --force --reinstall --editable \
 #         --python /usr/bin/python3 <this repo>
-#     muyan-pilot --help
+#     orbi --help
 #
-# src layout (Issue #168): the runtime code lives in `src/muyan_pilot/`
+# src layout (Issue #168): the runtime code lives in `src/orbi/`
 # and setuptools discovers the package automatically (no hand-maintained
 # module list). The editable finder maps the WHOLE package directory, so
 # a newly added package module is importable by the next CLI process
 # without regenerating any module list (the #158 stale-finder root
-# cause). The checkout root carries NO `muyan_pilot.py` — a flat file
+# cause). The checkout root carries NO `orbi.py` — a flat file
 # named like the package would shadow it for every process with the
 # checkout root on sys.path; the direct-execution compatibility entry is
-# `python3 -m muyan_pilot.cli` (the exact same code as the console
+# `python3 -m orbi.cli` (the exact same code as the console
 # script).
 #
 # The release package is machine-independent: no third-party runtime
 # dependency (the bootstrap intentionally has none), no token, no user
-# directory — the config file (muyan-pilot.toml) and the user systemd
+# directory — the config file (orbi.toml) and the user systemd
 # dir stay machine-local.
 
 [build-system]
@@ -35,9 +36,9 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "muyan-pilot"
+name = "orbi"
 version = "0.2.0"
-description = "Orbi (CLI: muyan-pilot) — local AI development worker: claims GitHub Issues, runs Pi in isolated worktrees, and delivers PRs (GitHub Issues + labels are the only state store)."
+description = "Orbi — local AI development worker: claims GitHub Issues, runs Pi in isolated worktrees, and delivers PRs (GitHub Issues + labels are the only state store)."
 readme = "README.md"
 requires-python = ">=3.14"
 license = { file = "LICENSE.md" }
@@ -45,9 +46,9 @@ authors = [{ name = "xqliu" }]
 dependencies = []
 
 [project.scripts]
-muyan-pilot = "muyan_pilot.cli:main"
+orbi = "orbi.cli:main"
 
-# src layout: setuptools discovers the `muyan_pilot` package under
+# src layout: setuptools discovers the `orbi` package under
 # `src/` automatically (Issue #168) — the old hand-maintained
 # `py-modules` list is gone with it.
 [tool.setuptools.packages.find]
@@ -55,7 +56,7 @@ where = ["src"]
 
 # The contract test command (`python3 -m coverage run --branch -m pytest
 # tests/ -q`) runs WITHOUT installing the package: pytest puts `src/` on
-# sys.path so the suite imports `muyan_pilot.*` straight from the
+# sys.path so the suite imports `orbi.*` straight from the
 # checkout (Issue #168).
 [tool.pytest.ini_options]
 pythonpath = ["src"]

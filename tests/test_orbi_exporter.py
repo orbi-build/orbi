@@ -2,7 +2,7 @@
 Dashboard).
 
 The exporter is a standalone, read-only reader of the structured user
-systemd journal of the `muyan-pilot@*` Runner services. These tests pin
+systemd journal of the `orbi@*` Runner services. These tests pin
 the journal line contract (verified against the live journal and
 `pi_activity.parse_scene`), the low-cardinality label allowlist (no
 `run_id`, no command/prompt text), the fail-fast behavior on journal
@@ -20,13 +20,13 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-EXPORTER_PATH = REPO_ROOT / "monitoring" / "prometheus" / "muyan-pilot-exporter.py"
-EXPORTER_UNIT_PATH = REPO_ROOT / "systemd" / "muyan-pilot-exporter.service"
+EXPORTER_PATH = REPO_ROOT / "monitoring" / "prometheus" / "orbi-exporter.py"
+EXPORTER_UNIT_PATH = REPO_ROOT / "systemd" / "orbi-exporter.service"
 
 
 def load_exporter():
     spec = importlib.util.spec_from_file_location(
-        "muyan_pilot_exporter", EXPORTER_PATH,
+        "orbi_exporter", EXPORTER_PATH,
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -65,11 +65,11 @@ def test_exporter_unit_runs_the_deployed_exporter_and_restarts():
     """The versioned user unit keeps the exporter available after boot/exit."""
     unit = EXPORTER_UNIT_PATH.read_text(encoding="utf-8")
     assert "[Service]" in unit
-    assert "WorkingDirectory=%h/Documents/muyan/muyan-pilot" in unit
+    assert "WorkingDirectory=%h/Documents/orbi/orbi" in unit
     assert (
         "ExecStart=/usr/bin/python3 "
-        "%h/Documents/muyan/muyan-pilot/monitoring/prometheus/"
-        "muyan-pilot-exporter.py"
+        "%h/Documents/orbi/orbi/monitoring/prometheus/"
+        "orbi-exporter.py"
     ) in unit
     assert "Restart=always" in unit
     assert "RestartSec=5" in unit
@@ -186,7 +186,7 @@ def test_parse_duration_rejects_non_journal_formats():
 
 def test_issue_repo_splits_owner_repo_from_issue_ref():
     assert exporter.issue_repo("xqliu/orbi#162") == "xqliu/orbi"
-    assert exporter.issue_repo("xqliu/muyan-pilot#18") == "xqliu/muyan-pilot"
+    assert exporter.issue_repo("xqliu/orbi#18") == "xqliu/orbi"
 
 
 def test_issue_repo_falls_back_to_whole_ref_when_no_hash():
@@ -203,13 +203,13 @@ def test_fetch_journal_parses_json_entries_with_instance_and_ts():
     payload = "\n".join([
         json.dumps({
             "__REALTIME_TIMESTAMP": "1787958782202724",
-            "_SYSTEMD_USER_UNIT": "muyan-pilot@1.service",
+            "_SYSTEMD_USER_UNIT": "orbi@1.service",
             "MESSAGE": "INFO [cf357f0e] heartbeat issue=xqliu/orbi#162 "
                        "role=implement phase=read state=- elapsed=1m idle=1m",
         }),
         json.dumps({
             "__REALTIME_TIMESTAMP": "1787958785633784",
-            "_SYSTEMD_USER_UNIT": "muyan-pilot@2.service",
+            "_SYSTEMD_USER_UNIT": "orbi@2.service",
             "MESSAGE": "INFO [cf357f0e] run_start run=cf357f0e "
                        "issue=xqliu/orbi#162 role=implement phase=starting",
         }),
@@ -221,7 +221,7 @@ def test_fetch_journal_parses_json_entries_with_instance_and_ts():
         stderr = ""
 
     entries = exporter.fetch_journal(
-        "muyan-pilot@*",
+        "orbi@*",
         run=subprocess_run_factory(FakeCompleted()),
     )
     assert [e["instance"] for e in entries] == ["1", "2"]
@@ -235,7 +235,7 @@ def test_fetch_journal_skips_blank_lines_and_non_dict_records():
         "MESSAGE": "INFO [cf357f0e] heartbeat issue=x#1 role=implement",
     }) + "\n" + json.dumps({
         "__REALTIME_TIMESTAMP": "2000",
-        "_SYSTEMD_USER_UNIT": "muyan-pilot@1.service",
+        "_SYSTEMD_USER_UNIT": "orbi@1.service",
     }) + "\n"
 
     class FakeCompleted:
@@ -244,7 +244,7 @@ def test_fetch_journal_skips_blank_lines_and_non_dict_records():
         stderr = ""
 
     entries = exporter.fetch_journal(
-        "muyan-pilot@*",
+        "orbi@*",
         run=subprocess_run_factory(FakeCompleted()),
     )
     assert len(entries) == 1
@@ -253,7 +253,7 @@ def test_fetch_journal_skips_blank_lines_and_non_dict_records():
 def test_fetch_journal_invalid_timestamp_falls_back_to_zero():
     payload = json.dumps({
         "__REALTIME_TIMESTAMP": "not-a-number",
-        "_SYSTEMD_USER_UNIT": "muyan-pilot@1.service",
+        "_SYSTEMD_USER_UNIT": "orbi@1.service",
         "MESSAGE": "INFO [cf357f0e] heartbeat issue=x#1 role=implement",
     }) + "\n"
 
@@ -263,7 +263,7 @@ def test_fetch_journal_invalid_timestamp_falls_back_to_zero():
         stderr = ""
 
     entries = exporter.fetch_journal(
-        "muyan-pilot@*",
+        "orbi@*",
         run=subprocess_run_factory(FakeCompleted()),
     )
     assert entries[0]["ts"] == 0.0
@@ -282,7 +282,7 @@ def test_fetch_journal_skips_non_json_lines_and_missing_unit():
         stderr = ""
 
     entries = exporter.fetch_journal(
-        "muyan-pilot@*",
+        "orbi@*",
         run=subprocess_run_factory(FakeCompleted()),
     )
     assert len(entries) == 1
@@ -297,7 +297,7 @@ def test_fetch_journal_fails_fast_on_nonzero_exit():
 
     with pytest.raises(exporter.JournalError) as excinfo:
         exporter.fetch_journal(
-            "muyan-pilot@*",
+            "orbi@*",
             run=subprocess_run_factory(FakeCompleted()),
         )
     assert "No journal files were opened" in str(excinfo.value)
@@ -334,17 +334,17 @@ def test_build_metrics_live_run_gauges_and_counters():
     text = exporter.build_metrics(entries, now=300.0, service_active={"1": 1})
     lines = lines_of(text)
 
-    metric(lines, "muyan_pilot_service_active", 'slot="1"', 1.0)
-    metric(lines, "muyan_pilot_run_active",
+    metric(lines, "orbi_service_active", 'slot="1"', 1.0)
+    metric(lines, "orbi_run_active",
            'slot="1",repo="xqliu/orbi",issue="xqliu/orbi#162",'
            'role="implement",phase="read",state="model_wait"', 1.0)
-    metric(lines, "muyan_pilot_run_idle_seconds",
+    metric(lines, "orbi_run_idle_seconds",
            'slot="1",issue="xqliu/orbi#162"', 20.0)
-    metric(lines, "muyan_pilot_run_seconds",
+    metric(lines, "orbi_run_seconds",
            'slot="1",issue="xqliu/orbi#162",role="implement"', 60.0)
-    metric(lines, "muyan_pilot_run_start_total",
+    metric(lines, "orbi_run_start_total",
            'slot="1",issue="xqliu/orbi#162",role="implement"', 1.0)
-    metric(lines, "muyan_pilot_model_wait_total",
+    metric(lines, "orbi_model_wait_total",
            'slot="1",issue="xqliu/orbi#162"', 1.0)
 
 
@@ -371,21 +371,21 @@ def test_build_metrics_finished_run_keeps_end_scene_and_zeroes_active():
     text = exporter.build_metrics(entries, now=400.0, service_active={"1": 0})
     lines = lines_of(text)
 
-    metric(lines, "muyan_pilot_service_active", 'slot="1"', 0.0)
-    metric(lines, "muyan_pilot_run_active",
+    metric(lines, "orbi_service_active", 'slot="1"', 0.0)
+    metric(lines, "orbi_run_active",
            'slot="1",repo="xqliu/orbi",issue="xqliu/orbi#181",'
            'role="implement",phase="starting",state="-"', 1.0)
-    metric(lines, "muyan_pilot_run_active",
+    metric(lines, "orbi_run_active",
            'slot="1",repo="xqliu/orbi",issue="xqliu/orbi#50",'
            'role="implement",phase="test",state="-"', 0.0)
-    metric(lines, "muyan_pilot_run_seconds",
+    metric(lines, "orbi_run_seconds",
            'slot="1",issue="xqliu/orbi#50",role="implement"', 12600.0)
-    metric(lines, "muyan_pilot_run_end_total",
+    metric(lines, "orbi_run_end_total",
            'slot="1",issue="xqliu/orbi#50",role="implement",'
            'result="pr_opened"', 1.0)
     # The finished run's idle gauge is not re-emitted (no live state).
     assert not any(
-        ln.startswith('muyan_pilot_run_idle_seconds{slot="1",'
+        ln.startswith('orbi_run_idle_seconds{slot="1",'
                       'issue="xqliu/orbi#50"}')
         for ln in lines
     )
@@ -420,23 +420,23 @@ def test_build_metrics_failure_and_recovery_counters_by_reason():
     text = exporter.build_metrics(entries, now=700.0, service_active={"2": 1})
     lines = lines_of(text)
 
-    metric(lines, "muyan_pilot_pi_idle_total",
+    metric(lines, "orbi_pi_idle_total",
            'slot="2",issue="xqliu/orbi#181"', 1.0)
-    metric(lines, "muyan_pilot_pi_idle_term_total",
+    metric(lines, "orbi_pi_idle_term_total",
            'slot="2",issue="xqliu/orbi#181"', 1.0)
-    metric(lines, "muyan_pilot_pi_idle_kill_total",
+    metric(lines, "orbi_pi_idle_kill_total",
            'slot="2",issue="xqliu/orbi#181"', 1.0)
-    metric(lines, "muyan_pilot_run_failed_total",
+    metric(lines, "orbi_run_failed_total",
            'slot="2",issue="xqliu/orbi#181",'
            'reason="idle_recovery_stale_15m"', 1.0)
-    metric(lines, "muyan_pilot_progress_publish_failed_total",
+    metric(lines, "orbi_progress_publish_failed_total",
            'slot="2",issue="xqliu/orbi#181"', 1.0)
     # The failed run is no longer active.
     assert not any(
         ln.endswith('state="model_wait"} 1')
         and 'issue="xqliu/orbi#181"' in ln
         for ln in lines
-        if ln.startswith("muyan_pilot_run_active")
+        if ln.startswith("orbi_run_active")
     )
 
 
@@ -445,7 +445,7 @@ def test_build_metrics_labels_stay_within_allowlist():
     entries = [
         entry(100, "1",
               "INFO [eeee5555] run_start run=eeee5555 issue=xqliu/orbi#162 "
-              "role=implement branch=muyan-pilot/xqliu-orbi-issue-162-eeee5555 "
+              "role=implement branch=orbi/xqliu-orbi-issue-162-eeee5555 "
               "worktree=/home/x/w session=- session_file=- phase=starting "
               "last_activity=- action=- result=-"),
         entry(200, "1",
@@ -480,9 +480,9 @@ def test_build_metrics_unparseable_messages_are_skipped():
     ]
     text = exporter.build_metrics(entries, now=300.0, service_active={"1": 1})
     lines = lines_of(text)
-    assert metric(lines, "muyan_pilot_service_active", 'slot="1"') == 1.0
+    assert metric(lines, "orbi_service_active", 'slot="1"') == 1.0
     assert not any(
-        ln.startswith("muyan_pilot_run_") for ln in lines
+        ln.startswith("orbi_run_") for ln in lines
     )
 
 
@@ -496,7 +496,7 @@ def test_build_metrics_activity_before_run_start_is_ignored():
     text = exporter.build_metrics(entries, now=200.0, service_active={"1": 1})
     lines = lines_of(text)
     assert not any(
-        ln.startswith("muyan_pilot_run_") for ln in lines
+        ln.startswith("orbi_run_") for ln in lines
     )
 
 
@@ -512,12 +512,12 @@ def test_build_metrics_heartbeat_without_idle_or_elapsed_updates_combo_only():
     ]
     text = exporter.build_metrics(entries, now=300.0, service_active={"1": 1})
     lines = lines_of(text)
-    metric(lines, "muyan_pilot_run_active",
+    metric(lines, "orbi_run_active",
            'slot="1",repo="xqliu/orbi",issue="xqliu/orbi#162",'
            'role="implement",phase="read",state="model_wait"', 1.0)
-    assert not any(ln.startswith("muyan_pilot_run_idle_seconds")
+    assert not any(ln.startswith("orbi_run_idle_seconds")
                    for ln in lines)
-    assert not any(ln.startswith("muyan_pilot_run_seconds") for ln in lines)
+    assert not any(ln.startswith("orbi_run_seconds") for ln in lines)
 
 
 def test_build_metrics_run_end_without_elapsed_still_counts():
@@ -532,10 +532,10 @@ def test_build_metrics_run_end_without_elapsed_still_counts():
     ]
     text = exporter.build_metrics(entries, now=300.0, service_active={"1": 1})
     lines = lines_of(text)
-    metric(lines, "muyan_pilot_run_end_total",
+    metric(lines, "orbi_run_end_total",
            'slot="1",issue="xqliu/orbi#162",role="implement",'
            'result="failed"', 1.0)
-    assert not any(ln.startswith("muyan_pilot_run_seconds") for ln in lines)
+    assert not any(ln.startswith("orbi_run_seconds") for ln in lines)
 
 
 def test_label_value_falls_back_for_missing_and_empty():
@@ -564,9 +564,9 @@ def test_build_metrics_fails_fast_on_kind_outside_chain(monkeypatch):
 def test_build_metrics_empty_journal_emits_only_service_gauges():
     text = exporter.build_metrics([], now=10.0, service_active={"1": 1, "2": 0})
     lines = lines_of(text)
-    assert metric(lines, "muyan_pilot_service_active", 'slot="1"') == 1.0
-    assert metric(lines, "muyan_pilot_service_active", 'slot="2"') == 0.0
-    assert not any(ln.startswith("muyan_pilot_run_") for ln in lines)
+    assert metric(lines, "orbi_service_active", 'slot="1"') == 1.0
+    assert metric(lines, "orbi_service_active", 'slot="2"') == 0.0
+    assert not any(ln.startswith("orbi_run_") for ln in lines)
 
 
 def test_build_metrics_unknown_scene_fields_are_ignored():
@@ -579,7 +579,7 @@ def test_build_metrics_unknown_scene_fields_are_ignored():
     ]
     text = exporter.build_metrics(entries, now=200.0, service_active={"1": 1})
     lines = lines_of(text)
-    metric(lines, "muyan_pilot_run_active",
+    metric(lines, "orbi_run_active",
            'slot="1",repo="xqliu/orbi",issue="xqliu/orbi#9",'
            'role="implement",phase="starting",state="-"', 1.0)
 
@@ -593,7 +593,7 @@ def test_build_metrics_missing_instance_falls_back_to_unknown():
     ]
     text = exporter.build_metrics(entries, now=200.0, service_active={})
     lines = lines_of(text)
-    metric(lines, "muyan_pilot_run_start_total",
+    metric(lines, "orbi_run_start_total",
            'slot="unknown",issue="xqliu/orbi#162",role="implement"', 1.0)
 
 
@@ -615,7 +615,7 @@ def test_exporter_caches_journal_until_ttl_expires():
         return 0  # systemctl exit code: 0 = active
 
     exp = exporter.Exporter(
-        units="muyan-pilot@*", cache_ttl=10.0, instances=("1",),
+        units="orbi@*", cache_ttl=10.0, instances=("1",),
         fetch_journal=fake_journal, service_active=fake_systemctl,
         clock=lambda: 1.0,
     )
@@ -623,7 +623,7 @@ def test_exporter_caches_journal_until_ttl_expires():
     second = exp.metrics()
     assert first == second
     assert len(calls) == 1  # second scrape served from the cache
-    assert 'muyan_pilot_service_active{slot="1"} 1' in first
+    assert 'orbi_service_active{slot="1"} 1' in first
 
 
 def test_exporter_refreshes_after_ttl_and_after_journal_error():
@@ -636,14 +636,14 @@ def test_exporter_refreshes_after_ttl_and_after_journal_error():
         return []
 
     exp = exporter.Exporter(
-        units="muyan-pilot@*", cache_ttl=10.0, instances=("1",),
+        units="orbi@*", cache_ttl=10.0, instances=("1",),
         fetch_journal=fake_journal, service_active=lambda u: 0,
         clock=lambda: 1.0,
     )
     with pytest.raises(exporter.JournalError):
         exp.metrics()  # the error is NOT cached
     text = exp.metrics()  # the next scrape retries immediately
-    assert "muyan_pilot_service_active" in text
+    assert "orbi_service_active" in text
     assert state["n"] == 2
 
 
@@ -652,20 +652,20 @@ def test_exporter_service_active_maps_unit_instances():
 
     def fake_systemctl(unit):
         seen.append(unit)
-        return 0 if unit == "muyan-pilot@1.service" else 3
+        return 0 if unit == "orbi@1.service" else 3
 
     exp = exporter.Exporter(
-        units="muyan-pilot@*", cache_ttl=0.0,
+        units="orbi@*", cache_ttl=0.0,
         instances=("1", "2"),
         fetch_journal=lambda units, run=None: [],
         service_active=fake_systemctl,
         clock=lambda: 1.0,
     )
     text = exp.metrics()
-    assert seen == ["muyan-pilot@1.service", "muyan-pilot@2.service"]
+    assert seen == ["orbi@1.service", "orbi@2.service"]
     lines = lines_of(text)
-    metric(lines, "muyan_pilot_service_active", 'slot="1"', 1.0)
-    metric(lines, "muyan_pilot_service_active", 'slot="2"', 0.0)
+    metric(lines, "orbi_service_active", 'slot="1"', 1.0)
+    metric(lines, "orbi_service_active", 'slot="2"', 0.0)
 
 
 def test_exporter_default_systemctl_uses_systemctl_user_is_active():
@@ -677,11 +677,11 @@ def test_exporter_default_systemctl_uses_systemctl_user_is_active():
                               "stderr": ""})()
 
     result = exporter.default_service_active(
-        "muyan-pilot@1.service", run=fake_run,
+        "orbi@1.service", run=fake_run,
     )
     assert result == 0  # systemctl exit code: 0 = active
     assert seen["cmd"] == [
-        "systemctl", "--user", "is-active", "muyan-pilot@1.service",
+        "systemctl", "--user", "is-active", "orbi@1.service",
     ]
 
 
@@ -691,7 +691,7 @@ def test_default_service_active_nonzero_exit_means_inactive():
                               "stderr": ""})()
 
     assert exporter.default_service_active(
-        "muyan-pilot@2.service", run=fake_run,
+        "orbi@2.service", run=fake_run,
     ) == 3
 
 
@@ -718,7 +718,7 @@ def http_get(server, path):
 
 def test_http_metrics_health_and_404():
     exp = exporter.Exporter(
-        units="muyan-pilot@*", cache_ttl=0.0, instances=("1",),
+        units="orbi@*", cache_ttl=0.0, instances=("1",),
         fetch_journal=lambda units, run=None: [],
         service_active=lambda u: 0,
         clock=lambda: 1.0,
@@ -727,7 +727,7 @@ def test_http_metrics_health_and_404():
     try:
         status, body = http_get(server, "/metrics")
         assert status == 200
-        assert "muyan_pilot_service_active" in body
+        assert "orbi_service_active" in body
         status, body = http_get(server, "/health")
         assert status == 200
         assert body == "ok"
@@ -743,7 +743,7 @@ def test_http_metrics_survives_journal_failure_with_error_body():
         raise exporter.JournalError("No journal files were opened")
 
     exp = exporter.Exporter(
-        units="muyan-pilot@*", cache_ttl=0.0, instances=("1",),
+        units="orbi@*", cache_ttl=0.0, instances=("1",),
         fetch_journal=broken_journal,
         service_active=lambda u: 0,
         clock=lambda: 1.0,
@@ -782,5 +782,5 @@ def test_main_serves_until_interrupted(monkeypatch, capsys):
     rc = exporter.main(["--port", "0", "--bind", "127.0.0.1"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "muyan-pilot-exporter listening" in out
-    assert "units=muyan-pilot@*" in out
+    assert "orbi-exporter listening" in out
+    assert "units=orbi@*" in out

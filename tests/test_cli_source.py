@@ -1,7 +1,7 @@
 """CLI source consistency tests (Issue #152).
 
 The official local deployment is the EDITABLE uv tool install: the tool
-env's Python imports `muyan_pilot` directly from the deployment checkout
+env's Python imports `orbi` directly from the deployment checkout
 (a setuptools editable finder), so the ExecStartPre checkout sync is
 picked up by the NEXT CLI process automatically — there is no second
 copy of the source in site-packages and no per-version reinstall.
@@ -11,7 +11,7 @@ These tests pin:
 - the exact editable force-reinstall command (verified against the real
   `uv tool install --help`: `--force`, `--reinstall`, `--editable` and
   `--python` all exist);
-- the read-only source check: the running process's `muyan_pilot`
+- the read-only source check: the running process's `orbi`
   import file must sit directly inside the configured `repo_dir`
   (a non-editable site-packages source or a stale other-checkout
   source is drift);
@@ -23,20 +23,20 @@ from types import ModuleType
 
 import pytest
 
-from muyan_pilot import cli_source
-from muyan_pilot.pi_activity import quote_value
+from orbi import cli_source
+from orbi.pi_activity import quote_value
 
 
 def _fake_module_file(path: str) -> ModuleType:
-    """A stand-in for the imported `muyan_pilot` module."""
-    module = ModuleType("muyan_pilot")
+    """A stand-in for the imported `orbi` module."""
+    module = ModuleType("orbi")
     module.__file__ = path
     return module
 
 
 def _patch_module_file(monkeypatch, path: str) -> None:
     monkeypatch.setattr(
-        cli_source, "muyan_pilot", _fake_module_file(path),
+        cli_source, "orbi", _fake_module_file(path),
     )
 
 
@@ -50,12 +50,12 @@ def test_reinstall_command_is_the_editable_force_reinstall():
     the build cache, `--editable` points the tool env at the checkout,
     `--python` pins the production interpreter."""
     command = cli_source.reinstall_command(
-        Path("/home/xqianliu/Documents/muyan/muyan-pilot"),
+        Path("/home/xqianliu/Documents/orbi/orbi"),
     )
     assert command == (
         "uv tool install --force --reinstall --editable "
         "--python /usr/bin/python3 "
-        "/home/xqianliu/Documents/muyan/muyan-pilot"
+        "/home/xqianliu/Documents/orbi/orbi"
     )
 
 
@@ -64,13 +64,13 @@ def test_reinstall_command_is_the_editable_force_reinstall():
 
 def test_cli_source_clean_for_the_checkout_source(tmp_path, monkeypatch):
     """An editable install (or the compat entry run inside the
-    checkout) imports `muyan_pilot` from the checkout root: clean."""
+    checkout) imports `orbi` from the checkout root: clean."""
     repo = tmp_path / "checkout"
     repo.mkdir()
-    _patch_module_file(monkeypatch, str(repo / "src" / "muyan_pilot" / "__init__.py"))
+    _patch_module_file(monkeypatch, str(repo / "src" / "orbi" / "__init__.py"))
     source = cli_source.cli_source(repo)
     assert source["editable"] is True
-    assert source["actual"] == (repo / "src" / "muyan_pilot" / "__init__.py").resolve()
+    assert source["actual"] == (repo / "src" / "orbi" / "__init__.py").resolve()
     assert source["expected"] == repo.resolve()
     assert source["fix"] == cli_source.reinstall_command(repo)
 
@@ -79,16 +79,16 @@ def test_cli_source_clean_when_the_expected_dir_is_a_symlink(
     tmp_path, monkeypatch,
 ):
     """The comparison resolves both sides: a symlinked checkout path
-    (e.g. `/home/xqianliu/Documents/muyan/muyan-pilot` reached through
+    (e.g. `/home/xqianliu/Documents/orbi/orbi` reached through
     a link) is the same source as the resolved one."""
     real = tmp_path / "real"
     real.mkdir()
     link = tmp_path / "link"
     link.symlink_to(real)
-    _patch_module_file(monkeypatch, str(real / "src" / "muyan_pilot" / "__init__.py"))
+    _patch_module_file(monkeypatch, str(real / "src" / "orbi" / "__init__.py"))
     source = cli_source.cli_source(link)
     assert source["editable"] is True
-    assert source["actual"] == (real / "src" / "muyan_pilot" / "__init__.py").resolve()
+    assert source["actual"] == (real / "src" / "orbi" / "__init__.py").resolve()
 
 
 def test_cli_source_drifts_for_a_site_packages_source(tmp_path, monkeypatch):
@@ -98,16 +98,16 @@ def test_cli_source_drifts_for_a_site_packages_source(tmp_path, monkeypatch):
     repo = tmp_path / "checkout"
     repo.mkdir()
     site_packages = (
-        tmp_path / "uv" / "tools" / "muyan-pilot"
+        tmp_path / "uv" / "tools" / "orbi"
         / "lib" / "python3.14" / "site-packages"
     )
     site_packages.mkdir(parents=True)
     _patch_module_file(
-        monkeypatch, str(site_packages / "muyan_pilot" / "__init__.py"),
+        monkeypatch, str(site_packages / "orbi" / "__init__.py"),
     )
     source = cli_source.cli_source(repo)
     assert source["editable"] is False
-    assert source["actual"] == (site_packages / "muyan_pilot" / "__init__.py").resolve()
+    assert source["actual"] == (site_packages / "orbi" / "__init__.py").resolve()
     assert source["fix"] == cli_source.reinstall_command(repo)
 
 
@@ -118,21 +118,21 @@ def test_cli_source_drifts_for_a_stale_other_checkout(tmp_path, monkeypatch):
     repo.mkdir()
     stale = tmp_path / "old-clone"
     stale.mkdir()
-    _patch_module_file(monkeypatch, str(stale / "src" / "muyan_pilot" / "__init__.py"))
+    _patch_module_file(monkeypatch, str(stale / "src" / "orbi" / "__init__.py"))
     source = cli_source.cli_source(repo)
     assert source["editable"] is False
-    assert source["actual"] == (stale / "src" / "muyan_pilot" / "__init__.py").resolve()
+    assert source["actual"] == (stale / "src" / "orbi" / "__init__.py").resolve()
 
 
 def test_cli_source_drifts_for_a_nested_copy(tmp_path, monkeypatch):
     """A copy of the source nested INSIDE the checkout (e.g. a
-    worktree's own `muyan_pilot.py` shadowing the checkout root file)
+    worktree's own `orbi.py` shadowing the checkout root file)
     is not the configured source either: only the checkout ROOT
-    `muyan_pilot.py` counts."""
+    `orbi.py` counts."""
     repo = tmp_path / "checkout"
     (repo / ".worktrees" / "wt").mkdir(parents=True)
     _patch_module_file(
-        monkeypatch, str(repo / ".worktrees" / "wt" / "src" / "muyan_pilot" / "__init__.py"),
+        monkeypatch, str(repo / ".worktrees" / "wt" / "src" / "orbi" / "__init__.py"),
     )
     source = cli_source.cli_source(repo)
     assert source["editable"] is False
@@ -146,7 +146,7 @@ def test_drift_line_carries_source_expected_and_fix(tmp_path, monkeypatch):
     repo.mkdir()
     stale = tmp_path / "old-clone"
     stale.mkdir()
-    _patch_module_file(monkeypatch, str(stale / "src" / "muyan_pilot" / "__init__.py"))
+    _patch_module_file(monkeypatch, str(stale / "src" / "orbi" / "__init__.py"))
     source = cli_source.cli_source(repo)
     line = cli_source.drift_line(source)
     assert line is not None
@@ -163,7 +163,7 @@ def test_drift_line_carries_source_expected_and_fix(tmp_path, monkeypatch):
 def test_drift_line_is_none_when_clean(tmp_path, monkeypatch):
     repo = tmp_path / "checkout"
     repo.mkdir()
-    _patch_module_file(monkeypatch, str(repo / "src" / "muyan_pilot" / "__init__.py"))
+    _patch_module_file(monkeypatch, str(repo / "src" / "orbi" / "__init__.py"))
     source = cli_source.cli_source(repo)
     assert cli_source.drift_line(source) is None
 
@@ -171,22 +171,22 @@ def test_drift_line_is_none_when_clean(tmp_path, monkeypatch):
 # --- the real module file ----------------------------------------------------
 
 
-def test_module_file_is_the_running_muyan_pilot_file():
-    """`module_file()` is the running process's `muyan_pilot` import
+def test_module_file_is_the_running_orbi_file():
+    """`module_file()` is the running process's `orbi` import
     source (asserted against the real imported module — one real call,
     not a guessed shape)."""
-    import muyan_pilot
+    import orbi
 
     assert cli_source.module_file() == Path(
-        muyan_pilot.__file__,
+        orbi.__file__,
     ).resolve()
 
 
 def test_module_file_fails_fast_without_a_file_attribute(monkeypatch):
     """A module without `__file__` cannot be located: the check fails
     fast with the concrete reason (never a guessed path)."""
-    module = ModuleType("muyan_pilot")
-    monkeypatch.setattr(cli_source, "muyan_pilot", module)
+    module = ModuleType("orbi")
+    monkeypatch.setattr(cli_source, "orbi", module)
 
     with pytest.raises(RuntimeError, match="no __file__"):
         cli_source.module_file()

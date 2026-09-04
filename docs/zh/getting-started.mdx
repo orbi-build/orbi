@@ -7,7 +7,7 @@ Issue 被领取、实现、测试、开 PR、独立审查、合并。这里的�
 
 ## 前提
 
-这些前提由**你自己安装**——`muyan-pilot setup` 只**检查**它们（校验
+这些前提由**你自己安装**——`orbi setup` 只**检查**它们（校验
 `git`、`gh`、`python3`、`uv` 和 systemd user session）；它从不自动安装
 系统包、从不安装 `gh`、也不执行 `gh auth login`（你先登录，setup 只
 验证登录状态）。
@@ -15,7 +15,7 @@ Issue 被领取、实现、测试、开 PR、独立审查、合并。这里的�
 | 要求 | 用途 | 检查 |
 |---|---|---|
 | Python 3.14 | Runner 和测试契约（CI 固定同一 minor 版本） | `python3 --version` |
-| [uv](https://docs.astral.sh/uv/) | 把 `muyan-pilot` CLI 装进隔离的 tool 环境（setup 的 CLI editable 步骤会调 `uv tool install`） | `uv --version` |
+| [uv](https://docs.astral.sh/uv/) | 把 `orbi` CLI 装进隔离的 tool 环境（setup 的 CLI editable 步骤会调 `uv tool install`） | `uv --version` |
 | [Pi](https://github.com/earendil-works/pi) CLI | 开发 agent；每个任务一个完整 session | `pi --version` |
 | Git | worktree、分支、base 新鲜度 | `git --version` |
 | GitHub CLI（`gh`） | Issue、标签、PR、merge | `gh auth status` |
@@ -53,14 +53,14 @@ cd orbi
 
 ## 2. 安装 CLI
 
-正式使用方式是安装后的 `muyan-pilot` console script（`pyproject.toml`
-的 PEP 621 打包把 `muyan-pilot = muyan_pilot:main` 映射为可执行文件），
+正式使用方式是安装后的 `orbi` console script（`pyproject.toml`
+的 PEP 621 打包把 `orbi = orbi:main` 映射为可执行文件），
 以 **editable** `uv tool` 安装——这是官方本地部署方式（Issue #152）。
 在 clone 目录里安装，`--python` 固定生产解释器（3.14）：
 
 ```bash
 uv tool install --force --reinstall --editable --python /usr/bin/python3 .
-muyan-pilot --help
+orbi --help
 ```
 
 `uv tool` 把 CLI 装进隔离的 tool 环境，可执行文件落在 `~/.local/bin`
@@ -70,27 +70,27 @@ muyan-pilot --help
 环境的 site-packages；service 的 `ExecStartPre` 每次启动前把 checkout
 快进到最新 `main`——源码被复制后 CLI 仍在执行旧副本（启动死锁：
 Issue #152）。editable 安装下 tool 环境直接从 clone 目录导入
-`muyan_pilot`，下一个 CLI 进程（下一个 timer 启动的 Runner）自动取到
+`orbi`，下一个 CLI 进程（下一个 timer 启动的 Runner）自动取到
 merge 后的代码：**普通 Python 源码与 systemd 模板/迁移代码变更不需要
 任何重装或升级命令**。
 自 src layout（Issue #168）起，editable finder 映射**整个**
-`src/muyan_pilot/` package 目录——新增 package 模块**不需要重装**
+`src/orbi/` package 目录——新增 package 模块**不需要重装**
 （#158 的 stale 模块清单问题已在根上修复）。当其余**打包输入**变化
 （`pyproject.toml` 的依赖、入口点、包名、构建后端或 Python 版本）时，
 Runner 每次启动（在任何 slot/claim 之前）自动刷新安装——刷新失败会
 fail fast（结构化 `cli_install_failed` 行：原因 + 精确修复命令）。这个
-Runner 内刷新在 console script 连 `import muyan_pilot` 都失败时不可达
+Runner 内刷新在 console script 连 `import orbi` 都失败时不可达
 （#248 现场：#168 的 src 布局迁移让已安装的 editable finder 过期，Runner
 在 import 阶段就死了，刷新根本没机会运行）——这类损坏由 service 的第二个
-`ExecStartPre` 步骤在 Python 进程外自愈：它探测 `muyan-pilot --version`，
+`ExecStartPre` 步骤在 Python 进程外自愈：它探测 `orbi --version`，
 探测失败时执行同一条 editable 强制重装（完整机制见[运维](/zh/operations)）。
-`muyan-pilot doctor` 报告一致性
+`orbi doctor` 报告一致性
 （`cli_source: clean` 或 `cli_source: DRIFT` + 结构化 `cli_source_drift`
-行），`muyan-pilot setup` 幂等地校验或重装。发布包不携带第三方运行时
+行），`orbi setup` 幂等地校验或重装。发布包不携带第三方运行时
 依赖、token 或用户目录——配置文件和用户 systemd 目录保持机器本地。
-checkout 根目录**没有** `muyan_pilot.py`（与 package 同名的 flat 文件
+checkout 根目录**没有** `orbi.py`（与 package 同名的 flat 文件
 会遮蔽 checkout 根目录在 sys.path 上的一切进程的已安装 package）；
-直接执行入口 `python3 -m muyan_pilot.cli` 运行与 console script 完全
+直接执行入口 `python3 -m orbi.cli` 运行与 console script 完全
 相同的代码，保留为开发/兼容路径。
 
 ## 3. 创建配置
@@ -98,7 +98,7 @@ checkout 根目录**没有** `muyan_pilot.py`（与 package 同名的 flat 文�
 仓库带一份提交的 example；真实配置是本地状态（gitignored）。复制并编辑：
 
 ```bash
-cp .muyan-pilot.example.toml muyan-pilot.toml
+cp .orbi.example.toml orbi.toml
 ```
 
 全部字段（TOML，相对路径相对配置文件所在目录解析）：
@@ -106,7 +106,7 @@ cp .muyan-pilot.example.toml muyan-pilot.toml
 | 字段 | 必填 | 默认 | 含义 |
 |---|---|---|---|
 | `source_repos` | 是 | — | 每个 tick 按顺序扫描的 `owner/repo` 任务池列表（例如先你的 pilot 仓库，再你的 backlog 仓库） |
-| `repo_dir` | 否 | `.` | service 启动的 Runner checkout（`src/muyan_pilot/` package 所在目录） |
+| `repo_dir` | 否 | `.` | service 启动的 Runner checkout（`src/orbi/` package 所在目录） |
 | `workspace_root` | 否 | `..` | 包含任务 worktree 和 agent 可修改仓库的目录 |
 | `prompt` | 否 | `prompt.md` | 实现者 prompt 模板（`{{SOURCE_REPO}}` 等占位符由 Runner 渲染） |
 | `prompt_review` | 否 | `prompt_review.md` | PR 后独立审查 session 的 review prompt 模板 |
@@ -161,7 +161,7 @@ pi --print "reply with the single word: ok"
 
 把 `pi_providers` 指向一个 Pi 自己的 `models.json` 形状的 JSON 文件。
 每个 run 开始时 Runner 会物化一个 per-run agent 目录
-（`<worktree>/.muyan-pilot/pi-agent/`，gitignored），其 `models.json`
+（`<worktree>/.orbi/pi-agent/`，gitignored），其 `models.json`
 把你的用户 provider 与文件的 provider 合并（id 冲突时文件胜）——你
 已有的 provider 继续可用，文件只做添加或覆盖——并为该 run 选中配置
 的 provider/model。
@@ -216,12 +216,12 @@ pi --print "reply with the single word: ok"
 }
 ```
 
-然后在 `muyan-pilot.toml` 里选择 provider 和 model（Runner 会以
+然后在 `orbi.toml` 里选择 provider 和 model（Runner 会以
 `--provider groq --model qwen/qwen3.8-27b` 传给 Pi；设置
 `pi_thinking` 时再传 `--thinking <level>`）：
 
 ```toml
-pi_providers = ".muyan-pilot/pi-providers.json"
+pi_providers = ".orbi/pi-providers.json"
 pi_provider = "groq"
 pi_model = "qwen/qwen3.8-27b"
 ```
@@ -233,18 +233,18 @@ gitignored 状态目录的 env 文件里，由 systemd unit 在 service 启动�
 加载：
 
 ```bash
-mkdir -p .muyan-pilot
-cat > .muyan-pilot/env <<'EOF'
+mkdir -p .orbi
+cat > .orbi/env <<'EOF'
 GROQ_API_KEY=<your key value>
 EOF
-chmod 600 .muyan-pilot/env
+chmod 600 .orbi/env
 ```
 
 提交的 unit 模板已带
-`EnvironmentFile=-%h/Documents/muyan/muyan-pilot/.muyan-pilot/env`
+`EnvironmentFile=-%h/Documents/orbi/orbi/.orbi/env`
 （Issue #172）——如果你的 clone 在别处，像第 8 步的
 `WorkingDirectory` Note 一样，把**已安装** unit 的 `EnvironmentFile`
-指向**你的** `.muyan-pilot/env`。无 key 的本地 server 完全不需要 env
+指向**你的** `.orbi/env`。无 key 的本地 server 完全不需要 env
 文件（上面的 `"local"` 字面量占位即可通过形状检查）。
 
 #### Runner 校验什么（fail fast，在任何 slot/claim 之前）
@@ -274,7 +274,7 @@ python3、uv、systemd user session——缺失会 fail fast 并给出可执行�
 systemd user units 并 enable timer、检查 checkout、报告可选模型 proxy：
 
 ```bash
-muyan-pilot setup --config muyan-pilot.toml
+orbi setup --config orbi.toml
 ```
 
 它幂等（重复运行从不创建重复的标签、units 或 timer）且 fail-fast（仓库
@@ -286,11 +286,11 @@ muyan-pilot setup --config muyan-pilot.toml
 手工命令只用于首次验证和排查——正常运行由 timer 调度（第 8 步）：
 
 ```bash
-PYTHONPATH=src python3 -m muyan_pilot.runner --config muyan-pilot.toml
+PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
 ```
 
 （`PYTHONPATH=src` 把 checkout 的 `src/` layout 放进 import 路径；
-`-m` 运行 Runner package 模块——已安装的 `muyan-pilot` console script
+`-m` 运行 Runner package 模块——已安装的 `orbi` console script
 运行的是同一个 tick。）
 
 一个 tick 最多做一件事：恢复一个已打开的 PR（review/fix/merge），或
@@ -307,21 +307,21 @@ Milestone 的 Issue——Issue #139），然后退出。ready 队列为空时干
 ```bash
 # a. 向第一个配置的 source repo 派一个极小任务。
 #    `add` 一步完成创建 Issue 并加 ai-ready 标签。
-muyan-pilot add "Docs: verify smoke walkthrough" \
+orbi add "Docs: verify smoke walkthrough" \
   --body "Read README.md and confirm the smoke walkthrough commands exist." \
-  --config muyan-pilot.toml
+  --config orbi.toml
 
 # b. 看队列：新 Issue 已 ready。
-muyan-pilot status --config muyan-pilot.toml
+orbi status --config orbi.toml
 
 # c. 跑一个 tick：Runner 领取 Issue，在全新 worktree 里启动 Pi，
 #    朝 PR 推进。
-PYTHONPATH=src python3 -m muyan_pilot.runner --config muyan-pilot.toml
+PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
 
 # d. tick 运行期间跟实时活动（第二个终端）：
-journalctl --user -u muyan-pilot@1.service -u muyan-pilot@2.service -f
+journalctl --user -u orbi@1.service -u orbi@2.service -f
 # 或者对手工 tick 直接跟 session JSONL：
-muyan-pilot session --follow --config muyan-pilot.toml
+orbi session --follow --config orbi.toml
 
 # e. PR 打开后，Issue 带 ai-pr-opened，交付在后续 tick 继续
 #    （独立审查、会话内修复、merge）。在 GitHub 上看 Issue 和 PR。
@@ -337,10 +337,10 @@ tick（手工或 timer）里继续走独立审查和 merge。每个阶段都有�
 | 阶段 | 成功标准 | 在哪里检查 |
 |---|---|---|
 | 被领取 | Issue 标签 `ai-ready → ai-in-progress`；任务 worktree 和分支存在（都带 run id） | `gh issue view <n> --json labels`；journal `run_start run=<run_id> ...` |
-| 实现并测试 | Pi 在 worktree 里跑 TDD 循环；Issue 上唯一的 progress comment 报告 tests milestone | `muyan-pilot session --follow`；Issue 上的 progress comment |
+| 实现并测试 | Pi 在 worktree 里跑 TDD 循环；Issue 上唯一的 progress comment 报告 tests milestone | `orbi session --follow`；Issue 上的 progress comment |
 | PR 打开 | journal `run_end ... result=pr_opened pr=<url> commit=<sha>`；Issue 标签 `ai-pr-opened`；PR body 含 `Fixes #<n>` 和 run marker | `gh pr view <n> --json url,body` |
 | 独立审查 | 下一个 tick 恢复同一个 run；journal `review pr=<n> round=1 verdict=pass blockers=0 majors=0` | journal；PR |
-| 合并 | journal `merged pr=<n> head=<sha>`；PR 为 `MERGED` 且有 merge commit；Issue 标签 `ai-merged`，Issue 上有 `Muyan Pilot merged PR: ...` 评论 | `gh pr view <n> --json state,mergedAt,mergeCommit`；`gh issue view <n> --json state,labels` |
+| 合并 | journal `merged pr=<n> head=<sha>`；PR 为 `MERGED` 且有 merge commit；Issue 标签 `ai-merged`，Issue 上有 `Orbi merged PR: ...` 评论 | `gh pr view <n> --json state,mergedAt,mergeCommit`；`gh issue view <n> --json state,labels` |
 
 ```bash
 # 终态的两个只读检查：
@@ -362,14 +362,14 @@ session、phase、last activity、具体错误），journal 显示
 
 | 症状 | 证据 | 修复 |
 |---|---|---|
-| 启动在任何 slot/claim 前失败 | journal `API key for provider ... references missing environment variable GROQ_API_KEY`（只报变量**名**） | 把 key 值放进你的 `.muyan-pilot/env`（第 4 步），并确认已安装 unit 的 `EnvironmentFile` 指向它；手工 tick 则在 shell 里 export 该变量 |
-| 启动在 provider 文件上失败 | journal `pi_providers file ... is not valid JSON` / `is missing baseUrl` / `pi_provider ... is not defined` | 修 JSON（第 4 步契约：`providers` 对象、`baseUrl`、`api`、`models[].id`），重跑 `muyan-pilot setup` |
+| 启动在任何 slot/claim 前失败 | journal `API key for provider ... references missing environment variable GROQ_API_KEY`（只报变量**名**） | 把 key 值放进你的 `.orbi/env`（第 4 步），并确认已安装 unit 的 `EnvironmentFile` 指向它；手工 tick 则在 shell 里 export 该变量 |
+| 启动在 provider 文件上失败 | journal `pi_providers file ... is not valid JSON` / `is missing baseUrl` / `pi_provider ... is not defined` | 修 JSON（第 4 步契约：`providers` 对象、`baseUrl`、`api`、`models[].id`），重跑 `orbi setup` |
 | Pi 起来了但模型一直不响应 | session JSONL 停在 `model_wait`；死寂窗口（`model_wait_dead_seconds`，默认 1800 秒）后 journal 出现 `model_wait_dead` 行和 `run_failed ... reason=model_wait_dead_stale_...`（字段语义：[运维](/zh/operations)） | 模型请求挂死——模型 server/proxy 挂了、连接断了，或进程还活着但请求被挂住——用一次真实 `pi --print` 调用检查 endpoint，重启后重新派活（Issue 带现场 `ai-blocked`）；仍在生成的慢本地模型会存活过窗口（只有模型确实需要超过 30 分钟完整事件静默时才调大 `model_wait_dead_seconds`） |
 | PR 打开了但一直不 merge | Issue 标签 `ai-fix-needed`；审查 findings 在 Issue 和 PR 上 | 审查发现会话内修不掉的 Blocker/Major findings——下一个审查 session 重试**同一个** PR（上限 5 轮）；读 Issue 和 PR 上的 findings |
 | 审查循环耗尽轮数 | journal `review_rounds_exhausted issue=<n> rounds=5`；Issue **单独** `ai-blocked` | 有界循环是人工决策——读 findings，手工修 PR 或关闭；见[运维](/zh/operations) |
 | PR 落后于最新 base | Issue `ai-fix-needed`，review 评论说 PR 落后于最新 base 或有 merge 冲突 | 自动：下一个审查 session 在会话内把最新 `origin/<base>` merge 进分支、解冲突、重跑全量测试 |
-| 重启后 service 起不来 | `systemctl --user status muyan-pilot@1.service`；journal `unit_drift` / `cli_install_failed` / `transport_check_failed` 行 | 按结构化行处理：重跑 `muyan-pilot install-units`（unit 漂移）、它打印的精确重装命令（editable 安装过期）、或修 SSH transport（见[运维](/zh/operations)） |
-| `muyan-pilot doctor` 报告 `cli_source: DRIFT` | 结构化 `cli_source_drift` 行带精确重装命令 | 跑它打印的 `uv tool install --force --reinstall --editable ...` 命令（或 `muyan-pilot setup`） |
+| 重启后 service 起不来 | `systemctl --user status orbi@1.service`；journal `unit_drift` / `cli_install_failed` / `transport_check_failed` 行 | 按结构化行处理：重跑 `orbi install-units`（unit 漂移）、它打印的精确重装命令（editable 安装过期）、或修 SSH transport（见[运维](/zh/operations)） |
+| `orbi doctor` 报告 `cli_source: DRIFT` | 结构化 `cli_source_drift` 行带精确重装命令 | 跑它打印的 `uv tool install --force --reinstall --editable ...` 命令（或 `orbi setup`） |
 
 标签生命周期、journal 字段和恢复规则见[运维](/zh/operations)；
 review/merge 契约见[工作流](/zh/workflow)。
@@ -381,7 +381,7 @@ setup 已经安装 unit 模板，并按 `max_concurrency` enable timer 实例：
 实例——见[运维](/zh/operations)）；验证一下：
 
 ```bash
-systemctl --user list-timers 'muyan-pilot@*.timer'
+systemctl --user list-timers 'orbi@*.timer'
 ```
 
 setup 输出每个实例一行；启用的实例有 active 状态和下次触发时间，
@@ -392,11 +392,11 @@ fast-forward 和每实例启动语义定义在[运维](/zh/operations)（Timers�
 
 <Note>
 提交的 unit 模板通过 `%h` 占位符引用作者的 clone 布局
-（`%h/Documents/muyan/muyan-pilot`）。如果你的 clone 在别处，从**你**
+（`%h/Documents/orbi/orbi`）。如果你的 clone 在别处，从**你**
 的 clone 路径安装 CLI（第 2 步），并编辑你 user unit 目录
 （`~/.config/systemd/user/`）里**已安装**的 units，把
-`WorkingDirectory` 和 `MUYAN_PILOT_CONFIG` 指向**你的** clone 路径，
+`WorkingDirectory` 和 `ORBI_CONFIG` 指向**你的** clone 路径，
 然后 `systemctl --user daemon-reload`。`ExecStart` 是已安装的
-`muyan-pilot` CLI，保持相对名。仓库模板仍是其余一切的唯一事实源——
+`orbi` CLI，保持相对名。仓库模板仍是其余一切的唯一事实源——
 漂移检测见[运维](/zh/operations)。
 </Note>

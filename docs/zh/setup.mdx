@@ -1,12 +1,12 @@
 # 一次性 setup
 
-`muyan-pilot setup` 是新机器或新任务池仓库的一次性、配置驱动的初始化
+`orbi setup` 是新机器或新任务池仓库的一次性、配置驱动的初始化
 入口。它校验或重装 editable CLI 安装、验证本地前提、对齐平台标签、
 安装 systemd user units、检查 checkout、报告可选模型 proxy——一条
 命令，稳定的机器可读结果。
 
 ```bash
-muyan-pilot setup --config muyan-pilot.toml
+orbi setup --config orbi.toml
 ```
 
 每台机器运行一次（每个新任务池仓库再各运行一次）。它**幂等**：重复运行
@@ -18,7 +18,7 @@ setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下
 给出具体原因，退出码非零。
 
 1. **命令** — PATH 上有 `git`、`gh`、`python3`、`uv` 和已安装的
-   `muyan-pilot` CLI（这些前提由你自己安装——setup 只检查；缺失会
+   `orbi` CLI（这些前提由你自己安装——setup 只检查；缺失会
    fail fast 并给出可执行的安装指引，例如 `required command missing:
    uv (not on PATH) — install uv first: curl -LsSf
    https://astral.sh/uv/install.sh | sh`），且 `systemctl --user`
@@ -40,8 +40,8 @@ setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下
    - 八个平台标签从仓库根目录的 `labels.toml` **声明式**对齐——标签
      名/颜色/描述的唯一事实源：缺的创建、漂移的更新、从不删除，业务
      标签（`bug`、`enhancement`、...）从不被碰。
-5. **Systemd units** — 仓库模板（`systemd/muyan-pilot@.service`、
-   `systemd/muyan-pilot@.timer`）幂等安装到 user unit 目录（与
+5. **Systemd units** — 仓库模板（`systemd/orbi@.service`、
+   `systemd/orbi@.timer`）幂等安装到 user unit 目录（与
    `install-units` 相同的安装：复制、一次性迁移 #149 之前的非模板
    unit、`daemon-reload`、按 `max_concurrency` 启用 `@1`（值为 `1`）或
    `@1`/`@2`（值为 `2`），并停掉多余 timer——从不启动、停止或重启
@@ -73,7 +73,7 @@ setup 从不创建业务 Issue、从不领取任务、从不启动 Pi、从不�
 
 | 选项 | 含义 |
 |---|---|
-| `--config PATH` | `muyan-pilot.toml` 配置（默认：`$MUYAN_PILOT_CONFIG` 或 `muyan-pilot.toml`） |
+| `--config PATH` | `orbi.toml` 配置（默认：`$ORBI_CONFIG` 或 `orbi.toml`） |
 | `--repo OWNER/REPO` | 只初始化这个配置的 source repo（默认：每个配置的 source repo） |
 | `--installed-dir PATH` | user unit 目录（默认：标准 `~/.config/systemd/user`） |
 | `--json` | 以 JSON 而不是 `key=value` 行输出结果 |
@@ -85,16 +85,16 @@ agent 和脚本可以解析：
 
 ```text
 setup=ok version=2 base_branch=main
-cli=verified source=/path/to/checkout/src/muyan_pilot/__init__.py
+cli=verified source=/path/to/checkout/src/orbi/__init__.py
 repo=orbi-build/orbi permission=ADMIN default_branch=main labels=8/8
-service=installed path=~/.config/systemd/user/muyan-pilot@.service sha256=9f2c...
-timer=muyan-pilot@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
-timer=muyan-pilot@2.timer disabled active=false next="-"
+service=installed path=~/.config/systemd/user/orbi@.service sha256=9f2c...
+timer=orbi@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
+timer=orbi@2.timer disabled active=false next="-"
 checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:orbi-build/orbi.git protocol=ssh migrated=false ssh_reachable=true
 model_endpoint=optional optional_proxy=healthy url=http://127.0.0.1:18082/health
 ```
 
-`cli=verified` 表示运行中的 CLI 已经从部署 checkout 导入 `muyan_pilot`
+`cli=verified` 表示运行中的 CLI 已经从部署 checkout 导入 `orbi`
 （editable 安装就位）；`cli=installed` 表示 force editable 重装已执行。
 `labels=8/8` 表示八个平台标签都与 `labels.toml` 一致；`next` 是 timer
 的下次触发时间（没有时为 `-`）；`optional_proxy` 是 `healthy`、
@@ -105,7 +105,7 @@ setup 把 HTTPS `origin` 改写成了 SSH URL（重跑后报告 `migrated=false`
 `--json` 输出等价的 JSON 文档：
 
 ```bash
-muyan-pilot setup --config muyan-pilot.toml --json
+orbi setup --config orbi.toml --json
 ```
 
 ## 成功与失败示例
@@ -113,13 +113,13 @@ muyan-pilot setup --config muyan-pilot.toml --json
 成功（退出码 `0`）：
 
 ```bash
-$ muyan-pilot setup --config muyan-pilot.toml
+$ orbi setup --config orbi.toml
 setup=ok version=2 base_branch=main
-cli=verified source=/path/to/checkout/src/muyan_pilot/__init__.py
+cli=verified source=/path/to/checkout/src/orbi/__init__.py
 repo=orbi-build/orbi permission=ADMIN default_branch=main labels=8/8
-service=installed path=~/.config/systemd/user/muyan-pilot@.service sha256=9f2c...
-timer=muyan-pilot@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
-timer=muyan-pilot@2.timer disabled active=false next="-"
+service=installed path=~/.config/systemd/user/orbi@.service sha256=9f2c...
+timer=orbi@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
+timer=orbi@2.timer disabled active=false next="-"
 checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:orbi-build/orbi.git protocol=ssh migrated=false ssh_reachable=true
 model_endpoint=optional optional_proxy=unhealthy url=http://127.0.0.1:18082/health
 ```
@@ -136,7 +136,7 @@ setup_failed reason=editable tool install failed for /path/to/checkout: ... (fix
 setup_failed reason=repo not accessible: nobody/no-such (gh repo view failed: ...)
 setup_failed reason=insufficient permission for owner/repo: viewerPermission='READ' (one of ['ADMIN', 'MAINTAIN', 'WRITE'] required to manage labels)
 setup_failed reason=label alignment failed for owner/repo: ai-ready (gh label create failed: ...)
-setup_failed reason=checkout is not clean: /path/to/checkout (uncommitted changes: ' M src/muyan_pilot/runner.py') — commit or stash them first: ...
+setup_failed reason=checkout is not clean: /path/to/checkout (uncommitted changes: ' M src/orbi/runner.py') — commit or stash them first: ...
 setup_failed reason=checkout check failed for /path/to/checkout: ssh_unreachable: git ls-remote git@github.com:owner/repo.git failed: ... stderr=git@github.com: Permission denied (publickey). — fix SSH and retry
 ```
 

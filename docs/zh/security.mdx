@@ -46,12 +46,12 @@ Orbi 在你的机器上运行一个带 GitHub token 的自主 coding agent。
 
 Orbi 保留从不出机的本地状态：
 
-- **配置**（`muyan-pilot.toml`）：本地、gitignored。仓库只提交
-  example（`.muyan-pilot.example.toml`）。
+- **配置**（`orbi.toml`）：本地、gitignored。仓库只提交
+  example（`.orbi.example.toml`）。
 - **Run 产物**：plan、test log、session JSONL 和 review 证据在任务
   worktree（`.worktrees/...`，gitignored）。
-- **Slots**：`<repo_dir>/.muyan-pilot/slots/slot-N` 锁文件（通过
-  checkout 的 `.muyan-pilot/` 目录约定 gitignore）。
+- **Slots**：`<repo_dir>/.orbi/slots/slot-N` 锁文件（通过
+  checkout 的 `.orbi/` 目录约定 gitignore）。
 - **KV cache 文件**（仅当你运行可选的
   [local-llm-kv-cache](/zh/optional-kv-cache) proxy）：磁盘上的 prefix
   和 session KV 状态（例如 `~/.llama-slot-cache/*.bin`）包含从你的

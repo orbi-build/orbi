@@ -2,7 +2,7 @@
 
 Unit tests for the runner's resume path: an Issue in an opened-PR state
 (`ai-pr-opened` or `ai-fix-needed`) carries a run-scoped scene in its
-`Muyan Pilot opened PR:` comment. The next tick recovers run_id, branch,
+`Orbi opened PR:` comment. The next tick recovers run_id, branch,
 worktree and PR URL from that comment and resumes the delivery on the
 ORIGINAL branch, worktree and PR. Issue #82 removed the cold-start
 fixer: both states resume into the SAME independent review session,
@@ -16,13 +16,13 @@ from pathlib import Path
 
 import pytest
 
-import muyan_pilot.runner as runner
+import orbi.runner as runner
 from tests.test_progress_wiring import make_fake_gh
 
 
 FAKE_RUN_ID = "a1b2c3d4"
-FAKE_BRANCH = f"muyan-pilot/owner-repo-issue-9-{FAKE_RUN_ID}"
-FAKE_WORKTREE = "/srv/repo/.worktrees/muyan-pilot-owner-repo-issue-9-a1b2c3d4"
+FAKE_BRANCH = f"orbi/owner-repo-issue-9-{FAKE_RUN_ID}"
+FAKE_WORKTREE = "/srv/repo/.worktrees/orbi-owner-repo-issue-9-a1b2c3d4"
 FAKE_PR_URL = "https://github.com/owner/repo/pull/9"
 
 
@@ -40,14 +40,14 @@ def opened_pr_comment(run_id=FAKE_RUN_ID,
     # the runner from its own config and the run id, never parsed from a
     # comment (a public comment must not be able to name a local path).
     return (
-        f"<!-- muyan-pilot:run={run_id} -->\n"
-        f"Muyan Pilot opened PR: {pr_url} "
+        f"<!-- orbi:run={run_id} -->\n"
+        f"Orbi opened PR: {pr_url} "
         f"(base_branch={base_branch} base_sha={base_sha} run_id={run_id})"
     )
 
 
 def scene_for() -> dict:
-    # The scene recovered from the trusted `Muyan Pilot opened PR:`
+    # The scene recovered from the trusted `Orbi opened PR:`
     # comment. Branch and worktree are NOT part of it: the runner
     # derives them from its own config, the Issue number and the run id.
     return {
@@ -85,8 +85,8 @@ def test_parse_pr_comment_ignores_legacy_branch_and_worktree_fields():
 
 def test_parse_pr_comment_returns_none_for_started_comment():
     body = (
-        f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n"
-        f"Muyan Pilot started Pi: base_branch=main base_sha=abc123def456 "
+        f"<!-- orbi:run={FAKE_RUN_ID} -->\n"
+        f"Orbi started Pi: base_branch=main base_sha=abc123def456 "
         f"run_id={FAKE_RUN_ID} branch={FAKE_BRANCH} worktree={FAKE_WORKTREE}"
     )
     assert runner.parse_pr_comment(body) is None
@@ -94,8 +94,8 @@ def test_parse_pr_comment_returns_none_for_started_comment():
 
 def test_parse_pr_comment_returns_none_for_failed_comment():
     body = (
-        f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n"
-        f"Muyan Pilot failed: boom (base_branch=main base_sha=abc123def456 "
+        f"<!-- orbi:run={FAKE_RUN_ID} -->\n"
+        f"Orbi failed: boom (base_branch=main base_sha=abc123def456 "
         f"run_id={FAKE_RUN_ID})"
     )
     assert runner.parse_pr_comment(body) is None
@@ -149,7 +149,7 @@ def test_resume_scene_returns_latest_trusted_opened_pr_scene():
 
 def test_resume_scene_fails_fast_when_no_opened_pr_comment_exists():
     comments = [comment("no PR here")]
-    with pytest.raises(ValueError, match="no 'Muyan Pilot opened PR' comment"):
+    with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
         runner.resume_scene(comments)
 
 
@@ -173,7 +173,7 @@ def test_resume_scene_ignores_public_comment_with_scene():
     comments = [
         comment(opened_pr_comment(), association="NONE"),
     ]
-    with pytest.raises(ValueError, match="no 'Muyan Pilot opened PR' comment"):
+    with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
         runner.resume_scene(comments)
 
 
@@ -192,7 +192,7 @@ def test_resume_scene_ignores_comment_without_association():
     # A missing association is never trusted: only a positive trusted
     # value (OWNER/MAINTAINER/MEMBER/COLLABORATOR) passes.
     comments = [comment(opened_pr_comment(), association=None)]
-    with pytest.raises(ValueError, match="no 'Muyan Pilot opened PR' comment"):
+    with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
         runner.resume_scene(comments)
 
 
@@ -468,7 +468,7 @@ def test_pick_resumable_delivery_blocks_issue_without_scene_comment(
         ),
     )
     caplog.set_level("ERROR")
-    with pytest.raises(ValueError, match="no 'Muyan Pilot opened PR' comment"):
+    with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
         runner.pick_resumable_delivery(
             "owner/repo", tmp_path / "slots", 1,
         )
@@ -476,7 +476,7 @@ def test_pick_resumable_delivery_blocks_issue_without_scene_comment(
         "gh", "issue", "edit", "9", "--repo", "owner/repo",
         "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
     ]]
-    assert "Muyan Pilot failed:" in comments[0]
+    assert "Orbi failed:" in comments[0]
     assert "issue=9 resume scene is malformed" in caplog.text
 
 
@@ -505,7 +505,7 @@ def test_pick_resumable_delivery_blocks_issue_when_scene_is_malformed(
     comments: list[str] = []
     fake = make_pick_fake(
         issue_payload(),
-        gh_comments_payload(["Muyan Pilot opened PR: "
+        gh_comments_payload(["Orbi opened PR: "
                              "https://github.com/owner/repo/pull/9 "
                              "(base_branch=main base_sha=abc123def456)"
                              ]),
@@ -530,10 +530,10 @@ def test_pick_resumable_delivery_blocks_issue_when_scene_is_malformed(
     ]]
     # ...and a failure comment with the concrete reason...
     body = comments[0]
-    assert "Muyan Pilot failed:" in body
+    assert "Orbi failed:" in body
     assert "missing run_id" in body
     # ...but no run marker: no valid run id exists, so none is guessed.
-    assert "muyan-pilot:run=" not in body
+    assert "orbi:run=" not in body
     assert "issue=9 resume scene is malformed" in caplog.text
 
 
@@ -558,7 +558,7 @@ def test_pick_resumable_delivery_blocks_issue_when_no_trusted_scene(
 
     monkeypatch.setattr(runner, "run_command", counting)
     caplog.set_level("ERROR")
-    with pytest.raises(ValueError, match="no 'Muyan Pilot opened PR' comment"):
+    with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
         runner.pick_resumable_delivery(
             "owner/repo", tmp_path / "slots", 1,
         )
@@ -566,7 +566,7 @@ def test_pick_resumable_delivery_blocks_issue_when_no_trusted_scene(
         "gh", "issue", "edit", "9", "--repo", "owner/repo",
         "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
     ]]
-    assert "Muyan Pilot failed:" in comments[0]
+    assert "Orbi failed:" in comments[0]
     assert "issue=9 resume scene is malformed" in caplog.text
 
 
@@ -580,8 +580,8 @@ def test_pick_resumable_delivery_scene_failure_carries_marker_when_present(
     fake = make_pick_fake(
         issue_payload(),
         gh_comments_payload([
-            f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n"
-            "Muyan Pilot opened PR: "
+            f"<!-- orbi:run={FAKE_RUN_ID} -->\n"
+            "Orbi opened PR: "
             "https://github.com/owner/repo/pull/9 "
             "(base_branch=main base_sha=abc123def456)"
         ]),
@@ -597,7 +597,7 @@ def test_pick_resumable_delivery_scene_failure_carries_marker_when_present(
         runner.pick_resumable_delivery(
             "owner/repo", tmp_path / "slots", 1,
         )
-    assert f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->" in comments[0]
+    assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in comments[0]
 
 
 def test_pick_resumable_delivery_scene_failure_skips_bodyless_comments(
@@ -611,8 +611,8 @@ def test_pick_resumable_delivery_scene_failure_skips_bodyless_comments(
         json.dumps({"comments": [
             {
                 "body": (
-                    f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->\n"
-                    "Muyan Pilot opened PR: "
+                    f"<!-- orbi:run={FAKE_RUN_ID} -->\n"
+                    "Orbi opened PR: "
                     "https://github.com/owner/repo/pull/9 "
                     "(base_branch=main base_sha=abc123def456)"
                 ),
@@ -628,7 +628,7 @@ def test_pick_resumable_delivery_scene_failure_skips_bodyless_comments(
         runner.pick_resumable_delivery(
             "owner/repo", tmp_path / "slots", 1,
         )
-    assert f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->" in comments[0]
+    assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in comments[0]
 
 
 def test_pick_resumable_delivery_scene_failure_preserves_error_when_reporting_fails(
@@ -649,7 +649,7 @@ def test_pick_resumable_delivery_scene_failure_preserves_error_when_reporting_fa
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
-        ValueError, match="no 'Muyan Pilot opened PR' comment",
+        ValueError, match="no 'Orbi opened PR' comment",
     ):
         runner.pick_resumable_delivery(
             "owner/repo", tmp_path / "slots", 1,
@@ -670,7 +670,7 @@ def test_pick_next_delivery_stops_when_scene_is_malformed(
     """A malformed scene re-raises: the tick stops and no fresh task
     starts ahead of the broken delivery (round-5 review, Major 2)."""
     def broken(repo, slot_dir, max_concurrency):
-        raise ValueError("no 'Muyan Pilot opened PR' comment")
+        raise ValueError("no 'Orbi opened PR' comment")
 
     calls = []
     monkeypatch.setattr(runner, "pick_resumable_delivery", broken)
@@ -678,7 +678,7 @@ def test_pick_next_delivery_stops_when_scene_is_malformed(
         runner, "pick_issue",
         lambda repo, active_milestone=None: calls.append(("ready", repo)) or {"number": 10},
     )
-    with pytest.raises(ValueError, match="no 'Muyan Pilot opened PR' comment"):
+    with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
         runner.pick_next_delivery(
             ["owner/repo"], tmp_path / "slots", 1,
         )
@@ -839,7 +839,7 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
     waits = []
     for name in ("prompt.md", "prompt_review.md"):
         (tmp_path / name).write_text("prompt", encoding="utf-8")
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
@@ -880,7 +880,7 @@ def test_main_still_claims_new_issue_when_no_resumable(monkeypatch, tmp_path):
     processed = []
     for name in ("prompt.md", "prompt_review.md"):
         (tmp_path / name).write_text("prompt", encoding="utf-8")
-    config = tmp_path / "muyan-pilot.toml"
+    config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
@@ -1067,7 +1067,7 @@ def test_resume_failure_fake_answers_blocked_scene_and_rejects_other(
         "id": 77,
         "body": (
             f"{run_marker_body()}\n\n"
-            "**Muyan Pilot progress**\n\nawaiting review"
+            "**Orbi progress**\n\nawaiting review"
         ),
     }
     captured, fake_run = make_resume_failure_fake(
@@ -1249,7 +1249,7 @@ def test_verify_resumed_pr_backfill_label_api_failure_fails_fast(
     # The run-marked failure comment names the label API failure ...
     assert len(captured["comments"]) == 1
     body = captured["comments"][0][1]["body"]
-    assert "Muyan Pilot needs a fix:" in body
+    assert "Orbi needs a fix:" in body
     assert run_marker_body() in body
     assert "rate limited" in body
     # ... written to the Issue AND the PR (Issue #50) ...
@@ -1261,7 +1261,7 @@ def test_verify_resumed_pr_backfill_label_api_failure_fails_fast(
         for command in captured["api"]
         if "--method" in command and "POST" in command
     ]
-    assert any("Muyan Pilot: fix needed" in body for body in posted)
+    assert any("Orbi: fix needed" in body for body in posted)
     assert any("rate limited" in body for body in posted)
     assert "resume_pr_verification_failed" in caplog.text
 
@@ -1281,7 +1281,7 @@ def test_verify_resumed_pr_pr_url_mismatch_stays_fix_needed(
         "id": 77,
         "body": (
             f"{run_marker_body()}\n\n"
-            "**Muyan Pilot progress**\n\nawaiting review"
+            "**Orbi progress**\n\nawaiting review"
         ),
     }
     captured, _ = make_resume_failure_fake(
@@ -1321,7 +1321,7 @@ def test_verify_resumed_pr_pr_url_mismatch_stays_fix_needed(
     # ... with a run-marked failure comment that names the reason ...
     assert len(captured["comments"]) == 1
     body = captured["comments"][0][1]["body"]
-    assert "Muyan Pilot needs a fix:" in body
+    assert "Orbi needs a fix:" in body
     assert run_marker_body() in body
     assert "not the recovered original PR" in body
     # ... written to the Issue AND the PR (Issue #50) ...
@@ -1333,7 +1333,7 @@ def test_verify_resumed_pr_pr_url_mismatch_stays_fix_needed(
         for command in captured["api"]
         if "--method" in command and "POST" in command
     ]
-    assert any("Muyan Pilot: fix needed" in body for body in posted)
+    assert any("Orbi: fix needed" in body for body in posted)
     assert any("not the recovered original PR" in body for body in posted)
     # The tracked progress comment becomes the fix-needed scene in
     # place.
@@ -1345,7 +1345,7 @@ def test_verify_resumed_pr_pr_url_mismatch_stays_fix_needed(
     ]
     assert patches, "the tracked progress comment was not updated"
     fix_needed = patches[-1][patches[-1].index("--field") + 1][len("body="):]
-    assert "Muyan Pilot fix needed" in fix_needed
+    assert "Orbi fix needed" in fix_needed
     assert "next step:" in fix_needed
     assert "resume_pr_verification_failed" in caplog.text
 
@@ -1379,7 +1379,7 @@ def test_verify_resumed_pr_pr_repo_mismatch_stays_fix_needed(
                 "remove": "ai-pr-opened"}),
     ]
     body = captured["comments"][0][1]["body"]
-    assert "Muyan Pilot needs a fix:" in body
+    assert "Orbi needs a fix:" in body
     assert run_marker_body() in body
     assert "fork/repo" in body
     assert len(captured["pr_comments"]) == 1
@@ -1468,7 +1468,7 @@ def test_verify_resumed_pr_fails_fast_when_scene_base_differs(
                 "remove": "ai-pr-opened"}),
     ]
     body = captured["comments"][0][1]["body"]
-    assert "Muyan Pilot failed:" in body
+    assert "Orbi failed:" in body
     assert run_marker_body() in body
     assert "base_branch=develop" in body
     assert "base_branch=main" in body
@@ -1529,7 +1529,7 @@ def test_verify_resumed_pr_worktree_missing_stays_fix_needed(
                 "remove": "ai-pr-opened"}),
     ]
     body = captured["comments"][0][1]["body"]
-    assert "Muyan Pilot needs a fix:" in body
+    assert "Orbi needs a fix:" in body
     assert run_marker_body() in body
     assert str(expected_resume_worktree(tmp_path)) in body
     # The PR and branch are preserved in the failure comment (the
@@ -1544,8 +1544,8 @@ def test_verify_resumed_pr_worktree_missing_stays_fix_needed(
         for command in captured["api"]
         if "--method" in command and "POST" in command
     ]
-    assert any("Muyan Pilot: fix needed" in body for body in posted)
-    assert not any("Muyan Pilot: blocked" in body for body in posted)
+    assert any("Orbi: fix needed" in body for body in posted)
+    assert not any("Orbi: blocked" in body for body in posted)
     assert "resume_pr_verification_failed" in caplog.text
     # The fake proves the contract when called directly: verify_pr
     # must never run on a missing worktree.
@@ -1612,7 +1612,7 @@ def test_verify_resumed_pr_without_bound_run_id_still_fix_needed(
                 "remove": "ai-pr-opened"}),
     ]
     body = captured["comments"][0][1]["body"]
-    assert "Muyan Pilot needs a fix:" in body
+    assert "Orbi needs a fix:" in body
     # No run id: no marker, no milestone, no fix-needed progress scene
     # — the only gh traffic is the label read of the leftover-label
     # check and the PR failure comment (no progress API at all).
@@ -1623,4 +1623,4 @@ def test_verify_resumed_pr_without_bound_run_id_still_fix_needed(
 
 
 def run_marker_body() -> str:
-    return f"<!-- muyan-pilot:run={FAKE_RUN_ID} -->"
+    return f"<!-- orbi:run={FAKE_RUN_ID} -->"

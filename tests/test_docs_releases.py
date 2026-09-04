@@ -249,7 +249,7 @@ def test_release_v011_pages_state_that_they_correct_v010():
 
 def test_release_v012_pages_pin_the_real_tag_and_commit_and_mark_latest():
     """v0.1.2 is the LATEST release (the real GitHub Release
-    `Muyan Pilot v0.1.2`, published 2026-08-27): the pages must pin
+    `Orbi v0.1.2`, published 2026-08-27): the pages must pin
     the real tag object and commit and mark it as the latest release."""
     for rel in ("release-v0.1.2.mdx", "zh/release-v0.1.2.mdx"):
         text = (DOCS_DIR / rel).read_text(encoding="utf-8")

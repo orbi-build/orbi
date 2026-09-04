@@ -20,7 +20,7 @@ and every worktree inherits it.
 
 An existing HTTPS remote is never rewritten silently and never read
 from a comment or Issue body: only the human-run setup entry
-(`muyan-pilot setup`, `migrate=True`) migrates it with the plain
+(`orbi setup`, `migrate=True`) migrates it with the plain
 `git remote set-url origin <ssh-url>`; every other path fails fast
 with the exact migration command. A failed SSH probe (`git ls-remote`,
 verified against the real CLI: exit 0 = reachable and authenticated,
@@ -40,8 +40,8 @@ SSH_USER = "git"
 # separate pushurl is set).
 MIGRATION_COMMAND = "git remote set-url origin {url}"
 # The human-run entry that is authorized to perform the migration.
-# Issue #140: the official entry is the installed `muyan-pilot` CLI.
-MIGRATION_ENTRY = "muyan-pilot setup"
+# Issue #140: the official entry is the installed `orbi` CLI.
+MIGRATION_ENTRY = "orbi setup"
 
 
 class TransportError(RuntimeError):

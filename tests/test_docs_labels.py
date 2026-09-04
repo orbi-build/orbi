@@ -12,7 +12,7 @@ marker) is documented in docs/security.mdx / docs/workflow.mdx.
 import re
 from pathlib import Path
 
-import muyan_pilot.runner as runner
+import orbi.runner as runner
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 README = REPO_ROOT / "README.md"
@@ -103,9 +103,9 @@ def test_security_documents_recovery_scene_contract():
             f"docs/{slug} must say branch/worktree are derived"
         )
     # The scene comment prefix is the real code contract.
-    assert runner.OPENED_PR_PREFIX == "Muyan Pilot opened PR: "
+    assert runner.OPENED_PR_PREFIX == "Orbi opened PR: "
     # The PR body run marker is part of the documented contract.
-    assert "muyan-pilot:run=" in docs_page("workflow")
+    assert "orbi:run=" in docs_page("workflow")
 
 
 def test_workflow_documents_the_automatic_loop():
@@ -128,18 +128,18 @@ def test_workflow_documents_the_automatic_loop():
 
 def test_operations_documents_the_session_record():
     """Issue #49/#241: the session record is documented in
-    docs/operations.mdx — the `muyan-pilot session` command prints the
+    docs/operations.mdx — the `orbi session` command prints the
     live Pi session JSONL path (fail fast when no session exists) —
     and the code keeps the session in the task worktree's
     `.pi-session` directory (a resumed run starts a new session file
     there; the journal tracks the current invocation's session).
     """
     text = docs_page("operations")
-    assert "muyan-pilot session" in text
+    assert "orbi session" in text
     assert "JSONL" in text
     # The real session directory the code passes to Pi.
     assert ".pi-session" in text or ".pi-session" in (
-        (REPO_ROOT / "src" / "muyan_pilot" / "runner.py").read_text(encoding="utf-8")
+        (REPO_ROOT / "src" / "orbi" / "runner.py").read_text(encoding="utf-8")
     )
 
 

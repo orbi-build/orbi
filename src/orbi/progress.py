@@ -3,7 +3,7 @@
 
 The runner keeps exactly one live progress comment per run on the source
 Issue. The comment carries a hidden HTML run marker
-(`<!-- muyan-pilot:run=<run_id> -->`) so a restarted process finds the same
+(`<!-- orbi:run=<run_id> -->`) so a restarted process finds the same
 comment again and keeps PATCHing it in place — no database, no new
 heartbeat comments. Milestone events (started, plan ready, tests
 passed/failed, review findings, PR opened, merged, blocked)
@@ -20,13 +20,13 @@ import json
 from typing import Callable
 
 # One marker per run: hidden in the rendered comment, exact for lookup.
-RUN_MARKER_TEMPLATE = "<!-- muyan-pilot:run={run_id} -->"
+RUN_MARKER_TEMPLATE = "<!-- orbi:run={run_id} -->"
 # Standalone milestone comments share this prefix so they are recognizable.
-MILESTONE_PREFIX = "Muyan Pilot:"
+MILESTONE_PREFIX = "Orbi:"
 # The live progress comment carries this header; together with the run
 # marker it identifies the run's progress comment among the run's other
 # marker-carrying comments (started Pi / opened PR scenes, milestones).
-PROGRESS_HEADER = "**Muyan Pilot progress**"
+PROGRESS_HEADER = "**Orbi progress**"
 
 
 def run_marker(run_id: str) -> str:

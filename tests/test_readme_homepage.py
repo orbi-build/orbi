@@ -64,7 +64,7 @@ FORBIDDEN_MECHANISM_NEEDLES = (
     "--match-head-commit",
     "epic_not_claimed",
     "blockedBy",
-    "Muyan Pilot opened PR",
+    "Orbi opened PR",
     # label vocabulary beyond the one claim label the quickstart needs
     "ai-in-progress",
     "ai-pr-opened",
@@ -86,8 +86,8 @@ FORBIDDEN_MECHANISM_NEEDLES = (
     "max_concurrency",
     # stale deployment paths (Issue #152 / #103)
     "uv tool upgrade",
-    "python3 muyan_pilot.py",
-    "cp systemd/muyan-pilot.service",
+    "python3 orbi.py",
+    "cp systemd/orbi.service",
 )
 
 
@@ -166,10 +166,10 @@ def test_first_screen_says_what_orbi_is_and_how_to_start():
     assert "uv tool install --force --reinstall --editable" in head, (
         "the first screen must carry the CLI install command"
     )
-    assert "muyan-pilot setup" in head, (
+    assert "orbi setup" in head, (
         "the first screen must carry the one-time setup command"
     )
-    assert "muyan_pilot.runner" in head, (
+    assert "orbi.runner" in head, (
         "the first screen must carry the first-tick command (Issue #168 src layout)"
     )
 

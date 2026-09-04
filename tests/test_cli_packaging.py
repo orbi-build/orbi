@@ -1,21 +1,21 @@
 """CLI packaging contract (Issue #140).
 
-The official usage is the installed `muyan-pilot` console script
-(`muyan-pilot = muyan_pilot:main` in the PEP 621 `pyproject.toml`),
-not a hand-written `python3 muyan_pilot.py`. These tests pin:
+The official usage is the installed `orbi` console script
+(`orbi = orbi:main` in the PEP 621 `pyproject.toml`),
+not a hand-written `python3 orbi.py`. These tests pin:
 
 - the packaging file (console script, version, Python floor, the
   intentional zero runtime dependencies, and no hardcoded user
   directories/tokens in the release packaging);
 - the systemd service template's CLI entry (ExecStart = the installed
-  `muyan-pilot`, the uv-tool bin dir on the unit PATH, the unchanged
+  `orbi`, the uv-tool bin dir on the unit PATH, the unchanged
   WorkingDirectory and ExecStartPre);
 - the CLI command strings the failure scenes carry (the unit_drift
   fix command, the HTTPS-remote migration entry);
 - the documentation contract: the README quickstart, AGENTS.md and
-  the EN/ZH docs use `muyan-pilot` and no longer require the user to
-  hand-write `python3 muyan_pilot.py`;
-- the direct-execution path: `python3 -m muyan_pilot.cli` runs the
+  the EN/ZH docs use `orbi` and no longer require the user to
+  hand-write `python3 orbi.py`;
+- the direct-execution path: `python3 -m orbi.cli` runs the
   exact same code as the console script (development/compatibility,
   asserted against one real call).
 """
@@ -24,21 +24,21 @@ from pathlib import Path
 
 import pytest
 
-from muyan_pilot import git_transport
-from muyan_pilot import pilot_setup
-from muyan_pilot import systemd_deploy
+from orbi import git_transport
+from orbi import pilot_setup
+from orbi import systemd_deploy
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = REPO_ROOT / "pyproject.toml"
-SERVICE_FILE = REPO_ROOT / "systemd" / "muyan-pilot@.service"
+SERVICE_FILE = REPO_ROOT / "systemd" / "orbi@.service"
 README_FILE = REPO_ROOT / "README.md"
 AGENTS_FILE = REPO_ROOT / "AGENTS.md"
 
 # The runtime package (Issue #168 src layout): the installed console
-# script imports `muyan_pilot.cli`, and every runtime module lives in
+# script imports `orbi.cli`, and every runtime module lives in
 # this package — setuptools discovers it automatically, no hand-
 # maintained module list.
-RUNTIME_PACKAGE = "src/muyan_pilot"
+RUNTIME_PACKAGE = "src/orbi"
 RUNTIME_MODULES = (
     "cli",
     "runner",
@@ -95,19 +95,19 @@ def parse_unit(path: Path) -> dict[str, dict[str, list[str]]]:
 # --- the packaging file -------------------------------------------------------
 
 
-def test_pyproject_declares_the_muyan_pilot_console_script():
+def test_pyproject_declares_the_orbi_console_script():
     """Issue #140/#168: the console script is exactly
-    `muyan-pilot = muyan_pilot.cli:main` (the src-layout package)."""
+    `orbi = orbi.cli:main` (the src-layout package)."""
     data = load_pyproject()
-    assert data["project"]["scripts"]["muyan-pilot"] == (
-        "muyan_pilot.cli:main"
+    assert data["project"]["scripts"]["orbi"] == (
+        "orbi.cli:main"
     )
 
 
 def test_pyproject_project_metadata():
     data = load_pyproject()
     project = data["project"]
-    assert project["name"] == "muyan-pilot"
+    assert project["name"] == "orbi"
     assert project["version"] == "0.2.0"
     # The production interpreter is /usr/bin/python3 (3.14.6); the
     # package must not claim to run on an older minor version.
@@ -121,9 +121,9 @@ def test_version_matches_the_packaging_metadata():
     """The `--version` output and the PEP 621 `version` must agree
     (one source of truth, no drift between the module and the
     packaging file)."""
-    import muyan_pilot
+    import orbi
 
-    assert muyan_pilot.__version__ == load_pyproject()["project"]["version"]
+    assert orbi.__version__ == load_pyproject()["project"]["version"]
 
 
 def test_pyproject_builds_with_the_setuptools_backend():
@@ -146,7 +146,7 @@ def test_pyproject_discovers_the_src_package():
 
 def test_every_runtime_module_lives_in_the_package():
     """The installed console script imports the runtime package; every
-    runtime module must exist under `src/muyan_pilot/` so the `uv
+    runtime module must exist under `src/orbi/` so the `uv
     tool` install is complete (no module left behind at the repo
     root)."""
     package_dir = REPO_ROOT / RUNTIME_PACKAGE
@@ -159,7 +159,7 @@ def test_every_runtime_module_lives_in_the_package():
 def test_packaging_files_hardcode_no_user_dirs_or_tokens():
     """Issue #140: no dependency, token or user directory is hardcoded
     into the release packaging (the config path and the user unit dir
-    stay machine-local, provided by muyan-pilot.toml / the user's
+    stay machine-local, provided by orbi.toml / the user's
     systemd dir)."""
     forbidden = (
         "/home/",
@@ -167,8 +167,8 @@ def test_packaging_files_hardcode_no_user_dirs_or_tokens():
         "C:\\\\Users",
         "ghp_",
         "github_pat_",
-        "MUYAN_PILOT_CONFIG",
-        "MUYAN_PILOT_UNIT_DIR",
+        "ORBI_CONFIG",
+        "ORBI_UNIT_DIR",
     )
     for path in (PYPROJECT, REPO_ROOT / "requirements.txt"):
         text = path.read_text(encoding="utf-8")
@@ -183,12 +183,12 @@ def test_packaging_files_hardcode_no_user_dirs_or_tokens():
 
 
 def test_service_exec_start_uses_the_installed_cli():
-    """Issue #140: the service starts the installed `muyan-pilot` CLI
+    """Issue #140: the service starts the installed `orbi` CLI
     (the uv-tool console script in the user bin dir, as an explicit
     deployable absolute entry), not a hand-written
     `python3 .../bootstrap_runner.py`."""
     service = parse_unit(SERVICE_FILE)
-    assert service["Service"]["ExecStart"] == ["%h/.local/bin/muyan-pilot"]
+    assert service["Service"]["ExecStart"] == ["%h/.local/bin/orbi"]
 
 
 def test_service_keeps_working_directory_and_preflight():
@@ -198,7 +198,7 @@ def test_service_keeps_working_directory_and_preflight():
     service = parse_unit(SERVICE_FILE)
     section = service["Service"]
     assert section["WorkingDirectory"] == [
-        "%h/Documents/muyan/muyan-pilot",
+        "%h/Documents/orbi/orbi",
     ]
     pre = section["ExecStartPre"][0]
     assert pre.startswith("/usr/bin/timeout 90s /usr/bin/flock ")
@@ -208,11 +208,11 @@ def test_service_keeps_working_directory_and_preflight():
 
 def test_service_preflight_self_heals_the_editable_cli():
     """Issue #248: the #158 in-Runner refresh is unreachable when the
-    console script cannot even `import muyan_pilot` (the src-layout
+    console script cannot even `import orbi` (the src-layout
     migration of #168 left the installed editable finder stale, so the
     Runner died at the import stage before the refresh could run). The
     fix is a SECOND ExecStartPre line that self-heals OUTSIDE Python:
-    it probes the installed CLI (`muyan-pilot --version` succeeds iff
+    it probes the installed CLI (`orbi --version` succeeds iff
     the package imports) and, on probe failure, runs the exact editable
     force-reinstall (cli_source.reinstall_command) under the SAME
     base-sync flock the git sync uses."""
@@ -224,17 +224,17 @@ def test_service_preflight_self_heals_the_editable_cli():
     # The same timeout wrapper + shared lock as the git sync step.
     assert heal.startswith("/usr/bin/timeout 300s /usr/bin/flock ")
     assert (
-        "%h/Documents/muyan/muyan-pilot/.muyan-pilot/base-sync.lock"
+        "%h/Documents/orbi/orbi/.orbi/base-sync.lock"
         in heal
     )
     # The probe: the installed console script's `--version` succeeds iff
     # the package imports; its stdout/stderr are discarded.
-    assert "%h/.local/bin/muyan-pilot --version >/dev/null 2>&1" in heal
+    assert "%h/.local/bin/orbi --version >/dev/null 2>&1" in heal
     # The `||` fallback fires ONLY when the probe fails.
     assert " || " in heal
     # The fallback is the exact editable force-reinstall (the single
     # source of truth is cli_source.reinstall_command).
-    from muyan_pilot import cli_source
+    from orbi import cli_source
 
     # The systemd `%h` specifier is expanded by systemd before the
     # command runs, so the template carries the specifier, not the
@@ -243,12 +243,12 @@ def test_service_preflight_self_heals_the_editable_cli():
     reinstall_part = heal_argv.split("||", 1)[1].strip()
     assert reinstall_part == (
         "uv tool install --force --reinstall --editable "
-        "--python /usr/bin/python3 %h/Documents/muyan/muyan-pilot"
+        "--python /usr/bin/python3 %h/Documents/orbi/orbi"
     )
     # The reinstall argv is the same as the Python-side source of truth
     # (the path is the only difference: the template uses the %h
     # specifier, the Python command the resolved repo_dir).
-    py_args = cli_source.reinstall_args(Path("%h/Documents/muyan/muyan-pilot"))
+    py_args = cli_source.reinstall_args(Path("%h/Documents/orbi/orbi"))
     assert reinstall_part == " ".join(py_args)
 
 
@@ -270,7 +270,7 @@ def test_service_template_passes_systemd_analyze_verify():
     installed CLI at the unit's ExecStart path: the production machine
     via `uv tool install` and CI via the workflow's
     `pip install --prefix $HOME/.local .` (both land the executable at
-    `~/.local/bin/muyan-pilot`), so `systemd-analyze --user verify`
+    `~/.local/bin/orbi`), so `systemd-analyze --user verify`
     resolves the unit's absolute ExecStart against a real executable
     on both — no skip needed (a missing executable is exactly the
     failure this check must catch, never skippable noise)."""
@@ -291,17 +291,17 @@ def test_service_template_passes_systemd_analyze_verify():
 
 
 def test_unit_drift_fix_command_is_the_cli():
-    assert systemd_deploy.FIX_COMMAND == "muyan-pilot install-units"
+    assert systemd_deploy.FIX_COMMAND == "orbi install-units"
 
 
 def test_https_remote_migration_entry_is_the_cli():
-    assert git_transport.MIGRATION_ENTRY == "muyan-pilot setup"
+    assert git_transport.MIGRATION_ENTRY == "orbi setup"
 
 
 def test_setup_requires_the_installed_cli():
     """`setup` verifies the machine prerequisites; the installed CLI is
     one of them (the systemd entry it documents must exist)."""
-    assert "muyan-pilot" in pilot_setup.REQUIRED_COMMANDS
+    assert "orbi" in pilot_setup.REQUIRED_COMMANDS
     for name in ("git", "gh", "python3"):
         assert name in pilot_setup.REQUIRED_COMMANDS
     # Issue #156: setup calls `uv tool install` (the CLI editable step,
@@ -321,20 +321,20 @@ def test_readme_uses_the_cli_and_the_editable_uv_tool_install():
     the docs pages."""
     readme = README_FILE.read_text(encoding="utf-8")
     # The quickstart commands are the installed CLI.
-    assert "muyan-pilot setup" in readme
-    assert "muyan-pilot doctor" in readme
-    assert "muyan-pilot add" in readme
+    assert "orbi setup" in readme
+    assert "orbi doctor" in readme
+    assert "orbi add" in readme
     # Issue #152: the official local deployment is the EDITABLE uv
     # tool install.
     assert "uv tool install" in readme
     assert "--editable" in readme
     assert "uv tool install --force --reinstall --editable" in readme
     # The user is no longer required to hand-write the Python entry.
-    assert "python3 muyan_pilot.py" not in readme
-    # Issue #168: the runtime package lives in `src/muyan_pilot/` and
-    # the checkout root carries no `muyan_pilot.py` that could shadow
+    assert "python3 orbi.py" not in readme
+    # Issue #168: the runtime package lives in `src/orbi/` and
+    # the checkout root carries no `orbi.py` that could shadow
     # the installed package.
-    assert "src/muyan_pilot" in readme
+    assert "src/orbi" in readme
 
 
 def test_docs_document_the_full_cli_command_set():
@@ -343,9 +343,9 @@ def test_docs_document_the_full_cli_command_set():
     README homepage keeps the quickstart plus a one-sentence summary.
     """
     operations = (REPO_ROOT / "docs" / "operations.mdx").read_text(encoding="utf-8")
-    for command in ("muyan-pilot add", "muyan-pilot status",
-                    "muyan-pilot session", "muyan-pilot install-units",
-                    "muyan-pilot doctor", "muyan-pilot setup"):
+    for command in ("orbi add", "orbi status",
+                    "orbi session", "orbi install-units",
+                    "orbi doctor", "orbi setup"):
         assert command in operations, (
             f"docs/operations.mdx must document the {command} command"
         )
@@ -382,29 +382,29 @@ def test_docs_make_the_editable_install_the_official_deployment():
 
 def test_agents_md_uses_the_cli():
     text = AGENTS_FILE.read_text(encoding="utf-8")
-    assert "muyan-pilot install-units" in text
-    assert "muyan-pilot doctor" in text
-    assert "muyan-pilot setup" in text
-    assert "python3 muyan_pilot.py" not in text
+    assert "orbi install-units" in text
+    assert "orbi doctor" in text
+    assert "orbi setup" in text
+    assert "python3 orbi.py" not in text
 
 
 def test_docs_use_the_cli_and_never_require_the_python_entry():
     for slug in DOC_PAGES:
         page = (REPO_ROOT / "docs" / slug).read_text(encoding="utf-8")
-        assert "python3 muyan_pilot.py" not in page, (
+        assert "python3 orbi.py" not in page, (
             f"docs/{slug} still requires the hand-written Python entry"
         )
 
 
 def test_docs_getting_started_documents_the_cli_install():
     """A new user must find the `uv tool install` command and the
-    `muyan-pilot` CLI in the getting-started pages (EN + ZH)."""
+    `orbi` CLI in the getting-started pages (EN + ZH)."""
     for slug in ("getting-started.mdx", "zh/getting-started.mdx"):
         page = (REPO_ROOT / "docs" / slug).read_text(encoding="utf-8")
         assert "uv tool install" in page, (
             f"docs/{slug} must document the uv tool install"
         )
-        assert "muyan-pilot" in page, (
+        assert "orbi" in page, (
             f"docs/{slug} must name the installed CLI"
         )
 
@@ -412,7 +412,7 @@ def test_docs_getting_started_documents_the_cli_install():
 def test_docs_operations_name_the_cli():
     for slug in ("operations.mdx", "zh/operations.mdx"):
         page = (REPO_ROOT / "docs" / slug).read_text(encoding="utf-8")
-        assert "muyan-pilot" in page, f"docs/{slug} must name the CLI"
+        assert "orbi" in page, f"docs/{slug} must name the CLI"
         for command in ("status", "session", "add"):
             assert command in page, (
                 f"docs/{slug} must document the {command} command"
@@ -426,13 +426,13 @@ def test_bare_cli_runs_the_runner_tick(monkeypatch, tmp_path):
     """Issue #140 acceptance: `systemd 使用 CLI 入口可启动 Runner`.
 
     The service's `ExecStart` is the bare installed CLI (no
-    subcommand), so `muyan-pilot` with NO arguments must run one
+    subcommand), so `orbi` with NO arguments must run one
     Runner tick — exactly like the legacy `python3
     bootstrap_runner.py` — and must NOT die with the argparse error
     `the following arguments are required: command` (the pre-fix
     failure mode that made every timer tick exit 2 without ever
     starting the Runner)."""
-    import muyan_pilot.cli as muyan_pilot
+    import orbi.cli as orbi
 
     calls = []
 
@@ -441,10 +441,10 @@ def test_bare_cli_runs_the_runner_tick(monkeypatch, tmp_path):
         return 0
 
     monkeypatch.setattr(
-        muyan_pilot.runner, "main", fake_runner_main,
+        orbi.runner, "main", fake_runner_main,
     )
-    config = tmp_path / "muyan-pilot.toml"
-    assert muyan_pilot.main(["--config", str(config)]) == 0
+    config = tmp_path / "orbi.toml"
+    assert orbi.main(["--config", str(config)]) == 0
     assert calls == [["--config", str(config)]], (
         "the bare CLI must delegate to the Runner's main with the "
         f"same --config, got: {calls!r}"
@@ -452,19 +452,19 @@ def test_bare_cli_runs_the_runner_tick(monkeypatch, tmp_path):
 
 
 def test_bare_cli_default_config_delegates_to_the_runner(monkeypatch):
-    """`muyan-pilot` with no arguments at all uses the default config
-    path (MUYAN_PILOT_CONFIG / muyan-pilot.toml) and still delegates
+    """`orbi` with no arguments at all uses the default config
+    path (ORBI_CONFIG / orbi.toml) and still delegates
     to the Runner tick."""
-    import muyan_pilot.cli as muyan_pilot
+    import orbi.cli as orbi
 
     calls = []
     monkeypatch.setattr(
-        muyan_pilot.runner, "main",
+        orbi.runner, "main",
         lambda argv: calls.append(argv) or 7,
     )
-    monkeypatch.delenv("MUYAN_PILOT_CONFIG", raising=False)
-    assert muyan_pilot.main([]) == 7
-    assert calls == [["--config", "muyan-pilot.toml"]]
+    monkeypatch.delenv("ORBI_CONFIG", raising=False)
+    assert orbi.main([]) == 7
+    assert calls == [["--config", "orbi.toml"]]
 
 
 def test_bare_cli_real_call_reaches_the_runner_not_argparse(tmp_path):
@@ -475,9 +475,9 @@ def test_bare_cli_real_call_reaches_the_runner_not_argparse(tmp_path):
     import shutil
     import subprocess
 
-    cli = shutil.which("muyan-pilot")
+    cli = shutil.which("orbi")
     if cli is None:
-        pytest.skip("muyan-pilot CLI is not installed on this machine")
+        pytest.skip("orbi CLI is not installed on this machine")
     result = subprocess.run(
         [cli, "--config", str(tmp_path / "missing.toml")],
         capture_output=True, text=True, timeout=60,
@@ -504,7 +504,7 @@ def test_bare_cli_real_call_reaches_the_runner_not_argparse(tmp_path):
 
 def test_direct_execution_entry_stays():
     """Issue #140/#168: the direct-execution compatibility entry is
-    `python3 -m muyan_pilot.cli` — the exact same code the console
+    `python3 -m orbi.cli` — the exact same code the console
     script runs (the src-layout package, no fallback copy at the
     checkout root that could shadow the installed package)."""
     import os
@@ -514,12 +514,12 @@ def test_direct_execution_entry_stays():
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO_ROOT / "src")
     result = subprocess.run(
-        [sys.executable, "-m", "muyan_pilot.cli", "--help"],
+        [sys.executable, "-m", "orbi.cli", "--help"],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True,
         timeout=60,
     )
     assert result.returncode == 0, (
-        f"-m muyan_pilot.cli --help failed rc={result.returncode} "
+        f"-m orbi.cli --help failed rc={result.returncode} "
         f"stderr={result.stderr.strip()}"
     )
     for command in ("add", "status", "session", "install-units",
@@ -529,21 +529,21 @@ def test_direct_execution_entry_stays():
 
 def test_installed_cli_help_and_version_match_real_calls():
     """Issue #140 acceptance: in a clean environment the installed
-    `muyan-pilot --help` and `muyan-pilot --version` succeed — asserted
+    `orbi --help` and `orbi --version` succeed — asserted
     against real calls when the CLI is installed on this machine
     (skipped otherwise: the test suite must not require an install).
     The version output must carry the PEP 621 version."""
     import shutil
     import subprocess
 
-    cli = shutil.which("muyan-pilot")
+    cli = shutil.which("orbi")
     if cli is None:
-        pytest.skip("muyan-pilot CLI is not installed on this machine")
+        pytest.skip("orbi CLI is not installed on this machine")
     help_result = subprocess.run(
         [cli, "--help"], capture_output=True, text=True, timeout=60,
     )
     assert help_result.returncode == 0, (
-        f"muyan-pilot --help failed rc={help_result.returncode} "
+        f"orbi --help failed rc={help_result.returncode} "
         f"stderr={help_result.stderr.strip()}"
     )
     for command in ("add", "status", "session", "install-units",
@@ -553,7 +553,7 @@ def test_installed_cli_help_and_version_match_real_calls():
         [cli, "--version"], capture_output=True, text=True, timeout=60,
     )
     assert version_result.returncode == 0, (
-        f"muyan-pilot --version failed rc={version_result.returncode} "
+        f"orbi --version failed rc={version_result.returncode} "
         f"stderr={version_result.stderr.strip()}"
     )
     assert load_pyproject()["project"]["version"] in version_result.stdout
@@ -561,7 +561,7 @@ def test_installed_cli_help_and_version_match_real_calls():
 
 def test_compat_entry_help_matches_one_real_call():
     """The compatibility entry is asserted against one real call
-    (`python3 -m muyan_pilot.cli --help`), not a guessed shape: it must
+    (`python3 -m orbi.cli --help`), not a guessed shape: it must
     expose the same subcommands as the installed CLI."""
     import subprocess
     import sys
@@ -571,7 +571,7 @@ def test_compat_entry_help_matches_one_real_call():
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO_ROOT / "src")
     result = subprocess.run(
-        [sys.executable, "-m", "muyan_pilot.cli", "--help"],
+        [sys.executable, "-m", "orbi.cli", "--help"],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True,
         timeout=60,
     )

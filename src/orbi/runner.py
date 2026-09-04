@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot bootstrap runner for Muyan Pilot.
+"""One-shot bootstrap runner for Orbi.
 
 This is intentionally small. It claims one ready GitHub Issue, gives it to
 Pi in an isolated worktree, and accepts success only when one open PR exists.
@@ -45,19 +45,19 @@ from pathlib import Path
 
 # NOTE (Issue #158, root-caused by Issue #168): the editable CLI
 # install refresh below lives in THIS module: the bootstrap chain
-# (`muyan_pilot.cli` -> `muyan_pilot.runner`) must still LOAD in a
+# (`orbi.cli` -> `orbi.runner`) must still LOAD in a
 # tool env whose installed editable finder predates a packaging
 # change. Since the src layout (Issue #168) the finder maps the WHOLE
-# package directory `src/muyan_pilot/`, so a newly added package
+# package directory `src/orbi/`, so a newly added package
 # module is importable WITHOUT any reinstall — the #158 incident
 # class is fixed at the root. The refresh remains the safety net for
 # packaging-metadata changes (version, dependencies, entry points in
 # `pyproject.toml`). `cli_install` is a thin re-export of this
 # implementation for the tests only — the bootstrap chain never
 # imports it.
-from muyan_pilot.git_transport import TransportError, check_transport
-from muyan_pilot.pilot_slots import acquire_slot, slot_dir_for, slot_occupancy
-from muyan_pilot.pi_recovery import (
+from orbi.git_transport import TransportError, check_transport
+from orbi.pilot_slots import acquire_slot, slot_dir_for, slot_occupancy
+from orbi.pi_recovery import (
     clk_tck,
     find_idle_descendants,
     pid_alive,
@@ -67,7 +67,7 @@ from muyan_pilot.pi_recovery import (
     timeout_duration,
     upstream_alive,
 )
-from muyan_pilot.pi_activity import (
+from orbi.pi_activity import (
     SessionWatcher,
     activity_snapshot,
     format_duration,
@@ -76,8 +76,8 @@ from muyan_pilot.pi_activity import (
     quote_value,
     sanitize,
 )
-from muyan_pilot.progress import ProgressPublisher, format_elapsed, progress_body
-from muyan_pilot.systemd_deploy import (
+from orbi.progress import ProgressPublisher, format_elapsed, progress_body
+from orbi.systemd_deploy import (
     TIMER_INSTANCES,
     UnitDriftError,
     check_unit_drift,
@@ -85,7 +85,7 @@ from muyan_pilot.systemd_deploy import (
 )
 
 
-LOGGER = logging.getLogger("muyan_pilot.bootstrap")
+LOGGER = logging.getLogger("orbi.bootstrap")
 
 # Machine-readable verdict line the reviewer session must end with, and the
 # bounded size of the review/fix loop (see review-fix-loop skill: max 5 rounds).
@@ -333,7 +333,7 @@ def current_run_id() -> str | None:
 
 def run_marker(run_id: str) -> str:
     """Return the stable machine-readable run marker for GitHub text."""
-    return f"<!-- muyan-pilot:run={validate_run_id(run_id)} -->"
+    return f"<!-- orbi:run={validate_run_id(run_id)} -->"
 
 # Stop scene (Issue #48): when systemd (or any caller) stops the Runner
 # with SIGTERM, the journal must show which Issue context was active
@@ -526,7 +526,7 @@ def load_config(path: Path) -> dict:
     model_wait_probe_seconds = _model_wait_probe_seconds(data)
     # Optional Pi provider file (Issue #157): the provider metadata
     # (baseUrl / api / apiKey / models) lives in a separate JSON file in
-    # Pi's own `models.json` shape; `muyan-pilot.toml` only selects the
+    # Pi's own `models.json` shape; `orbi.toml` only selects the
     # provider/model/thinking used at runtime. Absent key -> None (Pi
     # keeps using its own agent dir, the exact pre-#157 behavior).
     pi_providers = _optional_pi_string(data, "pi_providers")
@@ -813,7 +813,7 @@ def prepare_pi_agent_dir(worktree: Path, config: dict) -> Path | None:
 
     Returns None when no provider file is configured — the Pi command
     and environment keep their exact pre-#157 shape (Pi uses its own
-    agent dir). Otherwise creates `<worktree>/.muyan-pilot/pi-agent/`
+    agent dir). Otherwise creates `<worktree>/.orbi/pi-agent/`
     (gitignored, per-run) and returns it:
 
     - `models.json`: the user agent dir's providers merged with the
@@ -857,7 +857,7 @@ def prepare_pi_agent_dir(worktree: Path, config: dict) -> Path | None:
     providers_data = config.get("pi_providers_data")
     if providers_data is None:
         return None
-    agent_dir = worktree / ".muyan-pilot" / "pi-agent"
+    agent_dir = worktree / ".orbi" / "pi-agent"
     agent_dir.mkdir(parents=True, exist_ok=True)
     user_agent = Path(os.path.expanduser("~")) / ".pi" / "agent"
     merged_providers: dict = {}
@@ -1720,7 +1720,7 @@ def create_repair_issue(*, repo: str, source_issue: int, run_id: str,
     signature = repair_signature(
         source_issue, run_id, release_commit, command, evidence,
     )
-    marker = f"muyan-pilot-repair-signature={signature}"
+    marker = f"orbi-repair-signature={signature}"
     raw = run_command([
         "timeout", str(REPAIR_ISSUE_TIMEOUT_SECONDS),
         "gh", "issue", "list", "--repo", repo, "--state", "all",
@@ -1847,7 +1847,7 @@ def publish_release(*, repo: str, tag: str, version: str,
         "",
         f"- {test_evidence}",
         "",
-        f"<!-- muyan-pilot:run={run_id} -->",
+        f"<!-- orbi:run={run_id} -->",
         f"run_id={run_id}",
     ])
     try:
@@ -1977,7 +1977,7 @@ def release_success_comment_body(run_id: str, run_info: str,
     """
     return "\n".join([
         run_marker(run_id),
-        f"Muyan Pilot released: {release_url}",
+        f"Orbi released: {release_url}",
         run_info,
         f"tag={tag} release_commit={release_commit}",
         "",
@@ -2012,7 +2012,7 @@ def release_failure_comment_body(run_id: str, run_info: str,
     """
     return "\n".join([
         run_marker(run_id),
-        "Muyan Pilot release failed (ai-blocked)",
+        "Orbi release failed (ai-blocked)",
         run_info,
         "",
         f"failure: {error}",
@@ -2118,7 +2118,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             run_id=run_id, issue=number, source_repo=source_repo,
             role=ROLE_RELEASE,
             action=lambda: publisher.milestone(
-                f"**Muyan Pilot release started**: {run_info}",
+                f"**Orbi release started**: {run_info}",
             ),
         )
         release_commit = freeze_base(config["repo_dir"], base_branch)
@@ -2133,7 +2133,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             run_id=run_id, issue=number, source_repo=source_repo,
             role=ROLE_RELEASE,
             action=lambda: publisher.milestone(
-                f"**Muyan Pilot release gates passed**: "
+                f"**Orbi release gates passed**: "
                 f"{'; '.join(gate_evidence)}",
             ),
         )
@@ -2146,7 +2146,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             run_id=run_id, issue=number, source_repo=source_repo,
             role=ROLE_RELEASE,
             action=lambda: publisher.milestone(
-                f"**Muyan Pilot release scope verified**: "
+                f"**Orbi release scope verified**: "
                 f"{'; '.join(scope_evidence)}",
             ),
         )
@@ -2171,7 +2171,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             run_id=run_id, issue=number, source_repo=source_repo,
             role=ROLE_RELEASE,
             action=lambda: publisher.milestone(
-                f"**Muyan Pilot release tests passed**: {test_evidence}",
+                f"**Orbi release tests passed**: {test_evidence}",
             ),
         )
         tag = declaration["version"]
@@ -2212,7 +2212,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             run_id=run_id, issue=number, source_repo=source_repo,
             role=ROLE_RELEASE,
             action=lambda: publisher.milestone(
-                f"**Muyan Pilot released**: {release_url}",
+                f"**Orbi released**: {release_url}",
             ),
         )
         edit_issue(
@@ -2483,7 +2483,7 @@ def freeze_base(repo_dir: Path, base_branch: str) -> str:
 
 def task_branch(source_repo: str, number: int, run_id: str) -> str:
     return (
-        f"muyan-pilot/{source_repo.replace('/', '-')}-issue-{number}-{run_id}"
+        f"orbi/{source_repo.replace('/', '-')}-issue-{number}-{run_id}"
     )
 
 
@@ -2492,7 +2492,7 @@ def started_pi_comment_body(run_id: str, run_info: str, branch: str,
     """The start comment doubles as the recoverable run scene (Issue #45)."""
     return (
         f"{run_marker(run_id)}\n"
-        f"Muyan Pilot started Pi: {run_info} branch={branch} "
+        f"Orbi started Pi: {run_info} branch={branch} "
         f"worktree={worktree}"
     )
 
@@ -2509,15 +2509,15 @@ def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str) -> str:
     """
     return (
         f"{run_marker(run_id)}\n"
-        f"Muyan Pilot opened PR: {pr_url} ({run_info})"
+        f"Orbi opened PR: {pr_url} ({run_info})"
     )
 
 
-OPENED_PR_PREFIX = "Muyan Pilot opened PR: "
+OPENED_PR_PREFIX = "Orbi opened PR: "
 
 
 def parse_pr_comment(body: str) -> dict | None:
-    """Parse one `Muyan Pilot opened PR:` comment into a resume scene.
+    """Parse one `Orbi opened PR:` comment into a resume scene.
 
     Returns None when the body is not an opened-PR comment. Fails fast
     when the comment is malformed: resuming must recover the exact run
@@ -2571,7 +2571,7 @@ def resume_scene(comments: list[dict]) -> dict:
         if scene is not None:
             return scene
     raise ValueError(
-        "no 'Muyan Pilot opened PR' comment from a trusted author; the "
+        "no 'Orbi opened PR' comment from a trusted author; the "
         "Issue cannot be resumed"
     )
 
@@ -2670,7 +2670,7 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
         body = comment.get("body")
         if not isinstance(body, str):
             continue
-        match = re.search(r"<!-- muyan-pilot:run=([0-9a-f]{8}) -->", body)
+        match = re.search(r"<!-- orbi:run=([0-9a-f]{8}) -->", body)
         if match:
             marker = run_marker(match.group(1))
             break
@@ -2690,11 +2690,11 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
             body=(
                 f"{marker}\n" if marker else ""
             ) + (
-                f"Muyan Pilot failed: {error}; this is an external "
+                f"Orbi failed: {error}; this is an external "
                 "precondition the AI cannot safely judge or fix, so "
                 "it cannot be recovered automatically (the Issue "
                 "stays ai-blocked until a human decides) — restore "
-                "the trusted 'Muyan Pilot opened PR' scene comment or "
+                "the trusted 'Orbi opened PR' scene comment or "
                 "relabel the Issue ai-fix-needed to resume this same PR"
             ),
         )
@@ -2750,7 +2750,7 @@ def worktree_path(repo_dir: Path, source_repo: str, number: int,
     slug = source_repo.replace("/", "-")
     return (
         repo_dir / ".worktrees"
-        / f"muyan-pilot-{slug}-issue-{number}-{run_id}"
+        / f"orbi-{slug}-issue-{number}-{run_id}"
     )
 
 
@@ -2781,11 +2781,11 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
 def run_state_path(worktree: Path) -> Path:
     """The run state file of one task worktree (Issue #219).
 
-    It lives in the gitignored `.muyan-pilot/` directory, so it never
+    It lives in the gitignored `.orbi/` directory, so it never
     dirties the commit boundary (Issue #186) and never reaches the
     delivery commit.
     """
-    return worktree / ".muyan-pilot" / "run-state.json"
+    return worktree / ".orbi" / "run-state.json"
 
 
 def write_run_state(worktree: Path, *, run_id: str, issue: int,
@@ -2921,7 +2921,7 @@ def worktree_resume_scene(repo_dir: Path, source_repo: str,
     """
     name = source_repo.rsplit("/", 1)[-1]
     pattern = re.compile(
-        r"^muyan-pilot-.+-issue-" + str(number) + r"-[0-9a-f]{8}$",
+        r"^orbi-.+-issue-" + str(number) + r"-[0-9a-f]{8}$",
     )
     candidates: list[Path] = []
     worktrees = repo_dir / ".worktrees"
@@ -2972,7 +2972,7 @@ def latest_run_id(repo_dir: Path, source_repo: str, number: int) -> str | None:
     discovery (`worktree_resume_scene`, Issue #219) instead.
     """
     slug = source_repo.replace("/", "-")
-    pattern = f".worktrees/muyan-pilot-{slug}-issue-{number}-*"
+    pattern = f".worktrees/orbi-{slug}-issue-{number}-*"
     candidates = [
         path for path in repo_dir.glob(pattern) if path.is_dir()
     ]
@@ -3964,7 +3964,7 @@ def run_ticket_agent(issue: dict, config: dict, source_repo: str,
     )
     # Pi's session is transient OS state, not a task worktree or repository
     # artifact. Its output and all terminal evidence are kept on the Issue.
-    with tempfile.TemporaryDirectory(prefix="muyan-pilot-ticket-") as directory:
+    with tempfile.TemporaryDirectory(prefix="orbi-ticket-") as directory:
         ticket_dir = Path(directory)
         session_dir = ticket_dir / ".pi-session"
         command = [
@@ -4029,7 +4029,7 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
         comment_issue(
             number, repo=source_repo,
             body=(f"{run_marker(run_id)}\n"
-                  f"Muyan Pilot ticket-only delivery (run_id={run_id}):\n\n"
+                  f"Orbi ticket-only delivery (run_id={run_id}):\n\n"
                   f"{output}"),
         )
         run_command(["gh", "issue", "close", str(number), "--repo", source_repo])
@@ -4046,7 +4046,7 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
                 issue=number, title=title, run_id=run_id, role=ROLE_TICKET,
                 branch="-", worktree=Path("-"), started=started, pr_url=None,
                 review_round=0, priority=priority,
-            ), outcome="**Muyan Pilot ticket-only delivered**")),
+            ), outcome="**Orbi ticket-only delivered**")),
         )
         LOGGER.info("run_end run=%s issue=%s role=%s result=ticket_only elapsed=%s",
                     run_id, issue_context(source_repo, number), ROLE_TICKET,
@@ -4061,7 +4061,7 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
             comment_issue(
                 number, repo=source_repo,
                 body=(f"{run_marker(run_id)}\n"
-                      f"Muyan Pilot ticket-only failed: {detail} ({run_info})\n"
+                      f"Orbi ticket-only failed: {detail} ({run_info})\n"
                       f"run_id={run_id}\n"
                       "No Git branch, commit, or PR was created."),
             )
@@ -4356,11 +4356,10 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
 # rename that file (the #246 brand-rename scene, run `b879a88c`), so the
 # Runner pins its own runtime paths in the worktree's LOCAL git exclude
 # (`.git/info/exclude`): git metadata that never enters an agent commit and
-# never depends on the task branch's content. The migration window keeps
-# BOTH the legacy state dir (`.muyan-pilot/`) and the renamed one
-# (`.orbi/`) excluded until the old runner/unit can no longer write the
-# legacy path.
-RUNNER_RUNTIME_EXCLUDES = (".muyan-pilot/", ".orbi/", ".pi-session/")
+# never depends on the task branch's content. The #246 rename converged the
+# legacy state dir onto `.orbi/`, so the migration window is closed and a
+# single pattern covers it.
+RUNNER_RUNTIME_EXCLUDES = (".orbi/", ".pi-session/")
 
 
 def runner_runtime_exclude_path(worktree: Path) -> Path:
@@ -4449,7 +4448,7 @@ def cleanup_task_worktree(worktree: Path, repo_dir: Path, *, run_id: str,
     (Issue #256).
 
     Called ONLY on the terminal `ai-blocked` outcome AFTER the Issue
-    evidence (journal line + `Muyan Pilot failed` comment) is recorded.
+    evidence (journal line + `Orbi failed` comment) is recorded.
     A retry generates a NEW run id and a NEW worktree, so the terminal
     scene is never needed again; the recoverable `ai-fix-needed` /
     model_wait paths keep the worktree for the same-run resume and must
@@ -4734,7 +4733,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
                         number, repo=source_repo, remove=FIX_NEEDED_LABEL,
                     )
                 body = (
-                    f"Muyan Pilot failed: the resume verification of "
+                    f"Orbi failed: the resume verification of "
                     f"PR {scene['pr_url']} failed: {detail}; this is an "
                     "external precondition the AI cannot safely judge "
                     "or fix, so it cannot be recovered automatically "
@@ -4756,7 +4755,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
                     remove=PR_OPENED_LABEL,
                 )
                 body = (
-                    f"Muyan Pilot needs a fix: the resume verification "
+                    f"Orbi needs a fix: the resume verification "
                     f"of PR {scene['pr_url']} failed: {detail}; the "
                     "Issue stays ai-fix-needed and the next tick "
                     "resumes the same run, branch, worktree and PR"
@@ -5187,7 +5186,7 @@ def review_rounds_so_far(comments: list[dict]) -> int:
     """Count the review rounds already recorded on the Issue.
 
     Each round with Blocker/Major findings posts one
-    `Muyan Pilot review round N for PR #...` comment, so the GitHub
+    `Orbi review round N for PR #...` comment, so the GitHub
     record alone bounds the loop (GitHub Issues are the only state
     store; a runner restart never loses the count). Only trusted
     maintainer comments count: a public comment cannot exhaust the
@@ -5201,7 +5200,7 @@ def review_rounds_so_far(comments: list[dict]) -> int:
         if not isinstance(body, str):
             continue
         for line in body.splitlines():
-            if line.startswith("Muyan Pilot review round "):
+            if line.startswith("Orbi review round "):
                 rounds += 1
                 break
     return rounds
@@ -5215,7 +5214,7 @@ def review_rounds_so_far(comments: list[dict]) -> int:
 # #152): the tool env imports the runtime package directly from the
 # deployment checkout through a setuptools editable finder. Since the
 # src layout (Issue #168) the finder maps the WHOLE package directory
-# `src/muyan_pilot/` — a newly added package module needs NO reinstall
+# `src/orbi/` — a newly added package module needs NO reinstall
 # (the #158 stale-module-list incident class is gone at the root). The
 # remaining packaging inputs come from the checkout's `pyproject.toml`
 # (entry points, version, dependencies): when THEY change the installed
@@ -5231,7 +5230,7 @@ def review_rounds_so_far(comments: list[dict]) -> int:
 #   `pyproject.toml` — the packaging input that decides the editable
 #   metadata) is compared against the fingerprint of the LAST
 #   successful install, stored in the shared state dir
-#   (`.muyan-pilot/cli-install.json` — the same gitignored dir as
+#   (`.orbi/cli-install.json` — the same gitignored dir as
 #   `base-sync.lock` and the slots, which survives the
 #   `git merge --ff-only` checkout sync). It is NOT a second release
 #   state: it only records which packaging input the installed tool
@@ -5256,7 +5255,7 @@ def review_rounds_so_far(comments: list[dict]) -> int:
 # imported lazily inside `refresh_cli_install`: the reinstall argv is
 # the single cross-module dependency (Issue #152's verified command).
 
-CLI_INSTALL_LOGGER = logging.getLogger("muyan_pilot.cli_install")
+CLI_INSTALL_LOGGER = logging.getLogger("orbi.cli_install")
 
 # The uv install timeout (seconds): a local editable build of this
 # zero-dependency package takes seconds; a hang (a wedged uv or a
@@ -5293,7 +5292,7 @@ def base_sync_lock_path(repo_dir: Path) -> Path:
     prompt-side fetch) races on that one ref and fails with
     ``cannot lock ref ... is at <X> but expected <Y>``.
     """
-    return Path(repo_dir) / ".muyan-pilot" / BASE_SYNC_LOCK_NAME
+    return Path(repo_dir) / ".orbi" / BASE_SYNC_LOCK_NAME
 
 
 def acquire_base_sync_lock(
@@ -5367,7 +5366,7 @@ def packaging_fingerprint(repo_dir: Path) -> str:
     metadata (the entry points, the version, the dependencies) — so
     its content hash is the refresh trigger. Ordinary Python source
     content is NOT part of it: since the src layout (Issue #168) the
-    editable finder maps the WHOLE `src/muyan_pilot/` package
+    editable finder maps the WHOLE `src/orbi/` package
     directory, so a newly added package module needs no reinstall
     (the whole point of the editable install, Issue #152). A checkout
     without `pyproject.toml` cannot be tool-installed: fail fast,
@@ -5386,12 +5385,12 @@ def packaging_fingerprint(repo_dir: Path) -> str:
 def install_state_path(repo_dir: Path) -> Path:
     """The last-install fingerprint record in the shared state dir.
 
-    `<repo_dir>/.muyan-pilot/cli-install.json` — the EXISTING shared
+    `<repo_dir>/.orbi/cli-install.json` — the EXISTING shared
     state dir (gitignored, next to `base-sync.lock` and the slots;
     it survives the `git merge --ff-only` checkout sync). Not a second
     release state and not a per-process temp file.
     """
-    return Path(repo_dir) / ".muyan-pilot" / "cli-install.json"
+    return Path(repo_dir) / ".orbi" / "cli-install.json"
 
 
 def read_install_state(repo_dir: Path) -> str | None:
@@ -5479,7 +5478,7 @@ def refresh_cli_install(
         reason = "first_install" if (
             read_install_state(repo_dir) is None
         ) else "packaging_changed"
-        from muyan_pilot import cli_source  # lazy: the single cross-module dependency
+        from orbi import cli_source  # lazy: the single cross-module dependency
         try:
             run_command(
                 cli_source.reinstall_args(repo_dir),
@@ -5673,7 +5672,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         )
         body = (
             f"{marker}\n"
-            f"Muyan Pilot review round {round} for PR #{pr['number']}: "
+            f"Orbi review round {round} for PR #{pr['number']}: "
             f"{verdict['blockers']} blocker(s), {verdict['majors']} "
             "major(s). Findings: "
             + json.dumps(verdict["findings"], ensure_ascii=False)
@@ -5703,7 +5702,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                     pr_url=pr["url"], review_round=round,
                     priority=priority,
                 ), outcome=(
-                    "**Muyan Pilot review findings**\n\n"
+                    "**Orbi review findings**\n\n"
                     f"round {round}: {verdict['blockers']} blocker(s), "
                     f"{verdict['majors']} major(s); the next review "
                     "session retries the same PR automatically"
@@ -5744,7 +5743,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             raise
         body = (
             f"{marker}\n"
-            f"Muyan Pilot review round {round} for PR #{pr['number']}: "
+            f"Orbi review round {round} for PR #{pr['number']}: "
             "the PR is behind the latest base or has a merge conflict; "
             f"the next review session merges the latest "
             f"origin/{base_branch} into the branch in-session, resolves "
@@ -5783,7 +5782,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                 pr_url=merged["url"], review_round=round,
                 priority=priority,
             ), outcome=(
-                "**Muyan Pilot delivered**\n\n"
+                "**Orbi delivered**\n\n"
                 f"PR {merged['url']} merged "
                 f"(merge_commit={confirmed['merge_commit']} "
                 f"review_rounds={round})"
@@ -5801,7 +5800,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         number, repo=source_repo,
         body=(
             f"{marker}\n"
-            f"Muyan Pilot merged PR: {merged['url']} "
+            f"Orbi merged PR: {merged['url']} "
             f"(merge_commit={confirmed['merge_commit']} "
             f"review_rounds={round} "
             f"base_branch={base_branch} run_id={config['run_id']})"
@@ -6133,7 +6132,7 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
         number, repo=source_repo,
         body=(
             f"{run_marker(run_id)}\n"
-            f"Muyan Pilot failed: cannot continue the interrupted run: "
+            f"Orbi failed: cannot continue the interrupted run: "
             f"{_failure_detail(error)} (run_id={run_id})"
         ),
     )
@@ -6241,7 +6240,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
     )
     worktree: Path | None = None
     started = time.monotonic()
-    # Issue #79: the `Muyan Pilot opened PR:` scene comment is the first
+    # Issue #79: the `Orbi opened PR:` scene comment is the first
     # delivery step AFTER the opened-PR label transition that can still
     # fail; when it does, the failure path below must leave the Issue in
     # the terminal state `ai-blocked` ALONE (docs/workflow.mdx label
@@ -6356,7 +6355,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
         # tick's resume (Issue #45/#89) parses it to recover run_id,
         # base and PR, so a failure here is a real delivery failure —
         # it propagates into the failure path below (ai-blocked, the
-        # `Muyan Pilot failed` comment, re-raise). The `ProgressPublisher`
+        # `Orbi failed` comment, re-raise). The `ProgressPublisher`
         # steps around it stay bypass: a failure there (Issue #60: the
         # #57 delivered PATCH 404'd and the runner labeled the Issue
         # ai-blocked, skipping the review of a valid PR) is logged as
@@ -6381,7 +6380,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
                 role=ROLE_IMPLEMENT, branch=branch,
                 worktree=worktree, started=started,
                 pr_url=pr_url, review_round=0, priority=priority,
-            ), outcome="**Muyan Pilot delivered**")),
+            ), outcome="**Orbi delivered**")),
         )
         LOGGER.info(
             "run_end %s",
@@ -6407,7 +6406,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
         detail = _failure_detail(exc)
         body = (
             f"{run_marker(run_id)}\n"
-            f"Muyan Pilot model_wait recovered: {detail}; the run is "
+            f"Orbi model_wait recovered: {detail}; the run is "
             "recoverable — the Issue stays ai-in-progress and the next "
             f"tick resumes the same run ({run_info})"
         )
@@ -6433,7 +6432,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
                 worktree=worktree, started=started,
                 pr_url=None, review_round=0, priority=priority,
             ), outcome=(
-                "**Muyan Pilot model_wait recovered**\n\n"
+                "**Orbi model_wait recovered**\n\n"
                 f"failure: {detail}\n"
                 "next step: nothing — the Issue stays ai-in-progress "
                 "and the next tick resumes the same run (same run id, "
@@ -6485,7 +6484,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
             detail = _failure_detail(exc)
             body = (
                 f"{run_marker(run_id)}\n"
-                f"Muyan Pilot failed: {detail} ({run_info})"
+                f"Orbi failed: {detail} ({run_info})"
             )
             if scene:
                 body += f" {scene}"
@@ -6515,7 +6514,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
                             pr_url=None, review_round=0,
                             priority=priority,
                         ), outcome=(
-                            "**Muyan Pilot blocked**\n\n"
+                            "**Orbi blocked**\n\n"
                             f"failure: {detail}\n"
                             "next step: fix the failure above and "
                             "re-run this Issue (a new run id is "
@@ -6527,7 +6526,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
             LOGGER.exception("issue=%s failure reporting failed", number)
         else:
             # Issue #256: the terminal evidence is recorded (journal +
-            # `Muyan Pilot failed` comment) and the Issue is genuinely
+            # `Orbi failed` comment) and the Issue is genuinely
             # `ai-blocked` — the scene is never needed again (a retry
             # gets a new run id and worktree), so clean it up. The
             # recoverable paths (ModelWaitDeadError, ai-fix-needed) and
@@ -6540,7 +6539,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
                     issue=number,
                 )
         # Issue #239: the failure is terminal — the Issue is `ai-blocked`
-        # and the `Muyan Pilot failed` comment is posted above. Returning
+        # and the `Orbi failed` comment is posted above. Returning
         # `None` ends the tick cleanly: `main` skips the delivery wait
         # (there is no PR) and the slot is released by its `finally`.
         # Re-raising here would escape `main` and crash the service on an
@@ -6634,7 +6633,7 @@ def _finish_blocked_progress(
         started=time.monotonic(), pr_url=pr_url,
         review_round=review_round, priority=priority,
     ), outcome=(
-        "**Muyan Pilot blocked**\n\n"
+        "**Orbi blocked**\n\n"
         f"failure: {detail}\n"
         f"next step: {next_step}"
     )))
@@ -6674,7 +6673,7 @@ def _finish_fix_needed_progress(
         started=time.monotonic(), pr_url=pr_url,
         review_round=review_round, priority=priority,
     ), outcome=(
-        "**Muyan Pilot fix needed**\n\n"
+        "**Orbi fix needed**\n\n"
         f"failure: {detail}\n"
         "next step: the next tick resumes the same run, branch, "
         "worktree and PR automatically (the Issue stays ai-fix-needed)"
@@ -6760,7 +6759,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     number, repo=source_repo, remove=FIX_NEEDED_LABEL,
                 )
             body = (
-                f"Muyan Pilot failed: PR {pr_url} was closed without "
+                f"Orbi failed: PR {pr_url} was closed without "
                 "a merge; the delivery is terminally failed"
             )
             if marker:
@@ -6861,7 +6860,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                         f"the resume scene is unrecoverable "
                         f"({scene_exc}); the runner cannot derive "
                         "run_id, branch, worktree or PR without the "
-                        "trusted 'Muyan Pilot opened PR' comment, so "
+                        "trusted 'Orbi opened PR' comment, so "
                         "it cannot start a review session; a human "
                         "must restore the scene comment or relabel "
                         "the Issue"
@@ -6948,7 +6947,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                             remove=FIX_NEEDED_LABEL,
                         )
                     body = (
-                        f"Muyan Pilot failed: the independent review of "
+                        f"Orbi failed: the independent review of "
                         f"PR {pr_url} failed: {detail}; this is an "
                         "external precondition the AI cannot safely "
                         "judge or fix, so it cannot be recovered "
@@ -7020,7 +7019,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     remove=PR_OPENED_LABEL,
                 )
                 body = (
-                    f"Muyan Pilot needs a fix: the independent review of "
+                    f"Orbi needs a fix: the independent review of "
                     f"PR {pr_url} failed: {detail}; the Issue stays "
                     "ai-fix-needed and the next tick resumes the same "
                     "run, branch, worktree and PR"
@@ -7114,7 +7113,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--config", type=Path,
-        default=Path(os.environ.get("MUYAN_PILOT_CONFIG", "muyan-pilot.toml")),
+        default=Path(os.environ.get("ORBI_CONFIG", "orbi.toml")),
     )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format=log_format())

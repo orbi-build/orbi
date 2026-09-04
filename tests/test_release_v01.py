@@ -11,7 +11,7 @@ the REAL git history and the REAL CLI:
   repository — a record that guessed the relationship would fail;
 - every #80 checklist item has a conclusive verdict in the record
   (MERGED with PR evidence, verified incomplete, or excluded);
-- the ``muyan_pilot.py session`` CLI contract the record cites is
+- the ``orbi.py session`` CLI contract the record cites is
   asserted against one real call (``session --help``), not against a
   guessed shape.
 """
@@ -157,12 +157,12 @@ def test_git_helper_fails_fast_on_nonzero_exit():
 def test_session_cli_contract_matches_one_real_call():
     """Issue #74/#97: the record cites the `session` CLI — assert the
     real contract with one real call (verified against the actual
-    `python3 -m muyan_pilot.cli session --help` output, Issue #168
+    `python3 -m orbi.cli session --help` output, Issue #168
     src layout), not a guessed shape."""
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO_ROOT / "src")
     result = subprocess.run(
-        [sys.executable, "-m", "muyan_pilot.cli", "session", "--help"],
+        [sys.executable, "-m", "orbi.cli", "session", "--help"],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True,
     )
     assert result.returncode == 0, (

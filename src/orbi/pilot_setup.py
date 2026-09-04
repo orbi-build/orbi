@@ -1,12 +1,12 @@
-"""One-time setup for Muyan Pilot (Issue #117).
+"""One-time setup for Orbi (Issue #117).
 
-`muyan-pilot setup` is the config-driven, idempotent, fail-fast
+`orbi setup` is the config-driven, idempotent, fail-fast
 initialization entry for a new machine or new task-pool repository:
 
 - verifies ``gh auth status`` and the viewer's read/write permission on
   every target repo;
 - verifies the required commands (``git``, ``gh``, ``python3``, ``uv``,
-  the ``muyan-pilot`` CLI — a missing one fails fast with its
+  the ``orbi`` CLI — a missing one fails fast with its
   actionable install guidance) and the ``systemctl --user`` user bus;
 - aligns the platform labels (``ai-ready``, ``ai-in-progress``,
   ``ai-pr-opened``, ``ai-fix-needed``, ``ai-merged``, ``ai-blocked``,
@@ -40,11 +40,11 @@ import shutil
 import tomllib
 from pathlib import Path
 
-from muyan_pilot import runner
-from muyan_pilot import cli_source
-from muyan_pilot import git_transport
-from muyan_pilot import systemd_deploy
-from muyan_pilot.pi_activity import quote_value
+from orbi import runner
+from orbi import cli_source
+from orbi import git_transport
+from orbi import systemd_deploy
+from orbi.pi_activity import quote_value
 
 # Bumped whenever the setup output contract changes shape.
 # Issue #152 added the `cli=` line (the editable install step).
@@ -79,13 +79,13 @@ COLOR_PATTERN = re.compile(r"^[0-9a-fA-F]{6}$")
 WRITE_PERMISSIONS = frozenset({"WRITE", "MAINTAIN", "ADMIN"})
 
 # Required local commands (checked with shutil.which). Issue #140:
-# the installed `muyan-pilot` CLI is a prerequisite too — the systemd
+# the installed `orbi` CLI is a prerequisite too — the systemd
 # entry it documents (and the service's ExecStart) must exist.
 # Issue #156: `uv` is a prerequisite too — the CLI editable step
 # (Issue #152) calls `uv tool install`, so a machine that has the CLI
 # but no uv must fail HERE (with actionable install guidance), not
 # mid-install with an indirect error.
-REQUIRED_COMMANDS = ("git", "gh", "python3", "uv", "muyan-pilot")
+REQUIRED_COMMANDS = ("git", "gh", "python3", "uv", "orbi")
 
 # Actionable install guidance per required command (Issue #156): the
 # missing-command error must tell the user how to install the
@@ -108,7 +108,7 @@ COMMAND_INSTALL_HINTS = {
         "install uv first: curl -LsSf https://astral.sh/uv/install.sh | sh "
         "(https://docs.astral.sh/uv/getting-started/installation/)"
     ),
-    "muyan-pilot": (
+    "orbi": (
         "install the editable uv tool CLI from the deployment checkout: "
         "uv tool install --force --reinstall --editable --python "
         "/usr/bin/python3 <repo_dir>"
@@ -203,8 +203,8 @@ def install_cli_step(repo_dir: Path, module_file: Path, *,
     """Install or verify the editable uv tool install (Issue #152).
 
     The official local deployment is the EDITABLE tool install: the
-    tool env imports the ``muyan_pilot`` package from the deployment
-    checkout (the editable finder maps the whole ``src/muyan_pilot/``
+    tool env imports the ``orbi`` package from the deployment
+    checkout (the editable finder maps the whole ``src/orbi/``
     package directory, Issue #168), so the ``ExecStartPre`` checkout
     sync is picked up by the NEXT CLI process automatically (no
     per-version reinstall, no second copy of the source in
@@ -243,7 +243,7 @@ def check_commands(run_command) -> dict:
     """Verify the required commands and the systemctl --user bus.
 
     ``git``, ``gh``, ``python3``, ``uv`` and the installed
-    ``muyan-pilot`` CLI must be on the PATH (Issue #156: ``uv`` is
+    ``orbi`` CLI must be on the PATH (Issue #156: ``uv`` is
     checked explicitly because the CLI editable step calls
     ``uv tool install``); a missing command fails fast with the
     actionable install guidance for that command (``COMMAND_INSTALL_
@@ -262,7 +262,7 @@ def check_commands(run_command) -> dict:
             )
         paths[name] = path
     # Probe an INSTANCE name (verified against the real CLI: `systemctl
-    # show` rejects the bare template name `muyan-pilot@.timer` but
+    # show` rejects the bare template name `orbi@.timer` but
     # accepts instance names, exiting 0 with `not-found` before the
     # units are installed — the probe only needs the user bus).
     probe = [
@@ -409,7 +409,7 @@ def timer_next_trigger(list_timers_output: str, unit_name: str) -> str:
 
     ``systemctl --user list-timers --no-pager`` prints a header line
     (``NEXT  LEFT ...``) followed by one row per timer; the row whose
-    UNIT column is the given instance (e.g. ``muyan-pilot@1.timer``)
+    UNIT column is the given instance (e.g. ``orbi@1.timer``)
     carries the next trigger time.
     """
     for line in list_timers_output.splitlines():

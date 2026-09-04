@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-import muyan_pilot.runner as runner
+import orbi.runner as runner
 
 
 def git(repo: Path, *args: str) -> str:
@@ -101,11 +101,11 @@ def install_fake_gh(monkeypatch, clone: Path, pr_json: str) -> list:
 
 
 def test_merge_gate_merges_head_containing_latest_base(clone, monkeypatch):
-    git(clone, "checkout", "-b", "muyan-pilot/owner-repo-issue-4-run1")
+    git(clone, "checkout", "-b", "orbi/owner-repo-issue-4-run1")
     head_oid = commit_file(clone, "delivery.txt", "delivery")
     pr = {"number": 4, "url": "u", "base_ref": "main",
           "base_oid": git(clone, "rev-parse", "origin/main"),
-          "head_ref": "muyan-pilot/owner-repo-issue-4-run1",
+          "head_ref": "orbi/owner-repo-issue-4-run1",
           "head_oid": head_oid}
     commands = install_fake_gh(monkeypatch, clone, make_pr(head_oid))
     merged = runner.merge_gate(clone, pr, "main", repo_dir=clone)
@@ -136,14 +136,14 @@ def test_merge_gate_merges_head_containing_latest_base(clone, monkeypatch):
 
 def test_merge_gate_rejects_head_behind_latest_base(clone, monkeypatch, caplog):
     # Delivery branch is based on the first commit only.
-    git(clone, "checkout", "-b", "muyan-pilot/owner-repo-issue-4-run1",
+    git(clone, "checkout", "-b", "orbi/owner-repo-issue-4-run1",
         git(clone, "rev-parse", "origin/main~1"))
     head_oid = commit_file(clone, "delivery.txt", "delivery")
     # Remote main advances after the delivery was created.
     git(clone, "checkout", "main")
     commit_file(clone, "advance.txt", "main advanced")
     git(clone, "push", "origin", "main")
-    git(clone, "checkout", "muyan-pilot/owner-repo-issue-4-run1")
+    git(clone, "checkout", "orbi/owner-repo-issue-4-run1")
 
     real_run = runner.run_command
     commands: list = []
@@ -157,7 +157,7 @@ def test_merge_gate_rejects_head_behind_latest_base(clone, monkeypatch, caplog):
     monkeypatch.setattr(runner, "run_command", fake_run)
     pr = {"number": 4, "url": "u", "base_ref": "main",
           "base_oid": git(clone, "rev-parse", "origin/main~1"),
-          "head_ref": "muyan-pilot/owner-repo-issue-4-run1",
+          "head_ref": "orbi/owner-repo-issue-4-run1",
           "head_oid": head_oid}
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="behind latest remote base",
@@ -194,11 +194,11 @@ def test_deployment_checkout_fast_forwards_after_independent_merge(
 
     # Delivery branch in the worktree clone; the fake `gh pr merge`
     # (the independent merge actor) lands the merge on origin/main.
-    git(clone, "checkout", "-b", "muyan-pilot/owner-repo-issue-4-run1")
+    git(clone, "checkout", "-b", "orbi/owner-repo-issue-4-run1")
     head_oid = commit_file(clone, "delivery.txt", "delivery")
     pr = {"number": 4, "url": "u", "base_ref": "main",
           "base_oid": git(clone, "rev-parse", "origin/main"),
-          "head_ref": "muyan-pilot/owner-repo-issue-4-run1",
+          "head_ref": "orbi/owner-repo-issue-4-run1",
           "head_oid": head_oid}
     install_fake_gh(monkeypatch, clone, make_pr(head_oid))
     merged = runner.merge_gate(clone, pr, "main", repo_dir=clone)

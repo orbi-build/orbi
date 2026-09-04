@@ -9,19 +9,19 @@ import json
 
 import pytest
 
-from muyan_pilot import progress
+from orbi import progress
 
 
 def test_run_marker_is_hidden_html_comment_with_run_id():
     marker = progress.run_marker("abc123")
-    assert marker == "<!-- muyan-pilot:run=abc123 -->"
+    assert marker == "<!-- orbi:run=abc123 -->"
 
 
 def test_find_run_comment_returns_comment_carrying_the_marker():
     comments = [
-        {"id": 1, "body": "Muyan Pilot started Pi: ..."},
-        {"id": 2, "body": "<!-- muyan-pilot:run=abc123 -->\n**progress**"},
-        {"id": 3, "body": "another run <!-- muyan-pilot:run=other -->"},
+        {"id": 1, "body": "Orbi started Pi: ..."},
+        {"id": 2, "body": "<!-- orbi:run=abc123 -->\n**progress**"},
+        {"id": 3, "body": "another run <!-- orbi:run=other -->"},
     ]
     found = progress.find_run_comment(comments, "abc123")
     assert found == comments[1]
@@ -29,16 +29,16 @@ def test_find_run_comment_returns_comment_carrying_the_marker():
 
 def test_find_run_comment_returns_none_when_marker_absent():
     comments = [
-        {"id": 1, "body": "Muyan Pilot started Pi: ..."},
-        {"id": 2, "body": "<!-- muyan-pilot:run=other -->"},
+        {"id": 1, "body": "Orbi started Pi: ..."},
+        {"id": 2, "body": "<!-- orbi:run=other -->"},
     ]
     assert progress.find_run_comment(comments, "abc123") is None
 
 
 def test_find_run_comment_returns_first_match_for_duplicate_markers():
     comments = [
-        {"id": 1, "body": "<!-- muyan-pilot:run=abc123 -->first"},
-        {"id": 2, "body": "<!-- muyan-pilot:run=abc123 -->second"},
+        {"id": 1, "body": "<!-- orbi:run=abc123 -->first"},
+        {"id": 2, "body": "<!-- orbi:run=abc123 -->second"},
     ]
     assert progress.find_run_comment(comments, "abc123")["id"] == 1
 
@@ -208,13 +208,13 @@ def test_progress_body_starts_with_hidden_run_marker():
         "last_action": "bash pytest tests/",
         "tests": "156 passed",
         "review_round": 0,
-        "branch": "muyan-pilot/xqliu-muyan-pilot-issue-18-abc123",
+        "branch": "orbi/xqliu-orbi-issue-18-abc123",
         "pr": None,
         "session": "sess-1",
     })
     lines = body.splitlines()
-    assert lines[0] == "<!-- muyan-pilot:run=abc123 -->"
-    assert "**Muyan Pilot progress**" in body
+    assert lines[0] == "<!-- orbi:run=abc123 -->"
+    assert "**Orbi progress**" in body
     assert "- issue: #18 Publish progress" in body
     assert "- role: implement" in body
     assert "- phase: test" in body
@@ -223,7 +223,7 @@ def test_progress_body_starts_with_hidden_run_marker():
     assert "- last action: bash pytest tests/" in body
     assert "- tests: 156 passed" in body
     assert "- review/fix round: 0" in body
-    assert "- branch: muyan-pilot/xqliu-muyan-pilot-issue-18-abc123" in body
+    assert "- branch: orbi/xqliu-orbi-issue-18-abc123" in body
     assert "- PR: -" in body
     assert "- session: sess-1" in body
 
@@ -263,11 +263,11 @@ def test_progress_body_shows_pr_url_when_present():
         "tests": None,
         "review_round": 1,
         "branch": "b",
-        "pr": "https://github.com/xqliu/muyan-pilot/pull/40",
+        "pr": "https://github.com/xqliu/orbi/pull/40",
         "session": None,
     })
     assert (
-        "- PR: https://github.com/xqliu/muyan-pilot/pull/40" in body
+        "- PR: https://github.com/xqliu/orbi/pull/40" in body
     )
     assert "- review/fix round: 1" in body
 
@@ -354,7 +354,7 @@ def make_publisher(run_command=None, comments=None, posted=None,
         return ""
 
     publisher = progress.ProgressPublisher(
-        18, "xqliu/muyan-pilot", "abc123",
+        18, "xqliu/orbi", "abc123",
         run_command=fake_run_command,
     )
     return publisher, calls
@@ -366,11 +366,11 @@ def test_publisher_ensure_creates_comment_when_marker_missing():
     assert comment_id == 42
     assert publisher.comment_id == 42
     assert calls[0] == [
-        "gh", "api", "repos/xqliu/muyan-pilot/issues/18/comments",
+        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
         "--paginate",
     ]
     assert calls[1] == [
-        "gh", "api", "repos/xqliu/muyan-pilot/issues/18/comments",
+        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
         "--method", "POST", "--field", "body=initial body",
     ]
 
@@ -379,8 +379,8 @@ def test_publisher_ensure_patches_existing_progress_comment():
     existing = {
         "id": 7,
         "body": (
-            "<!-- muyan-pilot:run=abc123 -->\n\n"
-            "**Muyan Pilot progress**\n\n- issue: #18"
+            "<!-- orbi:run=abc123 -->\n\n"
+            "**Orbi progress**\n\n- issue: #18"
         ),
     }
     publisher, calls = make_publisher(comments=[
@@ -392,11 +392,11 @@ def test_publisher_ensure_patches_existing_progress_comment():
     assert publisher.comment_id == 7
     assert calls == [
         [
-            "gh", "api", "repos/xqliu/muyan-pilot/issues/18/comments",
+            "gh", "api", "repos/xqliu/orbi/issues/18/comments",
             "--paginate",
         ],
         [
-            "gh", "api", "repos/xqliu/muyan-pilot/issues/comments/7",
+            "gh", "api", "repos/xqliu/orbi/issues/comments/7",
             "--method", "PATCH", "--field", "body=new body",
         ],
     ]
@@ -406,29 +406,29 @@ def test_publisher_ensure_never_hijacks_scene_comments():
     # The run's scene comments (started Pi / opened PR) and milestones
     # carry the run marker too: ensure must create a fresh progress
     # comment instead of PATCHing one of them (Issue #18).
-    scene = {"id": 3, "body": "<!-- muyan-pilot:run=abc123 -->started Pi"}
+    scene = {"id": 3, "body": "<!-- orbi:run=abc123 -->started Pi"}
     milestone = {
         "id": 4,
-        "body": "<!-- muyan-pilot:run=abc123 -->Muyan Pilot: started",
+        "body": "<!-- orbi:run=abc123 -->Orbi: started",
     }
     publisher, calls = make_publisher(comments=[scene, milestone])
     comment_id = publisher.ensure("initial body")
     assert comment_id == 42
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/muyan-pilot/issues/18/comments",
+        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
         "--method", "POST", "--field", "body=initial body",
     ]
 
 
 def test_find_progress_comment_requires_marker_and_header():
     comments = [
-        {"id": 1, "body": "<!-- muyan-pilot:run=abc123 -->scene"},
-        {"id": 2, "body": "**Muyan Pilot progress**"},
+        {"id": 1, "body": "<!-- orbi:run=abc123 -->scene"},
+        {"id": 2, "body": "**Orbi progress**"},
         {
             "id": 3,
             "body": (
-                "<!-- muyan-pilot:run=abc123 -->\n\n"
-                "**Muyan Pilot progress**"
+                "<!-- orbi:run=abc123 -->\n\n"
+                "**Orbi progress**"
             ),
         },
         {"id": 4},
@@ -449,15 +449,15 @@ def test_publisher_patch_updates_the_tracked_comment():
         {
             "id": 7,
             "body": (
-                "<!-- muyan-pilot:run=abc123 -->\n\n"
-                "**Muyan Pilot progress**"
+                "<!-- orbi:run=abc123 -->\n\n"
+                "**Orbi progress**"
             ),
         },
     ])
     publisher.ensure("old")
     publisher.patch("updated body")
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/muyan-pilot/issues/comments/7",
+        "gh", "api", "repos/xqliu/orbi/issues/comments/7",
         "--method", "PATCH", "--field", "body=updated body",
     ]
 
@@ -472,21 +472,21 @@ def test_publisher_patch_uses_the_github_update_comment_endpoint():
         {
             "id": 7,
             "body": (
-                "<!-- muyan-pilot:run=abc123 -->\n\n"
-                "**Muyan Pilot progress**"
+                "<!-- orbi:run=abc123 -->\n\n"
+                "**Orbi progress**"
             ),
         },
     ])
     publisher.ensure("old")
     publisher.patch("updated body")
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/muyan-pilot/issues/comments/7",
+        "gh", "api", "repos/xqliu/orbi/issues/comments/7",
         "--method", "PATCH", "--field", "body=updated body",
     ]
     # List/create keep the issue-scoped endpoint (that route is correct
     # for GET and POST).
     assert calls[0] == [
-        "gh", "api", "repos/xqliu/muyan-pilot/issues/18/comments",
+        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
         "--paginate",
     ]
 
@@ -503,11 +503,11 @@ def test_publisher_milestone_posts_short_standalone_comment():
     publisher.milestone("tests passed")
     assert calls == [
         [
-            "gh", "api", "repos/xqliu/muyan-pilot/issues/18/comments",
+            "gh", "api", "repos/xqliu/orbi/issues/18/comments",
             "--method", "POST",
             "--field",
-            "body=<!-- muyan-pilot:run=abc123 -->\n"
-            "Muyan Pilot: tests passed run_id=abc123",
+            "body=<!-- orbi:run=abc123 -->\n"
+            "Orbi: tests passed run_id=abc123",
         ],
     ]
     # A milestone never touches the tracked progress comment.
@@ -542,15 +542,15 @@ def test_publisher_finish_patches_final_summary_into_tracked_comment():
         {
             "id": 7,
             "body": (
-                "<!-- muyan-pilot:run=abc123 -->\n\n"
-                "**Muyan Pilot progress**"
+                "<!-- orbi:run=abc123 -->\n\n"
+                "**Orbi progress**"
             ),
         },
     ])
     publisher.ensure("old")
     publisher.finish("final delivery summary")
     assert calls[-1] == [
-        "gh", "api", "repos/xqliu/muyan-pilot/issues/comments/7",
+        "gh", "api", "repos/xqliu/orbi/issues/comments/7",
         "--method", "PATCH", "--field", "body=final delivery summary",
     ]
 

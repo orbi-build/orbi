@@ -53,17 +53,17 @@ jobs:
 
       # CLI packaging (Issue #140, #152): the console script must
       # install in a clean environment and the entry must work
-      # (`muyan-pilot --help` and `muyan-pilot --version`, exit 0).
+      # (`orbi --help` and `orbi --version`, exit 0).
       # The packaging file is the PEP 621 pyproject.toml.
       #
       # The install uses the DOCUMENTED production flow — the EDITABLE
       # uv tool install (Issue #152), not a plain `pip install .` and
       # not a non-editable `uv tool install`: uv tool places the
-      # executable at ~/.local/bin/muyan-pilot (the same path the
-      # service template's ExecStart %h/.local/bin/muyan-pilot uses, so
+      # executable at ~/.local/bin/orbi (the same path the
+      # service template's ExecStart %h/.local/bin/orbi uses, so
       # the real `systemd-analyze --user verify` test resolves the
       # unit's absolute ExecStart against the real executable here),
-      # and --editable makes the tool env import `muyan_pilot` from
+      # and --editable makes the tool env import `orbi` from
       # the checkout instead of copying the source into site-packages —
       # the official local deployment, where the ExecStartPre checkout
       # sync is picked up by the next CLI process automatically.
@@ -75,26 +75,26 @@ jobs:
       - name: Install the CLI (uv tool EDITABLE, the documented flow) and verify the entry and import source (Issue #140, #152)
         run: |
           uv tool install --force --reinstall --editable --python 3.14 .
-          ~/.local/bin/muyan-pilot --help
-          ~/.local/bin/muyan-pilot --version
+          ~/.local/bin/orbi --help
+          ~/.local/bin/orbi --version
           # Issue #152/#168: the editable install must import the
-          # `muyan_pilot` package from the checkout's `src/` layout
+          # `orbi` package from the checkout's `src/` layout
           # (not a site-packages copy): the tool env's python (the
           # console script's own interpreter, from its shebang)
           # reports the import source and it must sit inside
-          # `$GITHUB_WORKSPACE/src/muyan_pilot/`. The probe runs from
+          # `$GITHUB_WORKSPACE/src/orbi/`. The probe runs from
           # a NEUTRAL cwd (`cd /`): `python -c` puts the cwd first on
           # sys.path, so the probe must never depend on the checkout
           # cwd (the package lives in `src/`; the checkout root
-          # carries no `muyan_pilot.py` that could shadow it).
-          tool_python=$(head -n 1 ~/.local/bin/muyan-pilot | sed 's/^#!//')
-          source_path=$(cd / && "$tool_python" -c "import muyan_pilot; print(muyan_pilot.__file__)")
+          # carries no `orbi.py` that could shadow it).
+          tool_python=$(head -n 1 ~/.local/bin/orbi | sed 's/^#!//')
+          source_path=$(cd / && "$tool_python" -c "import orbi; print(orbi.__file__)")
           case "$source_path" in
-            "$GITHUB_WORKSPACE"/src/muyan_pilot/*)
+            "$GITHUB_WORKSPACE"/src/orbi/*)
               echo "cli_source ok: $source_path"
               ;;
             *)
-              echo "cli_source DRIFT: $source_path (expected $GITHUB_WORKSPACE/src/muyan_pilot/)" >&2
+              echo "cli_source DRIFT: $source_path (expected $GITHUB_WORKSPACE/src/orbi/)" >&2
               exit 1
               ;;
           esac

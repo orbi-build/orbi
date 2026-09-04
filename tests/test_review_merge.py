@@ -17,8 +17,8 @@ from unittest.mock import Mock
 
 import pytest
 
-import muyan_pilot.runner as runner
-from muyan_pilot import cli_install
+import orbi.runner as runner
+from orbi import cli_install
 from tests.test_progress_wiring import make_fake_gh
 
 
@@ -160,7 +160,7 @@ def _pr_json(number=4, base="main", base_oid="b1", head="h1"):
         "url": f"https://github.com/owner/repo/pull/{number}",
         "baseRefName": base,
         "baseRefOid": base_oid,
-        "headRefName": "muyan-pilot/owner-repo-issue-4-run1",
+        "headRefName": "orbi/owner-repo-issue-4-run1",
         "headRefOid": head,
     }])
 
@@ -174,7 +174,7 @@ def test_freeze_pr_returns_frozen_base_and_head(monkeypatch, tmp_path):
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     pr = runner.freeze_pr(
-        tmp_path, "muyan-pilot/owner-repo-issue-4-run1", "main",
+        tmp_path, "orbi/owner-repo-issue-4-run1", "main",
     )
     assert pr["number"] == 4
     assert pr["base_ref"] == "main"
@@ -183,7 +183,7 @@ def test_freeze_pr_returns_frozen_base_and_head(monkeypatch, tmp_path):
     assert pr["url"].endswith("/pull/4")
     assert calls == [[
         "gh", "pr", "list", "--state", "open", "--head",
-        "muyan-pilot/owner-repo-issue-4-run1",
+        "orbi/owner-repo-issue-4-run1",
         "--json", "number,url,baseRefName,baseRefOid,headRefName,headRefOid",
         "--limit", "2",
     ]]
@@ -194,13 +194,13 @@ def test_freeze_pr_rejects_wrong_base(monkeypatch, tmp_path):
         runner, "run_command", lambda command, **kwargs: _pr_json(base="develop"),
     )
     with pytest.raises(RuntimeError, match="PR base is develop, expected main"):
-        runner.freeze_pr(tmp_path, "muyan-pilot/owner-repo-issue-4-run1", "main")
+        runner.freeze_pr(tmp_path, "orbi/owner-repo-issue-4-run1", "main")
 
 
 def test_freeze_pr_rejects_no_open_pr(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "[]")
     with pytest.raises(RuntimeError, match="exactly one open PR"):
-        runner.freeze_pr(tmp_path, "muyan-pilot/owner-repo-issue-4-run1", "main")
+        runner.freeze_pr(tmp_path, "orbi/owner-repo-issue-4-run1", "main")
 
 
 def test_freeze_pr_rejects_multiple_open_prs(monkeypatch, tmp_path):
@@ -212,7 +212,7 @@ def test_freeze_pr_rejects_multiple_open_prs(monkeypatch, tmp_path):
     ])
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: two)
     with pytest.raises(RuntimeError, match="exactly one open PR"):
-        runner.freeze_pr(tmp_path, "muyan-pilot/owner-repo-issue-4-run1", "main")
+        runner.freeze_pr(tmp_path, "orbi/owner-repo-issue-4-run1", "main")
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +245,7 @@ def test_run_review_launches_independent_readonly_pi_session(monkeypatch, tmp_pa
     pr = {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
           "head_ref": "h", "head_oid": "h1"}
     out = runner.run_review(tmp_path, pr, _review_config(tmp_path),
-                            "owner/repo", 4, "muyan-pilot/owner-repo-issue-4-run1", 1)
+                            "owner/repo", 4, "orbi/owner-repo-issue-4-run1", 1)
     assert out == "done"
     command, kwargs = calls[0]
     # Review skill, shared flat session dir (so the same live activity
@@ -266,7 +266,7 @@ def test_run_review_launches_independent_readonly_pi_session(monkeypatch, tmp_pa
     assert kwargs["role"] == runner.ROLE_REVIEW
     assert kwargs["run_id"] == "run1"
     assert kwargs["issue"] == 4
-    assert kwargs["branch"] == "muyan-pilot/owner-repo-issue-4-run1"
+    assert kwargs["branch"] == "orbi/owner-repo-issue-4-run1"
     assert kwargs["source_repo"] == "owner/repo"
     assert kwargs["log_command"][-2:] == [
         "<redacted>", "<review-context-redacted>",
@@ -528,8 +528,8 @@ def test_comment_pr_runs_gh_pr_comment(monkeypatch):
 def _round_comment(round_no, pr_number=4, association="OWNER"):
     return {
         "body": (
-            "<!-- muyan-pilot:run=run1 -->\n"
-            f"Muyan Pilot review round {round_no} for PR #{pr_number}: "
+            "<!-- orbi:run=run1 -->\n"
+            f"Orbi review round {round_no} for PR #{pr_number}: "
             "1 blocker(s), 0 major(s). Findings: []"
         ),
         "authorAssociation": association,
@@ -538,10 +538,10 @@ def _round_comment(round_no, pr_number=4, association="OWNER"):
 
 def test_review_rounds_so_far_counts_recorded_rounds():
     comments = [
-        {"body": "Muyan Pilot opened PR: https://x",
+        {"body": "Orbi opened PR: https://x",
          "authorAssociation": "OWNER"},
         _round_comment(1),
-        {"body": "Muyan Pilot fixed PR: https://x",
+        {"body": "Orbi fixed PR: https://x",
          "authorAssociation": "OWNER"},
         _round_comment(2),
         {"body": None, "authorAssociation": "OWNER"},
@@ -551,7 +551,7 @@ def test_review_rounds_so_far_counts_recorded_rounds():
 
 def test_review_rounds_so_far_ignores_comments_without_round_line():
     assert runner.review_rounds_so_far([
-        {"body": "Muyan Pilot started Pi: ...", "authorAssociation": "OWNER"},
+        {"body": "Orbi started Pi: ...", "authorAssociation": "OWNER"},
         {"body": "some public comment", "authorAssociation": "OWNER"},
     ]) == 0
 
@@ -680,7 +680,7 @@ def test_sync_base_checkout_lock_path_is_the_shared_state_dir_file(
     # service template uses (the shared state dir, never a per-process
     # temp file).
     assert cli_install.base_sync_lock_path(tmp_path) == (
-        tmp_path / ".muyan-pilot" / "base-sync.lock"
+        tmp_path / ".orbi" / "base-sync.lock"
     )
 
 
@@ -1031,10 +1031,10 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     assert ("edit", {"repo": "owner/repo", "add": "ai-merged",
                      "remove": "ai-pr-opened"}) in calls
     comment = [c for c in calls if c[0] == "comment"][0][1]
-    assert "Muyan Pilot merged PR: u" in comment
+    assert "Orbi merged PR: u" in comment
     assert "merge_commit=m1" in comment
     assert "review_rounds=1" in comment
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in comment
+    assert "<!-- orbi:run=a1b2c3d4 -->" in comment
     # Delivery labels land before the local checkout sync: a sync
     # failure must not rewrite a landed merge as ai-blocked.
     assert calls.index(("edit", {"repo": "owner/repo", "add": "ai-merged",
@@ -1164,7 +1164,7 @@ def test_review_and_merge_keeps_merged_when_checkout_sync_fails(
     assert ("edit", {"repo": "owner/repo", "add": "ai-merged",
                      "remove": "ai-pr-opened"}) in calls
     assert any(
-        c[0] == "comment" and "Muyan Pilot merged PR:" in (c[1] or "")
+        c[0] == "comment" and "Orbi merged PR:" in (c[1] or "")
         for c in calls
     )
     assert not any(
@@ -1204,8 +1204,8 @@ def test_review_and_merge_findings_labels_fix_needed_and_comments(
     # The findings are recorded on Issue and PR with the run marker...
     assert calls[0][0] == "issue"
     assert "a.py:1" in calls[0][1]
-    assert "<!-- muyan-pilot:run=a1b2c3d4 -->" in calls[0][1]
-    assert "Muyan Pilot review round 1 for PR #4" in calls[0][1]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in calls[0][1]
+    assert "Orbi review round 1 for PR #4" in calls[0][1]
     assert calls[1][0] == "pr"
     assert "a.py:1" in calls[1][1]
     # ...and the Issue moves to the explicit fix state (the #45 fix loop
@@ -1330,7 +1330,7 @@ def test_review_and_merge_missing_verdict_raises(monkeypatch, tmp_path):
 
 def test_review_and_merge_exhausted_rounds_raises(monkeypatch, tmp_path, caplog):
     comments = [
-        {"body": f"Muyan Pilot review round {i} for PR #4: 1 blocker(s), "
+        {"body": f"Orbi review round {i} for PR #4: 1 blocker(s), "
                  "0 major(s). Findings: []",
          "authorAssociation": "OWNER"}
         for i in range(1, runner.MAX_REVIEW_ROUNDS + 1)

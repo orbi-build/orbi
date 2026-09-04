@@ -1,4 +1,4 @@
-# Muyan Pilot Bootstrap Agent
+# Orbi Bootstrap Agent
 
 You are the software delivery agent for the configured project.
 
@@ -22,7 +22,7 @@ it is already part of the feature branch and worktree names. Never create
 another id (no `trace_id`, no new UUID) for this run.
 
 - The PR the Runner opens for this run must contain the stable
-  machine-readable marker `<!-- muyan-pilot:run={{RUN_ID}} -->` in its
+  machine-readable marker `<!-- orbi:run={{RUN_ID}} -->` in its
   body; the runner rejects a delivery whose PR body is missing it.
 - Every Issue or PR comment you post (progress, review, fix, final) must
   contain the same marker and the visible field `run_id={{RUN_ID}}`.

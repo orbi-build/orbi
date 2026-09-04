@@ -1,13 +1,13 @@
-"""CLI source consistency for Muyan Pilot (Issue #152).
+"""CLI source consistency for Orbi (Issue #152).
 
 The official local deployment is the EDITABLE uv tool install:
 
     uv tool install --force --reinstall --editable \\
         --python /usr/bin/python3 <deployment checkout>
 
-The tool env's Python imports the ``muyan_pilot`` package directly from
+The tool env's Python imports the ``orbi`` package directly from
 the deployment checkout (the setuptools editable finder maps the WHOLE
-package directory ``src/muyan_pilot/`` onto the checkout — Issue #168),
+package directory ``src/orbi/`` onto the checkout — Issue #168),
 so the ``ExecStartPre`` checkout sync
 (``git fetch origin main && git merge --ff-only origin/main``) is
 picked up by the NEXT CLI process automatically: there is no second
@@ -22,8 +22,8 @@ new migration code). An editable install of a DIFFERENT (stale)
 checkout drifts the same way.
 
 This module is READ-ONLY: it reports the running process's
-``muyan_pilot`` import source against the configured ``repo_dir`` and
-the exact fix command. The fix is a HUMAN/setup step (``muyan-pilot
+``orbi`` import source against the configured ``repo_dir`` and
+the exact fix command. The fix is a HUMAN/setup step (``orbi
 setup`` runs it idempotently). Since Issue #158 the Runner ALSO
 refreshes the editable install at start (``cli_install``) when the
 packaging inputs changed — under the SAME base-sync flock the
@@ -34,8 +34,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import muyan_pilot
-from muyan_pilot.pi_activity import quote_value
+import orbi
+from orbi.pi_activity import quote_value
 
 # The production interpreter pinned by the documented install command
 # (docs/getting-started.mdx: `--python` pins the production
@@ -46,7 +46,7 @@ PYTHON_INTERPRETER = "/usr/bin/python3"
 # layout): the editable install maps this WHOLE directory, so a newly
 # added package module is importable without regenerating any module
 # list (the #158 stale-finder root cause).
-PACKAGE_DIR = Path("src") / "muyan_pilot"
+PACKAGE_DIR = Path("src") / "orbi"
 
 
 def reinstall_args(repo_dir: Path) -> list[str]:
@@ -68,7 +68,7 @@ def reinstall_command(repo_dir: Path) -> str:
     """The EXACT editable force reinstall command (one line, for a
     human or the fix field of a ``cli_source_drift`` line).
 
-    It leads the repair, never ``muyan-pilot install-units`` alone
+    It leads the repair, never ``orbi install-units`` alone
     (the unit files are only half of the #152 scene). A checkout path
     containing spaces is quoted so the line stays shell-executable.
     """
@@ -79,19 +79,19 @@ def reinstall_command(repo_dir: Path) -> str:
 
 
 def module_file() -> Path:
-    """The running process's ``muyan_pilot`` package import source
+    """The running process's ``orbi`` package import source
     (resolved).
 
     This is the ground truth for "which source is this CLI process
-    executing": the console script imports ``muyan_pilot`` at start,
+    executing": the console script imports ``orbi`` at start,
     so ``__file__`` is the file the interpreter actually loaded —
-    ``<checkout>/src/muyan_pilot/__init__.py`` for an editable install,
+    ``<checkout>/src/orbi/__init__.py`` for an editable install,
     a site-packages copy for a non-editable one.
     """
-    file = getattr(muyan_pilot, "__file__", None)
+    file = getattr(orbi, "__file__", None)
     if not isinstance(file, str) or not file:
         raise RuntimeError(
-            "cannot determine the muyan_pilot import source: the "
+            "cannot determine the orbi import source: the "
             "module has no __file__ (the CLI source check must never "
             "guess a path)"
         )
@@ -106,7 +106,7 @@ def cli_source(expected_repo_dir: Path) -> dict:
     (both resolved: a symlinked checkout path is the same source as
     the resolved one). ``editable`` is True exactly when the import
     source sits INSIDE the checkout's package directory — an editable
-    install imports ``<repo_dir>/src/muyan_pilot/__init__.py``; a
+    install imports ``<repo_dir>/src/orbi/__init__.py``; a
     non-editable install imports a site-packages copy, a stale install
     a different checkout, and a nested copy (e.g. a worktree's own
     package) is not the configured source either. ``fix`` is the exact
