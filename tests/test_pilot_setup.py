@@ -416,6 +416,25 @@ def test_check_repo_reports_permission_and_default_branch():
     }
 
 
+def test_check_repo_parses_json_after_a_wrapper_preamble():
+    raw = (
+        "mise ~/.config/mise/config.toml tools: gh@2.100.0\n"
+        "0\n"
+        '{"nameWithOwner":"xqliu/orbi",'
+        '"viewerPermission":"WRITE",'
+        '"defaultBranchRef":{"name":"main"}}'
+    )
+    result = pilot_setup.check_repo(
+        "xqliu/orbi",
+        run_command=lambda command, **kwargs: raw,
+    )
+    assert result == {
+        "repo": "xqliu/orbi",
+        "permission": "WRITE",
+        "default_branch": "main",
+    }
+
+
 def test_check_repo_fails_fast_on_a_read_only_repo():
     with pytest.raises(pilot_setup.SetupError, match="permission"):
         pilot_setup.check_repo(

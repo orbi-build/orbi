@@ -313,9 +313,19 @@ def check_repo(repo: str, run_command) -> dict:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise SetupError(
-            f"cannot parse gh repo view output for {repo}: {raw!r}"
-        ) from exc
+        data = None
+        for line in raw.splitlines():
+            try:
+                candidate = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict):
+                data = candidate
+                break
+        if data is None:
+            raise SetupError(
+                f"cannot parse gh repo view output for {repo}: {raw!r}"
+            ) from exc
     if not isinstance(data, dict):
         raise SetupError(
             f"cannot parse gh repo view output for {repo}: {raw!r}"
