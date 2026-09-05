@@ -1405,6 +1405,24 @@ def test_main_setup_config_failure_prints_structured_reason(
     assert "Traceback" not in captured.err
 
 
+def test_main_non_setup_config_failure_logs_structured_reason(
+    monkeypatch, tmp_path, caplog,
+):
+    config = _setup_world(tmp_path)
+    monkeypatch.setattr(
+        orbi, "load_config",
+        lambda path, **kwargs: (_ for _ in ()).throw(
+            ValueError("invalid configuration"),
+        ),
+    )
+    with caplog.at_level("ERROR"):
+        assert orbi.main(["status", "--config", str(config)]) == 1
+    assert len(caplog.records) == 1
+    assert caplog.records[0].message.endswith(
+        "config_invalid reason=invalid configuration",
+    )
+
+
 def test_main_setup_failure_prints_the_reason_and_returns_nonzero(
     monkeypatch, tmp_path, capsys,
 ):

@@ -965,18 +965,10 @@ def _pi_provider_api_key_finding(path: Path, provider_id: str,
     return None
 
 
-def _check_pi_provider_api_key(path: Path, provider_id: str,
-                               entry: dict, env_file: Path) -> None:
-    """Fail fast when an `apiKey` env-var reference is unresolved."""
-    finding = _pi_provider_api_key_finding(path, provider_id, entry, env_file)
-    if finding:
-        raise ValueError(finding["error"])
-
-
 def _expand_pi_api_key_refs(api_key: str) -> str:
     """Resolve `$VAR` / `${VAR}` references in an `apiKey` (Issue #303).
 
-    Same reference syntax `_check_pi_provider_api_key` validates (Pi's
+    Same reference syntax `_pi_provider_api_key_finding` validates (Pi's
     `docs/models.md`): every reference whose environment variable is
     set and non-empty is replaced by the real value; a reference whose
     variable is missing or empty — only possible for a non-selected
