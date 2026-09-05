@@ -6949,7 +6949,17 @@ def _failure_detail(exc: BaseException) -> str:
 def _tail_text(path: Path, *, lines: int = 20, chars: int = 4000) -> str:
     """Read a bounded tail for failure evidence without blocking cleanup."""
     try:
-        content = path.read_text(encoding="utf-8", errors="replace")
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            # UTF-8 characters are at most four bytes.  This is enough to
+            # retain the requested character tail without reading a huge
+            # test log or session file into memory.
+            window = min(size, chars * 4 + 1)
+            handle.seek(size - window)
+            content = handle.read(window).decode(
+                "utf-8", errors="replace",
+            )
     except (OSError, UnicodeError):
         return "<unavailable>"
     tail = "\n".join(content.splitlines()[-lines:])
