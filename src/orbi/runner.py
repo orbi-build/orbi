@@ -84,6 +84,7 @@ from orbi.delivery_labels import (
     MERGED_LABEL,
     P0_LABEL,
     PR_OPENED_LABEL,
+    READY_LABEL,
     RELEASE_LABEL,
     TICKET_ONLY_LABEL,
     EVENT_BLOCKED,
@@ -1323,6 +1324,29 @@ def ready_searches(active_milestone: str | None = None) -> tuple[str, str, str]:
         f"label:ai-ready label:{P0_LABEL}{scope} {READY_SCAN_EXCLUSIONS}",
         f"label:ai-ready label:bug{scope} {READY_SCAN_EXCLUSIONS}",
         f"label:ai-ready{scope} {READY_SCAN_EXCLUSIONS}",
+    )
+
+
+def release_fallback_search(active_milestone: str | None = None) -> str:
+    """Return the release fallback scan query (Issue #255).
+
+    A Release task is a closing action and must never compete with an
+    ordinary delivery for the slot: it is claimed only after the three
+    ordinary ready scans (p0/bug/plain) found nothing claimable. The
+    query keeps `label:ai-ready` (the human execution switch — a release
+    Issue without it stays waiting, as before) plus `label:ai-release`
+    and the same five delivery-state exclusions as the ordinary scans
+    (`READY_SCAN_EXCLUSIONS`). With a configured `active_milestone` it
+    carries the same `milestone:"<title>"` scope (the quoted form is the
+    contract, same as `ready_searches`). `ai-epic` is excluded by the
+    code-layer Epic guard in `_pick_from_scan`, not the query.
+    """
+    scope = (
+        f' milestone:"{active_milestone}"' if active_milestone else ""
+    )
+    return (
+        f"label:{READY_LABEL} label:{RELEASE_LABEL}{scope} "
+        f"{READY_SCAN_EXCLUSIONS}"
     )
 
 
@@ -2997,6 +3021,55 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         raise
 
 
+def _pick_from_scan(
+    issues: list[dict], repo: str, allow_release: bool = False,
+) -> dict | None:
+    """Return the first claimable Issue of one scan result, else None.
+
+    The per-Issue guards, shared by the three ordinary ready scans and
+    the release fallback scan (Issue #255). An `ai-epic` Issue is never
+    claimed — no label change, no worktree, no run, no slot — with the
+    structured `epic_not_claimed` line (the check precedes the blockedBy
+    check: "it is an Epic" is the more fundamental reason). An Issue
+    with open native blockers is skipped with the structured
+    `blocked_by` line (Issue #54). Otherwise the Issue is picked and the
+    pickup log carries the explicit priority field (Issue #101): `p0`
+    for urgent Issues, `normal` otherwise.
+
+    `allow_release` controls the release skip (Issue #255): the three
+    ordinary scans skip an `ai-release` Issue (`release_not_claimed`) so
+    a release never competes with an ordinary delivery for the slot; the
+    release fallback scan passes `allow_release=True` and claims it.
+    """
+    for issue in issues:
+        if is_epic(issue):
+            LOGGER.info(
+                "epic_not_claimed issue=%s repo=%s",
+                issue.get("number"), repo,
+            )
+            continue
+        if not allow_release and is_release(issue):
+            LOGGER.info(
+                "release_not_claimed issue=%s repo=%s",
+                issue.get("number"), repo,
+            )
+            continue
+        blockers = open_blocker_numbers(issue)
+        if blockers:
+            LOGGER.info(
+                "blocked_by issue=%s repo=%s blockers=%s",
+                issue.get("number"), repo,
+                ",".join(str(number) for number in blockers),
+            )
+            continue
+        LOGGER.info(
+            "picked issue=%s repo=%s priority=%s",
+            issue.get("number"), repo, issue_priority(issue),
+        )
+        return issue
+    return None
+
+
 def pick_issue(repo: str, active_milestone: str | None = None) -> dict | None:
     # A merged delivery keeps `ai-ready` + `ai-merged` on the (still
     # open) Issue; `ai-merged` is the success terminal state, so it is
@@ -3017,6 +3090,11 @@ def pick_issue(repo: str, active_milestone: str | None = None) -> dict | None:
     # (see `ready_searches`) — the Epic skip and the blockedBy skip
     # above are the unchanged second (code) layer, and a failed scan
     # still fails open (never a silent claim of the wrong version).
+    # Issue #255: an `ai-release` Issue is skipped by the three ordinary
+    # scans (`release_not_claimed`) and claimed only by the release
+    # fallback scan that runs AFTER all three found nothing claimable —
+    # a release is a closing action and must never take the slot ahead
+    # of an ordinary delivery.
     for search in ready_searches(active_milestone):
         try:
             raw = run_command([
@@ -3036,35 +3114,29 @@ def pick_issue(repo: str, active_milestone: str | None = None) -> dict | None:
                 repo, exc,
             )
             return None
-        for issue in issues:
-            # Epic skip (Issue #93): an `ai-epic` Issue is never
-            # claimed — no label change, no worktree, no run, no slot.
-            # The check precedes the blockedBy check: "it is an Epic"
-            # is the more fundamental reason, so the structured
-            # `epic_not_claimed` line (not a `blocked_by` line) is the
-            # recorded cause.
-            if is_epic(issue):
-                LOGGER.info(
-                    "epic_not_claimed issue=%s repo=%s",
-                    issue.get("number"), repo,
-                )
-                continue
-            blockers = open_blocker_numbers(issue)
-            if blockers:
-                LOGGER.info(
-                    "blocked_by issue=%s repo=%s blockers=%s",
-                    issue.get("number"), repo,
-                    ",".join(str(number) for number in blockers),
-                )
-                continue
-            # The pickup log carries the explicit priority field
-            # (Issue #101): `p0` for urgent Issues, `normal` otherwise.
-            LOGGER.info(
-                "picked issue=%s repo=%s priority=%s",
-                issue.get("number"), repo, issue_priority(issue),
-            )
-            return issue
-    return None
+        picked = _pick_from_scan(issues, repo)
+        if picked is not None:
+            return picked
+    # Release fallback (Issue #255): only when no ordinary delivery
+    # (p0/bug/plain) is claimable. The query keeps `label:ai-ready` +
+    # `label:ai-release` and the same delivery-state exclusions; the Epic
+    # and blockedBy guards still apply via `_pick_from_scan`. A failed
+    # fallback query fails open exactly like any other scan.
+    try:
+        raw = run_command([
+            "gh", "issue", "list", "--repo", repo, "--state", "open",
+            "--search", release_fallback_search(active_milestone),
+            "--json", "number,title,body,labels,blockedBy",
+            "--limit", "200",
+        ])
+        issues = parse_issue_array(raw)
+    except Exception as exc:
+        LOGGER.error(
+            "blocked_by_check_failed repo=%s error=%s",
+            repo, exc,
+        )
+        return None
+    return _pick_from_scan(issues, repo, allow_release=True)
 
 
 def pick_in_progress_issue(

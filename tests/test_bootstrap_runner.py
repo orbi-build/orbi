@@ -1520,6 +1520,172 @@ def test_pick_issue_p0_scan_keeps_existing_exclusions(monkeypatch):
     )
 
 
+# --- Issue #255: release fallback scan ------------------------------------
+
+
+def test_release_fallback_search_query():
+    """Issue #255: the release fallback scan keeps `label:ai-ready`
+    (the human execution switch) plus `label:ai-release` and the same
+    five delivery-state exclusions as the ordinary scans. Without a
+    configured Milestone it is the plain query; with one it carries the
+    same quoted `milestone:"<title>"` scope."""
+    exclusions = (
+        "-label:ai-in-progress -label:ai-pr-opened -label:ai-fix-needed "
+        "-label:ai-merged -label:ai-blocked"
+    )
+    assert runner.release_fallback_search(None) == (
+        f"label:ai-ready label:ai-release {exclusions}"
+    )
+    assert runner.release_fallback_search() == (
+        f"label:ai-ready label:ai-release {exclusions}"
+    )
+    assert runner.release_fallback_search("v0.3.0") == (
+        f'label:ai-ready label:ai-release milestone:"v0.3.0" {exclusions}'
+    )
+
+
+def test_release_issue_not_claimed_when_ordinary_delivery_exists(
+    monkeypatch, caplog,
+):
+    """Issue #255: with an ordinary delivery ready (here in the plain
+    scan), the release Issue is skipped there (`release_not_claimed`) —
+    the ordinary delivery is claimed first and the release fallback
+    scan never runs (only three gh searches)."""
+    feature = {
+        "number": 10, "title": "feature", "body": "",
+        "labels": [{"name": "ai-ready"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    release = {
+        "number": 254, "title": "release", "body": "",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    searches = []
+
+    def fake_run(command, **kwargs):
+        searches.append(command[command.index("--search") + 1])
+        if "label:p0" in searches[-1] or "label:bug" in searches[-1]:
+            return json.dumps([])
+        # The plain scan sees both (release listed first); the release
+        # is skipped and the ordinary delivery wins. The release
+        # fallback scan never runs (only three searches).
+        return json.dumps([release, feature])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/orbi") == feature
+    assert len(searches) == 3
+    assert "release_not_claimed" in caplog.text
+    assert "issue=254" in caplog.text
+
+
+def test_release_issue_claimed_when_no_ordinary_delivery(
+    monkeypatch, caplog,
+):
+    """Issue #255: when all three ordinary ready scans are empty, the
+    release fallback scan runs and claims the release Issue — it then
+    flows into the release state machine downstream."""
+    release = {
+        "number": 254, "title": "release", "body": "",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    searches = []
+
+    def fake_run(command, **kwargs):
+        searches.append(command[command.index("--search") + 1])
+        if "label:ai-release" in searches[-1]:
+            return json.dumps([release])
+        return json.dumps([])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/orbi") == release
+    # Three ordinary scans + one release fallback scan.
+    assert len(searches) == 4
+    assert "label:ai-release" in searches[3]
+    assert "label:ai-ready" in searches[3]
+    assert "picked issue=254" in caplog.text
+
+
+def test_release_fallback_scoped_to_active_milestone(monkeypatch):
+    """Issue #255: with a configured `active_milestone` the release
+    fallback scan carries the same `milestone:"<title>"` scope as the
+    ordinary scans — a release of another Milestone is never claimed."""
+    release = {
+        "number": 254, "title": "release", "body": "",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    searches = []
+
+    def fake_run(command, **kwargs):
+        searches.append(command[command.index("--search") + 1])
+        if "label:ai-release" in searches[-1]:
+            return json.dumps([release])
+        return json.dumps([])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.pick_issue(
+        "xqliu/orbi", active_milestone="v0.3.0",
+    ) == release
+    assert 'milestone:"v0.3.0"' in searches[3]
+    assert "label:ai-release" in searches[3]
+
+
+def test_release_fallback_excludes_epic_and_blocked(
+    monkeypatch, caplog,
+):
+    """Issue #255: the release fallback scan keeps the Epic and
+    blockedBy guards — an `ai-epic` release Issue is skipped with
+    `epic_not_claimed`, and a release Issue with open native blockers
+    is skipped with `blocked_by` (nothing is claimed)."""
+    epic_release = {
+        "number": 260, "title": "epic release", "body": "",
+        "labels": [
+            {"name": "ai-ready"}, {"name": "ai-release"},
+            {"name": "ai-epic"},
+        ],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    blocked_release = {
+        "number": 254, "title": "release", "body": "",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+        "blockedBy": {"nodes": [{"number": 9}], "totalCount": 1},
+    }
+
+    def fake_run(command, **kwargs):
+        search = command[command.index("--search") + 1]
+        if "label:ai-release" in search:
+            return json.dumps([epic_release, blocked_release])
+        return json.dumps([])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/orbi") is None
+    assert "epic_not_claimed" in caplog.text
+    assert "blocked_by" in caplog.text
+
+
+def test_release_fallback_scan_failure_fails_open(monkeypatch, caplog):
+    """Issue #255: a failed release fallback query fails open like any
+    other scan (Issue #54) — the tick claims nothing, the error is
+    logged, never raised."""
+    error = subprocess.CalledProcessError(1, ["gh"], output="boom")
+
+    def fake_run(command, **kwargs):
+        search = command[command.index("--search") + 1]
+        if "label:ai-release" in search:
+            raise error
+        return json.dumps([])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/orbi") is None
+    assert "blocked_by_check_failed" in caplog.text
+
+
 def test_pick_issue_p0_blocked_by_open_blocker_falls_back_to_bug(
     monkeypatch, caplog,
 ):
@@ -1694,9 +1860,13 @@ def test_pick_issue_returns_none_when_only_epics_are_ready(
 
     def fake_run(command, **kwargs):
         search = command[command.index("--search") + 1]
-        # The Epics carry no p0/bug label: only the plain ready scan
-        # sees them.
-        if "label:p0" in search or "label:bug" in search:
+        # The Epics carry no p0/bug/ai-release label: only the plain
+        # ready scan sees them; the release fallback scan (Issue #255)
+        # matches nothing.
+        if (
+            "label:p0" in search or "label:bug" in search
+            or "label:ai-release" in search
+        ):
             return json.dumps([])
         return json.dumps([epic_a, epic_b])
 
