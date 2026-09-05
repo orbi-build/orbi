@@ -91,6 +91,7 @@ from orbi.delivery_labels import (
     EVENT_BLOCKED,
     EVENT_CLAIM,
     EVENT_FIX_NEEDED,
+    EVENT_RELEASE_WAITING,
     EVENT_MERGED,
     EVENT_PR_OPENED,
     is_resumable,
@@ -231,6 +232,10 @@ RELEASE_TEST_TIMEOUT_SECONDS = 1800
 # the default matches RELEASE_TEST_TIMEOUT_SECONDS, the existing release
 # timeout convention.
 RELEASE_CI_WAIT_SECONDS = 1800
+# Release delivery wait (Issue #381): an early release ticket yields the
+# slot while other deliveries finish. The limit applies to one gate attempt;
+# the next tick retries the same ready release ticket.
+RELEASE_DELIVERIES_WAIT_SECONDS = 1800
 # Poll cadence while waiting: one `release_waiting_ci` journal line plus
 # one progress-comment PATCH per poll — the same 30s GitHub cadence as
 # the live progress heartbeat (PI_HEARTBEAT_SECONDS).
@@ -281,6 +286,19 @@ class ModelWaitDeadError(RuntimeError):
     never an unclassified top-level exception: the recovery stays
     fail-fast (Pi killed, the slot released by the tick ending) but its
     terminal outcome goes through the recoverable delivery path."""
+
+
+class ReleaseDeliveriesWaiting(RuntimeError):
+    """Gate 1 found deliveries still in flight; retry next tick."""
+
+    def __init__(self, issue_numbers: list[int], waited: float, limit: float):
+        self.issue_numbers = issue_numbers
+        self.waited = waited
+        self.limit = limit
+        super().__init__(
+            "release gate: waiting for open deliveries "
+            f"{issue_numbers} (waited {int(waited)}s / {int(limit)}s)"
+        )
 
 
 class UnrecoverableDeliveryError(RuntimeError):
@@ -592,6 +610,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     # pending checks on the release commit before failing with its own
     # timeout reason.
     release_ci_wait_seconds = _release_ci_wait_seconds(data)
+    release_deliveries_wait_seconds = _release_deliveries_wait_seconds(data)
     # Runner-self health alert routing (Issue #345): the orbi repo that
     # receives the watchdog's crash_loop / stale_pickup Issues. Absent ->
     # None (the Runner derives the orbi repo from the deploy home's git
@@ -697,6 +716,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         "model_wait_probe_url": model_wait_probe_url,
         "model_wait_probe_seconds": model_wait_probe_seconds,
         "release_ci_wait_seconds": release_ci_wait_seconds,
+        "release_deliveries_wait_seconds": release_deliveries_wait_seconds,
         "pi_providers": pi_providers_path,
         "pi_providers_data": pi_providers_data,
         "pi_provider_key_finding": getattr(
@@ -827,6 +847,25 @@ def _release_ci_wait_seconds(data: dict) -> float:
         raise ValueError(
             "release_ci_wait_seconds must be a positive number of seconds "
             f"(got {value!r})"
+        )
+    return number
+
+
+def _release_deliveries_wait_seconds(data: dict) -> float:
+    """Load the Issue #381 release delivery wait limit."""
+    value = data.get(
+        "release_deliveries_wait_seconds", RELEASE_DELIVERIES_WAIT_SECONDS,
+    )
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            "release_deliveries_wait_seconds must be a positive number "
+            f"(got {value!r})"
+        )
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError(
+            "release_deliveries_wait_seconds must be a positive finite "
+            f"number (got {value!r})"
         )
     return number
 
@@ -1980,7 +2019,10 @@ def build_release_changelog(repo: str, scope: list[int]) -> str:
 def check_release_gates(repo: str, base_branch: str, release_commit: str,
                         release_number: int, *,
                         ci_wait_seconds: float = RELEASE_CI_WAIT_SECONDS,
+                        delivery_wait_seconds: float = RELEASE_DELIVERIES_WAIT_SECONDS,
+                        delivery_waited_seconds: float = 0.0,
                         on_wait: Callable[[str], None] | None = None,
+                        on_delivery_wait: Callable[[str], None] | None = None,
                         ) -> list[str]:
     """Enforce the pre-release gates (Issue #98) and return their evidence.
 
@@ -2009,6 +2051,7 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
     unchanged — a gate that cannot be checked is a failed gate.
     """
     evidence: list[str] = []
+    open_deliveries: set[int] = set()
     for label in (IN_PROGRESS_LABEL, PR_OPENED_LABEL, FIX_NEEDED_LABEL):
         raw = run_command([
             "gh", "issue", "list", "--repo", repo, "--label", label,
@@ -2016,13 +2059,30 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
         ])
         for item in json.loads(raw):
             number = int(item["number"])
-            if number == release_number:
-                continue
-            raise RuntimeError(
-                f"release gate: Issue #{number} still carries "
-                f"{label} — finish or block that delivery before "
-                "releasing"
+            if number != release_number:
+                open_deliveries.add(number)
+    if open_deliveries:
+        numbers = sorted(open_deliveries)
+        detail = ", ".join(f"Issue #{number}" for number in numbers)
+        LOGGER.info(
+            "issue=%s release_waiting_deliveries open=%s waited=%ds limit=%ds",
+            release_number, numbers, int(delivery_waited_seconds),
+            int(delivery_wait_seconds),
+        )
+        if on_delivery_wait is not None:
+            on_delivery_wait(
+                f"{detail}; waited {int(delivery_waited_seconds)}s / "
+                f"{int(delivery_wait_seconds)}s"
             )
+        if delivery_waited_seconds >= delivery_wait_seconds:
+            raise RuntimeError(
+                f"release gate: waiting for open deliveries {numbers} "
+                f"timed out after {int(delivery_wait_seconds)}s "
+                "— delivery wait timeout, not a CI failure"
+            )
+        raise ReleaseDeliveriesWaiting(
+            numbers, delivery_waited_seconds, delivery_wait_seconds,
+        )
     evidence.append(
         "no open Issue carries "
         f"{IN_PROGRESS_LABEL} / {PR_OPENED_LABEL} / {FIX_NEEDED_LABEL}"
@@ -2871,6 +2931,15 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             activity={},
         )
 
+    def on_delivery_wait(detail: str) -> None:
+        state = progress()
+        state["phase"] = f"waiting deliveries: {detail}"
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_RELEASE,
+            action=lambda: publisher.patch(_progress_body(state)),
+        )
+
     def on_ci_wait(detail: str) -> None:
         # Issue #268: the CI wait is reflected in the live progress
         # comment (pure bypass, Issue #79); the gate itself emits the
@@ -2916,6 +2985,31 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             ),
         )
         release_commit = freeze_base(config["repo_dir"], base_branch)
+        wait_started: float | None = None
+        # Waiting is persisted in the auditable Issue comment, so a later
+        # tick can enforce one bounded waiting window without local state.
+        for comment in issue_comments(number, repo=source_repo):
+            # Only the runner's trusted, structured waiting comments may
+            # carry the persisted timer.  A public comment must not be able
+            # to inject an old timestamp and turn a recoverable wait into an
+            # immediate terminal block (the same trust boundary as resume
+            # scenes, Issue #45).
+            if not _comment_is_trusted(comment):
+                continue
+            body = comment.get("body", "")
+            if "Orbi release waiting for deliveries" not in body:
+                continue
+            match = re.search(r"wait_started: ([0-9]+(?:\.[0-9]+)?)", body)
+            if match:
+                started_at = float(match.group(1))
+                wait_started = (
+                    started_at if wait_started is None
+                    else min(wait_started, started_at)
+                )
+        release_waited_seconds = (
+            max(0.0, time.time() - wait_started)
+            if wait_started is not None else 0.0
+        )
         run_info = (
             f"base_branch={base_branch} base_sha={release_commit} "
             f"run_id={run_id} priority={priority}"
@@ -2929,7 +3023,13 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             ci_wait_seconds=config.get(
                 "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
             ),
+            delivery_wait_seconds=config.get(
+                "release_deliveries_wait_seconds",
+                RELEASE_DELIVERIES_WAIT_SECONDS,
+            ),
+            delivery_waited_seconds=release_waited_seconds,
             on_wait=on_ci_wait,
+            on_delivery_wait=on_delivery_wait,
         )
         _safe_publish(
             run_id=run_id, issue=number, source_repo=source_repo,
@@ -3105,6 +3205,36 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             time.monotonic() - started,
         )
         return release_url
+    except ReleaseDeliveriesWaiting as waiting:
+        # Issue #381: this is a clean, recoverable tick. Return the release
+        # ticket to the ready queue before releasing the caller's slot.
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_RELEASE_WAITING,
+            current_labels={IN_PROGRESS_LABEL},
+        )
+        detail = ", ".join(f"#{item}" for item in waiting.issue_numbers)
+        comment_issue(
+            number, repo=source_repo,
+            body=(
+                run_marker(run_id) + "\n"
+                "Orbi release waiting for deliveries\n"
+                f"open_deliveries: {detail}\n"
+                f"waited: {int(waiting.waited)}s / "
+                f"{int(waiting.limit)}s\n"
+                f"wait_started: {time.time()}\n"
+                f"run_id={run_id}"
+            ),
+        )
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_RELEASE,
+            action=lambda: publisher.finish(progress_body(progress())),
+        )
+        LOGGER.info(
+            "issue=%s release_waiting_deliveries_returned open=%s",
+            number, waiting.issue_numbers,
+        )
+        return ""
     except Exception as exc:
         LOGGER.exception("issue=%s release_failed", number)
         evidence = (

@@ -20,6 +20,14 @@ def test_label_patch_claim_adds_in_progress_only():
     assert to_remove == []
 
 
+def test_label_patch_release_waiting_returns_release_to_ready_queue():
+    to_add, to_remove = dl.label_patch(
+        dl.EVENT_RELEASE_WAITING, {"ai-ready", "ai-in-progress"},
+    )
+    assert to_add == ["ai-ready"]
+    assert to_remove == ["ai-in-progress"]
+
+
 def test_label_patch_pr_opened_swaps_in_progress_for_pr_opened():
     to_add, to_remove = dl.label_patch(
         dl.EVENT_PR_OPENED, {"ai-ready", "ai-in-progress"},
