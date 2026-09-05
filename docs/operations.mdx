@@ -308,6 +308,53 @@ PR.
 The run artifacts (plan, test log, session JSONL) stay in the task
 worktree as the local record; GitHub carries the delivery record.
 
+## A run stalls in `session_pending` before the first model response (Issue #311)
+
+**Symptom.** The Runner spawns Pi, but the session never creates its
+session file and never sends the first model request. The run sits in
+`session_pending`, the idle-stall recovery kills it after 15 minutes
+(`idle_recovery_stale_15m`), and the Issue ends `ai-blocked` — each
+failure burns 15 minutes of the slot and needs a manual re-dispatch. It
+hits online providers (reproduced with z.ai and google gemini); a local
+model on 127.0.0.1 is not affected. The tell: the session JSONL path is
+empty while the pi process is alive.
+
+**30-second forensics** (on the hung run):
+
+```bash
+PID=<pid from the journal `process_spawned` line, or `pgrep -f pi`>
+
+# 1. Alive but idle: state S, ~0% CPU, epoll spinning
+ps -o pid,stat,%cpu,wchan:32 -p "$PID"
+
+# 2. No TCP connection to the model API — the request was never sent
+ss -tnp | grep "$PID"                    # empty
+
+# 3. The only socket is D-Bus
+ls -l /proc/"$PID"/fd | grep socket      # unix socket -> /run/user/1000/bus
+
+# 4. The session file was never created
+ls -la <task worktree>/.pi-session/      # empty
+```
+
+**Root cause.** The per-run agent dir materialization (Issue #303) makes
+the Runner's Pi load the user-level plugins declared in
+`~/.pi/agent/settings.json` `packages`. The `pi-mcp-adapter` plugin
+initializes `@napi-rs/keyring` → the Secret Service
+(`org.freedesktop.secrets` / `kwalletd6`) D-Bus call at startup; in the
+systemd `--user` service context that call occasionally never returns,
+and node hangs in `poll_schedule_timeout` before any model request goes
+out.
+
+**Fix.** Remove `pi-mcp-adapter` from `~/.pi/agent/settings.json`
+`packages` (verified: the same run resumes to `session_created` +
+`first_response` in 15 seconds). The permanent fix is Issue #249 — orbi
+declares its own extensions (`[[pi_extensions]]`) and starts Pi with
+`--no-extensions`, so user-level plugins can never leak into an
+unattended session. Upstream: report to pi-mcp-adapter (it must not
+initialize the keyring when no MCP server is configured, or do it
+lazily).
+
 ## Concurrency
 
 `max_concurrency` (default 1) bounds the number of concurrent deliveries
