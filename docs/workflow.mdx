@@ -190,7 +190,24 @@ DAG, no priority numbers, no separate queues:
   7. Publish the GitHub Release (idempotent) whose notes carry the full
      verification evidence: version, tag, release commit, per-item
      scope evidence, gate evidence, test evidence and the run marker.
-  8. Close the Milestone whose title is EXACTLY the released version
+  8. Sync the docs-site Release notes (Issue #275) — after the GitHub
+     Release exists and before the Milestone is closed: generate
+     `docs/release-<version>.mdx` and `docs/zh/release-<version>.mdx`
+     from the published Release body (no changelog re-implementation —
+     #204 owns that), adding the meta the existing release pages share:
+     the tag/release-commit mapping, the publish time and the release
+     task Issue number; insert the new version at the head of the
+     `Releases`/`发布` navigation groups in `docs/docs.json` (both
+     languages, latest first); move the `(latest)` title marker from
+     the previous latest page to the new one (only the newest page may
+     carry it). The file changes are committed to the base branch
+     directly (the release path has no PR) and pushed with a plain
+     push. Idempotent: an existing page with identical content is
+     neither regenerated nor overwritten, and a run with nothing to
+     change commits nothing; an existing page with different content
+     fails fast. Any failure fails the whole release (`ai-blocked`),
+     never a silent skip.
+  9. Close the Milestone whose title is EXACTLY the released version
      (Issue #214) — on the success path, after the release Issue is
      closed with `ai-merged`. Exact title match only (no guessing, no
      fuzzy match, never a different Milestone): closed when it has 0
@@ -198,12 +215,13 @@ DAG, no priority numbers, no separate queues:
      a missing Milestone or remaining open Issues fail fast with the
      version, the Milestone number/url and the open issue list (never a
      silent skip).
-  9. Success: `ai-merged` (terminal) and the release Issue is closed,
+  10. Success: `ai-merged` (terminal) and the release Issue is closed,
      with the success comment (release URL, tag, commit, evidence,
-     Milestone evidence). Any failure: `ai-blocked` ALONE (a release is
-     a human decision point — no automatic retry), the failure comment
-     carries the run marker and the concrete reason, and the exception
-     propagates so the tick fails fast.
+     docs-site Release notes evidence, Milestone evidence). Any
+     failure: `ai-blocked` ALONE (a release is a human decision point —
+     no automatic retry), the failure comment carries the run marker
+     and the concrete reason, and the exception propagates so the tick
+     fails fast.
 
   The `ai-release` label is a type marker, NOT a delivery state: it is
   not part of the delivery-state machine, not an exclusion of the ready

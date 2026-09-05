@@ -1,0 +1,103 @@
+# v0.3.0 release (latest)
+
+`v0.3.0` was published 2026-09-04T08:33:09Z as the GitHub Release [v0.3.0](https://github.com/orbi-build/orbi/releases/tag/v0.3.0) (release task: Issue #254).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.3.0` | annotated tag `44dba3fde5f8a983661d68c34644230c78a014f1` | commit `2c11a3f61b918f1faa3b81760d871cb0741733d7` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- Python 项目结构清理：从根目录 flat modules 迁移到清晰的 src layout ([Issue #161](https://github.com/orbi-build/orbi/issues/161))
+- 技术债根治：迁移到 src package，消除 editable finder 模块漏记 ([Issue #168](https://github.com/orbi-build/orbi/issues/168); [PR #247](https://github.com/orbi-build/orbi/pull/247))
+- 增强 Runner 启动阶段可观测性：定位 starting 卡点 ([Issue #176](https://github.com/orbi-build/orbi/issues/176); [PR #245](https://github.com/orbi-build/orbi/pull/245))
+- 优化 harness 与 prompt：减少无效 compact 并保证测试反馈可信 ([Issue #180](https://github.com/orbi-build/orbi/issues/180); [PR #224](https://github.com/orbi-build/orbi/pull/224))
+- 0.3.0：将确定性 Git/GitHub 生命周期操作移出 Agent ([Issue #186](https://github.com/orbi-build/orbi/issues/186); [PR #213](https://github.com/orbi-build/orbi/pull/213))
+- Enhancement: release 失败时自动创建可追踪的修复 Issue ([Issue #202](https://github.com/orbi-build/orbi/issues/202); [PR #210](https://github.com/orbi-build/orbi/pull/210))
+- Enhancement: 生成可读且按类别组织的 Release notes ([Issue #204](https://github.com/orbi-build/orbi/issues/204); [PR #206](https://github.com/orbi-build/orbi/pull/206))
+- Release 成功后关闭对应 GitHub Milestone ([Issue #214](https://github.com/orbi-build/orbi/issues/214); [PR #222](https://github.com/orbi-build/orbi/pull/222))
+- core: model_wait 安全回收 —— 模型服务进程活着但请求挂死时永久卡死 ([Issue #218](https://github.com/orbi-build/orbi/issues/218); [PR #221](https://github.com/orbi-build/orbi/pull/221))
+- 覆盖率门禁分层：全局 line/branch ≥95%，变更代码与核心路径保持 100% ([Issue #234](https://github.com/orbi-build/orbi/issues/234); [PR #242](https://github.com/orbi-build/orbi/pull/242))
+
+### Reliability and recovery
+
+- Bug：本地 llama-server 单槽吞掉下一个请求且永不返回（模型进程活着/连接 ESTABLISHED/槽位空转），任务反复 ai-blocked ([Issue #233](https://github.com/orbi-build/orbi/issues/233); [PR #236](https://github.com/orbi-build/orbi/pull/236))
+
+### Deployment and operations
+
+- 0.3.0：按 max_concurrency 同步启用 Runner 实例 timer ([Issue #189](https://github.com/orbi-build/orbi/issues/189); [PR #212](https://github.com/orbi-build/orbi/pull/212))
+- ExecStartPre fetch 不应留下后台 Git 进程触发 systemd 警告 ([Issue #191](https://github.com/orbi-build/orbi/issues/191); [PR #208](https://github.com/orbi-build/orbi/pull/208))
+- Runner: model_wait 回收后未处理 RuntimeError 使 service 失败并阻塞任务 ([Issue #227](https://github.com/orbi-build/orbi/issues/227); [PR #252](https://github.com/orbi-build/orbi/pull/252))
+- 迁移 src package 后 editable CLI 未刷新：console script import 崩溃，Runner 每 tick ModuleNotFoundError ([Issue #248](https://github.com/orbi-build/orbi/issues/248); [PR #250](https://github.com/orbi-build/orbi/pull/250))
+- P0 部署阻塞：品牌改名（#246/#261）后本机 systemd 部署陷入死循环，orbi 生产队列已暂停 ([Issue #262](https://github.com/orbi-build/orbi/issues/262); [PR #267](https://github.com/orbi-build/orbi/pull/267))
+
+### Documentation
+
+- 文档整治：统一事实源、删除重复内容并压缩 README/AGENTS/站点文档 ([Issue #160](https://github.com/orbi-build/orbi/issues/160); [PR #230](https://github.com/orbi-build/orbi/pull/230))
+- v0.3.0：Orbi 品牌 rebrand、GitHub org 与官网/文档入口统一 ([Issue #183](https://github.com/orbi-build/orbi/issues/183); [PR #223](https://github.com/orbi-build/orbi/pull/223))
+- 宣传：Orbi v0.2.0 黑灯软件工厂发布 Thread ([Issue #205](https://github.com/orbi-build/orbi/issues/205); [PR #207](https://github.com/orbi-build/orbi/pull/207))
+- 文档去重：README/AGENTS 进一步压缩，docs 建立单一事实源（承接 #160） ([Issue #231](https://github.com/orbi-build/orbi/issues/231); [PR #244](https://github.com/orbi-build/orbi/pull/244))
+- AGENTS.md 收敛到 ≤200 行：只留 agent 必须遵守的规则，机制说明下沉到 docs（最佳实践） ([Issue #232](https://github.com/orbi-build/orbi/issues/232); [PR #237](https://github.com/orbi-build/orbi/pull/237))
+- README 首页化：保留定位/quickstart/能力概览/文档链接，移除重复机制说明 ([Issue #241](https://github.com/orbi-build/orbi/issues/241); [PR #243](https://github.com/orbi-build/orbi/pull/243))
+
+### Bug fixes
+
+- P0 Bug: marketing ticket-only 任务不应创建 Git 文件和 PR ([Issue #209](https://github.com/orbi-build/orbi/issues/209); [PR #211](https://github.com/orbi-build/orbi/pull/211))
+- gitignore .pi 以免 deliver_pr 被 pi-loop 状态文件卡住 ([Issue #215](https://github.com/orbi-build/orbi/issues/215); [PR #220](https://github.com/orbi-build/orbi/pull/220))
+- core: 中断后继续既有工作，而不是 fresh 重做 ([Issue #219](https://github.com/orbi-build/orbi/issues/219); [PR #240](https://github.com/orbi-build/orbi/pull/240))
+- P0: model_wait 回收阈值可配置并默认 30 分钟，避免慢本地模型误杀 ([Issue #228](https://github.com/orbi-build/orbi/issues/228); [PR #229](https://github.com/orbi-build/orbi/pull/229))
+- 补齐 .gitignore：覆盖 coverage.log、*.log 及常用开发产物，避免正常测试阻塞交付 ([Issue #235](https://github.com/orbi-build/orbi/issues/235); [PR #238](https://github.com/orbi-build/orbi/pull/238))
+- Bug：implement 运行完成前置检查后未提交 commit，Runner delivery_no_commit 异常阻塞任务 ([Issue #239](https://github.com/orbi-build/orbi/issues/239); [PR #251](https://github.com/orbi-build/orbi/pull/251))
+
+- tag: `v0.3.0`
+- release commit: `2c11a3f61b918f1faa3b81760d871cb0741733d7`
+- release task: Issue #254
+
+## Scope (verified item by item)
+
+- Issue #160 closed
+- Issue #161 closed
+- Issue #168 closed
+- Issue #176 closed
+- Issue #180 closed
+- Issue #183 closed
+- Issue #186 closed
+- Issue #189 closed
+- Issue #191 closed
+- Issue #202 closed
+- Issue #204 closed
+- Issue #205 closed
+- Issue #209 closed
+- Issue #214 closed
+- Issue #215 closed
+- Issue #218 closed
+- Issue #219 closed
+- Issue #227 closed
+- Issue #228 closed
+- Issue #231 closed
+- Issue #232 closed
+- Issue #233 closed
+- Issue #234 closed
+- Issue #235 closed
+- Issue #239 closed
+- Issue #241 closed
+- Issue #248 closed
+- Issue #262 closed
+
+## Pre-release gates
+
+- no open Issue carries ai-in-progress / ai-pr-opened / ai-fix-needed
+- CI on the release commit: 1 check(s) all success/neutral/skipped
+- no open PR targets main
+
+## Tests
+
+- declared test command and tiered coverage gate (line/branch >= 95%, Issue #234) passed in a clean worktree at 2c11a3f61b918f1faa3b81760d871cb0741733d7 (timeout 1800s)
+
+run_id=37216af5

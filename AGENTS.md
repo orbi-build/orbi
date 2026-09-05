@@ -103,7 +103,7 @@ each section points at the owning page instead of restating it.
 - A Release task is an `ai-ready` Issue additionally marked with the plain `ai-release` label: it NEVER enters the `run_pi` path — the Runner's deterministic release state machine delivers it (no Pi session, no PR), idempotent and resumable.
 - The `ai-release` label is a type marker, NOT a delivery state: the Runner never adds or removes it — only the human does.
 - Success: `ai-merged` (terminal) and the release Issue is closed. Any failure: `ai-blocked` ALONE (a release is a human decision point — no automatic retry).
-- The full 9-step state machine contract: `docs/workflow.mdx` (EN) / `docs/zh/workflow.mdx` (ZH).
+- The full 10-step state machine contract: `docs/workflow.mdx` (EN) / `docs/zh/workflow.mdx` (ZH).
 
 ## Review, fix and merge (same PR)
 

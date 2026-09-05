@@ -1,15 +1,15 @@
-"""Release documentation contract (Issue #128).
+"""Release documentation contract (Issue #128 + Issue #275).
 
 The docs `Releases`/`发布` group must mirror the REAL release state of
 the repository — verified against origin with `git ls-remote --tags
 origin` and `gh release list` (this run): tags `v0.1.0`, `v0.1.1`,
-`v0.1.2` exist; GitHub Releases `v0.1.1`, `v0.1.2` exist; **no
-`v0.1.3` tag or release exists**. Therefore:
+`v0.1.2`, `v0.2.0`, `v0.3.0` exist; GitHub Releases for all five exist;
+**no `v0.1.3` tag or release exists**. Therefore:
 
 - every listed release page corresponds to a real tag (no dead links,
   nothing real missing, nothing invented listed);
 - the navigation lists the releases in DESCENDING version order (Issue
-  #154): the latest release (v0.1.2) is the first entry in both the
+  #154): the latest release (v0.3.0) is the first entry in both the
   English `Releases` and the Chinese `发布` group, so the current
   release is found at the top of the list;
 - `v0.1.3` must not appear anywhere in the docs (fact-based handling:
@@ -20,7 +20,12 @@ origin` and `gh release list` (this run): tags `v0.1.0`, `v0.1.1`,
 - the v0.1.1 pages state that v0.1.1 is the CORRECTED release tag over
   v0.1.0 (the v0.1.0 record page stays the durable reconciliation
   artifact) and keep the link to it;
-- the v0.1.2 pages mark the LATEST release of the current main.
+- ONLY the v0.3.0 pages carry the `(latest)` / `（最新）` title marker
+  (Issue #275): the marker moved off v0.1.2 when the v0.2.0/v0.3.0
+  backfill pages landed — multiple or stale latest markers are a
+  contract violation;
+- the v0.2.0/v0.3.0 pages carry the content of their REAL published
+  GitHub Releases (the backfill of Issue #275).
 
 The EN/ZH page-set parity and the nav↔file exact match are enforced by
 tests/test_docs_i18n.py and tests/test_docs_site.py.
@@ -51,6 +56,14 @@ RELEASES = {
         "tag_object": "209af556a9e0d49c068ee361fcacb7a1a49153cf",
         "commit": "abe48f1e64aa6fa2e76633023df5b52141b35082",
     },
+    "v0.2.0": {
+        "tag_object": "7a2911b9cb518c9fcf2b4dfcedc7db490c407348",
+        "commit": "f5dd821dc2cf022923629481bc04a619dfd43126",
+    },
+    "v0.3.0": {
+        "tag_object": "44dba3fde5f8a983661d68c34644230c78a014f1",
+        "commit": "2c11a3f61b918f1faa3b81760d871cb0741733d7",
+    },
 }
 
 # The only versions with a real tag on origin — and therefore the only
@@ -58,11 +71,11 @@ RELEASES = {
 # Release), so it must not be documented.
 REAL_RELEASE_SLUGS = [
     f"release-{version}"
-    for version in ("v0.1.0", "v0.1.1", "v0.1.2")
+    for version in ("v0.1.0", "v0.1.1", "v0.1.2", "v0.2.0", "v0.3.0")
 ]
 
 # Issue #154: the navigation order is DESCENDING by version — the
-# latest release first (v0.1.2, v0.1.1, v0.1.0).
+# latest release first (v0.3.0, v0.2.0, v0.1.2, v0.1.1, v0.1.0).
 RELEASE_SLUGS_LATEST_FIRST = list(reversed(REAL_RELEASE_SLUGS))
 
 
@@ -247,10 +260,10 @@ def test_release_v011_pages_state_that_they_correct_v010():
     )
 
 
-def test_release_v012_pages_pin_the_real_tag_and_commit_and_mark_latest():
-    """v0.1.2 is the LATEST release (the real GitHub Release
-    `Orbi v0.1.2`, published 2026-08-27): the pages must pin
-    the real tag object and commit and mark it as the latest release."""
+def test_release_v012_pages_pin_the_real_tag_and_commit_without_latest():
+    """v0.1.2 pages must pin the real tag object and commit. The
+    `(latest)` title marker moved OFF v0.1.2 when the v0.2.0/v0.3.0
+    backfill pages landed (Issue #275) — only v0.3.0 may carry it."""
     for rel in ("release-v0.1.2.mdx", "zh/release-v0.1.2.mdx"):
         text = (DOCS_DIR / rel).read_text(encoding="utf-8")
         tag_object = RELEASES["v0.1.2"]["tag_object"]
@@ -267,11 +280,82 @@ def test_release_v012_pages_pin_the_real_tag_and_commit_and_mark_latest():
     ) == RELEASES["v0.1.2"]["commit"], (
         "the pinned v0.1.2 SHA does not resolve to a commit"
     )
-    en = (DOCS_DIR / "release-v0.1.2.mdx").read_text(encoding="utf-8")
-    zh = (DOCS_DIR / "zh" / "release-v0.1.2.mdx").read_text(encoding="utf-8")
-    assert "latest" in en.lower(), (
-        "en v0.1.2 page must mark it the latest release"
+    en_title = (
+        (DOCS_DIR / "release-v0.1.2.mdx").read_text(encoding="utf-8")
+        .splitlines()[0]
     )
-    assert "最新" in zh, (
-        "zh v0.1.2 page must mark it the latest release (最新)"
+    zh_title = (
+        (DOCS_DIR / "zh" / "release-v0.1.2.mdx").read_text(encoding="utf-8")
+        .splitlines()[0]
     )
+    assert "(latest)" not in en_title, (
+        "en v0.1.2 title must NOT carry the (latest) marker anymore"
+    )
+    assert "（最新）" not in zh_title, (
+        "zh v0.1.2 title must NOT carry the （最新） marker anymore"
+    )
+
+
+def test_release_v020_v030_pages_pin_the_real_tag_and_commit():
+    """Issue #275 backfill: the v0.2.0/v0.3.0 pages must pin the REAL
+    tag objects and commits (a guessed SHA fails)."""
+    for version in ("v0.2.0", "v0.3.0"):
+        for rel in (f"release-{version}.mdx", f"zh/release-{version}.mdx"):
+            text = (DOCS_DIR / rel).read_text(encoding="utf-8")
+            tag_object = RELEASES[version]["tag_object"]
+            commit = RELEASES[version]["commit"]
+            assert tag_object in text, (
+                f"{rel} must pin the real {version} tag object"
+            )
+            assert commit in text, f"{rel} must pin the real {version} commit"
+        assert git(
+            "cat-file", "-t", RELEASES[version]["tag_object"],
+        ) == "tag", f"the pinned {version} tag object is not a tag object"
+        assert git(
+            "rev-parse", f"{RELEASES[version]['commit']}^{{commit}}"
+        ) == RELEASES[version]["commit"], (
+            f"the pinned {version} SHA does not resolve to a commit"
+        )
+
+
+def test_only_the_v030_pages_carry_the_latest_marker():
+    """Issue #275: only the newest release page may carry the
+    `(latest)` / `（最新）` title marker — exactly the v0.3.0 pages."""
+    for slug in REAL_RELEASE_SLUGS:
+        en_title = (
+            (DOCS_DIR / f"{slug}.mdx").read_text(encoding="utf-8")
+            .splitlines()[0]
+        )
+        zh_title = (
+            (DOCS_DIR / "zh" / f"{slug}.mdx").read_text(encoding="utf-8")
+            .splitlines()[0]
+        )
+        is_latest = slug == "release-v0.3.0"
+        assert ("(latest)" in en_title) is is_latest, (
+            f"{slug} en title latest marker wrong: {en_title!r}"
+        )
+        assert ("（最新）" in zh_title) is is_latest, (
+            f"{slug} zh title latest marker wrong: {zh_title!r}"
+        )
+
+
+def test_release_v020_v030_pages_carry_the_published_release_content():
+    """Issue #275 backfill: the pages carry the content of their REAL
+    published GitHub Releases — publish time, release task Issue and
+    body excerpts verified against `gh release view` (this run)."""
+    en_v020 = (DOCS_DIR / "release-v0.2.0.mdx").read_text(encoding="utf-8")
+    zh_v020 = (DOCS_DIR / "zh" / "release-v0.2.0.mdx").read_text(encoding="utf-8")
+    en_v030 = (DOCS_DIR / "release-v0.3.0.mdx").read_text(encoding="utf-8")
+    zh_v030 = (DOCS_DIR / "zh" / "release-v0.3.0.mdx").read_text(encoding="utf-8")
+    for text in (en_v020, zh_v020):
+        assert "2026-08-31T01:52:32Z" in text, "v0.2.0 publish time missing"
+        assert "Issue #197" in text, "v0.2.0 release task Issue missing"
+        assert "## Scope (verified item by item)" in text, (
+            "v0.2.0 release body missing"
+        )
+        assert "- Issue #198 closed" in text, "v0.2.0 release body missing"
+    for text in (en_v030, zh_v030):
+        assert "2026-09-04T08:33:09Z" in text, "v0.3.0 publish time missing"
+        assert "Issue #254" in text, "v0.3.0 release task Issue missing"
+        assert "### Features" in text, "v0.3.0 changelog body missing"
+        assert "Issue #204" in text, "v0.3.0 changelog body missing"
