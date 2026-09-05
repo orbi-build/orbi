@@ -4799,6 +4799,119 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
     ]
 
 
+def test_parse_milestone_version_accepts_only_strict_semver():
+    assert runner._parse_version_title(None) is None
+    assert runner._parse_version_title("v0.3.1") == (0, 3, 1)
+    assert runner._parse_version_title("v01.3.1") is None
+    assert runner._parse_version_title("1.3.1") is None
+    assert runner._parse_version_title("v1.2.3.4") is None
+
+
+def test_rewrite_active_milestone_line_preserves_all_other_bytes(tmp_path):
+    config = tmp_path / "orbi.toml"
+    original = '# keep \r\nsource_repos = ["owner/repo"]\r\nactive_milestone = \'v0.3.0\'\r\nother = "x"\r\n'
+    config.write_bytes(original.encode())
+    runner.rewrite_active_milestone_line(config, "v0.3.1")
+    assert config.read_bytes() == original.replace(
+        "active_milestone = 'v0.3.0'", 'active_milestone = "v0.3.1"',
+    ).encode()
+
+
+def test_rewrite_active_milestone_line_fails_when_missing(tmp_path):
+    config = tmp_path / "orbi.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="active_milestone line not found"):
+        runner.rewrite_active_milestone_line(config, "v0.3.1")
+
+
+def test_advance_active_milestone_selects_smallest_higher_open(
+    monkeypatch, tmp_path, caplog,
+):
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
+    milestones = [
+        {"title": "v0.3.0", "state": "closed", "number": 1},
+        {"title": "v0.4.0", "state": "open", "open_issues": 3},
+        {"title": "v0.3.1", "state": "open", "open_issues": 8},
+        {"title": "not-a-version", "state": "open", "open_issues": 1},
+    ]
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps(milestones),
+    )
+    with caplog.at_level("INFO"):
+        assert runner.advance_active_milestone_on_idle(
+            "owner/repo", "v0.3.0", config,
+        ) == ("closed", "v0.3.1")
+    assert 'active_milestone = "v0.3.1"\n' == config.read_text()
+    assert "active_milestone_advanced old=v0.3.0 new=v0.3.1 closed=v0.3.0" in caplog.text
+
+
+def test_advance_active_milestone_open_does_not_query_extra_or_write(
+    monkeypatch, tmp_path,
+):
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append(command) or json.dumps([
+            {"title": "v0.3.0", "state": "open"},
+        ]),
+    )
+    assert runner.advance_active_milestone_on_idle("owner/repo", "v0.3.0", config) == ("open", None)
+    assert len(calls) == 1
+    assert config.read_text() == 'active_milestone = "v0.3.0"\n'
+
+
+def test_advance_active_milestone_closed_without_candidate_logs_and_keeps_value(
+    monkeypatch, tmp_path, caplog,
+):
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([
+            {"title": "v0.3.0", "state": "closed"},
+            {"title": "v0.2.0", "state": "open", "open_issues": 1},
+            {"title": "future", "state": "open", "open_issues": 2},
+        ]),
+    )
+    with caplog.at_level("INFO"):
+        assert runner.advance_active_milestone_on_idle(
+            "owner/repo", "v0.3.0", config,
+        ) == ("closed", None)
+    assert config.read_text() == 'active_milestone = "v0.3.0"\n'
+    assert "active_milestone_advance_none" in caplog.text
+
+
+def test_advance_active_milestone_missing_lists_open_milestones(monkeypatch, tmp_path):
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([
+            {"title": "v0.3.1", "state": "open", "open_issues": 8},
+        ]),
+    )
+    with pytest.raises(RuntimeError, match=r"active_milestone_missing current=v0.3.0; open milestones: v0.3.1\(8\)"):
+        runner.advance_active_milestone_on_idle("owner/repo", "v0.3.0", config)
+
+
+def test_advance_active_milestone_rejects_duplicate_title(monkeypatch, tmp_path):
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([
+            {"title": "v0.3.0", "state": "closed", "number": 1},
+            {"title": "v0.3.0", "state": "closed", "number": 2},
+        ]),
+    )
+    with pytest.raises(RuntimeError, match="ambiguous"):
+        runner.advance_active_milestone_on_idle("owner/repo", "v0.3.0", config)
+
+
 def _write_prompts(tmp_path):
     for name in ("prompt.md", "prompt_review.md"):
         (tmp_path / name).write_text("prompt", encoding="utf-8")
@@ -4834,8 +4947,28 @@ def test_main_passes_configured_active_milestone_to_the_claim_scan(
         return None
 
     monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
+    monkeypatch.setattr(runner, "advance_active_milestone_on_idle", lambda *args: None)
     assert runner.main(["--config", str(config)]) == 0
     assert seen["milestone"] == "v0.2.0"
+
+
+def test_main_advances_milestone_only_after_no_ready_issue(
+    monkeypatch, tmp_path,
+):
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = "v0.3.0"\n',
+        encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args: None)
+    monkeypatch.setattr(
+        runner, "advance_active_milestone_on_idle",
+        lambda *args: calls.append(args),
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    assert calls == [("owner/repo", "v0.3.0", config.resolve())]
 
 
 def test_main_passes_none_active_milestone_when_unconfigured(

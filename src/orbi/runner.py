@@ -660,6 +660,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
                 "state": "file missing",
             }
     return {
+        "config_path": path.resolve(),
         "source_repos": source_repos,
         "repo_dir": repo_dir,
         "deploy_home": deploy_home,
@@ -3637,6 +3638,84 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
     except Exception:
         LOGGER.exception("issue=%s failure reporting failed", number)
     raise error
+
+
+def _parse_version_title(title: object) -> tuple[int, int, int] | None:
+    """Parse a strict ``v<major>.<minor>.<patch>`` milestone title."""
+    if not isinstance(title, str):
+        return None
+    match = re.fullmatch(
+        r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", title,
+    )
+    return tuple(map(int, match.groups())) if match else None
+
+
+def rewrite_active_milestone_line(config_path: Path, new_value: str) -> None:
+    """Replace only the configured active_milestone line, byte-for-byte."""
+    text = config_path.read_bytes().decode("utf-8")
+    pattern = re.compile(r"(?m)^[ \t]*active_milestone[ \t]*=[ \t]*[^\r\n]+")
+    if not pattern.search(text):
+        raise RuntimeError(
+            f"active_milestone line not found in {config_path}"
+        )
+    updated, _ = pattern.subn(
+        f'active_milestone = "{new_value}"', text, count=1,
+    )
+    config_path.write_bytes(updated.encode("utf-8"))
+
+
+def advance_active_milestone_on_idle(
+    repo: str, active_milestone: str, config_path: Path,
+) -> tuple[str, str | None]:
+    """Check and advance a configured milestone after no_ready_issue."""
+    raw = run_command([
+        "gh", "api", f"repos/{repo}/milestones?state=all", "--paginate",
+    ], timeout=30)
+    milestones = parse_issue_array(raw)
+    matches = [
+        milestone for milestone in milestones
+        if isinstance(milestone, dict)
+        and milestone.get("title") == active_milestone
+    ]
+    if not matches:
+        open_list = ", ".join(
+            f"{milestone.get('title')}({milestone.get('open_issues')})"
+            for milestone in milestones
+            if isinstance(milestone, dict) and milestone.get("state") == "open"
+        ) or "(none)"
+        raise RuntimeError(
+            f"active_milestone_missing current={active_milestone}; "
+            f"open milestones: {open_list}"
+        )
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"active_milestone {active_milestone}: ambiguous exact-title "
+            f"match in {repo}, refusing to guess"
+        )
+    if matches[0].get("state") == "open":
+        return "open", None
+    current = _parse_version_title(active_milestone)
+    candidates = []
+    for milestone in milestones:
+        if not isinstance(milestone, dict) or milestone.get("state") != "open":
+            continue
+        version = _parse_version_title(milestone.get("title"))
+        if version is not None and current is not None and version > current:
+            candidates.append((version, milestone.get("title")))
+    if not candidates:
+        LOGGER.info(
+            "active_milestone_advance_none current=%s closed=%s repo=%s",
+            active_milestone, active_milestone, repo,
+        )
+        return "closed", None
+    candidates.sort()
+    new_value = candidates[0][1]
+    rewrite_active_milestone_line(config_path, new_value)
+    LOGGER.info(
+        "active_milestone_advanced old=%s new=%s closed=%s repo=%s",
+        active_milestone, new_value, active_milestone, repo,
+    )
+    return "closed", new_value
 
 
 def pick_next_delivery(
@@ -8317,6 +8396,15 @@ def main(argv: list[str] | None = None) -> int:
                 "source_repos=%s outcome=no_ready_issue",
                 config["source_repos"],
             )
+            # Issue #274: this is the sole trigger for validating and
+            # advancing the configured milestone. An absent setting keeps
+            # the historical idle path with no extra API request.
+            if config["active_milestone"] is not None:
+                advance_active_milestone_on_idle(
+                    config["source_repos"][0],
+                    config["active_milestone"],
+                    config["config_path"],
+                )
             return 0
         source_repo, issue, scene = selected
         if scene is not None:
