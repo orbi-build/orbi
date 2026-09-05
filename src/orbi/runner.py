@@ -1402,13 +1402,24 @@ def parse_release_declaration(body: str) -> dict:
       - #124
     ```
 
+    or, instead of the hand-listed `scope`, the scope derived from the
+    Milestone whose title is the release version (Issue #253):
+
+    ```markdown
+    - scope_from_milestone: v0.3.0
+    ```
+
     `version` is the exact tag name (no spaces), `base_branch` the
     branch the release commit is frozen from, `test_command` the
     shell command that must pass in a clean worktree at the release
     commit, and `scope` the Issue/PR numbers verified one by one.
-    Every deviation fails fast with the concrete field: missing
-    section, missing or duplicated field, unknown key, empty value,
-    empty scope or a malformed scope item. No guessing.
+    Exactly one of `scope` / `scope_from_milestone` must be present:
+    both (conflict) or neither fails fast. `scope_from_milestone` is
+    the Milestone TITLE (no spaces); its scope is derived later by
+    `derive_release_scope_from_milestone`. Every other deviation fails
+    fast with the concrete field: missing section, missing or
+    duplicated field, unknown key, empty value, empty scope or a
+    malformed scope item. No guessing.
     """
     if not isinstance(body, str):
         raise ValueError("release declaration body must be a string")
@@ -1421,7 +1432,8 @@ def parse_release_declaration(body: str) -> dict:
     except StopIteration:
         raise ValueError(
             f"release Issue body is missing the `{RELEASE_SECTION}` "
-            "section with version, base_branch, test_command and scope"
+            "section with version, base_branch, test_command and scope "
+            "or scope_from_milestone"
         ) from None
     section: list[str] = []
     for line in lines[start + 1:]:
@@ -1474,12 +1486,14 @@ def parse_release_declaration(body: str) -> dict:
                     )
                 scope_open = True
                 fields["scope"] = ""
-            elif key in ("version", "base_branch", "test_command"):
+            elif key in ("version", "base_branch", "test_command",
+                         "scope_from_milestone"):
                 fields[key] = value
             else:
                 raise ValueError(
                     f"release declaration has the unknown field {key!r} "
-                    "(expected version, base_branch, test_command or scope)"
+                    "(expected version, base_branch, test_command, "
+                    "scope or scope_from_milestone)"
                 )
         elif scope_open:
             raise ValueError(
@@ -1500,11 +1514,17 @@ def parse_release_declaration(body: str) -> dict:
             raise ValueError(
                 f"release declaration field `{key}` is empty"
             )
-    if "scope" not in fields:
+    if "scope" in fields and "scope_from_milestone" in fields:
         raise ValueError(
-            "release declaration is missing the `scope` field"
+            "release declaration must use exactly one of `scope` or "
+            "`scope_from_milestone`, not both"
         )
-    if not scope:
+    if "scope" not in fields and "scope_from_milestone" not in fields:
+        raise ValueError(
+            "release declaration is missing the `scope` field or the "
+            "`scope_from_milestone` field (exactly one of the two)"
+        )
+    if "scope" in fields and not scope:
         raise ValueError(
             "release declaration `scope` must list at least one "
             "`  - #N` Issue or PR number"
@@ -1515,11 +1535,23 @@ def parse_release_declaration(body: str) -> dict:
                 f"release declaration field `{key}` must not contain "
                 "spaces"
             )
+    if "scope_from_milestone" in fields:
+        if not fields["scope_from_milestone"]:
+            raise ValueError(
+                "release declaration field `scope_from_milestone` is "
+                "empty"
+            )
+        if any(ch.isspace() for ch in fields["scope_from_milestone"]):
+            raise ValueError(
+                "release declaration field `scope_from_milestone` must "
+                "not contain spaces"
+            )
     return {
         "version": fields["version"],
         "base_branch": fields["base_branch"],
         "test_command": fields["test_command"],
         "scope": scope,
+        "scope_from_milestone": fields.get("scope_from_milestone"),
     }
 
 
@@ -1604,6 +1636,92 @@ def verify_release_scope(repo: str, scope: list[int], repo_dir: Path,
             )
         evidence.append(f"Issue #{number} closed")
     return evidence
+
+
+def derive_release_scope_from_milestone(repo: str,
+                                        milestone_title: str) -> tuple[list[int], list[str]]:
+    """Derive the release scope from a Milestone (Issue #253).
+
+    The release scope is the Milestone's COMPLETED deliveries: every
+    Issue with state=closed and every PR with state=merged under the
+    Milestone whose title is EXACTLY `milestone_title` (the same
+    exact-title rule as `close_release_milestone` — never guessed,
+    never fuzzy-matched, never a different Milestone):
+
+    - no Milestone with that exact title -> fail fast;
+    - several Milestones with that exact title -> fail fast
+      (ambiguous — GitHub allows duplicate titles, so guessing one is
+      forbidden);
+    - open Issues/PRs are NEVER part of the scope (unfinished work is a
+      human decision point) but are returned as a separate evidence
+      list so the release run surfaces them instead of swallowing them.
+
+    Returns (scope numbers sorted ascending, open-item evidence
+    strings). A real `gh` failure (auth, rate limit, API error)
+    propagates unchanged — a scope that cannot be derived is a failed
+    release, never a guessed one.
+    """
+    raw = run_command([
+        "gh", "api", f"repos/{repo}/milestones?state=all", "--paginate",
+    ])
+    milestones = parse_issue_array(raw)
+    matches = [
+        m for m in milestones
+        if isinstance(m, dict) and m.get("title") == milestone_title
+    ]
+    if not matches:
+        raise RuntimeError(
+            f"release milestone derivation: no Milestone with the exact "
+            f"title {milestone_title!r} in {repo} — never guessed or "
+            "fuzzy-matched"
+        )
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"release milestone derivation: {len(matches)} Milestones "
+            f"share the exact title {milestone_title!r} in {repo} — "
+            "ambiguous, refusing to guess which to derive from"
+        )
+    number = matches[0].get("number")
+
+    def items(kind: str, state: str) -> list[dict]:
+        raw = run_command([
+            "gh", "api",
+            f"repos/{repo}/{kind}?state={state}&milestone={number}",
+            "--paginate",
+        ])
+        return [item for item in parse_issue_array(raw)
+                if isinstance(item, dict)]
+
+    closed_issues = [
+        item for item in items("issues", "closed")
+        if "pull_request" not in item
+    ]
+    open_issues = [
+        item for item in items("issues", "open")
+        if "pull_request" not in item
+    ]
+    # The `pulls` list query carries `merged_at` at the top level (a
+    # closed-but-unmerged PR has `merged_at: null`) — verified against
+    # the live REST contract; there is no nested `pull_request` key.
+    merged_prs = [
+        item for item in items("pulls", "closed")
+        if item.get("merged_at")
+    ]
+    open_prs = items("pulls", "open")
+
+    scope = sorted(
+        int(item["number"])
+        for item in closed_issues + merged_prs
+        if isinstance(item.get("number"), int)
+    )
+    open_evidence = [
+        f"open Issue #{item.get('number')} {item.get('title')}"
+        for item in open_issues
+    ] + [
+        f"open PR #{item.get('number')} {item.get('title')}"
+        for item in open_prs
+    ]
+    return scope, open_evidence
 
 
 RELEASE_CHANGELOG_CATEGORIES = (
@@ -2529,11 +2647,16 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
     1. Claim (`ai-in-progress`; a restart reuses the existing run id
        from the worktree — the same resume rule as normal tasks).
     2. Strictly parse the `## Release` declaration from the Issue
-       body (version, base_branch, test_command, scope).
+       body (version, base_branch, test_command, scope or
+       scope_from_milestone — exactly one of the two, Issue #253).
     3. Freeze the base — the release commit is exactly
        `origin/<base_branch>` (fetched under the base-sync lock).
     4. Enforce the pre-release gates (`check_release_gates`).
-    5. Verify the scope item by item (`verify_release_scope`).
+    5. When `scope_from_milestone` is declared, derive the scope from
+       the Milestone (`derive_release_scope_from_milestone`): closed
+       Issues + merged PRs; open items are surfaced as evidence, never
+       released. Then verify the scope item by item
+       (`verify_release_scope`).
     6. Run the declared test command in a clean worktree at the
        release commit (`timeout`-wrapped, Issue #95).
     7. Tag: the remote tag must not exist or must point EXACTLY at
@@ -2613,6 +2736,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
     release_commit: str | None = None
     release_test_error: subprocess.CalledProcessError | None = None
     declaration: dict | None = None
+    open_milestone_evidence: list[str] = []
     try:
         declaration = parse_release_declaration(issue["body"])
         base_branch = declaration["base_branch"]
@@ -2665,10 +2789,41 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
                 f"{'; '.join(gate_evidence)}",
             ),
         )
+        if declaration.get("scope_from_milestone") is not None:
+            # Issue #253: the scope is derived from the Milestone, then
+            # verified item by item exactly like a hand-listed scope.
+            derived_scope, open_milestone_evidence = (
+                derive_release_scope_from_milestone(
+                    source_repo, declaration["scope_from_milestone"],
+                )
+            )
+            if not derived_scope:
+                raise RuntimeError(
+                    f"release {declaration['version']}: Milestone "
+                    f"{declaration['scope_from_milestone']!r} has no "
+                    "closed Issue or merged PR — the derived scope is "
+                    "empty and a release needs at least one delivery"
+                )
+            declaration["scope"] = derived_scope
+            if open_milestone_evidence:
+                LOGGER.warning(
+                    "issue=%s release_milestone_open_items "
+                    "milestone=%s open_items=%s",
+                    number, declaration["scope_from_milestone"],
+                    "; ".join(open_milestone_evidence),
+                )
         scope_evidence = verify_release_scope(
             source_repo, declaration["scope"], config["repo_dir"],
             release_commit,
         )
+        if open_milestone_evidence:
+            # Open items are NOT released; they are surfaced in the
+            # auditable evidence instead of being silently swallowed.
+            scope_evidence = scope_evidence + [
+                f"NOT released (still open in milestone "
+                f"{declaration['scope_from_milestone']}): {item}"
+                for item in open_milestone_evidence
+            ]
         changelog = build_release_changelog(source_repo, declaration["scope"])
         _safe_publish(
             run_id=run_id, issue=number, source_repo=source_repo,

@@ -5925,9 +5925,11 @@ def test_stream_pi_logs_idle_warning_once_when_session_stalls(
     assert "phase=session_pending" in idle
     assert "stale_seconds=" in idle
     # The warning is a WARNING (visible in journalctl without -p info).
+    # No leading space: the `[run_id]` prefix (RunIdFilter, Issue #41)
+    # is not part of the message when no run id is bound in this test.
     assert any(
         record.levelno == logging.WARNING
-        and " pi_idle " in record.getMessage()
+        and "pi_idle " in record.getMessage()
         for record in caplog.records
     )
 
@@ -11785,6 +11787,7 @@ def test_parse_release_declaration_returns_all_fields():
             "&& /usr/bin/python3 -m coverage report --show-missing"
         ),
         "scope": [123, 124],
+        "scope_from_milestone": None,
     }
 
 
@@ -11872,6 +11875,61 @@ def test_parse_release_declaration_rejects_scope_item_without_hash():
 def test_parse_release_declaration_rejects_zero_scope_item():
     body = RELEASE_DECLARATION_BODY.replace("  - #123", "  - #0")
     with pytest.raises(ValueError, match="scope item"):
+        runner.parse_release_declaration(body)
+
+
+RELEASE_MILESTONE_DECLARATION_BODY = """Ship v0.3.0 to the remote.
+
+## Release
+
+- version: v0.3.0
+- base_branch: main
+- test_command: /usr/bin/python3 -m pytest tests/ -q
+- scope_from_milestone: v0.3.0
+
+## Notes
+
+- this text is outside the release section
+"""
+
+
+def test_parse_release_declaration_scope_from_milestone():
+    decl = runner.parse_release_declaration(RELEASE_MILESTONE_DECLARATION_BODY)
+    assert decl == {
+        "version": "v0.3.0",
+        "base_branch": "main",
+        "test_command": "/usr/bin/python3 -m pytest tests/ -q",
+        "scope": [],
+        "scope_from_milestone": "v0.3.0",
+    }
+
+
+def test_parse_release_declaration_manual_scope_has_no_milestone():
+    decl = runner.parse_release_declaration(RELEASE_DECLARATION_BODY)
+    assert decl["scope_from_milestone"] is None
+
+
+def test_parse_release_declaration_rejects_scope_and_scope_from_milestone():
+    body = RELEASE_MILESTONE_DECLARATION_BODY.replace(
+        "\n## Notes", "\n- scope:\n  - #123\n\n## Notes",
+    )
+    with pytest.raises(ValueError, match="exactly one"):
+        runner.parse_release_declaration(body)
+
+
+def test_parse_release_declaration_rejects_empty_scope_from_milestone():
+    body = RELEASE_MILESTONE_DECLARATION_BODY.replace(
+        "- scope_from_milestone: v0.3.0", "- scope_from_milestone:",
+    )
+    with pytest.raises(ValueError, match="scope_from_milestone"):
+        runner.parse_release_declaration(body)
+
+
+def test_parse_release_declaration_rejects_scope_from_milestone_with_space():
+    body = RELEASE_MILESTONE_DECLARATION_BODY.replace(
+        "- scope_from_milestone: v0.3.0", "- scope_from_milestone: v0.3 .0",
+    )
+    with pytest.raises(ValueError, match="scope_from_milestone"):
         runner.parse_release_declaration(body)
 
 
@@ -12242,6 +12300,136 @@ def test_verify_release_scope_reraises_real_gh_failure(monkeypatch):
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     with pytest.raises(subprocess.CalledProcessError):
         runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
+
+
+def make_milestone_gh(monkeypatch, *, milestones=None, items_by_milestone=None):
+    """Answer the gh api calls of `derive_release_scope_from_milestone`.
+
+    `milestones`: the `repos/o/r/milestones?state=all` payload.
+    `items_by_milestone`: milestone number -> dict with keys
+    `issues_closed` / `issues_open` / `pulls_closed` / `pulls_open`
+    (each a list of REST API items; a closed PR counts as merged only
+    when its top-level `merged_at` is set — the `pulls` list query
+    carries `merged_at` at the top level, verified against the live
+    REST contract).
+    """
+    milestones = milestones or []
+    items_by_milestone = items_by_milestone or {}
+    calls = []
+
+    def fake_run_command(command, **kwargs):
+        calls.append(command)
+        path = command[2] if len(command) > 2 else ""
+        if path == "repos/o/r/milestones?state=all":
+            return json.dumps(milestones)
+        match = re.fullmatch(
+            r"repos/o/r/(issues|pulls)\?state=(\w+)&milestone=(\d+)", path,
+        )
+        if match:
+            kind, state, number = match.groups()
+            bucket = items_by_milestone.get(int(number), {})
+            return json.dumps(bucket.get(f"{kind}_{state}", []))
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    return calls
+
+
+def test_milestone_gh_fake_rejects_unexpected_command(monkeypatch):
+    make_milestone_gh(monkeypatch, milestones=[])
+    with pytest.raises(AssertionError, match="unexpected command"):
+        runner.run_command(["gh", "api", "repos/o/r/issues?state=all"])
+    with pytest.raises(AssertionError, match="unexpected command"):
+        runner.run_command(["git", "status"])
+
+
+def test_derive_release_scope_from_milestone_returns_closed_and_merged(
+        monkeypatch):
+    make_milestone_gh(
+        monkeypatch,
+        milestones=[{"number": 5, "title": "v0.3.0", "state": "open"}],
+        items_by_milestone={5: {
+            "issues_closed": [
+                {"number": 160, "title": "Deliver A", "state": "closed"},
+                {"number": 168, "title": "Deliver B", "state": "closed"},
+            ],
+            "pulls_closed": [
+                {"number": 170, "title": "PR C", "state": "closed",
+                 "merged_at": "2026-09-01T00:00:00Z"},
+                {"number": 171, "title": "PR D unmerged", "state": "closed",
+                 "merged_at": None},
+            ],
+        }},
+    )
+    scope, open_evidence = runner.derive_release_scope_from_milestone(
+        "o/r", "v0.3.0",
+    )
+    assert scope == [160, 168, 170]
+    assert open_evidence == []
+
+
+def test_derive_release_scope_from_milestone_lists_open_items(monkeypatch):
+    make_milestone_gh(
+        monkeypatch,
+        milestones=[{"number": 5, "title": "v0.3.0", "state": "open"}],
+        items_by_milestone={5: {
+            "issues_closed": [
+                {"number": 160, "title": "Deliver A", "state": "closed"},
+            ],
+            "issues_open": [
+                {"number": 255, "title": "Still open work",
+                 "state": "open"},
+            ],
+            "pulls_open": [
+                {"number": 260, "title": "Open PR", "state": "open"},
+            ],
+        }},
+    )
+    scope, open_evidence = runner.derive_release_scope_from_milestone(
+        "o/r", "v0.3.0",
+    )
+    assert scope == [160]
+    assert open_evidence == [
+        "open Issue #255 Still open work",
+        "open PR #260 Open PR",
+    ]
+
+
+def test_derive_release_scope_from_milestone_fails_when_missing(monkeypatch):
+    make_milestone_gh(monkeypatch, milestones=[])
+    with pytest.raises(
+            RuntimeError, match="no Milestone with the exact title"):
+        runner.derive_release_scope_from_milestone("o/r", "v0.9.9")
+
+
+def test_derive_release_scope_from_milestone_fails_on_ambiguous_title(
+        monkeypatch):
+    make_milestone_gh(
+        monkeypatch,
+        milestones=[
+            {"number": 5, "title": "v0.3.0", "state": "open"},
+            {"number": 6, "title": "v0.3.0", "state": "open"},
+        ],
+    )
+    with pytest.raises(RuntimeError, match="ambiguous"):
+        runner.derive_release_scope_from_milestone("o/r", "v0.3.0")
+
+
+def test_derive_release_scope_from_milestone_empty_scope(monkeypatch):
+    make_milestone_gh(
+        monkeypatch,
+        milestones=[{"number": 5, "title": "v0.3.0", "state": "open"}],
+        items_by_milestone={5: {
+            "issues_open": [
+                {"number": 255, "title": "Still open work", "state": "open"},
+            ],
+        }},
+    )
+    scope, open_evidence = runner.derive_release_scope_from_milestone(
+        "o/r", "v0.3.0",
+    )
+    assert scope == []
+    assert open_evidence == ["open Issue #255 Still open work"]
 
 
 def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None,
@@ -12740,7 +12928,7 @@ def test_publish_release_reraises_real_gh_failure(monkeypatch):
 def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                              tag_commit=None, release_url="https://github.com/o/r/releases/tag/v0.3.0",
                              in_progress=False, existing_run_id=None,
-                             check_run_pages=None):
+                             check_run_pages=None, milestone_items=None):
     """Full fake environment for `process_release`.
 
     Returns a dict of captured state: edit_issue / comment_issue calls,
@@ -12748,6 +12936,9 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     `check_run_pages` (Issue #268) optionally sequences the check-runs
     endpoint: a list of [(name, status, conclusion)] pages answered in
     order, the last page repeating when exhausted.
+    `milestone_items` (Issue #253) answers the milestone scope-derivation
+    queries: milestone number -> dict with keys `issues_closed` /
+    `issues_open` / `pulls_closed` / `pulls_open`.
     """
     state = {
         "edits": [], "comments": [], "commands": [],
@@ -12810,6 +13001,15 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             return json.dumps({"number": 5, "title": "v0.3.0",
                                "state": "closed", "open_issues": 0})
         if command[:2] == ["gh", "api"]:
+            if milestone_items is not None:
+                match = re.fullmatch(
+                    r"repos/o/r/(issues|pulls)\?state=(\w+)&milestone=(\d+)",
+                    command[2],
+                )
+                if match:
+                    kind, item_state, number = match.groups()
+                    bucket = milestone_items.get(int(number), {})
+                    return json.dumps(bucket.get(f"{kind}_{item_state}", []))
             if check_run_pages:
                 page = check_run_pages.pop(0)
                 if not check_run_pages:
@@ -12935,6 +13135,96 @@ def test_process_release_success_end_to_end(monkeypatch):
     assert "docs release notes for v0.3.0 synced to base" \
         in comment_kwargs["body"]
     assert state["run_ids"][0] == "a1b2c3d4"
+
+
+def test_process_release_derives_scope_from_milestone(monkeypatch):
+    state = make_release_process_env(
+        monkeypatch,
+        body=RELEASE_MILESTONE_DECLARATION_BODY,
+        milestone_items={5: {
+            "issues_closed": [
+                {"number": 123, "title": "Deliver A", "state": "closed"},
+                {"number": 124, "title": "Deliver B", "state": "closed"},
+            ],
+        }},
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_MILESTONE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    url = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert url == "https://github.com/o/r/releases/tag/v0.3.0"
+    commands = [c for c, _ in state["commands"]]
+    # The scope was derived from the milestone, not hand-listed.
+    assert ["gh", "api",
+            "repos/o/r/issues?state=closed&milestone=5", "--paginate"] \
+        in commands
+    # The derived scope went through the existing item-by-item verify.
+    (comment_number, comment_kwargs), = state["comments"]
+    assert "PR #123 merged (mergeCommit=aaa111)" in comment_kwargs["body"]
+    assert "Issue #124 closed" in comment_kwargs["body"]
+
+
+def test_process_release_lists_open_milestone_items(monkeypatch):
+    state = make_release_process_env(
+        monkeypatch,
+        body=RELEASE_MILESTONE_DECLARATION_BODY,
+        milestone_items={5: {
+            "issues_closed": [
+                {"number": 123, "title": "Deliver A", "state": "closed"},
+            ],
+            "issues_open": [
+                {"number": 255, "title": "Still open work",
+                 "state": "open"},
+            ],
+        }},
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_MILESTONE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    url = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert url == "https://github.com/o/r/releases/tag/v0.3.0"
+    # Open items are surfaced as a warning and in the auditable success
+    # comment — never silently swallowed, never part of the scope.
+    warn_calls = [
+        c.args for c in runner.LOGGER.warning.call_args_list
+        if c.args and "release_milestone_open_items" in str(c.args)
+    ]
+    assert len(warn_calls) == 1
+    assert "#255" in str(warn_calls[0])
+    (comment_number, comment_kwargs), = state["comments"]
+    assert ("NOT released (still open in milestone v0.3.0): "
+            "open Issue #255 Still open work") in comment_kwargs["body"]
+    assert "PR #123 merged (mergeCommit=aaa111)" in comment_kwargs["body"]
+
+
+def test_process_release_fails_on_empty_derived_scope(monkeypatch):
+    state = make_release_process_env(
+        monkeypatch,
+        body=RELEASE_MILESTONE_DECLARATION_BODY,
+        milestone_items={5: {
+            "issues_open": [
+                {"number": 255, "title": "Still open work",
+                 "state": "open"},
+            ],
+        }},
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_MILESTONE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    with pytest.raises(RuntimeError, match="derived scope is empty"):
+        runner.process_release(
+            issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        )
+    # Terminal failure: ai-blocked ALONE, no tag, no close.
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+                                       "remove": "ai-in-progress"})
+    commands = [c for c, _ in state["commands"]]
+    assert not [c for c in commands if c[:2] == ["git", "tag"]]
+    assert not [c for c in commands if c[:3] == ["gh", "issue", "close"]]
 
 
 def test_process_release_waits_for_pending_ci_and_succeeds(monkeypatch):
