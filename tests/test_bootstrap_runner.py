@@ -11391,6 +11391,127 @@ def test_load_config_pi_providers_braced_env_reference(tmp_path, monkeypatch):
     assert config["pi_providers_data"] == providers
 
 
+def test_load_config_api_key_from_deploy_env_file_ok(tmp_path, monkeypatch):
+    """Issue #348: the key lives in `<deploy_home>/.orbi/env` (step 4 of
+    getting-started) but is NOT exported in the shell — `load_config`
+    must read the env file and validate successfully."""
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    env_file = tmp_path / ".orbi" / "env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("GROQ_API_KEY=file-key\n", encoding="utf-8")
+    config_path = _providers_config(
+        tmp_path, GROQ_PROVIDERS, pi_provider='"groq"',
+        pi_model='"qwen/qwen3.8-27b"',
+    )
+    config = runner.load_config(config_path)
+    assert config["pi_providers_data"] == GROQ_PROVIDERS
+    # The variable must be visible to the process so the per-run Pi agent
+    # dir expansion (_expand_pi_api_key_refs) resolves it too.
+    assert os.environ.get("GROQ_API_KEY") == "file-key"
+
+
+def test_load_config_api_key_shell_export_wins_over_env_file(
+    tmp_path, monkeypatch,
+):
+    """A shell-exported value stays the documented override for manual
+    ticks: the env file never replaces an existing variable."""
+    monkeypatch.setenv("GROQ_API_KEY", "shell-key")
+    env_file = tmp_path / ".orbi" / "env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("GROQ_API_KEY=file-key\n", encoding="utf-8")
+    config_path = _providers_config(
+        tmp_path, GROQ_PROVIDERS, pi_provider='"groq"',
+        pi_model='"qwen/qwen3.8-27b"',
+    )
+    runner.load_config(config_path)
+    assert os.environ.get("GROQ_API_KEY") == "shell-key"
+
+
+def test_load_config_api_key_missing_everywhere_names_both_remedies(
+    tmp_path, monkeypatch,
+):
+    """Key absent from the shell AND from `.orbi/env`: the failure must
+    point at both fixes, not only name the missing variable."""
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    config_path = _providers_config(
+        tmp_path, GROQ_PROVIDERS, pi_provider='"groq"',
+        pi_model='"qwen/qwen3.8-27b"',
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"missing environment variable GROQ_API_KEY.*"
+        r"Export GROQ_API_KEY.*\.orbi/env",
+    ):
+        runner.load_config(config_path)
+
+
+def test_load_config_env_file_absent_missing_key_still_fails(
+    tmp_path, monkeypatch,
+):
+    """No `.orbi/env` at all: the pre-#348 behavior is unchanged."""
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    config_path = _providers_config(
+        tmp_path, GROQ_PROVIDERS, pi_provider='"groq"',
+        pi_model='"qwen/qwen3.8-27b"',
+    )
+    with pytest.raises(
+        ValueError, match="missing environment variable GROQ_API_KEY",
+    ):
+        runner.load_config(config_path)
+
+
+def test_load_config_env_file_follows_explicit_deploy_home(
+    tmp_path, monkeypatch,
+):
+    """The env file is read from `<deploy_home>/.orbi/env`, not the
+    delivery checkout (repo_dir) when deploy_home is explicit."""
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    home = tmp_path / "orbi-home"
+    home.mkdir()
+    env_file = home / ".orbi" / "env"
+    env_file.parent.mkdir()
+    env_file.write_text("GROQ_API_KEY=home-key\n", encoding="utf-8")
+    config_path = _providers_config(
+        tmp_path, GROQ_PROVIDERS, pi_provider='"groq"',
+        pi_model='"qwen/qwen3.8-27b"', deploy_home=f'"{home}"',
+    )
+    runner.load_config(config_path)
+    assert os.environ.get("GROQ_API_KEY") == "home-key"
+
+
+def test_load_deploy_env_file_parses_comments_quotes_and_export(
+    tmp_path, monkeypatch,
+):
+    """Plain systemd EnvironmentFile syntax: blank lines and `#` comments
+    are skipped; matching quotes are stripped; `export ` prefix is
+    accepted."""
+    env_file = tmp_path / ".orbi" / "env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text(
+        "# a comment\n"
+        "\n"
+        'QUOTED="double"\n'
+        "SINGLE='single'\n"
+        "export EXPORTED=yes\n"
+        "PLAIN=raw\n",
+        encoding="utf-8",
+    )
+    runner._load_deploy_env_file(tmp_path)
+    assert os.environ.get("QUOTED") == "double"
+    assert os.environ.get("SINGLE") == "single"
+    assert os.environ.get("EXPORTED") == "yes"
+    assert os.environ.get("PLAIN") == "raw"
+
+
+def test_load_deploy_env_file_malformed_line_fails_fast(tmp_path):
+    """A line without `=` is a misconfiguration — fail fast, no fallback."""
+    env_file = tmp_path / ".orbi" / "env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("NOT_AN_ASSIGNMENT\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="NOT_AN_ASSIGNMENT"):
+        runner._load_deploy_env_file(tmp_path)
+
+
 def test_prepare_pi_agent_dir_user_models_json_without_providers_key(
     tmp_path, monkeypatch,
 ):
