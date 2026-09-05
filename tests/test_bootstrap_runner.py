@@ -15828,3 +15828,14 @@ def test_load_config_allows_missing_provider_file_for_setup_diagnostics(tmp_path
     config = runner.load_config(config_path, allow_missing_pi_providers=True)
     assert config["pi_providers_data"] is None
     assert config["pi_provider_key_finding"]["state"] == "file missing"
+
+
+def test_load_config_does_not_treat_provider_directory_as_missing(tmp_path):
+    config_path = tmp_path / "orbi.toml"
+    (tmp_path / "providers").mkdir()
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\n'
+        'pi_providers = "providers"\n', encoding="utf-8",
+    )
+    with pytest.raises(FileNotFoundError):
+        runner.load_config(config_path, allow_missing_pi_providers=True)

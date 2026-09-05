@@ -629,7 +629,10 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
                 check_api_key=check_provider_api_keys,
             )
         except FileNotFoundError:
-            if not allow_missing_pi_providers:
+            # A missing path is the setup/doctor diagnostic case.  Preserve
+            # fail-fast behavior for an existing non-file path (for example,
+            # a directory), which is an invalid provider configuration.
+            if not allow_missing_pi_providers or pi_providers_path.exists():
                 raise
             _load_pi_providers.last_key_finding = {
                 "provider": pi_provider or "-",
