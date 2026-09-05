@@ -360,6 +360,36 @@ def make_publisher(run_command=None, comments=None, posted=None,
     return publisher, calls
 
 
+def test_progress_comment_writes_use_body_free_log_commands():
+    commands = []
+    logged = []
+
+    def fake_run_command(command, **kwargs):
+        commands.append(command)
+        if "log_command" in kwargs:
+            logged.append(kwargs["log_command"])
+        if "--method" not in command:
+            return json.dumps([])
+        if "POST" in command:
+            return json.dumps({"id": 42})
+        return ""
+
+    publisher = progress.ProgressPublisher(
+        18, "xqliu/orbi", "abc123", run_command=fake_run_command,
+    )
+    publisher.ensure("body with\nfull markdown")
+    publisher.patch("updated body with\nfull markdown")
+    publisher.milestone("tests passed")
+
+    assert logged == [
+        ["gh", "api", "repos/xqliu/orbi/issues/18/comments", "--method", "POST"],
+        ["gh", "api", "repos/xqliu/orbi/issues/comments/42", "--method", "PATCH"],
+        ["gh", "api", "repos/xqliu/orbi/issues/18/comments", "--method", "POST"],
+    ]
+    assert all("--field" not in command for command in logged)
+    assert commands[2][-1] == "body=updated body with\nfull markdown"
+
+
 def test_publisher_ensure_creates_comment_when_marker_missing():
     publisher, calls = make_publisher()
     comment_id = publisher.ensure("initial body")

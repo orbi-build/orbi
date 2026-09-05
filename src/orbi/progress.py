@@ -182,10 +182,14 @@ class ProgressPublisher:
         return comments
 
     def _post_comment(self, body: str) -> int:
-        raw = self._run_command([
-            "gh", "api", self._endpoint(),
-            "--method", "POST", "--field", f"body={body}",
-        ])
+        endpoint = self._endpoint()
+        raw = self._run_command(
+            [
+                "gh", "api", endpoint,
+                "--method", "POST", "--field", f"body={body}",
+            ],
+            log_command=["gh", "api", endpoint, "--method", "POST"],
+        )
         # `gh api` replies with the full comment object, not a bare id.
         data = json.loads(raw)
         if not isinstance(data, dict) or not isinstance(data.get("id"), int):
@@ -195,10 +199,14 @@ class ProgressPublisher:
         return data["id"]
 
     def _patch_comment(self, comment_id: int, body: str) -> None:
-        self._run_command([
-            "gh", "api", self._update_endpoint(comment_id),
-            "--method", "PATCH", "--field", f"body={body}",
-        ])
+        endpoint = self._update_endpoint(comment_id)
+        self._run_command(
+            [
+                "gh", "api", endpoint,
+                "--method", "PATCH", "--field", f"body={body}",
+            ],
+            log_command=["gh", "api", endpoint, "--method", "PATCH"],
+        )
 
     def ensure(self, body: str) -> int:
         """Create or resume the run's progress comment; return its id.
