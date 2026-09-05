@@ -453,6 +453,13 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
             lines.append(
                 f"  {entry['unit']}: sha256={entry['installed_sha256']}"
             )
+    finding = config.get("pi_provider_key_finding")
+    if finding:
+        lines.append(
+            "model_endpoint: provider="
+            f"{finding['provider']} key={finding['variable']} "
+            f"{finding['state']} (file: {finding['path']})"
+        )
     # CLI source (Issue #152): the official local deployment is the
     # editable uv tool install — the tool env imports `orbi`
     # from the deployment checkout, so the ExecStartPre sync is picked
@@ -616,8 +623,18 @@ def main(argv: list[str] | None = None) -> int:
         # `python3 -m orbi.runner` entry has.
         return runner.main(["--config", str(args.config)])
 
-    config = load_config(args.config)
-    validate_config(config)
+    try:
+        config = load_config(
+            args.config,
+            check_provider_api_keys=args.command != "doctor",
+        )
+        validate_config(config)
+    except ValueError as exc:
+        if args.command == "setup":
+            print(f"setup_failed reason={exc}", file=sys.stderr)
+        else:
+            LOGGER.error("config_invalid reason=%s", exc)
+        return 1
     if args.command == "add":
         repo = args.repo or config["source_repos"][0]
         if repo not in config["source_repos"]:
