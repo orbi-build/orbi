@@ -18,6 +18,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 README = REPO_ROOT / "README.md"
+README_ZH = REPO_ROOT / "README.zh-CN.md"
 
 # The homepage budget (Issue #241 acceptance criteria).
 MAX_LINES = 120
@@ -96,6 +97,31 @@ def readme_text() -> str:
     return README.read_text(encoding="utf-8")
 
 
+def test_readmes_provide_reciprocal_language_switchers_and_localized_docs():
+    """The English README is the default, while the Chinese copy keeps
+    the same content shape and points its repository docs links at docs/zh/.
+    """
+    english = readme_text()
+    assert README_ZH.is_file(), "missing Chinese README"
+    chinese = README_ZH.read_text(encoding="utf-8")
+    assert english.startswith("English | [简体中文](README.zh-CN.md)")
+    assert chinese.startswith("[English](README.md) | 简体中文")
+    for topic in ("getting-started", "setup", "workflow", "operations", "testing", "contributing"):
+        assert f"docs/{topic}.mdx" in english
+        assert f"docs/zh/{topic}.mdx" in chinese
+    assert not re.search(r"[\u4e00-\u9fff]", "\n".join(english.splitlines()[1:]))
+
+
+def test_readme_relative_links_resolve_for_each_language():
+    """Every repository-relative README link must point to a real file or directory."""
+    for path in (README, README_ZH):
+        assert path.is_file(), f"missing README: {path}"
+        links = re.findall(r"\]\(([^)]+)\)", path.read_text(encoding="utf-8"))
+        relative = [link for link in links if not link.startswith(("http://", "https://", "#"))]
+        missing = [link for link in relative if not (REPO_ROOT / link).exists()]
+        assert not missing, f"{path.name} has missing relative links: {missing}"
+
+
 def test_readme_stays_within_the_homepage_budget():
     """Issue #241: the README is a homepage — 120 lines / 8KB max, so a
     new user can read it on one screen."""
@@ -146,7 +172,7 @@ def test_first_screen_says_what_orbi_is_and_how_to_start():
     assert "GitHub Issue" in head, (
         "the first screen must say Orbi's task pool is GitHub Issues"
     )
-    for boundary in ("数据库", "队列", "daemon"):
+    for boundary in ("no database", "queue", "daemon"):
         assert boundary in head, (
             f"the first screen must state the MVP boundary (no {boundary})"
         )
@@ -155,7 +181,7 @@ def test_first_screen_says_what_orbi_is_and_how_to_start():
     assert "worktree" in head, "the first screen must name the worktree"
     assert "Pi" in head, "the first screen must name the Pi development step"
     assert "PR" in head, "the first screen must name the PR delivery"
-    assert "审查" in head or "review" in head.lower(), (
+    assert "review" in head.lower(), (
         "the first screen must name the independent review"
     )
     assert "merge" in head.lower(), "the first screen must name the merge"
@@ -179,9 +205,9 @@ def overview_section(text: str) -> str:
     `## ` heading) — the chain check runs inside it, not over the whole
     file (the intro paragraph names `worktree` before the overview).
     """
-    match = re.search(r"^## 它能做什么\n(.*?)(?=^## )", text, re.DOTALL | re.MULTILINE)
+    match = re.search(r"^## What it does\n(.*?)(?=^## )", text, re.DOTALL | re.MULTILINE)
     assert match is not None, (
-        "README is missing the capability overview section (## 它能做什么)"
+        "README is missing the capability overview section (## What it does)"
     )
     return match.group(1)
 
@@ -202,7 +228,7 @@ def test_readme_capability_overview_keeps_the_delivery_chain():
         "worktree",
         "Pi",
         "PR",
-        "审查",
+        "Independent review",
         "merge",
     ]
     positions = []

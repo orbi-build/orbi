@@ -90,9 +90,9 @@ def test_readme_explains_the_terms_in_plain_language() -> None:
         "README does not name the Sustainable Use License"
     )
     assert "fair-code" in readme, "README does not say the project is fair-code"
-    assert "永久免费" in readme, (
+    assert "free forever" in readme, (
         "README does not state that self-hosted use stays free"
     )
-    assert "商业授权" in readme, (
+    assert "Commercial authorization" in readme, (
         "README does not say when a commercial licence is required"
     )
