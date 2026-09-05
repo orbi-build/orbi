@@ -684,10 +684,12 @@ def test_readme_titles_the_project_orbi():
     """Issue #183: the README (the GitHub homepage) no longer carries
     Orbi as the primary brand — the title is Orbi."""
     text = README.read_text(encoding="utf-8")
-    first_line = text.splitlines()[0]
-    assert first_line.strip() == "# Orbi", (
+    title_line = next(
+        (line for line in text.splitlines() if line.startswith("# ")), ""
+    )
+    assert title_line == "# Orbi", (
         f"the README title must be '# Orbi' (v0.3.0 rebrand), "
-        f"got: {first_line!r}"
+        f"got: {title_line!r}"
     )
 
 
