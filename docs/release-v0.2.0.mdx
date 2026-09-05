@@ -10,11 +10,47 @@
 
 ## Release notes
 
+v0.2.0 established the operational foundation for running multiple, recoverable AI delivery tasks from GitHub Issues.
+
+### Features
+
+- **Epic 与 Release task 分离**：识别 `ai-epic`，让聚合/发布门禁不再被当成一个大开发任务领取；新增 `ai-release` 路径，逐项核验范围、tag、CI 和交付收口 ([Issue #93](https://github.com/orbi-build/orbi/issues/93); [Issue #98](https://github.com/orbi-build/orbi/issues/98)).
+- **按版本限制领取范围**：支持显式 `active_milestone`，fresh claim 只领取当前发布版本的 ready Issue，并保留恢复流程的跨版本能力 ([Issue #139](https://github.com/orbi-build/orbi/issues/139); [Issue #192](https://github.com/orbi-build/orbi/issues/192)).
+- **可执行 CLI 与模型配置**：提供 `muyan-pilot` 命令入口，并允许为 implement/review 配置 Pi provider、model 和 thinking；支持 OpenAI-compatible provider 的 endpoint 与环境变量 key 引用 ([Issue #140](https://github.com/orbi-build/orbi/issues/140); [Issue #119](https://github.com/orbi-build/orbi/issues/119); [Issue #157](https://github.com/orbi-build/orbi/issues/157)).
+- **并发 Runner 部署**：将 systemd 改为实例化 service/timer，使 `max_concurrency=2` 真正启动两个独立 Runner，同时复用 slot 锁避免重复领取 ([Issue #149](https://github.com/orbi-build/orbi/issues/149)).
+
+### Reliability and recovery
+
+- **可恢复失败进入 fix loop**：review、测试、验证和 merge 等 AI 可修复失败进入 `ai-fix-needed`，保留同一 run、branch、worktree 和 PR，而不是永久 `ai-blocked` ([Issue #50](https://github.com/orbi-build/orbi/issues/50)).
+- **并发交付稳定收口**：修复双 Runner 场景下两个 PR 未能及时 review/merge、slot 未释放的问题，并保留第三个 Runner 的容量拒绝语义 ([Issue #105](https://github.com/orbi-build/orbi/issues/105)).
+- **停止与恢复状态可追踪**：Runner 停止时记录活动 Issue/run 上下文；resume 前补齐 `ai-in-progress`，避免进程实际运行但 GitHub Issue 没有运行标签 ([Issue #48](https://github.com/orbi-build/orbi/issues/48); [Issue #178](https://github.com/orbi-build/orbi/issues/178)).
+- **减少误杀并修复并发竞态**：idle/model_wait 检测尊重长工具和模型生成；idle recovery 遵守工具 deadline；共享 `origin/main` 的 fetch 受统一同步保护；Pi 的 settings/models 与 provider 启动配置保持一致 ([Issue #169](https://github.com/orbi-build/orbi/issues/169); [Issue #181](https://github.com/orbi-build/orbi/issues/181); [Issue #171](https://github.com/orbi-build/orbi/issues/171); [Issue #172](https://github.com/orbi-build/orbi/issues/172)).
+
+### Deployment and operations
+
+- **systemd unit 漂移可诊断**：保留模板为唯一事实源并在模板变更后正确同步，避免 timer/service 因合法部署更新持续 fail-fast ([Issue #131](https://github.com/orbi-build/orbi/issues/131); [Issue #142](https://github.com/orbi-build/orbi/issues/142)).
+- **editable CLI 自举刷新**：检测 packaging 元数据变化并在启动前刷新 editable finder，解决新增 runtime module 导致的 `ModuleNotFoundError`；同时避免每个 tick 无条件重装 ([Issue #152](https://github.com/orbi-build/orbi/issues/152); [Issue #158](https://github.com/orbi-build/orbi/issues/158)).
+- **运行状态可观测**：提供独立的 Prometheus exporter 与 Grafana Dashboard，展示 Runner、Issue、phase、idle、失败原因和 slot 状态，不影响主交付链路 ([Issue #162](https://github.com/orbi-build/orbi/issues/162); [Issue #198](https://github.com/orbi-build/orbi/issues/198)).
+
+### Documentation and developer experience
+
+- **KISS/LEAN 开发契约**：在 implementer/reviewer prompt、AGENTS 和文档中明确最小完整变更，禁止需求外架构、fallback 和无收益抽象 ([Issue #118](https://github.com/orbi-build/orbi/issues/118)).
+- **发布文档更易查找**：Release 导航按版本倒序排列，最新版本位于中英文列表顶部 ([Issue #154](https://github.com/orbi-build/orbi/issues/154)).
+- **完整上手路径**：补充从依赖、认证、配置、systemd 到 Issue pickup、Pi、PR 和验证的端到端操作文章 ([Issue #179](https://github.com/orbi-build/orbi/issues/179)).
+
+### Bug fixes
+
+- **CLI 前置检查更明确**：setup 在执行 editable 安装前显式检查 `uv`，缺失时给出可执行的安装指引，而不是在后续步骤才产生模糊错误 ([Issue #156](https://github.com/orbi-build/orbi/issues/156)).
+
+## Release metadata
+
 - tag: `v0.2.0`
 - release commit: `f5dd821dc2cf022923629481bc04a619dfd43126`
 - release task: Issue #197
 
-## Scope (verified item by item)
+## 发布对账
+
+### Scope (verified item by item)
 
 - Issue #198 closed
 - Issue #192 closed
@@ -43,13 +79,13 @@
 - Issue #50 closed
 - Issue #48 closed
 
-## Pre-release gates
+### Pre-release gates
 
 - no open Issue carries ai-in-progress / ai-pr-opened / ai-fix-needed
 - CI on the release commit: 2 check(s) all success/neutral/skipped
 - no open PR targets main
 
-## Tests
+### Tests
 
 - declared test command and 100% coverage gate passed in a clean worktree at f5dd821dc2cf022923629481bc04a619dfd43126 (timeout 1800s)
 
