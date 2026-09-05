@@ -35,6 +35,7 @@ agents and scripts can parse it.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 import shutil
@@ -582,10 +583,13 @@ def check_optional_proxy(run_command) -> dict:
     when curl itself is missing.
     """
     try:
-        run_command([
-            "curl", "-fsS", "-m", str(OPTIONAL_PROXY_TIMEOUT),
-            OPTIONAL_PROXY_URL,
-        ])
+        run_command(
+            [
+                "curl", "-fsS", "-m", str(OPTIONAL_PROXY_TIMEOUT),
+                OPTIONAL_PROXY_URL,
+            ],
+            failure_log_level=logging.INFO,
+        )
         status = "healthy"
     except FileNotFoundError:
         status = "unavailable"

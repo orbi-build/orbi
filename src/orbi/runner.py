@@ -1281,8 +1281,14 @@ def single_line(value: str) -> str:
 def run_command(command: list[str], *, cwd: Path | None = None,
                 timeout: int | None = None,
                 log_command: list[str] | None = None,
-                log_stdout: bool = False) -> str:
-    """Run one external command; log context and fail fast on any error."""
+                log_stdout: bool = False,
+                failure_log_level: int = logging.ERROR) -> str:
+    """Run one external command; log context and fail fast on any error.
+
+    ``failure_log_level`` is INFO for probes whose failure is an expected
+    status result, such as an optional component health check. The command
+    still raises, so callers retain control over whether the failure blocks.
+    """
     LOGGER.info(
         "command=%s cwd=%s",
         single_line(" ".join(log_command or command)), cwd or Path.cwd(),
@@ -1297,21 +1303,23 @@ def run_command(command: list[str], *, cwd: Path | None = None,
             timeout=timeout,
         )
     except subprocess.CalledProcessError as exc:
-        LOGGER.error(
+        LOGGER.log(
+            failure_log_level,
             "command_failed returncode=%s stdout=%s stderr=%s",
             exc.returncode, (exc.stdout or "").rstrip(),
             (exc.stderr or "").rstrip(),
         )
         raise
     except subprocess.TimeoutExpired as exc:
-        LOGGER.error(
+        LOGGER.log(
+            failure_log_level,
             "command_timeout timeout=%s stdout=%s stderr=%s",
             timeout, (exc.stdout or "").rstrip(),
             (exc.stderr or "").rstrip(),
         )
         raise
     except OSError as exc:
-        LOGGER.error("command_spawn_failed error=%s", exc)
+        LOGGER.log(failure_log_level, "command_spawn_failed error=%s", exc)
         raise
     if result.stderr:
         LOGGER.info("stderr=%s", result.stderr.rstrip())
