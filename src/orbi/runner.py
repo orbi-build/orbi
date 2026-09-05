@@ -1824,6 +1824,30 @@ def release_tag_commit(repo_dir: Path, tag: str) -> str | None:
         os.close(fd)
 
 
+def tag_commit_is_ancestor_of_base(tag_commit: str, base_commit: str,
+                                   repo_dir: Path) -> bool:
+    """True when `tag_commit` is reachable from `base_commit`.
+
+    (Issue #275) The docs-sync step (release state machine step 8) commits
+    and pushes the release notes to the base branch, advancing
+    `origin/<base>` past the tag commit. On a resume the frozen base is the
+    docs commit; this check distinguishes that expected advance (the tag
+    commit is an ancestor of the base — recover the tag commit as the
+    canonical release commit) from a genuine tag mismatch (fail fast — an
+    existing tag is never moved or overwritten).
+    """
+    try:
+        run_command(
+            ["git", "merge-base", "--is-ancestor", tag_commit, base_commit],
+            cwd=repo_dir,
+        )
+    except subprocess.CalledProcessError as exc:
+        if exc.returncode != 1:
+            raise
+        return False
+    return True
+
+
 def publish_release(*, repo: str, tag: str, version: str,
                     release_commit: str, changelog: str,
                     scope_evidence: list[str], gate_evidence: list[str], test_evidence: str,
@@ -2517,17 +2541,33 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         tag = declaration["version"]
         existing_tag_commit = release_tag_commit(config["repo_dir"], tag)
         if existing_tag_commit is not None:
-            if existing_tag_commit != release_commit:
+            if existing_tag_commit == release_commit:
+                LOGGER.info(
+                    "issue=%s release_tag_exists tag=%s commit=%s",
+                    number, tag, existing_tag_commit,
+                )
+            elif tag_commit_is_ancestor_of_base(
+                    existing_tag_commit, release_commit,
+                    config["repo_dir"]):
+                # Issue #275: the docs-sync step (step 8) pushed the release
+                # notes to the base branch, advancing origin/<base> past the
+                # tag commit. On a resume the frozen base is the docs commit;
+                # the tag commit is the canonical release commit — recover it
+                # so the release resumes instead of deadlocking on the tag
+                # check.
+                LOGGER.info(
+                    "issue=%s release_base_advanced_past_tag tag=%s "
+                    "tag_commit=%s base_commit=%s",
+                    number, tag, existing_tag_commit, release_commit,
+                )
+                release_commit = existing_tag_commit
+            else:
                 raise RuntimeError(
                     f"release tag {tag} already exists on the remote "
                     f"and points at {existing_tag_commit}, not the "
                     f"release commit {release_commit} — an existing "
                     "tag is never moved or overwritten"
                 )
-            LOGGER.info(
-                "issue=%s release_tag_exists tag=%s commit=%s",
-                number, tag, existing_tag_commit,
-            )
         else:
             run_command(
                 ["git", "tag", "-a", tag, "-m", f"Release {tag}",

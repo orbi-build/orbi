@@ -12860,6 +12860,23 @@ def test_process_release_repair_creation_failure_is_observable_and_preserves_tes
 
 def test_process_release_fails_on_tag_mismatch_without_moving_it(monkeypatch):
     state = make_release_process_env(monkeypatch, tag_commit="other123")
+    # A genuine tag mismatch: the tag commit is NOT an ancestor of the base
+    # (the merge-base check fails), so the release must fail fast instead of
+    # recovering the tag commit (Issue #275).
+    real_run = runner.run_command
+
+    def merge_base_failing(command, **kwargs):
+        # Only the tag check's merge-base call fails (the tag commit
+        # "other123" is not an ancestor of the base); the scope-verification
+        # merge-base call (ancestor "aaa111") still succeeds.
+        if command[:3] == ["git", "merge-base", "--is-ancestor"] \
+                and command[3] == "other123":
+            raise subprocess.CalledProcessError(
+                1, command, stderr="not an ancestor",
+            )
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", merge_base_failing)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -13776,6 +13793,68 @@ def test_sync_release_docs_fails_fast_on_a_real_git_diff_error(
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
         )
+
+
+def test_tag_commit_is_ancestor_of_base_true_when_ancestor(tmp_path):
+    """Issue #275: the docs-sync step advances the base past the tag
+    commit; the tag commit is an ancestor of the base (and not vice
+    versa)."""
+    work = make_release_docs_repo(tmp_path)
+    tag_commit = git_out(work, "rev-parse", "HEAD")
+    (work / "docs" / "extra.mdx").write_text("extra", encoding="utf-8")
+    subprocess.run(["git", "-C", str(work), "add", "docs/extra.mdx"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(work), "commit", "-m", "docs"],
+                   check=True, capture_output=True)
+    docs_head = git_out(work, "rev-parse", "HEAD")
+    assert runner.tag_commit_is_ancestor_of_base(
+        tag_commit, docs_head, work) is True
+    assert runner.tag_commit_is_ancestor_of_base(
+        docs_head, tag_commit, work) is False
+
+
+def test_tag_commit_is_ancestor_of_base_false_on_unrelated_commits(
+        tmp_path):
+    """Issue #275: a tag commit on an unrelated side branch is NOT an
+    ancestor of the base — the genuine tag mismatch that must fail
+    fast."""
+    work = make_release_docs_repo(tmp_path)
+    base = git_out(work, "rev-parse", "HEAD")
+    subprocess.run(["git", "-C", str(work), "checkout", "-b", "side"],
+                   check=True, capture_output=True)
+    (work / "side.txt").write_text("side", encoding="utf-8")
+    subprocess.run(["git", "-C", str(work), "add", "side.txt"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(work), "commit", "-m", "side"],
+                   check=True, capture_output=True)
+    side_head = git_out(work, "rev-parse", "HEAD")
+    assert runner.tag_commit_is_ancestor_of_base(
+        side_head, base, work) is False
+
+
+def test_process_release_resumes_after_docs_sync_advanced_the_base(
+        monkeypatch):
+    """Issue #275: the docs-sync step pushes the release notes to the base
+    branch, advancing origin/<base> past the tag commit. On a resume the
+    frozen base is the docs commit; the release must recover the tag commit
+    as the canonical release commit instead of deadlocking on the tag
+    check."""
+    state = make_release_process_env(monkeypatch, tag_commit="abc123")
+    # The frozen base is the docs commit (a descendant of the tag commit);
+    # the env's fake_run_command answers "ancestor" for the merge-base
+    # check.
+    monkeypatch.setattr(runner, "freeze_base", lambda r, b: "docs456")
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    release_url = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert release_url == "https://github.com/o/r/releases/tag/v0.3.0"
+    # The tag commit was recovered as the canonical release commit.
+    assert state["sync_docs_calls"][0]["release_commit"] == "abc123"
+    # The release succeeded (ai-merged), not blocked.
+    assert any(k.get("add") == "ai-merged" for _, k in state["edits"])
 
 
 def test_close_release_milestone_rejects_a_non_array_milestone_list(monkeypatch):
