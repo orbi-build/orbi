@@ -4525,6 +4525,11 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
     # local exclude BEFORE Pi starts (covers create, resume and
     # implement) — the tracked .gitignore is the agent's to rename.
     apply_runner_runtime_excludes(worktree)
+    # Issue #302: the run artifact dir exists BEFORE the session starts,
+    # so the contract commands write `.orbi/plan.md`, `.orbi/test.log`
+    # and the coverage artifacts without a mkdir step (a shell redirect
+    # into a missing directory fails the command outright).
+    (worktree / ".orbi").mkdir(exist_ok=True)
     started = time.monotonic()
     system_prompt = render_prompt(
         config["prompt"].read_text(encoding="utf-8"),
@@ -4786,7 +4791,26 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
 # never depends on the task branch's content. The #246 rename converged the
 # legacy state dir onto `.orbi/`, so the migration window is closed and a
 # single pattern covers it.
-RUNNER_RUNTIME_EXCLUDES = (".orbi/", ".pi-session/")
+#
+# Issue #302 extends the set with the ORBI CONTRACT ARTIFACTS: the pi-loop
+# plugin state (#215) and the per-run plan/test/verify artifacts the
+# Runner's own prompt tells the agent to write (pre-#302 at the worktree
+# root, now under the excluded `.orbi/` run dir). The four historical
+# dirty-gate incidents (#215/#235/#256/#301) were all orbi-owned artifacts
+# blocking a finished delivery — the exemption is now the Runner's runtime
+# behavior, not a hand-maintained tracked blacklist. Excludes hide only
+# untracked paths, so a modified tracked file or a committed artifact
+# still fails the gate; coverage command artifacts are NOT in this set —
+# the contract commands write them into the excluded `.orbi/` run dir and
+# the tracked `.gitignore` stays as the fallback layer.
+RUNNER_RUNTIME_EXCLUDES = (
+    ".orbi/",
+    ".pi-session/",
+    ".pi/",
+    "plan.md",
+    "test.log",
+    "verify.md",
+)
 
 
 def runner_runtime_exclude_path(worktree: Path) -> Path:
@@ -5431,6 +5455,9 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
     # Issue #256: the review/fix session gets the SAME local-exclude
     # preflight as the implementer (one idempotent helper, Pi 前).
     apply_runner_runtime_excludes(worktree)
+    # Issue #302: same run-dir guarantee as the implementer — the
+    # review session reads/writes the same `.orbi/` artifacts.
+    (worktree / ".orbi").mkdir(exist_ok=True)
     started = time.monotonic()
     system_prompt = render_prompt(
         config["prompt_review"].read_text(encoding="utf-8"),
@@ -6316,7 +6343,9 @@ def _is_no_result(line: str) -> bool:
 
 
 def read_test_result(worktree: Path) -> str | None:
-    """Summarize the worktree's `test.log`, or None when it does not exist.
+    """Summarize the worktree's `.orbi/test.log`, or None when it does
+    not exist (Issue #302: the contract test command writes the log
+    into the excluded run dir, never at the worktree root).
 
     Prefers the pytest summary line (`1 failed, 155 passed in 4.43s`):
     the LAST one with an outcome when the log holds several runs (TDD
@@ -6331,7 +6360,7 @@ def read_test_result(worktree: Path) -> str | None:
     and posting `tests passed` for it is a false notification (review
     round 3, PR #42).
     """
-    path = worktree / "test.log"
+    path = worktree / ".orbi" / "test.log"
     if not path.is_file():
         return None
     text = path.read_text(encoding="utf-8", errors="replace")
@@ -6422,8 +6451,9 @@ def _progress_body(state: dict, *, outcome: str | None = None) -> str:
 
 
 def _publish_plan_milestone(publisher: ProgressPublisher, worktree: Path) -> None:
-    """Post the `plan ready` milestone once the worktree has a plan.md."""
-    if (worktree / "plan.md").is_file():
+    """Post the `plan ready` milestone once the worktree has the plan
+    artifact (Issue #302: `.orbi/plan.md`, the excluded run dir)."""
+    if (worktree / ".orbi" / "plan.md").is_file():
         publisher.milestone("plan ready")
 
 

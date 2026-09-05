@@ -14454,6 +14454,9 @@ def test_run_pi_applies_runner_runtime_excludes_before_pi(monkeypatch, tmp_path)
         "owner/repo",
     )
     assert applied == [tmp_path]
+    # Issue #302: the run artifact dir exists before the session — the
+    # contract commands write `.orbi/plan.md` / `.orbi/test.log` into it.
+    assert (tmp_path / ".orbi").is_dir()
 
 
 def test_run_review_applies_runner_runtime_excludes_before_pi(
@@ -14479,6 +14482,9 @@ def test_run_review_applies_runner_runtime_excludes_before_pi(
         "owner/repo", 4, "branch", 1,
     )
     assert applied == [tmp_path]
+    # Issue #302: the review session reads/writes the same .orbi/ run
+    # artifacts — the run dir exists here too.
+    assert (tmp_path / ".orbi").is_dir()
 
 
 def test_deliver_pr_repairs_runner_runtime_leftovers(monkeypatch, tmp_path,
@@ -14593,6 +14599,18 @@ def test_runner_runtime_only_accepts_quoted_runner_paths():
     # are plain ASCII, so the unquoted match is exact.
     assert runner._is_runner_runtime_only('?? ".orbi/"\n')
     assert runner._is_runner_runtime_only('?? ".pi-session/"\n')
+    # Issue #302: the orbi contract artifact set (pi-loop state, per-run
+    # plan/test/verify artifacts) is runner-owned too — a porcelain entry
+    # carrying only them must keep the repair path open, never the fail
+    # fast.
+    assert runner._is_runner_runtime_only('?? ".pi/"\n')
+    assert runner._is_runner_runtime_only("?? plan.md\n")
+    assert runner._is_runner_runtime_only("?? test.log\n")
+    assert runner._is_runner_runtime_only("?? verify.md\n")
+    # An agent-owned leftover is NEVER runner-owned, mixed or alone.
+    assert runner._is_runner_runtime_only("?? notes.md\n") is False
+    assert runner._is_runner_runtime_only("?? unexpected.py\n") is False
+    assert runner._is_runner_runtime_only("?? plan.md\n?? notes.md\n") is False
 
 
 def test_exclude_path_for_a_plain_checkout_uses_its_own_git_dir(tmp_path):
@@ -14635,3 +14653,68 @@ def test_apply_runner_runtime_excludes_creates_a_missing_exclude_file(
     runner.apply_runner_runtime_excludes(wt)
     lines = exclude.read_text(encoding="utf-8").splitlines()
     assert lines == list(runner.RUNNER_RUNTIME_EXCLUDES)
+
+
+def test_runtime_excludes_exempt_the_orbi_contract_artifacts(tmp_path):
+    """Issue #302 acceptance: the four historical dirty-gate scenes are
+    exempted by the RUNTIME local exclude alone — with NO tracked
+    .gitignore at all (the #246 renamed/broken .gitignore scene), every
+    orbi-owned artifact is invisible to `git status --porcelain` while
+    real agent leftovers still fail the gate. No new .gitignore entry
+    is needed for any of them."""
+    repo, wt = _make_linked_worktree(tmp_path)
+    # The tracked .gitignore is gone entirely: the exemption must not
+    # depend on a file a task can legally rename or break.
+    assert not (wt / ".gitignore").exists()
+    runner.apply_runner_runtime_excludes(wt)
+    # Scene #215: pi-loop state written at session shutdown.
+    (wt / ".pi").mkdir()
+    (wt / ".pi" / "loops.json").write_text("{}\n", encoding="utf-8")
+    # Scene #256: runner runtime state (the brand dir and the pi
+    # session dir).
+    (wt / ".orbi").mkdir()
+    (wt / ".orbi" / "run-state.json").write_text("{}\n", encoding="utf-8")
+    (wt / ".pi-session").mkdir()
+    (wt / ".pi-session" / "s.jsonl").write_text("{}\n", encoding="utf-8")
+    # The per-run contract artifacts (the pre-#302 prompt wrote them at
+    # the worktree root) and the coverage gate output in the run dir.
+    for name in ("plan.md", "test.log", "verify.md"):
+        (wt / name).write_text("artifact\n", encoding="utf-8")
+    (wt / ".orbi" / "coverage.json").write_text(
+        '{"totals": {}}\n', encoding="utf-8",
+    )
+    (wt / ".orbi" / "test.log").write_text("156 passed\n", encoding="utf-8")
+    assert subprocess.run(
+        ["git", "status", "--porcelain"], cwd=wt,
+        capture_output=True, text=True, check=True,
+    ).stdout == ""
+    # The gate is NOT weakened: real agent leftovers are still reported.
+    (wt / "unexpected.py").write_text("x = 1\n", encoding="utf-8")
+    (wt / "notes.md").write_text("notes\n", encoding="utf-8")
+    lines = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=wt,
+        capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    assert "?? unexpected.py" in lines
+    assert "?? notes.md" in lines
+
+
+def test_runtime_excludes_never_hide_a_modified_tracked_file(tmp_path):
+    # Issue #302 reverse verification: the runtime exclude only ever
+    # hides UNTRACKED orbi artifacts — a modified tracked source file is
+    # never exempted (excludes cannot hide tracked changes), so the
+    # delivery gate still fails fast on it.
+    repo, wt = _make_linked_worktree(tmp_path)
+    tracked = wt / "src.py"
+    tracked.write_text("x = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(wt), "add", "src.py"], check=True)
+    subprocess.run(
+        ["git", "-C", str(wt), "commit", "-m", "src"], check=True,
+    )
+    runner.apply_runner_runtime_excludes(wt)
+    tracked.write_text("x = 2\n", encoding="utf-8")
+    (wt / "plan.md").write_text("artifact\n", encoding="utf-8")
+    assert subprocess.run(
+        ["git", "status", "--porcelain"], cwd=wt,
+        capture_output=True, text=True, check=True,
+    ).stdout == " M src.py\n"

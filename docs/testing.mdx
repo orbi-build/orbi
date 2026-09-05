@@ -21,13 +21,17 @@ entry guards and one defensive `except` guard in a test).
 ## Local contract commands
 
 Run them from the repository root (production interpreter
-`/usr/bin/python3`, Python 3.14):
+`/usr/bin/python3`, Python 3.14). `COVERAGE_FILE` (the official
+coverage.py environment variable) points the coverage data into the
+excluded run dir `.orbi/` (Issue #302): the worktree root never
+receives a coverage artifact, so the dirty-worktree gate never trips
+over one:
 
 ```bash
-/usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
-/usr/bin/python3 -m coverage report --show-missing
-/usr/bin/python3 coverage_gate.py
-/usr/bin/python3 diff_coverage_gate.py origin/main
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage report --show-missing
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 coverage_gate.py .orbi/.coverage
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 diff_coverage_gate.py origin/main
 ```
 
 The report shows both real numbers (line and branch) per file. The two

@@ -271,9 +271,10 @@ def test_prompt_review_md_narrows_the_context_reads():
 COMPACT_RECOVERY_ITEMS = (
     # The protocol names itself.
     ("compact-section", "context recovery after compaction"),
-    # The recovery reads the run artifacts, not the repository.
-    ("compact-plan", "plan.md"),
-    ("compact-test-log", "test.log"),
+    # The recovery reads the run artifacts, not the repository — in the
+    # excluded run dir (Issue #302), never at the worktree root.
+    ("compact-plan", ".orbi/plan.md"),
+    ("compact-test-log", ".orbi/test.log"),
     ("compact-progress", "progress comment"),
     # The implementer recovers its own plan; the reviewer recovers the
     # findings of the run.
@@ -317,7 +318,7 @@ EXIT_CODE_ITEMS = (
     ("exit-pipe-head", "head"),
     ("exit-pipe-grep", "grep"),
     # Truncation keeps the full output AND the real exit code.
-    ("exit-redirect-file", "> test.log 2>&1"),
+    ("exit-redirect-file", "> .orbi/test.log 2>&1"),
     ("exit-record-code", "exit=$?"),
     ("exit-pipefail", "set -o pipefail"),
     # test.log carries the real pytest output, never a self-declared
@@ -430,4 +431,52 @@ def test_agents_md_tdd_section_keeps_the_blocking_command_rule():
     missing = _missing(section, AGENTS_TDD_ITEMS)
     assert not missing, (
         f"AGENTS.md TDD section is missing the blocking-command rule: {missing}"
+    )
+
+
+# --- Issue #302: the orbi contract artifacts live in the excluded run dir -----
+
+# The four dirty-gate incidents (#215/#235/#256/#301) were all orbi-owned
+# artifacts landing at the worktree root. The prompts and the AGENTS.md
+# TDD section now route every contract artifact into the excluded
+# `.orbi/` run dir; the wording is locked here so it cannot drift back
+# to the worktree root.
+RUN_DIR_ITEMS = (
+    ("run-dir-plan", ".orbi/plan.md"),
+    ("run-dir-test-log", ".orbi/test.log"),
+    ("run-dir-never-root", "never at the worktree root"),
+)
+
+
+def test_prompt_md_routes_the_run_artifacts_into_the_run_dir():
+    missing = _missing(_text(PROMPT), RUN_DIR_ITEMS)
+    assert not missing, (
+        f"prompt.md is missing the .orbi/ run-dir contract (Issue #302): "
+        f"{missing}"
+    )
+
+
+def test_prompt_review_md_reads_the_run_artifacts_from_the_run_dir():
+    text = _text(PROMPT_REVIEW)
+    missing = _missing(text, RUN_DIR_ITEMS[:2])
+    assert not missing, (
+        f"prompt_review.md is missing the .orbi/ run-dir contract "
+        f"(Issue #302): {missing}"
+    )
+
+
+def test_agents_md_tdd_section_keeps_the_run_dir_coverage_commands():
+    text = _text(CONTRACT)
+    tdd = text.split("## tdd and coverage", 1)
+    assert len(tdd) == 2, "AGENTS.md is missing the TDD section"
+    section = tdd[1].split("## ui work", 1)[0]
+    missing = _missing(section, (
+        # The official COVERAGE_FILE env var points the data file into
+        # the run dir; the global gate takes the data file by argv.
+        ("tdd-coverage-file", "coverage_file=.orbi/.coverage"),
+        ("tdd-gate-data-file", "coverage_gate.py .orbi/.coverage"),
+    ))
+    assert not missing, (
+        f"AGENTS.md TDD section is missing the run-dir coverage commands "
+        f"(Issue #302): {missing}"
     )

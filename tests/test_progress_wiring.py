@@ -71,6 +71,9 @@ def patch_process_deps(monkeypatch, tmp_path, *, run_pi_side_effect=None):
     def fake_create_worktree(*args, **kwargs):
         path = tmp_path / "wt"
         path.mkdir(parents=True, exist_ok=True)
+        # Issue #302: the real run_pi creates the .orbi/ run dir before
+        # the session; the fake worktree mirrors that guarantee.
+        (path / ".orbi").mkdir(exist_ok=True)
         return path
 
     monkeypatch.setattr(runner, "create_worktree", fake_create_worktree)
@@ -105,12 +108,21 @@ def patch_process_deps(monkeypatch, tmp_path, *, run_pi_side_effect=None):
 # --- helpers ------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _orbi_run_dir(tmp_path):
+    """Issue #302: the runner creates the excluded `.orbi/` run dir
+    before every Pi session; the milestone readers expect the run
+    artifacts there. Stand-in for the real preflight (run_pi is mocked
+    in the wiring tests)."""
+    (tmp_path / ".orbi").mkdir(exist_ok=True)
+
+
 def test_read_test_result_returns_none_without_test_log(tmp_path):
     assert runner.read_test_result(tmp_path) is None
 
 
 def test_read_test_result_returns_matching_summary_line(tmp_path):
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "collected 202 items\n156 passed in 4.43s\n",
         encoding="utf-8",
     )
@@ -118,12 +130,12 @@ def test_read_test_result_returns_matching_summary_line(tmp_path):
 
 
 def test_read_test_result_falls_back_to_last_line(tmp_path):
-    (tmp_path / "test.log").write_text("hello\nworld\n", encoding="utf-8")
+    (tmp_path / ".orbi" / "test.log").write_text("hello\nworld\n", encoding="utf-8")
     assert runner.read_test_result(tmp_path) == "world"
 
 
 def test_read_test_result_returns_none_for_blank_log(tmp_path):
-    (tmp_path / "test.log").write_text("   \n", encoding="utf-8")
+    (tmp_path / ".orbi" / "test.log").write_text("   \n", encoding="utf-8")
     assert runner.read_test_result(tmp_path) is None
 
 
@@ -132,7 +144,7 @@ def test_read_test_result_skips_failures_section_header(tmp_path):
     line, not the `=== FAILURES ===` section header (review round 2, PR
     #42): the old code returned the first `=` line, so a failed run
     posted `tests passed: === FAILURES ===`."""
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "============================= test session starts "
         "=============================\n"
         "platform linux -- Python 3.12.3, pytest-9.0.3\n"
@@ -161,7 +173,7 @@ def test_read_test_result_skips_failures_section_header(tmp_path):
 def test_read_test_result_prefers_last_summary_of_a_multi_run_log(tmp_path):
     """A log holding several runs (TDD red, then green) reports the most
     recent run: the last pytest summary line."""
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "1 failed, 155 passed in 4.43s\n"
         "--- second run ---\n"
         "156 passed in 4.43s\n",
@@ -176,7 +188,7 @@ def test_read_test_result_falls_back_to_failed_line_without_summary(
     """A truncated log with a FAILURES section but no summary line must
     not report the section header: the first `FAILED` line is the
     failure evidence."""
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "=================================== FAILURES "
         "==================================\n"
         "FAILED tests/test_b.py::test_b_fails - assert 1 == 2\n",
@@ -189,7 +201,7 @@ def test_read_test_result_falls_back_to_failed_line_without_summary(
 def test_read_test_result_unwraps_padded_summary_line(tmp_path):
     """Some runners wrap the final summary in `=` padding; the reported
     line is the bare summary, never the padding."""
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "========================= 1 failed, 155 passed in 4.43s "
         "=========================\n",
         encoding="utf-8",
@@ -203,7 +215,7 @@ def test_read_test_result_is_none_when_the_log_holds_only_headers(
     """A log holding nothing but section headers carries no result info:
     reporting the header itself is the bug this fix removes (review
     round 2, PR #42)."""
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "==================== FAILURES ====================\n",
         encoding="utf-8",
     )
@@ -214,7 +226,7 @@ def test_read_test_result_is_none_when_no_tests_ran(tmp_path):
     """A pytest run that collected no tests verified nothing: reporting
     it as a pass is a false mobile notification (review round 3, PR
     #42)."""
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "collected 0 items\nno tests ran in 0.01s\n",
         encoding="utf-8",
     )
@@ -224,7 +236,7 @@ def test_read_test_result_is_none_when_no_tests_ran(tmp_path):
 def test_read_test_result_is_none_when_no_tests_collected(tmp_path):
     """The collect-only variant of the no-tests message is no result
     either."""
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "no tests collected in 0.00s\n", encoding="utf-8",
     )
     assert runner.read_test_result(tmp_path) is None
@@ -233,14 +245,14 @@ def test_read_test_result_is_none_when_no_tests_collected(tmp_path):
 def test_read_test_result_is_none_for_deselected_only_summary(tmp_path):
     """A summary whose counts carry no outcome (`N deselected`) is no
     result either (review round 3, PR #42)."""
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "3 deselected in 0.02s\n", encoding="utf-8",
     )
     assert runner.read_test_result(tmp_path) is None
 
 
 def test_read_test_result_is_none_for_skipped_only_summary(tmp_path):
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "2 skipped in 0.01s\n", encoding="utf-8",
     )
     assert runner.read_test_result(tmp_path) is None
@@ -249,7 +261,7 @@ def test_read_test_result_is_none_for_skipped_only_summary(tmp_path):
 def test_read_test_result_prefers_last_run_with_an_outcome(tmp_path):
     """A multi-run log whose LAST run collected no tests reports the
     last run that actually collected tests (review round 3, PR #42)."""
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "1 failed, 1 passed in 0.03s\n"
         "--- second run (empty selection) ---\n"
         "no tests ran in 0.01s\n",
@@ -261,7 +273,7 @@ def test_read_test_result_prefers_last_run_with_an_outcome(tmp_path):
 def test_read_test_result_reports_error_summary(tmp_path):
     """A collection error IS an outcome (pytest exits non-zero): it is
     reported, so the milestone check can post `tests failed`."""
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "1 error in 0.01s\n", encoding="utf-8",
     )
     assert runner.read_test_result(tmp_path) == "1 error in 0.01s"
@@ -330,7 +342,7 @@ def test_publish_plan_milestone_posts_only_when_plan_exists(tmp_path):
     publisher.milestone = Mock(side_effect=lambda text: posted.append(text))
     runner._publish_plan_milestone(publisher, tmp_path)
     assert posted == []
-    (tmp_path / "plan.md").write_text("# Plan\n", encoding="utf-8")
+    (tmp_path / ".orbi" / "plan.md").write_text("# Plan\n", encoding="utf-8")
     runner._publish_plan_milestone(publisher, tmp_path)
     assert posted == ["plan ready"]
 
@@ -342,13 +354,13 @@ def test_publish_test_milestone_posts_passed_or_failed(tmp_path):
     # No test.log: nothing is posted.
     runner._publish_test_milestone(publisher, tmp_path)
     assert posted == []
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "156 passed in 4.43s\n", encoding="utf-8",
     )
     runner._publish_test_milestone(publisher, tmp_path)
     assert posted == ["tests passed: 156 passed in 4.43s"]
     posted.clear()
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "1 failed, 155 passed in 4.43s\n", encoding="utf-8",
     )
     runner._publish_test_milestone(publisher, tmp_path)
@@ -364,7 +376,7 @@ def test_publish_test_milestone_detects_failure_case_insensitively(
     posted = []
     publisher = Mock()
     publisher.milestone = Mock(side_effect=lambda text: posted.append(text))
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "FAILED tests/test_b.py::test_b_fails - assert 1 == 2\n",
         encoding="utf-8",
     )
@@ -382,14 +394,14 @@ def test_publish_test_milestone_posts_nothing_when_no_tests_ran(
     posted = []
     publisher = Mock()
     publisher.milestone = Mock(side_effect=lambda text: posted.append(text))
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "collected 0 items\nno tests ran in 0.01s\n",
         encoding="utf-8",
     )
     runner._publish_test_milestone(publisher, tmp_path)
     assert posted == []
     posted.clear()
-    (tmp_path / "test.log").write_text(
+    (tmp_path / ".orbi" / "test.log").write_text(
         "3 deselected in 0.02s\n", encoding="utf-8",
     )
     runner._publish_test_milestone(publisher, tmp_path)
@@ -583,7 +595,7 @@ def test_process_issue_finishes_progress_comment_with_delivery_summary(
     patch_process_deps(monkeypatch, tmp_path)
 
     def fake_run_pi(*args, **kwargs):
-        (tmp_path / "wt" / "test.log").write_text(
+        (tmp_path / "wt" / ".orbi" / "test.log").write_text(
             "156 passed in 4.43s\n", encoding="utf-8",
         )
         return "done"
@@ -686,7 +698,7 @@ def test_process_issue_posts_plan_ready_milestone_when_plan_written(
     patch_process_deps(monkeypatch, tmp_path)
     # The fake pi session writes plan.md into the worktree.
     def fake_run_pi(*args, **kwargs):
-        (tmp_path / "wt" / "plan.md").write_text(
+        (tmp_path / "wt" / ".orbi" / "plan.md").write_text(
             "# Plan\n\n## Goal\n\nship it\n", encoding="utf-8",
         )
         return "done"
@@ -711,7 +723,7 @@ def test_process_issue_posts_tests_passed_milestone_when_test_log_ok(
     patch_process_deps(monkeypatch, tmp_path)
 
     def fake_run_pi(*args, **kwargs):
-        (tmp_path / "wt" / "test.log").write_text(
+        (tmp_path / "wt" / ".orbi" / "test.log").write_text(
             "156 passed in 4.43s\n", encoding="utf-8",
         )
         return "done"
@@ -734,7 +746,7 @@ def test_process_issue_posts_tests_failed_milestone_when_test_log_fails(
     patch_process_deps(monkeypatch, tmp_path)
 
     def fake_run_pi(*args, **kwargs):
-        (tmp_path / "wt" / "test.log").write_text(
+        (tmp_path / "wt" / ".orbi" / "test.log").write_text(
             "1 failed, 155 passed in 4.43s\n", encoding="utf-8",
         )
         return "done"
@@ -1153,8 +1165,9 @@ def test_process_issue_plan_test_milestone_failures_do_not_fail_delivery(
     # plan.md and a passing test.log so both milestones would post.
     worktree = tmp_path / "wt"
     worktree.mkdir(parents=True, exist_ok=True)
-    (worktree / "plan.md").write_text("# Plan\n", encoding="utf-8")
-    (worktree / "test.log").write_text(
+    (worktree / ".orbi").mkdir(exist_ok=True)
+    (worktree / ".orbi" / "plan.md").write_text("# Plan\n", encoding="utf-8")
+    (worktree / ".orbi" / "test.log").write_text(
         "5 passed in 1.0s\n", encoding="utf-8",
     )
 

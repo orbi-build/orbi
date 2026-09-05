@@ -19,13 +19,16 @@ GitHub 远端运行。
 
 ## 本地契约命令
 
-从仓库根目录运行（生产解释器 `/usr/bin/python3`，Python 3.14）：
+从仓库根目录运行（生产解释器 `/usr/bin/python3`，Python 3.14）。`COVERAGE_FILE`
+（coverage.py 官方环境变量）把覆盖率数据指到已排除的运行目录 `.orbi/`
+（Issue #302）：worktree 根不会出现任何覆盖率产物，dirty-worktree 门禁
+也就不会被它绊住：
 
 ```bash
-/usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
-/usr/bin/python3 -m coverage report --show-missing
-/usr/bin/python3 coverage_gate.py
-/usr/bin/python3 diff_coverage_gate.py origin/main
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage report --show-missing
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 coverage_gate.py .orbi/.coverage
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 diff_coverage_gate.py origin/main
 ```
 
 报告逐文件给出两个真实数字（行和分支）。两个门禁脚本才是门禁，不是

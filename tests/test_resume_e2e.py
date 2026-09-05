@@ -4,7 +4,9 @@ Real git (local bare origin + clone) plus a fake ``pi`` executable that
 behaves like the delivery agent in both modes:
 
 - implement mode (``Run id:`` in the system prompt): writes the
-  run-scoped plan artifact and commits — the first delivery (Issue
+  run-scoped plan artifact (`.orbi/plan.md`, Issue #302 — the run dir
+  the Runner creates and excludes before the session starts) and
+  commits a real tracked source file — the first delivery (Issue
   #186: the agent stops at the committed delivery; the Runner pushes
   the task branch and opens the PR);
 - review mode (system prompt without the run id): Issue #82 — the
@@ -59,10 +61,12 @@ if match is None:
     )
     if merge.returncode != 0:
         # Conflict: resolve it in this session (never auto-resolved by
-        # the runner).
-        with open(os.path.join(cwd, "plan.md"), "w",
+        # the runner). The carrier is the tracked source file the fake
+        # pi really delivers (Issue #302: the plan artifact left the
+        # tracked surface — it lives in the excluded .orbi/ run dir).
+        with open(os.path.join(cwd, "impl.py"), "w",
                   encoding="utf-8") as handle:
-            handle.write("# Plan\\n\\nmerged main\\n")
+            handle.write("# impl\\n\\nmerged main\\n")
         subprocess.run(["git", "add", "."], cwd=cwd, check=True,
                        capture_output=True)
         subprocess.run(["git", "commit", "--no-edit"], cwd=cwd,
@@ -78,11 +82,17 @@ plan = (
     f"<!-- orbi:run={run_id} -->\\n"
     f"# Plan\\n\\nrun_id={run_id}\\n"
 )
-with open(os.path.join(cwd, "plan.md"), "w", encoding="utf-8") as handle:
+# The plan artifact lives in the Runner-created .orbi/ run dir (Issue
+# #302): excluded from the delivery tree, never committed. The delivery
+# itself is a real tracked source file.
+with open(os.path.join(cwd, ".orbi", "plan.md"), "w",
+          encoding="utf-8") as handle:
     handle.write(plan)
+with open(os.path.join(cwd, "impl.py"), "w", encoding="utf-8") as handle:
+    handle.write("# impl\\n\\nagent delivery\\n")
 for command in (
     ["git", "add", "."],
-    ["git", "commit", "-m", f"plan for run {run_id}"],
+    ["git", "commit", "-m", f"delivery for run {run_id}"],
 ):
     subprocess.run(command, cwd=cwd, check=True, capture_output=True)
 """
@@ -449,9 +459,12 @@ def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
     assert f"Orbi opened PR: {PR_URL}" in opened
     assert f"run_id={run_id}" in opened
 
-    # ---- origin/main advances and edits the SAME file (plan.md).
-    (clone / "plan.md").write_text(
-        "main edited plan.md after the PR was opened\n", encoding="utf-8",
+    # ---- origin/main advances and edits the SAME tracked source file
+    #      the delivery carries (impl.py — Issue #302: the conflict
+    #      carrier is real tracked code, never the excluded plan
+    #      artifact).
+    (clone / "impl.py").write_text(
+        "main edited impl.py after the PR was opened\n", encoding="utf-8",
     )
     git(clone, "add", ".")
     git(clone, "commit", "-m", "main advances with a conflicting edit")
@@ -511,7 +524,9 @@ def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
     assert git(worktree, "branch", "--show-current") == branch
     # The conflict was resolved by the review session, not
     # auto-resolved.
-    assert "merged main" in (worktree / "plan.md").read_text(encoding="utf-8")
+    assert "merged main" in (worktree / "impl.py").read_text(
+        encoding="utf-8",
+    )
 
     # The SAME PR updated: exactly one open PR for the head branch, and
     # its head is the new local HEAD (pushed by the review session).
