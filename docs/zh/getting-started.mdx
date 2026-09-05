@@ -116,6 +116,7 @@ cp .orbi.example.toml orbi.toml
 | `model_wait_dead_seconds` | 否 | `1800` | 模型请求挂死阈值（Issue #228）：`model_wait` 静默多少秒后 Runner 杀掉 Pi 会话并 fail fast。字段语义（完整事件之间的静默、慢生成边界）：[运维](/zh/operations) 的 `model_wait_dead` journal 行。必须是有限正数，否则启动 fail fast |
 | `model_wait_probe_url` | 否 | 未设置 | 模型吞请求探针（Issue #233）：模型的 `/slots` 端点（如 `http://127.0.0.1:18082/slots`，agent 面向的端口——local-llm-kv-cache 代理从 llama.cpp 透传该端点）。Pi 冻结在 `model_wait` 时 Runner 探测它，所有 slot 持续 `model_wait_probe_seconds` 宽限空闲时快速杀掉 Pi 会话。字段语义（吞请求现场、旁路边界）：[运维](/zh/operations) 的 `model_wait_swallowed` journal 行。未设置 = 探针禁用（#233 之前的行为）。必须是非空 `http://`/`https://` URL，否则启动 fail fast |
 | `model_wait_probe_seconds` | 否 | `60` | 吞请求探针的持续空闲宽限（Issue #233）：`model_wait` 期间“所有 slot 空闲”状态需持续多少秒才判定请求被吞并杀掉 Pi。必须是有限正数，否则启动 fail fast |
+| `release_ci_wait_seconds` | 否 | `1800` | 发布 CI 等待（Issue #268）：release 门禁在 release commit 的 CI 处于 pending（queued/in_progress）时最多等待多少秒。pending 是中间态——等待期间以 `release_waiting_ci` journal 行和进度评论更新可见；最终结论说了算，等待超时以独立原因失败，绝不报成 CI 失败。必须是有限正数，否则启动 fail fast |
 | `skills` | 否 | `[]` | 可选 Pi skill 路径（绝对、`~`，或相对配置文件） |
 | `context_files` | 否 | `[]` | 可选 Markdown 上下文文件，以路径形式注入 prompt |
 | `pi_providers` | 否 | 未设置 | 指向 Pi `models.json` 形状 JSON 文件的路径，为每个 run 向 Pi 目录添加或覆盖 provider（Issue #157）。未设置 = Pi 原样使用自己的 agent 目录（第 4 步） |
