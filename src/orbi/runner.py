@@ -568,6 +568,12 @@ def load_config(path: Path) -> dict:
     # pending checks on the release commit before failing with its own
     # timeout reason.
     release_ci_wait_seconds = _release_ci_wait_seconds(data)
+    # Runner-self health alert routing (Issue #345): the orbi repo that
+    # receives the watchdog's crash_loop / stale_pickup Issues. Absent ->
+    # None (the Runner derives the orbi repo from the deploy home's git
+    # origin); present -> must be a non-empty `owner/repo` string, used
+    # verbatim for fork/private deployments.
+    health_alert_repo = _optional_pi_string(data, "health_alert_repo")
     # Optional Pi provider file (Issue #157): the provider metadata
     # (baseUrl / api / apiKey / models) lives in a separate JSON file in
     # Pi's own `models.json` shape; `orbi.toml` only selects the
@@ -618,6 +624,7 @@ def load_config(path: Path) -> dict:
         "source_repos": source_repos,
         "repo_dir": repo_dir,
         "deploy_home": deploy_home,
+        "health_alert_repo": health_alert_repo,
         "workspace_root": _config_path(data.get("workspace_root", ".."), base),
         # Issue #330: when deploy_home is EXPLICIT the prompt defaults
         # live in the deployment home (the delivery checkout may be a

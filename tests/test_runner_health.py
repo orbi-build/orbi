@@ -63,10 +63,21 @@ class FakeRunCommand:
 
 
 REPO = "owner/repo"
+ORBI_REPO = "orbi-build/orbi"
 
 
-def make_config(tmp_path: Path) -> dict:
-    return {"repo_dir": tmp_path, "source_repos": [REPO]}
+def make_config(tmp_path: Path, *, health_alert_repo=None) -> dict:
+    return {
+        "repo_dir": tmp_path,
+        "source_repos": [REPO],
+        "deploy_home": tmp_path,
+        "health_alert_repo": health_alert_repo,
+    }
+
+
+def origin_route(url: str = f"git@github.com:{ORBI_REPO}.git") -> dict:
+    """A FakeRunCommand route answering the deploy-home origin query."""
+    return {"remote get-url origin": url}
 
 
 def write_state(tmp_path: Path, state: dict) -> Path:
@@ -427,6 +438,7 @@ def test_crash_loop_creates_one_deduplicated_bug_issue(tmp_path):
     fake = FakeRunCommand({
         "journalctl --user -u orbi@1.service": journal,
         "journalctl --user -u orbi@2.service": "",
+        **origin_route(),
         # No health Issue exists yet.
         'in:body "orbi-health-fingerprint:': "[]",
     })
@@ -438,6 +450,9 @@ def test_crash_loop_creates_one_deduplicated_bug_issue(tmp_path):
     assert len(creates) == 1
     create = creates[0]
     assert "--label" in create and "bug" in create and "ai-ready" in create
+    # Issue #345: the alert routes to the orbi repo (deploy-home origin),
+    # never the delivery repo.
+    assert create[create.index("--repo") + 1] == ORBI_REPO
     body = create[create.index("--body") + 1]
     marker = runner_health.health_marker("crash_loop")
     assert marker in body
@@ -461,6 +476,7 @@ def test_stale_pickup_with_ready_issues_alarms(tmp_path):
     fake = FakeRunCommand({
         "journalctl --user -u orbi@1.service": "",
         "journalctl --user -u orbi@2.service": "",
+        **origin_route(),
         "--label ai-ready": json.dumps([{"number": 7}]),
         'in:body "orbi-health-fingerprint=': "[]",
     })
@@ -468,7 +484,9 @@ def test_stale_pickup_with_ready_issues_alarms(tmp_path):
         make_config(tmp_path), run_command=fake,
     )
     assert alerts == ["stale_pickup"]
-    assert len(fake.commands("gh issue create")) == 1
+    creates = fake.commands("gh issue create")
+    assert len(creates) == 1
+    assert creates[0][creates[0].index("--repo") + 1] == ORBI_REPO
 
 
 def test_stale_pickup_with_empty_queue_is_idle_not_a_failure(tmp_path):
@@ -545,6 +563,210 @@ def test_health_marker_is_stable_per_check():
         runner_health.health_marker("crash_loop")
     assert runner_health.health_marker("crash_loop") != \
         runner_health.health_marker("stale_pickup")
+
+
+# ---------------------------------------------------------------------------
+# Issue #345: routing (orbi repo) and config-vs-bug classification
+# ---------------------------------------------------------------------------
+
+CONFIG_REASON_LINE = (
+    "ERROR [abc12345] Runner failed to start: API key for provider "
+    "'opencode' references missing environment variable OPENCODE_API_KEY"
+)
+BUG_REASON_LINE = (
+    "ERROR [abc12345] delivery_no_commit: nothing to commit in worktree"
+)
+
+
+def test_classify_crash_config_caused():
+    lines = [
+        CRASH_LINE,
+        CONFIG_REASON_LINE,
+        CRASH_LINE,
+    ]
+    kind, reason = runner_health.classify_crash(lines)
+    assert kind == "config"
+    assert reason == CONFIG_REASON_LINE
+
+
+def test_classify_crash_bug_caused():
+    lines = [
+        CRASH_LINE,
+        BUG_REASON_LINE,
+        CRASH_LINE,
+    ]
+    kind, reason = runner_health.classify_crash(lines)
+    assert kind == "bug"
+    assert reason == BUG_REASON_LINE
+
+
+def test_classify_crash_unknown_is_bug_with_empty_reason():
+    lines = [CRASH_LINE, CRASH_LINE]
+    assert runner_health.classify_crash(lines) == ("bug", "")
+
+
+def test_classify_crash_prefers_most_recent_config_marker():
+    # A config marker beats an earlier bug marker (newest cause wins).
+    lines = [BUG_REASON_LINE, CONFIG_REASON_LINE]
+    kind, reason = runner_health.classify_crash(lines)
+    assert kind == "config"
+    assert reason == CONFIG_REASON_LINE
+
+
+def test_crash_reason_fingerprint_is_stable_and_empty_for_blank():
+    fp = runner_health.crash_reason_fingerprint(CONFIG_REASON_LINE)
+    assert fp == runner_health.crash_reason_fingerprint(CONFIG_REASON_LINE)
+    assert len(fp) == 16
+    assert runner_health.crash_reason_fingerprint("") == ""
+
+
+def test_orbi_repo_from_origin_url_ssh_and_https():
+    assert runner_health.orbi_repo_from_origin_url(
+        f"git@github.com:{ORBI_REPO}.git",
+    ) == ORBI_REPO
+    assert runner_health.orbi_repo_from_origin_url(
+        f"https://github.com/{ORBI_REPO}.git",
+    ) == ORBI_REPO
+    assert runner_health.orbi_repo_from_origin_url(
+        f"https://github.com/{ORBI_REPO}",
+    ) == ORBI_REPO
+
+
+def test_orbi_repo_from_origin_url_rejects_garbage():
+    assert runner_health.orbi_repo_from_origin_url("") is None
+    assert runner_health.orbi_repo_from_origin_url("not a url") is None
+
+
+def test_orbi_repo_from_deploy_home_reads_the_origin(tmp_path):
+    fake = FakeRunCommand(origin_route())
+    assert runner_health.orbi_repo_from_deploy_home(
+        tmp_path, fake,
+    ) == ORBI_REPO
+
+
+def test_orbi_repo_from_deploy_home_query_failure_is_none(tmp_path):
+    fake = FakeRunCommand({"remote get-url origin": RuntimeError("no git")})
+    assert runner_health.orbi_repo_from_deploy_home(tmp_path, fake) is None
+
+
+def test_config_caused_crash_loop_is_non_dispatchable(tmp_path):
+    """Issue #345: a config-caused crash loop must NOT create an ai-ready
+    task — it is a `bug`-only alert in the orbi repo naming the cause."""
+    write_state(tmp_path, {"runs": [], "last_pickup_ts": time.time(),
+                           "alerted": []})
+    journal = (
+        f"{CRASH_LINE}\n{CONFIG_REASON_LINE}\n{CRASH_LINE}\n{CRASH_LINE}\n"
+    )
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": journal,
+        "journalctl --user -u orbi@2.service": "",
+        **origin_route(),
+        'in:body "orbi-health-fingerprint:': "[]",
+    })
+    alerts = runner_health.run_health_check(
+        make_config(tmp_path), run_command=fake,
+    )
+    assert alerts == ["crash_loop"]
+    creates = fake.commands("gh issue create")
+    assert len(creates) == 1
+    create = creates[0]
+    # Routes to the orbi repo, NOT the delivery repo.
+    assert create[create.index("--repo") + 1] == ORBI_REPO
+    # Non-dispatchable: `bug` only, NO `ai-ready`.
+    assert "bug" in create
+    assert "ai-ready" not in create
+    body = create[create.index("--body") + 1]
+    assert "OPENCODE_API_KEY" in body  # the config cause is named
+    assert "ai-ready 流程" not in body
+
+
+def test_bug_caused_crash_loop_is_dispatchable_with_reason(tmp_path):
+    """Issue #345: a Runner-bug crash loop produces a bug+ai-ready issue in
+    the orbi repo carrying the journal root cause."""
+    write_state(tmp_path, {"runs": [], "last_pickup_ts": time.time(),
+                           "alerted": []})
+    journal = (
+        f"{CRASH_LINE}\n{BUG_REASON_LINE}\n{CRASH_LINE}\n{CRASH_LINE}\n"
+    )
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": journal,
+        "journalctl --user -u orbi@2.service": "",
+        **origin_route(),
+        'in:body "orbi-health-fingerprint:': "[]",
+    })
+    alerts = runner_health.run_health_check(
+        make_config(tmp_path), run_command=fake,
+    )
+    assert alerts == ["crash_loop"]
+    create = fake.commands("gh issue create")[0]
+    assert create[create.index("--repo") + 1] == ORBI_REPO
+    assert "bug" in create and "ai-ready" in create
+    body = create[create.index("--body") + 1]
+    assert BUG_REASON_LINE in body  # the journal root cause is in the body
+    assert "crash reason fingerprint:" in body
+
+
+def test_health_alert_repo_override_wins(tmp_path):
+    """Issue #345: the configured override routes the alert and skips the
+    deploy-home origin lookup (fork/private deployments)."""
+    write_state(tmp_path, {"runs": [], "last_pickup_ts": time.time(),
+                           "alerted": []})
+    journal = f"{CRASH_LINE}\n{CRASH_LINE}\n{CRASH_LINE}\n"
+    override = "fork-owner/orbi-fork"
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": journal,
+        "journalctl --user -u orbi@2.service": "",
+        'in:body "orbi-health-fingerprint:': "[]",
+    })
+    alerts = runner_health.run_health_check(
+        make_config(tmp_path, health_alert_repo=override), run_command=fake,
+    )
+    assert alerts == ["crash_loop"]
+    create = fake.commands("gh issue create")[0]
+    assert create[create.index("--repo") + 1] == override
+    # No origin lookup was needed.
+    assert fake.commands("remote get-url origin") == []
+
+
+def test_undeterminable_alert_repo_skips_the_issue(tmp_path, caplog):
+    """Issue #345: when the orbi repo cannot be determined the alert is
+    skipped (bypass) — never filed in the delivery repo, never guessed."""
+    write_state(tmp_path, {"runs": [], "last_pickup_ts": time.time(),
+                           "alerted": []})
+    journal = f"{CRASH_LINE}\n{CRASH_LINE}\n{CRASH_LINE}\n"
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": journal,
+        "journalctl --user -u orbi@2.service": "",
+        "remote get-url origin": "",
+    })
+    with caplog.at_level("INFO"):
+        alerts = runner_health.run_health_check(
+            make_config(tmp_path), run_command=fake,
+        )
+    assert alerts == []
+    assert fake.commands("gh issue create") == []
+    assert "health_alert_repo_undetermined" in caplog.text
+
+
+def test_stale_pickup_undeterminable_alert_repo_skips(tmp_path, caplog):
+    """Issue #345: a stale pickup with an undeterminable orbi repo is
+    skipped (bypass) — never filed in the delivery repo."""
+    write_state(tmp_path, {"runs": [],
+                           "last_pickup_ts": time.time() - 48 * 3600,
+                           "alerted": []})
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": "",
+        "journalctl --user -u orbi@2.service": "",
+        "remote get-url origin": "",
+        "--label ai-ready": json.dumps([{"number": 7}]),
+    })
+    with caplog.at_level("INFO"):
+        alerts = runner_health.run_health_check(
+            make_config(tmp_path), run_command=fake,
+        )
+    assert alerts == []
+    assert fake.commands("gh issue create") == []
+    assert "health_alert_repo_undetermined check=stale_pickup" in caplog.text
 
 
 # ---------------------------------------------------------------------------
