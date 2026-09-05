@@ -249,6 +249,24 @@ TRUSTED_COMMENT_ASSOCIATIONS = frozenset({
 })
 
 
+class RecoverablePiFailure(RuntimeError):
+    """A Pi process failure that leaves the run resumable.
+
+    The session may have failed because the model/process infrastructure was
+    unavailable (including idle recovery).  The worktree and run-state file
+    must survive so the next pickup resumes this run instead of starting a
+    fresh attempt.
+    """
+
+
+class RecoverablePiProcessError(subprocess.CalledProcessError, RecoverablePiFailure):
+    """Pi exited non-zero; retain CalledProcessError diagnostics."""
+
+
+class RecoverablePiTimeoutError(subprocess.TimeoutExpired, RecoverablePiFailure):
+    """Pi exceeded its bounded execution window."""
+
+
 class ModelWaitDeadError(RuntimeError):
     """The hung-model-request recovery (Issue #218/#228) killed the Pi
     session: the model request is HUNG (the model service process is alive
@@ -4783,7 +4801,7 @@ def stream_pi(
             ),
             stale,
         )
-        raise RuntimeError(
+        raise RecoverablePiFailure(
             f"Pi session stayed idle for {stale} after idle recovery "
             f"(TERM/KILL of pre-idle descendants); Pi was killed "
             "(Issue #94)"
@@ -4798,7 +4816,7 @@ def stream_pi(
             ),
             idle,
         )
-        raise RuntimeError(
+        raise RecoverablePiFailure(
             f"Pi is stuck in model_wait and the model /slots probe "
             f"reported every slot idle for the sustained grace "
             f"(session frozen {idle}): the model request was swallowed "
@@ -4835,7 +4853,7 @@ def stream_pi(
             ),
             reason,
         )
-        raise subprocess.TimeoutExpired(
+        raise RecoverablePiTimeoutError(
             safe_command, timeout, output=stdout, stderr=stderr,
         )
     if process.returncode != 0:
@@ -4848,7 +4866,16 @@ def stream_pi(
             ),
             reason,
         )
-        raise subprocess.CalledProcessError(
+        # A Pi exit after it created a session is an interrupted run: its
+        # work is resumable, including exits after idle recovery.  A
+        # pre-session startup failure remains terminal unless it reaches
+        # one of the explicit recovery classifications above.
+        error_type = (
+            RecoverablePiProcessError
+            if activity["session_file"] is not None
+            else subprocess.CalledProcessError
+        )
+        raise error_type(
             process.returncode, safe_command, output=stdout, stderr=stderr,
         )
     if stderr:
@@ -7411,7 +7438,15 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
             ),
         )
         return pr_url
-    except ModelWaitDeadError as exc:
+    except (ModelWaitDeadError, RecoverablePiFailure) as exc:
+        # Issue #227/#325: classified Pi/model infrastructure failures are
+        # recoverable. Keep the claim, worktree and run-state file so the
+        # next in-flight scan resumes this same run.
+        recoverable_name = (
+            "model_wait recovered"
+            if isinstance(exc, ModelWaitDeadError)
+            else "Pi failure recovered"
+        )
         # Issue #227: the hung-model-request recovery is a CLASSIFIED,
         # AI-recoverable failure — NOT the terminal `ai-blocked`. The
         # worktree keeps the interrupted work and the run state file is
@@ -7421,11 +7456,11 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
         # The recovery stays fail-fast (Pi was killed, the tick ends
         # cleanly below, the slot is released by `main`'s `finally`);
         # only the label outcome changes — never `ai-blocked`.
-        LOGGER.exception("issue=%s model_wait_dead_recovered", number)
+        LOGGER.exception("issue=%s %s", number, recoverable_name)
         detail = _failure_detail(exc)
         body = (
             f"{run_marker(run_id)}\n"
-            f"Orbi model_wait recovered: {detail}; the run is "
+            f"Orbi {recoverable_name}: {detail}; the run is "
             "recoverable — the Issue stays ai-in-progress and the next "
             f"tick resumes the same run ({run_info})"
         )
@@ -7451,7 +7486,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
                 worktree=worktree, started=started,
                 pr_url=None, review_round=0, priority=priority,
             ), outcome=(
-                "**Orbi model_wait recovered**\n\n"
+                f"**Orbi {recoverable_name}**\n\n"
                 f"failure: {detail}\n"
                 "next step: nothing — the Issue stays ai-in-progress "
                 "and the next tick resumes the same run (same run id, "

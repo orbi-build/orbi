@@ -615,6 +615,32 @@ def test_process_issue_finishes_progress_comment_with_delivery_summary(
     assert "<!-- orbi:run=a1b2c3d4 -->" in last_body
 
 
+def test_process_issue_pi_infrastructure_failure_keeps_run_for_resume(
+    monkeypatch, tmp_path,
+):
+    """Issue #325: a Pi process exit is recoverable infrastructure
+    failure, not a terminal task failure.  The claim, worktree and
+    run-state survive so the next tick can resume the same run."""
+    calls, posted = make_fake_gh(monkeypatch)
+    error = runner.RecoverablePiProcessError(
+        1, ["pi"], stderr="provider unavailable",
+    )
+    patch_process_deps(monkeypatch, tmp_path, run_pi_side_effect=error)
+    edit = runner.edit_issue
+    runner.process_issue(make_issue(), make_config(tmp_path), "xqliu/orbi")
+
+    assert edit.call_count == 1
+    assert edit.call_args.kwargs == {
+        "repo": "xqliu/orbi", "add": "ai-in-progress",
+    }
+    state = json.loads(
+        (tmp_path / "wt" / ".orbi" / "run-state.json").read_text(),
+    )
+    assert state["run_id"] == "a1b2c3d4"
+    assert any("Pi failure recovered" in str(call) for call in calls)
+    assert not any("ai-blocked" in str(call) for call in edit.call_args_list)
+
+
 def test_process_issue_failure_updates_progress_comment_with_blocked_scene(
     monkeypatch, tmp_path,
 ):
