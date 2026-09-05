@@ -96,6 +96,7 @@ from orbi.delivery_labels import (
     needs_human_intervention,
 )
 from orbi.progress import ProgressPublisher, format_elapsed, progress_body
+from orbi import runner_health
 from orbi.systemd_deploy import (
     TIMER_INSTANCES,
     UnitDriftError,
@@ -304,6 +305,10 @@ class RunIdFilter(logging.Filter):
 
 
 LOGGER.addFilter(RunIdFilter())
+# Issue #266: the health check's journal lines carry the same `[run_id]`
+# prefix as every other Runner line (the RunIdFilter is attached per
+# logger; the health module must not import this one — circular).
+runner_health.LOGGER.addFilter(RunIdFilter())
 
 
 def validate_run_id(run_id: object) -> str:
@@ -6811,6 +6816,13 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
     apply_label_patch(
         number, repo=source_repo, event=EVENT_CLAIM, current_labels=(),
     )
+    # Issue #266: the successful pickup resets the stale-pickup clock in
+    # the health state file (bypass — a state-write failure never fails
+    # the claim).
+    try:
+        runner_health.record_pickup(config["repo_dir"])
+    except Exception:
+        LOGGER.exception("issue=%s health_pickup_record_failed", number)
     # The Issue is in flight from the claim label on: bind the stop
     # scene (Issue #48) so a SIGTERM during this tick logs the active
     # Issue context, not only systemd's generic "Stopped" line. The
@@ -7032,6 +7044,19 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
         return None
     except Exception as exc:
         LOGGER.exception("issue=%s failed", number)
+        # Issue #266: record the failed run attempt (conservative failure
+        # fingerprint) so the next tick's self-health check can detect a
+        # repeating dead end (the #246 scene). Pure bypass: a state-write
+        # failure never changes the delivery outcome.
+        try:
+            runner_health.record_run_attempt(
+                runner_health.health_state_path(config["repo_dir"]),
+                repo=source_repo, issue=number, run_id=run_id,
+                outcome="failed",
+                fingerprint=runner_health.failure_fingerprint(exc),
+            )
+        except Exception:
+            LOGGER.exception("issue=%s health_failure_record_failed", number)
         scene = ""
         if worktree is not None:
             try:
@@ -7783,6 +7808,17 @@ def main(argv: list[str] | None = None) -> int:
         transport.get("remote", "-"), transport.get("protocol", "-"),
         transport.get("url", "-"), transport.get("ssh_reachable", "-"),
     )
+    # Self-health check (Issue #266): BEFORE any slot or claim the Runner
+    # actively looks for the incident patterns of 2026-09-04 — a service
+    # crash loop (>= 3 crashes in 60 min, the #262 scene), repeated
+    # same-fingerprint run failures on one Issue (>= 3, the #246 scene) and
+    # a stale pickup while the ai-ready queue is non-empty. It is a pure
+    # bypass (Issue #79): a check failure logs `health_check_failed` and
+    # never fails the delivery, takes no slot and changes no label.
+    try:
+        runner_health.run_health_check(config, run_command=run_command)
+    except Exception:
+        LOGGER.exception("health_check_failed")
     # Concurrency cap (Issue #39): take one slot BEFORE claiming anything.
     # The slot is held for the whole delivery lifecycle (implement ->
     # review -> fix -> merge) and released only after the delivery is

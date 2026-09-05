@@ -40,3 +40,19 @@ def _default_unit_drift_preflight(monkeypatch):
 def _default_transport_preflight(monkeypatch):
     """Default: the git transport preflight passes (no-op)."""
     monkeypatch.setattr(runner, "check_transport", lambda *a, **k: {})
+
+
+@pytest.fixture(autouse=True)
+def _default_health_check_preflight(monkeypatch):
+    """Default: the tick-start self-health check (Issue #266) is a no-op.
+
+    The in-process dispatch tests use tmp repo_dirs and strict
+    `run_command` fakes that reject anything but their own traffic; the
+    health check's own tests (`tests/test_runner_health.py`) and the
+    wiring tests exercise it explicitly (a `monkeypatch` always wins over
+    this default)."""
+    import orbi.runner_health as runner_health
+
+    monkeypatch.setattr(
+        runner_health, "run_health_check", lambda *a, **k: [],
+    )
