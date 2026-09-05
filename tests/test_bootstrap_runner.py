@@ -5910,12 +5910,13 @@ def test_stream_pi_startup_failed_without_first_request(tmp_path, caplog):
         tmp_path, session_records=records, stderr="boom", exit_code=1,
     )
     with caplog.at_level("INFO"):
-        with pytest.raises(subprocess.CalledProcessError):
+        with pytest.raises(subprocess.CalledProcessError) as excinfo:
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
                 run_id="run1", issue=24, source_repo="xqliu/orbi",
                 branch="b",
             )
+    assert not isinstance(excinfo.value, runner.RecoverablePiProcessError)
     lines = [line for line in caplog.text.splitlines()
              if " startup_failed " in line]
     assert len(lines) == 1
