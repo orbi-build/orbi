@@ -13681,8 +13681,24 @@ def test_process_release_wait_timeout_uses_persisted_wait_start(monkeypatch):
         monkeypatch, leftover_labels={"ai-in-progress": [7]},
     )
     monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [
-        {"body": "wait_started: 90"},
-        {"body": "wait_started: 95"},
+        {
+            "authorAssociation": "MEMBER",
+            "body": "<!-- orbi:run=aaaaaaaa -->\n"
+                    "Orbi release waiting for deliveries\n"
+                    "wait_started: 90",
+        },
+        {
+            "authorAssociation": "MEMBER",
+            "body": "<!-- orbi:run=bbbbbbbb -->\n"
+                    "Orbi release waiting for deliveries\n"
+                    "wait_started: 95",
+        },
+        {"authorAssociation": "MEMBER", "body": "unrelated maintainer note"},
+        {
+            "authorAssociation": "MEMBER",
+            "body": "Orbi release waiting for deliveries\nno timestamp",
+        },
+        {"authorAssociation": "NONE", "body": "wait_started: 0"},
         "not a comment",
     ])
     monkeypatch.setattr(runner.time, "time", lambda: 100)

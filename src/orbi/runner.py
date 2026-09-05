@@ -2989,7 +2989,16 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         # Waiting is persisted in the auditable Issue comment, so a later
         # tick can enforce one bounded waiting window without local state.
         for comment in issue_comments(number, repo=source_repo):
-            body = comment.get("body", "") if isinstance(comment, dict) else ""
+            # Only the runner's trusted, structured waiting comments may
+            # carry the persisted timer.  A public comment must not be able
+            # to inject an old timestamp and turn a recoverable wait into an
+            # immediate terminal block (the same trust boundary as resume
+            # scenes, Issue #45).
+            if not _comment_is_trusted(comment):
+                continue
+            body = comment.get("body", "")
+            if "Orbi release waiting for deliveries" not in body:
+                continue
             match = re.search(r"wait_started: ([0-9]+(?:\.[0-9]+)?)", body)
             if match:
                 started_at = float(match.group(1))
