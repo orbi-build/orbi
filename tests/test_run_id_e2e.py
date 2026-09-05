@@ -32,7 +32,9 @@ PR_URL = "https://github.com/owner/repo/pull/41"
 
 # The fake pi behaves like the delivery agent: it extracts the run id from
 # the injected system prompt (exactly where the real runner puts it), writes
-# the plan artifact with the stable marker, then commits. It does NOT push
+# the plan artifact into the Runner-created .orbi/ run dir (Issue #302:
+# excluded from the delivery tree, never committed) with the stable marker,
+# then commits a real tracked source file. It does NOT push
 # and does NOT create the PR (Issue #186: the Runner owns the push and the
 # PR creation — the e2e proves the closeout lands without agent help).
 FAKE_PI = """#!/usr/bin/env python3
@@ -46,11 +48,14 @@ plan = (
     f"<!-- orbi:run={run_id} -->\\n"
     f"# Plan\\n\\nrun_id={run_id}\\n"
 )
-with open(os.path.join(cwd, "plan.md"), "w", encoding="utf-8") as handle:
+with open(os.path.join(cwd, ".orbi", "plan.md"), "w",
+          encoding="utf-8") as handle:
     handle.write(plan)
+with open(os.path.join(cwd, "impl.py"), "w", encoding="utf-8") as handle:
+    handle.write("# impl\\n\\nagent delivery\\n")
 for command in (
     ["git", "add", "."],
-    ["git", "commit", "-m", f"plan for run {run_id}"],
+    ["git", "commit", "-m", f"delivery for run {run_id}"],
 ):
     subprocess.run(command, cwd=cwd, check=True, capture_output=True)
 """
@@ -96,11 +101,14 @@ plan = (
     f"<!-- orbi:run={run_id} -->\\n"
     f"# Plan\\n\\nrun_id={run_id}\\n"
 )
-with open(os.path.join(cwd, "plan.md"), "w", encoding="utf-8") as handle:
+with open(os.path.join(cwd, ".orbi", "plan.md"), "w",
+          encoding="utf-8") as handle:
     handle.write(plan)
+with open(os.path.join(cwd, "impl.py"), "w", encoding="utf-8") as handle:
+    handle.write("# impl\\n\\nagent delivery\\n")
 for command in (
     ["git", "add", "."],
-    ["git", "commit", "-m", f"plan for run {run_id}"],
+    ["git", "commit", "-m", f"delivery for run {run_id}"],
 ):
     subprocess.run(command, cwd=cwd, check=True, capture_output=True)
 sys.stdout.write("done")
@@ -373,9 +381,10 @@ def test_e2e_one_run_id_carries_every_event_of_the_attempt(
         f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-{run_id}"
     )
 
-    # 4. Run artifacts live inside the run-scoped worktree and carry the
-    #    marker; the Pi session dir is under the same run-scoped path.
-    plan = (worktree / "plan.md").read_text(encoding="utf-8")
+    # 4. Run artifacts live inside the run-scoped worktree (in the
+    #    excluded .orbi/ run dir, Issue #302) and carry the marker; the
+    #    Pi session dir is under the same run-scoped path.
+    plan = (worktree / ".orbi" / "plan.md").read_text(encoding="utf-8")
     assert f"<!-- orbi:run={run_id} -->" in plan
     assert (worktree / ".pi-session").is_dir()
 
@@ -399,8 +408,12 @@ def test_e2e_retry_of_same_issue_gets_new_run_id_and_keeps_old_scene(
     assert first.is_dir() and second.is_dir()
 
     # The old scene is preserved and still queryable by the old run id.
-    assert "a1b2c3d4" in (first / "plan.md").read_text(encoding="utf-8")
-    assert "b2c3d4e5" in (second / "plan.md").read_text(encoding="utf-8")
+    assert "a1b2c3d4" in (first / ".orbi" / "plan.md").read_text(
+        encoding="utf-8",
+    )
+    assert "b2c3d4e5" in (second / ".orbi" / "plan.md").read_text(
+        encoding="utf-8",
+    )
 
     # Comments are not confused: each attempt carries exactly its own
     # id (six comments per attempt: started Pi, progress, started
