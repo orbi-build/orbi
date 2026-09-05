@@ -980,6 +980,27 @@ def test_check_optional_proxy_reports_unhealthy_without_raising():
     assert result["optional"] is True
 
 
+def test_check_optional_proxy_logs_probe_failure_below_error(
+    monkeypatch, caplog,
+):
+    def failing_run(*args, **kwargs):
+        raise subprocess.CalledProcessError(
+            7, args[0], stderr="Connection refused",
+        )
+
+    monkeypatch.setattr(runner.subprocess, "run", failing_run)
+    with caplog.at_level("INFO"):
+        result = pilot_setup.check_optional_proxy(
+            run_command=runner.run_command,
+        )
+
+    assert result["proxy"] == "unhealthy"
+    failures = [record for record in caplog.records
+                if "command_failed" in record.message]
+    assert len(failures) == 1
+    assert failures[0].levelname == "INFO"
+
+
 def test_check_optional_proxy_reports_a_missing_curl_without_raising():
     result = pilot_setup.check_optional_proxy(
         run_command=lambda command, **kwargs: (
