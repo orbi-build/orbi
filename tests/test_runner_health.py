@@ -748,6 +748,27 @@ def test_undeterminable_alert_repo_skips_the_issue(tmp_path, caplog):
     assert "health_alert_repo_undetermined" in caplog.text
 
 
+def test_stale_pickup_undeterminable_alert_repo_skips(tmp_path, caplog):
+    """Issue #345: a stale pickup with an undeterminable orbi repo is
+    skipped (bypass) — never filed in the delivery repo."""
+    write_state(tmp_path, {"runs": [],
+                           "last_pickup_ts": time.time() - 48 * 3600,
+                           "alerted": []})
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": "",
+        "journalctl --user -u orbi@2.service": "",
+        "remote get-url origin": "",
+        "--label ai-ready": json.dumps([{"number": 7}]),
+    })
+    with caplog.at_level("INFO"):
+        alerts = runner_health.run_health_check(
+            make_config(tmp_path), run_command=fake,
+        )
+    assert alerts == []
+    assert fake.commands("gh issue create") == []
+    assert "health_alert_repo_undetermined check=stale_pickup" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # process_issue recording hooks: pure bypass (never fail the delivery)
 # ---------------------------------------------------------------------------
