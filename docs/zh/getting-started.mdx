@@ -432,6 +432,7 @@ session、phase、last activity、具体错误），journal 显示
 | 审查循环耗尽轮数 | journal `review_rounds_exhausted issue=<n> rounds=5`；Issue **单独** `ai-blocked` | 有界循环是人工决策——读 findings，手工修 PR 或关闭；见[运维](/zh/operations) |
 | PR 落后于最新 base | Issue `ai-fix-needed`，review 评论说 PR 落后于最新 base 或有 merge 冲突 | 自动：下一个审查 session 在会话内把最新 `origin/<base>` merge 进分支、解冲突、重跑全量测试 |
 | 重启后 service 起不来 | `systemctl --user status orbi@1.service`；journal `unit_drift` / `cli_install_failed` / `transport_check_failed` 行 | 按结构化行处理：重跑 `orbi install-units`（unit 漂移）、它打印的精确重装命令（editable 安装过期）、或修 SSH transport（见[运维](/zh/operations)） |
+| journal 出现 `Your local changes ... would be overwritten by merge` | service preflight 的 `deploy_home_dirty files=...` | 用 `git -C <deploy_home> stash && systemctl --user start orbi@1.service` 保留补丁，适当时再 `git -C <deploy_home> stash pop`；或用 `git -C <deploy_home> checkout -- .` 丢弃后重试。本地 tracked 编辑按设计会阻塞 self-update；`orbi doctor` 会报告 `deploy_home: DRIFT` |
 | `orbi doctor` 报告 `cli_source: DRIFT` | 结构化 `cli_source_drift` 行带精确重装命令 | 跑它打印的 `uv tool install --force --reinstall --editable ...` 命令（或 `orbi setup`） |
 
 标签生命周期、journal 字段和恢复规则见[运维](/zh/operations)；

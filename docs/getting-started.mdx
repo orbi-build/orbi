@@ -484,7 +484,10 @@ of them fails fast — nothing is retried silently.
 | The review loop exhausts its rounds | Journal `review_rounds_exhausted issue=<n> rounds=5`; the Issue is `ai-blocked` **alone** | The bounded loop is a human decision — read the findings, fix or close the PR manually; see [Operations](/operations) |
 | The PR is behind the latest base | The Issue is `ai-fix-needed` with a review comment that the PR is behind the latest base or has a merge conflict | Automatic: the next review session merges the latest `origin/<base>` into the branch in-session, resolves conflicts, re-runs the full suite |
 | The service does not start after a restart | `systemctl --user status orbi@1.service`; journal `unit_drift` / `cli_install_failed` / `transport_check_failed` lines | Follow the structured line: re-run `orbi install-units` (unit drift), the exact reinstall command it prints (stale editable install), or fix the SSH transport (see [Operations](/operations)) |
+| The journal says `Your local changes ... would be overwritten by merge` | `deploy_home_dirty files=...` from the service preflight | Preserve the patch with `git -C <deploy_home> stash && systemctl --user start orbi@1.service`, then `git -C <deploy_home> stash pop` when appropriate; or discard it with `git -C <deploy_home> checkout -- .` and retry. Local tracked edits block the self-update by design. `orbi doctor` reports `deploy_home: DRIFT`. |
 | `orbi doctor` reports `cli_source: DRIFT` | The structured `cli_source_drift` line with the exact reinstall command | Run the printed `uv tool install --force --reinstall --editable ...` command (or `orbi setup`) |
+
+The editable deployment home is self-updated before every service start. Any local tracked source edit can therefore block the fast-forward; use a dedicated local branch or stash it before retrying. The preflight emits `deploy_home_dirty` with the changed files and fix command instead of leaving only raw Git stderr.
 
 For the label lifecycle, the journal fields and the recovery rules see
 [Operations](/operations); for the review/merge contract see

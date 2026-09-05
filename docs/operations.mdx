@@ -21,7 +21,13 @@ Runner instances can run concurrently. Each tick's service instance:
    process): `timeout 90s git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main`. The checkout that is fast-forwarded is the **deployment home** — the `{{ORBI_REPO_DIR}}` placeholder renders the `deploy_home` path at install time (defaulting to `repo_dir`), so in the external single-repo mode (Issue #330) the fast-forward, the `base-sync.lock` and the CLI self-heal below all act on the orbi source checkout, never on the delivery checkout (user repo X). The fetch disables automatic maintenance so it cannot detach a Git child beyond the preflight and shared-lock lifetime.
    A dirty checkout, a failed fetch or a non-fast-forwardable state fails
    the preflight: the service does not start and the reason lands in the
-   systemd journal (fail fast). A currently running long task is never
+   systemd journal (fail fast). When tracked local edits cause the merge
+   failure, the preflight additionally emits one structured,
+   actionable `deploy_home_dirty files=... fix=...` line. Preserve the
+   edit with `git -C <deploy_home> stash`, then retry with
+   `systemctl --user start orbi@1.service` (and `stash pop` later), or
+   discard it with `git -C <deploy_home> checkout -- .`. A currently
+   running long task is never
    hot-updated or killed — while one service instance is active, systemd
    ignores further starts of THAT instance, and the next real start picks
    up the latest code. Because two instances may run `ExecStartPre` in
@@ -255,7 +261,8 @@ orbi add "task title" --repo OWNER/BACKLOG-REPO --config orbi.toml
 # repo (ai-pr-opened / ai-fix-needed / ai-merged / ai-blocked)
 orbi status --config orbi.toml
 
-# Read-only deployment/health report: repo commit, unit drift, CLI
+# Read-only deployment/health report: repo commit, deployment-home
+# cleanliness (deploy_home: clean / DRIFT), unit drift, CLI
 # source (cli_source: clean / DRIFT + the structured cli_source_drift
 # line), git transport (configured origin URL, protocol, expected SSH
 # URL, SSH probe — a failed transport is reported as `transport:

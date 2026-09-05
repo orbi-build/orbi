@@ -25,8 +25,10 @@ TimeoutStartSec=infinity
 # Issue #52: before the Runner starts, fast-forward the local main
 # checkout to the latest origin/main (outside the Python process). A
 # dirty checkout, a failed fetch or a non-fast-forwardable state fails
-# this command: the service does not start and the reason lands in the
-# systemd journal (fail fast). A currently running long task is never
+# this command: the service does not start. For the dirty-checkout
+# scene, emit one actionable structured journal line before failing;
+# Python cannot provide this diagnostic because it has not started yet.
+# A currently running long task is never
 # hot-updated or killed: while the service is active, systemd ignores
 # the timer's start request, and the next real start picks up the
 # latest code.
@@ -36,7 +38,7 @@ TimeoutStartSec=infinity
 # the SAME lock): the main worktree is never written concurrently.
 # Issue #191: disabling fetch's automatic maintenance prevents Git from
 # detaching a maintenance child beyond this preflight and flock lifetime.
-ExecStartPre=/usr/bin/timeout 90s /usr/bin/flock {{ORBI_REPO_DIR}}/.orbi/base-sync.lock -c 'git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main'
+ExecStartPre=/usr/bin/timeout 90s /usr/bin/flock {{ORBI_REPO_DIR}}/.orbi/base-sync.lock -c 'git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main || { dirty_files="$(git status --short --untracked-files=no | cut -c4- | paste -sd, -)"; if [ -n "$dirty_files" ]; then fix="git -C {{ORBI_REPO_DIR}} stash && systemctl --user start orbi@%i.service"; echo "deploy_home_dirty files=\"$dirty_files\" fix=\"$fix\""; fi; exit 1; }'
 # Issue #248: self-heal the editable CLI install OUTSIDE Python. The #158
 # in-Runner refresh (runner.refresh_cli_install) is unreachable when the
 # console script cannot even `import orbi` (the #248 scene: the
