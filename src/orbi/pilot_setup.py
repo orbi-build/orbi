@@ -5,8 +5,8 @@ initialization entry for a new machine or new task-pool repository:
 
 - verifies ``gh auth status`` and the viewer's read/write permission on
   every target repo;
-- verifies the required commands (``git``, ``gh``, ``python3``, ``uv``,
-  the ``orbi`` CLI — a missing one fails fast with its
+- verifies the required commands (``git``, ``gh``, ``uv``, the ``orbi``
+  CLI — a missing one fails fast with its
   actionable install guidance) and the ``systemctl --user`` user bus;
 - aligns the platform labels (``ai-ready``, ``ai-in-progress``,
   ``ai-pr-opened``, ``ai-fix-needed``, ``ai-merged``, ``ai-blocked``,
@@ -107,7 +107,7 @@ WRITE_PERMISSIONS = frozenset({"WRITE", "MAINTAIN", "ADMIN"})
 # (Issue #152) calls `uv tool install`, so a machine that has the CLI
 # but no uv must fail HERE (with actionable install guidance), not
 # mid-install with an indirect error.
-REQUIRED_COMMANDS = ("git", "gh", "python3", "uv", "orbi")
+REQUIRED_COMMANDS = ("git", "gh", "uv", "orbi")
 
 # Actionable install guidance per required command (Issue #156): the
 # missing-command error must tell the user how to install the
@@ -279,8 +279,8 @@ def install_cli_step(repo_dir: Path, module_file: Path, *,
 def check_commands(run_command) -> dict:
     """Verify the required commands and the systemctl --user bus.
 
-    ``git``, ``gh``, ``python3``, ``uv`` and the installed
-    ``orbi`` CLI must be on the PATH (Issue #156: ``uv`` is
+    ``git``, ``gh``, ``uv`` and the installed ``orbi`` CLI must be on
+    the PATH (Issue #156: ``uv`` is
     checked explicitly because the CLI editable step calls
     ``uv tool install``); a missing command fails fast with the
     actionable install guidance for that command (``COMMAND_INSTALL_

@@ -315,7 +315,6 @@ def test_check_commands_reports_the_required_commands(monkeypatch):
     assert result == {
         "git": "/usr/bin/git",
         "gh": "/usr/bin/gh",
-        "python3": "/usr/bin/python3",
         # Issue #156: setup calls `uv tool install` in the CLI editable
         # step (Issue #152), so uv is a checked prerequisite too.
         "uv": "/usr/bin/uv",

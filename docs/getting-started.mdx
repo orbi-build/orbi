@@ -14,32 +14,33 @@ New users only need to run the installer; it installs the CLI, creates the
 config, and starts the interactive setup:
 
 ```bash
-curl -LsSf https://orbi.build/install.sh | bash
+curl -LsSf https://raw.githubusercontent.com/orbi-build/orbi/main/install.sh | bash
 ```
 
 For a reviewable alternative to `curl | bash`, download and inspect first:
 
 ```bash
-curl -LsSf https://orbi.build/install.sh -o install.sh
+curl -LsSf https://raw.githubusercontent.com/orbi-build/orbi/main/install.sh -o install.sh
 less install.sh
 bash install.sh
 ```
 
-The installer requires `git`, `gh`, and a systemd user session; Python is
-managed by uv. For manual installations, `orbi setup` creates `orbi.toml`
+The installer requires `git`, `gh`, and a systemd user session; uv provisions
+Python 3.14 when needed. For manual installations, `orbi setup` creates `orbi.toml`
 from the adjacent `.orbi.example.toml` when absent, without overwriting it.
 
 ## Prerequisites
 
 You install these yourself — `orbi setup` only **checks** them
-(it verifies `git`, `gh`, `python3`, `uv` and the systemd user session
-on the machine); it never installs system packages, never installs
+(it verifies `git`, `gh`, `uv` and the systemd user session on the
+machine; uv provisions the required Python interpreter). It never installs
+system packages, never installs
 `gh`, and never runs `gh auth login` (you log in first, setup only
 verifies the login).
 
 | Requirement | What it is used for | Check |
 |---|---|---|
-| Python 3.14 | The Runner and the test contract (CI pins the same minor version) | `python3 --version` |
+| Python 3.14 | The Runner and the test contract (CI pins the same minor version) | provisioned by `uv` |
 | [uv](https://docs.astral.sh/uv/) | Installs the `orbi` CLI into an isolated tool environment (setup's CLI editable step calls `uv tool install`) | `uv --version` |
 | [Pi](https://github.com/earendil-works/pi) CLI | The development agent; one full session per task | `pi --version` |
 | Git | Worktrees, branches, base freshness | `git --version` |

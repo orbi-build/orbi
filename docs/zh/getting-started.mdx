@@ -11,31 +11,31 @@ Issue 被领取、实现、测试、开 PR、独立审查、合并。这里的�
 新用户只需运行安装器；它会安装 CLI、生成配置并进入交互式 setup：
 
 ```bash
-curl -LsSf https://orbi.build/install.sh | bash
+curl -LsSf https://raw.githubusercontent.com/orbi-build/orbi/main/install.sh | bash
 ```
 
 担心 `curl | bash` 时可先下载、检查，再执行：
 
 ```bash
-curl -LsSf https://orbi.build/install.sh -o install.sh
+curl -LsSf https://raw.githubusercontent.com/orbi-build/orbi/main/install.sh -o install.sh
 less install.sh
 bash install.sh
 ```
 
-安装器需要 `git`、`gh` 和 systemd user session；Python 由 uv 管理。
+安装器需要 `git`、`gh` 和 systemd user session；uv 会在需要时提供 Python 3.14。
 手动安装时，`orbi setup` 找不到 `orbi.toml` 会从相邻的
 `.orbi.example.toml` 生成，且不会覆盖已有配置。
 
 ## 前提
 
 这些前提由**你自己安装**——`orbi setup` 只**检查**它们（校验
-`git`、`gh`、`python3`、`uv` 和 systemd user session）；它从不自动安装
+`git`、`gh`、`uv` 和 systemd user session）；它从不自动安装
 系统包、从不安装 `gh`、也不执行 `gh auth login`（你先登录，setup 只
 验证登录状态）。
 
 | 要求 | 用途 | 检查 |
 |---|---|---|
-| Python 3.14 | Runner 和测试契约（CI 固定同一 minor 版本） | `python3 --version` |
+| Python 3.14 | Runner 和测试契约（CI 固定同一 minor 版本） | 由 `uv` 提供 |
 | [uv](https://docs.astral.sh/uv/) | 把 `orbi` CLI 装进隔离的 tool 环境（setup 的 CLI editable 步骤会调 `uv tool install`） | `uv --version` |
 | [Pi](https://github.com/earendil-works/pi) CLI | 开发 agent；每个任务一个完整 session | `pi --version` |
 | Git | worktree、分支、base 新鲜度 | `git --version` |
