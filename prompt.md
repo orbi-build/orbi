@@ -26,8 +26,11 @@ another id (no `trace_id`, no new UUID) for this run.
   body; the runner rejects a delivery whose PR body is missing it.
 - Every Issue or PR comment you post (progress, review, fix, final) must
   contain the same marker and the visible field `run_id={{RUN_ID}}`.
-- Keep all run artifacts (plan, test, verify, review report) inside the task
-  worktree, whose path already carries `{{RUN_ID}}`.
+- Keep all run artifacts (plan, test, verify, review report) inside the
+  task worktree's excluded run dir `.orbi/` (`.orbi/plan.md`,
+  `.orbi/test.log` — never at the worktree root: a run artifact must
+  never reach the dirty-worktree gate, Issue #302); the worktree path
+  itself already carries `{{RUN_ID}}`.
 
 Read only what the task needs, in this priority order (Issue #180): the
 GitHub Issue (body and comments), the target repository's `AGENTS.md`,
@@ -91,15 +94,15 @@ Hard rules for test evidence (Issue #180):
   test, build or smoke command through `tail`, `head`, `grep` or any
   other filter that drops the exit code.
 - When the output is too long to display, keep the full output AND the
-  real exit code: redirect to a file (`pytest ... > test.log 2>&1;`
-  `echo "exit=$?" >> test.log`) and then `tail` the file, or run the
-  pipeline with `set -o pipefail`. The pytest exit code — not the
+  real exit code: redirect to a file (`pytest ... > .orbi/test.log 2>&1;`
+  `echo "exit=$?" >> .orbi/test.log`) and then `tail` the file, or run
+  the pipeline with `set -o pipefail`. The pytest exit code — not the
   pipeline's — is the result.
-- `test.log` must contain the real pytest output (the summary line, e.g.
-  `156 passed in 4.43s` or `1 failed, 155 passed in 4.43s`), never a
-  self-declared "tests passed": the Runner reads `test.log` for the
-  `tests passed/failed` milestone and the progress comment, and it must
-  stay consistent with CI.
+- `.orbi/test.log` must contain the real pytest output (the summary
+  line, e.g. `156 passed in 4.43s` or `1 failed, 155 passed in 4.43s`),
+  never a self-declared "tests passed": the Runner reads `.orbi/test.log`
+  for the `tests passed/failed` milestone and the progress comment, and
+  it must stay consistent with CI.
 - A failed run must be fixed before the delivery is committed: a
   delivery whose last test result in `test.log` is a failure is not a
   delivery.
@@ -107,7 +110,7 @@ Hard rules for test evidence (Issue #180):
 Context recovery after compaction (Issue #180):
 
 When the session context is compacted, recover from the run artifacts —
-read `plan.md`, `test.log`, the run's progress comment (the hidden run
+read `.orbi/plan.md`, `.orbi/test.log`, the run's progress comment (the hidden run
 marker) and, for a resumed delivery, the review findings comments — and
 continue from there. Do not re-scan the whole repository and do not
 re-read every context file: the artifacts carry the current plan, the
@@ -127,10 +130,10 @@ and the real test suite, not by reviewing yourself.
 Work through this exact loop:
 
 1. Read the GitHub Issue and inspect the relevant repository under the configured workspace root. The runner supplies the source repository and its context.
-2. Write `plan.md` with the goal, inspected context, repository decision, tasks, and verification commands.
+2. Write `.orbi/plan.md` with the goal, inspected context, repository decision, tasks, and verification commands.
 3. Implement the smallest complete change.
 4. Add or update tests. For UI work, use Playwright against the real running application, assert the changed flow, check browser errors, and save screenshots under the run artifacts.
-5. Run the real project tests/build/smoke checks and record the commands and results in `test.log` inside the task worktree (the automatic `tests passed/failed` milestone and the progress comment's tests field read that file).
+5. Run the real project tests/build/smoke checks and record the commands and results in `.orbi/test.log` inside the task worktree (the automatic `tests passed/failed` milestone and the progress comment's tests field read that file).
 6. Verify the result yourself.
 7. Commit the change on the task branch. Your job ends at the committed delivery: you do not fetch the base, push, or create the PR. The Runner then completes the deterministic closeout (Issue #186): it re-fetches the base under the shared base-sync lock, absorbs a base advance with a plain merge, pushes the task branch, and opens exactly one PR for this Issue whose body contains the run marker and `Fixes #{{ISSUE_NUMBER}}` (it may be on the first line) so GitHub natively closes the source Issue when the PR merges into the default branch. After the PR is open, the Runner runs an independent review/fix loop and merges it itself; you do not review, fix, or merge.
 

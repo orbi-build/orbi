@@ -35,7 +35,8 @@ pointless compactions of long sessions.
 ## Context recovery after compaction (Issue #180)
 
 When the session context is compacted, recover from the run artifacts —
-read the worktree's `plan.md` and `test.log`, the review findings
+read the worktree's `.orbi/plan.md` and `.orbi/test.log` (the excluded
+run dir, Issue #302), the review findings
 comments of this run (the Issue and PR comments carrying the run marker)
 and the run's progress comment — and continue from there. Do not
 re-scan the whole repository and do not re-read every context file: the
@@ -94,12 +95,12 @@ the exit code of the last command, so `pytest ... | tail` exits 0 even
 when pytest fails and the failure is disguised as a shell success. Never
 pipe a test, build or smoke command through `tail`, `head`, `grep` or
 any other filter that drops the exit code — redirect to a file
-(`pytest ... > test.log 2>&1;` `echo "exit=$?" >> test.log`) and then
-`tail` the file, or run the pipeline with `set -o pipefail`. `test.log`
-must contain the real pytest output (the summary line), never a
-self-declared "tests passed": the Runner reads it for the progress
-comment and the `tests passed/failed` milestone, and it must stay
-consistent with CI.
+(`pytest ... > .orbi/test.log 2>&1;` `echo "exit=$?" >> .orbi/test.log`)
+and then `tail` the file, or run the pipeline with `set -o pipefail`.
+`.orbi/test.log` (the excluded run dir, Issue #302) must contain the
+real pytest output (the summary line), never a self-declared "tests
+passed": the Runner reads it for the progress comment and the `tests
+passed/failed` milestone, and it must stay consistent with CI.
 
 1. CI first: when the PR has CI failures, read the CI failure logs
    BEFORE running any local test — `gh pr checks {{PR_NUMBER}}` (the
