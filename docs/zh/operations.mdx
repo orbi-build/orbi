@@ -17,7 +17,11 @@ service 实例（`orbi@1.timer` → `orbi@1.service`，
 1. **先 fast-forward 代码**（`ExecStartPre`，在 Python 进程外）：
    `timeout 90s git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main`。被 fast-forward 的 checkout 是**部署 home**——`{{ORBI_REPO_DIR}}` 占位符在安装时渲染的是 `deploy_home` 路径（缺省 `repo_dir`），所以外部单仓库模式（Issue #330）下 fast-forward、`base-sync.lock` 和下面的 CLI 自愈全部作用于 orbi 源码 checkout，绝不作用于交付 checkout（用户仓库 X）。fetch 禁用自动维护，避免 Git 子进程脱离 preflight 和共享锁的生命周期。checkout
    不干净、fetch 失败或无法 fast-forward 时 preflight 失败：service 不
-   启动，原因写入 systemd journal（fail fast）。正在运行的长任务从不被
+   启动，原因写入 systemd journal（fail fast）。tracked 本地编辑导致
+   merge 失败时，preflight 还会写一条结构化、可操作的
+   `deploy_home_dirty files=... fix=...`。用 `git -C <deploy_home> stash`
+   保存编辑后以 `systemctl --user start orbi@1.service` 重试（之后可
+   `stash pop`），或用 `git -C <deploy_home> checkout -- .` 丢弃。正在运行的长任务从不被
    热更新或杀掉——一个 service 实例 active 时 systemd 忽略对**该实例**
    的后续 start 请求，下一次真正启动取到最新代码。两个实例可能在同一
    tick 运行 `ExecStartPre`，所以 fetch + fast-forward 包在一个短生命

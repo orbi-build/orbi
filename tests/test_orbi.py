@@ -1108,7 +1108,8 @@ def _deploy_world(tmp_path, drift: bool = False) -> tuple[dict, Path]:
     return config, installed
 
 
-def _fake_doctor_commands(monkeypatch, ssh_down: bool = False) -> list:
+def _fake_doctor_commands(monkeypatch, ssh_down: bool = False,
+                          dirty: str = "") -> list:
     calls: list = []
 
     def fake_run(command, **kwargs):
@@ -1117,6 +1118,8 @@ def _fake_doctor_commands(monkeypatch, ssh_down: bool = False) -> list:
             return "0123456789abcdef0123456789abcdef01234567"
         if command[:2] == ["git", "config"]:
             return "git@github.com:xqliu/orbi.git"
+        if command[:2] == ["git", "status"]:
+            return dirty
         if command[:2] == ["git", "ls-remote"]:
             if ssh_down:
                 raise subprocess.CalledProcessError(
@@ -1414,6 +1417,7 @@ def test_doctor_report_clean(tmp_path, monkeypatch):
     assert lines[0] == f"repo: {config['repo_dir']}"
     assert lines[1] == "commit: 0123456789abcdef0123456789abcdef01234567"
     assert "unit_drift: clean" in lines
+    assert "deploy_home: clean" in lines
     # Both units are reported with their installed hash.
     from orbi import systemd_deploy
     status = systemd_deploy.unit_status(config["repo_dir"], installed)
@@ -1459,6 +1463,29 @@ def test_doctor_report_clean(tmp_path, monkeypatch):
         "-u", "orbi@2.service",
         "-n", "20", "--no-pager",
     ] in calls
+
+
+def test_doctor_report_reports_dirty_deploy_home(tmp_path, monkeypatch):
+    config, installed = _deploy_world(tmp_path, drift=False)
+    _fake_doctor_commands(
+        monkeypatch,
+        dirty=(
+            " M src/orbi/pilot_setup.py\n"
+            " D deleted.py\n"
+            "R  old.py -> new.py\n"
+            "?? ignored.txt\n"
+        ),
+    )
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    report = orbi.doctor_report(config, installed)
+    lines = report.splitlines()
+    assert "deploy_home: DRIFT" in lines
+    assert "  files: src/orbi/pilot_setup.py, deleted.py, old.py -> new.py" in lines
+    assert "ignored.txt" not in report
+    assert (
+        "  fix: git -C " + str(config["deploy_home"])
+        + " stash && systemctl --user start orbi@1.service"
+    ) in lines
 
 
 def test_doctor_report_reports_a_failed_transport(tmp_path, monkeypatch):

@@ -338,6 +338,24 @@ def slot_lines(state_dir: Path, capacity: int) -> list[str]:
 JOURNAL_LINES = 20
 
 
+def deploy_home_dirty_files(repo_dir: Path, *, run_command) -> list[str]:
+    """Return tracked files changed in the deployment home.
+
+    The systemd preflight cannot start Python when this checkout is dirty,
+    so doctor uses the same porcelain status contract read-only. Untracked
+    files are deliberately excluded: they cannot block the fast-forward.
+    """
+    status = run_command(
+        ["git", "status", "--short", "--untracked-files=no"],
+        cwd=repo_dir,
+    )
+    return [
+        line[3:]
+        for line in status.splitlines()
+        if len(line) >= 3 and line[:2] != "??"
+    ]
+
+
 def install_units_command(config: dict, installed_dir: Path | None) -> str:
     """Run the idempotent unit install and return the deployment report.
 
@@ -380,6 +398,19 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
     lines.append(
         f"commit: {run_command(['git', 'rev-parse', 'HEAD'], cwd=repo_dir)}"
     )
+    dirty_files = deploy_home_dirty_files(
+        config["deploy_home"], run_command=run_command,
+    )
+    if dirty_files:
+        lines.append("deploy_home: DRIFT")
+        lines.append(f"  files: {', '.join(dirty_files)}")
+        lines.append(
+            "  fix: git -C "
+            f"{config['deploy_home']} stash && "
+            "systemctl --user start orbi@1.service"
+        )
+    else:
+        lines.append("deploy_home: clean")
     # Git transport (Issue #114): the checkout's origin protocol, the
     # expected SSH URL of the first configured source repo and the SSH
     # probe. doctor is the diagnostic report: a failed transport is
