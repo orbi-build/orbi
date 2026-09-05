@@ -17,8 +17,9 @@ Throughout the whole lifecycle the Runner publishes live progress
 automatically (Issue #18): one per-run GitHub progress comment carrying a
 hidden run marker is PATCHed in place on every activity change and at most
 every 30 seconds while any Pi session (implementer or reviewer) runs, and
-short milestone comments (started, plan ready, tests passed/failed, review
-findings, PR opened, merged, blocked) notify GitHub Mobile. No human
+short milestone comments (plan ready, tests passed/failed, review findings,
+merged, blocked) notify GitHub Mobile; started and PR-opened scene comments
+also notify while remaining available for resume parsing. No human
 command, poll or status check is part of the normal workflow.
 """
 from __future__ import annotations
@@ -7313,13 +7314,6 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
                 ),
             )),
         )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_IMPLEMENT,
-            action=lambda: publisher.milestone(
-                f"started: {run_info} branch={branch} worktree={worktree}"
-            ),
-        )
         run_pi(
             issue, worktree, config, source_repo, branch=branch,
             resume_context=resume_ctx,
@@ -7352,10 +7346,9 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
         commit = run_command(
             ["git", "rev-parse", "HEAD"], cwd=worktree,
         )
-        # The PR opened milestone announces the delivery: the
-        # implementer always commits the delivery on top of the frozen
-        # base, so the head always advanced. (Issue #82 removed the
-        # fixer's `fix pushed` milestone: findings are fixed by the
+        # The implementer always commits the delivery on top of the
+        # frozen base, so the head always advanced. (Issue #82 removed
+        # the fixer's `fix pushed` milestone: findings are fixed by the
         # review session, which records its own round comments.)
         apply_label_patch(
             number, repo=source_repo, event=EVENT_PR_OPENED,
@@ -7375,13 +7368,6 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
         comment_issue(
             number, repo=source_repo,
             body=opened_pr_comment_body(run_id, run_info, pr_url),
-        )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_IMPLEMENT,
-            action=lambda: publisher.milestone(
-                f"PR opened: {pr_url} ({run_info})"
-            ),
         )
         _safe_publish(
             run_id=run_id, issue=number, source_repo=source_repo,
