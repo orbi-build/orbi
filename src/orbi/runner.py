@@ -5702,7 +5702,9 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
             if current_run_id():
                 body = f"{run_marker(current_run_id())}\n{body}"
             comment_issue(number, repo=source_repo, body=body)
-            comment_pr(_pr_number(scene["pr_url"]), body=body)
+            comment_pr(
+                _pr_number(scene["pr_url"]), repo=source_repo, body=body,
+            )
             bound_run_id = current_run_id()
             if bound_run_id:
                 # Issue #79: the fix-needed/blocked-scene progress
@@ -6593,7 +6595,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             + json.dumps(verdict["findings"], ensure_ascii=False)
         )
         comment_issue(number, repo=source_repo, body=body)
-        comment_pr(pr["number"], body=body)
+        comment_pr(pr["number"], repo=source_repo, body=body)
         # Issue #79: the findings publishing is bypass — a 404 here
         # must not stop the `ai-fix-needed` transition below (the next
         # review session retries the same PR either way).
@@ -6665,7 +6667,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             "conflicts, and reruns the full test suite"
         )
         comment_issue(number, repo=source_repo, body=body)
-        comment_pr(pr["number"], body=body)
+        comment_pr(pr["number"], repo=source_repo, body=body)
         apply_label_patch(
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
             current_labels=(),
@@ -6734,9 +6736,12 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     return True
 
 
-def comment_pr(number: int, *, body: str) -> None:
-    """Comment on a PR (used to record each review round's findings)."""
-    run_command(["gh", "pr", "comment", str(number), "--body", body])
+def comment_pr(number: int, *, repo: str, body: str) -> None:
+    """Comment on a PR in the configured source repository."""
+    run_command([
+        "gh", "pr", "comment", str(number), "--repo", repo,
+        "--body", body,
+    ])
 
 def _pr_head_repo(pr: dict) -> str:
     """Return `owner/name` of the PR head repo, or '<missing>' if absent."""
@@ -7502,8 +7507,8 @@ def _pr_number(pr_url: str) -> int:
     return int(pr_url.rstrip("/").rsplit("/", 1)[-1])
 
 
-def pr_state(pr_url: str) -> str:
-    """Return the GitHub state of one PR: `OPEN`, `MERGED` or `CLOSED`.
+def pr_state(pr_url: str, source_repo: str) -> str:
+    """Return a PR's state from the configured source repository.
 
     The delivery-wait loop (Issue #39) uses it to tell a delivery that is
     still awaiting review from one that is done: only `MERGED` or
@@ -7512,7 +7517,8 @@ def pr_state(pr_url: str) -> str:
     """
     number = _pr_number(pr_url)
     raw = run_command([
-        "gh", "pr", "view", str(number), "--json", "state",
+        "gh", "pr", "view", str(number), "--repo", source_repo,
+        "--json", "state",
     ])
     data = json.loads(raw)
     if not isinstance(data, dict):
@@ -7680,7 +7686,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
         number, pr_url, priority,
     )
     while True:
-        state = pr_state(pr_url)
+        state = pr_state(pr_url, source_repo)
         if state == "MERGED":
             LOGGER.info(
                 "issue=%s delivery_merged pr=%s; releasing the slot",
@@ -8004,7 +8010,9 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 if marker:
                     body = f"{marker}\n{body}"
                 comment_issue(number, repo=source_repo, body=body)
-                comment_pr(_pr_number(pr_url), body=body)
+                comment_pr(
+                    _pr_number(pr_url), repo=source_repo, body=body,
+                )
                 if run_id:
                     # Issue #79: the fix-needed-scene progress
                     # publishing is bypass — a 404 here must not escape

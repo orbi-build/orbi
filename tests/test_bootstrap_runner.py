@@ -8891,7 +8891,7 @@ PR_URL = "https://github.com/owner/repo/pull/46"
 
 
 def fake_pr_view(monkeypatch, state: str) -> tuple[list, object]:
-    """Answer `gh pr view <n> --json state`.
+    """Answer `gh pr view <n> --repo owner/repo --json state`.
 
     Returns the command log and the fake itself (so a test can prove
     the fake rejects unexpected commands).
@@ -8903,7 +8903,9 @@ def fake_pr_view(monkeypatch, state: str) -> tuple[list, object]:
                 and command[2] == "view":
             seen.append(command)
             assert command[3] == "46"
-            assert command[4:] == ["--json", "state"]
+            assert command[4:] == [
+                "--repo", "owner/repo", "--json", "state",
+            ]
             return json.dumps({"state": state})
         raise AssertionError(f"unexpected command: {command}")
 
@@ -8911,10 +8913,15 @@ def fake_pr_view(monkeypatch, state: str) -> tuple[list, object]:
     return seen, fake_run
 
 
-def test_pr_state_returns_open_merged_or_closed(monkeypatch):
+def test_pr_state_returns_open_merged_or_closed_from_source_repo(
+        monkeypatch, tmp_path,
+):
+    # The deploy home can be an unrelated checkout in external single-repo
+    # mode; the command must not infer the repository from cwd.
+    monkeypatch.chdir(tmp_path)
     for state in ("OPEN", "MERGED", "CLOSED"):
         fake_pr_view(monkeypatch, state)
-        assert runner.pr_state(PR_URL) == state
+        assert runner.pr_state(PR_URL, "owner/repo") == state
 
 
 def test_fake_pr_view_rejects_unexpected_commands(monkeypatch):
@@ -8927,7 +8934,7 @@ def test_fake_pr_view_rejects_unexpected_commands(monkeypatch):
 def test_pr_state_fails_fast_on_unexpected_state(monkeypatch):
     fake_pr_view(monkeypatch, "WEIRD")
     with pytest.raises(ValueError, match="unexpected PR state"):
-        runner.pr_state(PR_URL)
+        runner.pr_state(PR_URL, "owner/repo")
 
 
 def test_pr_state_fails_fast_on_non_object_json(monkeypatch):
@@ -8936,7 +8943,7 @@ def test_pr_state_fails_fast_on_non_object_json(monkeypatch):
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(ValueError, match="pr view must be a JSON object"):
-        runner.pr_state(PR_URL)
+        runner.pr_state(PR_URL, "owner/repo")
 
 
 def test_finish_blocked_progress_is_a_noop_without_run_id(monkeypatch):
