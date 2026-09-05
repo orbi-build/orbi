@@ -4942,6 +4942,79 @@ def test_advance_active_milestone_rejects_duplicate_title(monkeypatch, tmp_path)
         runner.advance_active_milestone_on_idle("owner/repo", "v0.3.0", config)
 
 
+def test_arm_release_ticket_adds_ready_to_matching_open_issue(
+    monkeypatch, caplog,
+):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[0:3] == ["gh", "issue", "list"]:
+            return json.dumps([{"number": 385}])
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        runner.arm_release_ticket("owner/repo", "v0.4.0")
+
+    assert calls == [
+        [
+            "gh", "issue", "list", "--repo", "owner/repo", "--state", "open",
+            "--search",
+            'label:ai-release -label:ai-ready milestone:"v0.4.0"',
+            "--json", "number", "--limit", "200",
+        ],
+        [
+            "gh", "issue", "edit", "385", "--repo", "owner/repo",
+            "--add-label", "ai-ready",
+        ],
+    ]
+    assert "release_ticket_armed issue=#385 milestone=v0.4.0" in caplog.text
+
+
+def test_arm_release_ticket_does_nothing_when_no_ticket_matches(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append(command) or "[]",
+    )
+
+    runner.arm_release_ticket("owner/repo", "v0.4.0")
+
+    assert len(calls) == 1
+
+
+def test_arm_release_ticket_rejects_malformed_issue_number(monkeypatch):
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: '[{"number": "385"}]',
+    )
+
+    with pytest.raises(RuntimeError, match="invalid issue number"):
+        runner.arm_release_ticket("owner/repo", "v0.4.0")
+
+
+def test_main_idle_release_arm_failure_is_bypassed(monkeypatch, tmp_path, caplog):
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = "v0.4.0"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args: None)
+    monkeypatch.setattr(
+        runner, "arm_release_ticket",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("permission denied")),
+    )
+    monkeypatch.setattr(runner, "advance_active_milestone_on_idle", lambda *args: None)
+
+    with caplog.at_level("ERROR"):
+        assert runner.main(["--config", str(config)]) == 0
+
+    assert "release_ticket_arm_failed" in caplog.text
+    assert "permission denied" in caplog.text
+
+
 def _write_prompts(tmp_path):
     for name in ("prompt.md", "prompt_review.md"):
         (tmp_path / name).write_text("prompt", encoding="utf-8")
@@ -4977,6 +5050,7 @@ def test_main_passes_configured_active_milestone_to_the_claim_scan(
         return None
 
     monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
+    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args: None)
     monkeypatch.setattr(runner, "advance_active_milestone_on_idle", lambda *args: None)
     assert runner.main(["--config", str(config)]) == 0
     assert seen["milestone"] == "v0.2.0"
@@ -4993,6 +5067,7 @@ def test_main_advances_milestone_only_after_no_ready_issue(
     )
     calls = []
     monkeypatch.setattr(runner, "pick_next_delivery", lambda *args: None)
+    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args: None)
     monkeypatch.setattr(
         runner, "advance_active_milestone_on_idle",
         lambda *args: calls.append(args),
