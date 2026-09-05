@@ -179,8 +179,15 @@ def fake_run_factory(state: dict):
             return ""
         if head[:3] == ["systemctl", "--user", "is-enabled"]:
             unit = command[-1]
-            return state.get(
+            value = state.get(
                 f"is_enabled:{unit}", state.get("is_enabled", "enabled"),
+            )
+            if value == "enabled":
+                return value
+            # Real systemctl: a not-enabled unit exits 1 with the state
+            # word on stdout (Issue #339).
+            raise subprocess.CalledProcessError(
+                1, command, output=value,
             )
         if head[:3] == ["systemctl", "--user", "list-timers"]:
             return state.get(
@@ -589,6 +596,69 @@ def test_install_units_step_reports_the_disabled_surplus_timer(tmp_path):
     assert [
         "systemctl", "--user", "disable", "--now", "orbi@2.timer",
     ] in calls
+
+
+def test_install_units_step_treats_is_enabled_exit_1_disabled_as_not_enabled(
+    tmp_path,
+):
+    """Regression (Issue #339): ``is-enabled`` exits 1 with stdout
+    ``disabled`` for the surplus instance — that is the expected state,
+    not a command failure; setup must report ``enabled=False`` instead of
+    dying with a traceback."""
+    state = {}
+    fake_run, calls = fake_run_factory(state)
+    repo = make_repo(tmp_path)
+    result = pilot_setup.install_units_step(
+        repo, tmp_path / "units", max_concurrency=1, run_command=fake_run,
+    )
+    instances = result["timer"]["instances"]
+    assert instances["orbi@1.timer"]["enabled"] is True
+    assert instances["orbi@2.timer"]["enabled"] is False
+    assert [
+        "systemctl", "--user", "disable", "--now", "orbi@2.timer",
+    ] in calls
+
+
+def test_install_units_step_is_enabled_exit_1_masked_is_not_enabled(tmp_path):
+    state = {}
+    fake_run, _ = fake_run_factory(state)
+    repo = make_repo(tmp_path)
+
+    def masked(command, **kwargs):
+        if command[:3] == ["systemctl", "--user", "is-enabled"]:
+            raise subprocess.CalledProcessError(
+                1, command, output="masked",
+            )
+        return fake_run(command, **kwargs)
+
+    result = pilot_setup.install_units_step(
+        repo, tmp_path / "units", run_command=masked,
+    )
+    for instance in systemd_deploy.TIMER_INSTANCES:
+        assert result["timer"]["instances"][instance]["enabled"] is False
+
+
+def test_install_units_step_fails_fast_on_a_genuine_is_enabled_failure(
+    tmp_path,
+):
+    """A genuine systemctl failure (no user bus: exit 1, empty stdout)
+    must still fail fast, not be swallowed as "not enabled"."""
+    state = {}
+    fake_run, _ = fake_run_factory(state)
+    repo = make_repo(tmp_path)
+
+    def failing(command, **kwargs):
+        if command[:3] == ["systemctl", "--user", "is-enabled"]:
+            raise subprocess.CalledProcessError(
+                1, command,
+                stderr="Failed to connect to bus: No such file or directory",
+            )
+        return fake_run(command, **kwargs)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        pilot_setup.install_units_step(
+            repo, tmp_path / "units", run_command=failing,
+        )
 
 
 def test_install_units_step_reports_a_missing_next_trigger(tmp_path):
