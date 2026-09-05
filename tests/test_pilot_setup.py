@@ -1680,3 +1680,101 @@ def test_run_setup_routes_home_files_to_deploy_home(tmp_path, monkeypatch):
     assert seen["units"] == home
     # The delivery checkout stays the transport-checked repo.
     assert seen["checkout"] == repo
+
+
+def test_scaffold_model_config_is_idempotent_and_private(tmp_path):
+    config = {"deploy_home": tmp_path, "pi_providers": None}
+    first = pilot_setup.scaffold_model_config(config)
+    provider = Path(first["provider_file"])
+    env = Path(first["env_file"])
+    assert provider == tmp_path / ".orbi" / "pi-providers.json"
+    assert json.loads(provider.read_text())["providers"]["openai"]["apiKey"] == "$PROVIDER_API_KEY"
+    assert "PROVIDER_API_KEY=" in env.read_text()
+    assert oct(env.stat().st_mode & 0o777) == "0o600"
+    provider.write_text('{"providers": {"custom": {}}}\n', encoding="utf-8")
+    env.write_text("EXISTING=value\n", encoding="utf-8")
+    second = pilot_setup.scaffold_model_config(config)
+    assert second["provider_created"] is False
+    assert provider.read_text() == '{"providers": {"custom": {}}}\n'
+    assert env.read_text().startswith("EXISTING=value\n")
+    assert "PROVIDER_API_KEY=" in env.read_text()
+
+
+def test_format_setup_reports_model_provider_pointer(tmp_path):
+    result = sample_result()
+    result["model_provider"] = {
+        "state": "NOT CONFIGURED",
+        "provider_file": str(tmp_path / ".orbi" / "pi-providers.json"),
+        "env_file": str(tmp_path / ".orbi" / "env"),
+        "env_variable": "PROVIDER_API_KEY",
+    }
+    lines = pilot_setup.format_setup(result)
+    line = next(line for line in lines if line.startswith("model_provider="))
+    assert "NOT CONFIGURED" in line
+    assert "orbi.toml" in line
+    assert "PROVIDER_API_KEY" in line
+    assert str(tmp_path / ".orbi" / "env") in line
+
+
+def test_scaffold_model_config_preserves_existing_content_without_newline(tmp_path):
+    env = tmp_path / ".orbi" / "env"
+    env.parent.mkdir()
+    env.write_text("EXISTING=value", encoding="utf-8")
+    result = pilot_setup.scaffold_model_config({"deploy_home": tmp_path})
+    assert env.read_text() == "EXISTING=value\n# API key for the starter provider\nPROVIDER_API_KEY=\n"
+    assert result["env_created"] is True
+
+
+def test_model_provider_status_reports_missing_key_without_secret(tmp_path):
+    path = tmp_path / "providers.json"
+    finding = {"variable": "GROQ_API_KEY", "state": "is not set"}
+    result = pilot_setup.model_provider_status({
+        "deploy_home": tmp_path, "pi_providers": path,
+        "pi_provider": "groq", "pi_model": "model",
+        "pi_providers_data": {"providers": {"groq": {}}},
+        "pi_provider_key_finding": finding,
+    })
+    assert result["state"] == "NOT CONFIGURED"
+    assert result["key"] == "GROQ_API_KEY=is not set"
+
+
+def test_model_provider_status_reports_configured_provider_and_model(tmp_path):
+    result = pilot_setup.model_provider_status({
+        "deploy_home": tmp_path,
+        "pi_providers": tmp_path / "providers.json",
+        "pi_provider": "openai", "pi_model": "gpt",
+        "pi_providers_data": {"providers": {
+            "openai": {"apiKey": "${OPENAI_API_KEY}"},
+        }},
+    })
+    assert result["state"] == "ok"
+    assert result["provider"] == "openai"
+    assert result["model"] == "gpt"
+    assert result["key"] == "OPENAI_API_KEY=set"
+
+
+def test_model_provider_status_reports_literal_key_as_set(tmp_path):
+    result = pilot_setup.model_provider_status({
+        "deploy_home": tmp_path, "pi_providers": tmp_path / "providers.json",
+        "pi_provider": "local", "pi_model": "model",
+        "pi_providers_data": {"providers": {"local": {"apiKey": "local"}}},
+    })
+    assert result["key"] == "literal=set"
+
+
+def test_scaffold_model_config_does_not_append_existing_key(tmp_path):
+    env = tmp_path / ".orbi" / "env"
+    env.parent.mkdir()
+    env.write_text("PROVIDER_API_KEY=already-set\n", encoding="utf-8")
+    result = pilot_setup.scaffold_model_config({"deploy_home": tmp_path})
+    assert result["env_created"] is False
+    assert env.read_text() == "PROVIDER_API_KEY=already-set\n"
+
+
+def test_format_setup_reports_configured_model_provider(tmp_path):
+    result = sample_result()
+    result["model_provider"] = {
+        "state": "ok", "provider": "openai", "model": "gpt",
+        "key": "OPENAI_API_KEY=set",
+    }
+    assert "model_provider=ok provider=openai model=gpt key=OPENAI_API_KEY=set" in pilot_setup.format_setup(result)

@@ -50,7 +50,27 @@ from orbi.pi_activity import quote_value
 
 # Bumped whenever the setup output contract changes shape.
 # Issue #152 added the `cli=` line (the editable install step).
-SETUP_VERSION = 2
+SETUP_VERSION = 3
+
+PROVIDER_FILE_NAME = "pi-providers.json"
+PROVIDER_ENV_NAME = "PROVIDER_API_KEY"
+PROVIDER_STARTER = {
+    "_comment": "Edit this OpenAI-compatible provider and select it in orbi.toml.",
+    "providers": {
+        "openai": {
+            "baseUrl": "https://api.openai.com/v1",
+            "api": "openai-completions",
+            "apiKey": "$PROVIDER_API_KEY",
+            "models": [{
+                "id": "your-model",
+                "name": "Your model",
+                "contextWindow": 131072,
+                "maxTokens": 16384,
+            }],
+        },
+    },
+}
+PROVIDER_GUIDE = "See /getting-started#configure-the-model-provider"
 
 # The repo-managed single source of truth for the platform labels.
 LABELS_FILE = "labels.toml"
@@ -583,6 +603,73 @@ def check_checkout(repo_dir: Path, base_branch: str,
     }
 
 
+def scaffold_model_config(config: dict) -> dict:
+    """Create the non-secret provider starter and key slot idempotently."""
+    deploy_home = Path(config["deploy_home"])
+    state_dir = deploy_home / ".orbi"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    provider_path = config.get("pi_providers") or state_dir / PROVIDER_FILE_NAME
+    provider_path = Path(provider_path)
+    provider_created = False
+    if not provider_path.exists():
+        provider_path.write_text(
+            json.dumps(PROVIDER_STARTER, indent=2) + "\n", encoding="utf-8",
+        )
+        provider_created = True
+    env_path = state_dir / "env"
+    env_text = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    env_created = PROVIDER_ENV_NAME not in {
+        line.split("=", 1)[0].removeprefix("export ").strip()
+        for line in env_text.splitlines() if "=" in line
+    }
+    if env_created:
+        with env_path.open("a", encoding="utf-8") as handle:
+            if env_text and not env_text.endswith("\n"):
+                handle.write("\n")
+            handle.write(f"# API key for the starter provider\n{PROVIDER_ENV_NAME}=\n")
+    env_path.touch(mode=0o600, exist_ok=True)
+    env_path.chmod(0o600)
+    return {
+        "provider_file": str(provider_path),
+        "provider_created": provider_created,
+        "env_file": str(env_path),
+        "env_variable": PROVIDER_ENV_NAME,
+        "env_created": env_created,
+    }
+
+
+def model_provider_status(config: dict) -> dict:
+    """Return a safe, value-free provider status for setup and doctor."""
+    provider = config.get("pi_provider")
+    model = config.get("pi_model")
+    path = config.get("pi_providers")
+    if path is None:
+        path = Path(config["deploy_home"]) / ".orbi" / PROVIDER_FILE_NAME
+    finding = config.get("pi_provider_key_finding")
+    env_file = Path(config["deploy_home"]) / ".orbi" / "env"
+    if not provider or not model or not config.get("pi_providers_data"):
+        return {
+            "state": "NOT CONFIGURED", "provider_file": str(path),
+            "env_file": str(env_file), "env_variable": PROVIDER_ENV_NAME,
+        }
+    if finding:
+        return {
+            "state": "NOT CONFIGURED", "provider": provider, "model": model,
+            "key": f"{finding['variable']}={finding['state']}",
+            "provider_file": str(path), "env_file": str(env_file),
+            "env_variable": finding["variable"],
+        }
+    entry = config["pi_providers_data"]["providers"][provider]
+    key = entry.get("apiKey") if isinstance(entry, dict) else None
+    variable = (re.fullmatch(r"\$(?:\{)?([A-Za-z_][A-Za-z0-9_]*)\}?", key or ""))
+    key_name = variable.group(1) if variable else "literal"
+    return {
+        "state": "ok", "provider": provider, "model": model,
+        "key": f"{key_name}=set", "provider_file": str(path),
+        "env_file": str(env_file), "env_variable": key_name,
+    }
+
+
 def check_optional_proxy(run_command) -> dict:
     """Health-check the optional local-llm-kv-cache proxy (never raises).
 
@@ -670,6 +757,7 @@ def run_setup(config: dict, installed_dir: Path | None, *,
         run_command=run_command,
     )
     optional_proxy = check_optional_proxy(run_command)
+    scaffold = scaffold_model_config(config)
     return {
         "setup": "ok",
         "version": SETUP_VERSION,
@@ -680,6 +768,10 @@ def run_setup(config: dict, installed_dir: Path | None, *,
         "timer": units["timer"],
         "checkout": checkout,
         "optional_proxy": optional_proxy,
+        "model_provider": {
+            **model_provider_status(config),
+            **scaffold,
+        },
     }
 
 
@@ -738,6 +830,20 @@ def format_setup(result: dict) -> list[str]:
         f"migrated={'true' if checkout['migrated'] else 'false'} "
         f"ssh_reachable={reachable_text}"
     )
+    provider = result.get("model_provider")
+    if provider and provider["state"] == "ok":
+        lines.append(
+            f"model_provider=ok provider={provider['provider']} "
+            f"model={provider['model']} key={provider['key']}"
+        )
+    elif provider:
+        lines.append(
+            "model_provider=NOT CONFIGURED — edit orbi.toml "
+            "(pi_providers/pi_provider/pi_model), fill "
+            f"{provider['provider_file']} and put the key in "
+            f"{provider['env_file']} ({provider['env_variable']})"
+        )
+        lines.append(f"model_provider_guide={PROVIDER_GUIDE}")
     proxy = result["optional_proxy"]
     lines.append(
         f"model_endpoint=optional optional_proxy={proxy['proxy']} "

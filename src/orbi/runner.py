@@ -506,7 +506,8 @@ def _load_deploy_env_file(deploy_home: Path) -> None:
         os.environ.setdefault(name, value)
 
 
-def load_config(path: Path, *, check_provider_api_keys: bool = True) -> dict:
+def load_config(path: Path, *, check_provider_api_keys: bool = True,
+                allow_missing_pi_providers: bool = False) -> dict:
     """Load the human-maintained TOML config and resolve its paths.
 
     ``doctor`` disables the selected provider-key gate so it can report the
@@ -619,14 +620,24 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True) -> dict:
         else None
     )
     _load_pi_providers.last_key_finding = None
-    pi_providers_data = (
-        _load_pi_providers(
-            pi_providers_path, pi_provider, pi_model,
-            deploy_home / ".orbi" / "env",
-            check_api_key=check_provider_api_keys,
-        )
-        if pi_providers_path is not None else None
-    )
+    pi_providers_data = None
+    if pi_providers_path is not None:
+        try:
+            pi_providers_data = _load_pi_providers(
+                pi_providers_path, pi_provider, pi_model,
+                deploy_home / ".orbi" / "env",
+                check_api_key=check_provider_api_keys,
+            )
+        except FileNotFoundError:
+            if not allow_missing_pi_providers:
+                raise
+            _load_pi_providers.last_key_finding = {
+                "provider": pi_provider or "-",
+                "variable": "-",
+                "path": pi_providers_path,
+                "env_file": deploy_home / ".orbi" / "env",
+                "state": "file missing",
+            }
     return {
         "source_repos": source_repos,
         "repo_dir": repo_dir,

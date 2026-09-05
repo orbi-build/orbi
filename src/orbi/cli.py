@@ -454,11 +454,25 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
                 f"  {entry['unit']}: sha256={entry['installed_sha256']}"
             )
     finding = config.get("pi_provider_key_finding")
-    if finding:
+    if finding and finding.get("variable") != "-":
         lines.append(
             "model_endpoint: provider="
             f"{finding['provider']} key={finding['variable']} "
             f"{finding['state']} (file: {finding['path']})"
+        )
+    provider = pilot_setup.model_provider_status(config)
+    if provider["state"] == "ok":
+        lines.append(
+            f"model_provider: ok provider={provider['provider']} "
+            f"model={provider['model']} key={provider['key']}"
+        )
+    else:
+        lines.append(
+            "model_provider: NOT CONFIGURED "
+            f"provider_file={provider['provider_file']} "
+            f"key={provider['env_variable']} "
+            "(edit orbi.toml pi_providers/pi_provider/pi_model and "
+            f"{provider['env_file']})"
         )
     # CLI source (Issue #152): the official local deployment is the
     # editable uv tool install — the tool env imports `orbi`
@@ -627,6 +641,7 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(
             args.config,
             check_provider_api_keys=args.command != "doctor",
+            allow_missing_pi_providers=args.command in ("setup", "doctor"),
         )
         validate_config(config)
     except ValueError as exc:

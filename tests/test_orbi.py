@@ -1772,3 +1772,18 @@ def test_main_doctor_prints_report_and_returns_zero(
     assert seen["installed_dir"] == tmp_path / "u"
     out = capsys.readouterr().out
     assert "unit_drift: clean" in out
+
+
+def test_doctor_report_reports_configured_model_provider(tmp_path, monkeypatch):
+    config, installed = _deploy_world(tmp_path, drift=False)
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    config.update({
+        "pi_providers": tmp_path / "providers.json",
+        "pi_provider": "openai", "pi_model": "gpt",
+        "pi_providers_data": {"providers": {
+            "openai": {"apiKey": "$OPENAI_API_KEY"},
+        }},
+    })
+    report = orbi.doctor_report(config, installed)
+    assert "model_provider: ok provider=openai model=gpt key=OPENAI_API_KEY=set" in report
