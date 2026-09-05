@@ -420,6 +420,56 @@ def test_publisher_ensure_never_hijacks_scene_comments():
     ]
 
 
+def test_body_commands_log_a_redacted_log_command_without_the_body():
+    """Issue #326: the multi-KB progress/milestone body never reaches
+    the journal. The raw argv keeps the real body for `gh api`; the
+    `log_command` handed to run_command keeps endpoint + method only and
+    redacts the body (which already lives in the GitHub comment)."""
+    captured = {}
+
+    def fake_run_command(command, **kwargs):
+        captured["command"] = command
+        captured["log_command"] = kwargs.get("log_command")
+        if (command[:2] == ["gh", "api"] and "--method" not in command
+                and command[2].endswith("/comments")):
+            return "[]"  # no existing comments -> ensure takes the POST path
+        if "--method" in command and "POST" in command:
+            return json.dumps({"id": 5, "body": "created", "url": "u"})
+        return ""  # PATCH replies empty
+
+    publisher = progress.ProgressPublisher(
+        18, "xqliu/orbi", "abc123", run_command=fake_run_command,
+    )
+    secret_body = (
+        "<!-- orbi:run=abc123 -->\n\n"
+        "**Orbi progress**\n\n- issue: #18 top secret details"
+    )
+
+    # POST path (ensure creates a fresh progress comment).
+    publisher.ensure(secret_body)
+    assert captured["command"][-1] == f"body={secret_body}"
+    assert captured["log_command"] == [
+        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+        "--method", "POST", "--field", "body=<redacted>",
+    ]
+
+    # PATCH path (patch updates the tracked comment in place).
+    publisher.comment_id = 7
+    publisher.patch(secret_body)
+    assert captured["command"][-1] == f"body={secret_body}"
+    assert captured["log_command"] == [
+        "gh", "api", "repos/xqliu/orbi/issues/comments/7",
+        "--method", "PATCH", "--field", "body=<redacted>",
+    ]
+
+    # The body (and the run marker inside it) never leaks into the
+    # journal form (the raw command keeps it, by design, for `gh api`).
+    for logged in (captured["log_command"],):
+        joined = " ".join(logged)
+        assert "top secret" not in joined
+        assert "abc123" not in joined
+
+
 def test_find_progress_comment_requires_marker_and_header():
     comments = [
         {"id": 1, "body": "<!-- orbi:run=abc123 -->scene"},
