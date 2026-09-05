@@ -436,8 +436,8 @@ def test_process_issue_p0_progress_comment_and_milestones_carry_priority(
 ):
     """Issue #101: a P0 pickup (the scan's issue dict carries `labels`)
     shows `priority: p0` in the progress comment and `priority=p0` in
-    the journal/scene text (run_info, started milestone, started-Pi
-    scene comment) — the explicit field is visible end to end."""
+    the journal/scene text (run_info and started-Pi scene comment) —
+    the explicit field is visible end to end."""
     calls, posted = make_fake_gh(monkeypatch)
     patch_process_deps(monkeypatch, tmp_path)
     edit = Mock()
@@ -451,14 +451,6 @@ def test_process_issue_p0_progress_comment_and_milestones_carry_priority(
     ]
     assert len(progress_posts) == 1
     assert "- priority: p0" in progress_posts[0]
-    milestones = [
-        body for body in posted
-        if any(line.startswith(progress.MILESTONE_PREFIX)
-               for line in body.splitlines())
-    ]
-    started = [b for b in milestones if "Orbi: started" in b]
-    assert started, f"no started milestone: {milestones}"
-    assert "priority=p0" in started[0]
     # The started-Pi scene comment (run_info) carries the priority too.
     scene_comments = [
         call for call in calls
@@ -568,24 +560,26 @@ def test_process_issue_passes_issue_number_to_deliver_pr(
     )
 
 
-def test_process_issue_posts_started_and_pr_opened_milestones(
+def test_process_issue_posts_one_scene_announcement_per_delivery_transition(
     monkeypatch, tmp_path,
 ):
+    """Started and PR-opened scenes are resume state, not duplicate
+    milestones: each transition gets exactly one Issue announcement."""
     calls, posted = make_fake_gh(monkeypatch)
     patch_process_deps(monkeypatch, tmp_path)
     runner.process_issue(make_issue(), make_config(tmp_path),
                          "xqliu/orbi")
-    milestones = [
-        body for body in posted
-        if any(line.startswith(progress.MILESTONE_PREFIX)
-               for line in body.splitlines())
+
+    comments = [
+        command[-1] for command in calls
+        if command[:2] == ["gh", "issue"] and "comment" in command
     ]
-    assert any("Orbi: started" in body for body in milestones)
-    assert any(
-        "Orbi: PR opened" in body
-        and "https://github.com/xqliu/orbi/pull/40" in body
-        for body in milestones
-    )
+    started = [body for body in comments if "Orbi started Pi:" in body]
+    opened = [body for body in comments if "Orbi opened PR:" in body]
+    assert len(started) == 1
+    assert len(opened) == 1
+    assert not any("Orbi: started" in body for body in posted)
+    assert not any("Orbi: PR opened" in body for body in posted)
 
 
 def test_process_issue_finishes_progress_comment_with_delivery_summary(
@@ -767,8 +761,7 @@ def test_process_issue_never_posts_fix_pushed_on_a_fresh_claim(
 ):
     # The implementer always commits the delivery on top of the frozen
     # base, so the head always advanced: a fresh claim must not turn
-    # that into a `fix pushed` milestone (the PR opened milestone
-    # announces the delivery; Issue #82 removed the fixer and its
+    # that into a `fix pushed` milestone. Issue #82 removed the fixer and its
     # `fix pushed` milestone — findings are fixed by the review
     # session, which records its own round comments).
     calls, posted = make_fake_gh(monkeypatch)
@@ -781,7 +774,6 @@ def test_process_issue_never_posts_fix_pushed_on_a_fresh_claim(
         if any(line.startswith(progress.MILESTONE_PREFIX)
                for line in body.splitlines())
     ]
-    assert milestones
     assert not any("fix pushed" in body for body in milestones)
 
 
@@ -888,12 +880,11 @@ def test_process_issue_delivered_patch_failure_does_not_fail_delivery(
     assert "Orbi delivered" in last_body
 
 
-def test_process_issue_pr_opened_milestone_failure_does_not_fail_delivery(
+def test_process_issue_pr_opened_scene_has_no_duplicate_milestone(
     monkeypatch, tmp_path, caplog,
 ):
-    """The `PR opened` milestone POST failing after the label transition
-    is the same contract: logged, not fatal; the scene comment and the
-    delivered finish still run (independent publishing steps)."""
+    """The PR-opened scene remains the delivery record and has no
+    duplicate milestone; the delivered finish still runs."""
     calls, posted = make_failing_gh(
         monkeypatch,
         lambda command: (
@@ -914,9 +905,8 @@ def test_process_issue_pr_opened_milestone_failure_does_not_fail_delivery(
 
     assert pr_url == "https://github.com/xqliu/orbi/pull/40"
     assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
-    assert any("progress_publish_failed" in line
-               for line in caplog.text.splitlines()), caplog.text
-    # The delivered finish still ran (independent step)...
+    # No duplicate PR-opened milestone is attempted. The delivered
+    # finish still ran (independent step)...
     delivered_patches = [c for c in calls if _progress_patch_of(c)]
     assert delivered_patches, "the delivered finish was not attempted"
     last_body = delivered_patches[-1][
@@ -1104,12 +1094,11 @@ def test_process_issue_ensure_failure_does_not_fail_delivery(
     assert not any("Orbi: blocked" in body for body in posted)
 
 
-def test_process_issue_started_milestone_failure_does_not_fail_delivery(
+def test_process_issue_started_scene_has_no_duplicate_milestone(
     monkeypatch, tmp_path, caplog,
 ):
-    """Issue #79: the `started` milestone POST failing before `run_pi`
-    is the same contract: logged, not fatal; Pi still runs and the PR
-    is still opened."""
+    """The started scene remains the announcement before `run_pi`;
+    no duplicate milestone is attempted."""
     calls, posted = make_failing_gh(
         monkeypatch,
         lambda command: (
@@ -1131,9 +1120,8 @@ def test_process_issue_started_milestone_failure_does_not_fail_delivery(
     assert pr_url == "https://github.com/xqliu/orbi/pull/40"
     assert runner.run_pi.called
     assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
-    assert any("progress_publish_failed" in line
-               for line in caplog.text.splitlines()), caplog.text
-    # The ensure itself succeeded (only the milestone failed)...
+    # The ensure itself succeeded; the scene comment is the sole
+    # started announcement...
     assert any("Orbi progress" in body for body in posted)
     # ...and the failed milestone was not posted.
     assert not any("Orbi: started" in body for body in posted)
@@ -1180,8 +1168,9 @@ def test_process_issue_plan_test_milestone_failures_do_not_fail_delivery(
     # The failed milestones were not posted...
     assert not any("Orbi: plan ready" in body for body in posted)
     assert not any("Orbi: tests passed" in body for body in posted)
-    # ...but the delivery record still completed.
-    assert any("Orbi: PR opened" in body for body in posted)
+    # ...and the delivery record still completed without a duplicate
+    # PR-opened announcement.
+    assert not any("Orbi: PR opened" in body for body in posted)
 
 
 def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(

@@ -5,9 +5,9 @@ The runner keeps exactly one live progress comment per run on the source
 Issue. The comment carries a hidden HTML run marker
 (`<!-- orbi:run=<run_id> -->`) so a restarted process finds the same
 comment again and keeps PATCHing it in place — no database, no new
-heartbeat comments. Milestone events (started, plan ready, tests
-passed/failed, review findings, PR opened, merged, blocked)
-are published as short standalone comments so GitHub Mobile pushes a
+heartbeat comments. Milestone events without a resume scene (plan
+ready, tests passed/failed, review findings, merged, blocked) are
+published as short standalone comments so GitHub Mobile pushes a
 notification for each one.
 
 All GitHub traffic goes through the reused `runner.run_command`

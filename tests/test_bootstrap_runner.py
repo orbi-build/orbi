@@ -4276,7 +4276,8 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     assert runner.process_issue(issue, config, "xqliu/muyan-ceo") == "https://github.com/muyantech/orbi/pull/4"
     assert calls[0] == ("edit", (4,), {"repo": "xqliu/muyan-ceo", "add": "ai-in-progress"})
     # The run state is published automatically: exactly one progress
-    # comment (hidden run marker) plus the started / PR opened milestones.
+    # comment (hidden run marker); started and PR-opened scenes are
+    # separate resume announcements.
     progress_posts = [
         body for body in posted
         if "**Orbi progress**" in body
@@ -4286,17 +4287,6 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     # The PR URL is only known after verify_pr: the initial POST shows
     # `- PR: -`, the final delivery PATCH carries the URL.
     assert "- PR: -" in progress_posts[0]
-    assert any("Orbi: started" in body for body in posted)
-    started = [body for body in posted if "Orbi: started" in body][0]
-    assert "base_branch=main" in started
-    assert "base_sha=abc123def456" in started
-    assert "run_id=a1b2c3d4" in started
-    assert "branch=orbi/xqliu-muyan-ceo-issue-4-a1b2c3d4" in started
-    assert "worktree=" + str(tmp_path / "wt") in started
-    pr_opened = [body for body in posted if "Orbi: PR opened" in body]
-    assert pr_opened
-    assert "https://github.com/muyantech/orbi/pull/4" in pr_opened[0]
-    assert "run_id=a1b2c3d4" in pr_opened[0]
     # The scene comments (started Pi / opened PR) still carry the run scene.
     scene_comments = [
         call for call in gh_calls
@@ -4305,6 +4295,11 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     assert len(scene_comments) == 2
     start_body = scene_comments[0][-1]
     assert "Orbi started Pi:" in start_body
+    assert "base_branch=main" in start_body
+    assert "base_sha=abc123def456" in start_body
+    assert "run_id=a1b2c3d4" in start_body
+    assert "branch=orbi/xqliu-muyan-ceo-issue-4-a1b2c3d4" in start_body
+    assert "worktree=" + str(tmp_path / "wt") in start_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in start_body
     opened_body = scene_comments[1][-1]
     assert "Orbi opened PR: https://github.com/muyantech/orbi/pull/4" in opened_body

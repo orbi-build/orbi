@@ -367,9 +367,9 @@ def test_e2e_one_run_id_carries_every_event_of_the_attempt(
         assert message.startswith(f"[{run_id}]"), message
 
     # 2. Every Issue comment carries the visible field and the hidden
-    # marker: the live progress comment, the started / plan ready / PR
-    # opened milestones and the two scene comments.
-    assert len(comments) == 6
+    # marker: the live progress comment, the unaffected plan-ready
+    # milestone and the two scene comments.
+    assert len(comments) == 4
     for body in comments:
         assert f"run_id={run_id}" in body
         assert f"<!-- orbi:run={run_id} -->" in body
@@ -416,15 +416,15 @@ def test_e2e_retry_of_same_issue_gets_new_run_id_and_keeps_old_scene(
     )
 
     # Comments are not confused: each attempt carries exactly its own
-    # id (six comments per attempt: started Pi, progress, started
-    # milestone, plan ready milestone, opened PR, PR opened milestone).
-    assert len(comments) == 12
+    # id (four comments per attempt: started Pi, progress, plan ready
+    # milestone, opened PR).
+    assert len(comments) == 8
     assert "<!-- orbi:run=a1b2c3d4 -->" in comments[0]
     assert "b2c3d4e5" not in comments[0]
     assert "<!-- orbi:run=a1b2c3d4 -->" in comments[1]
-    assert "<!-- orbi:run=b2c3d4e5 -->" in comments[6]
-    assert "a1b2c3d4" not in comments[6]
-    assert "<!-- orbi:run=b2c3d4e5 -->" in comments[7]
+    assert "<!-- orbi:run=b2c3d4e5 -->" in comments[4]
+    assert "a1b2c3d4" not in comments[4]
+    assert "<!-- orbi:run=b2c3d4e5 -->" in comments[5]
 
     # The journal timeline splits cleanly into the two runs.
     first_lines = [
@@ -453,9 +453,8 @@ def test_e2e_failed_attempt_marks_blocked_with_same_run_id(
                                 REPO) is None
 
     # The failure report carries the same run id as the start comment
-    # (progress + started milestone + started Pi + failure + blocked
-    # milestone).
-    assert len(comments) == 5
+    # (progress + started Pi + failure + blocked milestone).
+    assert len(comments) == 4
     start = [c for c in comments if "Orbi started Pi:" in c][0]
     failure = [c for c in comments if "Orbi failed:" in c][0]
     assert "<!-- orbi:run=a1b2c3d4 -->" in start

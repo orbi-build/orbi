@@ -451,10 +451,9 @@ def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
     worktree = worktree_for(clone, run_id)
     assert worktree.is_dir()
     # The started Pi scene comment is posted first; the live progress
-    # comment (gh api) and the milestones follow, the opened PR scene
-    # comment comes before its milestone.
+    # comment and unaffected milestones follow, then the opened PR scene.
     started = comments[0]
-    opened = comments[4]
+    opened = comments[3]
     assert "Orbi started Pi:" in started
     assert f"Orbi opened PR: {PR_URL}" in opened
     assert f"run_id={run_id}" in opened
@@ -551,11 +550,10 @@ def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
         assert message.startswith(f"[{run_id}]"), message
 
     # One PR, one branch, one worktree, one run id: nothing was
-    # recreated. Six comments from the first delivery (started Pi,
-    # progress, started milestone, plan ready milestone, opened PR,
-    # PR opened milestone) plus two from the review (merged milestone,
-    # merged PR comment).
-    assert len(comments) == 8
+    # recreated. Four comments from the first delivery (started Pi,
+    # progress, plan ready milestone, opened PR) plus two from the
+    # review (merged milestone, merged PR comment).
+    assert len(comments) == 6
     merged_comment = [
         body for body in comments
         if "Orbi merged PR:" in body
