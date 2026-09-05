@@ -40,6 +40,7 @@ EVENT_CLAIM = "claim"
 EVENT_PR_OPENED = "pr_opened"
 EVENT_FIX_NEEDED = "fix_needed"
 EVENT_MERGED = "merged"
+EVENT_RELEASE_WAITING = "release_waiting"
 EVENT_BLOCKED = "blocked"
 
 # The delivery-state labels a terminal failure must clear so the
@@ -77,6 +78,8 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
         return ([PR_OPENED_LABEL], [IN_PROGRESS_LABEL])
     if event == EVENT_FIX_NEEDED:
         return ([FIX_NEEDED_LABEL], [PR_OPENED_LABEL])
+    if event == EVENT_RELEASE_WAITING:
+        return ([READY_LABEL], [IN_PROGRESS_LABEL])
     if event == EVENT_MERGED:
         to_remove = [
             label for label in _DELIVERY_STATE_LABELS if label in current

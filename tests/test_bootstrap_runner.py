@@ -447,6 +447,36 @@ def test_load_config_rejects_invalid_swallow_probe_seconds(
     assert reason in str(excinfo.value)
 
 
+# --- Issue #381: release delivery wait is configurable ------------------------
+
+def test_load_config_defaults_release_deliveries_wait_seconds(tmp_path):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    config = runner.load_config(config_path)
+    assert config["release_deliveries_wait_seconds"] == 1800.0
+
+
+def test_load_config_reads_explicit_release_deliveries_wait_seconds(tmp_path):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrelease_deliveries_wait_seconds = 42\n',
+        encoding="utf-8",
+    )
+    assert runner.load_config(config_path)["release_deliveries_wait_seconds"] == 42.0
+
+
+@pytest.mark.parametrize("value", ["true", "0", "-1", '"42"'])
+def test_load_config_rejects_invalid_release_deliveries_wait_seconds(tmp_path, value):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\n'
+        f"release_deliveries_wait_seconds = {value}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="release_deliveries_wait_seconds"):
+        runner.load_config(config_path)
+
+
 # --- Issue #268: release_ci_wait_seconds is configurable ---------------------
 
 def test_load_config_defaults_release_ci_wait_seconds(tmp_path):
@@ -13045,8 +13075,9 @@ def test_check_release_gates_fails_on_leftover_in_progress(monkeypatch):
         leftover_labels={"ai-in-progress": [7]},
         check_runs=[],
     )
-    with pytest.raises(RuntimeError, match="Issue #7 still carries ai-in-progress"):
+    with pytest.raises(runner.ReleaseDeliveriesWaiting) as excinfo:
         runner.check_release_gates("o/r", "main", "abc123", 99)
+    assert excinfo.value.issue_numbers == [7]
 
 
 def test_check_release_gates_fails_on_leftover_fix_needed(monkeypatch):
@@ -13055,8 +13086,17 @@ def test_check_release_gates_fails_on_leftover_fix_needed(monkeypatch):
         leftover_labels={"ai-fix-needed": [8]},
         check_runs=[],
     )
-    with pytest.raises(RuntimeError, match="Issue #8 still carries ai-fix-needed"):
+    with pytest.raises(runner.ReleaseDeliveriesWaiting) as excinfo:
         runner.check_release_gates("o/r", "main", "abc123", 99)
+    assert excinfo.value.issue_numbers == [8]
+
+
+def test_check_release_gates_delivery_wait_timeout_is_not_ci_failure(monkeypatch):
+    make_gate_gh(monkeypatch, leftover_labels={"ai-in-progress": [7]}, check_runs=[])
+    with pytest.raises(RuntimeError, match="delivery wait timeout, not a CI failure"):
+        runner.check_release_gates("o/r", "main", "abc123", 99,
+                                   delivery_wait_seconds=5,
+                                   delivery_waited_seconds=5)
 
 
 def test_check_release_gates_fails_on_failing_ci(monkeypatch):
@@ -13469,7 +13509,8 @@ def test_publish_release_reraises_real_gh_failure(monkeypatch):
 def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                              tag_commit=None, release_url="https://github.com/o/r/releases/tag/v0.3.0",
                              in_progress=False, existing_run_id=None,
-                             check_run_pages=None, milestone_items=None):
+                             check_run_pages=None, milestone_items=None,
+                             leftover_labels=None):
     """Full fake environment for `process_release`.
 
     Returns a dict of captured state: edit_issue / comment_issue calls,
@@ -13481,6 +13522,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     queries: milestone number -> dict with keys `issues_closed` /
     `issues_open` / `pulls_closed` / `pulls_open`.
     """
+    leftover_labels = leftover_labels or {}
     state = {
         "edits": [], "comments": [], "commands": [],
         "run_ids": [], "active_runs": [], "sync_docs_calls": [],
@@ -13503,8 +13545,10 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                 ),
             )
         if command[:3] == ["gh", "issue", "view"]:
-            number = int(command[3])
             fields = command[command.index("--json") + 1]
+            if fields == "comments":
+                return json.dumps({"comments": []})
+            number = int(command[3])
             if fields == "number,state" and number == 124:
                 return json.dumps({"number": 124, "state": "CLOSED"})
             if fields.startswith("number,title,") and number in (123, 124):
@@ -13524,7 +13568,8 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                 ),
             )
         if command[:3] == ["gh", "issue", "list"]:
-            return "[]"
+            label = command[command.index("--label") + 1]
+            return json.dumps([{"number": n} for n in leftover_labels.get(label, [])])
         if command == ["gh", "api",
                        "repos/o/r/milestones?state=all", "--paginate"]:
             return json.dumps([
@@ -13611,6 +13656,45 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
 
     monkeypatch.setattr(runner, "sync_release_docs", fake_sync_docs)
     return state
+
+
+def test_process_release_waiting_returns_ready_and_records_open_deliveries(monkeypatch):
+    state = make_release_process_env(
+        monkeypatch, leftover_labels={"ai-in-progress": [7], "ai-pr-opened": [8]},
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    result = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert result == ""
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-ready",
+                                       "remove": "ai-in-progress"})
+    waiting = [k["body"] for n, k in state["comments"]
+               if n == 99 and "waiting for deliveries" in k["body"]]
+    assert waiting and "open_deliveries: #7, #8" in waiting[0]
+
+
+def test_process_release_wait_timeout_uses_persisted_wait_start(monkeypatch):
+    state = make_release_process_env(
+        monkeypatch, leftover_labels={"ai-in-progress": [7]},
+    )
+    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [
+        {"body": "wait_started: 90"},
+        {"body": "wait_started: 95"},
+        "not a comment",
+    ])
+    monkeypatch.setattr(runner.time, "time", lambda: 100)
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    with pytest.raises(RuntimeError, match="delivery wait timeout"):
+        runner.process_release(
+            issue, {"repo_dir": Path("/r"), "base_branch": "main",
+                    "release_deliveries_wait_seconds": 5}, "o/r",
+        )
+    assert state["edits"][-1][1]["add"] == "ai-blocked"
 
 
 def test_process_release_success_end_to_end(monkeypatch):
