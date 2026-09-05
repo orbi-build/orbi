@@ -1175,6 +1175,74 @@ def test_install_units_command_reports_commit_and_hashes(monkeypatch,
         in lines
 
 
+def test_install_units_command_uses_deploy_home(monkeypatch, tmp_path):
+    """Issue #330: `orbi install-units` deploys the unit templates from
+    the deployment home — the delivery checkout (repo_dir) may be a
+    foreign repo without a systemd/ directory."""
+    from orbi import systemd_deploy
+
+    config, _ = _deploy_world(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    config["deploy_home"] = home
+    installed = tmp_path / "elsewhere"
+    captured = {}
+
+    def fake_install(repo_dir, installed_dir, *, max_concurrency, run_command):
+        captured["repo_dir"] = Path(repo_dir)
+        return {
+            "commit": "0123456789abcdef0123456789abcdef01234567",
+            "installed_dir": installed_dir,
+            "units": {
+                name: {"installed_path": installed_dir / name,
+                       "sha256": f"hash-{name}"}
+                for name in systemd_deploy.UNIT_NAMES
+            },
+        }
+
+    monkeypatch.setattr(systemd_deploy, "install_units", fake_install)
+    orbi.install_units_command(config, installed)
+    assert captured["repo_dir"] == home
+    assert captured["repo_dir"] != config["repo_dir"]
+
+
+def test_doctor_report_routes_home_checks_to_deploy_home(
+    monkeypatch, tmp_path,
+):
+    """Issue #330: `orbi doctor` compares unit drift and the editable CLI
+    source against the deployment home's templates and checkout — never
+    the delivery checkout (which may be a foreign repo)."""
+    from orbi import cli_source, systemd_deploy
+
+    config, installed = _deploy_world(tmp_path, drift=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    config["deploy_home"] = home
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    seen = {}
+
+    def spy_unit_status(repo_dir, installed_dir):
+        seen["units"] = Path(repo_dir)
+        return []
+
+    def spy_cli_source(expected_repo_dir):
+        seen["cli"] = Path(expected_repo_dir)
+        return {"actual": str(home)}
+
+    monkeypatch.setattr(
+        systemd_deploy, "unit_status", spy_unit_status,
+    )
+    monkeypatch.setattr(cli_source, "cli_source", spy_cli_source)
+    monkeypatch.setattr(cli_source, "drift_line", lambda source: None)
+    report = orbi.doctor_report(config, installed)
+    assert seen["units"] == home
+    assert seen["cli"] == home
+    assert home != config["repo_dir"]
+    assert "unit_drift: clean" in report.splitlines()
+    assert f"cli_source: clean source={home}" in report.splitlines()
+
+
 def test_main_install_units_prints_report_and_returns_zero(
     monkeypatch, tmp_path, capsys,
 ):
