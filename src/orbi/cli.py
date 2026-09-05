@@ -345,8 +345,11 @@ def install_units_command(config: dict, installed_dir: Path | None) -> str:
     HEAD — the commit the installed templates came from) and the
     installed sha256 of each unit (Issue #103).
     """
+    # Issue #330: the unit templates live in the deployment home (they
+    # render the home path into {{ORBI_REPO_DIR}}), never in the delivery
+    # checkout.
     result = systemd_deploy.install_units(
-        config["repo_dir"], installed_dir,
+        config["deploy_home"], installed_dir,
         max_concurrency=config["max_concurrency"], run_command=run_command,
     )
     lines = [
@@ -399,7 +402,9 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
         )
     except git_transport.TransportError as exc:
         lines.append(f"transport: FAILED {exc}")
-    status = systemd_deploy.unit_status(repo_dir, installed_dir)
+    # Issue #330: unit drift is compared against the deployment home's
+    # templates (the same comparison the pre-start check uses).
+    status = systemd_deploy.unit_status(config["deploy_home"], installed_dir)
     drifted = [entry for entry in status if entry["drifted"]]
     if drifted:
         lines.append("unit_drift: DRIFT")
@@ -427,7 +432,9 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
     # with the editable reinstall, never with
     # `orbi install-units` alone). Read-only: the report stays
     # readable and the rest of the health report is still produced.
-    source = cli_source.cli_source(repo_dir)
+    # Issue #330: the editable CLI source is expected in the deployment
+    # home, not the delivery checkout.
+    source = cli_source.cli_source(config["deploy_home"])
     line = cli_source.drift_line(source)
     if line is None:
         lines.append(f"cli_source: clean source={source['actual']}")

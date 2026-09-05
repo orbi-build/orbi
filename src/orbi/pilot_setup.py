@@ -601,14 +601,18 @@ def run_setup(config: dict, installed_dir: Path | None, *,
                 )
         targets = list(repos)
     repo_dir = config["repo_dir"]
-    defs = load_label_defs(repo_dir / LABELS_FILE)
+    # Issue #330: labels.toml, the CLI editable install and the unit
+    # templates live in the deployment home; the delivery checkout
+    # (repo_dir) may be a foreign repo without any of them.
+    deploy_home = config["deploy_home"]
+    defs = load_label_defs(deploy_home / LABELS_FILE)
     check_commands(run_command)
     # Issue #152: the CLI source step precedes every other step — the
     # running CLI must import from the deployment checkout, otherwise
     # the unit migration below (and the pre-start self-heal it
     # repairs) could never run the new code (the #152 deadlock).
     cli = install_cli_step(
-        repo_dir, cli_source.module_file(), run_command=run_command,
+        deploy_home, cli_source.module_file(), run_command=run_command,
     )
     check_auth(run_command)
     repo_results = []
@@ -620,7 +624,8 @@ def run_setup(config: dict, installed_dir: Path | None, *,
             "labels": {"aligned": labels["aligned"], "total": labels["total"]},
         })
     units = install_units_step(
-        repo_dir, installed_dir, max_concurrency=config["max_concurrency"],
+        deploy_home, installed_dir,
+        max_concurrency=config["max_concurrency"],
         run_command=run_command,
     )
     checkout = check_checkout(

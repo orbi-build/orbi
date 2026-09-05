@@ -70,6 +70,100 @@ def test_load_config_defaults_base_branch_to_main(tmp_path):
     assert config["base_branch"] == "main"
 
 
+def test_load_config_defaults_deploy_home_to_repo_dir(tmp_path):
+    """Issue #330: without deploy_home the deployment home IS the delivery
+    checkout — the orbi-bootstrap layout keeps its exact behavior."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["deploy_home"] == (tmp_path / "repo").resolve()
+
+
+def test_load_config_reads_explicit_deploy_home(tmp_path):
+    """Issue #330: an explicit deploy_home resolves like every other
+    config path (relative to the config file dir)."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n'
+        'deploy_home = "home"\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["repo_dir"] == (tmp_path / "repo").resolve()
+    assert config["deploy_home"] == (tmp_path / "home").resolve()
+
+
+def test_load_config_rejects_an_empty_deploy_home(tmp_path):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\ndeploy_home = ""\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError, match="deploy_home must be a non-empty string",
+    ):
+        runner.load_config(config_path)
+
+
+def test_load_config_rejects_a_non_string_deploy_home(tmp_path):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\ndeploy_home = 7\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError, match="deploy_home must be a non-empty string",
+    ):
+        runner.load_config(config_path)
+
+
+def test_load_config_prompt_defaults_resolve_from_deploy_home(tmp_path):
+    """Issue #330: with deploy_home set and no explicit prompt, the prompt
+    defaults live in the deployment home — never in the delivery checkout."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n'
+        'deploy_home = "home"\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["prompt"] == (tmp_path / "home" / "prompt.md").resolve()
+    assert config["prompt_review"] == (
+        tmp_path / "home" / "prompt_review.md"
+    ).resolve()
+
+
+def test_load_config_explicit_prompt_resolves_from_config_dir(tmp_path):
+    """Issue #330: an explicit prompt path keeps resolving against the
+    config file dir even when deploy_home is set."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n'
+        'deploy_home = "home"\nprompt = "my-prompt.md"\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["prompt"] == (tmp_path / "my-prompt.md").resolve()
+
+
+def test_validate_config_requires_the_deploy_home_dir(tmp_path):
+    """Issue #330: a missing deployment home fails the start fast, like a
+    missing delivery checkout."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n'
+        'deploy_home = "missing-home"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "repo").mkdir()
+    config = runner.load_config(config_path)
+    with pytest.raises(FileNotFoundError):
+        runner.validate_config(config)
+
+
 def test_load_config_repair_issue_creation_is_opt_in(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
@@ -609,6 +703,7 @@ def test_validate_config_accepts_existing_files(tmp_path):
         path.write_text("ok", encoding="utf-8")
     runner.validate_config({
         "repo_dir": tmp_path,
+        "deploy_home": tmp_path,
         "prompt": prompt,
         "prompt_review": prompt_review,
         "skills": [skill],
@@ -622,6 +717,7 @@ def test_validate_config_requires_review_prompt(tmp_path):
     with pytest.raises(FileNotFoundError, match="prompt_review.md"):
         runner.validate_config({
             "repo_dir": tmp_path,
+            "deploy_home": tmp_path,
             "prompt": prompt,
             "prompt_review": tmp_path / "prompt_review.md",
             "skills": [],
@@ -633,6 +729,7 @@ def test_validate_config_fails_before_issue_claim_when_path_missing(tmp_path):
     with pytest.raises(FileNotFoundError, match="missing.md"):
         runner.validate_config({
             "repo_dir": tmp_path,
+            "deploy_home": tmp_path,
             "prompt": tmp_path / "missing.md",
             "prompt_review": tmp_path / "prompt_review.md",
             "skills": [],
@@ -644,6 +741,7 @@ def test_validate_config_rejects_missing_repo_dir(tmp_path):
     with pytest.raises(FileNotFoundError, match="missing-repo"):
         runner.validate_config({
             "repo_dir": tmp_path / "missing-repo",
+            "deploy_home": tmp_path,
             "prompt": tmp_path / "prompt.md",
             "skills": [],
             "context_files": [],
@@ -680,6 +778,8 @@ def _base_config(tmp_path: Path) -> dict:
         path.write_text("ok", encoding="utf-8")
     return {
         "repo_dir": tmp_path,
+        # Issue #330: the bootstrap deployment — home == delivery checkout.
+        "deploy_home": tmp_path,
         "prompt": prompt,
         "prompt_review": prompt_review,
         "skills": [],
@@ -8394,6 +8494,88 @@ def test_main_cli_install_refresh_runs_before_slot_and_claim(
     # ...and the tick proceeded to the normal claim flow (slot taken
     # after the refresh).
     assert (tmp_path / ".orbi" / "slots" / "slot-1").exists()
+
+
+def test_main_cli_refresh_uses_deploy_home_not_repo_dir(
+    monkeypatch, tmp_path,
+):
+    """Issue #330: with deploy_home set the CLI self-update acts on the
+    deployment home — the delivery checkout (repo_dir) is never treated
+    as the orbi editable-install source."""
+    seen: dict = {}
+
+    def fake_refresh(repo_dir, *, run_command, lock_timeout_seconds=300.0):
+        seen["repo_dir"] = Path(repo_dir)
+        return "unchanged"
+
+    monkeypatch.setattr(runner, "refresh_cli_install", fake_refresh)
+    monkeypatch.setattr(runner, "check_unit_drift", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner, "check_transport",
+        lambda *a, **k: {
+            "remote": "origin", "protocol": "ssh",
+            "url": "git@github.com:owner/repo.git",
+            "expected": "git@github.com:owner/repo.git",
+            "migrated": False, "ssh_reachable": True,
+        },
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    for name in ("prompt.md", "prompt_review.md"):
+        (home / name).write_text("prompt", encoding="utf-8")
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "."\n'
+        'deploy_home = "home"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    assert seen["repo_dir"] == home
+
+
+def test_main_unit_drift_check_uses_deploy_home(
+    monkeypatch, tmp_path,
+):
+    """Issue #330: the pre-start unit drift check and its self-heal act on
+    the deployment home's templates, never the delivery checkout."""
+    seen: list[Path] = []
+
+    def fake_check(repo_dir, *args, **kwargs):
+        seen.append(Path(repo_dir))
+
+    monkeypatch.setattr(runner, "check_unit_drift", fake_check)
+    monkeypatch.setattr(
+        runner, "refresh_cli_install", lambda *a, **k: "unchanged",
+    )
+    monkeypatch.setattr(
+        runner, "check_transport",
+        lambda *a, **k: {
+            "remote": "origin", "protocol": "ssh",
+            "url": "git@github.com:owner/repo.git",
+            "expected": "git@github.com:owner/repo.git",
+            "migrated": False, "ssh_reachable": True,
+        },
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    for name in ("prompt.md", "prompt_review.md"):
+        (home / name).write_text("prompt", encoding="utf-8")
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "."\n'
+        'deploy_home = "home"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    assert seen == [home]
 
 
 def test_main_cli_install_failure_fails_fast_before_slot_and_claim(
