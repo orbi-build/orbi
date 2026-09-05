@@ -65,6 +65,20 @@ VOLATILE_TOKEN_RE = re.compile(
     r"\b[0-9a-f]{8,40}\b|\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}",
 )
 
+# Fail-fast validation errors a HUMAN must fix in the config (Issue #345):
+# there is nothing for any agent to implement until a human edits the
+# config. These are the exact messages the Runner raises at config load
+# (`_check_pi_provider_api_key`, `load_config`); a crash loop whose journal
+# carries one of them is a deployment-config problem, not an orbi bug.
+CONFIG_CAUSE_RE = re.compile(
+    r"missing environment variable"
+    r"|API key for provider"
+    r"|must be a non-empty"
+    r"|must be a boolean"
+    r"|must be a positive integer"
+    r"|is not defined for provider",
+)
+
 
 def health_state_path(repo_dir: Path) -> Path:
     """Return the health state file of one configured repo."""
@@ -156,23 +170,105 @@ def record_pickup(repo_dir: Path) -> None:
     save_health_state(path, state)
 
 
-def count_crashes(run_command, since_minutes: int = CRASH_WINDOW_MINUTES) -> int:
-    """Count service crashes in the window from the systemd journal.
+def crash_journal_lines(
+    run_command, since_minutes: int = CRASH_WINDOW_MINUTES,
+) -> list[str]:
+    """Return the systemd journal lines for every service instance in the
+    window.
 
     One bounded `journalctl` query per service instance (the verified shape
-    from `orbi doctor`); counts only the real systemd exit lines (see
-    CRASH_EXIT_RE).
+    from `orbi doctor`). The lines are the raw scene the crash-loop alert
+    needs (Issue #345): the exit lines plus the structured fail-fast reason
+    the Runner logged before each crash.
     """
-    total = 0
+    lines: list[str] = []
     for unit in SERVICE_INSTANCES:
         output = run_command([
             "timeout", "30", "journalctl", "--user", "-u", unit,
             "--since", f"-{since_minutes}min", "--no-pager", "-q",
         ])
-        total += sum(
-            1 for line in output.splitlines() if CRASH_EXIT_RE.search(line)
-        )
-    return total
+        lines.extend(output.splitlines())
+    return lines
+
+
+def count_crashes(run_command, since_minutes: int = CRASH_WINDOW_MINUTES) -> int:
+    """Count service crashes in the window from the systemd journal.
+
+    Counts only the real systemd exit lines (see CRASH_EXIT_RE).
+    """
+    return sum(
+        1 for line in crash_journal_lines(run_command, since_minutes)
+        if CRASH_EXIT_RE.search(line)
+    )
+
+
+def classify_crash(journal_lines: list[str]) -> tuple[str, str]:
+    """Classify a crash loop as deployment-config or orbi-bug (Issue #345).
+
+    Returns ``(kind, reason_line)``. ``kind`` is ``"config"`` when the
+    journal carries a fail-fast validation error (CONFIG_CAUSE_RE) — a human
+    must edit the config, no agent can fix it; otherwise ``"bug"`` (an
+    orbi-internal defect orbi's own agent can fix). ``reason_line`` is the
+    most recent journal line that names the cause (empty when unknown), so
+    the receiving agent has the scene.
+    """
+    for line in reversed(journal_lines):
+        if CONFIG_CAUSE_RE.search(line):
+            return "config", line
+    for line in reversed(journal_lines):
+        if "ERROR" in line.upper() or "Traceback" in line:
+            return "bug", line
+    return "bug", ""
+
+
+def crash_reason_fingerprint(reason_line: str) -> str:
+    """Return the stable 16-hex fingerprint of one crash reason line.
+
+    A per-crash identity for the alert body (Issue #345): the same fail-fast
+    reason always fingerprints identically, so a recurring loop is
+    recognizable at a glance. Empty reason -> empty fingerprint.
+    """
+    if not reason_line:
+        return ""
+    return hashlib.sha256(reason_line.encode("utf-8")).hexdigest()[:16]
+
+
+def orbi_repo_from_origin_url(url: str) -> str | None:
+    """Derive ``owner/repo`` from a git origin URL.
+
+    Handles the two forms `git remote get-url origin` returns for the orbi
+    checkout: SSH (``git@github.com:owner/repo.git``) and HTTPS
+    (``https://github.com/owner/repo[.git]``). Anything else -> None
+    (undeterminable; the caller logs and skips rather than guess).
+    """
+    url = url.strip()
+    if not url:
+        return None
+    match = re.match(r"^[^@]+@[^:]+:(.+?)(?:\.git)?$", url)
+    if match:
+        return match.group(1)
+    match = re.match(r"^https?://[^/]+/(.+?)(?:\.git)?/?$", url)
+    if match:
+        return match.group(1)
+    return None
+
+
+def orbi_repo_from_deploy_home(deploy_home: Path, run_command) -> str | None:
+    """Derive the orbi repo from the deploy home's git origin.
+
+    The deploy home is the orbi source checkout (Issue #330); its origin is
+    the orbi repo the Runner-self health alerts belong in (Issue #345).
+    A failed query or unparseable URL returns None (the caller falls back to
+    the configured override or skips — never guesses a repo).
+    """
+    try:
+        output = run_command([
+            "timeout", "30", "git", "-C", str(deploy_home),
+            "remote", "get-url", "origin",
+        ])
+    except Exception:
+        return None
+    return orbi_repo_from_origin_url(output)
 
 
 def repeated_failure_findings(state: dict) -> list[dict]:
@@ -230,13 +326,18 @@ def health_marker(check: str) -> str:
 
 
 def create_health_issue(
-    repo: str, check: str, detail: str, *, run_command,
+    repo: str, check: str, detail: str, *, run_command, dispatchable=True,
 ) -> str | None:
     """Create (or find) one deduplicated bug Issue for a health alarm.
 
     Reuses the #106 mechanism: the stable marker is written into the body
     and `gh issue list --search 'in:body ...'` finds an existing Issue, so a
     recurring alarm never creates a second Issue.
+
+    ``dispatchable`` (Issue #345): True -> the normal `bug`+`ai-ready`
+    dispatch (an orbi bug orbi's own agent can fix); False -> a
+    non-dispatchable alert (`bug` only, NO `ai-ready`) for a deployment
+    config problem only a human can fix — the Runner never picks it up.
     """
     marker = health_marker(check)
     raw = run_command([
@@ -251,6 +352,11 @@ def create_health_issue(
         existing = []
     if isinstance(existing, list) and existing:
         return existing[0].get("url")
+    closing = (
+        "该 Issue 由正常 `ai-ready` → PR → review → merge 流程处理。"
+        if dispatchable else
+        "该告警为部署配置问题，需人工修改配置后重启服务，不进入 `ai-ready` 流程。"
+    )
     body = "\n".join([
         "## Runner 健康巡检告警",
         "",
@@ -263,13 +369,16 @@ def create_health_issue(
         detail,
         "```",
         "",
-        "该 Issue 由正常 `ai-ready` → PR → review → merge 流程处理。",
+        closing,
     ])
-    run_command([
+    command = [
         "timeout", str(GH_TIMEOUT_SECONDS), "gh", "issue", "create",
         "--repo", repo, "--title", f"Runner 健康巡检告警: {check}",
-        "--body", body, "--label", "bug", "--label", "ai-ready",
-    ])
+        "--body", body, "--label", "bug",
+    ]
+    if dispatchable:
+        command += ["--label", "ai-ready"]
+    run_command(command)
     return None
 
 
@@ -307,23 +416,51 @@ def run_health_check(config: dict, *, run_command) -> list[str]:
     state_path = health_state_path(config["repo_dir"])
     state = load_health_state(state_path)
     try:
+        # Routing (Issue #345): Runner-self health alerts belong in the orbi
+        # repo, never the delivery repo by default. The configured
+        # `health_alert_repo` override wins (fork/private deployments);
+        # otherwise the orbi repo is derived from the deploy home's git
+        # origin. Undeterminable -> log and skip (bypass: never guess a
+        # repo, never file the alert in the delivery repo).
+        alert_repo = config.get("health_alert_repo")
+        if not alert_repo:
+            alert_repo = orbi_repo_from_deploy_home(
+                config["deploy_home"], run_command,
+            )
         # 1. Crash loop (#262 scene: repeated service exits, including the
         #    unit self-heal death loop — each iteration exits non-zero).
         crashes = count_crashes(run_command)
         if crashes >= CRASH_THRESHOLD:
+            journal_lines = crash_journal_lines(run_command)
+            kind, reason_line = classify_crash(journal_lines)
             LOGGER.info(
                 "health_degraded check=crash_loop crashes=%s "
-                "window_minutes=%s", crashes, CRASH_WINDOW_MINUTES,
+                "window_minutes=%s kind=%s", crashes, CRASH_WINDOW_MINUTES,
+                kind,
             )
-            create_health_issue(
-                config["source_repos"][0], "crash_loop",
-                (
+            if not alert_repo:
+                LOGGER.warning(
+                    "health_alert_repo_undetermined check=crash_loop "
+                    "crashes=%s",
+                    crashes,
+                )
+            else:
+                detail = (
                     f"service crashed {crashes} times in the last "
                     f"{CRASH_WINDOW_MINUTES} minutes"
-                ),
-                run_command=run_command,
-            )
-            alerts.append("crash_loop")
+                )
+                if reason_line:
+                    detail += (
+                        f"\ncrash reason (journal): {reason_line}\n"
+                        f"crash reason fingerprint: "
+                        f"{crash_reason_fingerprint(reason_line)}"
+                    )
+                create_health_issue(
+                    alert_repo, "crash_loop", detail,
+                    run_command=run_command,
+                    dispatchable=(kind == "bug"),
+                )
+                alerts.append("crash_loop")
         # 2. Repeated same-fingerprint run failures (#246 scene).
         for finding in repeated_failure_findings(state):
             key = (
@@ -368,16 +505,21 @@ def run_health_check(config: dict, *, run_command) -> list[str]:
                     len(ready),
                     int(time.time() - state["last_pickup_ts"]),
                 )
-                create_health_issue(
-                    config["source_repos"][0], "stale_pickup",
-                    (
-                        "no ticket pickup for "
-                        f"{int(time.time() - state['last_pickup_ts'])} "
-                        "seconds while the ai-ready queue is non-empty"
-                    ),
-                    run_command=run_command,
-                )
-                alerts.append("stale_pickup")
+                if not alert_repo:
+                    LOGGER.warning(
+                        "health_alert_repo_undetermined check=stale_pickup",
+                    )
+                else:
+                    create_health_issue(
+                        alert_repo, "stale_pickup",
+                        (
+                            "no ticket pickup for "
+                            f"{int(time.time() - state['last_pickup_ts'])} "
+                            "seconds while the ai-ready queue is non-empty"
+                        ),
+                        run_command=run_command,
+                    )
+                    alerts.append("stale_pickup")
     finally:
         save_health_state(state_path, state)
     return alerts

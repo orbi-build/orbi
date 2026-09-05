@@ -70,6 +70,33 @@ def test_load_config_defaults_base_branch_to_main(tmp_path):
     assert config["base_branch"] == "main"
 
 
+def test_load_config_health_alert_repo_default_and_override(tmp_path):
+    # Issue #345: absent -> None (derived from the deploy-home origin);
+    # present -> the verbatim `owner/repo` override.
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    assert runner.load_config(config_path)["health_alert_repo"] is None
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\n'
+        'health_alert_repo = "fork-owner/orbi-fork"\n',
+        encoding="utf-8",
+    )
+    assert runner.load_config(config_path)["health_alert_repo"] == \
+        "fork-owner/orbi-fork"
+
+
+def test_load_config_rejects_empty_health_alert_repo(tmp_path):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nhealth_alert_repo = ""\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError, match="health_alert_repo must be a non-empty string",
+    ):
+        runner.load_config(config_path)
+
+
 def test_load_config_defaults_deploy_home_to_repo_dir(tmp_path):
     """Issue #330: without deploy_home the deployment home IS the delivery
     checkout — the orbi-bootstrap layout keeps its exact behavior."""
