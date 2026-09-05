@@ -12309,7 +12309,9 @@ def make_milestone_gh(monkeypatch, *, milestones=None, items_by_milestone=None):
     `items_by_milestone`: milestone number -> dict with keys
     `issues_closed` / `issues_open` / `pulls_closed` / `pulls_open`
     (each a list of REST API items; a closed PR counts as merged only
-    when its `pull_request.merged_at` is set).
+    when its top-level `merged_at` is set — the `pulls` list query
+    carries `merged_at` at the top level, verified against the live
+    REST contract).
     """
     milestones = milestones or []
     items_by_milestone = items_by_milestone or {}
@@ -12353,9 +12355,9 @@ def test_derive_release_scope_from_milestone_returns_closed_and_merged(
             ],
             "pulls_closed": [
                 {"number": 170, "title": "PR C", "state": "closed",
-                 "pull_request": {"merged_at": "2026-09-01T00:00:00Z"}},
+                 "merged_at": "2026-09-01T00:00:00Z"},
                 {"number": 171, "title": "PR D unmerged", "state": "closed",
-                 "pull_request": {"merged_at": None}},
+                 "merged_at": None},
             ],
         }},
     )

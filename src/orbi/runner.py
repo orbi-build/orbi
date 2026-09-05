@@ -1700,10 +1700,12 @@ def derive_release_scope_from_milestone(repo: str,
         item for item in items("issues", "open")
         if "pull_request" not in item
     ]
+    # The `pulls` list query carries `merged_at` at the top level (a
+    # closed-but-unmerged PR has `merged_at: null`) — verified against
+    # the live REST contract; there is no nested `pull_request` key.
     merged_prs = [
         item for item in items("pulls", "closed")
-        if isinstance(item.get("pull_request"), dict)
-        and item["pull_request"].get("merged_at")
+        if item.get("merged_at")
     ]
     open_prs = items("pulls", "open")
 
