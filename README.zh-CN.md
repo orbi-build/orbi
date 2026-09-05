@@ -30,29 +30,27 @@ Pi 在隔离 worktree 中完成开发、测试并创建 PR，再经过独立审�
 ## 快速开始
 
 ```bash
-# 1. clone
 git clone https://github.com/orbi-build/orbi.git && cd orbi
-# 2. 安装 CLI（editable uv tool 安装，从 orbi 仓库安装一次；两种部署模式共用）
 uv tool install --force --reinstall --editable --python /usr/bin/python3 .
-# 3. 创建配置（仓库只提交 example，真实配置本地维护）
+```
+
+### 就绪检查（setup 之前）
+
+- `uv`：`uv --version`；Pi 和其 provider：`pi --version`，然后运行 `pi --print "reply with the single word: ok"`
+- GitHub CLI：先运行一次 `gh auth login`，再验证 `gh auth status`
+- systemd user session：`systemctl --user status`
+
+按 [Getting started](docs/zh/getting-started.mdx) 选择模式：自举模式使用本 checkout 作为 `repo_dir`；[External single-repo mode](docs/zh/getting-started.mdx#external-single-repo-mode-deploy_home) 使用本 checkout 作为 `deploy_home`，外部仓库作为 `repo_dir`。
+
+```bash
 cp .orbi.example.toml orbi.toml
-# 4. 一次性 setup（gh auth、labels、systemd units、checkout 检查；幂等）
+# 4. 一次性 setup（检查既有 gh auth、labels、systemd units、checkout；幂等）
 orbi setup --config orbi.toml
 # 5. 手动跑一个 tick（首次验证；日常由 timer 调度）
 PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
 # 6. 验证部署健康
 orbi doctor --config orbi.toml
 ```
-
-完整前提（Python 3.14、Pi、git + gh、systemd、模型端点）与从 0 开始的 smoke
-walkthrough 见 [Getting started](docs/zh/getting-started.mdx)；setup 的完整输出
-契约与失败现场见 [One-time setup](docs/zh/setup.mdx)。
-
-两种部署模式（Issue #330）：**自举模式**（默认，`repo_dir` 就是 orbi
-checkout 自身）与**外部单仓库模式**（`deploy_home` 指向 orbi checkout、
-`repo_dir` 指向用户仓库 X——orbi 安装一次后指向任意用户仓库，X 里开
-`ai-ready` issue 即被开发）。配置差异见 [Getting started](docs/zh/getting-started.mdx)
-的 External single-repo mode 一节。
 
 ## 它能做什么
 

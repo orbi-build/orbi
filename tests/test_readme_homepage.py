@@ -118,7 +118,8 @@ def test_readme_relative_links_resolve_for_each_language():
         assert path.is_file(), f"missing README: {path}"
         links = re.findall(r"\]\(([^)]+)\)", path.read_text(encoding="utf-8"))
         relative = [link for link in links if not link.startswith(("http://", "https://", "#"))]
-        missing = [link for link in relative if not (REPO_ROOT / link).exists()]
+        relative_paths = [link.split("#", 1)[0] for link in relative]
+        missing = [link for link, path in zip(relative, relative_paths) if not (REPO_ROOT / path).exists()]
         assert not missing, f"{path.name} has missing relative links: {missing}"
 
 
@@ -159,6 +160,44 @@ def test_readme_does_not_duplicate_docs_mechanism_sections():
         "README duplicates docs mechanism detail: "
         f"{found} — keep a one-sentence summary + the docs link instead"
     )
+
+
+def quickstart_section(text: str) -> str:
+    """Return the homepage quickstart, excluding later overview prose."""
+    match = re.search(r"^## (?:Quick start|快速开始)\n(.*?)(?=^## )", text, re.DOTALL | re.MULTILINE)
+    assert match is not None, "homepage is missing its quickstart section"
+    return match.group(1)
+
+
+def test_homepage_quickstart_lists_ready_prerequisites_and_checks():
+    """Issue #342: the quickstart must expose every preflight dependency and
+    its real check before showing the setup command."""
+    for path in (README, README_ZH):
+        text = path.read_text(encoding="utf-8")
+        quickstart = quickstart_section(text)
+        for requirement, check in (
+            ("uv", "uv --version"),
+            ("Pi", "pi --version"),
+            ("gh auth login", "gh auth status"),
+            ("systemd", "systemctl --user status"),
+            ("pi --print", "reply with the single word: ok"),
+        ):
+            assert requirement in quickstart, f"{path.name} omits prerequisite {requirement!r}"
+            assert check in quickstart, f"{path.name} omits readiness check {check!r}"
+        assert quickstart.index("### ") < quickstart.index("orbi setup"), (
+            f"{path.name} shows the setup command before its ready check"
+        )
+
+
+def test_homepage_quickstart_links_both_configuration_modes():
+    """Issue #342: a homepage-only reader must find the getting-started
+    guide and the external single-repo configuration section."""
+    for path in (README, README_ZH):
+        quickstart = quickstart_section(path.read_text(encoding="utf-8"))
+        assert "getting-started.mdx" in quickstart
+        assert "External single-repo mode" in " ".join(quickstart.split())
+        assert "deploy_home" in quickstart
+        assert "repo_dir" in quickstart
 
 
 def test_first_screen_says_what_orbi_is_and_how_to_start():
