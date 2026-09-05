@@ -26,29 +26,38 @@ setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下
    错误失败）。
 2. **CLI editable 安装**（Issue #152）——官方本地部署是 **editable**
    `uv tool` 安装（为什么——`ExecStartPre` checkout 同步——定义在
-   [快速开始](/zh/getting-started) 第 2 步）。运行进程已经从配置的
-   `repo_dir` 导入时只校验（不调 uv，`cli=verified`）；否则执行精确的
-   force editable 重装（`uv tool install --force --reinstall --editable
-   --python /usr/bin/python3 <repo_dir>`，`cli=installed`）。安装失败
-   fail fast——不装 unit、不半初始化。该步骤从不碰运行中的 Runner 进程
-   （新源码由下一个 CLI 启动加载）。
+   [快速开始](/zh/getting-started) 第 2 步）。安装作用于**部署 home**
+   （`deploy_home`，缺省 `repo_dir`——Issue #330）：运行进程已经从配置
+   的 `deploy_home` 导入时只校验（不调 uv，`cli=verified`）；否则执行
+   精确的 force editable 重装（`uv tool install --force --reinstall
+   --editable --python /usr/bin/python3 <deploy_home>`，`cli=installed`）。
+   外部单仓库模式下**绝不**从交付 checkout 重装 CLI——`repo_dir` 可能是
+   没有任何 orbi 打包输入的外部仓库 X。安装失败 fail fast——不装 unit、
+   不半初始化。该步骤从不碰运行中的 Runner 进程（新源码由下一个 CLI
+   启动加载）。
 3. **认证** — `gh auth status`（已登录且 token 可用）。
 4. **每个目标仓库**（默认每个配置的 `source_repos` 条目；`--repo
    OWNER/REPO` 时恰好一个）：
    - 仓库存在且 viewer 有写权限（`gh repo view` → `viewerPermission`
      必须是 `WRITE`、`MAINTAIN` 或 `ADMIN`）；
-   - 八个平台标签从仓库根目录的 `labels.toml` **声明式**对齐——标签
+   - 八个平台标签从部署 home 的 `labels.toml`
+     （`<deploy_home>/labels.toml`，Issue #330）**声明式**对齐——标签
      名/颜色/描述的唯一事实源：缺的创建、漂移的更新、从不删除，业务
-     标签（`bug`、`enhancement`、...）从不被碰。
-5. **Systemd units** — 仓库模板（`systemd/orbi@.service`、
-   `systemd/orbi@.timer`）幂等安装到 user unit 目录（与
+     标签（`bug`、`enhancement`、...）从不被碰。外部单仓库模式下标签
+     来自 orbi checkout，绝不来自交付 checkout X。
+5. **Systemd units** — 部署 home 的模板（
+   `<deploy_home>/systemd/orbi@.service`、
+   `<deploy_home>/systemd/orbi@.timer`；自举模式下即 orbi checkout，
+   Issue #330）幂等安装到 user unit 目录（与
    `install-units` 相同的安装：复制、一次性迁移 #149 之前的非模板
    unit、`daemon-reload`、按 `max_concurrency` 启用 `@1`（值为 `1`）或
    `@1`/`@2`（值为 `2`），并停掉多余 timer——从不启动、停止或重启
    service），然后报告每个 timer 实例的 enabled/active 状态和
    下次触发时间。
-6. **Checkout + git transport** — 检查配置的 `repo_dir`：`origin`
-   remote 的**传输协议**（Issue #114）：git 数据操作（fetch、push——
+6. **Checkout + git transport** — 检查配置的交付 checkout `repo_dir`
+   （自举模式下是 orbi checkout，外部单仓库模式下是用户仓库 X）：
+   `origin` remote 的**传输协议**（Issue #114）：git 数据操作
+   （fetch、push——
    包括 `.github/workflows/*.yml`）必须走 SSH
    （`git@github.com:owner/repo.git`），所以已有的 HTTPS `origin` 在这里
    用普通的 `git remote set-url origin git@github.com:owner/repo.git`
@@ -68,6 +77,23 @@ setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下
    缺失或不健康只是输出里的 warning，从不阻塞核心 GitHub/Orbi setup。
 
 setup 从不创建业务 Issue、从不领取任务、从不启动 Pi、从不修改保护分支。
+
+## 外部单仓库模式（deploy_home）
+
+外部单仓库模式（Issue #330，PR #334）下，配置把两个 checkout 分开：
+`deploy_home` 是 orbi 源码 checkout，`repo_dir` 是用户仓库 X。setup
+按此路由——第 2 步（CLI editable 安装）、第 4 步（`labels.toml`）和第
+5 步（unit 模板）作用于 `deploy_home`，第 6 步（checkout + git
+transport）检查 `repo_dir`：X 的 `origin` 必须是第一个配置的 source
+repo 的 SSH，X 的 worktree 必须干净，X 的 base 新鲜度只报告。注意
+外部模式下 timer 的 `ExecStartPre` fast-forward 作用于部署 home（orbi
+checkout）而不是 X——X 只在 Runner 创建任务 worktree 时被读取。
+`deploy_home` 缺省即自举模式：一切照旧作用于 `repo_dir`。
+
+一个实际后果：已安装 systemd unit 从 `<deploy_home>/orbi.toml` 读配置
+（`{{ORBI_REPO_DIR}}` 占位符渲染的是 deploy home 路径），所以外部模式
+下 `orbi.toml` 和可选的 `.orbi/env` 放在 orbi checkout——用
+`--config <deploy_home>/orbi.toml` 运行 setup。
 
 ## 选项
 

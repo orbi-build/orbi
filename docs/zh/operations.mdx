@@ -15,7 +15,7 @@ service 实例（`orbi@1.timer` → `orbi@1.service`，
 两个独立的 Runner 实例。每个 tick 的 service 实例：
 
 1. **先 fast-forward 代码**（`ExecStartPre`，在 Python 进程外）：
-   `timeout 90s git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main`。fetch 禁用自动维护，避免 Git 子进程脱离 preflight 和共享锁的生命周期。checkout
+   `timeout 90s git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main`。被 fast-forward 的 checkout 是**部署 home**——`{{ORBI_REPO_DIR}}` 占位符在安装时渲染的是 `deploy_home` 路径（缺省 `repo_dir`），所以外部单仓库模式（Issue #330）下 fast-forward、`base-sync.lock` 和下面的 CLI 自愈全部作用于 orbi 源码 checkout，绝不作用于交付 checkout（用户仓库 X）。fetch 禁用自动维护，避免 Git 子进程脱离 preflight 和共享锁的生命周期。checkout
    不干净、fetch 失败或无法 fast-forward 时 preflight 失败：service 不
    启动，原因写入 systemd journal（fail fast）。正在运行的长任务从不被
    热更新或杀掉——一个 service 实例 active 时 systemd 忽略对**该实例**
@@ -59,7 +59,10 @@ systemctl --user status 'orbi@*.service'
 ## Unit 模板变更后（Issue #131、#142）
 
 unit 模板（`systemd/orbi@.service` 和 `systemd/orbi@.timer`）
-是部署配置，不是普通代码——但模板变更合并后**不需要任何人工步骤**。下一次 timer 触发时 `ExecStartPre` 同步 checkout，启动前
+是部署配置，不是普通代码——但模板变更合并后**不需要任何人工步骤**。模板
+位于部署 home（`deploy_home`，缺省 `repo_dir`——Issue #330），漂移检查
+对比的是**这些**模板与已安装 unit。下一次 timer 触发时 `ExecStartPre`
+同步部署 home checkout，启动前
 `unit_drift` 检查自动自愈：用同一个幂等安装（把两个模板复制到用户
 unit 目录、daemon-reload、按 `max_concurrency` enable 或 disable timer
 实例——从不启动、停止或重启运行中的 Runner）、再用同一个哈希检查复核，tick 继续，每个 unit
@@ -176,8 +179,10 @@ idle 告警和模型请求挂死 kill 是日志/健康阈值——它们不是�
 免重装的源码变更、打包输入刷新）定义在[快速开始](/zh/getting-started)
 第 2 步。`orbi doctor` 报告一致性（`cli_source: clean` 或
 `cli_source: DRIFT` + 结构化 `cli_source_drift` 行：实际导入路径、
-期望 repo_dir、精确的 editable 重装命令），`orbi setup` 校验或
-重装。checkout 根目录**没有** `orbi.py`（与 package 同名的 flat
+期望 deploy_home、精确的 editable 重装命令），`orbi setup` 校验或
+重装。期望来源是**部署 home**（`deploy_home`，缺省 `repo_dir`——Issue
+#330）：外部单仓库模式下 `cli_source` clean 表示 editable 安装从 orbi
+checkout 导入，即使交付 checkout 是外部仓库 X。checkout 根目录**没有** `orbi.py`（与 package 同名的 flat
 文件会遮蔽已安装 package）；直接执行入口 `python3 -m orbi.cli`
 运行与 console script 完全相同的代码，保留为开发/兼容路径。
 

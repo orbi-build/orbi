@@ -5,6 +5,18 @@ source_repos = [
 ]
 
 repo_dir = "."
+# Deployment home (Issue #330): the orbi SOURCE checkout — where the
+# editable CLI install comes from, where the systemd/ unit templates and
+# labels.toml live, and where the prompt defaults (prompt.md,
+# prompt_review.md) resolve when unset. Default: repo_dir — the
+# orbi-bootstrap deployment (repo_dir IS the orbi checkout) keeps its
+# exact behavior. Set it to the orbi checkout path when repo_dir points
+# at a foreign user repo X (external single-repo mode): orbi is then
+# installed ONCE from the orbi repo and delivers Issues of X. The
+# installed systemd unit reads its config from <deploy_home>/orbi.toml,
+# so the config file (and .orbi/env) must live in the deploy home.
+# Must be a non-empty string; a missing directory fails the start fast.
+# deploy_home = "/path/to/orbi"
 workspace_root = ".."
 prompt = "prompt.md"
 # Implementer prompt (default prompt.md). The Runner also runs an

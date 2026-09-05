@@ -18,7 +18,7 @@ queued) and starts its OWN service instance
 Runner instances can run concurrently. Each tick's service instance:
 
 1. **Fast-forwards the code first** (`ExecStartPre`, outside the Python
-   process): `timeout 90s git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main`. The fetch disables automatic maintenance so it cannot detach a Git child beyond the preflight and shared-lock lifetime.
+   process): `timeout 90s git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main`. The checkout that is fast-forwarded is the **deployment home** — the `{{ORBI_REPO_DIR}}` placeholder renders the `deploy_home` path at install time (defaulting to `repo_dir`), so in the external single-repo mode (Issue #330) the fast-forward, the `base-sync.lock` and the CLI self-heal below all act on the orbi source checkout, never on the delivery checkout (user repo X). The fetch disables automatic maintenance so it cannot detach a Git child beyond the preflight and shared-lock lifetime.
    A dirty checkout, a failed fetch or a non-fast-forwardable state fails
    the preflight: the service does not start and the reason lands in the
    systemd journal (fail fast). A currently running long task is never
@@ -71,8 +71,12 @@ systemctl --user status 'orbi@*.service'
 
 The unit templates (`systemd/orbi@.service` and
 `systemd/orbi@.timer`) are deployment config, not ordinary code
-— but a template change needs NO human step after the merge. The next timer
-trigger's `ExecStartPre` fast-forwards the checkout, and the pre-start
+— but a template change needs NO human step after the merge. The templates
+live in the deployment home (`deploy_home`, defaulting to `repo_dir` —
+Issue #330), and the drift check compares the installed units against
+THOSE templates. The next timer
+trigger's `ExecStartPre` fast-forwards the deployment home checkout, and
+the pre-start
 `unit_drift` check self-heals: it runs the SAME idempotent install
 (copy both templates into the user unit directory, daemon-reload,
 enable or disable timer instances through `max_concurrency` — it never
@@ -229,8 +233,12 @@ sync, the reinstall-free source changes, the packaging-input refresh)
 is defined in [Getting started](/getting-started) step 2.
 `orbi doctor` reports the consistency (`cli_source: clean` or
 `cli_source: DRIFT` with the structured `cli_source_drift` line: actual
-import path, expected repo_dir, the exact editable reinstall command),
-and `orbi setup` verifies or reinstalls it. The checkout root
+import path, expected deploy_home, the exact editable reinstall command),
+and `orbi setup` verifies or reinstalls it. The expected source is the
+**deployment home** (`deploy_home`, defaulting to `repo_dir` — Issue
+#330): in the external single-repo mode a clean `cli_source` means the
+editable install imports from the orbi checkout, even though the
+delivery checkout is a foreign repo X. The checkout root
 carries no `orbi.py`: a flat file named like the package would
 shadow the installed package for every process with the checkout root
 on sys.path. The direct-execution entry `python3 -m orbi.cli`

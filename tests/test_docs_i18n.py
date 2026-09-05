@@ -57,6 +57,10 @@ LABEL_PATTERN = re.compile(r"\bai-[a-z][a-z-]*\b")
 KNOWN_CONFIG_FIELDS = frozenset({
     "source_repos",
     "repo_dir",
+    # Issue #330 (PR #334): the deployment home — the orbi source checkout
+    # (CLI install source, unit templates, labels.toml, prompt defaults);
+    # default = repo_dir (bootstrap mode unchanged).
+    "deploy_home",
     "workspace_root",
     "prompt",
     "prompt_review",
@@ -207,6 +211,23 @@ def test_chinese_getting_started_documents_prerequisites_and_smoke():
         "journalctl --user -u orbi@1.service -u "
         "orbi@2.service" in text
     ), "smoke must show the real journal command (both service instances)"
+
+
+def test_chinese_getting_started_documents_the_external_single_repo_mode():
+    """Issue #335 (docs for Issue #330 / PR #334): the Chinese
+    getting-started carries the same external single-repo mode facts as
+    the English page — the deploy_home field, its default (= repo_dir),
+    and the two-checkout relationship."""
+    text = zh_page_text("getting-started")
+    assert "deploy_home" in text, (
+        "Chinese getting-started must document the deploy_home config field"
+    )
+    assert "repo_dir" in text, (
+        "Chinese getting-started must keep documenting repo_dir"
+    )
+    assert "Issue #330" in text, (
+        "the external mode must cite its source issue (#330)"
+    )
 
 
 def test_chinese_getting_started_documents_the_model_provider_configuration():
