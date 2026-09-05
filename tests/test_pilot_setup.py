@@ -642,7 +642,8 @@ def test_install_units_step_fails_fast_on_a_genuine_is_enabled_failure(
     tmp_path,
 ):
     """A genuine systemctl failure (no user bus: exit 1, empty stdout)
-    must still fail fast, not be swallowed as "not enabled"."""
+    must still fail fast with a structured SetupError (never a raw
+    traceback — the #339 scene), not be swallowed as "not enabled"."""
     state = {}
     fake_run, _ = fake_run_factory(state)
     repo = make_repo(tmp_path)
@@ -655,10 +656,13 @@ def test_install_units_step_fails_fast_on_a_genuine_is_enabled_failure(
             )
         return fake_run(command, **kwargs)
 
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(
+        pilot_setup.SetupError, match="is-enabled failed for orbi@1.timer",
+    ) as excinfo:
         pilot_setup.install_units_step(
             repo, tmp_path / "units", run_command=failing,
         )
+    assert isinstance(excinfo.value.__cause__, subprocess.CalledProcessError)
 
 
 def test_install_units_step_reports_a_missing_next_trigger(tmp_path):

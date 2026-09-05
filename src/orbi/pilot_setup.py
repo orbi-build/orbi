@@ -472,8 +472,14 @@ def install_units_step(repo_dir: Path, installed_dir: Path | None,
     ])
     instances = {}
     for instance in systemd_deploy.TIMER_INSTANCES:
+        try:
+            enabled = unit_is_enabled(run_command, instance)
+        except subprocess.CalledProcessError as exc:
+            raise SetupError(
+                f"systemctl is-enabled failed for {instance}: {exc}"
+            ) from exc
         instances[instance] = {
-            "enabled": unit_is_enabled(run_command, instance),
+            "enabled": enabled,
             "active": run_command([
                 "systemctl", "--user", "show", "-p", "ActiveState",
                 "--value", instance,
