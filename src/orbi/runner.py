@@ -464,6 +464,47 @@ def _config_path(value: str, base: Path) -> Path:
     return (path if path.is_absolute() else base / path).resolve()
 
 
+def _load_deploy_env_file(deploy_home: Path) -> None:
+    """Merge `<deploy_home>/.orbi/env` into the process environment (Issue #348).
+
+    The documented env-file-first flow (getting-started step 4) writes the
+    provider key to this gitignored file, and the installed unit loads it
+    via `EnvironmentFile` at service start — the CLI process does not, so
+    `orbi setup` and friends must read it themselves or the documented
+    step 4 -> 5 flow fails verbatim. Plain systemd EnvironmentFile syntax:
+    `KEY=VALUE` lines, optional `export ` prefix, matching single/double
+    quotes stripped, blank lines and `#` comments skipped. A variable
+    already exported in the shell wins (`setdefault`): the shell export is
+    the documented override for manual ticks. A missing file is a no-op
+    (a keyless local server needs no env file at all); a line without `=`
+    is a misconfiguration and fails fast.
+    """
+    env_file = deploy_home / ".orbi" / "env"
+    if not env_file.is_file():
+        return
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[len("export "):]
+        if "=" not in stripped:
+            raise ValueError(
+                f"malformed line in env file {env_file}: {stripped!r} "
+                "(expected KEY=VALUE)"
+            )
+        name, value = stripped.split("=", 1)
+        name = name.strip()
+        value = value.strip()
+        if (
+            len(value) >= 2
+            and value[0] == value[-1]
+            and value[0] in ('"', "'")
+        ):
+            value = value[1:-1]
+        os.environ.setdefault(name, value)
+
+
 def load_config(path: Path) -> dict:
     """Load the human-maintained TOML config and resolve its paths."""
     base = path.resolve().parent
@@ -532,15 +573,6 @@ def load_config(path: Path) -> dict:
     # Pi's own `models.json` shape; `orbi.toml` only selects the
     # provider/model/thinking used at runtime. Absent key -> None (Pi
     # keeps using its own agent dir, the exact pre-#157 behavior).
-    pi_providers = _optional_pi_string(data, "pi_providers")
-    pi_providers_path = (
-        _config_path(pi_providers, base) if pi_providers is not None
-        else None
-    )
-    pi_providers_data = (
-        _load_pi_providers(pi_providers_path, pi_provider, pi_model)
-        if pi_providers_path is not None else None
-    )
     repo_dir = _config_path(data.get("repo_dir", "."), base)
     # Deployment home (Issue #330): the orbi source checkout — the editable
     # CLI install source, the systemd/ unit templates, labels.toml and the
@@ -558,6 +590,29 @@ def load_config(path: Path) -> dict:
         _config_path(deploy_home_raw, base)
         if deploy_home_raw is not None
         else repo_dir
+    )
+    # The deploy-home env file (Issue #348): step 4 of getting-started
+    # writes the provider key to `<deploy_home>/.orbi/env` and the
+    # installed unit loads it via `EnvironmentFile` at service start —
+    # the CLI process does not. Load it here so `orbi setup` (and every
+    # other CLI entry) validates the key exactly like the unit would.
+    _load_deploy_env_file(deploy_home)
+    # Optional Pi provider file (Issue #157): the provider metadata
+    # (baseUrl / api / apiKey / models) lives in a separate JSON file in
+    # Pi's own `models.json` shape; `orbi.toml` only selects the
+    # provider/model/thinking used at runtime. Absent key -> None (Pi
+    # keeps using its own agent dir, the exact pre-#157 behavior).
+    pi_providers = _optional_pi_string(data, "pi_providers")
+    pi_providers_path = (
+        _config_path(pi_providers, base) if pi_providers is not None
+        else None
+    )
+    pi_providers_data = (
+        _load_pi_providers(
+            pi_providers_path, pi_provider, pi_model,
+            deploy_home / ".orbi" / "env",
+        )
+        if pi_providers_path is not None else None
     )
     return {
         "source_repos": source_repos,
@@ -767,7 +822,7 @@ def _model_wait_dead_seconds(data: dict) -> float:
 
 
 def _load_pi_providers(path: Path, pi_provider: str | None,
-                       pi_model: str | None) -> dict:
+                       pi_model: str | None, env_file: Path) -> dict:
     """Load and validate the Pi provider file (Issue #157).
 
     The file uses Pi's own `models.json` shape (`{"providers": {id:
@@ -843,7 +898,7 @@ def _load_pi_providers(path: Path, pi_provider: str | None,
         # Only the SELECTED provider's key must resolve: an unselected
         # provider with a missing key just stays unavailable in Pi
         # (verified against real Pi 0.84.3), it never breaks the run.
-        _check_pi_provider_api_key(path, pi_provider, entry)
+        _check_pi_provider_api_key(path, pi_provider, entry, env_file)
         if pi_model is not None:
             model_ids = [
                 model["id"] for model in entry.get("models", [])
@@ -857,7 +912,7 @@ def _load_pi_providers(path: Path, pi_provider: str | None,
 
 
 def _check_pi_provider_api_key(path: Path, provider_id: str,
-                               entry: dict) -> None:
+                               entry: dict, env_file: Path) -> None:
     """Fail fast when an `apiKey` env-var reference is unresolved.
 
     Pi's value-resolution syntax (`docs/models.md`): `$VAR` or
@@ -865,7 +920,9 @@ def _check_pi_provider_api_key(path: Path, provider_id: str,
     variable leaves the value unresolved and Pi would only fail at
     request time. The Runner fails at config load instead (before any
     slot or claim). Only the variable NAME is reported — never a key
-    value.
+    value. The error names BOTH remedies (Issue #348): export the
+    variable in the shell, or add it to the deploy-home env file the
+    unit loads via `EnvironmentFile`.
     """
     api_key = entry.get("apiKey")
     if not isinstance(api_key, str) or not api_key:
@@ -877,7 +934,9 @@ def _check_pi_provider_api_key(path: Path, provider_id: str,
             raise ValueError(
                 f"API key for provider {provider_id!r} references "
                 f"missing environment variable {name} "
-                f"(pi_providers file {path})"
+                f"(pi_providers file {path}). Export {name} in your "
+                f"shell or add it to {env_file} (the unit's "
+                f"EnvironmentFile)."
             )
 
 
