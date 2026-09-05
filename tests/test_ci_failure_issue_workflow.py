@@ -119,13 +119,14 @@ def test_no_step_can_fake_success():
 
 def test_checkout_and_pinned_python_like_ci():
     """Same interpreter convention as the CI workflow (Python 3.14) and a
-    real checkout of the triage script."""
+    real checkout of the triage script, using Node 24-compatible actions."""
     steps = steps_of(load_workflow())
     uses = [str(step.get("uses", "")) for step in steps]
-    assert any(u.startswith("actions/checkout@v4") for u in uses), uses
+    assert uses.count("actions/checkout@v5") == 1, uses
     setup = [
         step for step in steps
         if str(step.get("uses", "")).startswith("actions/setup-python")
     ]
     assert len(setup) == 1, uses
+    assert uses.count("actions/setup-python@v6") == 1, uses
     assert str(setup[0].get("with", {}).get("python-version")) == "3.14"

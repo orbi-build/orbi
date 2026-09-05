@@ -101,7 +101,7 @@ def test_ci_workflow_checkout_fetches_full_history_and_tags():
     cat-file` / `git rev-parse` / `git merge-base --is-ancestor`
     against the checkout. The default shallow checkout (fetch-depth: 1)
     runs `git fetch --no-tags` (verified against the official
-    actions/checkout@v4 source: git-command-manager.ts), so the tag
+    actions/checkout@v5 source: git-command-manager.ts), so the tag
     object is absent in the CI environment and the test fails with
     `could not get object info`. `fetch-depth: 0` makes the action
     fetch all branches and `+refs/tags/*:refs/tags/*` without `--depth`
@@ -120,6 +120,19 @@ def test_ci_workflow_checkout_fetches_full_history_and_tags():
         f"(fetch-depth: 0) so the annotated tag objects exist for the "
         f"release reconciliation tests, got: {with_options!r}"
     )
+
+
+def test_workflows_use_node_24_compatible_actions():
+    workflow_dir = REPO_ROOT / ".github"
+    workflow_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in workflow_dir.rglob("*")
+        if path.is_file()
+    )
+    assert "actions/checkout@v4" not in workflow_text
+    assert "actions/setup-python@v5" not in workflow_text
+    assert "actions/checkout@v5" in workflow_text
+    assert "actions/setup-python@v6" in workflow_text
 
 
 def test_ci_workflow_pins_python_3_14_like_production():
