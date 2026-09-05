@@ -244,6 +244,47 @@ base），然后推送 task branch 并创建 PR。
 run 产物（plan、test log、session JSONL）留在任务 worktree 作为本地
 记录；GitHub 承载交付记录。
 
+## Run 卡在 `session_pending`：首个模型请求发出前挂死（Issue #311）
+
+**症状。** Runner 拉起 Pi 后，会话始终不创建 session 文件、也不发出
+首个模型请求。Run 停在 `session_pending`，15 分钟后被 idle-stall 恢复
+杀掉（`idle_recovery_stale_15m`），Issue 落到 `ai-blocked`——每次失败
+白烧 15 分钟 slot，且需人工重新派活。在线 provider 会中招（z.ai 与
+google gemini 均复现）；127.0.0.1 的本地模型不受影响。特征：session
+JSONL 路径为空，而 pi 进程还活着。
+
+**30 秒取证**（对卡死的 run）：
+
+```bash
+PID=<journal `process_spawned` 行里的 pid，或 `pgrep -f pi`>
+
+# 1. 活着但空闲：state S、~0% CPU、epoll 空转
+ps -o pid,stat,%cpu,wchan:32 -p "$PID"
+
+# 2. 没有任何到模型 API 的 TCP 连接——请求从未发出
+ss -tnp | grep "$PID"                    # 空
+
+# 3. 唯一的 socket 是 D-Bus
+ls -l /proc/"$PID"/fd | grep socket      # unix socket -> /run/user/1000/bus
+
+# 4. session 文件从未创建
+ls -la <任务 worktree>/.pi-session/      # 空
+```
+
+**根因。** per-run agent dir 物化机制（Issue #303）让 Runner 的 Pi 加载
+`~/.pi/agent/settings.json` `packages` 里声明的用户级插件。
+`pi-mcp-adapter` 插件启动时初始化 `@napi-rs/keyring` → Secret Service
+（`org.freedesktop.secrets` / `kwalletd6`）D-Bus 调用；在 systemd
+`--user` 服务上下文该调用偶发永不返回，node 在发出任何模型请求前就挂
+在 `poll_schedule_timeout`。
+
+**修复。** 从 `~/.pi/agent/settings.json` `packages` 移除
+`pi-mcp-adapter`（已验证：同一 run resume 后 15 秒内 `session_created`
++ `first_response`）。永久修复是 Issue #249——orbi 自声明 extensions
+（`[[pi_extensions]]`）并以 `--no-extensions` 启动 Pi，用户级插件从此
+无法泄漏进无人值守会话。上游：向 pi-mcp-adapter 报 bug（无 MCP server
+配置时不应硬初始化 keyring，或改惰性初始化）。
+
 ## 并发
 
 `max_concurrency`（默认 1）限定本机并发交付数。slot 是
