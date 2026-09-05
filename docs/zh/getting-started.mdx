@@ -66,6 +66,14 @@ orbi --help
 `uv tool` 把 CLI 装进隔离的 tool 环境，可执行文件落在 `~/.local/bin`
 （systemd unit 的 PATH 已包含该目录）。
 
+**两种部署模式**（Issue #330，PR #334）：安装命令两者完全相同——orbi
+永远从 orbi clone **安装一次**——区别在配置。**自举模式**（本页默认）：
+`repo_dir` 就是 orbi checkout 自身，部署 home 和交付 checkout 是同一
+个目录。**外部单仓库模式**：`deploy_home` 指向 orbi checkout，
+`repo_dir` 指向外部用户仓库 X——orbi 安装一次后指向 X，X 里开
+`ai-ready` issue 即被开发，且绝不会从 X 重装 CLI。配置差异见第 3 步
+和下面的「外部单仓库模式（deploy_home）」一节。
+
 **为什么必须 `--editable`**：非 editable 安装会把源码复制进 tool
 环境的 site-packages；service 的 `ExecStartPre` 每次启动前把 checkout
 快进到最新 `main`——源码被复制后 CLI 仍在执行旧副本（启动死锁：
@@ -106,7 +114,8 @@ cp .orbi.example.toml orbi.toml
 | 字段 | 必填 | 默认 | 含义 |
 |---|---|---|---|
 | `source_repos` | 是 | — | 每个 tick 按顺序扫描的 `owner/repo` 任务池列表（例如先你的 pilot 仓库，再你的 backlog 仓库） |
-| `repo_dir` | 否 | `.` | service 启动的 Runner checkout（`src/orbi/` package 所在目录） |
+| `repo_dir` | 否 | `.` | 交付 checkout：Runner 交付 Issue 的仓库。任务 worktree 从它冻结的 `origin/<base_branch>` SHA 创建，PR 对它打开，slot 锁在 `<repo_dir>/.orbi/slots/`。自举模式下它就是 orbi checkout 自身；外部单仓库模式（Issue #330）下是外部用户仓库 X |
+| `deploy_home` | 否 | `repo_dir` | orbi **源码** checkout（Issue #330）：editable CLI 安装来源（自更新）、`systemd/` unit 模板、`labels.toml`、prompt 默认（`prompt.md`、`prompt_review.md` 未设置时）。缺省 = `repo_dir`（自举模式，行为不变）。`repo_dir` 是外部仓库 X 时把它设为 orbi checkout。必须是非空字符串；目录不存在会启动 fail fast |
 | `workspace_root` | 否 | `..` | 包含任务 worktree 和 agent 可修改仓库的目录 |
 | `prompt` | 否 | `prompt.md` | 实现者 prompt 模板（`{{SOURCE_REPO}}` 等占位符由 Runner 渲染） |
 | `prompt_review` | 否 | `prompt_review.md` | PR 后独立审查 session 的 review prompt 模板 |
@@ -141,6 +150,55 @@ max_concurrency = 1
 skills = []
 context_files = []
 ```
+
+### 外部单仓库模式（deploy_home）
+
+Issue #330（PR #334）把 orbi 的部署 home 与交付 checkout 解耦：orbi
+从 orbi 仓库**安装一次**后，可以指向任意用户仓库 X——在 X 里开
+`ai-ready` Issue，会被领取、在 X 的 worktree 里实现、对 X 开 PR。
+
+- **自举模式（默认）**：`repo_dir` 就是 orbi checkout 自身——部署 home
+  和交付 checkout 是同一个目录（`deploy_home` 缺省，取 `repo_dir`）。
+  本页第 1–8 步描述的就是这个模式。
+- **外部单仓库模式**：`repo_dir` 是用户仓库 X，`deploy_home` 是 orbi
+  checkout。两个 checkout 各司其职：
+  - `deploy_home`（orbi checkout）——CLI 自更新来源（editable `uv tool`
+    安装、`ExecStartPre` fast-forward 与 CLI 自愈）、`systemd/` unit
+    模板（`{{ORBI_REPO_DIR}}` 占位符渲染的是**这个**路径）、
+    `labels.toml`、prompt 默认；
+  - `repo_dir`（用户仓库 X）——交付 checkout：Issue 从 X 领取，任务
+    worktree 从 X 冻结的 `origin/<base_branch>` 创建，PR 对 X 打开，
+    slot 锁在 `<repo_dir>/.orbi/slots/`。
+
+先安装一次（上面第 2 步，从 orbi clone），然后把配置文件放进部署 home
+——已安装 systemd unit 从 `<deploy_home>/orbi.toml` 读配置
+（`{{ORBI_REPO_DIR}}` 占位符渲染的是 deploy home 路径），所以
+`orbi.toml` 和可选的 `.orbi/env` 放在 orbi checkout，而不是 X：
+
+```toml
+# <deploy_home>/orbi.toml — orbi checkout，不是用户仓库 X
+source_repos = [
+  "OWNER/USER-REPO-X",
+]
+
+repo_dir = "/path/to/user-repo-x"
+deploy_home = "/path/to/orbi"
+workspace_root = "/path/to"
+base_branch = "main"
+max_concurrency = 1
+skills = []
+context_files = []
+```
+
+（任务 worktree 落在交付 checkout 的 `<repo_dir>/.worktrees/`；
+`workspace_root` 是告诉实现者 agent「可修改仓库所在目录」的路径
+（`{{WORKSPACE_ROOT}}` prompt 占位符）；未设置的 `prompt` /
+`prompt_review` 相对 `deploy_home` 解析。）
+
+其余一切——第 4–8 步（模型 provider、`orbi setup`、手工 tick、smoke
+walkthrough、timers）——不变：`orbi setup` 从 `deploy_home` 读标签、
+CLI 安装和 unit 模板，检查交付 checkout `repo_dir`（见[一次性
+setup](/zh/setup)）。
 
 ## 4. 配置模型 provider
 
@@ -398,9 +456,12 @@ fast-forward 和每实例启动语义定义在[运维](/zh/operations)（Timers�
 <Note>
 提交的 unit 模板与机器无关：它们携带 `{{ORBI_REPO_DIR}}` 占位符
 而不是硬编码的 checkout 路径（Issue #262）。`orbi install-units`
-（以及 `orbi setup`）在安装时用**你的**部署 checkout 的解析后
-路径替换它，因此任何位置的 clone 都能干净部署——无需手工编辑
-已安装的 units。`ExecStart` 是已安装的 `orbi` CLI，保持 home 相对
-（`%h/.local/bin/orbi`）。仓库模板仍是其余一切的唯一事实源——
-漂移检测见[运维](/zh/operations)。
+（以及 `orbi setup`）在安装时用**部署 home**（`deploy_home`，缺省
+`repo_dir`）的解析后路径替换它，因此任何位置的 clone 都能干净部署
+——无需手工编辑已安装的 units。外部单仓库模式（Issue #330）下，unit
+的 `WorkingDirectory`、`ORBI_CONFIG`、`EnvironmentFile`、`ExecStartPre`
+fast-forward、`base-sync.lock` 和 CLI 自愈**全部**作用于 orbi 源码
+checkout，绝不作用于交付 checkout X。`ExecStart` 是已安装的 `orbi`
+CLI，保持 home 相对（`%h/.local/bin/orbi`）。仓库模板仍是其余一切的
+唯一事实源——漂移检测见[运维](/zh/operations)。
 </Note>

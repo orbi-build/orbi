@@ -31,14 +31,18 @@ non-zero exit code.
 2. **CLI editable install** (Issue #152) — the official local
    deployment is the EDITABLE `uv tool` install (the why — the
    `ExecStartPre` checkout sync — is defined in [Getting
-   started](/getting-started) step 2). When the running process
-   already imports from the configured `repo_dir` the step verifies it
-   (no uv call, `cli=verified`); otherwise it runs the exact force
-   editable reinstall (`uv tool install --force --reinstall --editable
-   --python /usr/bin/python3 <repo_dir>`, `cli=installed`). A failing
-   install fails fast — no unit install, no half-initialized state. The
-   step never touches a running Runner process (the new source is
-   loaded by the next CLI start).
+   started](/getting-started) step 2). The install acts on the
+   **deployment home** (`deploy_home`, defaulting to `repo_dir` —
+   Issue #330): when the running process already imports from the
+   configured `deploy_home` the step verifies it (no uv call,
+   `cli=verified`); otherwise it runs the exact force editable
+   reinstall (`uv tool install --force --reinstall --editable
+   --python /usr/bin/python3 <deploy_home>`, `cli=installed`). In the
+   external single-repo mode the CLI is NEVER (re)installed from the
+   delivery checkout — `repo_dir` may be a foreign repo X without any
+   orbi packaging input. A failing install fails fast — no unit install,
+   no half-initialized state. The step never touches a running Runner
+   process (the new source is loaded by the next CLI start).
 3. **Auth** — `gh auth status` (logged in with a usable token).
 4. **Per target repository** (every configured `source_repos` entry by
    default; exactly one with `--repo OWNER/REPO`):
@@ -46,20 +50,27 @@ non-zero exit code.
      (`gh repo view` → `viewerPermission` must be `WRITE`, `MAINTAIN`
      or `ADMIN`);
    - the eight platform labels are aligned **declaratively** from the
-     repo-managed `labels.toml` (repo root) — the single source of
-     truth for label name, color and description: a missing label is
-     created, a drifted label is updated, nothing is deleted, and
-     business labels (`bug`, `enhancement`, ...) are never touched.
-5. **Systemd units** — the repo templates
-   (`systemd/orbi@.service`, `systemd/orbi@.timer`) are
-   installed idempotently into the user unit directory (the same
+     deployment home's `labels.toml` (`<deploy_home>/labels.toml`,
+     Issue #330) — the single source of truth for label name, color and
+     description: a missing label is created, a drifted label is
+     updated, nothing is deleted, and business labels (`bug`,
+     `enhancement`, ...) are never touched. In the external single-repo
+     mode the labels come from the orbi checkout, never from the
+     delivery checkout X.
+5. **Systemd units** — the deployment home's templates
+   (`<deploy_home>/systemd/orbi@.service`,
+   `<deploy_home>/systemd/orbi@.timer`; in bootstrap mode the orbi
+   checkout, Issue #330) are installed idempotently into the user unit
+   directory (the same
    install `install-units` performs: copy, migrate the pre-#149
    non-templated units away once, `daemon-reload`, then enables `@1` for
    `max_concurrency = 1` or `@1` and `@2` for `2` (and disables surplus
    timers) — the service is never started, stopped or restarted), then each timer
    instance's enabled/active state and next trigger time are reported.
-6. **Checkout + git transport** — check of the configured `repo_dir`:
-   the `origin` remote's **transport** (Issue #114): git data
+6. **Checkout + git transport** — check of the configured delivery
+   checkout `repo_dir` (the orbi checkout in bootstrap mode, the user
+   repo X in the external single-repo mode): the `origin` remote's
+   **transport** (Issue #114): git data
    operations (fetch, push — including `.github/workflows/*.yml`) must
    go over SSH (`git@github.com:owner/repo.git`), so an existing
    HTTPS `origin` is migrated here with the plain
@@ -85,6 +96,26 @@ non-zero exit code.
 
 Setup never creates business Issues, never claims a task, never starts
 Pi, and never modifies a protected branch.
+
+## External single-repo mode (deploy_home)
+
+In the external single-repo mode (Issue #330, PR #334) the config
+separates the two checkouts: `deploy_home` is the orbi source checkout
+and `repo_dir` is the user repo X. Setup routes accordingly — steps 2
+(CLI editable install), 4 (`labels.toml`) and 5 (unit templates) act on
+`deploy_home`, while step 6 (checkout + git transport) checks
+`repo_dir`: X's `origin` must be SSH for the first configured source
+repo, X's worktree must be clean, and X's base freshness is reported.
+Note that in external mode the timer's `ExecStartPre` fast-forward acts
+on the deploy home (the orbi checkout), not on X — X is only read from
+when the Runner creates task worktrees. `deploy_home` absent means bootstrap mode: everything acts on
+`repo_dir` exactly as before.
+
+One practical consequence: the installed systemd unit reads its config
+from `<deploy_home>/orbi.toml` (the `{{ORBI_REPO_DIR}}` placeholder
+renders the deploy home path), so in external mode `orbi.toml` and the
+optional `.orbi/env` live in the orbi checkout — run setup with
+`--config <deploy_home>/orbi.toml`.
 
 ## Options
 

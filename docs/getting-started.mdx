@@ -73,6 +73,17 @@ orbi --help
 `uv tool` keeps the CLI in an isolated tool environment; the executable
 lands in `~/.local/bin` (on the PATH of the systemd unit).
 
+**Two deployment modes** (Issue #330, PR #334): the install command is
+identical in both — orbi is always installed ONCE from the orbi clone —
+but the config differs. In the **bootstrap mode** (this page's default)
+`repo_dir` is the orbi checkout itself: the deployment home and the
+delivery checkout are one directory. In the **external single-repo
+mode**, `deploy_home` points at the orbi checkout and `repo_dir` points
+at a foreign user repo X, so orbi delivers Issues of X without ever
+being reinstalled from X. The config difference is in step 3 and in the
+[External single-repo mode](#external-single-repo-mode-deploy_home)
+section below.
+
 **Why `--editable` matters**: a non-editable install copies the source
 into the tool environment's site-packages. The service's `ExecStartPre`
 fast-forwards the checkout to the latest `main` before every start —
@@ -124,7 +135,8 @@ directory):
 | Field | Required | Default | Meaning |
 |---|---|---|---|
 | `source_repos` | yes | — | Ordered list of `owner/repo` task pools scanned each tick (e.g. your pilot repo first, then your backlog repo) |
-| `repo_dir` | no | `.` | The Runner checkout the service starts from (where the `src/orbi/` package lives) |
+| `repo_dir` | no | `.` | The delivery checkout: the repository whose Issues the Runner delivers. Task worktrees are created from its frozen `origin/<base_branch>` SHA, PRs open against it, and the slot locks live in `<repo_dir>/.orbi/slots/`. In bootstrap mode this is the orbi checkout itself; in the external single-repo mode (Issue #330) it is a foreign user repo X |
+| `deploy_home` | no | `repo_dir` | The orbi SOURCE checkout (Issue #330): the editable CLI install source (the self-update), the `systemd/` unit templates, `labels.toml`, and the prompt defaults (`prompt.md`, `prompt_review.md` when unset). Absent = `repo_dir` (bootstrap mode, unchanged). Set it to the orbi checkout when `repo_dir` is a foreign repo X. Must be a non-empty string; a missing directory fails the start fast |
 | `workspace_root` | no | `..` | Directory that contains the task worktrees and the repositories the agent may modify |
 | `prompt` | no | `prompt.md` | Implementer prompt template (placeholders like `{{SOURCE_REPO}}` are rendered by the Runner) |
 | `prompt_review` | no | `prompt_review.md` | Review prompt template for the independent post-PR review session |
@@ -159,6 +171,64 @@ max_concurrency = 1
 skills = []
 context_files = []
 ```
+
+### External single-repo mode (deploy_home)
+
+Issue #330 (PR #334) decoupled orbi's deployment home from the delivery
+checkout, so orbi can be installed ONCE from the orbi repository and
+then pointed at any user repository X: an `ai-ready` Issue opened in X
+is picked up, implemented in a worktree of X, and delivered as a PR
+against X.
+
+- **Bootstrap mode (default)**: `repo_dir` is the orbi checkout itself —
+  the deployment home and the delivery checkout are the same directory
+  (`deploy_home` absent, defaulting to `repo_dir`). Steps 1–8 of this
+  page describe exactly that mode.
+- **External single-repo mode**: `repo_dir` is the user repo X and
+  `deploy_home` is the orbi checkout. The two checkouts play different
+  roles:
+  - `deploy_home` (orbi checkout) — the CLI self-update source (the
+    editable `uv tool` install, the `ExecStartPre` fast-forward and the
+    CLI self-heal), the `systemd/` unit templates (the `{{ORBI_REPO_DIR}}`
+    placeholder renders THIS path), `labels.toml`, and the prompt
+    defaults;
+  - `repo_dir` (user repo X) — the delivery checkout: Issues are claimed
+    from X, task worktrees are created from X's frozen
+    `origin/<base_branch>`, PRs open against X, and the slot locks live
+    in `<repo_dir>/.orbi/slots/`.
+
+Install once (step 2 above, from the orbi clone), then put the config
+file in the deploy home — the installed systemd unit reads its config
+from `<deploy_home>/orbi.toml` (the `{{ORBI_REPO_DIR}}` placeholder
+renders the deploy home path), so `orbi.toml` and the optional
+`.orbi/env` live in the orbi checkout, not in X:
+
+```toml
+# <deploy_home>/orbi.toml — the orbi checkout, NOT the user repo X
+source_repos = [
+  "OWNER/USER-REPO-X",
+]
+
+repo_dir = "/path/to/user-repo-x"
+deploy_home = "/path/to/orbi"
+workspace_root = "/path/to"
+base_branch = "main"
+max_concurrency = 1
+skills = []
+context_files = []
+```
+
+(Task worktrees land in `<repo_dir>/.worktrees/` — the delivery
+checkout — and `workspace_root` is the directory the implementer agent
+is told contains the repositories it may touch (the
+`{{WORKSPACE_ROOT}}` prompt placeholder); unset `prompt` /
+`prompt_review` resolve against `deploy_home`.)
+
+Everything else — steps 4–8 (model provider, `orbi setup`, the manual
+tick, the smoke walkthrough, the timers) — is unchanged: `orbi setup`
+reads the labels, the CLI install and the unit templates from
+`deploy_home` and checks the delivery checkout `repo_dir` (see
+[One-time setup](/setup)).
 
 ## 4. Configure the model provider
 
@@ -443,10 +513,15 @@ flock slots remain the final safety boundary.
 The committed unit templates are machine-independent: they carry the
 `{{ORBI_REPO_DIR}}` placeholder instead of a hardcoded checkout path
 (Issue #262). `orbi install-units` (and `orbi setup`) substitute it
-with **your** deployment checkout's resolved path at install time, so
-a clone at ANY location deploys cleanly — no manual edit of the
-installed units. `ExecStart` is the installed `orbi` CLI and stays
-home-relative (`%h/.local/bin/orbi`). The repo templates stay the
-single source of truth for everything else — see [Operations](/operations)
-on drift detection.
+with the resolved path of the **deployment home** (`deploy_home`,
+defaulting to `repo_dir`) at install time, so a clone at ANY location
+deploys cleanly — no manual edit of the installed units. In the
+external single-repo mode (Issue #330) that means the unit's
+`WorkingDirectory`, `ORBI_CONFIG`, `EnvironmentFile`, the `ExecStartPre`
+fast-forward, the `base-sync.lock` and the CLI self-heal ALL act on the
+orbi source checkout — never on the delivery checkout X. `ExecStart` is
+the installed `orbi` CLI and stays home-relative
+(`%h/.local/bin/orbi`). The repo templates stay the single source of
+truth for everything else — see [Operations](/operations) on drift
+detection.
 </Note>

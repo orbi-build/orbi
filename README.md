@@ -30,7 +30,7 @@ Pi 在隔离 worktree 中完成开发、测试并创建 PR，再经过独立审�
 ```bash
 # 1. clone
 git clone https://github.com/orbi-build/orbi.git && cd orbi
-# 2. 安装 CLI（editable uv tool 安装，官方本地部署方式）
+# 2. 安装 CLI（editable uv tool 安装，从 orbi 仓库安装一次；两种部署模式共用）
 uv tool install --force --reinstall --editable --python /usr/bin/python3 .
 # 3. 创建配置（仓库只提交 example，真实配置本地维护）
 cp .orbi.example.toml orbi.toml
@@ -45,6 +45,12 @@ orbi doctor --config orbi.toml
 完整前提（Python 3.14、Pi、git + gh、systemd、模型端点）与从 0 开始的 smoke
 walkthrough 见 [Getting started](docs/getting-started.mdx)；setup 的完整输出
 契约与失败现场见 [One-time setup](docs/setup.mdx)。
+
+两种部署模式（Issue #330）：**自举模式**（默认，`repo_dir` 就是 orbi
+checkout 自身）与**外部单仓库模式**（`deploy_home` 指向 orbi checkout、
+`repo_dir` 指向用户仓库 X——orbi 安装一次后指向任意用户仓库，X 里开
+`ai-ready` issue 即被开发）。配置差异见 [Getting started](docs/getting-started.mdx)
+的 External single-repo mode 一节。
 
 ## 它能做什么
 

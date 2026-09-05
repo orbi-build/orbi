@@ -62,6 +62,10 @@ LABEL_PATTERN = re.compile(r"\bai-[a-z][a-z-]*\b")
 KNOWN_CONFIG_FIELDS = frozenset({
     "source_repos",
     "repo_dir",
+    # Issue #330 (PR #334): the deployment home — the orbi source checkout
+    # (CLI install source, unit templates, labels.toml, prompt defaults);
+    # default = repo_dir (bootstrap mode unchanged).
+    "deploy_home",
     "workspace_root",
     "prompt",
     "prompt_review",
@@ -286,6 +290,32 @@ def test_docs_config_field_table_matches_the_implementation():
     missing = example_fields - documented
     assert not missing, (
         f"docs field table misses fields of the committed example: {sorted(missing)}"
+    )
+
+
+def test_docs_getting_started_documents_the_external_single_repo_mode():
+    """Issue #335 (docs for Issue #330 / PR #334): the external
+    single-repo mode must be documented next to the bootstrap
+    deployment — the deploy_home field, its default (= repo_dir,
+    bootstrap unchanged), and the two-checkout relationship (deploy
+    home = orbi source checkout, repo_dir = delivery checkout X)."""
+    text = page_text("getting-started")
+    assert "deploy_home" in text, (
+        "getting-started must document the deploy_home config field"
+    )
+    assert "repo_dir" in text, (
+        "getting-started must keep documenting repo_dir"
+    )
+    assert "Issue #330" in text, (
+        "the external mode must cite its source issue (#330)"
+    )
+    example = EXAMPLE_CONFIG.read_text(encoding="utf-8")
+    assert "deploy_home" in example, (
+        ".orbi.example.toml must carry the deploy_home field"
+    )
+    assert "<repo_dir>/.worktrees/" in text, (
+        "task worktrees must be documented as landing in the delivery "
+        "checkout's .worktrees (worktree_path), never in workspace_root"
     )
 
 
