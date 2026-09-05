@@ -20,6 +20,22 @@ from orbi import pi_activity
 from tests.test_progress_wiring import make_fake_gh
 
 
+def test_runner_main_config_failure_is_one_structured_log_line(
+    monkeypatch, caplog,
+):
+    monkeypatch.setattr(
+        runner, "load_config",
+        lambda path: (_ for _ in ()).throw(
+            ValueError("API key for provider 'ollama' references environment variable OLLAMA_API_KEY is not set")
+        ),
+    )
+    with caplog.at_level("ERROR"):
+        assert runner.main(["--config", "orbi.toml"]) == 1
+    assert [record.message for record in caplog.records] == [
+        "config_invalid reason=API key for provider 'ollama' references environment variable OLLAMA_API_KEY is not set"
+    ]
+
+
 def test_parse_issue_list_returns_first_issue():
     issue = {"number": 7, "title": "ship", "body": "do it"}
     assert runner.parse_issue_list(json.dumps([issue])) == issue
@@ -10615,8 +10631,8 @@ def test_load_config_pi_providers_rejects_missing_api_key_env(
     )
     with pytest.raises(
         ValueError,
-        match="API key for provider 'groq' references missing "
-              "environment variable GROQ_API_KEY",
+        match="API key for provider 'groq' references environment variable "
+              "GROQ_API_KEY is not set",
     ):
         runner.load_config(config_path)
 
@@ -10631,10 +10647,34 @@ def test_load_config_pi_providers_rejects_empty_api_key_env(
     )
     with pytest.raises(
         ValueError,
-        match="API key for provider 'groq' references missing "
-              "environment variable GROQ_API_KEY",
+        match="API key for provider 'groq' references environment variable "
+              "GROQ_API_KEY is set but empty",
     ):
         runner.load_config(config_path)
+
+
+@pytest.mark.parametrize(
+    ("environment", "expected"),
+    [("unset", "is not set"), ("empty", "is set but empty")],
+)
+def test_load_config_doctor_mode_keeps_provider_key_finding(
+    tmp_path, monkeypatch, environment, expected,
+):
+    if environment == "unset":
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("GROQ_API_KEY", "")
+    config_path = _providers_config(
+        tmp_path, GROQ_PROVIDERS,
+        pi_provider='"groq"', pi_model='"qwen/qwen3.8-27b"',
+    )
+    config = runner.load_config(
+        config_path, check_provider_api_keys=False,
+    )
+    finding = config["pi_provider_key_finding"]
+    assert finding["variable"] == "GROQ_API_KEY"
+    assert finding["state"] == expected
+    assert "GROQ_API_KEY" in finding["error"]
 
 
 def test_load_config_pi_providers_accepts_groq_example(tmp_path, monkeypatch):
@@ -11464,7 +11504,7 @@ def test_load_config_pi_providers_braced_env_reference(tmp_path, monkeypatch):
         pi_model='"qwen/qwen3.8-27b"',
     )
     with pytest.raises(
-        ValueError, match="missing environment variable GROQ_API_KEY",
+        ValueError, match="environment variable GROQ_API_KEY is not set",
     ):
         runner.load_config(config_path)
     monkeypatch.setenv("GROQ_API_KEY", "test-key")
@@ -11520,7 +11560,7 @@ def test_load_config_api_key_missing_everywhere_names_both_remedies(
     )
     with pytest.raises(
         ValueError,
-        match=r"missing environment variable GROQ_API_KEY.*"
+        match=r"environment variable GROQ_API_KEY is not set.*"
         r"Export GROQ_API_KEY.*\.orbi/env",
     ):
         runner.load_config(config_path)
@@ -11536,7 +11576,7 @@ def test_load_config_env_file_absent_missing_key_still_fails(
         pi_model='"qwen/qwen3.8-27b"',
     )
     with pytest.raises(
-        ValueError, match="missing environment variable GROQ_API_KEY",
+        ValueError, match="environment variable GROQ_API_KEY is not set",
     ):
         runner.load_config(config_path)
 

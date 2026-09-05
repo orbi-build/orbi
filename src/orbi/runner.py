@@ -505,8 +505,12 @@ def _load_deploy_env_file(deploy_home: Path) -> None:
         os.environ.setdefault(name, value)
 
 
-def load_config(path: Path) -> dict:
-    """Load the human-maintained TOML config and resolve its paths."""
+def load_config(path: Path, *, check_provider_api_keys: bool = True) -> dict:
+    """Load the human-maintained TOML config and resolve its paths.
+
+    ``doctor`` disables the selected provider-key gate so it can report the
+    configuration finding instead of being stopped by it.
+    """
     base = path.resolve().parent
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     source_repos = data.get("source_repos")
@@ -613,10 +617,12 @@ def load_config(path: Path) -> dict:
         _config_path(pi_providers, base) if pi_providers is not None
         else None
     )
+    _load_pi_providers.last_key_finding = None
     pi_providers_data = (
         _load_pi_providers(
             pi_providers_path, pi_provider, pi_model,
             deploy_home / ".orbi" / "env",
+            check_api_key=check_provider_api_keys,
         )
         if pi_providers_path is not None else None
     )
@@ -659,6 +665,9 @@ def load_config(path: Path) -> dict:
         "release_ci_wait_seconds": release_ci_wait_seconds,
         "pi_providers": pi_providers_path,
         "pi_providers_data": pi_providers_data,
+        "pi_provider_key_finding": getattr(
+            _load_pi_providers, "last_key_finding", None,
+        ),
         # Multi-repo registry (Issue #134): the explicit per-repo entries
         # (name, path, github, base_branch). Absent section -> [] so the
         # single-repo config keeps its exact shape and flow.
@@ -829,7 +838,8 @@ def _model_wait_dead_seconds(data: dict) -> float:
 
 
 def _load_pi_providers(path: Path, pi_provider: str | None,
-                       pi_model: str | None, env_file: Path) -> dict:
+                       pi_model: str | None, env_file: Path, *,
+                       check_api_key: bool = True) -> dict:
     """Load and validate the Pi provider file (Issue #157).
 
     The file uses Pi's own `models.json` shape (`{"providers": {id:
@@ -843,6 +853,7 @@ def _load_pi_providers(path: Path, pi_provider: str | None,
     missing or empty. The key value itself is never logged; only the
     variable name is named in the error.
     """
+    _load_pi_providers.last_key_finding = None
     if not path.is_file():
         raise FileNotFoundError(path)
     try:
@@ -905,7 +916,12 @@ def _load_pi_providers(path: Path, pi_provider: str | None,
         # Only the SELECTED provider's key must resolve: an unselected
         # provider with a missing key just stays unavailable in Pi
         # (verified against real Pi 0.84.3), it never breaks the run.
-        _check_pi_provider_api_key(path, pi_provider, entry, env_file)
+        finding = _pi_provider_api_key_finding(
+            path, pi_provider, entry, env_file,
+        )
+        _load_pi_providers.last_key_finding = finding
+        if finding and check_api_key:
+            raise ValueError(finding["error"])
         if pi_model is not None:
             model_ids = [
                 model["id"] for model in entry.get("models", [])
@@ -918,33 +934,43 @@ def _load_pi_providers(path: Path, pi_provider: str | None,
     return data
 
 
-def _check_pi_provider_api_key(path: Path, provider_id: str,
-                               entry: dict, env_file: Path) -> None:
-    """Fail fast when an `apiKey` env-var reference is unresolved.
-
-    Pi's value-resolution syntax (`docs/models.md`): `$VAR` or
-    `${VAR}` interpolates the named environment variable; a missing
-    variable leaves the value unresolved and Pi would only fail at
-    request time. The Runner fails at config load instead (before any
-    slot or claim). Only the variable NAME is reported — never a key
-    value. The error names BOTH remedies (Issue #348): export the
-    variable in the shell, or add it to the deploy-home env file the
-    unit loads via `EnvironmentFile`.
-    """
+def _pi_provider_api_key_finding(path: Path, provider_id: str,
+                                  entry: dict, env_file: Path) -> dict | None:
+    """Return an unresolved selected-provider key finding, without key data."""
     api_key = entry.get("apiKey")
     if not isinstance(api_key, str) or not api_key:
-        return
-    for match in re.finditer(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)", api_key):
+        return None
+    for match in re.finditer(
+        r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)",
+        api_key,
+    ):
         name = match.group(1) or match.group(2)
-        value = os.environ.get(name)
-        if not value:
-            raise ValueError(
+        if name not in os.environ:
+            state = "is not set"
+        elif os.environ[name] == "":
+            state = "is set but empty"
+        else:
+            continue
+        return {
+            "provider": provider_id, "variable": name, "path": path,
+            "env_file": env_file,
+            "state": state,
+            "error": (
                 f"API key for provider {provider_id!r} references "
-                f"missing environment variable {name} "
+                f"environment variable {name} {state} "
                 f"(pi_providers file {path}). Export {name} in your "
-                f"shell or add it to {env_file} (the unit's "
-                f"EnvironmentFile)."
-            )
+                f"shell or add it to {env_file} (the unit's EnvironmentFile)."
+            ),
+        }
+    return None
+
+
+def _check_pi_provider_api_key(path: Path, provider_id: str,
+                               entry: dict, env_file: Path) -> None:
+    """Fail fast when an `apiKey` env-var reference is unresolved."""
+    finding = _pi_provider_api_key_finding(path, provider_id, entry, env_file)
+    if finding:
+        raise ValueError(finding["error"])
 
 
 def _expand_pi_api_key_refs(api_key: str) -> str:
@@ -8142,8 +8168,12 @@ def main(argv: list[str] | None = None) -> int:
     if threading.current_thread() is threading.main_thread():
         signal.signal(signal.SIGTERM, _handle_stop)
 
-    config = load_config(args.config)
-    validate_config(config)
+    try:
+        config = load_config(args.config)
+        validate_config(config)
+    except ValueError as exc:
+        LOGGER.error("config_invalid reason=%s", exc)
+        return 1
     # Editable CLI install refresh (Issue #158): BEFORE any slot or
     # claim the tool env's editable metadata must match the checkout's
     # packaging inputs — a merged packaging change (entry point,

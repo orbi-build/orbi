@@ -1389,6 +1389,22 @@ def test_main_setup_repo_override_is_passed_through(
     assert seen["repos"] == ["xqliu/orbi"]
 
 
+def test_main_setup_config_failure_prints_structured_reason(
+    monkeypatch, tmp_path, capsys,
+):
+    config = _setup_world(tmp_path)
+    monkeypatch.setattr(
+        orbi, "load_config",
+        lambda path, **kwargs: (_ for _ in ()).throw(
+            ValueError("API key for provider 'ollama' references environment variable OLLAMA_API_KEY is not set")
+        ),
+    )
+    assert orbi.main(["setup", "--config", str(config)]) == 1
+    captured = capsys.readouterr()
+    assert captured.err.startswith("setup_failed reason=API key")
+    assert "Traceback" not in captured.err
+
+
 def test_main_setup_failure_prints_the_reason_and_returns_nonzero(
     monkeypatch, tmp_path, capsys,
 ):
@@ -1406,6 +1422,21 @@ def test_main_setup_failure_prints_the_reason_and_returns_nonzero(
     err = capsys.readouterr().err
     assert "setup_failed" in err
     assert "insufficient permission" in err
+
+
+def test_doctor_report_reports_provider_key_finding(tmp_path, monkeypatch):
+    config, installed = _deploy_world(tmp_path, drift=False)
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    config["pi_provider_key_finding"] = {
+        "provider": "ollama", "variable": "OLLAMA_API_KEY",
+        "state": "is set but empty", "path": tmp_path / ".orbi/pi-providers.json",
+    }
+    report = orbi.doctor_report(config, installed)
+    assert (
+        "model_endpoint: provider=ollama key=OLLAMA_API_KEY "
+        f"is set but empty (file: {tmp_path / '.orbi/pi-providers.json'})"
+    ) in report.splitlines()
 
 
 def test_doctor_report_clean(tmp_path, monkeypatch):
