@@ -208,6 +208,9 @@ def test_wait_for_delivery_recoverable_review_failure_stays_fix_needed(
     assert "session=" in body
     assert "phase=" in body
     assert "last_activity=" in body
+    assert "stderr=<empty>" in body
+    if isinstance(exc, subprocess.CalledProcessError):
+        assert "exit_code=1" in body
     # The SAME failure comment is written to the PR (Issue #50: the
     # failure comment must be written to Issue/PR).
     assert len(pr_comments) == 1
