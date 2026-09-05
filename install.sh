@@ -21,7 +21,12 @@ require_command systemctl
 
 if ! command -v uv >/dev/null 2>&1; then
   printf 'orbi install: uv not found; installing it with the official installer\n' >&2
-  curl -LsSf https://astral.sh/uv/install.sh | sh
+  uv_installer=$(mktemp)
+  trap 'rm -f "$uv_installer"' EXIT
+  timeout 120 curl -LsSf https://astral.sh/uv/install.sh -o "$uv_installer"
+  timeout 120 sh "$uv_installer"
+  rm -f "$uv_installer"
+  trap - EXIT
   export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 fi
 require_command uv
@@ -33,11 +38,11 @@ elif [ -e "$ORBI_SRC" ]; then
   printf 'orbi install: %s exists but is not a git checkout\n' "$ORBI_SRC" >&2
   exit 1
 else
-  git clone https://github.com/orbi-build/orbi.git "$ORBI_SRC"
+  timeout 300 git clone https://github.com/orbi-build/orbi.git "$ORBI_SRC"
 fi
 
 cd "$ORBI_SRC"
-uv tool install --force --reinstall --editable .
+timeout 300 uv tool install --force --reinstall --editable .
 if [ ! -e orbi.toml ]; then
   cp .orbi.example.toml orbi.toml
 fi
