@@ -6946,6 +6946,65 @@ def _failure_detail(exc: BaseException) -> str:
     return detail
 
 
+def _tail_text(path: Path, *, lines: int = 20, chars: int = 4000) -> str:
+    """Read a bounded tail for failure evidence without blocking cleanup."""
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            # UTF-8 characters are at most four bytes.  This is enough to
+            # retain the requested character tail without reading a huge
+            # test log or session file into memory.
+            window = min(size, chars * 4 + 1)
+            handle.seek(size - window)
+            content = handle.read(window).decode(
+                "utf-8", errors="replace",
+            )
+    except (OSError, UnicodeError):
+        return "<unavailable>"
+    tail = "\n".join(content.splitlines()[-lines:])
+    return tail[-chars:] if len(tail) > chars else tail
+
+
+def _failure_evidence(worktree: Path | None, exc: BaseException) -> str:
+    """Render the bounded evidence that survives terminal worktree cleanup.
+
+    Pi subprocess streams come from ``CalledProcessError``. The session and
+    test log are read before cleanup and only their tails are copied into the
+    failure comment, keeping the GitHub comment useful and bounded.
+    """
+    stderr = getattr(exc, "stderr", None)
+    stdout = getattr(exc, "output", None)
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode(errors="replace")
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode(errors="replace")
+    stderr = str(stderr) if stderr else "<empty>"
+    stdout = str(stdout) if stdout else "<empty>"
+    return_code = getattr(exc, "returncode", None)
+    session = "<unavailable>"
+    test_log = "<unavailable>"
+    if worktree is not None:
+        session_files = sorted(
+            (p for p in (worktree / ".pi-session").glob("*.jsonl")
+             if p.is_file()),
+            key=lambda p: p.stat().st_mtime,
+        )
+        if session_files:
+            session = _tail_text(session_files[-1])
+        test_path = worktree / ".orbi" / "test.log"
+        if test_path.is_file():
+            test_log = _tail_text(test_path)
+    return (
+        "\n\nFailure evidence (captured before cleanup):\n"
+        f"exit_code={return_code if return_code is not None else '<unknown>'}\n"
+        f"stderr={stderr[-4000:]}\n"
+        f"stdout_tail={stdout[-4000:]}\n"
+        f"session_last_events={session[-4000:]}\n"
+        f"test_log_tail={test_log[-4000:]}"
+    )
+
+
 def _safe_publish(*, run_id: str, issue: int, source_repo: str,
                   role: str, action: Callable[[], None]) -> None:
     """Run one progress-publishing step as a pure bypass (Issue #79).
@@ -7433,12 +7492,14 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
             )
             blocked_transition_done = True
             detail = _failure_detail(exc)
+            evidence = _failure_evidence(worktree, exc)
             body = (
                 f"{run_marker(run_id)}\n"
                 f"Orbi failed: {detail} ({run_info})"
             )
             if scene:
                 body += f" {scene}"
+            body += evidence
             comment_issue(number, repo=source_repo, body=body)
             # The blocked milestone is posted even when the worktree was
             # never created or the progress comment was never ensured:
@@ -7874,6 +7935,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     "issue=%s delivery_review_failed pr=%s", number, pr_url,
                 )
                 detail = _failure_detail(exc)
+                evidence = _failure_evidence(worktree, exc)
                 if is_unrecoverable_failure(exc):
                     # Issue #50: the ONLY opened-PR failure that leaves
                     # the automatic loop is an external precondition
@@ -7903,6 +7965,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                         "automatically (the Issue stays ai-blocked "
                         "until a human decides)"
                     )
+                    body += evidence
                     if marker:
                         body = f"{marker}\n{body}"
                     comment_issue(number, repo=source_repo, body=body)
@@ -7973,6 +8036,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     "ai-fix-needed and the next tick resumes the same "
                     "run, branch, worktree and PR"
                 )
+                body += evidence
                 # The full scene (run_id, branch, worktree, session,
                 # phase, last activity) is always appended: a
                 # recoverable failure always happens after the scene

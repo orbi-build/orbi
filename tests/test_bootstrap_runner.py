@@ -5128,8 +5128,51 @@ def test_process_issue_failure_without_session_still_carries_scene(
     assert "session_file=-" in failure_body
 
 
+def test_failure_evidence_handles_binary_streams_and_unavailable_files(tmp_path):
+    error = subprocess.CalledProcessError(
+        2, ["pi"], output=b"binary stdout", stderr=b"binary stderr",
+    )
+
+    evidence = runner._failure_evidence(tmp_path / "missing", error)
+
+    assert "exit_code=2" in evidence
+    assert "stderr=binary stderr" in evidence
+    assert "stdout_tail=binary stdout" in evidence
+    assert "session_last_events=<unavailable>" in evidence
+    assert runner._tail_text(tmp_path / "missing.log") == "<unavailable>"
+
+
+def test_failure_evidence_includes_streams_session_and_test_tail(tmp_path):
+    worktree = tmp_path / "wt"
+    (worktree / ".pi-session").mkdir(parents=True)
+    (worktree / ".pi-session" / "session.jsonl").write_text(
+        "old event\nlatest event\n", encoding="utf-8",
+    )
+    (worktree / ".orbi").mkdir()
+    (worktree / ".orbi" / "test.log").write_text(
+        "test output\n1 failed, 2 passed\n", encoding="utf-8",
+    )
+    error = subprocess.CalledProcessError(1, ["pi"], output="stdout tail", stderr="")
+
+    evidence = runner._failure_evidence(worktree, error)
+
+    assert "exit_code=1" in evidence
+    assert "stderr=<empty>" in evidence
+    assert "stdout tail" in evidence
+    assert "latest event" in evidence
+    assert "1 failed, 2 passed" in evidence
+
+
 def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_path):
     calls = []
+    (tmp_path / "wt" / ".pi-session").mkdir(parents=True)
+    (tmp_path / "wt" / ".pi-session" / "session.jsonl").write_text(
+        "assistant event\n", encoding="utf-8",
+    )
+    (tmp_path / "wt" / ".orbi").mkdir()
+    (tmp_path / "wt" / ".orbi" / "test.log").write_text(
+        "coverage output\n1 failed\n", encoding="utf-8",
+    )
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
     monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
@@ -5173,6 +5216,10 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     assert "last_activity=2026-08-25T02:30:00Z" in failure_body
     assert 'action="bash pytest tests/"' in failure_body
     assert "result=ok" in failure_body
+    assert "exit_code=1" in failure_body
+    assert "stderr=boom" in failure_body
+    assert "assistant event" in failure_body
+    assert "1 failed" in failure_body
     # The full scene on the failure comment carries the debug entry.
     assert f"worktree={tmp_path / 'wt'}" in failure_body
     assert "branch=orbi/xqliu-muyan-ceo-issue-8-a1b2c3d4" in failure_body
