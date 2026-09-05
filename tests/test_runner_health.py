@@ -19,6 +19,7 @@ journal. These tests pin the active detection contract:
 import json
 import time
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -544,6 +545,111 @@ def test_health_marker_is_stable_per_check():
         runner_health.health_marker("crash_loop")
     assert runner_health.health_marker("crash_loop") != \
         runner_health.health_marker("stale_pickup")
+
+
+# ---------------------------------------------------------------------------
+# process_issue recording hooks: pure bypass (never fail the delivery)
+# ---------------------------------------------------------------------------
+
+def test_process_issue_pickup_record_failure_is_bypass(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #266: a health-state write failure at claim time must never
+    fail the delivery (bypass) — the claim and the run go on."""
+    import orbi.runner as runner
+    from tests.test_bootstrap_runner import _gh_api
+    from tests.test_progress_wiring import make_fake_gh
+
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(
+        runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
+    )
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    monkeypatch.setattr(
+        runner, "deliver_pr",
+        lambda *args, **kwargs: "https://github.com/muyantech/orbi/pull/4",
+    )
+    monkeypatch.setattr(
+        runner, "comment_issue", lambda *args, **kwargs: None,
+    )
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            return "[]"
+        return "0123456789abcdef0123456789abcdef01234567"
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(
+        runner_health, "record_pickup",
+        lambda repo_dir: (_ for _ in ()).throw(
+            RuntimeError("state dir read-only"),
+        ),
+    )
+    with caplog.at_level("INFO"):
+        pr_url = runner.process_issue(
+            {"number": 4, "title": "Fix", "body": "Body"},
+            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+             "base_branch": "main"},
+            "xqliu/muyan-ceo",
+        )
+    assert pr_url == "https://github.com/muyantech/orbi/pull/4"
+    assert "health_pickup_record_failed" in caplog.text
+
+
+def test_process_issue_failure_record_failure_is_bypass(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #266: a health-state write failure in the terminal failure
+    path must never change the delivery outcome (bypass) — the Issue is
+    still marked ai-blocked and the tick ends cleanly."""
+    import orbi.runner as runner
+    from tests.test_bootstrap_runner import _gh_api
+    from tests.test_progress_wiring import make_fake_gh
+
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(
+        runner, "create_worktree",
+        Mock(side_effect=RuntimeError("git failed")),
+    )
+    monkeypatch.setattr(
+        runner, "activity_snapshot", lambda session_dir: None,
+    )
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            return "[]"
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(
+        runner_health, "record_run_attempt",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("state dir read-only"),
+        ),
+    )
+    with caplog.at_level("INFO"):
+        pr_url = runner.process_issue(
+            {"number": 4, "title": "Fix", "body": "Body"},
+            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+             "base_branch": "main"},
+            "xqliu/muyan-ceo",
+        )
+    assert pr_url is None
+    assert "health_failure_record_failed" in caplog.text
 
 
 # ---------------------------------------------------------------------------
