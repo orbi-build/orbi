@@ -32,15 +32,17 @@ still never race the tool env.
 """
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import orbi
 from orbi.pi_activity import quote_value
 
-# The production interpreter pinned by the documented install command
-# (docs/getting-started.mdx: `--python` pins the production
-# interpreter, 3.14).
-PYTHON_INTERPRETER = "/usr/bin/python3"
+# Prefer the host's Python 3 executable when present for compatibility with
+# existing deployments. On a fresh uv-only host, the version selector asks uv
+# to provision the required 3.14 interpreter instead of requiring a system
+# Python executable.
+PYTHON_INTERPRETER = shutil.which("python3") or "3.14"
 
 # The runtime package directory inside a checkout (Issue #168 src
 # layout): the editable install maps this WHOLE directory, so a newly
@@ -56,7 +58,8 @@ def reinstall_args(repo_dir: Path) -> list[str]:
     replaces the existing tool env, ``--reinstall`` bypasses the build
     cache, ``--editable`` points the tool env at the checkout ("changes
     in the package's source directory are reflected without
-    reinstallation") and ``--python`` pins the interpreter.
+    reinstallation") and ``--python`` pins the interpreter (or asks uv to
+    provision 3.14 when no system ``python3`` is available).
     """
     return [
         "uv", "tool", "install", "--force", "--reinstall", "--editable",

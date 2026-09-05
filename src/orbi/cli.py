@@ -638,13 +638,15 @@ def main(argv: list[str] | None = None) -> int:
         return runner.main(["--config", str(args.config)])
 
     try:
+        if args.command == "setup":
+            pilot_setup.ensure_config(args.config)
         config = load_config(
             args.config,
             check_provider_api_keys=args.command != "doctor",
             allow_missing_pi_providers=args.command in ("setup", "doctor"),
         )
         validate_config(config)
-    except ValueError as exc:
+    except (ValueError, pilot_setup.SetupError) as exc:
         if args.command == "setup":
             print(f"setup_failed reason={exc}", file=sys.stderr)
         else:

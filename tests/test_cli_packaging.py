@@ -319,7 +319,7 @@ def test_setup_requires_the_installed_cli():
     """`setup` verifies the machine prerequisites; the installed CLI is
     one of them (the systemd entry it documents must exist)."""
     assert "orbi" in pilot_setup.REQUIRED_COMMANDS
-    for name in ("git", "gh", "python3"):
+    for name in ("git", "gh"):
         assert name in pilot_setup.REQUIRED_COMMANDS
     # Issue #156: setup calls `uv tool install` (the CLI editable step,
     # Issue #152), so the prerequisite check must verify uv explicitly.

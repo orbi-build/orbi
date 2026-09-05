@@ -315,7 +315,6 @@ def test_check_commands_reports_the_required_commands(monkeypatch):
     assert result == {
         "git": "/usr/bin/git",
         "gh": "/usr/bin/gh",
-        "python3": "/usr/bin/python3",
         # Issue #156: setup calls `uv tool install` in the CLI editable
         # step (Issue #152), so uv is a checked prerequisite too.
         "uv": "/usr/bin/uv",
@@ -1680,6 +1679,32 @@ def test_run_setup_routes_home_files_to_deploy_home(tmp_path, monkeypatch):
     assert seen["units"] == home
     # The delivery checkout stays the transport-checked repo.
     assert seen["checkout"] == repo
+
+
+def test_ensure_config_creates_example_without_overwriting(tmp_path):
+    example = tmp_path / ".orbi.example.toml"
+    example.write_text('source_repos = ["OWNER/REPO"]\n', encoding="utf-8")
+    config = tmp_path / "orbi.toml"
+
+    assert pilot_setup.ensure_config(config) == config
+    assert config.read_text(encoding="utf-8") == example.read_text(encoding="utf-8")
+
+    config.write_text('source_repos = ["existing/repo"]\n', encoding="utf-8")
+    assert pilot_setup.ensure_config(config) == config
+    assert "existing/repo" in config.read_text(encoding="utf-8")
+
+
+def test_ensure_config_fails_when_example_is_missing(tmp_path):
+    with pytest.raises(pilot_setup.SetupError, match="example config missing"):
+        pilot_setup.ensure_config(tmp_path / "orbi.toml")
+
+
+def test_ensure_config_reports_write_failure(tmp_path, monkeypatch):
+    example = tmp_path / ".orbi.example.toml"
+    example.write_text("source_repos = [\"OWNER/REPO\"]\n", encoding="utf-8")
+    monkeypatch.setattr(Path, "write_bytes", lambda *_: (_ for _ in ()).throw(OSError("read-only")))
+    with pytest.raises(pilot_setup.SetupError, match="config creation failed"):
+        pilot_setup.ensure_config(tmp_path / "orbi.toml")
 
 
 def test_scaffold_model_config_is_idempotent_and_private(tmp_path):
