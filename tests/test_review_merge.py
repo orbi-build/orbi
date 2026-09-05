@@ -517,8 +517,11 @@ def test_comment_pr_runs_gh_pr_comment(monkeypatch):
         runner, "run_command",
         lambda command, **kwargs: calls.append(command),
     )
-    runner.comment_pr(4, body="round 1 findings")
-    assert calls == [["gh", "pr", "comment", "4", "--body", "round 1 findings"]]
+    runner.comment_pr(4, repo="owner/repo", body="round 1 findings")
+    assert calls == [[
+        "gh", "pr", "comment", "4", "--repo", "owner/repo",
+        "--body", "round 1 findings",
+    ]]
 
 
 # ---------------------------------------------------------------------------
