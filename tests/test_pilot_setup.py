@@ -1511,3 +1511,58 @@ def test_run_setup_rejects_an_empty_repo_list(tmp_path):
             repos=[],
             run_command=lambda command, **kwargs: "",
         )
+
+
+def test_run_setup_routes_home_files_to_deploy_home(tmp_path, monkeypatch):
+    """Issue #330: with deploy_home set, labels.toml, the CLI editable
+    install and the unit templates come from the deployment home; the
+    delivery checkout (repo_dir) is only the transport-checked repo."""
+    repo, installed, state = make_run_state(tmp_path)
+    fake_run, calls = fake_run_factory(state)
+    home = tmp_path / "home"
+    home.mkdir()
+    config = runner.load_config(make_config(tmp_path, repo))
+    config["deploy_home"] = home
+
+    seen: dict = {}
+
+    def spy_load(path):
+        seen["labels"] = Path(path)
+        return [dict(entry) for entry in VALID_DEFS]
+
+    def spy_cli(repo_dir, module_file, *, run_command):
+        seen["cli"] = Path(repo_dir)
+        return {"action": "verified", "source": str(repo_dir)}
+
+    def spy_units(repo_dir, installed_dir, *, max_concurrency, run_command):
+        seen["units"] = Path(repo_dir)
+        return {
+            "service": {
+                "installed": True,
+                "installed_path": str(installed_dir / "orbi@.service"),
+                "sha256": "deadbeef",
+            },
+            "timer": {"instances": {}},
+        }
+
+    def spy_checkout(repo_dir, base_branch, source_repos, *, run_command):
+        seen["checkout"] = Path(repo_dir)
+        return {
+            "remote": "origin", "branch": "main", "clean": True,
+            "base_fresh": True, "remote_url": "git@github.com:x/orbi.git",
+            "remote_protocol": "ssh", "migrated": False,
+            "ssh_reachable": True,
+        }
+
+    monkeypatch.setattr(pilot_setup, "load_label_defs", spy_load)
+    monkeypatch.setattr(pilot_setup, "install_cli_step", spy_cli)
+    monkeypatch.setattr(pilot_setup, "install_units_step", spy_units)
+    monkeypatch.setattr(pilot_setup, "check_checkout", spy_checkout)
+
+    result = pilot_setup.run_setup(config, installed, run_command=fake_run)
+    assert result["setup"] == "ok"
+    assert seen["labels"] == home / "labels.toml"
+    assert seen["cli"] == home
+    assert seen["units"] == home
+    # The delivery checkout stays the transport-checked repo.
+    assert seen["checkout"] == repo

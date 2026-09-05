@@ -1099,6 +1099,8 @@ def _deploy_world(tmp_path, drift: bool = False) -> tuple[dict, Path]:
     config = {
         "source_repos": ["xqliu/orbi"],
         "repo_dir": repo,
+        # Issue #330: the bootstrap deployment — home == delivery checkout.
+        "deploy_home": repo,
         "base_branch": "main",
         "max_concurrency": 1,
         "slot_dir": repo / ".orbi" / "slots",

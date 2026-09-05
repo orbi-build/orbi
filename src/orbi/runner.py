@@ -541,13 +541,42 @@ def load_config(path: Path) -> dict:
         if pi_providers_path is not None else None
     )
     repo_dir = _config_path(data.get("repo_dir", "."), base)
+    # Deployment home (Issue #330): the orbi source checkout — the editable
+    # CLI install source, the systemd/ unit templates, labels.toml and the
+    # prompt defaults. Absent -> repo_dir (the orbi-bootstrap deployment,
+    # home == delivery checkout, keeps its exact behavior). Present -> must
+    # be a non-empty string, resolved like every other config path; the
+    # delivery checkout (repo_dir) is then decoupled from the CLI
+    # self-update and the startup gates act on the home only.
+    deploy_home_raw = data.get("deploy_home")
+    if deploy_home_raw is not None and (
+        not isinstance(deploy_home_raw, str) or not deploy_home_raw
+    ):
+        raise ValueError("deploy_home must be a non-empty string")
+    deploy_home = (
+        _config_path(deploy_home_raw, base)
+        if deploy_home_raw is not None
+        else repo_dir
+    )
     return {
         "source_repos": source_repos,
         "repo_dir": repo_dir,
+        "deploy_home": deploy_home,
         "workspace_root": _config_path(data.get("workspace_root", ".."), base),
-        "prompt": _config_path(data.get("prompt", "prompt.md"), base),
+        # Issue #330: when deploy_home is EXPLICIT the prompt defaults
+        # live in the deployment home (the delivery checkout may be a
+        # foreign repo without them); an explicit prompt path still
+        # resolves against the config file dir. deploy_home absent ->
+        # the original config-file-dir resolution (bootstrap unchanged).
+        "prompt": _config_path(
+            data.get("prompt", "prompt.md"),
+            base if "prompt" in data
+            else (deploy_home if deploy_home_raw is not None else base),
+        ),
         "prompt_review": _config_path(
-            data.get("prompt_review", "prompt_review.md"), base,
+            data.get("prompt_review", "prompt_review.md"),
+            base if "prompt_review" in data
+            else (deploy_home if deploy_home_raw is not None else base),
         ),
         "skills": [_config_path(item, base) for item in data.get("skills", [])],
         "context_files": [
@@ -1123,6 +1152,11 @@ def render_prompt(template: str, values: dict[str, str]) -> str:
 def validate_config(config: dict) -> None:
     if not config["repo_dir"].is_dir():
         raise FileNotFoundError(config["repo_dir"])
+    # Issue #330: the deployment home (CLI install source, unit templates,
+    # labels.toml, prompt defaults) must exist too — a missing home fails
+    # the start fast, like a missing delivery checkout.
+    if not config["deploy_home"].is_dir():
+        raise FileNotFoundError(config["deploy_home"])
     for path in [
         config["prompt"], config["prompt_review"],
         *config["skills"], *config["context_files"],
@@ -7763,8 +7797,11 @@ def main(argv: list[str] | None = None) -> int:
     # lives in THIS module (see the NOTE at the top): a separate new
     # module would not be importable in the stale-finder tool env, and
     # the refresh that repairs the finder could never run.
+    # Issue #330: the CLI self-update acts on the deployment home, never
+    # on the delivery checkout (repo_dir may be a foreign repo X without
+    # any orbi packaging input).
     refresh_cli_install(
-        config["repo_dir"], run_command=run_command,
+        config["deploy_home"], run_command=run_command,
     )
     # Deployment consistency (Issue #103, #142): BEFORE any slot or
     # claim the installed systemd units must match the repo templates
@@ -7777,10 +7814,11 @@ def main(argv: list[str] | None = None) -> int:
     # structured `unit_drift` line per unit and fails fast: this
     # start takes no slot, claims no Issue and changes no label.
     try:
-        check_unit_drift(config["repo_dir"])
+        check_unit_drift(config["deploy_home"])
     except UnitDriftError:
         sync_drifted_units(
-            config["repo_dir"], max_concurrency=config["max_concurrency"],
+            config["deploy_home"],
+            max_concurrency=config["max_concurrency"],
             run_command=run_command,
         )
     # Git transport preflight (Issue #114): BEFORE any slot or claim
