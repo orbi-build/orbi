@@ -12,7 +12,11 @@ notification for each one.
 
 All GitHub traffic goes through the reused `runner.run_command`
 (`gh api`), which logs the command and fails fast on any error. There is
-no fallback or retry.
+no fallback or retry. Progress POST/PATCH bodies (the full multi-KB
+markdown) are never written to the journal: `run_command` gets a
+redacted `log_command` with endpoint + method only (Issue #326), so the
+live state stays readable while the full body lives in the GitHub
+comment.
 """
 from __future__ import annotations
 
@@ -181,11 +185,27 @@ class ProgressPublisher:
             raise ValueError("issue comments must be a JSON array")
         return comments
 
+    @staticmethod
+    def _redacted_body_command(method: str, endpoint: str) -> list[str]:
+        """The journal form of one body-carrying `gh api` call.
+
+        Issue #326: the live progress/milestone body is multi-KB and is
+        PATCHed every ~30s; logging it verbatim floods the journal with
+        near-duplicate giant lines. The journal records endpoint and
+        method only; the body content stays in the GitHub comment.
+        """
+        return [
+            "gh", "api", endpoint, "--method", method,
+            "--field", "body=<redacted>",
+        ]
+
     def _post_comment(self, body: str) -> int:
-        raw = self._run_command([
-            "gh", "api", self._endpoint(),
-            "--method", "POST", "--field", f"body={body}",
-        ])
+        endpoint = self._endpoint()
+        raw = self._run_command(
+            ["gh", "api", endpoint,
+             "--method", "POST", "--field", f"body={body}"],
+            log_command=self._redacted_body_command("POST", endpoint),
+        )
         # `gh api` replies with the full comment object, not a bare id.
         data = json.loads(raw)
         if not isinstance(data, dict) or not isinstance(data.get("id"), int):
@@ -195,10 +215,12 @@ class ProgressPublisher:
         return data["id"]
 
     def _patch_comment(self, comment_id: int, body: str) -> None:
-        self._run_command([
-            "gh", "api", self._update_endpoint(comment_id),
-            "--method", "PATCH", "--field", f"body={body}",
-        ])
+        endpoint = self._update_endpoint(comment_id)
+        self._run_command(
+            ["gh", "api", endpoint,
+             "--method", "PATCH", "--field", f"body={body}"],
+            log_command=self._redacted_body_command("PATCH", endpoint),
+        )
 
     def ensure(self, body: str) -> int:
         """Create or resume the run's progress comment; return its id.
