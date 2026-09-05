@@ -4871,8 +4871,13 @@ def stream_pi(
         # pre-session startup failure remains terminal unless it reaches
         # one of the explicit recovery classifications above.
         error_type = (
+            # A session file alone only proves that Pi initialized its
+            # journal; an exit before the first request is still a startup
+            # failure (for example provider initialization) and must keep
+            # the existing terminal failure behavior.  Only an interrupted
+            # session after a request has actually started is resumable.
             RecoverablePiProcessError
-            if activity["session_file"] is not None
+            if activity["first_request"]
             else subprocess.CalledProcessError
         )
         raise error_type(
