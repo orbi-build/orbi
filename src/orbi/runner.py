@@ -3653,16 +3653,14 @@ def _parse_version_title(title: object) -> tuple[int, int, int] | None:
 def rewrite_active_milestone_line(config_path: Path, new_value: str) -> None:
     """Replace only the configured active_milestone line, byte-for-byte."""
     text = config_path.read_bytes().decode("utf-8")
-    pattern = re.compile(r"(?m)^active_milestone[ \t]*=[ \t]*[^\r\n]+")
+    pattern = re.compile(r"(?m)^[ \t]*active_milestone[ \t]*=[ \t]*[^\r\n]+")
     if not pattern.search(text):
         raise RuntimeError(
             f"active_milestone line not found in {config_path}"
         )
-    updated, count = pattern.subn(
+    updated, _ = pattern.subn(
         f'active_milestone = "{new_value}"', text, count=1,
     )
-    if count != 1:
-        raise RuntimeError("active_milestone line rewrite failed")
     config_path.write_bytes(updated.encode("utf-8"))
 
 
@@ -3672,7 +3670,7 @@ def advance_active_milestone_on_idle(
     """Check and advance a configured milestone after no_ready_issue."""
     raw = run_command([
         "gh", "api", f"repos/{repo}/milestones?state=all", "--paginate",
-    ])
+    ], timeout=30)
     milestones = parse_issue_array(raw)
     matches = [
         milestone for milestone in milestones
