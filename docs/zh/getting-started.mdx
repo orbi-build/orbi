@@ -5,6 +5,27 @@ provider、一次性 setup，以及一个最小 smoke——证明完整闭环：
 Issue 被领取、实现、测试、开 PR、独立审查、合并。这里的所有命令在
 任何 clone 路径下都能工作——不依赖任何特定机器布局。
 
+
+## 一键安装
+
+新用户只需运行安装器；它会安装 CLI、生成配置并进入交互式 setup：
+
+```bash
+curl -LsSf https://orbi.build/install.sh | bash
+```
+
+担心 `curl | bash` 时可先下载、检查，再执行：
+
+```bash
+curl -LsSf https://orbi.build/install.sh -o install.sh
+less install.sh
+bash install.sh
+```
+
+安装器需要 `git`、`gh` 和 systemd user session；Python 由 uv 管理。
+手动安装时，`orbi setup` 找不到 `orbi.toml` 会从相邻的
+`.orbi.example.toml` 生成，且不会覆盖已有配置。
+
 ## 前提
 
 这些前提由**你自己安装**——`orbi setup` 只**检查**它们（校验
@@ -59,7 +80,6 @@ cd orbi
 在 clone 目录里安装，`--python` 固定生产解释器（3.14）：
 
 ```bash
-uv tool install --force --reinstall --editable --python /usr/bin/python3 .
 orbi --help
 ```
 
@@ -105,9 +125,7 @@ checkout 根目录**没有** `orbi.py`（与 package 同名的 flat 文件
 
 仓库带一份提交的 example；真实配置是本地状态（gitignored）。复制并编辑：
 
-```bash
-cp .orbi.example.toml orbi.toml
-```
+`orbi setup` 会在配置缺失时自动创建 `orbi.toml`。
 
 全部字段（TOML，相对路径相对配置文件所在目录解析）：
 
@@ -336,7 +354,7 @@ python3、uv、systemd user session——缺失会 fail fast 并给出可执行�
 systemd user units 并 enable timer、检查 checkout、报告可选模型 proxy：
 
 ```bash
-orbi setup --config orbi.toml
+orbi setup
 ```
 
 它幂等（重复运行从不创建重复的标签、units 或 timer）且 fail-fast（仓库

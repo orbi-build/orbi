@@ -8,8 +8,12 @@ the checkout, and reports the optional model proxy — in one command,
 with a stable machine-readable result.
 
 ```bash
-orbi setup --config orbi.toml
+orbi setup
 ```
+
+`--config` remains available for a non-default config path. When the default
+`orbi.toml` is absent, setup creates it from the adjacent
+`.orbi.example.toml` and never overwrites an existing file.
 
 Run it once per machine (and once per new task-pool repository). It is
 **idempotent**: re-running it never creates duplicate labels, units or
@@ -164,7 +168,7 @@ orbi setup --config orbi.toml --json
 Success (exit code `0`):
 
 ```bash
-$ orbi setup --config orbi.toml
+$ orbi setup
 setup=ok version=2 base_branch=main
 cli=verified source=/path/to/checkout/src/orbi/__init__.py
 repo=orbi-build/orbi permission=ADMIN default_branch=main labels=8/8

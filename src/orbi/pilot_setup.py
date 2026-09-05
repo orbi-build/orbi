@@ -147,6 +147,21 @@ class SetupError(RuntimeError):
     """A core setup prerequisite or step failed (fail fast)."""
 
 
+def ensure_config(path: Path) -> Path:
+    """Create a local config from the adjacent example when absent."""
+    path = Path(path)
+    if path.exists():
+        return path
+    example = path.parent / ".orbi.example.toml"
+    if not example.is_file():
+        raise SetupError(f"example config missing: {example}")
+    try:
+        path.write_bytes(example.read_bytes())
+    except OSError as exc:
+        raise SetupError(f"config creation failed for {path}: {exc}") from exc
+    return path
+
+
 def load_label_defs(path: Path) -> list[dict]:
     """Parse and validate the repo-managed label definitions.
 

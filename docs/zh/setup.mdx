@@ -6,8 +6,11 @@
 命令，稳定的机器可读结果。
 
 ```bash
-orbi setup --config orbi.toml
+orbi setup
 ```
+
+`--config` 仍可用于指定其他配置路径。默认的 `orbi.toml` 不存在时，setup
+会从相邻的 `.orbi.example.toml` 生成，且不会覆盖已有文件。
 
 每台机器运行一次（每个新任务池仓库再各运行一次）。它**幂等**：重复运行
 从不创建重复的标签、units 或 timer，也从不碰业务 Issue 或业务标签。
@@ -139,7 +142,7 @@ orbi setup --config orbi.toml --json
 成功（退出码 `0`）：
 
 ```bash
-$ orbi setup --config orbi.toml
+$ orbi setup
 setup=ok version=2 base_branch=main
 cli=verified source=/path/to/checkout/src/orbi/__init__.py
 repo=orbi-build/orbi permission=ADMIN default_branch=main labels=8/8

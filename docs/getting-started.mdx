@@ -7,6 +7,28 @@ implemented, tested, opened as a PR, independently reviewed, and
 merged. Every command works at any clone path — nothing here depends on
 a specific machine layout.
 
+
+## One-line installation
+
+New users only need to run the installer; it installs the CLI, creates the
+config, and starts the interactive setup:
+
+```bash
+curl -LsSf https://orbi.build/install.sh | bash
+```
+
+For a reviewable alternative to `curl | bash`, download and inspect first:
+
+```bash
+curl -LsSf https://orbi.build/install.sh -o install.sh
+less install.sh
+bash install.sh
+```
+
+The installer requires `git`, `gh`, and a systemd user session; Python is
+managed by uv. For manual installations, `orbi setup` creates `orbi.toml`
+from the adjacent `.orbi.example.toml` when absent, without overwriting it.
+
 ## Prerequisites
 
 You install these yourself — `orbi setup` only **checks** them
@@ -66,7 +88,6 @@ PEP 621 packaging in `pyproject.toml` maps
 the clone directory, `--python` pins the production interpreter (3.14):
 
 ```bash
-uv tool install --force --reinstall --editable --python /usr/bin/python3 .
 orbi --help
 ```
 
@@ -125,9 +146,7 @@ development/compatibility path.
 The repository ships a committed example; the real config is local state
 (gitignored). Copy it and edit it:
 
-```bash
-cp .orbi.example.toml orbi.toml
-```
+`orbi setup` creates `orbi.toml` automatically when it is absent.
 
 All fields (TOML, relative paths resolve against the config file's
 directory):
@@ -379,7 +398,7 @@ state), installs the systemd user units and enables the timer, checks
 the checkout, and reports the optional model proxy:
 
 ```bash
-orbi setup --config orbi.toml
+orbi setup
 ```
 
 It is idempotent (re-running it never creates duplicate labels, units
