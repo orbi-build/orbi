@@ -1673,7 +1673,6 @@ def build_release_changelog(repo: str, scope: list[int]) -> str:
 def check_release_gates(repo: str, base_branch: str, release_commit: str,
                         release_number: int, *,
                         ci_wait_seconds: float = RELEASE_CI_WAIT_SECONDS,
-                        ci_poll_interval: float = RELEASE_CI_POLL_INTERVAL,
                         on_wait: Callable[[str], None] | None = None,
                         ) -> list[str]:
     """Enforce the pre-release gates (Issue #98) and return their evidence.
@@ -1756,7 +1755,7 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
                 f"{int(ci_wait_seconds)}s (still pending: {detail}) "
                 "— wait timeout, not a CI failure"
             )
-        step = min(ci_poll_interval, ci_wait_seconds - waited)
+        step = min(RELEASE_CI_POLL_INTERVAL, ci_wait_seconds - waited)
         time.sleep(step)
         waited += step
         check_runs = fetch_check_runs()
