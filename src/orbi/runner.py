@@ -218,6 +218,20 @@ RELEASE_SECTION = "## Release"
 # that does not terminate within the deadline is a broken path, never
 # ignorable noise.
 RELEASE_TEST_TIMEOUT_SECONDS = 1800
+# Release CI wait (Issue #268): the release commit is born from the last
+# delivery PR merge, so its CI is almost always still running when the
+# gate checks it — a pending check (queued/in_progress) is an
+# intermediate state, not a failure. The gate waits for completion up to
+# this limit and decides on the FINAL conclusions; a wait timeout is its
+# own failure reason, never reported as a CI failure. The TOML field
+# `release_ci_wait_seconds` overrides the default (the #228 pattern);
+# the default matches RELEASE_TEST_TIMEOUT_SECONDS, the existing release
+# timeout convention.
+RELEASE_CI_WAIT_SECONDS = 1800
+# Poll cadence while waiting: one `release_waiting_ci` journal line plus
+# one progress-comment PATCH per poll — the same 30s GitHub cadence as
+# the live progress heartbeat (PI_HEARTBEAT_SECONDS).
+RELEASE_CI_POLL_INTERVAL = 30.0
 # Repair-Issue GitHub operations are a convenience path, but they still run
 # during terminal failure handling. Bound them so an unavailable API cannot
 # hold the Runner indefinitely (Issue #95).
@@ -503,6 +517,10 @@ def load_config(path: Path) -> dict:
     # bounded by model_wait_dead_seconds only).
     model_wait_probe_url = _model_wait_probe_url(data)
     model_wait_probe_seconds = _model_wait_probe_seconds(data)
+    # Release CI wait (Issue #268): how long the release gate waits for
+    # pending checks on the release commit before failing with its own
+    # timeout reason.
+    release_ci_wait_seconds = _release_ci_wait_seconds(data)
     # Optional Pi provider file (Issue #157): the provider metadata
     # (baseUrl / api / apiKey / models) lives in a separate JSON file in
     # Pi's own `models.json` shape; `orbi.toml` only selects the
@@ -541,6 +559,7 @@ def load_config(path: Path) -> dict:
         "model_wait_dead_seconds": model_wait_dead_seconds,
         "model_wait_probe_url": model_wait_probe_url,
         "model_wait_probe_seconds": model_wait_probe_seconds,
+        "release_ci_wait_seconds": release_ci_wait_seconds,
         "pi_providers": pi_providers_path,
         "pi_providers_data": pi_providers_data,
         # Multi-repo registry (Issue #134): the explicit per-repo entries
@@ -627,6 +646,46 @@ def _model_wait_probe_seconds(data: dict) -> float:
     if number <= 0:
         raise ValueError(
             "model_wait_probe_seconds must be a positive number of seconds "
+            f"(got {value!r})"
+        )
+    return number
+
+
+def _release_ci_wait_seconds(data: dict) -> float:
+    """Load and validate the optional `release_ci_wait_seconds`
+    (Issue #268).
+
+    Omitted -> `RELEASE_CI_WAIT_SECONDS` (default 1800 s, matching the
+    RELEASE_TEST_TIMEOUT_SECONDS convention). Present -> must be a
+    finite positive number (int or float); booleans, zero, negative,
+    NaN/infinity and non-numeric values fail fast at config load with
+    the field name and the concrete reason.
+    """
+    value = data.get("release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS)
+    if isinstance(value, bool):
+        raise ValueError(
+            "release_ci_wait_seconds must be a number, not a boolean "
+            f"(got {value!r})"
+        )
+    if not isinstance(value, (int, float)):
+        raise ValueError(
+            "release_ci_wait_seconds must be a number "
+            f"(got {type(value).__name__} {value!r})"
+        )
+    number = float(value)
+    if math.isnan(number):
+        raise ValueError(
+            "release_ci_wait_seconds must be a finite number of seconds "
+            f"(got {value!r})"
+        )
+    if math.isinf(number):
+        raise ValueError(
+            "release_ci_wait_seconds must be a finite number of seconds "
+            f"(got {value!r})"
+        )
+    if number <= 0:
+        raise ValueError(
+            "release_ci_wait_seconds must be a positive number of seconds "
             f"(got {value!r})"
         )
     return number
@@ -1612,7 +1671,10 @@ def build_release_changelog(repo: str, scope: list[int]) -> str:
 
 
 def check_release_gates(repo: str, base_branch: str, release_commit: str,
-                        release_number: int) -> list[str]:
+                        release_number: int, *,
+                        ci_wait_seconds: float = RELEASE_CI_WAIT_SECONDS,
+                        on_wait: Callable[[str], None] | None = None,
+                        ) -> list[str]:
     """Enforce the pre-release gates (Issue #98) and return their evidence.
 
     Three gates, each checked against GitHub (never against local
@@ -1623,9 +1685,16 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
        carries `ai-in-progress` while the release runs).
     2. CI on the release commit is green: every check run reported by
        the GitHub API for the commit is `completed` with a
-       `success`/`neutral`/`skipped` conclusion (a pending, failing,
-       cancelled or error check fails the gate; no check runs at all
-       is recorded as such, not invented).
+       `success`/`neutral`/`skipped` conclusion (a failing, cancelled
+       or error check fails the gate; no check runs at all is recorded
+       as such, not invented). A PENDING check (queued/in_progress —
+       the release commit is born from the last delivery merge, so its
+       CI is almost always still running, Issue #268) is not a
+       conclusion: the gate polls until every check completes (one
+       `release_waiting_ci` journal line per poll, the wait reflected
+       through `on_wait`), then decides on the final conclusions.
+       Waiting past `ci_wait_seconds` fails with its own timeout
+       reason, explicitly distinct from a CI failure.
     3. No open PR targets the base branch — an open PR against the
        release base would make the released commit non-final.
 
@@ -1651,11 +1720,45 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
         "no open Issue carries "
         f"{IN_PROGRESS_LABEL} / {PR_OPENED_LABEL} / {FIX_NEEDED_LABEL}"
     )
-    raw = run_command([
-        "gh", "api", f"repos/{repo}/commits/{release_commit}/check-runs",
-        "--jq", ".check_runs",
-    ])
-    check_runs = json.loads(raw)
+    def fetch_check_runs() -> list[dict]:
+        return json.loads(run_command([
+            "gh", "api", f"repos/{repo}/commits/{release_commit}/check-runs",
+            "--jq", ".check_runs",
+        ]))
+
+    check_runs = fetch_check_runs()
+    waited = 0.0
+    while True:
+        pending = [
+            f"check '{check.get('name')}' is "
+            f"{check.get('status')}/{check.get('conclusion')}"
+            for check in check_runs if check.get("status") != "completed"
+        ]
+        if not pending:
+            break
+        detail = ", ".join(pending)
+        LOGGER.info(
+            "issue=%s release_waiting_ci commit=%s pending=%s "
+            "waited=%ds limit=%ds",
+            release_number, release_commit, detail,
+            int(waited), int(ci_wait_seconds),
+        )
+        if on_wait is not None:
+            on_wait(
+                f"{detail}; waited {int(waited)}s / "
+                f"{int(ci_wait_seconds)}s"
+            )
+        if waited >= ci_wait_seconds:
+            raise RuntimeError(
+                f"release gate: waiting for CI on the release commit "
+                f"{release_commit} timed out after "
+                f"{int(ci_wait_seconds)}s (still pending: {detail}) "
+                "— wait timeout, not a CI failure"
+            )
+        step = min(RELEASE_CI_POLL_INTERVAL, ci_wait_seconds - waited)
+        time.sleep(step)
+        waited += step
+        check_runs = fetch_check_runs()
     for check in check_runs:
         name = check.get("name")
         status = check.get("status")
@@ -1671,6 +1774,8 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
         evidence.append(
             f"CI on the release commit: {len(check_runs)} check(s) all "
             "success/neutral/skipped"
+            + (f" (waited {int(waited)}s for pending checks)" if waited
+               else "")
         )
     else:
         evidence.append(
@@ -2454,6 +2559,18 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             activity={},
         )
 
+    def on_ci_wait(detail: str) -> None:
+        # Issue #268: the CI wait is reflected in the live progress
+        # comment (pure bypass, Issue #79); the gate itself emits the
+        # `release_waiting_ci` journal line.
+        state = progress()
+        state["phase"] = f"waiting CI: {detail}"
+        _safe_publish(
+            run_id=run_id, issue=number, source_repo=source_repo,
+            role=ROLE_RELEASE,
+            action=lambda: publisher.patch(_progress_body(state)),
+        )
+
     release_commit: str | None = None
     release_test_error: subprocess.CalledProcessError | None = None
     declaration: dict | None = None
@@ -2492,6 +2609,14 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         )
         gate_evidence = check_release_gates(
             source_repo, base_branch, release_commit, number,
+            # Issue #268: the gate waits out pending CI checks on the
+            # release commit; the real load_config always provides the
+            # key, the module constant stays the fallback for hand-built
+            # configs.
+            ci_wait_seconds=config.get(
+                "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
+            ),
+            on_wait=on_ci_wait,
         )
         _safe_publish(
             run_id=run_id, issue=number, source_repo=source_repo,

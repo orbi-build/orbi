@@ -174,9 +174,13 @@ DAG, no priority numbers, no separate queues:
   3. Enforce the pre-release gates: no leftover open `ai-in-progress` /
      `ai-pr-opened` / `ai-fix-needed` Issues (the release Issue itself
      excluded), CI green on the release commit (no check runs passes
-     with explicit evidence), and no open PRs targeting the base
-     branch. A gate that cannot be checked because of a real `gh`
-     failure is a failed gate.
+     with explicit evidence; a pending check is an intermediate state —
+     the gate waits for the final conclusion, one `release_waiting_ci`
+     journal line and one progress-comment update per poll, up to
+     `release_ci_wait_seconds` (default 1800 s); a wait timeout fails
+     with its own reason, never reported as a CI failure), and no open
+     PRs targeting the base branch. A gate that cannot be checked
+     because of a real `gh` failure is a failed gate.
   4. Verify the scope item by item: `gh pr view` must report `MERGED`,
      otherwise `gh issue view` must report `CLOSED`. Checkbox parsing
      is forbidden — every scope item is checked against the live API.

@@ -310,6 +310,61 @@ def test_load_config_rejects_invalid_swallow_probe_seconds(
     assert reason in str(excinfo.value)
 
 
+# --- Issue #268: release_ci_wait_seconds is configurable ---------------------
+
+def test_load_config_defaults_release_ci_wait_seconds(tmp_path):
+    """Issue #268: omitted -> RELEASE_CI_WAIT_SECONDS (1800 s, the same
+    convention as RELEASE_TEST_TIMEOUT_SECONDS): the release gate waits
+    for pending CI checks on the release commit instead of failing on
+    the intermediate state."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    config = runner.load_config(config_path)
+    assert config["release_ci_wait_seconds"] == 1800.0
+
+
+def test_load_config_reads_explicit_release_ci_wait_seconds(tmp_path):
+    """Issue #268: an explicit override is accepted as-is."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrelease_ci_wait_seconds = 900\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["release_ci_wait_seconds"] == 900.0
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        ("true", "not a boolean"),
+        ("false", "not a boolean"),
+        ("0", "positive"),
+        ("-5", "positive"),
+        ("nan", "finite"),
+        ("inf", "finite"),
+        ("-inf", "finite"),
+        ('"300"', "number"),
+    ],
+)
+def test_load_config_rejects_invalid_release_ci_wait_seconds(
+    tmp_path, value, reason,
+):
+    """Issue #268: booleans, zero, negative, NaN/infinity and non-numeric
+    values are rejected at config load with the field name and the
+    concrete reason."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\n'
+        f"release_ci_wait_seconds = {value}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError) as excinfo:
+        runner.load_config(config_path)
+    assert "release_ci_wait_seconds" in str(excinfo.value)
+    assert reason in str(excinfo.value)
+
+
 def test_load_config_parses_repositories_registry(tmp_path):
     """Issue #134: an explicit [[repositories]] section parses into a
     registry of name/path/github/base_branch, with each path resolved
@@ -12102,13 +12157,99 @@ def test_check_release_gates_fails_on_failing_ci(monkeypatch):
         runner.check_release_gates("o/r", "main", "abc123", 99)
 
 
-def test_check_release_gates_fails_on_pending_ci(monkeypatch):
-    make_gate_gh(
-        monkeypatch,
-        check_runs=[("tests", "in_progress", None)],
-    )
-    with pytest.raises(RuntimeError, match="check 'tests' is in_progress/None"):
+def test_check_release_gates_waits_for_pending_ci_then_passes(
+        monkeypatch, caplog):
+    """Issue #268 regression (the 2026-09-04 v0.3.0 scene): the release
+    commit's CI is still running when the gate checks it — a pending
+    check is an intermediate state, not a failure. The gate waits,
+    emits `release_waiting_ci` journal lines, and passes on the FINAL
+    conclusion."""
+    pages = [
+        [("tests", "in_progress", None)],
+        [("tests", "completed", "success")],
+    ]
+
+    def fake_run_command(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            page = pages.pop(0)
+            if not pages:
+                pages.append(page)
+            return json.dumps([
+                {"name": n, "status": s, "conclusion": c}
+                for n, s, c in page
+            ])
+        return "[]"  # the label scans and the open-PR scan
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
+    waits = []
+    with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
+        evidence = runner.check_release_gates(
+            "o/r", "main", "abc123", 99, on_wait=waits.append,
+        )
+    assert evidence == [
+        "no open Issue carries ai-in-progress / ai-pr-opened / ai-fix-needed",
+        "CI on the release commit: 1 check(s) all success/neutral/skipped "
+        "(waited 30s for pending checks)",
+        "no open PR targets main",
+    ]
+    # The wait is observable: one `release_waiting_ci` journal line per
+    # poll and the detail passed to the progress-comment callback.
+    assert "release_waiting_ci" in caplog.text
+    assert "issue=99" in caplog.text
+    assert waits == ["check 'tests' is in_progress/None; waited 0s / 1800s"]
+
+
+def test_check_release_gates_waits_then_fails_on_final_ci_failure(
+        monkeypatch):
+    """Issue #268: waiting must not soften the gate — a check that ends
+    in failure still fails the gate with the existing message, so the
+    release keeps failing fast with the full evidence."""
+    pages = [
+        [("tests", "queued", None)],
+        [("tests", "completed", "failure")],
+    ]
+
+    def fake_run_command(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            page = pages.pop(0)
+            if not pages:
+                pages.append(page)
+            return json.dumps([
+                {"name": n, "status": s, "conclusion": c}
+                for n, s, c in page
+            ])
+        return "[]"
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
+    with pytest.raises(RuntimeError, match="check 'tests' is completed/failure"):
         runner.check_release_gates("o/r", "main", "abc123", 99)
+
+
+def test_check_release_gates_ci_wait_times_out(monkeypatch, caplog):
+    """Issue #268: exceeding the wait limit fails with its own reason —
+    explicitly distinct from a CI failure."""
+    def fake_run_command(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return json.dumps([
+                {"name": "tests", "status": "in_progress",
+                 "conclusion": None},
+            ])
+        return "[]"
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
+    with caplog.at_level(logging.INFO, logger="orbi.bootstrap"), pytest.raises(
+        RuntimeError,
+        match=r"waiting for CI on the release commit abc123 "
+              r"timed out after 7s.*not a CI failure",
+    ):
+        runner.check_release_gates("o/r", "main", "abc123", 99,
+                                   ci_wait_seconds=7.0)
+    # The deadline is exact even when the poll interval exceeds the
+    # remaining budget (the sleep step is capped, never overshot).
+    assert "release_waiting_ci" in caplog.text
 
 
 def test_check_release_gates_reraises_real_gh_failure(monkeypatch):
@@ -12416,11 +12557,15 @@ def test_publish_release_reraises_real_gh_failure(monkeypatch):
 
 def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                              tag_commit=None, release_url="https://github.com/o/r/releases/tag/v0.3.0",
-                             in_progress=False, existing_run_id=None):
+                             in_progress=False, existing_run_id=None,
+                             check_run_pages=None):
     """Full fake environment for `process_release`.
 
     Returns a dict of captured state: edit_issue / comment_issue calls,
     run_command calls, and the monkeypatched pieces.
+    `check_run_pages` (Issue #268) optionally sequences the check-runs
+    endpoint: a list of [(name, status, conclusion)] pages answered in
+    order, the last page repeating when exhausted.
     """
     state = {
         "edits": [], "comments": [], "commands": [],
@@ -12483,6 +12628,14 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             return json.dumps({"number": 5, "title": "v0.3.0",
                                "state": "closed", "open_issues": 0})
         if command[:2] == ["gh", "api"]:
+            if check_run_pages:
+                page = check_run_pages.pop(0)
+                if not check_run_pages:
+                    check_run_pages.append(page)
+                return json.dumps([
+                    {"name": n, "status": s, "conclusion": c}
+                    for n, s, c in page
+                ])
             return json.dumps([
                 {"name": "tests", "status": "completed",
                  "conclusion": "success"},
@@ -12600,6 +12753,73 @@ def test_process_release_success_end_to_end(monkeypatch):
     assert "docs release notes for v0.3.0 synced to base" \
         in comment_kwargs["body"]
     assert state["run_ids"][0] == "a1b2c3d4"
+
+
+def test_process_release_waits_for_pending_ci_and_succeeds(monkeypatch):
+    """Issue #268 regression (the 2026-09-04 v0.3.0 scene): the release
+    always runs right after the last delivery PR merge, so the release
+    commit's CI is almost certainly still `in_progress`. The state
+    machine waits for the final conclusion and completes instead of
+    ai-blocking; the wait is reflected in the live progress comment."""
+    state = make_release_process_env(
+        monkeypatch,
+        check_run_pages=[[("tests", "in_progress", None)],
+                         [("tests", "completed", "success")]],
+    )
+    monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
+
+    def run_publish_actions(**kwargs):
+        # The real `_safe_publish` runs the action; run it so the
+        # progress-comment wait reflection is actually recorded.
+        kwargs["action"]()
+
+    monkeypatch.setattr(runner, "_safe_publish", run_publish_actions)
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    url = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert url == "https://github.com/o/r/releases/tag/v0.3.0"
+    assert not any(k.get("add") == "ai-blocked" for _, k in state["edits"])
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged",
+                                       "remove": "ai-in-progress"})
+    publisher = runner.ProgressPublisher.return_value
+    patched = [c.args[0] for c in publisher.patch.call_args_list]
+    assert any("waiting CI: check 'tests' is in_progress/None" in body
+               for body in patched)
+
+
+def test_process_release_ci_wait_timeout_blocks_with_distinct_reason(
+        monkeypatch):
+    """Issue #268: a CI wait that exceeds the configured limit blocks
+    the release with the timeout reason — explicitly distinct from a CI
+    failure."""
+    state = make_release_process_env(
+        monkeypatch,
+        check_run_pages=[[("tests", "in_progress", None)]],
+    )
+    monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    with pytest.raises(RuntimeError, match="timed out"):
+        runner.process_release(
+            issue,
+            {"repo_dir": Path("/r"), "base_branch": "main",
+             "release_ci_wait_seconds": 0},
+            "o/r",
+        )
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+                                       "remove": "ai-in-progress"})
+    (comment_number, comment_kwargs), = [
+        (n, k) for n, k in state["comments"]
+        if "Orbi release failed (ai-blocked)" in k["body"]
+    ]
+    assert comment_number == 99
+    assert "waiting for CI on the release commit abc123 timed out after 0s" \
+        in comment_kwargs["body"]
+    assert "not a CI failure" in comment_kwargs["body"]
 
 
 def test_create_repair_issue_deduplicates_a_matching_failure_signature(monkeypatch):

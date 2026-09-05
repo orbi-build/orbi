@@ -149,7 +149,11 @@ PR 验收时校验该关键词，缺失即 fail fast。
      base-sync 锁下 fetch）。
   3. 执行发布前门禁：无遗留 open 的 `ai-in-progress` /
      `ai-pr-opened` / `ai-fix-needed` Issue（release Issue 本身除外）、
-     release commit 的 CI 全绿（no check runs passes 带明确证据）、
+     release commit 的 CI 全绿（no check runs passes 带明确证据；
+     pending check 是中间态——门禁等待最终结论，每次轮询一条
+     `release_waiting_ci` journal 行和一次进度评论更新，上限
+     `release_ci_wait_seconds`（默认 1800 秒）；等待超时以独立原因
+     失败，绝不报成 CI 失败）、
      base 分支无 open PR。因真实 `gh` 失败而查不了的门禁算失败门禁。
   4. 逐项验证 scope：`gh pr view` 必须报告 `MERGED`，否则
      `gh issue view` 必须报告 `CLOSED`。禁止解析复选框——每个 scope
