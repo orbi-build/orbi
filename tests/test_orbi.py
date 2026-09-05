@@ -1469,13 +1469,18 @@ def test_doctor_report_reports_dirty_deploy_home(tmp_path, monkeypatch):
     config, installed = _deploy_world(tmp_path, drift=False)
     _fake_doctor_commands(
         monkeypatch,
-        dirty=" M src/orbi/pilot_setup.py\n?? ignored.txt\n",
+        dirty=(
+            " M src/orbi/pilot_setup.py\n"
+            " D deleted.py\n"
+            "R  old.py -> new.py\n"
+            "?? ignored.txt\n"
+        ),
     )
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
     report = orbi.doctor_report(config, installed)
     lines = report.splitlines()
     assert "deploy_home: DRIFT" in lines
-    assert "  files: src/orbi/pilot_setup.py" in lines
+    assert "  files: src/orbi/pilot_setup.py, deleted.py, old.py -> new.py" in lines
     assert "ignored.txt" not in report
     assert (
         "  fix: git -C " + str(config["deploy_home"])

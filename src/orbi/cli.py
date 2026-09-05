@@ -352,7 +352,7 @@ def deploy_home_dirty_files(repo_dir: Path, *, run_command) -> list[str]:
     return [
         line[3:]
         for line in status.splitlines()
-        if len(line) >= 3 and line[:2] != "??" and line[2] == " "
+        if len(line) >= 3 and line[:2] != "??"
     ]
 
 
