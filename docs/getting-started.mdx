@@ -218,9 +218,11 @@ skills = []
 context_files = []
 ```
 
-(`workspace_root` must contain `repo_dir` — the task worktrees land in
-`<workspace_root>/.worktrees/`; unset `prompt` / `prompt_review`
-resolve against `deploy_home`.)
+(Task worktrees land in `<repo_dir>/.worktrees/` — the delivery
+checkout — and `workspace_root` is the directory the implementer agent
+is told contains the repositories it may touch (the
+`{{WORKSPACE_ROOT}}` prompt placeholder); unset `prompt` /
+`prompt_review` resolve against `deploy_home`.)
 
 Everything else — steps 4–8 (model provider, `orbi setup`, the manual
 tick, the smoke walkthrough, the timers) — is unchanged: `orbi setup`

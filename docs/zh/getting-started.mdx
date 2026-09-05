@@ -190,9 +190,10 @@ skills = []
 context_files = []
 ```
 
-（`workspace_root` 必须包含 `repo_dir`——任务 worktree 落在
-`<workspace_root>/.worktrees/`；未设置的 `prompt` / `prompt_review`
-相对 `deploy_home` 解析。）
+（任务 worktree 落在交付 checkout 的 `<repo_dir>/.worktrees/`；
+`workspace_root` 是告诉实现者 agent「可修改仓库所在目录」的路径
+（`{{WORKSPACE_ROOT}}` prompt 占位符）；未设置的 `prompt` /
+`prompt_review` 相对 `deploy_home` 解析。）
 
 其余一切——第 4–8 步（模型 provider、`orbi setup`、手工 tick、smoke
 walkthrough、timers）——不变：`orbi setup` 从 `deploy_home` 读标签、

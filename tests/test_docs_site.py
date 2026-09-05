@@ -313,6 +313,10 @@ def test_docs_getting_started_documents_the_external_single_repo_mode():
     assert "deploy_home" in example, (
         ".orbi.example.toml must carry the deploy_home field"
     )
+    assert "<repo_dir>/.worktrees/" in text, (
+        "task worktrees must be documented as landing in the delivery "
+        "checkout's .worktrees (worktree_path), never in workspace_root"
+    )
 
 
 def test_docs_getting_started_documents_the_model_provider_configuration():

@@ -228,6 +228,10 @@ def test_chinese_getting_started_documents_the_external_single_repo_mode():
     assert "Issue #330" in text, (
         "the external mode must cite its source issue (#330)"
     )
+    assert "<repo_dir>/.worktrees/" in text, (
+        "Chinese getting-started must document the task worktree "
+        "location in the delivery checkout like the English page"
+    )
 
 
 def test_chinese_getting_started_documents_the_model_provider_configuration():
