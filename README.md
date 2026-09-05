@@ -26,7 +26,7 @@ git clone https://github.com/orbi-build/orbi.git && cd orbi
 uv tool install --force --reinstall --editable --python /usr/bin/python3 .
 # 3. create configuration (only the example is committed; maintain the real configuration locally)
 cp .orbi.example.toml orbi.toml
-# 4. run one-time setup (gh auth, labels, systemd units, and checkout checks; idempotent)
+# 4. run one-time setup (checks prior gh auth, labels, systemd units, and checkout; idempotent)
 orbi setup --config orbi.toml
 # 5. manually run one tick (for initial verification; the timer schedules normal runs)
 PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
@@ -34,9 +34,20 @@ PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
 orbi doctor --config orbi.toml
 ```
 
-See [Getting started](docs/getting-started.mdx) for complete prerequisites (Python 3.14, Pi, git + gh, systemd, and a model endpoint) and a from-scratch smoke walkthrough. See [One-time setup](docs/setup.mdx) for the complete setup output contract and failure evidence.
+### Ready check (before setup)
 
-There are two deployment modes (Issue #330): **self-hosted mode** (the default, with `repo_dir` pointing to the Orbi checkout itself) and **external single-repository mode** (`deploy_home` points to the Orbi checkout and `repo_dir` points to a user repository X—after Orbi is installed once, it can target any user repository, and an `ai-ready` Issue in X will be developed). See the External single-repo mode section of [Getting started](docs/getting-started.mdx) for configuration differences.
+- `uv` installed: `uv --version`
+- Pi installed and a model provider works: `pi --version`, then
+  `pi --print "reply with the single word: ok"`
+- GitHub CLI authenticated: run `gh auth login` once, then verify with
+  `gh auth status`
+- A systemd user session is available: `systemctl --user status`
+
+Choose the configuration mode in [Getting started](docs/getting-started.mdx):
+**bootstrap mode** uses this checkout as `repo_dir`; [External single-repo
+mode](docs/getting-started.mdx#external-single-repo-mode-deploy_home) uses
+this checkout as `deploy_home` and a foreign user repository as `repo_dir`.
+See [One-time setup](docs/setup.mdx) for the setup output contract.
 
 ## What it does
 
