@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import shutil
 import tomllib
 from pathlib import Path
@@ -426,6 +427,24 @@ def timer_next_trigger(list_timers_output: str, unit_name: str) -> str:
     return "-"
 
 
+def unit_is_enabled(run_command, instance: str) -> bool:
+    """Whether the systemd unit is enabled.
+
+    ``systemctl --user is-enabled`` exits non-zero with the state word on
+    stdout (``disabled``, ``masked``, ...) for a unit that is NOT enabled —
+    that non-zero exit is documented systemd behavior, not a command
+    failure (Issue #339). A genuine systemctl failure (no user bus: empty
+    stdout, error on stderr) re-raises so setup fails fast.
+    """
+    try:
+        state = run_command(["systemctl", "--user", "is-enabled", instance])
+    except subprocess.CalledProcessError as exc:
+        state = (exc.stdout or "").strip()
+        if state not in ("disabled", "masked", "static", "indirect"):
+            raise
+    return state == "enabled"
+
+
 def install_units_step(repo_dir: Path, installed_dir: Path | None,
                        *, max_concurrency: int = len(systemd_deploy.TIMER_INSTANCES),
                        run_command) -> dict:
@@ -453,10 +472,14 @@ def install_units_step(repo_dir: Path, installed_dir: Path | None,
     ])
     instances = {}
     for instance in systemd_deploy.TIMER_INSTANCES:
+        try:
+            enabled = unit_is_enabled(run_command, instance)
+        except subprocess.CalledProcessError as exc:
+            raise SetupError(
+                f"systemctl is-enabled failed for {instance}: {exc}"
+            ) from exc
         instances[instance] = {
-            "enabled": run_command([
-                "systemctl", "--user", "is-enabled", instance,
-            ]) == "enabled",
+            "enabled": enabled,
             "active": run_command([
                 "systemctl", "--user", "show", "-p", "ActiveState",
                 "--value", instance,
