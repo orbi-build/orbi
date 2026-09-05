@@ -3,7 +3,8 @@
 The workflow (`.github/workflows/ci-failure-issue.yml`) is the runtime entry
 of the CI failure triage: it reacts to the COMPLETED runs of the `CI`
 workflow (`on: workflow_run`), holds the minimal explicit permissions
-(`actions: read`, `contents: read`, `issues: write`) and runs the triage
+(`actions: read`, `contents: read`, `issues: write`, `pull-requests: read`)
+and runs the triage
 script with the workflow token. These tests fail when the workflow is
 missing, stops watching the CI workflow, gains extra permissions, or can
 fake success (continue-on-error / `|| true`) — the review of the previous
@@ -74,9 +75,10 @@ def test_workflow_name_is_not_ci():
 
 def test_minimal_explicit_permissions():
     assert load_workflow().get("permissions") == {
-        "actions": "read",   # read the completed CI run's jobs
-        "contents": "read",  # check out the triage script
-        "issues": "write",   # create/update/close the bug Issue
+        "actions": "read",        # read the completed CI run's jobs
+        "contents": "read",       # check out the triage script
+        "issues": "write",        # create/update/close the bug Issue
+        "pull-requests": "read",  # resolve the run's PR (commits/{sha}/pulls)
     }
 
 
