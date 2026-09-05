@@ -13150,6 +13150,13 @@ def git_out(work: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def test_git_out_helper_fails_fast_on_nonzero_exit(tmp_path):
+    """The helper must fail fast (no silent swallow) when git exits
+    non-zero — the same contract as the other git smoke helpers."""
+    with pytest.raises(AssertionError, match=r"git .* failed rc=128"):
+        git_out(tmp_path, "rev-parse", "no-such-ref")
+
+
 def fake_gh_release_view(monkeypatch, *, body: str, tag: str = "v0.4.0",
                          raise_not_found: bool = False):
     """Answer `gh release view` with canned JSON; everything else goes to
@@ -13658,6 +13665,18 @@ def test_current_latest_release_slug_fails_fast_without_an_en_release_group():
         )
 
 
+def test_current_latest_release_slug_fails_fast_when_en_lacks_a_release_group():
+    """An en language that exists but carries no Releases group: the
+    group loop runs and exhausts, then the lookup fails fast."""
+    config_text = release_docs_fixture_config()
+    config = json.loads(config_text)
+    config["navigation"]["languages"][0]["groups"] = [
+        {"group": "Getting Started", "pages": ["index"]},
+    ]
+    with pytest.raises(RuntimeError, match="no English Releases group"):
+        runner.current_latest_release_slug(json.dumps(config))
+
+
 def test_update_release_navigation_fails_fast_when_only_one_group_exists():
     config_text = release_docs_fixture_config()
     config = json.loads(config_text)
@@ -13713,6 +13732,9 @@ def test_sync_release_docs_fails_fast_when_the_body_is_not_a_string(
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
         )
+    # The fall-through path answers real git commands (sync_release_docs
+    # never reaches it in this test — the body check fails first).
+    assert bad_body(["git", "rev-parse", "HEAD"], cwd=work)
 
 
 def test_sync_release_docs_fails_fast_when_docs_json_is_missing(
