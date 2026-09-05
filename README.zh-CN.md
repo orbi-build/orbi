@@ -30,11 +30,19 @@ Pi 在隔离 worktree 中完成开发、测试并创建 PR，再经过独立审�
 ## 快速开始
 
 ```bash
-# 1. clone
 git clone https://github.com/orbi-build/orbi.git && cd orbi
-# 2. 安装 CLI（editable uv tool 安装，从 orbi 仓库安装一次；两种部署模式共用）
 uv tool install --force --reinstall --editable --python /usr/bin/python3 .
-# 3. 创建配置（仓库只提交 example，真实配置本地维护）
+```
+
+### 就绪检查（setup 之前）
+
+- `uv`：`uv --version`；Pi 和其 provider：`pi --version`，然后运行 `pi --print "reply with the single word: ok"`
+- GitHub CLI：先运行一次 `gh auth login`，再验证 `gh auth status`
+- systemd user session：`systemctl --user status`
+
+按 [Getting started](docs/zh/getting-started.mdx) 选择模式：自举模式使用本 checkout 作为 `repo_dir`；[External single-repo mode](docs/zh/getting-started.mdx#external-single-repo-mode-deploy_home) 使用本 checkout 作为 `deploy_home`，外部仓库作为 `repo_dir`。
+
+```bash
 cp .orbi.example.toml orbi.toml
 # 4. 一次性 setup（检查既有 gh auth、labels、systemd units、checkout；幂等）
 orbi setup --config orbi.toml
@@ -43,19 +51,6 @@ PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
 # 6. 验证部署健康
 orbi doctor --config orbi.toml
 ```
-
-### 就绪检查（setup 之前）
-
-- 已安装 `uv`：`uv --version`
-- 已安装 Pi 且模型 provider 可用：`pi --version`，然后运行
-  `pi --print "reply with the single word: ok"`
-- GitHub CLI 已认证：先运行一次 `gh auth login`，再用 `gh auth status` 验证
-- 有可用的 systemd user session：`systemctl --user status`
-
-按 [Getting started](docs/zh/getting-started.mdx) 选择配置模式：**自举模式**使用
-本 Orbi checkout 作为 `repo_dir`；[External single-repo mode](docs/zh/getting-started.mdx#external-single-repo-mode-deploy_home)
-使用本 Orbi checkout 作为 `deploy_home`，并把 `repo_dir` 指向外部用户仓库。
-[One-time setup](docs/zh/setup.mdx) 说明 setup 的输出契约。
 
 ## 它能做什么
 

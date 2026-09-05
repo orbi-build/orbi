@@ -184,6 +184,9 @@ def test_homepage_quickstart_lists_ready_prerequisites_and_checks():
         ):
             assert requirement in quickstart, f"{path.name} omits prerequisite {requirement!r}"
             assert check in quickstart, f"{path.name} omits readiness check {check!r}"
+        assert quickstart.index("### ") < quickstart.index("orbi setup"), (
+            f"{path.name} shows the setup command before its ready check"
+        )
 
 
 def test_homepage_quickstart_links_both_configuration_modes():

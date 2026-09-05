@@ -20,11 +20,19 @@ This repository is its own evidence: 99 of the most recent 106 merged PRs were d
 ## Quick start
 
 ```bash
-# 1. clone
 git clone https://github.com/orbi-build/orbi.git && cd orbi
-# 2. install the CLI (editable uv tool installation; install once from the Orbi repository; shared by both deployment modes)
 uv tool install --force --reinstall --editable --python /usr/bin/python3 .
-# 3. create configuration (only the example is committed; maintain the real configuration locally)
+```
+
+### Ready check (before setup)
+
+- `uv`: `uv --version`; Pi and its provider: `pi --version`, then `pi --print "reply with the single word: ok"`
+- GitHub CLI: run `gh auth login` once, then verify `gh auth status`
+- systemd user session: `systemctl --user status`
+
+Choose the mode in [Getting started](docs/getting-started.mdx): bootstrap uses this checkout as `repo_dir`; [External single-repo mode](docs/getting-started.mdx#external-single-repo-mode-deploy_home) uses it as `deploy_home` and a foreign repository as `repo_dir`.
+
+```bash
 cp .orbi.example.toml orbi.toml
 # 4. run one-time setup (checks prior gh auth, labels, systemd units, and checkout; idempotent)
 orbi setup --config orbi.toml
@@ -33,21 +41,6 @@ PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
 # 6. verify deployment health
 orbi doctor --config orbi.toml
 ```
-
-### Ready check (before setup)
-
-- `uv` installed: `uv --version`
-- Pi installed and a model provider works: `pi --version`, then
-  `pi --print "reply with the single word: ok"`
-- GitHub CLI authenticated: run `gh auth login` once, then verify with
-  `gh auth status`
-- A systemd user session is available: `systemctl --user status`
-
-Choose the configuration mode in [Getting started](docs/getting-started.mdx):
-**bootstrap mode** uses this checkout as `repo_dir`; [External single-repo
-mode](docs/getting-started.mdx#external-single-repo-mode-deploy_home) uses
-this checkout as `deploy_home` and a foreign user repository as `repo_dir`.
-See [One-time setup](docs/setup.mdx) for the setup output contract.
 
 ## What it does
 
