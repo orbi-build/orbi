@@ -3794,6 +3794,35 @@ def rewrite_active_milestone_line(config_path: Path, new_value: str) -> None:
     config_path.write_bytes(updated.encode("utf-8"))
 
 
+def arm_release_ticket(repo: str, active_milestone: str) -> None:
+    """Arm one open release ticket for the current milestone on idle.
+
+    This is an idle-path bypass: callers deliberately catch failures so a
+    GitHub label operation cannot change the outcome of the main tick.
+    """
+    search = (
+        f"label:{RELEASE_LABEL} -label:{READY_LABEL} "
+        f'milestone:"{active_milestone}"'
+    )
+    raw = run_command([
+        "gh", "issue", "list", "--repo", repo, "--state", "open",
+        "--search", search, "--json", "number", "--limit", "200",
+    ], timeout=30)
+    issues = parse_issue_array(raw)
+    if not issues:
+        return
+    number = issues[0].get("number")
+    if not isinstance(number, int):
+        raise RuntimeError(f"release ticket has invalid issue number: {number!r}")
+    run_command([
+        "gh", "issue", "edit", str(number), "--repo", repo,
+        "--add-label", READY_LABEL,
+    ], timeout=30)
+    LOGGER.info(
+        "release_ticket_armed issue=#%s milestone=%s", number, active_milestone,
+    )
+
+
 def advance_active_milestone_on_idle(
     repo: str, active_milestone: str, config_path: Path,
 ) -> tuple[str, str | None]:
@@ -8526,10 +8555,21 @@ def main(argv: list[str] | None = None) -> int:
                 "source_repos=%s outcome=no_ready_issue",
                 config["source_repos"],
             )
-            # Issue #274: this is the sole trigger for validating and
-            # advancing the configured milestone. An absent setting keeps
-            # the historical idle path with no extra API request.
+            # Issue #385: arm a release ticket as a pure bypass. A failed
+            # label operation must not change the idle outcome.
             if config["active_milestone"] is not None:
+                try:
+                    arm_release_ticket(
+                        config["source_repos"][0],
+                        config["active_milestone"],
+                    )
+                except Exception:
+                    LOGGER.exception(
+                        "release_ticket_arm_failed repo=%s milestone=%s",
+                        config["source_repos"][0],
+                        config["active_milestone"],
+                    )
+                # Issue #274: validate and advance only after the arm attempt.
                 advance_active_milestone_on_idle(
                     config["source_repos"][0],
                     config["active_milestone"],
