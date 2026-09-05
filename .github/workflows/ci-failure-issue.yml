@@ -1,0 +1,55 @@
+# CI Failure Issue (Issue #106): when the CI workflow (`.github/workflows/
+# ci.yml`) fails on a pull_request or a push to main, file ONE deduplicated
+# `bug` + `ai-ready` Issue per failed job — the Muyan Pilot ready queue picks
+# it up and delivers the fix through its normal single-Issue / single-PR /
+# independent-review contract. When CI recovers, the matching Issue gets the
+# recovery run evidence and is closed.
+#
+# Runtime contract (verified against the official docs and the live API):
+# `on: workflow_run` reacts ONLY to completed runs of the workflow named
+# `CI` — the anti-recursion anchor, because Issue create/update/close emit
+# no CI workflow_run. The triage logic itself lives in `ci_failure_triage.py`
+# (unit-tested against the real REST shapes); this workflow is the thin
+# entry: checkout, the pinned Python 3.14 (the CI convention), and the
+# script — the default `bash -e` shell propagates a triage failure as a red
+# job (no fake success). The Issue body is built only from the event payload
+# and the jobs API response; no secret or token ever reaches it.
+#
+# Minimal permission set, declared explicitly: `actions: read` (read the
+# completed CI run's jobs), `contents: read` (check out the triage script),
+# `issues: write` (create/update/close the bug Issue), `pull-requests: read`
+# (the triage resolves a pull_request run's PR number via
+# `GET commits/{sha}/pulls`, whose documented fine-grained permission is
+# "Pull requests" read — verified against the official REST docs; on this
+# public repo the endpoint would also answer without it via the
+# public-resources clause, but the declared set must match the official
+# requirement, not the visibility exception).
+name: CI Failure Issue
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the triage script
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14 (the CI convention)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Triage the completed CI run (create / update / close the bug Issue)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ci_failure_triage.py

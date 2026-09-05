@@ -646,6 +646,7 @@ ALLOWED_PRAGMA_FILES = (
     "monitoring/prometheus/orbi-exporter.py",
     "coverage_gate.py",
     "diff_coverage_gate.py",
+    "ci_failure_triage.py",
     "tests/test_cli_install.py",
 )
 
