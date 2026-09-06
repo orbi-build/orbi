@@ -156,18 +156,17 @@ def sha256_hex(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def render_unit_template(template_text: str, repo_dir: Path) -> str:
-    """Substitute the deployment checkout path into a unit template.
-
-    The repo templates are machine-independent: the single
-    machine-specific value (the deployment checkout path) is carried as
-    the ``{{ORBI_REPO_DIR}}`` placeholder and replaced here with the
-    checkout's resolved absolute path. A template without the placeholder
-    is returned unchanged.
-    """
-    return template_text.replace(
+def render_unit_template(template_text: str, repo_dir: Path,
+                         unit_name: str | None = None) -> str:
+    """Render a template for the deployment's installed unit name."""
+    rendered = template_text.replace(
         REPO_DIR_PLACEHOLDER, str(Path(repo_dir).resolve()),
     )
+    if unit_name is not None:
+        rendered = rendered.replace(
+            "orbi@%i.service", f"orbi-{unit_name}@%i.service",
+        )
+    return rendered
 
 
 def unit_status(repo_dir: Path, installed_dir: Path,
@@ -192,7 +191,7 @@ def unit_status(repo_dir: Path, installed_dir: Path,
             # compare against the rendered form — otherwise a clean
             # install would always look drifted.
             rendered = render_unit_template(
-                repo_path.read_text(encoding="utf-8"), repo_dir,
+                repo_path.read_text(encoding="utf-8"), repo_dir, unit_name,
             )
             repo_sha = hashlib.sha256(
                 rendered.encode("utf-8"),
@@ -406,7 +405,7 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
         template_text = (
             repo_unit_dir(repo_dir) / template_name
         ).read_text(encoding="utf-8")
-        rendered = render_unit_template(template_text, repo_dir)
+        rendered = render_unit_template(template_text, repo_dir, unit_name)
         (installed_dir / name).write_bytes(rendered.encode("utf-8"))
     run_command(["systemctl", "--user", "daemon-reload"])
     for instance in instances[:max_concurrency]:

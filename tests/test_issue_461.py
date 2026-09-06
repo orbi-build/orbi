@@ -13,7 +13,9 @@ def test_named_units_are_distinct_and_install_without_touching_default(tmp_path)
     (systemd / "orbi@.service").write_text(
         '[Service]\nEnvironment="ORBI_CONFIG={{ORBI_REPO_DIR}}/orbi.toml"\n'
     )
-    (systemd / "orbi@.timer").write_text("[Timer]\nOnCalendar=hourly\n")
+    (systemd / "orbi@.timer").write_text(
+        "[Timer]\nOnCalendar=hourly\nUnit=orbi@%i.service\n"
+    )
     installed = tmp_path / "units"
     calls = []
 
@@ -26,6 +28,9 @@ def test_named_units_are_distinct_and_install_without_touching_default(tmp_path)
     assert (installed / "orbi-website@.timer").is_file()
     assert not (installed / "orbi@.service").exists()
     assert ["systemctl", "--user", "enable", "--now", "orbi-website@1.timer"] in calls
+    assert "Unit=orbi-website@%i.service" in (
+        installed / "orbi-website@.timer"
+    ).read_text()
     systemd_deploy.check_unit_drift(repo, installed, "website")
 
 
