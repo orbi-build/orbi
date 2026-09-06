@@ -2937,47 +2937,41 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
     step by step, each step idempotent so a restart resumes the same
     run (same run id, same worktree) from the top:
 
-    1. Claim (`ai-in-progress`; a restart reuses the existing run id
-       from the worktree — the same resume rule as normal tasks).
-    2. Strictly parse the `## Release` declaration from the Issue
+    1. Strictly parse the `## Release` declaration from the Issue
        body (version, base_branch, test_command, scope or
        scope_from_milestone — exactly one of the two, Issue #253).
-    3. Freeze the base — the release commit is exactly
+    2. Freeze the base — the release commit is exactly
        `origin/<base_branch>` (fetched under the base-sync lock).
-    4. Enforce the pre-release gates (`check_release_gates`).
-    5. When `scope_from_milestone` is declared, derive the scope from
+    3. Enforce the pre-release gates (`check_release_gates`).
+    4. When `scope_from_milestone` is declared, derive the scope from
        the Milestone (`derive_release_scope_from_milestone`): closed
        Issues + merged PRs; open items are surfaced as evidence, never
        released. Then verify the scope item by item
        (`verify_release_scope`).
-    6. Run the declared test command in a clean worktree at the
+    5. Run the declared test command in a clean worktree at the
        release commit (`timeout`-wrapped, Issue #95).
-    7. Tag: the remote tag must not exist or must point EXACTLY at
+    6. Tag: the remote tag must not exist or must point EXACTLY at
        the release commit (a mismatch fails — an existing tag is
        never moved); otherwise create an annotated tag at the release
        commit and push it with a plain push (never `--force`).
-    8. Publish the GitHub Release (idempotent) with the full
+    7. Publish the GitHub Release (idempotent) with the full
        verification evidence.
-    9. Sync the docs-site Release notes (Issue #275): generate
+    8. Sync the docs-site Release notes (Issue #275): generate
        `docs/release-<version>.mdx` + `docs/zh/release-<version>.mdx`
-       from the published Release body, insert the new version at the
-       head of the `Releases`/`发布` navigation groups in
-       `docs/docs.json` (both languages), move the `(latest)` title
-       marker from the previous latest page, and commit + push those
-       docs changes to the base branch directly (the release path has
-       no PR). Idempotent: an identical existing page is neither
-       regenerated nor overwritten; anything else fails fast.
-    10. Success: `ai-merged` (terminal, the Issue is closed, the
-        success comment carries the evidence).
-    11. Close the Milestone whose title is EXACTLY the released
-        version (Issue #214): closed when it has 0 open Issues
-        (idempotent when already closed); fail fast — never a silent
-        skip, never a different Milestone — when no Milestone carries
-        that exact title or open Issues remain.
-    12. Any failure: `ai-blocked` ALONE (no automatic retry — a
-         release is a human decision point), the failure comment
-         carries the run marker and the concrete reason, and the
-         handled failure returns cleanly so the tick does not crash.
+       from the published Release body, update both navigation groups,
+       move the `(latest)` marker, and commit + push those docs changes
+       to the base branch directly. Idempotent: identical pages are not
+       overwritten; anything else fails fast.
+    9. Apply `ai-merged` and close the release Issue (terminal delivery
+       transition).
+    10. Close the Milestone whose title is EXACTLY the released
+        version (Issue #214), then write the success comment (release
+        URL, tag, commit, evidence, docs-site Release notes evidence,
+        Milestone evidence). Exact title match only; close it only when
+        it has 0 open Issues; already-closed is idempotent. A missing
+        Milestone or remaining open Issues fails fast. Any failure is
+        `ai-blocked` ALONE, with a concrete failure comment, and the
+        handled failure returns cleanly so the tick does not crash.
     """
     number = int(issue["number"])
     title = issue["title"]
