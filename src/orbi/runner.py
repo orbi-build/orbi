@@ -3270,9 +3270,20 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         run_command(
             ["gh", "issue", "close", str(number), "--repo", source_repo],
         )
-        milestone_evidence = close_release_milestone(
-            source_repo, tag,
-        )
+        try:
+            milestone_evidence = close_release_milestone(
+                source_repo, tag,
+            )
+        except Exception as exc:
+            # The tag and GitHub Release are already published at this point.
+            # Milestone closure is evidence only and must not rewrite that
+            # irreversible release result as ai-blocked.
+            LOGGER.exception(
+                "issue=%s release_milestone_evidence_failed", number,
+            )
+            milestone_evidence = (
+                "milestone evidence unavailable: " + str(exc)
+            )
         comment_issue(
             number, repo=source_repo,
             body=release_success_comment_body(

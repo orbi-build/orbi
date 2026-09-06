@@ -14209,13 +14209,13 @@ def test_create_repair_issue_creates_a_reproducible_ready_bug(monkeypatch):
         fake_run(["unexpected"])
 
 
-def test_process_release_milestone_failure_fails_fast_and_blocks(monkeypatch):
+def test_process_release_milestone_failure_keeps_release_successful(monkeypatch):
     state = make_release_process_env(monkeypatch)
     real = runner.run_command
 
     def milestone_failing(command, **kwargs):
         # The v0.3.0 Milestone still has an open Issue: the close must
-        # fail fast and the release must not be reported as successful.
+        # fail fast, but the already-published release remains successful.
         if command[:2] == ["gh", "api"] and "?state=all" in command[2]:
             return json.dumps([
                 {"number": 5, "title": "v0.3.0", "state": "open",
@@ -14236,20 +14236,21 @@ def test_process_release_milestone_failure_fails_fast_and_blocks(monkeypatch):
     result = runner.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
-    assert result == ""
+    assert result == "https://github.com/o/r/releases/tag/v0.3.0"
     commands = [c for c, _ in state["commands"]]
     # The release itself succeeded (tag pushed, Release published,
     # Issue closed with ai-merged)...
     assert ["gh", "issue", "close", "99", "--repo", "o/r"] in commands
     assert any(k.get("add") == "ai-merged" for _, k in state["edits"])
-    # ...but the Milestone close failed: no PATCH was issued, the run
-    # failed fast and the terminal state is ai-blocked with the
-    # concrete reason on the Issue.
+    # ...but the Milestone close failed: no PATCH was issued. The failure
+    # is retained as evidence in the success comment and does not rewrite
+    # the terminal state.
     assert not [c for c in commands if "PATCH" in c]
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged",
                                        "remove": "ai-in-progress"})
     (comment_number, comment_kwargs), = state["comments"]
-    assert "Orbi release failed (ai-blocked)" in comment_kwargs["body"]
+    assert "Orbi released" in comment_kwargs["body"]
+    assert "milestone evidence unavailable" in comment_kwargs["body"]
     assert "Milestone #5" in comment_kwargs["body"]
     assert "#101" in comment_kwargs["body"]
 
