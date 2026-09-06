@@ -372,9 +372,14 @@ def install_units_command(config: dict, installed_dir: Path | None) -> str:
     # Issue #330: the unit templates live in the deployment home (they
     # render the home path into {{ORBI_REPO_DIR}}), never in the delivery
     # checkout.
+    kwargs = {
+        "max_concurrency": config["max_concurrency"],
+        "run_command": run_command,
+    }
+    if config.get("unit_name") is not None:
+        kwargs["unit_name"] = config["unit_name"]
     result = systemd_deploy.install_units(
-        config["deploy_home"], installed_dir,
-        max_concurrency=config["max_concurrency"], run_command=run_command,
+        config["deploy_home"], installed_dir, **kwargs,
     )
     lines = [
         (
@@ -382,7 +387,7 @@ def install_units_command(config: dict, installed_dir: Path | None) -> str:
             f"installed_dir={result['installed_dir']}"
         ),
     ]
-    for name in systemd_deploy.UNIT_NAMES:
+    for name in systemd_deploy.unit_names(config.get("unit_name")):
         entry = result["units"][name]
         lines.append(f"unit={name} sha256={entry['sha256']}")
     return "\n".join(lines)
@@ -441,7 +446,12 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
         lines.append(f"transport: FAILED {exc}")
     # Issue #330: unit drift is compared against the deployment home's
     # templates (the same comparison the pre-start check uses).
-    status = systemd_deploy.unit_status(config["deploy_home"], installed_dir)
+    if config.get("unit_name") is None:
+        status = systemd_deploy.unit_status(config["deploy_home"], installed_dir)
+    else:
+        status = systemd_deploy.unit_status(
+            config["deploy_home"], installed_dir, config["unit_name"],
+        )
     drifted = [entry for entry in status if entry["drifted"]]
     if drifted:
         lines.append("unit_drift: DRIFT")
@@ -503,8 +513,8 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
     # `systemctl show` rejects the bare template name, and `journalctl
     # -u` with a template-name glob fails when no instance exists —
     # instance names always work).
-    for unit in (*systemd_deploy.TIMER_INSTANCES,
-                 *systemd_deploy.SERVICE_INSTANCES):
+    for unit in (*systemd_deploy.timer_instances(config.get("unit_name")),
+                 *systemd_deploy.service_instances(config.get("unit_name"))):
         state = run_command([
             "systemctl", "--user", "show", "-p", "ActiveState",
             "--value", unit,
@@ -518,7 +528,7 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
         current = current_issue(repo)
         lines.append(f"  current: {format_issue(current) if current else '-'}")
     journal_args: list[str] = ["journalctl", "--user"]
-    for unit in systemd_deploy.SERVICE_INSTANCES:
+    for unit in systemd_deploy.service_instances(config.get("unit_name")):
         journal_args.extend(["-u", unit])
     journal = run_command(journal_args + [
         "-n", str(JOURNAL_LINES), "--no-pager",

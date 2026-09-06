@@ -1155,8 +1155,9 @@ def test_run_setup_capacity_two_enables_both_timers(tmp_path):
     repo, installed, state = make_run_state(tmp_path)
     fake_run, calls = fake_run_factory(state)
     config = runner.load_config(make_config(tmp_path, repo, max_concurrency=2))
+    config["unit_name"] = "website"
     result = pilot_setup.run_setup(config, installed, run_command=fake_run)
-    for instance in systemd_deploy.TIMER_INSTANCES:
+    for instance in systemd_deploy.timer_instances("website"):
         assert result["timer"]["instances"][instance]["enabled"] is True
         assert result["timer"]["instances"][instance]["active"] is True
         assert ["systemctl", "--user", "enable", "--now", instance] in calls

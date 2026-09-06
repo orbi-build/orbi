@@ -1190,24 +1190,28 @@ def test_install_units_command_uses_deploy_home(monkeypatch, tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     config["deploy_home"] = home
+    config["unit_name"] = "website"
     installed = tmp_path / "elsewhere"
     captured = {}
 
-    def fake_install(repo_dir, installed_dir, *, max_concurrency, run_command):
+    def fake_install(repo_dir, installed_dir, *, max_concurrency, run_command,
+                     unit_name=None):
         captured["repo_dir"] = Path(repo_dir)
+        captured["unit_name"] = unit_name
         return {
             "commit": "0123456789abcdef0123456789abcdef01234567",
             "installed_dir": installed_dir,
             "units": {
                 name: {"installed_path": installed_dir / name,
                        "sha256": f"hash-{name}"}
-                for name in systemd_deploy.UNIT_NAMES
+                for name in systemd_deploy.unit_names(unit_name)
             },
         }
 
     monkeypatch.setattr(systemd_deploy, "install_units", fake_install)
     orbi.install_units_command(config, installed)
     assert captured["repo_dir"] == home
+    assert captured["unit_name"] == "website"
     assert captured["repo_dir"] != config["repo_dir"]
 
 
@@ -1223,12 +1227,14 @@ def test_doctor_report_routes_home_checks_to_deploy_home(
     home = tmp_path / "home"
     home.mkdir()
     config["deploy_home"] = home
+    config["unit_name"] = "website"
     _fake_doctor_commands(monkeypatch)
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
     seen = {}
 
-    def spy_unit_status(repo_dir, installed_dir):
+    def spy_unit_status(repo_dir, installed_dir, unit_name=None):
         seen["units"] = Path(repo_dir)
+        seen["unit_name"] = unit_name
         return []
 
     def spy_cli_source(expected_repo_dir):
@@ -1242,6 +1248,7 @@ def test_doctor_report_routes_home_checks_to_deploy_home(
     monkeypatch.setattr(cli_source, "drift_line", lambda source: None)
     report = orbi.doctor_report(config, installed)
     assert seen["units"] == home
+    assert seen["unit_name"] == "website"
     assert seen["cli"] == home
     assert home != config["repo_dir"]
     assert "unit_drift: clean" in report.splitlines()

@@ -73,6 +73,21 @@ class UnitConflictError(RuntimeError):
     """An existing unit belongs to a different deployment checkout."""
 
 
+def unit_names(unit_name: str | None = None) -> tuple[str, str]:
+    prefix = "orbi" if unit_name is None else f"orbi-{unit_name}"
+    return f"{prefix}@.service", f"{prefix}@.timer"
+
+
+def timer_instances(unit_name: str | None = None) -> tuple[str, str]:
+    prefix = "orbi" if unit_name is None else f"orbi-{unit_name}"
+    return f"{prefix}@1.timer", f"{prefix}@2.timer"
+
+
+def service_instances(unit_name: str | None = None) -> tuple[str, str]:
+    prefix = "orbi" if unit_name is None else f"orbi-{unit_name}"
+    return f"{prefix}@1.service", f"{prefix}@2.service"
+
+
 def installed_config(unit_path: Path) -> Path | None:
     """Return the ORBI_CONFIG value from an installed service unit."""
     if not unit_path.is_file():
@@ -91,9 +106,11 @@ def installed_config(unit_path: Path) -> Path | None:
     return Path(value).expanduser().resolve()
 
 
-def reject_different_deployment(repo_dir: Path, installed_dir: Path) -> None:
+def reject_different_deployment(repo_dir: Path, installed_dir: Path,
+                                unit_name: str | None = None) -> None:
     """Refuse to overwrite units owned by another checkout."""
-    existing = installed_config(installed_dir / SERVICE_UNIT)
+    service_unit, _ = unit_names(unit_name)
+    existing = installed_config(installed_dir / service_unit)
     if existing is None:
         return
     expected = (Path(repo_dir).resolve() / "orbi.toml").resolve()
@@ -107,7 +124,7 @@ def reject_different_deployment(repo_dir: Path, installed_dir: Path) -> None:
     LOGGER.error(
         "unit_conflict unit=%s installed_config=%s expected_config=%s "
         "action=uninstall_existing_deployment",
-        SERVICE_UNIT, existing, expected,
+        service_unit, existing, expected,
     )
     raise UnitConflictError(message)
 
@@ -153,7 +170,8 @@ def render_unit_template(template_text: str, repo_dir: Path) -> str:
     )
 
 
-def unit_status(repo_dir: Path, installed_dir: Path) -> list[dict]:
+def unit_status(repo_dir: Path, installed_dir: Path,
+                unit_name: str | None = None) -> list[dict]:
     """Compare the installed units against the repo templates.
 
     One entry per unit (service and timer, in order): the repo and
@@ -164,8 +182,9 @@ def unit_status(repo_dir: Path, installed_dir: Path) -> list[dict]:
     repo_dir = Path(repo_dir)
     installed_dir = Path(installed_dir)
     entries: list[dict] = []
-    for name in UNIT_NAMES:
-        repo_path = repo_unit_dir(repo_dir) / name
+    names = unit_names(unit_name)
+    for template_name, name in zip(UNIT_NAMES, names):
+        repo_path = repo_unit_dir(repo_dir) / template_name
         installed_path = installed_dir / name
         if repo_path.is_file():
             # Issue #262: the installed unit is the RENDERED template
@@ -224,7 +243,8 @@ def drift_lines(status: list[dict]) -> list[str]:
 
 
 def check_unit_drift(repo_dir: Path,
-                     installed_dir: Path | None = None) -> None:
+                     installed_dir: Path | None = None,
+                     unit_name: str | None = None) -> None:
     """Pre-start deployment check (Issue #103).
 
     Compares BOTH installed units against the repo templates. Clean:
@@ -235,7 +255,7 @@ def check_unit_drift(repo_dir: Path,
     """
     if installed_dir is None:
         installed_dir = installed_unit_dir()
-    status = unit_status(repo_dir, installed_dir)
+    status = unit_status(repo_dir, installed_dir, unit_name)
     lines = drift_lines(status)
     if not lines:
         LOGGER.info("unit_drift clean installed_dir=%s", installed_dir)
@@ -251,7 +271,7 @@ def check_unit_drift(repo_dir: Path,
 def sync_drifted_units(repo_dir: Path,
                        installed_dir: Path | None = None,
                        *, max_concurrency: int = len(TIMER_INSTANCES),
-                       run_command) -> list[dict]:
+                       unit_name: str | None = None, run_command) -> list[dict]:
     """Pre-start self-heal for drifted units (Issue #142).
 
     The normal scene: a template change merged to main, the
@@ -272,14 +292,14 @@ def sync_drifted_units(repo_dir: Path,
     if installed_dir is None:
         installed_dir = installed_unit_dir()
     installed_dir = Path(installed_dir)
-    before = unit_status(repo_dir, installed_dir)
+    before = unit_status(repo_dir, installed_dir, unit_name)
     if not any(entry["drifted"] for entry in before):
         return []
     result = install_units(
         repo_dir, installed_dir, max_concurrency=max_concurrency,
-        run_command=run_command,
+        unit_name=unit_name, run_command=run_command,
     )
-    after = unit_status(repo_dir, installed_dir)
+    after = unit_status(repo_dir, installed_dir, unit_name)
     lines = drift_lines(after)
     if lines:
         for line in lines:
@@ -340,7 +360,7 @@ def migrate_legacy_units(installed_dir: Path, *, run_command) -> bool:
 
 def install_units(repo_dir: Path, installed_dir: Path | None = None,
                   *, max_concurrency: int = len(TIMER_INSTANCES),
-                  run_command) -> dict:
+                  unit_name: str | None = None, run_command) -> dict:
     """Idempotently install the repo templates as the user units.
 
     Overwrites BOTH installed template units with the repo templates
@@ -365,7 +385,9 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
     if installed_dir is None:
         installed_dir = installed_unit_dir()
     installed_dir = Path(installed_dir)
-    reject_different_deployment(repo_dir, installed_dir)
+    names = unit_names(unit_name)
+    instances = timer_instances(unit_name)
+    reject_different_deployment(repo_dir, installed_dir, unit_name)
     for name in UNIT_NAMES:
         template = repo_unit_dir(repo_dir) / name
         if not template.is_file():
@@ -374,21 +396,22 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
                 "templates are the single source of truth)"
             )
     installed_dir.mkdir(parents=True, exist_ok=True)
-    migrate_legacy_units(installed_dir, run_command=run_command)
-    for name in UNIT_NAMES:
+    if unit_name is None:
+        migrate_legacy_units(installed_dir, run_command=run_command)
+    for template_name, name in zip(UNIT_NAMES, names):
         # Issue #262: render the template (substitute the deployment
         # checkout path for the {{ORBI_REPO_DIR}} placeholder) so the
         # installed unit points at THIS checkout regardless of where it
         # lives. A template without the placeholder is written unchanged.
         template_text = (
-            repo_unit_dir(repo_dir) / name
+            repo_unit_dir(repo_dir) / template_name
         ).read_text(encoding="utf-8")
         rendered = render_unit_template(template_text, repo_dir)
         (installed_dir / name).write_bytes(rendered.encode("utf-8"))
     run_command(["systemctl", "--user", "daemon-reload"])
-    for instance in TIMER_INSTANCES[:max_concurrency]:
+    for instance in instances[:max_concurrency]:
         run_command(["systemctl", "--user", "enable", "--now", instance])
-    for instance in TIMER_INSTANCES[max_concurrency:]:
+    for instance in instances[max_concurrency:]:
         run_command(["systemctl", "--user", "disable", "--now", instance])
     commit = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
     units = {
@@ -396,13 +419,13 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
             "installed_path": installed_dir / name,
             "sha256": sha256_hex(installed_dir / name),
         }
-        for name in UNIT_NAMES
+        for name in names
     }
     LOGGER.info(
         "units_installed commit=%s installed_dir=%s units=%s "
         "instances=%s",
-        commit, installed_dir, ",".join(UNIT_NAMES),
-        ",".join(TIMER_INSTANCES[:max_concurrency]),
+        commit, installed_dir, ",".join(names),
+        ",".join(instances[:max_concurrency]),
     )
     return {
         "commit": commit,
