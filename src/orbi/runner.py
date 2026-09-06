@@ -3274,6 +3274,11 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             on_wait=on_ci_wait,
             on_delivery_wait=on_delivery_wait,
         )
+        # The release version changed the packaging inputs after the tick's
+        # preflight refresh. Install the release worktree before validating
+        # it, so installed-CLI assertions exercise the version being released
+        # on this first run rather than waiting for the next tick.
+        refresh_cli_install(worktree, run_command=run_command)
         try:
             run_release_tests(
                 worktree, declaration["test_command"],
