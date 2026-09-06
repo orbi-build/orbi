@@ -96,7 +96,12 @@ def installed_config(unit_path: Path) -> Path | None:
     )
     if match is None:
         return None
-    return Path(match.group(1) or match.group(2)).expanduser().resolve()
+    value = match.group(1) or match.group(2)
+    # Older templates used systemd's %h specifier in ORBI_CONFIG.  Resolve
+    # it before comparing with the absolute path used by current templates;
+    # otherwise a reinstall of the same deployment is mistaken for a conflict.
+    value = value.replace("%h", str(Path.home()))
+    return Path(value).expanduser().resolve()
 
 
 def reject_different_deployment(repo_dir: Path, installed_dir: Path) -> None:

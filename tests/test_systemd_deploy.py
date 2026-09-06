@@ -282,6 +282,18 @@ def test_install_units_rejects_an_existing_deployment_for_another_config(
     assert "unit_conflict" in caplog.text
 
 
+def test_installed_config_resolves_systemd_home_specifier(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    unit = tmp_path / "orbi@.service"
+    unit.write_text(
+        '[Service]\nEnvironment="ORBI_CONFIG=%h/Documents/orbi/orbi.toml"\n',
+        encoding="utf-8",
+    )
+    assert systemd_deploy.installed_config(unit) == (
+        tmp_path / "Documents/orbi/orbi.toml"
+    ).resolve()
+
+
 def test_install_units_allows_reinstall_for_the_same_config(tmp_path):
     repo = make_repo(tmp_path)
     (repo / "systemd" / "orbi@.service").write_text(
