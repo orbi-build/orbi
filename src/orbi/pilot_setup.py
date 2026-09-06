@@ -44,6 +44,14 @@ from pathlib import Path
 
 from orbi import runner
 from orbi import cli_source
+from orbi.delivery_labels import (
+    BLOCKED_LABEL,
+    FIX_NEEDED_LABEL,
+    IN_PROGRESS_LABEL,
+    MERGED_LABEL,
+    PR_OPENED_LABEL,
+    READY_LABEL,
+)
 from orbi import git_transport
 from orbi import systemd_deploy
 from orbi.pi_activity import quote_value
@@ -75,12 +83,12 @@ PROVIDER_GUIDE = "See /getting-started#configure-the-model-provider"
 # The repo-managed single source of truth for the platform labels.
 LABELS_FILE = "labels.toml"
 REQUIRED_LABELS = (
-    "ai-ready",
-    "ai-in-progress",
-    "ai-pr-opened",
-    "ai-fix-needed",
-    "ai-merged",
-    "ai-blocked",
+    READY_LABEL,
+    IN_PROGRESS_LABEL,
+    PR_OPENED_LABEL,
+    FIX_NEEDED_LABEL,
+    MERGED_LABEL,
+    BLOCKED_LABEL,
     "p0",
     # Epic marker (Issue #93): the claim scan skips `ai-epic` Issues
     # (`epic_not_claimed`), so the label is platform state the setup

@@ -2324,7 +2324,7 @@ def create_repair_issue(*, repo: str, source_issue: int, run_id: str,
         "timeout", str(REPAIR_ISSUE_TIMEOUT_SECONDS),
         "gh", "issue", "create", "--repo", repo,
         "--title", f"修复 Release #{source_issue} 测试门禁失败",
-        "--body", body, "--label", "ai-ready", "--label", "bug",
+        "--body", body, "--label", READY_LABEL, "--label", "bug",
     ])
 
 
