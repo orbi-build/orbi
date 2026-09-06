@@ -13867,11 +13867,11 @@ def test_process_release_wait_timeout_uses_persisted_wait_start(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    with pytest.raises(RuntimeError, match="delivery wait timeout"):
-        runner.process_release(
-            issue, {"repo_dir": Path("/r"), "base_branch": "main",
-                    "release_deliveries_wait_seconds": 5}, "o/r",
-        )
+    result = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main",
+                "release_deliveries_wait_seconds": 5}, "o/r",
+    )
+    assert result == ""
     assert state["edits"][-1][1]["add"] == "ai-blocked"
 
 
@@ -14018,10 +14018,10 @@ def test_process_release_fails_on_empty_derived_scope(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_MILESTONE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    with pytest.raises(RuntimeError, match="derived scope is empty"):
-        runner.process_release(
-            issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
-        )
+    result = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert result == ""
     # Terminal failure: ai-blocked ALONE, no tag, no close.
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
@@ -14078,13 +14078,13 @@ def test_process_release_ci_wait_timeout_blocks_with_distinct_reason(
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    with pytest.raises(RuntimeError, match="timed out"):
-        runner.process_release(
-            issue,
-            {"repo_dir": Path("/r"), "base_branch": "main",
-             "release_ci_wait_seconds": 0},
-            "o/r",
-        )
+    result = runner.process_release(
+        issue,
+        {"repo_dir": Path("/r"), "base_branch": "main",
+         "release_ci_wait_seconds": 0},
+        "o/r",
+    )
+    assert result == ""
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
     (comment_number, comment_kwargs), = [
@@ -14095,6 +14095,28 @@ def test_process_release_ci_wait_timeout_blocks_with_distinct_reason(
     assert "waiting for CI on the release commit abc123 timed out after 0s" \
         in comment_kwargs["body"]
     assert "not a CI failure" in comment_kwargs["body"]
+
+
+def test_process_release_gate_failure_blocks_and_returns_cleanly(monkeypatch):
+    """A failed release gate is handled business failure, not a tick crash."""
+    state = make_release_process_env(
+        monkeypatch,
+        check_run_pages=[[('tests', 'completed', 'failure')]],
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+
+    result = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+
+    assert result == ""
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+                                        "remove": "ai-in-progress"})
+    assert "CI check 'tests' is completed/failure" in (
+        state["comments"][-1][1]["body"]
+    )
 
 
 def test_create_repair_issue_deduplicates_a_matching_failure_signature(monkeypatch):
@@ -14175,10 +14197,10 @@ def test_process_release_milestone_failure_fails_fast_and_blocks(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    with pytest.raises(RuntimeError, match="Milestone #5"):
-        runner.process_release(
-            issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
-        )
+    result = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert result == ""
     commands = [c for c, _ in state["commands"]]
     # The release itself succeeded (tag pushed, Release published,
     # Issue closed with ai-merged)...
@@ -14209,10 +14231,10 @@ def test_process_release_docs_sync_failure_fails_fast_and_blocks(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    with pytest.raises(RuntimeError, match="non-fast-forward"):
-        runner.process_release(
-            issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
-        )
+    result = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert result == ""
     # The GitHub Release was published (step 7 succeeded) but the docs
     # sync failed: the release is NOT reported successful — the terminal
     # state is ai-blocked with the concrete reason on the Issue.
@@ -14250,10 +14272,10 @@ def test_process_release_fails_on_malformed_declaration(monkeypatch):
     state = make_release_process_env(monkeypatch)
     issue = {"number": 99, "title": "Release v0.3.0", "body": "no section",
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    with pytest.raises(ValueError, match="## Release"):
-        runner.process_release(
-            issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
-        )
+    result = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert result == ""
     # Terminal failure: ai-blocked ALONE, no ai-merged, no close.
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
@@ -14294,11 +14316,11 @@ def test_process_release_test_failure_creates_repair_and_keeps_release_blocked(m
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    with pytest.raises(subprocess.CalledProcessError):
-        runner.process_release(
-            issue, {"repo_dir": Path("/r"), "base_branch": "main",
-                    "auto_repair_issues": True}, "o/r",
-        )
+    result = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main",
+                "auto_repair_issues": True}, "o/r",
+    )
+    assert result == ""
     assert repairs == [{
         "repo": "o/r", "source_issue": 99, "run_id": "a1b2c3d4",
         "release_commit": "abc123",
@@ -14325,10 +14347,10 @@ def test_process_release_test_failure_stays_blocked_when_repair_opt_in_is_disabl
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    with pytest.raises(subprocess.CalledProcessError):
-        runner.process_release(
-            issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
-        )
+    result = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert result == ""
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
                                         "remove": "ai-in-progress"})
 
@@ -14344,12 +14366,12 @@ def test_process_release_repair_creation_failure_is_observable_and_preserves_tes
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    with caplog.at_level("ERROR"), pytest.raises(subprocess.CalledProcessError) as excinfo:
-        runner.process_release(
+    with caplog.at_level("ERROR"):
+        result = runner.process_release(
             issue, {"repo_dir": Path("/r"), "base_branch": "main",
                     "auto_repair_issues": True}, "o/r",
         )
-    assert excinfo.value is original
+    assert result == ""
     assert "repair_issue_failed source_issue=99 run_id=a1b2c3d4" in caplog.text
 
 
@@ -14375,10 +14397,10 @@ def test_process_release_fails_on_tag_mismatch_without_moving_it(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    with pytest.raises(RuntimeError, match="never moved"):
-        runner.process_release(
-            issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
-        )
+    result = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert result == ""
     commands = [c for c, _ in state["commands"]]
     assert not [c for c in commands if c[:2] == ["git", "tag"]]
     assert not [c for c in commands if c[:2] == ["git", "push"]]
@@ -14417,10 +14439,10 @@ def test_process_release_fails_on_scope_violation(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    with pytest.raises(RuntimeError, match="PR #123 is not merged"):
-        runner.process_release(
-            issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
-        )
+    result = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert result == ""
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
                                        "remove": "ai-in-progress"})
 
@@ -15503,10 +15525,10 @@ def test_process_release_fails_on_scope_item_that_is_neither(monkeypatch):
     state = make_release_process_env(monkeypatch, body=body)
     issue = {"number": 99, "title": "Release v0.3.0", "body": body,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    with pytest.raises(RuntimeError, match="neither a PR nor an Issue"):
-        runner.process_release(
-            issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
-        )
+    result = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert result == ""
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
                                         "remove": "ai-in-progress"})
 

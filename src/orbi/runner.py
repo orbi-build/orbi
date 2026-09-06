@@ -2977,7 +2977,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
     12. Any failure: `ai-blocked` ALONE (no automatic retry — a
          release is a human decision point), the failure comment
          carries the run marker and the concrete reason, and the
-         exception propagates so the tick fails fast.
+         handled failure returns cleanly so the tick does not crash.
     """
     number = int(issue["number"])
     title = issue["title"]
@@ -3357,7 +3357,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             role=ROLE_RELEASE,
             action=lambda: publisher.finish(progress_body(progress())),
         )
-        raise
+        return ""
 
 
 def _pick_from_scan(
