@@ -168,7 +168,8 @@ DAG, no priority numbers, no separate queues:
 
   1. Strictly parse the `## Release` declaration from the Issue body:
      `version`, `base_branch`, `test_command`, `scope` (a list of `#N`
-     items). Missing, duplicated or unknown fields fail fast.
+     items), and optional `version_file` (`pyproject.toml` by default,
+     `package.json`, or `none`). Missing, duplicated or unknown fields fail fast.
   2. Freeze the base — the release commit is exactly
      `origin/<base_branch>` (fetched under the base-sync lock).
   3. Enforce the pre-release gates: no leftover open `ai-in-progress` /

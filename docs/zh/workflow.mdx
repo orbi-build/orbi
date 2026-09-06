@@ -143,8 +143,9 @@ PR 验收时校验该关键词，缺失即 fail fast。
   run id/worktree），按顺序执行这些步骤：
 
   1. 严格解析 Issue 正文的 `## Release` 声明：`version`、
-     `base_branch`、`test_command`、`scope`（`#N` 列表）。字段缺失、
-     重复或未知都 fail fast。
+     `base_branch`、`test_command`、`scope`（`#N` 列表），以及可选的
+     `version_file`（默认 `pyproject.toml`，也可为 `package.json` 或 `none`）。
+     字段缺失、重复或未知都 fail fast。
   2. 冻结 base——release commit 就是 `origin/<base_branch>`（在
      base-sync 锁下 fetch）。
   3. 执行发布前门禁：无遗留 open 的 `ai-in-progress` /
