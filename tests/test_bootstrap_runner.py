@@ -2985,7 +2985,7 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
               "base_branch": "main"}
     assert runner.process_issue(
         issue, config, "xqliu/muyan-ceo",
-    ) == "https://github.com/muyantech/orbi/pull/4"
+    ) == runner.IssueResult("pr", "https://github.com/muyantech/orbi/pull/4")
     # The reused run id drives the branch and the scene comments.
     assert calls[0] == ("edit", (4,), {"repo": "xqliu/muyan-ceo",
                                        "add": "ai-in-progress"})
@@ -4388,7 +4388,7 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     issue = {"number": 4, "title": "Fix", "body": "Body"}
     config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}
-    assert runner.process_issue(issue, config, "xqliu/muyan-ceo") == "https://github.com/muyantech/orbi/pull/4"
+    assert runner.process_issue(issue, config, "xqliu/muyan-ceo") == runner.IssueResult("pr", "https://github.com/muyantech/orbi/pull/4")
     assert calls[0] == ("edit", (4,), {"repo": "xqliu/muyan-ceo", "add": "ai-in-progress"})
     # The run state is published automatically: exactly one progress
     # comment (hidden run marker); started and PR-opened scenes are
@@ -4501,7 +4501,7 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     monkeypatch.setattr(runner, "run_command", fake_run)
     # The failure is terminal: `process_issue` returns `None` (no PR) and
     # does NOT re-raise — the service must not crash on it (Issue #239).
-    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo") is None
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo").kind == "failed"
     assert calls[1][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-blocked", "remove": "ai-in-progress"}
     assert calls[2][0] == "comment"
     failure_body = calls[2][2]["body"]
@@ -4579,7 +4579,7 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
         {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
          "base_branch": "main"},
         "xqliu/orbi",
-    ) is None
+    ).kind == "failed"
     edits = [entry for entry in calls if isinstance(entry, dict)]
     assert edits == [
         {"repo": "xqliu/orbi", "add": "ai-in-progress"},
@@ -4663,7 +4663,7 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
         {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
          "base_branch": "main"},
         "xqliu/orbi",
-    ) is None
+    ).kind == "failed"
     # The Issue keeps `ai-in-progress`: the ONLY label edit is the claim
     # at the start — no `ai-blocked`, no removal of `ai-in-progress`
     # (the edit calls are the dict entries; the `gh issue comment`
@@ -4751,7 +4751,7 @@ def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
         {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
          "base_branch": "main"},
         "xqliu/orbi",
-    ) is None
+    ).kind == "failed"
     # The Issue keeps `ai-in-progress`: the ONLY label edit is the claim
     # at the start — the failed recovery comment must NOT fall through
     # to the generic handler's terminal `ai-blocked` (Issue #227).
@@ -4825,7 +4825,7 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
         {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
          "base_branch": "main"},
         "xqliu/orbi",
-    ) is None
+    ).kind == "failed"
     edits = [entry for entry in calls if isinstance(entry, dict)]
     assert edits == [
         {"repo": "xqliu/orbi", "add": "ai-in-progress"},
@@ -4897,7 +4897,7 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
         # The failure is terminal: `process_issue` returns `None` (no PR)
         # and does NOT re-raise — the service must not crash on it
         # (Issue #239).
-        assert runner.process_issue({"number": 13, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo") is None
+        assert runner.process_issue({"number": 13, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo").kind == "failed"
     assert "failure reporting failed" in caplog.text
     # No progress comment was posted (the failure report died on the
     # failure-comment POST before the bypass steps).
@@ -5193,7 +5193,7 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
             "xqliu/orbi", issue, None
         ),
     )
-    monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: calls.append((args, kwargs)) or "https://github.com/x/y/pull/12")
+    monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: calls.append((args, kwargs)) or runner.IssueResult("pr", "https://github.com/x/y/pull/12"))
     monkeypatch.setattr(
         runner, "wait_for_delivery",
         lambda *args, **kwargs: waits.append((args, kwargs)),
@@ -5205,6 +5205,46 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     assert waits[0][0][:2] == (
         "https://github.com/x/y/pull/12", issue,
     )
+
+
+def test_main_uses_process_result_kind_without_rechecking_task_type(
+    monkeypatch, tmp_path,
+):
+    issue = {"number": 281, "title": "task", "body": "body",
+             "labels": [{"name": "ai-ready"}]}
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+            "owner/repo", issue, None
+        ),
+    )
+    monkeypatch.setattr(
+        runner, "process_issue",
+        lambda *args: runner.IssueResult("pr", "https://x/y/pull/281"),
+    )
+    monkeypatch.setattr(
+        runner, "is_ticket_only",
+        lambda issue: (_ for _ in ()).throw(
+            AssertionError("main must not recheck task type")
+        ),
+    )
+    monkeypatch.setattr(
+        runner, "is_release",
+        lambda issue: (_ for _ in ()).throw(
+            AssertionError("main must not recheck task type")
+        ),
+    )
+    waits = []
+    monkeypatch.setattr(
+        runner, "wait_for_delivery",
+        lambda *args: waits.append(args),
+    )
+
+    assert runner.main(["--config", str(config)]) == 0
+    assert waits[0][0] == "https://x/y/pull/281"
 
 
 def test_main_ends_tick_when_process_issue_delivers_nothing(
@@ -5226,7 +5266,7 @@ def test_main_ends_tick_when_process_issue_delivers_nothing(
             "owner/repo", issue, None
         ),
     )
-    monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: runner.IssueResult("failed", None))
     monkeypatch.setattr(
         runner, "wait_for_delivery",
         lambda *args, **kwargs: waits.append((args, kwargs)),
@@ -5253,7 +5293,7 @@ def test_main_ticket_only_finishes_without_entering_pr_delivery_wait(
             "owner/repo", issue, None
         ),
     )
-    monkeypatch.setattr(runner, "process_issue", lambda *args: "ticket-only")
+    monkeypatch.setattr(runner, "process_issue", lambda *args: runner.IssueResult("ticket-only", None))
     monkeypatch.setattr(
         runner, "wait_for_delivery",
         lambda *args: (_ for _ in ()).throw(
@@ -5289,7 +5329,7 @@ def test_main_release_success_ends_tick_without_pr_delivery_wait(
             "owner/repo", issue, None
         ),
     )
-    monkeypatch.setattr(runner, "process_issue", lambda *args: release_url)
+    monkeypatch.setattr(runner, "process_issue", lambda *args: runner.IssueResult("release", release_url))
     monkeypatch.setattr(
         runner, "wait_for_delivery",
         lambda *args: waits.append(args) or (
@@ -5407,7 +5447,7 @@ def test_main_accepts_repeated_source_repo(monkeypatch, tmp_path):
             seen.append(repos) or (repos[0], issue, None)
         ),
     )
-    monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: "https://github.com/x/y/pull/14")
+    monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: runner.IssueResult("pr", "https://github.com/x/y/pull/14"))
     monkeypatch.setattr(runner, "wait_for_delivery", lambda *a, **k: None)
     assert runner.main([
         "--config", str(config),
@@ -5452,7 +5492,7 @@ def test_process_issue_failure_without_session_still_carries_scene(
     monkeypatch.setattr(runner, "run_command", fake_run)
     # Issue #239: the failure is terminal — `process_issue` returns `None`
     # instead of re-raising; the scene assertions below are unchanged.
-    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo") is None
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo").kind == "failed"
     failure_body = calls[-1][2]["body"]
     # No session file yet: the scene still carries the full debug entry
     # (worktree, branch) with '-' session fields.
@@ -5542,7 +5582,7 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     })
     # Issue #239: the failure is terminal — `process_issue` returns `None`
     # instead of re-raising; the scene assertions below are unchanged.
-    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo") is None
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo").kind == "failed"
     failure_body = calls[-1][2]["body"]
     assert "Orbi failed:" in failure_body
     assert "session=sess-9" in failure_body
@@ -5599,7 +5639,7 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
         # Issue #239: the failure is terminal — `process_issue` returns
         # `None` instead of re-raising; the scene-isolation assertions
         # below are unchanged.
-        assert runner.process_issue({"number": 9, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo") is None
+        assert runner.process_issue({"number": 9, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo").kind == "failed"
     assert "activity scene failed" in caplog.text
     failure_body = calls[-1][2]["body"]
     assert "Orbi failed: git failed" in failure_body
@@ -8630,7 +8670,7 @@ def test_main_holds_slot_while_processing_issue(monkeypatch, tmp_path):
         return ("owner/repo", issue, None)
 
     monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
-    monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: "https://x/y/pull/12")
+    monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: runner.IssueResult("pr", "https://x/y/pull/12"))
     monkeypatch.setattr(runner, "wait_for_delivery", lambda *a, **k: None)
     assert runner.main(["--config", str(config)]) == 0
     assert seen["occupancy"] == [(1, os.getpid())]
@@ -10535,7 +10575,7 @@ def test_main_holds_slot_through_delivery_wait(monkeypatch, tmp_path):
             "owner/repo", issue, None
         ),
     )
-    monkeypatch.setattr(runner, "process_issue", lambda *a, **k: PR_URL)
+    monkeypatch.setattr(runner, "process_issue", lambda *a, **k: runner.IssueResult("pr", PR_URL))
 
     started = threading.Event()
     release = threading.Event()
@@ -12686,7 +12726,7 @@ def test_process_issue_routes_release_to_process_release(monkeypatch):
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "freeze_base", lambda r, b: "abc")
     result = runner.process_issue(issue, {"base_branch": "main"}, "o/r")
-    assert result == "rel-url"
+    assert result == runner.IssueResult("release", "rel-url")
     assert calls == ["release"]
 
 
@@ -12792,7 +12832,7 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
 
     result = runner.process_issue(issue, {"repo_dir": Path("/repo")}, "o/r")
 
-    assert result == "ticket-only"
+    assert result == runner.IssueResult("ticket-only", None)
     assert edits == [
         (99, {"repo": "o/r", "add": "ai-in-progress"}),
         (99, {"repo": "o/r", "remove": "ai-in-progress"}),

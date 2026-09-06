@@ -849,7 +849,7 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
     )
     monkeypatch.setattr(
         runner, "process_issue",
-        lambda *args, **kwargs: processed.append(args) or FAKE_PR_URL,
+        lambda *args, **kwargs: processed.append(args) or runner.IssueResult("pr", FAKE_PR_URL),
     )
     # The resume pre-validation (Issue #89) is stubbed: it returns a
     # verified URL that differs from the scene's comment string, so the
@@ -890,7 +890,7 @@ def test_main_still_claims_new_issue_when_no_resumable(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         runner, "process_issue",
-        lambda *args, **kwargs: processed.append(args) or FAKE_PR_URL,
+        lambda *args, **kwargs: processed.append(args) or runner.IssueResult("pr", FAKE_PR_URL),
     )
     # The dispatch test must not run the real delivery-wait loop (it would
     # call `gh` against the real PR number of FAKE_PR_URL).

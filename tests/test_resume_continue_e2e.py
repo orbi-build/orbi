@@ -327,7 +327,7 @@ def run_first_attempt(monkeypatch, tmp_path: Path, clone: Path,
     # `process_issue` returns `None` instead of re-raising.
     assert runner.process_issue(issue(), config_for(clone, tmp_path,
                                                     source_repo),
-                                source_repo) is None
+                                source_repo).kind == "failed"
     # The runner is back: label transitions work again.
     monkeypatch.setattr(runner, "edit_issue", real_edit_issue)
     worktree = worktree_for(clone, source_repo, "a1b2c3d4")
@@ -358,12 +358,12 @@ def test_e2e_restart_continues_on_the_uncommitted_work(
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI_CONTINUE)
     install_fake_gh(monkeypatch, comments, labels)
     monkeypatch.setattr(runner, "new_run_id", lambda: "b2c3d4e5")
-    pr_url = runner.process_issue(
+    result = runner.process_issue(
         issue(), config_for(clone, tmp_path, REPO), REPO,
     )
 
     # The SAME run continues: no second worktree, same branch.
-    assert pr_url == PR_URL
+    assert result.url == PR_URL
     assert runner.current_run_id() == "a1b2c3d4"
     assert not worktree_for(clone, REPO, "b2c3d4e5").exists()
     assert git(
@@ -417,13 +417,13 @@ def test_e2e_repo_rename_finds_the_old_worktree_by_issue_and_name(
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI_CONTINUE)
     install_fake_gh(monkeypatch, comments, labels)
     monkeypatch.setattr(runner, "new_run_id", lambda: "b2c3d4e5")
-    pr_url = runner.process_issue(
+    result = runner.process_issue(
         issue(), config_for(clone, tmp_path, RENAME_NEW), RENAME_NEW,
     )
 
     # The SAME worktree (old slug) continues; no second worktree under
     # the new slug.
-    assert pr_url == PR_URL
+    assert result.url == PR_URL
     assert runner.current_run_id() == "a1b2c3d4"
     assert worktree.is_dir()
     assert not worktree_for(clone, RENAME_NEW, "a1b2c3d4").exists()

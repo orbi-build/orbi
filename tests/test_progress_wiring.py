@@ -483,7 +483,7 @@ def test_process_issue_p0_failure_enters_ai_blocked_terminal_state(
     # instead of re-raising; the terminal-state assertions below are
     # unchanged.
     assert runner.process_issue(issue, make_config(tmp_path),
-                                "xqliu/orbi") is None
+                                "xqliu/orbi").kind == "failed"
     # Claim first, then the terminal state: `ai-blocked` added,
     # `ai-in-progress` removed.
     assert edit.call_args_list[0] == mock_call(
@@ -655,7 +655,7 @@ def test_process_issue_failure_updates_progress_comment_with_blocked_scene(
     # instead of re-raising; the blocked-scene assertions below are
     # unchanged.
     assert runner.process_issue(make_issue(), make_config(tmp_path),
-                                "xqliu/orbi") is None
+                                "xqliu/orbi").kind == "failed"
     milestones = [
         body for body in posted
         if any(line.startswith(progress.MILESTONE_PREFIX)
@@ -877,10 +877,10 @@ def test_process_issue_delivered_patch_failure_does_not_fail_delivery(
                         edits.append(kwargs))
     caplog.set_level("ERROR")
 
-    pr_url = runner.process_issue(make_issue(), make_config(tmp_path),
+    result = runner.process_issue(make_issue(), make_config(tmp_path),
                                   "xqliu/orbi")
 
-    assert pr_url == "https://github.com/xqliu/orbi/pull/40"
+    assert result.url == "https://github.com/xqliu/orbi/pull/40"
     # The state transition happened (the Issue awaits review)...
     assert edits == [{
         "repo": "xqliu/orbi", "add": "ai-in-progress"},
@@ -926,10 +926,10 @@ def test_process_issue_pr_opened_scene_has_no_duplicate_milestone(
                         edits.append(kwargs))
     caplog.set_level("ERROR")
 
-    pr_url = runner.process_issue(make_issue(), make_config(tmp_path),
+    result = runner.process_issue(make_issue(), make_config(tmp_path),
                                   "xqliu/orbi")
 
-    assert pr_url == "https://github.com/xqliu/orbi/pull/40"
+    assert result.url == "https://github.com/xqliu/orbi/pull/40"
     assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
     # No duplicate PR-opened milestone is attempted. The delivered
     # finish still ran (independent step)...
@@ -981,7 +981,7 @@ def test_process_issue_scene_comment_failure_fails_delivery(
     # `None` instead of re-raising; the terminal-state assertions below
     # are unchanged.
     assert runner.process_issue(make_issue(), make_config(tmp_path),
-                                "xqliu/orbi") is None
+                                "xqliu/orbi").kind == "failed"
 
     # The delivery failed: the opened-PR transition is undone and the
     # Issue is marked ai-blocked ALONE (the failure happened after the
@@ -1052,10 +1052,10 @@ def test_process_issue_publishing_failure_is_never_blocked_scene(
     calls, posted = make_failing_gh(monkeypatch, _delivery_record_of)
     patch_process_deps(monkeypatch, tmp_path)
 
-    pr_url = runner.process_issue(make_issue(), make_config(tmp_path),
+    result = runner.process_issue(make_issue(), make_config(tmp_path),
                                   "xqliu/orbi")
 
-    assert pr_url == "https://github.com/xqliu/orbi/pull/40"
+    assert result.url == "https://github.com/xqliu/orbi/pull/40"
     # No blocked milestone...
     assert not any("Orbi: blocked" in body for body in posted)
     # ...no `Orbi failed` comment...
@@ -1095,11 +1095,11 @@ def test_process_issue_ensure_failure_does_not_fail_delivery(
                         edits.append(kwargs))
     caplog.set_level("ERROR")
 
-    pr_url = runner.process_issue(make_issue(), make_config(tmp_path),
+    result = runner.process_issue(make_issue(), make_config(tmp_path),
                                   "xqliu/orbi")
 
     # The delivery completed: the PR is open and awaits review...
-    assert pr_url == "https://github.com/xqliu/orbi/pull/40"
+    assert result.url == "https://github.com/xqliu/orbi/pull/40"
     assert any(
         kwargs.get("add") == "ai-pr-opened"
         for kwargs in edits
@@ -1140,10 +1140,10 @@ def test_process_issue_started_scene_has_no_duplicate_milestone(
                         edits.append(kwargs))
     caplog.set_level("ERROR")
 
-    pr_url = runner.process_issue(make_issue(), make_config(tmp_path),
+    result = runner.process_issue(make_issue(), make_config(tmp_path),
                                   "xqliu/orbi")
 
-    assert pr_url == "https://github.com/xqliu/orbi/pull/40"
+    assert result.url == "https://github.com/xqliu/orbi/pull/40"
     assert runner.run_pi.called
     assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
     # The ensure itself succeeded; the scene comment is the sole
@@ -1185,10 +1185,10 @@ def test_process_issue_plan_test_milestone_failures_do_not_fail_delivery(
         "5 passed in 1.0s\n", encoding="utf-8",
     )
 
-    pr_url = runner.process_issue(make_issue(), make_config(tmp_path),
+    result = runner.process_issue(make_issue(), make_config(tmp_path),
                                   "xqliu/orbi")
 
-    assert pr_url == "https://github.com/xqliu/orbi/pull/40"
+    assert result.url == "https://github.com/xqliu/orbi/pull/40"
     assert not any(kwargs.get("add") == "ai-blocked" for kwargs in edits)
     assert caplog.text.count("progress_publish_failed") >= 2, caplog.text
     # The failed milestones were not posted...
@@ -1239,7 +1239,7 @@ def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(
     # `None` instead of re-raising; the bypass assertions below are
     # unchanged.
     assert runner.process_issue(make_issue(), make_config(tmp_path),
-                                "xqliu/orbi") is None
+                                "xqliu/orbi").kind == "failed"
 
     # The `ai-blocked` transition completed even though the progress
     # publishing 404'd...
