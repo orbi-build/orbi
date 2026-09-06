@@ -1,0 +1,458 @@
+# v0.3.1 发布（最新）
+
+`v0.3.1` 于 2026-09-06T07:18:02Z 发布为 GitHub Release [v0.3.1](https://github.com/orbi-build/orbi/releases/tag/v0.3.1)（release task：Issue #379）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.3.1` | 注解 tag `9e56161972d65184c62955ae1197fc25d7b8371b` | 提交 `98fb55c7843bdf7938d9a0fd9ee645431c05d154` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- feat: configure two-source bootstrap queue ([PR #5](https://github.com/orbi-build/orbi/pull/5))
+- feat: add muyan-pilot add and status commands ([PR #17](https://github.com/orbi-build/orbi/pull/17))
+- chore: pin 15-minute idle poll schedule (review of PR #19) ([PR #26](https://github.com/orbi-build/orbi/pull/26))
+- feat: keep task worktrees in repo .worktrees directory ([PR #28](https://github.com/orbi-build/orbi/pull/28))
+- Run the Pilot scheduler 24 hours a day ([PR #35](https://github.com/orbi-build/orbi/pull/35))
+- Create tasks from latest remote base and make retries conflict-safe ([PR #36](https://github.com/orbi-build/orbi/pull/36))
+- feat: stream live Pi activity during active runs (Issue #24) ([PR #37](https://github.com/orbi-build/orbi/pull/37))
+- feat: auto review, fix, and merge delivered PRs (Issue #34) ([PR #38](https://github.com/orbi-build/orbi/pull/38))
+- feat: propagate run_id as the end-to-end correlation id (Issue #41) ([PR #43](https://github.com/orbi-build/orbi/pull/43))
+- ci: run the test contract with 100% coverage on GitHub (Issue #56) ([PR #63](https://github.com/orbi-build/orbi/pull/63))
+- feat: require Fixes #N in the PR body so GitHub closes the Issue natively (Issue #53) ([PR #69](https://github.com/orbi-build/orbi/pull/69))
+- 整理 AGENTS.md：Issue 粒度与实现/审查分工 ([PR #84](https://github.com/orbi-build/orbi/pull/84))
+- fix: pass role-specific --skill lists to implement vs review Pi ([PR #86](https://github.com/orbi-build/orbi/pull/86))
+- Review session fixes findings in-session; no cold-start fixer ([PR #87](https://github.com/orbi-build/orbi/pull/87))
+- v0.1: land the release checklist items and close out the run (Issue #80) ([PR #92](https://github.com/orbi-build/orbi/pull/92))
+- test: guard AGENTS.md against implementer review-fix-loop wording (Issue #78) ([PR #109](https://github.com/orbi-build/orbi/pull/109))
+- feat: pi_idle 超时后自动清理挂死的 Pi 子进程，让工具失败信号回到模型 (Issue #94) ([PR #123](https://github.com/orbi-build/orbi/pull/123))
+- ci: fetch full history + all tags in CI checkout for release verification ([PR #127](https://github.com/orbi-build/orbi/pull/127))
+- Runner: claim scan skips ai-epic Issues with epic_not_claimed (Issue #93) ([PR #145](https://github.com/orbi-build/orbi/pull/145))
+- feat: parse and validate the explicit multi-repo registry config ([PR #150](https://github.com/orbi-build/orbi/pull/150))
+- List doc releases in descending version order, latest first ([PR #165](https://github.com/orbi-build/orbi/pull/165))
+- Support configurable Pi provider/model/thinking in TOML config (Issue #119) ([PR #166](https://github.com/orbi-build/orbi/pull/166))
+- Scope the fresh-claim scans to the configured active Milestone (Issue #139) ([PR #167](https://github.com/orbi-build/orbi/pull/167))
+- Support configurable Pi provider file with baseUrl for OpenAI-compatible endpoints (Issue #157) ([PR #170](https://github.com/orbi-build/orbi/pull/170))
+- Add a focused regression hammer for the shared-ref race (Issue #105) ([PR #184](https://github.com/orbi-build/orbi/pull/184))
+- Fix per-run Pi provider settings ([PR #185](https://github.com/orbi-build/orbi/pull/185))
+- Log the active Issue context when the Runner is stopped ([PR #193](https://github.com/orbi-build/orbi/pull/193))
+- Add the ai-release Release task type with a Runner-side release state machine ([PR #199](https://github.com/orbi-build/orbi/pull/199))
+- 修复并发 E2E 的 delivery base 时序竞态 ([PR #203](https://github.com/orbi-build/orbi/pull/203))
+- 生成分类且可读的 Release notes ([PR #206](https://github.com/orbi-build/orbi/pull/206))
+- 宣传：新增 v0.2.0 黑灯软件工厂发布 Thread ([PR #207](https://github.com/orbi-build/orbi/pull/207))
+- 修复 ExecStartPre Git 自动维护残留进程 ([PR #208](https://github.com/orbi-build/orbi/pull/208))
+- 自动创建可追踪的 Release 修复 Issue ([PR #210](https://github.com/orbi-build/orbi/pull/210))
+- 修复 marketing ticket-only 的 Git 交付 ([PR #211](https://github.com/orbi-build/orbi/pull/211))
+- Runner 接管确定性 Git/GitHub 收尾 (deliver_pr) ([PR #213](https://github.com/orbi-build/orbi/pull/213))
+- gitignore .pi 以免 deliver_pr 被 pi-loop 状态文件卡住 ([PR #220](https://github.com/orbi-build/orbi/pull/220))
+- core: model_wait 安全回收 —— 模型服务进程活着但请求挂死时永久卡死 ([PR #221](https://github.com/orbi-build/orbi/pull/221))
+- Release 成功后关闭对应 GitHub Milestone ([PR #222](https://github.com/orbi-build/orbi/pull/222))
+- 优化 harness 与 prompt：减少无效 compact 并保证测试反馈可信 ([PR #224](https://github.com/orbi-build/orbi/pull/224))
+- P0: model_wait 回收阈值可配置并默认 30 分钟，避免慢本地模型误杀 ([PR #229](https://github.com/orbi-build/orbi/pull/229))
+- 补齐 .gitignore：覆盖 coverage.log、*.log 及常用开发产物，避免正常测试阻塞交付 ([PR #238](https://github.com/orbi-build/orbi/pull/238))
+- core: 中断后继续既有工作，而不是 fresh 重做 ([PR #240](https://github.com/orbi-build/orbi/pull/240))
+- 覆盖率门禁分层：全局 line/branch ≥95%，变更代码与核心路径保持 100% ([PR #242](https://github.com/orbi-build/orbi/pull/242))
+- 增强 Runner 启动阶段可观测性：定位 starting 卡点 ([PR #245](https://github.com/orbi-build/orbi/pull/245))
+- 技术债根治：迁移到 src package，消除 editable finder 模块漏记 ([PR #247](https://github.com/orbi-build/orbi/pull/247))
+- Bug：implement 运行完成前置检查后未提交 commit，Runner delivery_no_commit 异常阻塞任务 ([PR #251](https://github.com/orbi-build/orbi/pull/251))
+- Enhancement: Release task scope 从 milestone 自动推导（替代手动列出） ([Issue #253](https://github.com/orbi-build/orbi/issues/253); [PR #337](https://github.com/orbi-build/orbi/pull/337))
+- Enhancement: Release task 应最后处理——兜底扫描，不与其他 delivery 抢槽位 ([Issue #255](https://github.com/orbi-build/orbi/issues/255); [PR #346](https://github.com/orbi-build/orbi/pull/346))
+- Bug：隔离 Runner 自有运行状态，避免 .muyan-pilot/ 被误判为 agent 未提交变更 ([PR #260](https://github.com/orbi-build/orbi/pull/260))
+- 重构：抽离 delivery label 生命周期与调度策略 ([PR #265](https://github.com/orbi-build/orbi/pull/265))
+- Runner 自我健康巡检：主动发现连续失败、反复崩溃与自愈死循环，不再依赖人工翻日志 ([Issue #266](https://github.com/orbi-build/orbi/issues/266); [PR #333](https://github.com/orbi-build/orbi/pull/333))
+- Bug：release 成功后把 Release URL 当 PR URL 解析，ValueError 导致 Runner 崩溃退出 ([PR #271](https://github.com/orbi-build/orbi/pull/271))
+- Enhancement：milestone 做完后自动前进到下一个版本，消除发布后的人工配置断点 ([Issue #273](https://github.com/orbi-build/orbi/issues/273))
+- Bug：pi_providers 的 apiKey $VAR 引用未展开，第三方 provider 静默挂起无法使用 ([PR #304](https://github.com/orbi-build/orbi/pull/304))
+- Bug：.gitignore 漏了 coverage.json，覆盖率门禁产物卡住交付（第四次同类问题） ([PR #310](https://github.com/orbi-build/orbi/pull/310))
+- 机制：per-run agent dir 支持插件(packages)过滤，用户级 MCP 插件不得进入无人值守会话 ([Issue #312](https://github.com/orbi-build/orbi/issues/312))
+- 根治 dirty-worktree 门禁：orbi 自有契约产物源头迁出交付树（不再逐个补 .gitignore） ([PR #327](https://github.com/orbi-build/orbi/pull/327))
+- CI：GitHub Actions 失败时自动创建去重的 bug Issue ([PR #329](https://github.com/orbi-build/orbi/pull/329))
+- Runner 自我健康巡检：主动发现连续失败、反复崩溃与自愈死循环，不再依赖人工翻日志 ([PR #333](https://github.com/orbi-build/orbi/pull/333))
+- Enhancement: Release task scope 从 milestone 自动推导（替代手动列出） ([PR #337](https://github.com/orbi-build/orbi/pull/337))
+- orbi.build quickstart omits prerequisites (uv, Pi + provider, gh auth login) and external single-repo mode ([Issue #342](https://github.com/orbi-build/orbi/issues/342); [PR #374](https://github.com/orbi-build/orbi/pull/374))
+- Enhancement: Release task 应最后处理——兜底扫描，不与其他 delivery 抢槽位 ([PR #346](https://github.com/orbi-build/orbi/pull/346))
+- Health watchdog files Runner crash-loop alerts as ai-ready tasks in the delivery repo instead of routing orbi bugs to the orbi repo ([PR #357](https://github.com/orbi-build/orbi/pull/357))
+- Doubled issue announcements: scene comment and publisher milestone both post at 'PR opened' and 'started' (same payload, 1s apart) ([PR #367](https://github.com/orbi-build/orbi/pull/367))
+- orbi.build quickstart omits prerequisites (uv, Pi + provider, gh auth login) and external single-repo mode ([PR #374](https://github.com/orbi-build/orbi/pull/374))
+- milestone 做完后自动前进，失效时 fail fast —— 触发点统一为 no_ready_issue ([PR #376](https://github.com/orbi-build/orbi/pull/376))
+- no_ready_issue 时自动给 release ticket 补 ai-ready —— 开发队列空即触发发布，消除人工打标断点 ([Issue #385](https://github.com/orbi-build/orbi/issues/385); [PR #388](https://github.com/orbi-build/orbi/pull/388))
+- no_ready_issue 时自动给 release ticket 补 ai-ready —— 开发队列空即触发发布，消除人工打标断点 ([PR #388](https://github.com/orbi-build/orbi/pull/388))
+- ci_failure_triage.py create_issue 不带 milestone：自动创建的 CI failure ticket 全部没有当前 milestone ([PR #403](https://github.com/orbi-build/orbi/pull/403))
+- Runner 交付合并不检查 GitHub CI 状态：PR head CI FAILURE 仍被 merge，main 被打红（PR #400 实证） ([PR #407](https://github.com/orbi-build/orbi/pull/407))
+- merge gate：等待 CI checks 完成后轮询 mergeable（UNKNOWN 竞态的完整修复，扩展 #398） ([PR #410](https://github.com/orbi-build/orbi/pull/410))
+- Delivery CI 门禁无法区分 main 既有红与 PR 引入失败：无辜 PR 烧 5 轮 review-fix 后转 ai-fix-needed（#409/PR #410 实证） ([PR #414](https://github.com/orbi-build/orbi/pull/414))
+- #399 实现偏差：PR #403 在 workflow 硬编码 ORBI_ACTIVE_MILESTONE，且缺 runner 每 tick 同步 variable —— 闭环不成立 ([PR #416](https://github.com/orbi-build/orbi/pull/416))
+
+### Reliability and recovery
+
+- fix: remove artificial task timeout ([PR #8](https://github.com/orbi-build/orbi/pull/8))
+- fix: keep command timeout optional ([PR #10](https://github.com/orbi-build/orbi/pull/10))
+- feat: enforce max_concurrency with cross-process slots (Issue #39) ([PR #46](https://github.com/orbi-build/orbi/pull/46))
+- feat: resume the same PR after review findings or base conflicts (Issue #45) ([PR #47](https://github.com/orbi-build/orbi/pull/47))
+- fix: keep a post-PR progress failure from blocking the delivery (Issue #60) ([PR #62](https://github.com/orbi-build/orbi/pull/62))
+- Runner 尊重 GitHub 原生 blockedBy 依赖;正文 Depends on 约定迁移 (Issue #54) ([PR #68](https://github.com/orbi-build/orbi/pull/68))
+- fix: resume stranded ai-pr-opened deliveries into the review (Issue #70) ([PR #85](https://github.com/orbi-build/orbi/pull/85))
+- resume fails fast when the scene base differs from the configured base ([PR #96](https://github.com/orbi-build/orbi/pull/96))
+- fix: fail fast when the resume worktree is missing, before any git/Pi mutation (Issue #90) ([PR #99](https://github.com/orbi-build/orbi/pull/99))
+- fix: verify the resumed PR before any git/Pi mutation (Issue #89) ([PR #102](https://github.com/orbi-build/orbi/pull/102))
+- test: pin the upstream-dead failure path and document the kill contract (Issue #75) ([PR #110](https://github.com/orbi-build/orbi/pull/110))
+- feat: P0 urgent pickup priority — p0 label first, ai-blocked terminal, priority in logs/progress (Issue #101) ([PR #113](https://github.com/orbi-build/orbi/pull/113))
+- feat: KISS/LEAN as the explicit development contract — minimal complete change only (Issue #118) ([PR #144](https://github.com/orbi-build/orbi/pull/144))
+- Make stall detection evidence-based: live upstream connection and timeout deadlines (Issue #169) ([PR #174](https://github.com/orbi-build/orbi/pull/174))
+- Run every shared-ref fetch under the base-sync lock (Issue #171) ([PR #182](https://github.com/orbi-build/orbi/pull/182))
+- Keep AI-recoverable failures in the automatic fix loop ([PR #187](https://github.com/orbi-build/orbi/pull/187))
+- Grace window for past-deadline timeout targets (Issue #181) ([PR #190](https://github.com/orbi-build/orbi/pull/190))
+- Bug：本地 llama-server 单槽吞掉下一个请求且永不返回（模型进程活着/连接 ESTABLISHED/槽位空转），任务反复 ai-blocked ([PR #236](https://github.com/orbi-build/orbi/pull/236))
+- Bug：release 门禁遇到 CI in_progress 直接失败，导致每次发布必然先 ai-blocked 一次 ([Issue #268](https://github.com/orbi-build/orbi/issues/268); [PR #328](https://github.com/orbi-build/orbi/pull/328))
+- resume 未覆盖 run 失败/回收后的重领：issue 反复以新 run_id 从头重跑（#302 已连续 5 个 run_id） ([Issue #325](https://github.com/orbi-build/orbi/issues/325); [PR #375](https://github.com/orbi-build/orbi/pull/375))
+- Bug：release 门禁遇到 CI in_progress 直接失败，导致每次发布必然先 ai-blocked 一次 ([PR #328](https://github.com/orbi-build/orbi/pull/328))
+- implement 失败现场被销毁：pi exit 1（空 stderr）→ ai-blocked 后 worktree/session 即删，无法取证（#352 案例：coverage 8m12s 后静默退出） ([Issue #355](https://github.com/orbi-build/orbi/issues/355); [PR #362](https://github.com/orbi-build/orbi/pull/362))
+- implement 失败现场被销毁：pi exit 1（空 stderr）→ ai-blocked 后 worktree/session 即删，无法取证（#352 案例：coverage 8m12s 后静默退出） ([PR #362](https://github.com/orbi-build/orbi/pull/362))
+- resume 未覆盖 run 失败/回收后的重领：issue 反复以新 run_id 从头重跑（#302 已连续 5 个 run_id） ([PR #375](https://github.com/orbi-build/orbi/pull/375))
+- Release 门禁 1 碰到未完成交付应可恢复等待，而非烧成终态 ai-blocked —— 让 release ticket 可提前就位（对称 release_waiting_ci） ([Issue #381](https://github.com/orbi-build/orbi/issues/381); [PR #386](https://github.com/orbi-build/orbi/pull/386))
+- Release 门禁 1 碰到未完成交付应可恢复等待，而非烧成终态 ai-blocked —— 让 release ticket 可提前就位（对称 release_waiting_ci） ([PR #386](https://github.com/orbi-build/orbi/pull/386))
+- CI tests fail on release commit: 3 tests hardcode /usr/bin/python3 but CI resolves python via shutil.which (blocks v0.3.1 release) ([Issue #396](https://github.com/orbi-build/orbi/issues/396); [PR #400](https://github.com/orbi-build/orbi/pull/400))
+- merge_gate 对 mergeable=UNKNOWN 直接 fail：in-session push 后必撞 GitHub 异步计算窗口，5 轮耗尽转 ai-blocked ([Issue #398](https://github.com/orbi-build/orbi/issues/398); [PR #417](https://github.com/orbi-build/orbi/pull/417))
+- CI tests fail on release commit: 3 tests hardcode /usr/bin/python3 but CI resolves python via shutil.which (blocks v0.3.1 release) ([PR #400](https://github.com/orbi-build/orbi/pull/400))
+- merge_gate 对 mergeable=UNKNOWN 直接 fail：in-session push 后必撞 GitHub 异步计算窗口，5 轮耗尽转 ai-blocked ([PR #417](https://github.com/orbi-build/orbi/pull/417))
+
+### Deployment and operations
+
+- feat: schedule pilot ticks with systemd ([PR #6](https://github.com/orbi-build/orbi/pull/6))
+- fix: let pilot service run without systemd startup limit ([PR #9](https://github.com/orbi-build/orbi/pull/9))
+- feat: systemd deployment consistency — idempotent install, pre-start drift check, doctor (Issue #103) ([PR #112](https://github.com/orbi-build/orbi/pull/112))
+- Setup: one-time config-driven initialization of GitHub, labels and local prerequisites ([PR #120](https://github.com/orbi-build/orbi/pull/120))
+- Git transport：bootstrap 默认使用 SSH，支持 workflow 文件可靠推送 ([PR #122](https://github.com/orbi-build/orbi/pull/122))
+- Change the idle polling timer from 15 to 5 minutes ([PR #130](https://github.com/orbi-build/orbi/pull/130))
+- fix: pin the post-merge install-units contract for unit template changes (Issue #131) ([PR #132](https://github.com/orbi-build/orbi/pull/132))
+- feat: executable muyan-pilot CLI entry (packaging, console script, systemd CLI ExecStart) ([PR #141](https://github.com/orbi-build/orbi/pull/141))
+- fix: pre-start unit-drift preflight self-heals with the idempotent install and re-verifies (Issue #142) ([PR #147](https://github.com/orbi-build/orbi/pull/147))
+- Templated systemd units with two timer instances (Issue #149) ([PR #151](https://github.com/orbi-build/orbi/pull/151))
+- Make the editable uv tool install the official CLI deployment (Issue #152) ([PR #153](https://github.com/orbi-build/orbi/pull/153))
+- Check uv explicitly in setup prerequisites with install guidance (Issue #156) ([PR #164](https://github.com/orbi-build/orbi/pull/164))
+- Auto-refresh the editable CLI install when packaging inputs change (Issue #158) ([PR #177](https://github.com/orbi-build/orbi/pull/177))
+- 将 exporter 部署为持久 user systemd 服务 ([PR #200](https://github.com/orbi-build/orbi/pull/200))
+- 按并发配置同步 Runner timer ([PR #212](https://github.com/orbi-build/orbi/pull/212))
+- 迁移 src package 后 editable CLI 未刷新：console script import 崩溃，Runner 每 tick ModuleNotFoundError ([PR #250](https://github.com/orbi-build/orbi/pull/250))
+- Runner: model_wait 回收后未处理 RuntimeError 使 service 失败并阻塞任务 ([PR #252](https://github.com/orbi-build/orbi/pull/252))
+- 技术债收尾：运行契约全量剔除 Muyan Pilot 命名，CLI/配置/systemd/标识统一为 orbi ([PR #261](https://github.com/orbi-build/orbi/pull/261))
+- P0 部署阻塞：品牌改名（#246/#261）后本机 systemd 部署陷入死循环，orbi 生产队列已暂停 ([PR #267](https://github.com/orbi-build/orbi/pull/267))
+- 启动门禁把 repo_dir 当 orbi 可编辑安装源：让『单仓库 X（≠orbi）』作为交付仓库需解耦 CLI 自更新与 checkout ([Issue #330](https://github.com/orbi-build/orbi/issues/330); [PR #334](https://github.com/orbi-build/orbi/pull/334))
+- document: 在线模型下 Pi 启动偶发卡死 15 分钟（根因：pi-mcp-adapter 的 keyring D-Bus 初始化在 systemd 上下文挂起） ([PR #332](https://github.com/orbi-build/orbi/pull/332))
+- 启动门禁把 repo_dir 当 orbi 可编辑安装源：让『单仓库 X（≠orbi）』作为交付仓库需解耦 CLI 自更新与 checkout ([PR #334](https://github.com/orbi-build/orbi/pull/334))
+- orbi setup crashes with a raw traceback when reporting the disabled surplus timer instance (systemctl is-enabled exit 1) ([Issue #339](https://github.com/orbi-build/orbi/issues/339); [PR #347](https://github.com/orbi-build/orbi/pull/347))
+- Non-JSON preamble on gh stdout produces an opaque 'cannot parse gh repo view output' setup failure ([Issue #340](https://github.com/orbi-build/orbi/issues/340); [PR #369](https://github.com/orbi-build/orbi/pull/369))
+- Optional model-proxy health-check failure is logged as ERROR command_failed in setup output ([Issue #341](https://github.com/orbi-build/orbi/issues/341); [PR #368](https://github.com/orbi-build/orbi/pull/368))
+- Missing/empty provider API key crashes runner, setup AND doctor with a raw traceback; doctor should report it as a finding instead ([Issue #343](https://github.com/orbi-build/orbi/issues/343); [PR #364](https://github.com/orbi-build/orbi/pull/364))
+- orbi setup does not scaffold or report model-provider config: fresh setup ends 'ok' with no pointer to orbi.toml / pi-providers.json / .orbi/env ([Issue #344](https://github.com/orbi-build/orbi/issues/344); [PR #373](https://github.com/orbi-build/orbi/pull/373))
+- orbi setup crashes with a raw traceback when reporting the disabled surplus timer instance (systemctl is-enabled exit 1) ([PR #347](https://github.com/orbi-build/orbi/pull/347))
+- orbi setup validates the provider key against the process env only, ignoring .orbi/env — the documented step 4→5 flow fails verbatim ([Issue #348](https://github.com/orbi-build/orbi/issues/348); [PR #351](https://github.com/orbi-build/orbi/pull/351))
+- orbi setup validates the provider key against the process env only, ignoring .orbi/env — the documented step 4→5 flow fails verbatim ([PR #351](https://github.com/orbi-build/orbi/pull/351))
+- Dirty deploy home blocks the ExecStartPre fast-forward with a raw git error: no structured journal line, no troubleshooting entry, self-update hard-blocked by any local edit ([Issue #352](https://github.com/orbi-build/orbi/issues/352); [PR #363](https://github.com/orbi-build/orbi/pull/363))
+- CI: actions/checkout@v4 and actions/setup-python@v5 trigger Node.js 20 deprecation warnings (forced to Node 24) ([Issue #353](https://github.com/orbi-build/orbi/issues/353); [PR #371](https://github.com/orbi-build/orbi/pull/371))
+- pr_state polls the PR against the deploy home's repo (no --repo, implicit cwd): external single-repo mode deterministically crashes wait_for_delivery after PR creation ([Issue #356](https://github.com/orbi-build/orbi/issues/356); [PR #359](https://github.com/orbi-build/orbi/pull/359))
+- pr_state polls the PR against the deploy home's repo (no --repo, implicit cwd): external single-repo mode deterministically crashes wait_for_delivery after PR creation ([PR #359](https://github.com/orbi-build/orbi/pull/359))
+- Dirty deploy home blocks the ExecStartPre fast-forward with a raw git error: no structured journal line, no troubleshooting entry, self-update hard-blocked by any local edit ([PR #363](https://github.com/orbi-build/orbi/pull/363))
+- Missing/empty provider API key crashes runner, setup AND doctor with a raw traceback; doctor should report it as a finding instead ([PR #364](https://github.com/orbi-build/orbi/pull/364))
+- Optional model-proxy health-check failure is logged as ERROR command_failed in setup output ([PR #368](https://github.com/orbi-build/orbi/pull/368))
+- Non-JSON preamble on gh stdout produces an opaque 'cannot parse gh repo view output' setup failure ([PR #369](https://github.com/orbi-build/orbi/pull/369))
+- CI: actions/checkout@v4 and actions/setup-python@v5 trigger Node.js 20 deprecation warnings (forced to Node 24) ([PR #371](https://github.com/orbi-build/orbi/pull/371))
+- 把 uv tool install / cp example.toml 收进 orbi setup，精简网站安装命令 ([Issue #372](https://github.com/orbi-build/orbi/issues/372); [PR #378](https://github.com/orbi-build/orbi/pull/378))
+- orbi setup does not scaffold or report model-provider config: fresh setup ends 'ok' with no pointer to orbi.toml / pi-providers.json / .orbi/env ([PR #373](https://github.com/orbi-build/orbi/pull/373))
+- 把 uv tool install / cp example.toml 收进 orbi setup，精简网站安装命令 ([PR #378](https://github.com/orbi-build/orbi/pull/378))
+- install-units 静默覆盖既有部署的 systemd unit（同机重装无任何警告） ([Issue #382](https://github.com/orbi-build/orbi/issues/382); [PR #394](https://github.com/orbi-build/orbi/pull/394))
+- install-units 静默覆盖既有部署的 systemd unit（同机重装无任何警告） ([PR #394](https://github.com/orbi-build/orbi/pull/394))
+- Release gate failure re-raises after blocking issue, crashing orbi@1.service (exit 1) — inconsistent with delivery error path ([Issue #397](https://github.com/orbi-build/orbi/issues/397); [PR #418](https://github.com/orbi-build/orbi/pull/418))
+- Release gate failure re-raises after blocking issue, crashing orbi@1.service (exit 1) — inconsistent with delivery error path ([PR #418](https://github.com/orbi-build/orbi/pull/418))
+
+### Observability
+
+- feat: automatically publish live task progress and outcomes (Issue #18) ([PR #42](https://github.com/orbi-build/orbi/pull/42))
+- feat: concise run-scoped journal lines for live Pi activity (Issue #40) ([PR #44](https://github.com/orbi-build/orbi/pull/44))
+- fix: drop the duplicated run= field from high-frequency journal lines (Issue #57) ([PR #59](https://github.com/orbi-build/orbi/pull/59))
+- fix: PATCH the progress comment via the GitHub update route (Issue #58) ([PR #61](https://github.com/orbi-build/orbi/pull/61))
+- fix: make the whole ProgressPublisher path a pure bypass (Issue #79) ([PR #107](https://github.com/orbi-build/orbi/pull/107))
+- Progress comment issue line shows number and title (Issue #100) ([PR #115](https://github.com/orbi-build/orbi/pull/115))
+- fix: flatten multi-line command args to one journal line in the command= log (Issue #143) ([PR #148](https://github.com/orbi-build/orbi/pull/148))
+- 可观测性：Muyan Pilot Prometheus exporter 与 Grafana Dashboard (Issue #162) ([PR #188](https://github.com/orbi-build/orbi/pull/188))
+- Backfill ai-in-progress when resuming an opened-PR delivery ([PR #195](https://github.com/orbi-build/orbi/pull/195))
+- progress PATCH/POST 把整份 body 打进 journal（~30s 一条巨行）→ 用 log_command 收敛为精简行 ([Issue #326](https://github.com/orbi-build/orbi/issues/326); [PR #390](https://github.com/orbi-build/orbi/pull/390))
+- progress PATCH/POST 把整份 body 打进 journal（~30s 一条巨行）→ 用 log_command 收敛为精简行 ([PR #390](https://github.com/orbi-build/orbi/pull/390))
+
+### Documentation
+
+- docs: publish config example instead of local config ([PR #7](https://github.com/orbi-build/orbi/pull/7))
+- docs: add AGENTS.md development contract ([PR #29](https://github.com/orbi-build/orbi/pull/29))
+- docs: add Apache License 2.0 LICENSE file and README link (Issue #81) ([PR #88](https://github.com/orbi-build/orbi/pull/88))
+- docs: add v0.1.0 open-source docs site under docs/ (Issue #104) ([PR #111](https://github.com/orbi-build/orbi/pull/111))
+- docs: blocking-command contract — timeout wrap + loop-test termination guard (Issue #95) ([PR #121](https://github.com/orbi-build/orbi/pull/121))
+- docs: Chinese docs (Mintlify i18n) + architecture & lifecycle Mermaid diagrams (Issue #116) ([PR #124](https://github.com/orbi-build/orbi/pull/124))
+- docs: v0.1.0 release reconciliation record + corrected tag v0.1.1 (Issue #97) ([PR #125](https://github.com/orbi-build/orbi/pull/125))
+- docs: complete the release navigation with the real v0.1.1/v0.1.2 pages and fix the zh home title ([PR #129](https://github.com/orbi-build/orbi/pull/129))
+- Docs: getting-started covers the model provider and the full chain ([PR #196](https://github.com/orbi-build/orbi/pull/196))
+- v0.3.0：Orbi 品牌 rebrand、GitHub org 与官网/文档入口统一 ([PR #223](https://github.com/orbi-build/orbi/pull/223))
+- 文档整治：统一事实源、删除重复内容并压缩 README/AGENTS/站点文档 ([PR #230](https://github.com/orbi-build/orbi/pull/230))
+- AGENTS.md 收敛到 ≤200 行：只留 agent 必须遵守的规则，机制说明下沉到 docs（最佳实践） ([PR #237](https://github.com/orbi-build/orbi/pull/237))
+- README 首页化：保留定位/quickstart/能力概览/文档链接，移除重复机制说明 ([PR #243](https://github.com/orbi-build/orbi/pull/243))
+- 文档去重：README/AGENTS 进一步压缩，docs 建立单一事实源（承接 #160） ([PR #244](https://github.com/orbi-build/orbi/pull/244))
+- release 状态机补一步：发布后同步文档站 Release notes（现停留在 v0.1.2） ([Issue #275](https://github.com/orbi-build/orbi/issues/275); [PR #323](https://github.com/orbi-build/orbi/pull/323))
+- document: 在线模型下 Pi 启动偶发卡死 15 分钟（根因：pi-mcp-adapter 的 keyring D-Bus 初始化在 systemd 上下文挂起） ([Issue #311](https://github.com/orbi-build/orbi/issues/311); [PR #332](https://github.com/orbi-build/orbi/pull/332))
+- release 状态机补一步：发布后同步文档站 Release notes（现停留在 v0.1.2） ([PR #323](https://github.com/orbi-build/orbi/pull/323))
+- 优化 v0.2.0 release notes：按主题整理为可读 changelog（docs + GitHub Release） ([Issue #324](https://github.com/orbi-build/orbi/issues/324); [PR #392](https://github.com/orbi-build/orbi/pull/392))
+- 补齐『外部单仓库模式』文档：#330/#334 引入的 deploy_home 解耦需要覆盖安装/setup/配置/运维 ([Issue #335](https://github.com/orbi-build/orbi/issues/335); [PR #336](https://github.com/orbi-build/orbi/pull/336))
+- 补齐『外部单仓库模式』文档：#330/#334 引入的 deploy_home 解耦需要覆盖安装/setup/配置/运维 ([PR #336](https://github.com/orbi-build/orbi/pull/336))
+- Docs: 英文化 README 作为默认版本，中文版迁移至 README.zh-CN.md 并互链 ([Issue #354](https://github.com/orbi-build/orbi/issues/354); [PR #370](https://github.com/orbi-build/orbi/pull/370))
+- Docs: 英文化 README 作为默认版本，中文版迁移至 README.zh-CN.md 并互链 ([PR #370](https://github.com/orbi-build/orbi/pull/370))
+- 优化 v0.2.0 release notes：按主题整理为可读 changelog（docs + GitHub Release） ([PR #392](https://github.com/orbi-build/orbi/pull/392))
+- Docs: remove the stale self-delivery PR counts (106/99) from README ([Issue #412](https://github.com/orbi-build/orbi/issues/412); [PR #419](https://github.com/orbi-build/orbi/pull/419))
+- Docs: remove the stale self-delivery PR counts (106/99) from README ([PR #419](https://github.com/orbi-build/orbi/pull/419))
+
+### Bug fixes
+
+- CI：GitHub Actions 失败时自动创建去重的 bug Issue ([Issue #106](https://github.com/orbi-build/orbi/issues/106); [PR #329](https://github.com/orbi-build/orbi/pull/329))
+- Bug：release 成功后把 Release URL 当 PR URL 解析，ValueError 导致 Runner 崩溃退出 ([Issue #269](https://github.com/orbi-build/orbi/issues/269); [PR #271](https://github.com/orbi-build/orbi/pull/271))
+- Bug：active_milestone 失效时 Runner 静默空转，应 fail fast 并列出候选 ([Issue #270](https://github.com/orbi-build/orbi/issues/270))
+- milestone 做完后自动前进，失效时 fail fast —— 触发点统一为 no_ready_issue ([Issue #274](https://github.com/orbi-build/orbi/issues/274); [PR #376](https://github.com/orbi-build/orbi/pull/376))
+- Bug：.gitignore 漏了 coverage.json，覆盖率门禁产物卡住交付（第四次同类问题） ([Issue #301](https://github.com/orbi-build/orbi/issues/301); [PR #310](https://github.com/orbi-build/orbi/pull/310))
+- 根治 dirty-worktree 门禁：orbi 自有契约产物源头迁出交付树（不再逐个补 .gitignore） ([Issue #302](https://github.com/orbi-build/orbi/issues/302); [PR #327](https://github.com/orbi-build/orbi/pull/327))
+- Bug：pi_providers 的 apiKey $VAR 引用未展开，第三方 provider 静默挂起无法使用 ([Issue #303](https://github.com/orbi-build/orbi/issues/303); [PR #304](https://github.com/orbi-build/orbi/pull/304))
+- Runner 停在 open 但不可领取的 milestone 上时静默空转（#274 未覆盖的第二种失效） ([Issue #320](https://github.com/orbi-build/orbi/issues/320))
+- Health watchdog files Runner crash-loop alerts as ai-ready tasks in the delivery repo instead of routing orbi bugs to the orbi repo ([Issue #345](https://github.com/orbi-build/orbi/issues/345); [PR #357](https://github.com/orbi-build/orbi/pull/357))
+- Doubled issue announcements: scene comment and publisher milestone both post at 'PR opened' and 'started' (same payload, 1s apart) ([Issue #366](https://github.com/orbi-build/orbi/issues/366); [PR #367](https://github.com/orbi-build/orbi/pull/367))
+- ci_failure_triage.py create_issue 不带 milestone：自动创建的 CI failure ticket 全部没有当前 milestone ([Issue #399](https://github.com/orbi-build/orbi/issues/399); [PR #403](https://github.com/orbi-build/orbi/pull/403))
+- CI failure: tests on PR #400 (pull_request) ([Issue #401](https://github.com/orbi-build/orbi/issues/401))
+- Runner 交付合并不检查 GitHub CI 状态：PR head CI FAILURE 仍被 merge，main 被打红（PR #400 实证） ([Issue #404](https://github.com/orbi-build/orbi/issues/404); [PR #407](https://github.com/orbi-build/orbi/pull/407))
+- CI failure: tests on PR #403 (pull_request) ([Issue #405](https://github.com/orbi-build/orbi/issues/405))
+- #399 实现偏差：PR #403 在 workflow 硬编码 ORBI_ACTIVE_MILESTONE，且缺 runner 每 tick 同步 variable —— 闭环不成立 ([Issue #406](https://github.com/orbi-build/orbi/issues/406); [PR #416](https://github.com/orbi-build/orbi/pull/416))
+- CI failure: tests on PR #407 (pull_request) ([Issue #408](https://github.com/orbi-build/orbi/issues/408))
+- merge gate：等待 CI checks 完成后轮询 mergeable（UNKNOWN 竞态的完整修复，扩展 #398） ([Issue #409](https://github.com/orbi-build/orbi/issues/409); [PR #410](https://github.com/orbi-build/orbi/pull/410))
+- Delivery CI 门禁无法区分 main 既有红与 PR 引入失败：无辜 PR 烧 5 轮 review-fix 后转 ai-fix-needed（#409/PR #410 实证） ([Issue #413](https://github.com/orbi-build/orbi/issues/413); [PR #414](https://github.com/orbi-build/orbi/pull/414))
+
+- tag: `v0.3.1`
+- release commit: `98fb55c7843bdf7938d9a0fd9ee645431c05d154`
+- release task: Issue #379
+
+## Scope (verified item by item)
+
+- PR #5 merged (mergeCommit=af0c662b9c9accd38fbee66493fc35bbcf60d0c5)
+- PR #6 merged (mergeCommit=43c56a927bf4030f60128a4df46792b89616a056)
+- PR #7 merged (mergeCommit=15bde38857380000b0acffe048da42f0f02c6623)
+- PR #8 merged (mergeCommit=9ea063a7003c14caece892b6810837b7ad0091d9)
+- PR #9 merged (mergeCommit=c933551cd9083efd2f8a37b82529eb600e66b714)
+- PR #10 merged (mergeCommit=fb8ead25cdd960b38c546d8f134672f0a14cb19f)
+- PR #17 merged (mergeCommit=c887d1392f4fe47f9084c0fd75e1fb677cc8d14d)
+- PR #26 merged (mergeCommit=8f304a52538e97e7a5595e7baf6c6bc82d181ac7)
+- PR #28 merged (mergeCommit=a08b617fdbdc76f48cbbb476f3c87731be73d822)
+- PR #29 merged (mergeCommit=f26f987deffbfa094eee84aa03de9715ea24526c)
+- PR #35 merged (mergeCommit=9530c7c4815932089f6108010a455d657834e8ea)
+- PR #36 merged (mergeCommit=a0eb92aff07dc83640f1808d3e483aac96ba756b)
+- PR #37 merged (mergeCommit=aff4113068a5601cea87830f5422f55ad95e3e41)
+- PR #38 merged (mergeCommit=44a71440cbda53bc8fd78c8e6f1f41711a628d4a)
+- PR #42 merged (mergeCommit=f42c35ebe2f5206ff0c1398f60c86cc16061b2c3)
+- PR #43 merged (mergeCommit=b7fab34679608ff3a871db0ab880b469a9c44aff)
+- PR #44 merged (mergeCommit=106756bf80c8b3f900bce1211397518f1345c620)
+- PR #46 merged (mergeCommit=63577240b80567f952ac028c0781fb3663a60c89)
+- PR #47 merged (mergeCommit=a93bf6093c10ef0b4ea6cde622a8c19756fcc31c)
+- PR #59 merged (mergeCommit=fe10b72aca1aa39f51f5c08ca22b65b7c4190602)
+- PR #61 merged (mergeCommit=49cb2540e68f376a5405b89b46aff731049bb02e)
+- PR #62 merged (mergeCommit=74ff0bc4529a5ac983ca4c55250ce8f98ff22bf6)
+- PR #63 merged (mergeCommit=ca17b2d693f776eb4a5999bd9b79f3a58b11a374)
+- PR #68 merged (mergeCommit=799b04b161464c0139ad03ebcc76330819b4865d)
+- PR #69 merged (mergeCommit=133786e391a3eec9c23f73c5172f6dedd6faea4c)
+- PR #84 merged (mergeCommit=fd5b6e82324a15f752c761e2e46c2caac55b5642)
+- PR #85 merged (mergeCommit=d76045a734de717a1b8edfdd1e26a3f021919fd1)
+- PR #86 merged (mergeCommit=468fdd4e1251f1b497136ac232d97551d04bdf30)
+- PR #87 merged (mergeCommit=724892763f90eaa166ee20f26157335b51111222)
+- PR #88 merged (mergeCommit=b9a7e1fe9021629bb14f2b36ea1302d818a5981c)
+- PR #92 merged (mergeCommit=f6c065e8ec7ec53d7e9fb99e6475c1bc16c2dabf)
+- PR #96 merged (mergeCommit=13e42929452b2043b15d470e03b03a49070119d7)
+- PR #99 merged (mergeCommit=b2268239bd38b38cd12ee7e6428ee97a9168c5bb)
+- PR #102 merged (mergeCommit=7f75c65e59058be41b272060ce8b16b37e56daed)
+- Issue #106 closed
+- PR #107 merged (mergeCommit=e2cc6dca5b66e5a6b16df38fc9819a2c13a78fa7)
+- PR #109 merged (mergeCommit=678c72f91ffc18f8bf79c09a6ccbec28c1f57d0f)
+- PR #110 merged (mergeCommit=6e793e54b5cf830f84ce3311e468a62f1210ebf5)
+- PR #111 merged (mergeCommit=06780d492087ec0ddabfb47f20daa1a2ea53578a)
+- PR #112 merged (mergeCommit=e3f9fb63f94104c3572a93b99769aa6f55905126)
+- PR #113 merged (mergeCommit=a58e2d5c7de9d5dce220be211d527b79fe0b576b)
+- PR #115 merged (mergeCommit=c1d9feb8dbd32bddbab778ecbf2b4026cf387443)
+- PR #120 merged (mergeCommit=f7fb0bfca84e178b0a45b0469399d943827ea78f)
+- PR #121 merged (mergeCommit=0f3038ef8c292c03d6d57e33fe172fe04516a7a0)
+- PR #122 merged (mergeCommit=e321bbb7908edc61c5e39762d2748cd635676deb)
+- PR #123 merged (mergeCommit=df5749e8f7aa945fa8b40171abcdbdbc3b090aba)
+- PR #124 merged (mergeCommit=87ec2c4a904caa834fce697def06d7d2bcd9579b)
+- PR #125 merged (mergeCommit=ec9231be109c00c9261369453f8cb75334b51c45)
+- PR #127 merged (mergeCommit=abe48f1e64aa6fa2e76633023df5b52141b35082)
+- PR #129 merged (mergeCommit=15dbb5d5f1f689a16c411eba975d3215b20e0f27)
+- PR #130 merged (mergeCommit=bc5aed78821a8fbcafde296cd5189709cf5b1412)
+- PR #132 merged (mergeCommit=5a204b48a8e7473cab19f805736920d930a4866f)
+- PR #141 merged (mergeCommit=d09ae86d4e85b00ab6e151f94e64354414a61c04)
+- PR #144 merged (mergeCommit=f07ca908e1be4721b701b1a909a509517436ba44)
+- PR #145 merged (mergeCommit=b67ef07058eecd36d6be9b3c685f7575d0a772ad)
+- PR #147 merged (mergeCommit=691ca632255eaf109971d2378bbf03d7c3335369)
+- PR #148 merged (mergeCommit=e784bb805afbf05db2b13088cfb62b68f687f0a9)
+- PR #150 merged (mergeCommit=e0cf48d6755a2c27b53780c58254c464391e6eba)
+- PR #151 merged (mergeCommit=45a4c93e64f1fa88f2846b294749da30aefcb879)
+- PR #153 merged (mergeCommit=ec47b4608d0b05f12eaea970ee2854cf02c9cb3f)
+- PR #164 merged (mergeCommit=8cf5d43ed25d3c68aa6957b066268ade9b553279)
+- PR #165 merged (mergeCommit=001f280d6838de318d8b1548a810af61f7848925)
+- PR #166 merged (mergeCommit=d5244fce5f65a25adb67dddfbe202fbf272e611a)
+- PR #167 merged (mergeCommit=6f3e1d507dffdad95f4638b46bfc89d8cf256e37)
+- PR #170 merged (mergeCommit=75ce22fa0fbc7734c6ed74e032bdb415b7ed8093)
+- PR #174 merged (mergeCommit=920a4b3c0927c2ae202a0f79b6941bc5b0bc5079)
+- PR #177 merged (mergeCommit=5a5929f7a03923f1f60c18bbfa86eeeff154ce63)
+- PR #182 merged (mergeCommit=6420338b6cda19e201d2d073326c40faf0717508)
+- PR #184 merged (mergeCommit=aa0fff1e2ebd84d6f1594c5b19ccca6216053002)
+- PR #185 merged (mergeCommit=7ea30492899c0057ebd8e18163b06ddaaaea8011)
+- PR #187 merged (mergeCommit=70ee9dcfc0a1df5f1999957317e456bb3161f974)
+- PR #188 merged (mergeCommit=239e7e161aa19da5cda2a0855f2013a17d019ddb)
+- PR #190 merged (mergeCommit=5dd7b7c3197f00f1aa0384a95b56392fc6767f27)
+- PR #193 merged (mergeCommit=4b3212b9643961ec7c3a9f168f3137582d634bb4)
+- PR #195 merged (mergeCommit=6f25005c3dd6630793c7ead8a8c5375c11639ecd)
+- PR #196 merged (mergeCommit=09e02b3e4441067084714e62699094c3d9791676)
+- PR #199 merged (mergeCommit=f87716238786f5e50089d0054ad8a27c675a0530)
+- PR #200 merged (mergeCommit=9fce945402f9aa66b9eb5ec14fa6c29e48d2baf9)
+- PR #203 merged (mergeCommit=f5dd821dc2cf022923629481bc04a619dfd43126)
+- PR #206 merged (mergeCommit=83acfe29084077308c84fb5aae6fcd19718ba0eb)
+- PR #207 merged (mergeCommit=b720e9584ffe5c487939e541b2c99f3dc6ee5f4a)
+- PR #208 merged (mergeCommit=4c4314b543bd54affbb8755bf9d6318e3012fe76)
+- PR #210 merged (mergeCommit=42109f6ca116c204c39c1c3c0cfd13c809eacd76)
+- PR #211 merged (mergeCommit=717b5552004a746f4761c55b6df6f3d01c5fa68b)
+- PR #212 merged (mergeCommit=dcec690d9f809873dff6e6e7116341e1b9bb62fc)
+- PR #213 merged (mergeCommit=2277aed8de6a9cf884dee4b878a4cdaf211e17f9)
+- PR #220 merged (mergeCommit=9d241ef719ba83cd68ac5161d25e69c39d100406)
+- PR #221 merged (mergeCommit=5f76582f7c261b92b3e53e2ca12f15de25717f1e)
+- PR #222 merged (mergeCommit=a604e416ae4fad1e2dcdba035b2490c069d83cfa)
+- PR #223 merged (mergeCommit=0c45f57d96c6f55add1346602df930743f67195f)
+- PR #224 merged (mergeCommit=71c832489eae00157b16576068857507f135c329)
+- PR #229 merged (mergeCommit=e4f2178d1d80f17c07685e9d7ac2cf4a20c93470)
+- PR #230 merged (mergeCommit=156cb374f9a94315579fd112b3e06798dcfe0ba4)
+- PR #236 merged (mergeCommit=7853b059761d36335889fd9199c99fad70a3dd60)
+- PR #237 merged (mergeCommit=7694f4afe2af04d89b35e66b195e7d2f669ac498)
+- PR #238 merged (mergeCommit=35cbef1b7308d6a746801c42eb9fce68f095984e)
+- PR #240 merged (mergeCommit=397a8c2671f6c8446a8dc56f246e79ac5f3ceafe)
+- PR #242 merged (mergeCommit=32b4a0f491c07bb91b124e0bb8184173d1ec4549)
+- PR #243 merged (mergeCommit=04edf77e1d7d72a54f723a0f6a6c3b496655eec0)
+- PR #244 merged (mergeCommit=5935c81988ecf088522d5d7d8fe21971629dcde1)
+- PR #245 merged (mergeCommit=bd6013e62bd392227afeaec97666458de1ae5e49)
+- PR #247 merged (mergeCommit=7315c99e4f69d961cecd1c853ab671db49c801f0)
+- PR #250 merged (mergeCommit=2cd32005fcc433f782397333d1e6a03ae45c3bc1)
+- PR #251 merged (mergeCommit=37e33dc0733b6e02eef7c48f79ddfe3a009c9484)
+- PR #252 merged (mergeCommit=09dd7f69a6f26c61f9446d8b57405ebbb8cc191d)
+- Issue #253 closed
+- Issue #255 closed
+- PR #260 merged (mergeCommit=37144efc26f21701cc324c56b3b230d6882ec472)
+- PR #261 merged (mergeCommit=bbe95b966dd6b233f9073450d09e895603a0f0c6)
+- PR #265 merged (mergeCommit=3c6368bf19ef7048a2ccb18fbc60b59e75c49a14)
+- Issue #266 closed
+- PR #267 merged (mergeCommit=2c11a3f61b918f1faa3b81760d871cb0741733d7)
+- Issue #268 closed
+- Issue #269 closed
+- Issue #270 closed
+- PR #271 merged (mergeCommit=2adac1425c7ecd0f1f2e3db7507b91867ddc505c)
+- Issue #273 closed
+- Issue #274 closed
+- Issue #275 closed
+- Issue #301 closed
+- Issue #302 closed
+- Issue #303 closed
+- PR #304 merged (mergeCommit=dafdb038f839c01ac4bdc7d312223bc54f3159d7)
+- PR #310 merged (mergeCommit=2faf7419c0ed40a6ec18c1d5213e14d4e5cdc8fa)
+- Issue #311 closed
+- Issue #312 closed
+- Issue #320 closed
+- PR #323 merged (mergeCommit=e70df74e65d3841074443ff137a3f0e1047c6947)
+- Issue #324 closed
+- Issue #325 closed
+- Issue #326 closed
+- PR #327 merged (mergeCommit=d184dd3bb0e8aa35acb65125a8da967730d6b7eb)
+- PR #328 merged (mergeCommit=c96e88067ca7d834b0972920b45d65858cfc9ccf)
+- PR #329 merged (mergeCommit=0bc1fb437d562fd564a495b959bc69a21a4a5702)
+- Issue #330 closed
+- PR #332 merged (mergeCommit=bfb10fb2acd00c77c8c360cdd6d3e6d9771025db)
+- PR #333 merged (mergeCommit=5f54067f2c198979b08dd72f8869a1c821fa10e1)
+- PR #334 merged (mergeCommit=7c12e30a60b66c1b74c1486a6f2701605c980e59)
+- Issue #335 closed
+- PR #336 merged (mergeCommit=1c94211f09158aa7a7a64fa2492fd607936976a9)
+- PR #337 merged (mergeCommit=927ec83269550cf2f95e33591cea718bef74292c)
+- Issue #339 closed
+- Issue #340 closed
+- Issue #341 closed
+- Issue #342 closed
+- Issue #343 closed
+- Issue #344 closed
+- Issue #345 closed
+- PR #346 merged (mergeCommit=26978eee27a249d55c71888c2ff2274b894bf5c6)
+- PR #347 merged (mergeCommit=a9f58c5a864d3500adfdda9528268e0c8ec669ec)
+- Issue #348 closed
+- PR #351 merged (mergeCommit=483752683c869da55cf4c45e003e098b1d4f90d0)
+- Issue #352 closed
+- Issue #353 closed
+- Issue #354 closed
+- Issue #355 closed
+- Issue #356 closed
+- PR #357 merged (mergeCommit=8d5c381234ffabbc557f3bbbea3f9d1520c419b3)
+- PR #359 merged (mergeCommit=cec5cb7e7bac1bcabb37ecbc49e36862a12db166)
+- PR #362 merged (mergeCommit=7eddb91466ae55da591f16d607b6adb18f28af61)
+- PR #363 merged (mergeCommit=961642e8a0ca00ad69bec13a71060161e6833885)
+- PR #364 merged (mergeCommit=b8ce2658298f5c5ed50c645e56ce87d242841ea0)
+- Issue #366 closed
+- PR #367 merged (mergeCommit=18a49c7a65af5f971597cc864b15b4c42a949d05)
+- PR #368 merged (mergeCommit=b3579fe90a3c6af894e1badc21742f056d7fe1c8)
+- PR #369 merged (mergeCommit=2f4b90498da8452da81bef036c48894d2baa384d)
+- PR #370 merged (mergeCommit=2784cf3405141ed8188899af68367945cdc54999)
+- PR #371 merged (mergeCommit=fa50af42c0bb90d214ce44e842e4d22d7ac36e2b)
+- Issue #372 closed
+- PR #373 merged (mergeCommit=e427f5d78fabe0307d962eb98dbde6066e9fd2b3)
+- PR #374 merged (mergeCommit=e82a79b0e9401c21eb0f3e5ccc1ebda1a8797291)
+- PR #375 merged (mergeCommit=c0dc3edd8e48a77b622cca77120bfa29b2566fd3)
+- PR #376 merged (mergeCommit=c63afb4fdd3088dc5499ce67fc875c7f2fe7759c)
+- PR #378 merged (mergeCommit=6010dd3570793d3b16e172cc6bdfa231658a7566)
+- Issue #381 closed
+- Issue #382 closed
+- Issue #385 closed
+- PR #386 merged (mergeCommit=d2e8b04d11cf034a05a31d350ef5d137a923a293)
+- PR #388 merged (mergeCommit=1f6ec8bba64f922f8f8a9964f0d9aadeeb5beccc)
+- PR #390 merged (mergeCommit=3dd0d598f0cfcc79d7fe7bd497c635bb17aa282e)
+- PR #392 merged (mergeCommit=830f4b15476b88463b09d730f9f13d2ed6e71b72)
+- PR #394 merged (mergeCommit=386ebba54ea48ac1b6f1d45d4b382a38d52a5f56)
+- Issue #396 closed
+- Issue #397 closed
+- Issue #398 closed
+- Issue #399 closed
+- PR #400 merged (mergeCommit=7a016a6c5c67424517aab5c1137cd07b27728ff2)
+- Issue #401 closed
+- PR #403 merged (mergeCommit=806e66e6a524fc38125701c38e5e850f0be17364)
+- Issue #404 closed
+- Issue #405 closed
+- Issue #406 closed
+- PR #407 merged (mergeCommit=2e223debfbbac4da2d8591bdce1bf196d772a07f)
+- Issue #408 closed
+- Issue #409 closed
+- PR #410 merged (mergeCommit=72b366a6f80cd6abcaf8a034f64ecea3e530eabc)
+- Issue #412 closed
+- Issue #413 closed
+- PR #414 merged (mergeCommit=08e2aa1325d8681d882c6a60218db30e428e63a6)
+- PR #416 merged (mergeCommit=c9dd916c5ee5a73d55ed8d2d3865e5d59b0947f7)
+- PR #417 merged (mergeCommit=20566ea23ab75f3cde475ac3a0366120e39d7fcf)
+- PR #418 merged (mergeCommit=bb40ddca2ffecae7433b24a2e89433585e412ae7)
+- PR #419 merged (mergeCommit=98fb55c7843bdf7938d9a0fd9ee645431c05d154)
+- NOT released (still open in milestone v0.3.1): open Issue #420 根目录 3 个 CI/gate 脚本（ci_failure_triage.py / coverage_gate.py / diff_coverage_gate.py）移入 tools/ 并同步更新所有引用
+- NOT released (still open in milestone v0.3.1): open Issue #379 Release task：发布 v0.3.1 并完成远端交付对账
+
+## Pre-release gates
+
+- no open Issue carries ai-in-progress / ai-pr-opened / ai-fix-needed
+- CI on the release commit: 3 check(s) all success/neutral/skipped (waited 180s for pending checks)
+- no open PR targets main
+
+## Tests
+
+- declared test command and tiered coverage gate (line/branch >= 95%, Issue #234) passed in a clean worktree at 98fb55c7843bdf7938d9a0fd9ee645431c05d154 (timeout 1800s)
+
+run_id=50c4c4d5
