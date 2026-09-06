@@ -487,7 +487,7 @@ def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
     assert scene is not None
     # The scene carries only what the runner cannot derive itself;
     # branch and worktree are derived from config + issue + run id.
-    base_sha = re.search(r"base_sha=([0-9a-f]{40})", opened).group(1)
+    base_sha = re.search(r"- base_sha: ([0-9a-f]{40})", opened).group(1)
     assert scene == {
         "run_id": run_id,
         "base_branch": "main",

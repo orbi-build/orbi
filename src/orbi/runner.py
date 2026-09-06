@@ -102,6 +102,8 @@ from orbi.delivery_labels import (
 from orbi.progress import (
     RUN_MARKER_PATTERN,
     ProgressPublisher,
+    field_block,
+    format_status_comment,
     format_elapsed,
     progress_body,
     run_marker,
@@ -2957,11 +2959,11 @@ def release_success_comment_body(run_id: str, run_info: str,
     evidence (Issue #214: the Milestone whose title is the released
     version is closed on the success path).
     """
+    info = _run_info_fields(run_info)
     return "\n".join([
-        run_marker(run_id),
-        f"Orbi released: {release_url}",
-        run_info,
-        f"tag={tag} release_commit={release_commit}",
+        field_block(run_id, f"Orbi released: {release_url}", {
+            **info, "tag": tag, "release_commit": release_commit,
+        }),
         "",
         "## Scope (verified item by item)",
         "",
@@ -2996,15 +2998,11 @@ def release_failure_comment_body(run_id: str, run_info: str,
     reason, so the recoverable scene is on GitHub, not only in the
     journal.
     """
-    return "\n".join([
-        run_marker(run_id),
-        "Orbi release failed (ai-blocked)",
-        run_info,
-        "",
-        f"failure: {error}",
-        "",
-        f"run_id={run_id}",
-    ])
+    return field_block(
+        run_id, "Orbi release failed (ai-blocked)", {
+            **_run_info_fields(run_info), "failure": error,
+        },
+    )
 
 
 def process_release(issue: dict, config: dict, source_repo: str) -> str:
@@ -3686,7 +3684,7 @@ def apply_label_patch(number: int, *, repo: str, event: str,
 
 def comment_issue(number: int, *, repo: str, body: str) -> None:
     run_command(["gh", "issue", "comment", str(number), "--repo", repo,
-                 "--body", body])
+                 "--body", format_status_comment(body)])
 
 
 def issue_comments(number: int, *, repo: str) -> list[dict]:
@@ -3748,14 +3746,26 @@ def task_branch(source_repo: str, number: int, run_id: str) -> str:
     )
 
 
+def _run_info_fields(run_info: str) -> dict[str, str]:
+    """Extract the runner-owned key/value fields for comment rendering."""
+    return dict(
+        part.split("=", 1) for part in run_info.split()
+        if "=" in part
+    )
+
+
 def started_pi_comment_body(run_id: str, run_info: str, branch: str,
                             worktree: Path) -> str:
     """The start comment doubles as the recoverable run scene (Issue #45)."""
-    return (
-        f"{run_marker(run_id)}\n"
-        f"Orbi started Pi: {run_info} branch={branch} "
-        f"worktree={worktree}"
+    fields = _run_info_fields(run_info)
+    fields["branch"] = str(branch)
+    fields["worktree"] = str(worktree)
+    info = _run_info_fields(run_info)
+    headline = "Orbi started Pi: " + " ".join(
+        f"{key}={info[key]}" for key in ("run_id", "priority")
+        if key in info
     )
+    return field_block(run_id, headline, fields)
 
 
 def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str) -> str:
@@ -3768,10 +3778,9 @@ def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str) -> str:
     are derived from the configured repo_dir, source_repo, Issue number
     and run_id — a comment must never be able to name a local path.
     """
-    return (
-        f"{run_marker(run_id)}\n"
-        f"Orbi opened PR: {pr_url} ({run_info})"
-    )
+    fields = _run_info_fields(run_info)
+    headline = "Orbi opened PR: " + pr_url
+    return field_block(run_id, headline, fields)
 
 
 OPENED_PR_PREFIX = "Orbi opened PR: "
@@ -3790,9 +3799,19 @@ def parse_pr_comment(body: str) -> dict | None:
     if not isinstance(body, str) or OPENED_PR_PREFIX not in body:
         return None
     head = body.split(OPENED_PR_PREFIX, 1)[1]
-    pr_url, _, fields_part = head.partition(" (")
+    pr_head = head.partition(" (")[0].splitlines()
+    pr_url = pr_head[0].strip() if pr_head else ""
     fields: dict[str, str] = {}
-    for part in fields_part.rstrip(")").split():
+    # New comments use `- key: value`; existing comments use a
+    # parenthesized `key=value` block. Accept both during recovery.
+    for line in head.splitlines()[1:]:
+        match = re.match(
+            r"\s*-\s*([A-Za-z_][\w-]*)(?::\s*|=)(.*)\s*$", line,
+        )
+        if match:
+            fields[match.group(1)] = match.group(2)
+    legacy = head.partition(" (")[2].rstrip(")")
+    for part in legacy.split():
         key, _, value = part.partition("=")
         if key:
             fields[key] = value
@@ -7519,6 +7538,7 @@ def comment_pr(number: int, *, repo: str, body: str) -> None:
         "gh", "pr", "comment", str(number), "--repo", repo,
         "--body", body,
     ])
+
 
 def _pr_head_repo(pr: dict) -> str:
     """Return `owner/name` of the PR head repo, or '<missing>' if absent."""

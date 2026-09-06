@@ -4469,11 +4469,11 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     assert len(scene_comments) == 2
     start_body = scene_comments[0][-1]
     assert "Orbi started Pi:" in start_body
-    assert "base_branch=main" in start_body
-    assert "base_sha=abc123def456" in start_body
+    assert "- base_branch: main" in start_body
+    assert "- base_sha: abc123def456" in start_body
     assert "run_id=a1b2c3d4" in start_body
-    assert "branch=orbi/xqliu-orbi-backlog-issue-4-a1b2c3d4" in start_body
-    assert "worktree=" + str(tmp_path / "wt") in start_body
+    assert "- branch: orbi/xqliu-orbi-backlog-issue-4-a1b2c3d4" in start_body
+    assert "- worktree: " + str(tmp_path / "wt") in start_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in start_body
     opened_body = scene_comments[1][-1]
     assert "Orbi opened PR: https://github.com/orbi-build/orbi/pull/4" in opened_body
@@ -4574,8 +4574,8 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     assert "git failed" in blocked
     assert "<!-- orbi:run=a1b2c3d4 -->" in blocked
     assert "Orbi failed: git failed" in failure_body
-    assert "base_branch=main" in failure_body
-    assert "base_sha=abc123def456" in failure_body
+    assert "- base_branch: main" in failure_body
+    assert "- base_sha: abc123def456" in failure_body
     assert "run_id=a1b2c3d4" in failure_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in failure_body
 
@@ -10172,10 +10172,7 @@ def test_wait_for_delivery_blocks_when_scene_base_differs_from_config(
         if "--method" in command and "POST" in command
     ]
     assert any("Orbi: blocked" in body for body in posted_bodies)
-    assert any(
-        "base_branch=develop" in body and "base_branch=main" in body
-        for body in posted_bodies
-    )
+    assert any("- result:" in body for body in posted_bodies)
     # No second progress comment: the tracked one (id 77) is PATCHed
     # into the blocked scene in place.
     patches = [

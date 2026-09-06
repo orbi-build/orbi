@@ -12,6 +12,18 @@ import pytest
 from orbi import progress
 
 
+def test_format_status_comment_non_string_is_unchanged():
+    assert progress.format_status_comment(None) is None
+
+
+def test_format_status_comment_expands_marked_failure():
+    body = progress.format_status_comment(
+        "<!-- orbi:run=abc12345 -->\nOrbi failed: boom (run_id=abc12345)",
+    )
+    assert "Orbi failed: boom" in body
+    assert "- run_id=abc12345" in body
+
+
 def test_run_marker_is_hidden_html_comment_with_run_id():
     marker = progress.run_marker("abc12345")
     assert marker == "<!-- orbi:run=abc12345 -->"
@@ -542,19 +554,44 @@ def test_publisher_patch_fails_fast_without_tracked_comment():
     assert calls == []
 
 
-def test_publisher_milestone_posts_short_standalone_comment():
+def test_publisher_milestone_omits_result_for_only_key_value_fields():
     publisher, calls = make_publisher()
-    publisher.milestone("tests passed")
+    publisher.milestone("started: base_branch=main")
+    body = calls[0][-1]
+    assert "- base_branch: main" in body
+    assert "- result:" not in body
+
+
+def test_publisher_milestone_keeps_prose_with_key_value_fields():
+    publisher, calls = make_publisher()
+    publisher.milestone("merged: https://example.test merge_commit=m1")
+    body = calls[0][-1]
+    assert "- result: https://example.test merge_commit=m1" in body
+    assert "- merge_commit: m1" in body
+
+
+def test_publisher_milestone_keeps_prose_and_key_value_fields():
+    publisher, calls = make_publisher()
+    publisher.milestone("blocked: base_branch=develop base_branch=main")
+    body = calls[0][-1]
+    assert "- result: base_branch=develop base_branch=main" in body
+    assert "- base_branch: main" in body
+
+
+def test_publisher_milestone_posts_multiline_field_block():
+    publisher, calls = make_publisher()
+    publisher.milestone("tests passed: 156 passed in 4.43s")
     assert calls == [
         [
             "gh", "api", "repos/xqliu/orbi/issues/18/comments",
             "--method", "POST",
             "--field",
             "body=<!-- orbi:run=abc12345 -->\n"
-            "Orbi: tests passed run_id=abc12345",
+            "Orbi: tests passed\n"
+            "- result: 156 passed in 4.43s\n"
+            "- run_id=abc12345",
         ],
     ]
-    # A milestone never touches the tracked progress comment.
     assert publisher.comment_id is None
 
 
