@@ -355,9 +355,9 @@ def test_e2e_one_run_id_carries_every_event_of_the_attempt(
     install_fake_gh(monkeypatch, comments)
     caplog.set_level("INFO")
 
-    pr_url = runner.process_issue(issue(), config_for(clone, tmp_path), REPO)
+    result = runner.process_issue(issue(), config_for(clone, tmp_path), REPO)
 
-    assert pr_url == PR_URL
+    assert result.url == PR_URL
     run_id = runner.current_run_id()
     assert re.fullmatch(r"[0-9a-f]{8}", run_id)
 
@@ -450,7 +450,7 @@ def test_e2e_failed_attempt_marks_blocked_with_same_run_id(
     # `None` instead of re-raising; the run-id assertions below are
     # unchanged.
     assert runner.process_issue(issue(), config_for(clone, tmp_path),
-                                REPO) is None
+                                REPO).kind == "failed"
 
     # The failure report carries the same run id as the start comment
     # (progress + started Pi + failure + blocked milestone).
@@ -514,7 +514,7 @@ def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
     # Issue #239: the failure path runs (the `claiming_edit` above
     # suppresses its label transition, simulating the kill) and
     # `process_issue` returns `None` instead of re-raising.
-    assert runner.process_issue(issue(), config, REPO) is None
+    assert runner.process_issue(issue(), config, REPO).kind == "failed"
     first_worktree = worktree_for(clone, "a1b2c3d4")
     assert first_worktree.is_dir()
     # The kill left the label behind: the fake state still carries it.
@@ -530,11 +530,11 @@ def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
     monkeypatch.setattr(runner, "edit_issue", real_edit_issue)
     monkeypatch.setattr(runner, "new_run_id", lambda: "b2c3d4e5")
-    pr_url = runner.process_issue(issue(), config, REPO)
+    result = runner.process_issue(issue(), config, REPO)
 
     # The reused run id drives the branch and the worktree: no second
     # worktree, the first one is the scene the run continues in.
-    assert pr_url == PR_URL
+    assert result.url == PR_URL
     assert runner.current_run_id() == "a1b2c3d4"
     assert not worktree_for(clone, "b2c3d4e5").exists()
     assert git(
@@ -571,8 +571,8 @@ def test_e2e_startup_sequence_visible_in_journal(
     install_fake_gh(monkeypatch, comments)
     caplog.set_level("INFO")
 
-    pr_url = runner.process_issue(issue(), config_for(clone, tmp_path), REPO)
-    assert pr_url == PR_URL
+    result = runner.process_issue(issue(), config_for(clone, tmp_path), REPO)
+    assert result.url == PR_URL
     run_id = runner.current_run_id()
 
     lines = [m for m in caplog.messages if m.startswith(f"[{run_id}]")]

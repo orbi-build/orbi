@@ -815,13 +815,13 @@ def test_process_issue_pickup_record_failure_is_bypass(
         ),
     )
     with caplog.at_level("INFO"):
-        pr_url = runner.process_issue(
+        result = runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
             {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
              "base_branch": "main"},
             "xqliu/muyan-ceo",
         )
-    assert pr_url == "https://github.com/muyantech/orbi/pull/4"
+    assert result.url == "https://github.com/muyantech/orbi/pull/4"
     assert "health_pickup_record_failed" in caplog.text
 
 
@@ -864,13 +864,13 @@ def test_process_issue_failure_record_failure_is_bypass(
         ),
     )
     with caplog.at_level("INFO"):
-        pr_url = runner.process_issue(
+        result = runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
             {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
              "base_branch": "main"},
             "xqliu/muyan-ceo",
         )
-    assert pr_url is None
+    assert result.kind == "failed"
     assert "health_failure_record_failed" in caplog.text
 
 

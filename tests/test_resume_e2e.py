@@ -448,8 +448,8 @@ def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
     config = config_for(clone, tmp_path)
 
     # ---- First delivery: PR A is opened on the old base.
-    pr_url = runner.process_issue(issue(), config, REPO)
-    assert pr_url == PR_URL
+    result = runner.process_issue(issue(), config, REPO)
+    assert result.url == PR_URL
     run_id = runner.current_run_id()
     assert re.fullmatch(r"[0-9a-f]{8}", run_id)
     branch = f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-{run_id}"
@@ -589,8 +589,8 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
     config = config_for(clone, tmp_path)
 
     # First delivery: PR A is opened; the Issue is now awaiting review.
-    pr_url = runner.process_issue(issue(), config, REPO)
-    assert pr_url == PR_URL
+    result = runner.process_issue(issue(), config, REPO)
+    assert result.url == PR_URL
     run_id = runner.current_run_id()
     worktree = worktree_for(clone, run_id)
     head_before = git(worktree, "rev-parse", "HEAD")
@@ -788,8 +788,8 @@ def test_e2e_review_failure_keeps_pr_and_stays_fix_needed(
     caplog.set_level("INFO")
     config = config_for(clone, tmp_path)
 
-    pr_url = runner.process_issue(issue(), config, REPO)
-    assert pr_url == PR_URL
+    result = runner.process_issue(issue(), config, REPO)
+    assert result.url == PR_URL
     run_id = runner.current_run_id()
     branch = f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-{run_id}"
     worktree = worktree_for(clone, run_id)
@@ -799,7 +799,7 @@ def test_e2e_review_failure_keeps_pr_and_stays_fix_needed(
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI_REVIEW_FAILING)
     runner.set_run_id(run_id)
     runner.wait_for_delivery(
-        pr_url, issue(), config, REPO, poll_interval=0.01,
+        result.url, issue(), config, REPO, poll_interval=0.01,
     )
 
     # The Issue is marked ai-fix-needed (leaving the opened-PR state)
@@ -845,8 +845,8 @@ def test_e2e_pr_closed_while_fix_needed_removes_leftover_label(
     caplog.set_level("INFO")
     config = config_for(clone, tmp_path)
 
-    pr_url = runner.process_issue(issue(), config, REPO)
-    assert pr_url == PR_URL
+    result = runner.process_issue(issue(), config, REPO)
+    assert result.url == PR_URL
     run_id = runner.current_run_id()
 
     # The review found a finding the session could not fix: the Issue
@@ -859,7 +859,7 @@ def test_e2e_pr_closed_while_fix_needed_removes_leftover_label(
 
     runner.set_run_id(run_id)
     runner.wait_for_delivery(
-        pr_url, issue(), config, REPO, poll_interval=0.01,
+        result.url, issue(), config, REPO, poll_interval=0.01,
     )
 
     # The Issue is marked ai-blocked; the blocked patch clears every

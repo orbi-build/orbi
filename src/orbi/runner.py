@@ -43,6 +43,7 @@ import tomllib
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 # NOTE (Issue #158, root-caused by Issue #168): the editable CLI
 # install refresh below lives in THIS module: the bootstrap chain
@@ -7727,7 +7728,14 @@ def _report_resume_failure(*, number: int, source_repo: str, run_id: str,
     )
 
 
-def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
+class IssueResult(NamedTuple):
+    """The single outcome contract returned by :func:`process_issue`."""
+
+    kind: str
+    url: str | None
+
+
+def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
     number = int(issue["number"])
     # Issue #100: the progress comment's issue line shows the number
     # AND the title in every scene. The scanned issue dict always
@@ -7740,9 +7748,10 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
     # its own deterministic release state machine instead (scope
     # verification, gates, tests, tag, GitHub Release).
     if is_release(issue):
-        return process_release(issue, config, source_repo)
+        return IssueResult("release", process_release(issue, config, source_repo))
     if is_ticket_only(issue):
-        return process_ticket_only(issue, config, source_repo)
+        process_ticket_only(issue, config, source_repo)
+        return IssueResult("ticket-only", None)
     base_branch = config["base_branch"]
     # The run id is generated once per attempt and bound BEFORE any
     # other step is logged, so every journal line of the attempt
@@ -7977,7 +7986,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
                 pr=pr_url, commit=commit,
             ),
         )
-        return pr_url
+        return IssueResult("pr", pr_url)
     except (ModelWaitDeadError, RecoverablePiFailure) as exc:
         # Issue #227/#325: classified Pi/model infrastructure failures are
         # recoverable. Keep the claim, worktree and run-state file so the
@@ -8033,7 +8042,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
                 "branch, worktree)"
             ))),
         )
-        return None
+        return IssueResult("failed", None)
     except Exception as exc:
         LOGGER.exception("issue=%s failed", number)
         # Issue #266: record the failed run attempt (conservative failure
@@ -8161,7 +8170,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
         # reporting itself failed the Issue keeps `ai-in-progress`, and
         # the next tick's restart-resume scan recovers it — no crash
         # needed for either outcome.
-        return None
+        return IssueResult("failed", None)
 
 
 def _pr_number(pr_url: str) -> int:
@@ -8917,27 +8926,13 @@ def main(argv: list[str] | None = None) -> int:
             # is marked ai-blocked and the tick stops.
             pr_url = verify_resumed_pr(scene, issue, config, source_repo)
         else:
-            pr_url = process_issue(issue, config, source_repo)
-            # Ticket-only delivery is complete when its Agent output is
-            # posted and the source Issue is closed; it has no PR to review
-            # or merge (Issue #209).
-            if is_ticket_only(issue):
+            result = process_issue(issue, config, source_repo)
+            # `process_issue` owns task dispatch and reports its outcome;
+            # do not repeat task-type predicates here (Issue #281).
+            if result.kind != "pr":
                 return 0
-            # Issue #269: a release delivery returns a Release URL, not a
-            # PR URL. `process_release` already closed the delivery (tag
-            # pushed, GitHub Release published, Issue `ai-merged` and
-            # closed), so the tick ends here — entering the PR wait made
-            # `_pr_number` raise `ValueError` on the tag name and crashed
-            # the Runner (run_id=37216af5).
-            if is_release(issue):
-                return 0
-            # Issue #239: a terminal delivery failure — `process_issue`
-            # already marked the Issue `ai-blocked` and posted the failure
-            # comment; there is no PR to wait for, so the tick ends
-            # cleanly instead of crashing the service on the handled
-            # failure.
-            if pr_url is None:
-                return 0
+            pr_url = result.url
+            assert pr_url is not None
         # The delivery is not done when the PR is open: hold the slot
         # through review -> merge and release it only after the PR is
         # merged or terminally failed (Issue #39).
