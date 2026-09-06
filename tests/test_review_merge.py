@@ -287,9 +287,9 @@ def _merge_gate_fake(pr_state="MERGEABLE", head_oid="h1",
                 "mergedAt": None, "mergeCommit": None,
             })
         if command[:2] == ["gh", "api"]:
-            return json.dumps(check_runs or [{
+            return json.dumps([{
                 "name": "tests", "status": "completed", "conclusion": "success",
-            }])
+            }] if check_runs is None else check_runs)
         return ""
     return fake_run
 
@@ -326,6 +326,20 @@ def test_merge_gate_waits_for_pending_github_ci_then_merges(
                                "main", repo_dir=tmp_path,
                                source_repo="owner/repo")
     assert result["merged"] is True
+
+
+def test_merge_gate_times_out_when_github_reports_no_ci(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        runner, "run_command",
+        _merge_gate_fake(check_runs=[]),
+    )
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+    with pytest.raises(RuntimeError, match="no check runs reported"):
+        runner.merge_gate(tmp_path, {"number": 4, "url": "u",
+                                     "base_ref": "main", "base_oid": "b1",
+                                     "head_ref": "h", "head_oid": "h1"},
+                          "main", repo_dir=tmp_path, ci_wait_seconds=0,
+                          source_repo="owner/repo")
 
 
 def test_merge_gate_times_out_pending_github_ci(monkeypatch, tmp_path):

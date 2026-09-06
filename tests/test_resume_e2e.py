@@ -236,7 +236,10 @@ def install_fake_gh(monkeypatch, comments: list[str],
                 return ""
             if command[1] == "api":
                 if "check-runs" in command[2]:
-                    return "[]"
+                    return json.dumps([{
+                        "name": "tests", "status": "completed",
+                        "conclusion": "success",
+                    }])
                 # The progress publisher (Issue #18) keeps the single
                 # per-run comment via gh api: list (GET), create (POST),
                 # update (PATCH). Comments are tracked by id like the

@@ -219,39 +219,45 @@ elif args[:2] == ["pr", "merge"]:
     state["merged_head"] = head
     save()
 elif args[:1] == ["api"]:
-    # The progress publisher (Issue #18) keeps the single per-run
-    # comment via gh api: list (GET) and create (POST) on
-    # repos/<owner>/<repo>/issues/<n>/comments, update (PATCH) on
-    # repos/<owner>/<repo>/issues/comments/<id> — the GitHub update
-    # route carries no issue number (Issue #58).
-    parts = args[1].split("/")
-    num = parts[4] if parts[4].isdigit() else None
-    if "--method" in args:
-        method = args[args.index("--method") + 1]
-        body = args[args.index("--field") + 1][len("body="):]
-        if method == "POST":
-            cid = max([c.get("id", 0) for c in state["comments"]] or [0]) + 1
-            state["comments"].append(
-                {"issue": num, "body": body, "id": cid,
-                 "authorAssociation": "OWNER"}
-            )
-            save()
-            print(json.dumps({"id": cid, "body": body}))
-        elif method == "PATCH":
-            # Update route: repos/<owner>/<repo>/issues/comments/<id>
-            cid = int(parts[5])
-            for c in state["comments"]:
-                if c.get("id") == cid:
-                    c["body"] = body
-            save()
-            print(json.dumps({"id": cid, "body": body}))
+    if "check-runs" in args[1]:
+        print(json.dumps([{
+            "name": "tests", "status": "completed",
+            "conclusion": "success",
+        }]))
     else:
-        print(json.dumps([
-            {"id": c.get("id", i + 1), "body": c["body"],
-             "authorAssociation": c.get("authorAssociation", "OWNER")}
-            for i, c in enumerate(state["comments"])
-            if c["issue"] == num
-        ]))
+        # The progress publisher (Issue #18) keeps the single per-run
+        # comment via gh api: list (GET) and create (POST) on
+        # repos/<owner>/<repo>/issues/<n>/comments, update (PATCH) on
+        # repos/<owner>/<repo>/issues/comments/<id> — the GitHub update
+        # route carries no issue number (Issue #58).
+        parts = args[1].split("/")
+        num = parts[4] if parts[4].isdigit() else None
+        if "--method" in args:
+            method = args[args.index("--method") + 1]
+            body = args[args.index("--field") + 1][len("body="):]
+            if method == "POST":
+                cid = max([c.get("id", 0) for c in state["comments"]] or [0]) + 1
+                state["comments"].append(
+                    {"issue": num, "body": body, "id": cid,
+                     "authorAssociation": "OWNER"}
+                )
+                save()
+                print(json.dumps({"id": cid, "body": body}))
+            elif method == "PATCH":
+                # Update route: repos/<owner>/<repo>/issues/comments/<id>
+                cid = int(parts[5])
+                for c in state["comments"]:
+                    if c.get("id") == cid:
+                        c["body"] = body
+                save()
+                print(json.dumps({"id": cid, "body": body}))
+        else:
+            print(json.dumps([
+                {"id": c.get("id", i + 1), "body": c["body"],
+                 "authorAssociation": c.get("authorAssociation", "OWNER")}
+                for i, c in enumerate(state["comments"])
+                if c["issue"] == num
+            ]))
 else:
     raise SystemExit(f"unexpected gh command: {args}")
 """

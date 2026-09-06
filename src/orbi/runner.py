@@ -6372,6 +6372,8 @@ def check_delivery_ci(repo: str, commit: str, *, wait_seconds: float) -> None:
             f"{check.get('conclusion')}"
             for check in check_runs if check.get("status") != "completed"
         ]
+        if not check_runs:
+            pending = ["no check runs reported"]
         if not pending:
             break
         detail = ", ".join(pending)
@@ -7084,8 +7086,16 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             f"origin/{base_branch} into the branch in-session, resolves "
             "conflicts, and reruns the full test suite"
         ))
-        comment_issue(number, repo=source_repo, body=body)
-        comment_pr(pr["number"], repo=source_repo, body=body)
+        # CI evidence is best-effort observability.  A GitHub comment
+        # outage must not prevent the required ai-fix-needed transition.
+        try:
+            comment_issue(number, repo=source_repo, body=body)
+            comment_pr(pr["number"], repo=source_repo, body=body)
+        except Exception:
+            LOGGER.exception(
+                "delivery_ci_evidence_publish_failed pr=%s run_id=%s",
+                pr["number"], config["run_id"],
+            )
         apply_label_patch(
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
             current_labels=(),
