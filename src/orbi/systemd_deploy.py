@@ -58,19 +58,6 @@ LEGACY_UNIT_NAMES = ("orbi.service", "orbi.timer")
 # ``%h/Documents/orbi/orbi``, so a checkout at ANY path deploys cleanly.
 REPO_DIR_PLACEHOLDER = "{{ORBI_REPO_DIR}}"
 
-# Issue #262: the pre-#246 renamed units. The brand rename (#246/#261)
-# changed the unit names from ``muyan-pilot@*`` to ``orbi@*``; a machine
-# deployed before the rename still carries the OLD installed units, whose
-# ExecStartPre self-heal probes ``muyan-pilot --version`` and reinstalls
-# from the (now ``orbi``) checkout — a guaranteed probe → reinstall →
-# probe dead loop. install_units migrates them away once.
-RENAMED_TEMPLATE_UNITS = (
-    "muyan-pilot@.service", "muyan-pilot@.timer",
-)
-RENAMED_TIMER_INSTANCES = (
-    "muyan-pilot@1.timer", "muyan-pilot@2.timer",
-)
-
 # The idempotent install command that repairs any drift (carried on
 # every unit_drift line as the fix command). Issue #140: the official
 # entry is the installed `orbi` CLI (the uv-tool console
@@ -351,38 +338,6 @@ def migrate_legacy_units(installed_dir: Path, *, run_command) -> bool:
     return True
 
 
-def migrate_renamed_units(installed_dir: Path, *, run_command) -> bool:
-    """One-time migration away from the pre-#246 renamed units (#262).
-
-    The brand rename (#246/#261) changed the unit names from
-    ``muyan-pilot@*`` to ``orbi@*``, but a machine deployed before the
-    rename still carries the OLD installed units. Their ``ExecStartPre``
-    self-heal probes ``muyan-pilot --version`` and, on failure, reinstalls
-    from the checkout — but the checkout's package is now ``orbi``, so the
-    reinstall produces ``orbi``, never ``muyan-pilot``: a guaranteed probe
-    → reinstall → probe dead loop, one crash per timer tick. This
-    migration breaks the loop: it disables the old timer instances (TIMER
-    stops — the service is never started/stopped/restarted, so a running
-    Runner keeps running) and removes the old unit files, so the old
-    schedule cannot keep firing. One-time and idempotent: no old timer
-    file → no-op (a fresh or already-migrated machine). A failing step
-    propagates unchanged (fail fast).
-    """
-    if not (installed_dir / "muyan-pilot@.timer").is_file():
-        return False
-    for instance in RENAMED_TIMER_INSTANCES:
-        run_command(["systemctl", "--user", "disable", "--now", instance])
-    for name in RENAMED_TEMPLATE_UNITS:
-        legacy = installed_dir / name
-        if legacy.is_file():
-            legacy.unlink()
-    LOGGER.info(
-        "renamed_units_migrated installed_dir=%s removed=%s",
-        installed_dir, ",".join(RENAMED_TEMPLATE_UNITS),
-    )
-    return True
-
-
 def install_units(repo_dir: Path, installed_dir: Path | None = None,
                   *, max_concurrency: int = len(TIMER_INSTANCES),
                   run_command) -> dict:
@@ -420,7 +375,6 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
             )
     installed_dir.mkdir(parents=True, exist_ok=True)
     migrate_legacy_units(installed_dir, run_command=run_command)
-    migrate_renamed_units(installed_dir, run_command=run_command)
     for name in UNIT_NAMES:
         # Issue #262: render the template (substitute the deployment
         # checkout path for the {{ORBI_REPO_DIR}} placeholder) so the

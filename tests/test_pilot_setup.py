@@ -1169,7 +1169,7 @@ def test_run_setup_repo_override_limits_the_target(tmp_path):
     fake_run, calls = fake_run_factory(state)
     config = runner.load_config(make_config(
         tmp_path, repo,
-        source_repos=["xqliu/orbi", "xqliu/muyan-ceo"],
+        source_repos=["xqliu/orbi", "xqliu/orbi-backlog"],
     ))
     result = pilot_setup.run_setup(
         config, installed,
@@ -1468,7 +1468,7 @@ def test_format_setup_renders_multiple_repos():
     result = sample_result()
     result["repos"].append(
         {
-            "repo": "xqliu/muyan-ceo",
+            "repo": "xqliu/orbi-backlog",
             "permission": "WRITE",
             "default_branch": "main",
             "labels": {"aligned": 6, "total": 10},
@@ -1477,7 +1477,7 @@ def test_format_setup_renders_multiple_repos():
     lines = pilot_setup.format_setup(result)
     repo_lines = [line for line in lines if line.startswith("repo=")]
     assert len(repo_lines) == 2
-    assert repo_lines[1].startswith("repo=xqliu/muyan-ceo ")
+    assert repo_lines[1].startswith("repo=xqliu/orbi-backlog ")
     assert "labels=6/10" in repo_lines[1]
 
 
