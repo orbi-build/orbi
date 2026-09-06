@@ -98,7 +98,14 @@ from orbi.delivery_labels import (
     label_patch,
     needs_human_intervention,
 )
-from orbi.progress import ProgressPublisher, format_elapsed, progress_body
+from orbi.progress import (
+    RUN_MARKER_PATTERN,
+    ProgressPublisher,
+    format_elapsed,
+    progress_body,
+    run_marker,
+    validate_run_id,
+)
 from orbi import runner_health
 from orbi.systemd_deploy import (
     TIMER_INSTANCES,
@@ -201,7 +208,8 @@ ROLE_TICKET = "ticket"
 # every journal line of the attempt starts with `[run_id]`, so a single
 # grep reconstructs the whole timeline. The filter rewrites the message in
 # place, so every handler (journal, caplog) sees the same prefixed text.
-RUN_ID_PATTERN = re.compile(r"^[0-9a-f]{8}$")
+# Run marker validation and rendering live in progress.py so every caller
+# enforces the same strict eight-hex-digit contract.
 _CURRENT_RUN_ID: str | None = None
 
 # GitHub labels are the only state store (Issue #45). The delivery
@@ -362,13 +370,6 @@ LOGGER.addFilter(RunIdFilter())
 runner_health.LOGGER.addFilter(RunIdFilter())
 
 
-def validate_run_id(run_id: object) -> str:
-    """Fail fast unless `run_id` is the 8-hex id of one task attempt."""
-    if not isinstance(run_id, str) or not RUN_ID_PATTERN.fullmatch(run_id):
-        raise ValueError(f"invalid run id: {run_id!r}")
-    return run_id
-
-
 def set_run_id(run_id: str) -> None:
     """Bind one task attempt: every later journal line carries `[run_id]`."""
     global _CURRENT_RUN_ID
@@ -379,10 +380,6 @@ def current_run_id() -> str | None:
     """Return the run id bound to this tick, or None before the claim."""
     return _CURRENT_RUN_ID
 
-
-def run_marker(run_id: str) -> str:
-    """Return the stable machine-readable run marker for GitHub text."""
-    return f"<!-- orbi:run={validate_run_id(run_id)} -->"
 
 # Stop scene (Issue #48): when systemd (or any caller) stops the Runner
 # with SIGTERM, the journal must show which Issue context was active
@@ -2442,7 +2439,7 @@ def publish_release(*, repo: str, tag: str, version: str,
         "",
         f"- {test_evidence}",
         "",
-        f"<!-- orbi:run={run_id} -->",
+        run_marker(run_id),
         f"run_id={run_id}",
     ])
     try:
@@ -3816,7 +3813,7 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
         body = comment.get("body")
         if not isinstance(body, str):
             continue
-        match = re.search(r"<!-- orbi:run=([0-9a-f]{8}) -->", body)
+        match = RUN_MARKER_PATTERN.search(body)
         if match:
             marker = run_marker(match.group(1))
             break

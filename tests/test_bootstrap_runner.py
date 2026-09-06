@@ -16,7 +16,7 @@ from unittest.mock import Mock
 import pytest
 
 import orbi.runner as runner
-from orbi import pi_activity
+from orbi import pi_activity, progress
 from tests.test_progress_wiring import make_fake_gh
 
 
@@ -2433,10 +2433,8 @@ def test_run_marker_is_stable_machine_readable_comment():
     assert runner.run_marker("e07383c2") == "<!-- orbi:run=e07383c2 -->"
 
 
-def test_run_marker_rejects_missing_or_invalid_run_id():
-    for bad in ("", "run1", None):
-        with pytest.raises(ValueError, match="invalid run id"):
-            runner.run_marker(bad)
+def test_run_marker_is_shared_with_progress_formatter():
+    assert runner.run_marker is progress.run_marker
 
 
 def test_set_run_id_binds_the_attempt_and_current_run_id_reads_it(monkeypatch):
@@ -5678,7 +5676,7 @@ def test_stream_pi_logs_run_start_once_with_full_scene(tmp_path, caplog):
     with caplog.at_level("INFO"):
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="orbi/xqliu-orbi-issue-24-run1",
         )
     assert result == "final answer"
@@ -5688,7 +5686,7 @@ def test_stream_pi_logs_run_start_once_with_full_scene(tmp_path, caplog):
               if " run_start " in line]
     assert len(starts) == 1
     start = starts[0]
-    assert "run=run1" in start
+    assert "run=deadbeef" in start
     assert "issue=xqliu/orbi#24" in start
     assert "role=implement" in start
     assert "branch=orbi/xqliu-orbi-issue-24-run1" in start
@@ -5722,7 +5720,7 @@ def test_stream_pi_run_start_never_follows_pre_existing_session_file(
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     starts = [line for line in caplog.text.splitlines()
@@ -5742,7 +5740,7 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -5757,7 +5755,7 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     # No redundant `run=` field on the high-frequency lines (Issue #57);
     # the `[run_id]` prefix is the run-id carrier (bound-run tests and
     # the e2e suite cover the prefix itself).
-    assert "run=run1" not in line
+    assert "run=deadbeef" not in line
     assert "issue=xqliu/orbi#24" in line
     assert "role=implement" in line
     assert "phase=test" in line
@@ -5772,7 +5770,7 @@ def test_stream_pi_logs_activity_and_heartbeat_lines(tmp_path, caplog):
     # The idle tail produced heartbeats at the poll interval.
     assert len(heartbeats) >= 1
     for line in heartbeats:
-        assert "run=run1" not in line
+        assert "run=deadbeef" not in line
         assert "role=implement" in line
         assert ("phase=request_pending" in line
                 or "phase=test" in line)
@@ -5922,7 +5920,7 @@ def test_stream_pi_activity_keeps_action_after_tool_result(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -5947,7 +5945,7 @@ def test_stream_pi_heartbeat_interval_is_stable(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -5972,7 +5970,7 @@ def test_stream_pi_success_logs_no_run_end(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     assert " run_end " not in caplog.text
@@ -5986,7 +5984,7 @@ def test_stream_pi_logs_command_redacted_and_stderr(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b", log_command=["pi", "--print", "<redacted>"],
         )
     assert "command=pi --print <redacted>" in caplog.text
@@ -6005,7 +6003,7 @@ def test_stream_pi_logs_run_failed_with_full_scene_and_reraises(
     ) as excinfo:
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     assert excinfo.value.returncode == 3
@@ -6016,7 +6014,7 @@ def test_stream_pi_logs_run_failed_with_full_scene_and_reraises(
                 if " run_failed " in line]
     assert len(failures) == 1
     failure = failures[0]
-    assert "run=run1" in failure
+    assert "run=deadbeef" in failure
     assert "issue=xqliu/orbi#24" in failure
     assert "role=implement" in failure
     assert "phase=test" in failure
@@ -6039,7 +6037,7 @@ def test_stream_pi_heartbeats_when_session_is_idle(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     heartbeats = [line for line in caplog.text.splitlines()
@@ -6057,7 +6055,7 @@ def test_stream_pi_heartbeats_when_no_session_file_appears(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     heartbeats = [line for line in caplog.text.splitlines()
@@ -6098,7 +6096,7 @@ def test_stream_pi_logs_process_spawned_after_popen(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = [line for line in caplog.text.splitlines()
@@ -6127,7 +6125,7 @@ def test_stream_pi_logs_startup_milestones_in_order(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -6181,7 +6179,7 @@ def test_stream_pi_activity_lines_show_startup_sub_phase(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -6204,7 +6202,7 @@ def test_stream_pi_startup_failed_without_session_file(tmp_path, caplog):
         with pytest.raises(subprocess.CalledProcessError):
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
-                run_id="run1", issue=24, source_repo="xqliu/orbi",
+                run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
                 branch="b",
             )
     lines = [line for line in caplog.text.splitlines()
@@ -6238,7 +6236,7 @@ def test_stream_pi_startup_failed_without_first_request(tmp_path, caplog):
         with pytest.raises(subprocess.CalledProcessError) as excinfo:
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
-                run_id="run1", issue=24, source_repo="xqliu/orbi",
+                run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
                 branch="b",
             )
     assert not isinstance(excinfo.value, runner.RecoverablePiProcessError)
@@ -6271,7 +6269,7 @@ def test_stream_pi_startup_failed_early_exit_after_first_request(
         with pytest.raises(subprocess.CalledProcessError):
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
-                run_id="run1", issue=24, source_repo="xqliu/orbi",
+                run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
                 branch="b",
             )
     lines = [line for line in caplog.text.splitlines()
@@ -6327,7 +6325,7 @@ def test_stream_pi_startup_failed_auth_failure(tmp_path, caplog):
         with pytest.raises(subprocess.CalledProcessError):
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
-                run_id="run1", issue=24, source_repo="xqliu/orbi",
+                run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
                 branch="b",
             )
     lines = [line for line in caplog.text.splitlines()
@@ -6349,7 +6347,7 @@ def test_stream_pi_startup_failed_network_timeout(tmp_path, caplog):
         with pytest.raises(subprocess.CalledProcessError):
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
-                run_id="run1", issue=24, source_repo="xqliu/orbi",
+                run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
                 branch="b",
             )
     lines = [line for line in caplog.text.splitlines()
@@ -6369,7 +6367,7 @@ def test_stream_pi_no_startup_failed_after_first_response(tmp_path, caplog):
         with pytest.raises(subprocess.CalledProcessError):
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
-                run_id="run1", issue=24, source_repo="xqliu/orbi",
+                run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
                 branch="b",
             )
     assert not any(" startup_failed " in line
@@ -6407,7 +6405,7 @@ def test_stream_pi_model_wait_then_resumed_no_warning_spam(
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -6419,7 +6417,7 @@ def test_stream_pi_model_wait_then_resumed_no_warning_spam(
     wait = waits[0]
     # The transition lines carry no redundant `run=` field (Issue #57);
     # the `[run_id]` prefix is the run-id carrier.
-    assert "run=run1" not in wait
+    assert "run=deadbeef" not in wait
     assert "issue=xqliu/orbi#24" in wait
     assert "role=implement" in wait
     assert "phase=test" in wait
@@ -6428,7 +6426,7 @@ def test_stream_pi_model_wait_then_resumed_no_warning_spam(
     assert "branch=" not in wait
     assert f"worktree={tmp_path}" not in wait
     resume = resumed[0]
-    assert "run=run1" not in resume
+    assert "run=deadbeef" not in resume
     assert "state=resumed" in resume
     assert "phase=test" in resume
     # While waiting, the heartbeats carry the model_wait state and the
@@ -6464,7 +6462,7 @@ def test_stream_pi_no_model_wait_after_assistant_text(tmp_path, caplog):
     with caplog.at_level("INFO"):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     assert " model_wait " not in caplog.text
@@ -6489,7 +6487,7 @@ def test_stream_pi_logs_idle_warning_once_when_session_stalls(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.5,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -6498,7 +6496,7 @@ def test_stream_pi_logs_idle_warning_once_when_session_stalls(
     idle = idles[0]
     # No redundant `run=` field (Issue #57); the `[run_id]` prefix is
     # the run-id carrier.
-    assert "run=run1" not in idle
+    assert "run=deadbeef" not in idle
     assert "issue=xqliu/orbi#24" in idle
     assert "role=implement" in idle
     # Issue #176: no session file was ever created, so the sub-phase is
@@ -6533,7 +6531,7 @@ def test_stream_pi_logs_pi_resumed_after_idle_warning(tmp_path, caplog):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.4,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -6544,7 +6542,7 @@ def test_stream_pi_logs_pi_resumed_after_idle_warning(tmp_path, caplog):
     # resumed comes after the warning and carries no redundant `run=`
     # field (Issue #57).
     assert lines.index(resumed[0]) > lines.index(idles[0])
-    assert "run=run1" not in resumed[0]
+    assert "run=deadbeef" not in resumed[0]
     assert "issue=xqliu/orbi#24" in resumed[0]
     assert "role=implement" in resumed[0]
     assert "phase=starting" in resumed[0]
@@ -6575,7 +6573,7 @@ def test_stream_pi_no_idle_warning_during_model_wait(tmp_path, caplog):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.5,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     assert " pi_idle " not in caplog.text
@@ -6666,7 +6664,7 @@ def test_stream_pi_drains_pipe_data_written_after_exit(
     with caplog.at_level("INFO"):
         result = runner.stream_pi(
             ["fake"], cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     assert result == "late stdout data"
@@ -6705,7 +6703,7 @@ def test_stream_pi_hung_model_request_killed_when_upstream_gone(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             model_wait_dead_seconds=0.5,
-            run_id="run1", issue=75, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=75, source_repo="xqliu/orbi",
             branch="b",
         )
     # The failure message names the hung model request and the stale
@@ -6773,7 +6771,7 @@ def test_stream_pi_frozen_model_wait_just_before_default_survives(
     with caplog.at_level("INFO"):
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=228, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=228, source_repo="xqliu/orbi",
             branch="b",
         )
     assert result == "final answer"
@@ -6794,7 +6792,7 @@ def test_stream_pi_frozen_model_wait_at_default_kills_with_configured_threshold(
     ):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=228, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=228, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -6821,7 +6819,7 @@ def test_stream_pi_explicit_short_override_kills_before_default(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             model_wait_dead_seconds=1.0,
-            run_id="run1", issue=228, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=228, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -6845,7 +6843,7 @@ def test_stream_pi_frozen_model_wait_at_ten_minutes_survives_default(
     with caplog.at_level("INFO"):
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=228, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=228, source_repo="xqliu/orbi",
             branch="b",
         )
     assert result == "final answer"
@@ -6884,7 +6882,7 @@ def test_stream_pi_slow_model_still_generating_is_not_killed(
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             model_wait_dead_seconds=0.4,
-            run_id="run1", issue=75, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=75, source_repo="xqliu/orbi",
             branch="b",
         )
     assert result == "final answer"
@@ -6910,7 +6908,7 @@ def test_stream_pi_no_upstream_kill_before_model_wait(tmp_path, caplog):
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             model_wait_dead_seconds=0.5,
-            run_id="run1", issue=75, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=75, source_repo="xqliu/orbi",
             branch="b",
         )
     assert "model_wait_dead" not in caplog.text
@@ -7021,7 +7019,7 @@ def test_stream_pi_hung_model_request_killed_despite_live_upstream(
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
                 model_wait_dead_seconds=0.5,
-                run_id="run1", issue=218, source_repo="xqliu/orbi",
+                run_id="deadbeef", issue=218, source_repo="xqliu/orbi",
                 branch="b",
             )
     finally:
@@ -7102,7 +7100,7 @@ def test_stream_pi_dropped_connection_model_wait_dead_upstream_false(
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
                 model_wait_dead_seconds=0.5,
-                run_id="run1", issue=169, source_repo="xqliu/orbi",
+                run_id="deadbeef", issue=169, source_repo="xqliu/orbi",
                 branch="b",
             )
     finally:
@@ -7142,7 +7140,7 @@ def test_stream_pi_swallowed_model_request_killed_fast(tmp_path, caplog,
             model_wait_dead_seconds=10.0,
             model_wait_probe_url="http://127.0.0.1:18082/slots",
             model_wait_probe_seconds=0.5,
-            run_id="run1", issue=233, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=233, source_repo="xqliu/orbi",
             branch="b",
         )
     assert "model_wait" in str(excinfo.value)
@@ -7220,7 +7218,7 @@ def test_stream_pi_swallow_not_fired_while_a_slot_is_processing(
             model_wait_dead_seconds=0.5,
             model_wait_probe_url="http://127.0.0.1:18082/slots",
             model_wait_probe_seconds=0.2,
-            run_id="run1", issue=233, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=233, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -7251,7 +7249,7 @@ def test_stream_pi_swallow_probe_failure_is_inconclusive(
             model_wait_dead_seconds=0.5,
             model_wait_probe_url="http://127.0.0.1:18082/slots",
             model_wait_probe_seconds=0.2,
-            run_id="run1", issue=233, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=233, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -7276,7 +7274,7 @@ def test_stream_pi_unconfigured_probe_keeps_dead_bound(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             model_wait_dead_seconds=0.5,
-            run_id="run1", issue=233, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=233, source_repo="xqliu/orbi",
             branch="b",
         )
     # The probe was never called (no URL configured).
@@ -7367,7 +7365,7 @@ def test_stream_pi_timeout_tool_inside_deadline_not_killed(
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.3,
-            run_id="run1", issue=105, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=105, source_repo="xqliu/orbi",
             branch="b",
         )
     assert result == ""
@@ -7375,7 +7373,7 @@ def test_stream_pi_timeout_tool_inside_deadline_not_killed(
     waits = [line for line in lines if " pi_idle_wait " in line]
     assert len(waits) == 1, f"exactly one wait decision: {lines}"
     wait = waits[0]
-    assert "run=run1" in wait
+    assert "run=deadbeef" in wait
     assert "issue=xqliu/orbi#105" in wait
     assert "pid=" in wait
     assert "cmdline=" in wait
@@ -7497,7 +7495,7 @@ def test_stream_pi_timeout_tool_deadline_grace_window_not_killed(
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.3,
-            run_id="run1", issue=105, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=105, source_repo="xqliu/orbi",
             branch="b", progress=progress,
         )
     # The tool was TERMed by the runner (the wrapper failed to end it:
@@ -7555,7 +7553,7 @@ def test_stream_pi_timeout_tool_past_deadline_still_terminated(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.3,
-            run_id="run1", issue=105, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=105, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -7590,7 +7588,7 @@ def test_stream_pi_idle_recovery_state_wait_visible_in_progress_callback(
     runner.stream_pi(
         command, cwd=tmp_path, poll_interval=0.1,
         idle_warn_seconds=0.3,
-        run_id="run1", issue=105, source_repo="xqliu/orbi",
+        run_id="deadbeef", issue=105, source_repo="xqliu/orbi",
         branch="b", progress=progress,
     )
     assert "wait" in seen
@@ -7621,7 +7619,7 @@ def test_stream_pi_wait_state_cleared_when_waited_tool_exits(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.3,
-            run_id="run1", issue=105, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=105, source_repo="xqliu/orbi",
             branch="b", progress=progress,
         )
     lines = caplog.text.splitlines()
@@ -7769,7 +7767,7 @@ def test_stream_pi_idle_recovery_terms_hung_descendant_and_resumes(
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.3,
-            run_id="run1", issue=94, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=94, source_repo="xqliu/orbi",
             branch="b",
         )
     assert result == ""
@@ -7779,7 +7777,7 @@ def test_stream_pi_idle_recovery_terms_hung_descendant_and_resumes(
     terms = [line for line in lines if " pi_idle_term " in line]
     assert len(terms) == 1, f"exactly one TERM step: {lines}"
     term = terms[0]
-    assert "run=run1" in term
+    assert "run=deadbeef" in term
     assert "issue=xqliu/orbi#94" in term
     assert "role=implement" in term
     assert "pid=" in term
@@ -7813,7 +7811,7 @@ def test_stream_pi_idle_recovery_kills_descendant_that_ignores_term(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.3,
-            run_id="run1", issue=94, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=94, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -7822,7 +7820,7 @@ def test_stream_pi_idle_recovery_kills_descendant_that_ignores_term(
     assert len(terms) == 1 and "result=sent" in terms[0]
     assert len(kills) == 1, f"exactly one KILL step: {lines}"
     kill = kills[0]
-    assert "run=run1" in kill
+    assert "run=deadbeef" in kill
     assert "pid=" in kill
     assert "cmdline=" in kill
     assert "result=sent" in kill  # the SIGKILL was delivered
@@ -7851,7 +7849,7 @@ def test_stream_pi_idle_recovery_kills_pi_session_after_three_idle_cycles(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.3,
-            run_id="run1", issue=94, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=94, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -7866,7 +7864,7 @@ def test_stream_pi_idle_recovery_kills_pi_session_after_three_idle_cycles(
     assert len(failures) == 1
     failure = failures[0]
     assert "reason=idle_recovery_stale_" in failure
-    assert "run=run1" in failure
+    assert "run=deadbeef" in failure
     assert "issue=xqliu/orbi#94" in failure
     assert f"worktree={tmp_path}" in failure
 
@@ -7894,7 +7892,7 @@ def test_stream_pi_idle_recovery_without_descendants_still_terminates(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             idle_warn_seconds=0.3,
-            run_id="run1", issue=94, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=94, source_repo="xqliu/orbi",
             branch="b",
         )
     lines = caplog.text.splitlines()
@@ -7924,7 +7922,7 @@ def test_stream_pi_idle_recovery_never_signals_non_descendants(
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.1,
                 idle_warn_seconds=0.3,
-                run_id="run1", issue=94, source_repo="xqliu/orbi",
+                run_id="deadbeef", issue=94, source_repo="xqliu/orbi",
                 branch="b",
             )
         # The bystander is untouched: still running, and its pid never
@@ -7953,7 +7951,7 @@ def test_stream_pi_idle_recovery_never_fires_during_model_wait(
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             model_wait_dead_seconds=0.5,
-            run_id="run1", issue=94, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=94, source_repo="xqliu/orbi",
             branch="b",
         )
     assert " pi_idle_term " not in caplog.text
@@ -7980,7 +7978,7 @@ def test_stream_pi_idle_recovery_state_visible_in_progress_callback(
     runner.stream_pi(
         command, cwd=tmp_path, poll_interval=0.1,
         idle_warn_seconds=0.3,
-        run_id="run1", issue=94, source_repo="xqliu/orbi",
+        run_id="deadbeef", issue=94, source_repo="xqliu/orbi",
         branch="b", progress=progress,
     )
     assert "term" in seen
@@ -7997,7 +7995,7 @@ def test_stream_pi_times_out_and_kills_process(tmp_path, caplog):
     ) as excinfo:
         runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1, timeout=0.5,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b",
         )
     assert excinfo.value.timeout == 0.5
@@ -8036,7 +8034,7 @@ def test_stream_pi_invokes_progress_callback_while_child_is_running(
 
     result = runner.stream_pi(
         command, cwd=tmp_path, poll_interval=0.1,
-        run_id="run1", issue=24, source_repo="xqliu/orbi",
+        run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
         branch="b", progress=progress,
     )
     assert result == "final answer"
@@ -8082,14 +8080,14 @@ def test_stream_pi_live_progress_patches_github_before_child_exits(
 
     publisher = FakePublisher()
     throttle = runner.LiveProgressThrottle(
-        publisher, issue=24, title="Live progress", run_id="run1",
+        publisher, issue=24, title="Live progress", run_id="deadbeef",
         role="implement", branch="b", worktree=tmp_path,
         started=time.monotonic(), pr_url=None, review_round=0,
         priority="normal",
     )
     result = runner.stream_pi(
         command, cwd=tmp_path, poll_interval=0.1,
-        run_id="run1", issue=24, source_repo="xqliu/orbi",
+        run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
         branch="b", progress=throttle,
     )
     assert result == "done"
@@ -8098,7 +8096,7 @@ def test_stream_pi_live_progress_patches_github_before_child_exits(
     assert len(patches) >= 2
     # The live comment carries the run marker and the live phase.
     assert all(
-        body.startswith("<!-- orbi:run=run1 -->")
+        body.startswith("<!-- orbi:run=deadbeef -->")
         for body in patches
     )
     assert any("- phase: test" in body for body in patches)
@@ -8121,12 +8119,12 @@ def test_stream_pi_progress_callback_error_never_interrupts_run(
     with caplog.at_level("ERROR"):
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
-            run_id="run1", issue=24, source_repo="xqliu/orbi",
+            run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
             branch="b", progress=boom,
         )
     assert result == "final answer"
     assert "progress_publish_failed" in caplog.text
-    assert "run=run1" in caplog.text
+    assert "run=deadbeef" in caplog.text
     assert "role=implement" in caplog.text
 
 
@@ -8143,7 +8141,7 @@ def test_live_progress_throttle_patches_on_change_and_cadence():
 
     publisher = FakePublisher()
     throttle = runner.LiveProgressThrottle(
-        publisher, issue=1, title="Throttle task", run_id="run1",
+        publisher, issue=1, title="Throttle task", run_id="deadbeef",
         role="implement", branch="b", worktree=Path("/w"),
         started=time.monotonic(), pr_url=None, review_round=0,
         priority="normal",
@@ -8190,7 +8188,7 @@ def test_live_progress_throttle_patches_on_recovery_change():
 
     publisher = FakePublisher()
     throttle = runner.LiveProgressThrottle(
-        publisher, issue=94, title="Idle recovery", run_id="run1",
+        publisher, issue=94, title="Idle recovery", run_id="deadbeef",
         role="implement", branch="b", worktree=Path("/w"),
         started=time.monotonic(), pr_url=None, review_round=0,
         priority="normal",
@@ -11629,7 +11627,7 @@ def test_stream_pi_sets_pi_env_on_the_process(tmp_path):
     result = runner.stream_pi(
         [sys.executable, "-c", script],
         cwd=tmp_path, poll_interval=0.1,
-        run_id="run1", issue=24, source_repo="xqliu/orbi",
+        run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
         branch="b", pi_env={"PI_CODING_AGENT_DIR": "/agent-dir"},
     )
     assert result == "/agent-dir"
@@ -11646,7 +11644,7 @@ def test_stream_pi_without_pi_env_keeps_inherited_env(tmp_path, monkeypatch):
     result = runner.stream_pi(
         [sys.executable, "-c", script],
         cwd=tmp_path, poll_interval=0.1,
-        run_id="run1", issue=24, source_repo="xqliu/orbi",
+        run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
         branch="b",
     )
     assert result == "inherited"

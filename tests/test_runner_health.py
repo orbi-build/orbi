@@ -160,12 +160,12 @@ def test_health_state_path_lives_in_state_dir(tmp_path):
 
 def test_state_roundtrip(tmp_path):
     path = write_state(tmp_path, {
-        "runs": [run_entry(REPO, 41, "r1", "fp1")],
+        "runs": [run_entry(REPO, 41, "00000001", "fp1")],
         "last_pickup_ts": 1234.5,
         "alerted": ["owner/repo#41:fp1"],
     })
     state = runner_health.load_health_state(path)
-    assert state["runs"][0]["run_id"] == "r1"
+    assert state["runs"][0]["run_id"] == "00000001"
     assert state["last_pickup_ts"] == 1234.5
     assert state["alerted"] == ["owner/repo#41:fp1"]
 
@@ -223,9 +223,9 @@ def test_record_run_attempt_bounds_history(tmp_path):
 def test_three_consecutive_same_fingerprint_failures_are_a_finding():
     state = {
         "runs": [
-            run_entry(REPO, 41, "r1", "fp1"),
-            run_entry(REPO, 41, "r2", "fp1"),
-            run_entry(REPO, 41, "r3", "fp1"),
+            run_entry(REPO, 41, "00000001", "fp1"),
+            run_entry(REPO, 41, "00000002", "fp1"),
+            run_entry(REPO, 41, "00000003", "fp1"),
         ],
         "last_pickup_ts": None, "alerted": [],
     }
@@ -237,14 +237,14 @@ def test_three_consecutive_same_fingerprint_failures_are_a_finding():
     assert finding["fingerprint"] == "fp1"
     assert finding["count"] == 3
     # Newest failing run first (its marker goes on the alert comment).
-    assert finding["run_ids"] == ["r3", "r2", "r1"]
+    assert finding["run_ids"] == ["00000003", "00000002", "00000001"]
 
 
 def test_two_failures_are_below_threshold():
     state = {
         "runs": [
-            run_entry(REPO, 41, "r1", "fp1"),
-            run_entry(REPO, 41, "r2", "fp1"),
+            run_entry(REPO, 41, "00000001", "fp1"),
+            run_entry(REPO, 41, "00000002", "fp1"),
         ],
         "last_pickup_ts": None, "alerted": [],
     }
@@ -254,11 +254,11 @@ def test_two_failures_are_below_threshold():
 def test_success_breaks_the_streak():
     state = {
         "runs": [
-            run_entry(REPO, 41, "r1", "fp1"),
-            run_entry(REPO, 41, "r2", "fp1"),
-            run_entry(REPO, 41, "r3", "fp1"),
+            run_entry(REPO, 41, "00000001", "fp1"),
+            run_entry(REPO, 41, "00000002", "fp1"),
+            run_entry(REPO, 41, "00000003", "fp1"),
             # The delivery eventually succeeded: the old streak is history.
-            run_entry(REPO, 41, "r4", "fp1", outcome="pr_opened"),
+            run_entry(REPO, 41, "00000004", "fp1", outcome="pr_opened"),
         ],
         "last_pickup_ts": None, "alerted": [],
     }
@@ -269,9 +269,9 @@ def test_different_fingerprints_are_not_the_same_pit():
     # Normal multi-round review/fix: every round fails differently.
     state = {
         "runs": [
-            run_entry(REPO, 41, "r1", "fp1"),
-            run_entry(REPO, 41, "r2", "fp2"),
-            run_entry(REPO, 41, "r3", "fp3"),
+            run_entry(REPO, 41, "00000001", "fp1"),
+            run_entry(REPO, 41, "00000002", "fp2"),
+            run_entry(REPO, 41, "00000003", "fp3"),
         ],
         "last_pickup_ts": None, "alerted": [],
     }
@@ -281,10 +281,10 @@ def test_different_fingerprints_are_not_the_same_pit():
 def test_other_issues_do_not_break_the_streak():
     state = {
         "runs": [
-            run_entry(REPO, 41, "r1", "fp1"),
-            run_entry(REPO, 42, "x1", "fp9"),
-            run_entry(REPO, 41, "r2", "fp1"),
-            run_entry(REPO, 41, "r3", "fp1"),
+            run_entry(REPO, 41, "00000001", "fp1"),
+            run_entry(REPO, 42, "10000001", "fp9"),
+            run_entry(REPO, 41, "00000002", "fp1"),
+            run_entry(REPO, 41, "00000003", "fp1"),
         ],
         "last_pickup_ts": None, "alerted": [],
     }
@@ -297,20 +297,20 @@ def test_other_issues_do_not_break_the_streak():
 def test_a_new_streak_after_an_old_one_is_counted_from_the_newest():
     state = {
         "runs": [
-            run_entry(REPO, 41, "r1", "fp1"),
-            run_entry(REPO, 41, "r2", "fp1"),
-            run_entry(REPO, 41, "r3", "fp1"),
-            run_entry(REPO, 41, "r4", "fp1", outcome="pr_opened"),
-            run_entry(REPO, 41, "r5", "fp2"),
-            run_entry(REPO, 41, "r6", "fp2"),
-            run_entry(REPO, 41, "r7", "fp2"),
+            run_entry(REPO, 41, "00000001", "fp1"),
+            run_entry(REPO, 41, "00000002", "fp1"),
+            run_entry(REPO, 41, "00000003", "fp1"),
+            run_entry(REPO, 41, "00000004", "fp1", outcome="pr_opened"),
+            run_entry(REPO, 41, "00000005", "fp2"),
+            run_entry(REPO, 41, "00000006", "fp2"),
+            run_entry(REPO, 41, "00000007", "fp2"),
         ],
         "last_pickup_ts": None, "alerted": [],
     }
     findings = runner_health.repeated_failure_findings(state)
     assert len(findings) == 1
     assert findings[0]["fingerprint"] == "fp2"
-    assert findings[0]["run_ids"] == ["r7", "r6", "r5"]
+    assert findings[0]["run_ids"] == ["00000007", "00000006", "00000005"]
 
 
 # ---------------------------------------------------------------------------
@@ -398,9 +398,9 @@ def test_healthy_tick_produces_no_alerts_and_no_github_traffic(tmp_path):
 def test_repeated_failure_alerts_once_with_the_latest_run_marker(tmp_path):
     write_state(tmp_path, {
         "runs": [
-            run_entry(REPO, 41, "r1", "fp1"),
-            run_entry(REPO, 41, "r2", "fp1"),
-            run_entry(REPO, 41, "r3", "fp1"),
+            run_entry(REPO, 41, "00000001", "fp1"),
+            run_entry(REPO, 41, "00000002", "fp1"),
+            run_entry(REPO, 41, "00000003", "fp1"),
         ],
         "last_pickup_ts": time.time(), "alerted": [],
     })
@@ -419,8 +419,8 @@ def test_repeated_failure_alerts_once_with_the_latest_run_marker(tmp_path):
     assert "41" in comment
     assert "--repo" in comment and REPO in comment
     body = comment[comment.index("--body") + 1]
-    assert "<!-- orbi:run=r3 -->" in body
-    assert "run_id=r3" in body
+    assert "<!-- orbi:run=00000003 -->" in body
+    assert "run_id=00000003" in body
     assert "fp1" in body
 
     # The next tick must NOT comment again (deduped via the state file).
