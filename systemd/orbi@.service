@@ -53,7 +53,7 @@ ExecStartPre=/usr/bin/timeout 90s /usr/bin/flock {{ORBI_REPO_DIR}}/.orbi/base-sy
 # instances starting in the same tick never race the tool env), and the
 # timeout matches runner.UV_INSTALL_TIMEOUT_SECONDS: a failing reinstall
 # fails this preflight, the service does not start (fail fast), no fallback.
-ExecStartPre=/usr/bin/timeout 300s /usr/bin/flock {{ORBI_REPO_DIR}}/.orbi/base-sync.lock -c '%h/.local/bin/orbi --version >/dev/null 2>&1 || uv tool install --force --reinstall --editable --python /usr/bin/python3 {{ORBI_REPO_DIR}}'
+ExecStartPre=/usr/bin/timeout 300s /usr/bin/flock {{ORBI_REPO_DIR}}/.orbi/base-sync.lock -c '%h/.local/bin/orbi --version >/dev/null 2>&1 || uv tool install --force --reinstall --editable --python python3 {{ORBI_REPO_DIR}}'
 # Issue #140: the Runner is the installed `orbi` CLI (the
 # uv-tool console script, `uv tool install` / `uv tool upgrade`; the
 # executable lands in the user bin dir `~/.local/bin`). The absolute

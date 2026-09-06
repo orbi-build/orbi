@@ -38,11 +38,11 @@ from pathlib import Path
 import orbi
 from orbi.pi_activity import quote_value
 
-# Prefer the host's Python 3 executable when present for compatibility with
-# existing deployments. On a fresh uv-only host, the version selector asks uv
-# to provision the required 3.14 interpreter instead of requiring a system
-# Python executable.
-PYTHON_INTERPRETER = shutil.which("python3") or "3.14"
+# Use the PATH-resolved Python 3 command so the editable install has the same
+# interpreter contract in the systemd unit and in the Python-side refresh.
+# On a fresh uv-only host, the version selector asks uv to provision the
+# required 3.14 interpreter instead of requiring a system Python executable.
+PYTHON_INTERPRETER = "python3" if shutil.which("python3") else "3.14"
 
 # The runtime package directory inside a checkout (Issue #168 src
 # layout): the editable install maps this WHOLE directory, so a newly
