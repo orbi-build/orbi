@@ -588,6 +588,11 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         raise ValueError("source_repos must be a non-empty list")
     if not all(isinstance(repo, str) and repo for repo in source_repos):
         raise ValueError("source_repos must contain non-empty strings")
+    unit_name = data.get("unit_name")
+    if unit_name is not None and (
+        not isinstance(unit_name, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", unit_name)
+    ):
+        raise ValueError("unit_name must contain only letters, numbers, '-' or '_'")
     base_branch = data.get("base_branch", "main")
     if not isinstance(base_branch, str) or not base_branch:
         raise ValueError("base_branch must be a non-empty string")
@@ -719,6 +724,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         "source_repos": source_repos,
         "repo_dir": repo_dir,
         "deploy_home": deploy_home,
+        "unit_name": unit_name,
         "health_alert_repo": health_alert_repo,
         "workspace_root": _config_path(data.get("workspace_root", ".."), base),
         # Issue #330: when deploy_home is EXPLICIT the prompt defaults
@@ -5853,6 +5859,7 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
 # the tracked `.gitignore` stays as the fallback layer.
 RUNNER_RUNTIME_EXCLUDES = (
     ".orbi/",
+    ".worktrees/",
     ".pi-session/",
     ".pi/",
     "plan.md",
@@ -9051,10 +9058,11 @@ def main(argv: list[str] | None = None) -> int:
     # structured `unit_drift` line per unit and fails fast: this
     # start takes no slot, claims no Issue and changes no label.
     try:
-        check_unit_drift(config["deploy_home"])
+        check_unit_drift(config["deploy_home"], unit_name=config.get("unit_name"))
     except UnitDriftError:
         sync_drifted_units(
             config["deploy_home"],
+            unit_name=config.get("unit_name"),
             max_concurrency=config["max_concurrency"],
             run_command=run_command,
         )

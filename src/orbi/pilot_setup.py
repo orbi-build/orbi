@@ -42,6 +42,8 @@ import shutil
 import tomllib
 from pathlib import Path
 
+LOGGER = logging.getLogger("orbi.pilot_setup")
+
 from orbi import runner
 from orbi import cli_source
 from orbi.delivery_labels import (
@@ -284,7 +286,7 @@ def install_cli_step(repo_dir: Path, module_file: Path, *,
     }
 
 
-def check_commands(run_command) -> dict:
+def check_commands(run_command, unit_name: str | None = None) -> dict:
     """Verify the required commands and the systemctl --user bus.
 
     ``git``, ``gh``, ``uv`` and the installed ``orbi`` CLI must be on
@@ -312,7 +314,7 @@ def check_commands(run_command) -> dict:
     # units are installed — the probe only needs the user bus).
     probe = [
         "systemctl", "--user", "show", "-p", "LoadState", "--value",
-        systemd_deploy.TIMER_INSTANCES[0],
+        systemd_deploy.timer_instances(unit_name)[0],
     ]
     try:
         run_command(probe)
@@ -501,7 +503,7 @@ def unit_is_enabled(run_command, instance: str) -> bool:
 
 def install_units_step(repo_dir: Path, installed_dir: Path | None,
                        *, max_concurrency: int = len(systemd_deploy.TIMER_INSTANCES),
-                       run_command) -> dict:
+                       unit_name: str | None = None, run_command) -> dict:
     """Install the repo's user units and report their live state.
 
     Reuses the idempotent ``systemd_deploy.install_units`` (copy the
@@ -513,10 +515,10 @@ def install_units_step(repo_dir: Path, installed_dir: Path | None,
     (``list-timers``).
     """
     try:
-        result = systemd_deploy.install_units(
-            repo_dir, installed_dir, max_concurrency=max_concurrency,
-            run_command=run_command,
-        )
+        kwargs = {"max_concurrency": max_concurrency, "run_command": run_command}
+        if unit_name is not None:
+            kwargs["unit_name"] = unit_name
+        result = systemd_deploy.install_units(repo_dir, installed_dir, **kwargs)
     except Exception as exc:
         raise SetupError(
             f"systemd units install failed: {exc}"
@@ -525,7 +527,7 @@ def install_units_step(repo_dir: Path, installed_dir: Path | None,
         "systemctl", "--user", "list-timers", "--no-pager",
     ])
     instances = {}
-    for instance in systemd_deploy.TIMER_INSTANCES:
+    for instance in systemd_deploy.timer_instances(unit_name):
         try:
             enabled = unit_is_enabled(run_command, instance)
         except subprocess.CalledProcessError as exc:
@@ -540,7 +542,7 @@ def install_units_step(repo_dir: Path, installed_dir: Path | None,
             ]) == "active",
             "next": timer_next_trigger(list_timers, instance),
         }
-    service = result["units"][systemd_deploy.SERVICE_UNIT]
+    service = result["units"][systemd_deploy.unit_names(unit_name)[0]]
     return {
         "service": {
             "installed": True,
@@ -553,6 +555,30 @@ def install_units_step(repo_dir: Path, installed_dir: Path | None,
             "instances": instances,
         },
     }
+
+
+def ensure_worktrees_ignored(repo_dir: Path, *, run_command) -> bool:
+    """Keep Runner-created worktrees out of the main checkout status."""
+    if not (Path(repo_dir) / ".worktrees").is_dir():
+        return False
+    try:
+        run_command(["git", "check-ignore", "--quiet", "--", ".worktrees/"], cwd=repo_dir)
+        return False
+    except subprocess.CalledProcessError:
+        exclude = Path(run_command(
+            ["git", "rev-parse", "--git-path", "info/exclude"], cwd=repo_dir,
+        ))
+        if not exclude.is_absolute():
+            exclude = Path(repo_dir) / exclude
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        existing = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+        if ".worktrees/" not in existing.splitlines():
+            exclude.write_text(
+                existing + ("\n" if existing and not existing.endswith("\n") else "")
+                + ".worktrees/\n", encoding="utf-8",
+            )
+        LOGGER.info("worktrees_exclude_added repo=%s path=%s", repo_dir, exclude)
+        return True
 
 
 def check_checkout(repo_dir: Path, base_branch: str,
@@ -582,6 +608,9 @@ def check_checkout(repo_dir: Path, base_branch: str,
         )
         branch = run_command(
             ["git", "branch", "--show-current"], cwd=repo_dir,
+        )
+        worktrees_exclude_added = ensure_worktrees_ignored(
+            repo_dir, run_command=run_command,
         )
         dirty = run_command(
             ["git", "status", "--porcelain"], cwd=repo_dir,
@@ -623,6 +652,7 @@ def check_checkout(repo_dir: Path, base_branch: str,
         "remote_protocol": transport["protocol"],
         "migrated": transport["migrated"],
         "ssh_reachable": transport["ssh_reachable"],
+        **({"worktrees_exclude_added": True} if worktrees_exclude_added else {}),
     }
 
 
@@ -753,7 +783,7 @@ def run_setup(config: dict, installed_dir: Path | None, *,
     # (repo_dir) may be a foreign repo without any of them.
     deploy_home = config["deploy_home"]
     defs = load_label_defs(deploy_home / LABELS_FILE)
-    check_commands(run_command)
+    check_commands(run_command, config.get("unit_name"))
     # Issue #152: the CLI source step precedes every other step — the
     # running CLI must import from the deployment checkout, otherwise
     # the unit migration below (and the pre-start self-heal it
@@ -770,11 +800,13 @@ def run_setup(config: dict, installed_dir: Path | None, *,
             **info,
             "labels": {"aligned": labels["aligned"], "total": labels["total"]},
         })
-    units = install_units_step(
-        deploy_home, installed_dir,
-        max_concurrency=config["max_concurrency"],
-        run_command=run_command,
-    )
+    unit_kwargs = {
+        "max_concurrency": config["max_concurrency"],
+        "run_command": run_command,
+    }
+    if config.get("unit_name") is not None:
+        unit_kwargs["unit_name"] = config["unit_name"]
+    units = install_units_step(deploy_home, installed_dir, **unit_kwargs)
     checkout = check_checkout(
         repo_dir, config["base_branch"], config["source_repos"],
         run_command=run_command,
@@ -785,6 +817,7 @@ def run_setup(config: dict, installed_dir: Path | None, *,
         "setup": "ok",
         "version": SETUP_VERSION,
         "base_branch": config["base_branch"],
+        "unit_name": config.get("unit_name"),
         "repos": repo_results,
         "cli": cli,
         "service": units["service"],
@@ -830,7 +863,7 @@ def format_setup(result: dict) -> list[str]:
         f"sha256={service['sha256']}"
     )
     timer = result["timer"]
-    for instance in systemd_deploy.TIMER_INSTANCES:
+    for instance in systemd_deploy.timer_instances(result.get("unit_name")):
         entry = timer["instances"][instance]
         lines.append(
             f"timer={instance} "
@@ -852,6 +885,8 @@ def format_setup(result: dict) -> list[str]:
         f"protocol={checkout['remote_protocol']} "
         f"migrated={'true' if checkout['migrated'] else 'false'} "
         f"ssh_reachable={reachable_text}"
+        + (" worktrees_exclude_added=true"
+           if checkout.get("worktrees_exclude_added") else "")
     )
     provider = result.get("model_provider")
     if provider and provider["state"] == "ok":

@@ -157,6 +157,7 @@ directory):
 | `source_repos` | yes | — | One `owner/repo` task pool scanned each tick. Multiple entries fail fast because the current execution layer has only one checkout; multi-repo workspaces are not available yet |
 | `repo_dir` | no | `.` | The delivery checkout: the repository whose Issues the Runner delivers. Task worktrees are created from its frozen `origin/<base_branch>` SHA, PRs open against it, and the slot locks live in `<repo_dir>/.orbi/slots/`. In bootstrap mode this is the orbi checkout itself; in the external single-repo mode (Issue #330) it is a foreign user repo X |
 | `deploy_home` | no | `repo_dir` | The orbi SOURCE checkout (Issue #330): the editable CLI install source (the self-update), the `systemd/` unit templates, `labels.toml`, and the prompt defaults (`prompts/prompt.md`, `prompts/prompt_review.md` when unset). Absent = `repo_dir` (bootstrap mode, unchanged). Set it to the orbi checkout when `repo_dir` is a foreign repo X. Must be a non-empty string; a missing directory fails the start fast |
+| `unit_name` | no | unset | Optional per-deployment systemd name. `website` installs `orbi-website@1/2.timer` and matching services; unset keeps the compatible `orbi@1/2` names. |
 | `workspace_root` | no | `..` | Directory that contains the task worktrees and the repositories the agent may modify |
 | `prompt` | no | `prompts/prompt.md` | Implementer prompt template (placeholders like `{{SOURCE_REPO}}` are rendered by the Runner) |
 | `prompt_review` | no | `prompts/prompt_review.md` | Review prompt template for the independent post-PR review session |
@@ -246,6 +247,13 @@ checkout — and `workspace_root` is the directory the implementer agent
 is told contains the repositories it may touch (the
 `{{WORKSPACE_ROOT}}` prompt placeholder); unset `prompt` /
 `prompt_review` resolve against `deploy_home`.)
+
+For a second engine instance, give its config a distinct `unit_name`
+(for example `unit_name = "website"`), then run `orbi setup`. It installs
+and checks `orbi-website@1/2.service` and `orbi-website@1/2.timer`; no
+hand-written systemd units or `ORBI_CONFIG` override is needed. Setup also
+keeps Runner-created `<repo_dir>/.worktrees/` out of checkout cleanliness
+using the repository's local git exclude.
 
 Everything else — steps 4–8 (model provider, `orbi setup`, the manual
 tick, the smoke walkthrough, the timers) — is unchanged: `orbi setup`
