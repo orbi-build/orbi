@@ -12837,6 +12837,19 @@ def test_parse_release_declaration_accepts_none_version_file():
     assert runner.parse_release_declaration(body)["version_file"] == "none"
 
 
+@pytest.mark.parametrize(
+    "version_file",
+    ["pom.xml", "build.gradle", "build.gradle.kts", "gradle.properties",
+     "Cargo.toml", "composer.json", "pubspec.yaml"],
+)
+def test_parse_release_declaration_accepts_ecosystem_version_file(version_file):
+    body = RELEASE_DECLARATION_BODY.replace(
+        "- version: v0.3.0\n",
+        f"- version: v0.3.0\n- version_file: {version_file}\n",
+    )
+    assert runner.parse_release_declaration(body)["version_file"] == version_file
+
+
 def test_parse_release_declaration_rejects_invalid_version_file():
     body = RELEASE_DECLARATION_BODY.replace(
         "- version: v0.3.0\n", "- version: v0.3.0\n- version_file: version.txt\n",
@@ -13828,6 +13841,97 @@ def test_prepare_release_version_updates_package_json(tmp_path, monkeypatch):
         (["git", "push", "origin", "HEAD:refs/heads/main"], {"cwd": work}),
         (["git", "rev-parse", "HEAD"], {"cwd": work}),
     ]
+
+
+@pytest.mark.parametrize(
+    ("version_file", "source", "expected"),
+    [
+        (
+            "pom.xml",
+            "<project><parent><version>9.9.9</version></parent>"
+            "<version>0.2.0</version></project>",
+            "<version>0.3.0</version>",
+        ),
+        ("build.gradle", "version = '0.2.0'\n", "version = '0.3.0'"),
+        ("build.gradle.kts", "version = '0.2.0'\n", "version = '0.3.0'"),
+        ("gradle.properties", "version=0.2.0\n", "version=0.3.0"),
+        (
+            "Cargo.toml",
+            "[package]\nname = \"demo\"\nversion = \"0.2.0\"\n",
+            'version = "0.3.0"',
+        ),
+        ("composer.json", '{"name":"demo","version":"0.2.0"}\n',
+         '"version": "0.3.0"'),
+        ("pubspec.yaml", "name: demo\nversion: 0.2.0\n", "version: 0.3.0"),
+    ],
+)
+def test_prepare_release_version_updates_ecosystem_file(
+    tmp_path, monkeypatch, version_file, source, expected,
+):
+    work = tmp_path / "release"
+    work.mkdir()
+    (work / version_file).write_text(source, encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "newsha",
+    )
+
+    assert runner.prepare_release_version(
+        work, "v0.3.0", "main", version_file,
+    ) == "newsha"
+    updated = (work / version_file).read_text(encoding="utf-8")
+    assert expected in updated
+    if version_file == "Cargo.toml":
+        assert "[package]" in updated
+    assert calls[0] == (["git", "add", version_file], {"cwd": work})
+    assert calls[-1] == (["git", "rev-parse", "HEAD"], {"cwd": work})
+
+
+def test_prepare_release_version_ecosystem_file_is_idempotent(tmp_path, monkeypatch):
+    work = tmp_path / "release"
+    work.mkdir()
+    (work / "gradle.properties").write_text("version=0.3.0\n", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "head",
+    )
+    assert runner.prepare_release_version(
+        work, "v0.3.0", "main", "gradle.properties",
+    ) == "head"
+    assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": work})]
+
+
+def test_prepare_release_version_rejects_unparseable_ecosystem_file(tmp_path):
+    work = tmp_path / "release"
+    work.mkdir()
+    (work / "build.gradle").write_text("plugins {}\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="build.gradle"):
+        runner.prepare_release_version(work, "v0.3.0", "main", "build.gradle")
+
+
+def test_prepare_release_version_rejects_cargo_without_package_version(tmp_path):
+    work = tmp_path / "release"
+    work.mkdir()
+    (work / "Cargo.toml").write_text("[package]\nname = \"demo\"\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="Cargo.toml"):
+        runner.prepare_release_version(work, "v0.3.0", "main", "Cargo.toml")
+
+
+def test_prepare_release_version_none_does_not_require_a_file(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "head",
+    )
+    assert runner.prepare_release_version(tmp_path, "v0.3.0", "main", "none") == "head"
+    assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": tmp_path})]
+
+
+def test_prepare_release_version_rejects_unrecognized_file(tmp_path):
+    with pytest.raises(ValueError, match="version_file"):
+        runner.prepare_release_version(tmp_path, "v0.3.0", "main", "VERSION")
 
 
 def test_prepare_release_version_package_json_is_idempotent(tmp_path, monkeypatch):

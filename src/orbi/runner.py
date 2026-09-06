@@ -40,6 +40,7 @@ import tempfile
 import threading
 import time
 import tomllib
+import xml.etree.ElementTree as ET
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -1726,8 +1727,8 @@ def parse_release_declaration(body: str) -> dict:
     branch the release commit is frozen from, `test_command` the
     shell command that must pass in a clean worktree at the release
     commit, and `scope` the Issue/PR numbers verified one by one.
-    Optional `version_file` selects `pyproject.toml` (the default),
-    `package.json`, or `none` to skip version metadata changes.
+    Optional `version_file` selects a supported ecosystem metadata file
+    (the default is `pyproject.toml`) or `none` to skip version metadata changes.
     Exactly one of `scope` / `scope_from_milestone` must be present:
     both (conflict) or neither fails fast. `scope_from_milestone` is
     the Milestone TITLE (no spaces); its scope is derived later by
@@ -1862,10 +1863,13 @@ def parse_release_declaration(body: str) -> dict:
                 "not contain spaces"
             )
     version_file = fields.get("version_file", "pyproject.toml")
-    if version_file not in ("pyproject.toml", "package.json", "none"):
+    if version_file not in (
+        "pyproject.toml", "package.json", "pom.xml", "build.gradle",
+        "build.gradle.kts", "gradle.properties", "Cargo.toml",
+        "composer.json", "pubspec.yaml", "none",
+    ):
         raise ValueError(
-            "release declaration field `version_file` must be one of "
-            "`pyproject.toml`, `package.json` or `none`"
+            "release declaration field `version_file` is not supported"
         )
     return {
         "version": fields["version"],
@@ -2398,26 +2402,28 @@ def prepare_release_version(worktree: Path, tag: str,
             f"release version {tag!r} must be a v-prefixed numeric tag"
         )
     version = match.group(1)
-    if version_file not in ("pyproject.toml", "package.json", "none"):
-        raise ValueError(
-            "release version_file must be one of `pyproject.toml`, "
-            "`package.json` or `none`"
-        )
+    supported_files = {
+        "pyproject.toml", "package.json", "pom.xml", "build.gradle",
+        "build.gradle.kts", "gradle.properties", "Cargo.toml",
+        "composer.json", "pubspec.yaml", "none",
+    }
+    if version_file not in supported_files:
+        raise ValueError("release version_file is not supported")
     if version_file == "none":
         return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
-    if version_file == "package.json":
+    if version_file in ("package.json", "composer.json"):
         package_json = worktree / version_file
         try:
             package_data = json.loads(package_json.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError(
-                "release version source package.json is not valid JSON"
+                f"release version source {version_file} is not valid JSON"
             ) from exc
         if not isinstance(package_data, dict) or not isinstance(
             package_data.get("version"), str
         ) or not package_data["version"]:
             raise RuntimeError(
-                "release version source package.json must contain a non-empty "
+                f"release version source {version_file} must contain a non-empty "
                 "version field"
             )
         if package_data["version"] != version:
@@ -2425,6 +2431,72 @@ def prepare_release_version(worktree: Path, tag: str,
             package_json.write_text(
                 json.dumps(package_data, indent=2) + "\n", encoding="utf-8",
             )
+            run_command(["git", "add", version_file], cwd=worktree)
+            run_command([
+                "git", "commit", "-m", f"chore: prepare release {tag}",
+            ], cwd=worktree)
+            run_command([
+                "git", "push", "origin", f"HEAD:refs/heads/{base_branch}",
+            ], cwd=worktree)
+        return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+    if version_file not in ("pyproject.toml", "package.json", "composer.json"):
+        source = worktree / version_file
+        try:
+            text = source.read_text(encoding="utf-8")
+            if version_file == "pom.xml":
+                ET.fromstring(text)
+                matches = list(re.finditer(
+                    r"<version>\s*([^<\s]+)\s*</version>", text,
+                ))
+                parents = [m.span() for m in re.finditer(
+                    r"<parent\b.*?</parent>", text, re.DOTALL,
+                )]
+                matches = [m for m in matches if not any(
+                    start <= m.start() < end for start, end in parents
+                )]
+                pattern = matches[0] if len(matches) == 1 else None
+                replacement = rf"<version>{version}</version>"
+            elif version_file == "Cargo.toml":
+                data = tomllib.loads(text)
+                current = data.get("package", {}).get("version")
+                if not isinstance(current, str) or not current:
+                    raise ValueError("missing [package].version")
+                pattern = re.search(
+                    r"(?ms)^(\[package\][^\[]*?^version\s*=\s*)"
+                    r"([\"'])[^\n]+?\2\s*$",
+                    text,
+                )
+                replacement = None
+            elif version_file == "pubspec.yaml":
+                matches = list(re.finditer(
+                    r"(?m)^version\s*:\s*([^#\s]+)", text,
+                ))
+                pattern = matches[0] if len(matches) == 1 else None
+                replacement = f"version: {version}"
+            elif version_file == "gradle.properties":
+                matches = list(re.finditer(
+                    r"(?m)^version\s*=\s*([^#\s]+)", text,
+                ))
+                pattern = matches[0] if len(matches) == 1 else None
+                replacement = f"version={version}"
+            else:
+                matches = list(re.finditer(
+                    r"(?m)^[ \t]*version\s*=\s*(['\"])([^'\"]+)\1[ \t]*$",
+                    text,
+                ))
+                pattern = matches[0] if len(matches) == 1 else None
+                replacement = f"version = '" + version + "'"
+            if pattern is None:
+                raise ValueError("version declaration is not uniquely parseable")
+            if version_file == "Cargo.toml":
+                replacement = pattern.group(1) + f'"{version}"'
+            updated = text[:pattern.start()] + replacement + text[pattern.end():]
+        except (OSError, ET.ParseError, tomllib.TOMLDecodeError, ValueError) as exc:
+            raise RuntimeError(
+                f"release version source {version_file} has no parseable version"
+            ) from exc
+        if updated != text:
+            source.write_text(updated, encoding="utf-8")
             run_command(["git", "add", version_file], cwd=worktree)
             run_command([
                 "git", "commit", "-m", f"chore: prepare release {tag}",
