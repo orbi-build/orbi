@@ -13,8 +13,8 @@ from orbi import progress
 
 
 def test_run_marker_is_hidden_html_comment_with_run_id():
-    marker = progress.run_marker("abc123")
-    assert marker == "<!-- orbi:run=abc123 -->"
+    marker = progress.run_marker("abc12345")
+    assert marker == "<!-- orbi:run=abc12345 -->"
 
 
 def test_run_marker_pattern_extracts_the_run_id():
@@ -25,13 +25,19 @@ def test_run_marker_pattern_extracts_the_run_id():
     assert match.group(1) == "abc12345"
 
 
+def test_run_marker_rejects_missing_or_invalid_run_id():
+    for bad in ("", "run1", None):
+        with pytest.raises(ValueError, match="invalid run id"):
+            progress.run_marker(bad)
+
+
 def test_find_run_comment_returns_comment_carrying_the_marker():
     comments = [
         {"id": 1, "body": "Orbi started Pi: ..."},
-        {"id": 2, "body": "<!-- orbi:run=abc123 -->\n**progress**"},
+        {"id": 2, "body": "<!-- orbi:run=abc12345 -->\n**progress**"},
         {"id": 3, "body": "another run <!-- orbi:run=other -->"},
     ]
-    found = progress.find_run_comment(comments, "abc123")
+    found = progress.find_run_comment(comments, "abc12345")
     assert found == comments[1]
 
 
@@ -40,19 +46,19 @@ def test_find_run_comment_returns_none_when_marker_absent():
         {"id": 1, "body": "Orbi started Pi: ..."},
         {"id": 2, "body": "<!-- orbi:run=other -->"},
     ]
-    assert progress.find_run_comment(comments, "abc123") is None
+    assert progress.find_run_comment(comments, "abc12345") is None
 
 
 def test_find_run_comment_returns_first_match_for_duplicate_markers():
     comments = [
-        {"id": 1, "body": "<!-- orbi:run=abc123 -->first"},
-        {"id": 2, "body": "<!-- orbi:run=abc123 -->second"},
+        {"id": 1, "body": "<!-- orbi:run=abc12345 -->first"},
+        {"id": 2, "body": "<!-- orbi:run=abc12345 -->second"},
     ]
-    assert progress.find_run_comment(comments, "abc123")["id"] == 1
+    assert progress.find_run_comment(comments, "abc12345")["id"] == 1
 
 
 def test_find_run_comment_ignores_comments_without_body():
-    assert progress.find_run_comment([{"id": 1}], "abc123") is None
+    assert progress.find_run_comment([{"id": 1}], "abc12345") is None
 
 
 @pytest.mark.parametrize(
@@ -139,7 +145,7 @@ def test_issue_field_fails_fast_on_non_int_issue():
 def test_progress_body_issue_line_carries_number_and_title():
     # Issue #100: every progress scene renders `#<number> <title>`.
     body = progress.progress_body({
-        "run_id": "abc123",
+        "run_id": "abc12345",
         "issue": 89,
         "issue_title": "Bug: resume 使用评论里的 PR URL，不再 verify_pr",
         "role": "implement",
@@ -163,7 +169,7 @@ def test_progress_body_issue_line_carries_number_and_title():
 
 def test_progress_body_issue_line_is_single_line_for_any_title():
     state = {
-        "run_id": "abc123",
+        "run_id": "abc12345",
         "issue": 7,
         "issue_title": "a\n\nb  c",
         "role": "review",
@@ -187,7 +193,7 @@ def test_progress_body_fails_fast_without_issue_title():
     # A state without the title is a contract violation: fail fast,
     # never render a bare `#<number>` (that would hide the violation).
     state = {
-        "run_id": "abc123",
+        "run_id": "abc12345",
         "issue": 18,
         "role": "implement",
         "phase": "starting",
@@ -206,7 +212,7 @@ def test_progress_body_fails_fast_without_issue_title():
 
 def test_progress_body_starts_with_hidden_run_marker():
     body = progress.progress_body({
-        "run_id": "abc123",
+        "run_id": "abc12345",
         "issue": 18,
         "issue_title": "Publish progress",
         "role": "implement",
@@ -216,12 +222,12 @@ def test_progress_body_starts_with_hidden_run_marker():
         "last_action": "bash pytest tests/",
         "tests": "156 passed",
         "review_round": 0,
-        "branch": "orbi/xqliu-orbi-issue-18-abc123",
+        "branch": "orbi/xqliu-orbi-issue-18-abc12345",
         "pr": None,
         "session": "sess-1",
     })
     lines = body.splitlines()
-    assert lines[0] == "<!-- orbi:run=abc123 -->"
+    assert lines[0] == "<!-- orbi:run=abc12345 -->"
     assert "**Orbi progress**" in body
     assert "- issue: #18 Publish progress" in body
     assert "- role: implement" in body
@@ -231,14 +237,14 @@ def test_progress_body_starts_with_hidden_run_marker():
     assert "- last action: bash pytest tests/" in body
     assert "- tests: 156 passed" in body
     assert "- review/fix round: 0" in body
-    assert "- branch: orbi/xqliu-orbi-issue-18-abc123" in body
+    assert "- branch: orbi/xqliu-orbi-issue-18-abc12345" in body
     assert "- PR: -" in body
     assert "- session: sess-1" in body
 
 
 def test_progress_body_marks_missing_values_as_dash():
     body = progress.progress_body({
-        "run_id": "abc123",
+        "run_id": "abc12345",
         "issue": 18,
         "issue_title": "Publish progress",
         "role": "implement",
@@ -260,7 +266,7 @@ def test_progress_body_marks_missing_values_as_dash():
 
 def test_progress_body_shows_pr_url_when_present():
     body = progress.progress_body({
-        "run_id": "abc123",
+        "run_id": "abc12345",
         "issue": 18,
         "issue_title": "Publish progress",
         "role": "implement",
@@ -285,7 +291,7 @@ def test_progress_body_shows_priority_field():
     (`p0` for urgent Issues, `normal` otherwise) right after the role,
     so a mobile user sees at a glance that this run is a P0."""
     state = {
-        "run_id": "abc123",
+        "run_id": "abc12345",
         "issue": 7,
         "issue_title": "p0 outage",
         "role": "implement",
@@ -315,7 +321,7 @@ def test_progress_body_shows_recovery_field_only_when_active():
     is recovering a stalled session; without it the body is exactly
     the pre-#94 shape (no empty recovery line)."""
     state = {
-        "run_id": "abc123",
+        "run_id": "abc12345",
         "issue": 94,
         "issue_title": "Idle recovery",
         "role": "implement",
@@ -362,7 +368,7 @@ def make_publisher(run_command=None, comments=None, posted=None,
         return ""
 
     publisher = progress.ProgressPublisher(
-        18, "xqliu/orbi", "abc123",
+        18, "xqliu/orbi", "abc12345",
         run_command=fake_run_command,
     )
     return publisher, calls
@@ -383,7 +389,7 @@ def test_progress_comment_writes_use_body_free_log_commands():
         return ""
 
     publisher = progress.ProgressPublisher(
-        18, "xqliu/orbi", "abc123", run_command=fake_run_command,
+        18, "xqliu/orbi", "abc12345", run_command=fake_run_command,
     )
     publisher.ensure("body with\nfull markdown")
     publisher.patch("updated body with\nfull markdown")
@@ -417,7 +423,7 @@ def test_publisher_ensure_patches_existing_progress_comment():
     existing = {
         "id": 7,
         "body": (
-            "<!-- orbi:run=abc123 -->\n\n"
+            "<!-- orbi:run=abc12345 -->\n\n"
             "**Orbi progress**\n\n- issue: #18"
         ),
     }
@@ -444,10 +450,10 @@ def test_publisher_ensure_never_hijacks_scene_comments():
     # The run's scene comments (started Pi / opened PR) and milestones
     # carry the run marker too: ensure must create a fresh progress
     # comment instead of PATCHing one of them (Issue #18).
-    scene = {"id": 3, "body": "<!-- orbi:run=abc123 -->started Pi"}
+    scene = {"id": 3, "body": "<!-- orbi:run=abc12345 -->started Pi"}
     milestone = {
         "id": 4,
-        "body": "<!-- orbi:run=abc123 -->Orbi: started",
+        "body": "<!-- orbi:run=abc12345 -->Orbi: started",
     }
     publisher, calls = make_publisher(comments=[scene, milestone])
     comment_id = publisher.ensure("initial body")
@@ -460,20 +466,20 @@ def test_publisher_ensure_never_hijacks_scene_comments():
 
 def test_find_progress_comment_requires_marker_and_header():
     comments = [
-        {"id": 1, "body": "<!-- orbi:run=abc123 -->scene"},
+        {"id": 1, "body": "<!-- orbi:run=abc12345 -->scene"},
         {"id": 2, "body": "**Orbi progress**"},
         {
             "id": 3,
             "body": (
-                "<!-- orbi:run=abc123 -->\n\n"
+                "<!-- orbi:run=abc12345 -->\n\n"
                 "**Orbi progress**"
             ),
         },
         {"id": 4},
     ]
-    found = progress.find_progress_comment(comments, "abc123")
+    found = progress.find_progress_comment(comments, "abc12345")
     assert found["id"] == 3
-    assert progress.find_progress_comment(comments, "other") is None
+    assert progress.find_progress_comment(comments, "deadbeef") is None
 
 
 def test_publisher_ensure_rejects_non_list_comment_payload():
@@ -487,7 +493,7 @@ def test_publisher_patch_updates_the_tracked_comment():
         {
             "id": 7,
             "body": (
-                "<!-- orbi:run=abc123 -->\n\n"
+                "<!-- orbi:run=abc12345 -->\n\n"
                 "**Orbi progress**"
             ),
         },
@@ -510,7 +516,7 @@ def test_publisher_patch_uses_the_github_update_comment_endpoint():
         {
             "id": 7,
             "body": (
-                "<!-- orbi:run=abc123 -->\n\n"
+                "<!-- orbi:run=abc12345 -->\n\n"
                 "**Orbi progress**"
             ),
         },
@@ -544,8 +550,8 @@ def test_publisher_milestone_posts_short_standalone_comment():
             "gh", "api", "repos/xqliu/orbi/issues/18/comments",
             "--method", "POST",
             "--field",
-            "body=<!-- orbi:run=abc123 -->\n"
-            "Orbi: tests passed run_id=abc123",
+            "body=<!-- orbi:run=abc12345 -->\n"
+            "Orbi: tests passed run_id=abc12345",
         ],
     ]
     # A milestone never touches the tracked progress comment.
@@ -580,7 +586,7 @@ def test_publisher_finish_patches_final_summary_into_tracked_comment():
         {
             "id": 7,
             "body": (
-                "<!-- orbi:run=abc123 -->\n\n"
+                "<!-- orbi:run=abc12345 -->\n\n"
                 "**Orbi progress**"
             ),
         },

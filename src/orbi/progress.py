@@ -21,6 +21,7 @@ import re
 from typing import Callable
 
 # One marker per run: hidden in the rendered comment, exact for lookup.
+RUN_ID_PATTERN = re.compile(r"[0-9a-f]{8}")
 RUN_MARKER_PATTERN = re.compile(r"<!-- orbi:run=([0-9a-f]{8}) -->")
 RUN_MARKER_TEMPLATE = "<!-- orbi:run={run_id} -->"
 # Standalone milestone comments share this prefix so they are recognizable.
@@ -31,9 +32,16 @@ MILESTONE_PREFIX = "Orbi:"
 PROGRESS_HEADER = "**Orbi progress**"
 
 
-def run_marker(run_id: str) -> str:
-    """Return the hidden HTML marker that identifies one run's comment."""
-    return RUN_MARKER_TEMPLATE.format(run_id=run_id)
+def validate_run_id(run_id: object) -> str:
+    """Fail fast unless ``run_id`` identifies exactly one task attempt."""
+    if not isinstance(run_id, str) or not RUN_ID_PATTERN.fullmatch(run_id):
+        raise ValueError(f"invalid run id: {run_id!r}")
+    return run_id
+
+
+def run_marker(run_id: object) -> str:
+    """Return the hidden HTML marker that identifies one valid run."""
+    return RUN_MARKER_TEMPLATE.format(run_id=validate_run_id(run_id))
 
 
 def find_run_comment(comments: list[dict], run_id: str) -> dict | None:

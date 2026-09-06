@@ -104,6 +104,7 @@ from orbi.progress import (
     format_elapsed,
     progress_body,
     run_marker,
+    validate_run_id,
 )
 from orbi import runner_health
 from orbi.systemd_deploy import (
@@ -207,7 +208,8 @@ ROLE_TICKET = "ticket"
 # every journal line of the attempt starts with `[run_id]`, so a single
 # grep reconstructs the whole timeline. The filter rewrites the message in
 # place, so every handler (journal, caplog) sees the same prefixed text.
-RUN_ID_PATTERN = re.compile(r"^[0-9a-f]{8}$")
+# Run marker validation and rendering live in progress.py so every caller
+# enforces the same strict eight-hex-digit contract.
 _CURRENT_RUN_ID: str | None = None
 
 # GitHub labels are the only state store (Issue #45). The delivery
@@ -366,13 +368,6 @@ LOGGER.addFilter(RunIdFilter())
 # prefix as every other Runner line (the RunIdFilter is attached per
 # logger; the health module must not import this one — circular).
 runner_health.LOGGER.addFilter(RunIdFilter())
-
-
-def validate_run_id(run_id: object) -> str:
-    """Fail fast unless `run_id` is the 8-hex id of one task attempt."""
-    if not isinstance(run_id, str) or not RUN_ID_PATTERN.fullmatch(run_id):
-        raise ValueError(f"invalid run id: {run_id!r}")
-    return run_id
 
 
 def set_run_id(run_id: str) -> None:
