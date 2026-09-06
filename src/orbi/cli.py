@@ -32,6 +32,14 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from orbi import __version__, cli_source, git_transport, runner, systemd_deploy
+from orbi.delivery_labels import (
+    BLOCKED_LABEL,
+    FIX_NEEDED_LABEL,
+    IN_PROGRESS_LABEL,
+    MERGED_LABEL,
+    PR_OPENED_LABEL,
+    READY_LABEL,
+)
 
 from orbi.runner import (
     RunIdFilter,
@@ -57,13 +65,11 @@ LOGGER.addFilter(RunIdFilter())
 # pyproject.toml, so the two cannot drift.
 
 ISSUE_URL_PATTERN = re.compile(r"/issues/(\d+)$")
-READY_LABEL = "ai-ready"
-IN_PROGRESS_LABEL = "ai-in-progress"
 # `ai-pr-opened` (awaiting review), `ai-fix-needed` (awaiting the next
 # review session, Issue #82), `ai-merged` (the Runner merged the PR
 # itself, Issue #34) and `ai-blocked` are all result states of an
 # opened delivery (Issue #45).
-RESULT_LABELS = ("ai-pr-opened", "ai-fix-needed", "ai-merged", "ai-blocked")
+RESULT_LABELS = (PR_OPENED_LABEL, FIX_NEEDED_LABEL, MERGED_LABEL, BLOCKED_LABEL)
 
 
 def issue_number(url: str) -> int:

@@ -19,11 +19,13 @@ not a hand-written `python3 orbi.py`. These tests pin:
   exact same code as the console script (development/compatibility,
   asserted against one real call).
 """
+import importlib
 import tomllib
 from pathlib import Path
 
 import pytest
 
+from orbi import delivery_labels
 from orbi import git_transport
 from orbi import pilot_setup
 from orbi import systemd_deploy
@@ -93,6 +95,36 @@ def parse_unit(path: Path) -> dict[str, dict[str, list[str]]]:
 
 
 # --- the packaging file -------------------------------------------------------
+
+
+def test_delivery_label_consumers_follow_the_authoritative_source(monkeypatch):
+    """Delivery consumers must read labels from delivery_labels, not literals."""
+    monkeypatch.setattr(delivery_labels, "READY_LABEL", "changed-ready")
+    monkeypatch.setattr(delivery_labels, "IN_PROGRESS_LABEL", "changed-progress")
+    monkeypatch.setattr(delivery_labels, "PR_OPENED_LABEL", "changed-pr")
+    monkeypatch.setattr(delivery_labels, "FIX_NEEDED_LABEL", "changed-fix")
+    monkeypatch.setattr(delivery_labels, "MERGED_LABEL", "changed-merged")
+    monkeypatch.setattr(delivery_labels, "BLOCKED_LABEL", "changed-blocked")
+
+    cli = importlib.import_module("orbi.cli")
+    importlib.reload(cli)
+    importlib.reload(pilot_setup)
+
+    assert cli.READY_LABEL == "changed-ready"
+    assert cli.IN_PROGRESS_LABEL == "changed-progress"
+    assert cli.RESULT_LABELS == (
+        "changed-pr", "changed-fix", "changed-merged", "changed-blocked",
+    )
+    assert pilot_setup.REQUIRED_LABELS[:6] == (
+        "changed-ready", "changed-progress", "changed-pr",
+        "changed-fix", "changed-merged", "changed-blocked",
+    )
+
+    # Keep the imported modules usable by the remaining tests after the
+    # monkeypatch is reverted.
+    monkeypatch.undo()
+    importlib.reload(cli)
+    importlib.reload(pilot_setup)
 
 
 def test_pyproject_declares_the_orbi_console_script():
