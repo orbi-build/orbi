@@ -589,6 +589,21 @@ def test_merge_gate_mergeable_timeout_fails_fast(monkeypatch, tmp_path):
         )
 
 
+def test_merge_gate_continuous_unknown_times_out_after_polling(monkeypatch, tmp_path):
+    sleeps = []
+    monkeypatch.setattr(
+        runner, "run_command", _merge_gate_fake(pr_state="UNKNOWN"),
+    )
+    monkeypatch.setattr(runner.time, "sleep", sleeps.append)
+    with pytest.raises(RuntimeError, match="mergeable.*timed out"):
+        runner.merge_gate(
+            tmp_path, {"number": 4, "url": "u", "base_ref": "main",
+                       "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
+            "main", repo_dir=tmp_path, mergeable_wait_seconds=10,
+        )
+    assert sleeps == [runner.MERGEABLE_POLL_INTERVAL] * 2
+
+
 def test_merge_gate_rejects_non_mergeable_pr(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", _merge_gate_fake(pr_state="DIRTY"))
     with pytest.raises(RuntimeError, match="not mergeable"):
