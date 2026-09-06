@@ -1726,6 +1726,8 @@ def parse_release_declaration(body: str) -> dict:
     branch the release commit is frozen from, `test_command` the
     shell command that must pass in a clean worktree at the release
     commit, and `scope` the Issue/PR numbers verified one by one.
+    Optional `version_file` selects `pyproject.toml` (the default),
+    `package.json`, or `none` to skip version metadata changes.
     Exactly one of `scope` / `scope_from_milestone` must be present:
     both (conflict) or neither fails fast. `scope_from_milestone` is
     the Milestone TITLE (no spaces); its scope is derived later by
@@ -1800,13 +1802,13 @@ def parse_release_declaration(body: str) -> dict:
                 scope_open = True
                 fields["scope"] = ""
             elif key in ("version", "base_branch", "test_command",
-                         "scope_from_milestone"):
+                         "scope_from_milestone", "version_file"):
                 fields[key] = value
             else:
                 raise ValueError(
                     f"release declaration has the unknown field {key!r} "
                     "(expected version, base_branch, test_command, "
-                    "scope or scope_from_milestone)"
+                    "scope, scope_from_milestone or version_file)"
                 )
         elif scope_open:
             raise ValueError(
@@ -1859,12 +1861,19 @@ def parse_release_declaration(body: str) -> dict:
                 "release declaration field `scope_from_milestone` must "
                 "not contain spaces"
             )
+    version_file = fields.get("version_file", "pyproject.toml")
+    if version_file not in ("pyproject.toml", "package.json", "none"):
+        raise ValueError(
+            "release declaration field `version_file` must be one of "
+            "`pyproject.toml`, `package.json` or `none`"
+        )
     return {
         "version": fields["version"],
         "base_branch": fields["base_branch"],
         "test_command": fields["test_command"],
         "scope": scope,
         "scope_from_milestone": fields.get("scope_from_milestone"),
+        "version_file": version_file,
     }
 
 
@@ -2374,14 +2383,14 @@ def release_test_evidence(exc: subprocess.CalledProcessError) -> str | None:
 
 
 def prepare_release_version(worktree: Path, tag: str,
-                            base_branch: str) -> str:
-    """Commit the tag's version into both runtime metadata sources.
+                            base_branch: str,
+                            version_file: str = "pyproject.toml") -> str:
+    """Commit the tag's version into the declared metadata source.
 
     The release tag is the public identity (for example ``v0.3.0``), while
-    Python package metadata omits the leading ``v``.  Both existing sources
-    must be structurally recognizable and agree before either is changed;
-    otherwise a release stops before creating a tag.  The commit is pushed
-    directly to the release base, matching the release docs-sync step.
+    metadata version fields omit the leading ``v``.  The selected source
+    must be structurally recognizable before it is changed; the commit is
+    pushed directly to the release base, matching the release docs-sync step.
     """
     match = re.fullmatch(r"v([0-9]+(?:\.[0-9]+)+)", tag)
     if match is None:
@@ -2389,7 +2398,41 @@ def prepare_release_version(worktree: Path, tag: str,
             f"release version {tag!r} must be a v-prefixed numeric tag"
         )
     version = match.group(1)
-    pyproject = worktree / "pyproject.toml"
+    if version_file not in ("pyproject.toml", "package.json", "none"):
+        raise ValueError(
+            "release version_file must be one of `pyproject.toml`, "
+            "`package.json` or `none`"
+        )
+    if version_file == "none":
+        return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+    if version_file == "package.json":
+        package_json = worktree / version_file
+        try:
+            package_data = json.loads(package_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                "release version source package.json is not valid JSON"
+            ) from exc
+        if not isinstance(package_data, dict) or not isinstance(
+            package_data.get("version"), str
+        ) or not package_data["version"]:
+            raise RuntimeError(
+                "release version source package.json must contain a non-empty "
+                "version field"
+            )
+        package_data["version"] = version
+        package_json.write_text(
+            json.dumps(package_data, indent=2) + "\n", encoding="utf-8",
+        )
+        run_command(["git", "add", version_file], cwd=worktree)
+        run_command([
+            "git", "commit", "-m", f"chore: prepare release {tag}",
+        ], cwd=worktree)
+        run_command([
+            "git", "push", "origin", f"HEAD:refs/heads/{base_branch}",
+        ], cwd=worktree)
+        return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+    pyproject = worktree / version_file
     init_file = worktree / "src" / "orbi" / "__init__.py"
     pyproject_text = pyproject.read_text(encoding="utf-8")
     init_text = init_file.read_text(encoding="utf-8")
@@ -2420,7 +2463,7 @@ def prepare_release_version(worktree: Path, tag: str,
         pyproject.write_text(updated_pyproject, encoding="utf-8")
         init_file.write_text(updated_init, encoding="utf-8")
         run_command([
-            "git", "add", "pyproject.toml", "src/orbi/__init__.py",
+            "git", "add", version_file, "src/orbi/__init__.py",
         ], cwd=worktree)
         run_command([
             "git", "commit", "-m", f"chore: prepare release {tag}",
@@ -3030,10 +3073,10 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
        Issues + merged PRs; open items are surfaced as evidence, never
        released. Then verify the scope item by item
        (`verify_release_scope`).
-    Before step 5, prepare the release version in the clean worktree:
-       update both `pyproject.toml` and `src/orbi/__init__.py`, commit, and
-       push the new release commit to the base branch; mismatched sources
-       fail fast. The subsequent steps run against that commit.
+    Before step 5, prepare the release version in the clean worktree using
+       the declared `version_file` (`pyproject.toml` by default,
+       `package.json`, or `none`), commit and push when metadata changes.
+       The subsequent steps run against that commit.
     5. Run the declared test command in that release worktree
        (`timeout`-wrapped, Issue #95).
     6. Tag: the remote tag must not exist or must point EXACTLY at
@@ -3254,9 +3297,17 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         )
         # Version metadata is part of the release commit, not a post-release
         # fix: tests and the tag must identify the exact same commit.
-        release_commit = prepare_release_version(
-            worktree, declaration["version"], base_branch,
-        )
+        if declaration["version_file"] == "pyproject.toml":
+            # Keep the default invocation compatible with existing callers;
+            # the omitted field is the unchanged Python release path.
+            release_commit = prepare_release_version(
+                worktree, declaration["version"], base_branch,
+            )
+        else:
+            release_commit = prepare_release_version(
+                worktree, declaration["version"], base_branch,
+                declaration["version_file"],
+            )
         # Version preparation creates the commit that will be tagged. Re-run
         # the commit-specific gates so the recorded CI result and final
         # no-open-PR check cover that exact release commit, not the frozen

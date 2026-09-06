@@ -12819,7 +12819,30 @@ def test_parse_release_declaration_returns_all_fields():
         ),
         "scope": [123, 124],
         "scope_from_milestone": None,
+        "version_file": "pyproject.toml",
     }
+
+
+def test_parse_release_declaration_accepts_package_json_version_file():
+    body = RELEASE_DECLARATION_BODY.replace(
+        "- version: v0.3.0\n", "- version: v0.3.0\n- version_file: package.json\n",
+    )
+    assert runner.parse_release_declaration(body)["version_file"] == "package.json"
+
+
+def test_parse_release_declaration_accepts_none_version_file():
+    body = RELEASE_DECLARATION_BODY.replace(
+        "- version: v0.3.0\n", "- version: v0.3.0\n- version_file: none\n",
+    )
+    assert runner.parse_release_declaration(body)["version_file"] == "none"
+
+
+def test_parse_release_declaration_rejects_invalid_version_file():
+    body = RELEASE_DECLARATION_BODY.replace(
+        "- version: v0.3.0\n", "- version: v0.3.0\n- version_file: version.txt\n",
+    )
+    with pytest.raises(ValueError, match="version_file"):
+        runner.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_requires_the_release_section():
@@ -12932,6 +12955,7 @@ def test_parse_release_declaration_scope_from_milestone():
         "test_command": "/usr/bin/python3 -m pytest tests/ -q",
         "scope": [],
         "scope_from_milestone": "v0.3.0",
+        "version_file": "pyproject.toml",
     }
 
 
@@ -13781,6 +13805,68 @@ def test_prepare_release_version_updates_sources_and_commits(tmp_path, monkeypat
     ]
 
 
+def test_prepare_release_version_updates_package_json(tmp_path, monkeypatch):
+    work = tmp_path / "release"
+    work.mkdir()
+    (work / "package.json").write_text(
+        '{\n  "name": "cloud",\n  "version": "0.2.0"\n}\n', encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "newsha",
+    )
+
+    assert runner.prepare_release_version(
+        work, "v0.3.0", "main", "package.json",
+    ) == "newsha"
+    assert '"version": "0.3.0"' in (work / "package.json").read_text()
+    assert calls == [
+        (["git", "add", "package.json"], {"cwd": work}),
+        (["git", "commit", "-m", "chore: prepare release v0.3.0"],
+         {"cwd": work}),
+        (["git", "push", "origin", "HEAD:refs/heads/main"], {"cwd": work}),
+        (["git", "rev-parse", "HEAD"], {"cwd": work}),
+    ]
+
+
+def test_prepare_release_version_rejects_invalid_version_file(tmp_path):
+    with pytest.raises(ValueError, match="version_file"):
+        runner.prepare_release_version(tmp_path, "v0.3.0", "main", "version.txt")
+
+
+def test_prepare_release_version_rejects_invalid_package_json(tmp_path):
+    work = tmp_path / "release"
+    work.mkdir()
+    (work / "package.json").write_text("not json", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="not valid JSON"):
+        runner.prepare_release_version(work, "v0.3.0", "main", "package.json")
+
+
+def test_prepare_release_version_rejects_package_without_version(tmp_path):
+    work = tmp_path / "release"
+    work.mkdir()
+    (work / "package.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="version field"):
+        runner.prepare_release_version(work, "v0.3.0", "main", "package.json")
+
+
+def test_prepare_release_version_none_does_not_change_files(tmp_path, monkeypatch):
+    work = tmp_path / "release"
+    work.mkdir()
+    marker = work / "README.md"
+    marker.write_text("unchanged\n", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "head",
+    )
+
+    assert runner.prepare_release_version(work, "v0.3.0", "main", "none") == "head"
+    assert marker.read_text() == "unchanged\n"
+    assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": work})]
+
+
 def test_prepare_release_version_rejects_non_tag_version(tmp_path):
     with pytest.raises(ValueError, match="release version"):
         runner.prepare_release_version(tmp_path, "0.3.0", "main")
@@ -14260,6 +14346,22 @@ def test_process_release_wait_timeout_uses_persisted_wait_start(monkeypatch):
     )
     assert result == ""
     assert state["edits"][-1][1]["add"] == "ai-blocked"
+
+
+def test_process_release_uses_declared_package_version_file(monkeypatch):
+    state = make_release_process_env(monkeypatch)
+    seen = []
+    monkeypatch.setattr(
+        runner, "prepare_release_version",
+        lambda *args: seen.append(args) or "abc123",
+    )
+    body = RELEASE_DECLARATION_BODY.replace(
+        "- version: v0.3.0\n", "- version: v0.3.0\n- version_file: package.json\n",
+    )
+    issue = {"number": 99, "title": "Release v0.3.0", "body": body,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    runner.process_release(issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r")
+    assert seen == [(Path("/wt"), "v0.3.0", "main", "package.json")]
 
 
 def test_process_release_success_end_to_end(monkeypatch):
