@@ -44,6 +44,10 @@ base_branch = "main"
 # output creates (or deduplicates) an ai-ready + bug repair Issue. The Release
 # itself remains ai-blocked and must be explicitly re-run after review/merge.
 # auto_repair_issues = true
+# When false, a closed active milestone pauses here and creates one
+# ai-ready + p0 confirmation Issue instead of rewriting this file.
+# Missing keeps the existing automatic-advance behavior.
+# auto_next_milestone = true
 # Hung-model-request threshold (Issue #228): seconds of silence in
 # `model_wait` (the newest COMPLETE Pi session event is a tool result
 # and no new event arrives) after which the Runner declares the model

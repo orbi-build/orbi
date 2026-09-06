@@ -606,6 +606,9 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     auto_repair_issues = data.get("auto_repair_issues", False)
     if not isinstance(auto_repair_issues, bool):
         raise ValueError("auto_repair_issues must be a boolean")
+    auto_next_milestone = data.get("auto_next_milestone", True)
+    if not isinstance(auto_next_milestone, bool):
+        raise ValueError("auto_next_milestone must be a boolean")
     # Concurrency cap (Issue #39): the local machine can only serve a
     # limited number of concurrent tasks, so the default is 1. Any other
     # value must be a positive integer; fail fast on anything else.
@@ -740,6 +743,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         "base_branch": base_branch,
         "active_milestone": active_milestone,
         "auto_repair_issues": auto_repair_issues,
+        "auto_next_milestone": auto_next_milestone,
         "max_concurrency": max_concurrency,
         "slot_dir": slot_dir_for(repo_dir),
         "pi_provider": pi_provider,
@@ -4027,8 +4031,46 @@ def arm_release_ticket(repo: str, active_milestone: str) -> None:
     )
 
 
+def _pending_milestone_issue(
+    repo: str, old: str, candidates: list[dict],
+) -> None:
+    """Create one idempotent human-confirmation issue for a milestone advance."""
+    titles = [str(candidate["title"]) for candidate in candidates]
+    fingerprint = f"orbi-milestone-advance old={old} candidates={','.join(titles)}"
+    existing = parse_issue_array(run_command([
+        "gh", "issue", "list", "--repo", repo, "--state", "all",
+        "--search", f'in:body "{fingerprint}"',
+        "--json", "number", "--limit", "1",
+    ], timeout=30))
+    if existing:
+        return
+    lines = [
+        "## Milestone 自动推进待人工确认",
+        "",
+        fingerprint,
+        "",
+        f"当前 milestone `{old}` 已完成，等待确认推进到以下候选版本：",
+        "",
+    ]
+    lines.extend(
+        f"- `{candidate['title']}`：{candidate.get('open_issues', 0)} open issues"
+        for candidate in candidates
+    )
+    lines.extend([
+        "",
+        "请人工将 `active_milestone` 改为目标版本（或恢复自动推进），然后关闭本 Issue。",
+    ])
+    run_command([
+        "gh", "issue", "create", "--repo", repo,
+        "--title", f"Milestone {old} 已完成，等待确认推进到 {titles[0]}",
+        "--body", "\n".join(lines),
+        "--label", READY_LABEL, "--label", P0_LABEL,
+    ], timeout=30)
+
+
 def advance_active_milestone_on_idle(
     repo: str, active_milestone: str, config_path: Path,
+    *, auto_next_milestone: bool = True,
 ) -> tuple[str, str | None]:
     """Check and advance a configured milestone after no_ready_issue."""
     raw = run_command([
@@ -4072,6 +4114,20 @@ def advance_active_milestone_on_idle(
         )
         return "closed", None
     candidates.sort()
+    candidate_details = [
+        milestone for _, title in candidates
+        for milestone in milestones
+        if isinstance(milestone, dict) and milestone.get("title") == title
+    ]
+    if not auto_next_milestone:
+        candidate_titles = ",".join(title for _, title in candidates)
+        LOGGER.warning(
+            "active_milestone_advance_pending old=%s candidates=%s "
+            "auto_next_milestone=false",
+            active_milestone, candidate_titles,
+        )
+        _pending_milestone_issue(repo, active_milestone, candidate_details)
+        return "closed", None
     new_value = candidates[0][1]
     rewrite_active_milestone_line(config_path, new_value)
     LOGGER.info(
@@ -9005,6 +9061,7 @@ def main(argv: list[str] | None = None) -> int:
                     config["source_repos"][0],
                     config["active_milestone"],
                     config["config_path"],
+                    auto_next_milestone=config["auto_next_milestone"],
                 )
             return 0
         source_repo, issue, scene = selected
