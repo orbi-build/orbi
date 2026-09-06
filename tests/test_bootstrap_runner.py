@@ -9353,7 +9353,7 @@ PR_URL = "https://github.com/owner/repo/pull/46"
 
 
 def fake_pr_view(monkeypatch, state: str) -> tuple[list, object]:
-    """Answer `gh pr view <n> --repo owner/repo --json state`.
+    """Answer `gh pr view <n> --repo owner/repo with delivery fields`.
 
     Returns the command log and the fake itself (so a test can prove
     the fake rejects unexpected commands).
@@ -9366,9 +9366,10 @@ def fake_pr_view(monkeypatch, state: str) -> tuple[list, object]:
             seen.append(command)
             assert command[3] == "46"
             assert command[4:] == [
-                "--repo", "owner/repo", "--json", "state",
+                "--repo", "owner/repo", "--json",
+                "state,statusCheckRollup",
             ]
-            return json.dumps({"state": state})
+            return json.dumps({"state": state, "statusCheckRollup": []})
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -9406,6 +9407,25 @@ def test_pr_state_fails_fast_on_non_object_json(monkeypatch):
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(ValueError, match="pr view must be a JSON object"):
         runner.pr_state(PR_URL, "owner/repo")
+
+
+def test_pr_delivery_status_rejects_non_array_check_rollup(monkeypatch):
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda *a, **k: json.dumps({"state": "OPEN", "statusCheckRollup": {}}),
+    )
+    with pytest.raises(ValueError, match="statusCheckRollup must be a JSON array"):
+        runner.pr_delivery_status(PR_URL, "owner/repo")
+
+
+def test_pr_delivery_status_ignores_malformed_check_entry(monkeypatch):
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda *a, **k: json.dumps({
+            "state": "OPEN", "statusCheckRollup": [None],
+        }),
+    )
+    assert runner.pr_delivery_status(PR_URL, "owner/repo") == ("OPEN", [])
 
 
 def test_finish_blocked_progress_is_a_noop_without_run_id(monkeypatch):
@@ -10538,6 +10558,81 @@ def test_wait_for_delivery_review_failure_without_bound_run_id(
     assert "orbi:run=" not in body
 
 
+def test_wait_for_delivery_repairs_in_progress_label_and_logs_ci(
+        monkeypatch, caplog, tmp_path,
+):
+    """An open PR proves implementation reached delivery: repair a lost
+    label transition and expose CI state before entering review."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:2] == ["gh", "pr"] and command[2] == "view":
+            return json.dumps({
+                "state": "OPEN",
+                "statusCheckRollup": [
+                    {"name": "tests", "status": "COMPLETED",
+                     "conclusion": "FAILURE"},
+                    {"name": "lint", "status": "IN_PROGRESS",
+                     "conclusion": None},
+                ],
+            })
+        if command[:2] == ["gh", "issue"] and command[2] == "view":
+            if command[-1] == "comments":
+                return json.dumps({"comments": [{
+                    "body": (
+                        "<!-- orbi:run=a1b2c3d4 -->\n"
+                        "Orbi opened PR: "
+                        f"{PR_URL} (base_branch=main "
+                        "base_sha=abc123def456 run_id=a1b2c3d4)"
+                    ),
+                    "authorAssociation": "OWNER",
+                }]})
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(runner, "review_and_merge_if_clean", lambda *a, **k: True)
+    (tmp_path / ".worktrees" /
+     "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
+    caplog.set_level("INFO")
+    runner.wait_for_delivery(
+        PR_URL, {"number": 39, "title": "task", "body": ""},
+        {"repo_dir": tmp_path, "base_branch": "main"}, "owner/repo",
+    )
+    assert any("--add-label" in call and "ai-pr-opened" in call
+               and "--remove-label" in call and "ai-in-progress" in call
+               for call in calls)
+    assert "tests=COMPLETED/FAILURE" in caplog.text
+    assert "lint=IN_PROGRESS" in caplog.text
+
+
+def test_wait_for_delivery_blocks_when_in_progress_label_repair_fails(
+        monkeypatch, caplog,
+):
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"] and command[2] == "view":
+            return json.dumps({"state": "OPEN", "statusCheckRollup": []})
+        return json.dumps({"labels": [{"name": "ai-in-progress"}]})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    patches = []
+    def fake_patch(number, **kwargs):
+        patches.append(kwargs)
+        if kwargs["event"] == runner.EVENT_PR_OPENED:
+            raise RuntimeError("label API unavailable")
+    monkeypatch.setattr(runner, "apply_label_patch", fake_patch)
+    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
+    runner.wait_for_delivery(
+        PR_URL, {"number": 39, "title": "task", "body": ""},
+        {}, "owner/repo",
+    )
+    assert patches[-1]["event"] == runner.EVENT_BLOCKED
+    assert "delivery_label_repair_failed" in caplog.text
+
+
 def test_wait_for_delivery_keeps_holding_when_no_delivery_label(
         monkeypatch, caplog,
 ):
@@ -10553,6 +10648,10 @@ def test_wait_for_delivery_keeps_holding_when_no_delivery_label(
             return json.dumps({"state": states[pr_calls["n"] - 1]})
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             return json.dumps({"labels": [{"name": "ai-ready"}]})
+        if command[:3] == ["gh", "issue", "edit"]:
+            return ""
+        if command[:3] == ["gh", "issue", "comment"]:
+            return ""
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -10560,13 +10659,14 @@ def test_wait_for_delivery_keeps_holding_when_no_delivery_label(
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "list"])
     monkeypatch.setattr(runner.time, "sleep", lambda s: None)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
     issue = {"number": 39, "title": "task", "body": ""}
     caplog.set_level("INFO")
     runner.wait_for_delivery(PR_URL, issue, {}, "owner/repo")
-    # First poll: OPEN + no delivery label -> awaiting (no review);
-    # second poll: MERGED -> terminal.
-    assert pr_calls["n"] == 2
-    assert "delivery_awaiting" in caplog.text
+    # An open PR with no resumable delivery label is unrecoverable: it is
+    # blocked immediately instead of retaining the slot indefinitely.
+    assert pr_calls["n"] == 1
+    assert "delivery_label_inconsistent" in caplog.text
 
 
 def test_wait_for_delivery_logs_awaiting_without_bound_run_id(monkeypatch, caplog):
