@@ -3250,6 +3250,23 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         release_commit = prepare_release_version(
             worktree, declaration["version"], base_branch,
         )
+        # Version preparation creates the commit that will be tagged. Re-run
+        # the commit-specific gates so the recorded CI result and final
+        # no-open-PR check cover that exact release commit, not the frozen
+        # pre-version source commit.
+        gate_evidence = check_release_gates(
+            source_repo, base_branch, release_commit, number,
+            ci_wait_seconds=config.get(
+                "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
+            ),
+            delivery_wait_seconds=config.get(
+                "release_deliveries_wait_seconds",
+                RELEASE_DELIVERIES_WAIT_SECONDS,
+            ),
+            delivery_waited_seconds=release_waited_seconds,
+            on_wait=on_ci_wait,
+            on_delivery_wait=on_delivery_wait,
+        )
         try:
             run_release_tests(
                 worktree, declaration["test_command"],
