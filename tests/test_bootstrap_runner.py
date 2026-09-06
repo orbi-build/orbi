@@ -13830,6 +13830,24 @@ def test_prepare_release_version_updates_package_json(tmp_path, monkeypatch):
     ]
 
 
+def test_prepare_release_version_package_json_is_idempotent(tmp_path, monkeypatch):
+    work = tmp_path / "release"
+    work.mkdir()
+    (work / "package.json").write_text(
+        '{"name": "cloud", "version": "0.3.0"}\n', encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "head",
+    )
+
+    assert runner.prepare_release_version(
+        work, "v0.3.0", "main", "package.json",
+    ) == "head"
+    assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": work})]
+
+
 def test_prepare_release_version_rejects_invalid_version_file(tmp_path):
     with pytest.raises(ValueError, match="version_file"):
         runner.prepare_release_version(tmp_path, "v0.3.0", "main", "version.txt")

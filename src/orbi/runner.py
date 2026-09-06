@@ -2420,17 +2420,18 @@ def prepare_release_version(worktree: Path, tag: str,
                 "release version source package.json must contain a non-empty "
                 "version field"
             )
-        package_data["version"] = version
-        package_json.write_text(
-            json.dumps(package_data, indent=2) + "\n", encoding="utf-8",
-        )
-        run_command(["git", "add", version_file], cwd=worktree)
-        run_command([
-            "git", "commit", "-m", f"chore: prepare release {tag}",
-        ], cwd=worktree)
-        run_command([
-            "git", "push", "origin", f"HEAD:refs/heads/{base_branch}",
-        ], cwd=worktree)
+        if package_data["version"] != version:
+            package_data["version"] = version
+            package_json.write_text(
+                json.dumps(package_data, indent=2) + "\n", encoding="utf-8",
+            )
+            run_command(["git", "add", version_file], cwd=worktree)
+            run_command([
+                "git", "commit", "-m", f"chore: prepare release {tag}",
+            ], cwd=worktree)
+            run_command([
+                "git", "push", "origin", f"HEAD:refs/heads/{base_branch}",
+            ], cwd=worktree)
         return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
     pyproject = worktree / version_file
     init_file = worktree / "src" / "orbi" / "__init__.py"
