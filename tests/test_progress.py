@@ -554,6 +554,22 @@ def test_publisher_patch_fails_fast_without_tracked_comment():
     assert calls == []
 
 
+def test_publisher_milestone_omits_result_for_only_key_value_fields():
+    publisher, calls = make_publisher()
+    publisher.milestone("started: base_branch=main")
+    body = calls[0][-1]
+    assert "- base_branch: main" in body
+    assert "- result:" not in body
+
+
+def test_publisher_milestone_keeps_prose_with_key_value_fields():
+    publisher, calls = make_publisher()
+    publisher.milestone("merged: https://example.test merge_commit=m1")
+    body = calls[0][-1]
+    assert "- result: https://example.test merge_commit=m1" in body
+    assert "- merge_commit: m1" in body
+
+
 def test_publisher_milestone_keeps_prose_and_key_value_fields():
     publisher, calls = make_publisher()
     publisher.milestone("blocked: base_branch=develop base_branch=main")

@@ -82,6 +82,14 @@ def test_parse_pr_comment_returns_scene_for_legacy_opened_pr_comment():
     assert scene == scene_for()
 
 
+def test_parse_pr_comment_ignores_unrelated_new_format_line():
+    body = runner.opened_pr_comment_body(
+        FAKE_RUN_ID, "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4",
+        FAKE_PR_URL,
+    ) + "\nnot a field"
+    assert runner.parse_pr_comment(body) == scene_for()
+
+
 def test_started_pi_comment_uses_multiline_field_block():
     body = runner.started_pi_comment_body(
         FAKE_RUN_ID,
