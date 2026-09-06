@@ -32,6 +32,47 @@ MILESTONE_PREFIX = "Orbi:"
 PROGRESS_HEADER = "**Orbi progress**"
 
 
+def field_block(run_id: str, headline: str, fields: dict[str, object]) -> str:
+    """Render a marker-first status comment with one field per line."""
+    lines = [run_marker(run_id), headline]
+    lines.extend(
+        f"- {key}={value}" if key == "run_id"
+        else f"- {key}: {value}" for key, value in fields.items()
+    )
+    return "\n".join(lines)
+
+
+def format_status_comment(body: str) -> str:
+    """Expand legacy one-line Orbi status comments into field blocks."""
+    if not isinstance(body, str):
+        return body
+    marker = ""
+    if body.startswith("<!-- orbi:run=") and "\n" in body:
+        marker, _, body = body.partition("\n")
+    first, separator, remainder = body.partition("\n")
+    prefixes = (
+        "Orbi failed:", "Orbi needs a fix:", "Orbi merged PR:",
+        "Orbi release failed", "Orbi release waiting",
+    )
+    if not first.startswith(prefixes):
+        return (marker + "\n" + body) if marker else body
+    fields: dict[str, object] = {}
+    for key, value in re.findall(r"([A-Za-z_][\w-]*)=([^\s)]+)", first):
+        fields[key] = value
+    detail = re.sub(r"\s*\((?=[^)]*=)[^)]*\)", "", first).strip()
+    run_id = fields.get("run_id")
+    if not run_id and marker:
+        match = re.search(r"orbi:run=([0-9a-f]{8})", marker)
+        run_id = match.group(1) if match else None
+    fields.setdefault("detail", detail)
+    if isinstance(run_id, str) and RUN_ID_PATTERN.fullmatch(run_id):
+        rendered = field_block(run_id, detail, fields)
+        if remainder:
+            rendered += "\n" + remainder
+        return (marker + "\n" + rendered.split("\n", 1)[1]) if marker else rendered
+    return (marker + "\n" + body) if marker else body
+
+
 def validate_run_id(run_id: object) -> str:
     """Fail fast unless ``run_id`` identifies exactly one task attempt."""
     if not isinstance(run_id, str) or not RUN_ID_PATTERN.fullmatch(run_id):
@@ -252,11 +293,19 @@ class ProgressPublisher:
         carry it already, so the contract holds for every milestone
         without repeating the field.
         """
-        if f"run_id={self.run_id}" not in text:
-            text = f"{text} run_id={self.run_id}"
-        self._post_comment(
-            f"{run_marker(self.run_id)}\n{MILESTONE_PREFIX} {text}",
-        )
+        headline, separator, detail = text.partition(": ")
+        fields: dict[str, object] = {}
+        if separator:
+            pairs = re.findall(r"([A-Za-z_][\w-]*)=([^\s)]+)", detail)
+            fields.update(pairs)
+            prose = re.sub(r"\s*\(?[A-Za-z_][\w-]*=[^\s)]+", "", detail)
+            prose = prose.strip(" ()")
+            if prose or len({key for key, _ in pairs}) != len(pairs):
+                fields["result"] = detail
+        fields["run_id"] = self.run_id
+        self._post_comment(field_block(
+            self.run_id, f"{MILESTONE_PREFIX} {headline}", fields,
+        ))
 
     def finish(self, body: str) -> None:
         """Replace the tracked comment with the final outcome body."""

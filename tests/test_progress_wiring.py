@@ -1328,7 +1328,7 @@ def test_review_and_merge_posts_merged_milestone_and_final_summary(
                for line in body.splitlines())
     ]
     assert any("Orbi: merged" in body for body in milestones)
-    assert any("merge_commit=m1" in body for body in milestones)
+    assert any("- merge_commit: m1" in body for body in milestones)
     final_patches = [
         command for command in calls
         if command[:2] == ["gh", "api"]

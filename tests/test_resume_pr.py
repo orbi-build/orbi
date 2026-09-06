@@ -61,14 +61,43 @@ def scene_for() -> dict:
 # ---------------------------------------------------------------- parse
 
 
-def test_parse_pr_comment_returns_scene_for_opened_pr_comment():
+def test_parse_pr_comment_returns_scene_for_multiline_opened_pr_comment():
+    body = runner.opened_pr_comment_body(
+        FAKE_RUN_ID, "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4",
+        FAKE_PR_URL,
+    )
+    scene = runner.parse_pr_comment(body)
+    assert scene == scene_for()
+    assert body.splitlines() == [
+        f"<!-- orbi:run={FAKE_RUN_ID} -->",
+        f"Orbi opened PR: {FAKE_PR_URL}",
+        "- base_branch: main",
+        "- base_sha: abc123def456",
+        f"- run_id={FAKE_RUN_ID}",
+    ]
+
+
+def test_parse_pr_comment_returns_scene_for_legacy_opened_pr_comment():
     scene = runner.parse_pr_comment(opened_pr_comment())
-    assert scene == {
-        "run_id": FAKE_RUN_ID,
-        "base_branch": "main",
-        "base_sha": "abc123def456",
-        "pr_url": FAKE_PR_URL,
-    }
+    assert scene == scene_for()
+
+
+def test_started_pi_comment_uses_multiline_field_block():
+    body = runner.started_pi_comment_body(
+        FAKE_RUN_ID,
+        "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4 priority=normal",
+        FAKE_BRANCH, Path(FAKE_WORKTREE),
+    )
+    assert body == (
+        f"<!-- orbi:run={FAKE_RUN_ID} -->\n"
+        f"Orbi started Pi: run_id={FAKE_RUN_ID} priority=normal\n"
+        "- base_branch: main\n"
+        "- base_sha: abc123def456\n"
+        f"- run_id={FAKE_RUN_ID}\n"
+        "- priority: normal\n"
+        f"- branch: {FAKE_BRANCH}\n"
+        f"- worktree: {FAKE_WORKTREE}"
+    )
 
 
 def test_parse_pr_comment_ignores_legacy_branch_and_worktree_fields():
