@@ -6356,12 +6356,57 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
     )
 
 
+def check_delivery_ci(repo: str, commit: str, *, wait_seconds: float) -> None:
+    """Require GitHub checks for a delivery head to finish successfully."""
+    def fetch() -> list[dict]:
+        return json.loads(run_command([
+            "gh", "api", f"repos/{repo}/commits/{commit}/check-runs",
+            "--jq", ".check_runs",
+        ]))
+
+    waited = 0.0
+    check_runs = fetch()
+    while True:
+        pending = [
+            f"check '{check.get('name')}' is {check.get('status')}/"
+            f"{check.get('conclusion')}"
+            for check in check_runs if check.get("status") != "completed"
+        ]
+        if not check_runs:
+            pending = ["no check runs reported"]
+        if not pending:
+            break
+        detail = ", ".join(pending)
+        LOGGER.info(
+            "delivery_waiting_ci commit=%s pending=%s waited=%ds limit=%ds",
+            commit, detail, int(waited), int(wait_seconds),
+        )
+        if waited >= wait_seconds:
+            raise RuntimeError(
+                f"delivery gate: waiting for CI on {commit} timed out after "
+                f"{int(wait_seconds)}s (still pending: {detail})"
+            )
+        step = min(RELEASE_CI_POLL_INTERVAL, wait_seconds - waited)
+        time.sleep(step)
+        waited += step
+        check_runs = fetch()
+    for check in check_runs:
+        if check.get("conclusion") not in ("success", "neutral", "skipped"):
+            raise RuntimeError(
+                f"delivery gate: CI check '{check.get('name')}' is "
+                f"{check.get('status')}/{check.get('conclusion')} on {commit}"
+            )
+
+
 def merge_gate(worktree: Path, pr: dict, base_branch: str,
-               *, repo_dir: Path) -> dict:
+               *, repo_dir: Path, ci_wait_seconds: float = RELEASE_CI_WAIT_SECONDS,
+               source_repo: str | None = None) -> dict:
     """Merge the reviewed PR only if the gate still holds against latest base.
 
     Re-fetch the latest remote base, require the PR head to contain it, the PR
-    to be mergeable, and the remote head to still be the reviewed head. Then
+    to be mergeable, the remote head to still be the reviewed head, and the
+    exact head's GitHub CI checks to be completed successfully. Pending checks
+    are polled with a deadline; failures and timeouts prevent merging. Then
     merge with `--match-head-commit` so only that exact head can land. No force
     push, no direct push of the protected branch. The base fetch updates the
     shared remote-tracking ref, so it runs under the base-sync lock
@@ -6409,6 +6454,12 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             f"PR #{pr['number']} head moved since review "
             f"(reviewed={pr['head_oid']} remote={remote_head}); re-review "
             "before merging"
+        )
+    source_repo = source_repo or pr.get("_source_repo")
+    if source_repo is not None:
+        check_delivery_ci(
+            source_repo, pr["head_oid"],
+            wait_seconds=pr.get("_ci_wait_seconds", ci_wait_seconds),
         )
     run_command([
         "gh", "pr", "merge", str(pr["number"]),
@@ -7007,29 +7058,44 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         )
     try:
         merged = merge_gate(
-            worktree, refrozen, base_branch,
-            repo_dir=config["repo_dir"],
+            worktree,
+            {**refrozen, "_source_repo": source_repo,
+             "_ci_wait_seconds": config.get(
+                 "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
+             )},
+            base_branch, repo_dir=config["repo_dir"],
         )
     except RuntimeError as exc:
         message = str(exc)
         # Behind and merge-conflict are the same next-session job:
         # absorb origin/<base>, resolve, retest. Other gate failures
         # (head moved, etc.) fail fast.
-        if (
+        if "delivery gate: CI" not in message and (
             "behind latest remote base" not in message
             and "not mergeable" not in message
         ):
             raise
+        ci_failure = "delivery gate: CI" in message
         body = (
             f"{marker}\n"
-            f"Orbi review round {round} for PR #{pr['number']}: "
+            + (f"Orbi CI merge gate blocked PR #{pr['number']}: {message} "
+               f"(run_id={config['run_id']})" if ci_failure else
+               f"Orbi review round {round} for PR #{pr['number']}: "
             "the PR is behind the latest base or has a merge conflict; "
             f"the next review session merges the latest "
             f"origin/{base_branch} into the branch in-session, resolves "
             "conflicts, and reruns the full test suite"
-        )
-        comment_issue(number, repo=source_repo, body=body)
-        comment_pr(pr["number"], repo=source_repo, body=body)
+        ))
+        # CI evidence is best-effort observability.  A GitHub comment
+        # outage must not prevent the required ai-fix-needed transition.
+        try:
+            comment_issue(number, repo=source_repo, body=body)
+            comment_pr(pr["number"], repo=source_repo, body=body)
+        except Exception:
+            LOGGER.exception(
+                "delivery_ci_evidence_publish_failed pr=%s run_id=%s",
+                pr["number"], config["run_id"],
+            )
         apply_label_patch(
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
             current_labels=(),
