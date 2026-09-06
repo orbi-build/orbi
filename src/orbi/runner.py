@@ -1947,19 +1947,21 @@ def derive_release_scope_from_milestone(repo: str,
                                         milestone_title: str) -> tuple[list[int], list[str]]:
     """Derive the release scope from a Milestone (Issue #253).
 
-    The release scope is the Milestone's COMPLETED deliveries: every
-    Issue with state=closed and every PR with state=merged under the
+    The release scope is the Milestone's COMPLETED Issues under the
     Milestone whose title is EXACTLY `milestone_title` (the same
     exact-title rule as `close_release_milestone` — never guessed,
-    never fuzzy-matched, never a different Milestone):
+    never fuzzy-matched, never a different Milestone). Pull requests are
+    obtained from each scoped Issue's closing references by
+    `build_release_changelog`; the REST `/pulls` list endpoint does not
+    support milestone filtering:
 
     - no Milestone with that exact title -> fail fast;
     - several Milestones with that exact title -> fail fast
       (ambiguous — GitHub allows duplicate titles, so guessing one is
       forbidden);
-    - open Issues/PRs are NEVER part of the scope (unfinished work is a
-      human decision point) but are returned as a separate evidence
-      list so the release run surfaces them instead of swallowing them.
+    - open Issues are NEVER part of the scope (unfinished work is a
+      human decision point) but are returned as a separate evidence list
+      so the release run surfaces them instead of swallowing them.
 
     Returns (scope numbers sorted ascending, open-item evidence
     strings). A real `gh` failure (auth, rate limit, API error)
@@ -1988,43 +1990,28 @@ def derive_release_scope_from_milestone(repo: str,
         )
     number = matches[0].get("number")
 
-    def items(kind: str, state: str) -> list[dict]:
+    def issues(state: str) -> list[dict]:
         raw = run_command([
             "gh", "api",
-            f"repos/{repo}/{kind}?state={state}&milestone={number}",
+            f"repos/{repo}/issues?state={state}&milestone={number}",
             "--paginate",
         ])
         return [item for item in parse_issue_array(raw)
                 if isinstance(item, dict)]
 
-    closed_issues = [
-        item for item in items("issues", "closed")
-        if "pull_request" not in item
-    ]
-    open_issues = [
-        item for item in items("issues", "open")
-        if "pull_request" not in item
-    ]
-    # The `pulls` list query carries `merged_at` at the top level (a
-    # closed-but-unmerged PR has `merged_at: null`) — verified against
-    # the live REST contract; there is no nested `pull_request` key.
-    merged_prs = [
-        item for item in items("pulls", "closed")
-        if item.get("merged_at")
-    ]
-    open_prs = items("pulls", "open")
+    closed_issues = [item for item in issues("closed")
+                     if "pull_request" not in item]
+    open_issues = [item for item in issues("open")
+                   if "pull_request" not in item]
 
     scope = sorted(
         int(item["number"])
-        for item in closed_issues + merged_prs
+        for item in closed_issues
         if isinstance(item.get("number"), int)
     )
     open_evidence = [
         f"open Issue #{item.get('number')} {item.get('title')}"
         for item in open_issues
-    ] + [
-        f"open PR #{item.get('number')} {item.get('title')}"
-        for item in open_prs
     ]
     return scope, open_evidence
 
