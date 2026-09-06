@@ -13337,15 +13337,12 @@ def test_verify_release_scope_reraises_real_gh_failure(monkeypatch):
 
 
 def make_milestone_gh(monkeypatch, *, milestones=None, items_by_milestone=None):
-    """Answer the gh api calls of `derive_release_scope_from_milestone`.
+    """Answer the gh API calls used for milestone issue scope derivation.
 
     `milestones`: the `repos/o/r/milestones?state=all` payload.
-    `items_by_milestone`: milestone number -> dict with keys
-    `issues_closed` / `issues_open` / `pulls_closed` / `pulls_open`
-    (each a list of REST API items; a closed PR counts as merged only
-    when its top-level `merged_at` is set — the `pulls` list query
-    carries `merged_at` at the top level, verified against the live
-    REST contract).
+    `items_by_milestone`: milestone number -> `issues_closed` /
+    `issues_open` lists. Pull requests are intentionally not a milestone
+    scope source: the REST `/pulls` list endpoint ignores `milestone`.
     """
     milestones = milestones or []
     items_by_milestone = items_by_milestone or {}
@@ -13356,13 +13353,17 @@ def make_milestone_gh(monkeypatch, *, milestones=None, items_by_milestone=None):
         path = command[2] if len(command) > 2 else ""
         if path == "repos/o/r/milestones?state=all":
             return json.dumps(milestones)
+        if "/pulls?" in path:
+            raise AssertionError(
+                "milestone scope must not query /pulls: milestone is ignored"
+            )
         match = re.fullmatch(
-            r"repos/o/r/(issues|pulls)\?state=(\w+)&milestone=(\d+)", path,
+            r"repos/o/r/issues\?state=(\w+)&milestone=(\d+)", path,
         )
         if match:
-            kind, state, number = match.groups()
+            state, number = match.groups()
             bucket = items_by_milestone.get(int(number), {})
-            return json.dumps(bucket.get(f"{kind}_{state}", []))
+            return json.dumps(bucket.get(f"issues_{state}", []))
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
@@ -13375,31 +13376,35 @@ def test_milestone_gh_fake_rejects_unexpected_command(monkeypatch):
         runner.run_command(["gh", "api", "repos/o/r/issues?state=all"])
     with pytest.raises(AssertionError, match="unexpected command"):
         runner.run_command(["git", "status"])
+    with pytest.raises(AssertionError, match="must not query /pulls"):
+        runner.run_command([
+            "gh", "api", "repos/o/r/pulls?state=closed&milestone=5",
+        ])
 
 
-def test_derive_release_scope_from_milestone_returns_closed_and_merged(
+def test_derive_release_scope_from_milestone_filters_pr_objects_from_issues(
         monkeypatch):
-    make_milestone_gh(
+    calls = make_milestone_gh(
         monkeypatch,
         milestones=[{"number": 5, "title": "v0.3.0", "state": "open"}],
         items_by_milestone={5: {
             "issues_closed": [
                 {"number": 160, "title": "Deliver A", "state": "closed"},
                 {"number": 168, "title": "Deliver B", "state": "closed"},
-            ],
-            "pulls_closed": [
-                {"number": 170, "title": "PR C", "state": "closed",
-                 "merged_at": "2026-09-01T00:00:00Z"},
-                {"number": 171, "title": "PR D unmerged", "state": "closed",
-                 "merged_at": None},
+                # GitHub's issues endpoint can include PR objects. They
+                # must not become scope items; PRs are linked later from
+                # each scoped issue's closing references.
+                {"number": 170, "title": "External PR", "state": "closed",
+                 "pull_request": {"merged_at": "2026-09-01T00:00:00Z"}},
             ],
         }},
     )
     scope, open_evidence = runner.derive_release_scope_from_milestone(
         "o/r", "v0.3.0",
     )
-    assert scope == [160, 168, 170]
+    assert scope == [160, 168]
     assert open_evidence == []
+    assert not any("/pulls?" in command[2] for command in calls)
 
 
 def test_derive_release_scope_from_milestone_lists_open_items(monkeypatch):
@@ -13414,19 +13419,13 @@ def test_derive_release_scope_from_milestone_lists_open_items(monkeypatch):
                 {"number": 255, "title": "Still open work",
                  "state": "open"},
             ],
-            "pulls_open": [
-                {"number": 260, "title": "Open PR", "state": "open"},
-            ],
         }},
     )
     scope, open_evidence = runner.derive_release_scope_from_milestone(
         "o/r", "v0.3.0",
     )
     assert scope == [160]
-    assert open_evidence == [
-        "open Issue #255 Still open work",
-        "open PR #260 Open PR",
-    ]
+    assert open_evidence == ["open Issue #255 Still open work"]
 
 
 def test_derive_release_scope_from_milestone_fails_when_missing(monkeypatch):
