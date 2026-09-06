@@ -532,6 +532,32 @@ def test_load_config_rejects_invalid_release_ci_wait_seconds(
     assert reason in str(excinfo.value)
 
 
+def test_load_config_defaults_mergeable_wait_seconds(tmp_path):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    assert runner.load_config(config_path)["mergeable_wait_seconds"] == 120.0
+
+
+def test_load_config_reads_mergeable_wait_seconds(tmp_path):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nmergeable_wait_seconds = 15\n',
+        encoding="utf-8",
+    )
+    assert runner.load_config(config_path)["mergeable_wait_seconds"] == 15.0
+
+
+@pytest.mark.parametrize("value", ["true", "0", "-1", "nan", '"15"'])
+def test_load_config_rejects_invalid_mergeable_wait_seconds(tmp_path, value):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\n'
+        f"mergeable_wait_seconds = {value}\n", encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="mergeable_wait_seconds"):
+        runner.load_config(config_path)
+
+
 def test_load_config_parses_repositories_registry(tmp_path):
     """Issue #134: an explicit [[repositories]] section parses into a
     registry of name/path/github/base_branch, with each path resolved
