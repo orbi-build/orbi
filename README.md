@@ -4,8 +4,6 @@ English | [简体中文](README.zh-CN.md)
 
 Orbi is a local AI development Worker: put work in a GitHub Issue, and it automatically claims the Issue, starts Pi in an isolated worktree to develop and test it, creates a PR, and then passes it through independent review and merge gates. GitHub Issues and labels are the only state store—there is no database, queue, or daemon.
 
-This repository is its own evidence: 99 of the most recent 106 merged PRs were delivered by Orbi itself.
-
 - Website <https://orbi.build> ｜ Documentation <https://docs.orbi.build/> (the repository's [`docs/`](docs/) is the single source of truth; the Chinese entry point is [`docs/zh/`](docs/zh/)) ｜ Updates [@xqliu](https://x.com/xqliu)
 - **[Join the first group of contributors](https://orbi.build/apply)**: if you are stuck on the environment, model integration, or workflow, we can help you run your first Issue. The problems you encounter become Issues to prioritize.
 
