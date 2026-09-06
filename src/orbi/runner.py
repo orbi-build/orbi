@@ -1336,6 +1336,57 @@ def validate_config(config: dict) -> None:
             )
 
 
+def sync_active_milestone_variable(
+    repo: str, milestone: str | None, *,
+    run_command: Callable[..., str] | None = None,
+) -> None:
+    """Keep the triage workflow's read-only milestone variable current.
+
+    This is deliberately a bypass: a GitHub variable outage must not stop
+    the Runner's issue delivery tick.  The workflow consumes this value via
+    ``vars.ORBI_ACTIVE_MILESTONE`` and the triage script resolves its title.
+    """
+    command_runner = run_command or globals()["run_command"]
+    endpoint = f"repos/{repo}/actions/variables/ORBI_ACTIVE_MILESTONE"
+    try:
+        raw = command_runner(["gh", "api", endpoint], timeout=30)
+        current = json.loads(raw)
+        if not isinstance(current, dict):
+            raise ValueError("variable response is not an object")
+        if milestone is None:
+            command_runner(
+                ["gh", "api", "-X", "DELETE", endpoint], timeout=30,
+            )
+            LOGGER.info("active_milestone_variable_removed repo=%s", repo)
+            return
+        if current.get("value") == milestone:
+            LOGGER.info("active_milestone_variable_unchanged repo=%s", repo)
+            return
+        command_runner(
+            ["gh", "api", "-X", "PATCH", endpoint, "-f", f"name=ORBI_ACTIVE_MILESTONE",
+             "-f", f"value={milestone}"], timeout=30,
+        )
+        LOGGER.info("active_milestone_variable_updated repo=%s", repo)
+    except subprocess.CalledProcessError as exc:
+        if exc.returncode != 1 or "404" not in (exc.stderr or ""):
+            LOGGER.exception("active_milestone_variable_sync_failed repo=%s", repo)
+            return
+        if milestone is None:
+            LOGGER.info("active_milestone_variable_absent repo=%s", repo)
+            return
+        try:
+            command_runner(
+                ["gh", "api", "-X", "POST", "repos/{}/actions/variables".format(repo),
+                 "-f", "name=ORBI_ACTIVE_MILESTONE", "-f", f"value={milestone}"],
+                timeout=30,
+            )
+            LOGGER.info("active_milestone_variable_created repo=%s", repo)
+        except Exception:
+            LOGGER.exception("active_milestone_variable_sync_failed repo=%s", repo)
+    except Exception:
+        LOGGER.exception("active_milestone_variable_sync_failed repo=%s", repo)
+
+
 def single_line(value: str) -> str:
     """Flatten a log value to one journal line (Issue #143).
 
@@ -8452,6 +8503,13 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         LOGGER.error("config_invalid reason=%s", exc)
         return 1
+    # Issue #399: publish the configured active milestone for the CI
+    # triage workflow. This is a bypass; delivery must continue when the
+    # variable API is unavailable.
+    sync_active_milestone_variable(
+        config["source_repos"][0], config["active_milestone"],
+        run_command=run_command,
+    )
     # Editable CLI install refresh (Issue #158): BEFORE any slot or
     # claim the tool env's editable metadata must match the checkout's
     # packaging inputs — a merged packaging change (entry point,

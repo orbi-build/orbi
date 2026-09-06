@@ -983,6 +983,67 @@ def test_run_command_logs_optional_timeout_and_reraises(tmp_path, caplog):
     assert "command_timeout timeout=7 stdout=partial stderr=wait" in caplog.text
 
 
+def test_sync_active_milestone_variable_skips_matching_value():
+    calls = []
+
+    def command(args, **kwargs):
+        calls.append((args, kwargs))
+        return '{"name":"ORBI_ACTIVE_MILESTONE","value":"v1"}'
+
+    runner.sync_active_milestone_variable("owner/repo", "v1", run_command=command)
+    assert len(calls) == 1
+    assert calls[0][1] == {"timeout": 30}
+
+
+def test_sync_active_milestone_variable_patches_different_value():
+    calls = []
+
+    def command(args, **kwargs):
+        calls.append(args)
+        return '{"name":"ORBI_ACTIVE_MILESTONE","value":"v0"}' if len(calls) == 1 else "{}"
+
+    runner.sync_active_milestone_variable("owner/repo", "v1", run_command=command)
+    assert calls[1][:5] == ["gh", "api", "-X", "PATCH", "repos/owner/repo/actions/variables/ORBI_ACTIVE_MILESTONE"]
+    assert "value=v1" in calls[1]
+
+
+def test_sync_active_milestone_variable_creates_missing_value():
+    calls = []
+
+    def command(args, **kwargs):
+        calls.append(args)
+        if len(calls) == 1:
+            raise subprocess.CalledProcessError(1, args, stderr="HTTP 404")
+        return "{}"
+
+    runner.sync_active_milestone_variable("owner/repo", "v1", run_command=command)
+    assert calls[1][:4] == ["gh", "api", "-X", "POST"]
+    assert "value=v1" in calls[1]
+
+
+def test_sync_active_milestone_variable_removes_stale_value():
+    calls = []
+
+    def command(args, **kwargs):
+        calls.append(args)
+        return '{"name":"ORBI_ACTIVE_MILESTONE","value":"v0"}' if len(calls) == 1 else "{}"
+
+    runner.sync_active_milestone_variable("owner/repo", None, run_command=command)
+    assert calls[1] == [
+        "gh", "api", "-X", "DELETE",
+        "repos/owner/repo/actions/variables/ORBI_ACTIVE_MILESTONE",
+    ]
+
+
+def test_sync_active_milestone_variable_failure_is_bypass(caplog):
+    def command(args, **kwargs):
+        raise RuntimeError("offline")
+
+    with caplog.at_level("ERROR"):
+        runner.sync_active_milestone_variable("owner/repo", "v1", run_command=command)
+    assert "active_milestone_variable_sync_failed" in caplog.text
+
+
 def test_single_line_flattens_line_breaks_to_visible_escapes():
     assert runner.single_line("a\nb") == "a\\nb"
     assert runner.single_line("a\r\nb") == "a\\nb"
