@@ -5030,6 +5030,31 @@ def test_advance_active_milestone_pending_creates_one_p0_ready_issue(
     assert "auto_next_milestone=false" in caplog.text
 
 
+def test_advance_active_milestone_pending_issue_failure_is_bypassed(
+    monkeypatch, tmp_path, caplog,
+):
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
+
+    def fail_pending(command, **kwargs):
+        if command[:3] == ["gh", "issue", "list"]:
+            return "[]"
+        if command[:3] == ["gh", "issue", "create"]:
+            raise RuntimeError("GitHub unavailable")
+        return json.dumps([
+            {"title": "v0.3.0", "state": "closed"},
+            {"title": "v0.3.1", "state": "open", "open_issues": 2},
+        ])
+
+    monkeypatch.setattr(runner, "run_command", fail_pending)
+    with caplog.at_level("ERROR"):
+        assert runner.advance_active_milestone_on_idle(
+            "owner/repo", "v0.3.0", config, auto_next_milestone=False,
+        ) == ("closed", None)
+    assert "pending_milestone_issue_failed repo=owner/repo old=v0.3.0" in caplog.text
+    assert config.read_text() == 'active_milestone = "v0.3.0"\n'
+
+
 def test_advance_active_milestone_pending_is_idempotent(
     monkeypatch, tmp_path,
 ):

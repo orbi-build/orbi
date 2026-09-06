@@ -4126,7 +4126,18 @@ def advance_active_milestone_on_idle(
             "auto_next_milestone=false",
             active_milestone, candidate_titles,
         )
-        _pending_milestone_issue(repo, active_milestone, candidate_details)
+        try:
+            _pending_milestone_issue(
+                repo, active_milestone, candidate_details,
+            )
+        except Exception:
+            # The confirmation Issue is an idle-path notification. Its
+            # failure must not turn an otherwise successful no-ready tick
+            # into a delivery failure (Issue #73/#79).
+            LOGGER.exception(
+                "pending_milestone_issue_failed repo=%s old=%s",
+                repo, active_milestone,
+            )
         return "closed", None
     new_value = candidates[0][1]
     rewrite_active_milestone_line(config_path, new_value)
