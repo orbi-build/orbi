@@ -760,8 +760,11 @@ def test_confirm_merged_rejects_merged_pr_without_commit_oid(monkeypatch, tmp_pa
 # comment_pr
 # ---------------------------------------------------------------------------
 
-def test_comment_pr_runs_gh_pr_comment(monkeypatch):
+def test_comment_pr_runs_gh_pr_comment_from_unrelated_cwd(
+        monkeypatch, tmp_path,
+):
     calls = []
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         runner, "run_command",
         lambda command, **kwargs: calls.append(command),
