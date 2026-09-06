@@ -17,9 +17,11 @@ no fallback or retry.
 from __future__ import annotations
 
 import json
+import re
 from typing import Callable
 
 # One marker per run: hidden in the rendered comment, exact for lookup.
+RUN_MARKER_PATTERN = re.compile(r"<!-- orbi:run=([0-9a-f]{8}) -->")
 RUN_MARKER_TEMPLATE = "<!-- orbi:run={run_id} -->"
 # Standalone milestone comments share this prefix so they are recognizable.
 MILESTONE_PREFIX = "Orbi:"

@@ -37,6 +37,7 @@ import time
 from pathlib import Path
 
 from orbi.delivery_labels import READY_LABEL
+from orbi.progress import run_marker
 from orbi.systemd_deploy import SERVICE_INSTANCES
 
 LOGGER = logging.getLogger("orbi.health")
@@ -390,7 +391,7 @@ def repeat_failure_comment(finding: dict) -> str:
     """
     run_id = finding["run_ids"][0]
     return "\n".join([
-        f"<!-- orbi:run={run_id} -->",
+        run_marker(run_id),
         (
             f"Orbi health check: issue #{finding['issue']} failed "
             f"{finding['count']} consecutive runs with the same failure "

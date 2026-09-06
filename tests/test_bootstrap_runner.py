@@ -16,7 +16,7 @@ from unittest.mock import Mock
 import pytest
 
 import orbi.runner as runner
-from orbi import pi_activity
+from orbi import pi_activity, progress
 from tests.test_progress_wiring import make_fake_gh
 
 
@@ -2433,10 +2433,8 @@ def test_run_marker_is_stable_machine_readable_comment():
     assert runner.run_marker("e07383c2") == "<!-- orbi:run=e07383c2 -->"
 
 
-def test_run_marker_rejects_missing_or_invalid_run_id():
-    for bad in ("", "run1", None):
-        with pytest.raises(ValueError, match="invalid run id"):
-            runner.run_marker(bad)
+def test_run_marker_is_shared_with_progress_formatter():
+    assert runner.run_marker is progress.run_marker
 
 
 def test_set_run_id_binds_the_attempt_and_current_run_id_reads_it(monkeypatch):

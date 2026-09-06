@@ -17,6 +17,14 @@ def test_run_marker_is_hidden_html_comment_with_run_id():
     assert marker == "<!-- orbi:run=abc123 -->"
 
 
+def test_run_marker_pattern_extracts_the_run_id():
+    match = progress.RUN_MARKER_PATTERN.search(
+        "started <!-- orbi:run=abc12345 -->"
+    )
+    assert match is not None
+    assert match.group(1) == "abc12345"
+
+
 def test_find_run_comment_returns_comment_carrying_the_marker():
     comments = [
         {"id": 1, "body": "Orbi started Pi: ..."},
