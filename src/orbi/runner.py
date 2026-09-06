@@ -3023,26 +3023,27 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
        Issues + merged PRs; open items are surfaced as evidence, never
        released. Then verify the scope item by item
        (`verify_release_scope`).
-    5. Prepare the release version in the clean worktree: update both
-       `pyproject.toml` and `src/orbi/__init__.py`, commit, and push the
-       new release commit to the base branch; mismatched sources fail fast.
-    6. Run the declared test command in that release worktree
+    Before step 5, prepare the release version in the clean worktree:
+       update both `pyproject.toml` and `src/orbi/__init__.py`, commit, and
+       push the new release commit to the base branch; mismatched sources
+       fail fast. The subsequent steps run against that commit.
+    5. Run the declared test command in that release worktree
        (`timeout`-wrapped, Issue #95).
-    7. Tag: the remote tag must not exist or must point EXACTLY at
+    6. Tag: the remote tag must not exist or must point EXACTLY at
        the release commit (a mismatch fails — an existing tag is
        never moved); otherwise create an annotated tag at the release
        commit and push it with a plain push (never `--force`).
-    8. Publish the GitHub Release (idempotent) with the full
+    7. Publish the GitHub Release (idempotent) with the full
        verification evidence.
-    9. Sync the docs-site Release notes (Issue #275): generate
+    8. Sync the docs-site Release notes (Issue #275): generate
        `docs/release-<version>.mdx` + `docs/zh/release-<version>.mdx`
        from the published Release body, update both navigation groups,
        move the `(latest)` marker, and commit + push those docs changes
        to the base branch directly. Idempotent: identical pages are not
        overwritten; anything else fails fast.
-    10. Apply `ai-merged` and close the release Issue (terminal delivery
+    9. Apply `ai-merged` and close the release Issue (terminal delivery
        transition).
-    11. Close the Milestone whose title is EXACTLY the released
+    10. Close the Milestone whose title is EXACTLY the released
         version (Issue #214), then write the success comment (release
         URL, tag, commit, evidence, docs-site Release notes evidence,
         Milestone evidence). Exact title match only; close it only when
