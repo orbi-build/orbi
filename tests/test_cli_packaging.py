@@ -109,8 +109,7 @@ def test_pyproject_project_metadata():
     project = data["project"]
     assert project["name"] == "orbi"
     assert project["version"] == "0.2.0"
-    # The production interpreter is /usr/bin/python3 (3.14.6); the
-    # package must not claim to run on an older minor version.
+    # The package must not claim to run on an older minor version.
     assert project["requires-python"] == ">=3.14"
     # The bootstrap intentionally has no third-party runtime
     # dependency: the release package must not hardcode dependencies.
@@ -246,7 +245,7 @@ def test_service_preflight_self_heals_the_editable_cli():
     reinstall_part = heal_argv.split("||", 1)[1].strip()
     assert reinstall_part == (
         "uv tool install --force --reinstall --editable "
-        "--python /usr/bin/python3 {{ORBI_REPO_DIR}}"
+        f"--python {cli_source.PYTHON_INTERPRETER} {{{{ORBI_REPO_DIR}}}}"
     )
     # The reinstall argv is the same as the Python-side source of truth
     # (the path is the only difference: the template carries the
