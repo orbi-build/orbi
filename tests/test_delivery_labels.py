@@ -20,6 +20,14 @@ def test_label_patch_claim_adds_in_progress_only():
     assert to_remove == []
 
 
+def test_label_patch_claim_clears_fix_needed_from_fix_round():
+    to_add, to_remove = dl.label_patch(
+        dl.EVENT_CLAIM, {"ai-ready", "ai-fix-needed"},
+    )
+    assert to_add == ["ai-in-progress"]
+    assert to_remove == ["ai-fix-needed"]
+
+
 def test_label_patch_release_waiting_returns_release_to_ready_queue():
     to_add, to_remove = dl.label_patch(
         dl.EVENT_RELEASE_WAITING, {"ai-ready", "ai-in-progress"},
@@ -42,6 +50,36 @@ def test_label_patch_fix_needed_swaps_pr_opened_for_fix_needed():
     )
     assert to_add == ["ai-fix-needed"]
     assert to_remove == ["ai-pr-opened"]
+
+
+def test_label_patch_fix_needed_clears_stale_in_progress_too():
+    to_add, to_remove = dl.label_patch(
+        dl.EVENT_FIX_NEEDED,
+        {"ai-ready", "ai-pr-opened", "ai-in-progress"},
+    )
+    assert to_add == ["ai-fix-needed"]
+    assert to_remove == ["ai-in-progress", "ai-pr-opened"]
+
+
+def test_label_patch_fix_round_sequence_leaves_only_merged():
+    labels = {"ai-ready"}
+    add, remove = dl.label_patch(dl.EVENT_CLAIM, labels)
+    labels.update(add)
+    labels.difference_update(remove)
+    add, remove = dl.label_patch(dl.EVENT_PR_OPENED, labels)
+    labels.update(add)
+    labels.difference_update(remove)
+    add, remove = dl.label_patch(dl.EVENT_FIX_NEEDED, labels)
+    labels.update(add)
+    labels.difference_update(remove)
+    # A resumed fix round claims from the actual GitHub label set.
+    add, remove = dl.label_patch(dl.EVENT_CLAIM, labels)
+    labels.update(add)
+    labels.difference_update(remove)
+    add, remove = dl.label_patch(dl.EVENT_MERGED, labels)
+    labels.update(add)
+    labels.difference_update(remove)
+    assert labels == {"ai-ready", "ai-merged"}
 
 
 def test_label_patch_merged_removes_pr_opened():

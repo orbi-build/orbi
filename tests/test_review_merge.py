@@ -22,6 +22,14 @@ from orbi import cli_install
 from tests.test_progress_wiring import make_fake_gh
 
 
+@pytest.fixture(autouse=True)
+def _current_delivery_labels(monkeypatch):
+    """Provide the live label read used by review transitions."""
+    monkeypatch.setattr(
+        runner, "issue_labels", lambda *a, **k: ["ai-pr-opened"],
+    )
+
+
 # ---------------------------------------------------------------------------
 # parse_review_verdict
 # ---------------------------------------------------------------------------
@@ -1243,6 +1251,11 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
         monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(
+        runner, "issue_labels", lambda *a, **k: [
+            "ai-ready", "ai-pr-opened",
+        ],
+    )
+    monkeypatch.setattr(
         runner, "issue_comments", lambda *a, **k: [],
     )
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
@@ -1283,6 +1296,40 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     # failure must not rewrite a landed merge as ai-blocked.
     assert calls.index(("edit", {"repo": "owner/repo", "add": "ai-merged",
                                  "remove": "ai-pr-opened"})) < calls.index("sync")
+
+
+def test_review_and_merge_fix_round_clears_live_delivery_labels(
+        monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(runner, "issue_labels", lambda *a, **k: [
+        "ai-ready", "ai-in-progress", "ai-fix-needed",
+    ])
+    monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(
+        runner, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
+    )
+    monkeypatch.setattr(
+        runner, "confirm_merged",
+        lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
+    )
+    monkeypatch.setattr(runner, "sync_base_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner, "edit_issue", lambda *a, **k: calls.append(k),
+    )
+    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
+    make_fake_gh(monkeypatch)
+
+    assert runner.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4, title="Review task", priority="normal",
+    ) is True
+    assert calls == [
+        {"repo": "owner/repo", "add": "ai-merged",
+         "remove": "ai-in-progress"},
+        {"repo": "owner/repo", "remove": "ai-fix-needed"},
+    ]
 
 
 def test_review_and_merge_refreezes_head_after_in_session_fix(

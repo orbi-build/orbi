@@ -10186,13 +10186,11 @@ def test_wait_for_delivery_worktree_missing_while_fix_needed_keeps_label(
     )
     # No review was started.
     assert reviews == []
-    # The single transition: ai-pr-opened removed, ai-fix-needed added
-    # (the label the Issue already carries is re-added idempotently —
-    # the next tick's scan needs it; Issue #50: never ai-blocked).
+    # The Issue already carries only ai-fix-needed, so no absent label is
+    # removed; the state remains in the automatic fix loop.
     assert edits[0][1] == {
         "repo": "owner/repo",
         "add": "ai-fix-needed",
-        "remove": "ai-pr-opened",
     }
     assert len(edits) == 1
     body = comments[0][1]["body"]

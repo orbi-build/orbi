@@ -57,10 +57,11 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
     A pure function of the event and the current labels: the same
     inputs always produce the same deterministic, idempotent patch.
 
-    - claim: add `ai-in-progress` (the `ai-ready` residue is kept — a
-      claim never removes it).
+    - claim: add `ai-in-progress`, remove a stale `ai-fix-needed` from
+      a resumed fix round (the `ai-ready` residue is kept).
     - pr_opened: add `ai-pr-opened`, remove `ai-in-progress`.
-    - fix_needed: add `ai-fix-needed`, remove `ai-pr-opened`.
+    - fix_needed: add `ai-fix-needed`, remove any stale opened-PR or
+      in-flight label.
     - merged: add `ai-merged`, remove the current delivery-state label
       (the one present in `current_labels`): `ai-pr-opened` for the
       normal PR delivery, `ai-in-progress` for the release state
@@ -73,11 +74,18 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
     """
     current = set(current_labels)
     if event == EVENT_CLAIM:
-        return ([IN_PROGRESS_LABEL], [])
+        to_remove = [
+            FIX_NEEDED_LABEL,
+        ] if FIX_NEEDED_LABEL in current else []
+        return ([IN_PROGRESS_LABEL], to_remove)
     if event == EVENT_PR_OPENED:
         return ([PR_OPENED_LABEL], [IN_PROGRESS_LABEL])
     if event == EVENT_FIX_NEEDED:
-        return ([FIX_NEEDED_LABEL], [PR_OPENED_LABEL])
+        to_remove = [
+            label for label in (IN_PROGRESS_LABEL, PR_OPENED_LABEL)
+            if label in current
+        ]
+        return ([FIX_NEEDED_LABEL], to_remove)
     if event == EVENT_RELEASE_WAITING:
         return ([READY_LABEL], [IN_PROGRESS_LABEL])
     if event == EVENT_MERGED:

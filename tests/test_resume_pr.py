@@ -1404,17 +1404,16 @@ def test_verify_resumed_pr_recoverable_failure_keeps_fix_needed_label(
     monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    issue = make_resume_issue()
+    issue["labels"] = [{"name": "ai-fix-needed"}]
     with pytest.raises(RuntimeError, match="exactly one open PR"):
         runner.verify_resumed_pr(
-            make_resume_scene(), make_resume_issue(),
-            make_resume_config(tmp_path), "owner/repo",
+            make_resume_scene(), issue, make_resume_config(tmp_path), "owner/repo",
         )
-    # The single transition: ai-pr-opened removed, ai-fix-needed added
-    # (the label the Issue already carries is re-added idempotently —
-    # the next tick's scan needs it).
+    # The current label set already carries ai-fix-needed, so the
+    # transition does not invent a remove for absent ai-pr-opened.
     assert captured["edits"] == [
-        ((9,), {"repo": "owner/repo", "add": "ai-fix-needed",
-                "remove": "ai-pr-opened"}),
+        ((9,), {"repo": "owner/repo", "add": "ai-fix-needed"}),
     ]
 
 

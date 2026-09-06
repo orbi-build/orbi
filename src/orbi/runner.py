@@ -3044,7 +3044,10 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             "issue=%s release_task %s", number, run_info,
         )
         apply_label_patch(
-            number, repo=source_repo, event=EVENT_CLAIM, current_labels=(),
+            number, repo=source_repo, event=EVENT_CLAIM,
+            current_labels={label.get("name") for label in issue.get(
+                "labels", []) if isinstance(label, dict)
+                and isinstance(label.get("name"), str)},
         )
         set_active_run(
             number, title, branch, str(worktree),
@@ -5270,7 +5273,10 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
     publisher = ProgressPublisher(number, source_repo, run_id, run_command=run_command)
     started = time.monotonic()
     apply_label_patch(
-        number, repo=source_repo, event=EVENT_CLAIM, current_labels=(),
+        number, repo=source_repo, event=EVENT_CLAIM,
+        current_labels={label.get("name") for label in issue.get(
+            "labels", []) if isinstance(label, dict)
+            and isinstance(label.get("name"), str)},
     )
     set_active_run(number, title, "-", "-")
     try:
@@ -6005,8 +6011,16 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
         # is a recoverable resume failure (ai-fix-needed, failure
         # comment, tick stops) with the command evidence in the
         # journal.
+        labels = {
+            label.get("name") for label in issue.get("labels", [])
+            if isinstance(label, dict) and isinstance(label.get("name"), str)
+        }
+        # Resume scans include labels; preserve compatibility with callers
+        # that provide a minimal issue object representing the normal
+        # ai-pr-opened state.
         apply_label_patch(
-            number, repo=source_repo, event=EVENT_CLAIM, current_labels=(),
+            number, repo=source_repo, event=EVENT_CLAIM,
+            current_labels=labels or {PR_OPENED_LABEL},
         )
         return verified_url
     except Exception as exc:
@@ -6052,7 +6066,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
                 # scene and is written to the Issue AND the PR.
                 apply_label_patch(
                     number, repo=source_repo, event=EVENT_FIX_NEEDED,
-                    current_labels=(),
+                    current_labels=issue_labels(number, source_repo),
                 )
                 body = (
                     f"Orbi needs a fix: the resume verification "
@@ -7193,7 +7207,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         )
         apply_label_patch(
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
-            current_labels=(),
+            current_labels=issue_labels(number, source_repo),
         )
         return False
     # Issue #82: the reviewer fixes findings in the same session and
@@ -7253,7 +7267,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             )
         apply_label_patch(
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
-            current_labels=(),
+            current_labels=issue_labels(number, source_repo),
         )
         return False
     confirmed = confirm_merged(
@@ -7292,11 +7306,12 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     # The GitHub merge already landed. Record ai-merged before touching
     # the local systemd checkout: a checkout that cannot fast-forward is
     # runner ops, not a failed delivery (must not become ai-blocked).
-    # The current delivery-state label is `ai-pr-opened` (set by the PR
-    # opened transition) — the merged patch clears it.
+    # Read the label projection after the merge: a resumed fix round may
+    # have both `ai-in-progress` and `ai-fix-needed` (Issue #423/#330).
+    # The merged patch clears every delivery-state label actually present.
     apply_label_patch(
         number, repo=source_repo, event=EVENT_MERGED,
-        current_labels={PR_OPENED_LABEL},
+        current_labels=issue_labels(number, source_repo),
     )
     comment_issue(
         number, repo=source_repo,
@@ -7788,7 +7803,10 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> str | None:
         "issue=%s %s", number, run_info,
     )
     apply_label_patch(
-        number, repo=source_repo, event=EVENT_CLAIM, current_labels=(),
+        number, repo=source_repo, event=EVENT_CLAIM,
+        current_labels={label.get("name") for label in issue.get(
+            "labels", []) if isinstance(label, dict)
+            and isinstance(label.get("name"), str)},
     )
     # Issue #266: the successful pickup resets the stale-pickup clock in
     # the health state file (bypass — a state-write failure never fails
@@ -8604,7 +8622,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 # Issue AND the PR.
                 apply_label_patch(
                     number, repo=source_repo, event=EVENT_FIX_NEEDED,
-                    current_labels=(),
+                    current_labels=issue_labels(number, source_repo),
                 )
                 body = (
                     f"Orbi needs a fix: the independent review of "
