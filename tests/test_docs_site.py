@@ -17,6 +17,7 @@ references a label or config field the implementation does not have, or
 when a doc (in any language) carries a personal absolute path, an
 unimplemented feature, or the stale 15-minute timer.
 """
+import inspect
 import json
 import re
 from pathlib import Path
@@ -404,6 +405,31 @@ def test_docs_document_the_full_issue_to_merge_workflow():
     assert "REVIEW_VERDICT" in text, "workflow must document the review verdict"
     assert "Fixes #" in text, "workflow must document the PR body Fixes #N contract"
     assert "orbi:run=" in text, "workflow must document the run marker"
+
+
+def test_release_state_contract_matches_terminal_code_order():
+    """The release contract must describe the implemented terminal order."""
+    contracts = (
+        page_text("workflow"),
+        (DOCS_DIR / "zh" / "workflow.mdx").read_text(encoding="utf-8"),
+        inspect.getdoc(runner.process_release),
+    )
+    for text in contracts:
+        step9 = re.search(
+            r"^\s*9\..*?(?=^\s*10\.)",
+            text, re.MULTILINE | re.DOTALL,
+        )
+        step10 = re.search(
+            r"^\s*10\..*?(?=^\s*11\.|\Z)",
+            text, re.MULTILINE | re.DOTALL,
+        )
+        assert step9 and step10, (
+            "release contract must have terminal steps 9 and 10"
+        )
+        assert "ai-merged" in step9.group()
+        assert "release Issue" in step9.group()
+        assert "Milestone" in step10.group()
+        assert "success comment" in step10.group() or "成功评论" in step10.group()
 
 
 def test_docs_document_labels_run_marker_epic_release_task_and_p0():

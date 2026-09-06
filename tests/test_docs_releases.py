@@ -3,13 +3,13 @@
 The docs `Releases`/`发布` group must mirror the REAL release state of
 the repository — verified against origin with `git ls-remote --tags
 origin` and `gh release list` (this run): tags `v0.1.0`, `v0.1.1`,
-`v0.1.2`, `v0.2.0`, `v0.3.0` exist; GitHub Releases for all five exist;
+`v0.1.2`, `v0.2.0`, `v0.3.0`, `v0.3.1` exist; GitHub Releases for all six exist;
 **no `v0.1.3` tag or release exists**. Therefore:
 
 - every listed release page corresponds to a real tag (no dead links,
   nothing real missing, nothing invented listed);
 - the navigation lists the releases in DESCENDING version order (Issue
-  #154): the latest release (v0.3.0) is the first entry in both the
+  #154): the latest release (v0.3.1) is the first entry in both the
   English `Releases` and the Chinese `发布` group, so the current
   release is found at the top of the list;
 - `v0.1.3` must not appear anywhere in the docs (fact-based handling:
@@ -20,11 +20,11 @@ origin` and `gh release list` (this run): tags `v0.1.0`, `v0.1.1`,
 - the v0.1.1 pages state that v0.1.1 is the CORRECTED release tag over
   v0.1.0 (the v0.1.0 record page stays the durable reconciliation
   artifact) and keep the link to it;
-- ONLY the v0.3.0 pages carry the `(latest)` / `（最新）` title marker
-  (Issue #275): the marker moved off v0.1.2 when the v0.2.0/v0.3.0
+- ONLY the v0.3.1 pages carry the `(latest)` / `（最新）` title marker
+  (Issue #275): the marker moved off v0.1.2 when the v0.2.0/v0.3.0/v0.3.1
   backfill pages landed — multiple or stale latest markers are a
   contract violation;
-- the v0.2.0/v0.3.0 pages carry the content of their REAL published
+- the v0.2.0/v0.3.0/v0.3.1 pages carry the content of their REAL published
   GitHub Releases (the backfill of Issue #275).
 
 The EN/ZH page-set parity and the nav↔file exact match are enforced by
@@ -64,6 +64,10 @@ RELEASES = {
         "tag_object": "44dba3fde5f8a983661d68c34644230c78a014f1",
         "commit": "2c11a3f61b918f1faa3b81760d871cb0741733d7",
     },
+    "v0.3.1": {
+        "tag_object": "9e56161972d65184c62955ae1197fc25d7b8371b",
+        "commit": "98fb55c7843bdf7938d9a0fd9ee645431c05d154",
+    },
 }
 
 # The only versions with a real tag on origin — and therefore the only
@@ -71,11 +75,11 @@ RELEASES = {
 # Release), so it must not be documented.
 REAL_RELEASE_SLUGS = [
     f"release-{version}"
-    for version in ("v0.1.0", "v0.1.1", "v0.1.2", "v0.2.0", "v0.3.0")
+    for version in ("v0.1.0", "v0.1.1", "v0.1.2", "v0.2.0", "v0.3.0", "v0.3.1")
 ]
 
 # Issue #154: the navigation order is DESCENDING by version — the
-# latest release first (v0.3.0, v0.2.0, v0.1.2, v0.1.1, v0.1.0).
+# latest release first (v0.3.1, v0.3.0, v0.2.0, v0.1.2, v0.1.1, v0.1.0).
 RELEASE_SLUGS_LATEST_FIRST = list(reversed(REAL_RELEASE_SLUGS))
 
 
@@ -262,8 +266,8 @@ def test_release_v011_pages_state_that_they_correct_v010():
 
 def test_release_v012_pages_pin_the_real_tag_and_commit_without_latest():
     """v0.1.2 pages must pin the real tag object and commit. The
-    `(latest)` title marker moved OFF v0.1.2 when the v0.2.0/v0.3.0
-    backfill pages landed (Issue #275) — only v0.3.0 may carry it."""
+    `(latest)` title marker moved OFF v0.1.2 when the v0.2.0/v0.3.0/v0.3.1
+    pages landed (Issue #275) — only v0.3.1 may carry it."""
     for rel in ("release-v0.1.2.mdx", "zh/release-v0.1.2.mdx"):
         text = (DOCS_DIR / rel).read_text(encoding="utf-8")
         tag_object = RELEASES["v0.1.2"]["tag_object"]
@@ -330,7 +334,7 @@ def test_only_the_v030_pages_carry_the_latest_marker():
             (DOCS_DIR / "zh" / f"{slug}.mdx").read_text(encoding="utf-8")
             .splitlines()[0]
         )
-        is_latest = slug == "release-v0.3.0"
+        is_latest = slug == "release-v0.3.1"
         assert ("(latest)" in en_title) is is_latest, (
             f"{slug} en title latest marker wrong: {en_title!r}"
         )
