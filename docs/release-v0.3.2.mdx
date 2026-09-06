@@ -10,6 +10,10 @@
 
 ## Release notes
 
+### Upgrade note
+
+Installations from before the unit rename require manual cleanup: disable the obsolete timer instances with `systemctl --user disable --now <old-prefix>@1.timer <old-prefix>@2.timer`, then remove `<user-systemd-dir>/<old-prefix>@.service` and `<user-systemd-dir>/<old-prefix>@.timer`.
+
 ## Changelog
 
 ### Features

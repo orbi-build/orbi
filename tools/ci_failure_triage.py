@@ -12,7 +12,7 @@ object, the jobs object and `commits/{sha}/pulls` — and `gh api --help`,
 gh 2.97):
 
 - The CI run concluded `failure`, `cancelled` or `timed_out` on a target
-  event: one `bug` + `ai-ready` Issue per FAILED JOB (the Muyan Pilot ready
+  event: one `bug` + `ai-ready` Issue per FAILED JOB (the Orbi ready
   queue picks it up and delivers the fix through its normal single-Issue /
   single-PR / review contract), with the full evidence — workflow, job,
   event, branch/PR, commit SHA, run id, run URL, failed steps, trigger

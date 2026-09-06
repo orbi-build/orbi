@@ -1,6 +1,6 @@
 # CI Failure Issue (Issue #106): when the CI workflow (`.github/workflows/
 # ci.yml`) fails on a pull_request or a push to main, file ONE deduplicated
-# `bug` + `ai-ready` Issue per failed job — the Muyan Pilot ready queue picks
+# `bug` + `ai-ready` Issue per failed job — the Orbi ready queue picks
 # it up and delivers the fix through its normal single-Issue / single-PR /
 # independent-review contract. When CI recovers, the matching Issue gets the
 # recovery run evidence and is closed.

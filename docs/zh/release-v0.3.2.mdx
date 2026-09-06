@@ -10,6 +10,10 @@
 
 ## Release notes
 
+### 升级说明
+
+改名前部署的安装需要手动清理：使用 `systemctl --user disable --now <old-prefix>@1.timer <old-prefix>@2.timer` 停用旧定时器实例，然后删除 `<user-systemd-dir>/<old-prefix>@.service` 和 `<user-systemd-dir>/<old-prefix>@.timer`。
+
 ## Changelog
 
 ### Features
