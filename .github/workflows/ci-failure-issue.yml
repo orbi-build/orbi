@@ -52,4 +52,6 @@ jobs:
       - name: Triage the completed CI run (create / update / close the bug Issue)
         env:
           GH_TOKEN: ${{ github.token }}
+          # Keep this title aligned with the Runner's active_milestone.
+          ORBI_ACTIVE_MILESTONE: v0.3.1
         run: python3 ci_failure_triage.py

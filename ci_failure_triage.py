@@ -337,11 +337,52 @@ def index_open_issues(owner: str, repo: str) -> dict[str, dict]:
     return index
 
 
-def create_issue(owner: str, repo: str, title: str, body: str) -> None:
+def resolve_active_milestone(owner: str, repo: str) -> int | None:
+    """Resolve the configured active milestone title to its REST number.
+
+    The workflow supplies the title from the repository variable
+    ``ORBI_ACTIVE_MILESTONE``.  Milestone lookup is deliberately a bypass:
+    an unavailable, missing, or malformed milestone cannot prevent a CI
+    failure Issue from being created.
+    """
+    title = os.environ.get("ORBI_ACTIVE_MILESTONE")
+    if not title:
+        log("milestone_fallback reason=active_milestone_not_configured")
+        return None
+    endpoint = f"repos/{owner}/{repo}/milestones?state=open&per_page=100"
+    try:
+        milestones = gh_api(endpoint)
+    except GhApiError as exc:
+        log(f"milestone_fallback reason=lookup_failed detail={exc.detail}")
+        return None
+    if not isinstance(milestones, list):
+        log("milestone_fallback reason=malformed_response")
+        return None
+    matches = [
+        item for item in milestones
+        if isinstance(item, dict)
+        and item.get("title") == title
+        and isinstance(item.get("number"), int)
+    ]
+    if len(matches) != 1:
+        reason = "not_found" if not matches else "ambiguous_or_malformed"
+        log(f"milestone_fallback reason={reason} title={title!r}")
+        return None
+    return matches[0]["number"]
+
+
+def create_issue(
+    owner: str, repo: str, title: str, body: str, milestone: int | None = None,
+) -> None:
     gh_api(
         f"repos/{owner}/{repo}/issues",
         method="POST",
-        payload={"title": title, "body": body, "labels": list(ISSUE_LABELS)},
+        payload={
+            "title": title,
+            "body": body,
+            "labels": list(ISSUE_LABELS),
+            "milestone": milestone,
+        },
     )
 
 
@@ -371,6 +412,7 @@ def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
         log(f"ignored reason=no_failed_jobs run_id={run.get('id')}")
         return
     index = index_open_issues(owner, repo)
+    milestone = resolve_active_milestone(owner, repo)
     for item in failed:
         value = fingerprint(
             run.get("event"), run.get("head_branch", ""), item["name"],
@@ -381,6 +423,7 @@ def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
                 owner, repo,
                 issue_title(run, item, pr_number),
                 build_failure_body(run, item, pr_number, value),
+                milestone,
             )
             log(f"created issue job={item['name']} run_id={run.get('id')}")
         else:
