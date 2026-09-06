@@ -54,7 +54,7 @@ def test_reinstall_command_is_the_editable_force_reinstall():
     )
     assert command == (
         "uv tool install --force --reinstall --editable "
-        "--python /usr/bin/python3 "
+        f"--python {cli_source.PYTHON_INTERPRETER} "
         "/home/xqianliu/Documents/orbi/orbi"
     )
 

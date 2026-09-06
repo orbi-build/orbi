@@ -22,7 +22,7 @@ These tests pin the pre-start refresh contract:
 - unchanged fingerprint: NO uv call at all (no per-tick reinstall);
 - changed or missing state (first install): ONE lock-protected
   ``uv tool install --force --reinstall --editable --python
-  /usr/bin/python3 <repo_dir>`` (the exact verified argv from
+  the resolved Python interpreter <repo_dir>`` (the exact verified argv from
   ``cli_source.reinstall_args``), then the state is recorded;
 - two instances starting in the same tick: the SAME base-sync flock
   (the lock file the service template's ``ExecStartPre`` uses) — the
@@ -466,7 +466,7 @@ def test_reinstall_argv_is_the_verified_editable_force_reinstall(tmp_path):
     """The refresh runs the EXACT verified argv (Issue #152 contract,
     asserted against the real `uv tool install --help` in
     test_cli_source.py): `--force`, `--reinstall`, `--editable`,
-    `--python /usr/bin/python3`, the deployment checkout."""
+    `--python` with the resolved interpreter, the deployment checkout."""
     _write_pyproject(tmp_path, '[project]\nname = "a"\n')
     calls = []
     cli_install.refresh_cli_install(tmp_path, run_command=_recorder(calls))
@@ -474,6 +474,6 @@ def test_reinstall_argv_is_the_verified_editable_force_reinstall(tmp_path):
     command, kwargs = calls[0]
     assert command == [
         "uv", "tool", "install", "--force", "--reinstall", "--editable",
-        "--python", "/usr/bin/python3", str(tmp_path),
+        "--python", cli_source.PYTHON_INTERPRETER, str(tmp_path),
     ]
     assert kwargs["timeout"] == cli_install.UV_INSTALL_TIMEOUT_SECONDS
