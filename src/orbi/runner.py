@@ -5859,6 +5859,7 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
 # the tracked `.gitignore` stays as the fallback layer.
 RUNNER_RUNTIME_EXCLUDES = (
     ".orbi/",
+    ".worktrees/",
     ".pi-session/",
     ".pi/",
     "plan.md",

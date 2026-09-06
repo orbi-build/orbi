@@ -577,7 +577,7 @@ def ensure_worktrees_ignored(repo_dir: Path, *, run_command) -> bool:
                 existing + ("\n" if existing and not existing.endswith("\n") else "")
                 + ".worktrees/\n", encoding="utf-8",
             )
-        LOGGER.info("worktrees_gitignore_added repo_dir=%s path=%s", repo_dir, exclude)
+        LOGGER.info("worktrees_exclude_added repo=%s path=%s", repo_dir, exclude)
         return True
 
 
@@ -609,7 +609,7 @@ def check_checkout(repo_dir: Path, base_branch: str,
         branch = run_command(
             ["git", "branch", "--show-current"], cwd=repo_dir,
         )
-        worktrees_gitignore_added = ensure_worktrees_ignored(
+        worktrees_exclude_added = ensure_worktrees_ignored(
             repo_dir, run_command=run_command,
         )
         dirty = run_command(
@@ -652,7 +652,7 @@ def check_checkout(repo_dir: Path, base_branch: str,
         "remote_protocol": transport["protocol"],
         "migrated": transport["migrated"],
         "ssh_reachable": transport["ssh_reachable"],
-        **({"worktrees_gitignore_added": True} if worktrees_gitignore_added else {}),
+        **({"worktrees_exclude_added": True} if worktrees_exclude_added else {}),
     }
 
 
@@ -885,8 +885,8 @@ def format_setup(result: dict) -> list[str]:
         f"protocol={checkout['remote_protocol']} "
         f"migrated={'true' if checkout['migrated'] else 'false'} "
         f"ssh_reachable={reachable_text}"
-        + (" worktrees_gitignore_added=true"
-           if checkout.get("worktrees_gitignore_added") else "")
+        + (" worktrees_exclude_added=true"
+           if checkout.get("worktrees_exclude_added") else "")
     )
     provider = result.get("model_provider")
     if provider and provider["state"] == "ok":

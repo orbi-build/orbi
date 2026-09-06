@@ -51,6 +51,10 @@ def test_unit_name_is_optional_and_validated(tmp_path):
         runner.load_config(config)
 
 
+def test_runner_runtime_excludes_cover_worktrees():
+    assert ".worktrees/" in runner.RUNNER_RUNTIME_EXCLUDES
+
+
 def test_setup_excludes_runner_worktrees_and_reports_structured_change(tmp_path):
     repo = tmp_path / "checkout"
     repo.mkdir()
