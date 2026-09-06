@@ -6,8 +6,6 @@ Orbi 是一个本地 AI 开发 Worker：把任务放进 GitHub Issue，它自动
 Pi 在隔离 worktree 中完成开发、测试并创建 PR，再经过独立审查与合并门禁后
 合入。GitHub Issue 与标签是唯一状态存储——没有数据库、队列或 daemon。
 
-这个仓库自己就是证据：最近 106 个已合并 PR 里，99 个是 Orbi 自己交付的。
-
 - 官网 <https://orbi.build> ｜ 文档 <https://docs.orbi.build/>（仓库内
   [`docs/`](docs/) 是唯一事实源，中文入口 [`docs/zh/`](docs/zh/)）｜ 进展
   [@xqliu](https://x.com/xqliu)
