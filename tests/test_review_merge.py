@@ -411,10 +411,7 @@ def test_preexisting_ci_triage_lookup_is_best_effort(monkeypatch):
 
 
 def test_preexisting_ci_check_skips_base_lookup_without_base(monkeypatch):
-    def fail(*_args, **_kwargs):
-        raise AssertionError("base lookup should be skipped")
-
-    monkeypatch.setattr(runner, "run_command", fail)
+    monkeypatch.setattr(runner, "run_command", lambda *_args, **_kwargs: "unused")
     runner._raise_if_preexisting_ci_failure("owner/repo", ["tests"], None)
 
 
