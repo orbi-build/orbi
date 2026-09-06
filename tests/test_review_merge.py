@@ -290,6 +290,8 @@ def _merge_gate_fake(pr_state="MERGEABLE", head_oid="h1",
                 }] if check_runs is None else check_runs),
                 "mergedAt": None, "mergeCommit": None,
             })
+        if command[:2] == ["gh", "api"] and "check-runs" in command[2]:
+            return json.dumps([])
         return ""
     return fake_run
 
@@ -308,6 +310,36 @@ def test_merge_gate_rejects_failed_github_ci(monkeypatch, tmp_path):
                           "main", repo_dir=tmp_path, source_repo="owner/repo")
 
 
+def test_merge_gate_rejects_preexisting_failed_ci_as_unrecoverable(
+        monkeypatch, tmp_path):
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"] and "view" in command:
+            return json.dumps({
+                "state": "OPEN", "mergeable": "MERGEABLE", "headRefOid": "h1",
+                "statusCheckRollup": [{
+                    "name": "tests", "status": "COMPLETED",
+                    "conclusion": "FAILURE",
+                }],
+            })
+        if command[:2] == ["gh", "api"] and "check-runs" in command[2]:
+            return json.dumps([{
+                "name": "tests", "status": "completed",
+                "conclusion": "failure",
+            }])
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([{"title": "CI failure: tests on branch main (push)",
+                                "url": "https://github.com/o/r/issues/402"}])
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(runner.PreExistingCIFailure, match="main is already red"):
+        runner.merge_gate(
+            tmp_path, {"number": 4, "url": "u", "base_ref": "main",
+                       "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
+            "main", repo_dir=tmp_path, source_repo="owner/repo",
+        )
+
+
 def test_merge_gate_rejects_failed_status_context(monkeypatch, tmp_path):
     monkeypatch.setattr(
         runner, "run_command",
@@ -321,6 +353,39 @@ def test_merge_gate_rejects_failed_status_context(monkeypatch, tmp_path):
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
             "main", repo_dir=tmp_path,
         )
+
+
+def test_check_delivery_ci_distinguishes_pr_failure_from_base(
+        monkeypatch):
+    responses = {
+        "h1": [{"name": "tests", "status": "completed", "conclusion": "failure"}],
+        "b1": [{"name": "tests", "status": "completed", "conclusion": "success"}],
+    }
+
+    def fake_run(command, **kwargs):
+        commit = command[2].split("/")[-2]
+        return json.dumps(responses[commit])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="CI check 'tests'"):
+        runner.check_delivery_ci("owner/repo", "h1", wait_seconds=0,
+                                 base_commit="b1")
+
+
+def test_check_delivery_ci_reports_base_failure_and_triage(monkeypatch):
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return json.dumps([{
+                "name": "tests", "status": "completed", "conclusion": "failure",
+            }])
+        return json.dumps([{"title": "CI failure: tests on branch main (push)",
+                            "url": "https://github.com/o/r/issues/402"}])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(runner.PreExistingCIFailure, match="#?main is already red") as exc:
+        runner.check_delivery_ci("owner/repo", "h1", wait_seconds=0,
+                                 base_commit="b1")
+    assert "issues/402" in str(exc.value)
 
 
 def test_merge_gate_waits_for_pending_github_ci_then_merges(

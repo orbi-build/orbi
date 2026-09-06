@@ -323,6 +323,14 @@ class UnrecoverableDeliveryError(RuntimeError):
     """
 
 
+class PreExistingCIFailure(UnrecoverableDeliveryError):
+    """A failed delivery check is already failing on the PR's base.
+
+    Retrying review/fix rounds cannot change a failure that the PR did not
+    introduce, so this external precondition fails the delivery quickly.
+    """
+
+
 def is_unrecoverable_failure(exc: BaseException) -> bool:
     """Issue #50: classify one delivery failure.
 
@@ -6380,8 +6388,57 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
     )
 
 
-def check_delivery_ci(repo: str, commit: str, *, wait_seconds: float) -> None:
-    """Require GitHub checks for a delivery head to finish successfully."""
+def _main_ci_triage_url(repo: str, check_name: str) -> str | None:
+    """Find the existing auto-created main CI issue, when present."""
+    try:
+        issues = json.loads(run_command([
+            "gh", "issue", "list", "--repo", repo, "--state", "all",
+            "--search", f"CI failure: {check_name} on branch main",
+            "--json", "number,url,title", "--limit", "20",
+        ]))
+    except Exception:
+        LOGGER.exception("delivery_ci_triage_lookup_failed repo=%s check=%s",
+                         repo, check_name)
+        return None
+    if not isinstance(issues, list):
+        return None
+    prefix = f"CI failure: {check_name} on branch main"
+    for issue in issues:
+        if isinstance(issue, dict) and str(issue.get("title", "")).startswith(prefix):
+            url = issue.get("url")
+            if isinstance(url, str) and url:
+                return url
+    return None
+
+
+def _raise_if_preexisting_ci_failure(
+        repo: str, failed_names: list[str], base_commit: str | None) -> None:
+    """Raise a fast, explicit error when base has the same failed check."""
+    if not base_commit:
+        return
+    base_checks = json.loads(run_command([
+        "gh", "api", f"repos/{repo}/commits/{base_commit}/check-runs",
+        "--jq", ".check_runs",
+    ]))
+    base_failures = {
+        check.get("name") for check in base_checks
+        if check.get("status") == "completed"
+        and check.get("conclusion") not in ("success", "neutral", "skipped")
+    }
+    for name in failed_names:
+        if name not in base_failures:
+            continue
+        triage_url = _main_ci_triage_url(repo, name)
+        suffix = f"; triage: {triage_url}" if triage_url else ""
+        raise PreExistingCIFailure(
+            f"delivery gate: main is already red on check '{name}' — "
+            f"fix main first{suffix}"
+        )
+
+
+def check_delivery_ci(repo: str, commit: str, *, wait_seconds: float,
+                       base_commit: str | None = None) -> None:
+    """Require delivery checks to pass, identifying failures inherited from base."""
     def fetch() -> list[dict]:
         return json.loads(run_command([
             "gh", "api", f"repos/{repo}/commits/{commit}/check-runs",
@@ -6414,12 +6471,18 @@ def check_delivery_ci(repo: str, commit: str, *, wait_seconds: float) -> None:
         time.sleep(step)
         waited += step
         check_runs = fetch()
-    for check in check_runs:
-        if check.get("conclusion") not in ("success", "neutral", "skipped"):
-            raise RuntimeError(
-                f"delivery gate: CI check '{check.get('name')}' is "
-                f"{check.get('status')}/{check.get('conclusion')} on {commit}"
-            )
+    failed = [
+        check for check in check_runs
+        if check.get("conclusion") not in ("success", "neutral", "skipped")
+    ]
+    _raise_if_preexisting_ci_failure(
+        repo, [str(check.get("name")) for check in failed], base_commit,
+    )
+    for check in failed:
+        raise RuntimeError(
+            f"delivery gate: CI check '{check.get('name')}' is "
+            f"{check.get('status')}/{check.get('conclusion')} on {commit}"
+        )
 
 
 def merge_gate(worktree: Path, pr: dict, base_branch: str,
@@ -6491,8 +6554,13 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
     while True:
         pending, failed = check_rollup(state)
         if failed:
+            failed_names = [item.split(chr(39))[1] for item in failed]
+            _raise_if_preexisting_ci_failure(
+                pr.get("_source_repo", source_repo or ""), failed_names,
+                pr.get("base_oid"),
+            )
             raise RuntimeError(
-                f"delivery gate: CI check '{failed[0].split(chr(39))[1]}' "
+                f"delivery gate: CI check '{failed_names[0]}' "
                 f"failed on PR #{pr['number']}: " + ", ".join(failed)
             )
         if not pending:
