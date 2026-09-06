@@ -240,6 +240,11 @@ RELEASE_DELIVERIES_WAIT_SECONDS = 1800
 # one progress-comment PATCH per poll — the same 30s GitHub cadence as
 # the live progress heartbeat (PI_HEARTBEAT_SECONDS).
 RELEASE_CI_POLL_INTERVAL = 30.0
+# Mergeability is recomputed asynchronously after a push. Poll the PR after
+# its checks settle instead of treating the transient UNKNOWN value as a
+# conflict.
+MERGEABLE_WAIT_SECONDS = 120.0
+MERGEABLE_POLL_INTERVAL = 5.0
 # Repair-Issue GitHub operations are a convenience path, but they still run
 # during terminal failure handling. Bound them so an unavailable API cannot
 # hold the Runner indefinitely (Issue #95).
@@ -610,6 +615,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     # pending checks on the release commit before failing with its own
     # timeout reason.
     release_ci_wait_seconds = _release_ci_wait_seconds(data)
+    mergeable_wait_seconds = _mergeable_wait_seconds(data)
     release_deliveries_wait_seconds = _release_deliveries_wait_seconds(data)
     # Runner-self health alert routing (Issue #345): the orbi repo that
     # receives the watchdog's crash_loop / stale_pickup Issues. Absent ->
@@ -716,6 +722,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         "model_wait_probe_url": model_wait_probe_url,
         "model_wait_probe_seconds": model_wait_probe_seconds,
         "release_ci_wait_seconds": release_ci_wait_seconds,
+        "mergeable_wait_seconds": mergeable_wait_seconds,
         "release_deliveries_wait_seconds": release_deliveries_wait_seconds,
         "pi_providers": pi_providers_path,
         "pi_providers_data": pi_providers_data,
@@ -847,6 +854,23 @@ def _release_ci_wait_seconds(data: dict) -> float:
         raise ValueError(
             "release_ci_wait_seconds must be a positive number of seconds "
             f"(got {value!r})"
+        )
+    return number
+
+
+def _mergeable_wait_seconds(data: dict) -> float:
+    """Load and validate the merge gate's mergeable wait limit."""
+    value = data.get("mergeable_wait_seconds", MERGEABLE_WAIT_SECONDS)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            "mergeable_wait_seconds must be a number "
+            f"(got {type(value).__name__} {value!r})"
+        )
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError(
+            "mergeable_wait_seconds must be a finite positive number of "
+            f"seconds (got {value!r})"
         )
     return number
 
@@ -6399,7 +6423,8 @@ def check_delivery_ci(repo: str, commit: str, *, wait_seconds: float) -> None:
 
 
 def merge_gate(worktree: Path, pr: dict, base_branch: str,
-               *, repo_dir: Path, ci_wait_seconds: float = RELEASE_CI_WAIT_SECONDS,
+               *, repo_dir: Path, ci_wait_seconds: float | None = None,
+               mergeable_wait_seconds: float | None = None,
                source_repo: str | None = None) -> dict:
     """Merge the reviewed PR only if the gate still holds against latest base.
 
@@ -6412,6 +6437,12 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
     shared remote-tracking ref, so it runs under the base-sync lock
     (Issue #171) with the deployment checkout as the lock location.
     """
+    ci_wait_seconds = (ci_wait_seconds if ci_wait_seconds is not None else
+                       pr.get("_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS))
+    mergeable_wait_seconds = (
+        mergeable_wait_seconds if mergeable_wait_seconds is not None else
+        pr.get("_mergeable_wait_seconds", MERGEABLE_WAIT_SECONDS)
+    )
     fetch_base_ref(repo_dir, base_branch, cwd=worktree)
     try:
         run_command(
@@ -6429,11 +6460,76 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             f"remote base origin/{base_branch}; absorb the latest base, rerun "
             "tests and review, then retry"
         ) from None
-    raw = run_command([
+    view_command = [
         "gh", "pr", "view", str(pr["number"]),
-        "--json", "state,mergeable,headRefOid",
-    ], cwd=worktree)
-    state = json.loads(raw)
+        "--json", "state,mergeable,headRefOid,statusCheckRollup",
+    ]
+
+    def fetch_state() -> dict:
+        return json.loads(run_command(view_command, cwd=worktree))
+
+    def check_rollup(state: dict) -> tuple[list[str], list[str]]:
+        rollup = state.get("statusCheckRollup") or []
+        pending: list[str] = []
+        failed: list[str] = []
+        for check in rollup:
+            status = str(check.get("status", check.get("state", ""))).upper()
+            conclusion = str(check.get("conclusion", "")).upper()
+            name = check.get("name", check.get("context", "check"))
+            if status not in ("COMPLETED", "SUCCESS", "FAILURE", "ERROR"):
+                pending.append(f"check '{name}' is {status or 'UNKNOWN'}")
+            elif status == "COMPLETED" and conclusion not in (
+                "SUCCESS", "NEUTRAL", "SKIPPED",
+            ):
+                failed.append(f"check '{name}' is {status}/{conclusion}")
+            elif status in ("FAILURE", "ERROR"):
+                failed.append(f"check '{name}' is {status}")
+        return pending, failed
+
+    waited = 0.0
+    state = fetch_state()
+    while True:
+        pending, failed = check_rollup(state)
+        if failed:
+            raise RuntimeError(
+                f"delivery gate: CI check '{failed[0].split(chr(39))[1]}' "
+                f"failed on PR #{pr['number']}: " + ", ".join(failed)
+            )
+        if not pending:
+            break
+        detail = ", ".join(pending)
+        LOGGER.info(
+            "merge_gate_waiting_ci pr=%s pending=%s waited=%ds limit=%ds",
+            pr["number"], detail, int(waited), int(ci_wait_seconds),
+        )
+        if waited >= ci_wait_seconds:
+            raise RuntimeError(
+                f"delivery gate: waiting for CI on PR #{pr['number']} timed "
+                f"out after {int(ci_wait_seconds)}s (still pending: {detail})"
+            )
+        step = min(RELEASE_CI_POLL_INTERVAL, ci_wait_seconds - waited)
+        time.sleep(step)
+        waited += step
+        state = fetch_state()
+
+    mergeable_waited = 0.0
+    while state.get("mergeable") == "UNKNOWN":
+        LOGGER.info(
+            "merge_gate_waiting_mergeable pr=%s waited=%ds limit=%ds",
+            pr["number"], int(mergeable_waited),
+            int(mergeable_wait_seconds),
+        )
+        if mergeable_waited >= mergeable_wait_seconds:
+            raise RuntimeError(
+                f"PR #{pr['number']} not mergeable: mergeable state timed "
+                f"out after {int(mergeable_wait_seconds)}s"
+            )
+        step = min(MERGEABLE_POLL_INTERVAL,
+                   mergeable_wait_seconds - mergeable_waited)
+        time.sleep(step)
+        mergeable_waited += step
+        state = fetch_state()
+
     mergeable = state.get("mergeable")
     if mergeable != "MERGEABLE":
         LOGGER.error(
@@ -6454,12 +6550,6 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             f"PR #{pr['number']} head moved since review "
             f"(reviewed={pr['head_oid']} remote={remote_head}); re-review "
             "before merging"
-        )
-    source_repo = source_repo or pr.get("_source_repo")
-    if source_repo is not None:
-        check_delivery_ci(
-            source_repo, pr["head_oid"],
-            wait_seconds=pr.get("_ci_wait_seconds", ci_wait_seconds),
         )
     run_command([
         "gh", "pr", "merge", str(pr["number"]),
@@ -7062,6 +7152,9 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             {**refrozen, "_source_repo": source_repo,
              "_ci_wait_seconds": config.get(
                  "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
+             ),
+             "_mergeable_wait_seconds": config.get(
+                 "mergeable_wait_seconds", MERGEABLE_WAIT_SECONDS,
              )},
             base_branch, repo_dir=config["repo_dir"],
         )
