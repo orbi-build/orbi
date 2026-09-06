@@ -639,8 +639,6 @@ def test_verify_resumed_pr_local_ahead_of_pr_head_continues_to_review(
             return ""
         if command[:3] == ["git", "rev-parse", "HEAD"]:
             return local_head
-        if command[:2] == ["gh", "issue"] and "view" in command:
-            return json.dumps({"labels": [{"name": "ai-fix-needed"}]})
         if command[:2] == ["gh", "pr"]:
             return json.dumps([{
                 "url": "https://github.com/owner/repo/pull/9",

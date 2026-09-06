@@ -44,8 +44,6 @@ def make_fake_gh(monkeypatch, comments=None, in_progress=False):
             return ""
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps([{"number": 18}] if in_progress else [])
-        if command[:3] == ["gh", "issue", "view"]:
-            return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
