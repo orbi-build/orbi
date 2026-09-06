@@ -154,7 +154,7 @@ directory):
 
 | Field | Required | Default | Meaning |
 |---|---|---|---|
-| `source_repos` | yes | — | Ordered list of `owner/repo` task pools scanned each tick (e.g. your pilot repo first, then your backlog repo) |
+| `source_repos` | yes | — | One `owner/repo` task pool scanned each tick. Multiple entries fail fast because the current execution layer has only one checkout; multi-repo workspaces are not available yet |
 | `repo_dir` | no | `.` | The delivery checkout: the repository whose Issues the Runner delivers. Task worktrees are created from its frozen `origin/<base_branch>` SHA, PRs open against it, and the slot locks live in `<repo_dir>/.orbi/slots/`. In bootstrap mode this is the orbi checkout itself; in the external single-repo mode (Issue #330) it is a foreign user repo X |
 | `deploy_home` | no | `repo_dir` | The orbi SOURCE checkout (Issue #330): the editable CLI install source (the self-update), the `systemd/` unit templates, `labels.toml`, and the prompt defaults (`prompt.md`, `prompt_review.md` when unset). Absent = `repo_dir` (bootstrap mode, unchanged). Set it to the orbi checkout when `repo_dir` is a foreign repo X. Must be a non-empty string; a missing directory fails the start fast |
 | `workspace_root` | no | `..` | Directory that contains the task worktrees and the repositories the agent may modify |
