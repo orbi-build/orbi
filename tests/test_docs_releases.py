@@ -162,24 +162,18 @@ def test_release_pages_exist_in_both_languages():
 
 def test_release_pages_pin_resolvable_tag_objects_and_commits():
     for slug in release_page_slugs("en"):
+        version = slug.removeprefix("release-")
+        tag_object = git("rev-parse", f"refs/tags/{version}")
+        commit = git("rev-parse", f"refs/tags/{version}^{{commit}}")
+        assert git("cat-file", "-t", tag_object) == "tag", (
+            f"{version} must be an annotated tag"
+        )
+        assert git("rev-parse", f"{commit}^{{commit}}") == commit
         for path in (DOCS_DIR / f"{slug}.mdx", DOCS_DIR / "zh" / f"{slug}.mdx"):
             text = path.read_text(encoding="utf-8")
             hashes = SHA_PATTERN.findall(text)
-            assert hashes, f"{path} must record release Git objects"
-            object_types = {
-                value: git("cat-file", "-t", value) for value in hashes
-            }
-            tag_objects = [
-                value for value, object_type in object_types.items()
-                if object_type == "tag"
-            ]
-            commits = [
-                value for value, object_type in object_types.items()
-                if object_type == "commit"
-            ]
-            assert tag_objects, f"{path} must record an annotated tag object"
-            assert commits, f"{path} must record the release commit"
-            assert git("rev-parse", f"{commits[0]}^{{commit}}") == commits[0]
+            assert tag_object in hashes, f"{path} must record {version}'s tag object"
+            assert commit in hashes, f"{path} must record {version}'s release commit"
 
 
 def test_only_the_highest_version_pages_carry_latest_markers():
@@ -191,6 +185,18 @@ def test_only_the_highest_version_pages_carry_latest_markers():
         is_latest = slug == latest
         assert ("(latest)" in en_title) is is_latest
         assert ("（最新）" in zh_title) is is_latest
+
+
+def test_corrected_release_keeps_the_previous_release_record_link():
+    versions = sorted(release_page_slugs("en"), key=release_version)
+    assert len(versions) >= 2, "the corrected release needs a prior release"
+    corrected = versions[1]
+    previous = versions[0].removeprefix("release-")
+    for path in (DOCS_DIR / f"{corrected}.mdx", DOCS_DIR / "zh" / f"{corrected}.mdx"):
+        text = path.read_text(encoding="utf-8")
+        assert previous in text
+        assert ("correct" in text.lower()) or ("修正" in text)
+        assert f"/{versions[0]}" in text
 
 
 def test_release_pages_have_matching_version_titles():
