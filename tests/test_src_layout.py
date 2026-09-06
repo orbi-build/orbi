@@ -141,7 +141,9 @@ def test_console_script_works_from_the_editable_install(tmp_path):
         assert command in result.stdout
     result = _run([str(cli), "--version"])
     assert result.returncode == 0, result.stderr
-    assert "orbi 0.3.2" in result.stdout
+    version = _import_probe(python, "import orbi; print(orbi.__version__)")
+    assert version.returncode == 0, version.stderr
+    assert f"orbi {version.stdout.strip()}" in result.stdout
 
 
 # --- the checkout root cannot shadow the installed package ------------------
