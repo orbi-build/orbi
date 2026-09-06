@@ -8362,18 +8362,12 @@ def _pr_number(pr_url: str) -> int:
     return int(pr_url.rstrip("/").rsplit("/", 1)[-1])
 
 
-def pr_state(pr_url: str, source_repo: str) -> str:
-    """Return a PR's state from the configured source repository.
-
-    The delivery-wait loop (Issue #39) uses it to tell a delivery that is
-    still awaiting review from one that is done: only `MERGED` or
-    `CLOSED` ends the slot hold. Anything else is a corrupted state and
-    fails fast.
-    """
+def pr_delivery_status(pr_url: str, source_repo: str) -> tuple[str, list[str]]:
+    """Return PR state and CI summaries for delivery-wait evidence."""
     number = _pr_number(pr_url)
     raw = run_command([
         "gh", "pr", "view", str(number), "--repo", source_repo,
-        "--json", "state",
+        "--json", "state,statusCheckRollup",
     ])
     data = json.loads(raw)
     if not isinstance(data, dict):
@@ -8381,7 +8375,28 @@ def pr_state(pr_url: str, source_repo: str) -> str:
     state = data.get("state")
     if state not in ("OPEN", "MERGED", "CLOSED"):
         raise ValueError(f"unexpected PR state: {state!r}")
-    return state
+    rollup = data.get("statusCheckRollup")
+    if rollup is None:
+        rollup = []
+    if not isinstance(rollup, list):
+        raise ValueError("pr statusCheckRollup must be a JSON array")
+    summaries = []
+    for check in rollup:
+        if not isinstance(check, dict):
+            continue
+        name = check.get("name", check.get("context", "check"))
+        status = check.get("status", check.get("state", "UNKNOWN"))
+        conclusion = check.get("conclusion")
+        detail = str(status)
+        if conclusion:
+            detail += f"/{conclusion}"
+        summaries.append(f"{name}={detail}")
+    return state, summaries
+
+
+def pr_state(pr_url: str, source_repo: str) -> str:
+    """Return a PR's state from the configured source repository."""
+    return pr_delivery_status(pr_url, source_repo)[0]
 
 
 def issue_labels(number: int, repo: str) -> list[str]:
@@ -8516,11 +8531,14 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
       released); unfixed findings or a behind/conflict gate label the
       Issue `ai-fix-needed` and the next iteration re-runs the same
       independent review;
-    - otherwise -> keep holding the slot and re-check.
+    - an open PR with `ai-in-progress` -> repair the lost transition to
+      `ai-pr-opened`, then review immediately;
+    - any other unrecoverable label inconsistency -> mark the Issue
+      `ai-blocked` and release the slot. It must never hold the slot by
+      polling forever.
 
-    There is no timeout: systemd owns the run lifecycle and kills the
-    service on stop, which releases the slot via the kernel (flock on
-    the open descriptor). No polling shim, no daemon loop, no queue.
+    CI status is included in every open-PR heartbeat so pending and failed
+    checks remain visible while the review gate is being reached.
     """
     number = int(issue["number"])
     # Issue #100: the progress comment's issue line shows the number
@@ -8540,8 +8558,30 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
         "slot until the PR is merged or terminally failed",
         number, pr_url, priority,
     )
+    def block_label_inconsistency(labels: list[str], reason: str) -> None:
+        LOGGER.error(
+            "issue=%s delivery_label_inconsistent pr=%s reason=%s; "
+            "marking ai-blocked", number, pr_url, reason,
+        )
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_BLOCKED,
+            current_labels=labels,
+        )
+        body = (
+            f"Orbi failed: PR {pr_url} is open but the delivery labels "
+            f"could not be repaired ({reason}); the Issue is ai-blocked"
+        )
+        if marker:
+            body = f"{marker}\n{body}"
+        comment_issue(number, repo=source_repo, body=body)
+
     while True:
-        state = pr_state(pr_url, source_repo)
+        state, ci_checks = pr_delivery_status(pr_url, source_repo)
+        if state == "OPEN":
+            LOGGER.info(
+                "issue=%s delivery_ci pr=%s checks=%s",
+                number, pr_url, ",".join(ci_checks) or "none",
+            )
         if state == "MERGED":
             LOGGER.info(
                 "issue=%s delivery_merged pr=%s; releasing the slot",
@@ -8618,6 +8658,25 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 )
             return
         labels = issue_labels(number, source_repo)
+        if IN_PROGRESS_LABEL in labels:
+            try:
+                apply_label_patch(
+                    number, repo=source_repo, event=EVENT_PR_OPENED,
+                    current_labels=labels,
+                )
+            except Exception as exc:
+                LOGGER.exception(
+                    "issue=%s delivery_label_repair_failed pr=%s",
+                    number, pr_url,
+                )
+                block_label_inconsistency(labels, str(exc))
+                return
+            labels = [label for label in labels if label != IN_PROGRESS_LABEL]
+            labels.append(PR_OPENED_LABEL)
+            LOGGER.info(
+                "issue=%s delivery_label_repaired pr=%s from=%s to=%s",
+                number, pr_url, IN_PROGRESS_LABEL, PR_OPENED_LABEL,
+            )
         if (is_resumable(labels)
                 and not needs_human_intervention(labels)
                 and MERGED_LABEL not in labels):
@@ -8911,11 +8970,11 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 )
                 return
             continue  # findings: the next iteration re-runs the review
-        LOGGER.info(
-            "issue=%s delivery_awaiting pr=%s state=%s",
-            number, pr_url, state,
+        block_label_inconsistency(
+            labels,
+            "open PR has no resumable delivery label",
         )
-        time.sleep(poll_interval)
+        return
 
 
 def main(argv: list[str] | None = None) -> int:

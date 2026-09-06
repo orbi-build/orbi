@@ -23,7 +23,7 @@ DASHBOARD_PATH = (
 PROMETHEUS_DS = {"type": "prometheus", "uid": "eflztqehr89a8c"}
 
 # The exporter's metric family (monitoring/prometheus/orbi-exporter.py).
-MUYAN_METRICS = (
+ORBI_METRICS = (
     "orbi_service_active",
     "orbi_run_active",
     "orbi_run_seconds",
@@ -102,7 +102,7 @@ def _check_datasources(panels):
 def test_dashboard_covers_every_exporter_metric_family():
     exprs = all_exprs(load_dashboard())
     joined = "\n".join(exprs)
-    for name in MUYAN_METRICS:
+    for name in ORBI_METRICS:
         assert re.search(rf"\b{re.escape(name)}\b", joined), (
             f"no panel queries {name}"
         )

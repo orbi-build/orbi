@@ -1195,13 +1195,13 @@ def test_pick_issue_uses_github_queue(monkeypatch):
         return json.dumps([issue])
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    assert runner.pick_issue("xqliu/muyan-ceo") == issue
+    assert runner.pick_issue("xqliu/orbi-backlog") == issue
     # Issue #101: the P0 scan runs first, then the bug scan (Issue
     # #71); with nothing in either queue the plain ready scan decides.
     # All three keep the same exclusions.
     assert calls == [
         [
-            "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
+            "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
             "--state", "open", "--search",
             "label:ai-ready label:p0 -label:ai-in-progress "
             "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
@@ -1210,7 +1210,7 @@ def test_pick_issue_uses_github_queue(monkeypatch):
             "--limit", "200",
         ],
         [
-            "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
+            "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
             "--state", "open", "--search",
             "label:ai-ready label:bug -label:ai-in-progress "
             "-label:ai-pr-opened -label:ai-fix-needed -label:ai-merged "
@@ -1219,7 +1219,7 @@ def test_pick_issue_uses_github_queue(monkeypatch):
             "--limit", "200",
         ],
         [
-            "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
+            "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
             "--state", "open", "--search",
             "label:ai-ready -label:ai-in-progress -label:ai-pr-opened "
             "-label:ai-fix-needed -label:ai-merged -label:ai-blocked",
@@ -1412,7 +1412,7 @@ def test_pick_issue_scopes_all_three_ready_scans_to_active_milestone(
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.pick_issue(
-        "xqliu/muyan-ceo", active_milestone="v0.2.0",
+        "xqliu/orbi-backlog", active_milestone="v0.2.0",
     ) == issue
     scope = ' milestone:"v0.2.0"'
     exclusions = (
@@ -1421,21 +1421,21 @@ def test_pick_issue_scopes_all_three_ready_scans_to_active_milestone(
     )
     assert calls == [
         [
-            "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
+            "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
             "--state", "open", "--search",
             f"label:ai-ready label:p0{scope} {exclusions}",
             "--json", "number,title,body,labels,blockedBy",
             "--limit", "200",
         ],
         [
-            "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
+            "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
             "--state", "open", "--search",
             f"label:ai-ready label:bug{scope} {exclusions}",
             "--json", "number,title,body,labels,blockedBy",
             "--limit", "200",
         ],
         [
-            "gh", "issue", "list", "--repo", "xqliu/muyan-ceo",
+            "gh", "issue", "list", "--repo", "xqliu/orbi-backlog",
             "--state", "open", "--search",
             f"label:ai-ready{scope} {exclusions}",
             "--json", "number,title,body,labels,blockedBy",
@@ -2420,13 +2420,13 @@ def test_pick_next_issue_returns_first_ready_source(monkeypatch):
 
     def pick(repo, active_milestone=None):
         calls.append(repo)
-        return issue if repo == "xqliu/muyan-ceo" else None
+        return issue if repo == "xqliu/orbi-backlog" else None
 
     monkeypatch.setattr(runner, "pick_issue", pick)
-    assert runner.pick_next_issue(["xqliu/muyan-ceo", "xqliu/orbi"]) == (
-        "xqliu/muyan-ceo", issue,
+    assert runner.pick_next_issue(["xqliu/orbi-backlog", "xqliu/orbi"]) == (
+        "xqliu/orbi-backlog", issue,
     )
-    assert calls == ["xqliu/muyan-ceo"]
+    assert calls == ["xqliu/orbi-backlog"]
 
 
 def test_pick_next_issue_falls_through_to_second_source(monkeypatch):
@@ -2438,23 +2438,23 @@ def test_pick_next_issue_falls_through_to_second_source(monkeypatch):
         return issue if repo == "xqliu/orbi" else None
 
     monkeypatch.setattr(runner, "pick_issue", pick)
-    assert runner.pick_next_issue(["xqliu/muyan-ceo", "xqliu/orbi"]) == (
+    assert runner.pick_next_issue(["xqliu/orbi-backlog", "xqliu/orbi"]) == (
         "xqliu/orbi", issue,
     )
-    assert calls == ["xqliu/muyan-ceo", "xqliu/orbi"]
+    assert calls == ["xqliu/orbi-backlog", "xqliu/orbi"]
 
 
 def test_pick_next_issue_returns_none_when_all_sources_empty(monkeypatch):
     monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: None)
-    assert runner.pick_next_issue(["xqliu/muyan-ceo", "xqliu/orbi"]) is None
+    assert runner.pick_next_issue(["xqliu/orbi-backlog", "xqliu/orbi"]) is None
 
 
 def test_edit_issue_builds_add_and_remove_command(monkeypatch):
     calls = []
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append(command))
-    runner.edit_issue(3, repo="xqliu/muyan-ceo", add="ai-in-progress", remove="ai-ready")
+    runner.edit_issue(3, repo="xqliu/orbi-backlog", add="ai-in-progress", remove="ai-ready")
     assert calls == [[
-        "gh", "issue", "edit", "3", "--repo", "xqliu/muyan-ceo",
+        "gh", "issue", "edit", "3", "--repo", "xqliu/orbi-backlog",
         "--add-label", "ai-in-progress", "--remove-label", "ai-ready",
     ]]
 
@@ -2462,8 +2462,8 @@ def test_edit_issue_builds_add_and_remove_command(monkeypatch):
 def test_edit_issue_allows_no_label_change(monkeypatch):
     calls = []
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append(command))
-    runner.edit_issue(3, repo="xqliu/muyan-ceo")
-    assert calls == [["gh", "issue", "edit", "3", "--repo", "xqliu/muyan-ceo"]]
+    runner.edit_issue(3, repo="xqliu/orbi-backlog")
+    assert calls == [["gh", "issue", "edit", "3", "--repo", "xqliu/orbi-backlog"]]
 
 
 def test_new_run_id_is_unique_short_hex():
@@ -2984,7 +2984,7 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     gh_calls, posted = make_fake_gh(
         monkeypatch, comments=[existing_comment], in_progress=True,
     )
-    branch = "orbi/xqliu-muyan-ceo-issue-4-a1b2c3d4"
+    branch = "orbi/xqliu-orbi-backlog-issue-4-a1b2c3d4"
     head = "0123456789abcdef0123456789abcdef01234567"
 
     def fake_run(command, **kwargs):
@@ -3001,12 +3001,12 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
             return ""
         if command[:2] == ["gh", "pr"]:
             return json.dumps([{
-                "url": "https://github.com/muyantech/orbi/pull/4",
+                "url": "https://github.com/orbi-build/orbi/pull/4",
                 "baseRefName": "main",
                 "headRefName": branch,
                 "headRefOid": head,
                 "headRepository": {"name": "orbi"},
-                "headRepositoryOwner": {"login": "muyantech"},
+                "headRepositoryOwner": {"login": "orbi-build"},
                 "body": (
                     "<!-- orbi:run=a1b2c3d4 -->\n\n"
                     "Fixes #4\n\nPlan"
@@ -3043,10 +3043,10 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
               "base_branch": "main"}
     assert runner.process_issue(
-        issue, config, "xqliu/muyan-ceo",
-    ) == runner.IssueResult("pr", "https://github.com/muyantech/orbi/pull/4")
+        issue, config, "xqliu/orbi-backlog",
+    ) == runner.IssueResult("pr", "https://github.com/orbi-build/orbi/pull/4")
     # The reused run id drives the branch and the scene comments.
-    assert calls[0] == ("edit", (4,), {"repo": "xqliu/muyan-ceo",
+    assert calls[0] == ("edit", (4,), {"repo": "xqliu/orbi-backlog",
                                        "add": "ai-in-progress"})
     scene_comments = [
         call for call in gh_calls
@@ -3066,13 +3066,13 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     patches = [
         command for command in gh_calls
         if command[:2] == ["gh", "api"]
-        and command[2] == "repos/xqliu/muyan-ceo/issues/comments/77"
+        and command[2] == "repos/xqliu/orbi-backlog/issues/comments/77"
         and "PATCH" in command
     ]
     assert patches, "the existing progress comment was not updated"
     last_body = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Orbi delivered" in last_body
-    assert "- branch: orbi/xqliu-muyan-ceo-issue-4-a1b2c3d4" in last_body
+    assert "- branch: orbi/xqliu-orbi-backlog-issue-4-a1b2c3d4" in last_body
 
 
 def test_process_issue_binds_run_id_before_the_resume_scan(
@@ -3084,7 +3084,7 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
     which run before the resume decision (review round 3, PR #42)."""
     gh_calls, posted = make_fake_gh(monkeypatch, in_progress=True)
     head = "0123456789abcdef0123456789abcdef01234567"
-    branch = "orbi/xqliu-muyan-ceo-issue-4-a1b2c3d4"
+    branch = "orbi/xqliu-orbi-backlog-issue-4-a1b2c3d4"
 
     def fake_run(command, **kwargs):
         gh_calls.append(command)
@@ -3096,12 +3096,12 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
             return ""
         if command[:2] == ["gh", "pr"]:
             return json.dumps([{
-                "url": "https://github.com/muyantech/orbi/pull/4",
+                "url": "https://github.com/orbi-build/orbi/pull/4",
                 "baseRefName": "main",
                 "headRefName": branch,
                 "headRefOid": head,
                 "headRepository": {"name": "orbi"},
-                "headRepositoryOwner": {"login": "muyantech"},
+                "headRepositoryOwner": {"login": "orbi-build"},
                 "body": (
                     "<!-- orbi:run=a1b2c3d4 -->\n\n"
                     "Fixes #4\n\nPlan"
@@ -3134,7 +3134,7 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
             {"number": 4, "title": "Fix", "body": "Body"},
             {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
              "base_branch": "main"},
-            "xqliu/muyan-ceo",
+            "xqliu/orbi-backlog",
         )
     # No unprefixed line: the claim-time gh scan and resuming_run are
     # part of the attempt's timeline.
@@ -3167,19 +3167,19 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
             return ""
         if command[:2] == ["gh", "pr"]:
             return json.dumps([{
-                "url": "https://github.com/muyantech/orbi/pull/4",
+                "url": "https://github.com/orbi-build/orbi/pull/4",
                 "baseRefName": "main",
-                "headRefName": "orbi/xqliu-muyan-ceo-issue-4-ffffeeee",
+                "headRefName": "orbi/xqliu-orbi-backlog-issue-4-ffffeeee",
                 "headRefOid": head,
                 "headRepository": {"name": "orbi"},
-                "headRepositoryOwner": {"login": "muyantech"},
+                "headRepositoryOwner": {"login": "orbi-build"},
                 "body": (
                     "<!-- orbi:run=ffffeeee -->\n\n"
                     "Fixes #4\n\nPlan"
                 ),
             }])
         if command[:3] == ["git", "branch", "--show-current"]:
-            return "orbi/xqliu-muyan-ceo-issue-4-ffffeeee"
+            return "orbi/xqliu-orbi-backlog-issue-4-ffffeeee"
         if command[:2] == ["git", "rev-parse"]:
             return head
         return ""
@@ -3203,7 +3203,7 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
         {"number": 4, "title": "Fix", "body": "Body"},
         {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
          "base_branch": "main"},
-        "xqliu/muyan-ceo",
+        "xqliu/orbi-backlog",
     )
     # The fresh run id is used and the old worktree's run id is never
     # consulted (the label is the gate).
@@ -3234,19 +3234,19 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
             return ""
         if command[:2] == ["gh", "pr"]:
             return json.dumps([{
-                "url": "https://github.com/muyantech/orbi/pull/4",
+                "url": "https://github.com/orbi-build/orbi/pull/4",
                 "baseRefName": "main",
-                "headRefName": "orbi/xqliu-muyan-ceo-issue-4-ffffeeee",
+                "headRefName": "orbi/xqliu-orbi-backlog-issue-4-ffffeeee",
                 "headRefOid": head,
                 "headRepository": {"name": "orbi"},
-                "headRepositoryOwner": {"login": "muyantech"},
+                "headRepositoryOwner": {"login": "orbi-build"},
                 "body": (
                     "<!-- orbi:run=ffffeeee -->\n\n"
                     "Fixes #4\n\nPlan"
                 ),
             }])
         if command[:3] == ["git", "branch", "--show-current"]:
-            return "orbi/xqliu-muyan-ceo-issue-4-ffffeeee"
+            return "orbi/xqliu-orbi-backlog-issue-4-ffffeeee"
         if command[:2] == ["git", "rev-parse"]:
             return head
         return ""
@@ -3268,7 +3268,7 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
             {"number": 4, "title": "Fix", "body": "Body"},
             {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
              "base_branch": "main"},
-            "xqliu/muyan-ceo",
+            "xqliu/orbi-backlog",
         )
     # No resume happened: the fresh run id drives the delivery.
     assert "resuming_run" not in caplog.text
@@ -3295,7 +3295,7 @@ def _resume_wiring_setup(monkeypatch, tmp_path, *, in_progress: bool,
     # resumed one (label on + a worktree to resume) or the fresh one.
     run_id = ("a1b2c3d4"
               if in_progress and latest_run_id_result else "ffffeeee")
-    branch = f"orbi/xqliu-muyan-ceo-issue-4-{run_id}"
+    branch = f"orbi/xqliu-orbi-backlog-issue-4-{run_id}"
     comment_bodies = []
 
     def fake_run(command, **kwargs):
@@ -3361,20 +3361,20 @@ def test_process_issue_writes_run_state_and_resume_context(
     monkeypatch.setattr(
         runner, "deliver_pr",
         lambda *args, **kwargs:
-        "https://github.com/muyantech/orbi/pull/4",
+        "https://github.com/orbi-build/orbi/pull/4",
     )
     caplog.set_level("INFO")
     runner.process_issue(
         {"number": 4, "title": "Fix", "body": "Body"},
         {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
          "base_branch": "main"},
-        "xqliu/muyan-ceo",
+        "xqliu/orbi-backlog",
     )
     # The run state file marks the worktree as the same run.
     state = runner.read_run_state(worktree)
     assert state["run_id"] == "a1b2c3d4"
     assert state["issue"] == 4
-    assert state["repo"] == "xqliu/muyan-ceo"
+    assert state["repo"] == "xqliu/orbi-backlog"
     # The new session starts from the existing work.
     assert len(resume_contexts) == 1
     assert resume_contexts[0] is not None
@@ -3410,14 +3410,14 @@ def test_process_issue_fresh_run_has_no_resume_context(
     monkeypatch.setattr(
         runner, "deliver_pr",
         lambda *args, **kwargs:
-        "https://github.com/muyantech/orbi/pull/4",
+        "https://github.com/orbi-build/orbi/pull/4",
     )
     caplog.set_level("INFO")
     runner.process_issue(
         {"number": 4, "title": "Fix", "body": "Body"},
         {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
          "base_branch": "main"},
-        "xqliu/muyan-ceo",
+        "xqliu/orbi-backlog",
     )
     state = runner.read_run_state(worktree)
     assert state["run_id"] == "ffffeeee"
@@ -3460,13 +3460,13 @@ def test_process_issue_fails_fast_when_the_run_state_is_missing(
             {"number": 4, "title": "Fix", "body": "Body"},
             {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
              "base_branch": "main"},
-            "xqliu/muyan-ceo",
+            "xqliu/orbi-backlog",
         )
     # No fresh run was started.
     assert run_pi_calls == []
     # The terminal state is `ai-blocked` (the claim label removed).
     assert edits[-1] == ((4,), {
-        "repo": "xqliu/muyan-ceo", "add": "ai-blocked",
+        "repo": "xqliu/orbi-backlog", "add": "ai-blocked",
         "remove": "ai-in-progress",
     })
     # The failure comment carries the reason and the run marker.
@@ -3482,23 +3482,23 @@ def test_process_issue_fails_fast_when_the_run_state_is_missing(
 
 
 def test_worktree_path_lives_inside_repo_worktrees_and_includes_run_id():
-    repo_dir = Path("/srv/muyan/orbi")
+    repo_dir = Path("/srv/orbi/orbi")
     path = runner.worktree_path(repo_dir, "owner/repo", 3, "run1")
     assert path == repo_dir / ".worktrees" / "orbi-owner-repo-issue-3-run1"
     assert Path(tempfile.gettempdir()) not in path.parents
 
 
 def test_worktree_path_keeps_source_repo_in_name_to_avoid_same_number_collision():
-    repo_dir = Path("/srv/muyan/orbi")
+    repo_dir = Path("/srv/orbi/orbi")
     pilot = runner.worktree_path(repo_dir, "xqliu/orbi", 14, "run1")
-    ceo = runner.worktree_path(repo_dir, "xqliu/muyan-ceo", 14, "run1")
+    ceo = runner.worktree_path(repo_dir, "xqliu/orbi-backlog", 14, "run1")
     assert pilot == repo_dir / ".worktrees" / "orbi-xqliu-orbi-issue-14-run1"
-    assert ceo == repo_dir / ".worktrees" / "orbi-xqliu-muyan-ceo-issue-14-run1"
+    assert ceo == repo_dir / ".worktrees" / "orbi-xqliu-orbi-backlog-issue-14-run1"
     assert pilot != ceo
 
 
 def test_worktree_path_and_task_branch_differ_per_run_for_same_issue():
-    repo_dir = Path("/srv/muyan/orbi")
+    repo_dir = Path("/srv/orbi/orbi")
     first_path = runner.worktree_path(repo_dir, "owner/repo", 3, "run1")
     retry_path = runner.worktree_path(repo_dir, "owner/repo", 3, "run2")
     assert first_path != retry_path
@@ -3514,9 +3514,9 @@ def test_task_branch_includes_source_repo_to_avoid_same_number_collision():
 def test_comment_issue_runs_gh_comment(monkeypatch):
     calls = []
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append(command))
-    runner.comment_issue(3, repo="xqliu/muyan-ceo", body="done")
+    runner.comment_issue(3, repo="xqliu/orbi-backlog", body="done")
     assert calls == [[
-        "gh", "issue", "comment", "3", "--repo", "xqliu/muyan-ceo",
+        "gh", "issue", "comment", "3", "--repo", "xqliu/orbi-backlog",
         "--body", "done",
     ]]
 
@@ -3871,8 +3871,8 @@ FAKE_HEAD_SHA = "0123456789abcdef0123456789abcdef01234567"
 FAKE_RUN_ID = "e07383c2"
 
 
-FAKE_PR_URL = "https://github.com/muyantech/orbi/pull/4"
-FAKE_PR_REPO = "muyantech/orbi"
+FAKE_PR_URL = "https://github.com/orbi-build/orbi/pull/4"
+FAKE_PR_REPO = "orbi-build/orbi"
 
 
 def fake_verify_pr_payload(**overrides) -> str:
@@ -3883,7 +3883,7 @@ def fake_verify_pr_payload(**overrides) -> str:
         "headRefName": f"orbi/issue-4-{FAKE_RUN_ID}",
         "headRefOid": FAKE_HEAD_SHA,
         "headRepository": {"name": "orbi"},
-        "headRepositoryOwner": {"login": "muyantech"},
+        "headRepositoryOwner": {"login": "orbi-build"},
         "body": (
             f"<!-- orbi:run={FAKE_RUN_ID} -->\n\n"
             "Fixes #4\n\nPlan"
@@ -3965,7 +3965,7 @@ def test_verify_pr_returns_url_when_delivery_contains_latest_base(monkeypatch, t
     assert runner.verify_pr(
         tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path,
-    ) == "https://github.com/muyantech/orbi/pull/4"
+    ) == "https://github.com/orbi-build/orbi/pull/4"
     assert ["git", "fetch", "origin", "main"] in calls
     assert ["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"] in calls
 
@@ -4239,7 +4239,7 @@ def test_verify_pr_queries_base_head_and_accepts_matching_pr(
     assert runner.verify_pr(
         tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path,
-    ) == "https://github.com/muyantech/orbi/pull/4"
+    ) == "https://github.com/orbi-build/orbi/pull/4"
     assert ["git", "rev-parse", "HEAD"] in calls
     assert [
         "gh", "pr", "list", "--state", "open", "--head",
@@ -4275,7 +4275,7 @@ def test_verify_pr_rejects_pr_head_in_another_repo(monkeypatch, tmp_path, caplog
     monkeypatch.setattr(runner, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="PR head repo is attacker/other, expected "
-                            "muyantech/orbi",
+                            "orbi-build/orbi",
     ):
         runner.verify_pr(
             tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
@@ -4295,7 +4295,7 @@ def test_verify_pr_rejects_pr_head_repo_missing_fields(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(
         RuntimeError, match="PR head repo is <missing>, expected "
-                            "muyantech/orbi",
+                            "orbi-build/orbi",
     ):
         runner.verify_pr(
             tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
@@ -4314,7 +4314,7 @@ def test_verify_pr_rejects_pr_head_repo_empty_fields(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(
         RuntimeError, match="PR head repo is <missing>, expected "
-                            "muyantech/orbi",
+                            "orbi-build/orbi",
     ):
         runner.verify_pr(
             tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
@@ -4350,16 +4350,16 @@ def test_verify_pr_rejects_url_different_from_expected(monkeypatch, tmp_path, ca
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"]:
             return fake_verify_pr_payload(
-                url="https://github.com/muyantech/orbi/pull/99",
+                url="https://github.com/orbi-build/orbi/pull/99",
             )
         return fake_verify_run(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match=(
-            "PR URL https://github.com/muyantech/orbi/pull/99 is "
+            "PR URL https://github.com/orbi-build/orbi/pull/99 is "
             "not the recovered original PR "
-            "https://github.com/muyantech/orbi/pull/4"
+            "https://github.com/orbi-build/orbi/pull/4"
         ),
     ):
         runner.verify_pr(
@@ -4405,7 +4405,7 @@ def test_verify_pr_skips_latest_base_check_when_not_required(
 def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_path):
     calls = []
     gh_calls, posted = make_fake_gh(monkeypatch)
-    branch = "orbi/xqliu-muyan-ceo-issue-4-a1b2c3d4"
+    branch = "orbi/xqliu-orbi-backlog-issue-4-a1b2c3d4"
     head = "0123456789abcdef0123456789abcdef01234567"
 
     def fake_run(command, **kwargs):
@@ -4421,12 +4421,12 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
             return ""
         if command[:2] == ["gh", "pr"]:
             return json.dumps([{
-                "url": "https://github.com/muyantech/orbi/pull/4",
+                "url": "https://github.com/orbi-build/orbi/pull/4",
                 "baseRefName": "main",
                 "headRefName": branch,
                 "headRefOid": head,
                 "headRepository": {"name": "orbi"},
-                "headRepositoryOwner": {"login": "muyantech"},
+                "headRepositoryOwner": {"login": "orbi-build"},
                 "body": (
                     "<!-- orbi:run=a1b2c3d4 -->\n\n"
                     "Fixes #4\n\nPlan"
@@ -4447,8 +4447,8 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     issue = {"number": 4, "title": "Fix", "body": "Body"}
     config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}
-    assert runner.process_issue(issue, config, "xqliu/muyan-ceo") == runner.IssueResult("pr", "https://github.com/muyantech/orbi/pull/4")
-    assert calls[0] == ("edit", (4,), {"repo": "xqliu/muyan-ceo", "add": "ai-in-progress"})
+    assert runner.process_issue(issue, config, "xqliu/orbi-backlog") == runner.IssueResult("pr", "https://github.com/orbi-build/orbi/pull/4")
+    assert calls[0] == ("edit", (4,), {"repo": "xqliu/orbi-backlog", "add": "ai-in-progress"})
     # The run state is published automatically: exactly one progress
     # comment (hidden run marker); started and PR-opened scenes are
     # separate resume announcements.
@@ -4457,7 +4457,7 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
         if "**Orbi progress**" in body
     ]
     assert len(progress_posts) == 1
-    assert "- branch: orbi/xqliu-muyan-ceo-issue-4-a1b2c3d4" in progress_posts[0]
+    assert "- branch: orbi/xqliu-orbi-backlog-issue-4-a1b2c3d4" in progress_posts[0]
     # The PR URL is only known after verify_pr: the initial POST shows
     # `- PR: -`, the final delivery PATCH carries the URL.
     assert "- PR: -" in progress_posts[0]
@@ -4472,11 +4472,11 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     assert "base_branch=main" in start_body
     assert "base_sha=abc123def456" in start_body
     assert "run_id=a1b2c3d4" in start_body
-    assert "branch=orbi/xqliu-muyan-ceo-issue-4-a1b2c3d4" in start_body
+    assert "branch=orbi/xqliu-orbi-backlog-issue-4-a1b2c3d4" in start_body
     assert "worktree=" + str(tmp_path / "wt") in start_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in start_body
     opened_body = scene_comments[1][-1]
-    assert "Orbi opened PR: https://github.com/muyantech/orbi/pull/4" in opened_body
+    assert "Orbi opened PR: https://github.com/orbi-build/orbi/pull/4" in opened_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in opened_body
     # The final delivery summary PATCHed the same progress comment.
     patches = [
@@ -4506,7 +4506,7 @@ def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, c
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
-    monkeypatch.setattr(runner, "deliver_pr", lambda *args, **kwargs: "https://github.com/muyantech/orbi/pull/4")
+    monkeypatch.setattr(runner, "deliver_pr", lambda *args, **kwargs: "https://github.com/orbi-build/orbi/pull/4")
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: None)
     gh_calls, posted = make_fake_gh(monkeypatch)
 
@@ -4523,14 +4523,14 @@ def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, c
         runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
             {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"},
-            "xqliu/muyan-ceo",
+            "xqliu/orbi-backlog",
         )
     ends = [line for line in caplog.text.splitlines() if " run_end " in line]
     assert len(ends) == 1
     assert "run=a1b2c3d4" in ends[0]
-    assert "issue=xqliu/muyan-ceo#4" in ends[0]
+    assert "issue=xqliu/orbi-backlog#4" in ends[0]
     assert "result=pr_opened" in ends[0]
-    assert "pr=https://github.com/muyantech/orbi/pull/4" in ends[0]
+    assert "pr=https://github.com/orbi-build/orbi/pull/4" in ends[0]
     assert "commit=0123456789abcdef0123456789abcdef01234567" in ends[0]
 
 
@@ -4560,8 +4560,8 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     monkeypatch.setattr(runner, "run_command", fake_run)
     # The failure is terminal: `process_issue` returns `None` (no PR) and
     # does NOT re-raise — the service must not crash on it (Issue #239).
-    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo").kind == "failed"
-    assert calls[1][2] == {"repo": "xqliu/muyan-ceo", "add": "ai-blocked", "remove": "ai-in-progress"}
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/orbi-backlog").kind == "failed"
+    assert calls[1][2] == {"repo": "xqliu/orbi-backlog", "add": "ai-blocked", "remove": "ai-in-progress"}
     assert calls[2][0] == "comment"
     failure_body = calls[2][2]["body"]
     # The failure is also published as the blocked milestone (Issue
@@ -4956,7 +4956,7 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
         # The failure is terminal: `process_issue` returns `None` (no PR)
         # and does NOT re-raise — the service must not crash on it
         # (Issue #239).
-        assert runner.process_issue({"number": 13, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo").kind == "failed"
+        assert runner.process_issue({"number": 13, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/orbi-backlog").kind == "failed"
     assert "failure reporting failed" in caplog.text
     # No progress comment was posted (the failure report died on the
     # failure-comment POST before the bypass steps).
@@ -4967,8 +4967,8 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
     # comment is the first failure after the transition; its test in
     # test_progress_wiring pins the other branch).
     assert edit_calls == [
-        {"repo": "xqliu/muyan-ceo", "add": "ai-in-progress"},
-        {"repo": "xqliu/muyan-ceo", "add": "ai-blocked",
+        {"repo": "xqliu/orbi-backlog", "add": "ai-in-progress"},
+        {"repo": "xqliu/orbi-backlog", "add": "ai-blocked",
          "remove": "ai-in-progress"},
     ]
 
@@ -5607,7 +5607,7 @@ def test_main_rejects_repeated_source_repo_before_execution(
     seen = []
     config = tmp_path / "orbi.toml"
     config.write_text(
-        "source_repos = [\"xqliu/orbi\", \"xqliu/muyan-ceo\"]\n",
+        "source_repos = [\"xqliu/orbi\", \"xqliu/orbi-backlog\"]\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -5655,12 +5655,12 @@ def test_process_issue_failure_without_session_still_carries_scene(
     monkeypatch.setattr(runner, "run_command", fake_run)
     # Issue #239: the failure is terminal — `process_issue` returns `None`
     # instead of re-raising; the scene assertions below are unchanged.
-    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo").kind == "failed"
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/orbi-backlog").kind == "failed"
     failure_body = calls[-1][2]["body"]
     # No session file yet: the scene still carries the full debug entry
     # (worktree, branch) with '-' session fields.
     assert f"worktree={tmp_path / 'wt'}" in failure_body
-    assert "branch=orbi/xqliu-muyan-ceo-issue-8-a1b2c3d4" in failure_body
+    assert "branch=orbi/xqliu-orbi-backlog-issue-8-a1b2c3d4" in failure_body
     assert "session=-" in failure_body
     assert "session_file=-" in failure_body
 
@@ -5745,7 +5745,7 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     })
     # Issue #239: the failure is terminal — `process_issue` returns `None`
     # instead of re-raising; the scene assertions below are unchanged.
-    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo").kind == "failed"
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/orbi-backlog").kind == "failed"
     failure_body = calls[-1][2]["body"]
     assert "Orbi failed:" in failure_body
     assert "session=sess-9" in failure_body
@@ -5759,7 +5759,7 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     assert "1 failed" in failure_body
     # The full scene on the failure comment carries the debug entry.
     assert f"worktree={tmp_path / 'wt'}" in failure_body
-    assert "branch=orbi/xqliu-muyan-ceo-issue-8-a1b2c3d4" in failure_body
+    assert "branch=orbi/xqliu-orbi-backlog-issue-8-a1b2c3d4" in failure_body
 
 
 def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, caplog):
@@ -5802,7 +5802,7 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
         # Issue #239: the failure is terminal — `process_issue` returns
         # `None` instead of re-raising; the scene-isolation assertions
         # below are unchanged.
-        assert runner.process_issue({"number": 9, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/muyan-ceo").kind == "failed"
+        assert runner.process_issue({"number": 9, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/orbi-backlog").kind == "failed"
     assert "activity scene failed" in caplog.text
     failure_body = calls[-1][2]["body"]
     assert "Orbi failed: git failed" in failure_body
@@ -9478,7 +9478,7 @@ PR_URL = "https://github.com/owner/repo/pull/46"
 
 
 def fake_pr_view(monkeypatch, state: str) -> tuple[list, object]:
-    """Answer `gh pr view <n> --repo owner/repo --json state`.
+    """Answer `gh pr view <n> --repo owner/repo with delivery fields`.
 
     Returns the command log and the fake itself (so a test can prove
     the fake rejects unexpected commands).
@@ -9491,9 +9491,10 @@ def fake_pr_view(monkeypatch, state: str) -> tuple[list, object]:
             seen.append(command)
             assert command[3] == "46"
             assert command[4:] == [
-                "--repo", "owner/repo", "--json", "state",
+                "--repo", "owner/repo", "--json",
+                "state,statusCheckRollup",
             ]
-            return json.dumps({"state": state})
+            return json.dumps({"state": state, "statusCheckRollup": []})
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -9531,6 +9532,25 @@ def test_pr_state_fails_fast_on_non_object_json(monkeypatch):
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(ValueError, match="pr view must be a JSON object"):
         runner.pr_state(PR_URL, "owner/repo")
+
+
+def test_pr_delivery_status_rejects_non_array_check_rollup(monkeypatch):
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda *a, **k: json.dumps({"state": "OPEN", "statusCheckRollup": {}}),
+    )
+    with pytest.raises(ValueError, match="statusCheckRollup must be a JSON array"):
+        runner.pr_delivery_status(PR_URL, "owner/repo")
+
+
+def test_pr_delivery_status_ignores_malformed_check_entry(monkeypatch):
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda *a, **k: json.dumps({
+            "state": "OPEN", "statusCheckRollup": [None],
+        }),
+    )
+    assert runner.pr_delivery_status(PR_URL, "owner/repo") == ("OPEN", [])
 
 
 def test_finish_blocked_progress_is_a_noop_without_run_id(monkeypatch):
@@ -10663,6 +10683,81 @@ def test_wait_for_delivery_review_failure_without_bound_run_id(
     assert "orbi:run=" not in body
 
 
+def test_wait_for_delivery_repairs_in_progress_label_and_logs_ci(
+        monkeypatch, caplog, tmp_path,
+):
+    """An open PR proves implementation reached delivery: repair a lost
+    label transition and expose CI state before entering review."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:2] == ["gh", "pr"] and command[2] == "view":
+            return json.dumps({
+                "state": "OPEN",
+                "statusCheckRollup": [
+                    {"name": "tests", "status": "COMPLETED",
+                     "conclusion": "FAILURE"},
+                    {"name": "lint", "status": "IN_PROGRESS",
+                     "conclusion": None},
+                ],
+            })
+        if command[:2] == ["gh", "issue"] and command[2] == "view":
+            if command[-1] == "comments":
+                return json.dumps({"comments": [{
+                    "body": (
+                        "<!-- orbi:run=a1b2c3d4 -->\n"
+                        "Orbi opened PR: "
+                        f"{PR_URL} (base_branch=main "
+                        "base_sha=abc123def456 run_id=a1b2c3d4)"
+                    ),
+                    "authorAssociation": "OWNER",
+                }]})
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(runner, "review_and_merge_if_clean", lambda *a, **k: True)
+    (tmp_path / ".worktrees" /
+     "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
+    caplog.set_level("INFO")
+    runner.wait_for_delivery(
+        PR_URL, {"number": 39, "title": "task", "body": ""},
+        {"repo_dir": tmp_path, "base_branch": "main"}, "owner/repo",
+    )
+    assert any("--add-label" in call and "ai-pr-opened" in call
+               and "--remove-label" in call and "ai-in-progress" in call
+               for call in calls)
+    assert "tests=COMPLETED/FAILURE" in caplog.text
+    assert "lint=IN_PROGRESS" in caplog.text
+
+
+def test_wait_for_delivery_blocks_when_in_progress_label_repair_fails(
+        monkeypatch, caplog,
+):
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"] and command[2] == "view":
+            return json.dumps({"state": "OPEN", "statusCheckRollup": []})
+        return json.dumps({"labels": [{"name": "ai-in-progress"}]})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    patches = []
+    def fake_patch(number, **kwargs):
+        patches.append(kwargs)
+        if kwargs["event"] == runner.EVENT_PR_OPENED:
+            raise RuntimeError("label API unavailable")
+    monkeypatch.setattr(runner, "apply_label_patch", fake_patch)
+    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
+    runner.wait_for_delivery(
+        PR_URL, {"number": 39, "title": "task", "body": ""},
+        {}, "owner/repo",
+    )
+    assert patches[-1]["event"] == runner.EVENT_BLOCKED
+    assert "delivery_label_repair_failed" in caplog.text
+
+
 def test_wait_for_delivery_keeps_holding_when_no_delivery_label(
         monkeypatch, caplog,
 ):
@@ -10678,6 +10773,10 @@ def test_wait_for_delivery_keeps_holding_when_no_delivery_label(
             return json.dumps({"state": states[pr_calls["n"] - 1]})
         if command[:2] == ["gh", "issue"] and command[2] == "view":
             return json.dumps({"labels": [{"name": "ai-ready"}]})
+        if command[:3] == ["gh", "issue", "edit"]:
+            return ""
+        if command[:3] == ["gh", "issue", "comment"]:
+            return ""
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -10685,13 +10784,14 @@ def test_wait_for_delivery_keeps_holding_when_no_delivery_label(
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "list"])
     monkeypatch.setattr(runner.time, "sleep", lambda s: None)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
     issue = {"number": 39, "title": "task", "body": ""}
     caplog.set_level("INFO")
     runner.wait_for_delivery(PR_URL, issue, {}, "owner/repo")
-    # First poll: OPEN + no delivery label -> awaiting (no review);
-    # second poll: MERGED -> terminal.
-    assert pr_calls["n"] == 2
-    assert "delivery_awaiting" in caplog.text
+    # An open PR with no resumable delivery label is unrecoverable: it is
+    # blocked immediately instead of retaining the slot indefinitely.
+    assert pr_calls["n"] == 1
+    assert "delivery_label_inconsistent" in caplog.text
 
 
 def test_wait_for_delivery_logs_awaiting_without_bound_run_id(monkeypatch, caplog):

@@ -42,7 +42,7 @@ def test_ssh_url_for_rejects_an_empty_segment():
 
 def test_ssh_url_for_rejects_an_extra_slash():
     with pytest.raises(git_transport.TransportError, match="malformed"):
-        git_transport.ssh_url_for("xqliu/muyan/pilot")
+        git_transport.ssh_url_for("xqliu/orbi/pilot")
 
 
 # --- remote_protocol ---------------------------------------------------------
@@ -270,7 +270,7 @@ def test_check_transport_uses_the_first_configured_source_repo(tmp_path):
     state = {}
     fake_run, calls, _ = ok_run_factory(state)
     git_transport.check_transport(
-        tmp_path, ["xqliu/orbi", "xqliu/muyan-ceo"],
+        tmp_path, ["xqliu/orbi", "xqliu/orbi-backlog"],
         run_command=fake_run,
     )
     assert [

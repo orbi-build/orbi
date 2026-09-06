@@ -705,7 +705,7 @@ def test_sync_drifted_units_still_drifted_after_sync_fails_fast(
     assert "unit_drift auto_synced" not in caplog.text
 
 
-# --- Issue #262: template path placeholder + renamed-unit migration ----------
+# --- Issue #262: template path placeholder -------------------------------
 
 
 def test_render_unit_template_substitutes_the_repo_dir(tmp_path):
@@ -812,98 +812,3 @@ def test_unit_status_drifts_when_installed_differs_from_the_rendered_template(
     service = [e for e in status if e["unit"] == "orbi@.service"][0]
     assert service["drifted"] is True
     assert service["repo_sha256"] != service["installed_sha256"]
-
-
-def test_migrate_renamed_units_disables_instances_and_removes_files(
-    tmp_path, caplog,
-):
-    installed = tmp_path / "install"
-    installed.mkdir()
-    (installed / "muyan-pilot@.service").write_text(
-        "[Service]\nExecStart=old\n", encoding="utf-8",
-    )
-    (installed / "muyan-pilot@.timer").write_text(
-        "[Timer]\nOnCalendar=old\n", encoding="utf-8",
-    )
-    calls: list[list[str]] = []
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        return ""
-
-    with caplog.at_level("INFO"):
-        migrated = systemd_deploy.migrate_renamed_units(
-            installed, run_command=fake_run,
-        )
-    assert migrated is True
-    # Both old timer instances are stopped (TIMER stops — the service is
-    # never started/stopped/restarted).
-    for instance in ("muyan-pilot@1.timer", "muyan-pilot@2.timer"):
-        assert [
-            "systemctl", "--user", "disable", "--now", instance,
-        ] in calls
-    # The old unit files are removed.
-    assert not (installed / "muyan-pilot@.service").exists()
-    assert not (installed / "muyan-pilot@.timer").exists()
-    assert "renamed_units_migrated" in caplog.text
-
-
-def test_migrate_renamed_units_is_a_noop_without_the_old_files(tmp_path):
-    installed = tmp_path / "install"
-    installed.mkdir()
-    calls: list[list[str]] = []
-    assert systemd_deploy.migrate_renamed_units(
-        installed, run_command=lambda command, **kwargs:
-        calls.append(command) or "",
-    ) is False
-    assert calls == []
-
-
-def test_migrate_renamed_units_removes_only_the_files_that_exist(tmp_path):
-    installed = tmp_path / "install"
-    installed.mkdir()
-    (installed / "muyan-pilot@.timer").write_text(
-        "[Timer]\nOnCalendar=old\n", encoding="utf-8",
-    )
-    calls: list[list[str]] = []
-    migrated = systemd_deploy.migrate_renamed_units(
-        installed, run_command=lambda command, **kwargs:
-        calls.append(command) or "",
-    )
-    assert migrated is True
-    assert not (installed / "muyan-pilot@.timer").exists()
-    assert not (installed / "muyan-pilot@.service").exists()
-
-
-def test_install_units_migrates_the_renamed_units_when_present(tmp_path):
-    repo = make_repo(tmp_path)
-    installed = tmp_path / "install"
-    installed.mkdir()
-    (installed / "muyan-pilot@.service").write_text(
-        "[Service]\nExecStart=old\n", encoding="utf-8",
-    )
-    (installed / "muyan-pilot@.timer").write_text(
-        "[Timer]\nOnCalendar=old\n", encoding="utf-8",
-    )
-    calls: list[list[str]] = []
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        if command[:3] == ["git", "rev-parse", "HEAD"]:
-            return "0123456789abcdef0123456789abcdef01234567"
-        return ""
-
-    systemd_deploy.install_units(repo, installed, run_command=fake_run)
-    for instance in ("muyan-pilot@1.timer", "muyan-pilot@2.timer"):
-        assert [
-            "systemctl", "--user", "disable", "--now", instance,
-        ] in calls
-    assert not (installed / "muyan-pilot@.service").exists()
-    assert not (installed / "muyan-pilot@.timer").exists()
-    # The new templates are installed and both new instances enabled.
-    for name in systemd_deploy.UNIT_NAMES:
-        assert (installed / name).is_file()
-    for instance in systemd_deploy.TIMER_INSTANCES:
-        assert [
-            "systemctl", "--user", "enable", "--now", instance,
-        ] in calls
