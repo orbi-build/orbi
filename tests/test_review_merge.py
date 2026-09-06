@@ -557,7 +557,7 @@ def test_merge_gate_rejects_head_behind_latest_base(monkeypatch, tmp_path, caplo
         return ""
     monkeypatch.setattr(runner, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
-        RuntimeError, match="behind latest remote base",
+        runner.RecoverableMergeGateError, match="behind latest remote base",
     ):
         runner.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                                      "base_oid": "b1", "head_ref": "h",
@@ -589,7 +589,7 @@ def test_merge_gate_polls_unknown_until_mergeable(monkeypatch, tmp_path):
 
 def test_merge_gate_mergeable_timeout_fails_fast(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", _merge_gate_fake(pr_state="UNKNOWN"))
-    with pytest.raises(RuntimeError, match="mergeable.*timed out"):
+    with pytest.raises(runner.RecoverableMergeGateError, match="mergeable.*timed out"):
         runner.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
@@ -603,7 +603,7 @@ def test_merge_gate_continuous_unknown_times_out_after_polling(monkeypatch, tmp_
         runner, "run_command", _merge_gate_fake(pr_state="UNKNOWN"),
     )
     monkeypatch.setattr(runner.time, "sleep", sleeps.append)
-    with pytest.raises(RuntimeError, match="mergeable.*timed out"):
+    with pytest.raises(runner.RecoverableMergeGateError, match="mergeable.*timed out"):
         runner.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                        "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
@@ -614,7 +614,7 @@ def test_merge_gate_continuous_unknown_times_out_after_polling(monkeypatch, tmp_
 
 def test_merge_gate_rejects_non_mergeable_pr(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", _merge_gate_fake(pr_state="DIRTY"))
-    with pytest.raises(RuntimeError, match="not mergeable"):
+    with pytest.raises(runner.RecoverableMergeGateError, match="not mergeable"):
         runner.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                                      "base_oid": "b1", "head_ref": "h",
                                      "head_oid": "h1"}, "main",
@@ -1513,9 +1513,8 @@ def test_review_and_merge_behind_base_labels_fix_needed(monkeypatch, tmp_path):
     monkeypatch.setattr(
         runner, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            RuntimeError(
-                "PR #4 head h1 is behind latest remote base origin/main; "
-                "absorb the latest base, rerun tests and review, then retry"
+            runner.RecoverableMergeGateError(
+                "wording changed: base needs absorbing before retry"
             ),
         ),
     )
@@ -1543,6 +1542,37 @@ def test_review_and_merge_behind_base_labels_fix_needed(monkeypatch, tmp_path):
                                  "remove": "ai-pr-opened"})
 
 
+def test_review_and_merge_ci_failure_labels_fix_needed(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(
+        runner, "merge_gate",
+        lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError("delivery gate: CI check 'tests' failed"),
+        ),
+    )
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *a, **k: calls.append(("issue", k.get("body"))),
+    )
+    monkeypatch.setattr(
+        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+    )
+    monkeypatch.setattr(
+        runner, "edit_issue", lambda *a, **k: calls.append(("edit", k)),
+    )
+    make_fake_gh(monkeypatch)
+    assert runner.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4, title="Review task", priority="normal",
+    ) is False
+    assert "CI merge gate blocked" in calls[0][1]
+    assert calls[2] == ("edit", {"repo": "owner/repo", "add": "ai-fix-needed",
+                                 "remove": "ai-pr-opened"})
+
+
 def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
     """A CONFLICTING/DIRTY PR is a fixer job, never a terminal block.
 
@@ -1556,7 +1586,7 @@ def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
     monkeypatch.setattr(
         runner, "merge_gate",
         lambda *a, **k: (_ for _ in ()).throw(
-            RuntimeError("PR #4 is not mergeable (mergeable=CONFLICTING)"),
+            runner.RecoverableMergeGateError("wording changed: conflict requires retry"),
         ),
     )
     monkeypatch.setattr(
