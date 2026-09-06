@@ -314,6 +314,15 @@ class ReleaseDeliveriesWaiting(RuntimeError):
         )
 
 
+class RecoverableMergeGateError(RuntimeError):
+    """A merge-gate failure the next review session can repair.
+
+    This type deliberately identifies only merge-gate outcomes that require
+    absorbing the latest base or resolving merge conflicts. Callers must not
+    infer delivery control flow from the human-readable error message.
+    """
+
+
 class UnrecoverableDeliveryError(RuntimeError):
     """A delivery failure that is an EXTERNAL precondition the AI cannot
     safely judge or fix (Issue #50).
@@ -6523,7 +6532,7 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             "merge_gate_behind_base base_branch=%s pr=%s head=%s",
             base_branch, pr["number"], pr["head_oid"],
         )
-        raise RuntimeError(
+        raise RecoverableMergeGateError(
             f"PR #{pr['number']} head {pr['head_oid']} is behind latest "
             f"remote base origin/{base_branch}; absorb the latest base, rerun "
             "tests and review, then retry"
@@ -6593,7 +6602,7 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             int(mergeable_wait_seconds),
         )
         if mergeable_waited >= mergeable_wait_seconds:
-            raise RuntimeError(
+            raise RecoverableMergeGateError(
                 f"PR #{pr['number']} not mergeable: mergeable state timed "
                 f"out after {int(mergeable_wait_seconds)}s"
             )
@@ -6609,7 +6618,7 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             "merge_gate_not_mergeable pr=%s mergeable=%s",
             pr["number"], mergeable,
         )
-        raise RuntimeError(
+        raise RecoverableMergeGateError(
             f"PR #{pr['number']} is not mergeable (mergeable={mergeable}); "
             "resolve conflicts and retry"
         )
@@ -7219,29 +7228,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             "review_head_advanced pr=%s round=%s frozen=%s reviewed=%s",
             pr["number"], round, pr["head_oid"], refrozen["head_oid"],
         )
-    try:
-        merged = merge_gate(
-            worktree,
-            {**refrozen, "_source_repo": source_repo,
-             "_ci_wait_seconds": config.get(
-                 "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
-             ),
-             "_mergeable_wait_seconds": config.get(
-                 "mergeable_wait_seconds", MERGEABLE_WAIT_SECONDS,
-             )},
-            base_branch, repo_dir=config["repo_dir"],
-        )
-    except RuntimeError as exc:
-        message = str(exc)
-        # Behind and merge-conflict are the same next-session job:
-        # absorb origin/<base>, resolve, retest. Other gate failures
-        # (head moved, etc.) fail fast.
-        if "delivery gate: CI" not in message and (
-            "behind latest remote base" not in message
-            and "not mergeable" not in message
-        ):
-            raise
-        ci_failure = "delivery gate: CI" in message
+    def handle_gate_failure(message: str, *, ci_failure: bool) -> None:
         body = (
             f"{marker}\n"
             + (f"Orbi CI merge gate blocked PR #{pr['number']}: {message} "
@@ -7266,6 +7253,29 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
             current_labels=issue_labels(number, source_repo),
         )
+
+    try:
+        merged = merge_gate(
+            worktree,
+            {**refrozen, "_source_repo": source_repo,
+             "_ci_wait_seconds": config.get(
+                 "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
+             ),
+             "_mergeable_wait_seconds": config.get(
+                 "mergeable_wait_seconds", MERGEABLE_WAIT_SECONDS,
+             )},
+            base_branch, repo_dir=config["repo_dir"],
+        )
+    except RecoverableMergeGateError as exc:
+        handle_gate_failure(str(exc), ci_failure=False)
+        return False
+    except RuntimeError as exc:
+        # CI failures retain their existing recoverable path. All other
+        # unclassified gate failures (including a moved head) fail fast.
+        message = str(exc)
+        if "delivery gate: CI" not in message:
+            raise
+        handle_gate_failure(message, ci_failure=True)
         return False
     confirmed = confirm_merged(
         worktree, merged, base_branch, repo_dir=config["repo_dir"],
