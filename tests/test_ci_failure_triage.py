@@ -99,6 +99,10 @@ def ep_create():
     return f"repos/{OWNER_REPO}/issues"
 
 
+def ep_milestones():
+    return f"repos/{OWNER_REPO}/milestones?state=open&per_page=100"
+
+
 def ep_comment(number):
     return f"repos/{OWNER_REPO}/issues/{number}/comments"
 
@@ -354,6 +358,7 @@ def test_failure_creates_one_issue_with_full_evidence(gh, monkeypatch, tmp_path,
     assert len(creates) == 1
     payload = creates[0]["payload"]
     assert payload["labels"] == ["bug", "ai-ready"]
+    assert payload["milestone"] is None
     assert payload["title"] == "CI failure: tests on branch main (push)"
     body = payload["body"]
     # The full evidence contract: workflow, job, event, branch, commit SHA,
@@ -374,6 +379,63 @@ def test_failure_creates_one_issue_with_full_evidence(gh, monkeypatch, tmp_path,
     # A push run must not spend the PR-resolution call.
     assert gh.calls_to(ep_pulls(), "GET") == []
     assert "ci_triage created" in capsys.readouterr().err
+
+
+def test_active_milestone_title_resolves_to_open_milestone_number(gh, monkeypatch):
+    monkeypatch.setenv("ORBI_ACTIVE_MILESTONE", "v0.3.1")
+    gh.routes[ep_milestones()] = [
+        {"number": 7, "title": "v0.3.1", "state": "open"},
+    ]
+    assert mod.resolve_active_milestone(
+        OWNER_REPO.split("/")[0], OWNER_REPO.split("/")[1],
+    ) == 7
+
+
+def test_milestone_lookup_failure_logs_fallback_and_returns_none(gh, monkeypatch, capsys):
+    monkeypatch.setenv("ORBI_ACTIVE_MILESTONE", "v0.3.1")
+    gh.error = (ep_milestones(), "HTTP 403")
+    assert mod.resolve_active_milestone("orbi-run", "test-repo") is None
+    assert "milestone_fallback" in capsys.readouterr().err
+
+
+def test_malformed_milestone_response_logs_fallback(gh, monkeypatch, capsys):
+    monkeypatch.setenv("ORBI_ACTIVE_MILESTONE", "v0.3.1")
+    gh.routes[ep_milestones()] = {"milestones": []}
+    assert mod.resolve_active_milestone("orbi-run", "test-repo") is None
+    assert "reason=malformed_response" in capsys.readouterr().err
+
+
+def test_ambiguous_milestone_match_logs_fallback(gh, monkeypatch, capsys):
+    monkeypatch.setenv("ORBI_ACTIVE_MILESTONE", "v0.3.1")
+    gh.routes[ep_milestones()] = [
+        {"number": 7, "title": "v0.3.1"},
+        {"number": 8, "title": "v0.3.1"},
+    ]
+    assert mod.resolve_active_milestone("orbi-run", "test-repo") is None
+    assert "reason=ambiguous_or_malformed" in capsys.readouterr().err
+
+
+def test_create_issue_payload_includes_resolved_milestone(gh, monkeypatch, tmp_path):
+    monkeypatch.setenv("ORBI_ACTIVE_MILESTONE", "v0.3.1")
+    write_event(monkeypatch, tmp_path, run_event())
+    gh.routes[ep_milestones()] = [{"number": 7, "title": "v0.3.1", "state": "open"}]
+    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
+    gh.routes[ep_issues_list()] = []
+    mod.main()
+    assert gh.calls_to(ep_create(), "POST")[0]["payload"]["milestone"] == 7
+
+
+def test_missing_active_milestone_logs_fallback_and_creates_without_milestone(
+    gh, monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setenv("ORBI_ACTIVE_MILESTONE", "v9.9.9")
+    write_event(monkeypatch, tmp_path, run_event())
+    gh.routes[ep_milestones()] = [{"number": 7, "title": "v0.3.1", "state": "open"}]
+    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
+    gh.routes[ep_issues_list()] = []
+    mod.main()
+    assert gh.calls_to(ep_create(), "POST")[0]["payload"]["milestone"] is None
+    assert "milestone_fallback" in capsys.readouterr().err
 
 
 def test_failure_resolves_the_pr_number_for_pull_request_runs(
