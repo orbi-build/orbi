@@ -244,10 +244,10 @@ def test_status_report_lists_sources_current_ready_and_result(monkeypatch):
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     report = orbi.status_report({
         "source_repos": ["xqliu/orbi"],
-        "repo_dir": Path("/srv/muyan/orbi"),
+        "repo_dir": Path("/srv/orbi/orbi"),
         "base_branch": "main",
         "max_concurrency": 1,
-        "slot_dir": Path("/srv/muyan/orbi/.orbi/slots"),
+        "slot_dir": Path("/srv/orbi/orbi/.orbi/slots"),
     })
     assert "source: xqliu/orbi" in report
     assert "base: main abc123def456" in report
@@ -267,12 +267,12 @@ def test_status_report_freezes_base_from_configured_repo_dir(monkeypatch):
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     orbi.status_report({
         "source_repos": ["xqliu/orbi"],
-        "repo_dir": Path("/srv/muyan/orbi"),
+        "repo_dir": Path("/srv/orbi/orbi"),
         "base_branch": "develop",
         "max_concurrency": 1,
-        "slot_dir": Path("/srv/muyan/orbi/.orbi/slots"),
+        "slot_dir": Path("/srv/orbi/orbi/.orbi/slots"),
     })
-    assert calls == [(Path("/srv/muyan/orbi"), "develop")]
+    assert calls == [(Path("/srv/orbi/orbi"), "develop")]
 
 
 def test_status_report_marks_empty_lookups(monkeypatch):
@@ -282,10 +282,10 @@ def test_status_report_marks_empty_lookups(monkeypatch):
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
     report = orbi.status_report({
         "source_repos": ["xqliu/orbi"],
-        "repo_dir": Path("/srv/muyan/orbi"),
+        "repo_dir": Path("/srv/orbi/orbi"),
         "base_branch": "main",
         "max_concurrency": 1,
-        "slot_dir": Path("/srv/muyan/orbi/.orbi/slots"),
+        "slot_dir": Path("/srv/orbi/orbi/.orbi/slots"),
     })
     assert "base: main abc123def456" in report
     assert "current: -" in report
@@ -296,7 +296,7 @@ def test_status_report_marks_empty_lookups(monkeypatch):
 def test_main_add_dispatches_to_selected_source_repo(monkeypatch, tmp_path, capsys):
     config = tmp_path / "orbi.toml"
     config.write_text(
-        "source_repos = [\"xqliu/orbi\", \"xqliu/muyan-ceo\"]\n",
+        "source_repos = [\"xqliu/orbi\", \"xqliu/orbi-backlog\"]\n",
         encoding="utf-8",
     )
     _write_prompts(tmp_path)
@@ -318,7 +318,7 @@ def test_main_add_dispatches_to_selected_source_repo(monkeypatch, tmp_path, caps
 def test_main_add_uses_explicit_repo_override(monkeypatch, tmp_path, capsys):
     config = tmp_path / "orbi.toml"
     config.write_text(
-        "source_repos = [\"xqliu/orbi\", \"xqliu/muyan-ceo\"]\n",
+        "source_repos = [\"xqliu/orbi\", \"xqliu/orbi-backlog\"]\n",
         encoding="utf-8",
     )
     _write_prompts(tmp_path)
@@ -328,9 +328,9 @@ def test_main_add_uses_explicit_repo_override(monkeypatch, tmp_path, capsys):
         lambda repo, title, body: calls.append(repo) or "https://github.com/x/y/issues/1",
     )
     assert orbi.main([
-        "add", "T", "--repo", "xqliu/muyan-ceo", "--config", str(config),
+        "add", "T", "--repo", "xqliu/orbi-backlog", "--config", str(config),
     ]) == 0
-    assert calls == ["xqliu/muyan-ceo"]
+    assert calls == ["xqliu/orbi-backlog"]
 
 
 def test_main_add_rejects_repo_not_in_config(monkeypatch, tmp_path):
@@ -883,7 +883,7 @@ def test_latest_task_worktree_returns_newest_by_mtime(tmp_path):
 
 def test_latest_task_worktree_ignores_other_issues_and_repos(tmp_path):
     other_issue = tmp_path / ".worktrees" / "orbi-xqliu-orbi-issue-4-run1"
-    other_repo = tmp_path / ".worktrees" / "orbi-xqliu-muyan-ceo-issue-3-run1"
+    other_repo = tmp_path / ".worktrees" / "orbi-xqliu-orbi-backlog-issue-3-run1"
     other_issue.mkdir(parents=True)
     other_repo.mkdir(parents=True)
     assert orbi.latest_task_worktree(

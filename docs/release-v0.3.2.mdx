@@ -10,12 +10,16 @@
 
 ## Release notes
 
+### Upgrade note
+
+Installations from before the unit rename require manual cleanup: disable the obsolete timer instances with `systemctl --user disable --now <old-prefix>@1.timer <old-prefix>@2.timer`, then remove `<user-systemd-dir>/<old-prefix>@.service` and `<user-systemd-dir>/<old-prefix>@.timer`.
+
 ## Changelog
 
 ### Features
 
 - feat: configure two-source bootstrap queue ([PR #5](https://github.com/orbi-build/orbi/pull/5))
-- feat: add muyan-pilot add and status commands ([PR #17](https://github.com/orbi-build/orbi/pull/17))
+- feat: add orbi add and status commands ([PR #17](https://github.com/orbi-build/orbi/pull/17))
 - chore: pin 15-minute idle poll schedule (review of PR #19) ([PR #26](https://github.com/orbi-build/orbi/pull/26))
 - feat: keep task worktrees in repo .worktrees directory ([PR #28](https://github.com/orbi-build/orbi/pull/28))
 - Run the Pilot scheduler 24 hours a day ([PR #35](https://github.com/orbi-build/orbi/pull/35))
@@ -60,7 +64,7 @@
 - 增强 Runner 启动阶段可观测性：定位 starting 卡点 ([PR #245](https://github.com/orbi-build/orbi/pull/245))
 - 技术债根治：迁移到 src package，消除 editable finder 模块漏记 ([PR #247](https://github.com/orbi-build/orbi/pull/247))
 - Bug：implement 运行完成前置检查后未提交 commit，Runner delivery_no_commit 异常阻塞任务 ([PR #251](https://github.com/orbi-build/orbi/pull/251))
-- Bug：隔离 Runner 自有运行状态，避免 .muyan-pilot/ 被误判为 agent 未提交变更 ([PR #260](https://github.com/orbi-build/orbi/pull/260))
+- Bug：隔离 Runner 自有运行状态，避免 .orbi/ 被误判为 agent 未提交变更 ([PR #260](https://github.com/orbi-build/orbi/pull/260))
 - 重构：抽离 delivery label 生命周期与调度策略 ([PR #265](https://github.com/orbi-build/orbi/pull/265))
 - Bug：release 成功后把 Release URL 当 PR URL 解析，ValueError 导致 Runner 崩溃退出 ([PR #271](https://github.com/orbi-build/orbi/pull/271))
 - Bug：pi_providers 的 apiKey $VAR 引用未展开，第三方 provider 静默挂起无法使用 ([PR #304](https://github.com/orbi-build/orbi/pull/304))
@@ -133,7 +137,7 @@
 - Git transport：bootstrap 默认使用 SSH，支持 workflow 文件可靠推送 ([PR #122](https://github.com/orbi-build/orbi/pull/122))
 - Change the idle polling timer from 15 to 5 minutes ([PR #130](https://github.com/orbi-build/orbi/pull/130))
 - fix: pin the post-merge install-units contract for unit template changes (Issue #131) ([PR #132](https://github.com/orbi-build/orbi/pull/132))
-- feat: executable muyan-pilot CLI entry (packaging, console script, systemd CLI ExecStart) ([PR #141](https://github.com/orbi-build/orbi/pull/141))
+- feat: executable orbi CLI entry (packaging, console script, systemd CLI ExecStart) ([PR #141](https://github.com/orbi-build/orbi/pull/141))
 - fix: pre-start unit-drift preflight self-heals with the idempotent install and re-verifies (Issue #142) ([PR #147](https://github.com/orbi-build/orbi/pull/147))
 - Templated systemd units with two timer instances (Issue #149) ([PR #151](https://github.com/orbi-build/orbi/pull/151))
 - Make the editable uv tool install the official CLI deployment (Issue #152) ([PR #153](https://github.com/orbi-build/orbi/pull/153))
@@ -143,7 +147,7 @@
 - 按并发配置同步 Runner timer ([PR #212](https://github.com/orbi-build/orbi/pull/212))
 - 迁移 src package 后 editable CLI 未刷新：console script import 崩溃，Runner 每 tick ModuleNotFoundError ([PR #250](https://github.com/orbi-build/orbi/pull/250))
 - Runner: model_wait 回收后未处理 RuntimeError 使 service 失败并阻塞任务 ([PR #252](https://github.com/orbi-build/orbi/pull/252))
-- 技术债收尾：运行契约全量剔除 Muyan Pilot 命名，CLI/配置/systemd/标识统一为 orbi ([PR #261](https://github.com/orbi-build/orbi/pull/261))
+- 技术债收尾：运行契约全量剔除旧命名，CLI/配置/systemd/标识统一为 orbi ([PR #261](https://github.com/orbi-build/orbi/pull/261))
 - P0 部署阻塞：品牌改名（#246/#261）后本机 systemd 部署陷入死循环，orbi 生产队列已暂停 ([PR #267](https://github.com/orbi-build/orbi/pull/267))
 - document: 在线模型下 Pi 启动偶发卡死 15 分钟（根因：pi-mcp-adapter 的 keyring D-Bus 初始化在 systemd 上下文挂起） ([PR #332](https://github.com/orbi-build/orbi/pull/332))
 - 启动门禁把 repo_dir 当 orbi 可编辑安装源：让『单仓库 X（≠orbi）』作为交付仓库需解耦 CLI 自更新与 checkout ([PR #334](https://github.com/orbi-build/orbi/pull/334))
@@ -169,7 +173,7 @@
 - fix: make the whole ProgressPublisher path a pure bypass (Issue #79) ([PR #107](https://github.com/orbi-build/orbi/pull/107))
 - Progress comment issue line shows number and title (Issue #100) ([PR #115](https://github.com/orbi-build/orbi/pull/115))
 - fix: flatten multi-line command args to one journal line in the command= log (Issue #143) ([PR #148](https://github.com/orbi-build/orbi/pull/148))
-- 可观测性：Muyan Pilot Prometheus exporter 与 Grafana Dashboard (Issue #162) ([PR #188](https://github.com/orbi-build/orbi/pull/188))
+- 可观测性：Orbi Prometheus exporter 与 Grafana Dashboard (Issue #162) ([PR #188](https://github.com/orbi-build/orbi/pull/188))
 - Backfill ai-in-progress when resuming an opened-PR delivery ([PR #195](https://github.com/orbi-build/orbi/pull/195))
 - progress PATCH/POST 把整份 body 打进 journal（~30s 一条巨行）→ 用 log_command 收敛为精简行 ([PR #390](https://github.com/orbi-build/orbi/pull/390))
 - merged 事件 current_labels 硬编码 {ai-pr-opened}：fix round 路径下 ai-in-progress/ai-fix-needed 残留（#330 实证） ([Issue #423](https://github.com/orbi-build/orbi/issues/423); [PR #425](https://github.com/orbi-build/orbi/pull/425))

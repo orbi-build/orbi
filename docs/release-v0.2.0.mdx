@@ -16,7 +16,7 @@ v0.2.0 established the operational foundation for running multiple, recoverable 
 
 - **Epic 与 Release task 分离**：识别 `ai-epic`，让聚合/发布门禁不再被当成一个大开发任务领取；新增 `ai-release` 路径，逐项核验范围、tag、CI 和交付收口 ([Issue #93](https://github.com/orbi-build/orbi/issues/93); [Issue #98](https://github.com/orbi-build/orbi/issues/98)).
 - **按版本限制领取范围**：支持显式 `active_milestone`，fresh claim 只领取当前发布版本的 ready Issue，并保留恢复流程的跨版本能力 ([Issue #139](https://github.com/orbi-build/orbi/issues/139); [Issue #192](https://github.com/orbi-build/orbi/issues/192)).
-- **可执行 CLI 与模型配置**：提供 `muyan-pilot` 命令入口，并允许为 implement/review 配置 Pi provider、model 和 thinking；支持 OpenAI-compatible provider 的 endpoint 与环境变量 key 引用 ([Issue #140](https://github.com/orbi-build/orbi/issues/140); [Issue #119](https://github.com/orbi-build/orbi/issues/119); [Issue #157](https://github.com/orbi-build/orbi/issues/157)).
+- **可执行 CLI 与模型配置**：提供 `orbi` 命令入口，并允许为 implement/review 配置 Pi provider、model 和 thinking；支持 OpenAI-compatible provider 的 endpoint 与环境变量 key 引用 ([Issue #140](https://github.com/orbi-build/orbi/issues/140); [Issue #119](https://github.com/orbi-build/orbi/issues/119); [Issue #157](https://github.com/orbi-build/orbi/issues/157)).
 - **并发 Runner 部署**：将 systemd 改为实例化 service/timer，使 `max_concurrency=2` 真正启动两个独立 Runner，同时复用 slot 锁避免重复领取 ([Issue #149](https://github.com/orbi-build/orbi/issues/149)).
 
 ### Reliability and recovery

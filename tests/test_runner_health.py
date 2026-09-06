@@ -108,15 +108,15 @@ def test_failure_fingerprint_is_stable_hex():
 
 
 def test_failure_fingerprint_same_for_same_error_text():
-    exc_a = RuntimeError("delivery_no_commit: ?? .muyan-pilot/ run_id=8ecac198")
-    exc_b = RuntimeError("delivery_no_commit: ?? .muyan-pilot/ run_id=abcd1234")
+    exc_a = RuntimeError("delivery_no_commit: ?? .orbi/ run_id=8ecac198")
+    exc_b = RuntimeError("delivery_no_commit: ?? .orbi/ run_id=abcd1234")
     # The volatile 8-hex run ids are stripped: same error, same fingerprint.
     assert runner_health.failure_fingerprint(exc_a) == \
         runner_health.failure_fingerprint(exc_b)
 
 
 def test_failure_fingerprint_differs_for_different_errors():
-    exc_a = RuntimeError("delivery_no_commit: ?? .muyan-pilot/")
+    exc_a = RuntimeError("delivery_no_commit: ?? .orbi/")
     exc_b = RuntimeError("verify_pr_failed: PR base mismatch")
     assert runner_health.failure_fingerprint(exc_a) != \
         runner_health.failure_fingerprint(exc_b)
@@ -793,7 +793,7 @@ def test_process_issue_pickup_record_failure_is_bypass(
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     monkeypatch.setattr(
         runner, "deliver_pr",
-        lambda *args, **kwargs: "https://github.com/muyantech/orbi/pull/4",
+        lambda *args, **kwargs: "https://github.com/orbi-build/orbi/pull/4",
     )
     monkeypatch.setattr(
         runner, "comment_issue", lambda *args, **kwargs: None,
@@ -819,9 +819,9 @@ def test_process_issue_pickup_record_failure_is_bypass(
             {"number": 4, "title": "Fix", "body": "Body"},
             {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
              "base_branch": "main"},
-            "xqliu/muyan-ceo",
+            "xqliu/orbi-backlog",
         )
-    assert result.url == "https://github.com/muyantech/orbi/pull/4"
+    assert result.url == "https://github.com/orbi-build/orbi/pull/4"
     assert "health_pickup_record_failed" in caplog.text
 
 
@@ -868,7 +868,7 @@ def test_process_issue_failure_record_failure_is_bypass(
             {"number": 4, "title": "Fix", "body": "Body"},
             {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
              "base_branch": "main"},
-            "xqliu/muyan-ceo",
+            "xqliu/orbi-backlog",
         )
     assert result.kind == "failed"
     assert "health_failure_record_failed" in caplog.text
