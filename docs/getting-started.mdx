@@ -156,10 +156,10 @@ directory):
 |---|---|---|---|
 | `source_repos` | yes | — | One `owner/repo` task pool scanned each tick. Multiple entries fail fast because the current execution layer has only one checkout; multi-repo workspaces are not available yet |
 | `repo_dir` | no | `.` | The delivery checkout: the repository whose Issues the Runner delivers. Task worktrees are created from its frozen `origin/<base_branch>` SHA, PRs open against it, and the slot locks live in `<repo_dir>/.orbi/slots/`. In bootstrap mode this is the orbi checkout itself; in the external single-repo mode (Issue #330) it is a foreign user repo X |
-| `deploy_home` | no | `repo_dir` | The orbi SOURCE checkout (Issue #330): the editable CLI install source (the self-update), the `systemd/` unit templates, `labels.toml`, and the prompt defaults (`prompt.md`, `prompt_review.md` when unset). Absent = `repo_dir` (bootstrap mode, unchanged). Set it to the orbi checkout when `repo_dir` is a foreign repo X. Must be a non-empty string; a missing directory fails the start fast |
+| `deploy_home` | no | `repo_dir` | The orbi SOURCE checkout (Issue #330): the editable CLI install source (the self-update), the `systemd/` unit templates, `labels.toml`, and the prompt defaults (`prompts/prompt.md`, `prompts/prompt_review.md` when unset). Absent = `repo_dir` (bootstrap mode, unchanged). Set it to the orbi checkout when `repo_dir` is a foreign repo X. Must be a non-empty string; a missing directory fails the start fast |
 | `workspace_root` | no | `..` | Directory that contains the task worktrees and the repositories the agent may modify |
-| `prompt` | no | `prompt.md` | Implementer prompt template (placeholders like `{{SOURCE_REPO}}` are rendered by the Runner) |
-| `prompt_review` | no | `prompt_review.md` | Review prompt template for the independent post-PR review session |
+| `prompt` | no | `prompts/prompt.md` | Implementer prompt template (placeholders like `{{SOURCE_REPO}}` are rendered by the Runner) |
+| `prompt_review` | no | `prompts/prompt_review.md` | Review prompt template for the independent post-PR review session |
 | `base_branch` | no | `main` | Delivery base branch; every task worktree is created from the frozen `origin/<base_branch>` SHA |
 | `active_milestone` | no | unset | Claim scope for the fresh-claim scans (Issue #139): the active GitHub Milestone title (e.g. `v0.2.0`). Set it to restrict the p0/bug/plain ready scans to that Milestone (the `milestone:"<title>"` qualifier is part of the gh search query — an Issue of another or no Milestone never enters the queue); `ai-ready` stays the execution switch, the pickup order is unchanged, P0 does not cross milestones, and resume states (opened PRs, in-flight restarts) are never gated by it. Unset = every `ai-ready` Issue is claimable (pre-#139 behavior) |
 | `max_concurrency` | no | `1` | Concurrent Orbi tasks and enabled Runner timers on this machine (`1` or `2`; the fixed template has two instances) |
@@ -186,8 +186,8 @@ source_repos = [
 
 repo_dir = "."
 workspace_root = ".."
-prompt = "prompt.md"
-prompt_review = "prompt_review.md"
+prompt = "prompts/prompt.md"
+prompt_review = "prompts/prompt_review.md"
 base_branch = "main"
 max_concurrency = 1
 skills = []

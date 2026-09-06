@@ -686,11 +686,13 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
     )
     prompt = write_prompt(tmp_path)
     config_path = tmp_path / "orbi.toml"
+    review_prompt = tmp_path / "prompt_review.md"
     config_path.write_text(
         f'source_repos = ["{REPO}"]\n'
         f'repo_dir = "{clone}"\n'
         f'workspace_root = "{tmp_path}"\n'
-        f'prompt = "{prompt}"\n',
+        f'prompt = "{prompt}"\n'
+        f'prompt_review = "{review_prompt}"\n',
         encoding="utf-8",
     )
     assert runner.main(["--config", str(config_path)]) == 0

@@ -133,10 +133,10 @@ checkout 根目录**没有** `orbi.py`（与 package 同名的 flat 文件
 |---|---|---|---|
 | `source_repos` | 是 | — | 每个 tick 扫描的一个 `owner/repo` 任务池。多个条目会因当前执行层只有一个 checkout 而 fail fast；多仓库 workspace 尚未提供 |
 | `repo_dir` | 否 | `.` | 交付 checkout：Runner 交付 Issue 的仓库。任务 worktree 从它冻结的 `origin/<base_branch>` SHA 创建，PR 对它打开，slot 锁在 `<repo_dir>/.orbi/slots/`。自举模式下它就是 orbi checkout 自身；外部单仓库模式（Issue #330）下是外部用户仓库 X |
-| `deploy_home` | 否 | `repo_dir` | orbi **源码** checkout（Issue #330）：editable CLI 安装来源（自更新）、`systemd/` unit 模板、`labels.toml`、prompt 默认（`prompt.md`、`prompt_review.md` 未设置时）。缺省 = `repo_dir`（自举模式，行为不变）。`repo_dir` 是外部仓库 X 时把它设为 orbi checkout。必须是非空字符串；目录不存在会启动 fail fast |
+| `deploy_home` | 否 | `repo_dir` | orbi **源码** checkout（Issue #330）：editable CLI 安装来源（自更新）、`systemd/` unit 模板、`labels.toml`、prompt 默认（`prompts/prompt.md`、`prompts/prompt_review.md` 未设置时）。缺省 = `repo_dir`（自举模式，行为不变）。`repo_dir` 是外部仓库 X 时把它设为 orbi checkout。必须是非空字符串；目录不存在会启动 fail fast |
 | `workspace_root` | 否 | `..` | 包含任务 worktree 和 agent 可修改仓库的目录 |
-| `prompt` | 否 | `prompt.md` | 实现者 prompt 模板（`{{SOURCE_REPO}}` 等占位符由 Runner 渲染） |
-| `prompt_review` | 否 | `prompt_review.md` | PR 后独立审查 session 的 review prompt 模板 |
+| `prompt` | 否 | `prompts/prompt.md` | 实现者 prompt 模板（`{{SOURCE_REPO}}` 等占位符由 Runner 渲染） |
+| `prompt_review` | 否 | `prompts/prompt_review.md` | PR 后独立审查 session 的 review prompt 模板 |
 | `base_branch` | 否 | `main` | 交付 base 分支；每个任务 worktree 都从冻结的 `origin/<base_branch>` SHA 创建 |
 | `active_milestone` | 否 | 未设置 | 新领取扫描的领取范围（Issue #139）：当前活跃的 GitHub Milestone 标题（如 `v0.2.0`）。设置后 p0/bug/普通三个 ready 扫描只领取该 Milestone 的 Issue（`milestone:"<title>"` 限定词直接进 gh 搜索查询——其他 Milestone 或无 Milestone 的 Issue 永远进不了队列）；`ai-ready` 仍是执行开关，领取顺序（p0 → bug → 普通）不变，P0 不跨 Milestone，恢复态（已开 PR、在途重启）不受 Milestone 限制。未设置 = 所有 `ai-ready` Issue 都可领取（#139 之前的行为） |
 | `max_concurrency` | 否 | `1` | 本机并发 Orbi 任务数和启用的 Runner timer 数（`1` 或 `2`；固定模板有两个实例） |
@@ -162,8 +162,8 @@ source_repos = [
 
 repo_dir = "."
 workspace_root = ".."
-prompt = "prompt.md"
-prompt_review = "prompt_review.md"
+prompt = "prompts/prompt.md"
+prompt_review = "prompts/prompt_review.md"
 base_branch = "main"
 max_concurrency = 1
 skills = []

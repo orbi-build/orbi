@@ -96,6 +96,32 @@ def test_load_config_defaults_base_branch_to_main(tmp_path):
     assert config["base_branch"] == "main"
 
 
+def test_load_config_defaults_prompts_to_prompts_directory(tmp_path):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    config = runner.load_config(config_path)
+    assert config["prompt"] == (tmp_path / "prompts" / "prompt.md").resolve()
+    assert config["prompt_review"] == (
+        tmp_path / "prompts" / "prompt_review.md"
+    ).resolve()
+
+
+def test_load_config_maps_missing_explicit_legacy_prompt_to_new_asset(tmp_path):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nprompt = "prompt.md"\n'
+        'prompt_review = "prompt_review.md"\n',
+        encoding="utf-8",
+    )
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "prompt.md").write_text("prompt", encoding="utf-8")
+    (prompts / "prompt_review.md").write_text("review", encoding="utf-8")
+    config = runner.load_config(config_path)
+    assert config["prompt"] == (prompts / "prompt.md").resolve()
+    assert config["prompt_review"] == (prompts / "prompt_review.md").resolve()
+
+
 def test_load_config_health_alert_repo_default_and_override(tmp_path):
     # Issue #345: absent -> None (derived from the deploy-home origin);
     # present -> the verbatim `owner/repo` override.
@@ -183,9 +209,11 @@ def test_load_config_prompt_defaults_resolve_from_deploy_home(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["prompt"] == (tmp_path / "home" / "prompt.md").resolve()
+    assert config["prompt"] == (
+        tmp_path / "home" / "prompts" / "prompt.md"
+    ).resolve()
     assert config["prompt_review"] == (
-        tmp_path / "home" / "prompt_review.md"
+        tmp_path / "home" / "prompts" / "prompt_review.md"
     ).resolve()
 
 
@@ -737,7 +765,7 @@ def test_prompt_requires_verifying_external_behavior_against_docs():
     bypass failures (progress, notifications) only log and never
     decide the delivery outcome."""
     template = (
-        Path(__file__).resolve().parent.parent / "prompt.md"
+        Path(__file__).resolve().parent.parent / "prompts" / "prompt.md"
     ).read_text(encoding="utf-8")
     assert "--help" in template
     assert "docs" in template.lower()
@@ -752,7 +780,7 @@ def test_review_prompt_flags_unverified_external_behavior():
     delivery — the #57 guessed-PATCH-route class of bug must be
     caught by review, not shipped."""
     template = (
-        Path(__file__).resolve().parent.parent / "prompt_review.md"
+        Path(__file__).resolve().parent.parent / "prompts" / "prompt_review.md"
     ).read_text(encoding="utf-8")
     assert "verify" in template.lower()
     assert "bypass" in template.lower()
@@ -765,7 +793,7 @@ def test_prompt_does_not_require_review_fix_loop_before_pr():
     review-fix loop before opening the PR — the old wording made the
     local Pi self-review for hours (#18/#34)."""
     template = (
-        Path(__file__).resolve().parent.parent / "prompt.md"
+        Path(__file__).resolve().parent.parent / "prompts" / "prompt.md"
     ).read_text(encoding="utf-8")
     assert "complete review-fix loop" not in template
     # The review is explicitly positioned AFTER the PR is open, and the
@@ -779,7 +807,7 @@ def test_prompt_template_requires_fixes_keyword_for_the_source_issue():
     GitHub closes the source Issue natively on merge; the requirement
     renders with the real issue number."""
     template = (
-        Path(__file__).resolve().parent.parent / "prompt.md"
+        Path(__file__).resolve().parent.parent / "prompts" / "prompt.md"
     ).read_text(encoding="utf-8")
     assert "Fixes #{{ISSUE_NUMBER}}" in template
     rendered = runner.render_prompt(template, {
@@ -5111,8 +5139,10 @@ def test_main_idle_release_arm_failure_is_bypassed(monkeypatch, tmp_path, caplog
 
 
 def _write_prompts(tmp_path):
+    prompts = tmp_path / "prompts"
+    prompts.mkdir(exist_ok=True)
     for name in ("prompt.md", "prompt_review.md"):
-        (tmp_path / name).write_text("prompt", encoding="utf-8")
+        (prompts / name).write_text("prompt", encoding="utf-8")
 
 
 def test_main_returns_zero_when_queue_empty(monkeypatch, tmp_path):
@@ -9150,8 +9180,9 @@ def test_main_cli_refresh_uses_deploy_home_not_repo_dir(
     )
     home = tmp_path / "home"
     home.mkdir()
+    (home / "prompts").mkdir()
     for name in ("prompt.md", "prompt_review.md"):
-        (home / name).write_text("prompt", encoding="utf-8")
+        (home / "prompts" / name).write_text("prompt", encoding="utf-8")
     config = tmp_path / "orbi.toml"
     config.write_text(
         'source_repos = ["owner/repo"]\nrepo_dir = "."\n'
@@ -9191,8 +9222,9 @@ def test_main_unit_drift_check_uses_deploy_home(
     )
     home = tmp_path / "home"
     home.mkdir()
+    (home / "prompts").mkdir()
     for name in ("prompt.md", "prompt_review.md"):
-        (home / name).write_text("prompt", encoding="utf-8")
+        (home / "prompts" / name).write_text("prompt", encoding="utf-8")
     config = tmp_path / "orbi.toml"
     config.write_text(
         'source_repos = ["owner/repo"]\nrepo_dir = "."\n'

@@ -7,8 +7,8 @@ source_repos = [
 repo_dir = "."
 # Deployment home (Issue #330): the orbi SOURCE checkout — where the
 # editable CLI install comes from, where the systemd/ unit templates and
-# labels.toml live, and where the prompt defaults (prompt.md,
-# prompt_review.md) resolve when unset. Default: repo_dir — the
+# labels.toml live, and where the prompt defaults (prompts/prompt.md,
+# prompts/prompt_review.md) resolve when unset. Default: repo_dir — the
 # orbi-bootstrap deployment (repo_dir IS the orbi checkout) keeps its
 # exact behavior. Set it to the orbi checkout path when repo_dir points
 # at a foreign user repo X (external single-repo mode): orbi is then
@@ -18,14 +18,14 @@ repo_dir = "."
 # Must be a non-empty string; a missing directory fails the start fast.
 # deploy_home = "/path/to/orbi"
 workspace_root = ".."
-prompt = "prompt.md"
-# Implementer prompt (default prompt.md). The Runner also runs an
+prompt = "prompts/prompt.md"
+# Implementer prompt (default prompts/prompt.md). The Runner also runs an
 # independent review session on the opened PR, then merges a clean PR
 # via `gh pr merge --match-head-commit`; the fixer reuses the
 # implementer prompt (its resume section is injected when a PR already
-# exists). The review prompt defaults to prompt_review.md in this
+# exists). The review prompt defaults to prompts/prompt_review.md in this
 # directory.
-prompt_review = "prompt_review.md"
+prompt_review = "prompts/prompt_review.md"
 # Delivery base branch: every task worktree is created from the latest
 # origin/<base_branch> (fetched and frozen at claim time). Default: "main".
 base_branch = "main"

@@ -33,8 +33,8 @@ weakened.
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PROMPT = REPO_ROOT / "prompt.md"
-PROMPT_REVIEW = REPO_ROOT / "prompt_review.md"
+PROMPT = REPO_ROOT / "prompts" / "prompt.md"
+PROMPT_REVIEW = REPO_ROOT / "prompts" / "prompt_review.md"
 CONTRACT = REPO_ROOT / "AGENTS.md"
 
 

@@ -8,7 +8,7 @@ claim scans) lives in the docs site (`docs/`, <https://docs.orbi.build>);
 each section points at the owning page instead of restating it.
 
 - **Implementer Pi**: plan, TDD, tests, commit the delivery; the Runner pushes the task branch and opens one PR.
-- **Reviewer Pi**: after the PR exists, a new `pi --print` with `prompt_review.md` and a new JSONL on the same worktree.
+- **Reviewer Pi**: after the PR exists, a new `pi --print` with `prompts/prompt_review.md` and a new JSONL on the same worktree.
 - **Runner**: labels, observability, review/fix, and merge.
 
 ## Issue granularity
@@ -108,7 +108,7 @@ each section points at the owning page instead of restating it.
 
 ## Review, fix and merge (same PR)
 
-- The review session is independent (a new Pi process, `prompt_review.md`, a new JSONL) and ALSO the fixer: it may modify code, run the full suite with the tiered coverage gate (Issue #234: whole repository line/branch >= 95% checked separately, changed Python code at 100%), commit, and push ONLY the task branch, then re-emit the `REVIEW_VERDICT` for the fixed head. A `pass` verdict means zero Blocker/Major findings AFTER the in-session fixes; a missing or malformed verdict fails fast and is never treated as a pass.
+- The review session is independent (a new Pi process, `prompts/prompt_review.md`, a new JSONL) and ALSO the fixer: it may modify code, run the full suite with the tiered coverage gate (Issue #234: whole repository line/branch >= 95% checked separately, changed Python code at 100%), commit, and push ONLY the task branch, then re-emit the `REVIEW_VERDICT` for the fixed head. A `pass` verdict means zero Blocker/Major findings AFTER the in-session fixes; a missing or malformed verdict fails fast and is never treated as a pass.
 - `ai-pr-opened` means awaiting review; `ai-fix-needed` marks a delivery whose head is not mergeable yet (a finding the session could not fix, a PR behind the latest base / with a merge conflict, or an AI-recoverable failure of the existing run/PR): the NEXT tick resumes the SAME run_id, branch, worktree and PR and runs the next independent review session, which absorbs the latest base in-session. Never a replacement PR, never a re-claim.
 - The merge gate re-fetches the latest remote base and requires the PR head to contain it, the PR to be mergeable, and the remote head to still be the reviewed head; the merge lands exactly that head (`gh pr merge --match-head-commit`).
 - The review loop is bounded (5 rounds); exhausting rounds with findings fails fast and marks the Issue `ai-blocked`.

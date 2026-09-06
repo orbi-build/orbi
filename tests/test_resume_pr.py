@@ -837,7 +837,8 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
     verified_url = "https://github.com/owner/repo/pull/98"
     processed = []
     waits = []
-    for name in ("prompt.md", "prompt_review.md"):
+    (tmp_path / "prompts").mkdir()
+    for name in ("prompts/prompt.md", "prompts/prompt_review.md"):
         (tmp_path / name).write_text("prompt", encoding="utf-8")
     config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
@@ -878,7 +879,8 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
 def test_main_still_claims_new_issue_when_no_resumable(monkeypatch, tmp_path):
     issue = {"number": 10, "title": "new", "body": ""}
     processed = []
-    for name in ("prompt.md", "prompt_review.md"):
+    (tmp_path / "prompts").mkdir()
+    for name in ("prompts/prompt.md", "prompts/prompt_review.md"):
         (tmp_path / name).write_text("prompt", encoding="utf-8")
     config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
