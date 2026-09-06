@@ -358,7 +358,7 @@ def test_failure_creates_one_issue_with_full_evidence(gh, monkeypatch, tmp_path,
     assert len(creates) == 1
     payload = creates[0]["payload"]
     assert payload["labels"] == ["bug", "ai-ready"]
-    assert payload["milestone"] is None
+    assert "milestone" not in payload
     assert payload["title"] == "CI failure: tests on branch main (push)"
     body = payload["body"]
     # The full evidence contract: workflow, job, event, branch, commit SHA,
@@ -434,7 +434,8 @@ def test_missing_active_milestone_logs_fallback_and_creates_without_milestone(
     gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
     gh.routes[ep_issues_list()] = []
     mod.main()
-    assert gh.calls_to(ep_create(), "POST")[0]["payload"]["milestone"] is None
+    payload = gh.calls_to(ep_create(), "POST")[0]["payload"]
+    assert "milestone" not in payload
     assert "milestone_fallback" in capsys.readouterr().err
 
 

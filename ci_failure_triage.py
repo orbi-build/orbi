@@ -374,15 +374,17 @@ def resolve_active_milestone(owner: str, repo: str) -> int | None:
 def create_issue(
     owner: str, repo: str, title: str, body: str, milestone: int | None = None,
 ) -> None:
+    payload = {
+        "title": title,
+        "body": body,
+        "labels": list(ISSUE_LABELS),
+    }
+    if milestone is not None:
+        payload["milestone"] = milestone
     gh_api(
         f"repos/{owner}/{repo}/issues",
         method="POST",
-        payload={
-            "title": title,
-            "body": body,
-            "labels": list(ISSUE_LABELS),
-            "milestone": milestone,
-        },
+        payload=payload,
     )
 
 

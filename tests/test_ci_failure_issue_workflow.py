@@ -105,6 +105,16 @@ def test_token_is_the_workflow_token():
     ), f"GH_TOKEN must be the workflow token, step envs: {envs!r}"
 
 
+def test_active_milestone_comes_only_from_repository_variable():
+    envs = [
+        step.get("env", {}) for step in steps_of(load_workflow())
+        if isinstance(step.get("env"), dict)
+    ]
+    milestone_values = [env.get("ORBI_ACTIVE_MILESTONE") for env in envs]
+    assert milestone_values == ["${{ vars.ORBI_ACTIVE_MILESTONE }}"]
+    assert "v0.3.1" not in WORKFLOW_FILE.read_text(encoding="utf-8")
+
+
 def test_no_step_can_fake_success():
     """Fail fast: no continue-on-error, no swallowed exit codes."""
     for step in steps_of(load_workflow()):
