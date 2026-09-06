@@ -2454,7 +2454,11 @@ def prepare_release_version(worktree: Path, tag: str,
                 matches = [m for m in matches if not any(
                     start <= m.start() < end for start, end in parents
                 )]
-                pattern = matches[0] if len(matches) == 1 else None
+                # Maven projects normally contain additional dependency
+                # versions.  The declaration contract selects the first
+                # version outside the parent block, not a uniquely occurring
+                # version in the whole document.
+                pattern = matches[0] if matches else None
                 replacement = rf"<version>{version}</version>"
             elif version_file == "Cargo.toml":
                 data = tomllib.loads(text)
@@ -2481,11 +2485,17 @@ def prepare_release_version(worktree: Path, tag: str,
                 replacement = f"version={version}"
             else:
                 matches = list(re.finditer(
-                    r"(?m)^[ \t]*version\s*=\s*(['\"])([^'\"]+)\1[ \t]*$",
+                    r"(?m)^([ \t]*version\s*=\s*)(['\"])([^'\"]+)\2[ \t]*$",
                     text,
                 ))
                 pattern = matches[0] if len(matches) == 1 else None
-                replacement = f"version = '" + version + "'"
+                # Groovy accepts either quote style, while Kotlin DSL only
+                # accepts double quotes. Preserve the source syntax.
+                replacement = (
+                    pattern.group(1) + pattern.group(2) + version
+                    + pattern.group(2)
+                    if pattern is not None else ""
+                )
             if pattern is None:
                 raise ValueError("version declaration is not uniquely parseable")
             if version_file == "Cargo.toml":

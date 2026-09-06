@@ -13849,11 +13849,13 @@ def test_prepare_release_version_updates_package_json(tmp_path, monkeypatch):
         (
             "pom.xml",
             "<project><parent><version>9.9.9</version></parent>"
-            "<version>0.2.0</version></project>",
+            "<version>0.2.0</version><dependencies>"
+            "<dependency><version>8.8.8</version></dependency>"
+            "</dependencies></project>",
             "<version>0.3.0</version>",
         ),
         ("build.gradle", "version = '0.2.0'\n", "version = '0.3.0'"),
-        ("build.gradle.kts", "version = '0.2.0'\n", "version = '0.3.0'"),
+        ("build.gradle.kts", "version = \"0.2.0\"\n", "version = \"0.3.0\""),
         ("gradle.properties", "version=0.2.0\n", "version=0.3.0"),
         (
             "Cargo.toml",
