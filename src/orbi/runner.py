@@ -2362,6 +2362,64 @@ def release_test_evidence(exc: subprocess.CalledProcessError) -> str | None:
     return evidence or None
 
 
+def prepare_release_version(worktree: Path, tag: str,
+                            base_branch: str) -> str:
+    """Commit the tag's version into both runtime metadata sources.
+
+    The release tag is the public identity (for example ``v0.3.0``), while
+    Python package metadata omits the leading ``v``.  Both existing sources
+    must be structurally recognizable and agree before either is changed;
+    otherwise a release stops before creating a tag.  The commit is pushed
+    directly to the release base, matching the release docs-sync step.
+    """
+    match = re.fullmatch(r"v([0-9]+(?:\.[0-9]+)+)", tag)
+    if match is None:
+        raise ValueError(
+            f"release version {tag!r} must be a v-prefixed numeric tag"
+        )
+    version = match.group(1)
+    pyproject = worktree / "pyproject.toml"
+    init_file = worktree / "src" / "orbi" / "__init__.py"
+    pyproject_text = pyproject.read_text(encoding="utf-8")
+    init_text = init_file.read_text(encoding="utf-8")
+    py_matches = re.findall(
+        r'(?m)^version\s*=\s*"([^"]+)"\s*$', pyproject_text,
+    )
+    init_matches = re.findall(
+        r'(?m)^__version__\s*=\s*"([^"]+)"\s*$', init_text,
+    )
+    if len(py_matches) != 1 or len(init_matches) != 1:
+        raise RuntimeError(
+            "release version sources must contain exactly one version "
+            "declaration each"
+        )
+    if py_matches[0] != init_matches[0]:
+        raise RuntimeError(
+            "release version sources disagree before release preparation"
+        )
+    updated_pyproject = re.sub(
+        r'(?m)^(version\s*=\s*)"[^"]+"(\s*)$',
+        rf'\g<1>"{version}"\g<2>', pyproject_text, count=1,
+    )
+    updated_init = re.sub(
+        r'(?m)^(__version__\s*=\s*)"[^"]+"(\s*)$',
+        rf'\g<1>"{version}"\g<2>', init_text, count=1,
+    )
+    if updated_pyproject != pyproject_text:
+        pyproject.write_text(updated_pyproject, encoding="utf-8")
+        init_file.write_text(updated_init, encoding="utf-8")
+        run_command([
+            "git", "add", "pyproject.toml", "src/orbi/__init__.py",
+        ], cwd=worktree)
+        run_command([
+            "git", "commit", "-m", f"chore: prepare release {tag}",
+        ], cwd=worktree)
+        run_command([
+            "git", "push", "origin", f"HEAD:refs/heads/{base_branch}",
+        ], cwd=worktree)
+    return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+
+
 def release_tag_commit(repo_dir: Path, tag: str) -> str | None:
     """Return the commit the tag points to on the remote, or None.
 
@@ -2965,8 +3023,12 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
        Issues + merged PRs; open items are surfaced as evidence, never
        released. Then verify the scope item by item
        (`verify_release_scope`).
-    5. Run the declared test command in a clean worktree at the
-       release commit (`timeout`-wrapped, Issue #95).
+    Before step 5, prepare the release version in the clean worktree:
+       update both `pyproject.toml` and `src/orbi/__init__.py`, commit, and
+       push the new release commit to the base branch; mismatched sources
+       fail fast. The subsequent steps run against that commit.
+    5. Run the declared test command in that release worktree
+       (`timeout`-wrapped, Issue #95).
     6. Tag: the remote tag must not exist or must point EXACTLY at
        the release commit (a mismatch fails — an existing tag is
        never moved); otherwise create an annotated tag at the release
@@ -3182,6 +3244,28 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         )
         worktree = create_worktree(
             config["repo_dir"], source_repo, number, run_id, release_commit,
+        )
+        # Version metadata is part of the release commit, not a post-release
+        # fix: tests and the tag must identify the exact same commit.
+        release_commit = prepare_release_version(
+            worktree, declaration["version"], base_branch,
+        )
+        # Version preparation creates the commit that will be tagged. Re-run
+        # the commit-specific gates so the recorded CI result and final
+        # no-open-PR check cover that exact release commit, not the frozen
+        # pre-version source commit.
+        gate_evidence = check_release_gates(
+            source_repo, base_branch, release_commit, number,
+            ci_wait_seconds=config.get(
+                "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
+            ),
+            delivery_wait_seconds=config.get(
+                "release_deliveries_wait_seconds",
+                RELEASE_DELIVERIES_WAIT_SECONDS,
+            ),
+            delivery_waited_seconds=release_waited_seconds,
+            on_wait=on_ci_wait,
+            on_delivery_wait=on_delivery_wait,
         )
         try:
             run_release_tests(

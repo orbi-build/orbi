@@ -13494,6 +13494,90 @@ def make_local_remote_pair(tmp_path):
     return work, head
 
 
+def test_prepare_release_version_updates_sources_and_commits(tmp_path, monkeypatch):
+    work = tmp_path / "release"
+    work.mkdir()
+    (work / "pyproject.toml").write_text(
+        '[project]\nname = "orbi"\nversion = "0.2.0"\n',
+        encoding="utf-8",
+    )
+    package = work / "src" / "orbi"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(
+        '__version__ = "0.2.0"\n', encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "newsha",
+    )
+
+    assert runner.prepare_release_version(
+        work, "v0.3.0", "main",
+    ) == "newsha"
+    assert 'version = "0.3.0"' in (work / "pyproject.toml").read_text()
+    assert '__version__ = "0.3.0"' in (package / "__init__.py").read_text()
+    assert calls == [
+        (["git", "add", "pyproject.toml", "src/orbi/__init__.py"],
+         {"cwd": work}),
+        (["git", "commit", "-m", "chore: prepare release v0.3.0"],
+         {"cwd": work}),
+        (["git", "push", "origin", "HEAD:refs/heads/main"],
+         {"cwd": work}),
+        (["git", "rev-parse", "HEAD"], {"cwd": work}),
+    ]
+
+
+def test_prepare_release_version_rejects_non_tag_version(tmp_path):
+    with pytest.raises(ValueError, match="release version"):
+        runner.prepare_release_version(tmp_path, "0.3.0", "main")
+
+
+def test_prepare_release_version_rejects_disagreeing_sources(tmp_path):
+    work = tmp_path / "release"
+    package = work / "src" / "orbi"
+    package.mkdir(parents=True)
+    (work / "pyproject.toml").write_text(
+        '[project]\nversion = "0.2.0"\n', encoding="utf-8",
+    )
+    (package / "__init__.py").write_text(
+        '__version__ = "0.1.0"\n', encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="sources disagree"):
+        runner.prepare_release_version(work, "v0.3.0", "main")
+
+
+def test_prepare_release_version_rejects_missing_source_declaration(tmp_path):
+    work = tmp_path / "release"
+    package = work / "src" / "orbi"
+    package.mkdir(parents=True)
+    (work / "pyproject.toml").write_text('[project]\n', encoding="utf-8")
+    (package / "__init__.py").write_text(
+        '__version__ = "0.2.0"\n', encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="exactly one"):
+        runner.prepare_release_version(work, "v0.3.0", "main")
+
+
+def test_prepare_release_version_is_idempotent(tmp_path, monkeypatch):
+    work = tmp_path / "release"
+    package = work / "src" / "orbi"
+    package.mkdir(parents=True)
+    (work / "pyproject.toml").write_text(
+        '[project]\nversion = "0.3.0"\n', encoding="utf-8",
+    )
+    (package / "__init__.py").write_text(
+        '__version__ = "0.3.0"\n', encoding="utf-8",
+    )
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "head",
+    )
+    assert runner.prepare_release_version(work, "v0.3.0", "main") == "head"
+    assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": work})]
+
+
 def test_release_tag_commit_returns_none_for_missing_remote_tag(tmp_path):
     work, _ = make_local_remote_pair(tmp_path)
     assert runner.release_tag_commit(work, "v9.9.9") is None
@@ -13852,6 +13936,8 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     monkeypatch.setattr(runner, "LOGGER", Mock())
     monkeypatch.setattr(runner, "release_tag_commit",
                         lambda r, t: tag_commit)
+    monkeypatch.setattr(runner, "prepare_release_version",
+                        lambda worktree, tag, base_branch: "abc123")
     monkeypatch.setattr(runner, "publish_release", lambda **k: release_url)
     # Issue #275: the docs sync step is covered by its own unit tests
     # (real git repos); here it is stubbed so the orchestration order is
