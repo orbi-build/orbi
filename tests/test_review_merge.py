@@ -388,6 +388,54 @@ def test_check_delivery_ci_reports_base_failure_and_triage(monkeypatch):
     assert "issues/402" in str(exc.value)
 
 
+def test_preexisting_ci_triage_lookup_is_best_effort(monkeypatch):
+    monkeypatch.setattr(runner, "run_command", lambda *_args, **_kwargs: "{}")
+    assert runner._main_ci_triage_url("owner/repo", "tests") is None
+
+    monkeypatch.setattr(runner, "run_command", lambda *_args, **_kwargs: "not json")
+    assert runner._main_ci_triage_url("owner/repo", "tests") is None
+
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda *_args, **_kwargs: json.dumps([{"title": "other", "url": ""}]),
+    )
+    assert runner._main_ci_triage_url("owner/repo", "tests") is None
+
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda *_args, **_kwargs: json.dumps([{
+            "title": "CI failure: tests on branch main (push)", "url": 42,
+        }]),
+    )
+    assert runner._main_ci_triage_url("owner/repo", "tests") is None
+
+
+def test_preexisting_ci_check_skips_base_lookup_without_base(monkeypatch):
+    def fail(*_args, **_kwargs):
+        raise AssertionError("base lookup should be skipped")
+
+    monkeypatch.setattr(runner, "run_command", fail)
+    runner._raise_if_preexisting_ci_failure("owner/repo", ["tests"], None)
+
+
+def test_check_delivery_ci_polls_pending_checks(monkeypatch):
+    pages = [
+        [{"name": "tests", "status": "queued", "conclusion": None}],
+        [{"name": "tests", "status": "completed", "conclusion": "success"}],
+    ]
+    monkeypatch.setattr(
+        runner, "run_command", lambda *_args, **_kwargs: json.dumps(pages.pop(0)),
+    )
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+    runner.check_delivery_ci("owner/repo", "h1", wait_seconds=30)
+
+
+def test_check_delivery_ci_times_out_without_check_runs(monkeypatch):
+    monkeypatch.setattr(runner, "run_command", lambda *_args, **_kwargs: "[]")
+    with pytest.raises(RuntimeError, match="no check runs reported"):
+        runner.check_delivery_ci("owner/repo", "h1", wait_seconds=0)
+
+
 def test_merge_gate_waits_for_pending_github_ci_then_merges(
         monkeypatch, tmp_path):
     pages = [
