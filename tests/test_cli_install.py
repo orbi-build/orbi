@@ -462,6 +462,25 @@ def test_base_sync_lock_path_is_the_shared_state_dir_file(tmp_path):
     )
 
 
+def test_refresh_can_install_one_checkout_while_locking_shared_checkout(
+    tmp_path,
+):
+    release_worktree = tmp_path / "release-worktree"
+    deployment_checkout = tmp_path / "deployment-checkout"
+    _write_pyproject(release_worktree, '[project]\nname = "release"\n')
+    calls = []
+
+    cli_install.refresh_cli_install(
+        release_worktree,
+        lock_repo_dir=deployment_checkout,
+        run_command=_recorder(calls),
+    )
+
+    assert cli_install.base_sync_lock_path(deployment_checkout).is_file()
+    assert not cli_install.base_sync_lock_path(release_worktree).exists()
+    assert calls[0][0] == cli_source.reinstall_args(release_worktree)
+
+
 def test_reinstall_argv_is_the_verified_editable_force_reinstall(tmp_path):
     """The refresh runs the EXACT verified argv (Issue #152 contract,
     asserted against the real `uv tool install --help` in

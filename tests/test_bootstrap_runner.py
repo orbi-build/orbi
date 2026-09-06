@@ -14191,6 +14191,10 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                         lambda r, t: tag_commit)
     monkeypatch.setattr(runner, "prepare_release_version",
                         lambda worktree, tag, base_branch: "abc123")
+    monkeypatch.setattr(
+        runner, "refresh_cli_install",
+        lambda worktree, **kwargs: "installed",
+    )
     monkeypatch.setattr(runner, "publish_release", lambda **k: release_url)
     # Issue #275: the docs sync step is covered by its own unit tests
     # (real git repos); here it is stubbed so the orchestration order is
@@ -14321,6 +14325,35 @@ def test_process_release_success_end_to_end(monkeypatch):
     assert "docs release notes for v0.3.0 synced to base" \
         in comment_kwargs["body"]
     assert state["run_ids"][0] == "a1b2c3d4"
+
+
+def test_process_release_refreshes_cli_before_release_tests(monkeypatch):
+    state = make_release_process_env(monkeypatch)
+    order = []
+    monkeypatch.setattr(
+        runner, "prepare_release_version",
+        lambda worktree, tag, base_branch: order.append("version") or "abc123",
+    )
+
+    def refresh(worktree, **kwargs):
+        order.append("cli")
+        assert Path(worktree) == Path("/wt")
+        assert kwargs["run_command"] is runner.run_command
+        return "installed"
+
+    monkeypatch.setattr(runner, "refresh_cli_install", refresh)
+    monkeypatch.setattr(
+        runner, "run_release_tests",
+        lambda worktree, command, timeout: order.append("tests"),
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+
+    assert runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    ) == "https://github.com/o/r/releases/tag/v0.3.0"
+    assert order == ["version", "cli", "tests"]
 
 
 def test_process_release_derives_scope_from_milestone(monkeypatch):
