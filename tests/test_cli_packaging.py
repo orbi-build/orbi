@@ -137,10 +137,12 @@ def test_pyproject_declares_the_orbi_console_script():
 
 
 def test_pyproject_project_metadata():
+    import orbi
+
     data = load_pyproject()
     project = data["project"]
     assert project["name"] == "orbi"
-    assert project["version"] == "0.3.2"
+    assert project["version"] == orbi.__version__
     # The package must not claim to run on an older minor version.
     assert project["requires-python"] == ">=3.14"
     # The bootstrap intentionally has no third-party runtime
