@@ -140,7 +140,7 @@ def test_pyproject_project_metadata():
     data = load_pyproject()
     project = data["project"]
     assert project["name"] == "orbi"
-    assert project["version"] == "0.2.0"
+    assert project["version"] == "0.3.2"
     # The package must not claim to run on an older minor version.
     assert project["requires-python"] == ">=3.14"
     # The bootstrap intentionally has no third-party runtime
