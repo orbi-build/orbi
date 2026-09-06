@@ -103,17 +103,17 @@ jobs:
         run: python3 -m coverage run --branch -m pytest tests/ -q
 
       # Tiered coverage gate (Issue #234): the whole repository keeps
-      # line >= 95% AND branch >= 95% (coverage_gate.py checks the two
+      # line >= 95% AND branch >= 95% (tools/coverage_gate.py checks the two
       # tiers SEPARATELY from the coverage JSON totals — never a merged
       # single percentage), and the Python lines/branches changed in
-      # this PR keep 100% (diff_coverage_gate.py against origin/main;
+      # this PR keep 100% (tools/diff_coverage_gate.py against origin/main;
       # a doc-only PR has no changed Python and passes). The report
       # keeps showing both real numbers as evidence.
       - name: Enforce the tiered coverage gate (contract, Issue #234)
         run: |
           python3 -m coverage report --show-missing
-          python3 coverage_gate.py
-          python3 diff_coverage_gate.py origin/main
+          python3 tools/coverage_gate.py
+          python3 tools/diff_coverage_gate.py origin/main
 
       # Mintlify docs build smoke (Issue #116): the official `mint` CLI
       # validates the docs/ build (docs.json config, pages, links) in

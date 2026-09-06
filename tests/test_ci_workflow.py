@@ -291,28 +291,28 @@ def test_ci_workflow_runs_the_contract_test_command():
 
 def test_ci_workflow_enforces_the_tiered_coverage_gate():
     """Issue #234: the CI gate is tiered — the whole repository keeps
-    line >= 95% and branch >= 95% (coverage_gate.py checks the two tiers
+    line >= 95% and branch >= 95% (tools/coverage_gate.py checks the two tiers
     SEPARATELY from the coverage JSON totals, never a merged single
     percentage), and the changed Python code keeps 100% line/branch
-    (diff_coverage_gate.py against origin/main; a doc-only PR has no
+    (tools/diff_coverage_gate.py against origin/main; a doc-only PR has no
     changed Python and passes). The old --fail-under=100 gate checked
     only the merged percentage and is gone."""
     commands = step_commands(steps_of(load_workflow()))
     global_gate = [
         command for command in commands
-        if "coverage_gate.py" in command
+        if "tools/coverage_gate.py" in command
     ]
     assert global_gate, (
-        "CI must enforce the tiered global gate (coverage_gate.py: line "
+        "CI must enforce the tiered global gate (tools/coverage_gate.py: line "
         f">= 95% and branch >= 95% checked separately), steps run: "
         f"{commands!r}"
     )
     diff_gate = [
         command for command in commands
-        if "diff_coverage_gate.py origin/main" in command
+        if "tools/diff_coverage_gate.py origin/main" in command
     ]
     assert diff_gate, (
-        "CI must enforce the changed-code gate (diff_coverage_gate.py "
+        "CI must enforce the changed-code gate (tools/diff_coverage_gate.py "
         f"origin/main: changed Python at 100% line/branch), steps run: "
         f"{commands!r}"
     )

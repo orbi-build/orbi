@@ -41,8 +41,8 @@ each section points at the owning page instead of restating it.
   ```bash
   COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
   COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage report --show-missing
-  COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 coverage_gate.py .orbi/.coverage
-  COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 diff_coverage_gate.py origin/main
+  COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/coverage_gate.py .orbi/.coverage
+  COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/diff_coverage_gate.py origin/main
   ```
 
 ## UI work

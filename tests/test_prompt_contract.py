@@ -474,7 +474,7 @@ def test_agents_md_tdd_section_keeps_the_run_dir_coverage_commands():
         # The official COVERAGE_FILE env var points the data file into
         # the run dir; the global gate takes the data file by argv.
         ("tdd-coverage-file", "coverage_file=.orbi/.coverage"),
-        ("tdd-gate-data-file", "coverage_gate.py .orbi/.coverage"),
+        ("tdd-gate-data-file", "tools/coverage_gate.py .orbi/.coverage"),
     ))
     assert not missing, (
         f"AGENTS.md TDD section is missing the run-dir coverage commands "

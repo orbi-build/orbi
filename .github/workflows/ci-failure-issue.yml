@@ -8,7 +8,7 @@
 # Runtime contract (verified against the official docs and the live API):
 # `on: workflow_run` reacts ONLY to completed runs of the workflow named
 # `CI` — the anti-recursion anchor, because Issue create/update/close emit
-# no CI workflow_run. The triage logic itself lives in `ci_failure_triage.py`
+# no CI workflow_run. The triage logic itself lives in `tools/ci_failure_triage.py`
 # (unit-tested against the real REST shapes); this workflow is the thin
 # entry: checkout, the pinned Python 3.14 (the CI convention), and the
 # script — the default `bash -e` shell propagates a triage failure as a red
@@ -53,4 +53,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ORBI_ACTIVE_MILESTONE: ${{ vars.ORBI_ACTIVE_MILESTONE }}
-        run: python3 ci_failure_triage.py
+        run: python3 tools/ci_failure_triage.py

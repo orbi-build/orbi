@@ -13467,7 +13467,7 @@ def test_run_release_tests_wraps_the_command_in_timeout_bash(monkeypatch):
     assert command == [
         "timeout", "120", "bash", "-c",
         "pytest -q && /usr/bin/python3 -m coverage report "
-        "--show-missing && /usr/bin/python3 coverage_gate.py",
+        "--show-missing && /usr/bin/python3 tools/coverage_gate.py",
     ]
     assert kwargs == {"cwd": Path("/wt")}
 
@@ -14077,7 +14077,7 @@ def test_process_release_success_end_to_end(monkeypatch):
              "/usr/bin/python3 -m coverage run --branch -m pytest tests/ -q "
              "&& /usr/bin/python3 -m coverage report --show-missing && "
              "/usr/bin/python3 -m coverage report --show-missing && "
-             "/usr/bin/python3 coverage_gate.py"],
+             "/usr/bin/python3 tools/coverage_gate.py"],
             {"cwd": Path("/wt")}) in state["commands"]
     # Issue #275: the docs sync step runs once, after the GitHub Release
     # is published and before the Milestone is closed, with the release

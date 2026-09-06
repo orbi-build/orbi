@@ -30,17 +30,17 @@ over one:
 ```bash
 COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
 COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage report --show-missing
-COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 coverage_gate.py .orbi/.coverage
-COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 diff_coverage_gate.py origin/main
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/coverage_gate.py .orbi/.coverage
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/diff_coverage_gate.py origin/main
 ```
 
 The report shows both real numbers (line and branch) per file. The two
-gate scripts are the gate, not a report: `coverage_gate.py` exits
+gate scripts are the gate, not a report: `tools/coverage_gate.py` exits
 non-zero when the line tier OR the branch tier is below 95% (it reads
 the coverage JSON totals `percent_statements_covered` and
 `percent_branches_covered` separately — the JSON field `percent_covered`
 is the merged line+branch percentage and is never the gate), and
-`diff_coverage_gate.py` exits non-zero when a Python line or branch
+`tools/diff_coverage_gate.py` exits non-zero when a Python line or branch
 changed since the base ref is not 100% covered.
 
 ## Remote CI (GitHub Actions)
@@ -51,7 +51,7 @@ and every push to `main`: one job, Python 3.14 pinned via
 interpreter at the production path, so the workflow pins the same minor
 version and runs the identical commands through `python3` on PATH),
 `requirements.txt` installed, then the contract commands above — the
-report, `coverage_gate.py`, and `diff_coverage_gate.py origin/main`
+report, `tools/coverage_gate.py`, and `tools/diff_coverage_gate.py origin/main`
 (the changed-code tier against the PR base; a doc-only PR has no
 changed Python and passes). No lint, no matrix, no cache.
 

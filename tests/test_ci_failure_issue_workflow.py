@@ -17,7 +17,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_FILE = REPO_ROOT / ".github" / "workflows" / "ci-failure-issue.yml"
-TRIAGE_SCRIPT = REPO_ROOT / "ci_failure_triage.py"
+TRIAGE_SCRIPT = REPO_ROOT / "tools" / "ci_failure_triage.py"
 
 
 def load_workflow() -> dict:
@@ -89,7 +89,7 @@ def test_single_job_runs_the_triage_script():
         str(step.get("run", "")) for step in steps_of(workflow) if step.get("run")
     ]
     assert any(
-        "python3 ci_failure_triage.py" in command for command in commands
+        "python3 tools/ci_failure_triage.py" in command for command in commands
     ), f"the job must run the triage script, steps run: {commands!r}"
 
 

@@ -7,7 +7,7 @@ never a single merged percentage — while the changed Python code and
 the core state machines keep 100% (the diff gate and the existing test
 suite enforce those tiers).
 
-Usage:  python3 coverage_gate.py [data_file]
+Usage:  python3 tools/coverage_gate.py [data_file]
 
 Reads the coverage.py JSON totals (`coverage json` — the same numbers
 the report shows) and checks the two tiers SEPARATELY:
