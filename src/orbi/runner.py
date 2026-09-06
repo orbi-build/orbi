@@ -2362,6 +2362,64 @@ def release_test_evidence(exc: subprocess.CalledProcessError) -> str | None:
     return evidence or None
 
 
+def prepare_release_version(worktree: Path, tag: str,
+                            base_branch: str) -> str:
+    """Commit the tag's version into both runtime metadata sources.
+
+    The release tag is the public identity (for example ``v0.3.0``), while
+    Python package metadata omits the leading ``v``.  Both existing sources
+    must be structurally recognizable and agree before either is changed;
+    otherwise a release stops before creating a tag.  The commit is pushed
+    directly to the release base, matching the release docs-sync step.
+    """
+    match = re.fullmatch(r"v([0-9]+(?:\.[0-9]+)+)", tag)
+    if match is None:
+        raise ValueError(
+            f"release version {tag!r} must be a v-prefixed numeric tag"
+        )
+    version = match.group(1)
+    pyproject = worktree / "pyproject.toml"
+    init_file = worktree / "src" / "orbi" / "__init__.py"
+    pyproject_text = pyproject.read_text(encoding="utf-8")
+    init_text = init_file.read_text(encoding="utf-8")
+    py_matches = re.findall(
+        r'(?m)^version\s*=\s*"([^"]+)"\s*$', pyproject_text,
+    )
+    init_matches = re.findall(
+        r'(?m)^__version__\s*=\s*"([^"]+)"\s*$', init_text,
+    )
+    if len(py_matches) != 1 or len(init_matches) != 1:
+        raise RuntimeError(
+            "release version sources must contain exactly one version "
+            "declaration each"
+        )
+    if py_matches[0] != init_matches[0]:
+        raise RuntimeError(
+            "release version sources disagree before release preparation"
+        )
+    updated_pyproject = re.sub(
+        r'(?m)^(version\s*=\s*)"[^"]+"(\s*)$',
+        rf'\g<1>"{version}"\g<2>', pyproject_text, count=1,
+    )
+    updated_init = re.sub(
+        r'(?m)^(__version__\s*=\s*)"[^"]+"(\s*)$',
+        rf'\g<1>"{version}"\g<2>', init_text, count=1,
+    )
+    if updated_pyproject != pyproject_text:
+        pyproject.write_text(updated_pyproject, encoding="utf-8")
+        init_file.write_text(updated_init, encoding="utf-8")
+        run_command([
+            "git", "add", "pyproject.toml", "src/orbi/__init__.py",
+        ], cwd=worktree)
+        run_command([
+            "git", "commit", "-m", f"chore: prepare release {tag}",
+        ], cwd=worktree)
+        run_command([
+            "git", "push", "origin", f"HEAD:refs/heads/{base_branch}",
+        ], cwd=worktree)
+    return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+
+
 def release_tag_commit(repo_dir: Path, tag: str) -> str | None:
     """Return the commit the tag points to on the remote, or None.
 
@@ -2965,23 +3023,26 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
        Issues + merged PRs; open items are surfaced as evidence, never
        released. Then verify the scope item by item
        (`verify_release_scope`).
-    5. Run the declared test command in a clean worktree at the
-       release commit (`timeout`-wrapped, Issue #95).
-    6. Tag: the remote tag must not exist or must point EXACTLY at
+    5. Prepare the release version in the clean worktree: update both
+       `pyproject.toml` and `src/orbi/__init__.py`, commit, and push the
+       new release commit to the base branch; mismatched sources fail fast.
+    6. Run the declared test command in that release worktree
+       (`timeout`-wrapped, Issue #95).
+    7. Tag: the remote tag must not exist or must point EXACTLY at
        the release commit (a mismatch fails — an existing tag is
        never moved); otherwise create an annotated tag at the release
        commit and push it with a plain push (never `--force`).
-    7. Publish the GitHub Release (idempotent) with the full
+    8. Publish the GitHub Release (idempotent) with the full
        verification evidence.
-    8. Sync the docs-site Release notes (Issue #275): generate
+    9. Sync the docs-site Release notes (Issue #275): generate
        `docs/release-<version>.mdx` + `docs/zh/release-<version>.mdx`
        from the published Release body, update both navigation groups,
        move the `(latest)` marker, and commit + push those docs changes
        to the base branch directly. Idempotent: identical pages are not
        overwritten; anything else fails fast.
-    9. Apply `ai-merged` and close the release Issue (terminal delivery
+    10. Apply `ai-merged` and close the release Issue (terminal delivery
        transition).
-    10. Close the Milestone whose title is EXACTLY the released
+    11. Close the Milestone whose title is EXACTLY the released
         version (Issue #214), then write the success comment (release
         URL, tag, commit, evidence, docs-site Release notes evidence,
         Milestone evidence). Exact title match only; close it only when
@@ -3182,6 +3243,11 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         )
         worktree = create_worktree(
             config["repo_dir"], source_repo, number, run_id, release_commit,
+        )
+        # Version metadata is part of the release commit, not a post-release
+        # fix: tests and the tag must identify the exact same commit.
+        release_commit = prepare_release_version(
+            worktree, declaration["version"], base_branch,
         )
         try:
             run_release_tests(
