@@ -3278,7 +3278,10 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         # preflight refresh. Install the release worktree before validating
         # it, so installed-CLI assertions exercise the version being released
         # on this first run rather than waiting for the next tick.
-        refresh_cli_install(worktree, run_command=run_command)
+        refresh_cli_install(
+            worktree, lock_repo_dir=config["repo_dir"],
+            run_command=run_command,
+        )
         try:
             run_release_tests(
                 worktree, declaration["test_command"],
@@ -7136,9 +7139,13 @@ def write_install_state(repo_dir: Path, fingerprint: str) -> None:
 def refresh_cli_install(
     repo_dir: Path, *, run_command,
     lock_timeout_seconds: float = 300.0,
+    lock_repo_dir: Path | None = None,
 ) -> str:
     """Refresh the editable CLI install when the packaging inputs
-    changed; return `"unchanged"` or `"installed"`.
+    changed; return `"unchanged"` or `"installed"`. ``repo_dir`` is
+    the checkout to install; ``lock_repo_dir`` optionally names the
+    shared deployment checkout whose base-sync lock also protects the
+    tool environment.
 
     The pre-start gate (called by the Runner tick before any slot or
     claim):
@@ -7162,6 +7169,9 @@ def refresh_cli_install(
     failure).
     """
     repo_dir = Path(repo_dir)
+    lock_repo_dir = (
+        Path(lock_repo_dir) if lock_repo_dir is not None else repo_dir
+    )
     fingerprint = packaging_fingerprint(repo_dir)
     if read_install_state(repo_dir) == fingerprint:
         CLI_INSTALL_LOGGER.info(
@@ -7169,7 +7179,7 @@ def refresh_cli_install(
             repo_dir, fingerprint,
         )
         return "unchanged"
-    fd = acquire_base_sync_lock(repo_dir, lock_timeout_seconds)
+    fd = acquire_base_sync_lock(lock_repo_dir, lock_timeout_seconds)
     try:
         # Re-check UNDER the lock: a concurrent instance may have
         # refreshed the tool env while we waited for the flock —
