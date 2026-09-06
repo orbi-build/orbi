@@ -504,10 +504,10 @@ def test_docs_document_tests_and_coverage_commands():
         "testing must show the contract coverage-run command"
     )
     assert "coverage report" in text, "testing must show the coverage report command"
-    assert "coverage_gate.py" in text, (
+    assert "tools/coverage_gate.py" in text, (
         "testing must show the tiered global gate command"
     )
-    assert "diff_coverage_gate.py" in text, (
+    assert "tools/diff_coverage_gate.py" in text, (
         "testing must show the changed-code gate command"
     )
     assert "95%" in text, "testing must state the 95% line/branch tiers"

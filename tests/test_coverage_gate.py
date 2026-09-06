@@ -27,8 +27,9 @@ from pathlib import Path
 import coverage
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-GLOBAL_GATE = REPO_ROOT / "coverage_gate.py"
-DIFF_GATE = REPO_ROOT / "diff_coverage_gate.py"
+TOOLS_DIR = REPO_ROOT / "tools"
+GLOBAL_GATE = TOOLS_DIR / "coverage_gate.py"
+DIFF_GATE = TOOLS_DIR / "diff_coverage_gate.py"
 PYTHON = sys.executable
 
 # A fixture module with 21 statement lines (1-19, 22, 23) and exactly
@@ -115,7 +116,7 @@ def run_gate(gate: Path, *args: str, data_file: Path,
     )
 
 
-def test_gate_scripts_exist_at_repository_root():
+def test_gate_scripts_exist_in_tools_directory():
     assert GLOBAL_GATE.is_file(), f"missing global gate: {GLOBAL_GATE}"
     assert DIFF_GATE.is_file(), f"missing diff gate: {DIFF_GATE}"
 
@@ -333,7 +334,7 @@ def test_diff_gate_fails_fast_when_the_base_ref_is_unknown(tmp_path):
 
 def load_gate_module(name: str):
     spec = importlib.util.spec_from_file_location(
-        name, REPO_ROOT / f"{name}.py"
+        name, TOOLS_DIR / f"{name}.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -644,9 +645,9 @@ ALLOWED_PRAGMA_FILES = (
     "src/orbi/runner.py",
     "src/orbi/cli.py",
     "monitoring/prometheus/orbi-exporter.py",
-    "coverage_gate.py",
-    "diff_coverage_gate.py",
-    "ci_failure_triage.py",
+    "tools/coverage_gate.py",
+    "tools/diff_coverage_gate.py",
+    "tools/ci_failure_triage.py",
     "tests/test_cli_install.py",
 )
 

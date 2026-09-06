@@ -2284,7 +2284,7 @@ def run_release_tests(worktree: Path, test_command: str,
     it runs through `bash -c` wrapped in `timeout <seconds>` (Issue
     #95). Its success is followed by the repository's tiered coverage
     gate (Issue #234: the report shows both real numbers, and
-    coverage_gate.py enforces line >= 95% and branch >= 95% checked
+    tools/coverage_gate.py enforces line >= 95% and branch >= 95% checked
     separately): a declaration such as `true` or a bare `pytest` must
     not let a release claim the coverage contract. A test that does not
     terminate within the deadline fails fast with `timeout`'s exit 124
@@ -2292,7 +2292,7 @@ def run_release_tests(worktree: Path, test_command: str,
     """
     coverage_gate = (
         "/usr/bin/python3 -m coverage report --show-missing && "
-        "/usr/bin/python3 coverage_gate.py"
+        "/usr/bin/python3 tools/coverage_gate.py"
     )
     run_command(
         ["timeout", str(timeout_seconds), "bash", "-c",

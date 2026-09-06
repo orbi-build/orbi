@@ -11,7 +11,7 @@ starts at a changed line and is missing. A change with no modified
 Python file (doc-only) passes: the gate must not invent a Python
 coverage requirement for it.
 
-Usage:  python3 diff_coverage_gate.py [base_ref]   (default: origin/main)
+Usage:  python3 tools/diff_coverage_gate.py [base_ref]   (default: origin/main)
 """
 import json
 import os

@@ -78,8 +78,8 @@ gh issue edit <number> --repo OWNER/PILOT-REPO --add-label ai-ready
    ```bash
    /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
    /usr/bin/python3 -m coverage report --show-missing
-   /usr/bin/python3 coverage_gate.py
-   /usr/bin/python3 diff_coverage_gate.py origin/main
+   /usr/bin/python3 tools/coverage_gate.py
+   /usr/bin/python3 tools/diff_coverage_gate.py origin/main
    ```
 
 5. 一个 Issue 一个 PR。PR 描述必须包含 `Fixes #<issue-number>`，

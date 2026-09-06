@@ -27,15 +27,15 @@ GitHub 远端运行。
 ```bash
 COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
 COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage report --show-missing
-COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 coverage_gate.py .orbi/.coverage
-COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 diff_coverage_gate.py origin/main
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/coverage_gate.py .orbi/.coverage
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/diff_coverage_gate.py origin/main
 ```
 
 报告逐文件给出两个真实数字（行和分支）。两个门禁脚本才是门禁，不是
-报告：`coverage_gate.py` 在行层级或分支层级任一低于 95% 时退出非零
+报告：`tools/coverage_gate.py` 在行层级或分支层级任一低于 95% 时退出非零
 （它分别读取 coverage JSON 的 `percent_statements_covered` 和
 `percent_branches_covered`——JSON 字段 `percent_covered` 是行+分支合并
-百分比，绝不作为门禁），`diff_coverage_gate.py` 在 base ref 之后变更的
+百分比，绝不作为门禁），`tools/diff_coverage_gate.py` 在 base ref 之后变更的
 Python 行或分支未达 100% 覆盖时退出非零。
 
 ## 远端 CI（GitHub Actions）
@@ -44,8 +44,8 @@ Python 行或分支未达 100% 覆盖时退出非零。
 `main` 时运行同一契约：单个 job，`actions/setup-python` 固定 Python
 3.14（GitHub-hosted runner 没有生产路径上的生产解释器，所以 workflow
 固定同一 minor 版本，通过 PATH 上的 `python3` 运行相同命令），安装
-`requirements.txt`，然后运行上面的契约命令——报告、`coverage_gate.py`
-和 `diff_coverage_gate.py origin/main`（变更代码层级对照 PR base；纯
+`requirements.txt`，然后运行上面的契约命令——报告、`tools/coverage_gate.py`
+和 `tools/diff_coverage_gate.py origin/main`（变更代码层级对照 PR base；纯
 文档 PR 没有变更的 Python，直接通过）。没有 lint、没有矩阵、没有缓存。
 
 Checkout 用 `fetch-depth: 0`（完整历史 + 全部 tags）：发布对账测试
