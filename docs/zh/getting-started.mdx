@@ -131,7 +131,7 @@ checkout 根目录**没有** `orbi.py`（与 package 同名的 flat 文件
 
 | 字段 | 必填 | 默认 | 含义 |
 |---|---|---|---|
-| `source_repos` | 是 | — | 每个 tick 按顺序扫描的 `owner/repo` 任务池列表（例如先你的 pilot 仓库，再你的 backlog 仓库） |
+| `source_repos` | 是 | — | 每个 tick 扫描的一个 `owner/repo` 任务池。多个条目会因当前执行层只有一个 checkout 而 fail fast；多仓库 workspace 尚未提供 |
 | `repo_dir` | 否 | `.` | 交付 checkout：Runner 交付 Issue 的仓库。任务 worktree 从它冻结的 `origin/<base_branch>` SHA 创建，PR 对它打开，slot 锁在 `<repo_dir>/.orbi/slots/`。自举模式下它就是 orbi checkout 自身；外部单仓库模式（Issue #330）下是外部用户仓库 X |
 | `deploy_home` | 否 | `repo_dir` | orbi **源码** checkout（Issue #330）：editable CLI 安装来源（自更新）、`systemd/` unit 模板、`labels.toml`、prompt 默认（`prompt.md`、`prompt_review.md` 未设置时）。缺省 = `repo_dir`（自举模式，行为不变）。`repo_dir` 是外部仓库 X 时把它设为 orbi checkout。必须是非空字符串；目录不存在会启动 fail fast |
 | `workspace_root` | 否 | `..` | 包含任务 worktree 和 agent 可修改仓库的目录 |

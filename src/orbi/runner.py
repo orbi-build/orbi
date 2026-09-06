@@ -1346,6 +1346,16 @@ def render_prompt(template: str, values: dict[str, str]) -> str:
     return rendered
 
 
+def validate_execution_source_repos(source_repos: list[str]) -> None:
+    """Reject task-pool fan-out until execution has per-repo checkouts."""
+    if len(source_repos) > 1:
+        raise ValueError(
+            "multiple source_repos are not supported with one checkout; "
+            "configure exactly one source repository until multi-repo "
+            "workspaces are available"
+        )
+
+
 def validate_config(config: dict) -> None:
     if not config["repo_dir"].is_dir():
         raise FileNotFoundError(config["repo_dir"])
@@ -8766,6 +8776,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config(args.config)
         validate_config(config)
+        validate_execution_source_repos(config["source_repos"])
     except ValueError as exc:
         LOGGER.error("config_invalid reason=%s", exc)
         return 1

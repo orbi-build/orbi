@@ -53,16 +53,26 @@ def test_parse_issue_list_rejects_non_list():
 def test_load_config_resolves_relative_paths_and_values(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text(
-        """source_repos = [\"owner/pilot\", \"owner/backlog\"]\nrepo_dir = \"repo\"\nworkspace_root = \"..\"\nprompt = \"prompt.md\"\nskills = [\"skill.md\"]\ncontext_files = [\"context.md\"]\n""",
+        """source_repos = [\"owner/repo\"]\nrepo_dir = \"repo\"\nworkspace_root = \"..\"\nprompt = \"prompt.md\"\nskills = [\"skill.md\"]\ncontext_files = [\"context.md\"]\n""",
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["source_repos"] == ["owner/pilot", "owner/backlog"]
+    assert config["source_repos"] == ["owner/repo"]
     assert config["repo_dir"] == (tmp_path / "repo").resolve()
     assert config["workspace_root"] == tmp_path.parent.resolve()
     assert config["prompt"] == (tmp_path / "prompt.md").resolve()
     assert config["skills"] == [(tmp_path / "skill.md").resolve()]
     assert config["context_files"] == [(tmp_path / "context.md").resolve()]
+
+
+def test_validate_execution_source_repos_rejects_multiple_checkouts():
+    with pytest.raises(
+        ValueError,
+        match="multiple source_repos are not supported with one checkout",
+    ):
+        runner.validate_execution_source_repos(
+            ["owner/first", "owner/second"],
+        )
 
 
 def test_load_config_requires_source_repos(tmp_path):
@@ -5435,24 +5445,22 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
     assert runner.current_run_id() == "a1b2c3d4"
 
 
-def test_main_accepts_repeated_source_repo(monkeypatch, tmp_path):
+def test_main_rejects_repeated_source_repo_before_execution(
+    monkeypatch, tmp_path,
+):
     _write_prompts(tmp_path)
     seen = []
-    issue = {"number": 14, "title": "task"}
     config = tmp_path / "orbi.toml"
-    config.write_text("source_repos = [\"xqliu/orbi\", \"xqliu/muyan-ceo\"]\n", encoding="utf-8")
+    config.write_text(
+        "source_repos = [\"xqliu/orbi\", \"xqliu/muyan-ceo\"]\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
-            seen.append(repos) or (repos[0], issue, None)
-        ),
+        lambda *args, **kwargs: seen.append(args) or None,
     )
-    monkeypatch.setattr(runner, "process_issue", lambda *args, **kwargs: runner.IssueResult("pr", "https://github.com/x/y/pull/14"))
-    monkeypatch.setattr(runner, "wait_for_delivery", lambda *a, **k: None)
-    assert runner.main([
-        "--config", str(config),
-    ]) == 0
-    assert seen == [["xqliu/orbi", "xqliu/muyan-ceo"]]
+    assert runner.main(["--config", str(config)]) == 1
+    assert seen == []
 
 
 def test_main_requires_prompt_file(monkeypatch, tmp_path):
@@ -9064,7 +9072,7 @@ def test_main_transport_preflight_receives_the_configured_args(
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
-        'source_repos = ["owner/repo", "owner/backlog"]\n',
+        'source_repos = ["owner/repo"]\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -9073,7 +9081,7 @@ def test_main_transport_preflight_receives_the_configured_args(
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen["repo_dir"] == tmp_path
-    assert seen["source_repos"] == ["owner/repo", "owner/backlog"]
+    assert seen["source_repos"] == ["owner/repo"]
     assert seen["migrate"] is False
     assert seen["run_command"] is runner.run_command
 
