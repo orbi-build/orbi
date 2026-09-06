@@ -1,0 +1,70 @@
+# v0.3.3 发布（最新）
+
+`v0.3.3` 于 2026-09-06T18:36:29Z 发布为 GitHub Release [v0.3.3](https://github.com/orbi-build/orbi/releases/tag/v0.3.3)（release task：Issue #437）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.3.3` | 注解 tag `16d29d962701473fe959310ad16acd43ebe178ff` | 提交 `96f5272b35c4ed8f18670ade75961a4c1b403629` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- auto_advance 开关：orbi.toml 配置控制版本间自动推进，false 时暂停等待人工确认 ([Issue #436](https://github.com/orbi-build/orbi/issues/436); [PR #445](https://github.com/orbi-build/orbi/pull/445))
+
+### Deployment and operations
+
+- 清除 muyan-pilot 改名遗留：删除 systemd 迁移兼容代码与全部 muyan 引用（我们已全部切换到 orbi） ([Issue #447](https://github.com/orbi-build/orbi/issues/447); [PR #450](https://github.com/orbi-build/orbi/pull/450))
+- 多实例部署缺口：setup/install-units 无每实例单元命名（第二个引擎实例要手搓 systemd 单元）；setup 干净门禁会被引擎自建的 .worktrees/ 绊倒 ([Issue #461](https://github.com/orbi-build/orbi/issues/461); [PR #463](https://github.com/orbi-build/orbi/pull/463))
+- Release 验证首跑必挂：版本 bump 先 push、CLI 刷新在后，installed-CLI 版本断言确定性失败 ([Issue #462](https://github.com/orbi-build/orbi/issues/462); [PR #464](https://github.com/orbi-build/orbi/pull/464))
+
+### Observability
+
+- 里程碑评论格式优化：started Pi / plan ready / tests passed / opened PR 等单行评论改为多行字段块（对齐 Orbi progress 风格） ([Issue #453](https://github.com/orbi-build/orbi/issues/453); [PR #460](https://github.com/orbi-build/orbi/pull/460))
+- wait_for_delivery 对 'PR open + issue 停留在 ai-in-progress' 无限轮询且不感知 CI 失败：slot 被永久占用 ([Issue #454](https://github.com/orbi-build/orbi/issues/454); [PR #455](https://github.com/orbi-build/orbi/pull/455))
+
+### Documentation
+
+- test_docs_releases.py 硬编码 release 快照：每发一版必红（#444 实证，#442 同族残留）；改为跨源一致性断言 ([Issue #451](https://github.com/orbi-build/orbi/issues/451); [PR #452](https://github.com/orbi-build/orbi/pull/452))
+- docs: README.zh-CN.md 未跟随英文版删除过期的 PR 统计文案 ([Issue #456](https://github.com/orbi-build/orbi/issues/456); [PR #459](https://github.com/orbi-build/orbi/pull/459))
+
+### Bug fixes
+
+- CI failure: tests on PR #445 (pull_request) ([Issue #446](https://github.com/orbi-build/orbi/issues/446))
+- Bug：release scope 的 PR 过滤失效（/pulls 端点忽略 milestone 参数）→ v0.3.2 Release notes 混入全仓库历史；且 main 已删除 scope_from_milestone 而 #437 仍声明它，v0.3.3 发布将 fail fast ([Issue #448](https://github.com/orbi-build/orbi/issues/448); [PR #458](https://github.com/orbi-build/orbi/pull/458))
+- 手动修正已发布 Release notes：v0.3.2 / v0.3.1 混入全仓库历史 PR（#448 根因修复的清理面） ([Issue #449](https://github.com/orbi-build/orbi/issues/449); [PR #457](https://github.com/orbi-build/orbi/pull/457))
+
+- tag: `v0.3.3`
+- release commit: `96f5272b35c4ed8f18670ade75961a4c1b403629`
+- release task: Issue #437
+
+## Scope (verified item by item)
+
+- Issue #436 closed
+- Issue #446 closed
+- Issue #447 closed
+- Issue #448 closed
+- Issue #449 closed
+- Issue #451 closed
+- Issue #453 closed
+- Issue #454 closed
+- Issue #456 closed
+- Issue #461 closed
+- Issue #462 closed
+- NOT released (still open in milestone v0.3.3): open Issue #437 Release task：发布 v0.3.3 并完成远端交付对账
+
+## Pre-release gates
+
+- no open Issue carries ai-in-progress / ai-pr-opened / ai-fix-needed
+- CI on the release commit: 3 check(s) all success/neutral/skipped
+- no open PR targets main
+
+## Tests
+
+- declared test command and tiered coverage gate (line/branch >= 95%, Issue #234) passed in a clean worktree at 96f5272b35c4ed8f18670ade75961a4c1b403629 (timeout 1800s)
+
+run_id=1daef7d8
