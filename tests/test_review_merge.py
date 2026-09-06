@@ -277,7 +277,8 @@ def test_run_review_launches_independent_readonly_pi_session(monkeypatch, tmp_pa
 # merge gate
 # ---------------------------------------------------------------------------
 
-def _merge_gate_fake(pr_state="MERGEABLE", head_oid="h1"):
+def _merge_gate_fake(pr_state="MERGEABLE", head_oid="h1",
+                     check_runs=None):
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"] and "view" in command:
             return json.dumps({
@@ -285,8 +286,62 @@ def _merge_gate_fake(pr_state="MERGEABLE", head_oid="h1"):
                 "mergeable": pr_state, "headRefOid": head_oid,
                 "mergedAt": None, "mergeCommit": None,
             })
+        if command[:2] == ["gh", "api"]:
+            return json.dumps(check_runs or [{
+                "name": "tests", "status": "completed", "conclusion": "success",
+            }])
         return ""
     return fake_run
+
+
+def test_merge_gate_rejects_failed_github_ci(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        runner, "run_command",
+        _merge_gate_fake(check_runs=[{
+            "name": "tests", "status": "completed", "conclusion": "failure",
+        }]),
+    )
+    with pytest.raises(RuntimeError, match="delivery gate: CI check 'tests'"):
+        runner.merge_gate(tmp_path, {"number": 4, "url": "u",
+                                     "base_ref": "main", "base_oid": "b1",
+                                     "head_ref": "h", "head_oid": "h1"},
+                          "main", repo_dir=tmp_path, source_repo="owner/repo")
+
+
+def test_merge_gate_waits_for_pending_github_ci_then_merges(
+        monkeypatch, tmp_path):
+    pages = [[{"name": "tests", "status": "in_progress", "conclusion": None}],
+             [{"name": "tests", "status": "completed", "conclusion": "success"}]]
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return json.dumps(pages.pop(0))
+        return _merge_gate_fake()(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+    result = runner.merge_gate(tmp_path, {"number": 4, "url": "u",
+                                          "base_ref": "main", "base_oid": "b1",
+                                          "head_ref": "h", "head_oid": "h1"},
+                               "main", repo_dir=tmp_path,
+                               source_repo="owner/repo")
+    assert result["merged"] is True
+
+
+def test_merge_gate_times_out_pending_github_ci(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        runner, "run_command",
+        _merge_gate_fake(check_runs=[{
+            "name": "tests", "status": "queued", "conclusion": None,
+        }]),
+    )
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+    with pytest.raises(RuntimeError, match="delivery gate: waiting for CI.*timed out"):
+        runner.merge_gate(tmp_path, {"number": 4, "url": "u",
+                                     "base_ref": "main", "base_oid": "b1",
+                                     "head_ref": "h", "head_oid": "h1"},
+                          "main", repo_dir=tmp_path, ci_wait_seconds=0,
+                          source_repo="owner/repo")
 
 
 def test_merge_gate_merges_reviewed_head_with_match_head_commit(monkeypatch, tmp_path):
