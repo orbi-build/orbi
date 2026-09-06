@@ -38,7 +38,7 @@ REQUIRED_ITEMS = (
     ("implement-then-pr", "plan, tdd, tests, commit the delivery"),
     ("review-after-pr", "after the pr exists"),
     ("review-new-jsonl", "new jsonl"),
-    ("review-prompt-review", "prompt_review.md"),
+    ("review-prompt-review", "prompts/prompt_review.md"),
     # 2d. Minimal implementation (KISS/LEAN, Issue #118): the smallest
     #     complete change for the acceptance criteria; no speculative
     #     features, no-benefit abstractions, extra framework layers,

@@ -521,6 +521,16 @@ def _config_path(value: str, base: Path) -> Path:
     return (path if path.is_absolute() else base / path).resolve()
 
 
+def _prompt_config_path(value: str, base: Path, legacy_name: str) -> Path:
+    """Resolve a prompt path, retaining explicit legacy basename configs."""
+    path = _config_path(value, base)
+    if Path(value).as_posix() == legacy_name and not path.exists():
+        migrated = _config_path(f"prompts/{legacy_name}", base)
+        if migrated.exists():
+            return migrated
+    return path
+
+
 def _load_deploy_env_file(deploy_home: Path) -> None:
     """Merge `<deploy_home>/.orbi/env` into the process environment (Issue #348).
 
@@ -711,15 +721,17 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         # foreign repo without them); an explicit prompt path still
         # resolves against the config file dir. deploy_home absent ->
         # the original config-file-dir resolution (bootstrap unchanged).
-        "prompt": _config_path(
-            data.get("prompt", "prompt.md"),
+        "prompt": _prompt_config_path(
+            data.get("prompt", "prompts/prompt.md"),
             base if "prompt" in data
             else (deploy_home if deploy_home_raw is not None else base),
+            "prompt.md",
         ),
-        "prompt_review": _config_path(
-            data.get("prompt_review", "prompt_review.md"),
+        "prompt_review": _prompt_config_path(
+            data.get("prompt_review", "prompts/prompt_review.md"),
             base if "prompt_review" in data
             else (deploy_home if deploy_home_raw is not None else base),
+            "prompt_review.md",
         ),
         "skills": [_config_path(item, base) for item in data.get("skills", [])],
         "context_files": [
@@ -5475,7 +5487,7 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
 
     Issue #82 removed the fixer reuse of this function: findings are
     fixed by the review session in the same session, so the implementer
-    is the only user of `prompt.md` now.
+    is the only user of `prompts/prompt.md` now.
 
     `resume_context` (Issue #219): when the worktree already carries
     the interrupted run's work (uncommitted changes and/or a previous
@@ -5677,7 +5689,7 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
         # local commit, branch, worktree and PR stay intact and the
         # state is RECOVERABLE: failing here would re-raise on every
         # tick and the review session — which pushes the task branch
-        # before its verdict (prompt_review.md) — could never run. Log
+        # before its verdict (prompts/prompt_review.md) — could never run. Log
         # the exact heads (the commit/push phase the journal must
         # carry) and continue the verification: the next review round
         # pushes the task branch on the same PR and the merge gate
@@ -6415,7 +6427,7 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
                progress: Callable[[dict], None] | None = None) -> str:
     """Run one independent review session for a frozen PR.
 
-    The session is independent (new process, `prompt_review.md`, a new
+    The session is independent (new process, `prompts/prompt_review.md`, a new
     session JSONL) and reviews the exact frozen base/head. Issue #82:
     when it finds Blocker/Major issues it fixes them IN THIS SAME
     SESSION (modify code, run the full test suite with coverage, commit

@@ -537,11 +537,13 @@ def write_config(
         "lock={{BASE_SYNC_LOCK}}\n", encoding="utf-8",
     )
     config = tmp_path / f"orbi-{max_concurrency}.toml"
+    review_prompt = tmp_path / "prompt_review.md"
     config.write_text(
         f'source_repos = ["{REPO}"]\n'
         f'repo_dir = "{clone}"\n'
         f'workspace_root = "{tmp_path}"\n'
         f'prompt = "{prompt}"\n'
+        f'prompt_review = "{review_prompt}"\n'
         f'max_concurrency = {max_concurrency}\n',
         encoding="utf-8",
     )

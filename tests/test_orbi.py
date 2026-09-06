@@ -12,8 +12,10 @@ import orbi.cli as orbi
 
 
 def _write_prompts(tmp_path):
+    prompts = tmp_path / "prompts"
+    prompts.mkdir(exist_ok=True)
     for name in ("prompt.md", "prompt_review.md"):
-        (tmp_path / name).write_text("prompt", encoding="utf-8")
+        (prompts / name).write_text("prompt", encoding="utf-8")
 
 
 def test_issue_number_extracts_number_from_github_url():

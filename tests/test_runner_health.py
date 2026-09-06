@@ -925,8 +925,9 @@ def test_main_health_check_failure_never_fails_the_tick(
 def _write_config(tmp_path: Path) -> None:
     repo_dir = tmp_path / "orbi"
     repo_dir.mkdir()
+    (tmp_path / "prompts").mkdir()
     for name in ("prompt.md", "prompt_review.md"):
-        (tmp_path / name).write_text("prompt", encoding="utf-8")
+        (tmp_path / "prompts" / name).write_text("prompt", encoding="utf-8")
     (tmp_path / "orbi.toml").write_text(
         'source_repos = ["owner/repo"]\n'
         f'repo_dir = "{repo_dir}"\n',

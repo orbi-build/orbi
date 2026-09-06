@@ -950,7 +950,7 @@ def test_prompt_review_covers_unpushed_local_commit():
     replacement PR."""
     from pathlib import Path
     text = (Path(__file__).resolve().parent.parent
-            / "prompt_review.md").read_text(encoding="utf-8").lower()
+            / "prompts" / "prompt_review.md").read_text(encoding="utf-8").lower()
     assert "local head" in text
     assert "ahead of the frozen" in text
     assert "push" in text
