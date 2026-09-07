@@ -1,0 +1,83 @@
+# 五步跑通第一个 Issue
+
+这是从零到看到一个 PR 的最短路径。本页路径固定使用 z.ai 的免费/体验额度
+和一个 `pi_providers` 文件，不要求选择 provider。**这条路径尚未由真实新人从
+空机器完整实测**；已校验的是 z.ai 模板和 Runner 配置校验。
+
+想了解每个设置在做什么，请看[完整上手文档](/zh/getting-started)。它仍然是
+深入参考，本页不会替换它。
+
+## 1. 安装 Orbi
+
+运行这条命令。安装器询问 GitHub 仓库时，填入你希望 Orbi 交付其 Issue 的
+仓库。
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/orbi-build/orbi/main/install.sh | bash
+```
+
+**成功判据：** setup 结束时没有 `setup_failed`，并且可以使用 `orbi --help`。
+如果失败，按错误中指出的前提操作（最常见是 `gh auth login` 或 SSH key），
+修好后重新运行同一条命令。
+
+## 2. 写入固定的免费 provider 配置
+
+复制下面这一整个配置块，只把 `replace-with-your-key` 替换成 z.ai 账户中的
+key：
+
+```bash
+cd ~/.orbi/src && mkdir -p .orbi && printf '%s\n' 'ZAI_API_KEY=replace-with-your-key' > .orbi/env && chmod 600 .orbi/env && cp templates/pi-providers/z-ai.json .orbi/pi-providers.json && cat >> orbi.toml <<'EOF'
+
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "z-ai"
+pi_model = "glm-5.3-flash"
+EOF
+```
+
+**成功判据：** 配置块无错误返回，文件中有 provider `z-ai`、model
+`glm-5.3-flash` 和 `apiKey` `$ZAI_API_KEY`。如果失败，确认当前目录是安装器
+checkout `~/.orbi/src` 后重跑；不要把真实 key 放进 `orbi.toml`、JSON、Issue
+或 PR。
+
+Runner 会在开始工作前通过 `_load_pi_providers` 校验这个
+`models.json` 形状的文件。文件、provider/model、endpoint/API 或环境变量缺失
+都会 fail fast。
+
+## 3. 创建一个 ready Issue
+
+用这一条命令创建最小测试任务：
+
+```bash
+cd ~/.orbi/src && orbi add "Add a hello-world README line"
+```
+
+**成功判据：** 输出包含 GitHub Issue URL，且该 Issue 带有 `ai-ready` 标签。
+如果没有 URL，确认 `gh auth status` 和第 1 步填写的仓库可写，然后重新运行这条
+命令。
+
+## 4. 启动一次交付 tick
+
+启动第一个 Runner 实例：
+
+```bash
+systemctl --user start orbi@1.service
+```
+
+**成功判据：** journal 出现 Issue 被领取，随后出现 Pi 的
+`session_pending`/activity 行。模型工作几分钟时停在 `session_pending` 是正常
+现象，不要因此停止它。如果命令失败，运行
+`journalctl --user -u orbi@1.service -n 30 --no-pager`；按其中明确的
+`setup_failed`、`transport_check_failed` 或 provider 错误修复，再重新启动服务。
+
+## 5. 看到 pull request
+
+等 journal 报告 `result=pr_opened` 后，在同一个 checkout 运行：
+
+```bash
+cd ~/.orbi/src && gh pr list --state open --limit 1 --json number,title,url
+```
+
+**成功判据：** 输出包含刚才 Issue 的标题和 PR URL。这就是可见结果：你的第一个
+Issue 已经变成 PR。如果列表为空，查看最后的服务日志：
+`journalctl --user -u orbi@1.service -n 50 --no-pager`；`ai-blocked` 表示
+运行带着明确故障停止，而不是静默成功。

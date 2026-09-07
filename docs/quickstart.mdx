@@ -1,0 +1,88 @@
+# Quickstart: your first Issue in five steps
+
+This is the shortest path from zero to a visible pull request. It deliberately
+uses the z.ai free/experience allowance and one `pi_providers` file; there is
+no provider choice in this guide. The path is **not fully tested by a newcomer from an empty machine**. The z.ai template and its runner validation
+are the tested parts.
+
+For an explanation of what each setting does, see the [full getting-started
+guide](/getting-started). It remains the reference and is intentionally not
+replaced by this page.
+
+## 1. Install Orbi
+
+Run this command. When the installer asks for a GitHub repository, enter the
+repository whose Issues Orbi should deliver.
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/orbi-build/orbi/main/install.sh | bash
+```
+
+**Success:** setup ends without `setup_failed`, and `orbi --help` is available.
+If it fails, follow the error's named prerequisite (most commonly `gh auth
+login` or an SSH key), fix it, and run the same command again.
+
+## 2. Add the fixed free provider configuration
+
+Copy this one configuration block, replacing only `replace-with-your-key`
+with the key from your z.ai account:
+
+```bash
+cd ~/.orbi/src && mkdir -p .orbi && printf '%s\n' 'ZAI_API_KEY=replace-with-your-key' > .orbi/env && chmod 600 .orbi/env && cp templates/pi-providers/z-ai.json .orbi/pi-providers.json && cat >> orbi.toml <<'EOF'
+
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "z-ai"
+pi_model = "glm-5.3-flash"
+EOF
+```
+
+**Success:** the block returns to the prompt, and the file contains provider
+`z-ai`, model `glm-5.3-flash`, and `apiKey` `$ZAI_API_KEY`. If it fails, check
+that you are in the installer checkout at `~/.orbi/src`, then rerun the block;
+never put the real key in `orbi.toml`, JSON, an Issue, or a PR.
+
+The runner validates this exact `models.json`-shape file through
+`_load_pi_providers` before starting work. It fails fast for a missing file,
+provider/model, endpoint/API, or environment variable.
+
+## 3. Create one ready Issue
+
+Create the smallest test task with this one command:
+
+```bash
+cd ~/.orbi/src && orbi add "Add a hello-world README line"
+```
+
+**Success:** the output contains a GitHub Issue URL, and that Issue has the
+`ai-ready` label. If no URL is printed, confirm `gh auth status` and that the
+repository entered in step 1 is writable, then run the command again.
+
+## 4. Start one delivery tick
+
+Start the first Runner instance:
+
+```bash
+systemctl --user start orbi@1.service
+```
+
+**Success:** the journal shows the Issue being claimed and then a Pi
+`session_pending`/activity line. `session_pending` is normal while the model
+is working—do not stop it just because it remains there for a few minutes. If
+the command fails, run `journalctl --user -u orbi@1.service -n 30 --no-pager`;
+fix the exact `setup_failed`, `transport_check_failed`, or provider error it
+names, then start the service again.
+
+## 5. See the pull request
+
+After the journal reports `result=pr_opened`, run this command from the same
+checkout:
+
+```bash
+cd ~/.orbi/src && gh pr list --state open --limit 1 --json number,title,url
+```
+
+**Success:** the output contains your Issue's title and a PR URL. That is the
+visible result: your first Issue has become a pull request. If the list is
+empty, inspect the last service lines with
+`journalctl --user -u orbi@1.service -n 50 --no-pager`; `ai-blocked` means the
+run stopped with its actionable failure, not that it silently succeeded.
