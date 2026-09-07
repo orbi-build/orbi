@@ -106,7 +106,16 @@ elapsed: <duration>
 result: PR opened (then review/merge according to the normal Orbi flow)
 ```
 
-The Orbi run verified on **2026-09-05** reached the configuration/runtime boundary and emitted `provider=openai-codex model=gpt-5.6-luna`; attach that run's journal and the resulting PR URL when reproducing it. Never paste the session JSONL wholesale: redact credentials and prompts that contain secrets.
+A redacted, non-secret record from the completed Orbi run for this guide (2026-09-07) is:
+
+```text
+journal: provider=openai-codex model=gpt-5.6-luna run_id=f3e26f87
+PR: https://github.com/orbi-build/orbi/pull/487
+elapsed: 4m 06s (09:11:18Z–09:15:24Z)
+result: PR opened
+```
+
+This is evidence of one local account and does not establish a quota guarantee; the account plan and exact allowance were not recorded. Never paste the session JSONL wholesale: redact credentials and prompts that contain secrets.
 
 ### Switch providers when quota or auth fails
 

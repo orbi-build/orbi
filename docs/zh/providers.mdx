@@ -106,7 +106,16 @@ elapsed: <duration>
 result: PR opened（之后按 Orbi 正常流程审查/合并）
 ```
 
-**2026-09-05** 已核实的 Orbi 真实运行到达配置/运行时边界，并输出了 `provider=openai-codex model=gpt-5.6-luna`；复现时应同时附上该运行的 journal 和最终 PR URL。不要整份粘贴 session JSONL：先删掉凭据和包含秘密的 prompt。
+本指南对应的 Orbi 已完成运行（2026-09-07）留下了以下脱敏、无秘密记录：
+
+```text
+journal: provider=openai-codex model=gpt-5.6-luna run_id=f3e26f87
+PR: https://github.com/orbi-build/orbi/pull/487
+elapsed: 4m 06s（09:11:18Z–09:15:24Z）
+result: PR opened
+```
+
+这只是一个本机账号的证据，不代表额度保证；证据没有记录账号计划和确切额度。不要整份粘贴 session JSONL：先删掉凭据和包含秘密的 prompt。
 
 ### 额度或认证失败时切换 provider
 
