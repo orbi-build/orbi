@@ -15442,6 +15442,8 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
     assert ["gh", "issue", "close", "34", "--repo", "o/r"] in calls
     assert ["gh", "issue", "close", "30", "--repo", "o/r"] not in calls
     assert ["gh", "issue", "close", "32", "--repo", "o/r"] not in calls
+    with pytest.raises(AssertionError):
+        fake_run(["unexpected"])
 
 
 # ---------------------------------------------------------------------------
