@@ -7195,18 +7195,27 @@ def human_review_recovery_at(number: int, repo: str) -> str | None:
 
 
 def log_recovery_ci_status(pr: dict, repo: str) -> None:
-    """Record the recovered PR's current check status without check output."""
-    checks = json.loads(run_command([
-        "gh", "api", f"repos/{repo}/commits/{pr['head_oid']}/check-runs",
-        "--jq", ".check_runs",
-    ]))
-    if not isinstance(checks, list):
-        raise ValueError("PR check-runs response must be an array")
-    summary = [
-        f"{check.get('name', '?')}={check.get('status', '?')}/"
-        f"{check.get('conclusion', '?')}"
-        for check in checks if isinstance(check, dict)
-    ]
+    """Record the recovered PR's current check status without check output.
+
+    This is observability only: a GitHub status lookup must never decide
+    whether the recovered review runs (Issue #79).
+    """
+    try:
+        checks = json.loads(run_command([
+            "gh", "api", f"repos/{repo}/commits/{pr['head_oid']}/check-runs",
+            "--jq", ".check_runs",
+        ]))
+        if not isinstance(checks, list):
+            raise ValueError("PR check-runs response must be an array")
+        summary = [
+            f"{check.get('name', '?')}={check.get('status', '?')}/"
+            f"{check.get('conclusion', '?')}"
+            for check in checks if isinstance(check, dict)
+        ]
+    except Exception as exc:
+        LOGGER.warning("review_recovery_ci_status_failed pr=%s error=%s",
+                       pr.get("number", "?"), quote_value(str(exc)))
+        return
     LOGGER.info("review_recovery_ci_status pr=%s checks=%s",
                 pr["number"], ",".join(summary) or "none")
 

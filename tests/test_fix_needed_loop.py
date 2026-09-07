@@ -985,14 +985,17 @@ def test_human_review_recovery_skips_non_object_events(monkeypatch):
     assert runner.human_review_recovery_at(39, "owner/repo") is None
 
 
-def test_log_recovery_ci_status_rejects_malformed_response(monkeypatch):
+def test_log_recovery_ci_status_logs_malformed_response_and_continues(
+        monkeypatch, caplog,
+):
     monkeypatch.setattr(
         runner, "run_command", lambda *a, **k: json.dumps({}),
     )
-    with pytest.raises(ValueError, match="check-runs response"):
-        runner.log_recovery_ci_status(
-            {"number": 46, "head_oid": "head-sha"}, "owner/repo",
-        )
+    caplog.set_level("WARNING")
+    runner.log_recovery_ci_status(
+        {"number": 46, "head_oid": "head-sha"}, "owner/repo",
+    )
+    assert "review_recovery_ci_status_failed pr=46" in caplog.text
 
 
 def test_log_recovery_ci_status_logs_only_check_summary(monkeypatch, caplog):
