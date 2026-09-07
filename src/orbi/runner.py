@@ -3495,11 +3495,14 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             on_delivery_wait=on_delivery_wait,
         )
         # The release version changed the packaging inputs after the tick's
-        # preflight refresh. Install the release worktree before validating
-        # it, so installed-CLI assertions exercise the version being released
-        # on this first run rather than waiting for the next tick.
+        # preflight refresh. Refresh Orbi from its deployment checkout, not
+        # the published source worktree: a foreign release (for example a
+        # Node-only repo) is not required to carry Orbi's pyproject.toml.
+        # The fallback keeps direct callers with legacy hand-built configs
+        # compatible; load_config always supplies deploy_home.
+        deployment_home = config.get("deploy_home", config["repo_dir"])
         refresh_cli_install(
-            worktree, lock_repo_dir=config["repo_dir"],
+            deployment_home, lock_repo_dir=deployment_home,
             run_command=run_command,
         )
         try:
