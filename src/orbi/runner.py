@@ -2777,7 +2777,115 @@ def publish_release(*, repo: str, tag: str, version: str,
     return json.loads(raw)["url"]
 
 
-def close_release_milestone(repo: str, version: str) -> str:
+EPIC_CHILD_URL_PATTERN = re.compile(
+    r"https://github\.com/([^/]+/[^/]+)/(issues|pull)/([0-9]+)",
+    re.IGNORECASE,
+)
+EPIC_CHILD_NUMBER_PATTERN = re.compile(r"(?<![\w])#([0-9]+)\b")
+
+
+def parse_epic_children(body: str, repo: str) -> list[tuple[str, int]]:
+    """Parse a deliberately explicit child section from an Epic body.
+
+    Only lines in a ``Children``/``Child Issues``/``Child PRs`` section are
+    scope.  This prevents incidental references in prose from becoming
+    release work, and makes an absent or ambiguous scope fail closed.
+    """
+    if not isinstance(body, str):
+        raise ValueError("Epic body is missing")
+    children: list[tuple[str, int]] = []
+    in_section = False
+    found_section = False
+    for line in body.splitlines():
+        heading = re.match(r"^\s{0,3}#{1,6}\s*(.+?)\s*#*\s*$", line)
+        if heading:
+            in_section = bool(re.search(r"\bchild(?:ren)?\b", heading.group(1), re.I))
+            found_section |= in_section
+            continue
+        if re.search(r"\bchildren?\s*[:：]", line, re.I):
+            in_section = True
+            found_section = True
+        if not in_section:
+            continue
+        urls = list(EPIC_CHILD_URL_PATTERN.finditer(line))
+        for match in urls:
+            if match.group(1).lower() != repo.lower():
+                raise ValueError(f"cross-repository child URL: {match.group(0)}")
+            kind = "pr" if match.group(2).lower() == "pull" else "issue"
+            children.append((kind, int(match.group(3))))
+        remainder = EPIC_CHILD_URL_PATTERN.sub("", line)
+        for match in EPIC_CHILD_NUMBER_PATTERN.finditer(remainder):
+            children.append(("unknown", int(match.group(1))))
+    if not found_section or not children:
+        raise ValueError("Epic child scope is missing or empty")
+    if len(set(children)) != len(children):
+        raise ValueError("Epic child scope contains duplicates")
+    return children
+
+
+def _epic_child_evidence(repo: str, kind: str, number: int) -> str:
+    """Verify one child against GitHub's live Issue/PR state."""
+    raw = run_command(["gh", "api", f"repos/{repo}/issues/{number}"])
+    item = json.loads(raw)
+    if not isinstance(item, dict):
+        raise ValueError(f"child #{number} response is not an object")
+    is_pr = "pull_request" in item
+    if kind == "issue" and is_pr:
+        raise ValueError(f"child #{number} declared as Issue but is a PR")
+    if kind == "pr" and not is_pr:
+        raise ValueError(f"child #{number} declared as PR but is an Issue")
+    if is_pr:
+        pr = json.loads(run_command(["gh", "api", f"repos/{repo}/pulls/{number}"]))
+        if not isinstance(pr, dict) or pr.get("merged") is not True:
+            raise ValueError(f"child PR #{number} is not merged")
+        return f"PR #{number} merged"
+    if item.get("state") != "closed":
+        raise ValueError(f"child Issue #{number} is not closed")
+    return f"Issue #{number} closed"
+
+
+def reconcile_release_epics(repo: str, milestone_number: int, version: str,
+                            run_id: str) -> list[str]:
+    """Close only provably complete open Epics in this exact Milestone."""
+    raw = run_command([
+        "gh", "issue", "list", "--repo", repo, "--milestone", version,
+        "--state", "open", "--json", "number,title,body,labels,blockedBy",
+        "--limit", "100",
+    ])
+    issues = [item for item in parse_issue_array(raw) if isinstance(item, dict)]
+    evidence: list[str] = []
+    for epic in issues:
+        labels = epic.get("labels", [])
+        names = {label.get("name") for label in labels if isinstance(label, dict)}
+        if EPIC_LABEL not in names:
+            continue
+        number = epic.get("number")
+        try:
+            children = parse_epic_children(epic.get("body", ""), repo)
+            blockers = epic.get("blockedBy")
+            if not isinstance(blockers, dict) or not isinstance(blockers.get("nodes"), list):
+                raise ValueError("native blocker/dependency state is unavailable")
+            open_blockers = open_blocker_numbers(epic)
+            if open_blockers:
+                raise ValueError("open blockers: " + ", ".join(f"#{n}" for n in open_blockers))
+            child_evidence = [_epic_child_evidence(repo, kind, child)
+                              for kind, child in children]
+        except (ValueError, json.JSONDecodeError) as exc:
+            evidence.append(f"Epic #{number} kept open: {exc}")
+            continue
+        audit = (f"<!-- orbi:run={run_id} -->\n"
+                 f"Epic reconciliation for {version}: complete; "
+                 f"children: {', '.join(child_evidence)}; "
+                 "no open native blockers/dependencies.")
+        comments = issue_comments(int(number), repo=repo)
+        if not any(audit in str(comment.get("body", "")) for comment in comments):
+            comment_issue(int(number), repo=repo, body=audit + f"\nrun_id={run_id}")
+        run_command(["gh", "issue", "close", str(number), "--repo", repo])
+        evidence.append(f"Epic #{number} closed after verification ({'; '.join(child_evidence)})")
+    return evidence
+
+
+def close_release_milestone(repo: str, version: str, *, run_id: str | None = None) -> str:
     """Close the Milestone whose title is exactly `version` (Issue #214).
 
     Runs on the release success path (after the tag is pushed, the
@@ -2837,27 +2945,36 @@ def close_release_milestone(repo: str, version: str) -> str:
             "idempotent success, nothing to do"
         )
     open_issues = milestone.get("open_issues")
+    epic_evidence: list[str] = []
+    if run_id is not None and (not isinstance(open_issues, int) or open_issues > 0):
+        # The summary only decides whether to query the open-issue listing;
+        # every listed Epic is still verified from its children and blockers.
+        epic_evidence = reconcile_release_epics(repo, int(number), version, run_id)
     if not isinstance(open_issues, int) or open_issues > 0:
         raw = run_command([
             "gh", "issue", "list", "--repo", repo, "--milestone", version,
             "--state", "open", "--json", "number,title", "--limit", "100",
         ])
         issues = parse_issue_array(raw)
-        listing = ", ".join(
-            f"#{i.get('number')} {i.get('title')}" for i in issues
-        ) or "(the API returned no list)"
-        raise RuntimeError(
-            f"release {version}: Milestone #{number} ({html_url}) still "
-            f"has {open_issues} open issue(s) — closing it would hide "
-            f"unfinished work; open issues: {listing}"
-        )
+        if issues:
+            listing = ", ".join(
+                f"#{i.get('number')} {i.get('title')}" for i in issues
+            )
+            raise RuntimeError(
+                f"release {version}: Milestone #{number} ({html_url}) still "
+                f"has {open_issues} open issue(s) — closing it would hide "
+                f"unfinished work; open issues: {listing}"
+            )
+        # GitHub's milestone summary can lag immediately after closing an
+        # Epic. The authoritative open-issue listing is empty, so continue.
     run_command([
         "gh", "api", f"repos/{repo}/milestones/{number}",
         "--method", "PATCH", "-f", "state=closed",
     ])
+    epic_suffix = f"; {'; '.join(epic_evidence)}" if epic_evidence else ""
     return (
         f"Milestone #{number} ({html_url}) closed after release "
-        f"{version} (0 open issues)"
+        f"{version} (0 open issues){epic_suffix}"
     )
 
 
@@ -3613,7 +3730,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         )
         try:
             milestone_evidence = close_release_milestone(
-                source_repo, tag,
+                source_repo, tag, run_id=run_id,
             )
         except Exception as exc:
             # The tag and GitHub Release are already published at this point.
