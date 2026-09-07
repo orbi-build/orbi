@@ -1015,7 +1015,8 @@ def test_exhausted_review_enters_new_budget_after_human_recovery(
 ):
     from tests.test_resume_pr import FAKE_RUN_ID
     monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [
-        {"body": f"Orbi review round {i} for PR #46: findings",
+        {"body": f"<!-- orbi:run=a1b2c3d4 -->\n"
+                 f"Orbi review round {i} for PR #46: findings",
          "authorAssociation": "OWNER",
          "createdAt": "2026-01-01T00:00:00Z"}
         for i in range(1, 6)
