@@ -105,10 +105,12 @@ systemctl --user status 'orbi@*.service'
    `max_concurrency = 1` 会启用 `orbi@1.timer`；`max_concurrency = 2` 还会
    启用 `orbi@2.timer`。用下面的命令确认结果：
    `systemctl --user list-timers 'orbi@*.timer'`。
-4. 确认新部署正常后，只有在旧 unit 不再需要时才删除它们。先按上面的步骤
-   停用 timer，再执行 `systemctl --user daemon-reload`。除非已经单独确认
-   数据可以丢弃，否则不要把 repo、worktree 或 `.orbi/` 目录作为 unit 清理
-   的一部分删除。
+4. 如果新部署使用与旧部署相同的 `unit_name`，setup 已经替换了 unit
+   文件；**不要**再删除它们，否则也会删除新部署的 unit。如果明确改用了
+   新的 `unit_name`，只有在新部署验证正常后才能删除旧 unit。先按上面的
+   步骤停用旧 timer，再执行 `systemctl --user daemon-reload`。除非已经
+   单独确认数据可以丢弃，否则不要把 repo、worktree 或 `.orbi/` 目录作为
+   unit 清理的一部分删除。
 
 如果配置了 `unit_name`，把下面命令中的 `orbi@1/2` 换成对应名称（例如
 `orbi-website@1/2`）。

@@ -123,9 +123,12 @@ installed units in place and enable the required timer again (or run
    `max_concurrency = 1` enables `orbi@1.timer`; `max_concurrency = 2` also
    enables `orbi@2.timer`. Verify the result with
    `systemctl --user list-timers 'orbi@*.timer'`.
-4. Only after the new deployment is verified, remove the old unit files if
-   they are no longer needed. Disable their timers first as shown above, then
-   run `systemctl --user daemon-reload`. Do not remove a repo, worktree, or
+4. If the new deployment uses the same `unit_name` as the old one, setup has
+   already replaced the unit files; do **not** remove them, or you will remove
+   the new deployment too. If you intentionally changed `unit_name`, only
+   after the new deployment is verified remove the old unit files. Disable the
+   old timers first as shown above, then run
+   `systemctl --user daemon-reload`. Do not remove a repo, worktree, or
    `.orbi/` directory as part of this unit cleanup unless you have separately
    confirmed that its data is disposable.
 
