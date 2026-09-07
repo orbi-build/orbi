@@ -61,12 +61,13 @@ pi_model = "minimax/minimax-m3:free"
 OpenRouter does not expose a durable per-model daily quota in this repository's provider catalog. Record each experiment separately because limits depend on account, model availability, and current OpenRouter policy. For each model, record UTC date, model ID, successful request count, first `429` timestamp, response body/error code, and whether the limit reset. Never record the API key or full prompts.
 
 ```bash
+set -euo pipefail
 set -a; . .orbi/env; set +a
 for model in \
   google/gemma-4-31b-it:free minimax/minimax-m3:free; do
   printf '\nmodel=%s started=%s\\n' "$model" "$(date -u +%FT%TZ)"
-  pi --no-session --provider openrouter --model "$model" --print \
-    "Reply with exactly OK." 2>&1 || true
+  timeout 300 pi --no-session --provider openrouter --model "$model" --print \
+    "Reply with exactly OK." 2>&1
   printf 'finished=%s\\n' "$(date -u +%FT%TZ)"
 done
 ```
