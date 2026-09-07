@@ -1,0 +1,56 @@
+# Pi Provider 模板
+
+Issue #309 在 [`templates/pi-providers`](https://github.com/orbi-build/orbi/tree/main/templates/pi-providers) 提供每家 provider 一份完整的 `pi_providers` 文件。每份文件都是 Pi `models.json` 形状的有效 JSON：可以把整份复制为 `.orbi/pi-providers.json`，也可以把其中唯一条目复制到已有文件的 `providers` 对象中。然后在 `orbi.toml` 中只设置两个选择项：
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "z-ai"
+pi_model = "glm-5.3-flash"
+```
+
+## 清单
+
+| Provider | 模板 | 环境变量 | 模型 | 状态 | #305 链接 |
+| --- | --- | --- | --- | --- | --- |
+| Google Gemini | `gemini.json` | `GOOGLE_API_KEY` | `gemini-3.8-flash` | 2026-09-04 实测：Pi 全链路 7 秒通过 | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| z.ai GLM | `z-ai.json` | `ZAI_API_KEY` | `glm-5.3-flash` | 2026-09-04 实测：真实任务 #303 到达 PR #304 | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| OpenRouter 免费层 | `openrouter.json` | `OPENROUTER_API_KEY` | `google/gemma-3-27b-it:free` | 未实测；不承诺免费目录持续可用 | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| DeepSeek | `deepseek.json` | `DEEPSEEK_API_KEY` | `deepseek-chat` | 未实测 | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| xAI | `xai.json` | `XAI_API_KEY` | `grok-4.1-fast` | 已验证认证，但无额度：403 | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| 本地 Qwen | `local-qwen.json` | 无（dummy key `local`） | `Qwen3.8-27B` | 本地零成本示例；需要本地 OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
+
+模板出现在清单中不代表承诺额度、可用性、速度或模型支持。`未实测` 是有意保留的状态。
+
+## 接入一家新 provider
+
+1. 复制最接近的模板并设置一个 provider id。`baseUrl`、`api`、`apiKey` 和非空 `models` 列表必须一起保留。选择的 `pi_model` **必须精确等于**某个 `models[].id`。
+2. OpenAI-compatible endpoint 使用 `openai-completions`。Google Gemini 使用 `google-generative-ai`，其 `baseUrl` 保持为 `https://generativelanguage.googleapis.com/v1beta`。
+3. 真实 key 放在 `.orbi/env`（gitignored、权限 `600`），提交的 JSON 只使用 `$VAR` 或 `${VAR}` 引用：
+
+   ```bash
+   mkdir -p .orbi
+   printf '%s\n' 'ZAI_API_KEY=replace-me' > .orbi/env
+   chmod 600 .orbi/env
+   ```
+
+   已安装的 `orbi@.service` 通过 `EnvironmentFile` 加载此文件；key 绝不能进入 Git 或模板。字面量 key 只是降级方案：文件仍应 gitignored，并且要接受它可能通过本地文件和进程工具泄漏的风险。
+4. 手动 tick 时 systemd 不会加载 `.orbi/env`。先导出变量，或在当前 shell 中 source：
+
+   ```bash
+   set -a
+   . .orbi/env
+   set +a
+   PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
+   ```
+
+5. `orbi.toml` 只选择 provider/model，不维护注释掉的 provider 配置块。真实任务前运行 loader/runner 校验；选中的 provider、model、endpoint、API 或 key 引用不正确时会 fail fast。
+
+### `thinkingLevelMap`
+
+不要为 provider 猜测完整映射。Gemini 模板的已知安全写法正是 `{"off": null}`：其他 thinking level 使用 provider 默认映射。若把所有 level 都映射成 `null`，可能发送 provider 不支持的值并得到 `400`。其他 provider 若没有经过 Pi provider 契约验证，应省略此字段。
+
+### 本地 provider
+
+本地 OpenAI-compatible server 仍需要非空的 `apiKey` 字段才能通过 provider 形状校验；本地模板使用无秘密的 dummy 值 `local`。模型 id 必须与 server 宣告的 id 一致（llama.cpp 可用 `--alias` 设置）。
+
+参见[上手指南](/zh/getting-started#path-b-a-pi_providers-file-orbi)中的完整配置，以及[Issue #305](https://github.com/orbi-build/orbi/issues/305) 的免费额度文章系列。

@@ -16,6 +16,7 @@
             "pages": [
               "index",
               "getting-started",
+              "providers",
               "setup"
             ]
           },
@@ -64,6 +65,7 @@
             "pages": [
               "zh/index",
               "zh/getting-started",
+              "zh/providers",
               "zh/setup"
             ]
           },

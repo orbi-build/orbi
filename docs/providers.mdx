@@ -1,0 +1,56 @@
+# Pi provider templates
+
+Issue #309 ships one complete `pi_providers` file per provider in [`templates/pi-providers`](https://github.com/orbi-build/orbi/tree/main/templates/pi-providers). Each file is valid JSON in Pi's `models.json` shape: copy the whole file to `.orbi/pi-providers.json`, or copy its single entry into the `providers` object of an existing file. Set the two selectors in `orbi.toml`:
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "z-ai"
+pi_model = "glm-5.3-flash"
+```
+
+## Catalog
+
+| Provider | Template | Environment variable | Model | Status | #305 link |
+| --- | --- | --- | --- | --- | --- |
+| Google Gemini | `gemini.json` | `GOOGLE_API_KEY` | `gemini-3.8-flash` | Tested 2026-09-04: full Pi chain passed in 7s | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| z.ai GLM | `z-ai.json` | `ZAI_API_KEY` | `glm-5.3-flash` | Tested 2026-09-04: real task #303 reached PR #304 | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| OpenRouter free | `openrouter.json` | `OPENROUTER_API_KEY` | `google/gemma-3-27b-it:free` | Not tested; free catalog availability is not promised | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| DeepSeek | `deepseek.json` | `DEEPSEEK_API_KEY` | `deepseek-chat` | Not tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| xAI | `xai.json` | `XAI_API_KEY` | `grok-4.1-fast` | Auth tested, but no quota: 403 | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| Local Qwen | `local-qwen.json` | None (dummy key `local`) | `Qwen3.8-27B` | Local zero-cost example; requires a local OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
+
+A template being listed is not a promise of quota, availability, speed, or model support. The `Not tested` labels are intentional.
+
+## Add a new provider
+
+1. Copy the closest template and give it one provider id. Keep `baseUrl`, `api`, `apiKey`, and a non-empty `models` list together. The selected `pi_model` **must exactly match** one `models[].id`.
+2. Use `openai-completions` for OpenAI-compatible endpoints. Google Gemini uses `google-generative-ai`; keep its `baseUrl` at `https://generativelanguage.googleapis.com/v1beta`.
+3. Put the real key in `.orbi/env` (gitignored, mode `600`) and use only `$VAR` or `${VAR}` in the committed JSON:
+
+   ```bash
+   mkdir -p .orbi
+   printf '%s\n' 'ZAI_API_KEY=replace-me' > .orbi/env
+   chmod 600 .orbi/env
+   ```
+
+   The installed `orbi@.service` loads this file through `EnvironmentFile`; it never belongs in Git or a template. Literal keys are a last-resort downgrade: keep the file gitignored and understand that the value can leak through local files and process tooling.
+4. For a manual tick, systemd is not loading `.orbi/env`. Export it first, or source it into the current shell:
+
+   ```bash
+   set -a
+   . .orbi/env
+   set +a
+   PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
+   ```
+
+5. Select only the provider/model in `orbi.toml`; do not maintain commented provider blocks there. Run the loader/runner validation before a real task. It fails fast when the selected provider, model, endpoint, API, or selected key reference is invalid.
+
+### `thinkingLevelMap`
+
+Do not invent a complete map for a provider. Gemini's known-safe template form is exactly `{"off": null}`: other thinking levels use the provider default mapping. A copied `null` mapping for every level can send an unsupported value and produce a provider `400`. For another provider, omit the field unless its Pi provider contract has been verified.
+
+### Local providers
+
+A local OpenAI-compatible server still needs a non-empty `apiKey` field to satisfy the provider shape; the local template uses the non-secret dummy value `local`. Its model id must match the server's advertised id (for llama.cpp, set it with `--alias`).
+
+See [Getting started](/getting-started#path-b-a-pi_providers-file-orbi-manages-the-selection) for the existing end-to-end setup and [Issue #305](https://github.com/orbi-build/orbi/issues/305) for the free-quota article series.
