@@ -105,7 +105,7 @@ pi_model = "google/gemma-4-31b-it:free"
 
 ### Cloudflare Workers AI
 
-Cloudflare 的 OpenAI-compatible endpoint 按账号区分。复制 [`cloudflare-workers-ai.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/cloudflare-workers-ai.json)，把 `baseUrl` 中的 `REPLACE_WITH_ACCOUNT_ID` 换成 Cloudflare Account ID，并创建具有 Workers AI 运行权限的 API token。token 放在 `.orbi/env`：
+Cloudflare 的 OpenAI-compatible endpoint 按账号区分。复制 [`cloudflare-workers-ai.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/cloudflare-workers-ai.json)，把 `baseUrl` 中的 `REPLACE_WITH_ACCOUNT_ID` 换成 Cloudflare Account ID，并创建同时具有 `Workers AI - Read` 和 `Workers AI - Edit` 权限的 API token（Cloudflare REST API 文档要求这两个权限）。token 放在 `.orbi/env`：
 
 ```bash
 printf '%s\n' 'CLOUDFLARE_API_TOKEN=replace-me' >> .orbi/env

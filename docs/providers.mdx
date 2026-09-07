@@ -105,7 +105,7 @@ Copy [`openrouter.json`](https://github.com/orbi-build/orbi/blob/main/templates/
 
 ### Cloudflare Workers AI
 
-Cloudflare's OpenAI-compatible endpoint is account-scoped. Copy [`cloudflare-workers-ai.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/cloudflare-workers-ai.json), replace `REPLACE_WITH_ACCOUNT_ID` in `baseUrl` with the Cloudflare account ID, and create an API token with the Workers AI run permission. Keep the token in `.orbi/env`:
+Cloudflare's OpenAI-compatible endpoint is account-scoped. Copy [`cloudflare-workers-ai.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/cloudflare-workers-ai.json), replace `REPLACE_WITH_ACCOUNT_ID` in `baseUrl` with the Cloudflare account ID, and create an API token with both the `Workers AI - Read` and `Workers AI - Edit` permissions (the permissions required by Cloudflare's REST API guide). Keep the token in `.orbi/env`:
 
 ```bash
 printf '%s\n' 'CLOUDFLARE_API_TOKEN=replace-me' >> .orbi/env
