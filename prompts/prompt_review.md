@@ -102,6 +102,35 @@ real pytest output (the summary line), never a self-declared "tests
 passed": the Runner reads it for the progress comment and the `tests
 passed/failed` milestone, and it must stay consistent with CI.
 
+Issue #500: run the review test gate with explicit exit-code aggregation.
+Do not use `&&` to hide which gate failed, and do not run the gates through
+`tail`. Use this exact shape (with the repository's actual test command):
+
+```bash
+set +e
+: > .orbi/test.log
+timeout 1800 bash -c 'COVERAGE_FILE=.orbi/.coverage python3 -m coverage run --branch -m pytest tests/ -q' >> .orbi/test.log 2>&1
+test_exit=$?
+timeout 1800 bash -c 'COVERAGE_FILE=.orbi/.coverage python3 -m coverage report --show-missing' >> .orbi/test.log 2>&1
+report_exit=$?
+timeout 1800 bash -c 'COVERAGE_FILE=.orbi/.coverage python3 tools/coverage_gate.py .orbi/.coverage' >> .orbi/test.log 2>&1
+full_gate_exit=$?
+timeout 1800 bash -c 'COVERAGE_FILE=.orbi/.coverage python3 tools/diff_coverage_gate.py origin/main' >> .orbi/test.log 2>&1
+diff_gate_exit=$?
+final_exit=0
+for exit_code in "$test_exit" "$report_exit" "$full_gate_exit" "$diff_gate_exit"; do
+  if [ "$exit_code" -ne 0 ] && [ "$final_exit" -eq 0 ]; then final_exit="$exit_code"; fi
+done
+printf '\ntest_exit=%s report_exit=%s full_gate_exit=%s diff_gate_exit=%s final_exit=%s\n' "$test_exit" "$report_exit" "$full_gate_exit" "$diff_gate_exit" "$final_exit" >> .orbi/test.log
+exit "$final_exit"
+```
+
+The diff gate runs even when the full gate fails, preserves every command's
+complete output and makes any failed subcommand non-zero overall.
+If `final_exit` is non-zero, do not emit a passing review verdict or continue
+toward merge: fix the failure, or end with `findings` so the Runner enters its
+deterministic `ai-fix-needed` path and releases the slot after terminal failure.
+
 1. CI first: when the PR has CI failures, read the CI failure logs
    BEFORE running any local test — `gh pr checks {{PR_NUMBER}}` (the
    status of every check) and `gh run view <run-id> --log-failed` (the

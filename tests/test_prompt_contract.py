@@ -30,7 +30,10 @@ review session, and the real pytest exit code as the only test result.
 The key wording is locked here so it cannot be silently deleted or
 weakened.
 """
+import os
 from pathlib import Path
+import re
+import subprocess
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPT = REPO_ROOT / "prompts" / "prompt.md"
@@ -47,6 +50,75 @@ def _text(path: Path) -> str:
 
 def _missing(text: str, items: tuple) -> list:
     return [name for name, needle in items if needle.lower() not in text]
+
+
+# --- Issue #500: review gate exit-code propagation ---------------------------
+
+REVIEW_GATE_ITEMS = (
+    ("gate-set-e", "set +e"),
+    ("gate-test-status", "test_exit=$?"),
+    ("gate-full-status", "full_gate_exit=$?"),
+    ("gate-diff-status", "diff_gate_exit=$?"),
+    ("gate-final-status", "final_exit"),
+    ("gate-diff-no-short-circuit", "diff gate runs even when the full gate fails"),
+    ("gate-log-append", ">> .orbi/test.log 2>&1"),
+    ("gate-log-status", "printf"),
+    ("gate-nonzero", "exit \"$final_exit\""),
+)
+
+
+def test_review_prompt_aggregates_all_gate_exit_codes():
+    missing = _missing(_text(PROMPT_REVIEW), REVIEW_GATE_ITEMS)
+    assert not missing, (
+        f"prompt_review.md is missing the Issue #500 gate contract: {missing}"
+    )
+
+
+def test_review_gate_returns_nonzero_for_each_failed_gate(tmp_path):
+    """Execute the prescribed wrapper, rather than only checking its prose."""
+    prompt = PROMPT_REVIEW.read_text(encoding="utf-8")
+    script = re.search(r"```bash\n(.*?)\n```", prompt, re.DOTALL).group(1)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "timeout").write_text(
+        "#!/bin/sh\nshift\nexec \"$@\"\n", encoding="utf-8"
+    )
+    (fake_bin / "python3").write_text(
+        "#!/bin/sh\n"
+        "case \"$*\" in\n"
+        "  *'coverage run'*) gate=test;;\n"
+        "  *'coverage report'*) gate=report;;\n"
+        "  *'tools/coverage_gate.py'*) gate=full;;\n"
+        "  *'tools/diff_coverage_gate.py'*) gate=diff;;\n"
+        "esac\n"
+        "printf '%s output\\n' \"$gate\"\n"
+        "case \"$gate\" in\n"
+        "  test) status=${GATE_TEST_EXIT:-0};;\n"
+        "  report) status=${GATE_REPORT_EXIT:-0};;\n"
+        "  full) status=${GATE_FULL_EXIT:-0};;\n"
+        "  diff) status=${GATE_DIFF_EXIT:-0};;\n"
+        "esac\n"
+        "exit \"$status\"\n",
+        encoding="utf-8",
+    )
+    for executable in fake_bin.iterdir():
+        executable.chmod(0o755)
+    (tmp_path / ".orbi").mkdir()
+    expected = {
+        "success": (0, {}),
+        "full": (7, {"GATE_FULL_EXIT": "7"}),
+        "diff": (9, {"GATE_DIFF_EXIT": "9"}),
+    }
+    for name, (status, overrides) in expected.items():
+        env = {**os.environ, "PATH": f"{fake_bin}:/usr/bin:/bin", **overrides}
+        result = subprocess.run(
+            ["/usr/bin/bash", "-c", script], cwd=tmp_path, env=env,
+            capture_output=True, text=True,
+        )
+        assert result.returncode == status, name
+        log = (tmp_path / ".orbi/test.log").read_text(encoding="utf-8")
+        assert "test output" in log and "diff output" in log
+        assert f"final_exit={status}" in log
 
 
 # --- prompt.md (implementer) -------------------------------------------------
