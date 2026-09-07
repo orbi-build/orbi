@@ -1,0 +1,12 @@
+{
+  "providers": {
+    "google": {
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "api": "google-generative-ai",
+      "apiKey": "$GOOGLE_API_KEY",
+      "models": [
+        {"id": "gemini-3.8-flash", "name": "Gemini 3.8 Flash", "contextWindow": 1048576, "maxTokens": 65536, "thinkingLevelMap": {"off": null}}
+      ]
+    }
+  }
+}

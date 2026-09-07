@@ -1,0 +1,12 @@
+{
+  "providers": {
+    "xai": {
+      "baseUrl": "https://api.x.ai/v1",
+      "api": "openai-completions",
+      "apiKey": "$XAI_API_KEY",
+      "models": [
+        {"id": "grok-4.20-0309", "name": "Grok 4.20", "contextWindow": 131072, "maxTokens": 16384}
+      ]
+    }
+  }
+}

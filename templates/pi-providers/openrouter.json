@@ -1,0 +1,12 @@
+{
+  "providers": {
+    "openrouter": {
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "api": "openai-completions",
+      "apiKey": "$OPENROUTER_API_KEY",
+      "models": [
+        {"id": "google/gemma-4-31b-it:free", "name": "Gemma 4 31B (free)", "contextWindow": 131072, "maxTokens": 8192}
+      ]
+    }
+  }
+}

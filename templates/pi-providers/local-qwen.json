@@ -1,0 +1,12 @@
+{
+  "providers": {
+    "local-qwen": {
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "models": [
+        {"id": "Qwen3.8-27B", "name": "Qwen 3.8 27B (local)", "contextWindow": 131072, "maxTokens": 16384}
+      ]
+    }
+  }
+}
