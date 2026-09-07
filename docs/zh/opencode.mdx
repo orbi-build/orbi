@@ -22,16 +22,20 @@ z.ai 或 Gemini 的耗时、额度数字套到 OpenCode 上。
 
 1. 在拥有目标额度的 OpenCode 账号/套餐中取得 API key。key 必须留在 Git、
    Issue、journal 和 PR 文本之外。
-2. 手工检查时导出 key，或将它放入 Orbi systemd unit 加载的私有环境文件：
+2. 使用 Pi 内置登录时，启动交互式 Pi，输入 `/login`，选择 OpenCode，
+   再选择 API key；Pi 会把凭据存入私有 auth 文件。也可以手工检查时导出
+   key，或将它放入 Orbi systemd unit 加载的私有环境文件：
 
    ```bash
+   pi
+   # 输入：/login，然后选择 OpenCode 和 API key
    export OPENCODE_API_KEY='...'
    timeout 30 pi auth check --provider opencode --json
    ```
 
-3. Pi 0.85.1 文档化的 CLI 命令是 `pi auth check`、`print-api-key` 和
-   `print-bearer-token`；没有针对 OpenCode 的 `/login` 流程。实测认证契约
-   是 API key，不是 OAuth。若未来 Pi 改变行为，必须重新运行上述命令并先
+3. Pi 0.85.1 还文档化了 `pi auth check`、`print-api-key` 和
+   `print-bearer-token`。实测 OpenCode 的认证契约是 API key，不需要
+   OpenCode 专用 OAuth 流程。若未来 Pi 改变行为，必须重新运行上述命令并先
    更新本文档，不能凭 provider 名称推断。
 
 ## 目录与 Orbi 配置

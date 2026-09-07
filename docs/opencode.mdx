@@ -24,19 +24,22 @@ numbers to this provider.
 
 1. Obtain an OpenCode API key from the OpenCode account/plan that owns the
    desired quota. Keep it outside Git and outside Issue, journal, and PR text.
-2. Export it for a manual check, or put it in the private environment file loaded
-   by the Orbi systemd unit:
+2. For Pi's built-in login, start interactive Pi, enter `/login`, select
+   OpenCode, and choose the API-key option; Pi stores the credential in its
+   private auth file. Alternatively, export the key for a manual check, or put
+   it in the private environment file loaded by the Orbi systemd unit:
 
    ```bash
+   pi
+   # enter: /login, then select OpenCode and API key
    export OPENCODE_API_KEY='...'
    timeout 30 pi auth check --provider opencode --json
    ```
 
-3. Pi 0.85.1's documented CLI exposes `pi auth check`, `print-api-key`, and
-   `print-bearer-token`; it does not document a provider-specific `/login` flow
-   for OpenCode. The observed credential contract is an API key, not OAuth. If a
-   future Pi version changes this, repeat the commands above and update this
-   page before documenting it.
+3. Pi 0.85.1 also documents `pi auth check`, `print-api-key`, and
+   `print-bearer-token`. The observed OpenCode credential contract is an API key;
+   no OpenCode-specific OAuth flow is required. If a future Pi version changes
+   this, repeat the commands above and update this page before documenting it.
 
 ## Catalog and Orbi configuration
 
