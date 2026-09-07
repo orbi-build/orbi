@@ -1536,6 +1536,7 @@ def run_command(command: list[str], *, cwd: Path | None = None,
 
 
 GIT_NETWORK_MAX_ATTEMPTS = 3
+GIT_NETWORK_TIMEOUT_SECONDS = 30
 GIT_NETWORK_BACKOFF_SECONDS = 1
 GIT_TRANSIENT_ERROR_MARKERS = (
     "connection timed out",
@@ -1560,6 +1561,14 @@ def _is_retryable_git_network_failure(
     return any(marker in stderr for marker in GIT_TRANSIENT_ERROR_MARKERS)
 
 
+def _is_git_network_command(command: list[str]) -> bool:
+    return (
+        len(command) >= 2
+        and command[:1] == ["git"]
+        and command[1] in {"fetch", "push"}
+    )
+
+
 def run_git_network_command(
     command: list[str], *, cwd: Path | str | None = None,
     command_runner: Callable[..., str] | None = None,
@@ -1575,22 +1584,27 @@ def run_git_network_command(
     while True:
         attempt += 1
         try:
-            return execute(command, cwd=cwd)
-        except subprocess.CalledProcessError as exc:
-            if (
-                attempt >= GIT_NETWORK_MAX_ATTEMPTS
-                or not _is_retryable_git_network_failure(command, exc)
-            ):
-                raise
-            delay = GIT_NETWORK_BACKOFF_SECONDS * (2 ** (attempt - 1))
-            LOGGER.warning(
-                "git_network_retry command=%s attempt=%s max_attempts=%s "
-                "delay_seconds=%s stderr=%s",
-                single_line(" ".join(command)), attempt + 1,
-                GIT_NETWORK_MAX_ATTEMPTS, delay,
-                single_line((exc.stderr or "").strip()),
+            return execute(
+                command, cwd=cwd, timeout=GIT_NETWORK_TIMEOUT_SECONDS,
             )
-            time.sleep(delay)
+        except subprocess.TimeoutExpired as exc:
+            retryable = _is_git_network_command(command)
+            detail = f"command timed out after {GIT_NETWORK_TIMEOUT_SECONDS}s"
+            if attempt >= GIT_NETWORK_MAX_ATTEMPTS or not retryable:
+                raise
+        except subprocess.CalledProcessError as exc:
+            retryable = _is_retryable_git_network_failure(command, exc)
+            detail = (exc.stderr or "").strip()
+            if attempt >= GIT_NETWORK_MAX_ATTEMPTS or not retryable:
+                raise
+        delay = GIT_NETWORK_BACKOFF_SECONDS * (2 ** (attempt - 1))
+        LOGGER.warning(
+            "git_network_retry command=%s attempt=%s max_attempts=%s "
+            "delay_seconds=%s stderr=%s",
+            single_line(" ".join(command)), attempt + 1,
+            GIT_NETWORK_MAX_ATTEMPTS, delay, single_line(detail),
+        )
+        time.sleep(delay)
 
 
 def parse_issue_array(raw: str) -> list[dict]:

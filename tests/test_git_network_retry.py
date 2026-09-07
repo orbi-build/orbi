@@ -32,6 +32,30 @@ def test_git_network_command_retries_transient_failure_then_succeeds(
     assert "attempt=2" in caplog.text
 
 
+def test_git_network_command_retries_bounded_timeouts_then_succeeds(
+    monkeypatch,
+):
+    calls = []
+    sleeps = []
+
+    def fake_run(command, **kwargs):
+        calls.append(kwargs)
+        if len(calls) < 3:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return "ok"
+
+    monkeypatch.setattr(runner.time, "sleep", sleeps.append)
+    assert runner.run_git_network_command(
+        ["git", "fetch", "origin", "main"], command_runner=fake_run,
+    ) == "ok"
+    assert len(calls) == 3
+    assert all(
+        call["timeout"] == runner.GIT_NETWORK_TIMEOUT_SECONDS
+        for call in calls
+    )
+    assert sleeps == [1, 2]
+
+
 def test_git_network_command_exhausts_transient_failures_and_preserves_stderr(
     monkeypatch,
 ):
@@ -78,6 +102,19 @@ def test_git_network_command_does_not_retry_other_git_commands():
         1, command, stderr="Connection timed out",
     )
     assert not runner._is_retryable_git_network_failure(command, error)
+
+
+def test_git_network_command_does_not_retry_non_git_timeout(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(runner.time, "sleep", lambda _: pytest.fail("slept"))
+    with pytest.raises(subprocess.TimeoutExpired):
+        runner.run_git_network_command(["gh", "pr", "create"], command_runner=fake_run)
+    assert len(calls) == 1
 
 
 def test_git_network_command_does_not_retry_non_git_commands(monkeypatch):
