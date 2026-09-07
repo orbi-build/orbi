@@ -1,0 +1,101 @@
+# OpenCode Zen provider
+
+本文说明如何在 Orbi 中使用 **OpenCode Zen**（OpenCode 提供的精选模型服务），属于 [provider 文档 Epic（#305）](https://github.com/orbi-build/orbi/issues/305)。它与 OpenCode 终端应用的项目配置不同：Orbi 运行的是 Pi，不是 OpenCode。
+
+> **证据边界——2026-09-07。** 以下检查使用已安装的 Pi CLI **0.85.1**。`pi auth check --provider opencode --json --no-refresh` 能识别 `opencode`，并返回 `credentials_not_configured`（退出码 1）。当前环境没有 OpenCode 账号或 API key，因此**未实测**真实模型请求、额度消耗以及 Orbi Issue 到 PR 的完整运行。不要把本文当作账号仍有可用额度的保证。
+
+## 认证
+
+OpenCode 官方流程是 API key 认证，不是 Orbi 发起的 OAuth 登录：
+
+1. 打开 [OpenCode authentication](https://opencode.ai/auth)，登录，填写 billing 信息，创建并复制 OpenCode Zen API key。
+2. 将 key 放入 Orbi 运行环境。推荐使用项目本地、权限为 600 的 `.orbi/env`（不会提交）：
+
+   ```bash
+   mkdir -p .orbi
+   printf '%s\n' 'OPENCODE_API_KEY=replace-with-your-key' > .orbi/env
+   chmod 600 .orbi/env
+   ```
+
+3. 派发 Issue 前检查凭据：
+
+   ```bash
+   pi auth check --provider opencode
+   ```
+
+   配置正确的 key 后，不应再返回 `credentials_not_configured`。此检查不消耗额度。可选的真实 smoke 请求（使用下面选择的精确 model）：
+
+   ```bash
+   pi --provider opencode --model glm-5.3-flash --print 'reply with: ok'
+   ```
+
+Pi 也有 API-key provider 的交互式 `/login` 流程，但这里不是必须的：`/login` 会把 key 存入 Pi 的 `~/.pi/agent/auth.json`，而 `.orbi/env` 方式让 Orbi systemd unit 显式加载凭据。不需要运行 OpenCode OAuth，也不需要在 Orbi 使用 Pi 时填写 OpenCode 的 `~/.local/share/opencode/auth.json`。
+
+## Pi 与 Orbi 配置
+
+Pi 0.85.1 原生提供以下 provider 契约：
+
+- provider：`opencode`
+- API key：`OPENCODE_API_KEY`
+- 服务 endpoint：Pi 内置的 OpenCode Zen endpoint
+- 支持的 API：原生 Anthropic Messages、Google Generative AI、OpenAI Completions 和 OpenAI Responses adapter，由 catalog 条目选择
+
+因此 **不要为 OpenCode 创建 `pi_providers.json`**，也不要把 OpenCode 条目复制到第二个 provider 文件。`pi_providers` 用于自定义 provider；重复定义会过时且没有必要。
+
+在 `orbi.toml` 中只设置选择项：
+
+```toml
+pi_provider = "opencode"
+pi_model = "glm-5.3-flash"
+```
+
+保持 `pi_providers` 未设置。Orbi 已安装的 unit 会加载 `.orbi/env`；手动运行时 shell 不会自动加载它，所以先导出变量：
+
+```bash
+set -a; . .orbi/env; set +a
+orbi --help >/dev/null
+```
+
+真实派发前运行 `orbi setup`/正常配置校验。所选 provider 和精确 model 必须存在于 Pi 当前 catalog 中。
+
+## Pi 0.85.1 实测 catalog
+
+已安装 Pi catalog 中观察到以下 OpenCode model ID。此快照仅供参考：生产运行前用 `pi --list-models` 检查/刷新，因为 OpenCode 可能增删模型或限制模型访问。
+
+| API family | 观察到的 model ID |
+| --- | --- |
+| Anthropic Messages | `claude-fable-5`、`claude-fable-5-1`、`claude-haiku-4-5`、`claude-opus-4-5`、`claude-opus-4-6`、`claude-opus-4-7`、`claude-opus-4-8`、`claude-opus-5`、`claude-sonnet-4`、`claude-sonnet-4-5`、`claude-sonnet-4-6`、`claude-sonnet-5`、`qwen3.5-plus`、`qwen3.6-plus` |
+| Google Generative AI | `gemini-3-flash`、`gemini-3.1-pro`、`gemini-3.5-flash`、`gemini-3.5-flash-lite`、`gemini-3.6-flash`、`gemini-3.7-flash`、`gemini-3.8-flash` |
+| OpenAI Completions | `big-pickle`、`deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`、`deepseek-v4-pro`、`glm-5`、`glm-5.1`、`glm-5.2`、`glm-5.3`、`glm-5.3-flash`、`kimi-k2.5`、`kimi-k2.6`、`kimi-k2.7-code`、`kimi-k3`、`ling-3.0-flash-fin-free`、`mimo-v2.5-free`、`minimax-m2.5`、`minimax-m2.7`、`minimax-m3`、`nemotron-3-ultra-free`、`nemotron-3.5-lightning-free` |
+| OpenAI Responses | `gpt-5`、`gpt-5-codex`、`gpt-5-nano`、`gpt-5.1`、`gpt-5.1-codex`、`gpt-5.1-codex-max`、`gpt-5.1-codex-mini`、`gpt-5.2`、`gpt-5.2-codex`、`gpt-5.3-codex`、`gpt-5.4`、`gpt-5.4-mini`、`gpt-5.4-nano`、`gpt-5.4-pro`、`gpt-5.5`、`gpt-5.5-pro`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-6-astra`、`grok-4.5`、`grok-4.6`、`grok-build-0.1`、`muse-spark-1.2`、`muse-spark-1.2-contributor-free`、`muse-spark-1.3`、`muse-spark-1.3-contributor-free` |
+
+选择 `glm-5.3-flash` 作为可复制示例，是因为它存在于已安装 catalog，也在 OpenCode Zen 官方模型表中。catalog 元数据显示其 context window 为 1,000,000、最大输出为 131,072；这是模型上限，不是账号额度。
+
+## 额度、限流、重置与失败表现
+
+根据 [Zen 官方文档](https://opencode.ai/docs/zen/)，Zen 按请求 pay-as-you-go，使用账号 credits，支持自动充值（余额低于 $5 时默认充值 $20，可配置或关闭），也支持 workspace 和团队成员的月度限额。官方没有承诺统一的免费额度或固定重置时间；限额和 model 可用性取决于账号、workspace 和 plan。标记为 `Free` 的若干模型也明确只是限时提供。
+
+本次运行没有账号，以下内容因此**未实测**：剩余余额、请求速率限制、重置时间、额度耗尽时的 HTTP status/body，以及具体 plan 是否启用某个 model。凭据失败、model 被禁用、credits 耗尽或上游限流，都会表现为 Pi model request 失败；Orbi 必须让 run 失败，不能静默重试或声称 Issue 已到达 PR。检查去除秘密后的 Pi/Orbi 错误，再在 OpenCode 中核对 key、余额、workspace 限额、model access 和当前 catalog。
+
+## 最小 fallback
+
+保持 Issue 和 runner 不变，只修改 provider 选择（替代 provider 需要 secret 时一并修改）。切换到仓库现有的 local Qwen template：
+
+```diff
+ pi_provider = "opencode"
+-pi_model = "glm-5.3-flash"
++pi_providers = ".orbi/pi-providers.json"
++pi_provider = "local-qwen"
++pi_model = "Qwen3.8-27B"
+```
+
+将 `templates/pi-providers/local-qwen.json` 复制为 `.orbi/pi-providers.json`，并确保本地 OpenAI-compatible server 正在运行。切换到 z.ai 时，复制 `templates/pi-providers/z-ai.json`，在 `.orbi/env` 使用 `ZAI_API_KEY`，并只将三个选择项改为 `pi_provider = "z-ai"`、`pi_model = "glm-5.3-flash"`。这些 fallback 各有自己的可用性和额度要求，并不保证有容量。
+
+## 来源与复查日期
+
+- [Pi provider 文档](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/docs/providers.md)
+- [OpenCode provider 文档](https://opencode.ai/docs/providers/)
+- [OpenCode Zen catalog、价格与限制](https://opencode.ai/docs/zen/)
+- Pi CLI/catalog 和 auth 检查：`pi --version`、`pi --list-models`、`pi auth check --provider opencode --json --no-refresh`，运行于 2026-09-07。
+
+后续 Pi 版本或 OpenCode plan 使用本文前，重新运行 catalog 和 auth 检查。

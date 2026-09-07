@@ -1,0 +1,153 @@
+# OpenCode Zen provider
+
+This page is the Orbi setup for **OpenCode Zen**, OpenCode's curated model
+service, and is part of the [provider documentation Epic (#305)](https://github.com/orbi-build/orbi/issues/305). It is separate from the OpenCode terminal application's project
+configuration: Orbi runs Pi, not OpenCode.
+
+> **Evidence boundary — 2026-09-07.** The checks below used the installed Pi
+> CLI **0.85.1**. `pi auth check --provider opencode --json --no-refresh`
+> recognized `opencode` and returned `credentials_not_configured` (exit 1).
+> No OpenCode account or API key was available in this environment, so a real
+> model request, quota consumption, and an Orbi Issue-to-PR run were **not
+> tested**. Do not read this page as a claim that an account has capacity.
+
+## Authentication
+
+OpenCode's official flow is API-key authentication, not an OAuth login from
+Orbi:
+
+1. Open [OpenCode authentication](https://opencode.ai/auth), sign in, add
+   billing details, and create/copy an OpenCode Zen API key.
+2. Put the key in the environment used by Orbi. The recommended project-local
+   method is a mode-600 `.orbi/env` file (it is not committed):
+
+   ```bash
+   mkdir -p .orbi
+   printf '%s\n' 'OPENCODE_API_KEY=replace-with-your-key' > .orbi/env
+   chmod 600 .orbi/env
+   ```
+
+3. Check the credential before dispatching an Issue:
+
+   ```bash
+   pi auth check --provider opencode
+   ```
+
+   A configured key should no longer report `credentials_not_configured`.
+   This check does not spend quota. For an optional real smoke request, use
+   the exact model selected below:
+
+   ```bash
+   pi --provider opencode --model glm-5.3-flash --print 'reply with: ok'
+   ```
+
+Pi also has an interactive `/login` flow for API-key providers. It is optional
+here: `/login` stores the key in Pi's `~/.pi/agent/auth.json`, whereas the
+`.orbi/env` method makes the credential explicit to the Orbi systemd unit.
+There is no need to run an OpenCode OAuth flow or to put an OpenCode credential
+in OpenCode's `~/.local/share/opencode/auth.json` when Orbi is using Pi.
+
+## Pi and Orbi configuration
+
+Pi 0.85.1 has a native provider with this contract:
+
+- provider: `opencode`
+- API key: `OPENCODE_API_KEY`
+- service endpoint: Pi's built-in OpenCode Zen endpoint
+- supported APIs: native Anthropic Messages, Google Generative AI, OpenAI
+  Completions, and OpenAI Responses adapters, selected by the catalog entry
+
+Therefore **do not create `pi_providers.json` for OpenCode** and do not copy an
+OpenCode entry into a second provider file. A `pi_providers` file is for
+custom/provider definitions; duplicating Pi's native entry can become stale
+and is unnecessary.
+
+Set only the selectors in `orbi.toml`:
+
+```toml
+pi_provider = "opencode"
+pi_model = "glm-5.3-flash"
+```
+
+Leave `pi_providers` unset. Orbi's installed unit loads `.orbi/env`; for a
+manual run, export the variable first because a shell does not load that file
+automatically:
+
+```bash
+set -a; . .orbi/env; set +a
+orbi --help >/dev/null
+```
+
+Run `orbi setup`/the normal config validation before claiming the provider is
+ready. The selected provider and exact model must be present in Pi's current
+catalog.
+
+## Catalog observed in Pi 0.85.1
+
+The installed Pi catalog contains these OpenCode model IDs. This snapshot is
+informational: refresh/check Pi's catalog and use `pi --list-models` before a
+production run because OpenCode can add, remove, or restrict models.
+
+| API family | Model IDs observed |
+| --- | --- |
+| Anthropic Messages | `claude-fable-5`, `claude-fable-5-1`, `claude-haiku-4-5`, `claude-opus-4-5`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`, `claude-opus-5`, `claude-sonnet-4`, `claude-sonnet-4-5`, `claude-sonnet-4-6`, `claude-sonnet-5`, `qwen3.5-plus`, `qwen3.6-plus` |
+| Google Generative AI | `gemini-3-flash`, `gemini-3.1-pro`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash`, `gemini-3.8-flash` |
+| OpenAI Completions | `big-pickle`, `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp`, `deepseek-v4-pro`, `glm-5`, `glm-5.1`, `glm-5.2`, `glm-5.3`, `glm-5.3-flash`, `kimi-k2.5`, `kimi-k2.6`, `kimi-k2.7-code`, `kimi-k3`, `ling-3.0-flash-fin-free`, `mimo-v2.5-free`, `minimax-m2.5`, `minimax-m2.7`, `minimax-m3`, `nemotron-3-ultra-free`, `nemotron-3.5-lightning-free` |
+| OpenAI Responses | `gpt-5`, `gpt-5-codex`, `gpt-5-nano`, `gpt-5.1`, `gpt-5.1-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`, `gpt-5.2`, `gpt-5.2-codex`, `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.4-pro`, `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `grok-build-0.1`, `muse-spark-1.2`, `muse-spark-1.2-contributor-free`, `muse-spark-1.3`, `muse-spark-1.3-contributor-free` |
+
+`glm-5.3-flash` is the copyable example because it is present in the
+installed catalog and is also listed by OpenCode Zen's official model table.
+The catalog metadata reports its context window as 1,000,000 and max output as
+131,072; those are model limits, not account quota.
+
+## Credits, limits, reset, and failures
+
+According to the [official Zen documentation](https://opencode.ai/docs/zen/),
+Zen is pay-as-you-go and charges per request. It supports account credits,
+auto-reload (below $5, reload $20 by default, configurable or disable-able),
+and monthly limits for a workspace and individual team members. The official
+page does not promise a universal free allowance or a fixed reset time; limits
+and model availability are account/workspace/plan dependent. Several models
+marked `Free` are explicitly described as available for a limited time.
+
+This run did not possess an account, so the following are deliberately **not
+measured here**: remaining balance, request rate limits, reset timing, an HTTP
+status/body for exhausted credits, and whether any listed model is enabled for
+a particular plan. A failed credential, disabled model, exhausted credit, or
+upstream rate limit is a failed Pi model request; Orbi must leave the run
+failed rather than silently retrying or claiming the Issue reached a PR.
+Inspect the redacted Pi/Orbi error, then verify the key, balance, workspace
+limit, model access, and current catalog in OpenCode.
+
+## Minimal fallback
+
+Keep the Issue and runner unchanged. Change only the provider selection (and
+secret if the replacement needs one). For the repository's existing local
+Qwen template:
+
+```diff
+ pi_provider = "opencode"
+-pi_model = "glm-5.3-flash"
++pi_providers = ".orbi/pi-providers.json"
++pi_provider = "local-qwen"
++pi_model = "Qwen3.8-27B"
+```
+
+Copy `templates/pi-providers/local-qwen.json` to
+`.orbi/pi-providers.json`, and ensure the local OpenAI-compatible server is
+running. For z.ai, copy `templates/pi-providers/z-ai.json`, use
+`ZAI_API_KEY` in `.orbi/env`, and change only the three selector values to
+`pi_provider = "z-ai"` and `pi_model = "glm-5.3-flash"`. These fallbacks have
+their own availability and quota requirements; they are not guaranteed
+capacity.
+
+## Sources and re-check date
+
+- [Pi provider documentation](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/docs/providers.md)
+- [OpenCode provider documentation](https://opencode.ai/docs/providers/)
+- [OpenCode Zen catalog, pricing, and limits](https://opencode.ai/docs/zen/)
+- Pi CLI/catalog and auth checks: `pi --version`, `pi --list-models`, and
+  `pi auth check --provider opencode --json --no-refresh`, run 2026-09-07.
+
+Re-run the catalog and auth checks before using this page for a later Pi
+release or a different OpenCode plan.

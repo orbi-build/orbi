@@ -17,6 +17,7 @@
               "index",
               "getting-started",
               "providers",
+              "opencode-zen",
               "ollama-pro",
               "setup"
             ]
@@ -67,6 +68,7 @@
               "zh/index",
               "zh/getting-started",
               "zh/providers",
+              "zh/opencode-zen",
               "zh/ollama-pro",
               "zh/setup"
             ]
