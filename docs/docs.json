@@ -18,6 +18,7 @@
               "quickstart",
               "getting-started",
               "providers",
+              "zai-glm-5-3-flash",
               "ollama-pro",
               "setup"
             ]
@@ -69,6 +70,7 @@
               "zh/quickstart",
               "zh/getting-started",
               "zh/providers",
+              "zh/zai-glm-5-3-flash",
               "zh/ollama-pro",
               "zh/setup"
             ]
