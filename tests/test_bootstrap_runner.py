@@ -15409,10 +15409,9 @@ def test_close_release_milestone_fails_fast_on_duplicate_titles(monkeypatch):
         fake_run(["unexpected"])
 
 
-def test_parse_paginated_issue_array_ignores_non_object_items():
-    assert runner.parse_paginated_issue_array('[[{"number": 1}, "bad"], []]') == [
-        {"number": 1},
-    ]
+def test_parse_paginated_issue_array_rejects_malformed_items():
+    with pytest.raises(ValueError, match="non-object item"):
+        runner.parse_paginated_issue_array('[[{"number": 1}, "bad"], []]')
     with pytest.raises(ValueError, match="array of arrays"):
         runner.parse_paginated_issue_array("[{}]")
 
@@ -15439,6 +15438,14 @@ def test_parse_epic_children_requires_explicit_scope_and_rejects_cross_repo():
     ]
     with pytest.raises(ValueError, match="duplicates"):
         runner.parse_epic_children("## Children\n- #12\n- #12", "o/r")
+
+
+def test_epic_issue_with_blockers_rejects_invalid_details(monkeypatch):
+    with pytest.raises(ValueError, match="number is missing"):
+        runner.epic_issue_with_blockers("o/r", {"number": "20"})
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "[]")
+    with pytest.raises(ValueError, match="details are not an object"):
+        runner.epic_issue_with_blockers("o/r", {"number": 20})
 
 
 def test_reconcile_release_epics_closes_verified_epic_with_audit(monkeypatch):

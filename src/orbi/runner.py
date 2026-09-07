@@ -1635,7 +1635,9 @@ def parse_paginated_issue_array(raw: str) -> list[dict]:
     pages = json.loads(raw)
     if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
         raise ValueError("paginated issue list must be an array of arrays")
-    return [item for page in pages for item in page if isinstance(item, dict)]
+    if any(not isinstance(item, dict) for page in pages for item in page):
+        raise ValueError("paginated issue list contains a non-object item")
+    return [item for page in pages for item in page]
 
 
 def milestone_open_issues(repo: str, milestone_number: int) -> list[dict]:
