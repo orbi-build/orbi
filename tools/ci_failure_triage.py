@@ -12,7 +12,7 @@ object, the jobs object and `commits/{sha}/pulls` — and `gh api --help`,
 gh 2.97):
 
 - The CI run concluded `failure`, `cancelled` or `timed_out` on a target
-  event: one `bug` + `ai-ready` Issue per FAILED JOB (the Orbi ready
+  event: one `bug` + `p0` + `ai-ready` Issue per FAILED JOB (the Orbi ready
   queue picks it up and delivers the fix through its normal single-Issue /
   single-PR / review contract), with the full evidence — workflow, job,
   event, branch/PR, commit SHA, run id, run URL, failed steps, trigger
@@ -65,7 +65,8 @@ PUSH_TARGET_BRANCH = "main"
 FAILURE_CONCLUSIONS = ("failure", "cancelled", "timed_out")
 STEP_FAILURE_CONCLUSIONS = ("failure", "timed_out")
 SUCCESS_CONCLUSION = "success"
-ISSUE_LABELS = ("bug", "ai-ready")
+ISSUE_LABELS = ("bug", "p0", "ai-ready")
+ISSUE_INDEX_LABELS = ("bug", "ai-ready")
 FINGERPRINT_MARKER = "ci-failure-fingerprint:"
 FINGERPRINT_RE = re.compile(
     r"<!--\s*" + re.escape(FINGERPRINT_MARKER) + r"([0-9a-f]{64})\s*-->"
@@ -317,10 +318,10 @@ def fetch_jobs(owner: str, repo: str, run_id: int) -> list:
 
 
 def index_open_issues(owner: str, repo: str) -> dict[str, dict]:
-    """Open Issues labeled bug+ai-ready, indexed by body fingerprint."""
+    """Open triage Issues, including tickets created before the p0 fix."""
     issues = gh_api(
         f"repos/{owner}/{repo}/issues"
-        f"?labels={','.join(ISSUE_LABELS)}&state=open&per_page=100"
+        f"?labels={','.join(ISSUE_INDEX_LABELS)}&state=open&per_page=100"
     )
     if not isinstance(issues, list):
         fail("list_issues", f"issues API did not return a list: {issues!r}")
