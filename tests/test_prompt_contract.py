@@ -49,6 +49,28 @@ def _missing(text: str, items: tuple) -> list:
     return [name for name, needle in items if needle.lower() not in text]
 
 
+# --- Issue #500: review gate exit-code propagation ---------------------------
+
+REVIEW_GATE_ITEMS = (
+    ("gate-set-e", "set +e"),
+    ("gate-test-status", "test_exit=$?"),
+    ("gate-full-status", "full_gate_exit=$?"),
+    ("gate-diff-status", "diff_gate_exit=$?"),
+    ("gate-final-status", "final_exit"),
+    ("gate-diff-no-short-circuit", "diff gate runs even when the full gate fails"),
+    ("gate-log-append", ">> .orbi/test.log 2>&1"),
+    ("gate-log-status", "printf"),
+    ("gate-nonzero", "exit \"$final_exit\""),
+)
+
+
+def test_review_prompt_aggregates_all_gate_exit_codes():
+    missing = _missing(_text(PROMPT_REVIEW), REVIEW_GATE_ITEMS)
+    assert not missing, (
+        f"prompt_review.md is missing the Issue #500 gate contract: {missing}"
+    )
+
+
 # --- prompt.md (implementer) -------------------------------------------------
 
 PROMPT_ITEMS = (
