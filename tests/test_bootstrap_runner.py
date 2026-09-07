@@ -15409,6 +15409,12 @@ def test_close_release_milestone_fails_fast_on_duplicate_titles(monkeypatch):
         fake_run(["unexpected"])
 
 
+def test_parse_paginated_issue_array_ignores_non_object_items():
+    assert runner.parse_paginated_issue_array('[[{"number": 1}, "bad"], []]') == [
+        {"number": 1},
+    ]
+
+
 def test_parse_epic_children_requires_explicit_scope_and_rejects_cross_repo():
     assert runner.parse_epic_children("## Children\n- #12\n- https://github.com/o/r/pull/13", "o/r") == [
         ("unknown", 12), ("pr", 13),
