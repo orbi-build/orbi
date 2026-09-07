@@ -838,11 +838,17 @@ def _load_pi_extensions(value: object, base: Path) -> list[dict]:
             if not semver.search(source):
                 raise ValueError(f"pi_extensions[{index}] npm source must pin a version")
             normalized = source
-        elif source.startswith(("git+", "git://", "github:")) or (
-            source.startswith(("https://", "ssh://")) and ".git" in source
+        elif source.startswith("git:") or source.startswith(
+            ("http://", "https://", "ssh://", "git://")
         ):
-            if "#" not in source or not source.rsplit("#", 1)[1]:
-                raise ValueError(f"pi_extensions[{index}] git source must pin a ref with #")
+            # Pi's documented git source syntax uses an @ separator for
+            # the pinned ref (for example git:github.com/org/repo@v1).
+            # Require that same syntax here so validation does not accept a
+            # source that Pi cannot resolve as a git package.
+            if "@" not in source or not source.rsplit("@", 1)[1]:
+                raise ValueError(
+                    f"pi_extensions[{index}] git source must pin a ref with @"
+                )
             normalized = source
         else:
             local = _config_path(source, base)

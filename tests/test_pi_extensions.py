@@ -25,7 +25,7 @@ def test_load_config_pi_extensions_normalizes_enabled_and_local_source(tmp_path)
 def test_load_config_pi_extensions_rejects_unlocked_or_duplicate_and_conflicting_env(tmp_path):
     cases = [
         ('[[pi_extensions]]\nsource = "npm:fixture"', "pin a version"),
-        ('[[pi_extensions]]\nsource = "git+https://x/repo.git"', "pin a ref"),
+        ('[[pi_extensions]]\nsource = "git:github.com/x/repo"', "pin a ref"),
         ('[[pi_extensions]]\nsource = "npm:fixture@1.0.0"\n[[pi_extensions]]\nsource = "npm:fixture@1.0.0"', "duplicate"),
         ('[[pi_extensions]]\nsource = "npm:a@1.0.0"\n[pi_extensions.env]\nX="1"\n[[pi_extensions]]\nsource = "npm:b@1.0.0"\n[pi_extensions.env]\nX="2"', "conflict"),
     ]
@@ -55,10 +55,10 @@ def test_load_config_pi_extensions_rejects_bad_shapes_and_accepts_git_ref(tmp_pa
     path = tmp_path / "git.toml"
     path.write_text(
         'source_repos=["owner/repo"]\n[[pi_extensions]]\n'
-        'source="git+https://github.com/example/fixture.git#v1.2.3"\n',
+        'source="git:github.com/example/fixture@v1.2.3"\n',
         encoding="utf-8",
     )
-    assert runner.load_config(path)["pi_extensions"][0]["source"].endswith("#v1.2.3")
+    assert runner.load_config(path)["pi_extensions"][0]["source"].endswith("@v1.2.3")
 
 
 def test_pi_extension_args_and_env_isolate_disabled_and_secrets():
