@@ -53,4 +53,83 @@ pi_model = "glm-5.3-flash"
 
 本地 OpenAI-compatible server 仍需要非空的 `apiKey` 字段才能通过 provider 形状校验；本地模板使用无秘密的 dummy 值 `local`。模型 id 必须与 server 宣告的 id 一致（llama.cpp 可用 `--alias` 设置）。
 
-参见[上手指南](/zh/getting-started#path-b-a-pi_providers-file-orbi)中的完整配置，以及[Issue #305](https://github.com/orbi-build/orbi/issues/305) 的免费额度文章系列。
+## Codex OAuth：使用 ChatGPT/Codex 订阅额度
+
+这条路径使用 Pi 原生的 `openai-codex` provider 和 OAuth 凭据。**不使用 `OPENAI_API_KEY`，也不需要第二份 `pi_providers` JSON**。它消耗的是订阅/Codex 额度，不是 OpenAI API 账单。
+
+### 第一次登录：必须按这个顺序
+
+1. 启动交互式 Pi 会话：`pi`。
+2. 在 Pi 提示符中执行 **`/login codex`**。
+3. 在浏览器完成 Codex OAuth 授权。
+4. 回到 Pi，用当前 Pi CLI 实际支持的命令检查登录：
+
+   ```bash
+   pi auth check --provider openai-codex --model gpt-5.6-luna --json
+   ```
+
+   成功时应报告 `"status":"ready"` 和 `"authType":"oauth"`。该命令默认会刷新过期 OAuth 凭据；不要在共享终端或 transcript 中使用 `--credentials`。
+5. 检查成功后，再配置 Orbi 并运行真实 Issue。
+
+### 最小 Orbi 配置
+
+如果存在 `pi_providers`，请删除；保持它**未设置**。不要复制或创建 `openai-codex` provider 条目。Pi 从自己的 `models.json` 提供 catalog，Orbi 的 per-run agent 目录复用 Pi 原生 auth。
+
+```toml
+source_repos = ["OWNER/YOUR-REPO"]
+# Orbi checkout 提供 CLI、prompt、labels 和 systemd 模板。
+repo_dir = "/path/to/your-repo"
+deploy_home = "/path/to/orbi"
+workspace_root = "/path/to"
+base_branch = "main"
+max_concurrency = 1
+
+# 不要写 pi_providers = ...
+pi_provider = "openai-codex"
+pi_model = "gpt-5.6-luna"
+```
+
+Pi catalog 在 **2026-09-07** 检查到该模型的 API 是 `openai-codex-responses`，endpoint 是 `https://chatgpt.com/backend-api`；启用 reasoning，支持 text/image 输入，上下文限制 1,000,000 tokens，输出限制 128,000 tokens。其 catalog 的 thinking 映射支持 `minimal → low`、`xhigh → xhigh`、`max → max`；默认可不设 `pi_thinking`，也可设置这些已核实的级别。这些是 Pi 的请求限制，不是订阅额度承诺。
+
+### 额度与计费边界
+
+OAuth 凭据消耗用户的 Codex/ChatGPT 订阅额度。它与 OpenAI API key、API organization 计费以及任何 `OPENAI_API_KEY` 余额相互独立。Pi catalog 的 `cost` 字段只是路由元数据，**不是账单或额度计数器**。额度、重置时间、限流、模型可用性和错误文本取决于账号计划且可能变化。2026-09-05 的真实运行来自一个本机账号；证据没有记录账号计划和确切额度，因此本文不做普遍额度承诺。额度耗尽或限流时，Pi session 中通常会出现上游认证/限流失败；请以当前 Codex UI/help 为准，不要用 catalog 推算剩余额度。
+
+### 应保留的真实 Issue 证据
+
+在用户自己的仓库运行第一个 Issue，并保留不含秘密的证据。成功运行至少应记录：
+
+```text
+journal: provider=openai-codex model=gpt-5.6-luna run_id=<run-id>
+PR: https://github.com/OWNER/YOUR-REPO/pull/<number>
+elapsed: <duration>
+result: PR opened（之后按 Orbi 正常流程审查/合并）
+```
+
+本指南对应的 Orbi 已完成运行（2026-09-07）留下了以下脱敏、无秘密记录：
+
+```text
+journal: provider=openai-codex model=gpt-5.6-luna run_id=f3e26f87
+PR: https://github.com/orbi-build/orbi/pull/487
+elapsed: 4m 06s（09:11:18Z–09:15:24Z）
+result: PR opened
+```
+
+这只是一个本机账号的证据，不代表额度保证；证据没有记录账号计划和确切额度。不要整份粘贴 session JSONL：先删掉凭据和包含秘密的 prompt。
+
+### 额度或认证失败时切换 provider
+
+只替换选择项即可。切换到 Orbi 模板里的 provider 时，需要把对应文件加回来，因为 fallback 不再是 Pi 原生 provider：
+
+```diff
+-# 不写 pi_providers
+-pi_provider = "openai-codex"
+-pi_model = "gpt-5.6-luna"
++pi_providers = ".orbi/pi-providers.json"
++pi_provider = "local-qwen"       # 或 "z-ai"
++pi_model = "Qwen3.8-27B"        # 或该文件中的 model id
+```
+
+使用本页对应的模板和 secret 配置；绝不要把 OAuth token 或 API key 写入仓库、Issue、PR body 或 journal。认证失效时先用 `/login codex` 修复/重新登录；切换 provider 不会修复过期的 Codex session。
+
+完整的 OpenAI-compatible 配置见[上手指南](/zh/getting-started#path-b-a-pi_providers-file-orbi)，provider 文章系列见 [Issue #305](https://github.com/orbi-build/orbi/issues/305)。
