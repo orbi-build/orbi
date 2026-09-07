@@ -3725,18 +3725,18 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
         branch="orbi/owner-repo-issue-4-run1",
     ) == "done"
     command, kwargs = calls[0]
-    assert command[:4] == ["pi", "--skill", "skill.md", "--print"]
-    assert "owner/repo" in command[7]
-    assert " 4 " in command[7]
-    assert "Fix title" in command[7]
-    assert "Fix body" in command[7]
-    assert "context.md" in command[7]
-    assert "skill.md" in command[7]
-    assert command[7].endswith(
+    assert command[:5] == ["pi", "--no-extensions", "--skill", "skill.md", "--print"]
+    assert "owner/repo" in command[8]
+    assert " 4 " in command[8]
+    assert "Fix title" in command[8]
+    assert "Fix body" in command[8]
+    assert "context.md" in command[8]
+    assert "skill.md" in command[8]
+    assert command[8].endswith(
         "main abc123def456 run1 "
         + str(tmp_path / "checkout" / ".orbi" / "base-sync.lock"),
     )
-    assert command[8] == "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: " + str(tmp_path) + "\nComplete the delivery process in the system prompt."
+    assert command[9] == "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: " + str(tmp_path) + "\nComplete the delivery process in the system prompt."
     assert kwargs["cwd"] == tmp_path
     assert kwargs["timeout"] is None
     assert kwargs["run_id"] == "run1"
@@ -3782,10 +3782,10 @@ def test_run_pi_redacts_prompt_and_issue_from_command_log(monkeypatch, tmp_path)
         "owner/repo", branch="orbi/owner-repo-issue-5-run1",
     )
     command, kwargs = calls[0]
-    assert "PRIVATE SYSTEM" in command[5]
-    assert "token" in command[5]
+    assert "PRIVATE SYSTEM" in command[6]
+    assert "token" in command[6]
     assert kwargs["log_command"] == [
-        "pi", "--print", "--session-dir",
+        "pi", "--no-extensions", "--print", "--session-dir",
         str(tmp_path / ".pi-session"),
         "--system-prompt", "<redacted>", "<issue-context-redacted>",
     ]
@@ -11148,9 +11148,9 @@ def test_run_pi_omits_model_args_when_not_configured(monkeypatch, tmp_path):
     assert "--provider" not in command
     assert "--model" not in command
     assert "--thinking" not in command
-    assert command[:3] == ["pi", "--print", "--session-dir"]
+    assert command[:4] == ["pi", "--no-extensions", "--print", "--session-dir"]
     assert kwargs["log_command"] == [
-        "pi", "--print", "--session-dir", str(tmp_path / ".pi-session"),
+        "pi", "--no-extensions", "--print", "--session-dir", str(tmp_path / ".pi-session"),
         "--system-prompt", "<redacted>", "<issue-context-redacted>",
     ]
 
@@ -11208,7 +11208,7 @@ def test_run_review_omits_model_args_when_not_configured(monkeypatch, tmp_path):
     assert "--model" not in command
     assert "--thinking" not in command
     assert kwargs["log_command"] == [
-        "pi", "--print", "--session-dir", str(tmp_path / ".pi-session"),
+        "pi", "--no-extensions", "--print", "--session-dir", str(tmp_path / ".pi-session"),
         "--system-prompt", "<redacted>", "<review-context-redacted>",
     ]
 

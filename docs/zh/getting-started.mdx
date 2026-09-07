@@ -152,6 +152,7 @@ checkout 根目录**没有** `orbi.py`（与 package 同名的 flat 文件
 | `pi_provider` | 否 | 未设置 | 每个 run 选用的 provider id（Issue #119）——以 `--provider` 传给 Pi；设置 `pi_providers` 文件时必须已在其中定义 |
 | `pi_model` | 否 | 未设置 | 选中 provider 内的 model id——以 `--model` 传给 Pi；必须存在于该 provider 的 `models` 列表 |
 | `pi_thinking` | 否 | 未设置 | 以 `--thinking` 传给 Pi 的思考级别（`off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`） |
+| `pi_extensions` | 否 | `[]` | 可重复的 extension 表：`source` 必须是锁定版本的 `npm:`/git 来源或配置文件相对的现有本地路径；`enabled` 默认开启，`env` 只注入当前 Pi 子进程。每次运行都传入 `--no-extensions`，不会发现全局 Pi extension。 |
 
 最小示例：
 

@@ -655,6 +655,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     pi_provider = _optional_pi_string(data, "pi_provider")
     pi_model = _optional_pi_string(data, "pi_model")
     pi_thinking = _optional_pi_string(data, "pi_thinking")
+    pi_extensions = _load_pi_extensions(data.get("pi_extensions"), base)
     # Hung-model-request threshold (Issue #228): the model_wait dead
     # silence is configurable; omitted -> PI_MODEL_WAIT_DEAD_SECONDS
     # (default 1800 s, 30 minutes). It measures silence between
@@ -777,6 +778,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         "pi_provider": pi_provider,
         "pi_model": pi_model,
         "pi_thinking": pi_thinking,
+        "pi_extensions": pi_extensions,
         "model_wait_dead_seconds": model_wait_dead_seconds,
         "model_wait_probe_url": model_wait_probe_url,
         "model_wait_probe_seconds": model_wait_probe_seconds,
@@ -808,6 +810,85 @@ def _optional_pi_string(data: dict, key: str) -> str | None:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{key} must be a non-empty string")
     return value
+
+
+def _load_pi_extensions(value: object, base: Path) -> list[dict]:
+    """Validate the extensions owned by an Orbi Pi run.
+
+    Package sources must be reproducible: npm sources end in a concrete
+    semver and git sources carry a non-empty ref after ``#``.  Other sources
+    are repository-relative local files/directories.  Values are normalized
+    once at config load so implement and review cannot diverge.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("pi_extensions must be an array of tables")
+    result: list[dict] = []
+    seen: set[str] = set()
+    env_values: dict[str, str] = {}
+    semver = re.compile(r"@[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(f"pi_extensions[{index}] must be a table")
+        source = item.get("source")
+        if not isinstance(source, str) or not source:
+            raise ValueError(f"pi_extensions[{index}].source must be a non-empty string")
+        if source.startswith("npm:"):
+            if not semver.search(source):
+                raise ValueError(f"pi_extensions[{index}] npm source must pin a version")
+            normalized = source
+        elif source.startswith(("git+", "git://", "github:")) or (
+            source.startswith(("https://", "ssh://")) and ".git" in source
+        ):
+            if "#" not in source or not source.rsplit("#", 1)[1]:
+                raise ValueError(f"pi_extensions[{index}] git source must pin a ref with #")
+            normalized = source
+        else:
+            local = _config_path(source, base)
+            if not local.exists():
+                raise ValueError(f"pi_extensions[{index}] local source does not exist: {local}")
+            normalized = str(local)
+        if normalized in seen:
+            raise ValueError(f"pi_extensions contains duplicate source: {source}")
+        seen.add(normalized)
+        enabled = item.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError(f"pi_extensions[{index}].enabled must be a boolean")
+        env = item.get("env", {})
+        if not isinstance(env, dict):
+            raise ValueError(f"pi_extensions[{index}].env must be a table")
+        clean_env: dict[str, str] = {}
+        for name, env_value in env.items():
+            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                raise ValueError(f"pi_extensions[{index}].env has invalid variable name {name!r}")
+            if not isinstance(env_value, str):
+                raise ValueError(f"pi_extensions[{index}].env.{name} must be a string")
+            previous = env_values.get(name)
+            if previous is not None and previous != env_value:
+                raise ValueError(f"pi_extensions env conflict for {name}")
+            env_values[name] = env_value
+            clean_env[name] = env_value
+        result.append({"source": normalized, "enabled": enabled, "env": clean_env})
+    return result
+
+
+def _pi_extension_args(config: dict) -> list[str]:
+    """Return the isolated extension flags for every Pi role."""
+    args = ["--no-extensions"]
+    for extension in config.get("pi_extensions", []):
+        if extension["enabled"]:
+            args.extend(("--extension", extension["source"]))
+    return args
+
+
+def _pi_extension_env(config: dict) -> dict[str, str]:
+    """Return extension variables for the Pi child only; never log them."""
+    values: dict[str, str] = {}
+    for extension in config.get("pi_extensions", []):
+        if extension["enabled"]:
+            values.update(extension["env"])
+    return values
 
 
 def _model_wait_probe_url(data: dict) -> str | None:
@@ -6064,7 +6145,8 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
     if resume_context:
         context += f"\n{resume_context}"
     command = [
-        "pi", *_skill_args(_skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)),
+        "pi", *_pi_extension_args(config),
+        *_skill_args(_skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)),
         *_pi_model_args(config),
         "--print", "--session-dir",
         str(worktree / ".pi-session"), "--system-prompt", system_prompt, context,
@@ -6085,15 +6167,18 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         elapsed=time.monotonic() - started,
     )
     extra = {}
+    pi_env = _pi_extension_env(config)
     if agent_dir is not None:
-        extra["pi_env"] = {"PI_CODING_AGENT_DIR": str(agent_dir)}
+        pi_env["PI_CODING_AGENT_DIR"] = str(agent_dir)
+    if pi_env:
+        extra["pi_env"] = pi_env
     return stream_pi(
         command,
         cwd=worktree,
         timeout=timeout,
         log_command=[
-            "pi", *_pi_model_args(config), "--print", "--session-dir",
-            str(worktree / ".pi-session"),
+            "pi", *_pi_extension_args(config), *_pi_model_args(config),
+            "--print", "--session-dir", str(worktree / ".pi-session"),
             "--system-prompt", "<redacted>", "<issue-context-redacted>",
         ],
         run_id=config["run_id"],
@@ -7040,7 +7125,8 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
         "task branch) and end with a single REVIEW_VERDICT line."
     )
     command = [
-        "pi", *_skill_args(_skills_for(config, REVIEW_EXCLUDED_SKILLS)),
+        "pi", *_pi_extension_args(config),
+        *_skill_args(_skills_for(config, REVIEW_EXCLUDED_SKILLS)),
         *_pi_model_args(config),
         "--print", "--session-dir",
         str(worktree / ".pi-session"), "--system-prompt", system_prompt,
@@ -7057,15 +7143,18 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
         elapsed=time.monotonic() - started,
     )
     extra = {}
+    pi_env = _pi_extension_env(config)
     if agent_dir is not None:
-        extra["pi_env"] = {"PI_CODING_AGENT_DIR": str(agent_dir)}
+        pi_env["PI_CODING_AGENT_DIR"] = str(agent_dir)
+    if pi_env:
+        extra["pi_env"] = pi_env
     return stream_pi(
         command,
         cwd=worktree,
         timeout=timeout,
         log_command=[
-            "pi", *_pi_model_args(config), "--print", "--session-dir",
-            str(worktree / ".pi-session"),
+            "pi", *_pi_extension_args(config), *_pi_model_args(config),
+            "--print", "--session-dir", str(worktree / ".pi-session"),
             "--system-prompt", "<redacted>", "<review-context-redacted>",
         ],
         run_id=config["run_id"],

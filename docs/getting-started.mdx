@@ -177,6 +177,7 @@ directory):
 | `pi_provider` | no | unset | The provider id selected for every run (Issue #119) — passed to Pi as `--provider`; must be defined when a `pi_providers` file is set |
 | `pi_model` | no | unset | The model id within the selected provider — passed to Pi as `--model`; must exist in the provider's `models` list |
 | `pi_thinking` | no | unset | Thinking level passed to Pi as `--thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) |
+| `pi_extensions` | no | `[]` | Repeatable extension tables: `source` is a pinned `npm:`/git source or an existing config-relative local path; `enabled` defaults to true and `env` is injected only into that Pi child. Every run passes `--no-extensions`, so global Pi extensions are never discovered. |
 
 Minimal example:
 
