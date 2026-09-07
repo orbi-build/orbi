@@ -1072,8 +1072,10 @@ def test_verify_pr_resume_keeps_unknown_state_for_non_object_scene_lookup(
             return "[]"
         if command[:3] == ["gh", "pr", "view"]:
             return "[]"
-        return ""
+        raise AssertionError(command)
 
+    with pytest.raises(AssertionError):
+        fake_run(["unexpected"])
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(runner.ResumeVerificationError, match="scene_pr_state=unknown"):
         runner.verify_pr(
@@ -1099,8 +1101,10 @@ def test_verify_pr_resume_keeps_failure_evidence_when_scene_lookup_fails(
             return "[]"
         if command[:3] == ["gh", "pr", "view"]:
             raise RuntimeError("lookup unavailable")
-        return ""
+        raise AssertionError(command)
 
+    with pytest.raises(AssertionError):
+        fake_run(["unexpected"])
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(runner.ResumeVerificationError, match="scene_pr_state=unknown"):
         runner.verify_pr(
