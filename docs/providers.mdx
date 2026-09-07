@@ -17,6 +17,7 @@ pi_model = "glm-5.3-flash"
 | OpenRouter free | `openrouter.json` | `OPENROUTER_API_KEY` | `google/gemma-4-31b-it:free` | Not tested; free catalog availability is not promised | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | DeepSeek | `deepseek.json` | `DEEPSEEK_API_KEY` | `deepseek-chat` | Not tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | xAI | `xai.json` | `XAI_API_KEY` | `grok-4.20-0309` | Model ID verified against xAI docs; not quota-tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| Groq Free Plan | `groq.json` | `GROQ_API_KEY` | `groq/compound` | Free Plan limits verified 2026-09-04; real request/usage/429 not tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Local Qwen | `local-qwen.json` | None (dummy key `local`) | `Qwen3.8-27B` | Local zero-cost example; requires a local OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Cloudflare Workers AI | `cloudflare-workers-ai.json` | `CLOUDFLARE_API_TOKEN` | `@cf/meta/llama-3.1-8b-instruct-fp8` | Hosted free allocation; quota must be checked in the account | [#318](https://github.com/orbi-build/orbi/issues/318) |
 
@@ -218,5 +219,21 @@ Remove or replace only the selectors. For a provider from an Orbi template, add 
 ```
 
 Use the matching template and secret setup in this guide; never put an OAuth token or API key in the repository, an Issue, a PR body, or a journal. For an auth failure, fix/re-login with `/login codex` first; switching providers does not repair an expired Codex session.
+
+## Groq Free Plan
+
+Copy [`groq.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/groq.json) as `.orbi/pi-providers.json`, then set the selectors and key reference:
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "groq"
+pi_model = "groq/compound"
+```
+
+The template uses Groq's OpenAI-compatible endpoint (`api: "openai-completions"`) and `$GROQ_API_KEY`; put the key in the gitignored `.orbi/env`, never in the JSON or a commit.
+
+According to Groq's [rate-limit table](https://console.groq.com/docs/rate-limits), the Free Plan row for `groq/compound` is **30 RPM / 250 RPD / 70K TPM** (checked 2026-09-04). These are account limits, not an Orbi guarantee; check the official table again before relying on them. The [model catalog](https://console.groq.com/docs/models) lists a 131,072-token context window and 8,192-token maximum completion for this model. The low TPM makes short, bounded coding Issues and small fixes a better fit than long-context repository analysis.
+
+A quota hit is returned upstream as HTTP `429`; Orbi does not silently retry or switch provider mid-session. Treat the run as failed, preserve the Issue/worktree evidence, and manually select another configured provider for the next run. The planned per-provider budget and automatic run-boundary rotation is tracked in [#313](https://github.com/orbi-build/orbi/issues/313); it is not yet a promise of current behavior. Real Groq requests, usage measurements, and 429 responses are **not tested** in this guide; do not claim a successful Groq Issue run without recording redacted evidence.
 
 See [Getting started](/getting-started#path-b-a-pi_providers-file-orbi) for the existing OpenAI-compatible setup and [Issue #305](https://github.com/orbi-build/orbi/issues/305) for the provider article series.
