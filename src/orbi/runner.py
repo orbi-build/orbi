@@ -1648,6 +1648,23 @@ def milestone_open_issues(repo: str, milestone_number: int) -> list[dict]:
     return parse_paginated_issue_array(raw)
 
 
+def epic_issue_with_blockers(repo: str, issue: dict) -> dict:
+    """Add the native blocker field omitted by the REST issue listing."""
+    if isinstance(issue.get("blockedBy"), dict):
+        return issue
+    number = issue.get("number")
+    if not isinstance(number, int) or isinstance(number, bool):
+        raise ValueError("Epic number is missing or invalid")
+    raw = run_command([
+        "gh", "issue", "view", str(number), "--repo", repo,
+        "--json", "number,body,labels,blockedBy",
+    ])
+    details = json.loads(raw)
+    if not isinstance(details, dict):
+        raise ValueError(f"Epic #{number} details are not an object")
+    return details
+
+
 def open_blocker_numbers(issue: dict) -> list[int]:
     """Return the numbers of the issue's OPEN native GitHub blockers.
 
@@ -2869,13 +2886,14 @@ def reconcile_release_epics(repo: str, milestone_number: int, version: str,
     """Close only provably complete open Epics in this exact Milestone."""
     issues = milestone_open_issues(repo, milestone_number)
     evidence: list[str] = []
-    for epic in issues:
-        labels = epic.get("labels", [])
+    for listed_epic in issues:
+        labels = listed_epic.get("labels", [])
         names = {label.get("name") for label in labels if isinstance(label, dict)}
         if EPIC_LABEL not in names:
             continue
-        number = epic.get("number")
+        number = listed_epic.get("number")
         try:
+            epic = epic_issue_with_blockers(repo, listed_epic)
             children = parse_epic_children(epic.get("body", ""), repo)
             blockers = epic.get("blockedBy")
             if not isinstance(blockers, dict) or not isinstance(blockers.get("nodes"), list):
