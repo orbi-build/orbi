@@ -2539,7 +2539,10 @@ def test_freeze_base_fetches_remote_and_returns_exact_sha(monkeypatch, tmp_path)
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.freeze_base(tmp_path, "main") == "abc123def456"
     assert calls == [(
-        ["git", "fetch", "origin", "main"], {"cwd": tmp_path},
+        ["git", "fetch", "origin", "main"], {
+            "cwd": tmp_path,
+            "timeout": runner.GIT_NETWORK_TIMEOUT_SECONDS,
+        },
     ), (
         ["git", "rev-parse", "origin/main"], {"cwd": tmp_path},
     )]
@@ -13829,8 +13832,10 @@ def test_prepare_release_version_updates_sources_and_commits(tmp_path, monkeypat
          {"cwd": work}),
         (["git", "commit", "-m", "chore: prepare release v0.3.0"],
          {"cwd": work}),
-        (["git", "push", "origin", "HEAD:refs/heads/main"],
-         {"cwd": work}),
+        (["git", "push", "origin", "HEAD:refs/heads/main"], {
+            "cwd": work,
+            "timeout": runner.GIT_NETWORK_TIMEOUT_SECONDS,
+        }),
         (["git", "rev-parse", "HEAD"], {"cwd": work}),
     ]
 
@@ -13855,7 +13860,10 @@ def test_prepare_release_version_updates_package_json(tmp_path, monkeypatch):
         (["git", "add", "package.json"], {"cwd": work}),
         (["git", "commit", "-m", "chore: prepare release v0.3.0"],
          {"cwd": work}),
-        (["git", "push", "origin", "HEAD:refs/heads/main"], {"cwd": work}),
+        (["git", "push", "origin", "HEAD:refs/heads/main"], {
+            "cwd": work,
+            "timeout": runner.GIT_NETWORK_TIMEOUT_SECONDS,
+        }),
         (["git", "rev-parse", "HEAD"], {"cwd": work}),
     ]
 
@@ -14523,8 +14531,10 @@ def test_process_release_success_end_to_end(monkeypatch):
     commands = [c for c, _ in state["commands"]]
     assert (["git", "tag", "-a", "v0.3.0", "-m", "Release v0.3.0",
              "abc123"], {"cwd": Path("/r")}) in state["commands"]
-    assert (["git", "push", "origin", "refs/tags/v0.3.0"],
-            {"cwd": Path("/r")}) in state["commands"]
+    assert (["git", "push", "origin", "refs/tags/v0.3.0"], {
+        "cwd": Path("/r"),
+        "timeout": runner.GIT_NETWORK_TIMEOUT_SECONDS,
+    }) in state["commands"]
     assert not any("--force" in c or "-f" == c for c in commands)
     # The release Issue is closed.
     assert ["gh", "issue", "close", "99", "--repo", "o/r"] in commands
@@ -15083,6 +15093,20 @@ def test_process_release_reuses_a_matching_existing_tag(monkeypatch):
     commands = [c for c, _ in state["commands"]]
     assert not [c for c in commands if c[:2] == ["git", "tag"]]
     assert not [c for c in commands if c[:2] == ["git", "push"]]
+
+
+def test_process_release_recovers_existing_ancestor_tag(monkeypatch):
+    state = make_release_process_env(monkeypatch, tag_commit="tag123")
+    monkeypatch.setattr(
+        runner, "tag_commit_is_ancestor_of_base", lambda *args: True,
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    assert runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    ) == "https://github.com/o/r/releases/tag/v0.3.0"
+    assert state["sync_docs_calls"][0]["release_commit"] == "tag123"
 
 
 def test_process_release_fails_on_scope_violation(monkeypatch):
