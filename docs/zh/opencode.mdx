@@ -8,7 +8,7 @@ OpenCode 是 **Pi 原生支持**的 provider。本页记录 **2026-09-07 使用 
 
 已安装的 Pi CLI 报告 OpenCode 使用 `OPENCODE_API_KEY`，内置 provider id
 是 `opencode`，并包含下面的模型目录。在本次验证账号上运行
-`pi auth check --provider opencode --json --no-refresh` 返回：
+`timeout 30 pi auth check --provider opencode --json --no-refresh` 返回：
 
 ```json
 {"status":"not_ready","provider":"opencode","reason":"credentials_not_configured"}
@@ -26,7 +26,7 @@ z.ai 或 Gemini 的耗时、额度数字套到 OpenCode 上。
 
    ```bash
    export OPENCODE_API_KEY='...'
-   pi auth check --provider opencode --json
+   timeout 30 pi auth check --provider opencode --json
    ```
 
 3. Pi 0.85.1 文档化的 CLI 命令是 `pi auth check`、`print-api-key` 和
@@ -72,8 +72,8 @@ OpenAI-compatible 模型使用 `https://opencode.ai/zen/v1`。本次安装的 Pi
 不要只信本文列表，先检查本机目录：
 
 ```bash
-pi --list-models
-pi --model opencode/glm-5.3-flash --no-session -p 'reply with OK'
+timeout 30 pi --list-models
+timeout 120 pi --model opencode/glm-5.3-flash --no-session -p 'reply with OK'
 ```
 
 第二条才是真实 provider 请求，需要 key；它也不能替代下面的 Orbi delivery
