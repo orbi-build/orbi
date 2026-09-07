@@ -9,6 +9,27 @@ import orbi.runner as runner
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = REPO_ROOT / "templates" / "pi-providers"
+OPENROUTER_FREE_MODELS = {
+    "inclusionai/ling-3.0-flash-sante:free",
+    "inclusionai/ling-3.0-flash-fin:free",
+    "dots-studio/dots-3-note-preview:free",
+    "liquid/lfm-2.5-2.6b:free",
+    "nvidia/nemotron-3.5-lightning:free",
+    "thinkingmachines/inkling-small:free",
+    "poolside/laguna-s-2.1:free",
+    "thinkingmachines/inkling:free",
+    "poolside/laguna-xs-2.1:free",
+    "cohere/north-mini-code:free",
+    "nvidia/nemotron-3.5-content-safety:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "minimax/minimax-m3:free",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "google/gemma-4-31b-it:free",
+    "minimax/minimax-m2.7:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+}
+
 EXPECTED = {
     "gemini": ("google", "gemini-3.8-flash", "GOOGLE_API_KEY"),
     "z-ai": ("z-ai", "glm-5.3-flash", "ZAI_API_KEY"),
@@ -43,6 +64,13 @@ def test_template_selected_model_is_explicit(name):
     provider_id, model_id, _variable = EXPECTED[name]
     models = data["providers"][provider_id]["models"]
     assert model_id in {model["id"] for model in models}
+
+
+def test_openrouter_template_contains_the_verified_free_catalog():
+    _path, data = load_template("openrouter")
+    models = data["providers"]["openrouter"]["models"]
+    assert {model["id"] for model in models} == OPENROUTER_FREE_MODELS
+    assert all(model["id"].endswith(":free") for model in models)
 
 
 def test_gemini_uses_model_default_thinking_mapping():

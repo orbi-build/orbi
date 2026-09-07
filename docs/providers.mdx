@@ -14,12 +14,70 @@ pi_model = "glm-5.3-flash"
 | --- | --- | --- | --- | --- | --- |
 | Google Gemini | `gemini.json` | `GOOGLE_API_KEY` | `gemini-3.8-flash` | Tested 2026-09-04: full Pi chain passed in 7s | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | z.ai GLM | `z-ai.json` | `ZAI_API_KEY` | `glm-5.3-flash` | Tested 2026-09-04: real task #303 reached PR #304 | [#305](https://github.com/orbi-build/orbi/issues/305) |
-| OpenRouter free | `openrouter.json` | `OPENROUTER_API_KEY` | `google/gemma-4-31b-it:free` | Not tested; free catalog availability is not promised | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| OpenRouter free | `openrouter.json` | `OPENROUTER_API_KEY` | 18 current `:free` models (default: `google/gemma-4-31b-it:free`) | Catalog checked 2026-09-07; per-model run/quota evidence is recorded below | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | DeepSeek | `deepseek.json` | `DEEPSEEK_API_KEY` | `deepseek-chat` | Not tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | xAI | `xai.json` | `XAI_API_KEY` | `grok-4.20-0309` | Model ID verified against xAI docs; not quota-tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Local Qwen | `local-qwen.json` | None (dummy key `local`) | `Qwen3.8-27B` | Local zero-cost example; requires a local OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
 
-A template being listed is not a promise of quota, availability, speed, or model support. The `Not tested` labels are intentional.
+A template being listed is not a promise of quota, availability, speed, or model support.
+
+## OpenRouter `:free`: one key, multiple models
+
+The OpenRouter template is one provider entry with the current `:free` catalog. The catalog was queried from the official endpoint `https://openrouter.ai/api/v1/models?max_price=0` on 2026-09-07; only IDs ending in `:free` were committed because the endpoint also returned non-free preview models. Refresh the template when the catalog changes—model IDs and availability are not stable.
+
+The 18 models in the checked catalog are:
+
+```text
+cohere/north-mini-code:free
+dots-studio/dots-3-note-preview:free
+google/gemma-4-26b-a4b-it:free
+google/gemma-4-31b-it:free
+inclusionai/ling-3.0-flash-fin:free
+inclusionai/ling-3.0-flash-sante:free
+liquid/lfm-2.5-2.6b:free
+minimax/minimax-m2.7:free
+minimax/minimax-m3:free
+nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+nvidia/nemotron-3-super-120b-a12b:free
+nvidia/nemotron-3-ultra-550b-a55b:free
+nvidia/nemotron-3.5-content-safety:free
+nvidia/nemotron-3.5-lightning:free
+poolside/laguna-s-2.1:free
+poolside/laguna-xs-2.1:free
+thinkingmachines/inkling-small:free
+thinkingmachines/inkling:free
+```
+
+Choose by task, then change only `pi_model`: code agents should start with `cohere/north-mini-code:free`; general coding/reasoning with `minimax/minimax-m3:free` or `nvidia/nemotron-3-super-120b-a12b:free`; fast, low-context experiments with `liquid/lfm-2.5-2.6b:free`; and safety-focused prompts with `nvidia/nemotron-3.5-content-safety:free`. These are starting suggestions, not benchmarks.
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "openrouter"
+pi_model = "minimax/minimax-m3:free"
+```
+
+### Measure quotas instead of guessing
+
+OpenRouter does not expose a durable per-model daily quota in this repository's provider catalog. Record each experiment separately because limits depend on account, model availability, and current OpenRouter policy. For each model, record UTC date, model ID, successful request count, first `429` timestamp, response body/error code, and whether the limit reset. Never record the API key or full prompts.
+
+```bash
+set -a; . .orbi/env; set +a
+for model in \
+  google/gemma-4-31b-it:free minimax/minimax-m3:free; do
+  printf '\nmodel=%s started=%s\\n' "$model" "$(date -u +%FT%TZ)"
+  pi --no-session --provider openrouter --model "$model" --print \
+    "Reply with exactly OK." 2>&1 || true
+  printf 'finished=%s\\n' "$(date -u +%FT%TZ)"
+done
+```
+
+The two models above are the required smoke pair for this guide. A successful record must include the exact model ID, UTC timestamps, `result=OK`, and the Orbi run/PR evidence; a 429 is a failed quota measurement, not a successful run. Do not turn an unverified number into a daily-limit claim.
+
+### 429 and `quota_exhausted`
+
+Classify an upstream `429` as `quota_exhausted` for #313 when the response says the account/model quota or rate limit is exhausted. Preserve the provider status, model ID, UTC timestamp, and redacted error text. A `401`/`403` is authentication or permission failure, a `404` is a stale/removed model ID, and a `5xx` or timeout is provider availability—not quota. The classification must not silently retry or swap models; fail fast and leave the evidence for triage.
+
+**Run evidence status:** this checkout has not claimed a successful OpenRouter run or a measured daily limit unless the redacted records are added here. The catalog verification above is not execution evidence.
 
 ## Add a new provider
 

@@ -5,7 +5,114 @@
       "api": "openai-completions",
       "apiKey": "$OPENROUTER_API_KEY",
       "models": [
-        {"id": "google/gemma-4-31b-it:free", "name": "Gemma 4 31B (free)", "contextWindow": 131072, "maxTokens": 8192}
+        {
+          "id": "inclusionai/ling-3.0-flash-sante:free",
+          "name": "inclusionAI: Ling 3.0 Flash Sante (free)",
+          "contextWindow": 262144,
+          "maxTokens": 32768
+        },
+        {
+          "id": "inclusionai/ling-3.0-flash-fin:free",
+          "name": "inclusionAI: Ling 3.0 Flash Fin (free)",
+          "contextWindow": 262144,
+          "maxTokens": 32768
+        },
+        {
+          "id": "dots-studio/dots-3-note-preview:free",
+          "name": "Dots Studio: Dots3-Note Preview (free)",
+          "contextWindow": 512000,
+          "maxTokens": 460800
+        },
+        {
+          "id": "liquid/lfm-2.5-2.6b:free",
+          "name": "LiquidAI: LFM2.5-2.6B (free)",
+          "contextWindow": 65536,
+          "maxTokens": 8192
+        },
+        {
+          "id": "nvidia/nemotron-3.5-lightning:free",
+          "name": "NVIDIA: Nemotron 3.5 Lightning (free)",
+          "contextWindow": 1000000,
+          "maxTokens": 65536
+        },
+        {
+          "id": "thinkingmachines/inkling-small:free",
+          "name": "Thinking Machines: Inkling Small (free)",
+          "contextWindow": 1048576,
+          "maxTokens": 262144
+        },
+        {
+          "id": "poolside/laguna-s-2.1:free",
+          "name": "Poolside: Laguna S 2.1 (free)",
+          "contextWindow": 262144,
+          "maxTokens": 32768
+        },
+        {
+          "id": "thinkingmachines/inkling:free",
+          "name": "Thinking Machines: Inkling (free)",
+          "contextWindow": 1048576,
+          "maxTokens": 262144
+        },
+        {
+          "id": "poolside/laguna-xs-2.1:free",
+          "name": "Poolside: Laguna XS 2.1 (free)",
+          "contextWindow": 262144,
+          "maxTokens": 32768
+        },
+        {
+          "id": "cohere/north-mini-code:free",
+          "name": "Cohere: North Mini Code (free)",
+          "contextWindow": 256000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "nvidia/nemotron-3.5-content-safety:free",
+          "name": "NVIDIA: Nemotron 3.5 Content Safety (free)",
+          "contextWindow": 128000,
+          "maxTokens": 8192
+        },
+        {
+          "id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "name": "NVIDIA: Nemotron 3 Ultra (free)",
+          "contextWindow": 1000000,
+          "maxTokens": 65536
+        },
+        {
+          "id": "minimax/minimax-m3:free",
+          "name": "MiniMax: MiniMax M3 (free)",
+          "contextWindow": 1048576,
+          "maxTokens": 943718
+        },
+        {
+          "id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+          "name": "NVIDIA: Nemotron 3 Nano Omni (free)",
+          "contextWindow": 256000,
+          "maxTokens": 65536
+        },
+        {
+          "id": "google/gemma-4-26b-a4b-it:free",
+          "name": "Google: Gemma 4 26B A4B  (free)",
+          "contextWindow": 262144,
+          "maxTokens": 32768
+        },
+        {
+          "id": "google/gemma-4-31b-it:free",
+          "name": "Google: Gemma 4 31B (free)",
+          "contextWindow": 262144,
+          "maxTokens": 32768
+        },
+        {
+          "id": "minimax/minimax-m2.7:free",
+          "name": "MiniMax: MiniMax M2.7 (free)",
+          "contextWindow": 196608,
+          "maxTokens": 176947
+        },
+        {
+          "id": "nvidia/nemotron-3-super-120b-a12b:free",
+          "name": "NVIDIA: Nemotron 3 Super (free)",
+          "contextWindow": 262144,
+          "maxTokens": 235929
+        }
       ]
     }
   }

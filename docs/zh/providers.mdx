@@ -14,12 +14,70 @@ pi_model = "glm-5.3-flash"
 | --- | --- | --- | --- | --- | --- |
 | Google Gemini | `gemini.json` | `GOOGLE_API_KEY` | `gemini-3.8-flash` | 2026-09-04 实测：Pi 全链路 7 秒通过 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | z.ai GLM | `z-ai.json` | `ZAI_API_KEY` | `glm-5.3-flash` | 2026-09-04 实测：真实任务 #303 到达 PR #304 | [#305](https://github.com/orbi-build/orbi/issues/305) |
-| OpenRouter 免费层 | `openrouter.json` | `OPENROUTER_API_KEY` | `google/gemma-4-31b-it:free` | 未实测；不承诺免费目录持续可用 | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| OpenRouter 免费层 | `openrouter.json` | `OPENROUTER_API_KEY` | 当前 18 个 `:free` 模型（默认：`google/gemma-4-31b-it:free`） | 2026-09-07 已核对目录；每模型运行/额度证据见下文 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | DeepSeek | `deepseek.json` | `DEEPSEEK_API_KEY` | `deepseek-chat` | 未实测 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | xAI | `xai.json` | `XAI_API_KEY` | `grok-4.20-0309` | 已根据 xAI 文档核对模型 ID；未测试额度 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | 本地 Qwen | `local-qwen.json` | 无（dummy key `local`） | `Qwen3.8-27B` | 本地零成本示例；需要本地 OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
 
-模板出现在清单中不代表承诺额度、可用性、速度或模型支持。`未实测` 是有意保留的状态。
+模板出现在清单中不代表承诺额度、可用性、速度或模型支持。
+
+## OpenRouter `:free`：一个 key 使用多个模型
+
+OpenRouter 模板是一个 provider 条目，包含当前 `:free` 目录。2026-09-07 从官方 endpoint `https://openrouter.ai/api/v1/models?max_price=0` 查询；该 endpoint 同时返回非免费预览模型，所以只提交 ID 以 `:free` 结尾的 18 个模型。目录会变化，模型 ID 或可用性变化时应刷新模板。
+
+本次核对的 18 个模型：
+
+```text
+cohere/north-mini-code:free
+dots-studio/dots-3-note-preview:free
+google/gemma-4-26b-a4b-it:free
+google/gemma-4-31b-it:free
+inclusionai/ling-3.0-flash-fin:free
+inclusionai/ling-3.0-flash-sante:free
+liquid/lfm-2.5-2.6b:free
+minimax/minimax-m2.7:free
+minimax/minimax-m3:free
+nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+nvidia/nemotron-3-super-120b-a12b:free
+nvidia/nemotron-3-ultra-550b-a55b:free
+nvidia/nemotron-3.5-content-safety:free
+nvidia/nemotron-3.5-lightning:free
+poolside/laguna-s-2.1:free
+poolside/laguna-xs-2.1:free
+thinkingmachines/inkling-small:free
+thinkingmachines/inkling:free
+```
+
+按任务选择后只修改 `pi_model`：代码任务可先试 `cohere/north-mini-code:free`；通用编码/推理可先试 `minimax/minimax-m3:free` 或 `nvidia/nemotron-3-super-120b-a12b:free`；快速小上下文实验可试 `liquid/lfm-2.5-2.6b:free`；安全性测试可试 `nvidia/nemotron-3.5-content-safety:free`。这些只是起点建议，不是 benchmark 结论。
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "openrouter"
+pi_model = "minimax/minimax-m3:free"
+```
+
+### 实测额度，不要猜
+
+本仓库的 provider 目录没有持久的逐模型每日额度。每次实测都记录 UTC 日期、模型 ID、成功请求数、第一次 `429` 的时间、响应 body/error code 和是否恢复；额度取决于账号、模型可用性和 OpenRouter 当前政策。绝不要记录 API key 或完整 prompt。
+
+```bash
+set -a; . .orbi/env; set +a
+for model in \
+  google/gemma-4-31b-it:free minimax/minimax-m3:free; do
+  printf '\\nmodel=%s started=%s\\n' "$model" "$(date -u +%FT%TZ)"
+  pi --no-session --provider openrouter --model "$model" --print \
+    "Reply with exactly OK." 2>&1 || true
+  printf 'finished=%s\\n' "$(date -u +%FT%TZ)"
+done
+```
+
+上面两个模型是本文要求的 smoke pair。成功记录必须包含精确模型 ID、UTC 时间、`result=OK` 和 Orbi run/PR 证据；`429` 是额度实测失败，不能当作跑通。未核实的数字不能写成每日上限。
+
+### 429 与 `quota_exhausted`
+
+当上游 `429` 明确表示账号或模型额度/限流耗尽时，为 #313 分类为 `quota_exhausted`，保留 provider 状态、模型 ID、UTC 时间和脱敏错误文本。`401`/`403` 是认证或权限失败，`404` 是过期/删除的模型 ID，`5xx` 或 timeout 是 provider 可用性问题，不是额度问题。不要静默重试或自动换模型；应 fail fast 并留下证据供排查。
+
+**实测证据状态：**本 checkout 尚未声称 OpenRouter 成功运行或已测得每日上限，除非在此补充脱敏记录。上面的目录核对不是执行证据。
 
 ## 接入一家新 provider
 
