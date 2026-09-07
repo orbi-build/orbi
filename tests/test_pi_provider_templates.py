@@ -12,9 +12,9 @@ TEMPLATE_DIR = REPO_ROOT / "templates" / "pi-providers"
 EXPECTED = {
     "gemini": ("google", "gemini-3.8-flash", "GOOGLE_API_KEY"),
     "z-ai": ("z-ai", "glm-5.3-flash", "ZAI_API_KEY"),
-    "openrouter": ("openrouter", "google/gemma-3-27b-it:free", "OPENROUTER_API_KEY"),
+    "openrouter": ("openrouter", "google/gemma-4-31b-it:free", "OPENROUTER_API_KEY"),
     "deepseek": ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
-    "xai": ("xai", "grok-4.1-fast", "XAI_API_KEY"),
+    "xai": ("xai", "grok-4.20-0309", "XAI_API_KEY"),
     "local-qwen": ("local-qwen", "Qwen3.8-27B", None),
 }
 

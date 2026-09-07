@@ -5,7 +5,7 @@
       "api": "openai-completions",
       "apiKey": "$XAI_API_KEY",
       "models": [
-        {"id": "grok-4.1-fast", "name": "Grok 4.1 Fast", "contextWindow": 131072, "maxTokens": 16384}
+        {"id": "grok-4.20-0309", "name": "Grok 4.20", "contextWindow": 131072, "maxTokens": 16384}
       ]
     }
   }
