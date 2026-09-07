@@ -92,7 +92,7 @@ pi_model = "glm-5.3-flash"
 
 #### 额度用尽后的切换路径
 
-Orbi 不提供自动 fallback。保留 `orbi.toml` 的选择方式，替换 provider 文件和 key 为[清单](#清单)中的另一项，然后重新验证。例如切换到已有的 OpenRouter 模板及其选中模型：
+Orbi 不提供自动 fallback。保留 `orbi.toml` 中的选择字段，但要把 `pi_provider` 和 `pi_model` 改为[清单](#清单)中另一 provider 的匹配值；同时替换 provider 文件和 key，然后重新验证。例如切换到已有的 OpenRouter 模板及其选中模型：
 
 ```toml
 pi_providers = ".orbi/pi-providers.json"

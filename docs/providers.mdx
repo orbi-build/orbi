@@ -92,7 +92,7 @@ Use this path when you have a z.ai account with an experience or free allowance.
 
 #### Switch when the allowance is exhausted
 
-There is no automatic fallback. Keep the same `orbi.toml` selectors and replace the provider file/key with another provider from the [catalog](#catalog), then validate again. For example, switch to the existing OpenRouter template and its selected model:
+There is no automatic fallback. Keep the same `orbi.toml` selector fields, but change `pi_provider` and `pi_model` to match another provider from the [catalog](#catalog); replace the provider file/key, then validate again. For example, switch to the existing OpenRouter template and its selected model:
 
 ```toml
 pi_providers = ".orbi/pi-providers.json"
