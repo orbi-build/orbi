@@ -14580,31 +14580,48 @@ def test_process_release_success_end_to_end(monkeypatch):
     assert state["run_ids"][0] == "a1b2c3d4"
 
 
-def test_process_release_refreshes_cli_before_release_tests(monkeypatch):
-    state = make_release_process_env(monkeypatch)
+def test_process_release_refreshes_deployment_cli_before_release_tests(
+    monkeypatch, tmp_path,
+):
+    """Issue #490: a foreign Node source worktree is not Orbi's install input."""
+    make_release_process_env(monkeypatch)
+    source = tmp_path / "node-source"
+    deployment = tmp_path / "orbi-deployment"
+    source.mkdir()
+    (source / "package.json").write_text("{}", encoding="utf-8")
+    deployment.mkdir()
+    (deployment / "pyproject.toml").write_text(
+        "[project]\nname = 'orbi'\n", encoding="utf-8",
+    )
     order = []
     monkeypatch.setattr(
         runner, "prepare_release_version",
         lambda worktree, tag, base_branch: order.append("version") or "abc123",
     )
 
-    def refresh(worktree, **kwargs):
+    def refresh(repo_dir, **kwargs):
         order.append("cli")
-        assert Path(worktree) == Path("/wt")
+        assert Path(repo_dir) == deployment
+        assert kwargs["lock_repo_dir"] == deployment
         assert kwargs["run_command"] is runner.run_command
         return "installed"
 
     monkeypatch.setattr(runner, "refresh_cli_install", refresh)
-    monkeypatch.setattr(
-        runner, "run_release_tests",
-        lambda worktree, command, timeout: order.append("tests"),
-    )
+    def run_tests(worktree, command, timeout):
+        order.append("tests")
+        assert Path(worktree) == Path("/wt")
+
+    monkeypatch.setattr(runner, "run_release_tests", run_tests)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
 
     assert runner.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue,
+        {"repo_dir": source,
+         "deploy_home": deployment,
+         "base_branch": "main"},
+        "o/r",
     ) == "https://github.com/o/r/releases/tag/v0.3.0"
     assert order == ["version", "cli", "tests"]
 
