@@ -1,0 +1,72 @@
+# GitHub Models 原型额度接入
+
+> **可用性警告（2026-09-07 核查）：** GitHub 当前[官方 GitHub Models 文档](https://docs.github.com/en/github-models)说明，独立的 GitHub Models 服务已于 2026-07-30 退役。本页保留 2026-09-04 核查过的原型配置作为历史快照，不表示 `models.github.ai` 现在仍可用。不要把 401、403 或 404 当成 Orbi 配置缺陷。
+
+本文是 Issue [#319](https://github.com/orbi-build/orbi/issues/319) 的配置记录，复用 [Providers](/zh/providers)（Issue #309）的 `pi_providers`/Pi `models.json` 契约；Orbi 没有 GitHub 专用 provider 集成。
+
+## PAT 和密钥
+
+原型路径使用 **fine-grained personal access token**。在 GitHub 打开 **Settings → Developer settings → Fine-grained personal access tokens**，只授予当前 token 页面显示的 GitHub Models 权限，并设置尽可能短的有效期。预览权限可能变化，以[官方文档](https://docs.github.com/en/github-models)和页面为准。
+
+不要把 token 提交或贴进 Issue、PR、日志、JSON 或 `orbi.toml`。把它放在 systemd unit 加载的本地 gitignored 环境文件中：
+
+```bash
+mkdir -p .orbi
+printf '%s\n' 'GITHUB_MODELS_TOKEN=替换为你的 fine-grained token' > .orbi/env
+chmod 600 .orbi/env
+```
+
+手动 tick 不经过 systemd 的 `EnvironmentFile`，必须显式加载：
+
+```bash
+set -a
+. .orbi/env
+set +a
+```
+
+## `pi_providers` 条目
+
+2026-09-04 原型 endpoint 是 OpenAI-compatible 的 `https://models.github.ai/inference`。完整的带日期快照见 [`templates/pi-providers/github-models.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/github-models.json)：
+
+```json
+{
+  "providers": {
+    "github-models": {
+      "baseUrl": "https://models.github.ai/inference",
+      "api": "openai-completions",
+      "apiKey": "$GITHUB_MODELS_TOKEN",
+      "models": [
+        {"id": "openai/gpt-4o-mini", "name": "GPT-4o mini (2026-09-04 snapshot)", "contextWindow": 128000, "maxTokens": 4096},
+        {"id": "meta/llama-3.1-8b-instruct", "name": "Llama 3.1 8B Instruct (2026-09-04 snapshot)", "contextWindow": 131072, "maxTokens": 4096}
+      ]
+    }
+  }
+}
+```
+
+复制到 `.orbi/pi-providers.json`，再选择一个精确的 model id：
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "github-models"
+pi_model = "openai/gpt-4o-mini"
+```
+
+现有 Runner 的 `_load_pi_providers` 会校验 provider、model、endpoint、API 和 token 引用；它不会测试 endpoint 可达性或额度。由于服务已经退役，不要用这个历史模板运行真实任务。
+
+## 模型、每日限额和证据
+
+2026-09-04 快照中，GitHub catalog 展示了 GPT、Gemini、Claude、Llama 等模型家族。catalog 和限额按模型动态变化，不能推导统一静态数字。以下是已记录的快照，没有编造实测数据：
+
+| 快照日期 | 模型 | 每日限额 | Orbi 真实运行 |
+| --- | --- | --- | --- |
+| 2026-09-04 | `openai/gpt-4o-mini` | 动态；重新核对官方服务 | **未实测** |
+| 2026-09-04 | `meta/llama-3.1-8b-instruct` | 动态；重新核对官方服务 | **未实测** |
+
+“未实测”表示本次交付没有实时凭据或可复现的 run 产物。未来测量必须记录 model id、UTC 时间、页面显示的 requests/day（及可能的 RPM/TPM）、脱敏命令和 HTTP/结果状态，以及 Orbi journal 结果；绝不能记录 PAT。可用性、额度、重置时间和模型名称都可能变化。
+
+## GitHub Models 与 Copilot 的边界
+
+GitHub Models 原型额度是独立的预览服务，不消耗也不增加 GitHub Copilot 订阅的 included usage 或 premium-request allowance。Copilot 是另一套服务，有独立限制。有 Copilot 订阅不代表退役的 Models endpoint 仍可用。Orbi 只提供 endpoint、密钥引用和 model 选择，不计量、轮换、增加或保证任一方的额度。
+
+通用 provider 校验见[上手指南](/zh/getting-started)；Issue [#313](https://github.com/orbi-build/orbi/issues/313) 是另一个未实现的多 provider 提案。

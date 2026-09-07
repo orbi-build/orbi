@@ -1,0 +1,13 @@
+{
+  "providers": {
+    "github-models": {
+      "baseUrl": "https://models.github.ai/inference",
+      "api": "openai-completions",
+      "apiKey": "$GITHUB_MODELS_TOKEN",
+      "models": [
+        {"id": "openai/gpt-4o-mini", "name": "GPT-4o mini (2026-09-04 snapshot)", "contextWindow": 128000, "maxTokens": 4096},
+        {"id": "meta/llama-3.1-8b-instruct", "name": "Llama 3.1 8B Instruct (2026-09-04 snapshot)", "contextWindow": 131072, "maxTokens": 4096}
+      ]
+    }
+  }
+}

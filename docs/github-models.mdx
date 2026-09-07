@@ -1,0 +1,72 @@
+# GitHub Models prototype access
+
+> **Availability warning (checked 2026-09-07):** GitHub's current [GitHub Models documentation](https://docs.github.com/en/github-models) says that the separate GitHub Models service was retired on July 30, 2026. This page preserves the prototype configuration verified on 2026-09-04 as a historical snapshot; it is not a claim that `models.github.ai` is currently available. Do not treat a 401, 403, or 404 as an Orbi configuration defect.
+
+This is the Issue [#319](https://github.com/orbi-build/orbi/issues/319) configuration record. It reuses the `pi_providers`/Pi `models.json` contract from [Providers](/providers) (Issue #309); Orbi has no GitHub-specific provider integration.
+
+## PAT and secret setup
+
+The prototype used a **fine-grained personal access token**. In GitHub, open **Settings → Developer settings → Fine-grained personal access tokens**, grant only the GitHub Models permission shown by the current token UI, and use the shortest useful expiry. The UI and [official documentation](https://docs.github.com/en/github-models) are authoritative because preview permissions can change.
+
+Never commit or paste the token into an Issue, PR, log, JSON file, or `orbi.toml`. Store it in the local gitignored environment file loaded by the systemd unit:
+
+```bash
+mkdir -p .orbi
+printf '%s\n' 'GITHUB_MODELS_TOKEN=replace-with-your-fine-grained-token' > .orbi/env
+chmod 600 .orbi/env
+```
+
+A manual tick must load it explicitly because systemd's `EnvironmentFile` is not involved:
+
+```bash
+set -a
+. .orbi/env
+set +a
+```
+
+## `pi_providers` entry
+
+The 2026-09-04 prototype endpoint was the OpenAI-compatible `https://models.github.ai/inference`. The complete dated snapshot is [`templates/pi-providers/github-models.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/github-models.json):
+
+```json
+{
+  "providers": {
+    "github-models": {
+      "baseUrl": "https://models.github.ai/inference",
+      "api": "openai-completions",
+      "apiKey": "$GITHUB_MODELS_TOKEN",
+      "models": [
+        {"id": "openai/gpt-4o-mini", "name": "GPT-4o mini (2026-09-04 snapshot)", "contextWindow": 128000, "maxTokens": 4096},
+        {"id": "meta/llama-3.1-8b-instruct", "name": "Llama 3.1 8B Instruct (2026-09-04 snapshot)", "contextWindow": 131072, "maxTokens": 4096}
+      ]
+    }
+  }
+}
+```
+
+Copy the file to `.orbi/pi-providers.json`, then select one exact model id:
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "github-models"
+pi_model = "openai/gpt-4o-mini"
+```
+
+The existing Runner `_load_pi_providers` validation accepts this shape and checks the selected provider, model, endpoint, API, and token reference. It does not test endpoint reachability or quota. Because the service is currently retired, do not run a real task with this historical template.
+
+## Models, daily limits, and evidence
+
+The 2026-09-04 snapshot covered GPT, Gemini, Claude, Llama, and other families shown by the GitHub catalog. The catalog and limits were dynamic and model-specific; no universal static number should be inferred. The following are the documented snapshot rows, with no fabricated measurements:
+
+| Snapshot date | Model | Daily limit | Real Orbi run |
+| --- | --- | --- | --- |
+| 2026-09-04 | `openai/gpt-4o-mini` | Dynamic; re-check the official service | **Not tested** |
+| 2026-09-04 | `meta/llama-3.1-8b-instruct` | Dynamic; re-check the official service | **Not tested** |
+
+“Not tested” means this delivery has no live credentials or reproducible run artifact. A future measurement must record the model id, UTC time, displayed requests/day (and any RPM/TPM), redacted command, HTTP/result status, and Orbi journal result—never the PAT. Availability, quota, reset time, and model names can change.
+
+## GitHub Models versus Copilot
+
+GitHub Models prototype quota was a separate preview service and did not consume or increase a GitHub Copilot subscription's included usage or premium-request allowance. Copilot is a separate service with separate limits. A Copilot subscription does not make the retired Models endpoint available. Orbi only supplies the endpoint, secret reference, and model selection; it does not meter, rotate, increase, or guarantee either quota.
+
+See [Getting started](/getting-started) for generic provider validation and [Issue #313](https://github.com/orbi-build/orbi/issues/313) for the separate multi-provider proposal (not implemented here).

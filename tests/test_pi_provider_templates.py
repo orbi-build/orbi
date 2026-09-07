@@ -16,6 +16,7 @@ EXPECTED = {
     "deepseek": ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
     "xai": ("xai", "grok-4.20-0309", "XAI_API_KEY"),
     "local-qwen": ("local-qwen", "Qwen3.8-27B", None),
+    "github-models": ("github-models", "openai/gpt-4o-mini", "GITHUB_MODELS_TOKEN"),
 }
 
 

@@ -17,6 +17,7 @@
               "index",
               "getting-started",
               "providers",
+              "github-models",
               "ollama-pro",
               "setup"
             ]
@@ -67,6 +68,7 @@
               "zh/index",
               "zh/getting-started",
               "zh/providers",
+              "zh/github-models",
               "zh/ollama-pro",
               "zh/setup"
             ]
