@@ -106,10 +106,12 @@ record the journal lines `provider=opencode model=<id>`, the stable Orbi
 
 ## Minimal fallback
 
-Keep the Orbi runner unchanged and change only the selectors (and, for a
-non-native provider, add its already documented provider file and key):
+Keep the Orbi runner unchanged. For z.ai, copy the existing `z-ai.json` template
+to `.orbi/pi-providers.json` and put `ZAI_API_KEY` in `.orbi/env`; the complete
+selector change is:
 
 ```diff
++pi_providers = ".orbi/pi-providers.json"
 -pi_provider = "opencode"
 -pi_model = "glm-5.3-flash"
 +pi_provider = "z-ai"

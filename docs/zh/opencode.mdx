@@ -99,9 +99,12 @@ secret）、journal 的 `provider` 与 `model`、`run_id`、PR URL 和耗时。�
 
 ## 最小切换方案
 
-保持 Orbi runner 不变，只改选择项；非原生 provider 则再使用已有模板和 key：
+保持 Orbi runner 不变。切到 z.ai 时，将已有 `z-ai.json` 模板复制为
+`.orbi/pi-providers.json`，并将 `ZAI_API_KEY` 放入 `.orbi/env`；完整的选择项
+变更如下：
 
 ```diff
++pi_providers = ".orbi/pi-providers.json"
 -pi_provider = "opencode"
 -pi_model = "glm-5.3-flash"
 +pi_provider = "z-ai"
