@@ -1535,6 +1535,64 @@ def run_command(command: list[str], *, cwd: Path | None = None,
     return result.stdout.strip()
 
 
+GIT_NETWORK_MAX_ATTEMPTS = 3
+GIT_NETWORK_BACKOFF_SECONDS = 1
+GIT_TRANSIENT_ERROR_MARKERS = (
+    "connection timed out",
+    "operation timed out",
+    "connection reset",
+    "connection refused",
+    "temporary failure in name resolution",
+    "network is unreachable",
+    "network unreachable",
+)
+
+
+def _is_retryable_git_network_failure(
+    command: list[str], exc: subprocess.CalledProcessError,
+) -> bool:
+    """Return whether a Git fetch/push failed with a known transient error."""
+    if len(command) < 2 or command[:1] != ["git"]:
+        return False
+    if command[1] not in {"fetch", "push"}:
+        return False
+    stderr = (exc.stderr or "").lower()
+    return any(marker in stderr for marker in GIT_TRANSIENT_ERROR_MARKERS)
+
+
+def run_git_network_command(
+    command: list[str], *, cwd: Path | str | None = None,
+    command_runner: Callable[..., str] | None = None,
+) -> str:
+    """Run an Orbi-controlled Git fetch/push with bounded network retries.
+
+    Only explicitly recognized transient network messages are retried. The
+    last ``CalledProcessError`` is re-raised unchanged so its stderr remains
+    available to the existing failure handling.
+    """
+    execute = command_runner or run_command
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return execute(command, cwd=cwd)
+        except subprocess.CalledProcessError as exc:
+            if (
+                attempt >= GIT_NETWORK_MAX_ATTEMPTS
+                or not _is_retryable_git_network_failure(command, exc)
+            ):
+                raise
+            delay = GIT_NETWORK_BACKOFF_SECONDS * (2 ** (attempt - 1))
+            LOGGER.warning(
+                "git_network_retry command=%s attempt=%s max_attempts=%s "
+                "delay_seconds=%s stderr=%s",
+                single_line(" ".join(command)), attempt + 1,
+                GIT_NETWORK_MAX_ATTEMPTS, delay,
+                single_line((exc.stderr or "").strip()),
+            )
+            time.sleep(delay)
+
+
 def parse_issue_array(raw: str) -> list[dict]:
     """Return the issue array from gh's JSON output."""
     issues = json.loads(raw)
@@ -2445,9 +2503,10 @@ def prepare_release_version(worktree: Path, tag: str,
             run_command([
                 "git", "commit", "-m", f"chore: prepare release {tag}",
             ], cwd=worktree)
-            run_command([
-                "git", "push", "origin", f"HEAD:refs/heads/{base_branch}",
-            ], cwd=worktree)
+            run_git_network_command(
+                ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
+                cwd=worktree,
+            )
         return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
     if version_file not in ("pyproject.toml", "package.json", "composer.json"):
         source = worktree / version_file
@@ -2521,9 +2580,10 @@ def prepare_release_version(worktree: Path, tag: str,
             run_command([
                 "git", "commit", "-m", f"chore: prepare release {tag}",
             ], cwd=worktree)
-            run_command([
-                "git", "push", "origin", f"HEAD:refs/heads/{base_branch}",
-            ], cwd=worktree)
+            run_git_network_command(
+                ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
+                cwd=worktree,
+            )
         return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
     pyproject = worktree / version_file
     init_file = worktree / "src" / "orbi" / "__init__.py"
@@ -2561,9 +2621,10 @@ def prepare_release_version(worktree: Path, tag: str,
         run_command([
             "git", "commit", "-m", f"chore: prepare release {tag}",
         ], cwd=worktree)
-        run_command([
-            "git", "push", "origin", f"HEAD:refs/heads/{base_branch}",
-        ], cwd=worktree)
+        run_git_network_command(
+            ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
+            cwd=worktree,
+        )
     return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
 
 
@@ -2582,7 +2643,7 @@ def release_tag_commit(repo_dir: Path, tag: str) -> str | None:
     fd = acquire_base_sync_lock(repo_dir, 300.0)
     try:
         try:
-            run_command(
+            run_git_network_command(
                 ["git", "fetch", "origin",
                  f"refs/tags/{tag}:refs/tags/{tag}"],
                 cwd=repo_dir,
@@ -3072,9 +3133,10 @@ def sync_release_docs(*, source_repo: str, repo_dir: Path,
             "git", "commit", "-m",
             f"docs: release notes for {tag} (Issue #{issue_number})",
         ], cwd=worktree)
-        run_command([
-            "git", "push", "origin", f"HEAD:refs/heads/{base_branch}",
-        ], cwd=worktree)
+        run_git_network_command(
+            ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
+            cwd=worktree,
+        )
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
@@ -3483,7 +3545,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
                  release_commit],
                 cwd=config["repo_dir"],
             )
-            run_command(
+            run_git_network_command(
                 ["git", "push", "origin", f"refs/tags/{tag}"],
                 cwd=config["repo_dir"],
             )
@@ -6266,7 +6328,9 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
     # The head is re-read after the absorb step: a successful base
     # merge advanced it to the merge commit.
     local_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
-    run_command(["git", "push", "origin", f"HEAD:{branch}"], cwd=worktree)
+    run_git_network_command(
+        ["git", "push", "origin", f"HEAD:{branch}"], cwd=worktree,
+    )
     remote_head = run_command(
         ["git", "rev-parse", f"origin/{branch}"], cwd=worktree,
     )
@@ -7226,9 +7290,10 @@ def fetch_base_ref(repo_dir: Path, base_branch: str,
         command_runner = run_command
     fd = acquire_base_sync_lock(repo_dir, lock_timeout_seconds)
     try:
-        command_runner(
+        run_git_network_command(
             ["git", "fetch", "origin", base_branch],
             cwd=cwd if cwd is not None else repo_dir,
+            command_runner=command_runner,
         )
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
@@ -7416,7 +7481,9 @@ def sync_base_checkout(repo_dir: Path, base_branch: str,
 def _sync_base_checkout_locked(repo_dir: Path, base_branch: str) -> None:
     """The actual fetch + fast-forward + verify, under the base-sync
     flock (see ``sync_base_checkout``)."""
-    run_command(["git", "fetch", "origin", base_branch], cwd=repo_dir)
+    run_git_network_command(
+        ["git", "fetch", "origin", base_branch], cwd=repo_dir,
+    )
     local_head = run_command(["git", "rev-parse", "HEAD"], cwd=repo_dir)
     remote_head = run_command(
         ["git", "rev-parse", f"origin/{base_branch}"], cwd=repo_dir,
