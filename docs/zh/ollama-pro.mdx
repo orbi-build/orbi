@@ -1,0 +1,114 @@
+# Ollama Pro 云端模型
+
+本文针对 Ollama 托管的云端模型（包括 Ollama Pro 订阅），不是本地 Ollama 或 llama.cpp server 教程。以下接入边界实测/核对日期为 **2026-09-07**。
+
+<Note>
+本次交付没有 Ollama 云端账号。订阅计划的额度、限流、特定账号的模型可用性以及 Orbi 实际运行结果均**未实测，待用户自行验证**；本文不承诺免费或无限额度。
+</Note>
+
+## 先核对了什么
+
+当前安装的 Pi 是 **0.85.1**。其 catalog（`pi --list-models`）没有 `ollama` provider；`pi auth check --provider ollama --json --no-refresh` 返回 `{"status":"not_ready","provider":"ollama","reason":"provider_not_found"}`。因此：
+
+- 当前版本的 Pi 内置 provider 和 `/login` 流程**不是** Ollama 接入路径。
+- 不要在 Pi OAuth 凭据中猜造 Ollama 条目，也不要假设 `pi login` 能授权 Ollama。
+- Orbi 必须使用 Pi `models.json` 形状的自定义 `pi_providers` 文件，配置 Ollama 的 OpenAI-compatible 云端 endpoint 和 API key 引用。
+
+这也与 Ollama 官方资料一致：本地/云端 CLI 使用 `ollama signin` 准备，而直接访问 `ollama.com` 要在 [Ollama settings/keys](https://ollama.com/settings/keys) 创建 API key；Ollama 的 OpenAI 兼容文档给出的云端 base URL 是 `https://ollama.com/v1`。依据：[Cloud](https://docs.ollama.com/cloud)、[API](https://docs.ollama.com/api)、[OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility)。
+
+## 准备 Ollama 访问
+
+1. 在 [ollama.com](https://ollama.com) 登录或注册。如果也使用本地 Ollama CLI，官方准备命令是：
+
+   ```bash
+   ollama signin
+   ```
+
+   这不是 Pi 或 Orbi 的登录命令。
+2. 在 [ollama.com/settings/keys](https://ollama.com/settings/keys) 创建 API key。它是账号秘密，绝不能粘贴进本仓库、Issue、日志或 commit。
+3. 把 key 放入 Orbi/systemd 使用的本地 gitignored 环境文件：
+
+   ```bash
+   mkdir -p .orbi
+   printf '%s\n' 'OLLAMA_API_KEY=替换为你的key' > .orbi/env
+   chmod 600 .orbi/env
+   ```
+
+4. 不要从本文固定抄模型名，先查询账号当前 catalog。Ollama 官方记录的认证 endpoint 是：
+
+   ```bash
+   set -a; . .orbi/env; set +a
+   curl -fsS https://ollama.com/api/tags \
+     -H "Authorization: Bearer $OLLAMA_API_KEY"
+   ```
+
+   返回值是请求时账号/API 可见的 catalog。官方云端示例在 direct API 中使用 `gpt-oss:120b`；这只是示例，不代表额度或可用性保证。本地 CLI 的云端 tag（如 `gpt-oss:120b-cloud`）也不自动等于 direct API 的 model ID。
+
+## 最小 Orbi 配置
+
+因为 Pi 0.85.1 没有 Ollama provider，需要按 Pi `models.json` 形状创建一个本地 provider 文件。可以不提交它，也可以只放入从 `/api/tags` 查到的模型：
+
+`.orbi/pi-providers.json`：
+
+```json
+{
+  "providers": {
+    "ollama-pro": {
+      "baseUrl": "https://ollama.com/v1",
+      "api": "openai-completions",
+      "apiKey": "$OLLAMA_API_KEY",
+      "models": [
+        {
+          "id": "gpt-oss:120b",
+          "name": "Ollama 云端模型（请以 /api/tags 核对）",
+          "contextWindow": 131072,
+          "maxTokens": 16384
+        }
+      ]
+    }
+  }
+}
+```
+
+把 `id` 换成你账号 `/api/tags` 返回的精确 ID，然后在 `orbi.toml` 只选择它：
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "ollama-pro"
+pi_model = "gpt-oss:120b"
+```
+
+key 只保留在 `.orbi/env`；systemd 通过 `EnvironmentFile` 加载它。手动 tick 时先导出：
+
+```bash
+set -a; . .orbi/env; set +a
+PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
+```
+
+真实任务前运行 Orbi 配置校验。它会 fail-fast 检查 provider、精确 model、endpoint、API 以及被引用的环境变量。不要把同一 provider 重复放入第二个 JSON 或 Pi 内置 auth store。
+
+## 额度、错误和证据边界
+
+Ollama 官方公开资料说明了云端模型和 API-key 认证，但没有给出 Orbi 可以承诺的固定 Ollama Pro 额度。本次交付没有 Ollama Pro 账号，因此额度/限流、订阅权益、账号可见模型以及成功的 Orbi Issue 均**未实测，待用户自行验证**。用户自行测试时只能记录日期、计划、model 和脱敏的命令/结果，绝不能记录 key。
+
+认证或额度失败可能以 Ollama HTTP/API 错误出现，并由 Pi/Orbi 表现为模型请求失败。不要静默重试，也不要把该 run 标记为成功。检查去除秘密后的日志中的 provider/model 和上游状态，然后修正 key/catalog 或切换 provider。
+
+## 最小 fallback diff
+
+保持 runner 和任务不变，只改选择的 provider/model，必要时改 `.orbi/env` 中的秘密：
+
+```diff
+-pi_provider = "ollama-pro"
+-pi_model = "gpt-oss:120b"
++pi_provider = "local-qwen"
++pi_model = "Qwen3.8-27B"
+```
+
+切换到 z.ai、Codex 或其他已有模板时，以[Providers](/zh/providers)列出的精确 provider/model 对为准，只改对应的 `pi_provider`、`pi_model` 和本地 secret 引用。fallback 同样不保证其额度可用。
+
+## 安全清单
+
+- `.orbi/env` 和本地 `.orbi/pi-providers.json` 不进 Git；JSON 使用 `$OLLAMA_API_KEY`，绝不写字面量 key。
+- 不要把 key 放入 Issue、PR、session transcript、shell history 或诊断日志。
+- model ID 和 HTTP 状态只有在删除 Authorization header 与响应数据后才适合分享。
+- Ollama Pro 的订阅有效期和额度会变化；生产任务前重新检查官方 catalog 和计划条款。
