@@ -18,6 +18,7 @@ pi_model = "glm-5.3-flash"
 | DeepSeek | `deepseek.json` | `DEEPSEEK_API_KEY` | `deepseek-chat` | 未实测 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | xAI | `xai.json` | `XAI_API_KEY` | `grok-4.20-0309` | 已根据 xAI 文档核对模型 ID；未测试额度 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | 本地 Qwen | `local-qwen.json` | 无（dummy key `local`） | `Qwen3.8-27B` | 本地零成本示例；需要本地 OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| Cloudflare Workers AI | `cloudflare-workers-ai.json` | `CLOUDFLARE_API_TOKEN` | `@cf/meta/llama-3.1-8b-instruct-fp8` | 托管免费额度；必须在账号中核对额度 | [#318](https://github.com/orbi-build/orbi/issues/318) |
 
 模板出现在清单中不代表承诺额度、可用性、速度或模型支持。`未实测` 是有意保留的状态。
 
@@ -101,6 +102,39 @@ pi_model = "google/gemma-4-31b-it:free"
 ```
 
 复制 [`openrouter.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/openrouter.json)，在 `.orbi/env` 设置 `OPENROUTER_API_KEY`，派发前执行一次真实 `pi --print` 检查。OpenRouter 的 `z-ai/glm-5.2:free` 是另一条 provider 路径；本文**未实测也不承诺**它的可用性和额度。
+
+### Cloudflare Workers AI
+
+Cloudflare 的 OpenAI-compatible endpoint 按账号区分。复制 [`cloudflare-workers-ai.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/cloudflare-workers-ai.json)，把 `baseUrl` 中的 `REPLACE_WITH_ACCOUNT_ID` 换成 Cloudflare Account ID，并创建具有 Workers AI 运行权限的 API token。token 放在 `.orbi/env`：
+
+```bash
+printf '%s\n' 'CLOUDFLARE_API_TOKEN=replace-me' >> .orbi/env
+chmod 600 .orbi/env
+```
+
+在 `orbi.toml` 中选择：
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "cloudflare-workers-ai"
+pi_model = "@cf/meta/llama-3.1-8b-instruct-fp8"
+```
+
+模型 ID 来自 Cloudflare 当前的 [Workers AI 模型目录](https://developers.cloudflare.com/workers-ai/models/llama-3.1-8b-instruct-fp8/)，endpoint 路径来自 [Workers AI 配置文档](https://developers.cloudflare.com/workers-ai/configuration/)。Cloudflare [官方定价页](https://developers.cloudflare.com/workers-ai/platform/pricing/)说明每天免费 **10,000 Neurons**，在 **00:00 UTC** 重置（信息核对日期：2026-09-04）。超过免费额度后，若未启用计费，后续操作会失败。额度和价格可能变化，运行前请重新查看官方页面。
+
+#### 实测一个 Orbi 任务的消耗
+
+派发一个 Issue 前、PR 打开后，分别记录 Workers AI 账号的 Neurons 使用量（必须是同一 UTC 日）。任务消耗为 `after - before`；保留 dashboard/API 的 UTC 时间戳、模型、Issue 和 PR URL，但不要保留 token。Orbi journal 只能证明选中了 provider/model，不能代替 Neurons 计量。**本仓库尚未使用带 Cloudflare 账号的真实 Orbi 任务；真实请求和 Neurons 消耗未实测，不得推断或编造。**
+
+```text
+journal: provider=cloudflare-workers-ai model=@cf/meta/llama-3.1-8b-instruct-fp8 run_id=<run-id>
+Cloudflare Workers AI usage: before=<n> neurons at <UTC>, after=<n> neurons at <UTC>, delta=<n>
+PR: https://github.com/OWNER/REPO/pull/<number>
+```
+
+#### 托管服务与本地 Qwen 的定位
+
+Workers AI 是托管服务：Cloudflare 提供推理服务和账号 Neurons 额度，适合没有高性能 GPU 的机器，但依赖网络、账号额度和 Cloudflare 的模型可用性。`local-qwen` 是自托管：不消耗 provider 额度，请求发往本地 OpenAI-compatible server，但操作者需要提供硬件、模型运行时和电力。轻量托管执行可选 Cloudflare；重视数据不出机和本地可控可用性时选本地 Qwen。
 
 ### 本地 provider
 
