@@ -15571,12 +15571,6 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
                        "--json", "number,body,labels,blockedBy"]:
             return json.dumps({"number": 30, "body": "## Children\n- #31",
                                "labels": [{"name": "ai-epic"}]})
-        if command == ["gh", "issue", "view", "32", "--repo", "o/r",
-                       "--json", "number,body,labels,blockedBy"]:
-            return json.dumps({"number": 32, "body": "## Children\n- #33",
-                               "labels": [{"name": "ai-epic"}],
-                               "blockedBy": {"nodes": [{"number": 9,
-                                                            "state": "OPEN"}]}})
         if command[:4] == ["gh", "issue", "view", "34"]:
             return json.dumps({"comments": [{"body": audit}]})
         if command == ["gh", "issue", "close", "34", "--repo", "o/r"]:
