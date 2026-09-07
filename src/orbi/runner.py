@@ -1630,6 +1630,24 @@ def parse_issue_list(raw: str) -> dict | None:
     return issues[0] if issues else None
 
 
+def parse_paginated_issue_array(raw: str) -> list[dict]:
+    """Flatten the JSON array emitted by ``gh api --paginate --slurp``."""
+    pages = json.loads(raw)
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        raise ValueError("paginated issue list must be an array of arrays")
+    return [item for page in pages for item in page if isinstance(item, dict)]
+
+
+def milestone_open_issues(repo: str, milestone_number: int) -> list[dict]:
+    """List open Issues for one exact Milestone number, including all pages."""
+    raw = run_command([
+        "gh", "api",
+        f"repos/{repo}/issues?milestone={milestone_number}&state=open&per_page=100",
+        "--paginate", "--slurp",
+    ])
+    return parse_paginated_issue_array(raw)
+
+
 def open_blocker_numbers(issue: dict) -> list[int]:
     """Return the numbers of the issue's OPEN native GitHub blockers.
 
@@ -2814,6 +2832,8 @@ def parse_epic_children(body: str, repo: str) -> list[tuple[str, int]]:
             kind = "pr" if match.group(2).lower() == "pull" else "issue"
             children.append((kind, int(match.group(3))))
         remainder = EPIC_CHILD_URL_PATTERN.sub("", line)
+        if re.search(r"https?://", remainder, re.I):
+            raise ValueError(f"malformed child URL in Epic scope: {line.strip()}")
         for match in EPIC_CHILD_NUMBER_PATTERN.finditer(remainder):
             children.append(("unknown", int(match.group(1))))
     if not found_section or not children:
@@ -2847,12 +2867,7 @@ def _epic_child_evidence(repo: str, kind: str, number: int) -> str:
 def reconcile_release_epics(repo: str, milestone_number: int, version: str,
                             run_id: str) -> list[str]:
     """Close only provably complete open Epics in this exact Milestone."""
-    raw = run_command([
-        "gh", "issue", "list", "--repo", repo, "--milestone", version,
-        "--state", "open", "--json", "number,title,body,labels,blockedBy",
-        "--limit", "100",
-    ])
-    issues = [item for item in parse_issue_array(raw) if isinstance(item, dict)]
+    issues = milestone_open_issues(repo, milestone_number)
     evidence: list[str] = []
     for epic in issues:
         labels = epic.get("labels", [])
@@ -2873,13 +2888,15 @@ def reconcile_release_epics(repo: str, milestone_number: int, version: str,
         except (ValueError, json.JSONDecodeError) as exc:
             evidence.append(f"Epic #{number} kept open: {exc}")
             continue
-        audit = (f"<!-- orbi:run={run_id} -->\n"
-                 f"Epic reconciliation for {version}: complete; "
+        audit = (f"Epic reconciliation for {version}: complete; "
                  f"children: {', '.join(child_evidence)}; "
                  "no open native blockers/dependencies.")
         comments = issue_comments(int(number), repo=repo)
         if not any(audit in str(comment.get("body", "")) for comment in comments):
-            comment_issue(int(number), repo=repo, body=audit + f"\nrun_id={run_id}")
+            comment_issue(
+                int(number), repo=repo,
+                body=f"<!-- orbi:run={run_id} -->\n{audit}\nrun_id={run_id}",
+            )
         run_command(["gh", "issue", "close", str(number), "--repo", repo])
         evidence.append(f"Epic #{number} closed after verification ({'; '.join(child_evidence)})")
     return evidence
@@ -2944,29 +2961,22 @@ def close_release_milestone(repo: str, version: str, *, run_id: str | None = Non
             f"Milestone #{number} ({html_url}) already closed — "
             "idempotent success, nothing to do"
         )
-    open_issues = milestone.get("open_issues")
+    open_issues = milestone_open_issues(repo, int(number))
     epic_evidence: list[str] = []
-    if run_id is not None and (not isinstance(open_issues, int) or open_issues > 0):
-        # The summary only decides whether to query the open-issue listing;
-        # every listed Epic is still verified from its children and blockers.
+    if run_id is not None and open_issues:
+        # Every listed Epic is verified from its children and blockers before
+        # the authoritative exact-Milestone list is checked again.
         epic_evidence = reconcile_release_epics(repo, int(number), version, run_id)
-    if not isinstance(open_issues, int) or open_issues > 0:
-        raw = run_command([
-            "gh", "issue", "list", "--repo", repo, "--milestone", version,
-            "--state", "open", "--json", "number,title", "--limit", "100",
-        ])
-        issues = parse_issue_array(raw)
-        if issues:
-            listing = ", ".join(
-                f"#{i.get('number')} {i.get('title')}" for i in issues
-            )
-            raise RuntimeError(
-                f"release {version}: Milestone #{number} ({html_url}) still "
-                f"has {open_issues} open issue(s) — closing it would hide "
-                f"unfinished work; open issues: {listing}"
-            )
-        # GitHub's milestone summary can lag immediately after closing an
-        # Epic. The authoritative open-issue listing is empty, so continue.
+        open_issues = milestone_open_issues(repo, int(number))
+    if open_issues:
+        listing = ", ".join(
+            f"#{i.get('number')} {i.get('title')}" for i in open_issues
+        )
+        raise RuntimeError(
+            f"release {version}: Milestone #{number} ({html_url}) still "
+            f"has {len(open_issues)} open issue(s) — closing it would hide "
+            f"unfinished work; open issues: {listing}"
+        )
     run_command([
         "gh", "api", f"repos/{repo}/milestones/{number}",
         "--method", "PATCH", "-f", "state=closed",
