@@ -345,6 +345,15 @@ class UnrecoverableDeliveryError(RuntimeError):
     """
 
 
+class ResumeVerificationError(UnrecoverableDeliveryError):
+    """A resume precondition was handled and reported for this tick.
+
+    The verification handler has already written the label and failure
+    evidence. Keeping a distinct type lets the tick boundary end normally
+    without swallowing unrelated Runner bugs.
+    """
+
+
 class PreExistingCIFailure(UnrecoverableDeliveryError):
     """A failed delivery check is already failing on the PR's base.
 
@@ -5952,7 +5961,11 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
         ["git", "branch", "--show-current"], cwd=worktree,
     )
     if current_branch != branch:
-        raise RuntimeError(
+        error_type = ResumeVerificationError if expected_url is not None else RuntimeError
+        raise error_type(
+            f"resume PR validation: run_id={run_id} branch={branch} "
+            f"open_pr_count=unknown open_prs=[] "
+            f"scene_pr={expected_url or '-'} scene_pr_state=unknown; "
             f"Pi changed branch: expected={branch} actual={current_branch}"
         )
     if require_latest_base:
@@ -5986,10 +5999,36 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
         "--json",
         "url,baseRefName,headRefName,headRefOid,"
         "headRepository,headRepositoryOwner,body",
-        "--limit", "2",
+        "--limit", "100" if expected_url is not None else "2",
     ], cwd=worktree)
     prs = json.loads(raw)
-    if not isinstance(prs, list) or len(prs) != 1:
+    if not isinstance(prs, list):
+        raise RuntimeError("expected exactly one open PR for the task branch")
+    if len(prs) != 1:
+        # A resume cannot safely select a replacement PR. Include the full
+        # query result in the exception: it is the audit record used by the
+        # resume failure transition (Issue #495).
+        if expected_url is not None:
+            scene_state = "unknown"
+            try:
+                scene_pr = run_command([
+                    "gh", "pr", "view", str(_pr_number(expected_url)),
+                    "--repo", pr_repo or "", "--json", "state,mergedAt",
+                ], cwd=worktree)
+                state = json.loads(scene_pr)
+                if isinstance(state, dict):
+                    scene_state = str(state.get("state", "unknown"))
+                    if state.get("mergedAt"):
+                        scene_state = "MERGED"
+            except Exception:
+                LOGGER.exception("resume_scene_pr_state_lookup_failed")
+            raise ResumeVerificationError(
+                f"resume PR validation: run_id={run_id} branch={branch} "
+                f"open_pr_count={len(prs)} "
+                f"open_prs={json.dumps(prs, sort_keys=True)} "
+                f"scene_pr={expected_url} scene_pr_state={scene_state}; "
+                "the scene PR is not uniquely open and must not be replaced"
+            )
         raise RuntimeError("expected exactly one open PR for the task branch")
     url = prs[0].get("url")
     if not url:
@@ -6001,7 +6040,11 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
                 "pr_repo_mismatch expected=%s actual=%s branch=%s",
                 pr_repo, head_repo, branch,
             )
-            raise RuntimeError(
+            error_type = ResumeVerificationError if expected_url is not None else RuntimeError
+            raise error_type(
+                f"resume PR validation: run_id={run_id} branch={branch} "
+                f"open_pr_count=1 open_prs={[url]} "
+                f"scene_pr={expected_url or '-'} scene_pr_state=OPEN; "
                 f"PR head repo is {head_repo}, expected {pr_repo}; the "
                 "resume must keep the PR of the configured source repo"
             )
@@ -6011,7 +6054,11 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
             "pr_base_mismatch expected=%s actual=%s branch=%s",
             base_branch, base_ref, branch,
         )
-        raise RuntimeError(
+        error_type = ResumeVerificationError if expected_url is not None else RuntimeError
+        raise error_type(
+            f"resume PR validation: run_id={run_id} branch={branch} "
+            f"open_pr_count=1 open_prs={[url]} "
+            f"scene_pr={expected_url or '-'} scene_pr_state=OPEN; "
             f"PR base is {base_ref}, expected {base_branch}; recreate the "
             "PR against the configured base branch"
         )
@@ -6083,9 +6130,12 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
             "pr_url_mismatch expected=%s actual=%s branch=%s",
             expected_url, url, branch,
         )
-        raise RuntimeError(
-            f"PR URL {url} is not the recovered original PR "
-            f"{expected_url}; the resume must keep the same PR number"
+        raise ResumeVerificationError(
+            f"resume PR validation: run_id={run_id} branch={branch} "
+            f"open_pr_count=1 open_prs={[url]} scene_pr_state=OPEN; "
+            f"scene_pr={expected_url}; PR URL {url} is not the "
+            f"recovered original PR {expected_url}; the "
+            "resume must keep the same PR number"
         )
     return url
 
@@ -6423,9 +6473,10 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
     config change) is terminal: the Issue is marked `ai-blocked` ALONE
     (the opened-PR state label is removed, and a leftover
     `ai-fix-needed` too) with the explicit reason why automatic
-    recovery is impossible. Either way the error is re-raised so the
-    tick stops — no review Pi is started, nothing is merged, and the
-    PR, branch and worktree stay intact.
+    recovery is impossible. The error is re-raised after reporting so
+    the tick boundary can distinguish this handled external scene from
+    an unhandled Runner bug; no review Pi is started, nothing is merged,
+    and the PR, branch and worktree stay intact.
     """
     number = int(issue["number"])
     run_id = scene["run_id"]
@@ -9541,7 +9592,19 @@ def main(argv: list[str] | None = None) -> int:
             # string, so a comment can never steer the runner into the
             # wrong PR (Issue #45). A mismatch is terminal: the Issue
             # is marked ai-blocked and the tick stops.
-            pr_url = verify_resumed_pr(scene, issue, config, source_repo)
+            try:
+                pr_url = verify_resumed_pr(
+                    scene, issue, config, source_repo,
+                )
+            except UnrecoverableDeliveryError as exc:
+                # Resume verification has already performed the audited
+                # label/comment transition. This is an expected external
+                # scene condition, not a failed Runner tick (Issue #495).
+                LOGGER.error(
+                    "resume_pr_handled issue=%s scene_pr=%s reason=%s",
+                    issue["number"], scene["pr_url"], exc,
+                )
+                return 0
         else:
             result = process_issue(issue, config, source_repo)
             # `process_issue` owns task dispatch and reports its outcome;

@@ -943,6 +943,47 @@ def test_main_still_claims_new_issue_when_no_resumable(monkeypatch, tmp_path):
 # --------------------------- resume PR verification (Issue #89)
 
 
+def test_main_ends_cleanly_after_handled_resume_scene_failure(
+    monkeypatch, tmp_path,
+):
+    """Issue #495: an audited stale scene does not kill the Runner tick."""
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "prompt.md").write_text("prompt", encoding="utf-8")
+    (prompts / "prompt_review.md").write_text("review", encoding="utf-8")
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    issue = {"number": 9, "title": "ship", "body": ""}
+    released = []
+
+    monkeypatch.setattr(runner, "sync_active_milestone_variable", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "refresh_cli_install", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "check_unit_drift", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "check_transport", lambda *a, **k: {})
+    monkeypatch.setattr(runner.runner_health, "run_health_check", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "acquire_slot", lambda *a, **k: type(
+        "Slot", (), {"release": lambda self: released.append(True)},
+    )())
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda *a, **k: ("owner/repo", issue, make_resume_scene()),
+    )
+    monkeypatch.setattr(
+        runner, "verify_resumed_pr",
+        lambda *a, **k: (_ for _ in ()).throw(
+            runner.ResumeVerificationError(
+                "open_pr_count=0 open_prs=[] scene_pr=" + FAKE_PR_URL
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        runner, "wait_for_delivery",
+        lambda *a, **k: pytest.fail("stale resume must not enter delivery wait"),
+    )
+    assert runner.main(["--config", str(config_path)]) == 0
+    assert released == [True]
+
+
 def make_resume_config(tmp_path) -> dict:
     return {
         "repo_dir": tmp_path,
@@ -967,6 +1008,111 @@ def expected_resume_worktree(tmp_path) -> Path:
     return runner.worktree_path(
         tmp_path, "owner/repo", 9, FAKE_RUN_ID,
     )
+
+
+@pytest.mark.parametrize(
+    ("open_prs", "scene_state", "expected"),
+    [
+        ([], "CLOSED", "scene_pr_state=CLOSED"),
+        ([], "MERGED", "scene_pr_state=MERGED"),
+        ([{"url": "https://github.com/owner/repo/pull/10"},
+         {"url": "https://github.com/owner/repo/pull/11"}],
+         "OPEN", "open_pr_count=2"),
+    ],
+)
+def test_verify_pr_resume_rejects_stale_or_ambiguous_scene_with_evidence(
+    monkeypatch, tmp_path, open_prs, scene_state, expected,
+):
+    """Issue #495: resume never guesses among zero or multiple open PRs."""
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return FAKE_BRANCH
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "head"
+        if command[:3] == ["gh", "pr", "list"]:
+            return json.dumps(open_prs)
+        if command[:3] == ["gh", "pr", "view"]:
+            return json.dumps({"state": scene_state,
+                               "mergedAt": "2024-01-01" if scene_state == "MERGED" else None})
+        raise AssertionError(command)
+
+    with pytest.raises(AssertionError):
+        fake_run(["unexpected"])
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(runner.ResumeVerificationError) as excinfo:
+        runner.verify_pr(
+            worktree, FAKE_BRANCH, "main", FAKE_RUN_ID, issue=9,
+            repo_dir=tmp_path, pr_repo="owner/repo",
+            expected_url=FAKE_PR_URL, require_latest_base=False,
+        )
+    message = str(excinfo.value)
+    assert expected in message
+    assert "open_prs=" in message
+    assert FAKE_PR_URL in message
+    assert any(command[:3] == ["gh", "pr", "view"] for command in commands)
+
+
+def test_verify_pr_resume_keeps_unknown_state_for_non_object_scene_lookup(
+    monkeypatch, tmp_path,
+):
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return FAKE_BRANCH
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "head"
+        if command[:3] == ["gh", "pr", "list"]:
+            return "[]"
+        if command[:3] == ["gh", "pr", "view"]:
+            return "[]"
+        raise AssertionError(command)
+
+    with pytest.raises(AssertionError):
+        fake_run(["unexpected"])
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(runner.ResumeVerificationError, match="scene_pr_state=unknown"):
+        runner.verify_pr(
+            worktree, FAKE_BRANCH, "main", FAKE_RUN_ID, issue=9,
+            repo_dir=tmp_path, pr_repo="owner/repo",
+            expected_url=FAKE_PR_URL, require_latest_base=False,
+        )
+
+
+def test_verify_pr_resume_keeps_failure_evidence_when_scene_lookup_fails(
+    monkeypatch, tmp_path, caplog,
+):
+    """A failed scene lookup is logged without replacing PR evidence."""
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return FAKE_BRANCH
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "head"
+        if command[:3] == ["gh", "pr", "list"]:
+            return "[]"
+        if command[:3] == ["gh", "pr", "view"]:
+            raise RuntimeError("lookup unavailable")
+        raise AssertionError(command)
+
+    with pytest.raises(AssertionError):
+        fake_run(["unexpected"])
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(runner.ResumeVerificationError, match="scene_pr_state=unknown"):
+        runner.verify_pr(
+            worktree, FAKE_BRANCH, "main", FAKE_RUN_ID, issue=9,
+            repo_dir=tmp_path, pr_repo="owner/repo",
+            expected_url=FAKE_PR_URL, require_latest_base=False,
+        )
+    assert "resume_scene_pr_state_lookup_failed" in caplog.text
 
 
 def test_verify_resumed_pr_verifies_scene_pr_and_returns_verified_url(
