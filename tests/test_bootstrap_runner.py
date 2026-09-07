@@ -15291,6 +15291,70 @@ def test_close_release_milestone_fails_fast_on_duplicate_titles(monkeypatch):
         fake_run(["unexpected"])
 
 
+def test_parse_epic_children_requires_explicit_scope_and_rejects_cross_repo():
+    assert runner.parse_epic_children("## Children\n- #12\n- https://github.com/o/r/pull/13", "o/r") == [
+        ("unknown", 12), ("pr", 13),
+    ]
+    with pytest.raises(ValueError, match="missing or empty"):
+        runner.parse_epic_children("## Children\nNo references", "o/r")
+    with pytest.raises(ValueError, match="cross-repository"):
+        runner.parse_epic_children("## Children\n- https://github.com/other/r/issues/12", "o/r")
+
+
+def test_reconcile_release_epics_closes_verified_epic_with_audit(monkeypatch):
+    commands = []
+    epic = {"number": 20, "labels": [{"name": "ai-epic"}],
+            "body": "## Children\n- https://github.com/o/r/issues/21",
+            "blockedBy": {"nodes": []}}
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        if command == ["gh", "issue", "list", "--repo", "o/r", "--milestone", "v0.4.0", "--state", "open", "--json", "number,title,body,labels,blockedBy", "--limit", "100"]:
+            return json.dumps([epic])
+        if command == ["gh", "api", "repos/o/r/issues/21"]:
+            return json.dumps({"number": 21, "state": "closed"})
+        if command == ["gh", "issue", "view", "20", "--repo", "o/r", "--json", "comments"]:
+            return json.dumps({"comments": []})
+        if command == ["gh", "issue", "close", "20", "--repo", "o/r"]:
+            return ""
+        raise AssertionError(command)
+
+    # Match the exact formatted comment without coupling this test to its
+    # wrapper's implementation.
+    def fake_comment(number, *, repo, body):
+        assert number == 20 and repo == "o/r"
+        assert "Issue #21 closed" in body
+        assert "run_id=abc12345" in body
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "comment_issue", fake_comment)
+    result = runner.reconcile_release_epics("o/r", 4, "v0.4.0", "abc12345")
+    assert result == ["Epic #20 closed after verification (Issue #21 closed)"]
+    assert ["gh", "issue", "close", "20", "--repo", "o/r"] in commands
+
+
+def test_reconcile_release_epics_keeps_open_child_and_bad_scope_open(monkeypatch):
+    calls = []
+    issues = [
+        {"number": 20, "labels": [{"name": "ai-epic"}],
+         "body": "## Children\n- #21", "blockedBy": {"nodes": []}},
+        {"number": 22, "labels": [{"name": "ai-epic"}],
+         "body": "## Children", "blockedBy": {"nodes": []}},
+    ]
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == ["gh", "issue", "list", "--repo", "o/r", "--milestone", "v0.4.0", "--state", "open", "--json", "number,title,body,labels,blockedBy", "--limit", "100"]:
+            return json.dumps(issues)
+        if command == ["gh", "api", "repos/o/r/issues/21"]:
+            return json.dumps({"number": 21, "state": "open"})
+        raise AssertionError(command)
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "comment_issue", lambda **kwargs: calls.append(["comment"]))
+    result = runner.reconcile_release_epics("o/r", 4, "v0.4.0", "abc12345")
+    assert "Epic #20 kept open: child Issue #21 is not closed" in result
+    assert "Epic #22 kept open: Epic child scope is missing or empty" in result
+    assert not any(command[:3] == ["gh", "issue", "close"] for command in calls if isinstance(command, list))
+
+
 # ---------------------------------------------------------------------------
 # Release docs sync — state machine step 8 (Issue #275)
 # ---------------------------------------------------------------------------
