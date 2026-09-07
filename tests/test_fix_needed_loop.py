@@ -436,7 +436,7 @@ def test_wait_for_delivery_unrecoverable_failure_marks_blocked_with_reason(
     )
 
     def failing_review(*args, **kwargs):
-        raise runner.UnrecoverableDeliveryError(reason)
+        raise runner.ReviewRoundsExhausted(reason)
 
     monkeypatch.setattr(runner, "review_and_merge_if_clean", failing_review)
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", RUN_ID)
@@ -474,6 +474,33 @@ def test_wait_for_delivery_unrecoverable_failure_marks_blocked_with_reason(
     finished = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Orbi blocked" in finished
     assert reason in finished
+    # A bounded stop is an expected terminal state, not a Runner crash.
+    assert "review_rounds_exhausted" in caplog.text
+    assert "Traceback (most recent call last)" not in caplog.text
+    assert "delivery_review_failed" not in caplog.text
+
+
+def test_wait_for_delivery_real_unrecoverable_failure_keeps_traceback(
+        monkeypatch, caplog, tmp_path,
+):
+    """Unexpected unrecoverable failures remain visible as failures."""
+    (tmp_path / ".worktrees"
+     / f"orbi-owner-repo-issue-39-{RUN_ID}").mkdir(parents=True)
+    make_wait_failure_fake(monkeypatch)
+    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
+
+    def failing_review(*args, **kwargs):
+        raise runner.UnrecoverableDeliveryError("credential revoked")
+
+    monkeypatch.setattr(runner, "review_and_merge_if_clean", failing_review)
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", RUN_ID)
+    caplog.set_level("ERROR")
+    runner.wait_for_delivery(PR_URL, _issue(), _config(tmp_path), "owner/repo")
+
+    assert "delivery_review_failed" in caplog.text
+    assert "Traceback (most recent call last)" in caplog.text
 
 
 def test_wait_for_delivery_base_branch_mismatch_marks_blocked_with_reason(
