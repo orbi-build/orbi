@@ -14475,6 +14475,9 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                  "url": "https://api.github.com/repos/o/r/milestones/5",
                  "html_url": "https://github.com/o/r/milestone/5"},
             ])
+        if command == ["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100",
+                       "--paginate", "--slurp"]:
+            return json.dumps([[]])
         if command == ["gh", "api", "repos/o/r/milestones/5",
                        "--method", "PATCH", "-f", "state=closed"]:
             return json.dumps({"number": 5, "title": "v0.3.0",
@@ -14988,10 +14991,8 @@ def test_process_release_milestone_failure_keeps_release_successful(monkeypatch)
                  "url": "https://api.github.com/repos/o/r/milestones/5",
                  "html_url": "https://github.com/o/r/milestone/5"},
             ])
-        if command[:3] == ["gh", "issue", "list"] and "--milestone" in command:
-            return json.dumps(
-                [{"number": 101, "title": "leftover"}],
-            )
+        if command[:2] == ["gh", "api"] and "issues?milestone=5&state=open" in command[2]:
+            return json.dumps([[{"number": 101, "title": "leftover"}]])
         return real(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", milestone_failing)
@@ -15266,6 +15267,10 @@ def test_process_release_fails_on_scope_violation(monkeypatch):
 MILESTONE_LIST_COMMAND = [
     "gh", "api", "repos/o/r/milestones?state=all", "--paginate",
 ]
+MILESTONE_ISSUES_COMMAND = [
+    "gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100",
+    "--paginate", "--slurp",
+]
 
 
 def _milestone(number, title, state, open_issues):
@@ -15288,6 +15293,8 @@ def test_close_release_milestone_closes_an_open_empty_milestone(monkeypatch):
                 _milestone(5, "v0.3.0", "open", 0),
                 _milestone(6, "v0.4.0", "open", 3),
             ])
+        if command == MILESTONE_ISSUES_COMMAND:
+            return json.dumps([[]])
         if command == ["gh", "api", "repos/o/r/milestones/5",
                        "--method", "PATCH", "-f", "state=closed"]:
             return json.dumps(_milestone(5, "v0.3.0", "closed", 0))
@@ -15359,13 +15366,9 @@ def test_close_release_milestone_fails_fast_when_open_issues_remain(monkeypatch)
             return json.dumps([
                 _milestone(5, "v0.3.0", "open", 2),
             ])
-        if command == ["gh", "issue", "list", "--repo", "o/r",
-                       "--milestone", "v0.3.0", "--state", "open",
-                       "--json", "number,title", "--limit", "100"]:
-            return json.dumps([
-                {"number": 101, "title": "leftover one"},
-                {"number": 102, "title": "leftover two"},
-            ])
+        if command == MILESTONE_ISSUES_COMMAND:
+            return json.dumps([[{"number": 101, "title": "leftover one"},
+                                {"number": 102, "title": "leftover two"}]])
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -15406,6 +15409,13 @@ def test_close_release_milestone_fails_fast_on_duplicate_titles(monkeypatch):
         fake_run(["unexpected"])
 
 
+def test_parse_paginated_issue_array_rejects_malformed_items():
+    with pytest.raises(ValueError, match="non-object item"):
+        runner.parse_paginated_issue_array('[[{"number": 1}, "bad"], []]')
+    with pytest.raises(ValueError, match="array of arrays"):
+        runner.parse_paginated_issue_array("[{}]")
+
+
 def test_parse_epic_children_requires_explicit_scope_and_rejects_cross_repo():
     assert runner.parse_epic_children("## Children\n- #12\n- https://github.com/o/r/pull/13", "o/r") == [
         ("unknown", 12), ("pr", 13),
@@ -15414,6 +15424,10 @@ def test_parse_epic_children_requires_explicit_scope_and_rejects_cross_repo():
         runner.parse_epic_children("## Children\nNo references", "o/r")
     with pytest.raises(ValueError, match="cross-repository"):
         runner.parse_epic_children("## Children\n- https://github.com/other/r/issues/12", "o/r")
+    with pytest.raises(ValueError, match="malformed child URL"):
+        runner.parse_epic_children(
+            "## Children\n- https://github.com/o/r/issue/12\n- #13", "o/r",
+        )
     with pytest.raises(ValueError, match="Epic body is missing"):
         runner.parse_epic_children(None, "o/r")
     assert runner.parse_epic_children("prose before scope\n## Children\n- #14", "o/r") == [
@@ -15426,6 +15440,14 @@ def test_parse_epic_children_requires_explicit_scope_and_rejects_cross_repo():
         runner.parse_epic_children("## Children\n- #12\n- #12", "o/r")
 
 
+def test_epic_issue_with_blockers_rejects_invalid_details(monkeypatch):
+    with pytest.raises(ValueError, match="number is missing"):
+        runner.epic_issue_with_blockers("o/r", {"number": "20"})
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "[]")
+    with pytest.raises(ValueError, match="details are not an object"):
+        runner.epic_issue_with_blockers("o/r", {"number": 20})
+
+
 def test_reconcile_release_epics_closes_verified_epic_with_audit(monkeypatch):
     commands = []
     epic = {"number": 20, "labels": [{"name": "ai-epic"}],
@@ -15434,8 +15456,8 @@ def test_reconcile_release_epics_closes_verified_epic_with_audit(monkeypatch):
 
     def fake_run(command, **kwargs):
         commands.append(command)
-        if command == ["gh", "issue", "list", "--repo", "o/r", "--milestone", "v0.4.0", "--state", "open", "--json", "number,title,body,labels,blockedBy", "--limit", "100"]:
-            return json.dumps([epic])
+        if command == ["gh", "api", "repos/o/r/issues?milestone=4&state=open&per_page=100", "--paginate", "--slurp"]:
+            return json.dumps([[epic]])
         if command == ["gh", "api", "repos/o/r/issues/21"]:
             return json.dumps({"number": 21, "state": "closed"})
         if command == ["gh", "issue", "view", "20", "--repo", "o/r", "--json", "comments"]:
@@ -15469,8 +15491,8 @@ def test_reconcile_release_epics_keeps_open_child_and_bad_scope_open(monkeypatch
     ]
     def fake_run(command, **kwargs):
         calls.append(command)
-        if command == ["gh", "issue", "list", "--repo", "o/r", "--milestone", "v0.4.0", "--state", "open", "--json", "number,title,body,labels,blockedBy", "--limit", "100"]:
-            return json.dumps(issues)
+        if command == ["gh", "api", "repos/o/r/issues?milestone=4&state=open&per_page=100", "--paginate", "--slurp"]:
+            return json.dumps([issues])
         if command == ["gh", "api", "repos/o/r/issues/21"]:
             return json.dumps({"number": 21, "state": "open"})
         raise AssertionError(command)
@@ -15513,8 +15535,8 @@ def test_close_release_milestone_reconciles_epics_when_summary_lags(monkeypatch)
         calls.append(command)
         if command == MILESTONE_LIST_COMMAND:
             return json.dumps([_milestone(5, "v0.4.0", "open", 1)])
-        if command[:5] == ["gh", "issue", "list", "--repo", "o/r"]:
-            return "[]"
+        if command == MILESTONE_ISSUES_COMMAND:
+            return json.dumps([[{"number": 20}]]) if calls.count(command) == 1 else json.dumps([[]])
         if command[-1:] == ["state=closed"]:
             return ""
         raise AssertionError(command)
@@ -15540,10 +15562,15 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
     audit = "<!-- orbi:run=abc12345 -->\nEpic reconciliation for v0.4.0: complete; children: Issue #35 closed; no open native blockers/dependencies."
     def fake_run(command, **kwargs):
         calls.append(command)
-        if command[0:4] == ["gh", "issue", "list", "--repo"]:
-            return json.dumps(issues)
+        if command == ["gh", "api", "repos/o/r/issues?milestone=4&state=open&per_page=100",
+                       "--paginate", "--slurp"]:
+            return json.dumps([issues])
         if command == ["gh", "api", "repos/o/r/issues/35"]:
             return json.dumps({"state": "closed"})
+        if command == ["gh", "issue", "view", "30", "--repo", "o/r",
+                       "--json", "number,body,labels,blockedBy"]:
+            return json.dumps({"number": 30, "body": "## Children\n- #31",
+                               "labels": [{"name": "ai-epic"}]})
         if command[:4] == ["gh", "issue", "view", "34"]:
             return json.dumps({"comments": [{"body": audit}]})
         if command == ["gh", "issue", "close", "34", "--repo", "o/r"]:
