@@ -28,7 +28,7 @@ Copy this one configuration block, replacing only `replace-with-your-key`
 with the key from your z.ai account:
 
 ```bash
-cd ~/.orbi/src && mkdir -p .orbi && printf '%s\n' 'ZAI_API_KEY=replace-with-your-key' > .orbi/env && chmod 600 .orbi/env && cp templates/pi-providers/z-ai.json .orbi/pi-providers.json && cat >> orbi.toml <<'EOF'
+cd ~/.orbi/src && mkdir -p .orbi && printf '%s\n' 'ZAI_API_KEY=replace-with-your-key' > .orbi/env && chmod 600 .orbi/env && cp templates/pi-providers/z-ai.json .orbi/pi-providers.json && sed -i -e '/^pi_providers = /d' -e '/^pi_provider = /d' -e '/^pi_model = /d' orbi.toml && cat >> orbi.toml <<'EOF'
 
 pi_providers = ".orbi/pi-providers.json"
 pi_provider = "z-ai"
@@ -78,7 +78,7 @@ After the journal reports `result=pr_opened`, run this command from the same
 checkout:
 
 ```bash
-cd ~/.orbi/src && gh pr list --state open --limit 1 --json number,title,url
+cd ~/.orbi/src && gh pr list --state open --search '"Add a hello-world README line"' --limit 10 --json number,title,url
 ```
 
 **Success:** the output contains your Issue's title and a PR URL. That is the

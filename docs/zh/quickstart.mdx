@@ -26,7 +26,7 @@ curl -LsSf https://raw.githubusercontent.com/orbi-build/orbi/main/install.sh | b
 key：
 
 ```bash
-cd ~/.orbi/src && mkdir -p .orbi && printf '%s\n' 'ZAI_API_KEY=replace-with-your-key' > .orbi/env && chmod 600 .orbi/env && cp templates/pi-providers/z-ai.json .orbi/pi-providers.json && cat >> orbi.toml <<'EOF'
+cd ~/.orbi/src && mkdir -p .orbi && printf '%s\n' 'ZAI_API_KEY=replace-with-your-key' > .orbi/env && chmod 600 .orbi/env && cp templates/pi-providers/z-ai.json .orbi/pi-providers.json && sed -i -e '/^pi_providers = /d' -e '/^pi_provider = /d' -e '/^pi_model = /d' orbi.toml && cat >> orbi.toml <<'EOF'
 
 pi_providers = ".orbi/pi-providers.json"
 pi_provider = "z-ai"
@@ -74,7 +74,7 @@ systemctl --user start orbi@1.service
 等 journal 报告 `result=pr_opened` 后，在同一个 checkout 运行：
 
 ```bash
-cd ~/.orbi/src && gh pr list --state open --limit 1 --json number,title,url
+cd ~/.orbi/src && gh pr list --state open --search '"Add a hello-world README line"' --limit 10 --json number,title,url
 ```
 
 **成功判据：** 输出包含刚才 Issue 的标题和 PR URL。这就是可见结果：你的第一个
