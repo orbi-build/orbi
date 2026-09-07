@@ -5963,7 +5963,8 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
     if current_branch != branch:
         error_type = ResumeVerificationError if expected_url is not None else RuntimeError
         raise error_type(
-            f"resume PR validation: open_pr_count=unknown open_prs=[] "
+            f"resume PR validation: run_id={run_id} branch={branch} "
+            f"open_pr_count=unknown open_prs=[] "
             f"scene_pr={expected_url or '-'} scene_pr_state=unknown; "
             f"Pi changed branch: expected={branch} actual={current_branch}"
         )
@@ -6022,7 +6023,8 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
             except Exception:
                 LOGGER.exception("resume_scene_pr_state_lookup_failed")
             raise ResumeVerificationError(
-                f"resume PR validation: open_pr_count={len(prs)} "
+                f"resume PR validation: run_id={run_id} branch={branch} "
+                f"open_pr_count={len(prs)} "
                 f"open_prs={json.dumps(prs, sort_keys=True)} "
                 f"scene_pr={expected_url} scene_pr_state={scene_state}; "
                 "the scene PR is not uniquely open and must not be replaced"
@@ -6040,7 +6042,8 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
             )
             error_type = ResumeVerificationError if expected_url is not None else RuntimeError
             raise error_type(
-                f"resume PR validation: open_pr_count=1 open_prs={[url]} "
+                f"resume PR validation: run_id={run_id} branch={branch} "
+                f"open_pr_count=1 open_prs={[url]} "
                 f"scene_pr={expected_url or '-'} scene_pr_state=OPEN; "
                 f"PR head repo is {head_repo}, expected {pr_repo}; the "
                 "resume must keep the PR of the configured source repo"
@@ -6053,7 +6056,8 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
         )
         error_type = ResumeVerificationError if expected_url is not None else RuntimeError
         raise error_type(
-            f"resume PR validation: open_pr_count=1 open_prs={[url]} "
+            f"resume PR validation: run_id={run_id} branch={branch} "
+            f"open_pr_count=1 open_prs={[url]} "
             f"scene_pr={expected_url or '-'} scene_pr_state=OPEN; "
             f"PR base is {base_ref}, expected {base_branch}; recreate the "
             "PR against the configured base branch"
@@ -6127,9 +6131,10 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
             expected_url, url, branch,
         )
         raise ResumeVerificationError(
-            f"resume PR validation: open_pr_count=1 "
-            f"open_prs={[url]} scene_pr_state=OPEN; PR URL {url} "
-            f"is not the recovered original PR {expected_url}; the "
+            f"resume PR validation: run_id={run_id} branch={branch} "
+            f"open_pr_count=1 open_prs={[url]} scene_pr_state=OPEN; "
+            f"scene_pr={expected_url}; PR URL {url} is not the "
+            f"recovered original PR {expected_url}; the "
             "resume must keep the same PR number"
         )
     return url

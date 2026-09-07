@@ -1041,6 +1041,8 @@ def test_verify_pr_resume_rejects_stale_or_ambiguous_scene_with_evidence(
                                "mergedAt": "2024-01-01" if scene_state == "MERGED" else None})
         raise AssertionError(command)
 
+    with pytest.raises(AssertionError):
+        fake_run(["unexpected"])
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(runner.ResumeVerificationError) as excinfo:
         runner.verify_pr(
@@ -1053,6 +1055,60 @@ def test_verify_pr_resume_rejects_stale_or_ambiguous_scene_with_evidence(
     assert "open_prs=" in message
     assert FAKE_PR_URL in message
     assert any(command[:3] == ["gh", "pr", "view"] for command in commands)
+
+
+def test_verify_pr_resume_keeps_unknown_state_for_non_object_scene_lookup(
+    monkeypatch, tmp_path,
+):
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return FAKE_BRANCH
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "head"
+        if command[:3] == ["gh", "pr", "list"]:
+            return "[]"
+        if command[:3] == ["gh", "pr", "view"]:
+            return "[]"
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(runner.ResumeVerificationError, match="scene_pr_state=unknown"):
+        runner.verify_pr(
+            worktree, FAKE_BRANCH, "main", FAKE_RUN_ID, issue=9,
+            repo_dir=tmp_path, pr_repo="owner/repo",
+            expected_url=FAKE_PR_URL, require_latest_base=False,
+        )
+
+
+def test_verify_pr_resume_keeps_failure_evidence_when_scene_lookup_fails(
+    monkeypatch, tmp_path, caplog,
+):
+    """A failed scene lookup is logged without replacing PR evidence."""
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return FAKE_BRANCH
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "head"
+        if command[:3] == ["gh", "pr", "list"]:
+            return "[]"
+        if command[:3] == ["gh", "pr", "view"]:
+            raise RuntimeError("lookup unavailable")
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(runner.ResumeVerificationError, match="scene_pr_state=unknown"):
+        runner.verify_pr(
+            worktree, FAKE_BRANCH, "main", FAKE_RUN_ID, issue=9,
+            repo_dir=tmp_path, pr_repo="owner/repo",
+            expected_url=FAKE_PR_URL, require_latest_base=False,
+        )
+    assert "resume_scene_pr_state_lookup_failed" in caplog.text
 
 
 def test_verify_resumed_pr_verifies_scene_pr_and_returns_verified_url(
