@@ -1,0 +1,12 @@
+{
+  "providers": {
+    "cloudflare-workers-ai": {
+      "baseUrl": "https://api.cloudflare.com/client/v4/accounts/REPLACE_WITH_ACCOUNT_ID/ai/v1",
+      "api": "openai-completions",
+      "apiKey": "$CLOUDFLARE_API_TOKEN",
+      "models": [
+        {"id": "@cf/meta/llama-3.1-8b-instruct-fp8", "name": "Llama 3.1 8B Instruct FP8 (Workers AI)", "contextWindow": 32000, "maxTokens": 8192}
+      ]
+    }
+  }
+}

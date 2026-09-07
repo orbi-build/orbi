@@ -18,6 +18,7 @@ pi_model = "glm-5.3-flash"
 | DeepSeek | `deepseek.json` | `DEEPSEEK_API_KEY` | `deepseek-chat` | Not tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | xAI | `xai.json` | `XAI_API_KEY` | `grok-4.20-0309` | Model ID verified against xAI docs; not quota-tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Local Qwen | `local-qwen.json` | None (dummy key `local`) | `Qwen3.8-27B` | Local zero-cost example; requires a local OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| Cloudflare Workers AI | `cloudflare-workers-ai.json` | `CLOUDFLARE_API_TOKEN` | `@cf/meta/llama-3.1-8b-instruct-fp8` | Hosted free allocation; quota must be checked in the account | [#318](https://github.com/orbi-build/orbi/issues/318) |
 
 A template being listed is not a promise of quota, availability, speed, or model support. The `Not tested` labels are intentional.
 
@@ -101,6 +102,39 @@ pi_model = "google/gemma-4-31b-it:free"
 ```
 
 Copy [`openrouter.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/openrouter.json), set `OPENROUTER_API_KEY` in `.orbi/env`, and run one real `pi --print` check before dispatching. OpenRouter's `z-ai/glm-5.2:free` listing is a separate provider route; its availability and quota are **not tested or promised** here.
+
+### Cloudflare Workers AI
+
+Cloudflare's OpenAI-compatible endpoint is account-scoped. Copy [`cloudflare-workers-ai.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/cloudflare-workers-ai.json), replace `REPLACE_WITH_ACCOUNT_ID` in `baseUrl` with the Cloudflare account ID, and create an API token with both the `Workers AI - Read` and `Workers AI - Edit` permissions (the permissions required by Cloudflare's REST API guide). Keep the token in `.orbi/env`:
+
+```bash
+printf '%s\n' 'CLOUDFLARE_API_TOKEN=replace-me' >> .orbi/env
+chmod 600 .orbi/env
+```
+
+Select it in `orbi.toml`:
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "cloudflare-workers-ai"
+pi_model = "@cf/meta/llama-3.1-8b-instruct-fp8"
+```
+
+The model ID is the current FP8 variant documented in Cloudflare's [Workers AI model catalog](https://developers.cloudflare.com/workers-ai/models/llama-3.1-8b-instruct-fp8/); the endpoint path is from the [Workers AI configuration guide](https://developers.cloudflare.com/workers-ai/configuration/). Cloudflare's [official pricing page](https://developers.cloudflare.com/workers-ai/platform/pricing/) documents **10,000 Neurons per day at no charge**, resetting at **00:00 UTC** (information checked 2026-09-04). After the free allocation, further operations fail unless billing is enabled. Limits and pricing can change, so check the official pages before a run.
+
+#### Measure a real Orbi task
+
+Record the Workers AI account's Neurons usage immediately before dispatching one Issue and immediately after the PR is opened (same UTC day). The measured task consumption is `after - before`; retain the dashboard/API timestamps, model, Issue and PR URL, but never retain the token. Orbi's journal proves the selected provider/model, not Neurons usage. **This repository has not run a Cloudflare-account-backed Orbi task; the request and Neurons consumption are not tested and must not be inferred.**
+
+```text
+journal: provider=cloudflare-workers-ai model=@cf/meta/llama-3.1-8b-instruct-fp8 run_id=<run-id>
+Cloudflare Workers AI usage: before=<n> neurons at <UTC>, after=<n> neurons at <UTC>, delta=<n>
+PR: https://github.com/OWNER/REPO/pull/<number>
+```
+
+#### Hosted versus local Qwen
+
+Workers AI is hosted: Cloudflare provides inference and the account's Neurons allocation, so it is convenient for a machine without a capable GPU but depends on network access, account quota and Cloudflare model availability. `local-qwen` is self-hosted: it avoids provider quota and sends requests to a local OpenAI-compatible server, but the operator supplies the hardware, model runtime and electricity. Use Cloudflare for lightweight hosted execution; use local Qwen when data locality and predictable local availability matter.
 
 ### Local providers
 
