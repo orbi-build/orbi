@@ -79,8 +79,10 @@ pi_model = "meta/llama-3.1-8b-instruct"
 ```
 
 Run `orbi doctor` or the normal Orbi startup validation before claiming the
-provider is configured. A missing token, stale model id, or retired endpoint
-must fail rather than be silently retried.
+provider is configured. These checks catch a missing token or stale model id;
+they do not prove that an external endpoint is reachable. Because this endpoint
+is retired, do not run a real task with this example or treat a request failure
+as an Orbi configuration problem.
 
 ## Dated quota and run record
 

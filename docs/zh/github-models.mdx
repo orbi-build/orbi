@@ -71,8 +71,9 @@ pi_provider = "github-models"
 pi_model = "meta/llama-3.1-8b-instruct"
 ```
 
-声称配置完成前运行 `orbi doctor` 或正常 Orbi 启动校验。缺少 token、model id
-过期或 endpoint 已退役时必须失败，不能静默重试。
+声称配置完成前运行 `orbi doctor` 或正常 Orbi 启动校验。这些校验可以发现缺少
+token 或过期的 model id，但不能证明外部 endpoint 可访问。由于该 endpoint 已退役，
+不要用此示例运行真实任务，也不要把请求失败当成 Orbi 配置问题。
 
 ## 有日期的额度和运行记录
 
