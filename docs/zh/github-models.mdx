@@ -1,0 +1,104 @@
+# GitHub Models 原型额度接入
+
+> **可用性说明（2026-09-07 核查）：** GitHub 当前文档说明，独立的 GitHub Models 服务已经退役。下面记录的是 2026-09-04 核查过的原型路径（历史证据），不保证 `models.github.ai` 或任何模型今天仍可用。创建 token 前必须重新查看[官方 GitHub Models 文档](https://docs.github.com/en/github-models)。如果服务不可用，应停止，不要把 401/403/404 当成 Orbi 配置错误。
+
+本文记录 Issue [#319](https://github.com/orbi-build/orbi/issues/319) 要求的
+GitHub Models **原型额度**路径，复用 [Providers](/zh/providers)（Issue #309）
+已有的 provider 文件契约；不增加 GitHub 专用运行时集成。
+
+## 原型额度是什么
+
+2026-09-04 快照中的 GitHub 账号原型额度按模型分别限流，每个模型有自己的
+每日限制，可见 GPT、Gemini、Claude、Llama 等模型家族。额度和模型清单由
+GitHub Models 动态展示，不是 Orbi 可以固化的配置。GitHub 账号即可尝试，
+不需要另注册模型厂商账号。
+
+这项额度与 Copilot 分开。Copilot 订阅不会自动增加 GitHub Models 原型额度，
+GitHub Models 请求也不会消耗 Copilot Chat 或 premium request 配额。
+
+## PAT 和密钥
+
+原型路径使用 **fine-grained personal access token**。在 GitHub 打开
+**Settings → Developer settings → Fine-grained personal access tokens**，
+只授予 token 页面显示的 GitHub Models 权限并设置尽可能短的有效期。不要把
+token 提交、贴进 Issue、日志、JSON 或 `orbi.toml`。预览服务可能会改权限名，
+以 token 页面和官方文档为准。
+
+把值放进 systemd unit 使用的本地 gitignored 环境文件：
+
+```bash
+mkdir -p .orbi
+printf '%s\n' 'GITHUB_MODELS_TOKEN=替换为你的 fine-grained token' > .orbi/env
+chmod 600 .orbi/env
+```
+
+手动 tick 时必须显式加载；手动启动不会经过 systemd 的 `EnvironmentFile`：
+
+```bash
+set -a
+. .orbi/env
+set +a
+```
+
+## `pi_providers` 条目
+
+原型路径使用 OpenAI-compatible endpoint
+`https://models.github.ai/inference`。始终使用服务当前展示的精确 model id；
+服务变化后不要继续复制旧 catalog。下面是 Orbi 接受的形状（model id 是有日期
+的快照示例，不代表当前可用）：
+
+```json
+{
+  "providers": {
+    "github-models": {
+      "baseUrl": "https://models.github.ai/inference",
+      "api": "openai-completions",
+      "apiKey": "$GITHUB_MODELS_TOKEN",
+      "models": [
+        {"id": "openai/gpt-4o-mini", "name": "GPT-4o mini", "contextWindow": 128000, "maxTokens": 4096},
+        {"id": "meta/llama-3.1-8b-instruct", "name": "Llama 3.1 8B Instruct", "contextWindow": 131072, "maxTokens": 4096}
+      ]
+    }
+  }
+}
+```
+
+保存为 `.orbi/pi-providers.json`，再在 `orbi.toml` 中选择一个模型：
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "github-models"
+pi_model = "meta/llama-3.1-8b-instruct"
+```
+
+声称配置完成前运行 `orbi doctor` 或正常 Orbi 启动校验。缺少 token、model id
+过期或 endpoint 已退役时必须失败，不能静默重试。
+
+## 有日期的额度和运行记录
+
+下表记录 2026-09-04 原型快照。GitHub 按模型动态显示额度，不存在可以安全写死
+进 Orbi 配置的统一数字。每次运行都应记录服务当天显示的 requests/day 以及
+可能显示的 RPM/TPM、UTC 时间和 model id。`—` 表示本次交付没有可复现的实时测量，
+不是零额度。
+
+| 快照日期 | 模型家族 | 服务显示的每日限制 | Orbi smoke/run 证据 |
+| --- | --- | --- | --- |
+| 2026-09-04 | Gemini | 动态、按模型；运行前重新核查 | 本仓库没有保存实时凭据或 run 产物 |
+| 2026-09-04 | Llama | 动态、按模型；运行前重新核查 | 本仓库没有保存实时凭据或 run 产物 |
+
+真实证据必须包含脱敏命令、model id、UTC 时间、HTTP/结果状态，以及
+`provider_config_loaded`、`session_created` 和最终 run 结果等 Orbi journal 行；
+绝不能包含 PAT。Issue #305 当前维护者决定：没有实际运行就标记为未实测，不能编造
+PR、额度数字或成功证据。
+
+## GitHub Models 与 Copilot 的边界
+
+- GitHub Models 原型额度：独立预览服务，用自己的 fine-grained PAT 认证，
+  按模型动态限流。
+- Copilot：另一套订阅/服务，有自己的 included usage 和 premium-request 规则。
+  有 Copilot 不代表退役的 Models endpoint 仍可用。
+- Orbi 只提供 OpenAI-compatible endpoint、key 引用和 model 选择；不计量、增加、
+  轮换或保证任一方的额度。
+
+通用 provider 校验见[上手指南](/zh/getting-started)；独立的多 provider 预算/轮换
+提案见 [Issue #313](https://github.com/orbi-build/orbi/issues/313)，本页不实现该功能。

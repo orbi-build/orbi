@@ -1,0 +1,117 @@
+# GitHub Models prototype access
+
+> **Availability note (checked 2026-09-07):** GitHub's current documentation says that the separate GitHub Models service has been retired. The configuration below records the prototype path checked on 2026-09-04; it is historical evidence, not a promise that `models.github.ai` or any model is currently available. Confirm the [official GitHub Models documentation](https://docs.github.com/en/github-models) before creating a token. If the service is unavailable, stop here rather than treating a 401/403/404 as an Orbi configuration problem.
+
+This page documents the GitHub Models **prototype quota** path requested by
+Issue [#319](https://github.com/orbi-build/orbi/issues/319). It reuses Orbi's
+provider-file contract from [Providers](/providers) (Issue #309); it does not
+add a GitHub-specific runtime integration.
+
+## What the prototype quota was
+
+The 2026-09-04 snapshot described a GitHub account-level prototype quota: each
+model had its own daily rate limit, and the available model set included GPT,
+Gemini, Claude, and Llama families. The limits were dynamic and shown by the
+GitHub Models service, not a durable Orbi setting. A GitHub account was enough
+to try the service; no separate model-vendor account was required.
+
+This quota was separate from Copilot. A Copilot subscription did not silently
+increase the GitHub Models prototype quota, and a GitHub Models request did not
+consume a Copilot chat or premium-request allowance.
+
+## PAT and secret setup
+
+For the prototype path, create a **fine-grained personal access token** in
+GitHub: **Settings → Developer settings → Fine-grained personal access tokens**.
+Grant only the GitHub Models permission shown by the token UI, set the shortest
+useful expiry, and do not commit or paste the token into an issue, log, JSON
+file, or `orbi.toml`. GitHub may change the permission name while the service
+is in preview; the token UI and the official documentation are authoritative.
+
+Store the value in the local, gitignored environment file used by the systemd
+unit:
+
+```bash
+mkdir -p .orbi
+printf '%s\n' 'GITHUB_MODELS_TOKEN=replace-with-your-fine-grained-token' > .orbi/env
+chmod 600 .orbi/env
+```
+
+For a manual tick, load it explicitly because systemd's `EnvironmentFile` is
+not involved:
+
+```bash
+set -a
+. .orbi/env
+set +a
+```
+
+## `pi_providers` entry
+
+The prototype endpoint was the OpenAI-compatible
+`https://models.github.ai/inference`. Use the exact model id currently shown
+by the service; do not copy an old catalog entry after the service changes.
+The following is the shape used by Orbi (the model ids are dated snapshot
+examples, not a current availability claim):
+
+```json
+{
+  "providers": {
+    "github-models": {
+      "baseUrl": "https://models.github.ai/inference",
+      "api": "openai-completions",
+      "apiKey": "$GITHUB_MODELS_TOKEN",
+      "models": [
+        {"id": "openai/gpt-4o-mini", "name": "GPT-4o mini", "contextWindow": 128000, "maxTokens": 4096},
+        {"id": "meta/llama-3.1-8b-instruct", "name": "Llama 3.1 8B Instruct", "contextWindow": 131072, "maxTokens": 4096}
+      ]
+    }
+  }
+}
+```
+
+Save it as `.orbi/pi-providers.json`, then select one model in `orbi.toml`:
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "github-models"
+pi_model = "meta/llama-3.1-8b-instruct"
+```
+
+Run `orbi doctor` or the normal Orbi startup validation before claiming the
+provider is configured. A missing token, stale model id, or retired endpoint
+must fail rather than be silently retried.
+
+## Dated quota and run record
+
+The table is a record of the 2026-09-04 prototype snapshot. GitHub exposed
+limits dynamically per model, so there is no safe static number to copy into
+an Orbi config. Record the value displayed by the service on the day of each
+run (requests/day, and any RPM/TPM fields), including the timestamp and model
+id. `—` means that this delivery has no reproducible live measurement; it is
+not zero.
+
+| Snapshot date | Model family | Daily limit shown by service | Orbi smoke/run evidence |
+| --- | --- | --- | --- |
+| 2026-09-04 | Gemini | Dynamic, model-specific; re-check the service | No live credential or run artifact is stored in this repository |
+| 2026-09-04 | Llama | Dynamic, model-specific; re-check the service | No live credential or run artifact is stored in this repository |
+
+A real evidence record must include the redacted command, model id, UTC time,
+HTTP/result status, and Orbi journal lines such as `provider_config_loaded`,
+`session_created`, and the final run result. Never include the PAT. The current
+maintainer decision for Issue #305 is that an unperformed live run must be
+labelled as untested, not converted into a fabricated PR or quota number.
+
+## GitHub Models versus Copilot
+
+- GitHub Models prototype quota: a separate preview service, authenticated by
+  its own fine-grained PAT, with dynamic per-model limits.
+- Copilot: a separate subscription/service with its own included usage and
+  premium-request rules. Having Copilot does not make a retired Models endpoint
+  available.
+- Orbi only supplies the OpenAI-compatible endpoint, key reference, and model
+  selection. It does not meter, increase, rotate, or guarantee either quota.
+
+See [Getting started](/getting-started) for the generic provider validation
+and [Issue #313](https://github.com/orbi-build/orbi/issues/313) for the separate
+multi-provider budget/rotation proposal (not implemented here).
