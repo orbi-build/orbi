@@ -7139,6 +7139,67 @@ def _raise_if_preexisting_ci_failure(
         )
 
 
+def check_review_ci(repo: str, commit: str, *, wait_seconds: float) -> str:
+    """Gate a clean review on the PR head's current GitHub check runs.
+
+    Review-local tests are advisory; the repository's own CI is the only
+    acceptance gate. An absent check list is intentionally fail-open, matching
+    the release gate, while pending checks are polled with the shared release
+    wait configuration and cadence.
+    """
+    def fetch() -> list[dict]:
+        return json.loads(run_command([
+            "gh", "api", f"repos/{repo}/commits/{commit}/check-runs",
+            "--jq", ".check_runs",
+        ]))
+
+    waited = 0.0
+    check_runs = fetch()
+    while True:
+        pending = [
+            f"check '{check.get('name')}' is {check.get('status')}/"
+            f"{check.get('conclusion')}"
+            for check in check_runs if check.get("status") != "completed"
+        ]
+        if not pending:
+            break
+        detail = ", ".join(pending)
+        LOGGER.info(
+            "review_waiting_ci head=%s pending=%s waited=%ds limit=%ds",
+            commit, detail, int(waited), int(wait_seconds),
+        )
+        if waited >= wait_seconds:
+            raise RuntimeError(
+                f"review gate: waiting for CI on PR head {commit} timed out "
+                f"after {int(wait_seconds)}s (still pending: {detail})"
+            )
+        step = min(RELEASE_CI_POLL_INTERVAL, wait_seconds - waited)
+        time.sleep(step)
+        waited += step
+        check_runs = fetch()
+
+    failed = [
+        check for check in check_runs
+        if check.get("conclusion") not in ("success", "neutral", "skipped")
+    ]
+    if failed:
+        check = failed[0]
+        reference = check.get("html_url") or check.get("details_url") or "no run URL"
+        raise RuntimeError(
+            f"review gate: CI check '{check.get('name')}' failed on PR head "
+            f"{commit} ({reference})"
+        )
+    if not check_runs:
+        evidence = f"CI on review head {commit}: no check runs (nothing to gate)"
+    else:
+        evidence = (
+            f"CI on review head {commit}: {len(check_runs)} check(s) all "
+            "success/neutral/skipped"
+        )
+    LOGGER.info("%s", evidence)
+    return evidence
+
+
 def check_delivery_ci(repo: str, commit: str, *, wait_seconds: float,
                        base_commit: str | None = None) -> None:
     """Require delivery checks to pass, identifying failures inherited from base."""
@@ -8049,6 +8110,19 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             current_labels=issue_labels(number, source_repo),
         )
 
+    try:
+        ci_evidence = check_review_ci(
+            source_repo, refrozen["head_oid"], wait_seconds=config.get(
+                "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
+            ),
+        )
+        LOGGER.info(
+            "review_ci_gate_passed pr=%s head=%s evidence=%s",
+            refrozen["number"], refrozen["head_oid"], ci_evidence,
+        )
+    except RuntimeError as exc:
+        handle_gate_failure(str(exc), ci_failure=True)
+        return False
     try:
         merged = merge_gate(
             worktree,
