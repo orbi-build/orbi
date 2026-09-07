@@ -15413,6 +15413,8 @@ def test_parse_paginated_issue_array_ignores_non_object_items():
     assert runner.parse_paginated_issue_array('[[{"number": 1}, "bad"], []]') == [
         {"number": 1},
     ]
+    with pytest.raises(ValueError, match="array of arrays"):
+        runner.parse_paginated_issue_array("[{}]")
 
 
 def test_parse_epic_children_requires_explicit_scope_and_rejects_cross_repo():
