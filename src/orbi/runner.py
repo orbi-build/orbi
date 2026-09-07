@@ -4433,8 +4433,34 @@ def _pending_milestone_issue(
         "gh", "issue", "create", "--repo", repo,
         "--title", f"Milestone {old} 已完成，等待确认推进到 {titles[0]}",
         "--body", "\n".join(lines),
-        "--label", READY_LABEL, "--label", P0_LABEL,
     ], timeout=30)
+
+
+def _close_stale_milestone_issues(repo: str, active_milestone: str) -> None:
+    """Close manual advance notices that no longer match the config."""
+    issues = parse_issue_array(run_command([
+        "gh", "issue", "list", "--repo", repo, "--state", "open",
+        "--search", 'in:body "orbi-milestone-advance"',
+        "--json", "number,body", "--limit", "200",
+    ], timeout=30))
+    pattern = re.compile(r"orbi-milestone-advance old=([^ ]+)")
+    for issue in issues:
+        if not isinstance(issue, dict) or not isinstance(issue.get("number"), int):
+            continue
+        body = issue.get("body")
+        match = pattern.search(body) if isinstance(body, str) else None
+        if match is None or match.group(1) == active_milestone:
+            continue
+        run_command([
+            "gh", "issue", "close", str(issue["number"]), "--repo", repo,
+            "--comment", (
+                f"已收敛：当前配置 active_milestone = `{active_milestone}`。"
+            ),
+        ], timeout=30)
+        LOGGER.info(
+            "stale_milestone_issue_closed issue=#%s active=%s",
+            issue["number"], active_milestone,
+        )
 
 
 def advance_active_milestone_on_idle(
@@ -4467,6 +4493,16 @@ def advance_active_milestone_on_idle(
             f"match in {repo}, refusing to guess"
         )
     if matches[0].get("state") == "open":
+        try:
+            _close_stale_milestone_issues(repo, active_milestone)
+        except Exception:
+            # Closing an obsolete confirmation is notification maintenance;
+            # it must not turn an otherwise successful idle tick into a
+            # delivery failure.
+            LOGGER.exception(
+                "stale_milestone_issue_close_failed repo=%s active=%s",
+                repo, active_milestone,
+            )
         return "open", None
     current = _parse_version_title(active_milestone)
     candidates = []

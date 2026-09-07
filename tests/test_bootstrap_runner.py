@@ -5027,10 +5027,105 @@ def test_advance_active_milestone_pending_creates_one_p0_ready_issue(
     assert config.read_text() == 'active_milestone = "v0.3.0"\n'
     create = [command for command in calls if command[:3] == ["gh", "issue", "create"]]
     assert len(create) == 1
-    assert "--label" in create[0] and create[0][create[0].index("--label") + 1:] == ["ai-ready", "--label", "p0"]
+    assert "--label" not in create[0]
     assert "`v0.3.1`：2 open issues" in create[0][create[0].index("--body") + 1]
     assert "active_milestone_advance_pending old=v0.3.0" in caplog.text
     assert "auto_next_milestone=false" in caplog.text
+
+
+def test_advance_active_milestone_manual_notification_is_not_pickupable(
+    monkeypatch, tmp_path,
+):
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append(command) or (
+            "[]" if command[:3] == ["gh", "issue", "list"] else json.dumps([
+                {"title": "v0.3.0", "state": "closed"},
+                {"title": "v0.4.0", "state": "open"},
+            ])
+        ),
+    )
+
+    runner.advance_active_milestone_on_idle(
+        "owner/repo", "v0.3.0", config, auto_next_milestone=False,
+    )
+
+    create = next(command for command in calls if command[:3] == ["gh", "issue", "create"])
+    assert "--label" not in create
+
+
+def test_advance_active_milestone_closes_old_manual_notification_after_manual_move(
+    monkeypatch, tmp_path,
+):
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.4.0"\n', encoding="utf-8")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([
+                {"number": "bad", "body": "orbi-milestone-advance old=v0.2.0"},
+                {"number": 492, "body": "not a milestone notice"},
+                {
+                    "number": 493,
+                    "body": "orbi-milestone-advance old=v0.3.0 candidates=v0.4.0",
+                },
+            ])
+        return json.dumps([{"title": "v0.4.0", "state": "open"}])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.advance_active_milestone_on_idle(
+        "owner/repo", "v0.4.0", config, auto_next_milestone=False,
+    ) == ("open", None)
+    close = next(command for command in calls if command[:3] == ["gh", "issue", "close"])
+    assert close == [
+        "gh", "issue", "close", "493", "--repo", "owner/repo",
+        "--comment", "已收敛：当前配置 active_milestone = `v0.4.0`。",
+    ]
+
+
+def test_advance_active_milestone_close_failure_is_bypassed(
+    monkeypatch, tmp_path, caplog,
+):
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.4.0"\n', encoding="utf-8")
+
+    def fail_close(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return json.dumps([{"title": "v0.4.0", "state": "open"}])
+        raise RuntimeError("GitHub unavailable")
+
+    monkeypatch.setattr(runner, "run_command", fail_close)
+    with caplog.at_level("ERROR"):
+        assert runner.advance_active_milestone_on_idle(
+            "owner/repo", "v0.4.0", config,
+        ) == ("open", None)
+    assert "stale_milestone_issue_close_failed repo=owner/repo active=v0.4.0" in caplog.text
+
+
+def test_advance_active_milestone_closure_is_idempotent_on_repeated_tick(
+    monkeypatch, tmp_path,
+):
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.4.0"\n', encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append(command) or (
+            "[]" if command[:3] == ["gh", "issue", "list"] else json.dumps([
+                {"title": "v0.4.0", "state": "open"},
+            ])
+        ),
+    )
+
+    runner.advance_active_milestone_on_idle("owner/repo", "v0.4.0", config)
+    runner.advance_active_milestone_on_idle("owner/repo", "v0.4.0", config)
+
+    assert not any(command[:3] == ["gh", "issue", "close"] for command in calls)
 
 
 def test_advance_active_milestone_pending_issue_failure_is_bypassed(
@@ -5080,6 +5175,25 @@ def test_advance_active_milestone_pending_is_idempotent(
     assert not any(command[:3] == ["gh", "issue", "create"] for command in calls)
 
 
+def test_advance_active_milestone_sorts_double_digit_versions_numerically(
+    monkeypatch, tmp_path,
+):
+    config = tmp_path / "orbi.toml"
+    config.write_text('active_milestone = "v0.9.0"\n', encoding="utf-8")
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([
+            {"title": "v0.9.0", "state": "closed"},
+            {"title": "v0.10.0", "state": "open"},
+            {"title": "v0.11.0", "state": "open"},
+        ]),
+    )
+
+    assert runner.advance_active_milestone_on_idle(
+        "owner/repo", "v0.9.0", config,
+    ) == ("closed", "v0.10.0")
+
+
 def test_advance_active_milestone_selects_smallest_higher_open(
     monkeypatch, tmp_path, caplog,
 ):
@@ -5103,7 +5217,7 @@ def test_advance_active_milestone_selects_smallest_higher_open(
     assert "active_milestone_advanced old=v0.3.0 new=v0.3.1 closed=v0.3.0" in caplog.text
 
 
-def test_advance_active_milestone_open_does_not_query_extra_or_write(
+def test_advance_active_milestone_open_reconciles_notifications_without_write(
     monkeypatch, tmp_path,
 ):
     config = tmp_path / "orbi.toml"
@@ -5116,7 +5230,8 @@ def test_advance_active_milestone_open_does_not_query_extra_or_write(
         ]),
     )
     assert runner.advance_active_milestone_on_idle("owner/repo", "v0.3.0", config) == ("open", None)
-    assert len(calls) == 1
+    assert len(calls) == 2
+    assert calls[1][:3] == ["gh", "issue", "list"]
     assert config.read_text() == 'active_milestone = "v0.3.0"\n'
 
 
