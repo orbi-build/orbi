@@ -73,6 +73,96 @@ systemctl --user list-timers 'orbi@*.timer'
 systemctl --user status 'orbi@*.service'
 ```
 
+## Stop, migrate, or remove a deployment
+
+A deployment is more than the editable `uv` tool: user-level systemd units
+keep starting timers from the configured `deploy_home`. If you move that
+checkout, stop the old deployment **before** installing the new one. Keep
+`deploy_home` on a persistent path (for example, under your home directory),
+not `/tmp` or another directory that may be removed between boots.
+
+### Pause a deployment
+
+To pause Orbi without deleting anything, first disable and stop every timer
+instance that setup may have enabled:
+
+```bash
+systemctl --user disable --now orbi@1.timer
+# Run this too when max_concurrency = 2:
+systemctl --user disable --now orbi@2.timer
+```
+
+Check for a service that was already running before changing files:
+
+```bash
+systemctl --user status 'orbi@*.service'
+```
+
+The commands above do not delete the checkout, task worktrees, `orbi.toml`,
+or `<repo_dir>/.orbi/` state. To resume the same deployment, leave the
+installed units in place and enable the required timer again (or run
+`orbi setup --config <deploy_home>/orbi.toml`).
+
+### Migrate to a new deploy home
+
+1. On the old deployment, run the pause commands above. Do this before
+   removing or renaming the old directory; otherwise its enabled timers keep
+   waking up and logging failures.
+2. Confirm the new `deploy_home` is a persistent directory, clone or move the
+   Orbi checkout there, and update its `orbi.toml`. Keep `repo_dir` pointed at
+   the delivery checkout; changing `deploy_home` must not move or delete that
+   checkout, its worktrees, or its `.orbi/` state.
+3. From the new deploy home, install the units and enable the desired timer
+   count:
+
+   ```bash
+   cd <new-deploy-home>
+   orbi setup --config orbi.toml
+   ```
+
+   `max_concurrency = 1` enables `orbi@1.timer`; `max_concurrency = 2` also
+   enables `orbi@2.timer`. Verify the result with
+   `systemctl --user list-timers 'orbi@*.timer'`.
+4. If the new deployment uses the same `unit_name` as the old one, setup has
+   already replaced the unit files; do **not** remove them, or you will remove
+   the new deployment too. If you intentionally changed `unit_name`, only
+   after the new deployment is verified remove the old unit files. Disable the
+   old timers first as shown above, then run
+   `systemctl --user daemon-reload`. Do not remove a repo, worktree, or
+   `.orbi/` directory as part of this unit cleanup unless you have separately
+   confirmed that its data is disposable.
+
+If `unit_name` is configured, replace `orbi@1/2` in these commands with the
+corresponding configured name (for example, `orbi-website@1/2`).
+
+### Completely remove Orbi from this machine
+
+First pause the deployment. For the default unit name, remove the installed
+templates only after both possible timers have been disabled:
+
+```bash
+systemctl --user disable --now orbi@1.timer
+# Also run when max_concurrency = 2:
+systemctl --user disable --now orbi@2.timer
+rm ~/.config/systemd/user/orbi@.service ~/.config/systemd/user/orbi@.timer
+systemctl --user daemon-reload
+```
+
+Before removing anything, inspect the paths and confirm that you are deleting
+only the user-systemd unit files. This cleanup does **not** remove the Orbi
+checkout, the configured `repo_dir`, task worktrees, `orbi.toml`, or
+`<repo_dir>/.orbi/`; delete those separately only after confirming they are
+not needed. If this machine will no longer use the Orbi CLI at all, optionally
+remove the editable tool as a separate final step:
+
+```bash
+uv tool uninstall orbi
+```
+
+`uv tool uninstall orbi` is not part of a pause or migration, and it does not
+clean systemd units or repository state. There is no `orbi uninstall` or
+`orbi teardown` command.
+
 ## After a unit template changes (Issue #131, #142)
 
 The unit templates (`systemd/orbi@.service` and

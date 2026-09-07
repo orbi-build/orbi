@@ -60,6 +60,86 @@ systemctl --user list-timers 'orbi@*.timer'
 systemctl --user status 'orbi@*.service'
 ```
 
+## 暂停、迁移或移除部署
+
+部署不只有 editable `uv` tool：用户级 systemd unit 会继续从配置的
+`deploy_home` 启动 timer。迁移 checkout 时，必须**先停止旧部署，再安装
+新部署**。`deploy_home` 应放在持久目录（例如 home 目录下），不要放在
+`/tmp` 或其他重启后可能消失的临时目录。
+
+### 暂停部署
+
+只想暂停 Orbi、保留所有文件时，先停用并停止 setup 可能启用的每个 timer
+实例：
+
+```bash
+systemctl --user disable --now orbi@1.timer
+# max_concurrency = 2 时也执行：
+systemctl --user disable --now orbi@2.timer
+```
+
+如果改动前已有 service 在运行，先检查它：
+
+```bash
+systemctl --user status 'orbi@*.service'
+```
+
+上面的命令不会删除 checkout、任务 worktree、`orbi.toml` 或
+`<repo_dir>/.orbi/` 状态。要恢复同一套部署，保留已安装的 unit，重新启用
+需要的 timer（或执行 `orbi setup --config <deploy_home>/orbi.toml`）。
+
+### 迁移到新的 deploy home
+
+1. 在旧部署上执行上面的暂停命令。必须先做这一步，再删除或改名旧目录；
+   否则启用中的 timer 会继续唤醒并持续记录失败日志。
+2. 确认新的 `deploy_home` 是持久目录，在那里 clone 或移动 Orbi checkout，
+   并更新其中的 `orbi.toml`。保留 `repo_dir` 指向交付 checkout；改变
+   `deploy_home` 不应移动或删除该 checkout、它的 worktree 或 `.orbi/` 状态。
+3. 在新的 deploy home 安装 unit 并启用所需数量的 timer：
+
+   ```bash
+   cd <new-deploy-home>
+   orbi setup --config orbi.toml
+   ```
+
+   `max_concurrency = 1` 会启用 `orbi@1.timer`；`max_concurrency = 2` 还会
+   启用 `orbi@2.timer`。用下面的命令确认结果：
+   `systemctl --user list-timers 'orbi@*.timer'`。
+4. 如果新部署使用与旧部署相同的 `unit_name`，setup 已经替换了 unit
+   文件；**不要**再删除它们，否则也会删除新部署的 unit。如果明确改用了
+   新的 `unit_name`，只有在新部署验证正常后才能删除旧 unit。先按上面的
+   步骤停用旧 timer，再执行 `systemctl --user daemon-reload`。除非已经
+   单独确认数据可以丢弃，否则不要把 repo、worktree 或 `.orbi/` 目录作为
+   unit 清理的一部分删除。
+
+如果配置了 `unit_name`，把下面命令中的 `orbi@1/2` 换成对应名称（例如
+`orbi-website@1/2`）。
+
+### 完全移除本机上的 Orbi
+
+先暂停部署。默认 unit 名称下，只有在两个可能的 timer 都停用后，才删除已
+安装的模板：
+
+```bash
+systemctl --user disable --now orbi@1.timer
+# max_concurrency = 2 时也执行：
+systemctl --user disable --now orbi@2.timer
+rm ~/.config/systemd/user/orbi@.service ~/.config/systemd/user/orbi@.timer
+systemctl --user daemon-reload
+```
+
+删除前检查路径，确认只删除用户 systemd unit 文件。这些清理命令**不会**删除
+Orbi checkout、配置的 `repo_dir`、任务 worktree、`orbi.toml` 或
+`<repo_dir>/.orbi/`；这些内容只有在确认不再需要后才另行删除。如果本机以后
+完全不再使用 Orbi CLI，再把卸载 editable tool 作为单独的最后一步（可选）：
+
+```bash
+uv tool uninstall orbi
+```
+
+`uv tool uninstall orbi` 不属于暂停或迁移步骤，也不会清理 systemd unit 或
+仓库状态。没有 `orbi uninstall` 或 `orbi teardown` 命令。
+
 ## Unit 模板变更后（Issue #131、#142）
 
 unit 模板（`systemd/orbi@.service` 和 `systemd/orbi@.timer`）
