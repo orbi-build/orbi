@@ -17,6 +17,7 @@
               "index",
               "getting-started",
               "providers",
+              "opencode",
               "setup"
             ]
           },
@@ -66,6 +67,7 @@
               "zh/index",
               "zh/getting-started",
               "zh/providers",
+              "zh/opencode",
               "zh/setup"
             ]
           },

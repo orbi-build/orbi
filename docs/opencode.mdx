@@ -1,0 +1,121 @@
+# OpenCode provider
+
+OpenCode is a **Pi-native** provider. This page records the behavior measured with
+Pi **0.85.1 on 2026-09-07**; OpenCode's catalog, plans, and limits can change.
+It is linked from the provider Epic [#305](https://github.com/orbi-build/orbi/issues/305).
+
+## What was actually verified
+
+The installed Pi CLI reports the provider credential variable
+`OPENCODE_API_KEY` and the built-in provider id `opencode`. The installed catalog
+contains the model ids listed below. `pi auth check --provider opencode
+--json --no-refresh` on the verification account returned:
+
+```json
+{"status":"not_ready","provider":"opencode","reason":"credentials_not_configured"}
+```
+
+Therefore this checkout does **not** claim a successful OpenCode request, quota
+consumption, or Orbi PR. A real delivery must be recorded only after an account
+with OpenCode credentials runs it; do not copy the z.ai or Gemini delivery
+numbers to this provider.
+
+## Authentication
+
+1. Obtain an OpenCode API key from the OpenCode account/plan that owns the
+   desired quota. Keep it outside Git and outside Issue, journal, and PR text.
+2. Export it for a manual check, or put it in the private environment file loaded
+   by the Orbi systemd unit:
+
+   ```bash
+   export OPENCODE_API_KEY='...'
+   pi auth check --provider opencode --json
+   ```
+
+3. Pi 0.85.1's documented CLI exposes `pi auth check`, `print-api-key`, and
+   `print-bearer-token`; it does not document a provider-specific `/login` flow
+   for OpenCode. The observed credential contract is an API key, not OAuth. If a
+   future Pi version changes this, repeat the commands above and update this
+   page before documenting it.
+
+## Catalog and Orbi configuration
+
+Pi owns this catalog, so **do not create or copy a `pi_providers.json` entry** for
+OpenCode. Defining a second OpenAI-compatible endpoint would pin stale model
+metadata and is not the native path. Set only the selectors in `orbi.toml`:
+
+```toml
+pi_provider = "opencode"
+pi_model = "glm-5.3-flash"
+```
+
+The provider's built-in endpoint is `https://opencode.ai/zen` for Anthropic
+models and `https://opencode.ai/zen/v1` for the Google/OpenAI-compatible models.
+The complete model ids present in the installed Pi 0.85.1 catalog are:
+
+- Anthropic: `claude-fable-5`, `claude-fable-5-1`, `claude-haiku-4-5`,
+  `claude-opus-4-5`, `claude-opus-4-6`, `claude-opus-4-7`, `claude-opus-4-8`,
+  `claude-opus-5`, `claude-sonnet-4`, `claude-sonnet-4-5`,
+  `claude-sonnet-4-6`, `claude-sonnet-5`, `qwen3.5-plus`, `qwen3.6-plus`.
+- Google: `gemini-3-flash`, `gemini-3.1-pro`, `gemini-3.5-flash`,
+  `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash`,
+  `gemini-3.8-flash`.
+- OpenAI-compatible: `big-pickle`, `deepseek-v4-flash`,
+  `deepseek-v4-flash-vision-exp`, `deepseek-v4-pro`, `glm-5`, `glm-5.1`,
+  `glm-5.2`, `glm-5.3`, `glm-5.3-flash`, `kimi-k2.5`, `kimi-k2.6`,
+  `kimi-k2.7-code`, `kimi-k3`, `ling-3.0-flash-fin-free`, `mimo-v2.5-free`,
+  `minimax-m2.5`, `minimax-m2.7`, `minimax-m3`, `nemotron-3-ultra-free`,
+  `nemotron-3.5-lightning-free`, `gpt-5`, `gpt-5-codex`, `gpt-5-nano`,
+  `gpt-5.1`, `gpt-5.1-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`,
+  `gpt-5.2`, `gpt-5.2-codex`, `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`,
+  `gpt-5.4-nano`, `gpt-5.4-pro`, `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.6-luna`,
+  `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`,
+  `grok-build-0.1`, `muse-spark-1.2`, `muse-spark-1.2-contributor-free`,
+  `muse-spark-1.3`, `muse-spark-1.3-contributor-free`.
+
+Check the local installation rather than trusting this list:
+
+```bash
+pi --list-models
+pi --model opencode/glm-5.3-flash --no-session -p 'reply with OK'
+```
+
+The second command is the real provider request; it requires a key and is not a
+substitute for the Orbi delivery evidence below.
+
+## Quota, limits, reset, and errors
+
+No OpenCode account or plan was authenticated during this measurement. Thus
+this page intentionally records **no numeric quota, rate limit, reset time, or
+plan promise**. Verify those values in the OpenCode account's current plan
+before budgeting a run. An unavailable/expired key is observable in Pi as
+`credentials_not_configured` from `pi auth check`; an upstream quota or rate
+failure must be captured from the actual Pi/Orbi journal response, including its
+HTTP status and provider message. Never infer reset behavior from a model name.
+
+For a completed real delivery, append dated evidence here or in the linked
+Issue: account/plan boundary (not the secret), journal `provider` and `model`,
+`run_id`, PR URL, and elapsed time. This checkout has no such evidence.
+
+## Real Orbi delivery checklist
+
+After authentication, run one small Issue in the user's own repository and
+record the journal lines `provider=opencode model=<id>`, the stable Orbi
+`run_id`, the PR URL, and elapsed seconds. A delivery is not proven by
+`pi auth check` alone. Do not put the API key in any artifact.
+
+## Minimal fallback
+
+Keep the Orbi runner unchanged and change only the selectors (and, for a
+non-native provider, add its already documented provider file and key):
+
+```diff
+-pi_provider = "opencode"
+-pi_model = "glm-5.3-flash"
++pi_provider = "z-ai"
++pi_model = "glm-5.3-flash"
+```
+
+For a local Qwen setup, use the existing `local-qwen.json` template and select
+its exact advertised model id; do not reuse the OpenCode model id. See [provider
+templates](/providers) and [Getting started](/getting-started).
