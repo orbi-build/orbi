@@ -18,7 +18,7 @@ pi_model = "glm-5.3-flash"
 | DeepSeek | `deepseek.json` | `DEEPSEEK_API_KEY` | `deepseek-chat` | Not tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | xAI | `xai.json` | `XAI_API_KEY` | `grok-4.20-0309` | Model ID verified against xAI docs; not quota-tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Local Qwen | `local-qwen.json` | None (dummy key `local`) | `Qwen3.8-27B` | Local zero-cost example; requires a local OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
-| Cloudflare Workers AI | `cloudflare-workers-ai.json` | `CLOUDFLARE_API_TOKEN` | `@cf/meta/llama-3.1-8b-instruct` | Hosted free allocation; quota must be checked in the account | [#318](https://github.com/orbi-build/orbi/issues/318) |
+| Cloudflare Workers AI | `cloudflare-workers-ai.json` | `CLOUDFLARE_API_TOKEN` | `@cf/meta/llama-3.1-8b-instruct-fp8` | Hosted free allocation; quota must be checked in the account | [#318](https://github.com/orbi-build/orbi/issues/318) |
 
 A template being listed is not a promise of quota, availability, speed, or model support. The `Not tested` labels are intentional.
 
@@ -65,17 +65,17 @@ Select it in `orbi.toml`:
 ```toml
 pi_providers = ".orbi/pi-providers.json"
 pi_provider = "cloudflare-workers-ai"
-pi_model = "@cf/meta/llama-3.1-8b-instruct"
+pi_model = "@cf/meta/llama-3.1-8b-instruct-fp8"
 ```
 
-The model ID and endpoint path are from Cloudflare's [Workers AI configuration guide](https://developers.cloudflare.com/workers-ai/configuration/). Cloudflare documents **10,000 Neurons per day at no charge**, resetting at **00:00 UTC**; after the free allocation, further operations fail unless billing is enabled. Limits and pricing can change, so check the [official pricing page](https://developers.cloudflare.com/workers-ai/platform/pricing/) before a run.
+The model ID is the current FP8 variant documented in Cloudflare's [Workers AI model catalog](https://developers.cloudflare.com/workers-ai/models/llama-3.1-8b-instruct-fp8/); the endpoint path is from the [Workers AI configuration guide](https://developers.cloudflare.com/workers-ai/configuration/). Cloudflare documents **10,000 Neurons per day at no charge**, resetting at **00:00 UTC**; after the free allocation, further operations fail unless billing is enabled. Limits and pricing can change, so check the [official pricing page](https://developers.cloudflare.com/workers-ai/platform/pricing/) before a run.
 
 #### Measure a real Orbi task
 
 Record the Workers AI account's Neurons usage immediately before dispatching one Issue and immediately after the PR is opened (same UTC day). The measured task consumption is `after - before`; retain the dashboard/API timestamps, model, Issue and PR URL, but never retain the token. Orbi's journal proves the selected provider/model, not Neurons usage:
 
 ```text
-journal: provider=cloudflare-workers-ai model=@cf/meta/llama-3.1-8b-instruct run_id=<run-id>
+journal: provider=cloudflare-workers-ai model=@cf/meta/llama-3.1-8b-instruct-fp8 run_id=<run-id>
 Cloudflare Workers AI usage: before=<n> neurons at <UTC>, after=<n> neurons at <UTC>, delta=<n>
 PR: https://github.com/OWNER/REPO/pull/<number>
 ```
