@@ -7345,14 +7345,19 @@ def confirm_merged(worktree: Path, pr: dict, base_branch: str,
 
 def review_rounds_so_far(
     comments: list[dict], *, after: str | None = None,
+    run_id: str | None = None, pr_number: int | None = None,
 ) -> int:
-    """Count trusted review rounds, optionally after a recovery event.
+    """Count trusted review rounds for the selected delivery identity.
 
-    A human recovery starts a fresh budget without deleting the historical
-    Issue record. GitHub comment ``createdAt`` values let the old rounds stay
-    visible while excluding them from the new budget.
+    With ``run_id`` supplied, only comments carrying that attempt's stable
+    marker count. This is essential when an Issue is picked up again after a
+    closed PR: historical rounds remain visible evidence, but cannot consume
+    the new PR's budget. ``after`` retains the existing human-recovery
+    boundary for resumes of the same PR. Calls without an identity filter
+    remain available for legacy evidence rendering.
     """
     rounds = 0
+    marker = run_marker(run_id) if run_id is not None else None
     for comment in comments:
         if not _comment_is_trusted(comment):
             continue
@@ -7361,8 +7366,18 @@ def review_rounds_so_far(
         body = comment.get("body")
         if not isinstance(body, str):
             continue
-        if any(line.startswith("Orbi review round ")
-               for line in body.splitlines()):
+        if marker is not None and marker not in body:
+            continue
+        if pr_number is None:
+            matches = any(line.startswith("Orbi review round ")
+                          for line in body.splitlines())
+        else:
+            matches = any(
+                line.startswith(f"Orbi review round ") and
+                f" for PR #{pr_number}:" in line
+                for line in body.splitlines()
+            )
+        if matches:
             rounds += 1
     return rounds
 
@@ -7840,7 +7855,9 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     """
     marker = run_marker(config["run_id"])
     comments = issue_comments(number, repo=source_repo)
-    rounds = review_rounds_so_far(comments)
+    # The run marker is the delivery-attempt boundary. Do not count review
+    # comments from a previous PR/run on the same Issue (Issue #508).
+    rounds = review_rounds_so_far(comments, run_id=config["run_id"])
     recovery_at = None
     if rounds >= MAX_REVIEW_ROUNDS:
         # Issue #483: a maintainer may repair an external prerequisite and
@@ -7849,7 +7866,9 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         # comments remain immutable evidence and are not counted again.
         recovery_at = human_review_recovery_at(number, source_repo)
         if recovery_at is not None:
-            rounds = review_rounds_so_far(comments, after=recovery_at)
+            rounds = review_rounds_so_far(
+                comments, after=recovery_at, run_id=config["run_id"],
+            )
             LOGGER.info(
                 "review_budget_recovered issue=%s recovery_at=%s rounds=%s",
                 number, recovery_at, rounds,
