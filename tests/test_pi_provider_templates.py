@@ -16,6 +16,9 @@ EXPECTED = {
     "deepseek": ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
     "xai": ("xai", "grok-4.20-0309", "XAI_API_KEY"),
     "local-qwen": ("local-qwen", "Qwen3.8-27B", None),
+    "cloudflare-workers-ai": (
+        "cloudflare-workers-ai", "@cf/meta/llama-3.1-8b-instruct", "CLOUDFLARE_API_TOKEN",
+    ),
 }
 
 
