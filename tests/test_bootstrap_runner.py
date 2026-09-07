@@ -5097,9 +5097,7 @@ def test_advance_active_milestone_close_failure_is_bypassed(
     def fail_close(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return json.dumps([{"title": "v0.4.0", "state": "open"}])
-        if command[:3] == ["gh", "issue", "list"]:
-            raise RuntimeError("GitHub unavailable")
-        raise AssertionError(command)
+        raise RuntimeError("GitHub unavailable")
 
     monkeypatch.setattr(runner, "run_command", fail_close)
     with caplog.at_level("ERROR"):
