@@ -49,6 +49,59 @@ A template being listed is not a promise of quota, availability, speed, or model
 
 Do not invent a complete map for a provider. Gemini's known-safe template form is exactly `{"off": null}`: other thinking levels use the provider default mapping. A copied `null` mapping for every level can send an unsupported value and produce a provider `400`. For another provider, omit the field unless its Pi provider contract has been verified.
 
+### z.ai GLM: experience/free quota
+
+Use this path when you have a z.ai account with an experience or free allowance. z.ai documents an OpenAI-compatible API; Orbi's template uses the direct endpoint `https://api.z.ai/api/paas/v4` and Pi's `openai-completions` API. See z.ai's [API quick start](https://docs.z.ai/guides/overview/quick-start) and [API-key management](https://z.ai/manage-apikey/apikey-list) for the current account and key-creation flow. The links and UI may change; do not paste the key into a repository, Issue, PR, or journal.
+
+1. Create an API key in the z.ai console, then keep it in the local, gitignored environment file:
+
+   ```bash
+   mkdir -p .orbi
+   printf '%s\n' 'ZAI_API_KEY=replace-me' > .orbi/env
+   chmod 600 .orbi/env
+   ```
+
+   The systemd service loads this file through `EnvironmentFile`. A manual tick does not: export it first with `set -a; . .orbi/env; set +a`, then run the command in [Getting started](/getting-started#6-run-one-tick-manually).
+2. Copy [`templates/pi-providers/z-ai.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/z-ai.json) to `.orbi/pi-providers.json`, or copy its provider entry. Select the exact IDs:
+
+   ```toml
+   pi_providers = ".orbi/pi-providers.json"
+   pi_provider = "z-ai"
+   pi_model = "glm-5.3-flash"
+   ```
+
+   The complete `models` entry currently is:
+
+   ```json
+   {
+     "id": "glm-5.3-flash",
+     "name": "GLM 5.3 Flash",
+     "contextWindow": 131072,
+     "maxTokens": 32768
+   }
+   ```
+
+   `reasoning` is an optional Pi model-catalog field indicating reasoning support. `thinkingLevelMap` maps Pi thinking levels to provider-specific values. The committed z.ai template intentionally omits both: this document does not assert a provider-specific reasoning or thinking-level mapping without verified Pi/z.ai contract evidence. Do not copy Gemini's `{"off": null}` mapping to z.ai.
+3. Validate the selected entry before dispatching work. The Runner's `_load_pi_providers` check requires the provider, exact model ID, endpoint/API, and a non-empty `ZAI_API_KEY`; it does not test or promise quota availability.
+
+#### What is known about the free allowance
+
+- **Verified 2026-09-04:** a real Orbi delivery using `glm-5.3-flash` completed the task from Issue [#303](https://github.com/orbi-build/orbi/issues/303) through commit [`b81f77a`](https://github.com/orbi-build/orbi/commit/b81f77a) and PR [#304](https://github.com/orbi-build/orbi/pull/304). This proves one successful run, not a quota guarantee.
+- z.ai does not statically publish a universal experience/free upper limit in the material used for this guide. Exact allowance, reset time, concurrency and model availability depend on the account and current z.ai policy; **not measured here**.
+- No controlled measurement of exhaustion or rate-limit response is available for this guide; **rate-limit behavior: not tested**. Treat upstream HTTP authentication/rate-limit errors as the source of truth and avoid retry loops or invented numbers.
+
+#### Switch when the allowance is exhausted
+
+There is no automatic fallback. Keep the same `orbi.toml` selectors and replace the provider file/key with another provider from the [catalog](#catalog), then validate again. For example, switch to the existing OpenRouter template and its selected model:
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "openrouter"
+pi_model = "google/gemma-4-31b-it:free"
+```
+
+Copy [`openrouter.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/openrouter.json), set `OPENROUTER_API_KEY` in `.orbi/env`, and run one real `pi --print` check before dispatching. OpenRouter's `z-ai/glm-5.2:free` listing is a separate provider route; its availability and quota are **not tested or promised** here.
+
 ### Local providers
 
 A local OpenAI-compatible server still needs a non-empty `apiKey` field to satisfy the provider shape; the local template uses the non-secret dummy value `local`. Its model id must match the server's advertised id (for llama.cpp, set it with `--alias`).
