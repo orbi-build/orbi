@@ -7136,28 +7136,88 @@ def confirm_merged(worktree: Path, pr: dict, base_branch: str,
     return {"state": "MERGED", "merge_commit": merge_commit}
 
 
-def review_rounds_so_far(comments: list[dict]) -> int:
-    """Count the review rounds already recorded on the Issue.
+def review_rounds_so_far(
+    comments: list[dict], *, after: str | None = None,
+) -> int:
+    """Count trusted review rounds, optionally after a recovery event.
 
-    Each round with Blocker/Major findings posts one
-    `Orbi review round N for PR #...` comment, so the GitHub
-    record alone bounds the loop (GitHub Issues are the only state
-    store; a runner restart never loses the count). Only trusted
-    maintainer comments count: a public comment cannot exhaust the
-    round budget or skip review (same filter as resume_scene).
+    A human recovery starts a fresh budget without deleting the historical
+    Issue record. GitHub comment ``createdAt`` values let the old rounds stay
+    visible while excluding them from the new budget.
     """
     rounds = 0
     for comment in comments:
         if not _comment_is_trusted(comment):
             continue
+        if after is not None and comment.get("createdAt", "") <= after:
+            continue
         body = comment.get("body")
         if not isinstance(body, str):
             continue
-        for line in body.splitlines():
-            if line.startswith("Orbi review round "):
-                rounds += 1
-                break
+        if any(line.startswith("Orbi review round ")
+               for line in body.splitlines()):
+            rounds += 1
     return rounds
+
+
+def human_review_recovery_at(number: int, repo: str) -> str | None:
+    """Return the latest explicit blocked -> fix-needed recovery time.
+
+    Label history is used rather than the current projection: the current
+    ``ai-fix-needed`` label alone cannot distinguish a normal retry from a
+    human decision after terminal blocking.
+    """
+    raw = run_command([
+        "gh", "api", f"repos/{repo}/issues/{number}/timeline",
+        "--paginate", "--jq", ".[]",
+    ])
+    events: list[dict] = []
+    decoded = [json.loads(line) for line in raw.splitlines() if line.strip()]
+    if len(decoded) == 1 and isinstance(decoded[0], list):
+        decoded = decoded[0]
+    for event in decoded:
+        if isinstance(event, dict):
+            events.append(event)
+    blocked_removed = False
+    recovery_at = None
+    for event in events:
+        label = event.get("label")
+        label_name = label.get("name") if isinstance(label, dict) else None
+        if event.get("event") == "labeled" and label_name == BLOCKED_LABEL:
+            blocked_removed = False
+        elif event.get("event") == "unlabeled" and label_name == BLOCKED_LABEL:
+            blocked_removed = True
+        elif (blocked_removed and event.get("event") == "labeled"
+              and label_name == FIX_NEEDED_LABEL):
+            recovery_at = event.get("created_at")
+            blocked_removed = False
+    return recovery_at if isinstance(recovery_at, str) else None
+
+
+def log_recovery_ci_status(pr: dict, repo: str) -> None:
+    """Record the recovered PR's current check status without check output.
+
+    This is observability only: a GitHub status lookup must never decide
+    whether the recovered review runs (Issue #79).
+    """
+    try:
+        checks = json.loads(run_command([
+            "gh", "api", f"repos/{repo}/commits/{pr['head_oid']}/check-runs",
+            "--jq", ".check_runs",
+        ]))
+        if not isinstance(checks, list):
+            raise ValueError("PR check-runs response must be an array")
+        summary = [
+            f"{check.get('name', '?')}={check.get('status', '?')}/"
+            f"{check.get('conclusion', '?')}"
+            for check in checks if isinstance(check, dict)
+        ]
+    except Exception as exc:
+        LOGGER.warning("review_recovery_ci_status_failed pr=%s error=%s",
+                       pr.get("number", "?"), quote_value(str(exc)))
+        return
+    LOGGER.info("review_recovery_ci_status pr=%s checks=%s",
+                pr["number"], ",".join(summary) or "none")
 
 
 # ---------------------------------------------------------------------------
@@ -7574,23 +7634,39 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     marker = run_marker(config["run_id"])
     comments = issue_comments(number, repo=source_repo)
     rounds = review_rounds_so_far(comments)
+    recovery_at = None
     if rounds >= MAX_REVIEW_ROUNDS:
-        LOGGER.error(
-            "review_rounds_exhausted issue=%s rounds=%s "
-            "terminal=expected_human_decision",
-            number, rounds,
-        )
-        # Issue #50: the loop is bounded by MAX_REVIEW_ROUNDS on purpose
-        # — after 5 rounds without a clean verdict the remaining findings
-        # need a human decision, so the AI cannot safely continue this PR
-        # (the explicit reason the blocked comment must carry).
-        raise ReviewRoundsExhausted(
-            f"review/fix loop exhausted after {MAX_REVIEW_ROUNDS} rounds "
-            "without a clean verdict; the bounded loop is a human "
-            "decision, so the AI cannot safely continue this PR"
-        )
+        # Issue #483: a maintainer may repair an external prerequisite and
+        # explicitly move the terminal Issue back to ai-fix-needed. That
+        # transition establishes a new budget for this same PR; old review
+        # comments remain immutable evidence and are not counted again.
+        recovery_at = human_review_recovery_at(number, source_repo)
+        if recovery_at is not None:
+            rounds = review_rounds_so_far(comments, after=recovery_at)
+            LOGGER.info(
+                "review_budget_recovered issue=%s recovery_at=%s rounds=%s",
+                number, recovery_at, rounds,
+            )
+        if rounds >= MAX_REVIEW_ROUNDS:
+            LOGGER.error(
+                "review_rounds_exhausted issue=%s rounds=%s "
+                "terminal=expected_human_decision",
+                number, rounds,
+            )
+            # Issue #50: the loop is bounded by MAX_REVIEW_ROUNDS on purpose
+            # — after 5 rounds without a clean verdict the remaining findings
+            # need a human decision, so the AI cannot safely continue this PR.
+            raise ReviewRoundsExhausted(
+                f"review/fix loop exhausted after {MAX_REVIEW_ROUNDS} rounds "
+                "without a clean verdict; the bounded loop is a human "
+                "decision, so the AI cannot safely continue this PR"
+            )
     round = rounds + 1
     pr = freeze_pr(worktree, branch, base_branch)
+    if recovery_at is not None:
+        # Only the explicit recovery path reaches this branch. Check the
+        # latest PR CI before spending the newly granted review budget.
+        log_recovery_ci_status(pr, source_repo)
     publisher = ProgressPublisher(
         number, source_repo, config["run_id"], run_command=run_command,
     )

@@ -928,12 +928,127 @@ def test_block_scene_failure_states_why_not_auto_recoverable(
 # ------------------------------------------------------------------ review rounds
 
 
+def test_review_rounds_after_human_recovery_ignores_old_run():
+    """Issue #483: a human recovery starts a new review budget."""
+    comments = [
+        {"body": "Orbi review round 1 for PR #46: findings",
+         "authorAssociation": "OWNER", "createdAt": "2026-01-01T00:00:00Z"},
+        {"body": "Orbi review round 5 for PR #46: findings",
+         "authorAssociation": "OWNER", "createdAt": "2026-01-02T00:00:00Z"},
+    ]
+    assert runner.review_rounds_so_far(
+        comments, after="2026-01-01T12:00:00Z",
+    ) == 1
+
+
+def test_human_recovery_requires_blocked_removal_then_fix_needed(monkeypatch):
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([
+            {"event": "labeled", "label": {"name": "ai-blocked"},
+             "created_at": "2026-01-01T00:00:00Z"},
+            {"event": "unlabeled", "label": {"name": "ai-blocked"},
+             "created_at": "2026-01-02T00:00:00Z"},
+            {"event": "labeled", "label": {"name": "ai-fix-needed"},
+             "created_at": "2026-01-02T01:00:00Z"},
+        ]),
+    )
+    assert runner.human_review_recovery_at(39, "owner/repo") == \
+        "2026-01-02T01:00:00Z"
+
+
+def test_human_review_recovery_ignores_unrelated_label_history(monkeypatch):
+    monkeypatch.setattr(
+        runner, "run_command", lambda *a, **k: '{"event":"labeled"}\n',
+    )
+    assert runner.human_review_recovery_at(39, "owner/repo") is None
+
+
+def test_human_review_recovery_requires_latest_blocked_removal(monkeypatch):
+    monkeypatch.setattr(
+        runner, "run_command", lambda *a, **k: json.dumps([
+            {"event": "unlabeled", "label": {"name": "ai-blocked"},
+             "created_at": "2026-01-01T00:00:00Z"},
+            {"event": "labeled", "label": {"name": "ai-blocked"},
+             "created_at": "2026-01-02T00:00:00Z"},
+            {"event": "labeled", "label": {"name": "ai-fix-needed"},
+             "created_at": "2026-01-02T01:00:00Z"},
+        ]),
+    )
+    assert runner.human_review_recovery_at(39, "owner/repo") is None
+
+
+def test_human_review_recovery_skips_non_object_events(monkeypatch):
+    monkeypatch.setattr(
+        runner, "run_command", lambda *a, **k: "1\n",
+    )
+    assert runner.human_review_recovery_at(39, "owner/repo") is None
+
+
+def test_log_recovery_ci_status_logs_malformed_response_and_continues(
+        monkeypatch, caplog,
+):
+    monkeypatch.setattr(
+        runner, "run_command", lambda *a, **k: json.dumps({}),
+    )
+    caplog.set_level("WARNING")
+    runner.log_recovery_ci_status(
+        {"number": 46, "head_oid": "head-sha"}, "owner/repo",
+    )
+    assert "review_recovery_ci_status_failed pr=46" in caplog.text
+
+
+def test_log_recovery_ci_status_logs_only_check_summary(monkeypatch, caplog):
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda *a, **k: json.dumps([]),
+    )
+    caplog.set_level("INFO")
+    runner.log_recovery_ci_status(
+        {"number": 46, "head_oid": "head-sha"}, "owner/repo",
+    )
+    assert "review_recovery_ci_status pr=46 checks=none" in caplog.text
+
+
+def test_exhausted_review_enters_new_budget_after_human_recovery(
+    monkeypatch, tmp_path,
+):
+    from tests.test_resume_pr import FAKE_RUN_ID
+    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [
+        {"body": f"Orbi review round {i} for PR #46: findings",
+         "authorAssociation": "OWNER",
+         "createdAt": "2026-01-01T00:00:00Z"}
+        for i in range(1, 6)
+    ])
+    monkeypatch.setattr(runner, "human_review_recovery_at",
+                        lambda *a: "2026-02-01T00:00:00Z")
+    frozen = {"number": 46, "url": PR_URL, "base_ref": "main",
+              "base_oid": "abc", "head_ref": "b", "head_oid": "def"}
+    freezes = []
+    monkeypatch.setattr(runner, "freeze_pr",
+                        lambda *a, **k: freezes.append(1) or frozen)
+    monkeypatch.setattr(runner, "log_recovery_ci_status", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "_safe_publish", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner, "run_review",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("review started")),
+    )
+    config = {"run_id": FAKE_RUN_ID, "base_branch": "main", "repo_dir": tmp_path}
+    with pytest.raises(RuntimeError, match="review started"):
+        runner.review_and_merge_if_clean(
+            tmp_path, "branch", "main", config, "owner/repo", 39,
+            title="task", priority="normal",
+        )
+    assert freezes == [1]
+
+
 def test_review_rounds_exhausted_raises_unrecoverable(monkeypatch, tmp_path):
     """Issue #50: the bounded review/fix loop (5 rounds) exhausted
     without a clean verdict is a human decision, not a recoverable
     failure: `review_and_merge_if_clean` raises
     UnrecoverableDeliveryError (the caller marks the Issue ai-blocked
     with the reason)."""
+    monkeypatch.setattr(runner, "human_review_recovery_at", lambda *a: None)
     from tests.test_resume_pr import FAKE_RUN_ID
 
     monkeypatch.setattr(
