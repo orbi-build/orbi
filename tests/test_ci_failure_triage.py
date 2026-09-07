@@ -9,7 +9,7 @@ conclusion, html_url, run_started_at, run_attempt`) and a mocked `gh api`
 layer, asserting the real GitHub REST contract:
 
 - failure/cancelled/timed_out on a `pull_request` or `push` to `main` →
-  exactly one `bug` + `ai-ready` Issue per failed job, full evidence body,
+  exactly one `bug` + `p0` + `ai-ready` Issue per failed job, full evidence body,
   hidden fingerprint marker;
 - the same fingerprint again → a re-occurrence comment on the existing Issue,
   never a second Issue (no storm);
@@ -342,7 +342,7 @@ def test_recovery_without_succeeded_jobs_is_a_logged_noop(gh, monkeypatch, tmp_p
 
 
 # ---------------------------------------------------------------------------
-# Failure flow: create (one bug + ai-ready Issue per failed job)
+# Failure flow: create (one bug + p0 + ai-ready Issue per failed job)
 # ---------------------------------------------------------------------------
 
 
@@ -357,7 +357,7 @@ def test_failure_creates_one_issue_with_full_evidence(gh, monkeypatch, tmp_path,
     creates = gh.calls_to(ep_create(), "POST")
     assert len(creates) == 1
     payload = creates[0]["payload"]
-    assert payload["labels"] == ["bug", "ai-ready"]
+    assert payload["labels"] == ["bug", "p0", "ai-ready"]
     assert "milestone" not in payload
     assert payload["title"] == "CI failure: tests on branch main (push)"
     body = payload["body"]

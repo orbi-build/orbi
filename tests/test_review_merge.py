@@ -822,6 +822,28 @@ def test_review_rounds_so_far_ignores_untrusted_comments():
     assert runner.review_rounds_so_far(mixed) == 1
 
 
+def test_review_rounds_so_far_scopes_new_attempt_away_from_closed_pr_history():
+    old = _round_comment(5, pr_number=47)
+    current = _round_comment(1, pr_number=49)
+    current["body"] = current["body"].replace(
+        "run=run1", "run=deadbeef",
+    )
+    assert runner.review_rounds_so_far(
+        [old, current], run_id="deadbeef", pr_number=49,
+    ) == 1
+
+
+def test_review_rounds_so_far_keeps_budget_for_same_attempt_and_pr():
+    comments = [_round_comment(1), _round_comment(2)]
+    for comment in comments:
+        comment["body"] = comment["body"].replace(
+            "run=run1", "run=a1b2c3d4",
+        )
+    assert runner.review_rounds_so_far(
+        comments, run_id="a1b2c3d4", pr_number=4,
+    ) == 2
+
+
 # ---------------------------------------------------------------------------
 # sync_base_checkout (F1: the deployment checkout systemd executes)
 # ---------------------------------------------------------------------------
@@ -1654,7 +1676,8 @@ def test_review_and_merge_missing_verdict_raises(monkeypatch, tmp_path):
 
 def test_review_and_merge_exhausted_rounds_raises(monkeypatch, tmp_path, caplog):
     comments = [
-        {"body": f"Orbi review round {i} for PR #4: 1 blocker(s), "
+        {"body": f"<!-- orbi:run=a1b2c3d4 -->\n"
+                 f"Orbi review round {i} for PR #4: 1 blocker(s), "
                  "0 major(s). Findings: []",
          "authorAssociation": "OWNER"}
         for i in range(1, runner.MAX_REVIEW_ROUNDS + 1)
