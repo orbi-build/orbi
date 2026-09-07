@@ -1,0 +1,170 @@
+# Run Orbi with z.ai GLM 5.3 Flash
+
+This is the first article in the provider series: a copyable setup for
+running your first Orbi Issue with z.ai's OpenAI-compatible endpoint.
+
+> **Referral:** 👉 [Join z.ai now](https://z.ai/subscribe?ic=HNMJADUB4J)
+
+## What you can get for free
+
+As of **2026-09-04**, we verified one real Orbi delivery with
+`glm-5.3-flash`. That is evidence that the route works, not a promise of a
+universal free quota.
+
+The following are **not measured in this article**: the account's exact free
+allowance, whether a card is required, the exhaustion/reset behavior,
+rate-limit response, elapsed wall-clock time, and tokens or quota consumed by
+one task. These vary by account and current z.ai policy. Do not infer them
+from the model's 1M-class catalog claims or from this example.
+
+## Prerequisites
+
+You need a GitHub repository with Orbi installed and a z.ai API key. Create
+the key in the [z.ai console](https://z.ai/manage-apikey/apikey-list). Keep it
+out of Git, Issues, PRs, and journals.
+
+The endpoint and API style used here are:
+
+- endpoint: `https://api.z.ai/api/paas/v4`
+- model: `glm-5.3-flash`
+- API: `openai-completions`
+- authentication: `Authorization: Bearer <key>` (Pi sends this from `apiKey`)
+
+## Configure it
+
+Copy the provider template, or create `.orbi/pi-providers.json` with this
+complete content:
+
+```json
+{
+  "providers": {
+    "z-ai": {
+      "baseUrl": "https://api.z.ai/api/paas/v4",
+      "api": "openai-completions",
+      "apiKey": "$ZAI_API_KEY",
+      "models": [
+        {
+          "id": "glm-5.3-flash",
+          "name": "GLM 5.3 Flash",
+          "contextWindow": 131072,
+          "maxTokens": 32768
+        }
+      ]
+    }
+  }
+}
+```
+
+Create the local environment file. Replace the placeholder locally; never
+commit the resulting file:
+
+```bash
+mkdir -p .orbi
+printf '%s\n' 'ZAI_API_KEY=replace-with-your-key' > .orbi/env
+chmod 600 .orbi/env
+```
+
+Select the exact provider and model in `orbi.toml`:
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "z-ai"
+pi_model = "glm-5.3-flash"
+```
+
+For a manual tick, systemd is not loading `.orbi/env`. Export it first, then
+run Orbi using the normal command from the getting-started guide:
+
+```bash
+set -a
+. .orbi/env
+set +a
+pi --print "reply with the single word: ok"
+orbi --config orbi.toml
+```
+
+Run one real `pi --print` check before dispatching an Issue. The Runner also
+fails fast if the JSON, selected model, endpoint, or `ZAI_API_KEY` is invalid.
+
+## The real run
+
+This article reuses a delivery that was already run on **2026-09-04**; no new
+Issue was dispatched for this article:
+
+- Issue [#303](https://github.com/orbi-build/orbi/issues/303)
+- run ID: `57517638`
+- result: commit [`b81f77a`](https://github.com/orbi-build/orbi/commit/b81f77a)
+  and PR [#304](https://github.com/orbi-build/orbi/pull/304), now merged
+- implementation: 45 lines, plus 159 lines of tests and synchronized Chinese
+  and English documentation (209 lines total)
+- session evidence: 148 records, 435 KB, 11 assistant responses, 15 tool calls
+- elapsed time: **not recorded in the supplied evidence**
+- quota/tokens consumed: **not measured**
+
+A useful detail: #303 fixed a bug where an `apiKey` written as `$VAR` in
+`pi_providers` did not expand. The provider used to run this example helped
+fix the configuration path that lets providers like z.ai work.
+
+To inspect a live run, follow the journal and the run ID:
+
+```bash
+journalctl --user -u orbi@1.service -u orbi@2.service | grep 57517638
+```
+
+The PR is the delivery boundary. Orbi does not silently retry or rotate to
+another provider in the same session.
+
+## Pitfalls
+
+### Confirm the key-expansion fix
+
+PR #304 is merged, so the current `main` includes the #303 fix. If you are
+using an older Orbi checkout, `$ZAI_API_KEY` may not work; update first rather
+than putting a real key into committed JSON.
+
+### `session_pending` does not necessarily mean stuck
+
+Do not judge a run only by how long its phase has stayed unchanged. During
+`session_pending`, the model may be working intensively. Check whether the
+`.pi-session/*.jsonl` file is still growing, and use the journal's activity
+lines. A genuinely stale startup is handled by Orbi's recovery path; do not
+invent a retry loop.
+
+### Reasoning metadata is deliberately omitted
+
+The working provider template does not guess a provider-specific reasoning or
+thinking-level mapping. Do not copy Gemini's `thinkingLevelMap` into this
+file without verifying the current Pi and z.ai contracts.
+
+## When the allowance runs out
+
+The exact exhaustion message and recovery time are **not tested** here. Keep
+the failed run evidence, check the current z.ai response, and switch manually
+for the next run. There is no automatic fallback.
+
+Replace the provider file and key with another tested or explicitly
+not-tested template, then change both selectors to matching values. For
+example, the OpenRouter template uses:
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "openrouter"
+pi_model = "google/gemma-4-31b-it:free"
+```
+
+Set `OPENROUTER_API_KEY`, validate the exact entry, and run one real
+`pi --print` check before dispatching. That alternative's availability and
+quota are **not tested** in this article.
+
+## Share after publishing
+
+Suggested post (use the real evidence, not a quota promise):
+
+> We ran a real Orbi Issue with z.ai GLM 5.3 Flash: 45 lines of implementation,
+> 159 lines of tests, and a PR opened hands-free. The run produced 148 session
+> records. Configure it here:
+> https://orbi.build/apply
+
+For the complete provider catalog and current status, see the
+[provider guide](/providers). For the Chinese version of this article, see
+[用 z.ai GLM 5.3 Flash 跑 Orbi](/zh/zai-glm-5-3-flash).

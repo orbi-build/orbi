@@ -1,0 +1,154 @@
+# 用 z.ai GLM 5.3 Flash 跑 Orbi
+
+这是 provider 系列第一篇：使用 z.ai 的 OpenAI 兼容端点，让你的第一个
+Orbi Issue 真正跑起来。
+
+> **Referral：** 👉 [Join z.ai now](https://z.ai/subscribe?ic=HNMJADUB4J)
+
+## 能白嫖到什么
+
+截至 **2026-09-04**，我们用 `glm-5.3-flash` 完成过一次真实 Orbi 交付。
+这证明这条链路可用，不代表所有账号都有统一的免费额度保证。
+
+以下内容在本文中**未实测**：账号的确切免费上限、是否需要信用卡、额度耗尽
+或重置时的表现、限流响应、真实墙钟耗时，以及单个任务消耗的 token 或额度。
+这些取决于账号和 z.ai 当前政策，不能从模型目录参数或这个案例推算。
+
+## 准备工作
+
+你需要一个已安装 Orbi 的 GitHub 仓库和 z.ai API key。在
+[z.ai 控制台](https://z.ai/manage-apikey/apikey-list)创建 key。不要把它
+放进 Git、Issue、PR 或 journal。
+
+本次配置使用：
+
+- endpoint：`https://api.z.ai/api/paas/v4`
+- 模型：`glm-5.3-flash`
+- API：`openai-completions`
+- 认证：`Authorization: Bearer <key>`（Pi 会从 `apiKey` 发送）
+
+## 配置
+
+复制 provider 模板，或者创建 `.orbi/pi-providers.json`，完整内容如下：
+
+```json
+{
+  "providers": {
+    "z-ai": {
+      "baseUrl": "https://api.z.ai/api/paas/v4",
+      "api": "openai-completions",
+      "apiKey": "$ZAI_API_KEY",
+      "models": [
+        {
+          "id": "glm-5.3-flash",
+          "name": "GLM 5.3 Flash",
+          "contextWindow": 131072,
+          "maxTokens": 32768
+        }
+      ]
+    }
+  }
+}
+```
+
+创建本地环境文件。只在本机替换占位符，不要提交生成的文件：
+
+```bash
+mkdir -p .orbi
+printf '%s\n' 'ZAI_API_KEY=replace-with-your-key' > .orbi/env
+chmod 600 .orbi/env
+```
+
+在 `orbi.toml` 中选择精确的 provider 和模型：
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "z-ai"
+pi_model = "glm-5.3-flash"
+```
+
+手动 tick 时，systemd 不会加载 `.orbi/env`。先导出变量，再使用上手指南
+中的正常命令：
+
+```bash
+set -a
+. .orbi/env
+set +a
+pi --print "reply with the single word: ok"
+orbi --config orbi.toml
+```
+
+派发 Issue 前先执行一次真实的 `pi --print` 检查。Runner 也会在启动时校验
+JSON、选中的模型、endpoint 和 `ZAI_API_KEY`，不正确就 fail fast。
+
+## 真实运行
+
+本文复用 **2026-09-04** 已完成的交付，没有为本文新派发任务：
+
+- Issue [#303](https://github.com/orbi-build/orbi/issues/303)
+- run ID：`57517638`
+- 结果：commit [`b81f77a`](https://github.com/orbi-build/orbi/commit/b81f77a)
+  和 PR [#304](https://github.com/orbi-build/orbi/pull/304)，现已合并
+- 实现：45 行；另有 159 行测试和同步的中英文文档，共 209 行
+- session 证据：148 条记录、435 KB、11 次 assistant 响应、15 次工具调用
+- 耗时：**现有实测材料未记录**
+- token/额度消耗：**未实测**
+
+这个案例还有一个巧合：#303 修复的是 `pi_providers` 中写成 `$VAR` 的
+`apiKey` 无法展开的问题。正是这次使用的 provider，帮助修通了接入 z.ai
+所依赖的配置路径。
+
+查看运行时，跟踪 journal 和 run ID：
+
+```bash
+journalctl --user -u orbi@1.service -u orbi@2.service | grep 57517638
+```
+
+PR 是交付边界。Orbi 不会在同一个 session 中静默重试或自动轮换 provider。
+
+## 踩坑记录
+
+### 先确认 key 展开修复已经合并
+
+PR #304 已合并，因此当前 `main` 包含 #303 修复。如果你使用的是较旧的
+Orbi checkout，`$ZAI_API_KEY` 可能无法生效；先更新，不要把真实 key 写进
+提交的 JSON。
+
+### `session_pending` 不等于卡住
+
+不要只按 phase 停留时长判断任务是否卡住。`session_pending` 期间模型可能仍在
+密集工作。检查 `.pi-session/*.jsonl` 是否继续增长，并查看 journal 的
+activity 行。真正停滞的启动会由 Orbi 的恢复路径处理；不要自行添加无限重试。
+
+### 有意省略 reasoning 映射
+
+可用的 provider 模板没有猜测 z.ai 专用的 reasoning 或 thinking-level 映射。
+没有核实当前 Pi 和 z.ai 契约前，不要把 Gemini 的 `thinkingLevelMap` 复制过来。
+
+## 额度用完后切哪一家
+
+本文**未实测**确切的耗尽报错和恢复时间。保留失败 run 的证据，查看当前
+z.ai 返回，然后为下一次运行手动切换；Orbi 没有自动 fallback。
+
+替换 provider 文件和 key，并把两个 selector 改成匹配的值。例如 OpenRouter
+模板使用：
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "openrouter"
+pi_model = "google/gemma-4-31b-it:free"
+```
+
+设置 `OPENROUTER_API_KEY`，校验精确条目，再执行一次真实 `pi --print` 检查。
+这个替代路径的可用性和额度在本文中**未实测**。
+
+## 发布后的推广文案
+
+建议配套推文（使用真实证据，不承诺额度）：
+
+> 用 z.ai GLM 5.3 Flash 跑了一个真实 Orbi Issue：45 行实现、159 行测试，
+> AI 全程无人干预并开出 PR；本次运行留下 148 条 session 记录。配置教程：
+> https://orbi.build/apply
+
+完整 provider 清单和当前状态见 [provider 指南](/zh/providers)。英文版见
+[Run Orbi with z.ai GLM 5.3 Flash](/zai-glm-5-3-flash)。
