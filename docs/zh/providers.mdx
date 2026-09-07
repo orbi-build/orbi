@@ -17,6 +17,7 @@ pi_model = "glm-5.3-flash"
 | OpenRouter 免费层 | `openrouter.json` | `OPENROUTER_API_KEY` | `google/gemma-4-31b-it:free` | 未实测；不承诺免费目录持续可用 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | DeepSeek | `deepseek.json` | `DEEPSEEK_API_KEY` | `deepseek-chat` | 未实测 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | xAI | `xai.json` | `XAI_API_KEY` | `grok-4.20-0309` | 已根据 xAI 文档核对模型 ID；未测试额度 | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| Groq 免费档 | `groq.json` | `GROQ_API_KEY` | `groq/compound` | 2026-09-04 核对 Free Plan 限流；真实请求/usage/429 未实测 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | 本地 Qwen | `local-qwen.json` | 无（dummy key `local`） | `Qwen3.8-27B` | 本地零成本示例；需要本地 OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Cloudflare Workers AI | `cloudflare-workers-ai.json` | `CLOUDFLARE_API_TOKEN` | `@cf/meta/llama-3.1-8b-instruct-fp8` | 托管免费额度；必须在账号中核对额度 | [#318](https://github.com/orbi-build/orbi/issues/318) |
 
@@ -218,5 +219,21 @@ result: PR opened
 ```
 
 使用本页对应的模板和 secret 配置；绝不要把 OAuth token 或 API key 写入仓库、Issue、PR body 或 journal。认证失效时先用 `/login codex` 修复/重新登录；切换 provider 不会修复过期的 Codex session。
+
+## Groq 免费档
+
+把 [`groq.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/groq.json) 复制为 `.orbi/pi-providers.json`，再设置选择项和 key 引用：
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "groq"
+pi_model = "groq/compound"
+```
+
+模板使用 Groq 的 OpenAI-compatible endpoint（`api: "openai-completions"`）和 `$GROQ_API_KEY`；真实 key 放在 gitignored 的 `.orbi/env`，不要写入 JSON 或提交。
+
+根据 Groq 的[限流表](https://console.groq.com/docs/rate-limits)，`groq/compound` 的 Free Plan 行为 **30 RPM / 250 RPD / 70K TPM**（2026-09-04 核对）。这是账号限额，不是 Orbi 承诺；实际使用前应重新查看官方表。[模型目录](https://console.groq.com/docs/models)列出该模型 131,072 token 上下文和 8,192 token 最大输出。TPM 较低，适合短小、边界清晰的 coding Issue 和小修复，不适合长上下文仓库分析。
+
+额度命中时上游返回 HTTP `429`；Orbi 不会静默重试，也不会在 session 中途切换 provider。应把该 run 视为失败，保留 Issue/worktree 证据，并在下一次运行手动选择另一家已配置的 provider。[#313](https://github.com/orbi-build/orbi/issues/313)规划了按 provider 预算和 run 边界自动轮换；在该功能实现前，不要把它当作当前行为。本指南中的真实 Groq 请求、usage 计量和 429 响应**未实测**；没有脱敏证据时不要声称 Groq Issue 已跑通。
 
 完整的 OpenAI-compatible 配置见[上手指南](/zh/getting-started#path-b-a-pi_providers-file-orbi)，provider 文章系列见 [Issue #305](https://github.com/orbi-build/orbi/issues/305)。

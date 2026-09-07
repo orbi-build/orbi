@@ -1,0 +1,12 @@
+{
+  "providers": {
+    "groq": {
+      "baseUrl": "https://api.groq.com/openai/v1",
+      "api": "openai-completions",
+      "apiKey": "$GROQ_API_KEY",
+      "models": [
+        {"id": "groq/compound", "name": "Groq Compound", "contextWindow": 131072, "maxTokens": 8192}
+      ]
+    }
+  }
+}

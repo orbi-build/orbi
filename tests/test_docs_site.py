@@ -369,6 +369,24 @@ def test_docs_getting_started_documents_the_model_provider_configuration():
     )
 
 
+def test_docs_document_groq_free_plan_configuration_and_limits():
+    """Issue #317: both provider pages must document the runnable Groq
+    template, its OpenAI-compatible contract, verified Free Plan limits,
+    task fit, and the current 429/#313 boundary without claiming an
+    unimplemented automatic fallback."""
+    for slug in ("providers", "zh/providers"):
+        text = (DOCS_DIR / f"{slug}.mdx").read_text(encoding="utf-8")
+        assert "groq.json" in text
+        assert "groq/compound" in text
+        assert "openai-completions" in text
+        assert "30 RPM" in text
+        assert "250 RPD" in text
+        assert "70K TPM" in text
+        assert "429" in text
+        assert "#313" in text
+        assert "GROQ_API_KEY" in text
+
+
 def test_docs_getting_started_documents_the_full_chain_and_troubleshooting():
     """Issue #179: the smoke walkthrough must verify the FULL chain —
     picked up, implemented, tested, PR opened, independently reviewed,

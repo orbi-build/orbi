@@ -15,6 +15,7 @@ EXPECTED = {
     "openrouter": ("openrouter", "google/gemma-4-31b-it:free", "OPENROUTER_API_KEY"),
     "deepseek": ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
     "xai": ("xai", "grok-4.20-0309", "XAI_API_KEY"),
+    "groq": ("groq", "groq/compound", "GROQ_API_KEY"),
     "local-qwen": ("local-qwen", "Qwen3.8-27B", None),
     "cloudflare-workers-ai": (
         "cloudflare-workers-ai", "@cf/meta/llama-3.1-8b-instruct-fp8", "CLOUDFLARE_API_TOKEN",
