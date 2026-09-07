@@ -363,6 +363,85 @@ def test_merge_gate_rejects_failed_status_context(monkeypatch, tmp_path):
         )
 
 
+def test_review_ci_gate_passes_success_neutral_and_skipped(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append(command) or json.dumps([
+            {"name": "tests", "status": "completed", "conclusion": "success"},
+            {"name": "docs", "status": "completed", "conclusion": "neutral"},
+            {"name": "deploy", "status": "completed", "conclusion": "skipped"},
+        ]),
+    )
+    assert runner.check_review_ci("owner/repo", "head-green", wait_seconds=10) == (
+        "CI on review head head-green: 3 check(s) all success/neutral/skipped"
+    )
+    assert calls[0][2] == "repos/owner/repo/commits/head-green/check-runs"
+
+
+def test_review_ci_gate_fails_with_run_reference(monkeypatch):
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([{
+            "name": "tests", "status": "completed", "conclusion": "failure",
+            "html_url": "https://github.com/owner/repo/actions/runs/42",
+        }]),
+    )
+    with pytest.raises(RuntimeError, match="actions/runs/42"):
+        runner.check_review_ci("owner/repo", "head-red", wait_seconds=10)
+
+
+@pytest.mark.parametrize("reference", [
+    {"details_url": "https://github.com/owner/repo/actions/runs/43"},
+    {},
+])
+def test_review_ci_gate_reports_any_failure_reference(monkeypatch, reference):
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([{
+            "name": "tests", "status": "completed", "conclusion": "failure",
+            **reference,
+        }]),
+    )
+    with pytest.raises(RuntimeError) as error:
+        runner.check_review_ci("owner/repo", "head-red", wait_seconds=10)
+    assert (reference.get("details_url") or "no run URL") in str(error.value)
+
+
+def test_review_ci_gate_times_out_pending_checks(monkeypatch):
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([{
+            "name": "tests", "status": "in_progress", "conclusion": None,
+        }]),
+    )
+    monkeypatch.setattr(runner, "time", Mock(sleep=Mock()))
+    with pytest.raises(RuntimeError, match="timed out"):
+        runner.check_review_ci("owner/repo", "head-pending", wait_seconds=0)
+
+
+def test_review_ci_gate_allows_no_checks_with_evidence(monkeypatch):
+    monkeypatch.setattr(runner, "run_command", lambda *a, **k: "[]")
+    assert runner.check_review_ci("owner/repo", "head-none", wait_seconds=10) == (
+        "CI on review head head-none: no check runs (nothing to gate)"
+    )
+
+
+def test_review_ci_gate_polls_the_current_head(monkeypatch):
+    heads = iter([
+        [{"name": "tests", "status": "in_progress", "conclusion": None}],
+        [{"name": "tests", "status": "completed", "conclusion": "success"}],
+    ])
+    seen = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: seen.append(command) or json.dumps(next(heads)),
+    )
+    monkeypatch.setattr(runner.time, "sleep", lambda seconds: None)
+    runner.check_review_ci("owner/repo", "new-head", wait_seconds=30)
+    assert all(any("new-head" in item for item in command) for command in seen)
+
+
 def test_check_delivery_ci_distinguishes_pr_failure_from_base(
         monkeypatch):
     responses = {
@@ -1573,9 +1652,12 @@ def test_review_and_merge_ci_failure_labels_fix_needed(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
     monkeypatch.setattr(
-        runner, "merge_gate",
+        runner, "check_review_ci",
         lambda *a, **k: (_ for _ in ()).throw(
-            RuntimeError("delivery gate: CI check 'tests' failed"),
+            RuntimeError(
+                "review gate: CI check 'tests' failed "
+                "(https://github.com/owner/repo/actions/runs/42)"
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -1594,6 +1676,7 @@ def test_review_and_merge_ci_failure_labels_fix_needed(monkeypatch, tmp_path):
         "owner/repo", 4, title="Review task", priority="normal",
     ) is False
     assert "CI merge gate blocked" in calls[0][1]
+    assert "actions/runs/42" in calls[0][1]
     assert calls[2] == ("edit", {"repo": "owner/repo", "add": "ai-fix-needed",
                                  "remove": "ai-pr-opened"})
 

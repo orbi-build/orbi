@@ -1394,6 +1394,9 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
         "head_ref": "h", "head_oid": "h1",
     })
     monkeypatch.setattr(runner, "run_review", lambda *a, **k: verdict)
+    # CI-as-gate is exercised in test_review_merge; keep this fixture focused
+    # on ProgressPublisher's bypass behavior.
+    monkeypatch.setattr(runner, "check_review_ci", lambda *a, **k: "ci ok")
     edits = []
     monkeypatch.setattr(
         runner, "edit_issue",
