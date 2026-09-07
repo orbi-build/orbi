@@ -1,0 +1,89 @@
+# OpenCode provider
+
+OpenCode is a Pi provider integration. This page is linked from the provider Epic [#305](https://github.com/orbi-build/orbi/issues/305) and records observations from **Pi 0.85.1 on 2026-09-07**. OpenCode’s catalog and plan terms can change.
+
+## Verified before configuring Orbi
+
+The installed Pi CLI help names `OPENCODE_API_KEY` as the credential for “OpenCode Zen/OpenCode Go”. However, the current local catalog command:
+
+```bash
+timeout 30 pi --list-models
+```
+
+returned no `opencode` provider row (only `local-qwen`, `openai-codex`, `xai`, and `zai` rows). The auth check was:
+
+```bash
+timeout 30 pi auth check --provider opencode --json --no-refresh
+```
+
+and returned:
+
+```json
+{"status":"not_ready","provider":"opencode","reason":"credentials_not_configured"}
+```
+
+This is the authoritative state of this measurement: **there is no currently verified `pi_provider`/`pi_model` pair to copy from this installation**. Do not invent a model id or add an OpenCode entry to `pi_providers.json`. After upgrading or refreshing Pi, repeat `pi update --models` and `pi --list-models opencode`; use only the exact pair printed by that installation.
+
+Pi documents model selection with `--provider`/`--model` and custom providers through `models.json`; Orbi’s corresponding selectors are `pi_provider` and `pi_model` ([getting started](/getting-started)).
+
+## Authentication
+
+There are two different tools named here:
+
+1. **OpenCode application:** OpenCode’s official provider guide says to use its `/connect` command, select OpenCode Zen, visit [opencode.ai/auth](https://opencode.ai/auth), sign in, add billing details, copy the API key, and paste it back. OpenCode stores that credential in `~/.local/share/opencode/auth.json`.
+2. **Pi:** Pi’s native auth command recognizes `OPENCODE_API_KEY`. In Pi’s interactive TUI, use `/login` only if the current Pi version offers OpenCode in the provider picker; otherwise export the key or configure the private environment used by Orbi:
+
+   ```bash
+   export OPENCODE_API_KEY='...'
+   timeout 30 pi auth check --provider opencode --json
+   ```
+
+Do not assume that OpenCode’s own `auth.json` is read by Pi. Do not put the key in Git, an Issue, a journal, a PR, or a committed JSON file. The commands above are verified against the installed Pi 0.85.1 help and OpenCode’s official provider documentation.
+
+## Catalog and Orbi configuration
+
+Because the current Pi catalog has no OpenCode row, leave `pi_provider` and `pi_model` unset until the catalog is refreshed and authenticated. Once `pi --list-models opencode` prints a row, configure the exact values it prints, for example:
+
+```toml
+# Replace both placeholders with the current Pi catalog values.
+pi_provider = "opencode"
+pi_model = "<model id printed by pi --list-models opencode>"
+```
+
+Then validate the real selection with:
+
+```bash
+timeout 30 pi --list-models opencode
+timeout 120 pi --provider opencode --model '<model id>' --no-session -p 'reply with OK'
+```
+
+The second command is a real provider request, not merely configuration validation. This checkout has no OpenCode credential, so that request was **not run successfully**.
+
+### Do not create `pi_providers.json`
+
+OpenCode is intended to be Pi-native when it appears in Pi’s catalog. Do not duplicate it with an OpenAI-compatible endpoint or a copied model list: that can pin stale metadata and does not reproduce Pi’s native auth behavior. Only use `pi_providers` for a provider that is absent from Pi’s native catalog and whose endpoint/model contract has been independently verified.
+
+## Quota, limits, reset, and errors
+
+**Account/plan boundary:** no OpenCode account was available for this measurement. Therefore no numeric quota, rate limit, reset time, billing promise, successful request, quota consumption, or Orbi PR is claimed here. Check the OpenCode account’s current plan and billing page before budgeting work; never infer limits from a model name.
+
+Observed without credentials: `pi auth check` returned `credentials_not_configured` and exit code 1. For an authenticated run, preserve the provider’s actual HTTP status and message in local troubleshooting evidence. A quota or rate-limit response is a failed model request; Orbi must not mark that run successful or silently retry it. This page contains **no real OpenCode Orbi delivery evidence**: no journal provider/model, run id, PR URL, or elapsed time was produced.
+
+## Smallest fallback
+
+Keep the Runner and Issue unchanged. Switch only the provider selection (and the required secret/config file):
+
+```diff
+-pi_provider = "opencode"
+-pi_model = "<current OpenCode catalog model>"
++pi_providers = ".orbi/pi-providers.json"
++pi_provider = "z-ai"
++pi_model = "glm-5.3-flash"
+```
+
+Copy `templates/pi-providers/z-ai.json` to `.orbi/pi-providers.json` and put `ZAI_API_KEY` in the private `.orbi/env`. For local Qwen, use `templates/pi-providers/local-qwen.json` and its exact model id (`kiwen1.1:27b` in the current local catalog), not an OpenCode model id. See [provider templates](/providers) and [getting started](/getting-started).
+
+## Sources
+
+- [OpenCode official provider guide](https://opencode.ai/docs/providers/)
+- Pi CLI `pi --help`, `pi auth --help`, `pi --list-models`, and `pi auth check` (measured 2026-09-07)

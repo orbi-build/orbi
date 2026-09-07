@@ -1,0 +1,89 @@
+# OpenCode provider
+
+OpenCode 是 Pi 的 provider 集成。本页挂在 provider Epic [#305](https://github.com/orbi-build/orbi/issues/305) 下，记录 **2026-09-07 使用 Pi 0.85.1** 的观察结果。OpenCode 的目录和套餐条款可能变化。
+
+## 配置前的实测
+
+已安装的 Pi CLI 帮助将 `OPENCODE_API_KEY` 列为 “OpenCode Zen/OpenCode Go” 的凭据变量。但当前目录命令：
+
+```bash
+timeout 30 pi --list-models
+```
+
+没有返回 `opencode` provider 行（只返回 `local-qwen`、`openai-codex`、`xai` 和 `zai` 行）。认证检查：
+
+```bash
+timeout 30 pi auth check --provider opencode --json --no-refresh
+```
+
+返回：
+
+```json
+{"status":"not_ready","provider":"opencode","reason":"credentials_not_configured"}
+```
+
+这就是本次测量的权威状态：**当前安装没有可验证、可直接复制的 `pi_provider`/`pi_model` 对**。不要臆造 model id，也不要在 `pi_providers.json` 中添加 OpenCode 条目。升级或刷新 Pi 后，重新执行 `pi update --models` 和 `pi --list-models opencode`，只使用该安装实际打印的精确值。
+
+Pi 用 `--provider`/`--model` 选择模型，并通过 `models.json` 支持自定义 provider；Orbi 对应的配置项是 `pi_provider` 和 `pi_model`，详见[上手指南](/zh/getting-started)。
+
+## 认证
+
+这里有两个不同的工具：
+
+1. **OpenCode 应用本身：** OpenCode 官方 provider 文档要求使用 `/connect`，选择 OpenCode Zen，访问 [opencode.ai/auth](https://opencode.ai/auth)，登录、添加账单信息、复制 API key，再粘贴回去。OpenCode 将凭据保存到 `~/.local/share/opencode/auth.json`。
+2. **Pi：** Pi 原生认证命令识别 `OPENCODE_API_KEY`。在 Pi 交互 TUI 中，只有当前 Pi 版本的 provider 选择器出现 OpenCode 时才使用 `/login`；否则导出 key，或配置 Orbi 使用的私有环境：
+
+   ```bash
+   export OPENCODE_API_KEY='...'
+   timeout 30 pi auth check --provider opencode --json
+   ```
+
+不要假设 Pi 会读取 OpenCode 自己的 `auth.json`。不要把 key 放入 Git、Issue、journal、PR 或已提交的 JSON。上述命令依据已安装 Pi 0.85.1 的帮助和 OpenCode 官方 provider 文档核对过。
+
+## 目录与 Orbi 配置
+
+由于当前 Pi 目录没有 OpenCode 行，在目录刷新并认证前请不要设置 `pi_provider` 或 `pi_model`。当 `pi --list-models opencode` 打印出行后，使用它打印的精确值，例如：
+
+```toml
+# 两个占位符都必须替换为当前 Pi catalog 的实际值。
+pi_provider = "opencode"
+pi_model = "<pi --list-models opencode 打印的 model id>"
+```
+
+然后验证真实选择：
+
+```bash
+timeout 30 pi --list-models opencode
+timeout 120 pi --provider opencode --model '<model id>' --no-session -p 'reply with OK'
+```
+
+第二条命令是真实 provider 请求，不只是配置校验。本工作区没有 OpenCode 凭据，因此**没有成功运行**该请求。
+
+### 不要创建 `pi_providers.json`
+
+当 OpenCode 出现在 Pi 目录中时，它应走 Pi 原生支持。不要用 OpenAI-compatible endpoint 或复制的模型列表重复定义它：这样会固定过期的元数据，也不能复现 Pi 原生认证。只有 Pi 原生目录没有某 provider，且其 endpoint/model 契约已独立核实，才使用 `pi_providers`。
+
+## 额度、限流、重置和错误
+
+**账号/套餐边界：** 本次没有可用的 OpenCode 账号。因此不声称任何数字额度、限流、重置时间、计费承诺、成功请求、额度消耗或 Orbi PR。预算任务前查看 OpenCode 账号当前套餐和账单页面；绝不能从 model 名称推断限制。
+
+无凭据时实测到的错误是：`pi auth check` 返回 `credentials_not_configured`，退出码为 1。认证后的运行应在本地排障证据中保留 provider 返回的真实 HTTP 状态和消息。额度或限流响应属于模型请求失败；Orbi 不得将该 run 标为成功，也不得静默重试。本页**没有真实 OpenCode Orbi delivery 证据**：没有产生 journal provider/model、run id、PR URL 或耗时。
+
+## 最小切换方案
+
+保持 Runner 和 Issue 不变，只切换 provider 选择（以及所需的 secret/配置文件）：
+
+```diff
+-pi_provider = "opencode"
+-pi_model = "<当前 OpenCode catalog model>"
++pi_providers = ".orbi/pi-providers.json"
++pi_provider = "z-ai"
++pi_model = "glm-5.3-flash"
+```
+
+将 `templates/pi-providers/z-ai.json` 复制为 `.orbi/pi-providers.json`，并把 `ZAI_API_KEY` 放入私有 `.orbi/env`。切到本地 Qwen 时使用 `templates/pi-providers/local-qwen.json` 及其精确 model id（当前本地目录为 `kiwen1.1:27b`），不要使用 OpenCode model id。参见[provider 模板](/zh/providers)和[上手指南](/zh/getting-started)。
+
+## 来源
+
+- [OpenCode 官方 provider 文档](https://opencode.ai/docs/providers/)
+- Pi CLI 的 `pi --help`、`pi auth --help`、`pi --list-models` 和 `pi auth check`（2026-09-07 实测）
