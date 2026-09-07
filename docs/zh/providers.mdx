@@ -51,6 +51,68 @@ pi_model = "glm-5.3-flash"
 
 不要为 provider 猜测完整映射。Gemini 模板的已知安全写法正是 `{"off": null}`：其他 thinking level 使用 provider 默认映射。若把所有 level 都映射成 `null`，可能发送 provider 不支持的值并得到 `400`。其他 provider 若没有经过 Pi provider 契约验证，应省略此字段。
 
+### Google Gemini：AI Studio 免费层
+
+在 Google 的 [AI Studio API key 页面](https://aistudio.google.com/app/apikey) 创建 API key。key 只保存在本机：提交的模板只引用 `GOOGLE_API_KEY`，不要把真实值写入 Git、Issue、PR 或 journal。
+
+1. 在 AI Studio 创建或选择 key，然后写入 Orbi 使用的 gitignored 环境文件：
+
+   ```bash
+   mkdir -p .orbi
+   printf '%s\n' 'GOOGLE_API_KEY=replace-me' > .orbi/env
+   chmod 600 .orbi/env
+   ```
+
+   已安装的 systemd unit 会加载 `.orbi/env`。手动 tick 时，先按[上手指南](/zh/getting-started#path-b-a-pi_providers-file-orbi)导出变量。
+2. 将 [`templates/pi-providers/gemini.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/gemini.json) 复制为 `.orbi/pi-providers.json`。其中完整的选中条目如下：
+
+   ```json
+   {
+     "providers": {
+       "google": {
+         "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+         "api": "google-generative-ai",
+         "apiKey": "$GOOGLE_API_KEY",
+         "models": [
+           {
+             "id": "gemini-3.8-flash",
+             "name": "Gemini 3.8 Flash",
+             "contextWindow": 1048576,
+             "maxTokens": 65536,
+             "thinkingLevelMap": {"off": null}
+           }
+         ]
+       }
+     }
+   }
+   ```
+
+3. 在 `orbi.toml` 中选择精确的 provider 和 model：
+
+   ```toml
+   pi_providers = ".orbi/pi-providers.json"
+   pi_provider = "google"
+   pi_model = "gemini-3.8-flash"
+   ```
+
+   `api`、`baseUrl`、model ID 和 `$GOOGLE_API_KEY` 引用都是已验证模板的一部分。除非重新核实当前 Pi/Gemini 契约，否则保持 Gemini 的 `thinkingLevelMap` 为 `{"off": null}`；把所有 thinking level 都映射为 `null` 可能导致上游 `400`。
+
+#### 免费层限流与实测表现
+
+截至 **2026-09-04** 核实，AI Studio Gemini API 免费层按 RPM、RPD、TPM 限流。官方[限流页面](https://ai.google.dev/gemini-api/docs/rate-limits)是动态页面，因此本文不抄写会变化的宣传数字。该账号真实的每日 RPD/TPD 上限**未测量**，应标为**未实测**，不能理解为不限量。
+
+本机使用 provider `google` 和 model `gemini-3.8-flash` 的真实 Pi 请求约 15 秒起跑。burst 后上游返回 HTTP `429`，消息为 `You exceeded your current quota`；约 50 分钟后再次返回 HTTP `200`。这条有日期的观察说明是暂时性限流，不能证明 key 无效，也不能证明每日额度已耗尽。它只是一个账号的证据，不是额度保证。
+
+Orbi 不会在 session 中静默重试或切换 provider。保留失败 run 的证据，等待暂时性限流恢复，或在下一次运行手动选择另一家已配置的 provider：
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "z-ai"       # 或清单中的其他 provider
+pi_model = "glm-5.3-flash"
+```
+
+替换 provider 文件和匹配的环境变量，再次验证精确的 provider/model/key，然后执行一次真实 `pi --print` 检查。切换必须手动完成；[#313](https://github.com/orbi-build/orbi/issues/313)规划的按 provider 自动轮换尚不是当前行为。
+
 ### z.ai GLM：体验/免费额度
 
 如果 z.ai 账号有体验或免费额度，可使用这条路径。z.ai 提供 OpenAI-compatible API；Orbi 模板使用直连 endpoint `https://api.z.ai/api/paas/v4` 和 Pi 的 `openai-completions` API。key 获取流程以 z.ai 的 [API 快速开始](https://docs.z.ai/guides/overview/quick-start) 和 [API key 管理页](https://z.ai/manage-apikey/apikey-list)为准。页面可能变化；不要把 key 写入仓库、Issue、PR 或 journal。
