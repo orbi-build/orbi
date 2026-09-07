@@ -1,0 +1,48 @@
+# v0.3.4 release (latest)
+
+`v0.3.4` was published 2026-09-07T00:29:38Z as the GitHub Release [v0.3.4](https://github.com/orbi-build/orbi/releases/tag/v0.3.4) (release task: Issue #467).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.3.4` | annotated tag `68abb2b17e229dd7f699508acfce29f84ad4f545` | commit `18760817a08397e64d94a054475ab8b670632c4b` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- Enhancement: release 状态机 version_file 支持多生态版本载体（gradle/maven/go/rust/composer/pubspec） ([Issue #468](https://github.com/orbi-build/orbi/issues/468); [PR #470](https://github.com/orbi-build/orbi/pull/470))
+
+### Reliability and recovery
+
+- Bug：release 状态机硬编码 pyproject.toml——非 Python 仓库发布必炸（orbi-cloud v0.5.0 发布实测，#21 ai-blocked） ([Issue #466](https://github.com/orbi-build/orbi/issues/466); [PR #469](https://github.com/orbi-build/orbi/pull/469))
+
+### Bug fixes
+
+- CI failure: tests on branch main (push) ([Issue #471](https://github.com/orbi-build/orbi/issues/471); [PR #472](https://github.com/orbi-build/orbi/pull/472))
+
+- tag: `v0.3.4`
+- release commit: `18760817a08397e64d94a054475ab8b670632c4b`
+- release task: Issue #467
+
+## Scope (verified item by item)
+
+- Issue #466 closed
+- Issue #468 closed
+- Issue #471 closed
+- NOT released (still open in milestone v0.3.4): open Issue #467 Release task：发布 v0.3.4 并完成远端交付对账
+
+## Pre-release gates
+
+- no open Issue carries ai-in-progress / ai-pr-opened / ai-fix-needed
+- CI on the release commit: 4 check(s) all success/neutral/skipped (waited 270s for pending checks)
+- no open PR targets main
+
+## Tests
+
+- declared test command and tiered coverage gate (line/branch >= 95%, Issue #234) passed in a clean worktree at 18760817a08397e64d94a054475ab8b670632c4b (timeout 1800s)
+
+run_id=950d1bfc
