@@ -353,6 +353,15 @@ class PreExistingCIFailure(UnrecoverableDeliveryError):
     """
 
 
+class ReviewRoundsExhausted(UnrecoverableDeliveryError):
+    """Expected terminal stop after the bounded review/fix budget.
+
+    This remains an exception internally so the existing delivery cleanup
+    path performs the terminal label/comment transition, but it is not a
+    Runner failure and must not be logged with a traceback.
+    """
+
+
 def is_unrecoverable_failure(exc: BaseException) -> bool:
     """Issue #50: classify one delivery failure.
 
@@ -7486,14 +7495,15 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     rounds = review_rounds_so_far(comments)
     if rounds >= MAX_REVIEW_ROUNDS:
         LOGGER.error(
-            "review_rounds_exhausted issue=%s rounds=%s",
+            "review_rounds_exhausted issue=%s rounds=%s "
+            "terminal=expected_human_decision",
             number, rounds,
         )
         # Issue #50: the loop is bounded by MAX_REVIEW_ROUNDS on purpose
         # — after 5 rounds without a clean verdict the remaining findings
         # need a human decision, so the AI cannot safely continue this PR
         # (the explicit reason the blocked comment must carry).
-        raise UnrecoverableDeliveryError(
+        raise ReviewRoundsExhausted(
             f"review/fix loop exhausted after {MAX_REVIEW_ROUNDS} rounds "
             "without a clean verdict; the bounded loop is a human "
             "decision, so the AI cannot safely continue this PR"
@@ -8972,10 +8982,23 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     title=title, priority=priority,
                 )
             except Exception as exc:
-                LOGGER.exception(
-                    "issue=%s delivery_review_failed pr=%s", number, pr_url,
-                )
                 detail = _failure_detail(exc)
+                if isinstance(exc, ReviewRoundsExhausted):
+                    # The bounded budget is an intentional human decision
+                    # point, not a Runner bug. Keep the structured event and
+                    # terminal handling below, but do not emit a traceback.
+                    LOGGER.error(
+                        "review_rounds_exhausted_expected_terminal issue=%s "
+                        "pr=%s reason=%s",
+                        number, pr_url, detail,
+                    )
+                else:
+                    # Real delivery failures retain traceback evidence for
+                    # health monitoring and diagnosis.
+                    LOGGER.exception(
+                        "issue=%s delivery_review_failed pr=%s", number, pr_url,
+                    )
+
                 evidence = _failure_evidence(worktree, exc)
                 if is_unrecoverable_failure(exc):
                     # Issue #50: the ONLY opened-PR failure that leaves
