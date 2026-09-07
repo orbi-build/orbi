@@ -64,6 +64,7 @@ from orbi.pi_recovery import (
     clk_tck,
     find_idle_descendants,
     pid_alive,
+    process_ppid,
     process_start_monotonic,
     signal_pid,
     slots_idle,
@@ -4796,13 +4797,37 @@ def _pending_timeout_targets(targets: list[dict]) -> list[tuple[dict, float]]:
     hz = clk_tck()
     now_mono = time.monotonic()
     now = time.time()
+    starts = {
+        target["pid"]: process_start_monotonic(target["pid"], hz=hz)
+        for target in targets
+    }
+    durations = {
+        target["pid"]: timeout_duration(target["cmdline"] or "")
+        for target in targets
+    }
+    # coreutils timeout forks the actual tool. The child has no `timeout`
+    # token in its command line, but it is still governed by the wrapper's
+    # deadline and must not be mistaken for a hung tool.
+    wrapper_deadlines = {
+        pid: (start, durations[pid])
+        for pid, start in starts.items()
+        if start is not None and durations[pid] is not None
+    }
     pending: list[tuple[dict, float]] = []
     for target in targets:
-        start_mono = process_start_monotonic(target["pid"], hz=hz)
-        if start_mono is None:
-            continue
-        duration = timeout_duration(target["cmdline"] or "")
+        pid = target["pid"]
+        start_mono = starts[pid]
+        duration = durations[pid]
         if duration is None:
+            parent = process_ppid(pid)
+            if parent not in wrapper_deadlines:
+                continue
+            # The wrapper itself is the single wait record. Keeping the
+            # delegated child out of the result avoids duplicate evidence;
+            # the non-empty wrapper result also protects the child from
+            # escalation while its wrapper is inside the deadline.
+            continue
+        if start_mono is None:
             continue
         remaining = duration - (now_mono - start_mono)
         if remaining > 0:

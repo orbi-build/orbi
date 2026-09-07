@@ -7873,6 +7873,7 @@ def test_pending_timeout_targets_unit(tmp_path, monkeypatch):
         return now_mono - 9.0  # started 9 s ago, timeout 5 s (passed)
 
     monkeypatch.setattr(runner, "process_start_monotonic", fake_start)
+    monkeypatch.setattr(runner, "process_ppid", lambda pid: None)
     targets = [
         {"pid": 1, "cmdline": "timeout 5 pytest"},
         {"pid": 2, "cmdline": "timeout 5 pytest"},
@@ -7885,6 +7886,22 @@ def test_pending_timeout_targets_unit(tmp_path, monkeypatch):
     (target, deadline) = pending[0]
     assert target["pid"] == 2
     assert time.time() + 3.0 < deadline < time.time() + 5.0
+    # A child process delegated to the timeout wrapper inherits its
+    # wrapper's deadline, even though its own command line has no
+    # `timeout` token.
+    monkeypatch.setattr(
+        runner, "process_ppid", lambda pid: 10 if pid == 11 else None,
+    )
+    monkeypatch.setattr(
+        runner, "process_start_monotonic",
+        lambda pid, *, hz: now_mono - 1.0,
+    )
+    pending = runner._pending_timeout_targets([
+        {"pid": 10, "cmdline": "timeout 5 sleep 300"},
+        {"pid": 11, "cmdline": "sleep 300"},
+    ])
+    assert [target["pid"] for target, _ in pending] == [10]
+
     # An empty target list is a no-op.
     assert runner._pending_timeout_targets([]) == []
 
