@@ -53,4 +53,72 @@ Do not invent a complete map for a provider. Gemini's known-safe template form i
 
 A local OpenAI-compatible server still needs a non-empty `apiKey` field to satisfy the provider shape; the local template uses the non-secret dummy value `local`. Its model id must match the server's advertised id (for llama.cpp, set it with `--alias`).
 
-See [Getting started](/getting-started#path-b-a-pi_providers-file-orbi-manages-the-selection) for the existing end-to-end setup and [Issue #305](https://github.com/orbi-build/orbi/issues/305) for the free-quota article series.
+## Codex OAuth: use a ChatGPT/Codex subscription
+
+This path uses Pi's native `openai-codex` provider and OAuth credentials. It does **not** use `OPENAI_API_KEY` and it does **not** need a second `pi_providers` JSON file. It is subscription/Codex quota, not OpenAI API billing.
+
+### First login: do this in order
+
+1. Start an interactive Pi session with `pi`.
+2. At the Pi prompt, run **`/login codex`**.
+3. Complete the Codex OAuth authorization in the browser.
+4. Return to Pi and verify the login with the command supported by the current Pi CLI:
+
+   ```bash
+   pi auth check --provider openai-codex --model gpt-5.6-luna --json
+   ```
+
+   A successful check reports `"status":"ready"` and `"authType":"oauth"`. This command refreshes expired OAuth credentials by default; do not use `--credentials` in a shared terminal or transcript.
+5. Only after the check succeeds, configure Orbi and run a real Issue.
+
+### Minimal Orbi configuration
+
+Delete `pi_providers` if it exists; leave it **unset**. Do not copy or create an `openai-codex` provider entry. Pi supplies the catalog from its own `models.json`, and Orbi's per-run agent directory reuses Pi's native auth.
+
+```toml
+source_repos = ["OWNER/YOUR-REPO"]
+repo_dir = "/path/to/your-repo"
+workspace_root = "/path/to"
+base_branch = "main"
+max_concurrency = 1
+
+# No pi_providers = ... line.
+pi_provider = "openai-codex"
+pi_model = "gpt-5.6-luna"
+```
+
+Pi's catalog checked on **2026-09-07** lists this model as `openai-codex-responses` at `https://chatgpt.com/backend-api`, with reasoning enabled, text/image input, a 272,000-token context window, and a 128,000-token output limit. Its catalog thinking map supports `minimal → low`, `xhigh → xhigh`, and `max → max`; leave `pi_thinking` unset for the default, or set one of those verified levels. These are Pi request limits, not a promise about subscription quota.
+
+### Quota and billing boundary
+
+The OAuth credential consumes the user's Codex/ChatGPT subscription allowance. It is separate from an OpenAI API key, API organization billing, and any `OPENAI_API_KEY` balance. Pi's catalog `cost` fields are routing metadata, **not a bill or quota counter**. Allowance, reset time, rate limits, model availability, and error messages depend on the account plan and can change. The 2026-09-05 real-run evidence was from one local account; the account plan and its exact allowance were not recorded, so this guide makes no universal quota claim. On exhaustion or throttling, expect an upstream auth/rate-limit failure in the Pi session and consult the account's current Codex UI/help; do not infer remaining quota from the catalog.
+
+### Real Issue evidence to retain
+
+Run the first Issue in the user's own repository, then retain the non-secret evidence. A successful run should show all of these:
+
+```text
+journal: provider=openai-codex model=gpt-5.6-luna run_id=<run-id>
+PR: https://github.com/OWNER/YOUR-REPO/pull/<number>
+elapsed: <duration>
+result: PR opened (then review/merge according to the normal Orbi flow)
+```
+
+The Orbi run verified on **2026-09-05** reached the configuration/runtime boundary and emitted `provider=openai-codex model=gpt-5.6-luna`; attach that run's journal and the resulting PR URL when reproducing it. Never paste the session JSONL wholesale: redact credentials and prompts that contain secrets.
+
+### Switch providers when quota or auth fails
+
+Remove or replace only the selectors. For a provider from an Orbi template, add its file back because the fallback is no longer Pi-native:
+
+```diff
+-# no pi_providers line
+-pi_provider = "openai-codex"
+-pi_model = "gpt-5.6-luna"
++pi_providers = ".orbi/pi-providers.json"
++pi_provider = "local-qwen"       # or "z-ai"
++pi_model = "Qwen3.8-27B"        # or the model id in that file
+```
+
+Use the matching template and secret setup in this guide; never put an OAuth token or API key in the repository, an Issue, a PR body, or a journal. For an auth failure, fix/re-login with `/login codex` first; switching providers does not repair an expired Codex session.
+
+See [Getting started](/getting-started#path-b-a-pi_providers-file-orbi) for the existing OpenAI-compatible setup and [Issue #305](https://github.com/orbi-build/orbi/issues/305) for the provider article series.
