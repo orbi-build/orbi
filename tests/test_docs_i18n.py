@@ -107,6 +107,20 @@ def en_page_stems() -> set[str]:
     }
 
 
+def test_chinese_quickstart_is_the_same_five_step_topic_as_english():
+    """Issue #308: the quickstart has one translated page and the same
+    five-step skeleton in both languages."""
+    english = (DOCS_DIR / "quickstart.mdx").read_text(encoding="utf-8")
+    chinese = zh_page_text("quickstart")
+    assert len(re.findall(r"^## [1-5]\.", english, re.MULTILINE)) == 5
+    assert len(re.findall(r"^## [1-5]\.", chinese, re.MULTILINE)) == 5
+    for text in (english, chinese):
+        assert "z-ai" in text
+        assert "pi_providers" in text
+        assert "ZAI_API_KEY" in text
+        assert "getting-started" in text
+
+
 def test_chinese_docs_entry_and_every_required_topic_page_exist():
     """A Chinese user starting from the docs home must find the entry
     (index) and every core topic (Issue #116 requirement list)."""

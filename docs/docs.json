@@ -15,6 +15,7 @@
             "group": "Getting Started",
             "pages": [
               "index",
+              "quickstart",
               "getting-started",
               "providers",
               "ollama-pro",
@@ -65,6 +66,7 @@
             "group": "快速开始",
             "pages": [
               "zh/index",
+              "zh/quickstart",
               "zh/getting-started",
               "zh/providers",
               "zh/ollama-pro",

@@ -222,6 +222,27 @@ def test_docs_navigation_uses_the_verified_i18n_languages_layout():
     assert not overlap, f"page paths duplicated across languages: {sorted(overlap)}"
 
 
+def test_docs_ship_the_five_step_quickstart_in_both_languages():
+    """Issue #308: the conversion path is independent from the reference
+    getting-started page, fixed to the validated z.ai provider route, and
+    contains exactly five numbered steps in each language."""
+    en = (DOCS_DIR / "quickstart.mdx").read_text(encoding="utf-8")
+    zh = (DOCS_DIR / "zh" / "quickstart.mdx").read_text(encoding="utf-8")
+    for text in (en, zh):
+        assert "getting-started" in text
+        assert "未做完整实测" in text or "not fully tested" in text or "尚未由真实新人" in text
+        assert "z-ai" in text
+        assert "ZAI_API_KEY" in text
+        assert "pi_providers" in text
+        assert "_load_pi_providers" in text
+        assert "成功判据" in text or "Success" in text
+        assert "失败" in text or "If it fails" in text
+        assert len(re.findall(r"^## [1-5]\.", text, re.MULTILINE)) == 5
+        assert not re.search(r"^## 6\.", text, re.MULTILINE)
+    assert "curl -LsSf https://raw.githubusercontent.com/orbi-build/orbi/main/install.sh | bash" in en
+    assert "curl -LsSf https://raw.githubusercontent.com/orbi-build/orbi/main/install.sh | bash" in zh
+
+
 def test_docs_navigation_matches_the_actual_pages_exactly():
     """KISS: one group per topic per language, every page listed once, no
     orphan page outside the navigation and no navigation entry without a
