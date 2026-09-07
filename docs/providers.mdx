@@ -51,6 +51,68 @@ A template being listed is not a promise of quota, availability, speed, or model
 
 Do not invent a complete map for a provider. Gemini's known-safe template form is exactly `{"off": null}`: other thinking levels use the provider default mapping. A copied `null` mapping for every level can send an unsupported value and produce a provider `400`. For another provider, omit the field unless its Pi provider contract has been verified.
 
+### Google Gemini: AI Studio free tier
+
+Use Google's [AI Studio API key page](https://aistudio.google.com/app/apikey) to create an API key. Keep the key local: the committed template references `GOOGLE_API_KEY`, so the literal value never belongs in Git, an Issue, a PR, or a journal.
+
+1. Create or select a key in AI Studio, then add it to the gitignored environment file used by Orbi:
+
+   ```bash
+   mkdir -p .orbi
+   printf '%s\n' 'GOOGLE_API_KEY=replace-me' > .orbi/env
+   chmod 600 .orbi/env
+   ```
+
+   The installed systemd unit loads `.orbi/env`. For a manual tick, export it first as described in [Getting started](/getting-started#path-b-a-pi_providers-file-orbi).
+2. Copy [`templates/pi-providers/gemini.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/gemini.json) to `.orbi/pi-providers.json`. Its complete selected entry is:
+
+   ```json
+   {
+     "providers": {
+       "google": {
+         "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+         "api": "google-generative-ai",
+         "apiKey": "$GOOGLE_API_KEY",
+         "models": [
+           {
+             "id": "gemini-3.8-flash",
+             "name": "Gemini 3.8 Flash",
+             "contextWindow": 1048576,
+             "maxTokens": 65536,
+             "thinkingLevelMap": {"off": null}
+           }
+         ]
+       }
+     }
+   }
+   ```
+
+3. Select the exact provider and model in `orbi.toml`:
+
+   ```toml
+   pi_providers = ".orbi/pi-providers.json"
+   pi_provider = "google"
+   pi_model = "gemini-3.8-flash"
+   ```
+
+   The `api`, `baseUrl`, model ID, and `$GOOGLE_API_KEY` reference are part of the validated template. Keep Gemini's `thinkingLevelMap` exactly as `{"off": null}` unless the installed Pi/Gemini contract is re-verified; mapping every thinking level to `null` can cause an upstream `400`.
+
+#### Free-tier limits and observed behavior
+
+As checked on **2026-09-04**, AI Studio's Gemini API free tier is rate-limited by RPM, RPD, and TPM. The official [rate-limit page](https://ai.google.dev/gemini-api/docs/rate-limits) is dynamic, so this guide does not copy a changing promotional number. The real daily RPD/TPD ceiling for this account was **not measured**; treat it as **not tested**, not as unlimited.
+
+A local setup using provider `google` and model `gemini-3.8-flash` started a real Pi request in about 15 seconds. After a burst, the upstream returned HTTP `429` with `You exceeded your current quota`; after roughly 50 minutes it returned HTTP `200` again. This dated observation indicates transient rate limiting, not proof that the key was invalid or that the daily allowance was exhausted. It is one account's evidence, not a quota guarantee.
+
+Orbi does not silently retry or switch providers mid-session. Preserve the failed run evidence, wait for the transient limit to recover, or manually select another configured provider for the next run:
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "z-ai"       # or another provider in the catalog
+pi_model = "glm-5.3-flash"
+```
+
+Replace the provider file and matching environment variable, validate the exact provider/model/key again, and then run one real `pi --print` check. Switching is manual; the automatic per-provider rotation tracked in [#313](https://github.com/orbi-build/orbi/issues/313) is not current behavior.
+
 ### z.ai GLM: experience/free quota
 
 Use this path when you have a z.ai account with an experience or free allowance. z.ai documents an OpenAI-compatible API; Orbi's template uses the direct endpoint `https://api.z.ai/api/paas/v4` and Pi's `openai-completions` API. See z.ai's [API quick start](https://docs.z.ai/guides/overview/quick-start) and [API-key management](https://z.ai/manage-apikey/apikey-list) for the current account and key-creation flow. The links and UI may change; do not paste the key into a repository, Issue, PR, or journal.
