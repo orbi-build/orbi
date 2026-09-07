@@ -1,0 +1,114 @@
+# Ollama Pro cloud models
+
+This guide is for Ollama's hosted cloud models (including an Ollama Pro subscription), not a local Ollama or llama.cpp server. It records the verified integration boundary as of **2026-09-07**.
+
+<Note>
+No Ollama cloud account was available for this delivery. The subscription plan's quota, rate limits, model availability for a particular account, and the resulting Orbi run were **not tested**. Do not read the examples below as a promise of free or unlimited capacity.
+</Note>
+
+## What was verified first
+
+The installed Pi is **0.85.1**. Its catalog (`pi --list-models`) contains no `ollama` provider, and `pi auth check --provider ollama --json --no-refresh` returns `{"status":"not_ready","provider":"ollama","reason":"provider_not_found"}`. Therefore:
+
+- Pi's built-in provider and `/login` flow are **not** the Ollama path in this version.
+- Do not invent an Ollama entry in Pi's OAuth credentials or assume that `pi login` authorizes Ollama.
+- Orbi must use Pi's custom `models.json`-shaped `pi_providers` file, with Ollama's OpenAI-compatible cloud endpoint and an API-key reference.
+
+This conclusion is also consistent with Ollama's official docs: local/cloud CLI use starts with `ollama signin`, while direct access to `ollama.com` creates an API key at [Ollama settings/keys](https://ollama.com/settings/keys). Ollama's OpenAI compatibility documentation gives `https://ollama.com/v1` as the cloud base URL. Sources: [Cloud](https://docs.ollama.com/cloud), [API](https://docs.ollama.com/api), and [OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility).
+
+## Prepare Ollama access
+
+1. Sign in or create an account at [ollama.com](https://ollama.com). If you also use the local Ollama CLI, its documented preparation command is:
+
+   ```bash
+   ollama signin
+   ```
+
+   This is not a Pi or Orbi login command.
+2. Create an API key at [ollama.com/settings/keys](https://ollama.com/settings/keys). The key is account secret material; never paste it into this repository, an Issue, a log, or a commit.
+3. Put the key in the local, gitignored environment file used by Orbi/systemd:
+
+   ```bash
+   mkdir -p .orbi
+   printf '%s\n' 'OLLAMA_API_KEY=replace-with-your-key' > .orbi/env
+   chmod 600 .orbi/env
+   ```
+
+4. Check the account's current catalog instead of copying a model name from this article. Ollama documents this authenticated endpoint:
+
+   ```bash
+   set -a; . .orbi/env; set +a
+   curl -fsS https://ollama.com/api/tags \
+     -H "Authorization: Bearer $OLLAMA_API_KEY"
+   ```
+
+   The response is the account/API catalog at the time of the request. The official cloud example uses `gpt-oss:120b` for direct API access; it is an example, not a quota or availability guarantee. A local CLI cloud tag such as `gpt-oss:120b-cloud` is not automatically the same model ID for the direct API.
+
+## Minimal Orbi configuration
+
+Because Pi 0.85.1 does not have an Ollama provider, create a small local provider file in the documented Pi `models.json` shape. The file may be uncommitted and can contain only the model you selected from `/api/tags`:
+
+`.orbi/pi-providers.json`:
+
+```json
+{
+  "providers": {
+    "ollama-pro": {
+      "baseUrl": "https://ollama.com/v1",
+      "api": "openai-completions",
+      "apiKey": "$OLLAMA_API_KEY",
+      "models": [
+        {
+          "id": "gpt-oss:120b",
+          "name": "Ollama cloud model (verify in /api/tags)",
+          "contextWindow": 131072,
+          "maxTokens": 16384
+        }
+      ]
+    }
+  }
+}
+```
+
+Replace the model `id` with an exact ID returned for your account. Then select it in `orbi.toml`:
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "ollama-pro"
+pi_model = "gpt-oss:120b"
+```
+
+The key remains only in `.orbi/env`; systemd loads that file through `EnvironmentFile`. For a manual tick, export the file first:
+
+```bash
+set -a; . .orbi/env; set +a
+PYTHONPATH=src python3 -m orbi.runner --config orbi.toml
+```
+
+Run Orbi's config validation before claiming the provider works. It fail-fast checks the provider, exact model, endpoint, API, and referenced environment variable. Do not add the same provider to a second JSON file or to Pi's built-in auth store.
+
+## Quota, errors, and evidence boundary
+
+Ollama's public docs identify cloud models and API-key authentication, but do not establish a fixed Ollama Pro quota that Orbi can promise. This delivery has no Ollama Pro account, so quota/limit behavior, plan entitlements, account-specific model visibility, and a successful Orbi Issue are **待用户自行验证 / not tested**. Record only the date, plan, selected model, and redacted command/result if a user performs that test; never record the key.
+
+An authentication or quota failure can appear as an HTTP/API error from Ollama and is surfaced by Pi/Orbi as a failed model request. Do not silently retry it or call that run successful. Check the redacted log for the provider/model and the upstream status, then either correct the key/catalog or switch providers.
+
+## Smallest fallback diff
+
+Keep the runner and task unchanged. Change only the selected provider/model and, if needed, the secret in `.orbi/env`:
+
+```diff
+-pi_provider = "ollama-pro"
+-pi_model = "gpt-oss:120b"
++pi_provider = "local-qwen"
++pi_model = "Qwen3.8-27B"
+```
+
+For z.ai, Codex, or another existing template, use its exact provider/model pair from [Providers](/providers) and change only the corresponding `pi_provider`, `pi_model`, and local secret reference. The fallback is not a guarantee that its quota is available.
+
+## Security checklist
+
+- Keep `.orbi/env` and any local `.orbi/pi-providers.json` out of Git; use `$OLLAMA_API_KEY`, never the literal key, in JSON.
+- Do not put a key in an Issue, PR, session transcript, shell history, or diagnostic log.
+- Treat model IDs and HTTP status messages as safe to share only after removing authorization headers and response data.
+- Ollama Pro subscription validity and quotas can change; re-check the official catalog and plan terms before a production task.
