@@ -9350,6 +9350,18 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
                 pr=pr_url, commit=commit,
             ),
         )
+        # Issue #266: the delivered outcome breaks any failure streak of
+        # this Issue in the health history (the streak-break contract of
+        # `repeated_failure_findings`). Pure bypass: a state-write
+        # failure never changes the delivery outcome.
+        try:
+            runner_health.record_run_attempt(
+                runner_health.health_state_path(config["repo_dir"]),
+                repo=source_repo, issue=number, run_id=run_id,
+                outcome="pr_opened", fingerprint="",
+            )
+        except Exception:
+            LOGGER.exception("issue=%s health_success_record_failed", number)
         return IssueResult("pr", pr_url)
     except (ModelWaitDeadError, RecoverablePiFailure) as exc:
         # Issue #227/#325: classified Pi/model infrastructure failures are
@@ -9406,6 +9418,21 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
                 "branch, worktree)"
             ))),
         )
+        # Issue #266: the recoverable failure reaches the health history
+        # exactly like the terminal one — the resume loop retries the
+        # same dead end, which IS the repeating-dead-end scene the
+        # self-health check exists to catch (#246). Without this record
+        # the #227 recovery path is invisible to it. Pure bypass: a
+        # state-write failure never changes the delivery outcome.
+        try:
+            runner_health.record_run_attempt(
+                runner_health.health_state_path(config["repo_dir"]),
+                repo=source_repo, issue=number, run_id=run_id,
+                outcome="failed",
+                fingerprint=runner_health.failure_fingerprint(exc),
+            )
+        except Exception:
+            LOGGER.exception("issue=%s health_failure_record_failed", number)
         return IssueResult("failed", None)
     except Exception as exc:
         LOGGER.exception("issue=%s failed", number)
