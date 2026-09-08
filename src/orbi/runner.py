@@ -616,12 +616,6 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     base_branch = data.get("base_branch", "main")
     if not isinstance(base_branch, str) or not base_branch:
         raise ValueError("base_branch must be a non-empty string")
-    # The delivery target's base branch is independent from the branch of
-    # the Orbi engine checkout running this process.  Most deployments use
-    # main for both, but a target such as website may legitimately use beta.
-    source_branch = data.get("source_branch", "main")
-    if not isinstance(source_branch, str) or not source_branch:
-        raise ValueError("source_branch must be a non-empty string")
     # Claim scope (Issue #139): the active Milestone is an EXPLICIT
     # version scope for the fresh-claim scans — it is never guessed
     # from the repo's Milestone list. Absent (None) keeps the current
@@ -643,7 +637,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     if not isinstance(auto_next_milestone, bool):
         raise ValueError("auto_next_milestone must be a boolean")
     # Startup source freshness (Issue #525): the Runner refuses to claim
-    # when the code it executes is not the origin/<source_branch> head.
+    # when the code it executes is not the origin/main head.
     # This flag is the EXPLICIT degraded mode for offline/restricted-
     # network deployments — it only downgrades the gate to a warning,
     # never skips it. Default False = fail fast.
@@ -784,7 +778,6 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
             _config_path(item, base) for item in data.get("context_files", [])
         ],
         "base_branch": base_branch,
-        "source_branch": source_branch,
         "active_milestone": active_milestone,
         "auto_repair_issues": auto_repair_issues,
         "auto_next_milestone": auto_next_milestone,
@@ -7991,7 +7984,7 @@ def refresh_cli_install(
 # checkout" are different facts. This gate judges the IMPORT SOURCE of
 # the running process (cli_source.module_file), never the
 # WorkingDirectory. All probes are LOCAL git reads: the freshness of
-# ``refs/remotes/origin/<engine-source>`` is supplied by the ExecStartPre
+# ``refs/remotes/origin/main`` is supplied by the ExecStartPre
 # fetch (a linked worktree shares the deployment checkout's refs), so a
 # fresh checkout costs zero network requests. The self-check can only protect
 # versions that carry it — the outermost defense stays the shell-layer
@@ -8002,7 +7995,7 @@ RUNNER_SOURCE_TIMEOUT_SECONDS = 30
 
 class RunnerSourceStaleError(RuntimeError):
     """The running CLI source is not proven to be the
-    ``origin/<source_branch>`` head (fail fast, before any slot or claim)."""
+    ``origin/main`` head (fail fast, before any slot or claim)."""
 
 
 def _parse_release_version(value: str) -> tuple[int, ...] | None:
@@ -8053,7 +8046,7 @@ def _runner_source_stale_line(facts: dict, *, allowed: bool, fix: str) -> str:
 
 def check_runner_source_freshness(config: dict, *, run_command) -> dict:
     """Startup invariant (Issue #525): prove that the code THIS process
-    executes is the fetched ``origin/<source_branch>`` head BEFORE any slot
+    executes is the fetched ``origin/main`` head BEFORE any slot
     or claim. A stale (or unverifiable) source fails fast with the
     structured ``runner_source_stale`` line (facts + the exact fix
     command, the ``deploy_home_dirty`` style); the explicit
@@ -8065,12 +8058,12 @@ def check_runner_source_freshness(config: dict, *, run_command) -> dict:
       resolves a checkout, and the checkout carries the src-layout
       package path (a $HOME dotfiles repo never matches ``src/orbi``,
       so it cannot fake an editable install) — then the checkout's
-      ``HEAD`` must equal its ``refs/remotes/origin/<source_branch>`` ref. The
+      ``HEAD`` must equal its ``refs/remotes/origin/main`` ref. The
       09-07 scene (an editable install bound to an old issue worktree)
       fails here: worktrees share the fetched remote-tracking ref.
     - non-editable: the installed distribution version
       (importlib.metadata) must not be older than the latest release tag
-      reachable from the fetched engine source ref (resolved in the deployment
+      reachable from the fetched origin/main ref (resolved in the deployment
       home). Version equality or newer passes (a dev install ahead of
       the tags is not stale).
 
@@ -8079,7 +8072,10 @@ def check_runner_source_freshness(config: dict, *, run_command) -> dict:
     field — never a silent pass. Returns the fresh-facts dict; raises
     ``RunnerSourceStaleError`` unless ``allow_stale_runner`` is set.
     """
-    engine_source_branch = config.get("source_branch", "main")
+    # The engine checkout is always the Orbi repository's main branch.
+    # ``base_branch`` belongs to the delivery target and must not affect
+    # this independent freshness check.
+    engine_source_branch = "main"
     delivery_base_branch = config["base_branch"]
     base_ref = f"refs/remotes/origin/{engine_source_branch}"
     deploy_home = Path(config["deploy_home"])
@@ -10070,7 +10066,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     # Startup source freshness (Issue #525): BEFORE any slot or claim,
     # prove that the code THIS process executes is the fetched
-    # origin/<source_branch> head (the import source's checkout HEAD for
+    # origin/main head (the import source's checkout HEAD for
     # an editable install, the installed version vs the latest release
     # tag for a non-editable one — all local git reads). The 09-07
     # incident: the editable install resolved into an old issue

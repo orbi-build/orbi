@@ -5,7 +5,7 @@ worktree while the ExecStartPre preflight kept the deployment checkout
 fresh — the Runner executed stale code while every delivery looked
 up-to-date (fresh base_sha, stale engine). The startup invariant: before
 any slot or claim, the checkout the RUNNING process imports `orbi` from
-must be exactly the fetched ``origin/<base_branch>`` ref (editable form),
+must be exactly the fetched ``origin/main`` ref (editable form),
 or the installed distribution version must not be older than the latest
 release tag reachable from that ref (non-editable form).
 
@@ -129,7 +129,7 @@ def test_fresh_editable_checkout_uses_engine_branch_for_all_delivery_targets(
     assert info["engine_source_branch"] == "main"
     assert info["delivery_base_branch"] == delivery_base
     assert info["origin_main"] == new
-    assert f"engine_source_branch=main" in caplog.text
+    assert "engine_source_branch=main" in caplog.text
     assert f"delivery_base_branch={delivery_base}" in caplog.text
 
 
@@ -313,37 +313,6 @@ def test_parse_release_version_handles_tags_and_rejects_noise():
 
 
 # --- config field ----------------------------------------------------------------
-
-
-def test_load_config_source_branch_defaults_to_main(tmp_path):
-    config = tmp_path / "orbi.toml"
-    config.write_text(
-        'source_repos = ["owner/repo"]\nbase_branch = "beta"\n',
-        encoding="utf-8",
-    )
-    loaded = runner.load_config(config, check_provider_api_keys=False)
-    assert loaded["base_branch"] == "beta"
-    assert loaded["source_branch"] == "main"
-
-
-def test_load_config_source_branch_can_be_explicit(tmp_path):
-    config = tmp_path / "orbi.toml"
-    config.write_text(
-        'source_repos = ["owner/repo"]\nsource_branch = "stable"\n',
-        encoding="utf-8",
-    )
-    loaded = runner.load_config(config, check_provider_api_keys=False)
-    assert loaded["source_branch"] == "stable"
-
-
-def test_load_config_source_branch_rejects_empty(tmp_path):
-    config = tmp_path / "orbi.toml"
-    config.write_text(
-        'source_repos = ["owner/repo"]\nsource_branch = ""\n',
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="source_branch"):
-        runner.load_config(config, check_provider_api_keys=False)
 
 
 def test_load_config_allow_stale_runner_defaults_false(tmp_path):

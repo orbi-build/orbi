@@ -137,12 +137,11 @@ checkout 根目录**没有** `orbi.py`（与 package 同名的 flat 文件
 | `workspace_root` | 否 | `..` | 包含任务 worktree 和 agent 可修改仓库的目录 |
 | `prompt` | 否 | `prompts/prompt.md` | 实现者 prompt 模板（`{{SOURCE_REPO}}` 等占位符由 Runner 渲染） |
 | `prompt_review` | 否 | `prompts/prompt_review.md` | PR 后独立审查 session 的 review prompt 模板 |
-| `base_branch` | 否 | `main` | 交付目标 base 分支；每个任务 worktree 都从冻结的 `origin/<base_branch>` SHA 创建 |
-| `source_branch` | 否 | `main` | Orbi engine 源码分支，用于新鲜度检查；独立于交付 `base_branch`（例如 website 可使用 `beta`） |
+| `base_branch` | 否 | `main` | 交付 base 分支；每个任务 worktree 都从冻结的 `origin/<base_branch>` SHA 创建 |
 | `active_milestone` | 否 | 未设置 | 新领取扫描的领取范围（Issue #139）：当前活跃的 GitHub Milestone 标题（如 `v0.2.0`）。设置后 p0/bug/普通三个 ready 扫描只领取该 Milestone 的 Issue（`milestone:"<title>"` 限定词直接进 gh 搜索查询——其他 Milestone 或无 Milestone 的 Issue 永远进不了队列）；`ai-ready` 仍是执行开关，领取顺序（p0 → bug → 普通）不变，P0 不跨 Milestone，恢复态（已开 PR、在途重启）不受 Milestone 限制。未设置 = 所有 `ai-ready` Issue 都可领取（#139 之前的行为） |
 | `auto_next_milestone` | 否 | `true` | 当前 Milestone 关闭且队列为空时是否自动推进。`false` 保持 `active_milestone` 不变，记录待确认告警并创建一个不带 `ai-ready` 或 `p0`、不会被领取的确认 Issue；人工推进后旧通知会自动关闭。非法值立即失败 |
 | `max_concurrency` | 否 | `1` | 本机并发 Orbi 任务数和启用的 Runner timer 数（`1` 或 `2`；固定模板有两个实例） |
-| `allow_stale_runner` | 否 | `false` | Runner 执行代码新鲜度门禁的离线逃生口（Issue #525）：领取任何 Issue 之前，Runner 必须证明自己执行的代码与已 fetch 的 `origin/<source_branch>` 一致（editable 安装看 import 所在 checkout 的 `HEAD`；非 editable 看安装版本与最新 release tag——全部是本地 git 读操作）。落后或无法证明时输出结构化 `runner_source_stale` 行（事实 + 修复命令）并 fail fast。`true` 把同一行降级为告警放行，供离线/受限网络机器继续运行——绝不跳过检查。非法值立即失败 |
+| `allow_stale_runner` | 否 | `false` | Runner 执行代码新鲜度门禁的离线逃生口（Issue #525）：领取任何 Issue 之前，Runner 必须证明自己执行的代码与已 fetch 的 `origin/<base_branch>` 一致（editable 安装看 import 所在 checkout 的 `HEAD`；非 editable 看安装版本与最新 release tag——全部是本地 git 读操作）。落后或无法证明时输出结构化 `runner_source_stale` 行（事实 + 修复命令）并 fail fast。`true` 把同一行降级为告警放行，供离线/受限网络机器继续运行——绝不跳过检查。非法值立即失败 |
 | `model_wait_dead_seconds` | 否 | `1800` | 模型请求挂死阈值（Issue #228）：`model_wait` 静默多少秒后 Runner 杀掉 Pi 会话并 fail fast。字段语义（完整事件之间的静默、慢生成边界）：[运维](/zh/operations) 的 `model_wait_dead` journal 行。必须是有限正数，否则启动 fail fast |
 | `model_wait_probe_url` | 否 | 未设置 | 模型吞请求探针（Issue #233）：模型的 `/slots` 端点（如 `http://127.0.0.1:18082/slots`，agent 面向的端口——local-llm-kv-cache 代理从 llama.cpp 透传该端点）。Pi 冻结在 `model_wait` 时 Runner 探测它，所有 slot 持续 `model_wait_probe_seconds` 宽限空闲时快速杀掉 Pi 会话。字段语义（吞请求现场、旁路边界）：[运维](/zh/operations) 的 `model_wait_swallowed` journal 行。未设置 = 探针禁用（#233 之前的行为）。必须是非空 `http://`/`https://` URL，否则启动 fail fast |
 | `model_wait_probe_seconds` | 否 | `60` | 吞请求探针的持续空闲宽限（Issue #233）：`model_wait` 期间“所有 slot 空闲”状态需持续多少秒才判定请求被吞并杀掉 Pi。必须是有限正数，否则启动 fail fast |
@@ -169,7 +168,6 @@ workspace_root = ".."
 prompt = "prompts/prompt.md"
 prompt_review = "prompts/prompt_review.md"
 base_branch = "main"
-source_branch = "main"
 max_concurrency = 1
 skills = []
 context_files = []
@@ -209,7 +207,6 @@ repo_dir = "/path/to/user-repo-x"
 deploy_home = "/path/to/orbi"
 workspace_root = "/path/to"
 base_branch = "main"
-source_branch = "main"
 max_concurrency = 1
 skills = []
 context_files = []

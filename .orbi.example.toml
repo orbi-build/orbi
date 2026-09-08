@@ -29,13 +29,9 @@ prompt_review = "prompts/prompt_review.md"
 # Delivery base branch: every task worktree is created from the latest
 # origin/<base_branch> (fetched and frozen at claim time). Default: "main".
 base_branch = "main"
-# Orbi engine source branch used by the startup freshness gate. This is
-# independent of base_branch (for example, a website target may use beta
-# while the Orbi engine remains on main). Default: "main".
-source_branch = "main"
 # Offline escape hatch for the runner source freshness gate (Issue #525).
 # Before any slot or claim the Runner proves the code it executes matches
-# the fetched origin/<source_branch> (the import checkout's HEAD for an
+# the fetched origin/<base_branch> (the import checkout's HEAD for an
 # editable install; the installed version vs the latest release tag for a
 # non-editable one — local git reads only). A stale or unverifiable source
 # logs the structured `runner_source_stale` line (facts + fix) and fails
