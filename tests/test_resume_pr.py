@@ -1062,6 +1062,29 @@ def test_verify_pr_resume_rejects_stale_or_ambiguous_scene_with_evidence(
     assert any(command[:3] == ["gh", "pr", "view"] for command in commands)
 
 
+def test_verify_pr_non_resume_rejects_multiple_open_prs(
+    monkeypatch, tmp_path,
+):
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return FAKE_BRANCH
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "head"
+        if command[:3] == ["gh", "pr", "list"]:
+            return json.dumps([{"url": FAKE_PR_URL}, {"url": FAKE_PR_URL}])
+        raise AssertionError(command)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="multiple open PRs"):
+        runner.verify_pr(
+            worktree, FAKE_BRANCH, "main", FAKE_RUN_ID, issue=9,
+            repo_dir=tmp_path, require_latest_base=False,
+        )
+
+
 def test_verify_pr_resume_keeps_unknown_state_for_non_object_scene_lookup(
     monkeypatch, tmp_path,
 ):
