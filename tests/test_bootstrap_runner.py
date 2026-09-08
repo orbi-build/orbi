@@ -16292,6 +16292,49 @@ def test_sync_release_docs_is_idempotent_on_rerun(tmp_path, monkeypatch):
     assert (work / "docs" / "release-v0.4.0.mdx").read_text(encoding="utf-8") == en_before
 
 
+def test_sync_release_docs_pushes_the_local_commit_a_failed_push_left_behind(
+    tmp_path, monkeypatch,
+):
+    """上次运行 commit 成功但 push 瞬时失败的续跑现场：工作区无可暂存
+    内容 ≠ 已同步——"无暂存"有两种世界，其一（本地提交从未到达远端）
+    返回 already in sync 就是假成功：release 宣告完成而远端永远拿不到
+    release notes。无暂存时必须用 merge-base 检验 HEAD 是否真的可达
+    origin/<base>，未达则补推。"""
+    work = make_release_docs_repo(tmp_path)
+    head = git_out(work, "rev-parse", "HEAD")
+    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
+                    "-m", "rel", head], check=True, capture_output=True)
+    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
+    original = runner.run_git_network_command
+
+    def failing_push(command, **kwargs):
+        if command[:3] == ["git", "push", "origin"]:
+            raise subprocess.CalledProcessError(1, command, stderr="boom")
+        return original(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_git_network_command", failing_push)
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.sync_release_docs(
+            source_repo="o/r", repo_dir=work, worktree=work,
+            base_branch="main", tag="v0.4.0", release_commit=head,
+            issue_number=77,
+        )
+    remote_before = git_out(work, "rev-parse", "origin/main")
+    # 续跑：网络恢复。修复前这里假成功（already in sync），远端仍停在
+    # 旧提交；修复后补推本地 docs 提交。
+    monkeypatch.setattr(runner, "run_git_network_command", original)
+    evidence = runner.sync_release_docs(
+        source_repo="o/r", repo_dir=work, worktree=work,
+        base_branch="main", tag="v0.4.0", release_commit=head,
+        issue_number=77,
+    )
+    assert "pushed" in evidence
+    assert git_out(work, "rev-parse", "origin/main") != remote_before
+    assert git_out(work, "rev-parse", "origin/main") == git_out(
+        work, "rev-parse", "HEAD",
+    )
+
+
 def test_sync_release_docs_resumes_after_a_partial_step(tmp_path, monkeypatch):
     """Resume after a partial step: the pages are written and the marker
     moved, but the navigation was never updated (a crash mid-step). The
