@@ -45,9 +45,10 @@ define the User Journey with User outcome, Preconditions, Acceptance, and Eviden
 Trace the real user command/configuration through the system action to the success
 result the user sees. Include a failure path with the concrete error the user sees
 and the repair action. Unit tests are local evidence, not a substitute for the
-real user path. Match depth to impact: provider/config changes use a real provider
-check, concurrency uses contention, setup uses the setup entry point, UI uses a
-real Playwright flow, and internal refactors verify the existing public caller.
+real user path. Match depth to impact: documentation changes use the rendered
+page/preview and link checks, provider/config changes use a real provider check,
+concurrency uses contention, setup uses the setup entry point, UI uses a real
+Playwright flow, and internal refactors verify the existing public caller.
 Record the applicable success and failure evidence in tests, journal, Issue/PR, or
 UI; do not invent a database, queue, daemon, or state system for this.
 

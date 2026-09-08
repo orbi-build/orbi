@@ -66,7 +66,8 @@ path and a failure path: name the concrete error the user sees and the repair
 action. Unit tests are necessary local evidence, but do not replace the user
 path.
 
-Match depth to impact: provider changes need a real provider/configuration check;
+Match depth to impact: documentation changes need the rendered docs page/preview
+and link checks; provider changes need a real provider/configuration check;
 concurrency changes need contention; setup changes need the setup entry point; UI
 changes need a real browser flow; and pure internal refactors need the existing
 public caller and regression tests. Record evidence in tests, journal, Issue/PR,

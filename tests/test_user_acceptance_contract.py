@@ -58,6 +58,7 @@ def test_bilingual_guidance_has_matching_contract_and_impact_examples():
         for item in ("provider", "concurrency", "setup", "ui", "refactor"):
             assert item in content
         assert "success" in content and "failure" in content
+    assert "documentation" in english and "文档" in chinese
     # The same impact categories must be present in both languages; this
     # prevents the translated page from silently weakening the contract.
     for item in ("provider", "concurrency", "setup", "ui", "refactor"):

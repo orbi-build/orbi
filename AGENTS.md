@@ -39,10 +39,11 @@ replace a real user path through the affected entry point. Evidence belongs in
 the test output, journal, Issue/PR, or UI as appropriate.
 
 Match verification depth to impact rather than running an unrelated full business
-journey: provider changes use a real provider/configuration check, concurrency
-changes use a contention scenario, setup changes use the install/setup entry
-point, UI changes use a real browser flow, and pure internal refactors use the
-existing public caller and regression tests. Both success and failure paths need
+journey: documentation changes use the rendered docs page/preview and link checks,
+provider changes use a real provider/configuration check, concurrency changes use
+contention, setup changes use the install/setup entry point, UI changes use a real
+browser flow, and pure internal refactors use the existing public caller and
+regression tests. Both success and failure paths need
 observable acceptance evidence. Do not add a database, queue, daemon, or state
 system merely to make an end-to-end claim.
 
