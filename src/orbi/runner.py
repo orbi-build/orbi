@@ -2205,9 +2205,10 @@ def derive_release_scope_from_milestone(repo: str,
     release, never a guessed one.
     """
     raw = run_command([
-        "gh", "api", f"repos/{repo}/milestones?state=all", "--paginate",
+        "gh", "api", f"repos/{repo}/milestones?state=all",
+        "--paginate", "--slurp",
     ])
-    milestones = parse_issue_array(raw)
+    milestones = parse_paginated_issue_array(raw)
     matches = [
         m for m in milestones
         if isinstance(m, dict) and m.get("title") == milestone_title
@@ -2230,9 +2231,9 @@ def derive_release_scope_from_milestone(repo: str,
         raw = run_command([
             "gh", "api",
             f"repos/{repo}/issues?state={state}&milestone={number}",
-            "--paginate",
+            "--paginate", "--slurp",
         ])
-        return [item for item in parse_issue_array(raw)
+        return [item for item in parse_paginated_issue_array(raw)
                 if isinstance(item, dict)]
 
     closed_issues = [item for item in issues("closed")
@@ -2982,9 +2983,10 @@ def close_release_milestone(repo: str, version: str, *, run_id: str | None = Non
     is a failed check.
     """
     raw = run_command([
-        "gh", "api", f"repos/{repo}/milestones?state=all", "--paginate",
+        "gh", "api", f"repos/{repo}/milestones?state=all",
+        "--paginate", "--slurp",
     ])
-    milestones = parse_issue_array(raw)
+    milestones = parse_paginated_issue_array(raw)
     matches = [
         m for m in milestones
         if isinstance(m, dict) and m.get("title") == version
@@ -4562,9 +4564,10 @@ def advance_active_milestone_on_idle(
 ) -> tuple[str, str | None]:
     """Check and advance a configured milestone after no_ready_issue."""
     raw = run_command([
-        "gh", "api", f"repos/{repo}/milestones?state=all", "--paginate",
+        "gh", "api", f"repos/{repo}/milestones?state=all",
+        "--paginate", "--slurp",
     ], timeout=30)
-    milestones = parse_issue_array(raw)
+    milestones = parse_paginated_issue_array(raw)
     matches = [
         milestone for milestone in milestones
         if isinstance(milestone, dict)
