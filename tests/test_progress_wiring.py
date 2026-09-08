@@ -427,7 +427,7 @@ def test_process_issue_creates_progress_comment_with_marker(monkeypatch, tmp_pat
     # Issue #100: the issue line shows the number AND the title.
     assert "- issue: #18 Publish progress" in body
     assert "- role: implement" in body
-    assert "- branch: orbi/xqliu-orbi-issue-18-a1b2c3d4" in body
+    assert "- branch: orbi/xqliu-orbi-issue-18" in body
     assert "- PR: -" in body
 
 

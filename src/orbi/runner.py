@@ -4273,10 +4273,57 @@ def freeze_base(repo_dir: Path, base_branch: str) -> str:
     )
 
 
-def task_branch(source_repo: str, number: int, run_id: str) -> str:
-    return (
-        f"orbi/{source_repo.replace('/', '-')}-issue-{number}-{run_id}"
+def task_branch(source_repo: str, number: int, run_id: str | None = None) -> str:
+    """Return the stable remote delivery identity for one Issue.
+
+    ``run_id`` remains accepted for callers and compatibility, but is not
+    part of the branch identity: retries must converge on one GitHub branch
+    and therefore one open PR.
+    """
+    return f"orbi/{source_repo.replace('/', '-')}-issue-{number}"
+
+
+def claim_route(labels: set[str], *, branch_exists: bool,
+                open_pr: bool) -> str:
+    """Choose the fresh-claim action from the physical GitHub scene.
+
+    This is deliberately pure: labels are the event and branch/PR existence
+    is the observed physical state.  The existing review loop handles the
+    returned ``review`` route.
+    """
+    if open_pr and READY_LABEL in labels:
+        return "review"
+    if open_pr and (PR_OPENED_LABEL in labels or FIX_NEEDED_LABEL in labels):
+        return "review"
+    # An existing branch without an open PR is resumed by implementation;
+    # a missing branch is the same implementation path.
+    return "implement"
+
+
+def stable_branch_exists(repo_dir: Path, branch: str) -> bool:
+    """Return whether the stable delivery branch exists on origin."""
+    raw = run_command(
+        ["git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
+        cwd=repo_dir, timeout=GIT_NETWORK_TIMEOUT_SECONDS,
     )
+    return bool(raw.strip())
+
+
+def open_pr_for_branch(repo_dir: Path, branch: str) -> dict | None:
+    """Return the sole open PR for a branch, or None when absent."""
+    raw = run_command([
+        "gh", "pr", "list", "--state", "open", "--head", branch,
+        "--json", "number,url,baseRefName,headRefName,headRefOid",
+        "--limit", "2",
+    ], cwd=repo_dir, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
+    prs = json.loads(raw) if raw.strip() else []
+    if not isinstance(prs, list):
+        raise RuntimeError("open PR query must return an array")
+    if len(prs) > 1:
+        raise RuntimeError(
+            f"multiple open PRs for stable delivery branch {branch}"
+        )
+    return prs[0] if prs else None
 
 
 def _run_info_fields(run_info: str) -> dict[str, str]:
@@ -4789,7 +4836,8 @@ def worktree_path(repo_dir: Path, source_repo: str, number: int,
 
 def create_worktree(repo_dir: Path, source_repo: str, number: int,
                     run_id: str, base_sha: str,
-                    existing: Path | None = None) -> Path:
+                    existing: Path | None = None,
+                    existing_branch: bool = False) -> Path:
     """Create the task worktree from the frozen base SHA, never HEAD.
 
     An existing path is reused: only a resumed run (same run id after a
@@ -4805,9 +4853,28 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
     if path.exists():
         return path
     branch = task_branch(source_repo, number, run_id)
-    run_command([
-        "git", "worktree", "add", "-b", branch, str(path), base_sha,
-    ], cwd=repo_dir)
+    if existing_branch:
+        # The branch is the delivery identity.  Fetch it, then create the
+        # run-isolated worktree from its remote HEAD rather than the base.
+        run_git_network_command(
+            ["git", "fetch", "origin", branch], cwd=repo_dir,
+        )
+        local = run_command(
+            ["git", "branch", "--list", branch], cwd=repo_dir,
+        )
+        if local.strip():
+            run_command([
+                "git", "worktree", "add", "--force", str(path), branch,
+            ], cwd=repo_dir)
+        else:
+            run_command([
+                "git", "worktree", "add", "-b", branch, str(path),
+                f"origin/{branch}",
+            ], cwd=repo_dir)
+    else:
+        run_command([
+            "git", "worktree", "add", "-b", branch, str(path), base_sha,
+        ], cwd=repo_dir)
     return path
 
 
@@ -9024,7 +9091,32 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
     # Completed runs keep their worktrees as evidence but lose the
     # label, so re-claiming an issue always starts a fresh run.
     existing_worktree: Path | None = None
-    if has_in_progress_label(number, source_repo):
+    takeover_pr: dict | None = None
+    stable_branch_present = False
+    claim_labels = {
+        label.get("name") for label in issue.get("labels", [])
+        if isinstance(label, dict) and isinstance(label.get("name"), str)
+    }
+    in_progress = has_in_progress_label(number, source_repo)
+    if not in_progress and READY_LABEL in claim_labels:
+        stable_branch = task_branch(source_repo, number)
+        takeover_pr = open_pr_for_branch(config["repo_dir"], stable_branch)
+        stable_branch_present = stable_branch_exists(
+            config["repo_dir"], stable_branch,
+        )
+        route = claim_route(
+            claim_labels,
+            branch_exists=stable_branch_present,
+            open_pr=takeover_pr is not None,
+        )
+        LOGGER.info(
+            "fresh_claim_route issue=%s branch=%s route=%s open_pr=%s",
+            number, stable_branch, route, takeover_pr is not None,
+        )
+        if route == "review":
+            LOGGER.info("delivery_takeover issue=%s branch=%s pr=%s",
+                        number, stable_branch, takeover_pr.get("url"))
+    if in_progress:
         try:
             scene = worktree_resume_scene(
                 config["repo_dir"], source_repo, number,
@@ -9120,6 +9212,10 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
         worktree = create_worktree(
             config["repo_dir"], source_repo, number, run_id, base_sha,
             existing=existing_worktree,
+            # A stable branch without an open PR is the interrupted push/
+            # create gap: continue from that branch rather than trying to
+            # create a second local branch with the same name.
+            existing_branch=stable_branch_present or takeover_pr is not None,
         )
         # Issue #219: the run state file is the same-run marker —
         # written for EVERY run (a fresh one included, so a later
@@ -9170,16 +9266,17 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
                 ),
             )),
         )
-        run_pi(
-            issue, worktree, config, source_repo, branch=branch,
-            resume_context=resume_ctx,
-            progress=LiveProgressThrottle(
-                publisher, issue=number, title=title, run_id=run_id,
-                role=ROLE_IMPLEMENT, branch=branch, worktree=worktree,
-                started=started, pr_url=None, review_round=0,
-                priority=priority,
-            ),
-        )
+        if takeover_pr is None:
+            run_pi(
+                issue, worktree, config, source_repo, branch=branch,
+                resume_context=resume_ctx,
+                progress=LiveProgressThrottle(
+                    publisher, issue=number, title=title, run_id=run_id,
+                    role=ROLE_IMPLEMENT, branch=branch, worktree=worktree,
+                    started=started, pr_url=None, review_round=0,
+                    priority=priority,
+                ),
+            )
         _safe_publish(
             run_id=run_id, issue=number, source_repo=source_repo,
             role=ROLE_IMPLEMENT,
@@ -9194,10 +9291,12 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
         # freshness + absorb, plain push, PR creation, PR verification)
         # is the Runner's job — the agent stopped at the committed
         # delivery.
-        pr_url = deliver_pr(
-            worktree, branch, base_branch, base_sha, run_id,
-            issue=number, issue_title=title,
-            repo_dir=config["repo_dir"],
+        pr_url = (
+            takeover_pr["url"] if takeover_pr is not None else deliver_pr(
+                worktree, branch, base_branch, base_sha, run_id,
+                issue=number, issue_title=title,
+                repo_dir=config["repo_dir"],
+            )
         )
         commit = run_command(
             ["git", "rev-parse", "HEAD"], cwd=worktree,
@@ -9208,7 +9307,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
         # review session, which records its own round comments.)
         apply_label_patch(
             number, repo=source_repo, event=EVENT_PR_OPENED,
-            current_labels=(),
+            current_labels={IN_PROGRESS_LABEL},
         )
         pr_opened = True
         # The scene comment is NOT a bypass (Issue #79): the next

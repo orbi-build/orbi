@@ -21,7 +21,7 @@ PR_URL = "https://github.com/owner/repo/pull/46"
 RUN_ID = "a1b2c3d4"
 MARKER = f"<!-- orbi:run={RUN_ID} -->"
 WORKTREE = "/srv/repo/.worktrees/orbi-owner-repo-issue-39-a1b2c3d4"
-BRANCH = "orbi/owner-repo-issue-39-a1b2c3d4"
+BRANCH = "orbi/owner-repo-issue-39"
 
 
 @pytest.fixture(autouse=True)
@@ -616,7 +616,7 @@ def test_verify_resumed_pr_diverged_pr_head_stays_fix_needed(
     assert "Orbi needs a fix:" in body
     assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in body
     assert FAKE_PR_URL in body
-    assert "orbi/owner-repo-issue-9-a1b2c3d4" in body
+    assert "orbi/owner-repo-issue-9" in body
     assert str(expected_resume_worktree(tmp_path)) in body
     assert "the branch diverged" in body
     # ... and the fix-needed milestone (not the blocked one).
@@ -648,7 +648,7 @@ def test_verify_resumed_pr_local_ahead_of_pr_head_continues_to_review(
 
     worktree = expected_resume_worktree(tmp_path)
     worktree.mkdir(parents=True)
-    branch = f"orbi/owner-repo-issue-9-{FAKE_RUN_ID}"
+    branch = f"orbi/owner-repo-issue-9"
     local_head = "18c78a2" * 5 + "18c78a2"
     pr_head = "ed72915" * 5 + "ed72915"
 

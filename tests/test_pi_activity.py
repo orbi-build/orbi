@@ -920,12 +920,12 @@ def test_format_run_scene_is_the_full_scene_logged_once():
     scene = pi_activity.format_run_scene(
         snapshot, run_id="e07383c2",
         issue="xqliu/orbi#18", role="implement",
-        branch="orbi/xqliu-orbi-issue-18-e07383c2",
+        branch="orbi/xqliu-orbi-issue-18",
         worktree="/w",
     )
     assert scene == (
         "run=e07383c2 issue=xqliu/orbi#18 role=implement "
-        "branch=orbi/xqliu-orbi-issue-18-e07383c2 worktree=/w "
+        "branch=orbi/xqliu-orbi-issue-18 worktree=/w "
         "session=sess-1 session_file=/w/.pi-session/sess-1.jsonl phase=test "
         "last_activity=2026-01-01T00:00:02Z action=\"bash pytest tests/\" "
         "result=ok"
@@ -1037,14 +1037,14 @@ def test_parse_scene_round_trips_run_scene():
     scene = pi_activity.format_run_scene(
         snapshot, run_id="e07383c2",
         issue="xqliu/orbi#18", role="implement",
-        branch="orbi/xqliu-orbi-issue-18-e07383c2",
+        branch="orbi/xqliu-orbi-issue-18",
         worktree="/w",
     )
     fields = pi_activity.parse_scene(scene)
     assert fields["run"] == "e07383c2"
     assert fields["issue"] == "xqliu/orbi#18"
     assert fields["branch"] == (
-        "orbi/xqliu-orbi-issue-18-e07383c2"
+        "orbi/xqliu-orbi-issue-18"
     )
     assert fields["session_file"] == "/w/.pi-session/sess-1.jsonl"
     assert fields["action"] == "bash pytest tests/"

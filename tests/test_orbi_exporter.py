@@ -445,7 +445,7 @@ def test_build_metrics_labels_stay_within_allowlist():
     entries = [
         entry(100, "1",
               "INFO [eeee5555] run_start run=eeee5555 issue=xqliu/orbi#162 "
-              "role=implement branch=orbi/xqliu-orbi-issue-162-eeee5555 "
+              "role=implement branch=orbi/xqliu-orbi-issue-162 "
               "worktree=/home/x/w session=- session_file=- phase=starting "
               "last_activity=- action=- result=-"),
         entry(200, "1",

@@ -146,9 +146,17 @@ elif args[:2] == ["issue", "view"]:
 elif args[:2] == ["pr", "list"]:
     branch = args[args.index("--head") + 1]
     head = git("rev-parse", "HEAD")
-    # Branch shape: orbi-owner-repo-issue-<n>-<run_id>.
-    issue_num = branch.rsplit("-", 2)[1]
-    run_id = branch.rsplit("-", 1)[1]
+    # Stable delivery branch shape: orbi-owner-repo-issue-<n>.
+    issue_num = branch.split("-issue-", 1)[1]
+    # Standalone verification may run before the delivery path writes its
+    # state file; normal delivery calls still provide their real run id.
+    state_path = os.path.join(os.getcwd(), ".orbi", "run-state.json")
+    try:
+        with open(state_path, encoding="utf-8") as f:
+            run_id = json.load(f)["run_id"]
+    except FileNotFoundError:
+        # The ref hammer supplies this fixed id to verify_pr.
+        run_id = "01234567"
     print(json.dumps([{
         "number": 99,
         "url": "https://github.com/owner/repo/pull/99",
@@ -964,7 +972,7 @@ def _run_ref_hammer(
     worktree = clone / ".worktrees" / \
         "orbi-owner-repo-issue-9-01234567"
     git(clone, "worktree", "add", "-b",
-        "orbi/owner-repo-issue-9-01234567", str(worktree), "HEAD")
+        "orbi/owner-repo-issue-9", str(worktree), "HEAD")
     if base_sha is None:
         base_sha = git(clone, "rev-parse", "HEAD")
 
@@ -1011,7 +1019,7 @@ def _run_ref_hammer(
                     clone, "owner/repo", number, "01234567", base_sha,
                 )
                 runner.verify_pr(
-                    worktree, "orbi/owner-repo-issue-9-01234567",
+                    worktree, "orbi/owner-repo-issue-9",
                     "main", "01234567", repo_dir=clone, issue=9,
                     require_latest_base=False,
                 )

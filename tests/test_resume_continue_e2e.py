@@ -368,7 +368,7 @@ def test_e2e_restart_continues_on_the_uncommitted_work(
     assert not worktree_for(clone, REPO, "b2c3d4e5").exists()
     assert git(
         worktree, "branch", "--show-current",
-    ) == f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-a1b2c3d4"
+    ) == f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}"
 
     # The new session RECEIVED the resume context (the existing work),
     # and the agent continued it: the committed work.txt carries BOTH
@@ -432,7 +432,7 @@ def test_e2e_repo_rename_finds_the_old_worktree_by_issue_and_name(
     # continues, never a second one.
     assert git(
         worktree, "branch", "--show-current",
-    ) == f"orbi/{RENAME_OLD.replace('/', '-')}-issue-{ISSUE_NUMBER}-a1b2c3d4"
+    ) == f"orbi/{RENAME_OLD.replace('/', '-')}-issue-{ISSUE_NUMBER}"
     # The continued work landed on the ORIGINAL branch.
     committed = git(worktree, "show", "HEAD:work.txt")
     assert committed == "part-1\npart-2"
