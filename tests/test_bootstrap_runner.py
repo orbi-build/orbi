@@ -7993,6 +7993,13 @@ def test_pending_timeout_targets_unit(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runner, "process_start_monotonic", fake_start)
     monkeypatch.setattr(runner, "process_ppid", lambda pid: None)
+    boot_clock = getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC)
+    monkeypatch.setattr(
+        runner.time, "clock_gettime",
+        lambda clock: now_mono if clock == boot_clock else pytest.fail(
+            f"unexpected clock: {clock}"
+        ),
+    )
     targets = [
         {"pid": 1, "cmdline": "timeout 5 pytest"},
         {"pid": 2, "cmdline": "timeout 5 pytest"},

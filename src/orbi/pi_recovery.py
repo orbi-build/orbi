@@ -122,14 +122,11 @@ def process_start_epoch(pid: int, *, btime: float, hz: float) -> float | None:
 
 
 def process_start_monotonic(pid: int, *, hz: float) -> float | None:
-    """The process age offset in MONOTONIC seconds since boot.
+    """The process start offset in the boot-time clock domain.
 
     stat field 22 (starttime, ticks since boot) converted with `hz`.
-    The value is compared against `time.monotonic()`, never against the
-    realtime epoch (Issue #169): a realtime step after boot (NTP)
-    must not skew a process's age — `process_start_epoch` (btime plus
-    the same ticks) is the realtime-flavoured view used by the
-    pre-idle check, this is the clock-consistent one.
+    Callers comparing this value must use CLOCK_BOOTTIME too, because
+    CLOCK_MONOTONIC stops during suspend (Issue #169).
     """
     raw = _read_stat(pid)
     if raw is None:
