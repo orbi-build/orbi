@@ -209,21 +209,33 @@ def timeout_duration(cmdline: str) -> float | None:
     wrapper in the command line, or None when the command has no clear
     timeout (Issue #169).
 
-    The wrapper word must stand alone (`timeout`, or an absolute path
-    to it) and the duration must be the IMMEDIATE next token — the
-    prompt contract form `timeout <seconds> ...`. Anything else
-    (options in between, a missing/unparseable duration, the word
-    inside a longer token) is not a clear timeout: the existing
-    recovery behavior applies (fail-safe, never a fabricated deadline).
+    The wrapper must BE the command: the prompt contract form
+    `timeout <seconds> ...`, or the `bash -c` payload form the Pi bash
+    tool actually spawns (`bash -c timeout <seconds> ...`). Anywhere
+    else the `timeout <number>` pair is data, not a deadline — a commit
+    message (`git commit -m "fix timeout 300 regression"` joins to
+    `... -m fix timeout 300 regression` on the real cmdline), an echo
+    argument, a pytest -k expression — and reading a deadline off it
+    would make the runner WAIT for a wrapper that does not exist.
+    Anything not matching the contract (options in between, a
+    missing/unparseable duration, a wrapper buried deeper in a compound
+    command) is not a clear timeout: the existing recovery behavior
+    applies (fail-safe, never a fabricated deadline).
     """
     tokens = cmdline.split()
-    for index, token in enumerate(tokens):
-        if token.rsplit("/", 1)[-1] != "timeout":
-            continue
-        if index + 1 >= len(tokens):
-            return None
-        return _parse_duration(tokens[index + 1])
-    return None
+    wrapper_index: int | None = None
+    if tokens and tokens[0].rsplit("/", 1)[-1] == "timeout":
+        wrapper_index = 0
+    elif (
+        len(tokens) >= 3
+        and tokens[0].rsplit("/", 1)[-1] == "bash"
+        and tokens[1] == "-c"
+        and tokens[2].rsplit("/", 1)[-1] == "timeout"
+    ):
+        wrapper_index = 2
+    if wrapper_index is None or wrapper_index + 1 >= len(tokens):
+        return None
+    return _parse_duration(tokens[wrapper_index + 1])
 
 
 # /proc/net/tcp socket states that still hold a live connection to a
