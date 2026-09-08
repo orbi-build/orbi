@@ -71,6 +71,7 @@ KNOWN_CONFIG_FIELDS = frozenset({
     "prompt",
     "prompt_review",
     "base_branch",
+    "source_branch",
     # Issue #139: the active Milestone claim scope (optional string).
     "active_milestone",
     "max_concurrency",

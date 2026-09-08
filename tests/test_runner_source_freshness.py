@@ -109,6 +109,30 @@ def gate_config(deploy_home: Path, **extra) -> dict:
 # --- editable install form ----------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("delivery_target", "delivery_base"),
+    [("core", "main"), ("cloud", "main"), ("website", "beta")],
+)
+def test_fresh_editable_checkout_uses_engine_branch_for_all_delivery_targets(
+    monkeypatch, tmp_path, caplog, delivery_target, delivery_base,
+):
+    """The engine freshness ref stays main even when a delivery target uses
+    a different base branch (the website beta incident)."""
+    repo, old, new = build_stale_repo(tmp_path, delivery_target)
+    git(repo, "reset", "--hard", new)
+    point_module_file(monkeypatch, repo)
+    with caplog.at_level("INFO"):
+        info = runner.check_runner_source_freshness(
+            gate_config(repo, base_branch=delivery_base),
+            run_command=recording_run_command([]),
+        )
+    assert info["engine_source_branch"] == "main"
+    assert info["delivery_base_branch"] == delivery_base
+    assert info["origin_main"] == new
+    assert f"engine_source_branch=main" in caplog.text
+    assert f"delivery_base_branch={delivery_base}" in caplog.text
+
+
 def test_fresh_editable_checkout_passes_with_only_local_git(
     monkeypatch, tmp_path,
 ):
@@ -289,6 +313,37 @@ def test_parse_release_version_handles_tags_and_rejects_noise():
 
 
 # --- config field ----------------------------------------------------------------
+
+
+def test_load_config_source_branch_defaults_to_main(tmp_path):
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nbase_branch = "beta"\n',
+        encoding="utf-8",
+    )
+    loaded = runner.load_config(config, check_provider_api_keys=False)
+    assert loaded["base_branch"] == "beta"
+    assert loaded["source_branch"] == "main"
+
+
+def test_load_config_source_branch_can_be_explicit(tmp_path):
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nsource_branch = "stable"\n',
+        encoding="utf-8",
+    )
+    loaded = runner.load_config(config, check_provider_api_keys=False)
+    assert loaded["source_branch"] == "stable"
+
+
+def test_load_config_source_branch_rejects_empty(tmp_path):
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nsource_branch = ""\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="source_branch"):
+        runner.load_config(config, check_provider_api_keys=False)
 
 
 def test_load_config_allow_stale_runner_defaults_false(tmp_path):
