@@ -298,8 +298,74 @@ def test_find_idle_descendants_selects_pre_idle_start_descendants_only(
         100, idle_start, btime=FAKE_BTIME, hz=FAKE_HZ,
     )
     assert targets == [
-        {"pid": 200, "cmdline": "/bin/bash -c pytest"},
+        {
+            "pid": 200, "cmdline": "/bin/bash -c pytest",
+            "start_epoch": start_epoch(100),
+        },
     ]
+
+
+def test_signal_pid_rechecks_identity_and_refuses_a_reused_pid(
+    tmp_path, monkeypatch,
+):
+    # The discovery-to-signal gap can span a full idle window: a target
+    # that exits in the gap and whose pid the kernel hands to an
+    # innocent process must NEVER be signaled. The start time (stat
+    # field 22) is the identity: a different start on the same pid is a
+    # reused pid (`pid_reused`, nothing signaled); the same start is
+    # the discovered process (`sent`).
+    proc = make_procfs(tmp_path, [(42, "innocent", 1, 200, b"other")])
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+
+    def refuse(pid, sig):
+        raise AssertionError(f"signaled the reused pid {pid}")
+
+    monkeypatch.setattr(pi_recovery.os, "kill", refuse)
+    assert pi_recovery.signal_pid(
+        42, signal.SIGTERM,
+        expected_start_epoch=start_epoch(100), btime=FAKE_BTIME,
+        hz=FAKE_HZ,
+    ) == "pid_reused"
+
+
+def test_signal_pid_identity_recheck_confirms_the_discovered_process(
+    tmp_path, monkeypatch,
+):
+    proc = make_procfs(tmp_path, [(42, "bash", 1, 100, b"bash")])
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    # The identity recheck reads the fake stat line; the delivery itself
+    # is faked (pid 42 is not a real process to signal).
+    monkeypatch.setattr(pi_recovery.os, "kill", lambda pid, sig: None)
+    assert pi_recovery.signal_pid(
+        42, signal.SIGTERM,
+        expected_start_epoch=start_epoch(100), btime=FAKE_BTIME,
+        hz=FAKE_HZ,
+    ) == "sent"
+
+
+def test_signal_pid_identity_recheck_reports_a_gone_process(
+    tmp_path, monkeypatch,
+):
+    # The target exited between the discovery and the signal (its stat
+    # is gone): already_dead, like the ESRCH path — no signal, no error.
+    proc = make_procfs(tmp_path, [])
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+
+    def refuse(pid, sig):
+        raise AssertionError(f"signaled the gone pid {pid}")
+
+    monkeypatch.setattr(pi_recovery.os, "kill", refuse)
+    assert pi_recovery.signal_pid(
+        42, signal.SIGTERM,
+        expected_start_epoch=start_epoch(100), btime=FAKE_BTIME,
+        hz=FAKE_HZ,
+    ) == "already_dead"
+
+
+def test_signal_pid_without_expected_start_keeps_the_legacy_behavior():
+    # No identity given (callers outside the idle recovery): the signal
+    # path is exactly as before.
+    assert pi_recovery.signal_pid(os.getpid(), 0) == "sent"
 
 
 def test_find_idle_descendants_includes_process_started_at_idle_start(
@@ -486,6 +552,22 @@ def test_process_state_none_for_malformed_stat(tmp_path, monkeypatch):
     assert pi_recovery.process_state(5) is None
 
 
+def test_process_state_none_for_paren_terminated_stat(
+    tmp_path, monkeypatch,
+):
+    # A line that ENDS at the comm parentheses has no state field at
+    # all: `_stat_fields` returns [] and the None contract of the
+    # sibling parsers applies — never an IndexError out of a
+    # fail-safe module (`not fields[0]` indexes before checking
+    # emptiness, and its empty-string intent can never fire: split()
+    # never yields empty tokens).
+    proc = make_procfs(tmp_path, [])
+    (proc / "5").mkdir()
+    (proc / "5" / "stat").write_text("5 (bash)", encoding="utf-8")
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.process_state(5) is None
+
+
 def test_process_start_monotonic_reads_field_22(tmp_path, monkeypatch):
     # stat field 22 (starttime) in ticks since boot, converted with the
     # given hz: 100 ticks at hz=100 -> 1.0 s since boot. The value stays
@@ -568,6 +650,32 @@ def test_timeout_duration_edge_tokens(tmp_path):
     assert pi_recovery.timeout_duration("timeout '' x") is None
     assert pi_recovery.timeout_duration("timeout 1.2.3 x") is None
     assert pi_recovery.timeout_duration("timeout . x") is None
+
+
+def test_timeout_duration_none_when_wrapper_is_not_the_command():
+    # A `timeout <number>` pair that is NOT the wrapped command itself is
+    # data, not a deadline: a commit message, an echo argument, a pytest
+    # -k expression. (/proc cmdline carries no quotes, so `git commit -m
+    # "fix timeout 300 regression"` joins to the tokens below.) A deadline
+    # read off the message text would make the runner WAIT for a wrapper
+    # that does not exist (the fabricated-deadline scene).
+    assert pi_recovery.timeout_duration(
+        "git commit -m fix timeout 300 regression",
+    ) is None
+    assert pi_recovery.timeout_duration("echo timeout 300 done") is None
+    assert pi_recovery.timeout_duration("pytest -k timeout 300 tests/") is None
+
+
+def test_timeout_duration_none_when_wrapper_sits_deeper_than_bash_c():
+    # The contract form is `timeout <seconds> ...` as THE command, either
+    # directly or as the `bash -c` payload. A wrapper buried deeper in a
+    # compound command (after `cd ... &&`, inside another tool's argv) is
+    # not the contract form: no clear timeout, the existing recovery
+    # behavior applies (fail-safe — never a fabricated deadline).
+    assert pi_recovery.timeout_duration(
+        "bash -c cd /x && timeout 300 pytest",
+    ) is None
+    assert pi_recovery.timeout_duration("sh -c timeout 300 pytest") is None
 
 
 def test_upstream_alive_true_for_established_tcp_socket(
@@ -888,6 +996,49 @@ def test_slots_idle_uses_the_given_timeout(monkeypatch):
     pi_recovery.slots_idle("http://x/slots", timeout=2.5)
     assert calls["timeout"] == 2.5
     assert calls["url"] == "http://x/slots"
+
+
+def test_slots_idle_none_when_no_slot_carries_the_flag(monkeypatch):
+    # Schema drift (a proxy that drops the key): no slot carries a real
+    # `is_processing` bool, so "every slot is false" is vacuously true —
+    # but a vacuous True is FABRICATED swallow evidence, and the #231
+    # recovery would kill a session whose model is in fact generating.
+    # Missing evidence is inconclusive (None), like every other
+    # unparseable payload.
+    _patch_urlopen(
+        monkeypatch, result=_FakeSlotsResponse(200, b'[{"id": 0}, {"id": 1}]'),
+    )
+    assert pi_recovery.slots_idle("http://x/slots") is None
+
+
+def test_slots_idle_none_when_flag_is_not_a_bool(monkeypatch):
+    # A non-bool `is_processing` (the string "true", the int 1) is not
+    # the documented contract (`is_processing` bool): inconclusive, not
+    # idle. `is True` on such a value answers False for BUSY and falls
+    # through to "idle" — the fail-open direction.
+    _patch_urlopen(
+        monkeypatch,
+        result=_FakeSlotsResponse(200, b'[{"is_processing": "true"}]'),
+    )
+    assert pi_recovery.slots_idle("http://x/slots") is None
+    _patch_urlopen(
+        monkeypatch,
+        result=_FakeSlotsResponse(200, b'[{"is_processing": 1}]'),
+    )
+    assert pi_recovery.slots_idle("http://x/slots") is None
+
+
+def test_slots_idle_none_when_any_slot_lacks_the_flag(monkeypatch):
+    # `True` means EVERY slot is idle (the documented contract). One slot
+    # without the flag is one slot of unknown state: the whole payload is
+    # inconclusive.
+    _patch_urlopen(
+        monkeypatch,
+        result=_FakeSlotsResponse(
+            200, b'[{"is_processing": false}, {"id": 1}]',
+        ),
+    )
+    assert pi_recovery.slots_idle("http://x/slots") is None
 
 
 def test_upstream_alive_false_for_live_state_without_remote_ip(

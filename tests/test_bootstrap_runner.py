@@ -4868,6 +4868,284 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
     )
 
 
+def _health_runs(repo_dir):
+    from orbi import runner_health
+    return runner_health.load_health_state(
+        runner_health.health_state_path(repo_dir),
+    )["runs"]
+
+
+def test_process_issue_model_wait_failure_records_health_attempt(
+    monkeypatch, tmp_path,
+):
+    """Issue #266/#246: a RECOVERABLE failure (the #227 model_wait
+    scene — the run stays ai-in-progress and the next tick retries the
+    same dead end) must reach health.json exactly like the terminal
+    failure branch, or the repeated-failure health check is blind to
+    the most common repeat-failure scene."""
+    monkeypatch.setattr(
+        runner, "edit_issue", lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(
+        runner, "create_worktree", Mock(return_value=tmp_path),
+    )
+    model_wait_dead = runner.ModelWaitDeadError(
+        "Pi is stuck in model_wait with a frozen session for 10m"
+    )
+
+    def dead_run_pi(*args, **kwargs):
+        raise model_wait_dead
+
+    monkeypatch.setattr(runner, "run_pi", dead_run_pi)
+    monkeypatch.setattr(
+        runner, "activity_snapshot", lambda session_dir: None,
+    )
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            # Restart-resume scan (Issue #18): fresh claim, no label.
+            return "[]"
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.process_issue(
+        {"number": 218, "title": "Model wait dead", "body": ""},
+        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+         "base_branch": "main"},
+        "xqliu/orbi",
+    ).kind == "failed"
+    runs = _health_runs(tmp_path)
+    assert len(runs) == 1, f"the recoverable failure is recorded: {runs}"
+    entry = runs[0]
+    assert entry["repo"] == "xqliu/orbi"
+    assert entry["issue"] == 218
+    assert entry["run_id"] == "a1b2c3d4"
+    assert entry["outcome"] == "failed"
+    assert entry["fingerprint"]
+
+
+def test_process_issue_three_recoverable_failures_raise_health_finding(
+    monkeypatch, tmp_path,
+):
+    """The #246 scene through the #227 path: the same Issue fails three
+    consecutive runs with the same classified recoverable failure — the
+    repeated-failure health check must see the streak (before the fix
+    none of these runs ever reached health.json)."""
+    from orbi import runner_health
+    monkeypatch.setattr(
+        runner, "edit_issue", lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(
+        runner, "create_worktree", Mock(return_value=tmp_path),
+    )
+    model_wait_dead = runner.ModelWaitDeadError(
+        "Pi is stuck in model_wait with a frozen session for 10m"
+    )
+
+    def dead_run_pi(*args, **kwargs):
+        raise model_wait_dead
+
+    monkeypatch.setattr(runner, "run_pi", dead_run_pi)
+    monkeypatch.setattr(
+        runner, "activity_snapshot", lambda session_dir: None,
+    )
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            return "[]"
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    for _ in range(3):
+        assert runner.process_issue(
+            {"number": 218, "title": "Model wait dead", "body": ""},
+            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+             "base_branch": "main"},
+            "xqliu/orbi",
+        ).kind == "failed"
+    state = runner_health.load_health_state(
+        runner_health.health_state_path(tmp_path),
+    )
+    findings = runner_health.repeated_failure_findings(state)
+    assert [
+        (f["repo"], f["issue"], f["count"]) for f in findings
+    ] == [("xqliu/orbi", 218, 3)]
+
+
+def test_process_issue_success_records_health_streak_break(
+    monkeypatch, tmp_path,
+):
+    """A delivered PR writes the non-failed outcome the streak-break
+    contract (runner_health.repeated_failure_findings, whose tests pin
+    outcome="pr_opened") has always expected from production: a
+    failure -> success -> failure sequence must NOT read as a streak."""
+    from orbi import runner_health
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(
+        runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
+    )
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    monkeypatch.setattr(
+        runner, "deliver_pr",
+        lambda *args, **kwargs: "https://github.com/orbi-build/orbi/pull/4",
+    )
+    monkeypatch.setattr(
+        runner, "comment_issue", lambda *args, **kwargs: None,
+    )
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            return "[]"
+        return "0123456789abcdef0123456789abcdef01234567"
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    result = runner.process_issue(
+        {"number": 4, "title": "Fix", "body": "Body"},
+        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+         "base_branch": "main"},
+        "xqliu/orbi-backlog",
+    )
+    assert result.kind == "pr"
+    runs = _health_runs(tmp_path)
+    assert [entry["outcome"] for entry in runs] == ["pr_opened"], runs
+    # The delivered outcome breaks a pre-existing failure streak of the
+    # same Issue: a later failure does not inherit the old failures.
+    runner_health.record_run_attempt(
+        runner_health.health_state_path(tmp_path),
+        repo="xqliu/orbi-backlog", issue=4, run_id="a1b2c3d4",
+        outcome="failed", fingerprint="whatever",
+    )
+    state = runner_health.load_health_state(
+        runner_health.health_state_path(tmp_path),
+    )
+    assert runner_health.repeated_failure_findings(state) == []
+
+
+def test_process_issue_recoverable_health_record_failure_is_bypassed(
+    monkeypatch, tmp_path, caplog,
+):
+    """The recoverable branch's health record is a pure bypass: a
+    state-write failure logs and never changes the recoverable outcome
+    (the Issue stays `failed`-recoverable, never `ai-blocked`)."""
+    from orbi import runner_health
+    monkeypatch.setattr(
+        runner, "edit_issue", lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(
+        runner, "create_worktree", Mock(return_value=tmp_path),
+    )
+    model_wait_dead = runner.ModelWaitDeadError(
+        "Pi is stuck in model_wait with a frozen session for 10m"
+    )
+
+    def dead_run_pi(*args, **kwargs):
+        raise model_wait_dead
+
+    monkeypatch.setattr(runner, "run_pi", dead_run_pi)
+    monkeypatch.setattr(
+        runner, "activity_snapshot", lambda session_dir: None,
+    )
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            return "[]"
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(
+        runner_health, "record_run_attempt",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("state dir read-only"),
+        ),
+    )
+    with caplog.at_level("INFO"):
+        result = runner.process_issue(
+            {"number": 218, "title": "Model wait dead", "body": ""},
+            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+             "base_branch": "main"},
+            "xqliu/orbi",
+        )
+    assert result.kind == "failed"
+    assert "health_failure_record_failed" in caplog.text
+
+
+def test_process_issue_success_health_record_failure_is_bypassed(
+    monkeypatch, tmp_path, caplog,
+):
+    """The delivery path's health record is a pure bypass: a
+    state-write failure logs and the PR result is returned unchanged."""
+    from orbi import runner_health
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(
+        runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
+    )
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    monkeypatch.setattr(
+        runner, "deliver_pr",
+        lambda *args, **kwargs: "https://github.com/orbi-build/orbi/pull/4",
+    )
+    monkeypatch.setattr(
+        runner, "comment_issue", lambda *args, **kwargs: None,
+    )
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            return "[]"
+        return "0123456789abcdef0123456789abcdef01234567"
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(
+        runner_health, "record_run_attempt",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("state dir read-only"),
+        ),
+    )
+    with caplog.at_level("INFO"):
+        result = runner.process_issue(
+            {"number": 4, "title": "Fix", "body": "Body"},
+            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+             "base_branch": "main"},
+            "xqliu/orbi-backlog",
+        )
+    assert result.kind == "pr"
+    assert "health_success_record_failed" in caplog.text
+
+
 def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
     monkeypatch, tmp_path,
 ):

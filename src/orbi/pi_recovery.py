@@ -95,7 +95,7 @@ def process_state(pid: int) -> str | None:
     if raw is None:
         return None
     fields = _stat_fields(raw)
-    if fields is None or not fields[0]:
+    if fields is None or not fields:
         return None
     return fields[0]
 
@@ -209,21 +209,33 @@ def timeout_duration(cmdline: str) -> float | None:
     wrapper in the command line, or None when the command has no clear
     timeout (Issue #169).
 
-    The wrapper word must stand alone (`timeout`, or an absolute path
-    to it) and the duration must be the IMMEDIATE next token — the
-    prompt contract form `timeout <seconds> ...`. Anything else
-    (options in between, a missing/unparseable duration, the word
-    inside a longer token) is not a clear timeout: the existing
-    recovery behavior applies (fail-safe, never a fabricated deadline).
+    The wrapper must BE the command: the prompt contract form
+    `timeout <seconds> ...`, or the `bash -c` payload form the Pi bash
+    tool actually spawns (`bash -c timeout <seconds> ...`). Anywhere
+    else the `timeout <number>` pair is data, not a deadline — a commit
+    message (`git commit -m "fix timeout 300 regression"` joins to
+    `... -m fix timeout 300 regression` on the real cmdline), an echo
+    argument, a pytest -k expression — and reading a deadline off it
+    would make the runner WAIT for a wrapper that does not exist.
+    Anything not matching the contract (options in between, a
+    missing/unparseable duration, a wrapper buried deeper in a compound
+    command) is not a clear timeout: the existing recovery behavior
+    applies (fail-safe, never a fabricated deadline).
     """
     tokens = cmdline.split()
-    for index, token in enumerate(tokens):
-        if token.rsplit("/", 1)[-1] != "timeout":
-            continue
-        if index + 1 >= len(tokens):
-            return None
-        return _parse_duration(tokens[index + 1])
-    return None
+    wrapper_index: int | None = None
+    if tokens and tokens[0].rsplit("/", 1)[-1] == "timeout":
+        wrapper_index = 0
+    elif (
+        len(tokens) >= 3
+        and tokens[0].rsplit("/", 1)[-1] == "bash"
+        and tokens[1] == "-c"
+        and tokens[2].rsplit("/", 1)[-1] == "timeout"
+    ):
+        wrapper_index = 2
+    if wrapper_index is None or wrapper_index + 1 >= len(tokens):
+        return None
+    return _parse_duration(tokens[wrapper_index + 1])
 
 
 # /proc/net/tcp socket states that still hold a live connection to a
@@ -338,7 +350,10 @@ def find_idle_descendants(root_pid: int, idle_start_epoch: float,
     no later than `idle_start_epoch` — the hung tools of the stalled
     scene.
 
-    Each result is `{"pid": int, "cmdline": str}`. A process spawned
+    Each result is `{"pid": int, "cmdline": str, "start_epoch": float}`.
+    The start time rides along as the process identity: the signal path
+    re-checks it before delivering, so a pid reused inside the
+    discovery-to-signal gap is never signaled. A process spawned
     after the idle window began (a new tool call) is never a target, and
     a process that is not a descendant (checked by the ppid chain) is
     never a target. `btime`/`hz` default to the real clock constants.
@@ -358,7 +373,11 @@ def find_idle_descendants(root_pid: int, idle_start_epoch: float,
         if start is None:
             continue
         if start <= idle_start_epoch:
-            targets.append({"pid": pid, "cmdline": cmdline_of(pid)})
+            targets.append({
+                "pid": pid,
+                "cmdline": cmdline_of(pid),
+                "start_epoch": start,
+            })
     return targets
 
 
@@ -396,8 +415,12 @@ def slots_idle(url: str, timeout: float = SLOTS_PROBE_TIMEOUT) -> bool | None:
       generating (a slow model, NOT a swallow).
     - `None`  — inconclusive: a probe error (network / non-200 / timeout),
       invalid JSON, or a payload that is not a non-empty list of slot
-      objects. The caller treats `None` as "no evidence" — the probe is a
-      pure bypass (Issue #79) and never fails the delivery.
+      objects — INCLUDING slots whose `is_processing` is missing or not
+      a bool (schema drift): a vacuous "every slot is false" over slots
+      that carry no flag would fabricate the swallow evidence and send
+      the #231 recovery after a model that is in fact generating. The
+      caller treats `None` as "no evidence" — the probe is a pure
+      bypass (Issue #79) and never fails the delivery.
     """
     try:
         # urlopen raises HTTPError for a non-2xx status (caught below),
@@ -413,18 +436,42 @@ def slots_idle(url: str, timeout: float = SLOTS_PROBE_TIMEOUT) -> bool | None:
     for slot in payload:
         if not isinstance(slot, dict):
             return None
-        if slot.get("is_processing") is True:
+        flag = slot.get("is_processing")
+        if flag is True:
             return False
+        if flag is not False:
+            return None
     return True
 
 
-def signal_pid(pid: int, sig: int) -> str:
+def signal_pid(pid: int, sig: int, *, expected_start_epoch: float | None = None,
+               btime: float | None = None, hz: float | None = None) -> str:
     """Send `sig` to `pid`; return the outcome for the journal.
 
+    With `expected_start_epoch` (the target's start time from
+    `find_idle_descendants`) the identity is re-checked on the stat
+    line right before the delivery: the discovery-to-signal gap can
+    span a full idle window, and a pid the kernel reused in the gap
+    belongs to an innocent process that must never be signaled
+    (TOCTOU).
+
     `sent` (delivered), `already_dead` (ESRCH: it exited between the
-    discovery and the signal) or `failed: <error>` (any other OS error —
-    logged, never raised: the recovery must not take the delivery down).
+    discovery and the signal — or the start-time recheck finds the
+    stat line gone), `pid_reused` (the recheck finds a different start
+    time on the pid: not the discovered process, nothing signaled) or
+    `failed: <error>` (any other OS error — logged, never raised: the
+    recovery must not take the delivery down).
     """
+    if expected_start_epoch is not None:
+        current = process_start_epoch(
+            pid,
+            btime=boot_time() if btime is None else btime,
+            hz=clk_tck() if hz is None else hz,
+        )
+        if current is None:
+            return "already_dead"
+        if current != expected_start_epoch:
+            return "pid_reused"
     try:
         os.kill(pid, sig)
         return "sent"
