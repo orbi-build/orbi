@@ -15517,6 +15517,68 @@ def test_reconcile_release_epics_keeps_open_child_and_bad_scope_open(monkeypatch
         fake_run(["unexpected"])
 
 
+def test_reconcile_open_epics_closes_and_deduplicates_audit(monkeypatch, caplog):
+    caplog.set_level("INFO")
+    epic = {"number": 20}
+    commands = []
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return json.dumps([epic]) if command[:3] == ["gh", "issue", "list"] else ""
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "_verify_epic_complete", lambda repo, item: ["Issue #21 closed"])
+    comments = []
+    monkeypatch.setattr(runner, "issue_comments", lambda number, repo: comments)
+    monkeypatch.setattr(runner, "comment_issue", lambda number, *, repo, body: comments.append({"body": body}))
+    result = runner.reconcile_open_epics("o/r", "abc12345")
+    assert result == ["Epic #20 closed after verification (Issue #21 closed)"]
+    assert len(comments) == 1 and "run_id=abc12345" in comments[0]["body"]
+    assert ["gh", "issue", "close", "20", "--repo", "o/r"] in commands
+    # The same audit is idempotent on the next tick.
+    commands.clear()
+    runner.reconcile_open_epics("o/r", "def67890")
+    assert len(comments) == 1
+    assert "epic_closed issue=20 repo=o/r" in caplog.text
+
+
+def test_reconcile_open_epics_keeps_incomplete_without_comment(monkeypatch, caplog):
+    caplog.set_level("INFO")
+    epic = {"number": 20}
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: json.dumps([epic]))
+    monkeypatch.setattr(runner, "_verify_epic_complete", lambda repo, item: (_ for _ in ()).throw(ValueError("open blockers: #3")))
+    comments = []
+    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: comments.append(True))
+    runner.reconcile_open_epics("o/r", "abc12345")
+    assert not comments
+    assert "epic_kept_open issue=20 repo=o/r reason=open blockers: #3" in caplog.text
+
+
+def test_reconcile_open_epics_failure_is_fail_open(monkeypatch, caplog):
+    monkeypatch.setattr(runner, "reconcile_open_epics", lambda *args: (_ for _ in ()).throw(RuntimeError("API down")))
+    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args: None)
+    monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args: None)
+    monkeypatch.setattr(runner, "pick_issue", lambda *args: {"number": 1})
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "abc12345")
+    result = runner.pick_next_delivery(["o/r"], Path("/tmp/slots"), 1)
+    assert result == ("o/r", {"number": 1}, None)
+    assert "epic_reconcile_failed repo=o/r" in caplog.text
+
+
+def test_verify_epic_complete_rejects_malformed_native_blockers(monkeypatch):
+    monkeypatch.setattr(runner, "run_command", lambda *args, **kwargs: json.dumps({
+        "number": 20, "body": "## Children\n- #21",
+    }))
+    with pytest.raises(ValueError, match="native blocker/dependency state is unavailable"):
+        runner._verify_epic_complete("o/r", {"number": 20})
+
+
+def test_verify_epic_complete_rejects_malformed_native_blocker_node():
+    with pytest.raises(ValueError, match="native blocker/dependency state is malformed"):
+        runner._verify_epic_complete("o/r", {
+            "number": 20, "body": "## Children\n- #21",
+            "blockedBy": {"nodes": [{"state": "OPEN"}]},
+        })
+
+
 def test_epic_child_evidence_validates_issue_and_pr_shapes(monkeypatch):
     responses = {
         "repos/o/r/issues/1": json.dumps({"state": "closed"}),

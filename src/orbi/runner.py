@@ -2980,6 +2980,35 @@ def _epic_child_evidence(repo: str, kind: str, number: int) -> str:
     return f"Issue #{number} closed"
 
 
+def _verify_epic_complete(repo: str, listed_epic: dict) -> list[str]:
+    """Return evidence only when an Epic is complete; otherwise fail closed."""
+    epic = epic_issue_with_blockers(repo, listed_epic)
+    children = parse_epic_children(epic.get("body", ""), repo)
+    blockers = epic.get("blockedBy")
+    # Live API check (Issue #552): `gh issue view --json blockedBy` returns
+    # {"blockedBy":{"nodes":[],"totalCount":0}} for zero dependencies.
+    # Missing/malformed blockedBy is not equivalent to that empty set.
+    if not isinstance(blockers, dict) or not isinstance(blockers.get("nodes"), list):
+        raise ValueError("native blocker/dependency state is unavailable")
+    for node in blockers["nodes"]:
+        if (not isinstance(node, dict)
+                or not isinstance(node.get("number"), int)
+                or isinstance(node.get("number"), bool)
+                or ("state" in node and node["state"] not in {"OPEN", "CLOSED"})):
+            raise ValueError("native blocker/dependency state is malformed")
+    open_blockers = open_blocker_numbers(epic)
+    if open_blockers:
+        raise ValueError("open blockers: " + ", ".join(f"#{n}" for n in open_blockers))
+    return [_epic_child_evidence(repo, kind, child) for kind, child in children]
+
+
+def _epic_audit(child_evidence: list[str], version: str | None = None) -> str:
+    prefix = f" for {version}" if version else ""
+    return (f"Epic reconciliation{prefix}: complete; "
+            f"children: {', '.join(child_evidence)}; "
+            "no open native blockers/dependencies.")
+
+
 def reconcile_release_epics(repo: str, milestone_number: int, version: str,
                             run_id: str) -> list[str]:
     """Close only provably complete open Epics in this exact Milestone."""
@@ -2992,29 +3021,43 @@ def reconcile_release_epics(repo: str, milestone_number: int, version: str,
             continue
         number = listed_epic.get("number")
         try:
-            epic = epic_issue_with_blockers(repo, listed_epic)
-            children = parse_epic_children(epic.get("body", ""), repo)
-            blockers = epic.get("blockedBy")
-            if not isinstance(blockers, dict) or not isinstance(blockers.get("nodes"), list):
-                raise ValueError("native blocker/dependency state is unavailable")
-            open_blockers = open_blocker_numbers(epic)
-            if open_blockers:
-                raise ValueError("open blockers: " + ", ".join(f"#{n}" for n in open_blockers))
-            child_evidence = [_epic_child_evidence(repo, kind, child)
-                              for kind, child in children]
+            child_evidence = _verify_epic_complete(repo, listed_epic)
         except (ValueError, json.JSONDecodeError) as exc:
             evidence.append(f"Epic #{number} kept open: {exc}")
             continue
-        audit = (f"Epic reconciliation for {version}: complete; "
-                 f"children: {', '.join(child_evidence)}; "
-                 "no open native blockers/dependencies.")
+        audit = _epic_audit(child_evidence, version)
         comments = issue_comments(int(number), repo=repo)
         if not any(audit in str(comment.get("body", "")) for comment in comments):
-            comment_issue(
-                int(number), repo=repo,
-                body=f"<!-- orbi:run={run_id} -->\n{audit}\nrun_id={run_id}",
-            )
+            comment_issue(int(number), repo=repo,
+                         body=f"<!-- orbi:run={run_id} -->\n{audit}\nrun_id={run_id}")
         run_command(["gh", "issue", "close", str(number), "--repo", repo])
+        evidence.append(f"Epic #{number} closed after verification ({'; '.join(child_evidence)})")
+    return evidence
+
+
+def reconcile_open_epics(repo: str, run_id: str) -> list[str]:
+    """Sweep open Epics once per tick; ordinary pickup must not depend on it."""
+    raw = run_command(["gh", "issue", "list", "--repo", repo, "--state", "open",
+                       "--search", f"label:{EPIC_LABEL}",
+                       "--json", "number,body,labels", "--limit", "200"])
+    epics = parse_issue_array(raw)
+    evidence: list[str] = []
+    for listed_epic in epics:
+        number = listed_epic.get("number")
+        try:
+            child_evidence = _verify_epic_complete(repo, listed_epic)
+        except (ValueError, json.JSONDecodeError) as exc:
+            reason = str(exc)
+            LOGGER.info("epic_kept_open issue=%s repo=%s reason=%s", number, repo, reason)
+            evidence.append(f"Epic #{number} kept open: {reason}")
+            continue
+        audit = _epic_audit(child_evidence)
+        comments = issue_comments(int(number), repo=repo)
+        if not any(audit in str(comment.get("body", "")) for comment in comments):
+            comment_issue(int(number), repo=repo,
+                         body=f"<!-- orbi:run={run_id} -->\n{audit}\nrun_id={run_id}")
+        run_command(["gh", "issue", "close", str(number), "--repo", repo])
+        LOGGER.info("epic_closed issue=%s repo=%s", number, repo)
         evidence.append(f"Epic #{number} closed after verification ({'; '.join(child_evidence)})")
     return evidence
 
@@ -4702,6 +4745,13 @@ def pick_next_delivery(
     completion is never gated by a Milestone change.
     """
     for repo in repos:
+        # Epic reconciliation is a per-tick bypass: a broken GitHub query or
+        # mutation must never prevent the ordinary delivery scans.
+        if current_run_id() is not None:
+            try:
+                reconcile_open_epics(repo, current_run_id())
+            except Exception:
+                LOGGER.exception("epic_reconcile_failed repo=%s", repo)
         selected = pick_resumable_delivery(
             repo, slot_dir, max_concurrency,
         )
