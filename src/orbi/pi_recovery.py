@@ -123,13 +123,11 @@ def process_start_epoch(pid: int, *, btime: float, hz: float) -> float | None:
 
 
 def process_start_monotonic(pid: int, *, hz: float) -> float | None:
-    """The process age offset in MONOTONIC seconds since boot.
+    """The process start offset in the boot-time clock domain.
 
     stat field 22 (starttime, ticks since boot) converted with `hz`.
-    Linux reports this clock as boottime, while Python's monotonic clock
-    can have a different origin after suspend. Convert the value into the
-    monotonic clock domain so a realtime or suspend adjustment cannot make
-    a live tool look older than it is (Issue #169).
+    Callers comparing this value must use CLOCK_BOOTTIME too, because
+    CLOCK_MONOTONIC stops during suspend (Issue #169).
     """
     raw = _read_stat(pid)
     if raw is None:
@@ -141,10 +139,7 @@ def process_start_monotonic(pid: int, *, hz: float) -> float | None:
         starttime = int(fields[19])
     except ValueError:
         return None
-    boottime = getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC)
-    return starttime / hz + (
-        time.monotonic() - time.clock_gettime(boottime)
-    )
+    return starttime / hz
 
 
 def boot_time() -> float:

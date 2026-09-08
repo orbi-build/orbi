@@ -488,19 +488,12 @@ def test_process_state_none_for_malformed_stat(tmp_path, monkeypatch):
 
 def test_process_start_monotonic_reads_field_22(tmp_path, monkeypatch):
     # stat field 22 (starttime) in ticks since boot, converted with the
-    # given hz: 100 ticks at hz=100 -> 1.0 s since boot. The value is a
-    # MONOTONIC offset (Issue #169): it is compared against
-    # `time.monotonic()`, never against the realtime epoch — a realtime
-    # step after boot (NTP) must not skew a process's age.
+    # given hz: 100 ticks at hz=100 -> 1.0 s since boot. The value stays
+    # in the boot-time clock domain (Issue #169), rather than being
+    # converted through a second clock whose suspend offset can change.
     proc = make_procfs(tmp_path, [(42, "bash", 7, 100, b"bash")])
     monkeypatch.setattr(pi_recovery, "PROC", proc)
-    expected = 1.0 + (
-        time.monotonic()
-        - time.clock_gettime(getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC))
-    )
-    assert pi_recovery.process_start_monotonic(42, hz=FAKE_HZ) == pytest.approx(
-        expected, abs=0.01,
-    )
+    assert pi_recovery.process_start_monotonic(42, hz=FAKE_HZ) == 1.0
 
 
 def test_process_start_monotonic_none_for_gone_process(tmp_path, monkeypatch):

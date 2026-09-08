@@ -5160,8 +5160,8 @@ def _pending_timeout_targets(targets: list[dict]) -> list[tuple[dict, float]]:
     `timeout <seconds>` wrapper and whose deadline is still in the
     future is a legitimately running tool — the runner waits for the
     deadline instead of signaling it. The age is measured CLOCK
-    CONSISTENTLY (Issue #169): the process's monotonic start offset
-    (stat field 22) against `time.monotonic()`, never the
+    CONSISTENTLY (Issue #169): the process's boot-time start offset
+    (stat field 22) against CLOCK_BOOTTIME, never the
     realtime-flavoured `process_start_epoch` — a realtime step after
     boot (NTP) must not make a tool look older than it is. A
     descendant without a clear timeout, whose start time is unreadable,
@@ -5171,7 +5171,8 @@ def _pending_timeout_targets(targets: list[dict]) -> list[tuple[dict, float]]:
     if not targets:
         return []
     hz = clk_tck()
-    now_mono = time.monotonic()
+    boot_clock = getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC)
+    now_mono = time.clock_gettime(boot_clock)
     now = time.time()
     starts = {
         target["pid"]: process_start_monotonic(target["pid"], hz=hz)
