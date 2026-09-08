@@ -8460,8 +8460,9 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     def handle_gate_failure(message: str, *, ci_failure: bool) -> None:
         body = (
             f"{marker}\n"
-            + (f"Orbi CI merge gate blocked PR #{pr['number']}: {message} "
-               f"(run_id={config['run_id']})" if ci_failure else
+            + (f"Orbi review round {round} for PR #{pr['number']}: "
+               "CI merge gate blocked: "
+               f"{message} (run_id={config['run_id']})" if ci_failure else
                f"Orbi review round {round} for PR #{pr['number']}: "
             "the PR is behind the latest base or has a merge conflict; "
             f"the next review session merges the latest "
@@ -10104,6 +10105,12 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     number, pr_url,
                 )
                 return
+            # Back to the next review round: yield the cadence first.
+            # This loop previously had NO sleep at all — a red CI turned
+            # the review into a hot loop that re-ran the full reviewer
+            # session back-to-back while holding the slot (and
+            # poll_interval was a dead parameter).
+            time.sleep(poll_interval)
             continue  # findings: the next iteration re-runs the review
         block_label_inconsistency(
             labels,

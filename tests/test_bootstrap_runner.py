@@ -10274,6 +10274,8 @@ def test_review_ci_failure_comment_counts_toward_the_round_budget(
             AssertionError(f"unexpected command: {command}")),
     )
     monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(runner, "issue_labels",
+                        lambda number, repo: ["ai-fix-needed"])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: {
         "number": 5, "head_oid": "h1",
         "url": "https://github.com/o/r/pull/5",
@@ -10312,8 +10314,10 @@ def test_review_ci_failure_comment_counts_toward_the_round_budget(
         title="task", priority="p2",
     )
     assert merged is False
+    # 与 review_rounds_so_far 同款判定：任意一行以轮次前缀开头即计入。
     budget_comments = [body for body in posted
-                       if body.startswith("Orbi review round ")]
+                       if any(line.startswith("Orbi review round ")
+                              for line in body.splitlines())]
     assert budget_comments, (
         f"CI 阻塞评论必须计入轮次预算（带轮次前缀），实际: {posted}"
     )
