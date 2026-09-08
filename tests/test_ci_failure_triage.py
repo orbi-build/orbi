@@ -91,6 +91,18 @@ def ep_pulls(sha=HEAD_SHA):
     return f"repos/{OWNER_REPO}/commits/{sha}/pulls"
 
 
+def ep_pr(number=328):
+    return f"repos/{OWNER_REPO}/pulls/{number}"
+
+
+def ep_source(number):
+    return f"repos/{OWNER_REPO}/issues/{number}"
+
+
+def ep_labels(number):
+    return f"repos/{OWNER_REPO}/issues/{number}/labels"
+
+
 def ep_issues_list():
     return f"repos/{OWNER_REPO}/issues?labels=bug,ai-ready&state=open&per_page=100"
 
@@ -447,6 +459,8 @@ def test_failure_resolves_the_pr_number_for_pull_request_runs(
         run_event(event="pull_request", head_branch="feature"),
     )
     gh.routes[ep_pulls()] = [{"number": 328, "state": "open", "title": "Fix"}]
+    gh.routes[ep_pr()] = {"number": 328, "body": "Fixes #494"}
+    gh.routes[ep_source(494)] = {"number": 494, "state": "open", "labels": []}
     gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
     gh.routes[ep_issues_list()] = []
     mod.main()
@@ -593,6 +607,87 @@ def test_malformed_job_entries_are_never_actionable(
     mod.main()
     assert gh.calls_to(ep_create(), "POST") == []
     assert "ci_triage ignored reason=no_failed_jobs" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Pull-request delivery ownership
+# ---------------------------------------------------------------------------
+
+
+def setup_active_pr_failure(gh, monkeypatch, tmp_path, *, body="Fixes #494", labels=None):
+    write_event(monkeypatch, tmp_path, run_event(event="pull_request", head_branch="feature"))
+    gh.routes[ep_pulls()] = [{"number": 541, "state": "open"}]
+    gh.routes[ep_pr(541)] = {"number": 541, "body": body}
+    gh.routes[ep_source(494)] = {
+        "number": 494, "state": "open",
+        "labels": [{"name": name} for name in (labels or ["ai-pr-opened"])],
+    }
+    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
+
+
+def test_active_orbi_pr_routes_evidence_to_source_and_pr(gh, monkeypatch, tmp_path):
+    setup_active_pr_failure(gh, monkeypatch, tmp_path)
+    mod.main()
+    assert gh.calls_to(ep_create(), "POST") == []
+    assert len(gh.calls_to(ep_comment(494), "POST")) == 1
+    assert len(gh.calls_to(ep_comment(541), "POST")) == 1
+    evidence = gh.calls_to(ep_comment(494), "POST")[0]["payload"]["body"]
+    assert "workflow: `CI`" in evidence
+    assert f"job logs: {JOB_URL}" in evidence
+    assert "Run the full test suite" in evidence
+    assert RUN_URL in evidence
+    assert gh.calls_to(ep_labels(494), "POST")[0]["payload"] == {
+        "labels": ["ai-fix-needed"]
+    }
+
+
+@pytest.mark.parametrize("body, labels, state", [
+    ("No closing reference", ["ai-pr-opened"], "open"),
+    ("Fixes #494", ["ai-pr-opened"], "closed"),
+    ("Fixes #494", ["bug"], "open"),
+])
+def test_unowned_or_inactive_pr_creates_independent_ticket(
+    gh, monkeypatch, tmp_path, body, labels, state
+):
+    setup_active_pr_failure(gh, monkeypatch, tmp_path, body=body, labels=labels)
+    gh.routes[ep_source(494)]["state"] = state
+    if body == "No closing reference":
+        gh.routes.pop(ep_source(494))
+    gh.routes[ep_issues_list()] = []
+    mod.main()
+    assert len(gh.calls_to(ep_create(), "POST")) == 1
+    assert gh.calls_to(ep_comment(494), "POST") == []
+    assert gh.calls_to(ep_comment(541), "POST") == []
+
+
+def test_active_pr_same_fingerprint_updates_same_source_and_pr(gh, monkeypatch, tmp_path):
+    setup_active_pr_failure(gh, monkeypatch, tmp_path)
+    mod.main()
+    setup_active_pr_failure(gh, monkeypatch, tmp_path)
+    mod.main()
+    assert len(gh.calls_to(ep_create(), "POST")) == 0
+    assert len(gh.calls_to(ep_comment(494), "POST")) == 2
+    assert len(gh.calls_to(ep_comment(541), "POST")) == 2
+
+
+def test_closing_reference_accepts_github_keywords_and_same_repo_qualification():
+    assert mod.closing_issue_numbers(
+        "Fixes #494; closes orbi-run/test-repo#495; resolves other/repo#496; "
+        "fixes #494",
+        "orbi-run", "test-repo",
+    ) == [494, 495]
+
+
+def test_pr_without_a_text_body_is_not_an_active_source(gh):
+    gh.routes[ep_pr(541)] = []
+    assert mod.active_source_issue("orbi-run", "test-repo", 541) is None
+    assert mod.active_source_issue("orbi-run", "test-repo", None) is None
+
+
+def test_malformed_source_issue_response_is_not_an_active_source(gh):
+    gh.routes[ep_pr(541)] = {"body": "Fixes #494"}
+    gh.routes[ep_source(494)] = []
+    assert mod.active_source_issue("orbi-run", "test-repo", 541) is None
 
 
 # ---------------------------------------------------------------------------
