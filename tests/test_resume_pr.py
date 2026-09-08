@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 import orbi.runner as runner
+from orbi import progress
 from tests.test_progress_wiring import make_fake_gh
 
 
@@ -74,6 +75,8 @@ def test_parse_pr_comment_returns_scene_for_multiline_opened_pr_comment():
         "- base_branch: main",
         "- base_sha: abc123def456",
         f"- run_id={FAKE_RUN_ID}",
+        "",
+        f"<!-- runner={progress.runner_fingerprint()} -->",
     ]
 
 
@@ -104,7 +107,9 @@ def test_started_pi_comment_uses_multiline_field_block():
         f"- run_id={FAKE_RUN_ID}\n"
         "- priority: normal\n"
         f"- branch: {FAKE_BRANCH}\n"
-        f"- worktree: {FAKE_WORKTREE}"
+        f"- worktree: {FAKE_WORKTREE}\n"
+        "\n"
+        f"<!-- runner={progress.runner_fingerprint()} -->"
     )
 
 
