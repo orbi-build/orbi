@@ -5,7 +5,7 @@ worktree while the ExecStartPre preflight kept the deployment checkout
 fresh — the Runner executed stale code while every delivery looked
 up-to-date (fresh base_sha, stale engine). The startup invariant: before
 any slot or claim, the checkout the RUNNING process imports `orbi` from
-must be exactly the fetched ``origin/<base_branch>`` ref (editable form),
+must be exactly the fetched ``origin/main`` ref (editable form),
 or the installed distribution version must not be older than the latest
 release tag reachable from that ref (non-editable form).
 
@@ -107,6 +107,30 @@ def gate_config(deploy_home: Path, **extra) -> dict:
 
 
 # --- editable install form ----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("delivery_target", "delivery_base"),
+    [("core", "main"), ("cloud", "main"), ("website", "beta")],
+)
+def test_fresh_editable_checkout_uses_engine_branch_for_all_delivery_targets(
+    monkeypatch, tmp_path, caplog, delivery_target, delivery_base,
+):
+    """The engine freshness ref stays main even when a delivery target uses
+    a different base branch (the website beta incident)."""
+    repo, old, new = build_stale_repo(tmp_path, delivery_target)
+    git(repo, "reset", "--hard", new)
+    point_module_file(monkeypatch, repo)
+    with caplog.at_level("INFO"):
+        info = runner.check_runner_source_freshness(
+            gate_config(repo, base_branch=delivery_base),
+            run_command=recording_run_command([]),
+        )
+    assert info["engine_source_branch"] == "main"
+    assert info["delivery_base_branch"] == delivery_base
+    assert info["origin_main"] == new
+    assert "engine_source_branch=main" in caplog.text
+    assert f"delivery_base_branch={delivery_base}" in caplog.text
 
 
 def test_fresh_editable_checkout_passes_with_only_local_git(
