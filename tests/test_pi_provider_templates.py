@@ -20,6 +20,7 @@ EXPECTED = {
     "cloudflare-workers-ai": (
         "cloudflare-workers-ai", "@cf/meta/llama-3.1-8b-instruct-fp8", "CLOUDFLARE_API_TOKEN",
     ),
+    "github-models": ("github-models", "openai/gpt-4.1-mini", "GH_MODELS_TOKEN"),
 }
 
 

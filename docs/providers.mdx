@@ -20,6 +20,7 @@ pi_model = "glm-5.3-flash"
 | Groq Free Plan | `groq.json` | `GROQ_API_KEY` | `groq/compound` | Free Plan limits verified 2026-09-04; real request/usage/429 not tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Local Qwen | `local-qwen.json` | None (dummy key `local`) | `Qwen3.8-27B` | Local zero-cost example; requires a local OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Cloudflare Workers AI | `cloudflare-workers-ai.json` | `CLOUDFLARE_API_TOKEN` | `@cf/meta/llama-3.1-8b-instruct-fp8` | Hosted free allocation; quota must be checked in the account | [#318](https://github.com/orbi-build/orbi/issues/318) |
+| GitHub Models | `github-models.json` | `GH_MODELS_TOKEN` | `openai/gpt-4.1-mini` | Historical snapshot; service retired and not available for live requests | [#319](https://github.com/orbi-build/orbi/issues/319) |
 
 A template being listed is not a promise of quota, availability, speed, or model support. The `Not tested` labels are intentional.
 
@@ -202,6 +203,53 @@ Workers AI is hosted: Cloudflare provides inference and the account's Neurons al
 ### Local providers
 
 A local OpenAI-compatible server still needs a non-empty `apiKey` field to satisfy the provider shape; the local template uses the non-secret dummy value `local`. Its model id must match the server's advertised id (for llama.cpp, set it with `--alias`).
+
+### GitHub Models: historical free-prototyping snapshot
+
+This section records the GitHub Models prototype configuration as it was documented on 2026-09-04. GitHub's official endpoint currently returns a retirement response (`410`); GitHub Models is not available for live requests. The template remains for historical/reference purposes and must not be presented as a working provider. The former free allowance was a GitHub Models service limit, not an Orbi or Copilot entitlement.
+
+The following is the historical setup (do not create a token or dispatch a live task against it while the service is retired):
+
+1. Create a fine-grained personal access token in [GitHub token settings](https://github.com/settings/personal-access-tokens). Grant the token the **Models: read** permission. Keep it local; do not paste it into Git, an Issue, a PR, or a journal:
+
+   ```bash
+   mkdir -p .orbi
+   printf '%s\n' 'GH_MODELS_TOKEN=replace-me' > .orbi/env
+   chmod 600 .orbi/env
+   ```
+
+2. Copy [`templates/pi-providers/github-models.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/github-models.json) to `.orbi/pi-providers.json`, then select the exact IDs:
+
+   ```toml
+   pi_providers = ".orbi/pi-providers.json"
+   pi_provider = "github-models"
+   pi_model = "openai/gpt-4.1-mini"
+   ```
+
+   The template uses `https://models.github.ai/inference`, Pi's `openai-completions` API, and `$GH_MODELS_TOKEN`. Validate the selected entry with the Runner before dispatching a task; validation checks shape and the key reference, not account access or quota.
+
+#### Model catalog and limits (checked 2026-09-04)
+
+The [official GitHub Models catalog](https://models.github.ai) was dynamic at the time of the snapshot. The following model IDs were listed when this guide was checked: `openai/gpt-4.1`, `openai/gpt-4.1-mini`, `openai/gpt-4o`, `openai/o4-mini`, `meta/llama-3.3-70b-instruct`, `meta/llama-4-scout-17b-16e-instruct`, `microsoft/phi-4`, `mistral-ai/mistral-small-2503`, `deepseek/DeepSeek-R1`, and `xai/grok-3-mini`. Availability can differ by account and can change without a repository change. `openai/gpt-4.1-mini` is the example pinned in the committed template.
+
+| Model | Daily free limit | Status |
+| --- | --- | --- |
+| `openai/gpt-4.1` | Not published as a stable per-model number on the checked dynamic page | Not measured |
+| `openai/gpt-4.1-mini` | Not published as a stable per-model number on the checked dynamic page | Not measured |
+| `openai/gpt-4o` | Not published as a stable per-model number on the checked dynamic page | Not measured |
+| `openai/o4-mini` | Not published as a stable per-model number on the checked dynamic page | Not measured |
+| `meta/llama-3.3-70b-instruct` | Not published as a stable per-model number on the checked dynamic page | Not measured |
+| `meta/llama-4-scout-17b-16e-instruct` | Not published as a stable per-model number on the checked dynamic page | Not measured |
+| `microsoft/phi-4` | Not published as a stable per-model number on the checked dynamic page | Not measured |
+| `mistral-ai/mistral-small-2503` | Not published as a stable per-model number on the checked dynamic page | Not measured |
+| `deepseek/DeepSeek-R1` | Not published as a stable per-model number on the checked dynamic page | Not measured |
+| `xai/grok-3-mini` | Not published as a stable per-model number on the checked dynamic page | Not measured |
+
+This repository has not made a real GitHub Models request or measured exhaustion, reset, or HTTP 429 behavior. The service is currently retired, so this historical snapshot is not a live-run guide. Treat every quota and model-availability claim as **not measured**; consult GitHub's current documentation before relying on any successor service.
+
+#### GitHub Models versus Copilot
+
+A GitHub Models PAT and its free prototyping allowance are separate from a GitHub Copilot subscription, Copilot requests, and Copilot premium-request allowance. Having Copilot does not establish GitHub Models quota, and GitHub Models usage does not consume Copilot subscription requests. Billing, eligibility, rate limits, and reset rules are controlled by the current GitHub Models terms; check the official pages rather than assuming the two products share a counter.
 
 ## Codex OAuth: use a ChatGPT/Codex subscription
 

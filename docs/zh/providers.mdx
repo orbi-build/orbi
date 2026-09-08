@@ -20,6 +20,7 @@ pi_model = "glm-5.3-flash"
 | Groq 免费档 | `groq.json` | `GROQ_API_KEY` | `groq/compound` | 2026-09-04 核对 Free Plan 限流；真实请求/usage/429 未实测 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | 本地 Qwen | `local-qwen.json` | 无（dummy key `local`） | `Qwen3.8-27B` | 本地零成本示例；需要本地 OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Cloudflare Workers AI | `cloudflare-workers-ai.json` | `CLOUDFLARE_API_TOKEN` | `@cf/meta/llama-3.1-8b-instruct-fp8` | 托管免费额度；必须在账号中核对额度 | [#318](https://github.com/orbi-build/orbi/issues/318) |
+| GitHub Models | `github-models.json` | `GH_MODELS_TOKEN` | `openai/gpt-4.1-mini` | 历史快照；服务已退役，无法进行实时请求 | [#319](https://github.com/orbi-build/orbi/issues/319) |
 
 模板出现在清单中不代表承诺额度、可用性、速度或模型支持。`未实测` 是有意保留的状态。
 
@@ -202,6 +203,53 @@ Workers AI 是托管服务：Cloudflare 提供推理服务和账号 Neurons 额�
 ### 本地 provider
 
 本地 OpenAI-compatible server 仍需要非空的 `apiKey` 字段才能通过 provider 形状校验；本地模板使用无秘密的 dummy 值 `local`。模型 id 必须与 server 宣告的 id 一致（llama.cpp 可用 `--alias` 设置）。
+
+### GitHub Models：免费原型额度历史快照
+
+本节记录 2026-09-04 时的 GitHub Models 原型配置。GitHub 官方 endpoint 当前返回退役响应（`410`）；GitHub Models 无法用于实时请求。模板仅保留作历史/参考用途，不应被当作可用 provider。此前的免费额度属于 GitHub Models 服务限制，不是 Orbi 或 Copilot 的额度。
+
+以下是历史配置（服务退役期间不要创建 token，也不要用它派发实时任务）：
+
+1. 在 [GitHub token 设置](https://github.com/settings/personal-access-tokens) 创建 fine-grained personal access token，并授予 **Models: read** 权限。只在本机保存 token；不要写入 Git、Issue、PR 或 journal：
+
+   ```bash
+   mkdir -p .orbi
+   printf '%s\n' 'GH_MODELS_TOKEN=replace-me' > .orbi/env
+   chmod 600 .orbi/env
+   ```
+
+2. 将 [`templates/pi-providers/github-models.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/github-models.json) 复制为 `.orbi/pi-providers.json`，然后选择精确 ID：
+
+   ```toml
+   pi_providers = ".orbi/pi-providers.json"
+   pi_provider = "github-models"
+   pi_model = "openai/gpt-4.1-mini"
+   ```
+
+   模板使用 `https://models.github.ai/inference`、Pi 的 `openai-completions` API 和 `$GH_MODELS_TOKEN`。派发任务前运行 Runner 校验；校验只检查结构和 key 引用，不检查账号访问权或额度。
+
+#### 模型清单和限额（2026-09-04 核对）
+
+[官方 GitHub Models catalog](https://models.github.ai) 在该历史快照时是动态的。本指南核对时清单中的模型 ID 为：`openai/gpt-4.1`、`openai/gpt-4.1-mini`、`openai/gpt-4o`、`openai/o4-mini`、`meta/llama-3.3-70b-instruct`、`meta/llama-4-scout-17b-16e-instruct`、`microsoft/phi-4`、`mistral-ai/mistral-small-2503`、`deepseek/DeepSeek-R1` 和 `xai/grok-3-mini`。可用性可能因账号不同，也可能随时变化；提交的模板固定使用 `openai/gpt-4.1-mini` 作为示例。
+
+| 模型 | 每日免费限额 | 状态 |
+| --- | --- | --- |
+| `openai/gpt-4.1` | 核对时动态页面未发布稳定的按模型数字 | 未实测 |
+| `openai/gpt-4.1-mini` | 核对时动态页面未发布稳定的按模型数字 | 未实测 |
+| `openai/gpt-4o` | 核对时动态页面未发布稳定的按模型数字 | 未实测 |
+| `openai/o4-mini` | 核对时动态页面未发布稳定的按模型数字 | 未实测 |
+| `meta/llama-3.3-70b-instruct` | 核对时动态页面未发布稳定的按模型数字 | 未实测 |
+| `meta/llama-4-scout-17b-16e-instruct` | 核对时动态页面未发布稳定的按模型数字 | 未实测 |
+| `microsoft/phi-4` | 核对时动态页面未发布稳定的按模型数字 | 未实测 |
+| `mistral-ai/mistral-small-2503` | 核对时动态页面未发布稳定的按模型数字 | 未实测 |
+| `deepseek/DeepSeek-R1` | 核对时动态页面未发布稳定的按模型数字 | 未实测 |
+| `xai/grok-3-mini` | 核对时动态页面未发布稳定的按模型数字 | 未实测 |
+
+本仓库没有发起真实 GitHub Models 请求，也没有测量耗尽、重置或 HTTP 429 行为。该服务目前已退役，因此本历史快照不是实时运行指南；所有额度和模型可用性都应明确视为**未实测**。如需依赖后续服务，请先查看 GitHub 当前文档。
+
+#### GitHub Models 与 Copilot 的边界
+
+GitHub Models PAT 及其免费原型额度，与 GitHub Copilot 订阅、Copilot 请求和 Copilot premium-request 额度相互独立。拥有 Copilot 不代表拥有 GitHub Models 额度，GitHub Models 使用也不消耗 Copilot 订阅请求。计费、资格、限流和重置规则以 GitHub Models 当前条款为准；不要假定两种产品共用计数器。
 
 ## Codex OAuth：使用 ChatGPT/Codex 订阅额度
 
