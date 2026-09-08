@@ -6289,9 +6289,9 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
     if not isinstance(prs, list):
         raise RuntimeError("expected exactly one open PR for the task branch")
     if len(prs) != 1:
-        # A resume cannot safely select a replacement PR. Include the full
-        # query result in the exception: it is the audit record used by the
-        # resume failure transition (Issue #495).
+        # A resume cannot safely select a replacement PR. Query the scene PR
+        # separately so zero open PRs (a closed/merged or missing scene PR)
+        # have a different outcome from an ambiguous branch (Issue #494).
         if expected_url is not None:
             scene_state = "unknown"
             try:
@@ -6306,14 +6306,44 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
                         scene_state = "MERGED"
             except Exception:
                 LOGGER.exception("resume_scene_pr_state_lookup_failed")
-            raise ResumeVerificationError(
-                f"resume PR validation: run_id={run_id} branch={branch} "
+            evidence = (
+                f"run_id={run_id} branch={branch} "
                 f"open_pr_count={len(prs)} "
                 f"open_prs={json.dumps(prs, sort_keys=True)} "
-                f"scene_pr={expected_url} scene_pr_state={scene_state}; "
-                "the scene PR is not uniquely open and must not be replaced"
+                f"scene_pr={expected_url} scene_pr_state={scene_state}"
             )
-        raise RuntimeError("expected exactly one open PR for the task branch")
+            if len(prs) == 0:
+                if scene_state in ("CLOSED", "MERGED"):
+                    LOGGER.error(
+                        "resume_pr_closed issue=%s branch=%s pr=%s state=%s",
+                        issue, branch, expected_url, scene_state,
+                    )
+                    raise UnrecoverableDeliveryError(
+                        f"resume PR is {scene_state.lower()} and cannot be "
+                        f"resumed or replaced: {evidence}; a human must "
+                        "decide whether to reopen or create a new delivery"
+                    )
+                LOGGER.error(
+                    "resume_pr_missing issue=%s branch=%s pr=%s state=%s",
+                    issue, branch, expected_url, scene_state,
+                )
+                raise ResumeVerificationError(
+                    f"resume PR is not open and was not found as closed or "
+                    f"merged: {evidence}; the scene must be repaired"
+                )
+            LOGGER.error(
+                "resume_pr_multiple_open issue=%s branch=%s count=%s",
+                issue, branch, len(prs),
+            )
+            raise ResumeVerificationError(
+                f"resume has multiple open PRs for the task branch: {evidence}; "
+                "the runner will not choose one"
+            )
+        if len(prs) == 0:
+            raise RuntimeError(
+                "no open PR for the task branch (expected exactly one open PR)"
+            )
+        raise RuntimeError("multiple open PRs for the task branch")
     url = prs[0].get("url")
     if not url:
         raise RuntimeError("open PR has no URL")

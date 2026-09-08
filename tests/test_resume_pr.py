@@ -1016,19 +1016,19 @@ def expected_resume_worktree(tmp_path) -> Path:
 
 
 @pytest.mark.parametrize(
-    ("open_prs", "scene_state", "expected"),
+    ("open_prs", "scene_state", "expected", "error_type"),
     [
-        ([], "CLOSED", "scene_pr_state=CLOSED"),
-        ([], "MERGED", "scene_pr_state=MERGED"),
+        ([], "CLOSED", "scene_pr_state=CLOSED", runner.UnrecoverableDeliveryError),
+        ([], "MERGED", "scene_pr_state=MERGED", runner.UnrecoverableDeliveryError),
         ([{"url": "https://github.com/owner/repo/pull/10"},
          {"url": "https://github.com/owner/repo/pull/11"}],
-         "OPEN", "open_pr_count=2"),
+         "OPEN", "open_pr_count=2", runner.ResumeVerificationError),
     ],
 )
 def test_verify_pr_resume_rejects_stale_or_ambiguous_scene_with_evidence(
-    monkeypatch, tmp_path, open_prs, scene_state, expected,
+    monkeypatch, tmp_path, open_prs, scene_state, expected, error_type,
 ):
-    """Issue #495: resume never guesses among zero or multiple open PRs."""
+    """Issue #494: resume classifies closed and ambiguous PR scenes."""
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     commands = []
@@ -1049,7 +1049,7 @@ def test_verify_pr_resume_rejects_stale_or_ambiguous_scene_with_evidence(
     with pytest.raises(AssertionError):
         fake_run(["unexpected"])
     monkeypatch.setattr(runner, "run_command", fake_run)
-    with pytest.raises(runner.ResumeVerificationError) as excinfo:
+    with pytest.raises(error_type) as excinfo:
         runner.verify_pr(
             worktree, FAKE_BRANCH, "main", FAKE_RUN_ID, issue=9,
             repo_dir=tmp_path, pr_repo="owner/repo",
