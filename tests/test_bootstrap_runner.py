@@ -10210,6 +10210,117 @@ def test_wait_for_delivery_returns_when_pr_merged(monkeypatch, caplog):
     assert f"pr={PR_URL}" in caplog.text
 
 
+def test_wait_for_delivery_sleeps_poll_interval_between_review_rounds(
+        monkeypatch, tmp_path,
+):
+    """findings/CI 失败回到下一轮评审之间必须让出一个 poll_interval：
+    这里曾经没有任何 sleep——CI 红时会在持有 slot 的热循环里一轮接
+    一轮重跑评审（poll_interval 形同死参数）。"""
+    states = ["OPEN", "OPEN", "MERGED"]
+    calls = {"pr": 0, "labels": 0}
+    sleeps = []
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"] and command[2] == "view":
+            calls["pr"] += 1
+            return json.dumps({"state": states[calls["pr"] - 1]})
+        if command[:2] == ["gh", "issue"] and command[2] == "view":
+            if command[-1] == "comments":
+                return json.dumps({"comments": [
+                    {
+                        "body": (
+                            "<!-- orbi:run=a1b2c3d4 -->\n"
+                            "Orbi opened PR: "
+                            f"{PR_URL} (base_branch=main "
+                            "base_sha=abc123def456 run_id=a1b2c3d4)"
+                        ),
+                        "authorAssociation": "OWNER",
+                    },
+                ]})
+            return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(
+        runner, "review_and_merge_if_clean",
+        lambda *args, **kwargs: False,
+    )
+    (tmp_path / ".worktrees"
+     / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
+    issue = {"number": 39, "title": "task", "body": ""}
+    runner.wait_for_delivery(
+        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        "owner/repo", poll_interval=1.5,
+    )
+    # 每轮评审之间各让出一个 poll_interval；合并终止不再 sleep。
+    assert sleeps == [1.5, 1.5]
+    assert calls["pr"] == 3
+
+
+def test_review_ci_failure_comment_counts_toward_the_round_budget(
+        monkeypatch, tmp_path,
+):
+    """干净评审 + CI 红的轮次此前不发任何预算评论（CI 阻塞评论没有
+    "Orbi review round" 前缀，review_rounds_so_far 永远数到 0），
+    wait 循环里一轮接一轮无限重跑评审、永不升级人类。CI 阻塞评论
+    必须带上轮次前缀，让预算在第 MAX 轮触发有界终止。"""
+    posted = []
+    labels = []
+
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: (_ for _ in ()).throw(
+            AssertionError(f"unexpected command: {command}")),
+    )
+    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: {
+        "number": 5, "head_oid": "h1",
+        "url": "https://github.com/o/r/pull/5",
+    })
+    monkeypatch.setattr(runner, "run_review", lambda *a, **k: "")
+    monkeypatch.setattr(runner, "parse_review_verdict", lambda output: {
+        "verdict": "pass", "blockers": 0, "majors": 0, "findings": [],
+    })
+    monkeypatch.setattr(
+        runner, "check_review_ci",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError(
+            "delivery gate: CI check 'tests' is red")),
+    )
+
+    def record_comment(number, *, repo, body):
+        posted.append(body)
+
+    monkeypatch.setattr(runner, "comment_issue", record_comment)
+    monkeypatch.setattr(
+        runner, "comment_pr",
+        lambda number, *, repo, body: posted.append(body),
+    )
+    monkeypatch.setattr(
+        runner, "apply_label_patch",
+        lambda number, **kwargs: labels.append(kwargs),
+    )
+    monkeypatch.setattr(runner, "_progress_state", lambda **k: {})
+    monkeypatch.setattr(runner, "_progress_body", lambda *a, **k: "body")
+    monkeypatch.setattr(runner, "ProgressPublisher", Mock())
+    monkeypatch.setattr(runner, "LiveProgressThrottle", Mock())
+
+    config = {"repo_dir": tmp_path, "base_branch": "main",
+              "run_id": "a1b2c3d4"}
+    merged = runner.review_and_merge_if_clean(
+        tmp_path, "orbi/o-r-issue-39", "main", config, "o/r", 39,
+        title="task", priority="p2",
+    )
+    assert merged is False
+    budget_comments = [body for body in posted
+                       if body.startswith("Orbi review round ")]
+    assert budget_comments, (
+        f"CI 阻塞评论必须计入轮次预算（带轮次前缀），实际: {posted}"
+    )
+    assert "CI merge gate blocked" in budget_comments[0]
+    assert labels and labels[0]["event"] == "fix_needed"
+
+
 def test_wait_for_delivery_keeps_waiting_while_pr_open(
         monkeypatch, tmp_path,
 ):
