@@ -202,7 +202,7 @@ def test_direct_execution_entry_fails_fast_without_the_package(tmp_path):
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
     result = _run(
-        [sys.executable, "-m", "orbi.cli", "--help"],
+        ["/usr/bin/python3", "-m", "orbi.cli", "--help"],
         cwd="/", env=env,
     )
     assert result.returncode != 0

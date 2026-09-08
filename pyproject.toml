@@ -45,6 +45,13 @@ license = { file = "LICENSE.md" }
 authors = [{ name = "xqliu" }]
 dependencies = []
 
+[project.optional-dependencies]
+test = [
+    "coverage",
+    "pytest",
+    "pyyaml",
+]
+
 [project.scripts]
 orbi = "orbi.cli:main"
 
@@ -54,9 +61,8 @@ orbi = "orbi.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# The contract test command (`python3 -m coverage run --branch -m pytest
-# tests/ -q`) runs WITHOUT installing the package: pytest puts `src/` on
-# sys.path so the suite imports `orbi.*` straight from the
-# checkout (Issue #168).
+# The repository-owned `scripts/test` entry point installs this test extra and
+# runs the full suite with coverage in an isolated virtual environment outside
+# the checkout.
 [tool.pytest.ini_options]
 pythonpath = ["src"]

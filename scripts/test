@@ -1,0 +1,19 @@
+#!/bin/sh
+# Repository-owned test entry point: dependencies come from pyproject.toml.
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+
+# Keep installed third-party sources outside the checkout: repository tests
+# intentionally scan every checkout Python file for coverage directives.
+VENV="${TMPDIR:-/tmp}/orbi-test-venv-$(basename "$ROOT")"
+"${PYTHON:-python3}" -m venv "$VENV"
+"$VENV/bin/python" -m pip install --editable '.[test]'
+
+mkdir -p .orbi
+export COVERAGE_FILE=.orbi/.coverage
+"$VENV/bin/python" -m coverage run --branch -m pytest tests/ -q
+"$VENV/bin/python" -m coverage report --show-missing
+"$VENV/bin/python" tools/coverage_gate.py .orbi/.coverage
+"$VENV/bin/python" tools/diff_coverage_gate.py origin/main

@@ -148,7 +148,8 @@ PR 验收时校验该关键词，缺失即 fail fast。
   1. 严格解析 Issue 正文的 `## Release` 声明：`version`、
      `base_branch`、`test_command`、`scope`（`#N` 列表），以及可选的
      `version_file`（默认 `pyproject.toml`，也可为 `package.json` 或 `none`）。
-     `test_command` 是贡献者从 clean checkout 执行的自包含命令，Runner 原样执行；
+     `test_command` 是贡献者从 clean checkout 执行的自包含命令，Runner 原样执行；本仓库使用
+     `scripts/test`，由它负责声明的测试环境和覆盖率门禁；
      可选的 `test_timeout_seconds` 设置正整数超时（默认 1800 秒）。字段缺失、
      重复或未知都 fail fast。
   2. 冻结 base——release commit 就是 `origin/<base_branch>`（在

@@ -87,13 +87,10 @@ journal、Issue/PR 或 UI 中，不为形式上的 E2E 增加基础设施。
 3. 先写失败测试，再写最小实现，再重构。外部接口（CLI flag、HTTP
    path、配置字段）对照官方文档或一次真实调用断言——从不对照猜出来的
    形状。
-4. 本地跑完整契约：
+4. 使用仓库自有的自包含入口运行完整契约（它会在隔离的虚拟环境安装声明的测试依赖）：
 
    ```bash
-   /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
-   /usr/bin/python3 -m coverage report --show-missing
-   /usr/bin/python3 tools/coverage_gate.py
-   /usr/bin/python3 tools/diff_coverage_gate.py origin/main
+   scripts/test
    ```
 
 5. 一个 Issue 一个 PR。PR 描述必须包含 `Fixes #<issue-number>`，
