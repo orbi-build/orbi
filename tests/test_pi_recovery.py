@@ -333,8 +333,11 @@ def test_signal_pid_identity_recheck_confirms_the_discovered_process(
 ):
     proc = make_procfs(tmp_path, [(42, "bash", 1, 100, b"bash")])
     monkeypatch.setattr(pi_recovery, "PROC", proc)
+    # The identity recheck reads the fake stat line; the delivery itself
+    # is faked (pid 42 is not a real process to signal).
+    monkeypatch.setattr(pi_recovery.os, "kill", lambda pid, sig: None)
     assert pi_recovery.signal_pid(
-        42, 0,
+        42, signal.SIGTERM,
         expected_start_epoch=start_epoch(100), btime=FAKE_BTIME,
         hz=FAKE_HZ,
     ) == "sent"

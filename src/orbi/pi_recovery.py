@@ -338,7 +338,10 @@ def find_idle_descendants(root_pid: int, idle_start_epoch: float,
     no later than `idle_start_epoch` — the hung tools of the stalled
     scene.
 
-    Each result is `{"pid": int, "cmdline": str}`. A process spawned
+    Each result is `{"pid": int, "cmdline": str, "start_epoch": float}`.
+    The start time rides along as the process identity: the signal path
+    re-checks it before delivering, so a pid reused inside the
+    discovery-to-signal gap is never signaled. A process spawned
     after the idle window began (a new tool call) is never a target, and
     a process that is not a descendant (checked by the ppid chain) is
     never a target. `btime`/`hz` default to the real clock constants.
@@ -358,7 +361,11 @@ def find_idle_descendants(root_pid: int, idle_start_epoch: float,
         if start is None:
             continue
         if start <= idle_start_epoch:
-            targets.append({"pid": pid, "cmdline": cmdline_of(pid)})
+            targets.append({
+                "pid": pid,
+                "cmdline": cmdline_of(pid),
+                "start_epoch": start,
+            })
     return targets
 
 
@@ -418,13 +425,34 @@ def slots_idle(url: str, timeout: float = SLOTS_PROBE_TIMEOUT) -> bool | None:
     return True
 
 
-def signal_pid(pid: int, sig: int) -> str:
+def signal_pid(pid: int, sig: int, *, expected_start_epoch: float | None = None,
+               btime: float | None = None, hz: float | None = None) -> str:
     """Send `sig` to `pid`; return the outcome for the journal.
 
+    With `expected_start_epoch` (the target's start time from
+    `find_idle_descendants`) the identity is re-checked on the stat
+    line right before the delivery: the discovery-to-signal gap can
+    span a full idle window, and a pid the kernel reused in the gap
+    belongs to an innocent process that must never be signaled
+    (TOCTOU).
+
     `sent` (delivered), `already_dead` (ESRCH: it exited between the
-    discovery and the signal) or `failed: <error>` (any other OS error —
-    logged, never raised: the recovery must not take the delivery down).
+    discovery and the signal — or the start-time recheck finds the
+    stat line gone), `pid_reused` (the recheck finds a different start
+    time on the pid: not the discovered process, nothing signaled) or
+    `failed: <error>` (any other OS error — logged, never raised: the
+    recovery must not take the delivery down).
     """
+    if expected_start_epoch is not None:
+        current = process_start_epoch(
+            pid,
+            btime=boot_time() if btime is None else btime,
+            hz=clk_tck() if hz is None else hz,
+        )
+        if current is None:
+            return "already_dead"
+        if current != expected_start_epoch:
+            return "pid_reused"
     try:
         os.kill(pid, sig)
         return "sent"
