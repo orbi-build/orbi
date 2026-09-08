@@ -316,6 +316,14 @@ def _write_prompts(tmp_path: Path) -> None:
         (prompts / name).write_text("prompt", encoding="utf-8")
 
 
+def test_git_helper_fails_fast_on_nonzero_exit(tmp_path):
+    """The repro helper must fail loudly on a git error, never pass a
+    broken setup silently."""
+    repo, old, new = build_stale_repo(tmp_path)
+    with pytest.raises(AssertionError, match="rc="):
+        git(repo, "rev-parse", "--verify", "refs/heads/no-such-branch")
+
+
 def test_main_source_gate_blocks_claim_before_slot(monkeypatch, tmp_path):
     """The gate is a start invariant: when the running source is stale,
     the tick dies BEFORE any slot is taken and nothing is claimed."""
@@ -327,6 +335,11 @@ def test_main_source_gate_blocks_claim_before_slot(monkeypatch, tmp_path):
         raise AssertionError("pick_next_delivery must not run on a stale runner")
 
     monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
+    # The guard itself must fail loudly if it is ever reached.
+    with pytest.raises(
+        AssertionError, match="must not run on a stale runner",
+    ):
+        fail_if_called()
     monkeypatch.setattr(
         runner, "check_runner_source_freshness",
         lambda *a, **k: (_ for _ in ()).throw(
