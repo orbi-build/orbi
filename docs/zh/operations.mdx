@@ -53,12 +53,59 @@ service 实例（`orbi@1.timer` → `orbi@1.service`，
    传输损坏记录结构化 `transport_check_failed ... reason=...` 行并让
    启动失败——不取 slot、不领取、不改标签，**没有 HTTPS 回退**（git
    数据操作，包括 `.github/workflows/*.yml` 推送，永远走 SSH；GitHub
-   API 操作留在 `gh` token 上）。
+   API 操作留在 `gh` token 上）。同样在任何 slot 或领取之前，tick
+   运行 **runner 执行代码新鲜度门禁**（Issue #525）：证明本进程执行
+   的代码与已 fetch 的 `origin/<base_branch>` 一致——见下文
+   [Runner 执行代码新鲜度与防线分层](#runner-执行代码新鲜度与防线分层)。
 
 ```bash
 systemctl --user list-timers 'orbi@*.timer'
 systemctl --user status 'orbi@*.service'
 ```
+
+## Runner 执行代码新鲜度与防线分层
+
+2026-09-07 事故：editable install 解析到了一个旧 issue 的 worktree，而
+`ExecStartPre` preflight 一直把部署 home 同步得很好——Runner 执行着旧
+代码，每笔交付看起来却都是新的（base_sha 新鲜、引擎陈旧），一个早已
+修复的 bug 在生产复现。"checkout 被同步了"和"进程执行的是那个
+checkout"是两个不同的事实，所以 tick 在任何 slot 或领取之前必须证明
+第二件（Issue #525）：
+
+- **editable 安装**（官方部署形态）：门禁解析**运行中进程**的 import
+  源（`orbi.__file__` → `src/orbi` 包目录，绝不是 WorkingDirectory），
+  用 `git rev-parse --show-toplevel` 定位其所在 checkout，并要求该
+  checkout 的 `HEAD` 等于已 fetch 的 `refs/remotes/origin/<base>`
+  ref。worktree 与部署 home 共享 refs，所以事故场景（install 绑到旧
+  worktree）在这里被拒绝。
+- **非 editable 安装**（uv tool / PyPI 拷贝）：安装的发行版本
+  （`importlib.metadata`）不得旧于已 fetch base ref 上可达的最新
+  release tag（在 deploy home 解析）。相等或更新即通过。
+- 全部是**本地 git 读**（`rev-parse` / `describe`）：remote-tracking
+  ref 的新鲜度由 `ExecStartPre` fetch 供给，checkout 一致时零网络
+  请求。任何**无法证明新鲜**的状态（origin ref 缺失、无 release tag、
+  import 源无法定位）都以同样方式失败并带 `reason=` 字段——绝不静默
+  放行。
+- 落后或无法证明时输出结构化
+  `runner_source_stale install=... source=... head=... origin_main=...
+  allowed=false fix=...` 行并 fail fast：不取 slot、不领取、不改标签。
+  `fix` 是对 deploy home 的精确 editable 强制重装命令。
+  `allow_stale_runner: true`（getting-started）把同一行降级为告警，
+  供离线/受限网络机器使用——绝不跳过检查。
+
+**自举边界（为什么需要分层）。** runner 内的自检只能保护**包含**自检
+的 runner 版本：旧到没有自检的 runner 无法自检，而 in-runner 的
+`unit_drift` 对比恰恰运行在可能被冻结的进程里。因此分层是严格的，
+从外到内：
+
+1. **shell 层 `ExecStartPre` preflight**（fetch + `merge --ff-only` +
+   CLI probe 自愈）是最外层防线：由 systemd 执行、不 import 任何
+   runner 代码，因此**不依赖 runner 版本**。保持已安装 unit 跟上模板
+   （`install-units` 与启动前检查的 `unit_drift` 自愈），这道 preflight
+   就永远存在。
+2. **runner 执行代码新鲜度门禁**（本节，Issue #525）是 in-runner
+   不变量：从它发布的版本起，代码陈旧的 runner 拒绝领取任务，而不是
+   无声地失败。
 
 ## 暂停、迁移或移除部署
 

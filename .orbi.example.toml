@@ -29,6 +29,15 @@ prompt_review = "prompts/prompt_review.md"
 # Delivery base branch: every task worktree is created from the latest
 # origin/<base_branch> (fetched and frozen at claim time). Default: "main".
 base_branch = "main"
+# Offline escape hatch for the runner source freshness gate (Issue #525).
+# Before any slot or claim the Runner proves the code it executes matches
+# the fetched origin/<base_branch> (the import checkout's HEAD for an
+# editable install; the installed version vs the latest release tag for a
+# non-editable one — local git reads only). A stale or unverifiable source
+# logs the structured `runner_source_stale` line (facts + fix) and fails
+# the start. true downgrades the SAME line to a warning for offline /
+# restricted-network machines — it never skips the check. Default: false.
+# allow_stale_runner = false
 # Claim scope (Issue #139): the active GitHub Milestone title (e.g.
 # "v0.2.0") that the fresh-claim scans (p0, bug, plain) are restricted
 # to. The milestone:"<title>" qualifier is part of the gh search query,

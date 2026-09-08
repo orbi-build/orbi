@@ -544,7 +544,13 @@ def write_config(
         f'workspace_root = "{tmp_path}"\n'
         f'prompt = "{prompt}"\n'
         f'prompt_review = "{review_prompt}"\n'
-        f'max_concurrency = {max_concurrency}\n',
+        f'max_concurrency = {max_concurrency}\n'
+        # Issue #525: these e2e runners run the REAL gate in a spawned
+        # subprocess, and its import source is THIS worktree — a task
+        # branch whose HEAD is by construction not origin/main. The
+        # documented escape hatch downgrades the (correctly detected)
+        # staleness to a warning; the gate still runs and probes.
+        f'allow_stale_runner = true\n',
         encoding="utf-8",
     )
     return config
