@@ -555,8 +555,11 @@ def test_docs_document_tests_and_coverage_commands():
     (full pytest with branch coverage, the report, and the two gate
     scripts) and the remote CI gate."""
     text = page_text("testing")
-    assert "scripts/test" in text, (
-        "testing must show the repository-owned test entry point"
+    assert "scripts/test" not in text, (
+        "testing must not carry the removed local test chain (Issue #569)"
+    )
+    assert "coverage run --branch -m pytest" in text, (
+        "testing must show the contract test command"
     )
     assert "coverage report" in text, "testing must show the coverage report command"
     assert "tools/coverage_gate.py" in text, (

@@ -172,14 +172,15 @@ DAG, no priority numbers, no separate queues:
   steps in order:
 
   1. Strictly parse the `## Release` declaration from the Issue body:
-     `version`, `base_branch`, `test_command`, `scope` (a list of `#N`
-     items), and optional `version_file` (`pyproject.toml` by default,
-     `package.json`, or `none`). `test_command` is the self-contained
-     command a contributor runs from a clean checkout; the Runner executes
-     it unchanged. For this repository, use `scripts/test`, which owns the
-     declared test environment and coverage gates. Optional `test_timeout_seconds` sets its positive integer
-     timeout (default 1800 seconds). Missing, duplicated or unknown fields
-     fail fast.
+     `version`, `base_branch`, and `scope` (a list of `#N` items) or
+     `scope_from_milestone`, plus optional `version_file`
+     (`pyproject.toml` by default, `package.json`, or `none`). The
+     declaration carries NO local test contract (Issue #569): test
+     acceptance is the GitHub Actions CI result on the release commit
+     (the Issue #268 CI-wait gate). A legacy body that still declares
+     `test_command` is accepted with the field ignored (one evidence
+     line) — it is never executed. Missing, duplicated or unknown
+     fields fail fast.
   2. Freeze the base — the release commit is exactly
      `origin/<base_branch>` (fetched under the base-sync lock).
   3. Enforce the pre-release gates: no leftover open `ai-in-progress` /
@@ -195,9 +196,12 @@ DAG, no priority numbers, no separate queues:
   4. Verify the scope item by item: `gh pr view` must report `MERGED`,
      otherwise `gh issue view` must report `CLOSED`. Checkbox parsing
      is forbidden — every scope item is checked against the live API.
-  5. Run the declared self-contained `test_command` unchanged in a clean
-     worktree at the release commit (`timeout`-wrapped, Issue #95; the
-     optional `test_timeout_seconds` overrides the 1800-second default).
+  5. Test acceptance is the CI-wait gate on the release commit: after
+     the version bump the gates re-run against that exact commit
+     (step 3's `release_ci_wait_seconds` wait), and a red or timed-out
+     CI takes the existing recoverable failure path (`ai-blocked`).
+     No local test execution (Issue #569) — the release flow is
+     bump → push → CI-wait → tag.
   6. Tag: when the remote tag is absent, create an annotated tag at the
      release commit and push it with a plain push (never `--force`).
      When it exists it must point EXACTLY at the release commit — a

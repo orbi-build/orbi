@@ -49,10 +49,6 @@ base_branch = "main"
 # pre-#139 behavior: every `ai-ready` Issue is claimable. It is never
 # guessed — an empty or non-string value fails the start fast.
 # active_milestone = "v0.2.0"
-# Disabled by default. When true, a failed release test command with captured
-# output creates (or deduplicates) an ai-ready + bug repair Issue. The Release
-# itself remains ai-blocked and must be explicitly re-run after review/merge.
-# auto_repair_issues = true
 # When false, a closed active milestone pauses here and creates one
 # ai-ready + p0 confirmation Issue instead of rewriting this file.
 # Missing keeps the existing automatic-advance behavior.

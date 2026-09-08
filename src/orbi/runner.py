@@ -226,23 +226,19 @@ _CURRENT_RUN_ID: str | None = None
 # source of truth. They are imported above; `p0`/`bug`/`ai-epic` are
 # scheduling metadata, never delivery lifecycle states.
 # The machine-readable section a release Issue body must carry (Issue
-# #98): `- version:`, `- base_branch:`, `- test_command:` and
-# `- scope:` with `  - #N` items. Parsed strictly — a missing or
-# malformed declaration fails fast, never guessed.
+# #98): `- version:`, `- base_branch:` and `- scope:` (or
+# `- scope_from_milestone:`). Parsed strictly — a missing or malformed
+# declaration fails fast, never guessed. The declaration carries NO
+# local test contract (Issue #569): test acceptance is the GitHub
+# Actions CI result on the release commit (the #268 CI-wait gate).
 RELEASE_SECTION = "## Release"
-# The repository-owned test entry point runs in a clean worktree wrapped
-# in `timeout <seconds> bash -c ...` (Issue #95). The runner is deliberately
-# stack-neutral: the command owns its tools and test policy.
-RELEASE_TEST_TIMEOUT_SECONDS = 1800
 # Release CI wait (Issue #268): the release commit is born from the last
 # delivery PR merge, so its CI is almost always still running when the
 # gate checks it — a pending check (queued/in_progress) is an
 # intermediate state, not a failure. The gate waits for completion up to
 # this limit and decides on the FINAL conclusions; a wait timeout is its
 # own failure reason, never reported as a CI failure. The TOML field
-# `release_ci_wait_seconds` overrides the default (the #228 pattern);
-# the default matches RELEASE_TEST_TIMEOUT_SECONDS, the existing release
-# timeout convention.
+# `release_ci_wait_seconds` overrides the default (the #228 pattern).
 RELEASE_CI_WAIT_SECONDS = 1800
 # Release delivery wait (Issue #381): an early release ticket yields the
 # slot while other deliveries finish. The limit applies to one gate attempt;
@@ -257,10 +253,6 @@ RELEASE_CI_POLL_INTERVAL = 30.0
 # conflict.
 MERGEABLE_WAIT_SECONDS = 120.0
 MERGEABLE_POLL_INTERVAL = 5.0
-# Repair-Issue GitHub operations are a convenience path, but they still run
-# during terminal failure handling. Bound them so an unavailable API cannot
-# hold the Runner indefinitely (Issue #95).
-REPAIR_ISSUE_TIMEOUT_SECONDS = 30
 
 # Only comments posted by a repo maintainer are trusted to carry the
 # recovery scene: a public comment (authorAssociation=NONE) must never
@@ -626,12 +618,6 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         not isinstance(active_milestone, str) or not active_milestone
     ):
         raise ValueError("active_milestone must be a non-empty string")
-    # Repair-Issue creation (Issue #202) is deliberately opt-in. A
-    # release remains blocked either way; this merely dispatches a normal
-    # ai-ready bug Issue when a release test command reports evidence.
-    auto_repair_issues = data.get("auto_repair_issues", False)
-    if not isinstance(auto_repair_issues, bool):
-        raise ValueError("auto_repair_issues must be a boolean")
     auto_next_milestone = data.get("auto_next_milestone", True)
     if not isinstance(auto_next_milestone, bool):
         raise ValueError("auto_next_milestone must be a boolean")
@@ -778,7 +764,6 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         ],
         "base_branch": base_branch,
         "active_milestone": active_milestone,
-        "auto_repair_issues": auto_repair_issues,
         "auto_next_milestone": auto_next_milestone,
         "max_concurrency": max_concurrency,
         "allow_stale_runner": allow_stale_runner,
@@ -976,11 +961,10 @@ def _release_ci_wait_seconds(data: dict) -> float:
     """Load and validate the optional `release_ci_wait_seconds`
     (Issue #268).
 
-    Omitted -> `RELEASE_CI_WAIT_SECONDS` (default 1800 s, matching the
-    RELEASE_TEST_TIMEOUT_SECONDS convention). Present -> must be a
-    finite positive number (int or float); booleans, zero, negative,
-    NaN/infinity and non-numeric values fail fast at config load with
-    the field name and the concrete reason.
+    Omitted -> `RELEASE_CI_WAIT_SECONDS` (default 1800 s). Present ->
+    must be a finite positive number (int or float); booleans, zero,
+    negative, NaN/infinity and non-numeric values fail fast at config
+    load with the field name and the concrete reason.
     """
     value = data.get("release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS)
     if isinstance(value, bool):
@@ -1934,7 +1918,6 @@ def parse_release_declaration(body: str) -> dict:
 
     - version: v0.3.0
     - base_branch: main
-    - test_command: <shell command>
     - scope:
       - #123
       - #124
@@ -1947,13 +1930,14 @@ def parse_release_declaration(body: str) -> dict:
     - scope_from_milestone: v0.3.0
     ```
 
-    `version` is the exact tag name (no spaces), `base_branch` the
-    branch the release commit is frozen from, and `test_command` the
-    self-contained command a new contributor runs from a clean checkout
-    to test the repository. The runner executes that command unchanged;
-    the repository owns its toolchain and test policy. Optional
-    `test_timeout_seconds` sets the positive integer timeout (default
-    1800 seconds). `scope` lists the Issue/PR numbers verified one by one.
+    `version` is the exact tag name (no spaces) and `base_branch` the
+    branch the release commit is frozen from. The declaration carries
+    NO local test contract (Issue #569): test acceptance is the GitHub
+    Actions CI result on the release commit (the #268 CI-wait gate), so
+    `test_command` is not part of the contract — a legacy body that
+    still declares it is accepted with the field ignored (one
+    `release_test_command_ignored` evidence line at run time) and never
+    executed. `scope` lists the Issue/PR numbers verified one by one.
     Optional `version_file` selects a supported ecosystem metadata file
     (the default is `pyproject.toml`) or `none` to skip version metadata changes.
     Exactly one of `scope` / `scope_from_milestone` must be present:
@@ -1975,8 +1959,8 @@ def parse_release_declaration(body: str) -> dict:
     except StopIteration:
         raise ValueError(
             f"release Issue body is missing the `{RELEASE_SECTION}` "
-            "section with version, base_branch, test_command and scope "
-            "or scope_from_milestone"
+            "section with version, base_branch and scope or "
+            "scope_from_milestone"
         ) from None
     section: list[str] = []
     for line in lines[start + 1:]:
@@ -2029,16 +2013,17 @@ def parse_release_declaration(body: str) -> dict:
                     )
                 scope_open = True
                 fields["scope"] = ""
+            # `test_command` stays a KNOWN key (Issue #569): a legacy
+            # body may still declare it — accepted, ignored, never
+            # executed.
             elif key in ("version", "base_branch", "test_command",
-                         "scope_from_milestone", "version_file",
-                         "test_timeout_seconds"):
+                         "scope_from_milestone", "version_file"):
                 fields[key] = value
             else:
                 raise ValueError(
                     f"release declaration has the unknown field {key!r} "
-                    "(expected version, base_branch, test_command, "
-                    "test_timeout_seconds, scope, scope_from_milestone "
-                    "or version_file)"
+                    "(expected version, base_branch, scope, "
+                    "scope_from_milestone or version_file)"
                 )
         elif scope_open:
             raise ValueError(
@@ -2050,7 +2035,7 @@ def parse_release_declaration(body: str) -> dict:
                 f"release declaration line {stripped!r} is not a "
                 "`- key: value` field or a scope item"
             )
-    for key in ("version", "base_branch", "test_command"):
+    for key in ("version", "base_branch"):
         if key not in fields:
             raise ValueError(
                 f"release declaration is missing the `{key}` field"
@@ -2091,16 +2076,6 @@ def parse_release_declaration(body: str) -> dict:
                 "release declaration field `scope_from_milestone` must "
                 "not contain spaces"
             )
-    timeout_value = fields.get("test_timeout_seconds")
-    if timeout_value is None:
-        test_timeout_seconds = RELEASE_TEST_TIMEOUT_SECONDS
-    elif not re.fullmatch(r"[1-9][0-9]*", timeout_value):
-        raise ValueError(
-            "release declaration field `test_timeout_seconds` must be a "
-            "positive integer"
-        )
-    else:
-        test_timeout_seconds = int(timeout_value)
     version_file = fields.get("version_file", "pyproject.toml")
     if version_file not in (
         "pyproject.toml", "package.json", "pom.xml", "build.gradle",
@@ -2113,8 +2088,8 @@ def parse_release_declaration(body: str) -> dict:
     return {
         "version": fields["version"],
         "base_branch": fields["base_branch"],
-        "test_command": fields["test_command"],
-        "test_timeout_seconds": test_timeout_seconds,
+        # Issue #569: a legacy field, accepted and ignored — never executed.
+        "test_command": fields.get("test_command"),
         "scope": scope,
         "scope_from_milestone": fields.get("scope_from_milestone"),
         "version_file": version_file,
@@ -2526,96 +2501,6 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
         )
     evidence.append(f"no open PR targets {base_branch}")
     return evidence
-
-
-def run_release_tests(worktree: Path, test_command: str,
-                      timeout_seconds: int) -> None:
-    """Run the declared release test command in the release worktree.
-
-    The command is a shell string (it may chain steps with `&&`), so
-    it runs unchanged through `bash -c` wrapped in `timeout <seconds>`
-    (Issue #95). The repository owns its test tools and coverage policy;
-    the runner must not append stack-specific commands. A test that does
-    not terminate within the deadline fails fast with `timeout`'s exit
-    124 — never ignorable noise or a second unbounded attempt.
-    """
-    run_command(
-        ["timeout", str(timeout_seconds), "bash", "-c", test_command],
-        cwd=worktree,
-    )
-
-
-def repair_signature(source_issue: int, run_id: str, release_commit: str,
-                     command: str, evidence: str) -> str:
-    """Return the stable identity for one evidenced release-test failure."""
-    scene = "\0".join((str(source_issue), run_id, release_commit, command, evidence))
-    return hashlib.sha256(scene.encode("utf-8")).hexdigest()[:16]
-
-
-def create_repair_issue(*, repo: str, source_issue: int, run_id: str,
-                        release_commit: str, command: str,
-                        evidence: str) -> str:
-    """Create or find one normal repair Issue for a release test failure.
-
-    GitHub Issue search's documented ``in:body`` qualifier searches the
-    stable signature written into every generated body. This makes the
-    deduplication external, auditable, and safe across process restarts.
-    """
-    signature = repair_signature(
-        source_issue, run_id, release_commit, command, evidence,
-    )
-    marker = f"orbi-repair-signature={signature}"
-    raw = run_command([
-        "timeout", str(REPAIR_ISSUE_TIMEOUT_SECONDS),
-        "gh", "issue", "list", "--repo", repo, "--state", "all",
-        "--search", f'in:body "{marker}"', "--json", "number,url", "--limit", "1",
-    ])
-    existing = parse_issue_array(raw)
-    if existing:
-        return existing[0]["url"]
-    body = "\n".join([
-        "## 自动生成的 Release 测试修复",
-        "",
-        f"- source Issue: #{source_issue}",
-        f"- run_id={run_id}",
-        f"- commit: `{release_commit}`",
-        f"- {marker}",
-        "",
-        "## Reproduce",
-        "",
-        "```bash",
-        command,
-        "```",
-        "",
-        "## Captured evidence",
-        "",
-        "```text",
-        evidence,
-        "```",
-        "",
-        "该 Issue 由正常 `ai-ready` → PR → review → merge 流程处理；原 Release "
-        "保持 `ai-blocked`，必须在修复合并后显式重新运行 Release gate。",
-    ])
-    return run_command([
-        "timeout", str(REPAIR_ISSUE_TIMEOUT_SECONDS),
-        "gh", "issue", "create", "--repo", repo,
-        "--title", f"修复 Release #{source_issue} 测试门禁失败",
-        "--body", body, "--label", READY_LABEL, "--label", "bug",
-    ])
-
-
-def release_test_evidence(exc: subprocess.CalledProcessError) -> str | None:
-    """Extract every concrete output stream from a failed release test."""
-    streams = [
-        ("stdout", exc.stdout),
-        ("stderr", exc.stderr),
-    ]
-    evidence = "\n\n".join(
-        f"[{name}]\n{output.strip()}"
-        for name, output in streams
-        if output and output.strip()
-    )
-    return evidence or None
 
 
 def prepare_release_version(worktree: Path, tag: str,
@@ -3535,8 +3420,11 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
     run (same run id, same worktree) from the top:
 
     1. Strictly parse the `## Release` declaration from the Issue
-       body (version, base_branch, test_command, scope or
-       scope_from_milestone — exactly one of the two, Issue #253).
+       body (version, base_branch, scope or
+       scope_from_milestone — exactly one of the two, Issue #253; a
+       legacy `test_command` field is ignored with one evidence
+       line — the declaration carries no local test contract,
+       Issue #569).
     2. Freeze the base — the release commit is exactly
        `origin/<base_branch>` (fetched under the base-sync lock).
     3. Enforce the pre-release gates (`check_release_gates`).
@@ -3549,8 +3437,10 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
        the declared `version_file` (`pyproject.toml` by default,
        `package.json`, or `none`), commit and push when metadata changes.
        The subsequent steps run against that commit.
-    5. Run the declared test command in that release worktree
-       (`timeout`-wrapped, Issue #95).
+    5. Test acceptance is the #268 CI-wait gate on the release commit:
+       after the version bump the gates re-run against that exact
+       commit, and a red or timed-out CI takes the existing recoverable
+       failure path. No local test execution (Issue #569).
     6. Tag: the remote tag must not exist or must point EXACTLY at
        the release commit (a mismatch fails — an existing tag is
        never moved); otherwise create an annotated tag at the release
@@ -3631,11 +3521,19 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         )
 
     release_commit: str | None = None
-    release_test_error: subprocess.CalledProcessError | None = None
     declaration: dict | None = None
     open_milestone_evidence: list[str] = []
     try:
         declaration = parse_release_declaration(issue["body"])
+        if declaration["test_command"] is not None:
+            # Issue #569: a legacy `test_command` line is accepted and
+            # ignored with this single evidence line — it is never
+            # executed; test acceptance is the CI-wait gate.
+            LOGGER.info(
+                "issue=%s release_test_command_ignored value=%r "
+                "(release tests are gated by GitHub Actions CI on the "
+                "release commit)", number, declaration["test_command"],
+            )
         base_branch = declaration["base_branch"]
         run_info = (
             f"base_branch={base_branch} run_id={run_id} "
@@ -3808,19 +3706,14 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             deployment_home, lock_repo_dir=deployment_home,
             run_command=run_command,
         )
-        try:
-            run_release_tests(
-                worktree, declaration["test_command"],
-                declaration["test_timeout_seconds"],
-            )
-        except subprocess.CalledProcessError as exc:
-            release_test_error = exc
-            raise
+        # Issue #569: there is NO local test execution — the CI-wait gate
+        # re-run above already decided the test acceptance on this exact
+        # release commit; a red or timed-out CI took the recoverable
+        # failure path there.
         test_evidence = (
-            f"declared test command and tiered coverage gate "
-            f"(line/branch >= 95%, Issue #234) passed in a clean "
-            f"worktree at {release_commit} "
-            f"(timeout {declaration['test_timeout_seconds']}s)"
+            f"release tests gated by GitHub Actions CI on the release "
+            f"commit {release_commit} (the #268 CI-wait gate; no local "
+            "test execution)"
         )
         _safe_publish(
             run_id=run_id, issue=number, source_repo=source_repo,
@@ -3970,30 +3863,6 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         return ""
     except Exception as exc:
         LOGGER.exception("issue=%s release_failed", number)
-        evidence = (
-            release_test_evidence(release_test_error)
-            if release_test_error is not None else None
-        )
-        if config.get("auto_repair_issues") and evidence is not None:
-            try:
-                repair_url = create_repair_issue(
-                    repo=source_repo, source_issue=number, run_id=run_id,
-                    release_commit=release_commit or "unknown",
-                    command=declaration["test_command"] if declaration else "unknown",
-                    evidence=evidence,
-                )
-                LOGGER.info(
-                    "repair_issue source_issue=%s run_id=%s url=%s",
-                    number, run_id, repair_url,
-                )
-            except Exception:
-                # A repair Issue is an auditable convenience only: failure to
-                # create it must be visible but cannot replace the original
-                # release-test failure or unblock/publish the release.
-                LOGGER.exception(
-                    "repair_issue_failed source_issue=%s run_id=%s",
-                    number, run_id,
-                )
         apply_label_patch(
             number, repo=source_repo, event=EVENT_BLOCKED,
             current_labels={IN_PROGRESS_LABEL},
