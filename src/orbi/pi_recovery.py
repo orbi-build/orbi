@@ -95,7 +95,7 @@ def process_state(pid: int) -> str | None:
     if raw is None:
         return None
     fields = _stat_fields(raw)
-    if fields is None or not fields[0]:
+    if fields is None or not fields:
         return None
     return fields[0]
 
