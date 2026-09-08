@@ -4304,7 +4304,7 @@ def stable_branch_exists(repo_dir: Path, branch: str) -> bool:
     """Return whether the stable delivery branch exists on origin."""
     raw = run_command(
         ["git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
-        cwd=repo_dir,
+        cwd=repo_dir, timeout=GIT_NETWORK_TIMEOUT_SECONDS,
     )
     return bool(raw.strip())
 
@@ -4315,7 +4315,7 @@ def open_pr_for_branch(repo_dir: Path, branch: str) -> dict | None:
         "gh", "pr", "list", "--state", "open", "--head", branch,
         "--json", "number,url,baseRefName,headRefName,headRefOid",
         "--limit", "2",
-    ], cwd=repo_dir)
+    ], cwd=repo_dir, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
     prs = json.loads(raw) if raw.strip() else []
     if not isinstance(prs, list):
         raise RuntimeError("open PR query must return an array")
@@ -4856,7 +4856,9 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
     if existing_branch:
         # The branch is the delivery identity.  Fetch it, then create the
         # run-isolated worktree from its remote HEAD rather than the base.
-        run_command(["git", "fetch", "origin", branch], cwd=repo_dir)
+        run_git_network_command(
+            ["git", "fetch", "origin", branch], cwd=repo_dir,
+        )
         local = run_command(
             ["git", "branch", "--list", branch], cwd=repo_dir,
         )

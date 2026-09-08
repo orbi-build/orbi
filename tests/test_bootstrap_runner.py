@@ -2641,7 +2641,7 @@ def test_create_worktree_reuses_existing_remote_branch(monkeypatch, tmp_path):
         tmp_path, "owner/repo", 3, "run1", "base", existing_branch=True,
     ) == path
     assert calls == [
-        (["git", "fetch", "origin", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
+        (["git", "fetch", "origin", "orbi/owner-repo-issue-3"], {"cwd": tmp_path, "timeout": runner.GIT_NETWORK_TIMEOUT_SECONDS}),
         (["git", "branch", "--list", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
         (["git", "worktree", "add", "-b", "orbi/owner-repo-issue-3", str(path), "origin/orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
     ]
