@@ -346,7 +346,7 @@ def fetch_issue(owner: str, repo: str, number: int) -> dict | None:
 
 def active_source_issue(
     owner: str, repo: str, pr_number: int | None,
-) -> tuple[int, int] | None:
+) -> tuple[int, int, set[str]] | None:
     """Resolve an open Orbi delivery Issue from a PR's closing reference."""
     if pr_number is None:
         return None
@@ -361,12 +361,20 @@ def active_source_issue(
             if isinstance(label, dict) and isinstance(label.get("name"), str)
         } if issue else set()
         if issue and issue.get("state") == "open" and labels & ACTIVE_DELIVERY_LABELS:
-            return number, pr_number
+            return number, pr_number, labels
     return None
 
 
+def remove_issue_label(owner: str, repo: str, number: int, label: str) -> None:
+    """Remove one stale delivery-state label from the source Issue."""
+    gh_api(
+        f"repos/{owner}/{repo}/issues/{number}/labels/{label}",
+        method="DELETE",
+    )
+
+
 def add_issue_label(owner: str, repo: str, number: int, label: str) -> None:
-    """Add one label without replacing the source Issue's delivery labels."""
+    """Add one label without replacing the source Issue's other labels."""
     gh_api(
         f"repos/{owner}/{repo}/issues/{number}/labels",
         method="POST", payload={"labels": [label]},
@@ -482,11 +490,17 @@ def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
         log(f"ignored reason=no_failed_jobs run_id={run.get('id')}")
         return
     if source is not None:
-        source_number, source_pr = source
+        source_number, source_pr, source_labels = source
         for item in failed:
             evidence = build_reoccurrence_comment(run, item)
             comment_issue(owner, repo, source_number, evidence)
             comment_issue(owner, repo, source_pr, evidence)
+        # Keep the delivery state canonical: the Runner's lifecycle contract
+        # requires ai-fix-needed to replace an older opened/in-flight state,
+        # not coexist with it.
+        for stale_label in ("ai-in-progress", "ai-pr-opened"):
+            if stale_label in source_labels:
+                remove_issue_label(owner, repo, source_number, stale_label)
         add_issue_label(owner, repo, source_number, "ai-fix-needed")
         log(
             f"routed source_issue={source_number} pr={source_pr} "

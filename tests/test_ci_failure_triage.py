@@ -618,10 +618,14 @@ def setup_active_pr_failure(gh, monkeypatch, tmp_path, *, body="Fixes #494", lab
     write_event(monkeypatch, tmp_path, run_event(event="pull_request", head_branch="feature"))
     gh.routes[ep_pulls()] = [{"number": 541, "state": "open"}]
     gh.routes[ep_pr(541)] = {"number": 541, "body": body}
+    active_labels = labels or ["ai-pr-opened"]
     gh.routes[ep_source(494)] = {
         "number": 494, "state": "open",
-        "labels": [{"name": name} for name in (labels or ["ai-pr-opened"])],
+        "labels": [{"name": name} for name in active_labels],
     }
+    for name in ("ai-in-progress", "ai-pr-opened"):
+        if name in active_labels:
+            gh.routes[f"{ep_labels(494)}/{name}"] = {}
     gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
 
 
@@ -636,6 +640,7 @@ def test_active_orbi_pr_routes_evidence_to_source_and_pr(gh, monkeypatch, tmp_pa
     assert f"job logs: {JOB_URL}" in evidence
     assert "Run the full test suite" in evidence
     assert RUN_URL in evidence
+    assert gh.calls_to(f"{ep_labels(494)}/ai-pr-opened", "DELETE")
     assert gh.calls_to(ep_labels(494), "POST")[0]["payload"] == {
         "labels": ["ai-fix-needed"]
     }
