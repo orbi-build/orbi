@@ -4744,14 +4744,20 @@ def pick_next_delivery(
     resume states, and running an in-flight or opened-PR delivery to
     completion is never gated by a Milestone change.
     """
+    # The sweep runs before a delivery is selected, so a fresh tick has no
+    # task attempt yet.  Give its auditable comments one tick-scoped marker;
+    # a selected delivery will replace this binding with its own attempt id.
+    tick_run_id = current_run_id()
+    if tick_run_id is None:
+        tick_run_id = new_run_id()
+        set_run_id(tick_run_id)
     for repo in repos:
         # Epic reconciliation is a per-tick bypass: a broken GitHub query or
         # mutation must never prevent the ordinary delivery scans.
-        if current_run_id() is not None:
-            try:
-                reconcile_open_epics(repo, current_run_id())
-            except Exception:
-                LOGGER.exception("epic_reconcile_failed repo=%s", repo)
+        try:
+            reconcile_open_epics(repo, tick_run_id)
+        except Exception:
+            LOGGER.exception("epic_reconcile_failed repo=%s", repo)
         selected = pick_resumable_delivery(
             repo, slot_dir, max_concurrency,
         )

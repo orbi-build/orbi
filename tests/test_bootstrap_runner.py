@@ -15563,6 +15563,18 @@ def test_reconcile_open_epics_failure_is_fail_open(monkeypatch, caplog):
     assert "epic_reconcile_failed repo=o/r" in caplog.text
 
 
+def test_reconcile_open_epics_runs_on_a_fresh_tick(monkeypatch):
+    calls = []
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(runner, "reconcile_open_epics", lambda repo, run_id: calls.append((repo, run_id)))
+    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args: None)
+    monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args: None)
+    monkeypatch.setattr(runner, "pick_issue", lambda *args: None)
+    assert runner.pick_next_delivery(["o/r"], Path("/tmp/slots"), 1) is None
+    assert calls == [("o/r", "a1b2c3d4")]
+
+
 def test_verify_epic_complete_rejects_malformed_native_blockers(monkeypatch):
     monkeypatch.setattr(runner, "run_command", lambda *args, **kwargs: json.dumps({
         "number": 20, "body": "## Children\n- #21",
