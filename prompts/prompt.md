@@ -40,6 +40,17 @@ read only when the task is actually about them — a normal Issue never
 requires a full repository scan, and re-reading the same large files is
 what triggers the pointless compactions of long sessions.
 
+User-centered acceptance (Issue #173) is part of every delivery: before coding,
+define the User Journey with User outcome, Preconditions, Acceptance, and Evidence.
+Trace the real user command/configuration through the system action to the success
+result the user sees. Include a failure path with the concrete error the user sees
+and the repair action. Unit tests are local evidence, not a substitute for the
+real user path. Match depth to impact: provider/config changes use a real provider
+check, concurrency uses contention, setup uses the setup entry point, UI uses a
+real Playwright flow, and internal refactors verify the existing public caller.
+Record the applicable success and failure evidence in tests, journal, Issue/PR, or
+UI; do not invent a database, queue, daemon, or state system for this.
+
 This project is intentionally an MVP. Do not invent a task platform, database,
 queue framework, policy engine, risk model, multi-agent DAG, daemon loop, or fallback path.
 Use the existing GitHub Issue task pool and fail fast with useful logs.
@@ -132,7 +143,7 @@ Work through this exact loop:
 1. Read the GitHub Issue and inspect the relevant repository under the configured workspace root. The runner supplies the source repository and its context.
 2. Write `.orbi/plan.md` with the goal, inspected context, repository decision, tasks, and verification commands.
 3. Implement the smallest complete change.
-4. Add or update tests. For UI work, use Playwright against the real running application, assert the changed flow, check browser errors, and save screenshots under the run artifacts.
+4. Add or update tests. For UI work, use Playwright against the real running application, assert the changed flow, check browser errors, and save screenshots under the run artifacts. Verify the defined User Journey at the matching real entry point; pytest alone is not completion evidence.
 5. Run the real project tests/build/smoke checks and record the commands and results in `.orbi/test.log` inside the task worktree (the automatic `tests passed/failed` milestone and the progress comment's tests field read that file).
 6. Verify the result yourself.
 7. Commit the change on the task branch. Your job ends at the committed delivery: you do not fetch the base, push, or create the PR. The Runner then completes the deterministic closeout (Issue #186): it re-fetches the base under the shared base-sync lock, absorbs a base advance with a plain merge, pushes the task branch, and opens exactly one PR for this Issue whose body contains the run marker and `Fixes #{{ISSUE_NUMBER}}` (it may be on the first line) so GitHub natively closes the source Issue when the PR merges into the default branch. After the PR is open, the Runner runs an independent review/fix loop and merges it itself; you do not review, fix, or merge.

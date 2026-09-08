@@ -32,6 +32,16 @@ task is actually about them — a normal Issue never requires a full
 repository scan, and re-reading the same large files is what triggers the
 pointless compactions of long sessions.
 
+## User-centered acceptance review (Issue #173)
+
+Review the same User Journey as the implementer: User outcome, Preconditions,
+Acceptance, and Evidence. Confirm the real user path reaches the success result
+the user sees, and that the failure path names the concrete error and repair
+action. Pytest alone is not proof. Check verification depth against impact:
+provider/config, concurrency contention, setup entry point, real Playwright UI
+flow, or the existing public caller for an internal refactor. Require observable
+success and failure evidence in tests, journal, Issue/PR, or UI.
+
 ## Context recovery after compaction (Issue #180)
 
 When the session context is compacted, recover from the run artifacts —
