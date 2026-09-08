@@ -168,7 +168,7 @@ def _pr_json(number=4, base="main", base_oid="b1", head="h1"):
         "url": f"https://github.com/owner/repo/pull/{number}",
         "baseRefName": base,
         "baseRefOid": base_oid,
-        "headRefName": "orbi/owner-repo-issue-4-run1",
+        "headRefName": "orbi/owner-repo-issue-4",
         "headRefOid": head,
     }])
 
@@ -182,7 +182,7 @@ def test_freeze_pr_returns_frozen_base_and_head(monkeypatch, tmp_path):
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     pr = runner.freeze_pr(
-        tmp_path, "orbi/owner-repo-issue-4-run1", "main",
+        tmp_path, "orbi/owner-repo-issue-4", "main",
     )
     assert pr["number"] == 4
     assert pr["base_ref"] == "main"
@@ -191,7 +191,7 @@ def test_freeze_pr_returns_frozen_base_and_head(monkeypatch, tmp_path):
     assert pr["url"].endswith("/pull/4")
     assert calls == [[
         "gh", "pr", "list", "--state", "open", "--head",
-        "orbi/owner-repo-issue-4-run1",
+        "orbi/owner-repo-issue-4",
         "--json", "number,url,baseRefName,baseRefOid,headRefName,headRefOid",
         "--limit", "2",
     ]]
@@ -202,13 +202,13 @@ def test_freeze_pr_rejects_wrong_base(monkeypatch, tmp_path):
         runner, "run_command", lambda command, **kwargs: _pr_json(base="develop"),
     )
     with pytest.raises(RuntimeError, match="PR base is develop, expected main"):
-        runner.freeze_pr(tmp_path, "orbi/owner-repo-issue-4-run1", "main")
+        runner.freeze_pr(tmp_path, "orbi/owner-repo-issue-4", "main")
 
 
 def test_freeze_pr_rejects_no_open_pr(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "[]")
     with pytest.raises(RuntimeError, match="exactly one open PR"):
-        runner.freeze_pr(tmp_path, "orbi/owner-repo-issue-4-run1", "main")
+        runner.freeze_pr(tmp_path, "orbi/owner-repo-issue-4", "main")
 
 
 def test_freeze_pr_rejects_multiple_open_prs(monkeypatch, tmp_path):
@@ -220,7 +220,7 @@ def test_freeze_pr_rejects_multiple_open_prs(monkeypatch, tmp_path):
     ])
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: two)
     with pytest.raises(RuntimeError, match="exactly one open PR"):
-        runner.freeze_pr(tmp_path, "orbi/owner-repo-issue-4-run1", "main")
+        runner.freeze_pr(tmp_path, "orbi/owner-repo-issue-4", "main")
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +253,7 @@ def test_run_review_launches_independent_readonly_pi_session(monkeypatch, tmp_pa
     pr = {"number": 4, "url": "u", "base_ref": "main", "base_oid": "b1",
           "head_ref": "h", "head_oid": "h1"}
     out = runner.run_review(tmp_path, pr, _review_config(tmp_path),
-                            "owner/repo", 4, "orbi/owner-repo-issue-4-run1", 1)
+                            "owner/repo", 4, "orbi/owner-repo-issue-4", 1)
     assert out == "done"
     command, kwargs = calls[0]
     # Review skill, shared flat session dir (so the same live activity
@@ -274,7 +274,7 @@ def test_run_review_launches_independent_readonly_pi_session(monkeypatch, tmp_pa
     assert kwargs["role"] == runner.ROLE_REVIEW
     assert kwargs["run_id"] == "run1"
     assert kwargs["issue"] == 4
-    assert kwargs["branch"] == "orbi/owner-repo-issue-4-run1"
+    assert kwargs["branch"] == "orbi/owner-repo-issue-4"
     assert kwargs["source_repo"] == "owner/repo"
     assert kwargs["log_command"][-2:] == [
         "<redacted>", "<review-context-redacted>",

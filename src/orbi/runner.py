@@ -9090,6 +9090,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
     # label, so re-claiming an issue always starts a fresh run.
     existing_worktree: Path | None = None
     takeover_pr: dict | None = None
+    stable_branch_present = False
     claim_labels = {
         label.get("name") for label in issue.get("labels", [])
         if isinstance(label, dict) and isinstance(label.get("name"), str)
@@ -9098,9 +9099,12 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
     if not in_progress and READY_LABEL in claim_labels:
         stable_branch = task_branch(source_repo, number)
         takeover_pr = open_pr_for_branch(config["repo_dir"], stable_branch)
+        stable_branch_present = stable_branch_exists(
+            config["repo_dir"], stable_branch,
+        )
         route = claim_route(
             claim_labels,
-            branch_exists=stable_branch_exists(config["repo_dir"], stable_branch),
+            branch_exists=stable_branch_present,
             open_pr=takeover_pr is not None,
         )
         LOGGER.info(
@@ -9206,7 +9210,10 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
         worktree = create_worktree(
             config["repo_dir"], source_repo, number, run_id, base_sha,
             existing=existing_worktree,
-            existing_branch=takeover_pr is not None,
+            # A stable branch without an open PR is the interrupted push/
+            # create gap: continue from that branch rather than trying to
+            # create a second local branch with the same name.
+            existing_branch=stable_branch_present or takeover_pr is not None,
         )
         # Issue #219: the run state file is the same-run marker —
         # written for EVERY run (a fresh one included, so a later

@@ -22,7 +22,7 @@ from tests.test_progress_wiring import make_fake_gh
 
 
 FAKE_RUN_ID = "a1b2c3d4"
-FAKE_BRANCH = f"orbi/owner-repo-issue-9-{FAKE_RUN_ID}"
+FAKE_BRANCH = f"orbi/owner-repo-issue-9"
 FAKE_WORKTREE = "/srv/repo/.worktrees/orbi-owner-repo-issue-9-a1b2c3d4"
 FAKE_PR_URL = "https://github.com/owner/repo/pull/9"
 

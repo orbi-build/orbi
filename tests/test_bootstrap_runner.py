@@ -2626,6 +2626,27 @@ def test_create_worktree_adds_branch_from_frozen_base_sha(monkeypatch, tmp_path)
     )]
 
 
+def test_create_worktree_reuses_existing_remote_branch(monkeypatch, tmp_path):
+    path = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-run1"
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[:3] == ["git", "branch", "--list"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.create_worktree(
+        tmp_path, "owner/repo", 3, "run1", "base", existing_branch=True,
+    ) == path
+    assert calls == [
+        (["git", "fetch", "origin", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
+        (["git", "branch", "--list", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
+        (["git", "worktree", "add", "-b", "orbi/owner-repo-issue-3", str(path), "origin/orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
+    ]
+
+
 def test_latest_run_id_returns_none_without_task_worktrees(tmp_path):
     assert runner.latest_run_id(tmp_path, "owner/repo", 3) is None
     # Unrelated directories are not task worktrees.
@@ -2671,13 +2692,13 @@ def test_write_run_state_writes_the_run_identity(tmp_path):
     worktree.mkdir()
     runner.write_run_state(
         worktree, run_id="a1b2c3d4", issue=3, source_repo="owner/repo",
-        branch="orbi/owner-repo-issue-3-a1b2c3d4",
+        branch="orbi/owner-repo-issue-3",
     )
     state = json.loads(runner.run_state_path(worktree).read_text())
     assert state["run_id"] == "a1b2c3d4"
     assert state["issue"] == 3
     assert state["repo"] == "owner/repo"
-    assert state["branch"] == "orbi/owner-repo-issue-3-a1b2c3d4"
+    assert state["branch"] == "orbi/owner-repo-issue-3"
     assert state["worktree"] == str(worktree)
     assert isinstance(state["created_at"], str) and state["created_at"]
 
@@ -2689,11 +2710,11 @@ def test_write_run_state_is_idempotent_for_a_resumed_run(tmp_path):
     worktree.mkdir()
     runner.write_run_state(
         worktree, run_id="a1b2c3d4", issue=3, source_repo="owner/repo",
-        branch="orbi/owner-repo-issue-3-a1b2c3d4",
+        branch="orbi/owner-repo-issue-3",
     )
     runner.write_run_state(
         worktree, run_id="a1b2c3d4", issue=3, source_repo="owner/repo",
-        branch="orbi/owner-repo-issue-3-a1b2c3d4",
+        branch="orbi/owner-repo-issue-3",
     )
     state = json.loads(runner.run_state_path(worktree).read_text())
     assert state["run_id"] == "a1b2c3d4"
@@ -2708,7 +2729,7 @@ def test_read_run_state_round_trips_the_written_state(tmp_path):
     worktree.mkdir()
     runner.write_run_state(
         worktree, run_id="a1b2c3d4", issue=3, source_repo="owner/repo",
-        branch="orbi/owner-repo-issue-3-a1b2c3d4",
+        branch="orbi/owner-repo-issue-3",
     )
     state = runner.read_run_state(worktree)
     assert state["run_id"] == "a1b2c3d4"
@@ -2852,7 +2873,7 @@ def test_resume_run_id_matches_by_issue_and_repo_name_across_a_rename(
     old.mkdir(parents=True)
     runner.write_run_state(
         old, run_id="aaaa1111", issue=42, source_repo="xqliu/orbi",
-        branch="orbi/xqliu-orbi-issue-42-aaaa1111",
+        branch="orbi/xqliu-orbi-issue-42",
     )
     assert runner.resume_run_id(
         tmp_path, "orbi-build/orbi", 42,
@@ -2987,7 +3008,7 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     gh_calls, posted = make_fake_gh(
         monkeypatch, comments=[existing_comment], in_progress=True,
     )
-    branch = "orbi/xqliu-orbi-backlog-issue-4-a1b2c3d4"
+    branch = "orbi/xqliu-orbi-backlog-issue-4"
     head = "0123456789abcdef0123456789abcdef01234567"
 
     def fake_run(command, **kwargs):
@@ -3075,7 +3096,7 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     assert patches, "the existing progress comment was not updated"
     last_body = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Orbi delivered" in last_body
-    assert "- branch: orbi/xqliu-orbi-backlog-issue-4-a1b2c3d4" in last_body
+    assert "- branch: orbi/xqliu-orbi-backlog-issue-4" in last_body
 
 
 def test_process_issue_binds_run_id_before_the_resume_scan(
@@ -3087,7 +3108,7 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
     which run before the resume decision (review round 3, PR #42)."""
     gh_calls, posted = make_fake_gh(monkeypatch, in_progress=True)
     head = "0123456789abcdef0123456789abcdef01234567"
-    branch = "orbi/xqliu-orbi-backlog-issue-4-a1b2c3d4"
+    branch = "orbi/xqliu-orbi-backlog-issue-4"
 
     def fake_run(command, **kwargs):
         gh_calls.append(command)
@@ -3172,7 +3193,7 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
             return json.dumps([{
                 "url": "https://github.com/orbi-build/orbi/pull/4",
                 "baseRefName": "main",
-                "headRefName": "orbi/xqliu-orbi-backlog-issue-4-ffffeeee",
+                "headRefName": "orbi/xqliu-orbi-backlog-issue-4",
                 "headRefOid": head,
                 "headRepository": {"name": "orbi"},
                 "headRepositoryOwner": {"login": "orbi-build"},
@@ -3182,7 +3203,7 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
                 ),
             }])
         if command[:3] == ["git", "branch", "--show-current"]:
-            return "orbi/xqliu-orbi-backlog-issue-4-ffffeeee"
+            return "orbi/xqliu-orbi-backlog-issue-4"
         if command[:2] == ["git", "rev-parse"]:
             return head
         return ""
@@ -3239,7 +3260,7 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
             return json.dumps([{
                 "url": "https://github.com/orbi-build/orbi/pull/4",
                 "baseRefName": "main",
-                "headRefName": "orbi/xqliu-orbi-backlog-issue-4-ffffeeee",
+                "headRefName": "orbi/xqliu-orbi-backlog-issue-4",
                 "headRefOid": head,
                 "headRepository": {"name": "orbi"},
                 "headRepositoryOwner": {"login": "orbi-build"},
@@ -3249,7 +3270,7 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
                 ),
             }])
         if command[:3] == ["git", "branch", "--show-current"]:
-            return "orbi/xqliu-orbi-backlog-issue-4-ffffeeee"
+            return "orbi/xqliu-orbi-backlog-issue-4"
         if command[:2] == ["git", "rev-parse"]:
             return head
         return ""
@@ -3298,7 +3319,7 @@ def _resume_wiring_setup(monkeypatch, tmp_path, *, in_progress: bool,
     # resumed one (label on + a worktree to resume) or the fresh one.
     run_id = ("a1b2c3d4"
               if in_progress and latest_run_id_result else "ffffeeee")
-    branch = f"orbi/xqliu-orbi-backlog-issue-4-{run_id}"
+    branch = f"orbi/xqliu-orbi-backlog-issue-4"
     comment_bodies = []
 
     def fake_run(command, **kwargs):
@@ -3564,7 +3585,7 @@ def test_run_pi_renders_base_sync_lock_into_prompt(monkeypatch, tmp_path):
     }
     runner.run_pi(
         issue, tmp_path, config, "owner/repo",
-        branch="orbi/owner-repo-issue-4-run1",
+        branch="orbi/owner-repo-issue-4",
     )
     command = calls[0]
     assert command[command.index("--system-prompt") + 1] == "SYSTEM " + str(
@@ -3598,7 +3619,7 @@ def test_run_pi_logs_provider_config_loaded_with_selection(
     with caplog.at_level("INFO"):
         runner.run_pi(
             issue, tmp_path, config, "owner/repo",
-            branch="orbi/owner-repo-issue-4-run1",
+            branch="orbi/owner-repo-issue-4",
         )
     lines = [line for line in caplog.text.splitlines()
              if " provider_config_loaded " in line]
@@ -3731,7 +3752,7 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
     }
     assert runner.run_pi(
         issue, tmp_path, config, "owner/repo",
-        branch="orbi/owner-repo-issue-4-run1",
+        branch="orbi/owner-repo-issue-4",
     ) == "done"
     command, kwargs = calls[0]
     assert command[:5] == ["pi", "--no-extensions", "--skill", "skill.md", "--print"]
@@ -3751,7 +3772,7 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
     assert kwargs["run_id"] == "run1"
     assert kwargs["issue"] == 4
     assert kwargs["source_repo"] == "owner/repo"
-    assert kwargs["branch"] == "orbi/owner-repo-issue-4-run1"
+    assert kwargs["branch"] == "orbi/owner-repo-issue-4"
     assert kwargs["log_command"][-2:] == ["<redacted>", "<issue-context-redacted>"]
 
 
@@ -3774,9 +3795,9 @@ def test_run_pi_passes_task_branch_to_stream_pi(monkeypatch, tmp_path):
     }
     runner.run_pi(
         issue, tmp_path, config, "owner/repo",
-        timeout=7, branch="orbi/owner-repo-issue-5-run1",
+        timeout=7, branch="orbi/owner-repo-issue-5",
     )
-    assert calls[0]["branch"] == "orbi/owner-repo-issue-5-run1"
+    assert calls[0]["branch"] == "orbi/owner-repo-issue-5"
     assert calls[0]["timeout"] == 7
 
 
@@ -3788,7 +3809,7 @@ def test_run_pi_redacts_prompt_and_issue_from_command_log(monkeypatch, tmp_path)
     runner.run_pi(
         {"number": 5, "title": "secret", "body": "token"}, tmp_path,
         {"prompt": prompt_path, "repo_dir": tmp_path, "source_repos": ["owner/repo"], "workspace_root": tmp_path, "context_files": [], "skills": [], "base_branch": "main", "base_sha": "abc123def456", "run_id": "run1"},
-        "owner/repo", branch="orbi/owner-repo-issue-5-run1",
+        "owner/repo", branch="orbi/owner-repo-issue-5",
     )
     command, kwargs = calls[0]
     assert "PRIVATE SYSTEM" in command[6]
@@ -3820,7 +3841,7 @@ def test_run_pi_keeps_the_fresh_context_without_a_resume_context(
     }
     runner.run_pi(
         {"number": 5, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="orbi/owner-repo-issue-5-run1",
+        "owner/repo", branch="orbi/owner-repo-issue-5",
     )
     command = calls[0]
     assert command[-1] == (
@@ -3860,7 +3881,7 @@ def test_run_pi_appends_the_resume_context_to_the_context_argument(
     )
     runner.run_pi(
         {"number": 5, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="orbi/owner-repo-issue-5-run1",
+        "owner/repo", branch="orbi/owner-repo-issue-5",
         resume_context=resume,
     )
     command = calls[0]
@@ -6007,7 +6028,7 @@ def test_stream_pi_logs_run_start_once_with_full_scene(tmp_path, caplog):
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.1,
             run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
-            branch="orbi/xqliu-orbi-issue-24-run1",
+            branch="orbi/xqliu-orbi-issue-24",
         )
     assert result == "final answer"
     # Without an explicit log_command the raw command is never logged.
@@ -6019,7 +6040,7 @@ def test_stream_pi_logs_run_start_once_with_full_scene(tmp_path, caplog):
     assert "run=deadbeef" in start
     assert "issue=xqliu/orbi#24" in start
     assert "role=implement" in start
-    assert "branch=orbi/xqliu-orbi-issue-24-run1" in start
+    assert "branch=orbi/xqliu-orbi-issue-24" in start
     assert f"worktree={tmp_path}" in start
     # The session fields are part of the scene; before Pi writes its first
     # record they are '-' (the full entry reappears on run_failed).
@@ -8786,7 +8807,7 @@ def test_run_pi_keeps_tdd_dev_and_code_review_drops_review_fix_loop(
     )
     runner.run_pi(
         {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="orbi/owner-repo-issue-4-a1b2c3d4",
+        "owner/repo", branch="orbi/owner-repo-issue-4",
     )
     skills = _command_skills(calls[0])
     assert any("tdd-dev" in skill for skill in skills)
@@ -8835,7 +8856,7 @@ def test_run_pi_and_run_review_skill_lists_differ(monkeypatch, tmp_path):
     )
     runner.run_pi(
         {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="orbi/owner-repo-issue-4-a1b2c3d4",
+        "owner/repo", branch="orbi/owner-repo-issue-4",
     )
     runner.run_review(
         tmp_path,
@@ -11111,7 +11132,7 @@ def test_run_pi_passes_configured_model_args(monkeypatch, tmp_path):
     )
     runner.run_pi(
         {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="orbi/owner-repo-issue-4-a1b2c3d4",
+        "owner/repo", branch="orbi/owner-repo-issue-4",
     )
     command, kwargs = calls[0]
     assert _command_model_args(command) == [
@@ -11140,7 +11161,7 @@ def test_run_pi_passes_partial_model_args(monkeypatch, tmp_path):
     config = _model_config(tmp_path, pi_provider="openai")
     runner.run_pi(
         {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="orbi/owner-repo-issue-4-a1b2c3d4",
+        "owner/repo", branch="orbi/owner-repo-issue-4",
     )
     command, kwargs = calls[0]
     assert _command_model_args(command) == [("--provider", "openai")]
@@ -11161,7 +11182,7 @@ def test_run_pi_omits_model_args_when_not_configured(monkeypatch, tmp_path):
     config = _model_config(tmp_path)
     runner.run_pi(
         {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="orbi/owner-repo-issue-4-a1b2c3d4",
+        "owner/repo", branch="orbi/owner-repo-issue-4",
     )
     command, kwargs = calls[0]
     assert "--provider" not in command
@@ -12123,7 +12144,7 @@ def test_run_pi_materializes_provider_dir_and_env(monkeypatch, tmp_path):
     )
     runner.run_pi(
         {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="orbi/owner-repo-issue-4-a1b2c3d4",
+        "owner/repo", branch="orbi/owner-repo-issue-4",
     )
     kwargs = calls[0]
     agent_dir = tmp_path / ".orbi" / "pi-agent"
@@ -12147,7 +12168,7 @@ def test_run_pi_without_providers_keeps_pre_157_env(monkeypatch, tmp_path):
     config = _model_config(tmp_path)
     runner.run_pi(
         {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="orbi/owner-repo-issue-4-a1b2c3d4",
+        "owner/repo", branch="orbi/owner-repo-issue-4",
     )
     kwargs = calls[0]
     assert "pi_env" not in kwargs
@@ -12465,7 +12486,7 @@ def test_e2e_provider_endpoint_reaches_pi_process(monkeypatch, tmp_path):
     )
     result = runner.run_pi(
         {"number": 4, "title": "t", "body": "b"}, tmp_path, config,
-        "owner/repo", branch="orbi/owner-repo-issue-4-a1b2c3d4",
+        "owner/repo", branch="orbi/owner-repo-issue-4",
     )
     assert result == "https://api.groq.com/openai/v1"
 
@@ -12553,7 +12574,7 @@ def test_stop_handler_active_run_logs_stopping_then_stopped_and_exits(
     monkeypatch.setattr(runner, "_ACTIVE_RUN", None)
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
     runner.set_active_run(
-        48, "Log the stop scene", "orbi/owner-repo-issue-48-a1b2c3d4",
+        48, "Log the stop scene", "orbi/owner-repo-issue-48",
         str(worktree),
     )
     child = subprocess.Popen(
@@ -12583,7 +12604,7 @@ def test_stop_handler_active_run_logs_stopping_then_stopped_and_exits(
     # No session file yet: the snapshot fields are '-' (never invented).
     assert "phase=-" in line
     assert "session=-" in line
-    assert "branch=orbi/owner-repo-issue-48-a1b2c3d4" in line
+    assert "branch=orbi/owner-repo-issue-48" in line
     assert f"worktree={worktree}" in line
     assert stopped[0].endswith("run_stopped issue=48 result=interrupted")
     # The live Pi child was shut down: no orphan survives the stop.
@@ -12764,7 +12785,7 @@ signal.signal(signal.SIGTERM, runner._handle_stop)
 runner.set_run_id("a1b2c3d4")
 runner.set_active_run(
     48, "Log the stop scene",
-    "orbi/owner-repo-issue-48-a1b2c3d4", {worktree!r},
+    "orbi/owner-repo-issue-48", {worktree!r},
 )
 # The real Pi-like child: a real long-running process (what stream_pi
 # tracks via set_active_pi). It lingers briefly on SIGTERM before
@@ -12871,7 +12892,7 @@ def test_real_subprocess_sigterm_logs_stop_scene_and_shuts_down_pi(
     # worktree's .pi-session.
     assert "phase=test" in line
     assert "session=sess-48" in line
-    assert "branch=orbi/owner-repo-issue-48-a1b2c3d4" in line
+    assert "branch=orbi/owner-repo-issue-48" in line
     assert f"worktree={worktree}" in line
     assert stopped[0].endswith("run_stopped issue=48 result=interrupted")
     # No orphan Pi: the stop handler waited for the child to exit

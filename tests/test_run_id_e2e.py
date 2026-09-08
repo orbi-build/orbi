@@ -374,11 +374,12 @@ def test_e2e_one_run_id_carries_every_event_of_the_attempt(
         assert f"run_id={run_id}" in body
         assert f"<!-- orbi:run={run_id} -->" in body
 
-    # 3. Branch and worktree names carry the run_id.
+    # 3. The local worktree remains run-scoped, while the delivery branch
+    # is the stable Issue identity.
     worktree = worktree_for(clone, run_id)
     assert worktree.is_dir()
     assert git(worktree, "branch", "--show-current") == (
-        f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-{run_id}"
+        f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}"
     )
 
     # 4. Run artifacts live inside the run-scoped worktree (in the
@@ -401,30 +402,38 @@ def test_e2e_retry_of_same_issue_gets_new_run_id_and_keeps_old_scene(
     config = config_for(clone, tmp_path)
 
     runner.process_issue(issue(), config, REPO)
-    runner.process_issue(issue(), config, REPO)
+    # A real fresh claim includes the ai-ready label; this is the
+    # relabel/takeover path for the already-open stable PR.
+    ready_issue = {
+        **issue(),
+        "labels": [{"name": runner.READY_LABEL}],
+    }
+    runner.process_issue(ready_issue, config, REPO)
 
     first = worktree_for(clone, "a1b2c3d4")
     second = worktree_for(clone, "b2c3d4e5")
     assert first.is_dir() and second.is_dir()
+    assert git(second, "branch", "--show-current") == (
+        f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}"
+    )
 
-    # The old scene is preserved and still queryable by the old run id.
+    # The old scene remains in its local worktree; takeover reviews the
+    # existing PR and does not run a second implementer or create a PR.
     assert "a1b2c3d4" in (first / ".orbi" / "plan.md").read_text(
         encoding="utf-8",
     )
-    assert "b2c3d4e5" in (second / ".orbi" / "plan.md").read_text(
-        encoding="utf-8",
-    )
+    assert not (second / ".orbi" / "plan.md").exists()
 
-    # Comments are not confused: each attempt carries exactly its own
-    # id (four comments per attempt: started Pi, progress, plan ready
-    # milestone, opened PR).
-    assert len(comments) == 8
+    # The takeover has only started/progress/opened-scene comments; the
+    # existing PR is reused and no second PR is created.
+    assert len(comments) == 7
     assert "<!-- orbi:run=a1b2c3d4 -->" in comments[0]
     assert "b2c3d4e5" not in comments[0]
     assert "<!-- orbi:run=a1b2c3d4 -->" in comments[1]
     assert "<!-- orbi:run=b2c3d4e5 -->" in comments[4]
     assert "a1b2c3d4" not in comments[4]
     assert "<!-- orbi:run=b2c3d4e5 -->" in comments[5]
+    assert "<!-- orbi:run=b2c3d4e5 -->" in comments[6]
 
     # The journal timeline splits cleanly into the two runs.
     first_lines = [
@@ -539,7 +548,7 @@ def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
     assert not worktree_for(clone, "b2c3d4e5").exists()
     assert git(
         first_worktree, "branch", "--show-current",
-    ) == f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-a1b2c3d4"
+    ) == f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}"
 
     # Exactly ONE progress comment: the restarted run PATCHed the
     # existing one (found by its run marker), never a second one.

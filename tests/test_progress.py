@@ -353,7 +353,7 @@ def test_progress_body_starts_with_hidden_run_marker():
         "last_action": "bash pytest tests/",
         "tests": "156 passed",
         "review_round": 0,
-        "branch": "orbi/xqliu-orbi-issue-18-abc12345",
+        "branch": "orbi/xqliu-orbi-issue-18",
         "pr": None,
         "session": "sess-1",
     })
@@ -368,7 +368,7 @@ def test_progress_body_starts_with_hidden_run_marker():
     assert "- last action: bash pytest tests/" in body
     assert "- tests: 156 passed" in body
     assert "- review/fix round: 0" in body
-    assert "- branch: orbi/xqliu-orbi-issue-18-abc12345" in body
+    assert "- branch: orbi/xqliu-orbi-issue-18" in body
     assert "- PR: -" in body
     assert "- session: sess-1" in body
 
