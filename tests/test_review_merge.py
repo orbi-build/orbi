@@ -18,7 +18,7 @@ from unittest.mock import Mock
 import pytest
 
 import orbi.runner as runner
-from orbi import cli_install
+from orbi import cli_install, progress
 from tests.test_progress_wiring import make_fake_gh
 
 
@@ -844,15 +844,27 @@ def test_comment_pr_runs_gh_pr_comment_from_unrelated_cwd(
 ):
     calls = []
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(progress, "runner_fingerprint", lambda: "8a12fb1c")
     monkeypatch.setattr(
         runner, "run_command",
         lambda command, **kwargs: calls.append(command),
     )
-    runner.comment_pr(4, repo="owner/repo", body="round 1 findings")
-    assert calls == [[
-        "gh", "pr", "comment", "4", "--repo", "owner/repo",
-        "--body", "round 1 findings",
-    ]]
+    runner.comment_pr(
+        4, repo="owner/repo",
+        body=(
+            "<!-- orbi:run=abc12345 -->\n"
+            "Orbi review round 1 for PR #4: findings"
+        ),
+    )
+    assert calls[0][:7] == [
+        "gh", "pr", "comment", "4", "--repo", "owner/repo", "--body",
+    ]
+    body = calls[0][7]
+    # The PR-side copy of a round/finding comment carries the same
+    # markers as its Issue twin (Issue #526): run marker first, the
+    # hidden runner fingerprint last.
+    assert body.startswith("<!-- orbi:run=abc12345 -->\n")
+    assert body.endswith("<!-- runner=8a12fb1c -->")
 
 
 # ---------------------------------------------------------------------------

@@ -8306,10 +8306,15 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
 
 
 def comment_pr(number: int, *, repo: str, body: str) -> None:
-    """Comment on a PR in the configured source repository."""
+    """Comment on a PR in the configured source repository.
+
+    The same `format_status_comment` rendering as `comment_issue`: the
+    PR-side copy of a round / finding / blocked comment carries the run
+    marker and the runner fingerprint like its Issue twin (Issue #526).
+    """
     run_command([
         "gh", "pr", "comment", str(number), "--repo", repo,
-        "--body", body,
+        "--body", format_status_comment(body),
     ])
 
 

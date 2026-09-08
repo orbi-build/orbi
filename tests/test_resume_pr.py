@@ -1210,6 +1210,9 @@ def make_resume_failure_fake(monkeypatch, *, progress_comments=None,
         progress_comments = []
     if labels is None:
         labels = ["ai-pr-opened"]
+    # The PR-side failure comment carries the hidden runner marker
+    # (Issue #526); pin the fingerprint for a deterministic assertion.
+    monkeypatch.setattr(progress, "runner_fingerprint", lambda: "8a12fb1c")
     captured = {"api": [], "edits": [], "comments": [], "pr_comments": []}
 
     def fake_run(command, **kwargs):
@@ -1442,9 +1445,12 @@ def test_verify_resumed_pr_backfill_label_api_failure_fails_fast(
     assert "Orbi needs a fix:" in body
     assert run_marker_body() in body
     assert "rate limited" in body
-    # ... written to the Issue AND the PR (Issue #50) ...
+    # ... written to the Issue AND the PR (Issue #50); the PR copy is
+    # the same formatted comment and additionally carries the hidden
+    # runner fingerprint (Issue #526) ...
     assert len(captured["pr_comments"]) == 1
-    assert captured["pr_comments"][0] == body
+    assert captured["pr_comments"][0].startswith(run_marker_body())
+    assert captured["pr_comments"][0].endswith("<!-- runner=8a12fb1c -->")
     # ... and the fix-needed milestone.
     posted = [
         command[command.index("--field") + 1][len("body="):]
@@ -1514,9 +1520,12 @@ def test_verify_resumed_pr_pr_url_mismatch_stays_fix_needed(
     assert "Orbi needs a fix:" in body
     assert run_marker_body() in body
     assert "not the recovered original PR" in body
-    # ... written to the Issue AND the PR (Issue #50) ...
+    # ... written to the Issue AND the PR (Issue #50); the PR copy is
+    # the same formatted comment and additionally carries the hidden
+    # runner fingerprint (Issue #526) ...
     assert len(captured["pr_comments"]) == 1
-    assert captured["pr_comments"][0] == body
+    assert captured["pr_comments"][0].startswith(run_marker_body())
+    assert captured["pr_comments"][0].endswith("<!-- runner=8a12fb1c -->")
     # ... and the fix-needed milestone.
     posted = [
         command[command.index("--field") + 1][len("body="):]
