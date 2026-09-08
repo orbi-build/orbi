@@ -6,6 +6,7 @@ finds the same comment and keeps PATCHing it — no database. Milestones are
 short standalone comments so GitHub Mobile pushes a notification.
 """
 import json
+import subprocess
 
 import pytest
 
@@ -35,6 +36,77 @@ def test_run_marker_pattern_extracts_the_run_id():
     )
     assert match is not None
     assert match.group(1) == "abc12345"
+
+
+def test_runner_fingerprint_uses_editable_checkout_head(monkeypatch, tmp_path):
+    package = tmp_path / "checkout" / "src" / "orbi"
+    package.mkdir(parents=True)
+    (tmp_path / "checkout" / ".git").mkdir()
+    monkeypatch.setattr(progress, "__file__", str(package / "progress.py"))
+    monkeypatch.setattr(
+        progress.subprocess, "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout="8a12fb1c\n", stderr="",
+        ),
+    )
+    assert progress.runner_fingerprint() == "8a12fb1c"
+
+
+def test_runner_fingerprint_uses_package_version_when_not_editable(
+    monkeypatch, tmp_path,
+):
+    package = tmp_path / "site-packages" / "orbi"
+    package.mkdir(parents=True)
+    monkeypatch.setattr(progress, "__file__", str(package / "progress.py"))
+    monkeypatch.setattr(progress.metadata, "version", lambda name: "0.3.4")
+    assert progress.runner_fingerprint() == "0.3.4"
+
+
+def test_runner_fingerprint_returns_unknown_for_invalid_git_output(
+    monkeypatch, tmp_path,
+):
+    package = tmp_path / "checkout" / "src" / "orbi"
+    package.mkdir(parents=True)
+    (tmp_path / "checkout" / ".git").mkdir()
+    monkeypatch.setattr(progress, "__file__", str(package / "progress.py"))
+    monkeypatch.setattr(
+        progress.subprocess, "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout="not-a-sha\n", stderr="",
+        ),
+    )
+    assert progress.runner_fingerprint() == "unknown"
+
+
+def test_runner_fingerprint_returns_unknown_when_detection_fails(
+    monkeypatch, tmp_path,
+):
+    package = tmp_path / "checkout" / "src" / "orbi"
+    package.mkdir(parents=True)
+    (tmp_path / "checkout" / ".git").mkdir()
+    monkeypatch.setattr(progress, "__file__", str(package / "progress.py"))
+    monkeypatch.setattr(
+        progress.subprocess, "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(128, args[0]),
+        ),
+    )
+    assert progress.runner_fingerprint() == "unknown"
+
+
+def test_structured_comment_places_runner_marker_at_end(monkeypatch):
+    monkeypatch.setattr(progress, "runner_fingerprint", lambda: "8a12fb1c")
+    body = progress.field_block("abc12345", "Orbi: started", {"run_id": "abc12345"})
+    assert body.endswith("<!-- runner=8a12fb1c -->")
+    assert body.count("runner=") == 1
+
+
+def test_legacy_comment_places_runner_marker_at_end(monkeypatch):
+    monkeypatch.setattr(progress, "runner_fingerprint", lambda: "8a12fb1c")
+    body = progress.format_status_comment(
+        "<!-- orbi:run=abc12345 -->\nOrbi failed: boom (run_id=abc12345)",
+    )
+    assert body.endswith("<!-- runner=8a12fb1c -->")
 
 
 def test_run_marker_rejects_missing_or_invalid_run_id():
@@ -578,7 +650,12 @@ def test_publisher_milestone_keeps_prose_and_key_value_fields():
     assert "- base_branch: main" in body
 
 
-def test_publisher_milestone_posts_multiline_field_block():
+def test_publisher_milestone_posts_multiline_field_block(monkeypatch):
+    # The runner fingerprint is the executing checkout's HEAD, so the
+    # expected marker must not hardcode one checkout's sha (Issue #529:
+    # the literal 0531f7da failed on every other checkout, e.g. the CI
+    # pull_request merge commit).
+    monkeypatch.setattr(progress, "runner_fingerprint", lambda: "8a12fb1c")
     publisher, calls = make_publisher()
     publisher.milestone("tests passed: 156 passed in 4.43s")
     assert calls == [
@@ -589,7 +666,8 @@ def test_publisher_milestone_posts_multiline_field_block():
             "body=<!-- orbi:run=abc12345 -->\n"
             "Orbi: tests passed\n"
             "- result: 156 passed in 4.43s\n"
-            "- run_id=abc12345",
+            "- run_id=abc12345\n"
+            "\n<!-- runner=8a12fb1c -->",
         ],
     ]
     assert publisher.comment_id is None

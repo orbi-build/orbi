@@ -18,18 +18,64 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+from importlib import metadata
+from pathlib import Path
 from typing import Callable
 
 # One marker per run: hidden in the rendered comment, exact for lookup.
 RUN_ID_PATTERN = re.compile(r"[0-9a-f]{8}")
 RUN_MARKER_PATTERN = re.compile(r"<!-- orbi:run=([0-9a-f]{8}) -->")
 RUN_MARKER_TEMPLATE = "<!-- orbi:run={run_id} -->"
+RUNNER_MARKER_TEMPLATE = "<!-- runner={fingerprint} -->"
+_RUNNER_MARKER_PATTERN = re.compile(r"<!-- runner=[^>]+ -->")
 # Standalone milestone comments share this prefix so they are recognizable.
 MILESTONE_PREFIX = "Orbi:"
 # The live progress comment carries this header; together with the run
 # marker it identifies the run's progress comment among the run's other
 # marker-carrying comments (started Pi / opened PR scenes, milestones).
 PROGRESS_HEADER = "**Orbi progress**"
+
+
+def _checkout_root(path: Path) -> Path | None:
+    """Return the nearest checkout containing a Git marker."""
+    for parent in (path, *path.parents):
+        if (parent / ".git").exists():
+            return parent
+    return None
+
+
+def runner_fingerprint() -> str:
+    """Identify the code executing the Runner without fabricating a value.
+
+    An editable install points at a package inside its checkout, whose HEAD
+    is the useful deployment identity. A copied/non-editable package has no
+    checkout, so its distribution version is the only available identity.
+    Any probe failure is deliberately reported as ``unknown``.
+    """
+    try:
+        checkout = _checkout_root(Path(__file__).resolve().parent)
+        if checkout is not None:
+            result = subprocess.run(
+                ["git", "rev-parse", "--short=8", "HEAD"],
+                cwd=checkout, check=True, capture_output=True,
+                text=True, timeout=5,
+            )
+            fingerprint = result.stdout.strip()
+            if re.fullmatch(r"[0-9a-fA-F]{7,40}", fingerprint):
+                return fingerprint
+            return "unknown"
+        version = metadata.version("orbi")
+        return version if isinstance(version, str) and version else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _with_runner_marker(body: str) -> str:
+    """Append the runner identity as a hidden, machine-readable marker."""
+    body = _RUNNER_MARKER_PATTERN.sub("", body).rstrip()
+    marker = RUNNER_MARKER_TEMPLATE.format(fingerprint=runner_fingerprint())
+    return body + "\n\n" + marker
 
 
 def field_block(run_id: str, headline: str, fields: dict[str, object]) -> str:
@@ -39,7 +85,7 @@ def field_block(run_id: str, headline: str, fields: dict[str, object]) -> str:
         f"- {key}={value}" if key == "run_id"
         else f"- {key}: {value}" for key, value in fields.items()
     )
-    return "\n".join(lines)
+    return _with_runner_marker("\n".join(lines))
 
 
 def format_status_comment(body: str) -> str:
@@ -55,7 +101,7 @@ def format_status_comment(body: str) -> str:
         "Orbi release failed", "Orbi release waiting",
     )
     if not first.startswith(prefixes):
-        return (marker + "\n" + body) if marker else body
+        return _with_runner_marker((marker + "\n" + body) if marker else body)
     fields: dict[str, object] = {}
     for key, value in re.findall(r"([A-Za-z_][\w-]*)=([^\s)]+)", first):
         fields[key] = value
@@ -69,8 +115,11 @@ def format_status_comment(body: str) -> str:
         rendered = field_block(run_id, detail, fields)
         if remainder:
             rendered += "\n" + remainder
-        return (marker + "\n" + rendered.split("\n", 1)[1]) if marker else rendered
-    return (marker + "\n" + body) if marker else body
+        return _with_runner_marker(
+            (marker + "\n" + rendered.split("\n", 1)[1])
+            if marker else rendered
+        )
+    return _with_runner_marker((marker + "\n" + body) if marker else body)
 
 
 def validate_run_id(run_id: object) -> str:

@@ -119,6 +119,11 @@ same Issue generates a new one. The same id appears in:
 - every journal line of the attempt (prefix `[e07383c2]`);
 - the Issue/PR comments: visible field `run_id=e07383c2` plus the hidden
   machine-readable marker `<!-- orbi:run=e07383c2 -->`;
+- milestone and scene comments also carry the hidden runner marker
+  `<!-- runner=1a2b3c4d -->`: a fingerprint of the deployment that wrote
+  them — the executing checkout's HEAD, the package version for a
+  non-editable install, or `unknown` when the probe fails (the live
+  progress comment and PR comments do not carry it);
 - the feature branch and worktree name
   (`.worktrees/<...>-issue-<n>-e07383c2`);
 - the PR body — the stable marker `<!-- orbi:run=e07383c2 -->` is
