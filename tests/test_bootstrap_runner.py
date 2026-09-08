@@ -10386,6 +10386,7 @@ def test_wait_for_delivery_worktree_missing_stays_fix_needed(
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(progress, "runner_fingerprint", lambda: "8a12fb1c")
     # The fake rejects anything that is not a pr/issue view or the
     # progress API.
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -10437,8 +10438,10 @@ def test_wait_for_delivery_worktree_missing_stays_fix_needed(
     assert "branch=None" not in body
     assert "delivery_review_failed" in caplog.text
     # The failure comment is written to the Issue AND the PR
-    # (Issue #50).
-    assert pr_comments == [body]
+    # (Issue #50); the PR copy is the same formatted comment and
+    # additionally carries the hidden runner fingerprint (Issue #526).
+    assert pr_comments[0].startswith("<!-- orbi:run=a1b2c3d4 -->")
+    assert pr_comments[0].endswith("<!-- runner=8a12fb1c -->")
     # The recoverable failure posts the fix-needed milestone (Issue
     # #18) AND the tracked progress comment becomes the fix-needed
     # scene.

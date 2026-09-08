@@ -237,7 +237,10 @@ def progress_body(state: dict) -> str:
     # pre-#94 body shape exactly.
     if state.get("recovery"):
         lines.append(f"- recovery: {state['recovery']}")
-    return "\n".join(lines)
+    # Issue #526: the progress comment (and the blocked / fix-needed
+    # scene it becomes) carries the runner fingerprint like every other
+    # Orbi comment.
+    return _with_runner_marker("\n".join(lines))
 
 
 class ProgressPublisher:

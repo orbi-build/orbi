@@ -109,6 +109,53 @@ def test_legacy_comment_places_runner_marker_at_end(monkeypatch):
     assert body.endswith("<!-- runner=8a12fb1c -->")
 
 
+def test_progress_body_places_runner_marker_at_end(monkeypatch):
+    # The live progress comment (and the blocked / fix-needed scenes it
+    # becomes) is the run's main observability surface, so it carries the
+    # runner fingerprint like every other Orbi comment (Issue #526).
+    monkeypatch.setattr(progress, "runner_fingerprint", lambda: "8a12fb1c")
+    body = progress.progress_body({
+        "run_id": "abc12345",
+        "issue": 18,
+        "issue_title": "Publish progress",
+        "role": "implement",
+        "phase": "test",
+        "elapsed": "3m 12s",
+        "last_activity": None,
+        "last_action": None,
+        "tests": None,
+        "review_round": 0,
+        "branch": "b",
+        "pr": None,
+        "session": None,
+    })
+    assert body.endswith("\n\n<!-- runner=8a12fb1c -->")
+    assert body.count("runner=") == 1
+
+
+def test_comment_rendering_degrades_to_runner_unknown(monkeypatch):
+    # Issue #526 acceptance: when the fingerprint probe fails, every
+    # Orbi comment still renders — with `runner=unknown`, never a
+    # fabricated value, and never a publishing failure (Issue #79).
+    # The probe's own catch-all owns the degradation (runner_fingerprint
+    # returns ``unknown``), so the failure is injected one layer below.
+    def _raise(*args, **kwargs):
+        raise RuntimeError("git unavailable")
+    monkeypatch.setattr(progress.subprocess, "run", _raise)
+    for body in (
+        progress.progress_body({
+            "run_id": "abc12345", "issue": 18,
+            "issue_title": "Publish progress", "role": "implement",
+            "phase": "test", "elapsed": "1s", "last_activity": None,
+            "last_action": None, "tests": None, "review_round": 0,
+            "branch": "b", "pr": None, "session": None,
+        }),
+        progress.field_block("abc12345", "Orbi: tests passed", {}),
+        progress.format_status_comment("Orbi failed: boom"),
+    ):
+        assert body.endswith("<!-- runner=unknown -->")
+
+
 def test_run_marker_rejects_missing_or_invalid_run_id():
     for bad in ("", "run1", None):
         with pytest.raises(ValueError, match="invalid run id"):
@@ -423,10 +470,12 @@ def test_progress_body_shows_recovery_field_only_when_active():
     assert "- recovery" not in body
     body = progress.progress_body({**state, "recovery": "term"})
     assert "- recovery: term" in body
-    # The recovery line is the last line of the body.
-    assert body.splitlines()[-1] == "- recovery: term"
+    # The recovery line is the last field line; the hidden runner
+    # fingerprint marker (Issue #526) closes the body.
+    assert body.splitlines()[-3] == "- recovery: term"
+    assert body.splitlines()[-1].startswith("<!-- runner=")
     body = progress.progress_body({**state, "recovery": "kill"})
-    assert body.splitlines()[-1] == "- recovery: kill"
+    assert body.splitlines()[-3] == "- recovery: kill"
 
 
 def make_publisher(run_command=None, comments=None, posted=None,
