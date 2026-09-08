@@ -4974,6 +4974,110 @@ def test_process_issue_success_records_health_streak_break(
     assert runner_health.repeated_failure_findings(state) == []
 
 
+def test_process_issue_recoverable_health_record_failure_is_bypassed(
+    monkeypatch, tmp_path, caplog,
+):
+    """The recoverable branch's health record is a pure bypass: a
+    state-write failure logs and never changes the recoverable outcome
+    (the Issue stays `failed`-recoverable, never `ai-blocked`)."""
+    from orbi import runner_health
+    monkeypatch.setattr(
+        runner, "edit_issue", lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(
+        runner, "create_worktree", Mock(return_value=tmp_path),
+    )
+    model_wait_dead = runner.ModelWaitDeadError(
+        "Pi is stuck in model_wait with a frozen session for 10m"
+    )
+
+    def dead_run_pi(*args, **kwargs):
+        raise model_wait_dead
+
+    monkeypatch.setattr(runner, "run_pi", dead_run_pi)
+    monkeypatch.setattr(
+        runner, "activity_snapshot", lambda session_dir: None,
+    )
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            return "[]"
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(
+        runner_health, "record_run_attempt",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("state dir read-only"),
+        ),
+    )
+    with caplog.at_level("INFO"):
+        result = runner.process_issue(
+            {"number": 218, "title": "Model wait dead", "body": ""},
+            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+             "base_branch": "main"},
+            "xqliu/orbi",
+        )
+    assert result.kind == "failed"
+    assert "health_failure_record_failed" in caplog.text
+
+
+def test_process_issue_success_health_record_failure_is_bypassed(
+    monkeypatch, tmp_path, caplog,
+):
+    """The delivery path's health record is a pure bypass: a
+    state-write failure logs and the PR result is returned unchanged."""
+    from orbi import runner_health
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(
+        runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
+    )
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    monkeypatch.setattr(
+        runner, "deliver_pr",
+        lambda *args, **kwargs: "https://github.com/orbi-build/orbi/pull/4",
+    )
+    monkeypatch.setattr(
+        runner, "comment_issue", lambda *args, **kwargs: None,
+    )
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "list"]:
+            return "[]"
+        return "0123456789abcdef0123456789abcdef01234567"
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(
+        runner_health, "record_run_attempt",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("state dir read-only"),
+        ),
+    )
+    with caplog.at_level("INFO"):
+        result = runner.process_issue(
+            {"number": 4, "title": "Fix", "body": "Body"},
+            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+             "base_branch": "main"},
+            "xqliu/orbi-backlog",
+        )
+    assert result.kind == "pr"
+    assert "health_success_record_failed" in caplog.text
+
+
 def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
     monkeypatch, tmp_path,
 ):
