@@ -8,6 +8,7 @@ it, so no real process is ever signaled here.
 import os
 import signal
 import sys
+import time
 
 import pytest
 
@@ -493,7 +494,13 @@ def test_process_start_monotonic_reads_field_22(tmp_path, monkeypatch):
     # step after boot (NTP) must not skew a process's age.
     proc = make_procfs(tmp_path, [(42, "bash", 7, 100, b"bash")])
     monkeypatch.setattr(pi_recovery, "PROC", proc)
-    assert pi_recovery.process_start_monotonic(42, hz=FAKE_HZ) == 1.0
+    expected = 1.0 + (
+        time.monotonic()
+        - time.clock_gettime(getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC))
+    )
+    assert pi_recovery.process_start_monotonic(42, hz=FAKE_HZ) == pytest.approx(
+        expected, abs=0.01,
+    )
 
 
 def test_process_start_monotonic_none_for_gone_process(tmp_path, monkeypatch):

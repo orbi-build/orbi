@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import time
 import urllib
 import urllib.request
 from pathlib import Path
@@ -125,11 +126,10 @@ def process_start_monotonic(pid: int, *, hz: float) -> float | None:
     """The process age offset in MONOTONIC seconds since boot.
 
     stat field 22 (starttime, ticks since boot) converted with `hz`.
-    The value is compared against `time.monotonic()`, never against the
-    realtime epoch (Issue #169): a realtime step after boot (NTP)
-    must not skew a process's age — `process_start_epoch` (btime plus
-    the same ticks) is the realtime-flavoured view used by the
-    pre-idle check, this is the clock-consistent one.
+    Linux reports this clock as boottime, while Python's monotonic clock
+    can have a different origin after suspend. Convert the value into the
+    monotonic clock domain so a realtime or suspend adjustment cannot make
+    a live tool look older than it is (Issue #169).
     """
     raw = _read_stat(pid)
     if raw is None:
@@ -141,7 +141,10 @@ def process_start_monotonic(pid: int, *, hz: float) -> float | None:
         starttime = int(fields[19])
     except ValueError:
         return None
-    return starttime / hz
+    boottime = getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC)
+    return starttime / hz + (
+        time.monotonic() - time.clock_gettime(boottime)
+    )
 
 
 def boot_time() -> float:
