@@ -2621,7 +2621,7 @@ def test_create_worktree_adds_branch_from_frozen_base_sha(monkeypatch, tmp_path)
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)))
     assert runner.create_worktree(tmp_path, "owner/repo", 3, "run1", "abc123def456") == path
     assert calls == [(
-        ["git", "worktree", "add", "-b", "orbi/owner-repo-issue-3-run1", str(path), "abc123def456"],
+        ["git", "worktree", "add", "-b", "orbi/owner-repo-issue-3", str(path), "abc123def456"],
         {"cwd": tmp_path},
     )]
 
@@ -3505,13 +3505,21 @@ def test_worktree_path_and_task_branch_differ_per_run_for_same_issue():
     first_path = runner.worktree_path(repo_dir, "owner/repo", 3, "run1")
     retry_path = runner.worktree_path(repo_dir, "owner/repo", 3, "run2")
     assert first_path != retry_path
-    assert runner.task_branch("owner/repo", 3, "run1") != runner.task_branch("owner/repo", 3, "run2")
-    assert runner.task_branch("owner/repo", 3, "run1") == "orbi/owner-repo-issue-3-run1"
+    assert runner.task_branch("owner/repo", 3, "run1") == "orbi/owner-repo-issue-3"
+    assert runner.task_branch("owner/repo", 3, "run2") == runner.task_branch("owner/repo", 3, "run1")
 
 
 def test_task_branch_includes_source_repo_to_avoid_same_number_collision():
-    assert runner.task_branch("owner/pilot", 1, "run1") == "orbi/owner-pilot-issue-1-run1"
+    assert runner.task_branch("owner/pilot", 1, "run1") == "orbi/owner-pilot-issue-1"
     assert runner.task_branch("owner/pilot", 1, "run1") != runner.task_branch("owner/ceo", 1, "run1")
+
+
+def test_claim_route_decision_table():
+    assert runner.claim_route({runner.READY_LABEL}, branch_exists=False, open_pr=False) == "implement"
+    assert runner.claim_route({runner.READY_LABEL}, branch_exists=True, open_pr=False) == "implement"
+    assert runner.claim_route({runner.READY_LABEL}, branch_exists=True, open_pr=True) == "review"
+    assert runner.claim_route({runner.PR_OPENED_LABEL}, branch_exists=True, open_pr=True) == "review"
+    assert runner.claim_route({runner.FIX_NEEDED_LABEL}, branch_exists=True, open_pr=True) == "review"
 
 
 def test_comment_issue_runs_gh_comment(monkeypatch):
@@ -4409,7 +4417,7 @@ def test_verify_pr_skips_latest_base_check_when_not_required(
 def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_path):
     calls = []
     gh_calls, posted = make_fake_gh(monkeypatch)
-    branch = "orbi/xqliu-orbi-backlog-issue-4-a1b2c3d4"
+    branch = "orbi/xqliu-orbi-backlog-issue-4"
     head = "0123456789abcdef0123456789abcdef01234567"
 
     def fake_run(command, **kwargs):
@@ -4461,7 +4469,7 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
         if "**Orbi progress**" in body
     ]
     assert len(progress_posts) == 1
-    assert "- branch: orbi/xqliu-orbi-backlog-issue-4-a1b2c3d4" in progress_posts[0]
+    assert "- branch: orbi/xqliu-orbi-backlog-issue-4" in progress_posts[0]
     # The PR URL is only known after verify_pr: the initial POST shows
     # `- PR: -`, the final delivery PATCH carries the URL.
     assert "- PR: -" in progress_posts[0]
@@ -4476,7 +4484,7 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     assert "- base_branch: main" in start_body
     assert "- base_sha: abc123def456" in start_body
     assert "run_id=a1b2c3d4" in start_body
-    assert "- branch: orbi/xqliu-orbi-backlog-issue-4-a1b2c3d4" in start_body
+    assert "- branch: orbi/xqliu-orbi-backlog-issue-4" in start_body
     assert "- worktree: " + str(tmp_path / "wt") in start_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in start_body
     opened_body = scene_comments[1][-1]
@@ -5779,7 +5787,7 @@ def test_process_issue_failure_without_session_still_carries_scene(
     # No session file yet: the scene still carries the full debug entry
     # (worktree, branch) with '-' session fields.
     assert f"worktree={tmp_path / 'wt'}" in failure_body
-    assert "branch=orbi/xqliu-orbi-backlog-issue-8-a1b2c3d4" in failure_body
+    assert "branch=orbi/xqliu-orbi-backlog-issue-8" in failure_body
     assert "session=-" in failure_body
     assert "session_file=-" in failure_body
 
@@ -5878,7 +5886,7 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     assert "1 failed" in failure_body
     # The full scene on the failure comment carries the debug entry.
     assert f"worktree={tmp_path / 'wt'}" in failure_body
-    assert "branch=orbi/xqliu-orbi-backlog-issue-8-a1b2c3d4" in failure_body
+    assert "branch=orbi/xqliu-orbi-backlog-issue-8" in failure_body
 
 
 def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, caplog):
@@ -9870,7 +9878,7 @@ def test_wait_for_delivery_keeps_waiting_while_pr_open(
     assert len(reviews) == 2
     # The review ran on the derived worktree/branch of the same run.
     worktree, branch, base_branch, review_config, repo, number = reviews[0][0]
-    assert branch == "orbi/owner-repo-issue-39-a1b2c3d4"
+    assert branch == "orbi/owner-repo-issue-39"
     assert base_branch == "main"
     assert review_config["run_id"] == "a1b2c3d4"
     assert review_config["base_sha"] == "abc123def456"
@@ -10441,7 +10449,7 @@ def test_wait_for_delivery_worktree_missing_stays_fix_needed(
     assert "orbi-owner-repo-issue-39-a1b2c3d4" in body
     # The full scene carries the ACTUAL branch (derived before the
     # worktree check, Issue #50) — never a `branch=None` placeholder.
-    assert "branch=orbi/owner-repo-issue-39-a1b2c3d4" in body
+    assert "branch=orbi/owner-repo-issue-39" in body
     assert "branch=None" not in body
     assert "delivery_review_failed" in caplog.text
     # The failure comment is written to the Issue AND the PR
@@ -10627,7 +10635,7 @@ def test_wait_for_delivery_runs_review_when_fix_needed(
     # No fixer: the review ran on the derived worktree/branch of the
     # same run.
     worktree, branch, base_branch, review_config, repo, number = reviews[0][0]
-    assert branch == "orbi/owner-repo-issue-39-a1b2c3d4"
+    assert branch == "orbi/owner-repo-issue-39"
     assert base_branch == "main"
     assert review_config["run_id"] == "a1b2c3d4"
     assert review_config["base_sha"] == "abc123def456"
@@ -16598,7 +16606,7 @@ def test_process_release_publishes_the_release_role_progress_body(
     assert "<!-- orbi:run=a1b2c3d4 -->" in body
     assert "- role: release" in body
     assert "- priority: normal" in body
-    assert "- branch: orbi/o-r-issue-99-a1b2c3d4" in body
+    assert "- branch: orbi/o-r-issue-99" in body
 
 
 def test_process_release_fails_on_scope_item_that_is_neither(monkeypatch):
