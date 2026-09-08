@@ -1642,6 +1642,7 @@ def run_command(command: list[str], *, cwd: Path | None = None,
 
 GIT_NETWORK_MAX_ATTEMPTS = 3
 GIT_NETWORK_TIMEOUT_SECONDS = 30
+RESUME_PR_STATE_TIMEOUT_SECONDS = 30
 GIT_NETWORK_BACKOFF_SECONDS = 1
 GIT_TRANSIENT_ERROR_MARKERS = (
     "connection timed out",
@@ -6298,7 +6299,7 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
                 scene_pr = run_command([
                     "gh", "pr", "view", str(_pr_number(expected_url)),
                     "--repo", pr_repo or "", "--json", "state,mergedAt",
-                ], cwd=worktree)
+                ], cwd=worktree, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
                 state = json.loads(scene_pr)
                 if isinstance(state, dict):
                     scene_state = str(state.get("state", "unknown"))
