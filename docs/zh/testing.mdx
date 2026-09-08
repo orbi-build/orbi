@@ -17,13 +17,22 @@ GitHub 远端运行。
 （静态测试钉住少数正当位置：`__main__` 入口守卫和测试里一个防御性
 `except` 守卫）。
 
-## 仓库自有的测试入口
+## 本地契约命令
 
-从仓库根目录运行 `scripts/test`。它在 checkout 外创建或复用 Python 虚拟环境，
-安装 `pyproject.toml` 声明的 `[test]` 依赖，然后运行完整套件、分支覆盖率、
-`coverage report --show-missing` 和两个分层门禁。覆盖率数据存放在排除的
-`.orbi/` 运行目录（Issue #302），clean checkout 不需要系统预装 pytest、coverage
-或 YAML 工具。CI 和 Release task 使用同一条命令。
+从仓库根目录运行（生产解释器 `/usr/bin/python3`，Python 3.14）。`COVERAGE_FILE`
+（coverage.py 官方环境变量）把覆盖率数据指到已排除的运行目录 `.orbi/`
+（Issue #302）：worktree 根不会出现任何覆盖率产物，dirty-worktree 门禁
+也就不会被它绊住：
+
+```bash
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage report --show-missing
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/coverage_gate.py .orbi/.coverage
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/diff_coverage_gate.py origin/main
+```
+
+贡献者本地怎么跑测试（虚拟环境、包装脚本、任何方式）是贡献者的私事——
+不是仓库契约，仓库不维护本地测试链（Issue #569）。
 
 报告逐文件给出两个真实数字（行和分支）。两个门禁脚本才是门禁，不是
 报告：`tools/coverage_gate.py` 在行层级或分支层级任一低于 95% 时退出非零
@@ -38,9 +47,10 @@ Python 行或分支未达 100% 覆盖时退出非零。
 `main` 时运行同一契约：单个 job，`actions/setup-python` 固定 Python
 3.14（GitHub-hosted runner 没有生产路径上的生产解释器，所以 workflow
 固定同一 minor 版本，通过 PATH 上的 `python3` 运行相同命令），安装
-仓库自有的 `scripts/test` 入口；它安装 `pyproject.toml` 的 `[test]` 依赖，
-并运行相同的报告和分层门禁（变更代码层级对照 PR base；纯文档 PR 没有变更
-的 Python，直接通过）。没有内联依赖注入、没有 lint、没有矩阵、没有缓存。
+`requirements.txt`，然后运行上面的契约命令——报告、`tools/coverage_gate.py`
+和 `tools/diff_coverage_gate.py origin/main`（变更代码层级对照 PR base；纯
+文档 PR 没有变更的 Python，直接通过）。没有 lint、没有矩阵、没有缓存。
+workflow 自含环境声明——CI 的工具链属于 ci.yml，不属于仓库（Issue #569）。
 
 Checkout 用 `fetch-depth: 0`（完整历史 + 全部 tags）：发布对账测试
 （`tests/test_release_v01.py`）用 `git cat-file` / `git rev-parse` 对

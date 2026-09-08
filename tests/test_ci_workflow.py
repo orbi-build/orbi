@@ -27,9 +27,10 @@ WORKFLOW_FILE = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 TEST_ENTRY = REPO_ROOT / "scripts" / "test"
 PYPROJECT_FILE = REPO_ROOT / "pyproject.toml"
 
-# CI delegates the contract to the repository-owned self-contained entry
-# point, which installs the pyproject test extra and runs these commands.
-CONTRACT_RUN = "scripts/test"
+# Issue #569: the repository carries NO local test chain — the CI
+# environment declaration belongs to ci.yml (the Actions territory) and
+# runs the contract commands directly.
+CONTRACT_RUN = "coverage run --branch -m pytest tests/ -q"
 CONTRACT_REPORT = "coverage report"
 
 
@@ -68,21 +69,19 @@ def step_commands(steps: list[dict]) -> list[str]:
     ]
 
 
-def test_repository_test_entry_owns_declared_dependencies_and_coverage():
-    assert TEST_ENTRY.is_file(), f"missing test entry point: {TEST_ENTRY}"
-    assert TEST_ENTRY.stat().st_mode & 0o111, "test entry point must be executable"
-    script = TEST_ENTRY.read_text(encoding="utf-8")
-    assert "-m venv" in script
-    assert "pip install --editable '.[test]'" in script
-    assert "coverage run --branch -m pytest tests/ -q" in script
-    assert "coverage report --show-missing" in script
-    assert "tools/coverage_gate.py" in script
-    assert "tools/diff_coverage_gate.py origin/main" in script
-
+def test_repository_carries_no_local_test_entry_point():
+    """Issue #569: the repository has no locally maintained test chain.
+    How a contributor runs the tests is the contributor's business, not
+    a repository contract; the CI environment declaration lives in
+    ci.yml."""
+    assert not TEST_ENTRY.exists(), (
+        f"the local test chain must stay deleted: {TEST_ENTRY}"
+    )
     project = tomllib.loads(PYPROJECT_FILE.read_text(encoding="utf-8"))
-    assert set(project["project"]["optional-dependencies"]["test"]) == {
-        "coverage", "pytest", "pyyaml",
-    }
+    assert "optional-dependencies" not in project["project"], (
+        "the pyproject [test] extra existed only for the deleted "
+        "scripts/test entry point (Issue #569)"
+    )
 
 
 def test_ci_workflow_exists_at_repository_root():
@@ -169,14 +168,30 @@ def test_ci_workflow_pins_python_3_14_like_production():
     )
 
 
-def test_ci_workflow_uses_the_repository_owned_test_entry_point():
+def test_ci_workflow_declares_its_own_environment_and_runs_the_contract():
+    """Issue #569: CI is self-contained — the workflow installs its own
+    toolchain (requirements + pytest/coverage/pyyaml) and runs the
+    contract test command directly; no repository-owned script sits in
+    between."""
     commands = step_commands(steps_of(load_workflow()))
-    assert any(command == CONTRACT_RUN for command in commands), (
-        f"CI must run {CONTRACT_RUN!r}, steps run: {commands!r}"
+    assert any(CONTRACT_RUN in command for command in commands), (
+        f"CI must run the contract test command {CONTRACT_RUN!r}, "
+        f"steps run: {commands!r}"
     )
-    assert not any("pip install pytest coverage pyyaml" in command for command in commands), (
-        "CI must not inject undeclared test dependencies"
+    installs = [command for command in commands if "pip install" in command]
+    assert any("-r requirements.txt" in command for command in installs), (
+        "CI must install the declared requirements itself, "
+        f"steps run: {commands!r}"
     )
+    assert any(
+        "pip install pytest coverage pyyaml" in command for command in installs
+    ), (
+        "CI must install its own test toolchain (pytest coverage pyyaml), "
+        f"steps run: {commands!r}"
+    )
+    assert not any(
+        command.strip() == "scripts/test" for command in commands
+    ), f"CI must not delegate to the deleted local test chain, steps run: {commands!r}"
 
 
 def test_ci_workflow_installs_the_cli_and_verifies_the_entry():
@@ -321,7 +336,7 @@ def test_ci_workflow_enforces_the_tiered_coverage_gate():
     changed Python and passes). The old --fail-under=100 gate checked
     only the merged percentage and is gone."""
     commands = step_commands(steps_of(load_workflow()))
-    contract = commands + [TEST_ENTRY.read_text(encoding="utf-8")]
+    contract = commands
     global_gate = [
         command for command in contract
         if "tools/coverage_gate.py" in command

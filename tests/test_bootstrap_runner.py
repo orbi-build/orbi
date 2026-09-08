@@ -245,21 +245,13 @@ def test_validate_config_requires_the_deploy_home_dir(tmp_path):
         runner.validate_config(config)
 
 
-def test_load_config_repair_issue_creation_is_opt_in(tmp_path):
+def test_load_config_has_no_auto_repair_issues_field(tmp_path):
+    """Issue #569: the repair-issue config field dispatched a failed
+    local release test command; with the local test execution removed
+    the field and its consumer are gone."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    assert runner.load_config(config_path)["auto_repair_issues"] is False
-    config_path.write_text(
-        'source_repos = ["owner/repo"]\nauto_repair_issues = true\n',
-        encoding="utf-8",
-    )
-    assert runner.load_config(config_path)["auto_repair_issues"] is True
-    config_path.write_text(
-        'source_repos = ["owner/repo"]\nauto_repair_issues = "yes"\n',
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="auto_repair_issues must be a boolean"):
-        runner.load_config(config_path)
+    assert "auto_repair_issues" not in runner.load_config(config_path)
 
 
 def test_load_config_reads_explicit_base_branch(tmp_path):
@@ -539,10 +531,9 @@ def test_load_config_rejects_invalid_release_deliveries_wait_seconds(tmp_path, v
 # --- Issue #268: release_ci_wait_seconds is configurable ---------------------
 
 def test_load_config_defaults_release_ci_wait_seconds(tmp_path):
-    """Issue #268: omitted -> RELEASE_CI_WAIT_SECONDS (1800 s, the same
-    convention as RELEASE_TEST_TIMEOUT_SECONDS): the release gate waits
-    for pending CI checks on the release commit instead of failing on
-    the intermediate state."""
+    """Issue #268: omitted -> RELEASE_CI_WAIT_SECONDS (1800 s): the
+    release gate waits for pending CI checks on the release commit
+    instead of failing on the intermediate state."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
@@ -13341,7 +13332,6 @@ RELEASE_DECLARATION_BODY = """Ship v0.3.0 to the remote.
 
 - version: v0.3.0
 - base_branch: main
-- test_command: /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q && /usr/bin/python3 -m coverage report --show-missing
 - scope:
   - #123
   - #124
@@ -13351,35 +13341,48 @@ RELEASE_DECLARATION_BODY = """Ship v0.3.0 to the remote.
 - this text is outside the release section
 """
 
+# Issue #569: a legacy body may still declare `test_command` — accepted,
+# ignored (never executed), one journal evidence line.
+LEGACY_TEST_COMMAND_DECLARATION_BODY = RELEASE_DECLARATION_BODY.replace(
+    "- base_branch: main\n",
+    "- base_branch: main\n- test_command: scripts/test\n",
+)
+
 
 def test_parse_release_declaration_returns_all_fields():
     decl = runner.parse_release_declaration(RELEASE_DECLARATION_BODY)
     assert decl == {
         "version": "v0.3.0",
         "base_branch": "main",
-        "test_command": (
-            "/usr/bin/python3 -m coverage run --branch -m pytest tests/ -q "
-            "&& /usr/bin/python3 -m coverage report --show-missing"
-        ),
-        "test_timeout_seconds": 1800,
+        "test_command": None,
         "scope": [123, 124],
         "scope_from_milestone": None,
         "version_file": "pyproject.toml",
     }
 
 
-def test_parse_release_declaration_accepts_custom_test_timeout():
-    body = RELEASE_DECLARATION_BODY.replace(
-        "- test_command:", "- test_timeout_seconds: 42\n- test_command:",
-    )
-    assert runner.parse_release_declaration(body)["test_timeout_seconds"] == 42
+def test_parse_release_declaration_does_not_require_test_command():
+    """Issue #569: the declaration carries NO local test contract —
+    release test acceptance is the GitHub Actions CI result on the
+    release commit (the #268 CI-wait gate)."""
+    decl = runner.parse_release_declaration(RELEASE_DECLARATION_BODY)
+    assert decl["test_command"] is None
 
 
-def test_parse_release_declaration_rejects_invalid_test_timeout():
-    body = RELEASE_DECLARATION_BODY.replace(
-        "- test_command:", "- test_timeout_seconds: 0\n- test_command:",
+def test_parse_release_declaration_ignores_a_legacy_test_command():
+    decl = runner.parse_release_declaration(
+        LEGACY_TEST_COMMAND_DECLARATION_BODY,
     )
-    with pytest.raises(ValueError, match="test_timeout_seconds"):
+    assert decl["test_command"] == "scripts/test"
+
+
+def test_parse_release_declaration_rejects_test_timeout_seconds():
+    """Issue #569: the local test-execution path is gone; the field that
+    parameterized its timeout is no longer part of the contract."""
+    body = RELEASE_DECLARATION_BODY.replace(
+        "- scope:", "- test_timeout_seconds: 42\n- scope:",
+    )
+    with pytest.raises(ValueError, match="unknown field"):
         runner.parse_release_declaration(body)
 
 
@@ -13432,12 +13435,6 @@ def test_parse_release_declaration_requires_version():
 def test_parse_release_declaration_requires_base_branch():
     body = RELEASE_DECLARATION_BODY.replace("- base_branch: main\n", "")
     with pytest.raises(ValueError, match="base_branch"):
-        runner.parse_release_declaration(body)
-
-
-def test_parse_release_declaration_requires_test_command():
-    body = RELEASE_DECLARATION_BODY.replace("- test_command: ", "- test_command2: ")
-    with pytest.raises(ValueError, match="test_command"):
         runner.parse_release_declaration(body)
 
 
@@ -13511,7 +13508,6 @@ RELEASE_MILESTONE_DECLARATION_BODY = """Ship v0.3.0 to the remote.
 
 - version: v0.3.0
 - base_branch: main
-- test_command: /usr/bin/python3 -m pytest tests/ -q
 - scope_from_milestone: v0.3.0
 
 ## Notes
@@ -13525,8 +13521,7 @@ def test_parse_release_declaration_scope_from_milestone():
     assert decl == {
         "version": "v0.3.0",
         "base_branch": "main",
-        "test_command": "/usr/bin/python3 -m pytest tests/ -q",
-        "test_timeout_seconds": 1800,
+        "test_command": None,
         "scope": [],
         "scope_from_milestone": "v0.3.0",
         "version_file": "pyproject.toml",
@@ -14277,36 +14272,15 @@ def test_check_release_gates_fails_on_open_pr_against_base(monkeypatch):
         runner.check_release_gates("o/r", "main", "abc123", 99)
 
 
-def test_run_release_tests_wraps_the_command_in_timeout_bash(monkeypatch):
-    calls = []
-    monkeypatch.setattr(runner, "run_command",
-                        lambda c, **k: calls.append((c, k)) or "")
-    runner.run_release_tests(Path("/wt"), "pytest -q", 120)
-    (command, kwargs), = calls
-    assert command == [
-        "timeout", "120", "bash", "-c", "pytest -q",
-    ]
-    assert kwargs == {"cwd": Path("/wt")}
-
-
-def test_run_release_tests_keeps_node_command_stack_neutral(monkeypatch):
-    calls = []
-    monkeypatch.setattr(runner, "run_command",
-                        lambda c, **k: calls.append((c, k)) or "")
-    runner.run_release_tests(Path("/wt"), "npm ci && npm test", 300)
-    (command, kwargs), = calls
-    assert command == ["timeout", "300", "bash", "-c", "npm ci && npm test"]
-    assert kwargs == {"cwd": Path("/wt")}
-
-
-def test_run_release_tests_fails_fast_on_nonzero(monkeypatch):
-    def fail(command, **kwargs):
-        raise subprocess.CalledProcessError(
-            1, command, stderr="1 failed",
-        )
-    monkeypatch.setattr(runner, "run_command", fail)
-    with pytest.raises(subprocess.CalledProcessError):
-        runner.run_release_tests(Path("/wt"), "pytest -q", 120)
+def test_run_release_tests_path_is_gone():
+    """Issue #569: the release state machine has NO local test
+    execution point — the declared test command is never run locally;
+    test acceptance is the GitHub Actions CI result on the release
+    commit."""
+    assert not hasattr(runner, "run_release_tests")
+    assert not hasattr(runner, "create_repair_issue")
+    assert not hasattr(runner, "release_test_evidence")
+    assert not hasattr(runner, "RELEASE_TEST_TIMEOUT_SECONDS")
 
 
 def make_local_remote_pair(tmp_path):
@@ -15103,12 +15077,10 @@ def test_process_release_success_end_to_end(monkeypatch):
         ["gh", "issue", "close", "99", "--repo", "o/r"])
     assert not [c for c in commands
                 if c[:2] == ["gh", "api"] and "milestones/1" in c[2]]
-    # The declared test command ran timeout-wrapped in the worktree.
-    assert (["timeout", str(runner.RELEASE_TEST_TIMEOUT_SECONDS),
-             "bash", "-c",
-             "/usr/bin/python3 -m coverage run --branch -m pytest tests/ -q "
-             "&& /usr/bin/python3 -m coverage report --show-missing"],
-            {"cwd": Path("/wt")}) in state["commands"]
+    # Issue #569: no local test execution anywhere in the release run —
+    # the `timeout`-wrapped declared command is gone; test acceptance is
+    # the CI-wait gate evidence only.
+    assert not [c for c, _ in state["commands"] if c[:1] == ["timeout"]]
     # Issue #275: the docs sync step runs once, after the GitHub Release
     # is published and before the Milestone is closed, with the release
     # identity.
@@ -15132,10 +15104,12 @@ def test_process_release_success_end_to_end(monkeypatch):
     assert state["run_ids"][0] == "a1b2c3d4"
 
 
-def test_process_release_refreshes_deployment_cli_before_release_tests(
+def test_process_release_refreshes_deployment_cli_after_version_bump(
     monkeypatch, tmp_path,
 ):
-    """Issue #490: a foreign Node source worktree is not Orbi's install input."""
+    """Issue #490: a foreign Node source worktree is not Orbi's install input.
+    Issue #569: after the CLI refresh the run goes straight to the
+    tag step — no local test execution sits in between."""
     make_release_process_env(monkeypatch)
     source = tmp_path / "node-source"
     deployment = tmp_path / "orbi-deployment"
@@ -15159,11 +15133,6 @@ def test_process_release_refreshes_deployment_cli_before_release_tests(
         return "installed"
 
     monkeypatch.setattr(runner, "refresh_cli_install", refresh)
-    def run_tests(worktree, command, timeout):
-        order.append("tests")
-        assert Path(worktree) == Path("/wt")
-
-    monkeypatch.setattr(runner, "run_release_tests", run_tests)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -15175,7 +15144,7 @@ def test_process_release_refreshes_deployment_cli_before_release_tests(
          "base_branch": "main"},
         "o/r",
     ) == "https://github.com/o/r/releases/tag/v0.3.0"
-    assert order == ["version", "cli", "tests"]
+    assert order == ["version", "cli"]
 
 
 def test_process_release_derives_scope_from_milestone(monkeypatch):
@@ -15357,60 +15326,6 @@ def test_process_release_gate_failure_blocks_and_returns_cleanly(monkeypatch):
     )
 
 
-def test_create_repair_issue_deduplicates_a_matching_failure_signature(monkeypatch):
-    calls = []
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        if command[:5] == ["timeout", "30", "gh", "issue", "list"]:
-            return json.dumps([{"number": 77, "url": "https://github.com/o/r/issues/77"}])
-        raise AssertionError(f"unexpected command: {command}")
-
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    url = runner.create_repair_issue(
-        repo="o/r", source_issue=99, run_id="a1b2c3d4",
-        release_commit="abc123", command="pytest -q", evidence="1 failed",
-    )
-    assert url == "https://github.com/o/r/issues/77"
-    assert calls[0][:5] == ["timeout", "30", "gh", "issue", "list"]
-    search = calls[0][calls[0].index("--search") + 1]
-    assert "orbi-repair-signature=" in search
-    assert "--label" not in calls[0]
-    with pytest.raises(AssertionError, match="unexpected command"):
-        fake_run(["unexpected"])
-
-
-def test_create_repair_issue_creates_a_reproducible_ready_bug(monkeypatch):
-    calls = []
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        if command[:5] == ["timeout", "30", "gh", "issue", "list"]:
-            return "[]"
-        if command[:5] == ["timeout", "30", "gh", "issue", "create"]:
-            return "https://github.com/o/r/issues/77"
-        raise AssertionError(f"unexpected command: {command}")
-
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    url = runner.create_repair_issue(
-        repo="o/r", source_issue=99, run_id="a1b2c3d4",
-        release_commit="abc123", command="pytest -q", evidence="1 failed",
-    )
-    assert url == "https://github.com/o/r/issues/77"
-    create = calls[1]
-    assert create[:5] == ["timeout", "30", "gh", "issue", "create"]
-    assert create.count("--label") == 2
-    assert "ai-ready" in create and "bug" in create
-    body = create[create.index("--body") + 1]
-    assert "source Issue: #99" in body
-    assert "run_id=a1b2c3d4" in body
-    assert "commit: `abc123`" in body
-    assert "pytest -q" in body and "1 failed" in body
-    assert "orbi-repair-signature=" in body
-    with pytest.raises(AssertionError, match="unexpected command"):
-        fake_run(["unexpected"])
-
-
 def test_process_release_milestone_failure_keeps_release_successful(monkeypatch):
     state = make_release_process_env(monkeypatch)
     real = runner.run_command
@@ -15524,92 +15439,29 @@ def test_process_release_fails_on_malformed_declaration(monkeypatch):
     assert "## Release" in comment_kwargs["body"]
 
 
-def test_release_test_evidence_keeps_stdout_and_stderr():
-    error = subprocess.CalledProcessError(
-        1, ["timeout"], output="tests/test_x.py::test_y FAILED\n",
-        stderr="coverage gate failed\n",
-    )
-    assert runner.release_test_evidence(error) == (
-        "[stdout]\ntests/test_x.py::test_y FAILED\n\n"
-        "[stderr]\ncoverage gate failed"
-    )
-
-
-def test_process_release_test_failure_creates_repair_and_keeps_release_blocked(monkeypatch):
-    state = make_release_process_env(monkeypatch)
-
-    def test_failure(*args, **kwargs):
-        raise subprocess.CalledProcessError(
-            1, ["timeout", "1800", "bash", "-c", "pytest -q"],
-            stderr="tests/test_x.py::test_y FAILED",
-        )
-
-    repairs = []
-    monkeypatch.setattr(runner, "run_release_tests", test_failure)
-    monkeypatch.setattr(
-        runner, "create_repair_issue",
-        lambda **kwargs: repairs.append(kwargs) or "https://github.com/o/r/issues/77",
+def test_process_release_ignores_a_legacy_test_command_and_never_runs_it(monkeypatch):
+    """Issue #569: a legacy body still declaring `test_command` is
+    accepted: the field is ignored with ONE journal evidence line and
+    the release delivers through the normal CI-gated path — nothing is
+    executed locally."""
+    state = make_release_process_env(
+        monkeypatch, body=LEGACY_TEST_COMMAND_DECLARATION_BODY,
     )
     issue = {"number": 99, "title": "Release v0.3.0",
-             "body": RELEASE_DECLARATION_BODY,
-             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main",
-                "auto_repair_issues": True}, "o/r",
-    )
-    assert result == ""
-    assert repairs == [{
-        "repo": "o/r", "source_issue": 99, "run_id": "a1b2c3d4",
-        "release_commit": "abc123",
-        "command": RELEASE_DECLARATION_BODY.split("- test_command: ")[1].split("\n")[0],
-        "evidence": "[stderr]\ntests/test_x.py::test_y FAILED",
-    }]
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
-                                        "remove": "ai-in-progress"})
-    assert not any(k.get("add") == "ai-merged" for _, k in state["edits"])
-
-
-def test_process_release_test_failure_stays_blocked_when_repair_opt_in_is_disabled(monkeypatch):
-    state = make_release_process_env(monkeypatch)
-    monkeypatch.setattr(
-        runner, "run_release_tests",
-        lambda *args: (_ for _ in ()).throw(
-            subprocess.CalledProcessError(1, ["timeout"], stderr="1 failed"),
-        ),
-    )
-    monkeypatch.setattr(
-        runner, "create_repair_issue",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("must remain opt-in")),
-    )
-    issue = {"number": 99, "title": "Release v0.3.0",
-             "body": RELEASE_DECLARATION_BODY,
+             "body": LEGACY_TEST_COMMAND_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     result = runner.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
-    assert result == ""
-    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
-                                        "remove": "ai-in-progress"})
-
-
-def test_process_release_repair_creation_failure_is_observable_and_preserves_test_failure(monkeypatch, caplog):
-    make_release_process_env(monkeypatch)
-    monkeypatch.setattr(runner, "LOGGER", logging.getLogger("repair-test"))
-    original = subprocess.CalledProcessError(1, ["timeout"], stderr="1 failed")
-    monkeypatch.setattr(runner, "run_release_tests",
-                        lambda *args: (_ for _ in ()).throw(original))
-    monkeypatch.setattr(runner, "create_repair_issue",
-                        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("GitHub unavailable")))
-    issue = {"number": 99, "title": "Release v0.3.0",
-             "body": RELEASE_DECLARATION_BODY,
-             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    with caplog.at_level("ERROR"):
-        result = runner.process_release(
-            issue, {"repo_dir": Path("/r"), "base_branch": "main",
-                    "auto_repair_issues": True}, "o/r",
-        )
-    assert result == ""
-    assert "repair_issue_failed source_issue=99 run_id=a1b2c3d4" in caplog.text
+    assert result == "https://github.com/o/r/releases/tag/v0.3.0"
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged",
+                                       "remove": "ai-in-progress"})
+    assert not [c for c, _ in state["commands"] if c[:1] == ["timeout"]]
+    ignored = [
+        call for call in runner.LOGGER.info.call_args_list
+        if "release_test_command_ignored" in str(call)
+    ]
+    assert len(ignored) == 1
 
 
 def test_process_release_fails_on_tag_mismatch_without_moving_it(monkeypatch):

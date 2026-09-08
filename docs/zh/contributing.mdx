@@ -87,10 +87,14 @@ journal、Issue/PR 或 UI 中，不为形式上的 E2E 增加基础设施。
 3. 先写失败测试，再写最小实现，再重构。外部接口（CLI flag、HTTP
    path、配置字段）对照官方文档或一次真实调用断言——从不对照猜出来的
    形状。
-4. 使用仓库自有的自包含入口运行完整契约（它会在隔离的虚拟环境安装声明的测试依赖）：
+4. 本地运行完整契约（精确命令见[测试](/zh/testing)）。本地环境怎么搭是
+   贡献者自己的事——不是仓库契约，仓库不维护本地测试链（Issue #569）：
 
    ```bash
-   scripts/test
+   COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
+   COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage report --show-missing
+   COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/coverage_gate.py .orbi/.coverage
+   COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/diff_coverage_gate.py origin/main
    ```
 
 5. 一个 Issue 一个 PR。PR 描述必须包含 `Fixes #<issue-number>`，

@@ -18,15 +18,26 @@ the coverage report. Unjustified `# pragma: no cover` is a contract
 violation (a static test pins the few justified sites: the `__main__`
 entry guards and one defensive `except` guard in a test).
 
-## The repository-owned test entry point
+## Local contract commands
 
-Run `scripts/test` from the repository root. It creates or reuses the
-Python virtual environment outside the checkout, installs the `[test]` extra declared
-in `pyproject.toml`, and runs the full suite with branch coverage,
-`coverage report --show-missing`, and both tiered gates. Coverage data is
-stored in the excluded `.orbi/` run directory (Issue #302), so a clean
-checkout needs no pre-installed pytest, coverage, or YAML tooling. CI and
-Release tasks use this same command.
+Run them from the repository root (production interpreter
+`/usr/bin/python3`, Python 3.14). `COVERAGE_FILE` (the official
+coverage.py environment variable) points the coverage data into the
+excluded run dir `.orbi/` (Issue #302): the worktree root never
+receives a coverage artifact, so the dirty-worktree gate never trips
+over one:
+
+```bash
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage report --show-missing
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/coverage_gate.py .orbi/.coverage
+COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/diff_coverage_gate.py origin/main
+```
+
+How a contributor runs the tests locally (a virtual environment, a
+wrapper script, whatever) is the contributor's private business — it is
+NOT a repository contract, and the repository maintains no local test
+chain (Issue #569).
 
 The report shows both real numbers (line and branch) per file. The two
 gate scripts are the gate, not a report: `tools/coverage_gate.py` exits
@@ -43,11 +54,13 @@ changed since the base ref is not 100% covered.
 and every push to `main`: one job, Python 3.14 pinned via
 `actions/setup-python` (GitHub-hosted runners do not have the production
 interpreter at the production path, so the workflow pins the same minor
-version), then runs the repository-owned `scripts/test` entry point. That
-entry point installs the `pyproject.toml` `[test]` extra and runs the report
-and tiered gates (the changed-code tier uses the PR base; a doc-only PR has
-no changed Python and passes). No inline dependency injection, lint, matrix,
-or cache.
+version and runs the identical commands through `python3` on PATH),
+`requirements.txt` installed, then the contract commands above — the
+report, `tools/coverage_gate.py`, and `tools/diff_coverage_gate.py origin/main`
+(the changed-code tier against the PR base; a doc-only PR has no
+changed Python and passes). No lint, no matrix, no cache. The workflow
+declares its own environment — the CI toolchain belongs to ci.yml, not
+to the repository (Issue #569).
 
 The checkout uses `fetch-depth: 0` (full history + all tags): the release
 reconciliation tests (`tests/test_release_v01.py`) verify the REAL annotated

@@ -101,11 +101,17 @@ first.
    refactor. External interfaces (CLI flags, HTTP paths, config fields)
    are asserted against the official docs or one real call — never
    against a guessed shape.
-4. Run the full contract locally with the repository-owned, self-contained
-   entry point (it installs the declared test extra in an isolated virtual environment):
+4. Run the full contract locally (see
+   [Testing](/testing) for the exact commands). How you set up your
+   local environment is your own business — it is not a repository
+   contract, and the repository maintains no local test chain
+   (Issue #569):
 
    ```bash
-   scripts/test
+   COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q
+   COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage report --show-missing
+   COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/coverage_gate.py .orbi/.coverage
+   COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/diff_coverage_gate.py origin/main
    ```
 
 5. Open one PR per Issue. The PR description must contain
