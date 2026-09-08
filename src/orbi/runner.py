@@ -3327,6 +3327,33 @@ def sync_release_docs(*, source_repo: str, repo_dir: Path,
             if exc.returncode != 1:
                 raise
         else:
+            # Nothing staged has TWO possible worlds: the docs commit
+            # already reached origin/<base> (genuinely in sync), or the
+            # previous run committed locally and its push failed — then
+            # this no-op would be a FALSE success (the release notes
+            # never landed remotely while the release is declared done,
+            # with Milestone closed and a success comment posted).
+            # HEAD reachable from origin/<base> is the evidence that
+            # separates the worlds; unreachable → push the recovery.
+            try:
+                run_command(
+                    ["git", "merge-base", "--is-ancestor",
+                     "HEAD", f"origin/{base_branch}"],
+                    cwd=worktree,
+                )
+            except subprocess.CalledProcessError as merge_exc:
+                if merge_exc.returncode != 1:
+                    raise
+                run_git_network_command(
+                    ["git", "push", "origin",
+                     f"HEAD:refs/heads/{base_branch}"],
+                    cwd=worktree,
+                )
+                return (
+                    f"docs release notes for {tag} recovered — the "
+                    "previous local commit had not been pushed; pushed "
+                    f"to {base_branch} now"
+                )
             return (
                 f"docs release notes for {tag} already in sync — "
                 "idempotent no-op, nothing committed"
