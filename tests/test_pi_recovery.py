@@ -570,6 +570,32 @@ def test_timeout_duration_edge_tokens(tmp_path):
     assert pi_recovery.timeout_duration("timeout . x") is None
 
 
+def test_timeout_duration_none_when_wrapper_is_not_the_command():
+    # A `timeout <number>` pair that is NOT the wrapped command itself is
+    # data, not a deadline: a commit message, an echo argument, a pytest
+    # -k expression. (/proc cmdline carries no quotes, so `git commit -m
+    # "fix timeout 300 regression"` joins to the tokens below.) A deadline
+    # read off the message text would make the runner WAIT for a wrapper
+    # that does not exist (the fabricated-deadline scene).
+    assert pi_recovery.timeout_duration(
+        "git commit -m fix timeout 300 regression",
+    ) is None
+    assert pi_recovery.timeout_duration("echo timeout 300 done") is None
+    assert pi_recovery.timeout_duration("pytest -k timeout 300 tests/") is None
+
+
+def test_timeout_duration_none_when_wrapper_sits_deeper_than_bash_c():
+    # The contract form is `timeout <seconds> ...` as THE command, either
+    # directly or as the `bash -c` payload. A wrapper buried deeper in a
+    # compound command (after `cd ... &&`, inside another tool's argv) is
+    # not the contract form: no clear timeout, the existing recovery
+    # behavior applies (fail-safe — never a fabricated deadline).
+    assert pi_recovery.timeout_duration(
+        "bash -c cd /x && timeout 300 pytest",
+    ) is None
+    assert pi_recovery.timeout_duration("sh -c timeout 300 pytest") is None
+
+
 def test_upstream_alive_true_for_established_tcp_socket(
     tmp_path, monkeypatch,
 ):
