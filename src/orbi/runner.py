@@ -3764,7 +3764,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
                 f"{'; '.join(scope_evidence)}",
             ),
         )
-        worktree = create_worktree(
+        worktree = create_release_worktree(
             config["repo_dir"], source_repo, number, run_id, release_commit,
         )
         # Version metadata is part of the release commit, not a post-release
@@ -4883,6 +4883,48 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
             "git", "worktree", "add", "-b", branch, str(path), base_sha,
         ], cwd=repo_dir)
     return path
+
+
+def create_release_worktree(repo_dir: Path, source_repo: str, number: int,
+                            run_id: str, release_commit: str) -> Path:
+    """Prepare the release worktree at this attempt's verified commit.
+
+    Release worktrees have no resumable session semantics.  A failed release
+    may leave the stable branch checked out in an older, run-specific
+    worktree, so reusing ``create_worktree(..., existing_branch=True)`` would
+    incorrectly preserve that old position.  Find that worktree when it is
+    registered, otherwise create one from the local stable branch (or the
+    release commit), then hard-reset it to the commit whose gates just passed.
+    """
+    branch = task_branch(source_repo, number, run_id)
+    listing = run_command(
+        ["git", "worktree", "list", "--porcelain"], cwd=repo_dir,
+    )
+    current_path: Path | None = None
+    current_branch = f"branch refs/heads/{branch}"
+    for block in listing.split("\n\n"):
+        lines = block.splitlines()
+        if current_branch in lines and lines:
+            current_path = Path(lines[0].removeprefix("worktree "))
+            break
+    if current_path is None:
+        local = run_command(
+            ["git", "branch", "--list", branch], cwd=repo_dir,
+        )
+        if local.strip():
+            current_path = worktree_path(
+                repo_dir, source_repo, number, run_id,
+            )
+            run_command([
+                "git", "worktree", "add", "--force", str(current_path),
+                branch,
+            ], cwd=repo_dir)
+        else:
+            current_path = create_worktree(
+                repo_dir, source_repo, number, run_id, release_commit,
+            )
+    run_command(["git", "reset", "--hard", release_commit], cwd=current_path)
+    return current_path
 
 
 def run_state_path(worktree: Path) -> Path:
