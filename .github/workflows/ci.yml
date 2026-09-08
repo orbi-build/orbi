@@ -45,9 +45,6 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Run the repository-owned test entry point
-        run: scripts/test
-
       # CLI packaging (Issue #140, #152): the console script must
       # install in a clean environment and the entry must work
       # (`orbi --help` and `orbi --version`, exit 0).
@@ -95,6 +92,9 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Run the repository-owned test entry point
+        run: scripts/test
 
       # Mintlify docs build smoke (Issue #116): the official `mint` CLI
       # validates the docs/ build (docs.json config, pages, links) in
