@@ -2647,6 +2647,83 @@ def test_create_worktree_reuses_existing_remote_branch(monkeypatch, tmp_path):
     ]
 
 
+def test_create_release_worktree_resets_leftover_worktree_to_current_commit(
+    monkeypatch, tmp_path,
+):
+    old_worktree = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-oldrun"
+    branch = "orbi/owner-repo-issue-3"
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command == ["git", "worktree", "list", "--porcelain"]:
+            return f"worktree {old_worktree}\nHEAD old\nbranch refs/heads/{branch}\n"
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.create_release_worktree(
+        tmp_path, "owner/repo", 3, "newrun", "new-release-commit",
+    ) == old_worktree
+    assert calls[-1] == (
+        ["git", "reset", "--hard", "new-release-commit"],
+        {"cwd": old_worktree},
+    )
+    assert not any(command[:3] == ["git", "worktree", "add"]
+                   for command, _ in calls)
+
+
+def test_create_release_worktree_handles_leftover_local_branch(
+    monkeypatch, tmp_path,
+):
+    path = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-newrun"
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command == ["git", "worktree", "list", "--porcelain"]:
+            return ""
+        if command == ["git", "branch", "--list", "orbi/owner-repo-issue-3"]:
+            return "  orbi/owner-repo-issue-3"
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.create_release_worktree(
+        tmp_path, "owner/repo", 3, "newrun", "new-release-commit",
+    ) == path
+    assert calls[-2:] == [
+        (["git", "worktree", "add", "--force", str(path),
+          "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
+        (["git", "reset", "--hard", "new-release-commit"],
+         {"cwd": path}),
+    ]
+
+
+def test_create_release_worktree_creates_from_release_commit_when_branch_is_new(
+    monkeypatch, tmp_path,
+):
+    calls = []
+    expected = tmp_path / "created"
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command == ["git", "worktree", "list", "--porcelain"]:
+            return ""
+        if command == ["git", "branch", "--list", "orbi/owner-repo-issue-3"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "create_worktree",
+                        lambda *args: expected)
+    assert runner.create_release_worktree(
+        tmp_path, "owner/repo", 3, "newrun", "new-release-commit",
+    ) == expected
+    assert calls[-1] == (
+        ["git", "reset", "--hard", "new-release-commit"],
+        {"cwd": expected},
+    )
+
+
 def test_latest_run_id_returns_none_without_task_worktrees(tmp_path):
     assert runner.latest_run_id(tmp_path, "owner/repo", 3) is None
     # Unrelated directories are not task worktrees.
@@ -14613,6 +14690,8 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     monkeypatch.setattr(runner, "comment_issue",
                         lambda n, **k: state["comments"].append((n, k)))
     monkeypatch.setattr(runner, "create_worktree",
+                        lambda *a: Path("/wt"))
+    monkeypatch.setattr(runner, "create_release_worktree",
                         lambda *a: Path("/wt"))
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
     monkeypatch.setattr(runner, "_safe_publish", lambda **k: None)
