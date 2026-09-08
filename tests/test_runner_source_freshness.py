@@ -42,6 +42,7 @@ def _restore_real_gate(monkeypatch):
 def git(repo: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args], cwd=repo, capture_output=True, text=True,
+        timeout=30,
     )
     if result.returncode != 0:
         raise AssertionError(
@@ -57,6 +58,7 @@ def recording_run_command(commands: list[list[str]]):
         commands.append([str(part) for part in command])
         result = subprocess.run(
             command, cwd=cwd, capture_output=True, text=True,
+            timeout=timeout or 30,
         )
         if result.returncode != 0:
             raise subprocess.CalledProcessError(
