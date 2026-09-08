@@ -408,6 +408,22 @@ def test_docs_document_groq_free_plan_configuration_and_limits():
         assert "GROQ_API_KEY" in text
 
 
+def test_docs_document_openrouter_free_models_with_honest_limits():
+    """Issue #316: the OpenRouter guide must be runnable and distinguish
+    catalog facts from measurements that were not performed."""
+    for slug in ("providers", "zh/providers"):
+        text = (DOCS_DIR / f"{slug}.mdx").read_text(encoding="utf-8")
+        assert "openrouter.json" in text
+        assert "OPENROUTER_API_KEY" in text
+        assert "openrouter.ai/models?max_price=0" in text
+        assert "20" in text and ("1000" in text or "1,000" in text)
+        assert "2026-09-04" in text
+        assert "未实测" in text or "not tested" in text.lower()
+        assert "429" in text
+        assert "#313" in text
+        assert "thinkingLevelMap" in text
+
+
 def test_docs_getting_started_documents_the_full_chain_and_troubleshooting():
     """Issue #179: the smoke walkthrough must verify the FULL chain —
     picked up, implemented, tested, PR opened, independently reviewed,

@@ -24,6 +24,55 @@ pi_model = "glm-5.3-flash"
 
 A template being listed is not a promise of quota, availability, speed, or model support. The `Not tested` labels are intentional.
 
+### OpenRouter `:free`: one key, multiple models
+
+OpenRouter exposes many zero-price models behind one OpenAI-compatible endpoint. This is a configuration guide, not a promise that a model will remain listed or that a request is free of rate limits. The catalog is dynamic; the [official zero-price catalog](https://openrouter.ai/models?max_price=0) is the source of truth.
+
+The `:free` catalog snapshot used for this guide was checked on **2026-09-04** and reported 18 models. The named examples in that snapshot were:
+
+`nvidia/nemotron-3-ultra-550b-a55b:free`, `nvidia/nemotron-3-super-120b-a12b:free`, `z-ai/glm-5.2:free`, `google/gemma-4-31b-it:free`, `cohere/north-mini-code:free`, `thinkingmachines/inkling:free`, `poolside/laguna-s-2.1:free`, and `liquid/lfm-2.5-2.6b:free`. Model IDs are shown exactly as they must appear in `models[].id`; the catalog is dynamic, so re-check every ID before selecting it.
+
+Do not paste a key into the provider file. Copy the Issue #309 template, then add the exact model IDs you intend to select to its `models` list. Keep the same endpoint, API, and key reference:
+
+```bash
+mkdir -p .orbi
+cp templates/pi-providers/openrouter.json .orbi/pi-providers.json
+printf '%s\n' 'OPENROUTER_API_KEY=replace-me' > .orbi/env
+chmod 600 .orbi/env
+```
+
+```json
+{
+  "providers": {
+    "openrouter": {
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "api": "openai-completions",
+      "apiKey": "$OPENROUTER_API_KEY",
+      "models": [
+        {"id": "google/gemma-4-31b-it:free", "name": "Gemma 4 31B (free)"},
+        {"id": "cohere/north-mini-code:free", "name": "North Mini Code (free)"}
+      ]
+    }
+  }
+}
+```
+
+The template's selected model is `google/gemma-4-31b-it:free`. Select any ID that is actually present in your copied file; the Runner validates the provider, endpoint, API, model list, and `$OPENROUTER_API_KEY` reference before dispatch:
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "openrouter"
+pi_model = "cohere/north-mini-code:free"
+```
+
+Do not add `thinkingLevelMap` unless the selected model's current Pi/OpenRouter contract has been verified. If it is needed, use the model-specific mapping documented by that contract; this guide does not invent one. For task selection, prefer `cohere/north-mini-code:free` for small code/search tasks, `nvidia/nemotron-3-ultra-550b-a55b:free` or `nvidia/nemotron-3-super-120b-a12b:free` for long reasoning when available, `z-ai/glm-5.2:free` for general reasoning, and Gemma or LFM for lightweight experiments. These are practical suggestions, not benchmark results; **not tested** here.
+
+#### Limits, requests, and 429 status
+
+OpenRouter's official [rate-limit documentation](https://openrouter.ai/docs/api/reference/limits) states a shared free-model policy of approximately **20 requests/day** for accounts without the required credits and up to **1,000 requests/day** for eligible accounts; the exact policy, model availability, and account eligibility can change. These are policy-level limits, not per-model measurements. The 2026-09-04 snapshot did not provide a separately verified daily number for each of the 18 models, so each model's measured daily limit is **not tested**.
+
+A real Orbi request against these `:free` models, exhaustion behavior, and HTTP **429** response body were **not tested** for this repository as of 2026-09-04. Do not claim that a 429 means daily quota exhaustion without the upstream response and account usage evidence. Preserve the failed run evidence and manually select another configured model; Orbi does not automatically rotate models. Automatic quota classification (`quota_exhausted`) belongs to [#313](https://github.com/orbi-build/orbi/issues/313) and is not implemented by this documentation or template.
+
 ## Add a new provider
 
 1. Copy the closest template and give it one provider id. Keep `baseUrl`, `api`, `apiKey`, and a non-empty `models` list together. The selected `pi_model` **must exactly match** one `models[].id`.
