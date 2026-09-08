@@ -14999,6 +14999,10 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             return ""
         if command[:2] == ["git", "push"]:
             return ""
+        if command[:2] == ["git", "rev-parse"]:
+            # ensure_release_tag_pushed 的本地残留探测：env 假环境没有
+            # 本地 tag——按"不存在"失败（走创建分支）。
+            raise subprocess.CalledProcessError(1, command)
         if command[0] == "timeout":
             return ""
         if command[:3] == ["gh", "issue", "close"]:
@@ -16992,9 +16996,9 @@ def test_release_process_env_fake_rejects_unexpected_command(monkeypatch):
         runner.run_command(["gh", "label", "list"])
 
 
-def test_release_process_env_fake_answers_the_real_tag_fetch(tmp_path,
+def test_release_process_env_fake_answers_the_real_tag_probe(tmp_path,
                                                              monkeypatch):
-    # The env fake answers the `git fetch` of the REAL
+    # The env fake answers the `git ls-remote` of the REAL
     # `release_tag_commit` (the lock is taken for real on tmp_path).
     real_release_tag_commit = runner.release_tag_commit
     make_release_process_env(monkeypatch)
@@ -17003,8 +17007,9 @@ def test_release_process_env_fake_answers_the_real_tag_fetch(tmp_path,
     env_fake = runner.run_command
 
     def fake(command, **kwargs):
-        if command[:2] == ["git", "rev-parse"]:
-            return "abc123"
+        if command[:2] == ["git", "ls-remote"]:
+            return ("abc123\trefs/tags/v0.3.0\n"
+                    "abc123\trefs/tags/v0.3.0^{}\n")
         return env_fake(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", fake)

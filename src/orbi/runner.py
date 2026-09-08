@@ -2680,35 +2680,75 @@ def prepare_release_version(worktree: Path, tag: str,
 def release_tag_commit(repo_dir: Path, tag: str) -> str | None:
     """Return the commit the tag points to on the remote, or None.
 
-    (Issue #98) The tag is fetched under the base-sync lock — a task
-    worktree shares the checkout's common dir, so an unlocked
-    concurrent fetch would race on `refs/tags/<tag>` exactly like the
-    shared remote-tracking ref of Issue #171. When the remote has no
-    such tag the fetch exits 128 (verified against the real CLI) and
-    None is returned; after a successful fetch the tag is resolved to
-    the commit it points to locally (annotated tags are peeled with
-    `^{commit}`). Any other fetch failure fails fast.
+    (Issue #98) `git ls-remote` keeps the existence probe read-only and
+    its exit semantics unambiguous: exit 0 with empty output means the
+    remote has no such tag (None); ANY non-zero exit is a real failure
+    (network/auth) and propagates. The previous `git fetch` probe read
+    exit 128 as "missing", but a network failure also exits 128 — a
+    transient outage would read as "no tag on the remote", the retry
+    would re-create the tag, and a local residue from the failed push
+    deadlocked the release ticket. Annotated tags are peeled with the
+    `^{}` line ls-remote reports alongside the tag object.
+
+    The base-sync lock is kept: `ls-remote` does not write refs, but
+    the sibling steps around it do, and the lock orders them against
+    task worktrees sharing the checkout's common dir.
     """
     fd = acquire_base_sync_lock(repo_dir, 300.0)
     try:
-        try:
-            run_git_network_command(
-                ["git", "fetch", "origin",
-                 f"refs/tags/{tag}:refs/tags/{tag}"],
-                cwd=repo_dir,
-            )
-        except subprocess.CalledProcessError as exc:
-            if exc.returncode != 128:
-                raise
-            return None
-        return run_command(
-            ["git", "rev-parse", "-q", "--verify",
-             f"refs/tags/{tag}^{{commit}}"],
+        output = run_git_network_command(
+            ["git", "ls-remote", "origin",
+             f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
             cwd=repo_dir,
         )
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
+    refs: dict[str, str] = {}
+    for line in output.splitlines():
+        oid, _, ref = line.partition("\t")
+        refs[ref.strip()] = oid.strip()
+    peeled = refs.get(f"refs/tags/{tag}^{{}}")
+    if peeled:
+        return peeled
+    return refs.get(f"refs/tags/{tag}")
+
+
+def ensure_release_tag_pushed(repo_dir: Path, tag: str,
+                              release_commit: str) -> None:
+    """Create the annotated release tag and push it — idempotently.
+
+    本地残留收敛：上次 `git tag` 成功但 push 失败会留下本地 tag，重试
+    时远端仍无此 tag，不处理残留的话 `git tag -a` 永远 fatal: tag
+    already exists（发布票死锁）。残留指向本次发布提交 → 跳过重建直接
+    重推；指向别的提交 → fail fast——已有的 tag 永不移动或覆盖
+    （与 `release_tag_commit` 的远端侧同一不变量）。
+    """
+    try:
+        local_tag_commit = run_command(
+            ["git", "rev-parse", "-q", "--verify",
+             f"refs/tags/{tag}^{{commit}}"],
+            cwd=repo_dir,
+        ).strip()
+    except subprocess.CalledProcessError:
+        local_tag_commit = None
+    if local_tag_commit is None:
+        run_command(
+            ["git", "tag", "-a", tag, "-m", f"Release {tag}",
+             release_commit],
+            cwd=repo_dir,
+        )
+    elif local_tag_commit != release_commit:
+        raise RuntimeError(
+            f"local tag {tag} already exists and points at "
+            f"{local_tag_commit}, not the release commit "
+            f"{release_commit} — an existing tag is never moved or "
+            "overwritten"
+        )
+    run_git_network_command(
+        ["git", "push", "origin", f"refs/tags/{tag}"],
+        cwd=repo_dir,
+    )
 
 
 def tag_commit_is_ancestor_of_base(tag_commit: str, base_commit: str,
@@ -3753,15 +3793,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
                     "tag is never moved or overwritten"
                 )
         else:
-            run_command(
-                ["git", "tag", "-a", tag, "-m", f"Release {tag}",
-                 release_commit],
-                cwd=config["repo_dir"],
-            )
-            run_git_network_command(
-                ["git", "push", "origin", f"refs/tags/{tag}"],
-                cwd=config["repo_dir"],
-            )
+            ensure_release_tag_pushed(config["repo_dir"], tag, release_commit)
             LOGGER.info(
                 "issue=%s release_tag_pushed tag=%s commit=%s",
                 number, tag, release_commit,
