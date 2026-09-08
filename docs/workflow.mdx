@@ -176,7 +176,8 @@ DAG, no priority numbers, no separate queues:
      items), and optional `version_file` (`pyproject.toml` by default,
      `package.json`, or `none`). `test_command` is the self-contained
      command a contributor runs from a clean checkout; the Runner executes
-     it unchanged. Optional `test_timeout_seconds` sets its positive integer
+     it unchanged. For this repository, use `scripts/test`, which owns the
+     declared test environment and coverage gates. Optional `test_timeout_seconds` sets its positive integer
      timeout (default 1800 seconds). Missing, duplicated or unknown fields
      fail fast.
   2. Freeze the base — the release commit is exactly
