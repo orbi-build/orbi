@@ -30,13 +30,14 @@ OpenRouter 用一个 OpenAI 兼容 endpoint 提供许多零价格模型。本节
 
 本文使用的 `:free` 目录快照于 **2026-09-04** 核实，共 18 个模型。该快照中明确列出的示例包括：
 
-`nemotron-3-ultra-550b-a55b`、`nemotron-3-super-120b`、`minimax-m3`、`minimax-m2.7`、`z-ai/glm-5.2:free`、`google/gemma-4-31b-it`、`cohere/north-mini-code`、`thinkingmachines/inkling`、`poolside/laguna-s-2.1`、`liquid/lfm-2.5-2.6b`。
+`nvidia/nemotron-3-ultra-550b-a55b:free`、`nvidia/nemotron-3-super-120b-a12b:free`、`z-ai/glm-5.2:free`、`google/gemma-4-31b-it:free`、`cohere/north-mini-code:free`、`thinkingmachines/inkling:free`、`poolside/laguna-s-2.1:free`、`liquid/lfm-2.5-2.6b:free`。这里的模型 ID 是 `models[].id` 必须使用的精确值；目录会动态变化，选择前请重新核对每个 ID。
 
 不要把 key 写进 provider 文件。复制 Issue #309 的模板，再把实际要选择的精确模型 ID 加入 `models` 列表；endpoint、API 和 key 引用保持不变：
 
 ```bash
+mkdir -p .orbi
 cp templates/pi-providers/openrouter.json .orbi/pi-providers.json
-printf '%s\n' 'OPENROUTER_API_KEY=replace-me' >> .orbi/env
+printf '%s\n' 'OPENROUTER_API_KEY=replace-me' > .orbi/env
 chmod 600 .orbi/env
 ```
 
@@ -64,7 +65,7 @@ pi_provider = "openrouter"
 pi_model = "cohere/north-mini-code:free"
 ```
 
-除非已经核实所选模型当前的 Pi/OpenRouter contract，否则不要添加 `thinkingLevelMap`；需要时只使用该 contract 给出的模型专属映射，本文不臆造映射。按任务选择可以优先考虑：`north-mini-code` 用于小型编码/搜索，`nemotron-3-ultra-550b-a55b` 或 `nemotron-3-super-120b` 用于较长推理，`glm-5.2`/`minimax-m3` 用于通用推理，Gemma 或 LFM 用于轻量实验。这些只是实践建议，不是 benchmark 结果；本文**未实测**。
+除非已经核实所选模型当前的 Pi/OpenRouter contract，否则不要添加 `thinkingLevelMap`；需要时只使用该 contract 给出的模型专属映射，本文不臆造映射。按任务选择可以优先考虑：`cohere/north-mini-code:free` 用于小型编码/搜索，`nvidia/nemotron-3-ultra-550b-a55b:free` 或 `nvidia/nemotron-3-super-120b-a12b:free` 用于较长推理，`z-ai/glm-5.2:free` 用于通用推理，Gemma 或 LFM 用于轻量实验。这些只是实践建议，不是 benchmark 结果；本文**未实测**。
 
 #### 限额、请求与 429 状态
 

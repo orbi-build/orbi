@@ -30,13 +30,14 @@ OpenRouter exposes many zero-price models behind one OpenAI-compatible endpoint.
 
 The `:free` catalog snapshot used for this guide was checked on **2026-09-04** and reported 18 models. The named examples in that snapshot were:
 
-`nemotron-3-ultra-550b-a55b`, `nemotron-3-super-120b`, `minimax-m3`, `minimax-m2.7`, `z-ai/glm-5.2:free`, `google/gemma-4-31b-it`, `cohere/north-mini-code`, `thinkingmachines/inkling`, `poolside/laguna-s-2.1`, and `liquid/lfm-2.5-2.6b`.
+`nvidia/nemotron-3-ultra-550b-a55b:free`, `nvidia/nemotron-3-super-120b-a12b:free`, `z-ai/glm-5.2:free`, `google/gemma-4-31b-it:free`, `cohere/north-mini-code:free`, `thinkingmachines/inkling:free`, `poolside/laguna-s-2.1:free`, and `liquid/lfm-2.5-2.6b:free`. Model IDs are shown exactly as they must appear in `models[].id`; the catalog is dynamic, so re-check every ID before selecting it.
 
 Do not paste a key into the provider file. Copy the Issue #309 template, then add the exact model IDs you intend to select to its `models` list. Keep the same endpoint, API, and key reference:
 
 ```bash
+mkdir -p .orbi
 cp templates/pi-providers/openrouter.json .orbi/pi-providers.json
-printf '%s\n' 'OPENROUTER_API_KEY=replace-me' >> .orbi/env
+printf '%s\n' 'OPENROUTER_API_KEY=replace-me' > .orbi/env
 chmod 600 .orbi/env
 ```
 
@@ -64,7 +65,7 @@ pi_provider = "openrouter"
 pi_model = "cohere/north-mini-code:free"
 ```
 
-Do not add `thinkingLevelMap` unless the selected model's current Pi/OpenRouter contract has been verified. If it is needed, use the model-specific mapping documented by that contract; this guide does not invent one. For task selection, prefer `north-mini-code` for small code/search tasks, `nemotron-3-ultra-550b-a55b` or `nemotron-3-super-120b` for long reasoning when available, `glm-5.2`/`minimax-m3` for general reasoning, and Gemma or LFM for lightweight experiments. These are practical suggestions, not benchmark results; **not tested** here.
+Do not add `thinkingLevelMap` unless the selected model's current Pi/OpenRouter contract has been verified. If it is needed, use the model-specific mapping documented by that contract; this guide does not invent one. For task selection, prefer `cohere/north-mini-code:free` for small code/search tasks, `nvidia/nemotron-3-ultra-550b-a55b:free` or `nvidia/nemotron-3-super-120b-a12b:free` for long reasoning when available, `z-ai/glm-5.2:free` for general reasoning, and Gemma or LFM for lightweight experiments. These are practical suggestions, not benchmark results; **not tested** here.
 
 #### Limits, requests, and 429 status
 
