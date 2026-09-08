@@ -3520,7 +3520,8 @@ def test_comment_issue_runs_gh_comment(monkeypatch):
     runner.comment_issue(3, repo="xqliu/orbi-backlog", body="done")
     assert calls == [[
         "gh", "issue", "comment", "3", "--repo", "xqliu/orbi-backlog",
-        "--body", "done",
+        "--body", "done\n\n<!-- runner="
+        + progress.runner_fingerprint() + " -->",
     ]]
 
 

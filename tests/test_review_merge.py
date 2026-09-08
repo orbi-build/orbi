@@ -18,7 +18,7 @@ from unittest.mock import Mock
 import pytest
 
 import orbi.runner as runner
-from orbi import cli_install
+from orbi import cli_install, progress
 from tests.test_progress_wiring import make_fake_gh
 
 

@@ -37,7 +37,7 @@ import time
 from pathlib import Path
 
 from orbi.delivery_labels import READY_LABEL
-from orbi.progress import run_marker
+from orbi.progress import format_status_comment, run_marker
 from orbi.systemd_deploy import SERVICE_INSTANCES
 
 LOGGER = logging.getLogger("orbi.health")
@@ -480,7 +480,9 @@ def run_health_check(config: dict, *, run_command) -> list[str]:
             run_command([
                 "timeout", str(GH_TIMEOUT_SECONDS), "gh", "issue",
                 "comment", str(finding["issue"]), "--repo", finding["repo"],
-                "--body", repeat_failure_comment(finding),
+                "--body", format_status_comment(
+                    repeat_failure_comment(finding),
+                ),
             ])
             alerts.append(f"repeated_failure:{finding['repo']}#{finding['issue']}")
         # 3. Stale pickup: system stuck vs queue idle.
