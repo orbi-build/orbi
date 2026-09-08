@@ -396,8 +396,12 @@ def slots_idle(url: str, timeout: float = SLOTS_PROBE_TIMEOUT) -> bool | None:
       generating (a slow model, NOT a swallow).
     - `None`  — inconclusive: a probe error (network / non-200 / timeout),
       invalid JSON, or a payload that is not a non-empty list of slot
-      objects. The caller treats `None` as "no evidence" — the probe is a
-      pure bypass (Issue #79) and never fails the delivery.
+      objects — INCLUDING slots whose `is_processing` is missing or not
+      a bool (schema drift): a vacuous "every slot is false" over slots
+      that carry no flag would fabricate the swallow evidence and send
+      the #231 recovery after a model that is in fact generating. The
+      caller treats `None` as "no evidence" — the probe is a pure
+      bypass (Issue #79) and never fails the delivery.
     """
     try:
         # urlopen raises HTTPError for a non-2xx status (caught below),
@@ -413,8 +417,11 @@ def slots_idle(url: str, timeout: float = SLOTS_PROBE_TIMEOUT) -> bool | None:
     for slot in payload:
         if not isinstance(slot, dict):
             return None
-        if slot.get("is_processing") is True:
+        flag = slot.get("is_processing")
+        if flag is True:
             return False
+        if flag is not False:
+            return None
     return True
 
 

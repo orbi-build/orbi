@@ -906,6 +906,49 @@ def test_slots_idle_uses_the_given_timeout(monkeypatch):
     assert calls["url"] == "http://x/slots"
 
 
+def test_slots_idle_none_when_no_slot_carries_the_flag(monkeypatch):
+    # Schema drift (a proxy that drops the key): no slot carries a real
+    # `is_processing` bool, so "every slot is false" is vacuously true —
+    # but a vacuous True is FABRICATED swallow evidence, and the #231
+    # recovery would kill a session whose model is in fact generating.
+    # Missing evidence is inconclusive (None), like every other
+    # unparseable payload.
+    _patch_urlopen(
+        monkeypatch, result=_FakeSlotsResponse(200, b'[{"id": 0}, {"id": 1}]'),
+    )
+    assert pi_recovery.slots_idle("http://x/slots") is None
+
+
+def test_slots_idle_none_when_flag_is_not_a_bool(monkeypatch):
+    # A non-bool `is_processing` (the string "true", the int 1) is not
+    # the documented contract (`is_processing` bool): inconclusive, not
+    # idle. `is True` on such a value answers False for BUSY and falls
+    # through to "idle" — the fail-open direction.
+    _patch_urlopen(
+        monkeypatch,
+        result=_FakeSlotsResponse(200, b'[{"is_processing": "true"}]'),
+    )
+    assert pi_recovery.slots_idle("http://x/slots") is None
+    _patch_urlopen(
+        monkeypatch,
+        result=_FakeSlotsResponse(200, b'[{"is_processing": 1}]'),
+    )
+    assert pi_recovery.slots_idle("http://x/slots") is None
+
+
+def test_slots_idle_none_when_any_slot_lacks_the_flag(monkeypatch):
+    # `True` means EVERY slot is idle (the documented contract). One slot
+    # without the flag is one slot of unknown state: the whole payload is
+    # inconclusive.
+    _patch_urlopen(
+        monkeypatch,
+        result=_FakeSlotsResponse(
+            200, b'[{"is_processing": false}, {"id": 1}]',
+        ),
+    )
+    assert pi_recovery.slots_idle("http://x/slots") is None
+
+
 def test_upstream_alive_false_for_live_state_without_remote_ip(
     tmp_path, monkeypatch,
 ):
