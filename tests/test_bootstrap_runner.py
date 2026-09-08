@@ -13926,6 +13926,43 @@ def test_verify_release_scope_reraises_real_gh_failure(monkeypatch):
         runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
 
 
+def test_derive_release_scope_flattens_multi_page_results(monkeypatch):
+    """`gh api --paginate` 不带 `--slurp` 时把每页 JSON 首尾拼接输出：
+    Milestone 的 issue 超过一页（REST 默认每页 30 条）后按单页
+    `json.loads` 解析必崩，发布 scope 推导对该 Milestone 永久失败。
+    修复与 `milestone_open_issues` 同款：`--slurp` 收拢各页 +
+    `parse_paginated_issue_array` 展平，多页 scope 完整保留。"""
+    milestones = [{
+        "number": 5, "title": "v0.9.0", "state": "closed",
+        "open_issues": 0, "closed_issues": 35,
+        "url": "https://api.github.com/repos/o/r/milestones/5",
+        "html_url": "https://github.com/o/r/milestone/5",
+    }]
+    page_one = [{"number": n, "title": f"issue {n}", "state": "closed"}
+                for n in range(1, 31)]
+    page_two = [{"number": n, "title": f"issue {n}", "state": "closed"}
+                for n in range(31, 36)]
+
+    def fake_run(command, **kwargs):
+        # 忠实模拟 gh 的两种输出形态：带 --slurp 收拢进外层数组；
+        # 不带则各页 JSON 首尾相接（这正是修复前的崩溃输入）。
+        path = command[2]
+        if "--slurp" in command:
+            if path.startswith("repos/o/r/milestones?"):
+                return json.dumps([milestones])
+            return json.dumps([page_one, page_two])
+        if path.startswith("repos/o/r/milestones?"):
+            return json.dumps(milestones)
+        return json.dumps(page_one) + json.dumps(page_two)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    scope, open_evidence = runner.derive_release_scope_from_milestone(
+        "o/r", "v0.9.0",
+    )
+    assert scope == list(range(1, 36))
+    assert open_evidence == []
+
+
 def make_milestone_gh(monkeypatch, *, milestones=None, items_by_milestone=None):
     """Answer the gh API calls used for milestone issue scope derivation.
 
