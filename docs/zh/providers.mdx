@@ -24,6 +24,54 @@ pi_model = "glm-5.3-flash"
 
 模板出现在清单中不代表承诺额度、可用性、速度或模型支持。`未实测` 是有意保留的状态。
 
+### OpenRouter `:free`：一个 key、多个模型
+
+OpenRouter 用一个 OpenAI 兼容 endpoint 提供许多零价格模型。本节是配置说明，不保证模型持续存在，也不保证请求不会被限流。[官方零价格目录](https://openrouter.ai/models?max_price=0)是唯一准确来源，目录会动态变化。
+
+本文使用的 `:free` 目录快照于 **2026-09-04** 核实，共 18 个模型。该快照中明确列出的示例包括：
+
+`nemotron-3-ultra-550b-a55b`、`nemotron-3-super-120b`、`minimax-m3`、`minimax-m2.7`、`z-ai/glm-5.2:free`、`google/gemma-4-31b-it`、`cohere/north-mini-code`、`thinkingmachines/inkling`、`poolside/laguna-s-2.1`、`liquid/lfm-2.5-2.6b`。
+
+不要把 key 写进 provider 文件。复制 Issue #309 的模板，再把实际要选择的精确模型 ID 加入 `models` 列表；endpoint、API 和 key 引用保持不变：
+
+```bash
+cp templates/pi-providers/openrouter.json .orbi/pi-providers.json
+printf '%s\n' 'OPENROUTER_API_KEY=replace-me' >> .orbi/env
+chmod 600 .orbi/env
+```
+
+```json
+{
+  "providers": {
+    "openrouter": {
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "api": "openai-completions",
+      "apiKey": "$OPENROUTER_API_KEY",
+      "models": [
+        {"id": "google/gemma-4-31b-it:free", "name": "Gemma 4 31B (free)"},
+        {"id": "cohere/north-mini-code:free", "name": "North Mini Code (free)"}
+      ]
+    }
+  }
+}
+```
+
+模板默认选择 `google/gemma-4-31b-it:free`。只能选择复制后的文件中实际存在的 ID；Runner 会在派发前校验 provider、endpoint、API、模型列表和 `$OPENROUTER_API_KEY` 引用：
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "openrouter"
+pi_model = "cohere/north-mini-code:free"
+```
+
+除非已经核实所选模型当前的 Pi/OpenRouter contract，否则不要添加 `thinkingLevelMap`；需要时只使用该 contract 给出的模型专属映射，本文不臆造映射。按任务选择可以优先考虑：`north-mini-code` 用于小型编码/搜索，`nemotron-3-ultra-550b-a55b` 或 `nemotron-3-super-120b` 用于较长推理，`glm-5.2`/`minimax-m3` 用于通用推理，Gemma 或 LFM 用于轻量实验。这些只是实践建议，不是 benchmark 结果；本文**未实测**。
+
+#### 限额、请求与 429 状态
+
+OpenRouter 官方[限流文档](https://openrouter.ai/docs/api/reference/limits)给出的 free-model 共享政策约为：未达到要求的充值额度时 **20 次请求/日**，符合条件的账户最高 **1000 次请求/日**；具体政策、模型可用性和账户资格可能变化。这是政策级别的额度，不是逐模型实测值。2026-09-04 的快照没有为 18 个模型分别核实每日数字，所以每个模型的实测每日上限均为**未实测**。
+
+截至 2026-09-04，本仓库没有对这些 `:free` 模型执行真实 Orbi 请求，也没有实测耗尽行为或 HTTP **429** 响应体。没有上游响应和账户用量证据时，不要把 429 断言为每日额度耗尽。保留失败 run 证据并手动选择另一个已配置模型；Orbi 不会自动轮换模型。自动的 `quota_exhausted` 分类属于 [#313](https://github.com/orbi-build/orbi/issues/313)，不由本文或模板实现。
+
 ## 接入一家新 provider
 
 1. 复制最接近的模板并设置一个 provider id。`baseUrl`、`api`、`apiKey` 和非空 `models` 列表必须一起保留。选择的 `pi_model` **必须精确等于**某个 `models[].id`。
