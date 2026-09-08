@@ -1077,6 +1077,8 @@ def test_verify_pr_non_resume_rejects_multiple_open_prs(
             return json.dumps([{"url": FAKE_PR_URL}, {"url": FAKE_PR_URL}])
         raise AssertionError(command)
 
+    with pytest.raises(AssertionError):
+        fake_run(["unexpected"])
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="multiple open PRs"):
         runner.verify_pr(
