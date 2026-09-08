@@ -486,6 +486,22 @@ def test_process_state_none_for_malformed_stat(tmp_path, monkeypatch):
     assert pi_recovery.process_state(5) is None
 
 
+def test_process_state_none_for_paren_terminated_stat(
+    tmp_path, monkeypatch,
+):
+    # A line that ENDS at the comm parentheses has no state field at
+    # all: `_stat_fields` returns [] and the None contract of the
+    # sibling parsers applies — never an IndexError out of a
+    # fail-safe module (`not fields[0]` indexes before checking
+    # emptiness, and its empty-string intent can never fire: split()
+    # never yields empty tokens).
+    proc = make_procfs(tmp_path, [])
+    (proc / "5").mkdir()
+    (proc / "5" / "stat").write_text("5 (bash)", encoding="utf-8")
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    assert pi_recovery.process_state(5) is None
+
+
 def test_process_start_monotonic_reads_field_22(tmp_path, monkeypatch):
     # stat field 22 (starttime) in ticks since boot, converted with the
     # given hz: 100 ticks at hz=100 -> 1.0 s since boot. The value stays
