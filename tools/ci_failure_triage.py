@@ -71,6 +71,11 @@ FINGERPRINT_MARKER = "ci-failure-fingerprint:"
 FINGERPRINT_RE = re.compile(
     r"<!--\s*" + re.escape(FINGERPRINT_MARKER) + r"([0-9a-f]{64})\s*-->"
 )
+CLOSING_REFERENCE_RE = re.compile(
+    r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+"
+    r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#(\d+)"
+)
+ACTIVE_DELIVERY_LABELS = {"ai-in-progress", "ai-pr-opened", "ai-fix-needed"}
 
 
 class GhApiError(Exception):
@@ -260,10 +265,13 @@ def build_failure_body(
 
 
 def build_reoccurrence_comment(run: dict, job: dict) -> str:
-    """The evidence appended to an existing Issue when the failure repeats."""
+    """The evidence appended to an existing target when the failure repeats."""
     return "\n".join([
         f"CI failure re-occurred (job `{job['name']}`, same fingerprint):",
         "",
+        f"- workflow: `{CI_WORKFLOW_NAME}` (`{CI_WORKFLOW_PATH}`)",
+        f"- event: `{run.get('event')}`",
+        f"- job logs: {job.get('html_url')}",
         f"- commit: `{run.get('head_sha')}`",
         f"- run id: `{run.get('id')}` (attempt {run.get('run_attempt')}),"
         f" conclusion: `{run.get('conclusion')}`",
@@ -306,6 +314,71 @@ def resolve_pr_number(owner: str, repo: str, head_sha: str) -> int | None:
         if isinstance(number, int):
             return number
     return None
+
+
+def fetch_pull_request(owner: str, repo: str, number: int) -> dict | None:
+    """Fetch the PR body used for GitHub's closing-reference contract."""
+    data = gh_api(f"repos/{owner}/{repo}/pulls/{number}")
+    return data if isinstance(data, dict) else None
+
+
+def closing_issue_numbers(body: str, owner: str, repo: str) -> list[int]:
+    """Return same-repository Issues named by GitHub closing keywords."""
+    numbers: list[int] = []
+    for match in CLOSING_REFERENCE_RE.finditer(body):
+        reference = match.group(0)
+        qualified = re.search(r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)#", reference)
+        if qualified and (
+            qualified.group(1) != owner or qualified.group(2) != repo
+        ):
+            continue
+        number = int(match.group(1))
+        if number not in numbers:
+            numbers.append(number)
+    return numbers
+
+
+def fetch_issue(owner: str, repo: str, number: int) -> dict | None:
+    """Fetch one source Issue, including its current state and labels."""
+    data = gh_api(f"repos/{owner}/{repo}/issues/{number}")
+    return data if isinstance(data, dict) else None
+
+
+def active_source_issue(
+    owner: str, repo: str, pr_number: int | None,
+) -> tuple[int, int, set[str]] | None:
+    """Resolve an open Orbi delivery Issue from a PR's closing reference."""
+    if pr_number is None:
+        return None
+    pull = fetch_pull_request(owner, repo, pr_number)
+    body = pull.get("body") if pull else None
+    if not isinstance(body, str):
+        return None
+    for number in closing_issue_numbers(body, owner, repo):
+        issue = fetch_issue(owner, repo, number)
+        labels = {
+            label.get("name") for label in issue.get("labels", [])
+            if isinstance(label, dict) and isinstance(label.get("name"), str)
+        } if issue else set()
+        if issue and issue.get("state") == "open" and labels & ACTIVE_DELIVERY_LABELS:
+            return number, pr_number, labels
+    return None
+
+
+def remove_issue_label(owner: str, repo: str, number: int, label: str) -> None:
+    """Remove one stale delivery-state label from the source Issue."""
+    gh_api(
+        f"repos/{owner}/{repo}/issues/{number}/labels/{label}",
+        method="DELETE",
+    )
+
+
+def add_issue_label(owner: str, repo: str, number: int, label: str) -> None:
+    """Add one label without replacing the source Issue's other labels."""
+    gh_api(
+        f"repos/{owner}/{repo}/issues/{number}/labels",
+        method="POST", payload={"labels": [label]},
+    )
 
 
 def fetch_jobs(owner: str, repo: str, run_id: int) -> list:
@@ -406,13 +479,33 @@ def close_issue(owner: str, repo: str, number: int) -> None:
 
 
 def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
-    """Create or update one bug Issue per failed job."""
+    """Route active PR deliveries, or create/update one bug Issue per job."""
     pr_number = None
+    source = None
     if run.get("event") == "pull_request":
         pr_number = resolve_pr_number(owner, repo, run.get("head_sha", ""))
+        source = active_source_issue(owner, repo, pr_number)
     failed = jobs_with_conclusion(jobs, FAILURE_CONCLUSIONS)
     if not failed:
         log(f"ignored reason=no_failed_jobs run_id={run.get('id')}")
+        return
+    if source is not None:
+        source_number, source_pr, source_labels = source
+        for item in failed:
+            evidence = build_reoccurrence_comment(run, item)
+            comment_issue(owner, repo, source_number, evidence)
+            comment_issue(owner, repo, source_pr, evidence)
+        # Keep the delivery state canonical: the Runner's lifecycle contract
+        # requires ai-fix-needed to replace an older opened/in-flight state,
+        # not coexist with it.
+        for stale_label in ("ai-in-progress", "ai-pr-opened"):
+            if stale_label in source_labels:
+                remove_issue_label(owner, repo, source_number, stale_label)
+        add_issue_label(owner, repo, source_number, "ai-fix-needed")
+        log(
+            f"routed source_issue={source_number} pr={source_pr} "
+            f"run_id={run.get('id')}"
+        )
         return
     index = index_open_issues(owner, repo)
     milestone = resolve_active_milestone(owner, repo)
