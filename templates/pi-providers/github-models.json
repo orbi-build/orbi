@@ -1,0 +1,12 @@
+{
+  "providers": {
+    "github-models": {
+      "baseUrl": "https://models.github.ai/inference",
+      "api": "openai-completions",
+      "apiKey": "$GH_MODELS_TOKEN",
+      "models": [
+        {"id": "openai/gpt-4.1-mini", "name": "OpenAI GPT-4.1 mini (GitHub Models)", "contextWindow": 1048576, "maxTokens": 32768}
+      ]
+    }
+  }
+}
