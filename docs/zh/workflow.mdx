@@ -102,6 +102,9 @@ attempt 的每一步复用同一个值；同一 Issue 的 retry 生成新的。�
 - 该 attempt 的每条 journal 行（前缀 `[e07383c2]`）；
 - Issue/PR 评论：可见字段 `run_id=e07383c2` + 隐藏机器可读 marker
   `<!-- orbi:run=e07383c2 -->`；
+- 里程碑与场景评论还携带隐藏的 runner marker `<!-- runner=1a2b3c4d -->`：
+  写出评论的部署指纹——执行 checkout 的 HEAD；非 editable 安装为包版本；
+  探测失败为 `unknown`（live progress 评论与 PR 评论不带它）；
 - feature branch 和 worktree 名（`.worktrees/<...>-issue-<n>-e07383c2`）；
 - PR body——稳定 marker `<!-- orbi:run=e07383c2 -->` 是 PR 契约
   的一部分；Runner 拒绝没有它的 PR。
