@@ -56,6 +56,23 @@ reads the Issue, the repository's `AGENTS.md`, the files it will change
 plus their callers, and the related tests — the README and the rest of
 the repository only when the task is actually about them (Issue #180).
 
+## User-centered acceptance
+
+Use the same four sections for every new Issue: **User outcome** (what the user
+can accomplish), **Preconditions** (the configuration and command),
+**Acceptance** (the system action and the success result the user sees), and
+**Evidence** (a real entry point plus inspectable output). Include both a success
+path and a failure path: name the concrete error the user sees and the repair
+action. Unit tests are necessary local evidence, but do not replace the user
+path.
+
+Match depth to impact: documentation changes need the rendered docs page/preview
+and link checks; provider changes need a real provider/configuration check;
+concurrency changes need contention; setup changes need the setup entry point; UI
+changes need a real browser flow; and pure internal refactors need the existing
+public caller and regression tests. Record evidence in tests, journal, Issue/PR,
+or UI without adding infrastructure just for E2E.
+
 ## Reporting a bug
 
 Open an Issue with the `bug` label and include:

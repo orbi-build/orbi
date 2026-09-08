@@ -28,6 +28,25 @@ each section points at the owning page instead of restating it.
 - Read the GitHub Issue (body and comments) first. Then, in priority order: the repository `AGENTS.md`, the files you will change plus their callers, and the related tests.
 - `README.md`, the configured context files, build files and history are read only when the task is actually about them — a normal Issue never requires a full repository scan, and re-reading the same large files triggers pointless compactions.
 
+## User-centered acceptance
+
+Every Issue and delivery describes one **User outcome**, its **Preconditions**, the
+**Acceptance** path, and the **Evidence** that a user can inspect. The acceptance
+follows the user journey: user command and configuration, the system action, the
+success result the user sees in the success path, and the failure path (the concrete error the user
+sees plus the repair action). Unit tests prove local logic only; they do not
+replace a real user path through the affected entry point. Evidence belongs in
+the test output, journal, Issue/PR, or UI as appropriate.
+
+Match verification depth to impact rather than running an unrelated full business
+journey: documentation changes use the rendered docs page/preview and link checks,
+provider changes use a real provider/configuration check, concurrency changes use
+contention, setup changes use the install/setup entry point, UI changes use a real
+browser flow, and pure internal refactors use the existing public caller and
+regression tests. Both success and failure paths need
+observable acceptance evidence. Do not add a database, queue, daemon, or state
+system merely to make an end-to-end claim.
+
 ## TDD and coverage
 
 - TDD: write a failing test first, then the smallest implementation, then refactor.

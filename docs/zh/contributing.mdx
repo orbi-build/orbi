@@ -48,6 +48,20 @@ gh issue edit <number> --repo OWNER/PILOT-REPO --add-label ai-ready
 改任何东西之前会读 Issue、仓库的 `AGENTS.md`、要改的文件及其调用方和
 相关测试——README 和仓库其余部分只在任务确实相关时才读（Issue #180）。
 
+## 面向用户的验收（User-centered acceptance）
+
+每个新 Issue 使用同一组四个部分：**User outcome（用户结果）**、
+**Preconditions（前置条件）**、**Acceptance（验收）** 和 **Evidence（证据）**。
+写清用户执行的命令和配置、系统实际动作、用户看到的成功结果。必须同时
+写 success path 和 failure path：说明用户看到的具体错误以及 repair action
+（修复动作）。单元测试只是局部证据，不能替代真实用户路径。
+
+验收深度按影响面匹配：文档变更检查渲染后的文档页面/预览和链接，provider
+变更做真实 provider/configuration 检查，concurrency 变更做竞争场景，setup
+变更走 setup 入口，UI 变更走真实浏览器流程，纯内部 refactor 使用现有
+public caller 和回归测试。证据记录在测试、
+journal、Issue/PR 或 UI 中，不为形式上的 E2E 增加基础设施。
+
 ## 报告 bug
 
 开一个带 `bug` 标签的 Issue，包含：
