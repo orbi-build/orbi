@@ -1,0 +1,145 @@
+# OpenCode provider
+
+This page is the Orbi integration note for Pi's native OpenCode provider. It is
+part of the [provider series](https://github.com/orbi-build/orbi/issues/305).
+The facts below were checked on **2026-09-08** with **Pi 0.85.1** (`pi
+--version`). OpenCode's catalog and plans are service-controlled and can change;
+repeat the catalog command before a new deployment.
+
+## What is authenticated
+
+Pi 0.85.1 treats `opencode` as an API-key provider, not an OAuth provider. Its
+provider documentation maps it to `OPENCODE_API_KEY` and to the `opencode` key
+in Pi's `auth.json`. The key is an OpenCode Zen/OpenCode account key; it is not
+an Orbi token and not `OPENAI_API_KEY`.
+
+Choose one of these equivalent setup paths:
+
+1. Create/copy the key in the OpenCode account, following the official
+   [OpenCode Zen documentation](https://opencode.ai/docs/zen/).
+2. In an interactive Pi session run `/login`, choose **OpenCode Zen**, and
+   paste the API key. Pi stores it in its user auth file (mode `0600`). This is
+   an API-key login, not an OAuth browser flow.
+3. Or provide the key to the Orbi service through its gitignored environment
+   file:
+
+   ```bash
+   mkdir -p .orbi
+   printf '%s\n' 'OPENCODE_API_KEY=replace-me' > .orbi/env
+   chmod 600 .orbi/env
+   ```
+
+   The installed Orbi systemd unit loads `.orbi/env`. For a manual check,
+   export it in the shell first:
+
+   ```bash
+   set -a; . .orbi/env; set +a
+   ```
+
+Check readiness without printing the credential:
+
+```bash
+pi auth check --provider opencode --model deepseek-v4-flash-free --json
+```
+
+Pi 0.85.1 returned `credentials_not_configured` when no key was present. A
+successful check is evidence that credentials are configured, not evidence
+that the account has quota. Do not use `--credentials` in a transcript.
+
+## Catalog and Orbi configuration
+
+`opencode` is built into Pi's catalog. The catalog check used for this page was:
+
+```bash
+OPENCODE_API_KEY=present-but-not-a-real-key pi --offline --list-models opencode
+```
+
+The placeholder only makes Pi display the catalog; it was **not** used for a
+request. On 2026-09-08 Pi listed these `opencode` model IDs (context/output
+limits are also shown by the command and are intentionally not copied here as
+quota promises):
+
+```text
+big-pickle, claude-fable-5, claude-fable-5-1, claude-haiku-4-5,
+claude-opus-4-5, claude-opus-4-6, claude-opus-4-7, claude-opus-4-8,
+claude-opus-5, claude-sonnet-4, claude-sonnet-4-5, claude-sonnet-4-6,
+claude-sonnet-5, deepseek-v4-flash, deepseek-v4-flash-free,
+deepseek-v4-flash-vision-exp, deepseek-v4-pro, gemini-3-flash,
+gemini-3.1-pro, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.6-flash,
+gemini-3.7-flash, gemini-3.8-flash, glm-5, glm-5.1, glm-5.2, glm-5.3,
+glm-5.3-flash, gpt-5, gpt-5-codex, gpt-5-nano, gpt-5.1,
+gpt-5.1-codex, gpt-5.1-codex-max, gpt-5.1-codex-mini, gpt-5.2,
+gpt-5.2-codex, gpt-5.3-codex, gpt-5.4, gpt-5.4-mini, gpt-5.4-nano,
+gpt-5.4-pro, gpt-5.5, gpt-5.5-pro, gpt-5.6-luna, gpt-5.6-sol,
+gpt-5.6-terra, gpt-6-astra, grok-4.5, grok-4.6, grok-build-0.1,
+kimi-k2.5, kimi-k2.6, kimi-k2.7-code, kimi-k3, ling-3.0-flash-fin-free,
+mimo-v2.5-free, minimax-m2.5, minimax-m2.7, minimax-m3,
+muse-spark-1.2, muse-spark-1.2-contributor-free, muse-spark-1.3,
+muse-spark-1.3-contributor-free, nemotron-3-ultra-free,
+nemotron-3.5-lightning-free, qwen3.5-plus, qwen3.6-plus
+```
+
+The same Pi catalog also exposes a separate `opencode-go` provider. Do not
+change `pi_provider` to it unless the account is an OpenCode Go account; its
+model IDs and plan are separate. The catalog can be filtered again with
+`pi --list-models opencode` after authentication/catalog refresh.
+
+For the smallest Orbi setup, select a model ID exactly as Pi printed it:
+
+```toml
+pi_provider = "opencode"
+pi_model = "deepseek-v4-flash-free"
+# No pi_providers line.
+```
+
+**Do not create `.orbi/pi-providers.json` for this setup.** Pi already owns the
+provider, endpoint, API type, model metadata, and API-key mapping. Defining a
+second `opencode` entry can shadow or stale the native catalog. Use a
+`pi_providers` file only for providers that Pi does not natively supply, such
+as Orbi's `local-qwen` or `z-ai` templates.
+
+Before dispatching an Issue, run a real, non-secret smoke request with the
+selected account and model:
+
+```bash
+pi --provider opencode --model deepseek-v4-flash-free --print \
+  "Reply with the single word: ok"
+```
+
+## Quota, limits, and observed boundary
+
+OpenCode's [Zen page](https://opencode.ai/docs/zen/) and [OpenCode Go
+page](https://opencode.ai/docs/go/) are the authority for current pricing,
+free models, account plans, rate limits, and reset behavior. These values are
+not Pi catalog metadata and must not be inferred from `contextWindow`,
+`maxTokens`, or a model name.
+
+As of the dated check above, this worktree had **no usable OpenCode account**:
+
+- real OpenCode inference request: **not tested**;
+- quota consumption or remaining allowance: **not measured**;
+- rate-limit/429 response and reset time: **not tested**;
+- real Orbi Issue delivery and PR: **not tested**.
+
+Therefore this page makes no numeric quota or reset claim. A credential error
+means authentication/configuration is wrong; an upstream quota or rate-limit
+error is account/service state. Orbi does not silently retry or rotate
+providers. Preserve the failed run evidence and change the selectors manually.
+
+## Minimal fallback
+
+To switch after an auth, quota, or limit failure, change only the provider
+selection and use that provider's existing setup:
+
+```diff
+-pi_provider = "opencode"
+-pi_model = "deepseek-v4-flash-free"
++pi_providers = ".orbi/pi-providers.json"
++pi_provider = "local-qwen"       # or "z-ai"
++pi_model = "Qwen3.8-27B"          # or "glm-5.3-flash"
+```
+
+Copy the matching template from `templates/pi-providers/`, put its key in
+`.orbi/env` (local Qwen uses its documented dummy key), and run the provider
+validation plus one real `pi --print` request. Switching is manual; it does
+not repair an invalid OpenCode key or create an automatic fallback.
