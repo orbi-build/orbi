@@ -148,8 +148,15 @@ elif args[:2] == ["pr", "list"]:
     head = git("rev-parse", "HEAD")
     # Stable delivery branch shape: orbi-owner-repo-issue-<n>.
     issue_num = branch.split("-issue-", 1)[1]
-    with open(os.path.join(os.getcwd(), ".orbi", "run-state.json"), encoding="utf-8") as f:
-        run_id = json.load(f)["run_id"]
+    # Standalone verification may run before the delivery path writes its
+    # state file; normal delivery calls still provide their real run id.
+    state_path = os.path.join(os.getcwd(), ".orbi", "run-state.json")
+    try:
+        with open(state_path, encoding="utf-8") as f:
+            run_id = json.load(f)["run_id"]
+    except FileNotFoundError:
+        # The ref hammer supplies this fixed id to verify_pr.
+        run_id = "01234567"
     print(json.dumps([{
         "number": 99,
         "url": "https://github.com/owner/repo/pull/99",

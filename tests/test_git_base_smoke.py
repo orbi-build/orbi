@@ -92,16 +92,13 @@ def test_task_created_from_latest_origin_base_when_main_worktree_on_side_branch(
     assert git(path, "branch", "--show-current") == "orbi/owner-repo-issue-3"
 
 
-def test_retry_of_same_issue_gets_new_independent_run(clone):
-    base_sha = runner.freeze_base(clone, "main")
-    first = runner.create_worktree(clone, "owner/repo", 3, "run1", base_sha)
-    commit_file(first, "first-run.txt", "first run work")
-    second = runner.create_worktree(clone, "owner/repo", 3, "run2", base_sha)
-    assert second != first
-    assert git(second, "rev-parse", "HEAD") == base_sha
-    # The old scene is preserved untouched.
-    assert git(first, "rev-parse", "HEAD") != base_sha
-    assert (first / "first-run.txt").is_file()
+def test_retries_share_the_stable_delivery_branch(clone):
+    assert runner.task_branch("owner/repo", 3, "run1") == (
+        "orbi/owner-repo-issue-3"
+    )
+    assert runner.task_branch("owner/repo", 3, "run2") == (
+        "orbi/owner-repo-issue-3"
+    )
 
 
 def test_verify_pr_rejects_delivery_behind_latest_remote_base(clone, caplog):

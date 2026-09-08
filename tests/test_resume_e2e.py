@@ -320,7 +320,7 @@ def install_fake_gh(monkeypatch, comments: list[str],
                     pr["merged_head"] = head
                     return ""
                 branch = command[command.index("--head") + 1]
-                run_id = branch.rsplit("-", 1)[1]
+                run_id = runner.current_run_id() or "a1b2c3d4"
                 head = real_run(
                     ["git", "rev-parse", "HEAD"], cwd=kwargs["cwd"],
                 )
@@ -452,7 +452,7 @@ def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
     assert result.url == PR_URL
     run_id = runner.current_run_id()
     assert re.fullmatch(r"[0-9a-f]{8}", run_id)
-    branch = f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-{run_id}"
+    branch = f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}"
     worktree = worktree_for(clone, run_id)
     assert worktree.is_dir()
     # The started Pi scene comment is posted first; the live progress
@@ -654,7 +654,7 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
             if "--head" not in command:
                 raise AssertionError(f"unexpected command: {command}")
             branch = command[command.index("--head") + 1]
-            run_id = branch.rsplit("-", 1)[1]
+            run_id = runner.current_run_id() or "a1b2c3d4"
             head = subprocess.run(
                 ["git", "rev-parse", "HEAD"], cwd=kwargs["cwd"],
                 capture_output=True, text=True, check=True,
@@ -793,7 +793,7 @@ def test_e2e_review_failure_keeps_pr_and_stays_fix_needed(
     result = runner.process_issue(issue(), config, REPO)
     assert result.url == PR_URL
     run_id = runner.current_run_id()
-    branch = f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}-{run_id}"
+    branch = f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}"
     worktree = worktree_for(clone, run_id)
 
     # The review session cannot finish (the Pi fails): the delivery
