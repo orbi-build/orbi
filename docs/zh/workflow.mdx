@@ -148,7 +148,9 @@ PR 验收时校验该关键词，缺失即 fail fast。
   1. 严格解析 Issue 正文的 `## Release` 声明：`version`、
      `base_branch`、`test_command`、`scope`（`#N` 列表），以及可选的
      `version_file`（默认 `pyproject.toml`，也可为 `package.json` 或 `none`）。
-     字段缺失、重复或未知都 fail fast。
+     `test_command` 是贡献者从 clean checkout 执行的自包含命令，Runner 原样执行；
+     可选的 `test_timeout_seconds` 设置正整数超时（默认 1800 秒）。字段缺失、
+     重复或未知都 fail fast。
   2. 冻结 base——release commit 就是 `origin/<base_branch>`（在
      base-sync 锁下 fetch）。
   3. 执行发布前门禁：无遗留 open 的 `ai-in-progress` /
@@ -162,8 +164,9 @@ PR 验收时校验该关键词，缺失即 fail fast。
   4. 逐项验证 scope：`gh pr view` 必须报告 `MERGED`，否则
      `gh issue view` 必须报告 `CLOSED`。禁止解析复选框——每个 scope
      项都对照 live API 检查。
-  5. 在 release commit 的干净 worktree 里跑声明的 `test_command`
-     （`timeout` 包裹，Issue #95）。
+  5. 在 release commit 的干净 worktree 里原样执行自包含的 `test_command`
+     （`timeout` 包裹，Issue #95；可选的 `test_timeout_seconds` 覆盖默认的
+     1800 秒）。
   6. 打 tag：远端 tag 不存在时，在 release commit 上创建 annotated
      tag 并普通 push（绝不 `--force`）。已存在时必须精确指向 release
      commit——不匹配 fail fast。已存在的 tag 绝不移动、覆盖或
