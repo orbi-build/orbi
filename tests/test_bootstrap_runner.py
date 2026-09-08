@@ -13006,10 +13006,26 @@ def test_parse_release_declaration_returns_all_fields():
             "/usr/bin/python3 -m coverage run --branch -m pytest tests/ -q "
             "&& /usr/bin/python3 -m coverage report --show-missing"
         ),
+        "test_timeout_seconds": 1800,
         "scope": [123, 124],
         "scope_from_milestone": None,
         "version_file": "pyproject.toml",
     }
+
+
+def test_parse_release_declaration_accepts_custom_test_timeout():
+    body = RELEASE_DECLARATION_BODY.replace(
+        "- test_command:", "- test_timeout_seconds: 42\n- test_command:",
+    )
+    assert runner.parse_release_declaration(body)["test_timeout_seconds"] == 42
+
+
+def test_parse_release_declaration_rejects_invalid_test_timeout():
+    body = RELEASE_DECLARATION_BODY.replace(
+        "- test_command:", "- test_timeout_seconds: 0\n- test_command:",
+    )
+    with pytest.raises(ValueError, match="test_timeout_seconds"):
+        runner.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_accepts_package_json_version_file():
@@ -13155,6 +13171,7 @@ def test_parse_release_declaration_scope_from_milestone():
         "version": "v0.3.0",
         "base_branch": "main",
         "test_command": "/usr/bin/python3 -m pytest tests/ -q",
+        "test_timeout_seconds": 1800,
         "scope": [],
         "scope_from_milestone": "v0.3.0",
         "version_file": "pyproject.toml",
@@ -13912,10 +13929,18 @@ def test_run_release_tests_wraps_the_command_in_timeout_bash(monkeypatch):
     runner.run_release_tests(Path("/wt"), "pytest -q", 120)
     (command, kwargs), = calls
     assert command == [
-        "timeout", "120", "bash", "-c",
-        "pytest -q && /usr/bin/python3 -m coverage report "
-        "--show-missing && /usr/bin/python3 tools/coverage_gate.py",
+        "timeout", "120", "bash", "-c", "pytest -q",
     ]
+    assert kwargs == {"cwd": Path("/wt")}
+
+
+def test_run_release_tests_keeps_node_command_stack_neutral(monkeypatch):
+    calls = []
+    monkeypatch.setattr(runner, "run_command",
+                        lambda c, **k: calls.append((c, k)) or "")
+    runner.run_release_tests(Path("/wt"), "npm ci && npm test", 300)
+    (command, kwargs), = calls
+    assert command == ["timeout", "300", "bash", "-c", "npm ci && npm test"]
     assert kwargs == {"cwd": Path("/wt")}
 
 
@@ -14725,9 +14750,7 @@ def test_process_release_success_end_to_end(monkeypatch):
     assert (["timeout", str(runner.RELEASE_TEST_TIMEOUT_SECONDS),
              "bash", "-c",
              "/usr/bin/python3 -m coverage run --branch -m pytest tests/ -q "
-             "&& /usr/bin/python3 -m coverage report --show-missing && "
-             "/usr/bin/python3 -m coverage report --show-missing && "
-             "/usr/bin/python3 tools/coverage_gate.py"],
+             "&& /usr/bin/python3 -m coverage report --show-missing"],
             {"cwd": Path("/wt")}) in state["commands"]
     # Issue #275: the docs sync step runs once, after the GitHub Release
     # is published and before the Milestone is closed, with the release
