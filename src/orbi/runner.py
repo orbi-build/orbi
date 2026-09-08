@@ -230,10 +230,9 @@ _CURRENT_RUN_ID: str | None = None
 # `- scope:` with `  - #N` items. Parsed strictly — a missing or
 # malformed declaration fails fast, never guessed.
 RELEASE_SECTION = "## Release"
-# The declared `test_command` runs in a clean worktree at the release
-# commit wrapped in `timeout <seconds> bash -c ...` (Issue #95): a test
-# that does not terminate within the deadline is a broken path, never
-# ignorable noise.
+# The repository-owned test entry point runs in a clean worktree wrapped
+# in `timeout <seconds> bash -c ...` (Issue #95). The runner is deliberately
+# stack-neutral: the command owns its tools and test policy.
 RELEASE_TEST_TIMEOUT_SECONDS = 1800
 # Release CI wait (Issue #268): the release commit is born from the last
 # delivery PR merge, so its CI is almost always still running when the
@@ -1949,9 +1948,12 @@ def parse_release_declaration(body: str) -> dict:
     ```
 
     `version` is the exact tag name (no spaces), `base_branch` the
-    branch the release commit is frozen from, `test_command` the
-    shell command that must pass in a clean worktree at the release
-    commit, and `scope` the Issue/PR numbers verified one by one.
+    branch the release commit is frozen from, and `test_command` the
+    self-contained command a new contributor runs from a clean checkout
+    to test the repository. The runner executes that command unchanged;
+    the repository owns its toolchain and test policy. Optional
+    `test_timeout_seconds` sets the positive integer timeout (default
+    1800 seconds). `scope` lists the Issue/PR numbers verified one by one.
     Optional `version_file` selects a supported ecosystem metadata file
     (the default is `pyproject.toml`) or `none` to skip version metadata changes.
     Exactly one of `scope` / `scope_from_milestone` must be present:
@@ -2028,13 +2030,15 @@ def parse_release_declaration(body: str) -> dict:
                 scope_open = True
                 fields["scope"] = ""
             elif key in ("version", "base_branch", "test_command",
-                         "scope_from_milestone", "version_file"):
+                         "scope_from_milestone", "version_file",
+                         "test_timeout_seconds"):
                 fields[key] = value
             else:
                 raise ValueError(
                     f"release declaration has the unknown field {key!r} "
                     "(expected version, base_branch, test_command, "
-                    "scope, scope_from_milestone or version_file)"
+                    "test_timeout_seconds, scope, scope_from_milestone "
+                    "or version_file)"
                 )
         elif scope_open:
             raise ValueError(
@@ -2087,6 +2091,16 @@ def parse_release_declaration(body: str) -> dict:
                 "release declaration field `scope_from_milestone` must "
                 "not contain spaces"
             )
+    timeout_value = fields.get("test_timeout_seconds")
+    if timeout_value is None:
+        test_timeout_seconds = RELEASE_TEST_TIMEOUT_SECONDS
+    elif not re.fullmatch(r"[1-9][0-9]*", timeout_value):
+        raise ValueError(
+            "release declaration field `test_timeout_seconds` must be a "
+            "positive integer"
+        )
+    else:
+        test_timeout_seconds = int(timeout_value)
     version_file = fields.get("version_file", "pyproject.toml")
     if version_file not in (
         "pyproject.toml", "package.json", "pom.xml", "build.gradle",
@@ -2100,6 +2114,7 @@ def parse_release_declaration(body: str) -> dict:
         "version": fields["version"],
         "base_branch": fields["base_branch"],
         "test_command": fields["test_command"],
+        "test_timeout_seconds": test_timeout_seconds,
         "scope": scope,
         "scope_from_milestone": fields.get("scope_from_milestone"),
         "version_file": version_file,
@@ -2518,22 +2533,14 @@ def run_release_tests(worktree: Path, test_command: str,
     """Run the declared release test command in the release worktree.
 
     The command is a shell string (it may chain steps with `&&`), so
-    it runs through `bash -c` wrapped in `timeout <seconds>` (Issue
-    #95). Its success is followed by the repository's tiered coverage
-    gate (Issue #234: the report shows both real numbers, and
-    tools/coverage_gate.py enforces line >= 95% and branch >= 95% checked
-    separately): a declaration such as `true` or a bare `pytest` must
-    not let a release claim the coverage contract. A test that does not
-    terminate within the deadline fails fast with `timeout`'s exit 124
-    — never ignorable noise or a second unbounded attempt.
+    it runs unchanged through `bash -c` wrapped in `timeout <seconds>`
+    (Issue #95). The repository owns its test tools and coverage policy;
+    the runner must not append stack-specific commands. A test that does
+    not terminate within the deadline fails fast with `timeout`'s exit
+    124 — never ignorable noise or a second unbounded attempt.
     """
-    coverage_gate = (
-        "/usr/bin/python3 -m coverage report --show-missing && "
-        "/usr/bin/python3 tools/coverage_gate.py"
-    )
     run_command(
-        ["timeout", str(timeout_seconds), "bash", "-c",
-         f"{test_command} && {coverage_gate}"],
+        ["timeout", str(timeout_seconds), "bash", "-c", test_command],
         cwd=worktree,
     )
 
@@ -3804,7 +3811,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         try:
             run_release_tests(
                 worktree, declaration["test_command"],
-                RELEASE_TEST_TIMEOUT_SECONDS,
+                declaration["test_timeout_seconds"],
             )
         except subprocess.CalledProcessError as exc:
             release_test_error = exc
@@ -3813,7 +3820,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             f"declared test command and tiered coverage gate "
             f"(line/branch >= 95%, Issue #234) passed in a clean "
             f"worktree at {release_commit} "
-            f"(timeout {RELEASE_TEST_TIMEOUT_SECONDS}s)"
+            f"(timeout {declaration['test_timeout_seconds']}s)"
         )
         _safe_publish(
             run_id=run_id, issue=number, source_repo=source_repo,
