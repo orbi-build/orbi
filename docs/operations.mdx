@@ -67,11 +67,68 @@ Runner instances can run concurrently. Each tick's service instance:
    start — no slot, no claim, no label change, **no HTTPS fallback**
    (git data operations, including `.github/workflows/*.yml` pushes,
    always go over SSH; GitHub API operations stay on the `gh` token).
+   And before any slot or claim the tick runs the **runner source
+   freshness gate** (Issue #525): it proves the code THIS process
+   executes matches the fetched `origin/<base_branch>` — see
+   [Runner source freshness and the defense layers](#runner-source-freshness-and-the-defense-layers)
+   below.
 
 ```bash
 systemctl --user list-timers 'orbi@*.timer'
 systemctl --user status 'orbi@*.service'
 ```
+
+## Runner source freshness and the defense layers
+
+The 2026-09-07 incident: an editable install resolved into an OLD issue
+worktree while the `ExecStartPre` preflight kept the deployment home
+fresh — the Runner executed stale code while every delivery LOOKED
+up-to-date (fresh `base_sha`, stale engine), and a long-fixed bug
+replayed in production. "The checkout gets synced" and "the process
+executes that checkout" are different facts, so before any slot or
+claim the tick proves the second one (Issue #525):
+
+- **Editable install** (the official deployment): the gate resolves the
+  import source of the RUNNING process (`orbi.__file__` → the
+  `src/orbi` package directory, never the WorkingDirectory) to its
+  checkout with `git rev-parse --show-toplevel`, and requires that
+  checkout's `HEAD` to equal the fetched `refs/remotes/origin/<base>`
+  ref. Worktrees share the deployment home's refs, so the incident
+  scene (an install bound to a stale worktree) is rejected here.
+- **Non-editable install** (uv tool / PyPI copy): the installed
+  distribution version (`importlib.metadata`) must not be older than
+  the latest release tag reachable from the fetched base ref (resolved
+  in the deploy home). Equality or newer passes.
+- Everything is a LOCAL git read (`rev-parse` / `describe`): the
+  freshness of the remote-tracking ref is supplied by the
+  `ExecStartPre` fetch, so a fresh checkout costs zero network
+  requests. Whatever cannot be PROVEN fresh (missing origin ref, no
+  release tag, unresolvable import source) fails the same way with a
+  `reason=` field — never a silent pass.
+- A stale or unverifiable source logs the structured
+  `runner_source_stale install=... source=... head=... origin_main=...
+  allowed=false fix=...` line and fails the start: no slot, no claim,
+  no label change. The `fix` is the exact editable force-reinstall
+  against the deploy home. `allow_stale_runner: true` (getting-started)
+  downgrades the SAME line to a warning for offline/restricted-network
+  machines — it never skips the check.
+
+**The bootstrap boundary (why there are layers).** A self-check inside
+the runner can only protect runner versions that CONTAIN the self-check:
+a runner old enough to predate it cannot check itself, and the in-runner
+`unit_drift` comparison runs inside the very process that may be frozen.
+The layering is therefore strict, from the outside in:
+
+1. The **shell-layer `ExecStartPre` preflight** (fetch + `merge
+   --ff-only` + the CLI probe self-heal) is the OUTERMOST defense: it is
+   executed by systemd without importing any runner code, so it never
+   depends on the runner version. Keep the installed units current (the
+   `unit_drift` self-heal of `install-units` and the pre-start check)
+   so this preflight always exists.
+2. The **runner source freshness gate** (this section, Issue #525) is
+   the in-runner invariant: from its first release onward, a runner
+   whose code is stale refuses to pick up work instead of failing
+   invisibly.
 
 ## Stop, migrate, or remove a deployment
 

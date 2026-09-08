@@ -636,6 +636,14 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     auto_next_milestone = data.get("auto_next_milestone", True)
     if not isinstance(auto_next_milestone, bool):
         raise ValueError("auto_next_milestone must be a boolean")
+    # Startup source freshness (Issue #525): the Runner refuses to claim
+    # when the code it executes is not the origin/<base_branch> head.
+    # This flag is the EXPLICIT degraded mode for offline/restricted-
+    # network deployments — it only downgrades the gate to a warning,
+    # never skips it. Default False = fail fast.
+    allow_stale_runner = data.get("allow_stale_runner", False)
+    if not isinstance(allow_stale_runner, bool):
+        raise ValueError("allow_stale_runner must be a boolean")
     # Concurrency cap (Issue #39): the local machine can only serve a
     # limited number of concurrent tasks, so the default is 1. Any other
     # value must be a positive integer; fail fast on anything else.
@@ -774,6 +782,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         "auto_repair_issues": auto_repair_issues,
         "auto_next_milestone": auto_next_milestone,
         "max_concurrency": max_concurrency,
+        "allow_stale_runner": allow_stale_runner,
         "slot_dir": slot_dir_for(repo_dir),
         "pi_provider": pi_provider,
         "pi_model": pi_model,
@@ -7936,6 +7945,185 @@ def refresh_cli_install(
         os.close(fd)
 
 
+# Startup source freshness (Issue #525): the 2026-09-07 incident — the
+# editable install resolved into an OLD issue worktree while the
+# ExecStartPre preflight kept the deployment checkout fresh — showed
+# that "the checkout gets synced" and "the process executes that
+# checkout" are different facts. This gate judges the IMPORT SOURCE of
+# the running process (cli_source.module_file), never the
+# WorkingDirectory. All probes are LOCAL git reads: the freshness of
+# ``refs/remotes/origin/<base>`` is supplied by the ExecStartPre fetch
+# (a linked worktree shares the deployment checkout's refs), so a fresh
+# checkout costs zero network requests. The self-check can only protect
+# versions that carry it — the outermost defense stays the shell-layer
+# ExecStartPre preflight, which does not depend on the runner version
+# (docs/operations.mdx, the defense-layer section).
+RUNNER_SOURCE_TIMEOUT_SECONDS = 30
+
+
+class RunnerSourceStaleError(RuntimeError):
+    """The running CLI source is not proven to be the
+    ``origin/<base_branch>`` head (fail fast, before any slot or claim)."""
+
+
+def _parse_release_version(value: str) -> tuple[int, ...] | None:
+    """Parse a ``vX.Y.Z`` release version into a comparable tuple.
+
+    Returns None for anything else (the comparison then cannot prove
+    freshness and the gate fails — never guesses).
+    """
+    text = value.strip()
+    if text[:1] in ("v", "V"):
+        text = text[1:]
+    parts = text.split(".")
+    if not text or not all(part.isdigit() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
+
+
+def _orbi_distribution_version() -> str:
+    """The installed ``orbi`` distribution version (install metadata,
+    not the code's self-reported ``__version__``). Test seam: the
+    non-editable form monkeypatches this module global."""
+    import importlib.metadata
+    return importlib.metadata.version("orbi")
+
+
+def _runner_source_git(args: list[str], cwd: Path, *, run_command) -> str | None:
+    """One LOCAL read-only git probe; None when git cannot answer
+    (an expected probe result, logged at DEBUG by run_command)."""
+    try:
+        return run_command(
+            ["git", *args], cwd=cwd,
+            timeout=RUNNER_SOURCE_TIMEOUT_SECONDS,
+            failure_log_level=logging.DEBUG,
+        )
+    except Exception:
+        return None
+
+
+def _runner_source_stale_line(facts: dict, *, allowed: bool, fix: str) -> str:
+    fields = " ".join(
+        f"{key}={quote_value(str(value))}" for key, value in facts.items()
+    )
+    return (
+        f"runner_source_stale {fields} "
+        f"allowed={str(allowed).lower()} fix={quote_value(fix)}"
+    )
+
+
+def check_runner_source_freshness(config: dict, *, run_command) -> dict:
+    """Startup invariant (Issue #525): prove that the code THIS process
+    executes is the fetched ``origin/<base_branch>`` head BEFORE any slot
+    or claim. A stale (or unverifiable) source fails fast with the
+    structured ``runner_source_stale`` line (facts + the exact fix
+    command, the ``deploy_home_dirty`` style); the explicit
+    ``allow_stale_runner`` config downgrades the same line to a warning.
+
+    Two install forms, both judged from git/install metadata facts:
+
+    - editable: ``git rev-parse --show-toplevel`` at the import source
+      resolves a checkout, and the checkout carries the src-layout
+      package path (a $HOME dotfiles repo never matches ``src/orbi``,
+      so it cannot fake an editable install) — then the checkout's
+      ``HEAD`` must equal its ``refs/remotes/origin/<base>`` ref. The
+      09-07 scene (an editable install bound to an old issue worktree)
+      fails here: worktrees share the fetched remote-tracking ref.
+    - non-editable: the installed distribution version
+      (importlib.metadata) must not be older than the latest release tag
+      reachable from the fetched base ref (resolved in the deployment
+      home). Version equality or newer passes (a dev install ahead of
+      the tags is not stale).
+
+    Whatever cannot be PROVEN fresh (missing origin ref, no release tag,
+    unresolvable import source) fails the same way with a ``reason=``
+    field — never a silent pass. Returns the fresh-facts dict; raises
+    ``RunnerSourceStaleError`` unless ``allow_stale_runner`` is set.
+    """
+    base_ref = f"refs/remotes/origin/{config['base_branch']}"
+    deploy_home = Path(config["deploy_home"])
+    from orbi import cli_source  # lazy: the single cross-module dependency
+    module_path = cli_source.module_file()
+    package_dir = module_path.parent
+    fix = cli_source.reinstall_command(deploy_home)
+
+    toplevel_raw = _runner_source_git(
+        ["rev-parse", "--show-toplevel"], package_dir, run_command=run_command,
+    )
+    toplevel = Path(toplevel_raw).resolve() if toplevel_raw else None
+    editable = (
+        toplevel is not None
+        and toplevel / cli_source.PACKAGE_DIR == package_dir.resolve()
+    )
+
+    if editable:
+        head = _runner_source_git(
+            ["rev-parse", "HEAD"], toplevel, run_command=run_command,
+        )
+        base = _runner_source_git(
+            ["rev-parse", "--verify", base_ref], toplevel,
+            run_command=run_command,
+        )
+        if head and base:
+            facts = {
+                "install": "editable", "source": str(toplevel),
+                "head": head, "origin_main": base,
+            }
+            stale_reason = None if head == base else "head_is_not_origin_main"
+        else:
+            facts = {
+                "install": "editable",
+                "source": str(toplevel or package_dir),
+                "reason": "unverifiable_git_state",
+            }
+            stale_reason = "unverifiable_git_state"
+    else:
+        try:
+            version = _orbi_distribution_version()
+        except Exception:
+            version = None
+        tag = _runner_source_git(
+            ["describe", "--tags", "--match", "v*", "--abbrev=0", base_ref],
+            deploy_home, run_command=run_command,
+        )
+        parsed_version = (
+            _parse_release_version(version) if version else None
+        )
+        parsed_tag = _parse_release_version(tag) if tag else None
+        if parsed_version and parsed_tag:
+            facts = {
+                "install": "non_editable", "source": str(module_path),
+                "version": version, "origin_main": tag,
+            }
+            stale_reason = (
+                None if parsed_version >= parsed_tag
+                else "version_older_than_latest_tag"
+            )
+        else:
+            facts = {
+                "install": "non_editable", "source": str(module_path),
+                "reason": "unverifiable_version_state",
+            }
+            stale_reason = "unverifiable_version_state"
+
+    if stale_reason is None:
+        LOGGER.info(
+            "runner_source fresh %s",
+            " ".join(
+                f"{key}={quote_value(str(value))}"
+                for key, value in facts.items()
+            ),
+        )
+        return facts
+    allowed = bool(config.get("allow_stale_runner"))
+    line = _runner_source_stale_line(facts, allowed=allowed, fix=fix)
+    if allowed:
+        LOGGER.warning("%s", line)
+        return facts
+    LOGGER.error("%s", line)
+    raise RunnerSourceStaleError(line)
+
+
 def sync_base_checkout(repo_dir: Path, base_branch: str,
                        *, lock_timeout_seconds: float = 300.0) -> None:
     """Fast-forward the configured repo_dir base checkout to origin/<base>.
@@ -9831,6 +10019,19 @@ def main(argv: list[str] | None = None) -> int:
     refresh_cli_install(
         config["deploy_home"], run_command=run_command,
     )
+    # Startup source freshness (Issue #525): BEFORE any slot or claim,
+    # prove that the code THIS process executes is the fetched
+    # origin/<base_branch> head (the import source's checkout HEAD for
+    # an editable install, the installed version vs the latest release
+    # tag for a non-editable one — all local git reads). The 09-07
+    # incident: the editable install resolved into an old issue
+    # worktree, so the preflight synced a checkout the process never
+    # executed and the stale engine failed deliveries invisibly. A stale
+    # or unverifiable source logs the structured `runner_source_stale`
+    # line (facts + fix) and fails the start: no slot, no claim, no
+    # label change. `allow_stale_runner: true` downgrades the same line
+    # to a warning (explicit offline escape hatch, never silent).
+    check_runner_source_freshness(config, run_command=run_command)
     # Deployment consistency (Issue #103, #142): BEFORE any slot or
     # claim the installed systemd units must match the repo templates
     # (the templates the ExecStartPre-synced checkout just loaded).

@@ -68,6 +68,9 @@ KNOWN_CONFIG_FIELDS = frozenset({
     # Issue #139: the active Milestone claim scope (optional string).
     "active_milestone",
     "max_concurrency",
+    # Issue #525: the runner source freshness gate's offline escape
+    # hatch (explicit boolean, default false).
+    "allow_stale_runner",
     # Issue #228: the configurable model_wait dead-request threshold
     # (finite positive number, default 1800 s).
     "model_wait_dead_seconds",

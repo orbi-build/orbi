@@ -43,6 +43,19 @@ def _default_transport_preflight(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _default_runner_source_preflight(monkeypatch):
+    """Default: the runner source freshness gate (Issue #525) passes.
+
+    The in-process dispatch tests run inside THIS worktree, whose HEAD
+    is a task branch — exactly the scene the real gate must reject — so
+    the gate's own tests stub or exercise it explicitly (a
+    `monkeypatch` always wins over this default)."""
+    monkeypatch.setattr(
+        runner, "check_runner_source_freshness", lambda *a, **k: {},
+    )
+
+
+@pytest.fixture(autouse=True)
 def _default_health_check_preflight(monkeypatch):
     """Default: the tick-start self-health check (Issue #266) is a no-op.
 
