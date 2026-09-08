@@ -1,0 +1,144 @@
+# v0.4.0 release (latest)
+
+`v0.4.0` was published 2026-09-08T16:26:31Z as the GitHub Release [v0.4.0](https://github.com/orbi-build/orbi/releases/tag/v0.4.0) (release task: Issue #551).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.4.0` | annotated tag `56273d65bde956c4c31d70a68f9480f966805477` | commit `fd31207ce3351587b0f78e33da311feb47ae2c6d` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- 多 Repo Registry：显式配置与兼容单 Repo ([Issue #134](https://github.com/orbi-build/orbi/issues/134); [PR #150](https://github.com/orbi-build/orbi/pull/150))
+- 开发契约：将用户视角的端到端验收内化到 Issue、Agent 和 Review 流程 ([Issue #173](https://github.com/orbi-build/orbi/issues/173); [PR #550](https://github.com/orbi-build/orbi/pull/550))
+- Orbi 自包含管理 Pi extensions，隔离全局 Pi 配置 ([Issue #249](https://github.com/orbi-build/orbi/issues/249); [PR #524](https://github.com/orbi-build/orbi/pull/524))
+- 维护：清理滞留重复 PR，串行恢复 #316/#360/#319 原有 PR 交付闭环 ([Issue #533](https://github.com/orbi-build/orbi/issues/533))
+- Enhancement：CI failure triage 优先复用已有 PR，减少重复修复票 ([Issue #544](https://github.com/orbi-build/orbi/issues/544); [PR #545](https://github.com/orbi-build/orbi/pull/545))
+
+### Reliability and recovery
+
+- Runner Python exception：review/fix 达到 5 轮上限后抛出 UnrecoverableDeliveryError ([Issue #478](https://github.com/orbi-build/orbi/issues/478); [PR #480](https://github.com/orbi-build/orbi/pull/480))
+- 修复 ai-blocked review loop：外部前置条件修复后无法恢复同一 PR ([Issue #483](https://github.com/orbi-build/orbi/issues/483); [PR #485](https://github.com/orbi-build/orbi/pull/485))
+- Runner Python exception：resume 校验对已关闭 PR 抛 expected exactly one open PR 并死循环重试 ([Issue #494](https://github.com/orbi-build/orbi/issues/494); [PR #541](https://github.com/orbi-build/orbi/pull/541))
+- resume PR 校验失败时 Runner 不应未处理退出进程 ([Issue #495](https://github.com/orbi-build/orbi/issues/495); [PR #496](https://github.com/orbi-build/orbi/pull/496))
+- P0 Bug：新 PR 错误继承旧 PR 的 review exhausted 状态并立即 ai-blocked ([Issue #508](https://github.com/orbi-build/orbi/issues/508); [PR #509](https://github.com/orbi-build/orbi/pull/509))
+- 可观测性：Orbi progress/blocked/failed 评论携带 runner 版本指纹，旧代码执行一眼可见 ([Issue #526](https://github.com/orbi-build/orbi/issues/526); [PR #536](https://github.com/orbi-build/orbi/pull/536))
+- Epic 自动收尾：tick 级 reconcile——声明子票全部完结且无 open blocker 时自动关闭 Epic ([Issue #552](https://github.com/orbi-build/orbi/issues/552); [PR #554](https://github.com/orbi-build/orbi/pull/554))
+
+### Deployment and operations
+
+- Git 网络操作增加有界 timeout 重试，降低偶发 SSH push/fetch 失败 ([Issue #479](https://github.com/orbi-build/orbi/issues/479); [PR #481](https://github.com/orbi-build/orbi/pull/481))
+- 健壮性：Runner 启动时强制校验执行代码与 origin/main 一致，deploy_home 落后时 fail-fast（09-07 旧部署事故根因） ([Issue #525](https://github.com/orbi-build/orbi/issues/525); [PR #539](https://github.com/orbi-build/orbi/pull/539))
+- Bug：direct-Pi website service 因 beta base ref freshness 检查失败而无法启动 ([Issue #543](https://github.com/orbi-build/orbi/issues/543); [PR #546](https://github.com/orbi-build/orbi/pull/546))
+
+### Documentation
+
+- 文章：用 z.ai GLM 5.3 Flash 免费额度跑 Orbi（系列第一篇） ([Issue #306](https://github.com/orbi-build/orbi/issues/306); [PR #523](https://github.com/orbi-build/orbi/pull/523))
+- 5 步跑通第一个 Issue：面向免费额度系列的极简上手路径（含图文/录屏） ([Issue #308](https://github.com/orbi-build/orbi/issues/308); [PR #522](https://github.com/orbi-build/orbi/pull/522))
+- 模板：pi_providers 多 provider 配置文件模板（重点覆盖免费额度各家），支撑 #305 系列 ([Issue #309](https://github.com/orbi-build/orbi/issues/309); [PR #475](https://github.com/orbi-build/orbi/pull/475))
+- 配置文档：Google Gemini（AI Studio 免费层）接入 orbi ([Issue #314](https://github.com/orbi-build/orbi/issues/314); [PR #521](https://github.com/orbi-build/orbi/pull/521))
+- 配置文档：z.ai GLM（免费/体验额度）接入 orbi ([Issue #315](https://github.com/orbi-build/orbi/issues/315); [PR #515](https://github.com/orbi-build/orbi/pull/515))
+- 配置文档：OpenRouter :free 模型接入 orbi ([Issue #316](https://github.com/orbi-build/orbi/issues/316); [PR #549](https://github.com/orbi-build/orbi/pull/549))
+- 配置文档：Groq 免费档接入 orbi ([Issue #317](https://github.com/orbi-build/orbi/issues/317); [PR #519](https://github.com/orbi-build/orbi/pull/519))
+- 配置文档：Cloudflare Workers AI 免费额度接入 orbi ([Issue #318](https://github.com/orbi-build/orbi/issues/318); [PR #518](https://github.com/orbi-build/orbi/pull/518))
+- 配置文档：GitHub Models 免费原型额度接入 orbi ([Issue #319](https://github.com/orbi-build/orbi/issues/319); [PR #548](https://github.com/orbi-build/orbi/pull/548))
+- 补齐部署迁移/清理文档，避免 stale systemd units ([Issue #349](https://github.com/orbi-build/orbi/issues/349); [PR #477](https://github.com/orbi-build/orbi/pull/477))
+- 配置文档：Codex OAuth / GPT-5.6 Luna 额度接入 Orbi ([Issue #358](https://github.com/orbi-build/orbi/issues/358); [PR #487](https://github.com/orbi-build/orbi/pull/487))
+- 配置文档：OpenCode provider 额度/认证接入 Orbi ([Issue #360](https://github.com/orbi-build/orbi/issues/360); [PR #547](https://github.com/orbi-build/orbi/pull/547))
+- 配置文档：Ollama Pro 云端模型接入 Orbi ([Issue #361](https://github.com/orbi-build/orbi/issues/361); [PR #482](https://github.com/orbi-build/orbi/pull/482))
+
+### Bug fixes
+
+- release runner 不应强制要求 Python pyproject.toml：Node-only source repo 发布失败 ([Issue #488](https://github.com/orbi-build/orbi/issues/488))
+- release 后置路径仍错误地从 Node source repo 查找 pyproject.toml ([Issue #490](https://github.com/orbi-build/orbi/issues/490); [PR #491](https://github.com/orbi-build/orbi/pull/491))
+- release 前自动收敛已完成的 ai-epic，避免 Epic 阻塞 Milestone 关闭 ([Issue #492](https://github.com/orbi-build/orbi/issues/492); [PR #498](https://github.com/orbi-build/orbi/pull/498))
+- 修复 milestone 推进确认票：不得被 Runner pickup，已手动推进后应自动收敛 ([Issue #493](https://github.com/orbi-build/orbi/issues/493); [PR #505](https://github.com/orbi-build/orbi/pull/505))
+- CI failure: tests on PR #496 (pull_request) ([Issue #497](https://github.com/orbi-build/orbi/issues/497))
+- CI failure: tests on PR #498 (pull_request) ([Issue #499](https://github.com/orbi-build/orbi/issues/499); [PR #503](https://github.com/orbi-build/orbi/pull/503))
+- P0 Bug：diff coverage 失败被测试包装吞掉，错误返回 exit 0 占住 Runner slot ([Issue #500](https://github.com/orbi-build/orbi/issues/500); [PR #511](https://github.com/orbi-build/orbi/pull/511))
+- P0 Bug：CI 自动修复票应继承来源 Issue 的 p0 优先级 ([Issue #501](https://github.com/orbi-build/orbi/issues/501); [PR #502](https://github.com/orbi-build/orbi/pull/502))
+- CI failure: tests on PR #503 (pull_request) ([Issue #504](https://github.com/orbi-build/orbi/issues/504))
+- CI failure: tests on PR #505 (pull_request) ([Issue #506](https://github.com/orbi-build/orbi/issues/506))
+- CI failure: tests on PR #498 (pull_request) ([Issue #510](https://github.com/orbi-build/orbi/issues/510))
+- P0：review 测试门禁改为以 PR CI 为准（CI-as-gate），取代 PR #511 的本地包装方案（关联 #500） ([Issue #513](https://github.com/orbi-build/orbi/issues/513); [PR #514](https://github.com/orbi-build/orbi/pull/514))
+- CI failure: tests on branch orbi/orbi-build-orbi-issue-526-7d9a98f7 (pull_request) ([Issue #529](https://github.com/orbi-build/orbi/issues/529); [PR #531](https://github.com/orbi-build/orbi/pull/531))
+- CI failure: tests on branch main (push) ([Issue #538](https://github.com/orbi-build/orbi/issues/538); [PR #540](https://github.com/orbi-build/orbi/pull/540))
+- CI failure: tests on PR #541 (pull_request) ([Issue #542](https://github.com/orbi-build/orbi/issues/542))
+- Bug：交付分支身份含 run_id 导致重复/滞留 PR 阻塞 release——分支改为按 issue 命名，claim 时接管已有交付 ([Issue #553](https://github.com/orbi-build/orbi/issues/553); [PR #555](https://github.com/orbi-build/orbi/pull/555))
+- Bug：release 测试步非中性执行器——硬编码 /usr/bin/python3 coverage gate（Python 锁死+依赖系统工具链）——runner 原样执行仓库自有测试入口，契约归客户仓库 ([Issue #556](https://github.com/orbi-build/orbi/issues/556); [PR #557](https://github.com/orbi-build/orbi/pull/557))
+- bug: release 路径裸调 create_worktree——上次尝试的稳定分支/worktree 残留使 retry 必然 255（交付路径已处理，release 漏了） ([Issue #565](https://github.com/orbi-build/orbi/issues/565); [PR #566](https://github.com/orbi-build/orbi/pull/566))
+- bug: release 声明的 test_command 非自包含（系统 python 无测试工具链）+ 全量套件依赖未声明——建立自包含测试入口并更新 #551/#563 ([Issue #567](https://github.com/orbi-build/orbi/issues/567); [PR #568](https://github.com/orbi-build/orbi/pull/568))
+
+- tag: `v0.4.0`
+- release commit: `fd31207ce3351587b0f78e33da311feb47ae2c6d`
+- release task: Issue #551
+
+## Scope (verified item by item)
+
+- Issue #134 closed
+- Issue #173 closed
+- Issue #249 closed
+- Issue #306 closed
+- Issue #308 closed
+- Issue #309 closed
+- Issue #314 closed
+- Issue #315 closed
+- Issue #316 closed
+- Issue #317 closed
+- Issue #318 closed
+- Issue #319 closed
+- Issue #349 closed
+- Issue #358 closed
+- Issue #360 closed
+- Issue #361 closed
+- Issue #478 closed
+- Issue #479 closed
+- Issue #483 closed
+- Issue #488 closed
+- Issue #490 closed
+- Issue #492 closed
+- Issue #493 closed
+- Issue #494 closed
+- Issue #495 closed
+- Issue #497 closed
+- Issue #499 closed
+- Issue #500 closed
+- Issue #501 closed
+- Issue #504 closed
+- Issue #506 closed
+- Issue #508 closed
+- Issue #510 closed
+- Issue #513 closed
+- Issue #525 closed
+- Issue #526 closed
+- Issue #529 closed
+- Issue #533 closed
+- Issue #538 closed
+- Issue #542 closed
+- Issue #543 closed
+- Issue #544 closed
+- Issue #552 closed
+- Issue #553 closed
+- Issue #556 closed
+- Issue #565 closed
+- Issue #567 closed
+- NOT released (still open in milestone v0.4.0): open Issue #569 bug: 移除 scripts/test 本地测试链——release 测试验收交给 GitHub Actions（KISS：能交给平台的就交出去）
+- NOT released (still open in milestone v0.4.0): open Issue #551 Release task：发布 v0.4.0 并完成远端交付对账
+- NOT released (still open in milestone v0.4.0): open Issue #305 Epic：各家 AI provider 免费/试用额度接入 Orbi —— 系列上手文章
+
+## Pre-release gates
+
+- no open Issue carries ai-in-progress / ai-pr-opened / ai-fix-needed
+- CI on the release commit: 4 check(s) all success/neutral/skipped (waited 30s for pending checks)
+- no open PR targets main
+
+## Tests
+
+- declared test command and tiered coverage gate (line/branch >= 95%, Issue #234) passed in a clean worktree at fd31207ce3351587b0f78e33da311feb47ae2c6d (timeout 1800s)
+
+run_id=54967d01
