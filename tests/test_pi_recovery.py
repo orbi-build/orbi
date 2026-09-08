@@ -298,8 +298,74 @@ def test_find_idle_descendants_selects_pre_idle_start_descendants_only(
         100, idle_start, btime=FAKE_BTIME, hz=FAKE_HZ,
     )
     assert targets == [
-        {"pid": 200, "cmdline": "/bin/bash -c pytest"},
+        {
+            "pid": 200, "cmdline": "/bin/bash -c pytest",
+            "start_epoch": start_epoch(100),
+        },
     ]
+
+
+def test_signal_pid_rechecks_identity_and_refuses_a_reused_pid(
+    tmp_path, monkeypatch,
+):
+    # The discovery-to-signal gap can span a full idle window: a target
+    # that exits in the gap and whose pid the kernel hands to an
+    # innocent process must NEVER be signaled. The start time (stat
+    # field 22) is the identity: a different start on the same pid is a
+    # reused pid (`pid_reused`, nothing signaled); the same start is
+    # the discovered process (`sent`).
+    proc = make_procfs(tmp_path, [(42, "innocent", 1, 200, b"other")])
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+
+    def refuse(pid, sig):
+        raise AssertionError(f"signaled the reused pid {pid}")
+
+    monkeypatch.setattr(pi_recovery.os, "kill", refuse)
+    assert pi_recovery.signal_pid(
+        42, signal.SIGTERM,
+        expected_start_epoch=start_epoch(100), btime=FAKE_BTIME,
+        hz=FAKE_HZ,
+    ) == "pid_reused"
+
+
+def test_signal_pid_identity_recheck_confirms_the_discovered_process(
+    tmp_path, monkeypatch,
+):
+    proc = make_procfs(tmp_path, [(42, "bash", 1, 100, b"bash")])
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+    # The identity recheck reads the fake stat line; the delivery itself
+    # is faked (pid 42 is not a real process to signal).
+    monkeypatch.setattr(pi_recovery.os, "kill", lambda pid, sig: None)
+    assert pi_recovery.signal_pid(
+        42, signal.SIGTERM,
+        expected_start_epoch=start_epoch(100), btime=FAKE_BTIME,
+        hz=FAKE_HZ,
+    ) == "sent"
+
+
+def test_signal_pid_identity_recheck_reports_a_gone_process(
+    tmp_path, monkeypatch,
+):
+    # The target exited between the discovery and the signal (its stat
+    # is gone): already_dead, like the ESRCH path — no signal, no error.
+    proc = make_procfs(tmp_path, [])
+    monkeypatch.setattr(pi_recovery, "PROC", proc)
+
+    def refuse(pid, sig):
+        raise AssertionError(f"signaled the gone pid {pid}")
+
+    monkeypatch.setattr(pi_recovery.os, "kill", refuse)
+    assert pi_recovery.signal_pid(
+        42, signal.SIGTERM,
+        expected_start_epoch=start_epoch(100), btime=FAKE_BTIME,
+        hz=FAKE_HZ,
+    ) == "already_dead"
+
+
+def test_signal_pid_without_expected_start_keeps_the_legacy_behavior():
+    # No identity given (callers outside the idle recovery): the signal
+    # path is exactly as before.
+    assert pi_recovery.signal_pid(os.getpid(), 0) == "sent"
 
 
 def test_find_idle_descendants_includes_process_started_at_idle_start(

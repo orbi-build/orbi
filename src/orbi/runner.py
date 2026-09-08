@@ -5835,6 +5835,7 @@ def stream_pi(
                             for target in flipped:
                                 result = signal_pid(
                                     target["pid"], signal.SIGTERM,
+                                    expected_start_epoch=target["start_epoch"],
                                 )
                                 LOGGER.warning(
                                     "pi_idle_term run=%s issue=%s "
@@ -5898,7 +5899,10 @@ def stream_pi(
                                 quote_value(target["cmdline"] or "-"),
                             )
                             continue
-                        result = signal_pid(target["pid"], signal.SIGKILL)
+                        result = signal_pid(
+                            target["pid"], signal.SIGKILL,
+                            expected_start_epoch=target["start_epoch"],
+                        )
                         LOGGER.warning(
                             "pi_idle_kill run=%s issue=%s role=%s "
                             "pid=%s cmdline=%s result=%s",
