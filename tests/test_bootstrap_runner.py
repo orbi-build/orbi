@@ -15326,6 +15326,34 @@ def test_process_release_gate_failure_blocks_and_returns_cleanly(monkeypatch):
     )
 
 
+def test_process_release_publish_closeout_failure_keeps_release_result(
+    monkeypatch,
+):
+    """tag 和 GitHub Release 已发布之后，ai-merged 转移/关票/成功评论
+    都是既成事实的记账（Issue #79 旁路语义）：任何一步瞬时失败只记日志，
+    绝不允许掉进通用异常处理器把已发布结果改写成 ai-blocked（仓库里
+    同时挂 ai-merged 与 ai-blocked 双终态）。"""
+    state = make_release_process_env(monkeypatch)
+    real_edit = runner.edit_issue
+
+    def failing_edit(number, **kwargs):
+        if kwargs.get("add") == "ai-merged":
+            raise RuntimeError("GitHub unavailable")
+        return real_edit(number, **kwargs)
+
+    monkeypatch.setattr(runner, "edit_issue", failing_edit)
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    url = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    # The published release result stands; the closeout failure never
+    # rewrote it as blocked.
+    assert url == "https://github.com/o/r/releases/tag/v0.3.0"
+    assert not any(k.get("add") == "ai-blocked" for _, k in state["edits"])
+
+
 def test_process_release_milestone_failure_keeps_release_successful(monkeypatch):
     state = make_release_process_env(monkeypatch)
     real = runner.run_command
