@@ -650,7 +650,12 @@ def test_publisher_milestone_keeps_prose_and_key_value_fields():
     assert "- base_branch: main" in body
 
 
-def test_publisher_milestone_posts_multiline_field_block():
+def test_publisher_milestone_posts_multiline_field_block(monkeypatch):
+    # The runner fingerprint is the executing checkout's HEAD, so the
+    # expected marker must not hardcode one checkout's sha (Issue #529:
+    # the literal 0531f7da failed on every other checkout, e.g. the CI
+    # pull_request merge commit).
+    monkeypatch.setattr(progress, "runner_fingerprint", lambda: "8a12fb1c")
     publisher, calls = make_publisher()
     publisher.milestone("tests passed: 156 passed in 4.43s")
     assert calls == [
@@ -662,7 +667,7 @@ def test_publisher_milestone_posts_multiline_field_block():
             "Orbi: tests passed\n"
             "- result: 156 passed in 4.43s\n"
             "- run_id=abc12345\n"
-            "\n<!-- runner=0531f7da -->",
+            "\n<!-- runner=8a12fb1c -->",
         ],
     ]
     assert publisher.comment_id is None
