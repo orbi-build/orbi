@@ -7952,26 +7952,26 @@ def test_stream_pi_swallow_window_restarts_when_events_arrive(
     事件每 0.4s 到达一次（< probe_seconds=0.6），窗口必须在每次事件
     后重启，探测永不触发，会话自然跑完。"""
     monkeypatch.setattr(runner, "slots_idle", lambda url: True)
+
+    def tool_result(n):
+        return {"type": "message", "id": f"r{n}",
+                "timestamp": fresh_timestamp(n),
+                "message": {"role": "toolResult", "toolCallId": f"t{n}",
+                            "toolName": "bash",
+                            "content": [{"type": "text", "text": "ok"}]}}
+    # make_fake_pi 的 delay 是逐条累加的 sleep：0.3s 间隔的事件流
+    # （< probe_seconds=0.6），结尾 0.4s 收尾——任何无事件间隙都小于
+    # 探针宽限，窗口在每次事件后重启，永不触发。
     records = [
         (0.0, {"type": "session", "id": "sess-live",
                "timestamp": fresh_timestamp(), "cwd": "/w"}),
-        (0.4, {"type": "message", "id": "r1",
-               "timestamp": fresh_timestamp(1),
-               "message": {"role": "toolResult", "toolCallId": "t1",
-                           "toolName": "bash",
-                           "content": [{"type": "text", "text": "ok"}]}}),
-        (0.8, {"type": "message", "id": "r2",
-               "timestamp": fresh_timestamp(2),
-               "message": {"role": "toolResult", "toolCallId": "t2",
-                           "toolName": "bash",
-                           "content": [{"type": "text", "text": "ok"}]}}),
-        (1.2, {"type": "message", "id": "r3",
-               "timestamp": fresh_timestamp(3),
-               "message": {"role": "toolResult", "toolCallId": "t3",
-                           "toolName": "bash",
-                           "content": [{"type": "text", "text": "ok"}]}}),
+        (0.3, tool_result(1)),
+        (0.3, tool_result(2)),
+        (0.3, tool_result(3)),
+        (0.3, tool_result(4)),
+        (0.3, tool_result(5)),
     ]
-    command = make_fake_pi(tmp_path, session_records=records, sleep=1.4)
+    command = make_fake_pi(tmp_path, session_records=records, sleep=0.4)
     runner.stream_pi(
         command, cwd=tmp_path, poll_interval=0.1,
         model_wait_dead_seconds=10.0,

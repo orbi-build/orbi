@@ -5816,6 +5816,16 @@ def stream_pi(
                 model_wait_probe_url is not None
                 and activity["model_wait"]
             ):
+                if activity["changed"]:
+                    # Events arrived since the last poll — a turn may
+                    # have completed entirely inside the poll gap. The
+                    # sustained-idle window must RESTART: a window
+                    # carried across a completed turn killed healthy
+                    # sessions (the journal showed idle_seconds far
+                    # below the probe grace). This is the "never fires
+                    # while events keep arriving" contract enforced
+                    # across poll gaps, not just within one poll.
+                    probe_first_idle = None
                 idle = slots_idle(model_wait_probe_url)
                 if idle is True:
                     if probe_first_idle is None:
