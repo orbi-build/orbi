@@ -16475,6 +16475,8 @@ def test_reconcile_release_milestones_closes_only_published_empty_milestones(mon
     assert runner.reconcile_release_milestones("o/r", "abc12345") == ["Milestone #5 (v0.4.0) closed"]
     assert "milestone_closed number=5 repo=o/r" in caplog.text
     assert calls.index(["gh", "api", "repos/o/r/milestones/5", "--method", "PATCH", "-f", "state=closed"]) > calls.index(["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100", "--paginate", "--slurp"])
+    with pytest.raises(AssertionError):
+        fake_run(["unexpected"])
 
 
 def test_reconcile_release_milestones_keeps_open_without_published_release_or_empty_scope(monkeypatch, caplog):
@@ -16489,6 +16491,8 @@ def test_reconcile_release_milestones_keeps_open_without_published_release_or_em
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.reconcile_release_milestones("o/r", "abc12345") == []
     assert "reason=ambiguous title" in caplog.text
+    with pytest.raises(AssertionError):
+        fake_run(["unexpected"])
 
 
 def test_verify_epic_complete_uses_native_sub_issue_shapes(monkeypatch):
@@ -16520,11 +16524,13 @@ def test_verify_epic_complete_uses_native_sub_issue_shapes(monkeypatch):
     monkeypatch.setattr(runner, "run_command", pr_run)
     with pytest.raises(ValueError, match="not merged"):
         runner._verify_epic_complete("o/r", base)
+    with pytest.raises(AssertionError):
+        pr_run(["x", "y", "z"])
 
 
 def test_reconcile_release_milestones_keeps_malformed_or_incomplete_open(monkeypatch, caplog):
     caplog.set_level("INFO")
-    milestones = [{"number": "bad", "title": "v0.4.0"}, _milestone(5, "v0.5.0", "open", 1)]
+    milestones = [{"number": "bad", "title": "v0.4.0", "state": "open"}, {"number": 7, "title": "v0.7.0", "state": "invalid"}, _milestone(5, "v0.5.0", "open", 1), _milestone(6, "v0.6.0", "open", 0)]
     def fake_run(command, **kwargs):
         if "milestones?state=all" in command[2]:
             return json.dumps([milestones])
@@ -16537,6 +16543,9 @@ def test_reconcile_release_milestones_keeps_malformed_or_incomplete_open(monkeyp
     assert runner.reconcile_release_milestones("o/r", "abc12345") == []
     assert "reason=malformed" in caplog.text
     assert "reason=open issues" in caplog.text
+    assert "reason=no published release" in caplog.text
+    with pytest.raises(AssertionError):
+        fake_run(["x", "y", "z"])
 
 
 def test_reconcile_open_epics_failure_is_fail_open(monkeypatch, caplog):
@@ -16652,8 +16661,6 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
             return json.dumps([[{"number": 31, "repository": {"full_name": "o/r"}, "state": "closed"}]])
         if command == ["gh", "api", "repos/o/r/issues/31"]:
             return json.dumps({"number": 31, "state": "closed"})
-        if command == ["gh", "api", "repos/o/r/issues/32/sub_issues?per_page=100", "--paginate", "--slurp"]:
-            return json.dumps([[]])
         if command[:4] == ["gh", "issue", "view", "34"]:
             return json.dumps({"comments": [{"body": audit}]})
         if tuple(command) in {
