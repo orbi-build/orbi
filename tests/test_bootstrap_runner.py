@@ -16454,6 +16454,92 @@ def test_sync_release_docs_is_idempotent_on_rerun(tmp_path, monkeypatch):
     assert (work / "docs" / "release-v0.4.0.mdx").read_text(encoding="utf-8") == en_before
 
 
+def test_sync_release_docs_pushes_the_local_commit_a_failed_push_left_behind(
+    tmp_path, monkeypatch,
+):
+    """上次运行 commit 成功但 push 瞬时失败的续跑现场：工作区无可暂存
+    内容 ≠ 已同步——"无暂存"有两种世界，其一（本地提交从未到达远端）
+    返回 already in sync 就是假成功：release 宣告完成而远端永远拿不到
+    release notes。无暂存时必须用 merge-base 检验 HEAD 是否真的可达
+    origin/<base>，未达则补推。"""
+    work = make_release_docs_repo(tmp_path)
+    head = git_out(work, "rev-parse", "HEAD")
+    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
+                    "-m", "rel", head], check=True, capture_output=True)
+    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
+    original = runner.run_git_network_command
+
+    def failing_push(command, **kwargs):
+        raise subprocess.CalledProcessError(1, command, stderr="boom")
+
+    monkeypatch.setattr(runner, "run_git_network_command", failing_push)
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.sync_release_docs(
+            source_repo="o/r", repo_dir=work, worktree=work,
+            base_branch="main", tag="v0.4.0", release_commit=head,
+            issue_number=77,
+        )
+    remote_before = git_out(work, "rev-parse", "origin/main")
+    # 续跑：网络恢复。修复前这里假成功（already in sync），远端仍停在
+    # 旧提交；修复后补推本地 docs 提交。
+    monkeypatch.setattr(runner, "run_git_network_command", original)
+    evidence = runner.sync_release_docs(
+        source_repo="o/r", repo_dir=work, worktree=work,
+        base_branch="main", tag="v0.4.0", release_commit=head,
+        issue_number=77,
+    )
+    assert "pushed" in evidence
+    assert git_out(work, "rev-parse", "origin/main") != remote_before
+    assert git_out(work, "rev-parse", "origin/main") == git_out(
+        work, "rev-parse", "HEAD",
+    )
+
+
+def test_sync_release_docs_reraises_when_merge_base_verification_fails(
+    tmp_path, monkeypatch,
+):
+    """merge-base 检验以非 1 退出码失败（真 git 错误，如远端 ref 缺失）
+    时异常必须原样传播：检验做不了 = 失败，绝不能落进 already in sync
+    假成功。"""
+    work = make_release_docs_repo(tmp_path)
+    head = git_out(work, "rev-parse", "HEAD")
+    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
+                    "-m", "rel", head], check=True, capture_output=True)
+    real = runner.run_command
+    release_json = json.dumps({
+        "tagName": "v0.4.0",
+        "publishedAt": "2026-09-08T12:00:00Z",
+        "url": "https://github.com/o/r/releases/tag/v0.4.0",
+        "body": RELEASE_DOCS_BODY_V040,
+    })
+
+    def gh_view(command, **kwargs):
+        if command[:3] == ["gh", "release", "view"]:
+            return release_json
+        return real(command, **kwargs)
+
+    def broken_merge_base(command, **kwargs):
+        if command[:2] == ["git", "merge-base"]:
+            raise subprocess.CalledProcessError(128, command)
+        return gh_view(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", gh_view)
+    first = runner.sync_release_docs(
+        source_repo="o/r", repo_dir=work, worktree=work,
+        base_branch="main", tag="v0.4.0", release_commit=head,
+        issue_number=77,
+    )
+    assert "committed and pushed" in first
+    monkeypatch.setattr(runner, "run_command", broken_merge_base)
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        runner.sync_release_docs(
+            source_repo="o/r", repo_dir=work, worktree=work,
+            base_branch="main", tag="v0.4.0", release_commit=head,
+            issue_number=77,
+        )
+    assert excinfo.value.returncode == 128
+
+
 def test_sync_release_docs_resumes_after_a_partial_step(tmp_path, monkeypatch):
     """Resume after a partial step: the pages are written and the marker
     moved, but the navigation was never updated (a crash mid-step). The
