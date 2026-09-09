@@ -76,6 +76,15 @@ CLOSING_REFERENCE_RE = re.compile(
     r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#(\d+)"
 )
 ACTIVE_DELIVERY_LABELS = {"ai-in-progress", "ai-pr-opened", "ai-fix-needed"}
+# Issue #608: a CI failure on an EXTERNAL contributor PR (head branch not
+# the Runner's stable delivery naming `orbi/<owner>-<repo>-issue-<n>`) is
+# filed with the PR link in the body plus the hidden marker below — the
+# delivery loop parses the marker at claim time and reviews the external
+# PR FIRST instead of silently redoing the work internally.
+EXTERNAL_PR_MARKER = "orbi:external-pr:"
+EXTERNAL_PR_RE = re.compile(
+    r"<!--\s*" + re.escape(EXTERNAL_PR_MARKER) + r"(\d+)\s*-->"
+)
 
 
 class GhApiError(Exception):
@@ -212,11 +221,37 @@ def failed_steps_display(job: dict) -> str:
     return "(none reported by the jobs API)"
 
 
-def target_display(run: dict, pr_number: int | None) -> str:
+def pr_html_url(owner: str, repo: str, number: int) -> str:
+    """The canonical PR HTML URL (GitHub's stable public format)."""
+    return f"https://github.com/{owner}/{repo}/pull/{number}"
+
+
+def is_external_head(owner: str, repo: str, head_branch: str) -> bool:
+    """True when the head branch is not the Runner's stable delivery naming.
+
+    The Runner's own PRs always carry `orbi/<owner>-<repo>-issue-<n>` (the
+    stable delivery identity); a contributor's freely chosen branch name is
+    an external contribution the delivery loop must review, not redo.
+    """
+    if re.fullmatch(
+        rf"orbi/{re.escape(owner)}-{re.escape(repo)}-issue-\d+",
+        head_branch or "",
+    ):
+        return False
+    return True
+
+
+def target_display(
+    run: dict, pr_number: int | None, pr_url: str | None = None,
+) -> str:
     """Human-readable branch/PR target for the Issue body."""
     if run.get("event") == "pull_request":
         if pr_number is not None:
-            return f"PR #{pr_number} (head branch `{run.get('head_branch')}`)"
+            link = (
+                f"[PR #{pr_number}]({pr_url})" if pr_url
+                else f"PR #{pr_number}"
+            )
+            return f"{link} (head branch `{run.get('head_branch')}`)"
         return f"head branch `{run.get('head_branch')}` (no PR resolved)"
     return f"branch `{run.get('head_branch')}`"
 
@@ -231,9 +266,16 @@ def issue_title(run: dict, job: dict, pr_number: int | None) -> str:
 
 def build_failure_body(
     run: dict, job: dict, pr_number: int | None, fingerprint_value: str,
+    pr_url: str | None = None, external_pr: int | None = None,
 ) -> str:
-    """The Issue body: full evidence, the dedup rule and the hidden marker."""
-    return "\n".join([
+    """The Issue body: full evidence, the dedup rule and the hidden marker.
+
+    `external_pr` carries the PR number when the failure run's PR head is
+    an external contribution: the body then links the PR and embeds the
+    hidden `orbi:external-pr:` marker the delivery loop parses at claim
+    time (Issue #608).
+    """
+    lines = [
         f"## CI failure: {job['name']}",
         "",
         "Auto-created by the `CI Failure Issue` workflow "
@@ -241,7 +283,16 @@ def build_failure_body(
         "",
         f"- workflow: `{CI_WORKFLOW_NAME}` (`{CI_WORKFLOW_PATH}`)",
         f"- event: `{run.get('event')}`",
-        f"- branch/PR: {target_display(run, pr_number)}",
+        f"- branch/PR: {target_display(run, pr_number, pr_url)}",
+    ]
+    if external_pr is not None:
+        lines.append(
+            f"- external PR: [{external_pr}]({pr_url}) — head branch "
+            f"`{run.get('head_branch')}` is outside the stable delivery "
+            "naming, so this is an external contribution: the delivery "
+            "loop reviews this PR first instead of redoing the work"
+        )
+    lines += [
         f"- commit: `{run.get('head_sha')}`",
         f"- run id: `{run.get('id')}` (attempt {run.get('run_attempt')})",
         f"- run URL: {run.get('html_url')}",
@@ -259,9 +310,13 @@ def build_failure_body(
         "successful CI run of the same workflow/job/branch matches, this",
         "Issue is closed as completed with the recovery run evidence.",
         "",
-        f"<!-- {FINGERPRINT_MARKER}{fingerprint_value} -->",
-        "",
-    ])
+    ]
+    if external_pr is not None:
+        lines.append(f"<!-- {EXTERNAL_PR_MARKER}{external_pr} -->")
+        lines.append("")
+    lines.append(f"<!-- {FINGERPRINT_MARKER}{fingerprint_value} -->")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def build_reoccurrence_comment(run: dict, job: dict) -> str:
@@ -481,9 +536,19 @@ def close_issue(owner: str, repo: str, number: int) -> None:
 def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
     """Route active PR deliveries, or create/update one bug Issue per job."""
     pr_number = None
+    pr_url = None
+    external_pr = None
     source = None
     if run.get("event") == "pull_request":
         pr_number = resolve_pr_number(owner, repo, run.get("head_sha", ""))
+        if pr_number is not None:
+            pr_url = pr_html_url(owner, repo, pr_number)
+            if is_external_head(owner, repo, run.get("head_branch", "")):
+                external_pr = pr_number
+                log(
+                    f"external_pr pr={pr_number} "
+                    f"head_branch={run.get('head_branch')!r}"
+                )
         source = active_source_issue(owner, repo, pr_number)
     failed = jobs_with_conclusion(jobs, FAILURE_CONCLUSIONS)
     if not failed:
@@ -518,7 +583,9 @@ def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
             create_issue(
                 owner, repo,
                 issue_title(run, item, pr_number),
-                build_failure_body(run, item, pr_number, value),
+                build_failure_body(
+                    run, item, pr_number, value, pr_url, external_pr,
+                ),
                 milestone,
             )
             log(f"created issue job={item['name']} run_id={run.get('id')}")

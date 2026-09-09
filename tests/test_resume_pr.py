@@ -51,11 +51,14 @@ def scene_for() -> dict:
     # The scene recovered from the trusted `Orbi opened PR:`
     # comment. Branch and worktree are NOT part of it: the runner
     # derives them from its own config, the Issue number and the run id.
+    # `external` is the Issue #608 external-takeover marker — empty for
+    # a Runner-owned PR, `true` for a contributor-PR takeover.
     return {
         "run_id": FAKE_RUN_ID,
         "base_branch": "main",
         "base_sha": "abc123def456",
         "pr_url": FAKE_PR_URL,
+        "external": "",
     }
 
 
@@ -1163,7 +1166,7 @@ def test_verify_resumed_pr_verifies_scene_pr_and_returns_verified_url(
 
     def fake_verify_pr(worktree, branch, base_branch, run_id, *, issue,
                        repo_dir=None, pr_repo=None, expected_url=None,
-                       require_latest_base=True):
+                       require_latest_base=True, external_pr=False):
         calls.append({
             "worktree": worktree, "branch": branch,
             "base_branch": base_branch, "run_id": run_id, "issue": issue,
@@ -1351,7 +1354,7 @@ def test_verify_resumed_pr_backfills_in_progress_label_before_continuing(
 
     def fake_verify_pr(worktree, branch, base_branch, run_id, *, issue,
                        repo_dir=None, pr_repo=None, expected_url=None,
-                       require_latest_base=True):
+                       require_latest_base=True, external_pr=False):
         calls.append(1)
         return FAKE_PR_URL
 
@@ -1384,7 +1387,7 @@ def test_verify_resumed_pr_repeated_resume_backfill_is_idempotent(
 
     def fake_verify_pr(worktree, branch, base_branch, run_id, *, issue,
                        repo_dir=None, pr_repo=None, expected_url=None,
-                       require_latest_base=True):
+                       require_latest_base=True, external_pr=False):
         verify_calls.append((worktree, branch, run_id))
         return FAKE_PR_URL
 
@@ -1413,6 +1416,59 @@ def test_verify_resumed_pr_repeated_resume_backfill_is_idempotent(
         (expected_resume_worktree(tmp_path), FAKE_BRANCH, FAKE_RUN_ID),
         (expected_resume_worktree(tmp_path), FAKE_BRANCH, FAKE_RUN_ID),
     ]
+
+
+def test_verify_resumed_pr_external_scene_reads_branch_from_worktree(
+    monkeypatch, tmp_path,
+):
+    """Issue #608: an external takeover scene resumes the contributor's
+    own PR — the delivery branch is read from the derived takeover
+    worktree, and verify_pr runs in external mode (no run-marker /
+    Fixes body checks) with every other check intact."""
+    verify_calls = []
+    edits = []
+
+    def fake_verify_pr(worktree, branch, base_branch, run_id, *, issue,
+                       repo_dir=None, pr_repo=None, expected_url=None,
+                       require_latest_base=True, external_pr=False):
+        verify_calls.append(
+            (worktree, branch, expected_url, require_latest_base,
+             external_pr),
+        )
+        return "https://github.com/xqliu/orbi/pull/592"
+
+    def fake_edit(number, *, repo, add=None, remove=None):
+        edits.append((number, repo, add, remove))
+
+    # verify_pr is mocked, so the only command the flow issues is the
+    # worktree branch read.
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: "fix/outer",
+    )
+    monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
+    monkeypatch.setattr(runner, "edit_issue", fake_edit)
+    expected_resume_worktree(tmp_path).mkdir(parents=True)
+    scene = make_resume_scene("https://github.com/xqliu/orbi/pull/592")
+    scene["external"] = "true"
+    url = runner.verify_resumed_pr(
+        scene, make_resume_issue(),
+        make_resume_config(tmp_path), "owner/repo",
+    )
+    assert url == "https://github.com/xqliu/orbi/pull/592"
+    worktree, branch, expected_url, require_latest_base, external_pr = (
+        verify_calls[0]
+    )
+    # The branch is the contributor's head branch (read from the derived
+    # worktree), the scene PR URL is the exact anchor, and the body
+    # checks are off for the takeover PR.
+    assert branch == "fix/outer"
+    assert expected_url == "https://github.com/xqliu/orbi/pull/592"
+    assert require_latest_base is False
+    assert external_pr is True
+    # The in-flight backfill still applies (the resumed delivery is in
+    # flight from the verified PR on).
+    assert edits == [(9, "owner/repo", "ai-in-progress", None)]
 
 
 def test_verify_resumed_pr_backfill_label_api_failure_fails_fast(

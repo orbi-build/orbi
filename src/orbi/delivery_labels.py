@@ -41,6 +41,7 @@ EVENT_PR_OPENED = "pr_opened"
 EVENT_FIX_NEEDED = "fix_needed"
 EVENT_MERGED = "merged"
 EVENT_RELEASE_WAITING = "release_waiting"
+EVENT_REQUEUE = "requeue"
 EVENT_BLOCKED = "blocked"
 
 # The delivery-state labels a terminal failure must clear so the
@@ -88,6 +89,16 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
         return ([FIX_NEEDED_LABEL], to_remove)
     if event == EVENT_RELEASE_WAITING:
         return ([READY_LABEL], [IN_PROGRESS_LABEL])
+    if event == EVENT_REQUEUE:
+        # Issue #608: the external takeover delivery ended without a merge
+        # (the contributor withdrew the PR, or a maintainer closed it) —
+        # the Issue returns to the ready queue and the next claim redoes
+        # the fix internally. Every delivery-state label is cleared so the
+        # Issue is `ai-ready` alone.
+        to_remove = [
+            label for label in _DELIVERY_STATE_LABELS if label in current
+        ]
+        return ([READY_LABEL], to_remove)
     if event == EVENT_MERGED:
         to_remove = [
             label for label in _DELIVERY_STATE_LABELS if label in current

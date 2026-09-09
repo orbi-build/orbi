@@ -36,6 +36,28 @@ def test_label_patch_release_waiting_returns_release_to_ready_queue():
     assert to_remove == ["ai-in-progress"]
 
 
+def test_label_patch_requeue_returns_external_takeover_to_ready_queue():
+    """Issue #608: the external takeover delivery ended without a merge
+    (contributor withdrew / maintainer rejected) — the Issue returns to
+    `ai-ready` ALONE for the internal redo, whatever opened-PR state
+    label it carried."""
+    to_add, to_remove = dl.label_patch(
+        dl.EVENT_REQUEUE, {"ai-pr-opened"},
+    )
+    assert to_add == ["ai-ready"]
+    assert to_remove == ["ai-pr-opened"]
+    to_add, to_remove = dl.label_patch(
+        dl.EVENT_REQUEUE, {"ai-fix-needed", "ai-in-progress"},
+    )
+    assert to_add == ["ai-ready"]
+    assert to_remove == ["ai-in-progress", "ai-fix-needed"]
+    # Idempotent patch shape (the release_waiting convention: the add is
+    # always named; the caller's no-op detection drops it when present).
+    assert dl.label_patch(dl.EVENT_REQUEUE, {"ai-ready"}) == (
+        ["ai-ready"], [],
+    )
+
+
 def test_label_patch_pr_opened_swaps_in_progress_for_pr_opened():
     to_add, to_remove = dl.label_patch(
         dl.EVENT_PR_OPENED, {"ai-ready", "ai-in-progress"},

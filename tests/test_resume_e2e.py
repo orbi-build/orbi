@@ -493,6 +493,7 @@ def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
         "base_branch": "main",
         "base_sha": base_sha,
         "pr_url": PR_URL,
+        "external": "",
     }
     assert runner.task_branch(REPO, ISSUE_NUMBER, run_id) == branch
     assert runner.worktree_path(

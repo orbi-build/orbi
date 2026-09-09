@@ -468,7 +468,80 @@ def test_failure_resolves_the_pr_number_for_pull_request_runs(
     create = gh.calls_to(ep_create(), "POST")[0]["payload"]
     assert create["title"] == "CI failure: tests on PR #328 (pull_request)"
     assert create["body"].startswith("## CI failure: tests")
-    assert "- branch/PR: PR #328 (head branch `feature`)" in create["body"]
+    assert (
+        "- branch/PR: "
+        "[PR #328](https://github.com/orbi-run/test-repo/pull/328)"
+        " (head branch `feature`)"
+    ) in create["body"]
+
+
+def test_external_pr_failure_links_the_pr_and_embeds_the_marker(
+    gh, monkeypatch, tmp_path, capsys
+):
+    """Issue #608 acceptance (b): a CI failure on an external contributor
+    PR (head branch outside the stable delivery naming) is filed with the
+    PR link AND the hidden marker the delivery loop parses at claim time
+    — the external PR must be reviewed first, never silently redone."""
+    write_event(
+        monkeypatch, tmp_path,
+        run_event(event="pull_request", head_branch="zzuu080603-patch-1"),
+    )
+    gh.routes[ep_pulls()] = [{"number": 592, "state": "open", "title": "Fix"}]
+    gh.routes[ep_pr(592)] = {"number": 592, "body": "fix the bug"}
+    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
+    gh.routes[ep_issues_list()] = []
+    mod.main()
+    create = gh.calls_to(ep_create(), "POST")[0]["payload"]
+    assert (
+        "- external PR: [592](https://github.com/orbi-run/test-repo/pull/592)"
+        " — head branch `zzuu080603-patch-1` is outside the stable delivery "
+        "naming, so this is an external contribution: the delivery loop "
+        "reviews this PR first instead of redoing the work"
+    ) in create["body"]
+    assert "<!-- orbi:external-pr:592 -->" in create["body"]
+    assert "external_pr pr=592" in capsys.readouterr().err
+
+
+def test_stable_named_head_creates_no_external_marker(
+    gh, monkeypatch, tmp_path
+):
+    """The Runner's own PR head (`orbi/<owner>-<repo>-issue-<n>`) is the
+    stable delivery identity — its triage Issue carries no external
+    marker (the takeover scan finds the PR by branch name)."""
+    write_event(
+        monkeypatch, tmp_path,
+        run_event(
+            event="pull_request", head_branch="orbi/orbi-run-test-repo-issue-7",
+        ),
+    )
+    gh.routes[ep_pulls()] = [{"number": 330, "state": "open", "title": "Fix"}]
+    gh.routes[ep_pr(330)] = {"number": 330, "body": "Fixes #7"}
+    gh.routes[ep_source(7)] = {"number": 7, "state": "open", "labels": []}
+    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
+    gh.routes[ep_issues_list()] = []
+    mod.main()
+    create = gh.calls_to(ep_create(), "POST")[0]["payload"]
+    assert "external PR:" not in create["body"]
+    assert "orbi:external-pr" not in create["body"]
+
+
+def test_is_external_head_matches_the_stable_delivery_naming_only():
+    assert mod.is_external_head("orbi-run", "test-repo", "fix/bug") is True
+    assert mod.is_external_head("orbi-run", "test-repo", "main") is True
+    assert (
+        mod.is_external_head(
+            "orbi-run", "test-repo", "orbi/orbi-run-test-repo-issue-42",
+        )
+        is False
+    )
+    assert mod.is_external_head("orbi-run", "test-repo", "") is True
+
+
+def test_external_pr_marker_regex_extracts_the_number():
+    assert mod.EXTERNAL_PR_RE.findall(
+        "text\n<!-- orbi:external-pr:592 -->\n"
+        "<!-- ci-failure-fingerprint:%s -->" % ("a" * 64)
+    ) == ["592"]
 
 
 def test_failure_without_a_resolved_pr_falls_back_to_the_head_branch(
