@@ -25,6 +25,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import coverage
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = REPO_ROOT / "tools"
@@ -662,15 +663,22 @@ def find_pragma_offenders(paths, allowed=ALLOWED_PRAGMA_FILES) -> list[str]:
         Path(__file__).resolve(),
         REPO_ROOT / "tests" / "test_agents_md.py",
     }
+    excluded_dirs = {".git", "htmlcov", ".worktrees", ".orbi", ".venv"}
     for path in sorted(paths):
-        if ".git" in path.parts or "htmlcov" in path.parts:
+        try:
+            relative_path = path.relative_to(REPO_ROOT)
+        except ValueError:
+            if any(directory in path.parts for directory in excluded_dirs):
+                continue
+            raise
+        if any(directory in relative_path.parts for directory in excluded_dirs):
             continue
         if path in rule_files:
             continue
         for line in path.read_text(encoding="utf-8").splitlines():
             if "# pragma: no cover" not in line:
                 continue
-            relative = path.relative_to(REPO_ROOT).as_posix()
+            relative = relative_path.as_posix()
             if relative not in allowed:
                 offenders.append(f"{relative}: {line.strip()}")
             elif "if __name__ == \"__main__\"" not in line and (
@@ -746,6 +754,22 @@ def test_pragma_scan_accepts_the_main_guard_and_except_guard():
         assert find_pragma_offenders(
             [scratch], allowed=("tests/_scratch_gate.py",),
         ) == []
+
+
+def test_pragma_scan_skips_runtime_directories(tmp_path):
+    """Runtime/history directories are never scanned, even when they
+    carry an unjustified pragma."""
+    pragma = "def f():\n    if f():\n        pass  # pragma: no cover\n"
+    worktree_file = tmp_path / ".worktrees" / "x" / "a.py"
+    worktree_file.parent.mkdir(parents=True)
+    worktree_file.write_text(pragma, encoding="utf-8")
+    assert find_pragma_offenders([worktree_file]) == []
+
+
+def test_pragma_scan_rejects_unrelated_external_files(tmp_path):
+    """Only explicitly excluded external runtime trees are accepted."""
+    with pytest.raises(ValueError):
+        find_pragma_offenders([tmp_path / "source.py"])
 
 
 def test_pragma_scan_skips_generated_directories(tmp_path):
