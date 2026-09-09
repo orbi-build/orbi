@@ -1,0 +1,48 @@
+name: Link pull request to Issue
+
+on:
+  # pull_request workflows from forked PRs receive a read-only token;
+  # target is required to update the linked Issue for external contributors.
+  pull_request_target:
+    types: [opened, reopened, edited]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  link:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Link the PR or explain the missing link
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            const body = pr.body || "";
+            const match = body.match(/\b(?:fixes|closes|resolves)\s+#?(\d+)\b/i);
+            const issueNumber = match && Number(match[1]);
+            const marker = `<!-- orbi:external-pr:${pr.number} -->`;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: pr.number, per_page: 100
+            });
+            const alreadyPrompted = comments.some(c => c.body && c.body.includes("<!-- orbi:pr-issue-link -->"));
+            const prompt = "<!-- orbi:pr-issue-link -->\nPlease open an Issue first and use `Fixes #<Issue number>` in this PR body. Without a linked Issue, Orbi cannot route the PR through automatic review.";
+            if (!issueNumber) {
+              if (!alreadyPrompted) await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: pr.number, body: prompt });
+              return;
+            }
+            const issue = await github.rest.issues.get({ owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber });
+            const states = ["ai-in-progress", "ai-pr-opened", "ai-fix-needed", "ai-merged", "ai-blocked"];
+            if (!issue.data.labels.some(label => states.includes(typeof label === "string" ? label : label.name))) {
+              await github.rest.issues.addLabels({ owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber, labels: ["ai-pr-opened"] });
+            }
+            // Runner PRs already carry this marker; external PRs need it for takeover.
+            if (!body.includes("<!-- orbi:run=") && !issue.data.body?.includes(marker)) {
+              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber, body: `${issue.data.body || ""}\n\n${marker}` });
+            }
+            if (!body.match(/\b(?:fixes|closes|resolves)\s+#/i) && !alreadyPrompted) {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: pr.number, body: prompt });
+            }

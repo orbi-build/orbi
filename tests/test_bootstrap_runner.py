@@ -4410,6 +4410,24 @@ def test_verify_pr_accepts_pr_body_with_fixes_keyword(monkeypatch, tmp_path):
     ) == FAKE_PR_URL
 
 
+@pytest.mark.parametrize("reference", ["Fixes #4", "Fixes 4"])
+def test_verify_pr_accepts_hash_and_hashless_fixes_reference(
+    monkeypatch, tmp_path, reference,
+):
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return fake_verify_pr_payload(
+                body=f"<!-- orbi:run={FAKE_RUN_ID} -->\\n\\n{reference}",
+            )
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.verify_pr(
+        tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
+        issue=4, repo_dir=tmp_path,
+    ) == FAKE_PR_URL
+
+
 def test_verify_pr_rejects_pr_body_without_fixes_keyword(
     monkeypatch, tmp_path, caplog,
 ):
