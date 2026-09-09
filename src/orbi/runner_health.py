@@ -51,13 +51,30 @@ RECENT_RUNS_KEEP = 50
 GH_TIMEOUT_SECONDS = 60
 HEALTH_MARKER_PREFIX = "orbi-health-fingerprint:"
 
-# The real systemd crash lines (verified against the live journal):
-#   systemd[1015]: orbi@1.service: Main process exited, code=exited, ...
-#   systemd[1015]: orbi@1.service: Failed with result 'exit-code'.
+# The real systemd main-process exit lines (verified against the live
+# journal):
+#   systemd[1015]: orbi@1.service: Main process exited, code=exited,
+#                  status=1/FAILURE
+#   systemd[1015]: orbi@1.service: Main process exited, code=dumped,
+#                  status=11/SEGV
+# Only ABNORMAL main-process exits count, exactly one line per crash:
+# - status=0/SUCCESS is a healthy tick exit (a timer-driven Type=simple
+#   service exits cleanly every run — counting those would fire the
+#   crash_loop alert on every healthy deployment);
+# - "Failed with result" is NOT counted: a real crash emits it alongside
+#   the exit line (double counting would halve the threshold), and an
+#   ExecStartPre failure emits it WITHOUT the main process ever starting
+#   (a preflight problem, not a main-process crash);
+# - code=killed (e.g. status=15/TERM) is a systemd/human stop, not a
+#   crash — `orbi install-units` never stops a running Runner, so a kill
+#   is an external action outside this check's scope.
 # The `.service:` prefix requirement keeps the count conservative: the
 # Runner's own journal lines can echo the words "Main process exited" when
 # logging a command, and those must never count as a crash.
-CRASH_EXIT_RE = re.compile(r"\.service: (Main process exited, code=|Failed with result)")
+CRASH_EXIT_RE = re.compile(
+    r"\.service: Main process exited, "
+    r"code=(?:dumped|exited, status=[1-9][0-9]*/)"
+)
 
 # Volatile tokens stripped before fingerprinting: 8-40 hex runs (run ids,
 # SHAs), ISO-ish timestamps, and duration shapes ("30m", "6s", "1h5m",
