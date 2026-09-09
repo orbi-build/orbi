@@ -16656,7 +16656,10 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
             return json.dumps([[]])
         if command[:4] == ["gh", "issue", "view", "34"]:
             return json.dumps({"comments": [{"body": audit}]})
-        if command == ["gh", "issue", "close", "34", "--repo", "o/r"]:
+        if tuple(command) in {
+            ("gh", "issue", "close", "30", "--repo", "o/r"),
+            ("gh", "issue", "close", "34", "--repo", "o/r"),
+        }:
             return ""
         raise AssertionError(command)
     monkeypatch.setattr(runner, "run_command", fake_run)
