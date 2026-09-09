@@ -4485,11 +4485,17 @@ def _authenticated_github_login() -> str:
     request that cannot identify this credential shape.
     """
     try:
-        status = run_command(["gh", "auth", "status"])
+        # The comments being verified come from github.com.  Restrict the
+        # status query to that host so an active account on another configured
+        # GitHub Enterprise host cannot be mistaken for this credential.
+        status = run_command([
+            "gh", "auth", "status", "--hostname", "github.com",
+        ])
     except Exception as exc:
         raise ValueError(
             "GitHub identity resolution failed: `gh auth status` could not "
-            f"read the active account: {exc}"
+            f"read the active account: {exc}; run `gh auth login` or fix "
+            "the GitHub credentials"
         ) from exc
 
     account: str | None = None
@@ -4505,7 +4511,8 @@ def _authenticated_github_login() -> str:
     if not active_account:
         raise ValueError(
             "GitHub identity resolution failed: `gh auth status` did not "
-            "report an active account"
+            "report an active account; run `gh auth login` or select an "
+            "active github.com account with `gh auth switch`"
         )
     return active_account
 

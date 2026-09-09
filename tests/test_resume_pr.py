@@ -219,7 +219,7 @@ def test_authenticated_github_login_uses_active_gh_account(monkeypatch):
         ),
     )
     assert runner._authenticated_github_login() == "orbi-dev-test[bot]"
-    assert calls == [["gh", "auth", "status"]]
+    assert calls == [["gh", "auth", "status", "--hostname", "github.com"]]
 
 
 def test_authenticated_github_login_selects_active_account(monkeypatch):
@@ -262,7 +262,9 @@ def test_resume_scene_accepts_the_authenticated_runner_app_bot(monkeypatch):
     }]
 
     def gh_status(command):
-        assert command == ["gh", "auth", "status"]
+        assert command == [
+            "gh", "auth", "status", "--hostname", "github.com",
+        ]
         return (
             "github.com\n"
             "  ✓ Logged in to github.com account orbi-dev-test[bot] (keyring)\n"
