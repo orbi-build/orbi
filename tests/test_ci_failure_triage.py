@@ -258,6 +258,15 @@ def test_groq_fingerprint_is_separate_from_ci():
     )
 
 
+def test_workflow_metadata_distinguishes_catalog_from_ci():
+    assert mod.workflow_metadata({"path": mod.GROQ_WORKFLOW_PATH}) == (
+        mod.GROQ_WORKFLOW_NAME, mod.GROQ_WORKFLOW_PATH,
+    )
+    assert mod.workflow_metadata({"path": mod.CI_WORKFLOW_PATH}) == (
+        mod.CI_WORKFLOW_NAME, mod.CI_WORKFLOW_PATH,
+    )
+
+
 @pytest.mark.parametrize("event", ["workflow_dispatch", "schedule", "release"])
 def test_scope_ignores_non_target_events(event):
     mode, reason = mod.triage_scope(run_event(event=event)["workflow_run"])
