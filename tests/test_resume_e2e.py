@@ -73,8 +73,13 @@ if match is None:
                        check=True, capture_output=True)
     subprocess.run(["git", "push", "origin", "HEAD"], cwd=cwd,
                    check=True, capture_output=True)
-    print('REVIEW_VERDICT ' + '{"verdict": "pass", "blockers": 0, '
-          '"majors": 0, "minors": 0, "findings": []}')
+    # Issue #591: the verdict carries the pushed head it covers.
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=cwd,
+                          check=True, capture_output=True,
+                          text=True).stdout.strip()
+    print('REVIEW_VERDICT ' + '{"verdict": "pass", "head": "%s", '
+          '"blockers": 0, "majors": 0, "minors": 0, "findings": []}'
+          % head)
     sys.exit(0)
 # Implement mode: first delivery.
 run_id = match.group(1)

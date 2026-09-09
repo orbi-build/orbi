@@ -51,8 +51,10 @@ ai-ready                a task is dispatched (orbi add, or a human
                         concrete error), and the NEXT tick starts the next
                         review session on the same run_id, branch,
                         worktree and PR
-  -> merge              clean verdict + merge gate (head contains the
-                        latest base, PR mergeable, remote head unchanged)
+  -> merge              clean verdict (its head field equals the PR
+                        head, Issue #591) + merge gate (head contains
+                        the latest base, PR mergeable, remote head
+                        unchanged)
   -> ai-merged          success terminal state; the PR body's Fixes #N
                         closes the Issue natively
 ```

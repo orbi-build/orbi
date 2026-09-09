@@ -46,7 +46,8 @@ ai-ready                任务被派发（orbi add，或人工加标签）
                         session、phase、last activity、具体错误）；下一
                         个 tick 在同一 run_id、branch、worktree、PR 上
                         启动下一个审查会话
-  -> merge              clean verdict + merge 门禁（head 包含最新 base、
+  -> merge              clean verdict（其 head 字段等于 PR head，
+                        Issue #591）+ merge 门禁（head 包含最新 base、
                         PR mergeable、远端 head 未变）
   -> ai-merged          成功终态；PR body 的 Fixes #N 原生关闭 Issue
 ```
