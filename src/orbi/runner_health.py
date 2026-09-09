@@ -38,7 +38,7 @@ from pathlib import Path
 
 from orbi.delivery_labels import READY_LABEL
 from orbi.progress import format_status_comment, run_marker
-from orbi.systemd_deploy import SERVICE_INSTANCES
+from orbi.systemd_deploy import service_instances
 
 LOGGER = logging.getLogger("orbi.health")
 
@@ -173,17 +173,20 @@ def record_pickup(repo_dir: Path) -> None:
 
 def crash_journal_lines(
     run_command, since_minutes: int = CRASH_WINDOW_MINUTES,
+    unit_name: str | None = None,
 ) -> list[str]:
     """Return the systemd journal lines for every service instance in the
     window.
 
-    One bounded `journalctl` query per service instance (the verified shape
-    from `orbi doctor`). The lines are the raw scene the crash-loop alert
+    One bounded `journalctl` query per service instance of THIS deployment
+    (Issue #616: a `unit_name` deployment installs `orbi-<name>@N.service`,
+    so the query must follow the same naming — `None` keeps the default
+    `orbi@N.service`). The lines are the raw scene the crash-loop alert
     needs (Issue #345): the exit lines plus the structured fail-fast reason
     the Runner logged before each crash.
     """
     lines: list[str] = []
-    for unit in SERVICE_INSTANCES:
+    for unit in service_instances(unit_name):
         output = run_command([
             "timeout", "30", "journalctl", "--user", "-u", unit,
             "--since", f"-{since_minutes}min", "--no-pager", "-q",
@@ -192,13 +195,18 @@ def crash_journal_lines(
     return lines
 
 
-def count_crashes(run_command, since_minutes: int = CRASH_WINDOW_MINUTES) -> int:
+def count_crashes(
+    run_command, since_minutes: int = CRASH_WINDOW_MINUTES,
+    unit_name: str | None = None,
+) -> int:
     """Count service crashes in the window from the systemd journal.
 
     Counts only the real systemd exit lines (see CRASH_EXIT_RE).
     """
     return sum(
-        1 for line in crash_journal_lines(run_command, since_minutes)
+        1 for line in crash_journal_lines(
+            run_command, since_minutes, unit_name=unit_name,
+        )
         if CRASH_EXIT_RE.search(line)
     )
 
@@ -430,9 +438,13 @@ def run_health_check(config: dict, *, run_command) -> list[str]:
             )
         # 1. Crash loop (#262 scene: repeated service exits, including the
         #    unit self-heal death loop — each iteration exits non-zero).
-        crashes = count_crashes(run_command)
+        #    Issue #616: watch THIS deployment's units (unit_name-aware).
+        unit_name = config.get("unit_name")
+        crashes = count_crashes(run_command, unit_name=unit_name)
         if crashes >= CRASH_THRESHOLD:
-            journal_lines = crash_journal_lines(run_command)
+            journal_lines = crash_journal_lines(
+                run_command, unit_name=unit_name,
+            )
             kind, reason_line = classify_crash(journal_lines)
             LOGGER.info(
                 "health_degraded check=crash_loop crashes=%s "
