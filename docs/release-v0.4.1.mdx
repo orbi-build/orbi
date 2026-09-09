@@ -1,0 +1,131 @@
+# v0.4.1 release (latest)
+
+`v0.4.1` was published 2026-09-09T17:33:28Z as the GitHub Release [v0.4.1](https://github.com/orbi-build/orbi/releases/tag/v0.4.1) (release task: Issue #563).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.4.1` | annotated tag `4e7187989f299cd9a66c8338e7f97feb87f88555` | commit `aec697a77d0ca8811b182424dac2b75af96698e7` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- `发布 scope 推导与 milestone 查询：gh api --paginate 多页输出按单页解析，Milestone 的 issue 超过一页时发布永久失败` ([Issue #584](https://github.com/orbi-build/orbi/issues/584))
+- `stream_pi swallow 探针的持续空闲窗口跨轮携带：事件落在两次 poll 之间时不重置，把刚完成一轮健康请求的活会话误杀` ([Issue #590](https://github.com/orbi-build/orbi/issues/590); [PR #597](https://github.com/orbi-build/orbi/pull/597))
+- 外部贡献 PR 接入交付循环：CONTRIBUTING/PR 模板要求先建 Issue + workflow 接线到 ai-pr-opened（不新增状态） ([Issue #632](https://github.com/orbi-build/orbi/issues/632); [PR #644](https://github.com/orbi-build/orbi/pull/644))
+
+### Reliability and recovery
+
+- `pi_recovery: timeout_duration fabricates a timeout wrapper from command data (commit message text) and waits on a nonexistent deadline` ([Issue #570](https://github.com/orbi-build/orbi/issues/570); [PR #575](https://github.com/orbi-build/orbi/pull/575))
+- `pi_recovery: slots_idle returns True (swallow evidence) on schema drift — a missing or non-bool is_processing can get a generating session killed` ([Issue #571](https://github.com/orbi-build/orbi/issues/571); [PR #576](https://github.com/orbi-build/orbi/pull/576))
+- `pi_recovery: TERM/KILL deliver to a bare pid with no start-time recheck — a pid reused in the discovery-to-signal gap is an innocent process` ([Issue #572](https://github.com/orbi-build/orbi/issues/572); [PR #577](https://github.com/orbi-build/orbi/pull/577))
+- `pi_recovery: process_state guard "not fields[0]" can IndexError on a "(comm)"-terminated stat line — the sibling parsers' None contract is broken for that shape` ([Issue #573](https://github.com/orbi-build/orbi/issues/573); [PR #578](https://github.com/orbi-build/orbi/pull/578))
+- `runner_health: record_run_attempt is called only in the generic except — recoverable failures (#227/#325) and successes never reach health.json, and failure streaks never break` ([Issue #574](https://github.com/orbi-build/orbi/issues/574); [PR #579](https://github.com/orbi-build/orbi/pull/579))
+- `release 发布成功后的收尾失败会把已发布结果改写成 ai-blocked：ai-merged 与 ai-blocked 双终态并存，违背"不可逆结果不得改写"的自有契约` ([Issue #586](https://github.com/orbi-build/orbi/issues/586))
+- CI failure: tests on branch fix/release-tag-retry-lock (pull_request) ([Issue #600](https://github.com/orbi-build/orbi/issues/600); [PR #611](https://github.com/orbi-build/orbi/pull/611))
+
+### Deployment and operations
+
+- Bug：direct-Pi website service 因 beta base ref freshness 检查失败而无法启动 ([Issue #543](https://github.com/orbi-build/orbi/issues/543); [PR #546](https://github.com/orbi-build/orbi/pull/546))
+- 引擎交付 checkout 支持 https+gh-token 传输（App installation token 路线的前置；现为 setup 强制 migrate 到 SSH） ([Issue #580](https://github.com/orbi-build/orbi/issues/580); [PR #612](https://github.com/orbi-build/orbi/pull/612))
+- P0 Bug：setup 的 label 权限预检把 installation token 误判为无权限（viewerPermission 对 ghs_ 恒空，实际 API 能力足够） ([Issue #613](https://github.com/orbi-build/orbi/issues/613); [PR #626](https://github.com/orbi-build/orbi/pull/626))
+- installation token 凭据下 runner 评论以 App bot 身份发布，trusted-author 场景校验拒绝续场（需人工重建场景评论） ([Issue #637](https://github.com/orbi-build/orbi/issues/637); [PR #640](https://github.com/orbi-build/orbi/pull/640))
+- P0：gh api installation 在 installation token 下返回 404，trusted-author 判定崩溃，所有托管交付在评审阶段必然 ai-blocked ([Issue #648](https://github.com/orbi-build/orbi/issues/648); [PR #653](https://github.com/orbi-build/orbi/pull/653))
+
+### Documentation
+
+- docs: 修正 Codex 段 gpt-5.6-luna 上下文窗口 1M → 272K（1M 属于 gpt-5.6-sol，非 luna） ([Issue #558](https://github.com/orbi-build/orbi/issues/558); [PR #643](https://github.com/orbi-build/orbi/pull/643))
+- bug: cloudflare-workers-ai 模板的 provider id 被 Pi 拒绝，真实请求必败——需换自定义 id 并同步文档 ([Issue #559](https://github.com/orbi-build/orbi/issues/559); [PR #642](https://github.com/orbi-build/orbi/pull/642))
+- docs: 刷新 OpenRouter :free 目录（z-ai/glm-5.2:free 已下架，16 个可用）并补 2026-09-08 真实 429/200 实测证据 ([Issue #560](https://github.com/orbi-build/orbi/issues/560); [PR #654](https://github.com/orbi-build/orbi/pull/654))
+- docs: Groq 节补充实测发现——groq/compound 可被组织级门禁关闭（HTTP 403），文档只写了 429 ([Issue #561](https://github.com/orbi-build/orbi/issues/561); [PR #649](https://github.com/orbi-build/orbi/pull/649))
+- bug: xAI 模板锁定 ID grok-4.20-0309 已不在官方文档——现只有 -reasoning/-non-reasoning 变体 ([Issue #562](https://github.com/orbi-build/orbi/issues/562); [PR #641](https://github.com/orbi-build/orbi/pull/641))
+- `sync_release_docs 假成功：上次 commit 成功但 push 瞬时失败后，续跑把"无可暂存内容"误判为"已同步"，release notes 永远没上远端` ([Issue #587](https://github.com/orbi-build/orbi/issues/587))
+- CI failure: tests on branch fix/docs-sync-verify-remote (pull_request) ([Issue #598](https://github.com/orbi-build/orbi/issues/598); [PR #607](https://github.com/orbi-build/orbi/pull/607))
+- Constitution：新增 CONSTITUTION.md 固定架构不变量与公开表面，AGENTS.md 加一行指向 ([Issue #604](https://github.com/orbi-build/orbi/issues/604); [PR #647](https://github.com/orbi-build/orbi/pull/647))
+- 文档：在 operations.mdx 声明公开表面（CLI、config、label 状态机、journal、分支与 worktree 命名），并修正三处过时的分支命名描述 ([Issue #609](https://github.com/orbi-build/orbi/issues/609); [PR #646](https://github.com/orbi-build/orbi/pull/646))
+- sync_release_docs 的补推恢复分支在 resume 路径上不可达（create_release_worktree 先 hard-reset），且误触发时给出不实的 "recovered" 证据 ([Issue #623](https://github.com/orbi-build/orbi/issues/623); [PR #639](https://github.com/orbi-build/orbi/pull/639))
+- Bug：release docs-sync 假设仓库携带 Mintlify docs（docs/docs.json 缺失即必挂）——orbi-cloud v0.5.0 发布实证，外部/无文档仓库需要跳过语义 ([Issue #636](https://github.com/orbi-build/orbi/issues/636); [PR #638](https://github.com/orbi-build/orbi/pull/638))
+
+### Bug fixes
+
+- Bug：release prep commit 在测试验收前直推 main——终态失败后 main 残留未发布版本 bump——改为本地测试通过后再推送，失败路径零新增代码 ([Issue #564](https://github.com/orbi-build/orbi/issues/564); [PR #633](https://github.com/orbi-build/orbi/pull/633))
+- bug: 移除 scripts/test 本地测试链——release 测试验收交给 GitHub Actions（KISS：能交给平台的就交出去） ([Issue #569](https://github.com/orbi-build/orbi/issues/569); [PR #581](https://github.com/orbi-build/orbi/pull/581))
+- Epic 完结判定应以 native sub-issues 关系为唯一子票声明：#305（12/12 全关）滞留 open，v0.4.0 milestone 无法关闭 ([Issue #582](https://github.com/orbi-build/orbi/issues/582); [PR #630](https://github.com/orbi-build/orbi/pull/630))
+- `发布 tag 重试死锁：fetch exit 128 混淆"远端无 tag"与网络故障，push 失败残留的本地 tag 让重试永远 fatal: tag already exists` ([Issue #585](https://github.com/orbi-build/orbi/issues/585))
+- `评审环两个有界性缺口：干净评审 + CI 红的轮次不计预算（5 轮上限永不生效），wait 循环体没有 sleep（热循环重跑评审、poll_interval 是死参数）` ([Issue #588](https://github.com/orbi-build/orbi/issues/588))
+- `评审门可被注入越过：REVIEW_VERDICT 解析接受正文中任意前缀匹配行且"后者覆盖前者"，verdict 与被评审 head 无绑定` ([Issue #591](https://github.com/orbi-build/orbi/issues/591); [PR #628](https://github.com/orbi-build/orbi/pull/628))
+- CI failure: tests on branch fix/paginate-slurp-remaining-sites (pull_request) ([Issue #599](https://github.com/orbi-build/orbi/issues/599); [PR #606](https://github.com/orbi-build/orbi/pull/606))
+- Bug：交付 claim 路径裸调 create_worktree（稳定分支已存在必 255，#566 只修了 release 路径）+ 外部贡献者 PR 与交付循环零整合（接管扫描不可见、被内部静默重做后误关） ([Issue #608](https://github.com/orbi-build/orbi/issues/608); [PR #621](https://github.com/orbi-build/orbi/pull/621))
+- P0 Bug：空闲 tick 的 milestone 推进无保护——milestone 改名即每 tick 非零退出，健康检查判为崩溃循环并自动开 ai-ready bug Issue（自激） ([Issue #614](https://github.com/orbi-build/orbi/issues/614); [PR #625](https://github.com/orbi-build/orbi/pull/625))
+- Bug：merge_gate 的 is-ancestor 缺 returncode 守卫，git 128 被报成"PR 落后于 base"进入 ai-fix-needed 循环；顺带删除死代码 check_delivery_ci ([Issue #615](https://github.com/orbi-build/orbi/issues/615); [PR #629](https://github.com/orbi-build/orbi/pull/629))
+- P0 Bug：runner_health 是唯一漏传 unit_name 的消费方——改名部署（cloud 托管沙箱方向）崩溃告警恒不触发，系统静默死亡 ([Issue #616](https://github.com/orbi-build/orbi/issues/616); [PR #624](https://github.com/orbi-build/orbi/pull/624))
+- repeated-failure 检测两处失灵：浮动时长让同坑失败指纹漂移、streak 永远到不了阈值；alerted 键只增不清让打断后的新 streak 终身静默 ([Issue #618](https://github.com/orbi-build/orbi/issues/618))
+- P0 安全：REVIEW_VERDICT 全文扫描且后者覆盖前者，评审门可被输出中任意位置的伪造 verdict 绕过（#591 的执行票） ([Issue #622](https://github.com/orbi-build/orbi/issues/622))
+- 覆盖门禁的 pragma 扫描包含 .worktrees/ 历史副本，部署机上全量测试必红且报错指向无关文件 ([Issue #634](https://github.com/orbi-build/orbi/issues/634); [PR #635](https://github.com/orbi-build/orbi/pull/635))
+- release 门禁 check-runs 403 无法诊断：失败信息只有裸命令与退出码，看不出是缺 Checks:read 权限 ([Issue #650](https://github.com/orbi-build/orbi/issues/650); [PR #652](https://github.com/orbi-build/orbi/pull/652))
+- release 在 Release 已发布后因缺 Milestone 抛错：Issue 已关闭却报失败，终态与事实不符 ([Issue #651](https://github.com/orbi-build/orbi/issues/651))
+
+- tag: `v0.4.1`
+- release commit: `aec697a77d0ca8811b182424dac2b75af96698e7`
+- release task: Issue #563
+
+## Scope (verified item by item)
+
+- Issue #543 closed
+- Issue #558 closed
+- Issue #559 closed
+- Issue #560 closed
+- Issue #561 closed
+- Issue #562 closed
+- Issue #564 closed
+- Issue #569 closed
+- Issue #570 closed
+- Issue #571 closed
+- Issue #572 closed
+- Issue #573 closed
+- Issue #574 closed
+- Issue #580 closed
+- Issue #582 closed
+- Issue #584 closed
+- Issue #585 closed
+- Issue #586 closed
+- Issue #587 closed
+- Issue #588 closed
+- Issue #590 closed
+- Issue #591 closed
+- Issue #598 closed
+- Issue #599 closed
+- Issue #600 closed
+- Issue #604 closed
+- Issue #608 closed
+- Issue #609 closed
+- Issue #613 closed
+- Issue #614 closed
+- Issue #615 closed
+- Issue #616 closed
+- Issue #618 closed
+- Issue #622 closed
+- Issue #623 closed
+- Issue #632 closed
+- Issue #634 closed
+- Issue #636 closed
+- Issue #637 closed
+- Issue #648 closed
+- Issue #650 closed
+- Issue #651 closed
+- NOT released (still open in milestone v0.4.1): open Issue #563 Release task：发布 v0.4.1（provider 文档准确性版本）并完成远端交付对账
+
+## Pre-release gates
+
+- no open Issue carries ai-in-progress / ai-pr-opened / ai-fix-needed
+- CI on the release commit: 4 check(s) all success/neutral/skipped (waited 240s for pending checks)
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit aec697a77d0ca8811b182424dac2b75af96698e7 (the #268 CI-wait gate; no local test execution)
+
+run_id=5e6aa5b1
