@@ -74,15 +74,19 @@ VOLATILE_TOKEN_RE = re.compile(
 # Fail-fast validation errors a HUMAN must fix in the config (Issue #345):
 # there is nothing for any agent to implement until a human edits the
 # config. These are the exact messages the Runner raises at config load
-# (`_check_pi_provider_api_key`, `load_config`); a crash loop whose journal
-# carries one of them is a deployment-config problem, not an orbi bug.
+# (`_check_pi_provider_api_key`, `load_config`) and the milestone errors
+# `advance_active_milestone_on_idle` raises for a misconfigured
+# `active_milestone` (Issue #614); a crash loop whose journal carries one
+# of them is a deployment-config problem, not an orbi bug.
 CONFIG_CAUSE_RE = re.compile(
     r"missing environment variable"
     r"|API key for provider"
     r"|must be a non-empty"
     r"|must be a boolean"
     r"|must be a positive integer"
-    r"|is not defined for provider",
+    r"|is not defined for provider"
+    r"|active_milestone_missing"
+    r"|ambiguous exact-title match",
 )
 
 

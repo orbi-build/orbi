@@ -10598,12 +10598,22 @@ def main(argv: list[str] | None = None) -> int:
                         config["active_milestone"],
                     )
                 # Issue #274: validate and advance only after the arm attempt.
-                advance_active_milestone_on_idle(
-                    config["source_repos"][0],
-                    config["active_milestone"],
-                    config["config_path"],
-                    auto_next_milestone=config["auto_next_milestone"],
-                )
+                # Issue #614: like the arm above, the advance is an idle-path
+                # pure bypass — a renamed/deleted milestone or a failed `gh`
+                # call must not turn an idle tick into a non-zero exit.
+                try:
+                    advance_active_milestone_on_idle(
+                        config["source_repos"][0],
+                        config["active_milestone"],
+                        config["config_path"],
+                        auto_next_milestone=config["auto_next_milestone"],
+                    )
+                except Exception:
+                    LOGGER.exception(
+                        "active_milestone_advance_failed repo=%s milestone=%s",
+                        config["source_repos"][0],
+                        config["active_milestone"],
+                    )
             return 0
         source_repo, issue, scene = selected
         result = None
