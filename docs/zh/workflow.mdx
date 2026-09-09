@@ -176,6 +176,9 @@ PR 验收时校验该关键词，缺失即 fail fast。
      该 commit 重跑（步骤 3 的 `release_ci_wait_seconds` 等待），CI 红或
      等待超时走既有可恢复失败路径（`ai-blocked`）。没有本地测试执行
      （Issue #569）——release 流程即 bump → push → CI-wait → tag。
+     如果 CI 红或等待超时，既有失败路径会阻止发布；版本 bump 可以保留在
+     `main`，这是可接受的终态。bump 是幂等的，修复 CI 后重试 release
+     会安全地再次准备所请求的版本。
   6. 打 tag：远端 tag 不存在时，在 release commit 上创建 annotated
      tag 并普通 push（绝不 `--force`）。已存在时必须精确指向 release
      commit——不匹配 fail fast。已存在的 tag 绝不移动、覆盖或
