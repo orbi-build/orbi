@@ -3408,25 +3408,15 @@ def sync_release_docs(*, source_repo: str, repo_dir: Path,
             if exc.returncode != 1:
                 raise
         else:
-            # Nothing staged has TWO possible worlds: the docs commit
-            # already reached origin/<base> (genuinely in sync), or the
-            # previous run committed locally and its push failed — then
-            # this no-op would be a FALSE success (the release notes
-            # never landed remotely while the release is declared done,
-            # with Milestone closed and a success comment posted).
-            # HEAD reachable from origin/<base> is the evidence that
-            # separates the worlds; unreachable → push the recovery.
-            if not _is_ancestor("HEAD", f"origin/{base_branch}", cwd=worktree):
-                run_git_network_command(
-                    ["git", "push", "origin",
-                     f"HEAD:refs/heads/{base_branch}"],
-                    cwd=worktree,
-                )
-                return (
-                    f"docs release notes for {tag} recovered — the "
-                    "previous local commit had not been pushed; pushed "
-                    f"to {base_branch} now"
-                )
+            # Nothing staged can only mean the docs commit of a previous
+            # run is already part of this tick's frozen base: the release
+            # state machine hard-resets the worktree to release_commit in
+            # create_release_worktree BEFORE this function runs, so a
+            # local docs commit whose push failed cannot survive to this
+            # point — the resume regenerates the pages below and takes
+            # the normal commit+push path (#623; the #587 world is
+            # unreachable, and a stale origin/<base> tracking ref must
+            # not be answered with a false "recovered" no-op push).
             return (
                 f"docs release notes for {tag} already in sync — "
                 "idempotent no-op, nothing committed"
