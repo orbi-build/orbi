@@ -208,14 +208,22 @@ def test_resume_scene_skips_non_dict_comments():
     assert scene["run_id"] == FAKE_RUN_ID
 
 
-def test_authenticated_github_login_uses_gh_user_endpoint(monkeypatch):
+def test_authenticated_github_login_uses_gh_installation_endpoint(monkeypatch):
     calls = []
     monkeypatch.setattr(
         runner, "run_command",
         lambda command: calls.append(command) or "orbi-dev-test[bot]\n",
     )
     assert runner._authenticated_github_login() == "orbi-dev-test[bot]"
-    assert calls == [["gh", "api", "user", "--jq", ".login"]]
+    assert calls == [[
+        "gh", "api", "installation", "--jq", ".account.login",
+    ]]
+
+
+def test_authenticated_github_login_rejects_empty_login(monkeypatch):
+    monkeypatch.setattr(runner, "run_command", lambda command: "\n")
+    with pytest.raises(ValueError, match="empty login"):
+        runner._authenticated_github_login()
 
 
 def test_resume_scene_accepts_the_authenticated_runner_app_bot(monkeypatch):

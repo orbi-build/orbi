@@ -4473,12 +4473,14 @@ def _authenticated_github_login() -> str:
     """Return the login represented by the active ``gh`` credential.
 
     Installation tokens identify their GitHub App installation as an account
-    ending in ``[bot]``.  This uses GitHub's authenticated-user endpoint
-    rather than trusting an arbitrary bot name supplied by a comment.
+    ending in ``[bot]``.  This uses GitHub's authenticated-installation
+    endpoint rather than trusting an arbitrary bot name supplied by a
+    comment.  The ``/user`` endpoint is not supported by installation
+    access tokens.
     """
-    login = run_command(["gh", "api", "user", "--jq", ".login"]).strip()
+    login = run_command(["gh", "api", "installation", "--jq", ".account.login"]).strip()
     if not login:
-        raise ValueError("gh api user returned an empty login")
+        raise ValueError("gh api installation returned an empty login")
     return login
 
 
