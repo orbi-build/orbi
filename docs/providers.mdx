@@ -348,7 +348,7 @@ pi_provider = "openai-codex"
 pi_model = "gpt-5.6-luna"
 ```
 
-Pi's catalog checked on **2026-09-07** lists this model as `openai-codex-responses` at `https://chatgpt.com/backend-api`, with reasoning enabled, text/image input, a 1,000,000-token context window, and a 128,000-token output limit. Its catalog thinking map supports `minimal → low`, `xhigh → xhigh`, and `max → max`; leave `pi_thinking` unset for the default, or set one of those verified levels. These are Pi request limits, not a promise about subscription quota.
+Pi's catalog checked on **2026-09-08** lists this model as `openai-codex-responses` at `https://chatgpt.com/backend-api`, with reasoning enabled, text/image input, a 272,000-token context window, and a 128,000-token output limit. Its catalog thinking map supports `minimal → low`, `xhigh → xhigh`, and `max → max`; leave `pi_thinking` unset for the default, or set one of those verified levels. These are Pi request limits, not a promise about subscription quota. The 1,000,000-token context capability is a product-side capability of `gpt-5.6-sol`, not `gpt-5.6-luna`; Pi's current catalog also lists `sol` at 272,000 tokens, so Orbi's actual routing follows the Pi catalog. If selecting `sol`, verify the catalog again at that time.
 
 ### Quota and billing boundary
 
