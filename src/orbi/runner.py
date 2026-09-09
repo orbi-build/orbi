@@ -4469,11 +4469,32 @@ def parse_pr_comment(body: str) -> dict | None:
     return scene
 
 
+def _authenticated_github_login() -> str:
+    """Return the login represented by the active ``gh`` credential.
+
+    Installation tokens identify their GitHub App installation as an account
+    ending in ``[bot]``.  This uses GitHub's authenticated-user endpoint
+    rather than trusting an arbitrary bot name supplied by a comment.
+    """
+    login = run_command(["gh", "api", "user", "--jq", ".login"]).strip()
+    if not login:
+        raise ValueError("gh api user returned an empty login")
+    return login
+
+
 def _comment_is_trusted(comment: object) -> bool:
-    """True only when the comment carries a trusted maintainer association."""
+    """True when the comment is from a maintainer or this runner's App bot."""
     if not isinstance(comment, dict):
         return False
-    return comment.get("authorAssociation") in TRUSTED_COMMENT_ASSOCIATIONS
+    if comment.get("authorAssociation") in TRUSTED_COMMENT_ASSOCIATIONS:
+        return True
+    author = comment.get("author")
+    login = author.get("login") if isinstance(author, dict) else None
+    if not isinstance(login, str) or not login.endswith("[bot]"):
+        return False
+    # A copied run marker is not sufficient: the author must be the account
+    # represented by the currently authenticated installation token.
+    return login == _authenticated_github_login()
 
 
 def resume_scene(comments: list[dict]) -> dict:

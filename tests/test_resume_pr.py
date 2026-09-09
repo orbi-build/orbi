@@ -208,6 +208,44 @@ def test_resume_scene_skips_non_dict_comments():
     assert scene["run_id"] == FAKE_RUN_ID
 
 
+def test_authenticated_github_login_uses_gh_user_endpoint(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command: calls.append(command) or "orbi-dev-test[bot]\n",
+    )
+    assert runner._authenticated_github_login() == "orbi-dev-test[bot]"
+    assert calls == [["gh", "api", "user", "--jq", ".login"]]
+
+
+def test_resume_scene_accepts_the_authenticated_runner_app_bot(monkeypatch):
+    comments = [{
+        "body": opened_pr_comment(),
+        "authorAssociation": "NONE",
+        "author": {"login": "orbi-dev-test[bot]"},
+    }]
+    monkeypatch.setattr(
+        runner, "_authenticated_github_login",
+        lambda: "orbi-dev-test[bot]",
+    )
+    scene = runner.resume_scene(comments)
+    assert scene["run_id"] == FAKE_RUN_ID
+
+
+def test_resume_scene_rejects_another_app_bot_even_with_the_marker(monkeypatch):
+    comments = [{
+        "body": opened_pr_comment(),
+        "authorAssociation": "NONE",
+        "author": {"login": "unrelated-app[bot]"},
+    }]
+    monkeypatch.setattr(
+        runner, "_authenticated_github_login",
+        lambda: "orbi-dev-test[bot]",
+    )
+    with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
+        runner.resume_scene(comments)
+
+
 # ------------------------------------------------- trusted comments (F1)
 
 
