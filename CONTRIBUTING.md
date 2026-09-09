@@ -5,6 +5,14 @@ How to build, test, and open a pull request lives in
 agents and humans alike is [AGENTS.md](AGENTS.md). This file covers only the
 legal side, because that part has to be settled before your first patch lands.
 
+## Before submitting a pull request
+
+Please open an Issue first to describe the problem or proposal, then put
+`Fixes #<Issue number>` in the pull request body. Pull requests without a
+linked Issue do not enter Orbi's automatic review process. The Issue is the
+place to discuss the direction before implementation, avoiding the cost of
+discovering after the work is written that the approach needs to change.
+
 ## Licence of your contribution
 
 Orbi is [fair-code](https://faircode.io) under the **Sustainable Use License**

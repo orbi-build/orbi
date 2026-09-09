@@ -6694,9 +6694,10 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
             "must carry the machine-readable run id of this attempt"
         )
     fixes = f"Fixes #{issue}"
+    # Accept GitHub-style `Fixes #N` and the common `Fixes N` variant.
     # The number must match exactly, not as a digit prefix: `Fixes #41`
     # closes Issue 41, not Issue 4 (review F1, Issue #53).
-    if not external_pr and not re.search(rf"Fixes #{issue}(?!\d)", body):
+    if not external_pr and not re.search(rf"Fixes #?{issue}(?!\d)", body):
         LOGGER.error(
             "pr_fixes_missing issue=%s branch=%s", issue, branch,
         )

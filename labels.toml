@@ -26,7 +26,7 @@ description = "Issue currently being handled by Orbi"
 [[label]]
 name = "ai-pr-opened"
 color = "0e8a16"
-description = "A PR has been opened for this issue"
+description = "A PR (internal or external) is open and awaiting review"
 
 [[label]]
 name = "ai-fix-needed"
