@@ -3594,28 +3594,29 @@ def test_has_in_progress_label_checks_the_issue_label(monkeypatch, tmp_path):
 
     def fake_run(command, **kwargs):
         calls.append(command)
-        return json.dumps([{"number": 4}])
+        return json.dumps({"labels": [{"name": "ai-in-progress"}]})
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.has_in_progress_label(4, "owner/repo") is True
     assert calls == [[
-        "gh", "issue", "list", "--repo", "owner/repo", "--state", "all",
-        "--search", "label:ai-in-progress",
-        "--json", "number", "--limit", "50",
+        "gh", "issue", "view", "4", "--repo", "owner/repo",
+        "--json", "labels",
     ]]
 
 
 def test_has_in_progress_label_is_false_without_the_label(monkeypatch):
     monkeypatch.setattr(
         runner, "run_command",
-        lambda command, **kwargs: json.dumps([{"number": 5}]),
+        lambda command, **kwargs: json.dumps(
+            {"labels": [{"name": "ai-fix-needed"}]},
+        ),
     )
     assert runner.has_in_progress_label(4, "owner/repo") is False
 
 
 def test_has_in_progress_label_fails_fast_on_malformed_output(monkeypatch):
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "{}")
-    with pytest.raises(ValueError, match="issue list must be a JSON array"):
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "[]")
+    with pytest.raises(ValueError, match="issue view must return a JSON object"):
         runner.has_in_progress_label(4, "owner/repo")
 
 
@@ -3779,6 +3780,8 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
                 # The existing progress comment of the dead run.
                 return json.dumps([existing_comment])
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # The Issue still carries `ai-in-progress` (the runner died).
             return json.dumps([{"number": 4}])
@@ -3875,6 +3878,8 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
         gh_calls.append(command)
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps([{"number": 4}])
         if command[:2] == ["gh", "issue"]:
@@ -3945,6 +3950,8 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
         gh_calls.append(command)
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # No `ai-in-progress` label: the previous run finished.
             return "[]"
@@ -4013,6 +4020,8 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
         gh_calls.append(command)
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps([{"number": 4}])
         if command[:2] == ["gh", "issue"]:
@@ -4087,6 +4096,11 @@ def _resume_wiring_setup(monkeypatch, tmp_path, *, in_progress: bool,
         gh_calls.append(command)
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [
+                {"name": "ai-in-progress"}] if in_progress
+                else [{"name": "ai-ready"}],
+            })
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps(
                 [{"number": 4}] if in_progress else [],
@@ -5396,6 +5410,8 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
         gh_calls.append(command)
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5497,6 +5513,8 @@ def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, c
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5535,6 +5553,8 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5608,6 +5628,8 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5691,6 +5713,8 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5778,6 +5802,8 @@ def test_process_issue_model_wait_failure_records_health_attempt(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5834,6 +5860,8 @@ def test_process_issue_three_recoverable_failures_raise_health_finding(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return ""
@@ -5884,6 +5912,8 @@ def test_process_issue_success_records_health_streak_break(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return "0123456789abcdef0123456789abcdef01234567"
@@ -5944,6 +5974,8 @@ def test_process_issue_recoverable_health_record_failure_is_bypassed(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return ""
@@ -5993,6 +6025,8 @@ def test_process_issue_success_health_record_failure_is_bypassed(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return "0123456789abcdef0123456789abcdef01234567"
@@ -6055,6 +6089,8 @@ def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -6132,6 +6168,8 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -6205,6 +6243,8 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
             # test_process_issue_failure_path_progress_failure_keeps_
             # blocked_transition.)
             raise RuntimeError("github report failed")
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -6274,6 +6314,8 @@ def test_advance_active_milestone_pending_creates_one_p0_ready_issue(
 
     def fake_run(command, **kwargs):
         calls.append(command)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return json.dumps([milestones])
@@ -6394,6 +6436,8 @@ def test_advance_active_milestone_pending_issue_failure_is_bypassed(
     config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
 
     def fail_pending(command, **kwargs):
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         if command[:3] == ["gh", "issue", "create"]:
@@ -7055,6 +7099,8 @@ def test_process_issue_failure_without_session_still_carries_scene(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -7137,6 +7183,8 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -7189,6 +7237,8 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -16222,6 +16272,8 @@ def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None,
 
     def fake_run_command(command, **kwargs):
         calls.append(command)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         if command[:3] == ["gh", "issue", "list"]:
             label = command[command.index("--label") + 1]
             numbers = leftover_labels.get(label, [])

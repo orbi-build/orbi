@@ -3672,12 +3672,27 @@ def has_in_progress_label(number: int, repo: str) -> bool:
     failure path, so it is the marker of a run that is (or was, when
     the runner died) in flight — as opposed to the preserved worktrees
     of completed runs (Issue #18).
+
+    Read via `gh issue view` — a direct, strongly consistent read. The
+    pre-#658 implementation used `gh issue list --search`, the same
+    eventually-consistent index the pickup scan reads, so it could not
+    see a label another instance added seconds ago — exactly the moment
+    this check exists to catch (the pre-claim race guard).
     """
-    issues = list_issues(
-        repo, state="all", search=f"label:{IN_PROGRESS_LABEL}",
-        json_fields="number", limit=50,
+    raw = run_command([
+        "gh", "issue", "view", str(number), "--repo", repo,
+        "--json", "labels",
+    ])
+    details = json.loads(raw)
+    if not isinstance(details, dict):
+        raise ValueError("issue view must return a JSON object")
+    labels = details.get("labels")
+    if not isinstance(labels, list):
+        raise ValueError("issue view labels must be a JSON array")
+    return any(
+        isinstance(label, dict) and label.get("name") == IN_PROGRESS_LABEL
+        for label in labels
     )
-    return any(int(issue.get("number", -1)) == number for issue in issues)
 
 
 def is_content_only(issue: dict) -> bool:
@@ -6800,6 +6815,28 @@ def process_issue(issue: dict, config: dict, source_repo: str,
     LOGGER.info(
         "issue=%s %s", number, run_info,
     )
+    if not in_progress and READY_LABEL in claim_labels \
+            and takeover_pr is None:
+        # Issue #658: the pickup scan and the in-progress recheck above
+        # both predate freeze_base (a seconds-long network round trip).
+        # A label — or the stable branch — appearing inside that window
+        # means another instance claimed this Issue while we were
+        # preparing: yield. No label writes, no comments, nothing that
+        # could interrupt the winner's in-flight delivery; the next
+        # tick's scan picks work up again on its own.
+        if has_in_progress_label(number, source_repo):
+            LOGGER.info(
+                "issue=%s claim_yield reason=in_progress_label", number,
+            )
+            return IssueResult("claim-yielded", None)
+        if not stable_branch_present and stable_branch_exists(
+                config["repo_dir"], stable_branch,
+        ):
+            LOGGER.info(
+                "issue=%s claim_yield reason=stable_branch_appeared",
+                number,
+            )
+            return IssueResult("claim-yielded", None)
     apply_label_patch(
         number, repo=source_repo, event=EVENT_CLAIM,
         current_labels={label.get("name") for label in issue.get(

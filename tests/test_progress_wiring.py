@@ -45,6 +45,14 @@ def make_fake_gh(monkeypatch, comments=None, in_progress=False):
                 return json.dumps({"id": 77, "body": body[len("body="):],
                                    "url": "https://x/77"})
             return ""
+        if command[:3] == ["gh", "issue", "view"]:
+            # The pre-claim in-progress recheck reads the Issue
+            # directly (Issue #658) — the same `in_progress` truth the
+            # search-based resume scan encodes.
+            return json.dumps({"labels": [
+                {"name": "ai-in-progress"}] if in_progress
+                else [{"name": "ai-ready"}],
+            })
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps([{"number": 18}] if in_progress else [])
         return ""
@@ -925,6 +933,8 @@ def make_failing_gh(monkeypatch, is_failing, comments=None):
                 return json.dumps({"id": 77, "body": body[len("body="):],
                                    "url": "https://x/77"})
             return ""
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return ""
@@ -2041,6 +2051,8 @@ def _make_takeover_gh(monkeypatch, monkeypatched, tmp_path, *, pr_state="OPEN",
 
     def fake_run_command(command, **kwargs):
         calls.append(command)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         if command[:3] == ["gh", "pr", "list"]:
