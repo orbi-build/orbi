@@ -212,17 +212,17 @@ def test_authenticated_github_login_uses_gh_installation_endpoint(monkeypatch):
     calls = []
     monkeypatch.setattr(
         runner, "run_command",
-        lambda command: calls.append(command) or "orbi-dev-test[bot]\n",
+        lambda command: calls.append(command) or "orbi-dev-test\n",
     )
     assert runner._authenticated_github_login() == "orbi-dev-test[bot]"
     assert calls == [[
-        "gh", "api", "installation", "--jq", ".account.login",
+        "gh", "api", "installation", "--jq", ".app_slug",
     ]]
 
 
 def test_authenticated_github_login_rejects_empty_login(monkeypatch):
     monkeypatch.setattr(runner, "run_command", lambda command: "\n")
-    with pytest.raises(ValueError, match="empty login"):
+    with pytest.raises(ValueError, match="empty app slug"):
         runner._authenticated_github_login()
 
 

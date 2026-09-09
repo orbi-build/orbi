@@ -4468,10 +4468,12 @@ def _authenticated_github_login() -> str:
     comment.  The ``/user`` endpoint is not supported by installation
     access tokens.
     """
-    login = run_command(["gh", "api", "installation", "--jq", ".account.login"]).strip()
-    if not login:
-        raise ValueError("gh api installation returned an empty login")
-    return login
+    app_slug = run_command(
+        ["gh", "api", "installation", "--jq", ".app_slug"],
+    ).strip()
+    if not app_slug:
+        raise ValueError("gh api installation returned an empty app slug")
+    return f"{app_slug}[bot]"
 
 
 def _comment_is_trusted(comment: object) -> bool:
