@@ -14,7 +14,7 @@ pi_model = "glm-5.3-flash"
 | --- | --- | --- | --- | --- | --- |
 | Google Gemini | `gemini.json` | `GOOGLE_API_KEY` | `gemini-3.8-flash` | 2026-09-04 实测：Pi 全链路 7 秒通过 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | z.ai GLM | `z-ai.json` | `ZAI_API_KEY` | `glm-5.3-flash` | 2026-09-04 实测：真实任务 #303 到达 PR #304 | [#305](https://github.com/orbi-build/orbi/issues/305) |
-| OpenRouter 免费层 | `openrouter.json` | `OPENROUTER_API_KEY` | `google/gemma-4-31b-it:free` | 未实测；不承诺免费目录持续可用 | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| OpenRouter 免费层 | `openrouter.json` | `OPENROUTER_API_KEY` | `google/gemma-4-31b-it:free` | 2026-09-08 实测：Gemma 返回上游共享池 HTTP 429；North Mini Code 返回 HTTP 200 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | DeepSeek | `deepseek.json` | `DEEPSEEK_API_KEY` | `deepseek-chat` | 未实测 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | xAI | `xai.json` | `XAI_API_KEY` | `grok-4.20-0309-reasoning` | 已根据 xAI 文档核对模型 ID（2026-09-09）；未测试额度 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Groq 免费档 | `groq.json` | `GROQ_API_KEY` | `groq/compound` | 2026-09-04 核对 Free Plan 限流；真实请求/usage/429 未实测 | [#305](https://github.com/orbi-build/orbi/issues/305) |
@@ -40,9 +40,9 @@ pi_model = "grok-4.20-0309-reasoning"
 
 OpenRouter 用一个 OpenAI 兼容 endpoint 提供许多零价格模型。本节是配置说明，不保证模型持续存在，也不保证请求不会被限流。[官方零价格目录](https://openrouter.ai/models?max_price=0)是唯一准确来源，目录会动态变化。
 
-本文使用的 `:free` 目录快照于 **2026-09-04** 核实，共 18 个模型。该快照中明确列出的示例包括：
+本文使用的 `:free` 目录快照于 **2026-09-08** 核实，共 16 个模型。该快照中明确列出的示例包括：
 
-`nvidia/nemotron-3-ultra-550b-a55b:free`、`nvidia/nemotron-3-super-120b-a12b:free`、`z-ai/glm-5.2:free`、`google/gemma-4-31b-it:free`、`cohere/north-mini-code:free`、`thinkingmachines/inkling:free`、`poolside/laguna-s-2.1:free`、`liquid/lfm-2.5-2.6b:free`。这里的模型 ID 是 `models[].id` 必须使用的精确值；目录会动态变化，选择前请重新核对每个 ID。
+`nvidia/nemotron-3-ultra-550b-a55b:free`、`nvidia/nemotron-3-super-120b-a12b:free`、`nvidia/nemotron-3.5-lightning:free`、`google/gemma-4-31b-it:free`、`cohere/north-mini-code:free`、`thinkingmachines/inkling:free`、`inclusionai/ling-3.0-flash-fin:free`、`poolside/laguna-s-2.1:free`、`liquid/lfm-2.5-2.6b:free`。这里的模型 ID 是 `models[].id` 必须使用的精确值；目录会动态变化，选择前请重新核对每个 ID。
 
 不要把 key 写进 provider 文件。复制 Issue #309 的模板，再把实际要选择的精确模型 ID 加入 `models` 列表；endpoint、API 和 key 引用保持不变：
 
@@ -77,13 +77,13 @@ pi_provider = "openrouter"
 pi_model = "cohere/north-mini-code:free"
 ```
 
-除非已经核实所选模型当前的 Pi/OpenRouter contract，否则不要添加 `thinkingLevelMap`；需要时只使用该 contract 给出的模型专属映射，本文不臆造映射。按任务选择可以优先考虑：`cohere/north-mini-code:free` 用于小型编码/搜索，`nvidia/nemotron-3-ultra-550b-a55b:free` 或 `nvidia/nemotron-3-super-120b-a12b:free` 用于较长推理，`z-ai/glm-5.2:free` 用于通用推理，Gemma 或 LFM 用于轻量实验。这些只是实践建议，不是 benchmark 结果；本文**未实测**。
+除非已经核实所选模型当前的 Pi/OpenRouter contract，否则不要添加 `thinkingLevelMap`；需要时只使用该 contract 给出的模型专属映射，本文不臆造映射。按任务选择可以优先考虑：`cohere/north-mini-code:free` 用于小型编码/搜索，`nvidia/nemotron-3-ultra-550b-a55b:free`、`nvidia/nemotron-3-super-120b-a12b:free` 或 `nvidia/nemotron-3.5-lightning:free` 用于较长推理，Gemma、Ling 或 LFM 用于轻量实验。这些只是实践建议，不是 benchmark 结果。
 
 #### 限额、请求与 429 状态
 
-OpenRouter 官方[限流文档](https://openrouter.ai/docs/api/reference/limits)给出的 free-model 共享政策约为：未达到要求的充值额度时 **20 次请求/日**，符合条件的账户最高 **1000 次请求/日**；具体政策、模型可用性和账户资格可能变化。这是政策级别的额度，不是逐模型实测值。2026-09-04 的快照没有为 18 个模型分别核实每日数字，所以每个模型的实测每日上限均为**未实测**。
+OpenRouter 官方[限流文档](https://openrouter.ai/docs/api/reference/limits)给出的 free-model 共享政策约为：未达到要求的充值额度时 **20 次请求/日**，符合条件的账户最高 **1000 次请求/日**；具体政策、模型可用性和账户资格可能变化。这是政策级别的额度，不是逐模型实测值。2026-09-08 的快照没有为 16 个模型分别核实每日数字，所以每个模型的实测每日上限均为**未实测**。
 
-截至 2026-09-04，本仓库没有对这些 `:free` 模型执行真实 Orbi 请求，也没有实测耗尽行为或 HTTP **429** 响应体。没有上游响应和账户用量证据时，不要把 429 断言为每日额度耗尽。保留失败 run 证据并手动选择另一个已配置模型；Orbi 不会自动轮换模型。自动的 `quota_exhausted` 分类属于 [#313](https://github.com/orbi-build/orbi/issues/313)，不由本文或模板实现。
+**2026-09-08** 使用原始模板和 Pi 0.85.1 的真实请求提供了具体证据：`google/gemma-4-31b-it:free` 两次返回 HTTP **429**（间隔约两分钟），响应含 `temporarily rate-limited upstream` 和 `limit_source: upstream_provider_shared_pool`；`cohere/north-mini-code:free` 返回 HTTP **200**，内容为 `ok`。429 的处理建议是稍后重试、绑定自己的 provider key，或更换 provider 路由/模型。这说明 429 可能是上游共享池的瞬时限流，不能据此断言每日额度已耗尽。保留失败 run 证据并手动选择另一个已配置模型；Orbi 不会自动轮换模型。自动的 `quota_exhausted` 分类属于 [#313](https://github.com/orbi-build/orbi/issues/313)，不由本文或模板实现。
 
 ## 接入一家新 provider
 
@@ -226,7 +226,7 @@ pi_provider = "openrouter"
 pi_model = "google/gemma-4-31b-it:free"
 ```
 
-复制 [`openrouter.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/openrouter.json)，在 `.orbi/env` 设置 `OPENROUTER_API_KEY`，派发前执行一次真实 `pi --print` 检查。OpenRouter 的 `z-ai/glm-5.2:free` 是另一条 provider 路径；本文**未实测也不承诺**它的可用性和额度。
+复制 [`openrouter.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/openrouter.json)，在 `.orbi/env` 设置 `OPENROUTER_API_KEY`，派发前执行一次真实 `pi --print` 检查。除上述有日期的证据外，OpenRouter 模型可用性和额度均**未实测也不承诺**；选择模型前请重新核对实时目录。
 
 ### Cloudflare Workers AI
 
