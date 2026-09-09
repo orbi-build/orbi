@@ -129,8 +129,9 @@ same Issue generates a new one. The same id appears in:
   them — the executing checkout's HEAD, the package version for a
   non-editable install, or `unknown` when the probe fails (the live
   progress comment and PR comments do not carry it);
-- the feature branch and worktree name
-  (`.worktrees/<...>-issue-<n>-e07383c2`);
+- the stable Issue-based feature branch (`orbi/<owner>-<repo>-issue-<N>`);
+- the worktree name (`.worktrees/orbi-<owner>-<repo>-issue-<n>-e07383c2`), plus
+  the Pi session directory and run artifacts;
 - the PR body — the stable marker `<!-- orbi:run=e07383c2 -->` is
   part of the PR contract; the Runner rejects a PR without it.
 

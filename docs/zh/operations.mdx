@@ -353,13 +353,43 @@ orbi session --pretty --config orbi.toml   # 一行摘要
 （默认 `orbi.toml`）。`status` 和 `session` 是调试附件——
 journal 和 GitHub 仍是正常可观测路径。
 
+## 公开表面
+
+以下接口和持久化命名都是公开表面。任何变更都必须在 release notes
+中声明，以便下游自动化有计划地迁移：
+
+- **CLI：**裸 `orbi` tick，以及 `add`、`status`、`doctor`、`setup`、
+  `install-units`、`session` 子命令，包括 `--config` 和
+  `ORBI_CONFIG` 环境变量。
+- **配置：**`orbi.toml` 字段（`source_repos`、`repo_dir`、`deploy_home`、
+  `workspace_root`、`prompt`、`prompt_review`、`base_branch`、
+  `git_transport`、`active_milestone`、`max_concurrency`、
+  `allow_stale_runner`、`model_wait_dead_seconds`、`model_wait_probe_url`、
+  `model_wait_probe_seconds`、`skills`、`context_files`、`pi_provider`、
+  `pi_model`、`pi_thinking`、`pi_providers`），以及由 systemd
+  `EnvironmentFile` 加载的 gitignored `.orbi/env` 文件。
+- **部署：**`systemd/orbi@.service` 和 `systemd/orbi@.timer` 模板，及其
+  `orbi@1`/`orbi@2` 实例。
+- **标签和生命周期：**`labels.toml` 与 `src/orbi/delivery_labels.py`，
+  以及 `ai-ready`、`ai-in-progress`、`ai-pr-opened`、`ai-fix-needed`、
+  `ai-merged`、`ai-blocked` 状态机。
+- **可观测性：**journal 每行以 `[run_id]` 开头，并使用
+  `run_start`、`run_end`、`activity`、`heartbeat`、`resumed`、`run_failed`
+  等稳定事件名，以及[日志（journal）](#日志journal)中记录的启动/恢复事件。
+  Pi 实时记录位于 `<worktree>/.pi-session/*.jsonl`。
+- **交付命名和标记：**稳定的任务分支是
+  `orbi/<owner>-<repo>-issue-<N>`；带 run 的 worktree 目录是
+  `.worktrees/orbi-<owner>-<repo>-issue-<N>-<run_id>`。Issue/PR 评论和
+  PR body 使用 `<!-- orbi:run=<run_id> -->` 及可见的
+  `run_id=<run_id>`；PR body 还必须包含 `Fixes #<N>`。
+
 ## Worktree 与 base 新鲜度
 
-每次领取先 fetch 并冻结 `origin/<base_branch>`，任务 worktree 和
-feature branch 都从那个精确 SHA 创建——绝不来自主工作区当前 HEAD。
-branch 和 worktree 名带 run id（例如
-`.worktrees/<...>-issue-14-e07383c2`），所以重试的 Issue 得到新的独立
-run，旧现场保留。`.worktrees/` 已 gitignore。
+每次领取先 fetch 并冻结 `origin/<base_branch>`，任务 worktree 和按
+Issue 稳定命名的 feature branch 都从那个精确 SHA 创建——绝不来自主
+工作区当前 HEAD。分支在重试之间保持稳定；worktree、Pi session 目录和
+run 产物带 run id，所以重试的 Issue 得到新的独立 run，旧现场保留。
+`.worktrees/` 已 gitignore。
 
 任务 worktree 继承部署 checkout 的单一 `origin` remote，所以 git
 transport 只配置一次、所有 worktree 继承（Issue #114——双通道边界与
