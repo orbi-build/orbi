@@ -3619,6 +3619,138 @@ def test_has_in_progress_label_fails_fast_on_malformed_output(monkeypatch):
         runner.has_in_progress_label(4, "owner/repo")
 
 
+def test_has_in_progress_label_reads_directly_not_via_the_search_index(
+    monkeypatch,
+):
+    """Issue #658：认领前复查必须直读（gh issue view，强一致）——不能走
+    与扫描同一套最终一致的搜索索引：另一实例几秒前刚打上的
+    ai-in-progress，索引可能尚未收录，复查必须看到它才能让路。"""
+    def fake_run_command(command, **kwargs):
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
+        if command[:3] == ["gh", "issue", "list"]:
+            # The stale search index has not ingested the label yet.
+            return json.dumps([])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    assert runner.has_in_progress_label(4, "owner/repo") is True
+
+
+def _claim_race_deps(monkeypatch, tmp_path, *, freeze_side_effect=None,
+                     stable_branch_seq=None):
+    """Minimal process_issue deps for the #658 claim-race tests.
+
+    Everything after the claim decision is irrelevant (the guard must
+    fire before any of it); run_pi returning normally keeps the
+    unguarded path moving so its downstream label writes become
+    observable — that is exactly what the red assertions catch.
+    """
+    if stable_branch_seq is not None:
+        seq = list(stable_branch_seq)
+        monkeypatch.setattr(
+            runner, "stable_branch_exists",
+            lambda repo_dir, branch: seq.pop(0) if seq else False,
+        )
+    if freeze_side_effect is not None:
+        def fake_freeze_base(repo_dir, base_branch):
+            freeze_side_effect()
+            return "0123456789abcdef0123456789abcdef01234567"
+        monkeypatch.setattr(runner, "freeze_base", fake_freeze_base)
+    else:
+        monkeypatch.setattr(
+            runner, "freeze_base",
+            lambda repo_dir, base_branch:
+                "0123456789abcdef0123456789abcdef01234567",
+        )
+    monkeypatch.setattr(
+        runner, "new_run_id", lambda: "feedface",
+    )
+
+    def fake_create_worktree(*args, **kwargs):
+        path = tmp_path / "wt"
+        (path / ".orbi").mkdir(parents=True, exist_ok=True)
+        return path
+
+    monkeypatch.setattr(runner, "create_worktree", fake_create_worktree)
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+
+
+def test_process_issue_yields_when_the_label_lands_mid_preparation(
+    monkeypatch, tmp_path,
+):
+    """Issue #658：扫描与认领写之间隔着 freeze_base 的秒级网络往返；
+    另一实例在该窗口内认领（ai-in-progress 出现）时，本实例必须让路
+    ——不打任何标签、不发失败评论、绝不能把胜者打成 ai-blocked。"""
+    state = {"in_progress": False}
+
+    def fake_run_command(command, **kwargs):
+        if command[:3] == ["gh", "issue", "view"]:
+            labels = ([{"name": "ai-in-progress"}]
+                      if state["in_progress"] else [])
+            return json.dumps({"labels": labels})
+        if command[:3] == ["gh", "issue", "list"]:
+            # The search index lags behind the other instance's claim.
+            return json.dumps(
+                [{"number": 18}] if state["in_progress"] else [],
+            )
+        if command[:3] == ["gh", "pr", "list"]:
+            return json.dumps([])
+        if command[:2] == ["git", "ls-remote"]:
+            # The scan-time stable-branch probe (before the race lands).
+            return ""
+        if command[:2] == ["gh", "api"]:
+            if "--method" not in command:
+                return json.dumps([])
+            return ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    _claim_race_deps(
+        monkeypatch, tmp_path,
+        freeze_side_effect=lambda: state.__setitem__("in_progress", True),
+    )
+    issue = {"number": 18, "title": "t", "body": "b",
+             "labels": [{"name": "ai-ready"}]}
+    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+              "base_branch": "main"}
+    result = runner.process_issue(issue, config, "owner/repo")
+    assert result == runner.IssueResult("claim-yielded", None)
+
+
+def test_process_issue_yields_when_the_stable_branch_lands_mid_preparation(
+    monkeypatch, tmp_path,
+):
+    """Issue #658 的撞分支面：扫描时 stable branch 尚不存在，freeze_base
+    的窗口内被另一实例创建（它先认领）——认领写之前必须复查到并让路，
+    而不是径直 create_worktree 撞分支后走 ai-blocked 失败路径。"""
+    def fake_run_command(command, **kwargs):
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([])
+        if command[:3] == ["gh", "pr", "list"]:
+            return json.dumps([])
+        if command[:2] == ["gh", "api"]:
+            if "--method" not in command:
+                return json.dumps([])
+            return ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    # First probe (scan-time): absent. Second probe (the pre-claim
+    # guard): the other instance created it while we were preparing.
+    _claim_race_deps(
+        monkeypatch, tmp_path, stable_branch_seq=[False, True],
+    )
+    issue = {"number": 18, "title": "t", "body": "b",
+             "labels": [{"name": "ai-ready"}]}
+    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+              "base_branch": "main"}
+    result = runner.process_issue(issue, config, "owner/repo")
+    assert result == runner.IssueResult("claim-yielded", None)
+
+
 def test_process_issue_resumes_existing_run_and_same_progress_comment(
     monkeypatch, tmp_path,
 ):
