@@ -790,6 +790,7 @@ def test_check_checkout_reports_remote_branch_clean_and_fresh(tmp_path):
         "remote_protocol": "ssh",
         "migrated": False,
         "ssh_reachable": True,
+        "transport_reachable": True,
     }
 
 
@@ -894,6 +895,71 @@ def test_check_checkout_migrates_an_https_remote_to_ssh(tmp_path):
     assert result["remote_protocol"] == "ssh"
     assert result["migrated"] is True
     assert result["ssh_reachable"] is True
+
+
+def test_check_checkout_https_mode_is_fully_green_over_https(tmp_path):
+    """Issue #580: with `git_transport = "https"` the setup checkout
+    check stays fully on HTTPS — the origin is kept, the probe is
+    `git ls-remote <https-url>` (gh credential helper), the report
+    says protocol=https / transport_reachable=true and NO SSH probe
+    ran."""
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["git", "config"]:
+            return "https://github.com/xqliu/orbi.git"
+        if command[:2] == ["git", "ls-remote"]:
+            return "abc\tHEAD"
+        if command[:3] == ["git", "rev-parse", "origin/main"]:
+            return "0123456789abcdef0123456789abcdef01234567"
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "0123456789abcdef0123456789abcdef01234567"
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return "main"
+        return ""
+
+    result = pilot_setup.check_checkout(
+        repo, "main", ["xqliu/orbi"], run_command=fake_run, mode="https",
+    )
+    assert result["remote_url"] == "https://github.com/xqliu/orbi.git"
+    assert result["remote_protocol"] == "https"
+    assert result["migrated"] is False
+    assert result["transport_reachable"] is True
+    # The https mode never touches SSH: no SSH probe result.
+    assert result["ssh_reachable"] is None
+
+
+def test_check_checkout_https_mode_fails_with_the_transport_reason(tmp_path):
+    """Issue #580 failure path: a broken HTTPS transport (bad/absent gh
+    token) fails the setup with the structured transport_unreachable
+    reason, never an ssh_unreachable one."""
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["git", "config"]:
+            return "https://github.com/xqliu/orbi.git"
+        if command[:2] == ["git", "ls-remote"]:
+            raise subprocess.CalledProcessError(
+                128, command,
+                stderr="fatal: Authentication failed for "
+                       "'https://github.com/xqliu/orbi.git/'",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    with pytest.raises(
+        pilot_setup.SetupError, match="transport_unreachable",
+    ) as exc:
+        pilot_setup.check_checkout(
+            repo, "main", ["xqliu/orbi"], run_command=fake_run, mode="https",
+        )
+    message = str(exc.value)
+    assert "git ls-remote https://github.com/xqliu/orbi.git" in message
+    assert "Authentication failed" in message
+    # The fake is strict: an unexpected command fails loudly.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["git", "worktree", "add"])
 
 
 def test_check_checkout_fails_fast_when_ssh_is_unreachable(tmp_path):
@@ -1323,6 +1389,7 @@ def test_run_setup_migrates_an_https_checkout_remote(tmp_path):
     assert result["checkout"]["remote_protocol"] == "ssh"
     assert result["checkout"]["migrated"] is True
     assert result["checkout"]["ssh_reachable"] is True
+    assert result["checkout"]["transport_reachable"] is True
     assert [
         "git", "remote", "set-url", "origin",
         "git@github.com:xqliu/orbi.git",
@@ -1402,6 +1469,7 @@ def sample_result() -> dict:
             "remote_protocol": "ssh",
             "migrated": False,
             "ssh_reachable": True,
+            "transport_reachable": True,
         },
         "optional_proxy": {
             "optional": True,
@@ -1445,7 +1513,7 @@ def test_format_setup_renders_stable_key_value_lines():
     assert (
         "checkout=remote=origin branch=main clean=true base_fresh=true "
         "remote_url=git@github.com:xqliu/orbi.git protocol=ssh "
-        "migrated=false ssh_reachable=true"
+        "migrated=false ssh_reachable=true transport_reachable=true"
     ) in lines
     assert (
         "model_endpoint=optional optional_proxy=healthy "
@@ -1659,7 +1727,8 @@ def test_run_setup_routes_home_files_to_deploy_home(tmp_path, monkeypatch):
             "timer": {"instances": {}},
         }
 
-    def spy_checkout(repo_dir, base_branch, source_repos, *, run_command):
+    def spy_checkout(repo_dir, base_branch, source_repos, *,
+                     run_command, mode):
         seen["checkout"] = Path(repo_dir)
         return {
             "remote": "origin", "branch": "main", "clean": True,

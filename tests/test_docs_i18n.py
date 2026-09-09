@@ -65,6 +65,8 @@ KNOWN_CONFIG_FIELDS = frozenset({
     "prompt",
     "prompt_review",
     "base_branch",
+    # Issue #580: the delivery checkout transport (ssh | https).
+    "git_transport",
     # Issue #139: the active Milestone claim scope (optional string).
     "active_milestone",
     "max_concurrency",

@@ -1,15 +1,23 @@
-"""Git transport contract (Issue #114).
+"""Git transport contract (Issue #114, #580).
 
 Two authentication channels with distinct responsibilities:
 
-- **Git data operations** (fetch, push — including pushing
-  `.github/workflows/*.yml`) go over **SSH**
-  (`git@github.com:owner/repo.git`), authenticated by the machine's
-  SSH key. A workflow push must never depend on the OAuth App
-  `workflow` scope — the HTTPS/OAuth transport that blocked Issue #106.
 - **GitHub API operations** (Issue, PR, label, comment, merge) stay on
-  the existing `gh` token. SSH is never used as API authentication and
-  the `gh` token is never used for git data.
+  the existing `gh` token.
+- **Git data operations** (fetch, push — including pushing
+  `.github/workflows/*.yml`) go over the delivery checkout's single
+  `origin` remote, in ONE of two configured modes (orbi.toml
+  `git_transport`):
+
+  - `ssh` (default, the Issue #114 contract): the SCP-style
+    `git@github.com:owner/repo.git`, authenticated by the machine's
+    SSH key. A workflow push must never depend on the OAuth App
+    `workflow` scope — the HTTPS/OAuth transport that blocked Issue
+    #106.
+  - `https` (Issue #580, the token-only sandbox path): the origin
+    stays `https://github.com/owner/repo.git` and the credentials
+    come from the `gh` credential helper (`gh auth login --with-token`)
+    — no SSH private key anywhere.
 
 The deployment checkout's single `origin` remote is the transport: a
 task worktree created with `git worktree add` shares the main
@@ -18,14 +26,16 @@ worktree's `git remote -v` and `git config remote.origin.url` are the
 main checkout's), so the transport is configured once on the checkout
 and every worktree inherits it.
 
-An existing HTTPS remote is never rewritten silently and never read
-from a comment or Issue body: only the human-run setup entry
-(`orbi setup`, `migrate=True`) migrates it with the plain
-`git remote set-url origin <ssh-url>`; every other path fails fast
-with the exact migration command. A failed SSH probe (`git ls-remote`,
+A remote on the opposite transport is never rewritten silently and
+never read from a comment or Issue body: only the human-run setup
+entry (`orbi setup`, `migrate=True`) migrates it with the plain
+`git remote set-url origin <expected-url>` (HTTPS→SSH in ssh mode,
+SSH→HTTPS in https mode); every other path fails fast with the exact
+migration command. A failed reachability probe (`git ls-remote`,
 verified against the real CLI: exit 0 = reachable and authenticated,
-refs listed) fails fast with the structured reason — no HTTPS
-fallback, no silent skip.
+refs listed) fails fast with the structured reason (`ssh_unreachable`
+in ssh mode, `transport_unreachable` in https mode) — no fallback, no
+silent skip.
 """
 from __future__ import annotations
 
@@ -42,18 +52,19 @@ MIGRATION_COMMAND = "git remote set-url origin {url}"
 # The human-run entry that is authorized to perform the migration.
 # Issue #140: the official entry is the installed `orbi` CLI.
 MIGRATION_ENTRY = "orbi setup"
+# The configured transport modes (orbi.toml `git_transport`).
+MODES = ("ssh", "https")
 
 
 class TransportError(RuntimeError):
-    """The git transport check failed (fail fast, no HTTPS fallback)."""
+    """The git transport check failed (fail fast, no fallback)."""
 
 
-def ssh_url_for(repo: str) -> str:
-    """The SSH URL of one configured `owner/name` source repo.
+def _validated_repo(repo: str) -> str:
+    """One configured `owner/name` source repo name, validated.
 
-    `owner/name` → `git@github.com:owner/name.git`. A malformed repo
-    name (missing/extra slash, empty segment) fails fast: a guessed
-    URL must never be probed.
+    A malformed repo name (missing/extra slash, empty segment) fails
+    fast: a guessed URL must never be probed.
     """
     parts = repo.split("/")
     if len(parts) != 2 or not all(parts):
@@ -61,7 +72,25 @@ def ssh_url_for(repo: str) -> str:
             f"malformed source repo name: {repo!r} "
             "(expected 'owner/name')"
         )
-    return f"{SSH_USER}@{GITHUB_HOST}:{repo}.git"
+    return repo
+
+
+def ssh_url_for(repo: str) -> str:
+    """The SSH URL of one configured `owner/name` source repo.
+
+    `owner/name` → `git@github.com:owner/name.git`.
+    """
+    return f"{SSH_USER}@{GITHUB_HOST}:{_validated_repo(repo)}.git"
+
+
+def https_url_for(repo: str) -> str:
+    """The HTTPS URL of one configured `owner/name` source repo.
+
+    `owner/name` → `https://github.com/owner/name.git` (the https
+    transport mode of Issue #580; credentials via the gh credential
+    helper).
+    """
+    return f"https://{GITHUB_HOST}/{_validated_repo(repo)}.git"
 
 
 def remote_protocol(url: str) -> str:
@@ -116,24 +145,36 @@ def check_transport(
     run_command,
     migrate: bool = False,
     probe: bool = True,
+    mode: str = "ssh",
 ) -> dict:
     """Check (and only when authorized, migrate) the git transport.
 
-    Checks, in order: the `origin` remote exists; it points at the
-    FIRST configured source repo (the deployment checkout is that
-    repo's clone — the worktrees share the single remote); its
-    protocol is SSH; when `probe` is on, `git ls-remote <ssh-url>`
-    exits 0 (SSH reachable and authenticated). An HTTPS remote of the
-    SAME repo is migrated with `git remote set-url origin <ssh-url>`
-    ONLY when `migrate` is True (the human-run setup entry); a remote
-    pointing at a DIFFERENT repo is never rewritten (the migration
-    would re-target the checkout) — it fails with the mismatch scene
-    whether or not `migrate` is set. Every other failure carries the
-    exact migration command and the setup entry. Any failure raises
-    :class:`TransportError` with the concrete reason — no HTTPS
-    fallback, no silent skip.
+    `mode` is the configured transport (`git_transport` in orbi.toml):
+    `"ssh"` (default, the exact Issue #114 contract) or `"https"`
+    (Issue #580). Checks, in order: the `origin` remote exists; it
+    points at the FIRST configured source repo (the deployment
+    checkout is that repo's clone — the worktrees share the single
+    remote); its protocol matches the mode; when `probe` is on,
+    `git ls-remote <expected-url>` exits 0 (the configured transport
+    reachable and authenticated — SSH key or gh credential helper). A
+    remote on the OPPOSITE transport (HTTPS in ssh mode, SSH in https
+    mode) of the SAME repo is migrated with
+    `git remote set-url origin <expected-url>` ONLY when `migrate` is
+    True (the human-run setup entry); a remote pointing at a DIFFERENT
+    repo is never rewritten (the migration would re-target the
+    checkout) — it fails with the mismatch scene whether or not
+    `migrate` is set. Every other failure carries the exact migration
+    command and the setup entry. Any failure raises
+    :class:`TransportError` with the concrete reason — no fallback, no
+    silent skip.
     """
-    expected = ssh_url_for(source_repos[0])
+    if mode not in MODES:
+        raise TransportError(
+            f"unknown git_transport mode {mode!r} (expected 'ssh' or "
+            "'https')"
+        )
+    url_for = ssh_url_for if mode == "ssh" else https_url_for
+    expected = url_for(source_repos[0])
     # The CONFIGURED URL is the transport (verified against the real
     # CLI: `git remote get-url` applies `url.<base>.insteadOf`
     # rewrites and would report the effective data-plane URL; `git
@@ -170,15 +211,20 @@ def check_transport(
             "must be a clone of the first configured source repo"
         )
     protocol = remote_protocol(url)
-    if protocol == "https":
+    migrated = False
+    if protocol == mode:
+        pass
+    elif protocol in MODES:
+        # The opposite configured transport, same repo: migrate ONLY
+        # from the human-run setup entry.
         if not migrate:
             raise TransportError(
-                f"origin remote is HTTPS ({url}); git data operations "
-                f"must use SSH ({expected}). Migrate with: "
+                f"origin remote is {protocol.upper()} ({url}); the "
+                f"configured git_transport is {mode.upper()} "
+                f"({expected}). Migrate with: "
                 f"{MIGRATION_COMMAND.format(url=expected)} — or run "
                 f"`{MIGRATION_ENTRY}` (the human-run setup entry "
-                "performs the migration). No automatic rewrite "
-                "and no HTTPS fallback."
+                "performs the migration). No automatic rewrite."
             )
         run_command(
             ["git", "remote", "set-url", "origin", expected],
@@ -186,15 +232,14 @@ def check_transport(
         )
         url = expected
         migrated = True
-    elif protocol != "ssh":
-        raise TransportError(
-            f"origin remote protocol is {protocol} ({url}); git data "
-            f"operations require SSH ({expected}). Fix the remote "
-            f"with: {MIGRATION_COMMAND.format(url=expected)}"
-        )
     else:
-        migrated = False
-    ssh_reachable: bool | None
+        raise TransportError(
+            f"origin remote protocol is {protocol} ({url}); the "
+            f"configured git_transport is {mode.upper()} "
+            f"({expected}). Fix the remote with: "
+            f"{MIGRATION_COMMAND.format(url=expected)}"
+        )
+    reachable: bool | None
     if probe:
         try:
             run_command(["git", "ls-remote", expected], cwd=repo_dir)
@@ -203,26 +248,42 @@ def check_transport(
             if exc.stderr:
                 detail += f" stderr={exc.stderr.strip()}"
             raise TransportError(
-                f"ssh_unreachable: git ls-remote {expected} failed: "
-                f"{detail} — SSH is unavailable (check the SSH key / "
-                "agent / network). No HTTPS fallback and no silent "
-                "skip: fix SSH and retry."
+                _probe_failure(mode, expected, detail)
             ) from exc
         except Exception as exc:
             raise TransportError(
-                f"ssh_unreachable: git ls-remote {expected} failed: "
-                f"{exc} — SSH is unavailable (check the SSH key / "
-                "agent / network). No HTTPS fallback and no silent "
-                "skip: fix SSH and retry."
+                _probe_failure(mode, expected, str(exc))
             ) from exc
-        ssh_reachable = True
+        reachable = True
     else:
-        ssh_reachable = None
+        reachable = None
     return {
         "remote": "origin",
-        "protocol": "ssh",
+        "protocol": mode,
         "url": url,
         "expected": expected,
         "migrated": migrated,
-        "ssh_reachable": ssh_reachable,
+        # Issue #580 compat: the SSH-specific probe result stays (None
+        # in https mode — no SSH probe runs there);
+        # `transport_reachable` is the ACTIVE transport's probe result.
+        "ssh_reachable": reachable if mode == "ssh" else None,
+        "transport_reachable": reachable,
     }
+
+
+def _probe_failure(mode: str, expected: str, detail: str) -> str:
+    """The structured probe-failure reason for the configured mode."""
+    if mode == "ssh":
+        return (
+            f"ssh_unreachable: git ls-remote {expected} failed: "
+            f"{detail} — SSH is unavailable (check the SSH key / "
+            "agent / network). No HTTPS fallback and no silent "
+            "skip: fix SSH and retry."
+        )
+    return (
+        f"transport_unreachable: git ls-remote {expected} failed: "
+        f"{detail} — the HTTPS transport is unavailable (check the "
+        "gh credentials: `gh auth status` — the credential helper "
+        "supplies them). No fallback and no silent skip: fix the "
+        "credentials and retry."
+    )

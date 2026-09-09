@@ -45,6 +45,22 @@ def test_ssh_url_for_rejects_an_extra_slash():
         git_transport.ssh_url_for("xqliu/orbi/pilot")
 
 
+# --- https_url_for (Issue #580) -----------------------------------------------
+
+
+def test_https_url_for_builds_the_github_https_url():
+    assert git_transport.https_url_for("xqliu/orbi") == (
+        "https://github.com/xqliu/orbi.git"
+    )
+
+
+def test_https_url_for_rejects_a_malformed_repo():
+    with pytest.raises(git_transport.TransportError, match="malformed"):
+        git_transport.https_url_for("orbi")
+    with pytest.raises(git_transport.TransportError, match="malformed"):
+        git_transport.https_url_for("xqliu/orbi/pilot")
+
+
 # --- remote_protocol ---------------------------------------------------------
 
 
@@ -124,6 +140,7 @@ def test_check_transport_passes_for_a_matching_ssh_remote(tmp_path):
         "expected": "git@github.com:xqliu/orbi.git",
         "migrated": False,
         "ssh_reachable": True,
+        "transport_reachable": True,
     }
     # Read-only: no set-url, one probe of the exact SSH URL.
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
@@ -252,6 +269,7 @@ def test_check_transport_skips_the_probe_when_disabled(tmp_path):
         run_command=fake_run, probe=False,
     )
     assert result["ssh_reachable"] is None
+    assert result["transport_reachable"] is None
     assert [c for c in calls if c[:2] == ["git", "ls-remote"]] == []
 
 
@@ -430,6 +448,172 @@ def test_check_transport_never_migrates_a_non_github_remote(tmp_path):
     assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
 
 
+# --- https mode (Issue #580): origin stays HTTPS, gh credential helper --------
+
+
+def test_check_transport_https_passes_for_a_matching_https_remote(tmp_path):
+    """Issue #580: in https mode the HTTPS origin IS the transport —
+    no SSH requirement, no rewrite; the probe is
+    `git ls-remote <https-url>` (credentials via the gh credential
+    helper)."""
+    state = {"origin_url": "https://github.com/xqliu/orbi.git"}
+    fake_run, calls, _ = ok_run_factory(state)
+    result = git_transport.check_transport(
+        tmp_path, ["xqliu/orbi"],
+        run_command=fake_run, mode="https",
+    )
+    assert result == {
+        "remote": "origin",
+        "protocol": "https",
+        "url": "https://github.com/xqliu/orbi.git",
+        "expected": "https://github.com/xqliu/orbi.git",
+        "migrated": False,
+        "ssh_reachable": None,
+        "transport_reachable": True,
+    }
+    # No migration, no SSH anywhere: the single probe targets the
+    # HTTPS URL.
+    assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
+    assert [
+        "git", "ls-remote", "https://github.com/xqliu/orbi.git",
+    ] in calls
+    assert [c for c in calls if c[2].startswith("git@github.com:")] == []
+
+
+def test_check_transport_https_migrates_an_ssh_remote_when_authorized(
+    tmp_path,
+):
+    """Issue #580: setup (the human-run entry) migrates symmetrically —
+    in https mode an SSH `origin` is rewritten to the HTTPS URL of the
+    first configured source repo."""
+    state = {"origin_url": "git@github.com:xqliu/orbi.git"}
+    fake_run, calls, _ = ok_run_factory(state)
+    result = git_transport.check_transport(
+        tmp_path, ["xqliu/orbi"],
+        run_command=fake_run, migrate=True, mode="https",
+    )
+    assert result["protocol"] == "https"
+    assert result["migrated"] is True
+    assert result["url"] == "https://github.com/xqliu/orbi.git"
+    assert result["transport_reachable"] is True
+    assert result["ssh_reachable"] is None
+    assert state["migrations"] == ["https://github.com/xqliu/orbi.git"]
+    # The probe runs against the HTTPS URL (after the migration).
+    assert [
+        "git", "ls-remote", "https://github.com/xqliu/orbi.git",
+    ] in calls
+
+
+def test_check_transport_https_fails_fast_on_an_ssh_remote_without_migrating(
+    tmp_path,
+):
+    """Issue #580: outside setup an SSH origin is never rewritten — the
+    failure carries the exact HTTPS migration command and the setup
+    entry, and nothing is probed."""
+    state = {"origin_url": "git@github.com:xqliu/orbi.git"}
+    fake_run, calls, _ = ok_run_factory(state)
+    with pytest.raises(git_transport.TransportError, match="SSH") as exc:
+        git_transport.check_transport(
+            tmp_path, ["xqliu/orbi"],
+            run_command=fake_run, mode="https",
+        )
+    message = str(exc.value)
+    assert (
+        "git remote set-url origin https://github.com/xqliu/orbi.git"
+    ) in message
+    assert "orbi setup" in message
+    assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
+    assert [c for c in calls if c[:2] == ["git", "ls-remote"]] == []
+
+
+def test_check_transport_https_fails_fast_when_the_probe_fails(tmp_path):
+    """Issue #580: a failed HTTPS probe (bad/absent gh token) fails
+    with the structured `transport_unreachable` reason — the exact
+    probe command and git stderr, never a fallback probe."""
+    state = {
+        "origin_url": "https://github.com/xqliu/orbi.git",
+        "ssh_down": True,
+    }
+    fake_run, calls, _ = ok_run_factory(state)
+    with pytest.raises(
+        git_transport.TransportError, match="transport_unreachable",
+    ) as exc:
+        git_transport.check_transport(
+            tmp_path, ["xqliu/orbi"],
+            run_command=fake_run, mode="https",
+        )
+    message = str(exc.value)
+    assert "git ls-remote https://github.com/xqliu/orbi.git" in message
+    assert "Permission denied (publickey)" in message
+    # The credential fix hint: the transport authenticates via the gh
+    # credential helper.
+    assert "gh auth" in message
+    # Exactly one probe, of the HTTPS URL — no SSH fallback.
+    probes = [c for c in calls if c[:2] == ["git", "ls-remote"]]
+    assert probes == [
+        ["git", "ls-remote", "https://github.com/xqliu/orbi.git"],
+    ]
+
+
+def test_check_transport_https_skips_the_probe_when_disabled(tmp_path):
+    state = {"origin_url": "https://github.com/xqliu/orbi.git"}
+    fake_run, calls, _ = ok_run_factory(state)
+    result = git_transport.check_transport(
+        tmp_path, ["xqliu/orbi"],
+        run_command=fake_run, probe=False, mode="https",
+    )
+    assert result["transport_reachable"] is None
+    assert result["ssh_reachable"] is None
+    assert [c for c in calls if c[:2] == ["git", "ls-remote"]] == []
+
+
+def test_check_transport_https_still_fails_fast_on_a_repo_mismatch(tmp_path):
+    """The repo gate is transport-independent: an https remote pointing
+    at a DIFFERENT repo is never probed nor migrated, and the expected
+    URL in the message is the configured transport's."""
+    state = {"origin_url": "https://github.com/other/repo.git"}
+    fake_run, calls, _ = ok_run_factory(state)
+    with pytest.raises(
+        git_transport.TransportError, match="mismatch",
+    ) as exc:
+        git_transport.check_transport(
+            tmp_path, ["xqliu/orbi"],
+            run_command=fake_run, mode="https",
+        )
+    message = str(exc.value)
+    assert "https://github.com/other/repo.git" in message
+    assert "https://github.com/xqliu/orbi.git" in message
+    assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
+    assert [c for c in calls if c[:2] == ["git", "ls-remote"]] == []
+
+
+def test_check_transport_https_rejects_an_http_remote(tmp_path):
+    state = {"origin_url": "http://github.com/xqliu/orbi.git"}
+    fake_run, calls, _ = ok_run_factory(state)
+    with pytest.raises(
+        git_transport.TransportError, match="git_transport",
+    ) as exc:
+        git_transport.check_transport(
+            tmp_path, ["xqliu/orbi"],
+            run_command=fake_run, mode="https",
+        )
+    assert "https://github.com/xqliu/orbi.git" in str(exc.value)
+
+
+def test_check_transport_rejects_an_unknown_mode(tmp_path):
+    fake_run, calls, _ = ok_run_factory({})
+    with pytest.raises(
+        git_transport.TransportError, match="git_transport",
+    ) as exc:
+        git_transport.check_transport(
+            tmp_path, ["xqliu/orbi"],
+            run_command=fake_run, mode="gopher",
+        )
+    assert "'ssh' or 'https'" in str(exc.value)
+    # Nothing was read, probed or rewritten.
+    assert calls == []
+
+
 # --- real git: the worktree inherits the checkout's transport -----------------
 
 
@@ -522,6 +706,68 @@ def test_real_workflow_file_push_goes_over_the_ssh_transport(tmp_path):
     # The workflow file is on the remote branch.
     refs = git(origin, "ls-tree", "-r", "refs/heads/task")
     assert ".github/workflows/ci.yml" in refs
+    git(clone, "worktree", "remove", "--force", str(worktree))
+
+
+def test_real_https_mode_checkout_and_worktree_delivery_without_ssh(tmp_path):
+    """Issue #580 acceptance: the full https-mode delivery path against
+    real git — the checkout's `origin` stays the HTTPS URL, the check
+    passes in https mode (the probe of the HTTPS URL succeeds via the
+    configured data plane), and a task worktree created from the
+    checkout shares that origin and pushes over it. No SSH anywhere:
+    the `url.<base>.insteadOf` rewrite keeps the data plane on a local
+    bare repo (the repo's standard e2e mechanism — the credential
+    helper's stand-in)."""
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    git(origin, "init", "--bare", "-b", "main")
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", str(origin), str(clone)],
+        capture_output=True, text=True, check=True,
+    )
+    git(clone, "config", "user.email", "pilot@test.local")
+    git(clone, "config", "user.name", "Pilot")
+    git(clone, "commit", "--allow-empty", "-m", "first")
+    # The transport: HTTPS URL on the remote, local data plane.
+    https_style = "https://github.com/xqliu/orbi.git"
+    git(clone, "remote", "set-url", "origin", https_style)
+    git(clone, "config", f"url.{origin}.insteadOf", https_style)
+
+    def run_command(command, cwd):
+        result = subprocess.run(
+            command, cwd=cwd, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                result.returncode, command, stderr=result.stderr,
+            )
+        return result.stdout.strip()
+
+    # The helper fails fast on a nonzero exit (the same guard the
+    # git() helper above is verified by).
+    with pytest.raises(subprocess.CalledProcessError):
+        run_command(["git", "rev-parse", "no-such-ref"], clone)
+
+    result = git_transport.check_transport(
+        clone, ["xqliu/orbi"], run_command=run_command, mode="https",
+    )
+    assert result["protocol"] == "https"
+    assert result["migrated"] is False
+    assert result["transport_reachable"] is True
+    assert result["ssh_reachable"] is None
+    # The task worktree inherits the single HTTPS remote and delivers
+    # over it (the runner's fetch/push path). The CONFIGURED URL is
+    # the transport (`remote get-url` would report the insteadOf
+    # data-plane URL).
+    worktree = tmp_path / "wt"
+    git(clone, "worktree", "add", "-b", "task", str(worktree), "HEAD")
+    assert git(worktree, "config", "remote.origin.url") == https_style
+    (worktree / "delivery.txt").write_text("x", encoding="utf-8")
+    git(worktree, "add", ".")
+    git(worktree, "commit", "-m", "feat: https-mode delivery")
+    git(worktree, "push", "origin", "HEAD:refs/heads/task")
+    assert "task" in git(origin, "branch", "--list")
     git(clone, "worktree", "remove", "--force", str(worktree))
 
 

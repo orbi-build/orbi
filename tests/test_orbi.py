@@ -1104,6 +1104,8 @@ def _deploy_world(tmp_path, drift: bool = False) -> tuple[dict, Path]:
         # Issue #330: the bootstrap deployment — home == delivery checkout.
         "deploy_home": repo,
         "base_branch": "main",
+        # Issue #580: the configured delivery transport (default ssh).
+        "git_transport": "ssh",
         "max_concurrency": 1,
         "slot_dir": repo / ".orbi" / "slots",
     }
@@ -1324,6 +1326,7 @@ def _setup_result() -> dict:
             "remote_protocol": "ssh",
             "migrated": False,
             "ssh_reachable": True,
+            "transport_reachable": True,
         },
         "optional_proxy": {
             "optional": True,
@@ -1488,7 +1491,8 @@ def test_doctor_report_clean(tmp_path, monkeypatch):
     assert (
         "transport: remote=origin "
         "url=git@github.com:xqliu/orbi.git protocol=ssh "
-        "expected=git@github.com:xqliu/orbi.git ssh_reachable=true"
+        "expected=git@github.com:xqliu/orbi.git "
+        "ssh_reachable=true transport_reachable=true"
     ) in lines
     # The probe is the real read-only command (verified against the
     # live CLI: exit 0 = reachable + authenticated).

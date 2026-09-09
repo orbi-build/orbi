@@ -59,14 +59,18 @@ Runner instances can run concurrently. Each tick's service instance:
    service does not start (fail fast, no fallback).
 2. **Runs one tick**: resume an opened PR (review/fix/merge) or claim one
    `ai-ready` Issue, then exit. Before any slot or claim the tick also
-   runs the pre-start **git transport check** (Issue #114): the
-   deployment checkout's configured `origin` remote must be SSH for the
-   first configured source repo and `git ls-remote <ssh-url>` must exit
-   0 (SSH reachable and authenticated). A broken transport logs the
+   runs the pre-start **git transport check** (Issue #114, #580): the
+   deployment checkout's configured `origin` remote must match the
+   configured transport (orbi.toml `git_transport`: `ssh` — the default,
+   `git@github.com:owner/repo.git` — or `https`,
+   `https://github.com/<repo>.git` with the `gh` credential helper) for
+   the first configured source repo and `git ls-remote <expected-url>`
+   must exit 0 (the transport reachable and authenticated). A broken
+   transport logs the
    structured `transport_check_failed ... reason=...` line and fails the
-   start — no slot, no claim, no label change, **no HTTPS fallback**
-   (git data operations, including `.github/workflows/*.yml` pushes,
-   always go over SSH; GitHub API operations stay on the `gh` token).
+   start — no slot, no claim, no label change, **no fallback** (in
+   ssh mode explicitly **no HTTPS fallback**; GitHub API operations
+   always stay on the `gh` token).
    And before any slot or claim the tick runs the **runner source
    freshness gate** (Issue #525): it proves the code THIS process
    executes matches the fetched `origin/<base_branch>` — see
@@ -411,19 +415,20 @@ orbi status --config orbi.toml
 # Read-only deployment/health report: repo commit, deployment-home
 # cleanliness (deploy_home: clean / DRIFT), unit drift, CLI
 # source (cli_source: clean / DRIFT + the structured cli_source_drift
-# line), git transport (configured origin URL, protocol, expected SSH
-# URL, SSH probe — a failed transport is reported as `transport:
+# line), git transport (configured origin URL, protocol, expected URL
+# for the configured git_transport, its reachability probe — a failed
+# transport is reported as `transport:
 # FAILED ...`, not raised), timer/service instance state, slots, Pi
 # session, current Issue, recent journal
 orbi doctor --config orbi.toml
 
 # One-time, idempotent initialization (new machine / new repo): gh
 # auth + repo permissions, platform labels, systemd user units, and
-# the checkout check INCLUDING the git transport — an existing HTTPS
-# `origin` is migrated to `git@github.com:owner/repo.git` (the
-# human-authorized migration path; the Runner itself never rewrites a
-# remote) and the SSH connectivity is probed (fail fast, no HTTPS
-# fallback)
+# the checkout check INCLUDING the git transport — an `origin` on the
+# opposite transport is migrated to the configured `git_transport`'s
+# URL (HTTPS->SSH or SSH->HTTPS; the human-authorized migration path;
+# the Runner itself never rewrites a remote) and the transport
+# connectivity is probed (fail fast, no fallback)
 orbi setup --config orbi.toml
 
 # Print the live Pi session JSONL path (fail fast when no session exists)

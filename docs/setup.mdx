@@ -74,19 +74,27 @@ non-zero exit code.
 6. **Checkout + git transport** — check of the configured delivery
    checkout `repo_dir` (the orbi checkout in bootstrap mode, the user
    repo X in the external single-repo mode): the `origin` remote's
-   **transport** (Issue #114): git data
-   operations (fetch, push — including `.github/workflows/*.yml`) must
-   go over SSH (`git@github.com:owner/repo.git`), so an existing
+   **transport** (Issue #114, #580), selected by `git_transport` in
+   orbi.toml. `ssh` (default): git data
+   operations (fetch, push — including `.github/workflows/*.yml`) go
+   over SSH (`git@github.com:owner/repo.git`), so an existing
    HTTPS `origin` is migrated here with the plain
    `git remote set-url origin git@github.com:owner/repo.git` (setup is
    the human-authorized migration path — the Runner itself never
-   rewrites a remote), the SSH URL must match the first configured
+   rewrites a remote). `https` (the token-only sandbox path): the
+   `origin` STAYS on `https://github.com/<repo>.git` and the
+   credentials come from the `gh` credential helper
+   (`gh auth login --with-token`) — an SSH `origin` is migrated to
+   the HTTPS URL here, and no SSH key is required anywhere. In both
+   modes the URL must match the first configured
    source repo — a remote pointing at a DIFFERENT repo is never
    migrated (the rewrite would re-target the checkout at another
    repository) and fails with `setup_failed reason=... origin remote
-   repo mismatch ...` — and `git ls-remote <ssh-url>` must exit 0
-   (SSH reachable and authenticated — a failure is `setup_failed
-   reason=... ssh_unreachable ...`, no HTTPS fallback). Then the
+   repo mismatch ...` — and `git ls-remote <expected-url>` must exit
+   0 (the configured transport reachable and authenticated — a
+   failure is `setup_failed reason=... ssh_unreachable ...` in ssh
+   mode or `... transport_unreachable ...` in https mode, no
+   fallback). Then the
    read-only parts: current branch, clean worktree (a dirty checkout
    fails: the timer's `ExecStartPre` fast-forward refuses a dirty
    worktree, so the Runner could never start), and base freshness
@@ -108,7 +116,7 @@ separates the two checkouts: `deploy_home` is the orbi source checkout
 and `repo_dir` is the user repo X. Setup routes accordingly — steps 2
 (CLI editable install), 4 (`labels.toml`) and 5 (unit templates) act on
 `deploy_home`, while step 6 (checkout + git transport) checks
-`repo_dir`: X's `origin` must be SSH for the first configured source
+`repo_dir`: X's `origin` must match the configured `git_transport` for the first configured source
 repo, X's worktree must be clean, and X's base freshness is reported.
 Note that in external mode the timer's `ExecStartPre` fast-forward acts
 on the deploy home (the orbi checkout), not on X — X is only read from
@@ -142,7 +150,7 @@ repo=orbi-build/orbi permission=ADMIN default_branch=main labels=8/8
 service=installed path=~/.config/systemd/user/orbi@.service sha256=9f2c...
 timer=orbi@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
 timer=orbi@2.timer disabled active=false next="-"
-checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:orbi-build/orbi.git protocol=ssh migrated=false ssh_reachable=true
+checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:orbi-build/orbi.git protocol=ssh migrated=false ssh_reachable=true transport_reachable=true
 model_endpoint=optional optional_proxy=healthy url=http://127.0.0.1:18082/health
 ```
 
@@ -153,9 +161,12 @@ means all eight platform labels match `labels.toml`;
 there is one `timer=` line per timer instance and its `next` is that
 instance's next trigger time (`-` when it has none);
 `optional_proxy` is `healthy`, `unhealthy` or `unavailable` and never
-changes the exit code. `migrated=true` means setup rewrote an HTTPS
-`origin` to the SSH URL (a re-run then reports `migrated=false`);
-`ssh_reachable` is the `git ls-remote` probe result.
+changes the exit code. `migrated=true` means setup rewrote an
+`origin` on the opposite transport to the configured transport's URL
+(a re-run then reports `migrated=false`); `ssh_reachable` is the SSH
+`git ls-remote` probe result (`-` in https mode — no SSH probe runs
+there) and `transport_reachable` is the probe result of the ACTIVE
+transport (Issue #580).
 
 `--json` prints the equivalent JSON document:
 
@@ -175,7 +186,7 @@ repo=orbi-build/orbi permission=ADMIN default_branch=main labels=8/8
 service=installed path=~/.config/systemd/user/orbi@.service sha256=9f2c...
 timer=orbi@1.timer enabled active=true next="Thu 2026-08-27 10:00:00 +08"
 timer=orbi@2.timer disabled active=false next="-"
-checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:orbi-build/orbi.git protocol=ssh migrated=false ssh_reachable=true
+checkout=remote=origin branch=main clean=true base_fresh=true remote_url=git@github.com:orbi-build/orbi.git protocol=ssh migrated=false ssh_reachable=true transport_reachable=true
 model_endpoint=optional optional_proxy=unhealthy url=http://127.0.0.1:18082/health
 ```
 
@@ -193,13 +204,14 @@ setup_failed reason=insufficient permission for owner/repo: viewerPermission='RE
 setup_failed reason=label alignment failed for owner/repo: ai-ready (gh label create failed: ...)
 setup_failed reason=checkout is not clean: /path/to/checkout (uncommitted changes: ' M src/orbi/runner.py') — commit or stash them first: ...
 setup_failed reason=checkout check failed for /path/to/checkout: ssh_unreachable: git ls-remote git@github.com:owner/repo.git failed: ... stderr=git@github.com: Permission denied (publickey). — fix SSH and retry
+setup_failed reason=checkout check failed for /path/to/checkout: transport_unreachable: git ls-remote https://github.com/owner/repo.git failed: ... stderr=fatal: Authentication failed — check the gh credentials (`gh auth status`) and retry
 ```
 
 A missing prerequisite command (e.g. `uv`), a wrong repo, missing
 labels that cannot be created (permission), a dirty checkout, an
-unreachable SSH (no HTTPS fallback) or a missing systemd user bus all
-stop the setup with the concrete reason — nothing is half-initialized
-without a clear signal.
+an unreachable transport (no fallback) or a missing systemd user bus
+all stop the setup with the concrete reason — nothing is
+half-initialized without a clear signal.
 
 ## Idempotency
 
@@ -208,6 +220,7 @@ external state: labels that already match are not rewritten, the unit
 templates are re-copied from the repo (drift repair), the configured timers
 retain their enabled or disabled states, and no Issues or business data are
 created or modified. The
-reported hashes and states are stable across runs. The HTTPS→SSH
-migration is one-shot: after the first run the `origin` remote is SSH
-and re-runs only re-verify it (`migrated=false`).
+reported hashes and states are stable across runs. The transport
+migration is one-shot: after the first run the `origin` remote matches
+the configured `git_transport` and re-runs only re-verify it
+(`migrated=false`).
