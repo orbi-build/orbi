@@ -16,13 +16,25 @@ pi_model = "glm-5.3-flash"
 | z.ai GLM | `z-ai.json` | `ZAI_API_KEY` | `glm-5.3-flash` | Tested 2026-09-04: real task #303 reached PR #304 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | OpenRouter free | `openrouter.json` | `OPENROUTER_API_KEY` | `google/gemma-4-31b-it:free` | Not tested; free catalog availability is not promised | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | DeepSeek | `deepseek.json` | `DEEPSEEK_API_KEY` | `deepseek-chat` | Not tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
-| xAI | `xai.json` | `XAI_API_KEY` | `grok-4.20-0309` | Model ID verified against xAI docs; not quota-tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| xAI | `xai.json` | `XAI_API_KEY` | `grok-4.20-0309-reasoning` | Model ID verified against xAI docs 2026-09-09; not quota-tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Groq Free Plan | `groq.json` | `GROQ_API_KEY` | `groq/compound` | Free Plan limits verified 2026-09-04; real request/usage/429 not tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Local Qwen | `local-qwen.json` | None (dummy key `local`) | `Qwen3.8-27B` | Local zero-cost example; requires a local OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Cloudflare Workers AI | `cloudflare-workers-ai.json` | `CLOUDFLARE_API_TOKEN` | `@cf/meta/llama-3.1-8b-instruct-fp8` | Hosted free allocation; quota must be checked in the account | [#318](https://github.com/orbi-build/orbi/issues/318) |
 | GitHub Models | `github-models.json` | `GH_MODELS_TOKEN` | `openai/gpt-4.1-mini` | Historical snapshot; service retired and not available for live requests | [#319](https://github.com/orbi-build/orbi/issues/319) |
 
 A template being listed is not a promise of quota, availability, speed, or model support. The `Not tested` labels are intentional.
+
+### xAI: Grok 4.20 Reasoning
+
+The xAI model catalog was checked on **2026-09-09**. Select the exact reasoning variant from the template:
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "xai"
+pi_model = "grok-4.20-0309-reasoning"
+```
+
+The catalog reports a 1,000,000-token maximum prompt length for this model. This template uses that value as `contextWindow` and keeps `maxTokens` at 16,384 as a conservative request cap. xAI quota and a real request were **not tested**; consult the [official xAI model catalog](https://docs.x.ai/docs/models) and your account when configuring a run.
 
 ### OpenRouter `:free`: one key, multiple models
 

@@ -14,7 +14,7 @@ EXPECTED = {
     "z-ai": ("z-ai", "glm-5.3-flash", "ZAI_API_KEY"),
     "openrouter": ("openrouter", "google/gemma-4-31b-it:free", "OPENROUTER_API_KEY"),
     "deepseek": ("deepseek", "deepseek-chat", "DEEPSEEK_API_KEY"),
-    "xai": ("xai", "grok-4.20-0309", "XAI_API_KEY"),
+    "xai": ("xai", "grok-4.20-0309-reasoning", "XAI_API_KEY"),
     "groq": ("groq", "groq/compound", "GROQ_API_KEY"),
     "local-qwen": ("local-qwen", "Qwen3.8-27B", None),
     "cloudflare-workers-ai": (
@@ -48,6 +48,13 @@ def test_template_selected_model_is_explicit(name):
     provider_id, model_id, _variable = EXPECTED[name]
     models = data["providers"][provider_id]["models"]
     assert model_id in {model["id"] for model in models}
+
+
+def test_xai_does_not_retain_the_obsolete_bare_model_id():
+    _path, data = load_template("xai")
+    model = data["providers"]["xai"]["models"][0]
+    assert model["id"] == "grok-4.20-0309-reasoning"
+    assert model["contextWindow"] == 1_000_000
 
 
 def test_gemini_uses_model_default_thinking_mapping():
