@@ -60,10 +60,15 @@ HEALTH_MARKER_PREFIX = "orbi-health-fingerprint:"
 CRASH_EXIT_RE = re.compile(r"\.service: (Main process exited, code=|Failed with result)")
 
 # Volatile tokens stripped before fingerprinting: 8-40 hex runs (run ids,
-# SHAs) and ISO-ish timestamps. Only errors whose normalized text is IDENTICAL
-# share a fingerprint — the conservative "same pit" rule of Issue #266.
+# SHAs), ISO-ish timestamps, and duration shapes ("30m", "6s", "1h5m",
+# "200ms" — the format_duration output the model_wait / idle-recovery
+# failures embed; the duration drifts by one poll interval for the same
+# pit). Only errors whose normalized text is IDENTICAL share a
+# fingerprint — the conservative "same pit" rule of Issue #266.
 VOLATILE_TOKEN_RE = re.compile(
-    r"\b[0-9a-f]{8,40}\b|\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}",
+    r"\b[0-9a-f]{8,40}\b"
+    r"|\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}"
+    r"|\b(?:\d+(?:ms|[smh]))+(?![0-9a-z])",
 )
 
 # Fail-fast validation errors a HUMAN must fix in the config (Issue #345):
@@ -154,6 +159,16 @@ def record_run_attempt(
 ) -> None:
     """Append one run attempt to the bounded health history."""
     state = load_health_state(state_path)
+    if outcome != "failed":
+        # A non-failure outcome breaks the repeated-failure streak. The
+        # issue's alert history must turn a fresh page with it: a later
+        # NEW streak on the same issue alerts again instead of staying
+        # silent forever behind the key recorded for the old streak.
+        prefix = f"{repo}#{issue}:"
+        state["alerted"] = [
+            key for key in state["alerted"]
+            if not key.startswith(prefix)
+        ]
     state["runs"].append({
         "repo": repo, "issue": issue, "run_id": run_id,
         "outcome": outcome, "fingerprint": fingerprint,
