@@ -15383,6 +15383,73 @@ def test_process_release_gate_failure_blocks_and_returns_cleanly(monkeypatch):
     )
 
 
+def test_process_release_publish_closeout_failure_keeps_release_result(
+    monkeypatch,
+):
+    """tag 和 GitHub Release 已发布之后，ai-merged 转移/关票都是既成事实的
+    记账（Issue #79 旁路语义）：瞬时失败只记日志，绝不允许掉进通用异常
+    处理器把已发布结果改写成 ai-blocked（仓库里同时挂 ai-merged 与
+    ai-blocked 双终态）。"""
+    state = make_release_process_env(monkeypatch)
+    real_edit = runner.edit_issue
+
+    def failing_edit(number, **kwargs):
+        if kwargs.get("add") == "ai-merged":
+            raise RuntimeError("GitHub unavailable")
+        return real_edit(number, **kwargs)
+
+    monkeypatch.setattr(runner, "edit_issue", failing_edit)
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    url = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    # The published release result stands; the closeout failure never
+    # rewrote it as blocked.
+    assert url == "https://github.com/o/r/releases/tag/v0.3.0"
+    assert not any(k.get("add") == "ai-blocked" for _, k in state["edits"])
+    assert any(
+        "release_publish_closeout_failed" in str(call)
+        for call in runner.LOGGER.exception.call_args_list
+    )
+
+
+def test_process_release_success_comment_failure_keeps_release_result(
+    monkeypatch,
+):
+    """成功评论同样只是既成发布的证据（Issue #79 旁路语义）：它失败只记
+    `release_success_comment_failed` 日志，绝不允许把已发布结果改写成
+    ai-blocked（Issue #601 的 CI diff 覆盖缺口正是这条路径）。"""
+    state = make_release_process_env(monkeypatch)
+
+    def failing_comment(number, **kwargs):
+        # In the success path the ONLY comment_issue call is the success
+        # comment itself (the milestone test asserts a single comment), so
+        # failing unconditionally fails exactly that comment.
+        raise RuntimeError("GitHub unavailable")
+
+    monkeypatch.setattr(runner, "comment_issue", failing_comment)
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    url = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    # The published release result stands; the failed evidence comment
+    # never rewrote it as blocked.
+    assert url == "https://github.com/o/r/releases/tag/v0.3.0"
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged",
+                                       "remove": "ai-in-progress"})
+    assert not any(k.get("add") == "ai-blocked" for _, k in state["edits"])
+    # The success comment never landed and its failure is logged.
+    assert not state["comments"]
+    assert any(
+        "release_success_comment_failed" in str(call)
+        for call in runner.LOGGER.exception.call_args_list
+    )
+
+
 def test_process_release_milestone_failure_keeps_release_successful(monkeypatch):
     state = make_release_process_env(monkeypatch)
     real = runner.run_command
