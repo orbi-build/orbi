@@ -16939,6 +16939,93 @@ def test_sync_release_docs_is_idempotent_on_rerun(tmp_path, monkeypatch):
     assert (work / "docs" / "release-v0.4.0.mdx").read_text(encoding="utf-8") == en_before
 
 
+def test_sync_release_docs_resume_after_failed_push_recommits_normally(
+    tmp_path, monkeypatch,
+):
+    """真实 resume 路径（Issue #623）：上一轮 commit 成功、push 失败后，
+    发布状态机下一轮先经 create_release_worktree 把 worktree
+    hard-reset 回 release_commit（结尾的 `git reset --hard`），未推送的
+    本地 docs commit 连同页面一起消失；随后 sync_release_docs 重新生成
+    页面 → 有可暂存内容 → 走正常的 commit + push 路径。恢复不是（也不
+    需要是）一条特殊分支。"""
+    work = make_release_docs_repo(tmp_path)
+    head = git_out(work, "rev-parse", "HEAD")
+    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
+                    "-m", "rel", head], check=True, capture_output=True)
+    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
+    original = runner.run_git_network_command
+
+    def failing_push(command, **kwargs):
+        raise subprocess.CalledProcessError(1, command, stderr="boom")
+
+    monkeypatch.setattr(runner, "run_git_network_command", failing_push)
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.sync_release_docs(
+            source_repo="o/r", repo_dir=work, worktree=work,
+            base_branch="main", tag="v0.4.0", release_commit=head,
+            issue_number=77,
+        )
+    orphaned = git_out(work, "rev-parse", "HEAD")
+    remote_stuck = git_out(work, "rev-parse", "origin/main")
+    assert orphaned != head           # the commit did happen locally
+    assert orphaned != remote_stuck   # ...but never reached the remote
+    # 下一轮 create_release_worktree 的 hard-reset——此处按真实时序原样
+    # 重放（对 release_commit 的一条 `git reset --hard`）。
+    subprocess.run(["git", "-C", str(work), "reset", "--hard", head],
+                   check=True, capture_output=True)
+    monkeypatch.setattr(runner, "run_git_network_command", original)
+    evidence = runner.sync_release_docs(
+        source_repo="o/r", repo_dir=work, worktree=work,
+        base_branch="main", tag="v0.4.0", release_commit=head,
+        issue_number=77,
+    )
+    assert "committed and pushed" in evidence
+    assert "recovered" not in evidence
+    new_head = git_out(work, "rev-parse", "HEAD")
+    assert new_head != head           # a fresh docs commit was created
+    assert git_out(work, "rev-parse", "origin/main") == new_head
+
+
+def test_sync_release_docs_stale_tracking_ref_is_not_a_false_recovery(
+    tmp_path, monkeypatch,
+):
+    """无可暂存内容但 origin/<base> 跟踪引用陈旧（落后于真实远端）的
+    世界（Issue #623）：真实远端其实已有 docs commit，补推是一个
+    no-op，宣称 "recovered — the previous local commit had not been
+    pushed" 是与事实不符的证据。hard-reset 保证没有未推送的本地 commit
+    能活到无暂存分支，唯一诚实的回答是 already in sync，且不应发起
+    任何网络 push。"""
+    work = make_release_docs_repo(tmp_path)
+    head = git_out(work, "rev-parse", "HEAD")
+    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
+                    "-m", "rel", head], check=True, capture_output=True)
+    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
+    runner.sync_release_docs(
+        source_repo="o/r", repo_dir=work, worktree=work,
+        base_branch="main", tag="v0.4.0", release_commit=head,
+        issue_number=77,
+    )
+    docs_head = git_out(work, "rev-parse", "HEAD")
+    # The push above landed on the real remote; rewind ONLY the tracking
+    # ref — the remote still has the docs commit.
+    git_out(work, "update-ref", "refs/remotes/origin/main", head)
+
+    def no_push_allowed(command, **kwargs):
+        raise AssertionError(
+            f"network push attempted in the nothing-staged world: {command}"
+        )
+
+    monkeypatch.setattr(runner, "run_git_network_command", no_push_allowed)
+    evidence = runner.sync_release_docs(
+        source_repo="o/r", repo_dir=work, worktree=work,
+        base_branch="main", tag="v0.4.0", release_commit=head,
+        issue_number=77,
+    )
+    assert "already in sync" in evidence
+    assert "recovered" not in evidence
+    assert git_out(work, "rev-parse", "HEAD") == docs_head
+
+
 def test_sync_release_docs_pushes_the_local_commit_a_failed_push_left_behind(
     tmp_path, monkeypatch,
 ):
