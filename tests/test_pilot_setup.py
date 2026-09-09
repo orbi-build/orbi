@@ -471,6 +471,114 @@ def test_check_repo_fails_fast_on_unparseable_output():
         )
 
 
+# Issue #613: an installation token (ghs_) has no meaningful
+# `viewerPermission` (always empty), but the App's issues:write does
+# manage labels — check_repo must probe the real capability instead of
+# failing on the empty field.
+
+
+def _installation_run_factory(permission="", token="ghs_installationtoken"):
+    """Build a fake run_command: repo view returns `permission`, auth
+    token returns `token`, gh api create/delete succeed (real API
+    verified 2026-09-09: create → 201 JSON, delete → 204)."""
+    def fake_run(command, **kwargs):
+        if command[:3] == ["gh", "repo", "view"]:
+            return json.dumps({
+                "nameWithOwner": "xqliu/orbi",
+                "viewerPermission": permission,
+                "defaultBranchRef": {"name": "main"},
+            })
+        if command == ["gh", "auth", "token"]:
+            return token
+        if command[:2] == ["gh", "api"]:
+            return ""
+        raise AssertionError(f"unexpected command: {command}")
+    return fake_run
+
+
+def test_check_repo_probes_labels_for_an_installation_token():
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return _installation_run_factory()(command, **kwargs)
+
+    result = pilot_setup.check_repo("xqliu/orbi", run_command=fake_run)
+    assert result == {
+        "repo": "xqliu/orbi",
+        "permission": "INSTALLATION",
+        "default_branch": "main",
+    }
+    api_calls = [c for c in calls if c[:2] == ["gh", "api"]]
+    assert len(api_calls) == 2
+    create, delete = api_calls
+    assert create[:5] == ["gh", "api", "-X", "POST", "repos/xqliu/orbi/labels"]
+    name_args = [arg for arg in create if arg.startswith("name=")]
+    assert len(name_args) == 1
+    probe_name = name_args[0][len("name="):]
+    assert probe_name.startswith("orbi-setup-probe-")
+    assert delete == [
+        "gh", "api", "-X", "DELETE",
+        f"repos/xqliu/orbi/labels/{probe_name}",
+    ]
+
+
+def test_installation_fake_rejects_an_unexpected_command():
+    with pytest.raises(AssertionError, match="unexpected command"):
+        _installation_run_factory()(["gh", "surprise"])
+
+
+def test_check_repo_fails_fast_when_an_installation_token_cannot_write_labels():
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            raise subprocess.CalledProcessError(
+                1, command,
+                stderr="Resource not accessible by integration",
+            )
+        return _installation_run_factory()(command, **kwargs)
+
+    with pytest.raises(pilot_setup.SetupError, match="installation token"):
+        pilot_setup.check_repo("xqliu/orbi", run_command=fake_run)
+
+
+def test_check_repo_fails_fast_when_the_probe_label_delete_fails():
+    created_names = []
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            if command[3] == "POST":
+                for arg in command:
+                    if arg.startswith("name="):
+                        created_names.append(arg[len("name="):])
+                return ""
+            raise subprocess.CalledProcessError(1, command, stderr="boom")
+        return _installation_run_factory()(command, **kwargs)
+
+    with pytest.raises(pilot_setup.SetupError, match="probe cleanup") as excinfo:
+        pilot_setup.check_repo("xqliu/orbi", run_command=fake_run)
+    # The readable failure names the probe label a human may have to
+    # delete by hand.
+    assert created_names[0] in str(excinfo.value)
+
+
+def test_check_repo_fails_fast_on_an_empty_permission_for_a_user_token():
+    fake_run = _installation_run_factory(token="gho_usertoken")
+    with pytest.raises(pilot_setup.SetupError, match="insufficient permission"):
+        pilot_setup.check_repo("xqliu/orbi", run_command=fake_run)
+
+
+def test_check_repo_treats_an_unreadable_token_as_a_user_token():
+    def fake_run(command, **kwargs):
+        if command == ["gh", "auth", "token"]:
+            raise subprocess.CalledProcessError(
+                1, command, stderr="not logged in",
+            )
+        return _installation_run_factory()(command, **kwargs)
+
+    with pytest.raises(pilot_setup.SetupError, match="insufficient permission"):
+        pilot_setup.check_repo("xqliu/orbi", run_command=fake_run)
+
+
 # --- label alignment ---------------------------------------------------------
 
 

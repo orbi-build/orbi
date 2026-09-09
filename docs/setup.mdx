@@ -52,7 +52,12 @@ non-zero exit code.
    default; exactly one with `--repo OWNER/REPO`):
    - the repo exists and the viewer has write permission
      (`gh repo view` → `viewerPermission` must be `WRITE`, `MAINTAIN`
-     or `ADMIN`);
+     or `ADMIN`). A GitHub App installation token (`ghs_`) reports an
+     empty `viewerPermission` although its issues:write manages labels
+     (Issue #613): setup decides the empty field with a one-shot
+     create+delete label probe (`gh api`) and reports
+     `permission=INSTALLATION`; a user token keeps the plain
+     permission requirement;
    - the eight platform labels are aligned **declaratively** from the
      deployment home's `labels.toml` (`<deploy_home>/labels.toml`,
      Issue #330) — the single source of truth for label name, color and
@@ -201,6 +206,7 @@ setup_failed reason=systemctl --user user bus unavailable (is a systemd user ses
 setup_failed reason=editable tool install failed for /path/to/checkout: ... (fix: uv tool install --force --reinstall --editable --python /usr/bin/python3 /path/to/checkout)
 setup_failed reason=repo not accessible: nobody/no-such (gh repo view failed: ...)
 setup_failed reason=insufficient permission for owner/repo: viewerPermission='READ' (one of ['ADMIN', 'MAINTAIN', 'WRITE'] required to manage labels)
+setup_failed reason=installation token cannot manage labels in owner/repo: ... (the GitHub App needs the Issues read/write repository permission and must be installed on owner/repo)
 setup_failed reason=label alignment failed for owner/repo: ai-ready (gh label create failed: ...)
 setup_failed reason=checkout is not clean: /path/to/checkout (uncommitted changes: ' M src/orbi/runner.py') — commit or stash them first: ...
 setup_failed reason=checkout check failed for /path/to/checkout: ssh_unreachable: git ls-remote git@github.com:owner/repo.git failed: ... stderr=git@github.com: Permission denied (publickey). — fix SSH and retry
