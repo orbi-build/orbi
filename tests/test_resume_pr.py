@@ -208,21 +208,49 @@ def test_resume_scene_skips_non_dict_comments():
     assert scene["run_id"] == FAKE_RUN_ID
 
 
-def test_authenticated_github_login_uses_gh_installation_endpoint(monkeypatch):
+def test_authenticated_github_login_uses_active_gh_account(monkeypatch):
     calls = []
     monkeypatch.setattr(
         runner, "run_command",
-        lambda command: calls.append(command) or "orbi-dev-test\n",
+        lambda command: calls.append(command) or (
+            "github.com\n"
+            "  ✓ Logged in to github.com account orbi-dev-test[bot] (keyring)\n"
+            "  - Active account: true\n"
+        ),
     )
     assert runner._authenticated_github_login() == "orbi-dev-test[bot]"
-    assert calls == [[
-        "gh", "api", "installation", "--jq", ".app_slug",
-    ]]
+    assert calls == [["gh", "auth", "status", "--hostname", "github.com"]]
 
 
-def test_authenticated_github_login_rejects_empty_login(monkeypatch):
-    monkeypatch.setattr(runner, "run_command", lambda command: "\n")
-    with pytest.raises(ValueError, match="empty app slug"):
+def test_authenticated_github_login_selects_active_account(monkeypatch):
+    monkeypatch.setattr(
+        runner,
+        "run_command",
+        lambda command: (
+            "github.com\n"
+            "  ✓ Logged in to github.com account old-bot[bot] (keyring)\n"
+            "  - Active account: false\n"
+            "  ✓ Logged in to github.com account orbi-dev-test[bot] (keyring)\n"
+            "  - Active account: true\n"
+        ),
+    )
+    assert runner._authenticated_github_login() == "orbi-dev-test[bot]"
+
+
+def test_authenticated_github_login_reports_identity_resolution_failure(monkeypatch):
+    def fail(command):
+        raise RuntimeError("gh api installation: 404 Not Found")
+
+    monkeypatch.setattr(runner, "run_command", fail)
+    with pytest.raises(ValueError, match="identity resolution.*gh auth status"):
+        runner._authenticated_github_login()
+
+
+def test_authenticated_github_login_rejects_missing_active_account(monkeypatch):
+    monkeypatch.setattr(
+        runner, "run_command", lambda command: "Active account: true\n",
+    )
+    with pytest.raises(ValueError, match="identity resolution"):
         runner._authenticated_github_login()
 
 
@@ -232,10 +260,18 @@ def test_resume_scene_accepts_the_authenticated_runner_app_bot(monkeypatch):
         "authorAssociation": "NONE",
         "author": {"login": "orbi-dev-test[bot]"},
     }]
-    monkeypatch.setattr(
-        runner, "_authenticated_github_login",
-        lambda: "orbi-dev-test[bot]",
-    )
+
+    def gh_status(command):
+        assert command == [
+            "gh", "auth", "status", "--hostname", "github.com",
+        ]
+        return (
+            "github.com\n"
+            "  ✓ Logged in to github.com account orbi-dev-test[bot] (keyring)\n"
+            "  - Active account: true\n"
+        )
+
+    monkeypatch.setattr(runner, "run_command", gh_status)
     scene = runner.resume_scene(comments)
     assert scene["run_id"] == FAKE_RUN_ID
 
