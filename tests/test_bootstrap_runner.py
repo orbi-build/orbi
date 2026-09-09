@@ -16644,7 +16644,10 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
         if command == ["gh", "issue", "view", "30", "--repo", "o/r",
                        "--json", "number,body,labels,blockedBy"]:
             return json.dumps({"number": 30, "body": "## Children\n- #31",
-                               "labels": [{"name": "ai-epic"}]})
+                               "labels": [{"name": "ai-epic"}],
+                               "blockedBy": {"nodes": []}})
+        if command == ["gh", "issue", "view", "30", "--repo", "o/r", "--json", "comments"]:
+            return json.dumps({"comments": []})
         if command == ["gh", "api", "repos/o/r/issues/30/sub_issues?per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[{"number": 31, "repository": {"full_name": "o/r"}, "state": "closed"}]])
         if command == ["gh", "api", "repos/o/r/issues/31"]:
@@ -16662,7 +16665,7 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
     assert any("native blocker/dependency" in item for item in result)
     assert any("open blockers: #9" in item for item in result)
     assert ["gh", "issue", "close", "34", "--repo", "o/r"] in calls
-    assert ["gh", "issue", "close", "30", "--repo", "o/r"] not in calls
+    assert ["gh", "issue", "close", "30", "--repo", "o/r"] in calls
     assert ["gh", "issue", "close", "32", "--repo", "o/r"] not in calls
     with pytest.raises(AssertionError):
         fake_run(["unexpected"])
