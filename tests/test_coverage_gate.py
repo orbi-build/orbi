@@ -25,6 +25,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import coverage
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = REPO_ROOT / "tools"
@@ -763,6 +764,12 @@ def test_pragma_scan_skips_runtime_directories(tmp_path):
     worktree_file.parent.mkdir(parents=True)
     worktree_file.write_text(pragma, encoding="utf-8")
     assert find_pragma_offenders([worktree_file]) == []
+
+
+def test_pragma_scan_rejects_unrelated_external_files(tmp_path):
+    """Only explicitly excluded external runtime trees are accepted."""
+    with pytest.raises(ValueError):
+        find_pragma_offenders([tmp_path / "source.py"])
 
 
 def test_pragma_scan_skips_generated_directories(tmp_path):
