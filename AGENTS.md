@@ -6,6 +6,7 @@ the agent must obey — the operational explanation of every mechanism
 (timer, unit drift, transport check, journal fields, label lifecycle,
 claim scans) lives in the docs site (`docs/`, <https://docs.orbi.build>);
 each section points at the owning page instead of restating it.
+Architectural invariants and the public surface live in [CONSTITUTION.md](CONSTITUTION.md); when this file and the constitution disagree, the constitution wins.
 
 - **Implementer Pi**: plan, TDD, tests, commit the delivery; the Runner pushes the task branch and opens one PR.
 - **Reviewer Pi**: after the PR exists, a new `pi --print` with `prompts/prompt_review.md` and a new JSONL on the same worktree.
