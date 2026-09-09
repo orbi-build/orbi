@@ -16139,6 +16139,74 @@ def test_check_release_gates_pass_clean(monkeypatch):
     assert labels == ["ai-in-progress", "ai-pr-opened", "ai-fix-needed"]
 
 
+def test_check_release_gates_waits_for_late_registered_checks(monkeypatch):
+    """repo_has_ci=True 时空 check-runs = 首个 check 尚未注册（Issue
+    #657）：gate 2 跑在刚 push 到 base 的版本提交上，GitHub 创建
+    CheckRun 有秒级滞后，空列表绝不能立即按 "nothing to gate" 放行——
+    必须在同一预算内轮询等首个 check 出现，再按其结论判门。"""
+    responses = [
+        [],                                   # first poll: not registered yet
+        [("tests", "completed", "success")],  # second poll: registered, green
+    ]
+
+    def fake_run_command(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return json.dumps([
+                {"name": name, "status": status, "conclusion": conclusion}
+                for name, status, conclusion in responses.pop(0)
+            ])
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+    evidence, has_ci = runner.check_release_gates(
+        "o/r", "main", "abc123", 99, repo_has_ci=True,
+    )
+    assert has_ci is True
+    assert not any("nothing to gate" in line for line in evidence)
+    assert any("1 check(s) all success" in line for line in evidence)
+    assert any("waited" in line for line in evidence)
+
+
+def test_check_release_gates_times_out_when_ci_never_registers(monkeypatch):
+    """repo_has_ci=True 且 check-runs 恒为空：等待宽限耗尽后必须按
+    wait-timeout 失败（不是 CI 失败、更不是放行），下 tick 可恢复重试
+    （Issue #657）。"""
+    def fake_run_command(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return json.dumps([])
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+    with pytest.raises(RuntimeError, match="wait timeout, not a CI failure"):
+        runner.check_release_gates(
+            "o/r", "main", "abc123", 99,
+            repo_has_ci=True, ci_wait_seconds=60,
+        )
+
+
+def test_check_release_gates_empty_without_ci_still_passes(monkeypatch):
+    """repo_has_ci=False（门控提交上无任何 check）＝无 CI 仓库：空列表
+    仍立即放行，"nothing to gate" 语义保持（Issue #657 的判据只收紧
+    有 CI 的仓库）。"""
+    def fake_run_command(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return json.dumps([])
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    evidence, has_ci = runner.check_release_gates("o/r", "main", "abc123", 99)
+    assert has_ci is False
+    assert any("nothing to gate" in line for line in evidence)
+
+
 def test_check_release_gates_excludes_the_release_issue_itself(monkeypatch):
     make_gate_gh(
         monkeypatch,
