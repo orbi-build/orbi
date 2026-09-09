@@ -14708,6 +14708,84 @@ def test_release_tag_commit_reraises_real_fetch_failure(tmp_path, monkeypatch):
         runner.release_tag_commit(work, "v0.1.0")
 
 
+def test_release_tag_commit_never_reads_a_network_failure_as_missing_tag(
+    tmp_path, monkeypatch,
+):
+    """fetch 的 exit 128 分不清"远端没有这个 tag"和"网络/鉴权故障"（对
+    真实 CLI 实测两种都是 128）：把网络故障读成"缺失"会让流程走到重打
+    tag 的分支，叠加本地残留就是发布票死锁（Issue #585）。改用 ls-remote
+    后二者语义分离——exit 0 且空输出才是真缺失，任何非零退出原样抛出。"""
+    work, _ = make_local_remote_pair(tmp_path)
+
+    def fail_ls_remote(command, **kwargs):
+        assert command[1] == "ls-remote"
+        raise subprocess.CalledProcessError(128, command, stderr="boom")
+
+    monkeypatch.setattr(runner, "run_git_network_command", fail_ls_remote)
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.release_tag_commit(work, "v0.1.0")
+
+
+def test_ensure_release_tag_pushed_creates_and_pushes_when_no_local_tag(
+    tmp_path, monkeypatch,
+):
+    work, head = make_local_remote_pair(tmp_path)
+    pushed = []
+
+    def fake_push(command, **kwargs):
+        pushed.append(command)
+
+    monkeypatch.setattr(runner, "run_git_network_command", fake_push)
+    runner.ensure_release_tag_pushed(work, "v0.1.0", head)
+    tag_type = subprocess.run(
+        ["git", "-C", str(work), "cat-file", "-t", "v0.1.0"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    assert tag_type == "tag"  # annotated, same as before
+    assert pushed == [["git", "push", "origin", "refs/tags/v0.1.0"]]
+
+
+def test_ensure_release_tag_pushed_repushes_local_residue(tmp_path, monkeypatch):
+    """上次 `git tag` 成功但 push 失败会留下本地残留 tag：重试时远端
+    仍无此 tag，不处理残留的话 `git tag -a` 永远 fatal: tag already
+    exists（发布票死锁，Issue #585）。残留指向本次发布提交 → 直接重推
+    收敛。"""
+    work, head = make_local_remote_pair(tmp_path)
+    subprocess.run(
+        ["git", "-C", str(work), "tag", "-a", "v0.1.0", "-m", "rel", head],
+        check=True, capture_output=True,
+    )
+    pushed = []
+
+    def fake_push(command, **kwargs):
+        pushed.append(command)
+
+    monkeypatch.setattr(runner, "run_git_network_command", fake_push)
+    runner.ensure_release_tag_pushed(work, "v0.1.0", head)
+    assert pushed == [["git", "push", "origin", "refs/tags/v0.1.0"]]
+
+
+def test_ensure_release_tag_pushed_fails_fast_on_residue_pointing_elsewhere(
+    tmp_path,
+):
+    work, head = make_local_remote_pair(tmp_path)
+    subprocess.run(
+        ["git", "-C", str(work), "commit", "--allow-empty",
+         "-m", "other", "--quiet"],
+        check=True, capture_output=True,
+    )
+    other = subprocess.run(
+        ["git", "-C", str(work), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "-C", str(work), "tag", "-a", "v0.1.0", "-m", "rel", other],
+        check=True, capture_output=True,
+    )
+    with pytest.raises(RuntimeError, match="never moved or overwritten"):
+        runner.ensure_release_tag_pushed(work, "v0.1.0", head)
+
+
 def make_release_gh(monkeypatch, *, release_exists=False,
                     release_body="## Changelog"):
     """Answer `gh release view` / `gh release create` / `gh release edit`."""
@@ -15015,6 +15093,10 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             return ""
         if command[:2] == ["git", "push"]:
             return ""
+        if command[:2] == ["git", "rev-parse"]:
+            # ensure_release_tag_pushed 的本地残留探测：env 假环境没有
+            # 本地 tag——按"不存在"失败（走创建分支）。
+            raise subprocess.CalledProcessError(1, command)
         if command[0] == "timeout":
             return ""
         if command[:3] == ["gh", "issue", "close"]:
@@ -17163,22 +17245,24 @@ def test_release_process_env_fake_rejects_unexpected_command(monkeypatch):
         runner.run_command(["gh", "label", "list"])
 
 
-def test_release_process_env_fake_answers_the_real_tag_fetch(tmp_path,
+def test_release_process_env_fake_answers_the_real_tag_probe(tmp_path,
                                                              monkeypatch):
-    # The env fake answers the `git fetch` of the REAL
+    # The env fake answers the `git ls-remote` of the REAL
     # `release_tag_commit` (the lock is taken for real on tmp_path).
     real_release_tag_commit = runner.release_tag_commit
     make_release_process_env(monkeypatch)
     monkeypatch.setattr(runner, "release_tag_commit",
                         real_release_tag_commit)
-    env_fake = runner.run_command
 
     def fake(command, **kwargs):
-        if command[:2] == ["git", "rev-parse"]:
-            return "abc123"
-        return env_fake(command, **kwargs)
+        if command[:2] == ["git", "ls-remote"]:
+            return ("abc123\trefs/tags/v0.3.0\n"
+                    "abc123\trefs/tags/v0.3.0^{}\n")
+        raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake)
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake(["git", "fetch", "origin"])
     assert runner.release_tag_commit(tmp_path, "v0.3.0") == "abc123"
 
 
