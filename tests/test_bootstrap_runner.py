@@ -16349,30 +16349,6 @@ def test_parse_paginated_issue_array_rejects_malformed_items():
         runner.parse_paginated_issue_array("[{}]")
 
 
-def test_parse_epic_children_requires_explicit_scope_and_rejects_cross_repo():
-    assert runner.parse_epic_children("## Children\n- #12\n- https://github.com/o/r/pull/13", "o/r") == [
-        ("unknown", 12), ("pr", 13),
-    ]
-    with pytest.raises(ValueError, match="missing or empty"):
-        runner.parse_epic_children("## Children\nNo references", "o/r")
-    with pytest.raises(ValueError, match="cross-repository"):
-        runner.parse_epic_children("## Children\n- https://github.com/other/r/issues/12", "o/r")
-    with pytest.raises(ValueError, match="malformed child URL"):
-        runner.parse_epic_children(
-            "## Children\n- https://github.com/o/r/issue/12\n- #13", "o/r",
-        )
-    with pytest.raises(ValueError, match="Epic body is missing"):
-        runner.parse_epic_children(None, "o/r")
-    assert runner.parse_epic_children("prose before scope\n## Children\n- #14", "o/r") == [
-        ("unknown", 14),
-    ]
-    assert runner.parse_epic_children("Children: #14\nprose #15", "o/r") == [
-        ("unknown", 14), ("unknown", 15),
-    ]
-    with pytest.raises(ValueError, match="duplicates"):
-        runner.parse_epic_children("## Children\n- #12\n- #12", "o/r")
-
-
 def test_epic_issue_with_blockers_rejects_invalid_details(monkeypatch):
     with pytest.raises(ValueError, match="number is missing"):
         runner.epic_issue_with_blockers("o/r", {"number": "20"})
@@ -16391,6 +16367,8 @@ def test_reconcile_release_epics_closes_verified_epic_with_audit(monkeypatch):
         commands.append(command)
         if command == ["gh", "api", "repos/o/r/issues?milestone=4&state=open&per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[epic]])
+        if command == ["gh", "api", "repos/o/r/issues/20/sub_issues?per_page=100", "--paginate", "--slurp"]:
+            return json.dumps([[{"number": 21, "repository": {"full_name": "o/r"}, "state": "closed"}]])
         if command == ["gh", "api", "repos/o/r/issues/21"]:
             return json.dumps({"number": 21, "state": "closed"})
         if command == ["gh", "issue", "view", "20", "--repo", "o/r", "--json", "comments"]:
@@ -16426,8 +16404,12 @@ def test_reconcile_release_epics_keeps_open_child_and_bad_scope_open(monkeypatch
         calls.append(command)
         if command == ["gh", "api", "repos/o/r/issues?milestone=4&state=open&per_page=100", "--paginate", "--slurp"]:
             return json.dumps([issues])
+        if command == ["gh", "api", "repos/o/r/issues/20/sub_issues?per_page=100", "--paginate", "--slurp"]:
+            return json.dumps([[{"number": 21, "repository": {"full_name": "o/r"}, "state": "open"}]])
         if command == ["gh", "api", "repos/o/r/issues/21"]:
             return json.dumps({"number": 21, "state": "open"})
+        if command == ["gh", "api", "repos/o/r/issues/22/sub_issues?per_page=100", "--paginate", "--slurp"]:
+            return json.dumps([[]])
         raise AssertionError(command)
     monkeypatch.setattr(runner, "run_command", fake_run)
     monkeypatch.setattr(runner, "comment_issue", lambda **kwargs: calls.append(["comment"]))
@@ -16472,6 +16454,89 @@ def test_reconcile_open_epics_keeps_incomplete_without_comment(monkeypatch, capl
     runner.reconcile_open_epics("o/r", "abc12345")
     assert not comments
     assert "epic_kept_open issue=20 repo=o/r reason=open blockers: #3" in caplog.text
+
+
+def test_reconcile_release_milestones_closes_only_published_empty_milestones(monkeypatch, caplog):
+    caplog.set_level("INFO")
+    calls = []
+    milestone = _milestone(5, "v0.4.0", "open", 0)
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == ["gh", "api", "repos/o/r/milestones?state=open&per_page=100", "--paginate", "--slurp"]:
+            return json.dumps([[milestone]])
+        if command == ["gh", "api", "repos/o/r/releases?per_page=100", "--paginate", "--slurp"]:
+            return json.dumps([[{"tag_name": "v0.4.0", "draft": False}]])
+        if command == ["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100", "--paginate", "--slurp"]:
+            return json.dumps([[]])
+        if command == ["gh", "api", "repos/o/r/milestones/5", "--method", "PATCH", "-f", "state=closed"]:
+            return ""
+        raise AssertionError(command)
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.reconcile_release_milestones("o/r", "abc12345") == ["Milestone #5 (v0.4.0) closed"]
+    assert "milestone_closed number=5 repo=o/r" in caplog.text
+    assert calls.index(["gh", "api", "repos/o/r/milestones/5", "--method", "PATCH", "-f", "state=closed"]) > calls.index(["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100", "--paginate", "--slurp"])
+
+
+def test_reconcile_release_milestones_keeps_open_without_published_release_or_empty_scope(monkeypatch, caplog):
+    caplog.set_level("INFO")
+    milestones = [_milestone(5, "v0.4.0", "open", 1), _milestone(6, "v0.4.0", "open", 0)]
+    def fake_run(command, **kwargs):
+        if command == ["gh", "api", "repos/o/r/milestones?state=open&per_page=100", "--paginate", "--slurp"]:
+            return json.dumps([milestones])
+        if command == ["gh", "api", "repos/o/r/releases?per_page=100", "--paginate", "--slurp"]:
+            return json.dumps([[{"tag_name": "v0.4.0", "draft": True}]])
+        raise AssertionError(command)
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.reconcile_release_milestones("o/r", "abc12345") == []
+    assert "reason=ambiguous title" in caplog.text
+
+
+def test_verify_epic_complete_uses_native_sub_issue_shapes(monkeypatch):
+    base = {"number": 20, "blockedBy": {"nodes": []}}
+    monkeypatch.setattr(runner, "epic_issue_with_blockers", lambda repo, issue: {"number": "bad", "blockedBy": {"nodes": []}})
+    with pytest.raises(ValueError, match="Epic number is missing"):
+        runner._verify_epic_complete("o/r", base)
+    cases = [
+        ({"number": "bad"}, "invalid number"),
+        ({"number": 21, "repository": {}, "state": "closed"}, "repository state is malformed"),
+        ({"number": 21, "repository": {"full_name": "other/r"}, "state": "closed"}, "cross-repository"),
+        ({"number": 21, "repository": {"full_name": "o/r"}}, "state is malformed"),
+    ]
+    for child, message in cases:
+        monkeypatch.setattr(runner, "epic_issue_with_blockers", lambda repo, issue: base)
+        monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: json.dumps([[child]]))
+        with pytest.raises(ValueError, match=message):
+            runner._verify_epic_complete("o/r", base)
+    pr = {"number": 21, "repository": {"full_name": "o/r"},
+          "state": "closed", "pull_request": {}}
+    def pr_run(command, **kwargs):
+        if "sub_issues?per_page=100" in command[2]:
+            return json.dumps([[pr]])
+        if command[-1] == "repos/o/r/issues/21":
+            return json.dumps({"pull_request": {}, "state": "closed"})
+        if command[-1] == "repos/o/r/pulls/21":
+            return json.dumps({"merged": False})
+        raise AssertionError(command)
+    monkeypatch.setattr(runner, "run_command", pr_run)
+    with pytest.raises(ValueError, match="not merged"):
+        runner._verify_epic_complete("o/r", base)
+
+
+def test_reconcile_release_milestones_keeps_malformed_or_incomplete_open(monkeypatch, caplog):
+    caplog.set_level("INFO")
+    milestones = [{"number": "bad", "title": "v0.4.0"}, _milestone(5, "v0.5.0", "open", 1)]
+    def fake_run(command, **kwargs):
+        if "milestones?state=open" in command[2]:
+            return json.dumps([milestones])
+        if "releases?per_page=100" in command[2]:
+            return json.dumps([[{"tag_name": "v0.5.0", "draft": False}]])
+        if "issues?milestone=5" in command[2]:
+            return json.dumps([[{"number": 9}]])
+        raise AssertionError(command)
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.reconcile_release_milestones("o/r", "abc12345") == []
+    assert "reason=malformed" in caplog.text
+    assert "reason=open issues" in caplog.text
 
 
 def test_reconcile_open_epics_failure_is_fail_open(monkeypatch, caplog):
@@ -16572,12 +16637,20 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
         if command == ["gh", "api", "repos/o/r/issues?milestone=4&state=open&per_page=100",
                        "--paginate", "--slurp"]:
             return json.dumps([issues])
+        if command == ["gh", "api", "repos/o/r/issues/34/sub_issues?per_page=100", "--paginate", "--slurp"]:
+            return json.dumps([[{"number": 35, "repository": {"full_name": "o/r"}, "state": "closed"}]])
         if command == ["gh", "api", "repos/o/r/issues/35"]:
-            return json.dumps({"state": "closed"})
+            return json.dumps({"number": 35, "state": "closed"})
         if command == ["gh", "issue", "view", "30", "--repo", "o/r",
                        "--json", "number,body,labels,blockedBy"]:
             return json.dumps({"number": 30, "body": "## Children\n- #31",
                                "labels": [{"name": "ai-epic"}]})
+        if command == ["gh", "api", "repos/o/r/issues/30/sub_issues?per_page=100", "--paginate", "--slurp"]:
+            return json.dumps([[{"number": 31, "repository": {"full_name": "o/r"}, "state": "closed"}]])
+        if command == ["gh", "api", "repos/o/r/issues/31"]:
+            return json.dumps({"number": 31, "state": "closed"})
+        if command == ["gh", "api", "repos/o/r/issues/32/sub_issues?per_page=100", "--paginate", "--slurp"]:
+            return json.dumps([[]])
         if command[:4] == ["gh", "issue", "view", "34"]:
             return json.dumps({"comments": [{"body": audit}]})
         if command == ["gh", "issue", "close", "34", "--repo", "o/r"]:

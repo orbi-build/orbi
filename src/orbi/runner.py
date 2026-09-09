@@ -2842,54 +2842,6 @@ def publish_release(*, repo: str, tag: str, version: str,
     return json.loads(raw)["url"]
 
 
-EPIC_CHILD_URL_PATTERN = re.compile(
-    r"https://github\.com/([^/]+/[^/]+)/(issues|pull)/([0-9]+)",
-    re.IGNORECASE,
-)
-EPIC_CHILD_NUMBER_PATTERN = re.compile(r"(?<![\w])#([0-9]+)\b")
-
-
-def parse_epic_children(body: str, repo: str) -> list[tuple[str, int]]:
-    """Parse a deliberately explicit child section from an Epic body.
-
-    Only lines in a ``Children``/``Child Issues``/``Child PRs`` section are
-    scope.  This prevents incidental references in prose from becoming
-    release work, and makes an absent or ambiguous scope fail closed.
-    """
-    if not isinstance(body, str):
-        raise ValueError("Epic body is missing")
-    children: list[tuple[str, int]] = []
-    in_section = False
-    found_section = False
-    for line in body.splitlines():
-        heading = re.match(r"^\s{0,3}#{1,6}\s*(.+?)\s*#*\s*$", line)
-        if heading:
-            in_section = bool(re.search(r"\bchild(?:ren)?\b", heading.group(1), re.I))
-            found_section |= in_section
-            continue
-        if re.search(r"\bchildren?\s*[:：]", line, re.I):
-            in_section = True
-            found_section = True
-        if not in_section:
-            continue
-        urls = list(EPIC_CHILD_URL_PATTERN.finditer(line))
-        for match in urls:
-            if match.group(1).lower() != repo.lower():
-                raise ValueError(f"cross-repository child URL: {match.group(0)}")
-            kind = "pr" if match.group(2).lower() == "pull" else "issue"
-            children.append((kind, int(match.group(3))))
-        remainder = EPIC_CHILD_URL_PATTERN.sub("", line)
-        if re.search(r"https?://", remainder, re.I):
-            raise ValueError(f"malformed child URL in Epic scope: {line.strip()}")
-        for match in EPIC_CHILD_NUMBER_PATTERN.finditer(remainder):
-            children.append(("unknown", int(match.group(1))))
-    if not found_section or not children:
-        raise ValueError("Epic child scope is missing or empty")
-    if len(set(children)) != len(children):
-        raise ValueError("Epic child scope contains duplicates")
-    return children
-
-
 def _epic_child_evidence(repo: str, kind: str, number: int) -> str:
     """Verify one child against GitHub's live Issue/PR state."""
     raw = run_command(["gh", "api", f"repos/{repo}/issues/{number}"])
@@ -2912,9 +2864,21 @@ def _epic_child_evidence(repo: str, kind: str, number: int) -> str:
 
 
 def _verify_epic_complete(repo: str, listed_epic: dict) -> list[str]:
-    """Return evidence only when an Epic is complete; otherwise fail closed."""
+    """Verify native sub-issues and blockers; otherwise fail closed.
+
+    Live API shape (measured 2026-09-09 against #305):
+    ``GET /repos/{owner}/{repo}/issues/{number}/sub_issues`` returns a JSON
+    array (``[]`` for no children), paginates with the standard ``--paginate``
+    contract, and Issue items include ``repository.full_name`` and no
+    ``pull_request`` key.  The endpoint is paginated with ``per_page=100``;
+    a cross-repository item is identified by its ``repository.full_name`` and
+    is rejected.  A PR-shaped item is identified by a non-null
+    ``pull_request`` field and is checked through the PR endpoint.
+    """
     epic = epic_issue_with_blockers(repo, listed_epic)
-    children = parse_epic_children(epic.get("body", ""), repo)
+    number = epic.get("number")
+    if not isinstance(number, int) or isinstance(number, bool):
+        raise ValueError("Epic number is missing or invalid")
     blockers = epic.get("blockedBy")
     # Live API check (Issue #552): `gh issue view --json blockedBy` returns
     # {"blockedBy":{"nodes":[],"totalCount":0}} for zero dependencies.
@@ -2930,7 +2894,28 @@ def _verify_epic_complete(repo: str, listed_epic: dict) -> list[str]:
     open_blockers = open_blocker_numbers(epic)
     if open_blockers:
         raise ValueError("open blockers: " + ", ".join(f"#{n}" for n in open_blockers))
-    return [_epic_child_evidence(repo, kind, child) for kind, child in children]
+    raw = run_command([
+        "gh", "api", f"repos/{repo}/issues/{number}/sub_issues?per_page=100",
+        "--paginate", "--slurp",
+    ])
+    children = parse_paginated_issue_array(raw)
+    if not children:
+        raise ValueError("Epic child scope is missing or empty")
+    child_evidence: list[str] = []
+    for child in children:
+        child_number = child.get("number")
+        if not isinstance(child_number, int) or isinstance(child_number, bool):
+            raise ValueError("Epic child scope contains an invalid number")
+        child_repo = child.get("repository")
+        if not isinstance(child_repo, dict) or not isinstance(child_repo.get("full_name"), str):
+            raise ValueError(f"child #{child_number} repository state is malformed")
+        if child_repo["full_name"].lower() != repo.lower():
+            raise ValueError(f"cross-repository child #{child_number}")
+        if child.get("state") not in {"open", "closed"}:
+            raise ValueError(f"child #{child_number} state is malformed")
+        kind = "pr" if child.get("pull_request") is not None else "issue"
+        child_evidence.append(_epic_child_evidence(repo, kind, child_number))
+    return child_evidence
 
 
 def _epic_audit(child_evidence: list[str], version: str | None = None) -> str:
@@ -2990,6 +2975,56 @@ def reconcile_open_epics(repo: str, run_id: str) -> list[str]:
         run_command(["gh", "issue", "close", str(number), "--repo", repo])
         LOGGER.info("epic_closed issue=%s repo=%s", number, repo)
         evidence.append(f"Epic #{number} closed after verification ({'; '.join(child_evidence)})")
+    return evidence
+
+
+def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
+    """Close published-release Milestones that now have no open Issues.
+
+    This is a tick-level, fail-open sweep: release publication and the exact
+    Milestone title are independent GitHub facts, so a late-closing Issue is
+    reconciled on a later tick without requiring a new release run.
+    """
+    raw = run_command([
+        "gh", "api", f"repos/{repo}/milestones?state=open&per_page=100",
+        "--paginate", "--slurp",
+    ])
+    milestones = parse_paginated_issue_array(raw)
+    releases_raw = run_command([
+        "gh", "api", f"repos/{repo}/releases?per_page=100",
+        "--paginate", "--slurp",
+    ])
+    releases = parse_paginated_issue_array(releases_raw)
+    published_tags = {
+        release.get("tag_name") for release in releases
+        if isinstance(release.get("tag_name"), str)
+        and release.get("draft") is False
+    }
+    evidence: list[str] = []
+    for milestone in milestones:
+        number = milestone.get("number")
+        title = milestone.get("title")
+        if not isinstance(number, int) or isinstance(number, bool) or not isinstance(title, str):
+            LOGGER.info("milestone_kept_open number=%s repo=%s reason=malformed", number, repo)
+            continue
+        matches = [m for m in milestones if m.get("title") == title]
+        if len(matches) != 1:
+            reason = "ambiguous title" if len(matches) > 1 else "missing title"
+            LOGGER.info("milestone_kept_open number=%s repo=%s reason=%s", number, repo, reason)
+            continue
+        if title not in published_tags:
+            LOGGER.info("milestone_kept_open number=%s repo=%s reason=no published release", number, repo)
+            continue
+        open_issues = milestone_open_issues(repo, number)
+        if open_issues:
+            LOGGER.info("milestone_kept_open number=%s repo=%s reason=open issues", number, repo)
+            continue
+        run_command([
+            "gh", "api", f"repos/{repo}/milestones/{number}",
+            "--method", "PATCH", "-f", "state=closed",
+        ])
+        LOGGER.info("milestone_closed number=%s repo=%s", number, repo)
+        evidence.append(f"Milestone #{number} ({title}) closed")
     return evidence
 
 
@@ -4826,6 +4861,12 @@ def pick_next_delivery(
             reconcile_open_epics(repo, tick_run_id)
         except Exception:
             LOGGER.exception("epic_reconcile_failed repo=%s", repo)
+        # Milestone reconciliation intentionally follows the Epic sweep so a
+        # just-closed final Epic can make its Milestone eligible this tick.
+        try:
+            reconcile_release_milestones(repo, tick_run_id)
+        except Exception:
+            LOGGER.exception("milestone_reconcile_failed repo=%s", repo)
         selected = pick_resumable_delivery(
             repo, slot_dir, max_concurrency,
         )
