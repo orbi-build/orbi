@@ -442,14 +442,45 @@ All commands accept the config via `--config` or the
 `orbi.toml`). `status` and `session` are debug attachments — the
 journal and GitHub remain the normal observability path.
 
+## Public surface
+
+The following interfaces and persisted names are public surfaces. Changes to
+any of them must be called out in the release notes so downstream automation
+can migrate deliberately:
+
+- **CLI:** the bare `orbi` tick and the `add`, `status`, `doctor`, `setup`,
+  `install-units`, and `session` subcommands, including `--config` and the
+  `ORBI_CONFIG` environment variable.
+- **Configuration:** `orbi.toml` fields (`source_repos`, `repo_dir`,
+  `deploy_home`, `workspace_root`, `prompt`, `prompt_review`, `base_branch`,
+  `git_transport`, `active_milestone`, `max_concurrency`, `allow_stale_runner`,
+  `model_wait_dead_seconds`, `model_wait_probe_url`,
+  `model_wait_probe_seconds`, `skills`, `context_files`, `pi_provider`,
+  `pi_model`, `pi_thinking`, and `pi_providers`), plus the gitignored
+  `.orbi/env` file loaded by the systemd `EnvironmentFile`.
+- **Deployment:** the `systemd/orbi@.service` and `systemd/orbi@.timer`
+  templates and their `orbi@1`/`orbi@2` instances.
+- **Labels and lifecycle:** `labels.toml` together with
+  `src/orbi/delivery_labels.py`, and the `ai-ready`, `ai-in-progress`,
+  `ai-pr-opened`, `ai-fix-needed`, `ai-merged`, and `ai-blocked` state machine.
+- **Observability:** journal lines begin with `[run_id]` and use stable event
+  names such as `run_start`, `run_end`, `activity`, `heartbeat`, `resumed`,
+  `run_failed`, and the startup/recovery events documented in [Logs (journal)](#logs-journal).
+  The live Pi record is `<worktree>/.pi-session/*.jsonl`.
+- **Delivery names and markers:** the stable task branch is
+  `orbi/<owner>-<repo>-issue-<N>`; the run-scoped worktree directory is
+  `.worktrees/orbi-<owner>-<repo>-issue-<N>-<run_id>`. Issue/PR comments and
+  PR bodies use `<!-- orbi:run=<run_id> -->` and visible `run_id=<run_id>`;
+  PR bodies also require `Fixes #<N>`.
+
 ## Worktrees and base freshness
 
 Each claim freezes `origin/<base_branch>` (fetched first) and creates the
-task worktree and feature branch from that exact SHA — never from the
-main worktree's current HEAD. Branch and worktree names carry the run id
-(e.g. `.worktrees/<...>-issue-14-e07383c2`), so a retried Issue gets a
-new independent run and the old scene is preserved. `.worktrees/` is
-gitignored.
+task worktree and stable Issue-based feature branch from that exact SHA —
+never from the main worktree's current HEAD. The branch is stable across
+retries; the worktree, Pi session directory, and run artifacts carry the
+run id, so a retried Issue gets a new independent run and the old scene is
+preserved. `.worktrees/` is gitignored.
 
 The task worktree inherits the deployment checkout's single `origin`
 remote, so the git transport is configured once and every worktree
