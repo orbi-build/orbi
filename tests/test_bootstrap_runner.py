@@ -17025,14 +17025,15 @@ def test_sync_release_docs_is_idempotent_on_rerun(tmp_path, monkeypatch):
     assert (work / "docs" / "release-v0.4.0.mdx").read_text(encoding="utf-8") == en_before
 
 
-def test_sync_release_docs_pushes_the_local_commit_a_failed_push_left_behind(
+def test_sync_release_docs_resume_after_failed_push_recommits_normally(
     tmp_path, monkeypatch,
 ):
-    """上次运行 commit 成功但 push 瞬时失败的续跑现场：工作区无可暂存
-    内容 ≠ 已同步——"无暂存"有两种世界，其一（本地提交从未到达远端）
-    返回 already in sync 就是假成功：release 宣告完成而远端永远拿不到
-    release notes。无暂存时必须用 merge-base 检验 HEAD 是否真的可达
-    origin/<base>，未达则补推。"""
+    """真实 resume 路径（Issue #623）：上一轮 commit 成功、push 失败后，
+    发布状态机下一轮先经 create_release_worktree 把 worktree
+    hard-reset 回 release_commit（结尾的 `git reset --hard`），未推送的
+    本地 docs commit 连同页面一起消失；随后 sync_release_docs 重新生成
+    页面 → 有可暂存内容 → 走正常的 commit + push 路径。恢复不是（也不
+    需要是）一条特殊分支。"""
     work = make_release_docs_repo(tmp_path)
     head = git_out(work, "rev-parse", "HEAD")
     subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
@@ -17050,65 +17051,65 @@ def test_sync_release_docs_pushes_the_local_commit_a_failed_push_left_behind(
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
         )
-    remote_before = git_out(work, "rev-parse", "origin/main")
-    # 续跑：网络恢复。修复前这里假成功（already in sync），远端仍停在
-    # 旧提交；修复后补推本地 docs 提交。
+    orphaned = git_out(work, "rev-parse", "HEAD")
+    remote_stuck = git_out(work, "rev-parse", "origin/main")
+    assert orphaned != head           # the commit did happen locally
+    assert orphaned != remote_stuck   # ...but never reached the remote
+    # 下一轮 create_release_worktree 的 hard-reset——此处按真实时序原样
+    # 重放（对 release_commit 的一条 `git reset --hard`）。
+    subprocess.run(["git", "-C", str(work), "reset", "--hard", head],
+                   check=True, capture_output=True)
     monkeypatch.setattr(runner, "run_git_network_command", original)
     evidence = runner.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
     )
-    assert "pushed" in evidence
-    assert git_out(work, "rev-parse", "origin/main") != remote_before
-    assert git_out(work, "rev-parse", "origin/main") == git_out(
-        work, "rev-parse", "HEAD",
-    )
+    assert "committed and pushed" in evidence
+    assert "recovered" not in evidence
+    new_head = git_out(work, "rev-parse", "HEAD")
+    assert new_head != head           # a fresh docs commit was created
+    assert git_out(work, "rev-parse", "origin/main") == new_head
 
 
-def test_sync_release_docs_reraises_when_merge_base_verification_fails(
+def test_sync_release_docs_stale_tracking_ref_is_not_a_false_recovery(
     tmp_path, monkeypatch,
 ):
-    """merge-base 检验以非 1 退出码失败（真 git 错误，如远端 ref 缺失）
-    时异常必须原样传播：检验做不了 = 失败，绝不能落进 already in sync
-    假成功。"""
+    """无可暂存内容但 origin/<base> 跟踪引用陈旧（落后于真实远端）的
+    世界（Issue #623）：真实远端其实已有 docs commit，补推是一个
+    no-op，宣称 "recovered — the previous local commit had not been
+    pushed" 是与事实不符的证据。hard-reset 保证没有未推送的本地 commit
+    能活到无暂存分支，唯一诚实的回答是 already in sync，且不应发起
+    任何网络 push。"""
     work = make_release_docs_repo(tmp_path)
     head = git_out(work, "rev-parse", "HEAD")
     subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
                     "-m", "rel", head], check=True, capture_output=True)
-    real = runner.run_command
-    release_json = json.dumps({
-        "tagName": "v0.4.0",
-        "publishedAt": "2026-09-08T12:00:00Z",
-        "url": "https://github.com/o/r/releases/tag/v0.4.0",
-        "body": RELEASE_DOCS_BODY_V040,
-    })
-
-    def gh_view(command, **kwargs):
-        if command[:3] == ["gh", "release", "view"]:
-            return release_json
-        return real(command, **kwargs)
-
-    def broken_merge_base(command, **kwargs):
-        if command[:2] == ["git", "merge-base"]:
-            raise subprocess.CalledProcessError(128, command)
-        return gh_view(command, **kwargs)
-
-    monkeypatch.setattr(runner, "run_command", gh_view)
-    first = runner.sync_release_docs(
+    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
+    runner.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
     )
-    assert "committed and pushed" in first
-    monkeypatch.setattr(runner, "run_command", broken_merge_base)
-    with pytest.raises(subprocess.CalledProcessError) as excinfo:
-        runner.sync_release_docs(
-            source_repo="o/r", repo_dir=work, worktree=work,
-            base_branch="main", tag="v0.4.0", release_commit=head,
-            issue_number=77,
-        )
-    assert excinfo.value.returncode == 128
+    docs_head = git_out(work, "rev-parse", "HEAD")
+    # The push above landed on the real remote; rewind ONLY the tracking
+    # ref — the remote still has the docs commit.
+    git_out(work, "update-ref", "refs/remotes/origin/main", head)
+
+    # A Mock (not a raiser): the fake must leave no dead line behind in
+    # the fixed world where the push never happens — the assertion below
+    # is what fails if it ever does.
+    no_push = Mock()
+    monkeypatch.setattr(runner, "run_git_network_command", no_push)
+    evidence = runner.sync_release_docs(
+        source_repo="o/r", repo_dir=work, worktree=work,
+        base_branch="main", tag="v0.4.0", release_commit=head,
+        issue_number=77,
+    )
+    no_push.assert_not_called()
+    assert "already in sync" in evidence
+    assert "recovered" not in evidence
+    assert git_out(work, "rev-parse", "HEAD") == docs_head
 
 
 def test_sync_release_docs_resumes_after_a_partial_step(tmp_path, monkeypatch):
