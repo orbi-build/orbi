@@ -1,0 +1,52 @@
+# Keep the Groq provider documentation's model reference tied to the live
+# catalog. Failures are consumed by CI Failure Issue via workflow_run.
+name: Groq docs catalog check
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  catalog:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the documented Groq model in the live catalog
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          key = os.environ.get("GROQ_API_KEY")
+          if not key:
+              raise SystemExit("GROQ_API_KEY Actions secret is not configured")
+
+          request = urllib.request.Request(
+              "https://api.groq.com/openai/v1/models",
+              headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  if response.status != 200:
+                      raise SystemExit(f"Groq catalog returned HTTP {response.status}")
+                  payload = json.load(response)
+          except urllib.error.HTTPError as error:
+              raise SystemExit(f"Groq catalog returned HTTP {error.code}") from error
+          except urllib.error.URLError as error:
+              raise SystemExit(f"Groq catalog request failed: {error.reason}") from error
+
+          models = payload.get("data") if isinstance(payload, dict) else None
+          if not isinstance(models, list):
+              raise SystemExit("Groq catalog response has no data list")
+          ids = {item.get("id") for item in models if isinstance(item, dict)}
+          if "groq/compound" not in ids:
+              raise SystemExit("documented model groq/compound is missing from the Groq catalog")
+          print("Groq catalog contains groq/compound")
+          PY

@@ -17,6 +17,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_FILE = REPO_ROOT / ".github" / "workflows" / "ci-failure-issue.yml"
+GROQ_WORKFLOW_FILE = REPO_ROOT / ".github" / "workflows" / "groq-docs-check.yml"
 TRIAGE_SCRIPT = REPO_ROOT / "tools" / "ci_failure_triage.py"
 
 
@@ -48,18 +49,31 @@ def test_workflow_exists():
     assert WORKFLOW_FILE.is_file()
 
 
+def test_groq_catalog_workflow_contract():
+    assert GROQ_WORKFLOW_FILE.is_file()
+    workflow = yaml.safe_load(GROQ_WORKFLOW_FILE.read_text(encoding="utf-8"))
+    trigger = workflow.get("on", workflow.get(True))
+    assert set(trigger) == {"schedule", "workflow_dispatch"}
+    assert trigger["schedule"] == [{"cron": "17 4 * * 1"}]
+    job = workflow["jobs"]["catalog"]
+    step = job["steps"][0]
+    assert step["env"]["GROQ_API_KEY"] == "${{ secrets.GROQ_API_KEY }}"
+    script = step["run"]
+    assert "https://api.groq.com/openai/v1/models" in script
+    assert '"groq/compound"' in script
+
+
 def test_triage_script_exists():
     assert TRIAGE_SCRIPT.is_file(), "the workflow must call a real script"
 
 
-def test_triggers_only_on_the_completed_ci_workflow():
-    """`on: workflow_run` for the CI workflow, `types: [completed]` — the
-    anti-recursion anchor: the triage reacts ONLY to CI runs, and Issue
-    create/update/close emit no CI workflow_run, so the triage can never
+def test_triggers_only_on_completed_validation_workflows():
+    """`workflow_run` is limited to the CI and Groq catalog workflows;
+    Issue create/update/close emit no matching workflow_run, so triage cannot
     re-trigger itself."""
     trigger = on_section(load_workflow()).get("workflow_run")
     assert trigger is not None, "the triage must be triggered by workflow_run"
-    assert trigger.get("workflows") == ["CI"]
+    assert trigger.get("workflows") == ["CI", "Groq docs catalog check"]
     assert trigger.get("types") == ["completed"]
     assert set(on_section(load_workflow())) == {"workflow_run"}, (
         "KISS: workflow_run is the only trigger"

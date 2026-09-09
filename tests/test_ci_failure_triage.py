@@ -241,7 +241,21 @@ def test_scope_ignores_every_non_ci_workflow_path(path):
     the triage."""
     mode, reason = mod.triage_scope(run_event(path=path)["workflow_run"])
     assert mode == "ignore"
-    assert "not_ci_workflow" in reason
+    assert "not_triaged_workflow" in reason
+
+
+def test_scope_accepts_groq_catalog_schedule_and_dispatch():
+    for event in ("schedule", "workflow_dispatch"):
+        mode, reason = mod.triage_scope(run_event(
+            event=event, path=".github/workflows/groq-docs-check.yml",
+        )["workflow_run"])
+        assert (mode, reason) == ("failure", "")
+
+
+def test_groq_fingerprint_is_separate_from_ci():
+    assert mod.fingerprint("schedule", "", "catalog") != mod.fingerprint(
+        "schedule", "", "catalog", "Groq docs catalog check",
+    )
 
 
 @pytest.mark.parametrize("event", ["workflow_dispatch", "schedule", "release"])
