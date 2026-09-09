@@ -1693,6 +1693,59 @@ def test_review_and_merge_ci_failure_labels_fix_needed(monkeypatch, tmp_path):
                                  "remove": "ai-pr-opened"})
 
 
+def test_review_and_merge_ci_failure_comment_counts_toward_round_budget(
+        monkeypatch, tmp_path,
+):
+    """Issue #588: a clean verdict + a red CI must consume review budget.
+
+    The gate-blocked comment carries the `Orbi review round N for PR #M:`
+    prefix — the only line shape `review_rounds_so_far` counts — so a
+    persistently red CI exhausts MAX_REVIEW_ROUNDS and escalates to a
+    human (`ReviewRoundsExhausted` -> ai-blocked) instead of re-running
+    review sessions forever while holding the slot.
+    """
+    calls = []
+    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(
+        runner, "check_review_ci",
+        lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError(
+                "review gate: CI check 'tests' failed "
+                "(https://github.com/owner/repo/actions/runs/42)"
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *a, **k: calls.append(("issue", k.get("body"))),
+    )
+    monkeypatch.setattr(
+        runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
+    )
+    monkeypatch.setattr(
+        runner, "edit_issue", lambda *a, **k: calls.append(("edit", k)),
+    )
+    make_fake_gh(monkeypatch)
+    assert runner.review_and_merge_if_clean(
+        tmp_path, "branch", "main", _review_merge_config(tmp_path),
+        "owner/repo", 4, title="Review task", priority="normal",
+    ) is False
+    # The evidence keeps the CI scene (Issue #79 bypass semantics unchanged)
+    # and now opens with the counted round prefix.
+    assert "Orbi review round 1 for PR #4:" in calls[0][1]
+    assert "CI merge gate blocked" in calls[0][1]
+    # The emitted comment is exactly the counting carrier: a trusted
+    # comment with this run's marker is counted as one round.
+    assert runner.review_rounds_so_far(
+        [{"body": calls[0][1], "authorAssociation": "OWNER"}],
+        run_id="a1b2c3d4",
+    ) == 1
+    assert calls[2] == ("edit", {"repo": "owner/repo", "add": "ai-fix-needed",
+                                 "remove": "ai-pr-opened"})
+
+
 def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
     """A CONFLICTING/DIRTY PR is a fixer job, never a terminal block.
 

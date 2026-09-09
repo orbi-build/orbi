@@ -10270,6 +10270,63 @@ def test_wait_for_delivery_keeps_waiting_while_pr_open(
         fake_run(["gh", "pr", "list"])
 
 
+def test_wait_for_delivery_sleeps_poll_interval_between_review_rounds(
+        monkeypatch, tmp_path,
+):
+    """Issue #588: between two review rounds the wait loop yields one
+    `poll_interval`. The loop previously had NO sleep at all — a red CI
+    re-ran full review sessions back-to-back in a hot loop while holding
+    the slot, and `poll_interval` was a dead parameter. The terminal
+    merge return sleeps nothing."""
+    states = ["OPEN", "OPEN", "MERGED"]
+    calls = {"pr": 0, "labels": 0}
+    sleeps = []
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"] and command[2] == "view":
+            calls["pr"] += 1
+            return json.dumps({"state": states[calls["pr"] - 1]})
+        if command[:2] == ["gh", "issue"] and command[2] == "view":
+            if command[-1] == "comments":
+                return json.dumps({"comments": [
+                    {
+                        "body": (
+                            "<!-- orbi:run=a1b2c3d4 -->\n"
+                            "Orbi opened PR: "
+                            f"{PR_URL} (base_branch=main "
+                            "base_sha=abc123def456 run_id=a1b2c3d4)"
+                        ),
+                        "authorAssociation": "OWNER",
+                    },
+                ]})
+            calls["labels"] += 1
+            return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    # The fake rejects anything that is not a pr/issue view.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "pr", "list"])
+    monkeypatch.setattr(runner.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(
+        runner, "review_and_merge_if_clean",
+        lambda *args, **kwargs: False,
+    )
+    # The derived worktree exists: a normal resume reaches the review
+    # (Issue #90 fails fast only when the directory is missing).
+    (tmp_path / ".worktrees"
+     / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
+    issue = {"number": 39, "title": "task", "body": ""}
+    runner.wait_for_delivery(
+        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        "owner/repo", poll_interval=1.5,
+    )
+    # Two finding rounds -> exactly one sleep before each next poll; the
+    # third poll is MERGED and returns without a further sleep.
+    assert sleeps == [1.5, 1.5]
+    assert calls == {"pr": 3, "labels": 2}
+
+
 def test_wait_for_delivery_auto_merges_on_clean_review(
         monkeypatch, caplog, tmp_path,
 ):
