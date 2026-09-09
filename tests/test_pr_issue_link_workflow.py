@@ -27,7 +27,7 @@ def script() -> str:
 
 
 def test_workflow_triggers_pr_lifecycle_events_and_has_write_permissions():
-    trigger = on_section(workflow())["pull_request"]
+    trigger = on_section(workflow())["pull_request_target"]
     assert trigger["types"] == ["opened", "reopened", "edited"]
     assert workflow()["permissions"] == {
         "issues": "write", "pull-requests": "write",

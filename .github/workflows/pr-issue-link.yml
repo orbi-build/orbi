@@ -1,7 +1,9 @@
 name: Link pull request to Issue
 
 on:
-  pull_request:
+  # pull_request workflows from forked PRs receive a read-only token;
+  # target is required to update the linked Issue for external contributors.
+  pull_request_target:
     types: [opened, reopened, edited]
 
 permissions:
