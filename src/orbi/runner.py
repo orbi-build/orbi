@@ -4479,18 +4479,35 @@ def parse_pr_comment(body: str) -> dict | None:
 def _authenticated_github_login() -> str:
     """Return the login represented by the active ``gh`` credential.
 
-    Installation tokens identify their GitHub App installation as an account
-    ending in ``[bot]``.  This uses GitHub's authenticated-installation
-    endpoint rather than trusting an arbitrary bot name supplied by a
-    comment.  The ``/user`` endpoint is not supported by installation
-    access tokens.
+    ``gh api installation`` is unavailable with installation tokens, while
+    ``gh auth status`` reports the account selected in gh's credential store.
+    Read that local status instead of guessing a bot name or making an API
+    request that cannot identify this credential shape.
     """
-    app_slug = run_command(
-        ["gh", "api", "installation", "--jq", ".app_slug"],
-    ).strip()
-    if not app_slug:
-        raise ValueError("gh api installation returned an empty app slug")
-    return f"{app_slug}[bot]"
+    try:
+        status = run_command(["gh", "auth", "status"])
+    except Exception as exc:
+        raise ValueError(
+            "GitHub identity resolution failed: `gh auth status` could not "
+            f"read the active account: {exc}"
+        ) from exc
+
+    account: str | None = None
+    active_account: str | None = None
+    for line in status.splitlines():
+        match = re.search(r"\baccount\s+(\S+)", line)
+        if match:
+            account = match.group(1)
+        if re.search(r"Active account:\s*true\b", line, re.IGNORECASE):
+            if account:
+                active_account = account
+
+    if not active_account:
+        raise ValueError(
+            "GitHub identity resolution failed: `gh auth status` did not "
+            "report an active account"
+        )
+    return active_account
 
 
 def _comment_is_trusted(comment: object) -> bool:
