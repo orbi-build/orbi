@@ -16,13 +16,25 @@ pi_model = "glm-5.3-flash"
 | z.ai GLM | `z-ai.json` | `ZAI_API_KEY` | `glm-5.3-flash` | 2026-09-04 实测：真实任务 #303 到达 PR #304 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | OpenRouter 免费层 | `openrouter.json` | `OPENROUTER_API_KEY` | `google/gemma-4-31b-it:free` | 未实测；不承诺免费目录持续可用 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | DeepSeek | `deepseek.json` | `DEEPSEEK_API_KEY` | `deepseek-chat` | 未实测 | [#305](https://github.com/orbi-build/orbi/issues/305) |
-| xAI | `xai.json` | `XAI_API_KEY` | `grok-4.20-0309` | 已根据 xAI 文档核对模型 ID；未测试额度 | [#305](https://github.com/orbi-build/orbi/issues/305) |
+| xAI | `xai.json` | `XAI_API_KEY` | `grok-4.20-0309-reasoning` | 已根据 xAI 文档核对模型 ID（2026-09-09）；未测试额度 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Groq 免费档 | `groq.json` | `GROQ_API_KEY` | `groq/compound` | 2026-09-04 核对 Free Plan 限流；真实请求/usage/429 未实测 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | 本地 Qwen | `local-qwen.json` | 无（dummy key `local`） | `Qwen3.8-27B` | 本地零成本示例；需要本地 OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Cloudflare Workers AI | `cloudflare-workers-ai.json` | `CLOUDFLARE_API_TOKEN` | `@cf/meta/llama-3.1-8b-instruct-fp8` | 托管免费额度；必须在账号中核对额度 | [#318](https://github.com/orbi-build/orbi/issues/318) |
 | GitHub Models | `github-models.json` | `GH_MODELS_TOKEN` | `openai/gpt-4.1-mini` | 历史快照；服务已退役，无法进行实时请求 | [#319](https://github.com/orbi-build/orbi/issues/319) |
 
 模板出现在清单中不代表承诺额度、可用性、速度或模型支持。`未实测` 是有意保留的状态。
+
+### xAI：Grok 4.20 Reasoning
+
+**2026-09-09** 已核对 xAI 模型目录。请从模板中选择精确的 reasoning 变体：
+
+```toml
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "xai"
+pi_model = "grok-4.20-0309-reasoning"
+```
+
+目录报告该模型的最大 prompt 长度为 1,000,000 tokens。模板将该值作为 `contextWindow`，并保守地将 `maxTokens` 保持为 16,384。xAI 额度和真实请求**未实测**；配置运行前请查看 [xAI 官方模型目录](https://docs.x.ai/docs/models) 和账号状态。
 
 ### OpenRouter `:free`：一个 key、多个模型
 
