@@ -407,4 +407,6 @@ pi_model = "groq/compound"
 
 额度命中时上游返回 HTTP `429`；Orbi 不会静默重试，也不会在 session 中途切换 provider。应把该 run 视为失败，保留 Issue/worktree 证据，并在下一次运行手动选择另一家已配置的 provider。[#313](https://github.com/orbi-build/orbi/issues/313)规划了按 provider 预算和 run 边界自动轮换；在该功能实现前，不要把它当作当前行为。本指南中的真实 Groq 请求、usage 计量和 429 响应**未实测**；没有脱敏证据时不要声称 Groq Issue 已跑通。
 
+模型即使出现在 Groq 的实时目录中，也可能被组织级策略禁用。此时真实请求会返回 HTTP `403` 和 `model_permission_blocked_org`（不是 `429`）：请让组织管理员在 [Groq 组织限额设置](https://console.groq.com/settings/limits) 中启用该模型，或改选另一家已配置的 provider。HTTP `429` 表示账号额度/速率限制已触发；排障路径与组织级 `403` 不同。
+
 完整的 OpenAI-compatible 配置见[上手指南](/zh/getting-started#path-b-a-pi_providers-file-orbi)，provider 文章系列见 [Issue #305](https://github.com/orbi-build/orbi/issues/305)。

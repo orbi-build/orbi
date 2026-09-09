@@ -407,4 +407,6 @@ According to Groq's [rate-limit table](https://console.groq.com/docs/rate-limits
 
 A quota hit is returned upstream as HTTP `429`; Orbi does not silently retry or switch provider mid-session. Treat the run as failed, preserve the Issue/worktree evidence, and manually select another configured provider for the next run. The planned per-provider budget and automatic run-boundary rotation is tracked in [#313](https://github.com/orbi-build/orbi/issues/313); it is not yet a promise of current behavior. Real Groq requests, usage measurements, and 429 responses are **not tested** in this guide; do not claim a successful Groq Issue run without recording redacted evidence.
 
+A model can also be present in Groq's live catalog but blocked by an organization policy. In that case a real request returns HTTP `403` with `model_permission_blocked_org` (not `429`): an organization administrator must enable the model at [Groq organization limits](https://console.groq.com/settings/limits), or you must select another configured provider. HTTP `429` means the account quota/rate limit was reached; follow the separate quota troubleshooting path above.
+
 See [Getting started](/getting-started#path-b-a-pi_providers-file-orbi) for the existing OpenAI-compatible setup and [Issue #305](https://github.com/orbi-build/orbi/issues/305) for the provider article series.

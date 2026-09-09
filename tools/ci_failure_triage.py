@@ -3,28 +3,28 @@
 
 Runs from the `CI Failure Issue` workflow (`.github/workflows/
 ci-failure-issue.yml`), which GitHub triggers with `on: workflow_run`
-(`workflows: ["CI"]`, `types: [completed]`) after every completed run of the
-CI workflow (`.github/workflows/ci.yml`) — the repository's remote pytest +
-coverage gate on `pull_request` and `push` to `main`.
+(`workflows: ["CI", "Groq docs catalog check"]`, `types: [completed]`) after
+completed runs of the repository's validation workflows.
 
 Behavior (external shapes verified against the live REST API — the run
 object, the jobs object and `commits/{sha}/pulls` — and `gh api --help`,
 gh 2.97):
 
-- The CI run concluded `failure`, `cancelled` or `timed_out` on a target
+- A monitored run concluded `failure`, `cancelled` or `timed_out` on a target
   event: one `bug` + `p0` + `ai-ready` Issue per FAILED JOB (the Orbi ready
   queue picks it up and delivers the fix through its normal single-Issue /
   single-PR / review contract), with the full evidence — workflow, job,
   event, branch/PR, commit SHA, run id, run URL, failed steps, trigger
   time. A re-occurrence of the same fingerprint appends a comment to the
   existing Issue instead of creating a second one.
-- The CI run concluded `success`: every SUCCEEDED job's fingerprint is
+- A monitored run concluded `success`: every SUCCEEDED job's fingerprint is
   matched against the open triage Issues; a match gets the recovery run
   evidence as a comment and is closed (`state_reason: completed`).
 - Anything else (another workflow, another event, a push off `main`, any
   other conclusion) is a logged no-op with exit 0.
 
-Stable failure fingerprint: `sha256("CI|<event>|<head_branch>|<job name>")`,
+Stable failure fingerprints include the workflow name, for example:
+`sha256("CI|<event>|<head_branch>|<job name>")`,
 embedded in the Issue body as the hidden marker
 `<!-- ci-failure-fingerprint:<hex> -->`. It is deliberately STABLE across
 commits — the recovery run carries a different head SHA, so a commit-scoped
@@ -37,10 +37,10 @@ Classification rules: a job is failing iff its `conclusion` is in
 `failure` or `timed_out` conclusions (a cancelled step is a cancellation
 symptom, not a step failure).
 
-Anti-recursion: the workflow reacts only to `workflow_run` of the CI
-workflow, the code re-checks `run.path`, and Issue create/update/close emit
-no `pull_request`/`push`/CI-workflow_run event — the triage can never
-re-trigger itself.
+Anti-recursion: the workflow reacts only to `workflow_run` of the two
+validation workflows, the code re-checks `run.path`, and Issue create/update/
+close emit no matching workflow-run event — the triage can never re-trigger
+itself.
 
 Fail fast: every environment or `gh api` failure is one structured
 `ci_triage error stage=...` log line and exit 1 — the triage job goes red
@@ -59,8 +59,11 @@ import sys
 
 CI_WORKFLOW_NAME = "CI"
 CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
+GROQ_WORKFLOW_NAME = "Groq docs catalog check"
+GROQ_WORKFLOW_PATH = ".github/workflows/groq-docs-check.yml"
 TRIAGE_WORKFLOW_PATH = ".github/workflows/ci-failure-issue.yml"
 TARGET_EVENTS = ("pull_request", "push")
+GROQ_TARGET_EVENTS = ("schedule", "workflow_dispatch")
 PUSH_TARGET_BRANCH = "main"
 FAILURE_CONCLUSIONS = ("failure", "cancelled", "timed_out")
 STEP_FAILURE_CONCLUSIONS = ("failure", "timed_out")
@@ -155,9 +158,12 @@ def repo_parts() -> tuple[str, str]:
     return owner, name
 
 
-def fingerprint(event: str, head_branch: str, job_name: str) -> str:
+def fingerprint(
+    event: str, head_branch: str, job_name: str,
+    workflow_name: str = CI_WORKFLOW_NAME,
+) -> str:
     """The stable failure fingerprint (see the module docstring)."""
-    raw = f"{CI_WORKFLOW_NAME}|{event}|{head_branch}|{job_name}"
+    raw = f"{workflow_name}|{event}|{head_branch}|{job_name}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -172,12 +178,17 @@ def issue_fingerprints(body: str) -> list[str]:
 
 def triage_scope(run: dict) -> tuple[str, str]:
     """("failure" | "recovery" | "ignore", ignore reason) for the run."""
-    if run.get("path") != CI_WORKFLOW_PATH:
-        return "ignore", f"reason=not_ci_workflow path={run.get('path')!r}"
+    path = run.get("path")
+    if path == CI_WORKFLOW_PATH:
+        events = TARGET_EVENTS
+    elif path == GROQ_WORKFLOW_PATH:
+        events = GROQ_TARGET_EVENTS
+    else:
+        return "ignore", f"reason=not_triaged_workflow path={path!r}"
     event = run.get("event")
-    if event not in TARGET_EVENTS:
+    if event not in events:
         return "ignore", f"reason=not_target_event event={event!r}"
-    if event == "push" and run.get("head_branch") != PUSH_TARGET_BRANCH:
+    if path == CI_WORKFLOW_PATH and event == "push" and run.get("head_branch") != PUSH_TARGET_BRANCH:
         return "ignore", f"reason=push_not_main branch={run.get('head_branch')!r}"
     conclusion = run.get("conclusion")
     if conclusion == SUCCESS_CONCLUSION:
@@ -256,12 +267,20 @@ def target_display(
     return f"branch `{run.get('head_branch')}`"
 
 
+def workflow_metadata(run: dict) -> tuple[str, str]:
+    """Return the display name and path for a triaged workflow."""
+    if run.get("path") == GROQ_WORKFLOW_PATH:
+        return GROQ_WORKFLOW_NAME, GROQ_WORKFLOW_PATH
+    return CI_WORKFLOW_NAME, CI_WORKFLOW_PATH
+
+
 def issue_title(run: dict, job: dict, pr_number: int | None) -> str:
+    workflow_name, _ = workflow_metadata(run)
     if run.get("event") == "pull_request" and pr_number is not None:
         target = f"PR #{pr_number}"
     else:
         target = f"branch {run.get('head_branch')}"
-    return f"CI failure: {job['name']} on {target} ({run.get('event')})"
+    return f"{workflow_name} failure: {job['name']} on {target} ({run.get('event')})"
 
 
 def build_failure_body(
@@ -275,13 +294,14 @@ def build_failure_body(
     hidden `orbi:external-pr:` marker the delivery loop parses at claim
     time (Issue #608).
     """
+    workflow_name, workflow_path = workflow_metadata(run)
     lines = [
-        f"## CI failure: {job['name']}",
+        f"## {workflow_name} failure: {job['name']}",
         "",
         "Auto-created by the `CI Failure Issue` workflow "
-        "(`.github/workflows/ci-failure-issue.yml`) from the failed CI run.",
+        "(`.github/workflows/ci-failure-issue.yml`) from the failed validation run.",
         "",
-        f"- workflow: `{CI_WORKFLOW_NAME}` (`{CI_WORKFLOW_PATH}`)",
+        f"- workflow: `{workflow_name}` (`{workflow_path}`)",
         f"- event: `{run.get('event')}`",
         f"- branch/PR: {target_display(run, pr_number, pr_url)}",
     ]
@@ -577,6 +597,7 @@ def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
     for item in failed:
         value = fingerprint(
             run.get("event"), run.get("head_branch", ""), item["name"],
+            workflow_metadata(run)[0],
         )
         match = index.get(value)
         if match is None:
@@ -610,6 +631,7 @@ def triage_recovery(run: dict, owner: str, repo: str, jobs: list) -> None:
     for item in succeeded:
         value = fingerprint(
             run.get("event"), run.get("head_branch", ""), item["name"],
+            workflow_metadata(run)[0],
         )
         match = index.get(value)
         if match is None:
