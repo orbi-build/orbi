@@ -29,6 +29,16 @@ prompt_review = "prompts/prompt_review.md"
 # Delivery base branch: every task worktree is created from the latest
 # origin/<base_branch> (fetched and frozen at claim time). Default: "main".
 base_branch = "main"
+# Delivery checkout transport (Issue #580): how git data operations
+# (fetch/push, including .github/workflows/*.yml) authenticate on the
+# checkout's single `origin` remote. "ssh" (default): the origin is
+# git@github.com:owner/repo.git and the machine's SSH key authenticates;
+# `orbi setup` migrates an HTTPS origin. "https": the origin stays on
+# https://github.com/<repo>.git and the gh credential helper supplies
+# the credentials (`gh auth login --with-token`) — the token-only
+# sandbox path with no SSH private key. Anything else fails the config
+# load fast.
+# git_transport = "ssh"
 # Offline escape hatch for the runner source freshness gate (Issue #525).
 # Before any slot or claim the Runner proves the code it executes matches
 # the fetched origin/<base_branch> (the import checkout's HEAD for an

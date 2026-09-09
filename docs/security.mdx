@@ -35,11 +35,14 @@ the delivery contract, local-only secrets, and no remote state store.
   metadata (read). Avoid organization-wide or classic broad-scope tokens.
 - **Git data operations** (fetch, push — including
   `.github/workflows/*.yml`) authenticate with the machine's **SSH key**
-  over `git@github.com:owner/repo.git` (Issue #114). A workflow push
+  over `git@github.com:owner/repo.git` (Issue #114), or — with
+  `git_transport = "https"` (Issue #580) — with the `gh` credential
+  helper over `https://github.com/<repo>.git` (the token-only sandbox
+  path). A workflow push
   must never depend on the OAuth App `workflow` scope — the
   HTTPS/OAuth transport that blocked Issue #106. The pre-start check
-  verifies the SSH transport and fails fast when it is broken (no
-  HTTPS fallback).
+  verifies the configured transport and fails fast when it is broken
+  (no fallback).
 - The channels are never mixed: SSH is not an API authentication and
   the `gh` token is not a git-data credential. The token lives in `gh`'s
   local credential store on the Runner machine; the SSH key lives in the

@@ -422,25 +422,33 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
         )
     else:
         lines.append("deploy_home: clean")
-    # Git transport (Issue #114): the checkout's origin protocol, the
-    # expected SSH URL of the first configured source repo and the SSH
-    # probe. doctor is the diagnostic report: a failed transport is
-    # REPORTED with the structured reason (the rest of the report stays
-    # readable) — the fail-fast gate is the pre-start check.
+    # Git transport (Issue #114, #580): the checkout's origin
+    # protocol, the expected URL of the first configured source repo
+    # for the CONFIGURED transport (orbi.toml git_transport) and its
+    # reachability probe. doctor is the diagnostic report: a failed
+    # transport is REPORTED with the structured reason (the rest of
+    # the report stays readable) — the fail-fast gate is the pre-start
+    # check.
     try:
         transport = git_transport.check_transport(
             repo_dir, config["source_repos"],
             run_command=run_command, migrate=False,
+            mode=config["git_transport"],
         )
-        reachable = transport["ssh_reachable"]
+        reachable = transport["transport_reachable"]
         reachable_text = "-" if reachable is None else (
             "true" if reachable else "false"
+        )
+        ssh_reachable = transport["ssh_reachable"]
+        ssh_text = "-" if ssh_reachable is None else (
+            "true" if ssh_reachable else "false"
         )
         lines.append(
             f"transport: remote={transport['remote']} "
             f"url={transport['url']} protocol={transport['protocol']} "
             f"expected={transport['expected']} "
-            f"ssh_reachable={reachable_text}"
+            f"ssh_reachable={ssh_text} "
+            f"transport_reachable={reachable_text}"
         )
     except git_transport.TransportError as exc:
         lines.append(f"transport: FAILED {exc}")

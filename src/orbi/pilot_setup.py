@@ -583,28 +583,32 @@ def ensure_worktrees_ignored(repo_dir: Path, *, run_command) -> bool:
 
 def check_checkout(repo_dir: Path, base_branch: str,
                    source_repos: list[str], *,
-                   run_command) -> dict:
+                   run_command, mode: str = "ssh") -> dict:
     """Local checkout check including the git transport (Issue #114).
 
     Reports the ``origin`` remote, its transport, the current branch
     and whether the local HEAD equals the freshly fetched
     ``origin/<base_branch>`` (base freshness — the same comparison
     the delivery gate uses). The git transport step (``git_transport``
-    contract): the remote must be SSH for the first configured source
-    repo (the worktrees share the checkout's single remote) and SSH
-    must be reachable (``git ls-remote`` exits 0 — verified against
-    the real CLI). The setup entry is the human-authorized migration
-    path: an existing HTTPS ``origin`` is migrated with the plain
-    ``git remote set-url origin <ssh-url>`` (never a remote read from
-    a comment or Issue, never a silent rewrite outside setup). A
-    missing remote, an unreachable SSH (no HTTPS fallback), a dirty
+    contract): the remote must match the CONFIGURED transport
+    (``mode`` — orbi.toml ``git_transport``, default ``ssh``; Issue
+    #580 adds ``https``: the origin stays on the HTTPS URL and the
+    ``git ls-remote`` probe authenticates via the gh credential
+    helper) for the first configured source repo (the worktrees share
+    the checkout's single remote) and that transport must be
+    reachable (``git ls-remote`` exits 0 — verified against the real
+    CLI). The setup entry is the human-authorized migration path: an
+    ``origin`` on the opposite transport is migrated with the plain
+    ``git remote set-url origin <expected-url>`` (never a remote read
+    from a comment or Issue, never a silent rewrite outside setup). A
+    missing remote, an unreachable transport (no fallback), a dirty
     worktree (the timer's ``ExecStartPre`` fast-forward would refuse
     it) or any git error fails fast with the concrete reason.
     """
     try:
         transport = git_transport.check_transport(
             repo_dir, source_repos, run_command=run_command,
-            migrate=True,
+            migrate=True, mode=mode,
         )
         branch = run_command(
             ["git", "branch", "--show-current"], cwd=repo_dir,
@@ -652,6 +656,7 @@ def check_checkout(repo_dir: Path, base_branch: str,
         "remote_protocol": transport["protocol"],
         "migrated": transport["migrated"],
         "ssh_reachable": transport["ssh_reachable"],
+        "transport_reachable": transport["transport_reachable"],
         **({"worktrees_exclude_added": True} if worktrees_exclude_added else {}),
     }
 
@@ -809,7 +814,7 @@ def run_setup(config: dict, installed_dir: Path | None, *,
     units = install_units_step(deploy_home, installed_dir, **unit_kwargs)
     checkout = check_checkout(
         repo_dir, config["base_branch"], config["source_repos"],
-        run_command=run_command,
+        run_command=run_command, mode=config["git_transport"],
     )
     optional_proxy = check_optional_proxy(run_command)
     scaffold = scaffold_model_config(config)
@@ -876,6 +881,10 @@ def format_setup(result: dict) -> list[str]:
     reachable_text = "-" if reachable is None else (
         "true" if reachable else "false"
     )
+    transport = checkout["transport_reachable"]
+    transport_text = "-" if transport is None else (
+        "true" if transport else "false"
+    )
     lines.append(
         f"checkout=remote={checkout['remote']} "
         f"branch={quote_value(checkout['branch'])} "
@@ -884,7 +893,8 @@ def format_setup(result: dict) -> list[str]:
         f"remote_url={checkout['remote_url']} "
         f"protocol={checkout['remote_protocol']} "
         f"migrated={'true' if checkout['migrated'] else 'false'} "
-        f"ssh_reachable={reachable_text}"
+        f"ssh_reachable={reachable_text} "
+        f"transport_reachable={transport_text}"
         + (" worktrees_exclude_added=true"
            if checkout.get("worktrees_exclude_added") else "")
     )

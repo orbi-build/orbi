@@ -47,13 +47,15 @@ service 实例（`orbi@1.timer` → `orbi@1.service`，
    fast，无回退）。
 2. **运行一个 tick**：恢复一个已打开的 PR（review/fix/merge），或领取
    一个 `ai-ready` Issue，然后退出。在任何 slot 或领取之前，tick 还
-   运行启动前 **git transport 检查**（Issue #114）：部署 checkout 的
-   **配置的** `origin` remote 必须是第一个配置 source repo 的 SSH
-   形式，且 `git ls-remote <ssh-url>` 退出 0（SSH 可达且已认证）。
+   运行启动前 **git transport 检查**（Issue #114、#580）：部署 checkout
+   的 `origin` remote 必须匹配配置的传输方式（orbi.toml
+   `git_transport`：`ssh`——默认，`git@github.com:owner/repo.git`；或
+   `https`——`https://github.com/<repo>.git`，凭据走 `gh` credential
+   helper），且对第一个配置 source repo 的 `git ls-remote
+   <expected-url>` 退出 0（传输可达且已认证）。
    传输损坏记录结构化 `transport_check_failed ... reason=...` 行并让
-   启动失败——不取 slot、不领取、不改标签，**没有 HTTPS 回退**（git
-   数据操作，包括 `.github/workflows/*.yml` 推送，永远走 SSH；GitHub
-   API 操作留在 `gh` token 上）。同样在任何 slot 或领取之前，tick
+   启动失败——不取 slot、不领取、不改标签，**没有回退**（GitHub
+   API 操作永远留在 `gh` token 上）。同样在任何 slot 或领取之前，tick
    运行 **runner 执行代码新鲜度门禁**（Issue #525）：证明本进程执行
    的代码与已 fetch 的 `origin/<base_branch>` 一致——见下文
    [Runner 执行代码新鲜度与防线分层](#runner-执行代码新鲜度与防线分层)。
@@ -329,16 +331,16 @@ orbi status --config orbi.toml
 
 # 只读部署/健康报告：repo commit、unit drift、CLI 源码（cli_source:
 # clean / DRIFT + 结构化 cli_source_drift 行）、git transport（配置的
-# origin URL、protocol、期望 SSH URL、SSH 探测——传输失败报告为
+# origin URL、protocol、配置的 git_transport 的期望 URL、可达性探测——传输失败报告为
 # `transport: FAILED ...`，不抛出）、timer/service 实例状态、slots、
 # Pi session、当前 Issue、最近 journal
 orbi doctor --config orbi.toml
 
 # 一次性、幂等初始化（新机器/新仓库）：gh auth + 仓库权限、平台 labels、
-# systemd user units、checkout 检查（含 git transport：已有 HTTPS
-# `origin` 迁移为 `git@github.com:owner/repo.git`（人工授权的迁移路径；
-# Runner 本身从不改写 remote），并探测 SSH 连通性（fail fast，没有
-# HTTPS 回退））
+# systemd user units、checkout 检查（含 git transport：处于相反传输的
+# `origin` 迁移为配置的 `git_transport` 的 URL（HTTPS->SSH 或
+# SSH->HTTPS；人工授权的迁移路径；Runner 本身从不改写 remote），并探测
+# 传输连通性（fail fast，没有回退））
 orbi setup --config orbi.toml
 
 # 打印当前 run 的 Pi session JSONL 路径（没有 session 时 fail fast）

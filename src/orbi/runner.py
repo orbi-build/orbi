@@ -607,6 +607,14 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     base_branch = data.get("base_branch", "main")
     if not isinstance(base_branch, str) or not base_branch:
         raise ValueError("base_branch must be a non-empty string")
+    # Delivery transport (Issue #580): how the checkout's git data
+    # operations (fetch/push) authenticate. Absent -> "ssh" (the exact
+    # pre-#580 contract); "https" keeps the origin on the HTTPS URL and
+    # authenticates via the gh credential helper (the token-only
+    # sandbox path). Anything else is a misconfiguration: fail fast.
+    git_transport = data.get("git_transport", "ssh")
+    if git_transport not in ("ssh", "https"):
+        raise ValueError("git_transport must be 'ssh' or 'https'")
     # Claim scope (Issue #139): the active Milestone is an EXPLICIT
     # version scope for the fresh-claim scans — it is never guessed
     # from the repo's Milestone list. Absent (None) keeps the current
@@ -763,6 +771,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
             _config_path(item, base) for item in data.get("context_files", [])
         ],
         "base_branch": base_branch,
+        "git_transport": git_transport,
         "active_milestone": active_milestone,
         "auto_next_milestone": auto_next_milestone,
         "max_concurrency": max_concurrency,
@@ -10297,17 +10306,20 @@ def main(argv: list[str] | None = None) -> int:
             max_concurrency=config["max_concurrency"],
             run_command=run_command,
         )
-    # Git transport preflight (Issue #114): BEFORE any slot or claim
-    # the deployment checkout's git transport must be SSH and reachable
-    # (the task worktrees share the checkout's single `origin` remote,
-    # so the worktree's fetch/push — including `.github/workflows/*.yml`
-    # — uses it). A broken transport fails the start with the
-    # structured reason: no slot, no claim, no label change, no HTTPS
-    # fallback. The `gh` token (GitHub API) is untouched.
+    # Git transport preflight (Issue #114, #580): BEFORE any slot or
+    # claim the deployment checkout's git transport must be the
+    # CONFIGURED one (orbi.toml `git_transport`, default "ssh") and
+    # reachable (the task worktrees share the checkout's single
+    # `origin` remote, so the worktree's fetch/push — including
+    # `.github/workflows/*.yml` — uses it). A broken transport fails
+    # the start with the structured reason: no slot, no claim, no
+    # label change, no fallback. The `gh` token (GitHub API) is
+    # untouched.
     try:
         transport = check_transport(
             config["repo_dir"], config["source_repos"],
             run_command=run_command, migrate=False,
+            mode=config["git_transport"],
         )
     except TransportError as exc:
         LOGGER.error(
@@ -10318,9 +10330,10 @@ def main(argv: list[str] | None = None) -> int:
         raise
     LOGGER.info(
         "transport clean remote=%s protocol=%s url=%s "
-        "ssh_reachable=%s",
+        "ssh_reachable=%s transport_reachable=%s",
         transport.get("remote", "-"), transport.get("protocol", "-"),
         transport.get("url", "-"), transport.get("ssh_reachable", "-"),
+        transport.get("transport_reachable", "-"),
     )
     # Self-health check (Issue #266): BEFORE any slot or claim the Runner
     # actively looks for the incident patterns of 2026-09-04 — a service

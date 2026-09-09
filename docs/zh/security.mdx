@@ -29,10 +29,12 @@ Orbi 在你的机器上运行一个带 GitHub token 的自主 coding agent。
   （read/write）、pull requests（read/write）、issues（read/write）、
   metadata（read）。避免组织级或经典宽 scope token。
 - **Git 数据操作**（fetch、push——包括 `.github/workflows/*.yml`）用
-  机器的 **SSH key** 走 `git@github.com:owner/repo.git`（Issue #114）。
+  机器的 **SSH key** 走 `git@github.com:owner/repo.git`（Issue #114）；
+  或在 `git_transport = "https"`（Issue #580）下用 `gh` credential
+  helper 走 `https://github.com/<repo>.git`（纯 token sandbox 路线）。
   workflow 推送从不依赖 OAuth App 的 `workflow` scope——那是阻塞
-  Issue #106 的 HTTPS/OAuth 传输。启动前检查验证 SSH 传输，损坏时
-  fail fast（没有 HTTPS 回退）。
+  Issue #106 的 HTTPS/OAuth 传输。启动前检查验证配置的传输，损坏时
+  fail fast（没有回退）。
 - 两条通道从不混用：SSH 不是 API 认证，`gh` token 不是 git 数据凭据。
   token 存在 Runner 机器上 `gh` 的本地凭据存储；SSH key 在用户的 SSH
   agent/config 里。两者都不写入仓库、配置文件、journal 或 GitHub

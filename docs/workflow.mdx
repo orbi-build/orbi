@@ -90,7 +90,10 @@ Rules of the chain:
   `origin/<base>` on the task branch (conflicts resolved manually),
   followed by a full test rerun. No force push, no auto conflict
   resolution, no push of the protected branch.
-- Git transport (Issue #114): git data operations go over SSH, GitHub
+- Git transport (Issue #114, #580): git data operations go over the
+  configured transport (`git_transport`: `ssh` by default — git over
+  SSH —, or `https` with
+  the `gh` credential helper), GitHub
   API operations stay on the `gh` token — the full two-channel boundary
   and the pre-start check: [Operations](/operations); the credentials:
   [Security](/security).

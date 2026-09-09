@@ -96,6 +96,45 @@ def test_load_config_defaults_base_branch_to_main(tmp_path):
     assert config["base_branch"] == "main"
 
 
+def test_load_config_defaults_git_transport_to_ssh(tmp_path):
+    """Issue #580: the delivery transport key is optional — absent keeps
+    the exact pre-#580 SSH contract."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    assert runner.load_config(config_path)["git_transport"] == "ssh"
+
+
+def test_load_config_accepts_the_https_git_transport(tmp_path):
+    """Issue #580: `git_transport = "https"` selects the token-only
+    sandbox path (origin stays HTTPS, gh credential helper)."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\ngit_transport = "https"\n',
+        encoding="utf-8",
+    )
+    assert runner.load_config(config_path)["git_transport"] == "https"
+
+
+def test_load_config_rejects_an_unknown_git_transport(tmp_path):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\ngit_transport = "gopher"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="git_transport must be"):
+        runner.load_config(config_path)
+
+
+def test_load_config_rejects_a_non_string_git_transport(tmp_path):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\ngit_transport = 1\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="git_transport must be"):
+        runner.load_config(config_path)
+
+
 def test_load_config_defaults_prompts_to_prompts_directory(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
@@ -9745,13 +9784,15 @@ def test_main_transport_preflight_receives_the_configured_args(
 ):
     """Issue #114: the preflight checks the configured repo_dir and
     source repos with the real run_command, and never migrates (the
-    migration is the human-run setup entry's job)."""
+    migration is the human-run setup entry's job). Issue #580: the
+    configured git_transport mode is passed through (default ssh)."""
     seen: dict = {}
 
     def fake_check(repo_dir, source_repos, **kwargs):
         seen["repo_dir"] = Path(repo_dir)
         seen["source_repos"] = list(source_repos)
         seen["migrate"] = kwargs.get("migrate")
+        seen["mode"] = kwargs.get("mode")
         seen["run_command"] = kwargs.get("run_command")
         return {}
 
@@ -9770,7 +9811,44 @@ def test_main_transport_preflight_receives_the_configured_args(
     assert seen["repo_dir"] == tmp_path
     assert seen["source_repos"] == ["owner/repo"]
     assert seen["migrate"] is False
+    assert seen["mode"] == "ssh"
     assert seen["run_command"] is runner.run_command
+
+
+def test_main_transport_preflight_honors_the_https_config(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #580: `git_transport = "https"` reaches the preflight —
+    the start gate checks the HTTPS transport, not SSH."""
+    seen: dict = {}
+
+    def fake_check(repo_dir, source_repos, **kwargs):
+        seen["mode"] = kwargs.get("mode")
+        return {
+            "remote": "origin", "protocol": "https",
+            "url": "https://github.com/owner/repo.git",
+            "expected": "https://github.com/owner/repo.git",
+            "migrated": False, "ssh_reachable": None,
+            "transport_reachable": True,
+        }
+
+    monkeypatch.setattr(runner, "check_transport", fake_check)
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\ngit_transport = "https"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+    )
+    with caplog.at_level("INFO"):
+        assert runner.main(["--config", str(config)]) == 0
+    assert seen["mode"] == "https"
+    # The clean line reports the ACTIVE transport's reachability.
+    assert "protocol=https" in caplog.text
+    assert "transport_reachable=True" in caplog.text
 
 
 def test_main_cli_install_refresh_runs_before_slot_and_claim(
