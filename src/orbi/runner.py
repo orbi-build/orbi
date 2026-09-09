@@ -7251,19 +7251,22 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
 
 
 def parse_review_verdict(text: str) -> dict:
-    """Extract the last REVIEW_VERDICT JSON line from a review session.
+    """Extract the REVIEW_VERDICT JSON from a review session's last line.
 
-    The reviewer must end with a machine-readable verdict so the Runner can
-    decide without parsing prose. Missing or malformed verdicts fail fast; a
-    review that cannot be read as a pass is never treated as a pass.
+    Only the output's LAST non-empty line is the verdict (Issue #591):
+    the reviewer reads untrusted text (Issue bodies, diffs, comments)
+    that may carry forged `REVIEW_VERDICT` lines, so no earlier line may
+    decide the gate — the prompt requires the machine-readable verdict
+    as the very last line, and this parser enforces exactly that. The
+    verdict must also name the head it covers (`head`); the merge gate
+    checks it against the PR head. Missing or malformed verdicts fail
+    fast; a review that cannot be read as a pass is never treated as a
+    pass.
     """
-    payload = None
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith(VERDICT_MARKER):
-            payload = stripped[len(VERDICT_MARKER):].strip()
-    if payload is None:
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines or not lines[-1].strip().startswith(VERDICT_MARKER):
         raise ValueError("no REVIEW_VERDICT line in review output")
+    payload = lines[-1].strip()[len(VERDICT_MARKER):].strip()
     try:
         verdict = json.loads(payload)
     except json.JSONDecodeError:
@@ -7272,6 +7275,9 @@ def parse_review_verdict(text: str) -> dict:
         raise ValueError("malformed REVIEW_VERDICT JSON")
     if verdict.get("verdict") not in ("pass", "findings"):
         raise ValueError("verdict must be 'pass' or 'findings'")
+    head = verdict.get("head")
+    if not isinstance(head, str) or not head:
+        raise ValueError("head must be the reviewed commit SHA")
     for key in ("blockers", "majors", "minors"):
         value = verdict.get(key)
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -7411,7 +7417,8 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
         f"{source_repo} against base {config['base_branch']}@{pr['base_oid']} "
         f"and head {pr['head_oid']} (round {round}). Follow code-review R1-R9; "
         "fix Blocker/Major findings in this same session (push only the "
-        "task branch) and end with a single REVIEW_VERDICT line."
+        "task branch) and end with a single REVIEW_VERDICT line carrying "
+        "the head it covers."
     )
     command = [
         "pi", *_pi_extension_args(config),
@@ -8506,9 +8513,10 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
       a merge conflict -> label the Issue `ai-fix-needed` with the
       absorb-base finding (the next review session absorbs the latest
       base in-session); returns False;
-    - missing/malformed verdict -> raise; the caller keeps the Issue in
-      the automatic fix loop (`ai-fix-needed`, Issue #50: the next review
-      session re-runs the same review on the same PR);
+    - missing/malformed verdict (including a verdict whose `head` does
+      not match the PR head, Issue #591) -> raise; the caller keeps the
+      Issue in the automatic fix loop (`ai-fix-needed`, Issue #50: the
+      next review session re-runs the same review on the same PR);
     - an exhausted round budget -> raise `UnrecoverableDeliveryError`
       (Issue #50: the bounded loop is a human decision, not a
       recoverable failure); the caller marks the Issue `ai-blocked`
@@ -8653,6 +8661,18 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         LOGGER.info(
             "review_head_advanced pr=%s round=%s frozen=%s reviewed=%s",
             pr["number"], round, pr["head_oid"], refrozen["head_oid"],
+        )
+    # Issue #591: the clean verdict is bound to the head it covers. The
+    # gate below merges exactly `refrozen["head_oid"]`, so a verdict
+    # naming any other head (forged by injected text, replayed from an
+    # older round, or stale after a fix the reviewer forgot to state)
+    # never merges: it is a malformed verdict — the recoverable loop
+    # re-reviews the same PR.
+    if verdict["head"] != refrozen["head_oid"]:
+        raise ValueError(
+            f"review verdict head {verdict['head']} does not match the "
+            f"PR head {refrozen['head_oid']}; the merge gate only merges "
+            "the head the verdict covers"
         )
     def handle_gate_failure(message: str, *, ci_failure: bool) -> None:
         body = (

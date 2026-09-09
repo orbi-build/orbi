@@ -1280,7 +1280,8 @@ def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(
 
 def test_review_and_merge_posts_review_findings_milestone(monkeypatch, tmp_path):
     findings_verdict = "REVIEW_VERDICT " + json.dumps({
-        "verdict": "findings", "blockers": 1, "majors": 0, "minors": 0,
+        "verdict": "findings", "head": "h1", "blockers": 1, "majors": 0,
+        "minors": 0,
         "findings": [{"level": "Blocker", "location": "a.py:1",
                       "note": "x"}],
     })
@@ -1314,8 +1315,8 @@ def test_review_and_merge_posts_merged_milestone_and_final_summary(
     monkeypatch, tmp_path,
 ):
     pass_verdict = "REVIEW_VERDICT " + json.dumps({
-        "verdict": "pass", "blockers": 0, "majors": 0, "minors": 0,
-        "findings": [],
+        "verdict": "pass", "head": "h1", "blockers": 0, "majors": 0,
+        "minors": 0, "findings": [],
     })
     merged, edits, calls, posted = _run_review_and_merge(
         monkeypatch, tmp_path, verdict=pass_verdict,
@@ -1440,7 +1441,8 @@ def test_review_and_merge_ensure_failure_does_not_block_issue(
     never `ai-blocked`, and the failure is logged as
     `progress_publish_failed` only."""
     findings_verdict = "REVIEW_VERDICT " + json.dumps({
-        "verdict": "findings", "blockers": 1, "majors": 0, "minors": 0,
+        "verdict": "findings", "head": "h1", "blockers": 1, "majors": 0,
+        "minors": 0,
         "findings": [{"level": "Blocker", "location": "a.py:1",
                       "note": "x"}],
     })
@@ -1492,8 +1494,8 @@ def test_review_and_merge_clean_verdict_merges_despite_progress_404(
     merge: the PR is merged, the Issue is labeled `ai-merged`, and the
     progress failure is logged as `progress_publish_failed` only."""
     pass_verdict = "REVIEW_VERDICT " + json.dumps({
-        "verdict": "pass", "blockers": 0, "majors": 0, "minors": 0,
-        "findings": [],
+        "verdict": "pass", "head": "h1", "blockers": 0, "majors": 0,
+        "minors": 0, "findings": [],
     })
     caplog.set_level("ERROR")
     merged, edits, calls, posted = _run_review_and_merge(
@@ -1526,7 +1528,8 @@ def test_review_and_merge_findings_publish_failure_does_not_block_issue(
     review verdict is the same contract: logged, not fatal; the
     `ai-fix-needed` transition still lands."""
     findings_verdict = "REVIEW_VERDICT " + json.dumps({
-        "verdict": "findings", "blockers": 1, "majors": 0, "minors": 0,
+        "verdict": "findings", "head": "h1", "blockers": 1, "majors": 0,
+        "minors": 0,
         "findings": [{"level": "Blocker", "location": "a.py:1",
                       "note": "x"}],
     })

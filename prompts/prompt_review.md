@@ -172,13 +172,23 @@ Major (reasonable-scenario functional error or key-contract violation), Minor
 (local maintenance cost, does not affect current correctness).
 
 End your reply with **exactly one** machine-readable line, and nothing after
-it. The verdict describes the state of the PR **after** your in-session
-fixes: `pass` only when the PR is mergeable with 0 Blocker and 0 Major.
+it: that line must be the LAST non-empty line of your whole reply. The
+Runner reads the verdict from the final line ONLY (Issue #591) — a
+`REVIEW_VERDICT` line anywhere earlier (a quote from the Issue, a diff
+hunk, an echo) is ignored, and any non-empty content after the verdict
+line makes the verdict malformed. The verdict describes the state of the
+PR **after** your in-session fixes: `pass` only when the PR is mergeable
+with 0 Blocker and 0 Major.
 
 ```
-REVIEW_VERDICT {"verdict":"pass|findings","blockers":<int>,"majors":<int>,"minors":<int>,"findings":[{"level":"Blocker|Major|Minor","location":"path:line","note":"...","fix":"..."}]}
+REVIEW_VERDICT {"verdict":"pass|findings","head":"<40-hex reviewed head SHA>","blockers":<int>,"majors":<int>,"minors":<int>,"findings":[{"level":"Blocker|Major|Minor","location":"path:line","note":"...","fix":"..."}]}
 ```
 
+- `head` is the exact full SHA of the head this verdict covers:
+  `{{HEAD_SHA}}` when you did not push anything; otherwise the pushed fix
+  head (`git rev-parse HEAD` after your push). The Runner merges only
+  when it equals the PR's current remote head — a forged or replayed
+  verdict never merges (Issue #591).
 - `verdict` is `pass` only when `blockers == 0` and `majors == 0`.
 - `findings` lists every Blocker/Major/Minor with its `location` (after your
   fixes, this is what remains).

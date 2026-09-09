@@ -289,6 +289,15 @@ time.sleep(1.0)
 system_prompt = sys.argv[sys.argv.index("--system-prompt") + 1]
 if "INDEPENDENT REVIEW" in system_prompt:
     run_id = system_prompt.split("run_id=")[1].split()[0]
+    # Issue #591: the verdict names the head it covers (the Runner
+    # checks it against the PR head before merging) — the fake reviewer
+    # states the same fact via git rev-parse HEAD.
+    def reviewed_head():
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"], check=True,
+            capture_output=True, text=True,
+        ).stdout.strip()
+
     marker = os.path.join(os.getcwd(), f".orbi-review-{run_id}")
     first_review = not os.path.exists(marker)
     if first_review:
@@ -296,7 +305,8 @@ if "INDEPENDENT REVIEW" in system_prompt:
             handle.write("reviewed")
         # Initial review: one major finding...
         print('REVIEW_VERDICT ' + json.dumps({
-            "verdict": "findings", "blockers": 0, "majors": 1,
+            "verdict": "findings", "head": reviewed_head(),
+            "blockers": 0, "majors": 1,
             "minors": 0,
             "findings": [
                 {"level": "Major", "location": "e2e",
@@ -363,9 +373,11 @@ if "INDEPENDENT REVIEW" in system_prompt:
                 check=True,
             )
     subprocess.run(["git", "push", "origin", "HEAD"], check=True)
-    # Final verdict after the in-session fix: clean.
+    # Final verdict after the in-session fix: clean, bound to the
+    # pushed head (Issue #591).
     print('REVIEW_VERDICT ' + json.dumps({
-        "verdict": "pass", "blockers": 0, "majors": 0,
+        "verdict": "pass", "head": reviewed_head(),
+        "blockers": 0, "majors": 0,
         "minors": 0, "findings": [],
     }))
 else:
