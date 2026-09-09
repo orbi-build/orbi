@@ -743,6 +743,34 @@ def test_classify_crash_prefers_most_recent_config_marker():
     assert reason == CONFIG_REASON_LINE
 
 
+def test_classify_crash_active_milestone_missing_is_config():
+    """Issue #614: the idle advance's missing-milestone error names a
+    deployment-config problem a human must fix — never a dispatchable bug."""
+    line = (
+        "ERROR [abc12345] Runner failed to start: RuntimeError: "
+        "active_milestone_missing current=v0.4.0; open milestones: v0.5.0(2)"
+    )
+    assert runner_health.classify_crash([CRASH_LINE, line]) == (
+        "config",
+        line,
+    )
+
+
+def test_classify_crash_ambiguous_exact_title_is_config():
+    """Issue #614: the ambiguous exact-title refusal is the advance's
+    second config-caused raise (its actual wording — there is no
+    `active_milestone_ambiguous` literal)."""
+    line = (
+        "ERROR [abc12345] Runner failed to start: RuntimeError: "
+        "active_milestone v0.4.0: ambiguous exact-title match in "
+        "owner/repo, refusing to guess"
+    )
+    assert runner_health.classify_crash([CRASH_LINE, line]) == (
+        "config",
+        line,
+    )
+
+
 def test_crash_reason_fingerprint_is_stable_and_empty_for_blank():
     fp = runner_health.crash_reason_fingerprint(CONFIG_REASON_LINE)
     assert fp == runner_health.crash_reason_fingerprint(CONFIG_REASON_LINE)

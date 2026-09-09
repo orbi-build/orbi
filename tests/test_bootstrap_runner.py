@@ -6045,6 +6045,35 @@ def test_main_idle_release_arm_failure_is_bypassed(monkeypatch, tmp_path, caplog
     assert "permission denied" in caplog.text
 
 
+def test_main_idle_advance_failure_is_bypassed(monkeypatch, tmp_path, caplog):
+    """Issue #614: the idle milestone advance is a pure bypass — a missing
+    or ambiguous `active_milestone` (or any `gh` failure) must not change
+    the idle outcome; the tick still returns 0 and only journals."""
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        'source_repos = ["owner/repo"]\nactive_milestone = "v0.4.0"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args: None)
+    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        runner, "advance_active_milestone_on_idle",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError(
+                "active_milestone_missing current=v0.4.0; "
+                "open milestones: v0.5.0(2)"
+            )
+        ),
+    )
+
+    with caplog.at_level("ERROR"):
+        assert runner.main(["--config", str(config)]) == 0
+
+    assert "active_milestone_advance_failed" in caplog.text
+    assert "active_milestone_missing" in caplog.text
+
+
 def _write_prompts(tmp_path):
     prompts = tmp_path / "prompts"
     prompts.mkdir(exist_ok=True)
