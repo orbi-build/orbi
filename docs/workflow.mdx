@@ -161,13 +161,18 @@ DAG, no priority numbers, no separate queues:
   Epic (Issue #93): the ready claim scan skips it with the structured
   `epic_not_claimed issue=N repo=...` journal line (no claim, no label
   change, no worktree, no run, no slot), and the restart-resume scan
-  excludes it too. The Epic is complete exactly when every declared child is closed (or its PR
-  is merged) and there is no open native `blockedBy` dependency. The Runner
-  reconciles open Epics on every tick and closes only when those GitHub facts
-  are proven, leaving an idempotent audit comment. An absent or malformed
-  child scope or dependency field fails closed. Any prose describing extra
+  excludes it too. Epic completion is declared exclusively by GitHub's native
+  `sub-issues` relationship: every child Issue must be closed (or its PR is
+  merged) and there must be no open native `blockedBy` dependency. References
+  in the Epic body, including `Children`/`Child Issues` sections, are not
+  declarations. An Epic with no native sub-issues, or malformed child or
+  dependency state, fails closed. The Runner reconciles open Epics on every
+  tick and leaves an idempotent audit comment. Any prose describing extra
   acceptance conditions is an Epic definition error: make that condition a
-  final child Issue instead (for example, a browser acceptance ticket).
+  final child Issue instead (for example, a browser acceptance ticket). The
+  same tick then reconciles open Milestones: an exact-title published Release
+  (draft excluded) plus zero open Issues closes the Milestone; all other cases
+  remain open.
 - **Release task**: an `ai-ready` Issue additionally marked with the
   `ai-release` label (Issue #98). It is NOT a development task: the
   Runner picks it up through the normal ready scan, but `process_issue`
