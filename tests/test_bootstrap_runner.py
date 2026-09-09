@@ -16665,7 +16665,7 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
     monkeypatch.setattr(runner, "run_command", fake_run)
     monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(["comment"]))
     result = runner.reconcile_release_epics("o/r", 4, "v0.4.0", "abc12345")
-    assert any("native blocker/dependency" in item for item in result)
+    assert any("Epic #30 closed after verification" in item for item in result)
     assert any("open blockers: #9" in item for item in result)
     assert ["gh", "issue", "close", "34", "--repo", "o/r"] in calls
     assert ["gh", "issue", "close", "30", "--repo", "o/r"] in calls
