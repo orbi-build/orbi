@@ -267,6 +267,18 @@ def test_workflow_metadata_distinguishes_catalog_from_ci():
     )
 
 
+def test_catalog_comments_name_the_catalog_workflow():
+    run = run_event(
+        path=mod.GROQ_WORKFLOW_PATH, event="schedule", head_branch="main",
+    )["workflow_run"]
+    failure = mod.build_reoccurrence_comment(run, job())
+    recovery = mod.build_recovery_comment(run, job(conclusion="success"))
+    assert f"{mod.GROQ_WORKFLOW_NAME} failure re-occurred" in failure
+    assert f"`{mod.GROQ_WORKFLOW_NAME}` (`{mod.GROQ_WORKFLOW_PATH}`)" in failure
+    assert f"{mod.GROQ_WORKFLOW_NAME} recovered" in recovery
+    assert f"`{mod.GROQ_WORKFLOW_NAME}` (`{mod.GROQ_WORKFLOW_PATH}`)" in recovery
+
+
 @pytest.mark.parametrize("event", ["workflow_dispatch", "schedule", "release"])
 def test_scope_ignores_non_target_events(event):
     mode, reason = mod.triage_scope(run_event(event=event)["workflow_run"])

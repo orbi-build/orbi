@@ -341,10 +341,11 @@ def build_failure_body(
 
 def build_reoccurrence_comment(run: dict, job: dict) -> str:
     """The evidence appended to an existing target when the failure repeats."""
+    workflow_name, workflow_path = workflow_metadata(run)
     return "\n".join([
-        f"CI failure re-occurred (job `{job['name']}`, same fingerprint):",
+        f"{workflow_name} failure re-occurred (job `{job['name']}`, same fingerprint):",
         "",
-        f"- workflow: `{CI_WORKFLOW_NAME}` (`{CI_WORKFLOW_PATH}`)",
+        f"- workflow: `{workflow_name}` (`{workflow_path}`)",
         f"- event: `{run.get('event')}`",
         f"- job logs: {job.get('html_url')}",
         f"- commit: `{run.get('head_sha')}`",
@@ -361,8 +362,9 @@ def build_reoccurrence_comment(run: dict, job: dict) -> str:
 
 def build_recovery_comment(run: dict, job: dict) -> str:
     """The recovery evidence appended before the Issue is closed."""
+    workflow_name, workflow_path = workflow_metadata(run)
     return "\n".join([
-        f"CI recovered: job `{job['name']}` passed with the same fingerprint:",
+        f"{workflow_name} recovered: job `{job['name']}` passed with the same fingerprint:",
         "",
         f"- commit: `{run.get('head_sha')}`",
         f"- run id: `{run.get('id')}` (attempt {run.get('run_attempt')}),"
@@ -371,7 +373,7 @@ def build_recovery_comment(run: dict, job: dict) -> str:
         f"- triggered at: `{run.get('run_started_at')}`",
         "",
         "Closing as completed (recovery verified by the `CI Failure Issue`"
-        " workflow, `.github/workflows/ci-failure-issue.yml`).",
+        f" workflow for `{workflow_name}` (`{workflow_path}`).",
     ])
 
 
