@@ -151,6 +151,29 @@ def test_failure_fingerprint_uses_first_line_only():
         runner_health.failure_fingerprint(exc_b)
 
 
+def test_failure_fingerprint_normalizes_drifting_durations():
+    # model_wait / idle-recovery failures embed format_duration output
+    # ("30m", "1h5m") that drifts by one poll interval for the SAME pit;
+    # the fingerprint must not change with it.
+    assert runner_health.failure_fingerprint(
+        RuntimeError("model_wait dead: frozen session for 30m"),
+    ) == runner_health.failure_fingerprint(
+        RuntimeError("model_wait dead: frozen session for 31m"),
+    )
+    assert runner_health.failure_fingerprint(
+        RuntimeError("pi stayed idle for 1h5m"),
+    ) == runner_health.failure_fingerprint(
+        RuntimeError("pi stayed idle for 1h40m"),
+    )
+    # Plain integers stay meaningful: a different retry count is a
+    # different failure, not the same pit with a drifting duration.
+    assert runner_health.failure_fingerprint(
+        RuntimeError("attempt 3 failed"),
+    ) != runner_health.failure_fingerprint(
+        RuntimeError("attempt 4 failed"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # State file (the lightweight file in the existing state dir)
 # ---------------------------------------------------------------------------
@@ -456,6 +479,65 @@ def test_repeated_failure_alerts_once_with_the_latest_run_marker(tmp_path):
     )
     assert alerts == []
     assert len(fake.commands("gh issue comment")) == 1
+
+
+def test_record_run_attempt_clears_alerted_keys_on_a_streak_break(tmp_path):
+    path = write_state(tmp_path, {
+        "runs": [], "last_pickup_ts": time.time(),
+        "alerted": [f"{REPO}#41:fp1", f"{REPO}#42:fp9"],
+    })
+    runner_health.record_run_attempt(
+        path, repo=REPO, issue=41, run_id="00000009",
+        outcome="pr_opened", fingerprint="",
+    )
+    state = runner_health.load_health_state(path)
+    # A success on the issue breaks the streak: the issue's alert history
+    # must turn a fresh page so a NEW 3-failure streak can alert again.
+    assert state["alerted"] == [f"{REPO}#42:fp9"]
+
+
+def test_repeated_failure_alerts_again_after_drifting_failures_and_a_break(
+    tmp_path,
+):
+    """同一坑的浮动时长失败必须累计成 streak；被成功打断后再次累计
+    必须再次告警——修复前时长漂移让 streak 反复清零、alerted 只增不
+    清让第二次累计永静默。"""
+    path = write_state(tmp_path, {
+        "runs": [], "last_pickup_ts": time.time(), "alerted": [],
+    })
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": "",
+        "journalctl --user -u orbi@2.service": "",
+    })
+
+    def fail(run_id, stale_text):
+        runner_health.record_run_attempt(
+            path, repo=REPO, issue=41, run_id=run_id, outcome="failed",
+            fingerprint=runner_health.failure_fingerprint(
+                RuntimeError(f"model_wait dead: frozen session {stale_text}"),
+            ),
+        )
+
+    fail("00000001", "for 30m")
+    fail("00000002", "for 31m")
+    fail("00000003", "for 45m")
+    alerts = runner_health.run_health_check(
+        make_config(tmp_path), run_command=fake,
+    )
+    assert alerts == [f"repeated_failure:{REPO}#41"]
+
+    runner_health.record_run_attempt(
+        path, repo=REPO, issue=41, run_id="00000004",
+        outcome="pr_opened", fingerprint="",
+    )
+    fail("00000005", "for 30m")
+    fail("00000006", "for 32m")
+    fail("00000007", "for 44m")
+    alerts = runner_health.run_health_check(
+        make_config(tmp_path), run_command=fake,
+    )
+    assert alerts == [f"repeated_failure:{REPO}#41"]
+    assert len(fake.commands("gh issue comment")) == 2
 
 
 def test_crash_loop_creates_one_deduplicated_bug_issue(tmp_path):

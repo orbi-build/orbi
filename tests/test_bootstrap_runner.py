@@ -8241,6 +8241,48 @@ def test_stream_pi_swallow_not_fired_while_a_slot_is_processing(
     assert "reason=model_wait_dead_stale_" in failures[0]
 
 
+def test_stream_pi_swallow_window_restarts_when_events_arrive(
+    tmp_path, caplog, monkeypatch,
+):
+    """事件持续到达的会话绝不能判 swallow（本函数自身的契约："Never
+    fires while events keep arriving"）。turn 完整落在两次 poll 之间
+    时，持续空闲窗口此前不重置——跨轮携带的窗口把"刚完成一轮健康
+    请求"的活会话误杀（复现日志里 idle_seconds 远小于 probe_seconds）。
+    事件每 0.4s 到达一次（< probe_seconds=0.6），窗口必须在每次事件
+    后重启，探测永不触发，会话自然跑完。"""
+    monkeypatch.setattr(runner, "slots_idle", lambda url: True)
+
+    def tool_result(n):
+        return {"type": "message", "id": f"r{n}",
+                "timestamp": fresh_timestamp(n),
+                "message": {"role": "toolResult", "toolCallId": f"t{n}",
+                            "toolName": "bash",
+                            "content": [{"type": "text", "text": "ok"}]}}
+    # make_fake_pi 的 delay 是逐条累加的 sleep：0.3s 间隔的事件流
+    # （< probe_seconds=0.6），结尾 0.4s 收尾——任何无事件间隙都小于
+    # 探针宽限，窗口在每次事件后重启，永不触发。
+    records = [
+        (0.0, {"type": "session", "id": "sess-live",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.3, tool_result(1)),
+        (0.3, tool_result(2)),
+        (0.3, tool_result(3)),
+        (0.3, tool_result(4)),
+        (0.3, tool_result(5)),
+    ]
+    command = make_fake_pi(tmp_path, session_records=records, sleep=0.4)
+    runner.stream_pi(
+        command, cwd=tmp_path, poll_interval=0.1,
+        model_wait_dead_seconds=10.0,
+        model_wait_probe_url="http://127.0.0.1:18082/slots",
+        model_wait_probe_seconds=0.6,
+        run_id="deadbeef", issue=233, source_repo="xqliu/orbi",
+        branch="b",
+    )
+    assert " model_wait_swallowed " not in caplog.text
+    assert " run_failed " not in caplog.text
+
+
 def test_stream_pi_swallow_probe_failure_is_inconclusive(
     tmp_path, caplog, monkeypatch,
 ):
