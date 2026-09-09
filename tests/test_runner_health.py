@@ -66,12 +66,14 @@ REPO = "owner/repo"
 ORBI_REPO = "orbi-build/orbi"
 
 
-def make_config(tmp_path: Path, *, health_alert_repo=None) -> dict:
+def make_config(tmp_path: Path, *, health_alert_repo=None,
+                unit_name: str | None = None) -> dict:
     return {
         "repo_dir": tmp_path,
         "source_repos": [REPO],
         "deploy_home": tmp_path,
         "health_alert_repo": health_alert_repo,
+        "unit_name": unit_name,
     }
 
 
@@ -386,6 +388,31 @@ def test_count_crashes_uses_a_bounded_window():
         assert "-60min" in call
 
 
+def journal_units(fake: FakeRunCommand) -> list[str]:
+    """The unit each journalctl call received (the `-u` argument)."""
+    return [
+        call[call.index("-u") + 1] for call in fake.commands("journalctl")
+    ]
+
+
+def test_count_crashes_queries_the_configured_unit_name():
+    # Issue #616: a deployment with unit_name installs orbi-x@*.service;
+    # the health check must query THOSE units (the old hardcode queried
+    # nonexistent orbi@*.service and never saw a crash).
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi-x@1.service": "",
+        "journalctl --user -u orbi-x@2.service": "",
+    })
+    runner_health.count_crashes(fake, unit_name="x")
+    assert journal_units(fake) == ["orbi-x@1.service", "orbi-x@2.service"]
+
+
+def test_count_crashes_default_unit_name_unchanged():
+    fake = FakeRunCommand()
+    runner_health.count_crashes(fake)
+    assert journal_units(fake) == ["orbi@1.service", "orbi@2.service"]
+
+
 # ---------------------------------------------------------------------------
 # Stale pickup (queue idle vs system stuck)
 # ---------------------------------------------------------------------------
@@ -549,6 +576,27 @@ def test_crash_loop_creates_one_deduplicated_bug_issue(tmp_path):
     )
     assert alerts == ["crash_loop"]
     assert len(fake.commands("gh issue create")) == 1
+
+
+def test_run_health_check_with_unit_name_watches_the_renamed_units(tmp_path):
+    # Issue #616: with unit_name="x" the installed units are
+    # orbi-x@{1,2}.service — a crash loop seen in THEIR journal must fire
+    # the alert, and no query may target the nonexistent default units.
+    write_state(tmp_path, {"runs": [], "last_pickup_ts": time.time(),
+                           "alerted": []})
+    journal = f"{CRASH_LINE}\n{CRASH_LINE}\n{CRASH_LINE}\n"
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi-x@1.service": journal,
+        "journalctl --user -u orbi-x@2.service": "",
+        **origin_route(),
+        # No health Issue exists yet.
+        'in:body "orbi-health-fingerprint:': "[]",
+    })
+    alerts = runner_health.run_health_check(
+        make_config(tmp_path, unit_name="x"), run_command=fake,
+    )
+    assert alerts == ["crash_loop"]
+    assert set(journal_units(fake)) == {"orbi-x@1.service", "orbi-x@2.service"}
 
 
 def test_stale_pickup_with_ready_issues_alarms(tmp_path):
