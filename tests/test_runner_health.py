@@ -359,7 +359,50 @@ def test_count_crashes_counts_real_systemd_exit_lines():
         "journalctl --user -u orbi@2.service":
             f"{FAILED_RESULT_LINE}\n",
     })
-    assert runner_health.count_crashes(fake) == 3
+    assert runner_health.count_crashes(fake) == 2
+
+
+def test_count_crashes_ignores_clean_exits_and_preflight_failures():
+    clean_exit = (
+        "Sep 04 11:40:00 host systemd[1015]: orbi@1.service: Main process "
+        "exited, code=exited, status=0/SUCCESS (success)"
+    )
+    stopped_by_systemd = (
+        "Sep 04 11:41:00 host systemd[1015]: orbi@1.service: Main process "
+        "exited, code=killed, status=15/TERM"
+    )
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service":
+            f"{clean_exit}\n{stopped_by_systemd}\n{FAILED_RESULT_LINE}\n",
+        "journalctl --user -u orbi@2.service": "",
+    })
+    # status=0 is a healthy tick exit; ExecStartPre failures produce
+    # "Failed with result" without the main process ever starting; a TERM
+    # stop is a human/systemd action. None of them is a crash.
+    assert runner_health.count_crashes(fake) == 0
+
+
+def test_count_crashes_counts_each_crash_once():
+    crashed_then_failed = f"{CRASH_LINE}\n{FAILED_RESULT_LINE}\n"
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": crashed_then_failed,
+        "journalctl --user -u orbi@2.service": "",
+    })
+    # One real crash emits BOTH the exit line and the Failed-with-result
+    # line; the count must stay 1 so the threshold keeps its meaning.
+    assert runner_health.count_crashes(fake) == 1
+
+
+def test_count_crashes_counts_core_dumps():
+    dumped = (
+        "Sep 04 11:42:00 host systemd[1015]: orbi@1.service: Main process "
+        "exited, code=dumped, status=11/SEGV"
+    )
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": f"{dumped}\n",
+        "journalctl --user -u orbi@2.service": "",
+    })
+    assert runner_health.count_crashes(fake) == 1
 
 
 def test_count_crashes_ignores_non_crash_lines():
