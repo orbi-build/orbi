@@ -2396,7 +2396,10 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
     reconciliation job, not the release gate's.
 
     A real `gh` failure (auth, rate limit, API error) propagates
-    unchanged — a gate that cannot be checked is a failed gate.
+    unchanged — a gate that cannot be checked is a failed gate. The one
+    exception is GitHub's HTTP 403 for the check-runs query: it is reported
+    as a missing Checks:read credential permission so the blocked release is
+    actionable.
     """
     evidence: list[str] = []
     open_deliveries: set[int] = set()
@@ -2436,10 +2439,24 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
         f"{IN_PROGRESS_LABEL} / {PR_OPENED_LABEL} / {FIX_NEEDED_LABEL}"
     )
     def fetch_check_runs() -> list[dict]:
-        return json.loads(run_command([
+        command = [
             "gh", "api", f"repos/{repo}/commits/{release_commit}/check-runs",
             "--jq", ".check_runs",
-        ]))
+        ]
+        try:
+            return json.loads(run_command(command))
+        except subprocess.CalledProcessError as error:
+            output = "\n".join(
+                str(value) for value in (error.stdout, error.stderr)
+                if value
+            )
+            if "403" in output:
+                raise RuntimeError(
+                    "CI gate could not be evaluated: the credential lacks "
+                    "Checks:read permission (GitHub returned HTTP 403 while "
+                    "listing check runs)"
+                ) from error
+            raise
 
     check_runs = fetch_check_runs()
     waited = 0.0
