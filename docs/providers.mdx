@@ -19,7 +19,7 @@ pi_model = "glm-5.3-flash"
 | xAI | `xai.json` | `XAI_API_KEY` | `grok-4.20-0309-reasoning` | Model ID verified against xAI docs 2026-09-09; not quota-tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Groq Free Plan | `groq.json` | `GROQ_API_KEY` | `groq/compound` | Free Plan limits verified 2026-09-04; real request/usage/429 not tested | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Local Qwen | `local-qwen.json` | None (dummy key `local`) | `Qwen3.8-27B` | Local zero-cost example; requires a local OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
-| Cloudflare Workers AI | `cloudflare-workers-ai.json` | `CLOUDFLARE_API_TOKEN` | `@cf/meta/llama-3.1-8b-instruct-fp8` | Hosted free allocation; quota must be checked in the account | [#318](https://github.com/orbi-build/orbi/issues/318) |
+| Cloudflare Workers AI (`cf-workers`) | `cloudflare-workers-ai.json` | `CLOUDFLARE_API_TOKEN` | `@cf/meta/llama-3.1-8b-instruct-fp8` | Hosted free allocation; quota must be checked in the account | [#318](https://github.com/orbi-build/orbi/issues/318) |
 | GitHub Models | `github-models.json` | `GH_MODELS_TOKEN` | `openai/gpt-4.1-mini` | Historical snapshot; service retired and not available for live requests | [#319](https://github.com/orbi-build/orbi/issues/319) |
 
 A template being listed is not a promise of quota, availability, speed, or model support. The `Not tested` labels are intentional.
@@ -230,7 +230,7 @@ Copy [`openrouter.json`](https://github.com/orbi-build/orbi/blob/main/templates/
 
 ### Cloudflare Workers AI
 
-Cloudflare's OpenAI-compatible endpoint is account-scoped. Copy [`cloudflare-workers-ai.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/cloudflare-workers-ai.json), replace `REPLACE_WITH_ACCOUNT_ID` in `baseUrl` with the Cloudflare account ID, and create an API token with both the `Workers AI - Read` and `Workers AI - Edit` permissions (the permissions required by Cloudflare's REST API guide). Keep the token in `.orbi/env`:
+Cloudflare's OpenAI-compatible endpoint is account-scoped. Copy [`cloudflare-workers-ai.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/cloudflare-workers-ai.json), replace `REPLACE_WITH_ACCOUNT_ID` in `baseUrl` with the Cloudflare account ID, and create an API token with both the `Workers AI - Read` and `Workers AI - Edit` permissions (the permissions required by Cloudflare's REST API guide). The template uses the custom Pi provider id `cf-workers` so Pi does not apply its native Cloudflare credential handling. Keep the token in `.orbi/env`:
 
 ```bash
 printf '%s\n' 'CLOUDFLARE_API_TOKEN=replace-me' >> .orbi/env
@@ -241,7 +241,7 @@ Select it in `orbi.toml`:
 
 ```toml
 pi_providers = ".orbi/pi-providers.json"
-pi_provider = "cloudflare-workers-ai"
+pi_provider = "cf-workers"
 pi_model = "@cf/meta/llama-3.1-8b-instruct-fp8"
 ```
 
@@ -252,7 +252,7 @@ The model ID is the current FP8 variant documented in Cloudflare's [Workers AI m
 Record the Workers AI account's Neurons usage immediately before dispatching one Issue and immediately after the PR is opened (same UTC day). The measured task consumption is `after - before`; retain the dashboard/API timestamps, model, Issue and PR URL, but never retain the token. Orbi's journal proves the selected provider/model, not Neurons usage. **This repository has not run a Cloudflare-account-backed Orbi task; the request and Neurons consumption are not tested and must not be inferred.**
 
 ```text
-journal: provider=cloudflare-workers-ai model=@cf/meta/llama-3.1-8b-instruct-fp8 run_id=<run-id>
+journal: provider=cf-workers model=@cf/meta/llama-3.1-8b-instruct-fp8 run_id=<run-id>
 Cloudflare Workers AI usage: before=<n> neurons at <UTC>, after=<n> neurons at <UTC>, delta=<n>
 PR: https://github.com/OWNER/REPO/pull/<number>
 ```

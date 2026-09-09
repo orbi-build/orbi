@@ -18,7 +18,7 @@ EXPECTED = {
     "groq": ("groq", "groq/compound", "GROQ_API_KEY"),
     "local-qwen": ("local-qwen", "Qwen3.8-27B", None),
     "cloudflare-workers-ai": (
-        "cloudflare-workers-ai", "@cf/meta/llama-3.1-8b-instruct-fp8", "CLOUDFLARE_API_TOKEN",
+        "cf-workers", "@cf/meta/llama-3.1-8b-instruct-fp8", "CLOUDFLARE_API_TOKEN",
     ),
     "github-models": ("github-models", "openai/gpt-4.1-mini", "GH_MODELS_TOKEN"),
 }

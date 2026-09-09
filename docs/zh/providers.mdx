@@ -19,7 +19,7 @@ pi_model = "glm-5.3-flash"
 | xAI | `xai.json` | `XAI_API_KEY` | `grok-4.20-0309-reasoning` | 已根据 xAI 文档核对模型 ID（2026-09-09）；未测试额度 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | Groq 免费档 | `groq.json` | `GROQ_API_KEY` | `groq/compound` | 2026-09-04 核对 Free Plan 限流；真实请求/usage/429 未实测 | [#305](https://github.com/orbi-build/orbi/issues/305) |
 | 本地 Qwen | `local-qwen.json` | 无（dummy key `local`） | `Qwen3.8-27B` | 本地零成本示例；需要本地 OpenAI-compatible server | [#305](https://github.com/orbi-build/orbi/issues/305) |
-| Cloudflare Workers AI | `cloudflare-workers-ai.json` | `CLOUDFLARE_API_TOKEN` | `@cf/meta/llama-3.1-8b-instruct-fp8` | 托管免费额度；必须在账号中核对额度 | [#318](https://github.com/orbi-build/orbi/issues/318) |
+| Cloudflare Workers AI（`cf-workers`） | `cloudflare-workers-ai.json` | `CLOUDFLARE_API_TOKEN` | `@cf/meta/llama-3.1-8b-instruct-fp8` | 托管免费额度；必须在账号中核对额度 | [#318](https://github.com/orbi-build/orbi/issues/318) |
 | GitHub Models | `github-models.json` | `GH_MODELS_TOKEN` | `openai/gpt-4.1-mini` | 历史快照；服务已退役，无法进行实时请求 | [#319](https://github.com/orbi-build/orbi/issues/319) |
 
 模板出现在清单中不代表承诺额度、可用性、速度或模型支持。`未实测` 是有意保留的状态。
@@ -230,7 +230,7 @@ pi_model = "google/gemma-4-31b-it:free"
 
 ### Cloudflare Workers AI
 
-Cloudflare 的 OpenAI-compatible endpoint 按账号区分。复制 [`cloudflare-workers-ai.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/cloudflare-workers-ai.json)，把 `baseUrl` 中的 `REPLACE_WITH_ACCOUNT_ID` 换成 Cloudflare Account ID，并创建同时具有 `Workers AI - Read` 和 `Workers AI - Edit` 权限的 API token（Cloudflare REST API 文档要求这两个权限）。token 放在 `.orbi/env`：
+Cloudflare 的 OpenAI-compatible endpoint 按账号区分。复制 [`cloudflare-workers-ai.json`](https://github.com/orbi-build/orbi/blob/main/templates/pi-providers/cloudflare-workers-ai.json)，把 `baseUrl` 中的 `REPLACE_WITH_ACCOUNT_ID` 换成 Cloudflare Account ID，并创建同时具有 `Workers AI - Read` 和 `Workers AI - Edit` 权限的 API token（Cloudflare REST API 文档要求这两个权限）。模板使用自定义 Pi provider id `cf-workers`，避免 Pi 对原生 Cloudflare 凭据进行特殊解析。token 放在 `.orbi/env`：
 
 ```bash
 printf '%s\n' 'CLOUDFLARE_API_TOKEN=replace-me' >> .orbi/env
@@ -241,7 +241,7 @@ chmod 600 .orbi/env
 
 ```toml
 pi_providers = ".orbi/pi-providers.json"
-pi_provider = "cloudflare-workers-ai"
+pi_provider = "cf-workers"
 pi_model = "@cf/meta/llama-3.1-8b-instruct-fp8"
 ```
 
@@ -252,7 +252,7 @@ pi_model = "@cf/meta/llama-3.1-8b-instruct-fp8"
 派发一个 Issue 前、PR 打开后，分别记录 Workers AI 账号的 Neurons 使用量（必须是同一 UTC 日）。任务消耗为 `after - before`；保留 dashboard/API 的 UTC 时间戳、模型、Issue 和 PR URL，但不要保留 token。Orbi journal 只能证明选中了 provider/model，不能代替 Neurons 计量。**本仓库尚未使用带 Cloudflare 账号的真实 Orbi 任务；真实请求和 Neurons 消耗未实测，不得推断或编造。**
 
 ```text
-journal: provider=cloudflare-workers-ai model=@cf/meta/llama-3.1-8b-instruct-fp8 run_id=<run-id>
+journal: provider=cf-workers model=@cf/meta/llama-3.1-8b-instruct-fp8 run_id=<run-id>
 Cloudflare Workers AI usage: before=<n> neurons at <UTC>, after=<n> neurons at <UTC>, delta=<n>
 PR: https://github.com/OWNER/REPO/pull/<number>
 ```

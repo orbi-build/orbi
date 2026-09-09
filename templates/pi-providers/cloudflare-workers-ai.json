@@ -1,6 +1,6 @@
 {
   "providers": {
-    "cloudflare-workers-ai": {
+    "cf-workers": {
       "baseUrl": "https://api.cloudflare.com/client/v4/accounts/REPLACE_WITH_ACCOUNT_ID/ai/v1",
       "api": "openai-completions",
       "apiKey": "$CLOUDFLARE_API_TOKEN",
