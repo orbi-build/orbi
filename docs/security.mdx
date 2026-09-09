@@ -43,11 +43,15 @@ the delivery contract, local-only secrets, and no remote state store.
   HTTPS/OAuth transport that blocked Issue #106. The pre-start check
   verifies the configured transport and fails fast when it is broken
   (no fallback).
-- The channels are never mixed: SSH is not an API authentication and
-  the `gh` token is not a git-data credential. The token lives in `gh`'s
-  local credential store on the Runner machine; the SSH key lives in the
-  user's SSH agent/config. Neither is written into the repository, the
-  config file, the journal, or a GitHub comment.
+- The channels are never mixed: SSH is never an API authentication, and
+  the GitHub API never authenticates over SSH. In the default `ssh`
+  transport mode the `gh` token is not a git-data credential (the
+  machine's SSH key is); in `https` transport mode (Issue #580) the
+  token IS the git-data credential — by explicit configuration,
+  supplied to git by the `gh` credential helper. The token lives in
+  `gh`'s local credential store on the Runner machine; the SSH key
+  lives in the user's SSH agent/config. Neither is written into the
+  repository, the config file, the journal, or a GitHub comment.
 - Logs are redacted by construction: command lines carrying secrets are
   logged as `<redacted>`, and tool summaries are truncated and masked.
   The full prompt, Issue body and token never reach the journal or the

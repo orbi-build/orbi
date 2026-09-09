@@ -35,7 +35,10 @@ Orbi 在你的机器上运行一个带 GitHub token 的自主 coding agent。
   workflow 推送从不依赖 OAuth App 的 `workflow` scope——那是阻塞
   Issue #106 的 HTTPS/OAuth 传输。启动前检查验证配置的传输，损坏时
   fail fast（没有回退）。
-- 两条通道从不混用：SSH 不是 API 认证，`gh` token 不是 git 数据凭据。
+- 两条通道从不混用：SSH 从不做 API 认证，GitHub API 也从不走 SSH。
+  默认 `ssh` 传输模式下 `gh` token 不是 git 数据凭据（凭据是机器的
+  SSH key）；`https` 传输模式下（Issue #580）token 按显式配置、经
+  `gh` credential helper 充当 git 数据凭据。
   token 存在 Runner 机器上 `gh` 的本地凭据存储；SSH key 在用户的 SSH
   agent/config 里。两者都不写入仓库、配置文件、journal 或 GitHub
   评论。
