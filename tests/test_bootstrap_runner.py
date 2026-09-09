@@ -17010,17 +17010,17 @@ def test_sync_release_docs_stale_tracking_ref_is_not_a_false_recovery(
     # ref — the remote still has the docs commit.
     git_out(work, "update-ref", "refs/remotes/origin/main", head)
 
-    def no_push_allowed(command, **kwargs):
-        raise AssertionError(
-            f"network push attempted in the nothing-staged world: {command}"
-        )
-
-    monkeypatch.setattr(runner, "run_git_network_command", no_push_allowed)
+    # A Mock (not a raiser): the fake must leave no dead line behind in
+    # the fixed world where the push never happens — the assertion below
+    # is what fails if it ever does.
+    no_push = Mock()
+    monkeypatch.setattr(runner, "run_git_network_command", no_push)
     evidence = runner.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
     )
+    no_push.assert_not_called()
     assert "already in sync" in evidence
     assert "recovered" not in evidence
     assert git_out(work, "rev-parse", "HEAD") == docs_head
