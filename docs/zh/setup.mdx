@@ -42,7 +42,11 @@ setup 是 **fail-fast**：核心前提失败会在任何后续变更之前停下
 4. **每个目标仓库**（默认每个配置的 `source_repos` 条目；`--repo
    OWNER/REPO` 时恰好一个）：
    - 仓库存在且 viewer 有写权限（`gh repo view` → `viewerPermission`
-     必须是 `WRITE`、`MAINTAIN` 或 `ADMIN`）；
+     必须是 `WRITE`、`MAINTAIN` 或 `ADMIN`）。GitHub App 的
+     installation token（`ghs_`）下该字段恒为空，而其 issues:write 足以
+     管理 labels（Issue #613）：setup 对空字段改用一次性 create+delete
+     标签探针（`gh api`）判定，并报告 `permission=INSTALLATION`；用户
+     token 保持原有的权限要求；
    - 八个平台标签从部署 home 的 `labels.toml`
      （`<deploy_home>/labels.toml`，Issue #330）**声明式**对齐——标签
      名/颜色/描述的唯一事实源：缺的创建、漂移的更新、从不删除，业务
@@ -172,6 +176,7 @@ setup_failed reason=systemctl --user user bus unavailable (is a systemd user ses
 setup_failed reason=editable tool install failed for /path/to/checkout: ... (fix: uv tool install --force --reinstall --editable --python /usr/bin/python3 /path/to/checkout)
 setup_failed reason=repo not accessible: nobody/no-such (gh repo view failed: ...)
 setup_failed reason=insufficient permission for owner/repo: viewerPermission='READ' (one of ['ADMIN', 'MAINTAIN', 'WRITE'] required to manage labels)
+setup_failed reason=installation token cannot manage labels in owner/repo: ... (the GitHub App needs the Issues read/write repository permission and must be installed on owner/repo)
 setup_failed reason=label alignment failed for owner/repo: ai-ready (gh label create failed: ...)
 setup_failed reason=checkout is not clean: /path/to/checkout (uncommitted changes: ' M src/orbi/runner.py') — commit or stash them first: ...
 setup_failed reason=checkout check failed for /path/to/checkout: ssh_unreachable: git ls-remote git@github.com:owner/repo.git failed: ... stderr=git@github.com: Permission denied (publickey). — fix SSH and retry

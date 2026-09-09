@@ -38,6 +38,7 @@ import json
 import logging
 import re
 import subprocess
+from uuid import uuid4
 import shutil
 import tomllib
 from pathlib import Path
@@ -338,6 +339,56 @@ def check_auth(run_command) -> None:
         ) from exc
 
 
+def token_is_installation(run_command) -> bool:
+    """Is the gh credential a GitHub App installation token (``ghs_``)?
+
+    Issue #613: ``viewerPermission`` is only meaningful for a user
+    token; an installation token reports an empty field there. The
+    token prefix (verified against gh 2.100.0 ``gh auth token``) is the
+    credential shape's ground truth. An unreadable token is NOT an
+    installation token: the caller keeps its existing fail-fast.
+    """
+    try:
+        token = run_command(["gh", "auth", "token"]).strip()
+    except Exception:
+        return False
+    return token.startswith("ghs_")
+
+
+def probe_label_capability(repo: str, run_command) -> None:
+    """Prove the credential can manage labels with a one-shot probe.
+
+    Issue #613: create a uniquely-named probe label and delete it again
+    (verified against the real API on 2026-09-09: create → 201 JSON,
+    delete → 204, both for a user token here and for the installation
+    token in the Issue scene). A create failure is a readable fail
+    fast with the repair action; a delete failure still fails fast and
+    names the label a human may have to remove.
+    """
+    name = f"orbi-setup-probe-{uuid4().hex[:8]}"
+    try:
+        run_command([
+            "gh", "api", "-X", "POST", f"repos/{repo}/labels",
+            "-f", f"name={name}", "-f", "color=cccccc",
+            "-f", "description=orbi setup capability probe",
+        ])
+    except Exception as exc:
+        raise SetupError(
+            f"installation token cannot manage labels in {repo}: {exc} "
+            "(the GitHub App needs the Issues read/write repository "
+            f"permission and must be installed on {repo})"
+        ) from exc
+    try:
+        run_command([
+            "gh", "api", "-X", "DELETE", f"repos/{repo}/labels/{name}",
+        ])
+    except Exception as exc:
+        raise SetupError(
+            f"installation token label probe cleanup failed for {repo}: "
+            f"the probe label {name!r} may be left behind: {exc}"
+        ) from exc
+
+
 def check_repo(repo: str, run_command) -> dict:
     """Verify the target repo exists and the viewer may write to it.
 
@@ -345,6 +396,11 @@ def check_repo(repo: str, run_command) -> dict:
     non-zero, a readable repo returns ``nameWithOwner``,
     ``viewerPermission`` and ``defaultBranchRef``). The viewer
     permission must allow label mutation (WRITE/MAINTAIN/ADMIN).
+    Issue #613: an installation token (``ghs_``) reports an empty
+    ``viewerPermission`` although its issues:write manages labels, so
+    the empty field on an installation token is decided by a one-shot
+    create+delete label probe instead of the meaningless field; a user
+    token keeps the exact prior behavior.
     """
     try:
         raw = run_command([
@@ -377,11 +433,15 @@ def check_repo(repo: str, run_command) -> dict:
         )
     permission = data.get("viewerPermission")
     if permission not in WRITE_PERMISSIONS:
-        raise SetupError(
-            f"insufficient permission for {repo}: viewerPermission="
-            f"{permission!r} (one of {sorted(WRITE_PERMISSIONS)} "
-            "required to manage labels)"
-        )
+        if not permission and token_is_installation(run_command):
+            probe_label_capability(repo, run_command)
+            permission = "INSTALLATION"
+        else:
+            raise SetupError(
+                f"insufficient permission for {repo}: viewerPermission="
+                f"{permission!r} (one of {sorted(WRITE_PERMISSIONS)} "
+                "required to manage labels)"
+            )
     name_with_owner = data.get("nameWithOwner")
     if not isinstance(name_with_owner, str) or not name_with_owner:
         raise SetupError(
