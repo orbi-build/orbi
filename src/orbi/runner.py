@@ -2149,19 +2149,11 @@ def verify_release_scope(repo: str, scope: list[int], repo_dir: Path,
                     f"release scope PR #{number} is merged but has no "
                     "merge commit evidence"
                 )
-            try:
-                run_command(
-                    ["git", "merge-base", "--is-ancestor", merge_commit,
-                     release_commit],
-                    cwd=repo_dir,
-                )
-            except subprocess.CalledProcessError as exc:
-                if exc.returncode != 1:
-                    raise
+            if not _is_ancestor(merge_commit, release_commit, cwd=repo_dir):
                 raise RuntimeError(
                     f"release scope PR #{number} merge commit {merge_commit} "
                     f"is not contained in release commit {release_commit}"
-                ) from exc
+                )
             evidence.append(
                 f"PR #{number} merged (mergeCommit={merge_commit})"
             )
@@ -2759,28 +2751,27 @@ def ensure_release_tag_pushed(repo_dir: Path, tag: str,
     )
 
 
-def tag_commit_is_ancestor_of_base(tag_commit: str, base_commit: str,
-                                   repo_dir: Path) -> bool:
-    """True when `tag_commit` is reachable from `base_commit`.
+def _is_ancestor(commit: str, base: str, *, cwd: Path) -> bool:
+    """Return whether *commit* is reachable from *base*.
 
-    (Issue #275) The docs-sync step (release state machine step 8) commits
-    and pushes the release notes to the base branch, advancing
-    `origin/<base>` past the tag commit. On a resume the frozen base is the
-    docs commit; this check distinguishes that expected advance (the tag
-    commit is an ancestor of the base — recover the tag commit as the
-    canonical release commit) from a genuine tag mismatch (fail fast — an
-    existing tag is never moved or overwritten).
+    Git uses exit code 1 for the normal negative answer. Any other failure
+    means the check itself could not be performed and must be surfaced.
     """
     try:
         run_command(
-            ["git", "merge-base", "--is-ancestor", tag_commit, base_commit],
-            cwd=repo_dir,
+            ["git", "merge-base", "--is-ancestor", commit, base], cwd=cwd,
         )
     except subprocess.CalledProcessError as exc:
         if exc.returncode != 1:
             raise
         return False
     return True
+
+
+def tag_commit_is_ancestor_of_base(tag_commit: str, base_commit: str,
+                                   repo_dir: Path) -> bool:
+    """Compatibility wrapper for the release state machine."""
+    return _is_ancestor(tag_commit, base_commit, cwd=repo_dir)
 
 
 def publish_release(*, repo: str, tag: str, version: str,
@@ -3384,15 +3375,7 @@ def sync_release_docs(*, source_repo: str, repo_dir: Path,
             # with Milestone closed and a success comment posted).
             # HEAD reachable from origin/<base> is the evidence that
             # separates the worlds; unreachable → push the recovery.
-            try:
-                run_command(
-                    ["git", "merge-base", "--is-ancestor",
-                     "HEAD", f"origin/{base_branch}"],
-                    cwd=worktree,
-                )
-            except subprocess.CalledProcessError as merge_exc:
-                if merge_exc.returncode != 1:
-                    raise
+            if not _is_ancestor("HEAD", f"origin/{base_branch}", cwd=worktree):
                 run_git_network_command(
                     ["git", "push", "origin",
                      f"HEAD:refs/heads/{base_branch}"],
@@ -6490,13 +6473,7 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
         # ref, so it runs under the base-sync lock (Issue #171) with
         # the deployment checkout as the lock location.
         fetch_base_ref(repo_dir, base_branch, cwd=worktree)
-        try:
-            run_command(
-                ["git", "merge-base", "--is-ancestor",
-                 f"origin/{base_branch}", "HEAD"],
-                cwd=worktree,
-            )
-        except subprocess.CalledProcessError:
+        if not _is_ancestor(f"origin/{base_branch}", "HEAD", cwd=worktree):
             LOGGER.error(
                 "delivery_behind_base base_branch=%s branch=%s",
                 base_branch, branch,
@@ -6505,7 +6482,7 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
                 f"delivery HEAD is behind latest remote base "
                 f"origin/{base_branch}; merge the latest base, rerun full "
                 "tests and review, then retry"
-            ) from None
+            )
     local_head = run_command(
         ["git", "rev-parse", "HEAD"], cwd=worktree,
     )
@@ -6623,13 +6600,7 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
         # ancestor of the local HEAD (diverged) is still a failure: a
         # plain push would be rejected and only a force push or a
         # human decision could continue it.
-        try:
-            run_command(
-                ["git", "merge-base", "--is-ancestor", head_oid,
-                 "HEAD"],
-                cwd=worktree,
-            )
-        except subprocess.CalledProcessError:
+        if not _is_ancestor(head_oid, "HEAD", cwd=worktree):
             LOGGER.error(
                 "pr_head_diverged pr_head=%s local_head=%s branch=%s",
                 head_oid, local_head, branch,
@@ -6640,7 +6611,7 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
                 "a plain push would be rejected and a force push is "
                 "forbidden, so the resume must not continue on this "
                 "branch"
-            ) from None
+            )
         LOGGER.info(
             "local_head_ahead_of_pr_head pr_head=%s local_head=%s "
             "branch=%s; the unpushed local commit is preserved and the "
@@ -6905,13 +6876,7 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
     # deployment checkout as the lock location. A lock timeout or a
     # fetch error fails fast — no retry, no lock bypass.
     fetch_base_ref(repo_dir, base_branch, cwd=worktree)
-    try:
-        run_command(
-            ["git", "merge-base", "--is-ancestor",
-             f"origin/{base_branch}", "HEAD"],
-            cwd=worktree,
-        )
-    except subprocess.CalledProcessError:
+    if not _is_ancestor(f"origin/{base_branch}", "HEAD", cwd=worktree):
         # The base advanced while the agent worked: absorb it with a
         # plain merge (the same base update the old agent prompt
         # required). A conflict is rolled back: the worktree returns
@@ -7585,55 +7550,6 @@ def check_review_ci(repo: str, commit: str, *, wait_seconds: float) -> str:
     return evidence
 
 
-def check_delivery_ci(repo: str, commit: str, *, wait_seconds: float,
-                       base_commit: str | None = None) -> None:
-    """Require delivery checks to pass, identifying failures inherited from base."""
-    def fetch() -> list[dict]:
-        return json.loads(run_command([
-            "gh", "api", f"repos/{repo}/commits/{commit}/check-runs",
-            "--jq", ".check_runs",
-        ]))
-
-    waited = 0.0
-    check_runs = fetch()
-    while True:
-        pending = [
-            f"check '{check.get('name')}' is {check.get('status')}/"
-            f"{check.get('conclusion')}"
-            for check in check_runs if check.get("status") != "completed"
-        ]
-        if not check_runs:
-            pending = ["no check runs reported"]
-        if not pending:
-            break
-        detail = ", ".join(pending)
-        LOGGER.info(
-            "delivery_waiting_ci commit=%s pending=%s waited=%ds limit=%ds",
-            commit, detail, int(waited), int(wait_seconds),
-        )
-        if waited >= wait_seconds:
-            raise RuntimeError(
-                f"delivery gate: waiting for CI on {commit} timed out after "
-                f"{int(wait_seconds)}s (still pending: {detail})"
-            )
-        step = min(RELEASE_CI_POLL_INTERVAL, wait_seconds - waited)
-        time.sleep(step)
-        waited += step
-        check_runs = fetch()
-    failed = [
-        check for check in check_runs
-        if check.get("conclusion") not in ("success", "neutral", "skipped")
-    ]
-    _raise_if_preexisting_ci_failure(
-        repo, [str(check.get("name")) for check in failed], base_commit,
-    )
-    for check in failed:
-        raise RuntimeError(
-            f"delivery gate: CI check '{check.get('name')}' is "
-            f"{check.get('status')}/{check.get('conclusion')} on {commit}"
-        )
-
-
 def merge_gate(worktree: Path, pr: dict, base_branch: str,
                *, repo_dir: Path, ci_wait_seconds: float | None = None,
                mergeable_wait_seconds: float | None = None,
@@ -7656,13 +7572,7 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         pr.get("_mergeable_wait_seconds", MERGEABLE_WAIT_SECONDS)
     )
     fetch_base_ref(repo_dir, base_branch, cwd=worktree)
-    try:
-        run_command(
-            ["git", "merge-base", "--is-ancestor",
-             f"origin/{base_branch}", pr["head_oid"]],
-            cwd=worktree,
-        )
-    except subprocess.CalledProcessError:
+    if not _is_ancestor(f"origin/{base_branch}", pr["head_oid"], cwd=worktree):
         LOGGER.error(
             "merge_gate_behind_base base_branch=%s pr=%s head=%s",
             base_branch, pr["number"], pr["head_oid"],
@@ -7671,7 +7581,7 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             f"PR #{pr['number']} head {pr['head_oid']} is behind latest "
             f"remote base origin/{base_branch}; absorb the latest base, rerun "
             "tests and review, then retry"
-        ) from None
+        )
     view_command = [
         "gh", "pr", "view", str(pr["number"]),
         "--json", "state,mergeable,headRefOid,statusCheckRollup",
@@ -7801,13 +7711,7 @@ def confirm_merged(worktree: Path, pr: dict, base_branch: str,
             f"PR #{pr['number']} is merged but has no merge commit oid"
         )
     fetch_base_ref(repo_dir, base_branch, cwd=worktree)
-    try:
-        run_command(
-            ["git", "merge-base", "--is-ancestor", merge_commit,
-             f"origin/{base_branch}"],
-            cwd=worktree,
-        )
-    except subprocess.CalledProcessError:
+    if not _is_ancestor(merge_commit, f"origin/{base_branch}", cwd=worktree):
         LOGGER.error(
             "confirm_merged_missing_on_base pr=%s merge_commit=%s",
             pr["number"], merge_commit,
@@ -7815,7 +7719,7 @@ def confirm_merged(worktree: Path, pr: dict, base_branch: str,
         raise RuntimeError(
             f"merge commit {merge_commit} is not on origin/{base_branch}; "
             "the merge did not land on the protected branch"
-        ) from None
+        )
     return {"state": "MERGED", "merge_commit": merge_commit}
 
 

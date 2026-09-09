@@ -483,39 +483,6 @@ def test_review_ci_gate_polls_the_current_head(monkeypatch):
     assert all(any("new-head" in item for item in command) for command in seen)
 
 
-def test_check_delivery_ci_distinguishes_pr_failure_from_base(
-        monkeypatch):
-    responses = {
-        "h1": [{"name": "tests", "status": "completed", "conclusion": "failure"}],
-        "b1": [{"name": "tests", "status": "completed", "conclusion": "success"}],
-    }
-
-    def fake_run(command, **kwargs):
-        commit = command[2].split("/")[-2]
-        return json.dumps(responses[commit])
-
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    with pytest.raises(RuntimeError, match="CI check 'tests'"):
-        runner.check_delivery_ci("owner/repo", "h1", wait_seconds=0,
-                                 base_commit="b1")
-
-
-def test_check_delivery_ci_reports_base_failure_and_triage(monkeypatch):
-    def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "api"]:
-            return json.dumps([{
-                "name": "tests", "status": "completed", "conclusion": "failure",
-            }])
-        return json.dumps([{"title": "CI failure: tests on branch main (push)",
-                            "url": "https://github.com/o/r/issues/402"}])
-
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    with pytest.raises(runner.PreExistingCIFailure, match="#?main is already red") as exc:
-        runner.check_delivery_ci("owner/repo", "h1", wait_seconds=0,
-                                 base_commit="b1")
-    assert "issues/402" in str(exc.value)
-
-
 def test_preexisting_ci_triage_lookup_is_best_effort(monkeypatch):
     monkeypatch.setattr(runner, "run_command", lambda *_args, **_kwargs: "{}")
     assert runner._main_ci_triage_url("owner/repo", "tests") is None
@@ -541,24 +508,6 @@ def test_preexisting_ci_triage_lookup_is_best_effort(monkeypatch):
 def test_preexisting_ci_check_skips_base_lookup_without_base(monkeypatch):
     monkeypatch.setattr(runner, "run_command", lambda *_args, **_kwargs: "unused")
     runner._raise_if_preexisting_ci_failure("owner/repo", ["tests"], None)
-
-
-def test_check_delivery_ci_polls_pending_checks(monkeypatch):
-    pages = [
-        [{"name": "tests", "status": "queued", "conclusion": None}],
-        [{"name": "tests", "status": "completed", "conclusion": "success"}],
-    ]
-    monkeypatch.setattr(
-        runner, "run_command", lambda *_args, **_kwargs: json.dumps(pages.pop(0)),
-    )
-    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
-    runner.check_delivery_ci("owner/repo", "h1", wait_seconds=30)
-
-
-def test_check_delivery_ci_times_out_without_check_runs(monkeypatch):
-    monkeypatch.setattr(runner, "run_command", lambda *_args, **_kwargs: "[]")
-    with pytest.raises(RuntimeError, match="no check runs reported"):
-        runner.check_delivery_ci("owner/repo", "h1", wait_seconds=0)
 
 
 def test_merge_gate_waits_for_pending_github_ci_then_merges(
@@ -668,6 +617,21 @@ def test_merge_gate_fetches_under_the_base_sync_lock(
                       "main", repo_dir=tmp_path)
     assert held == [True]
     _lock_free(tmp_path)
+
+
+def test_merge_gate_reraises_merge_base_errors(monkeypatch, tmp_path):
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "merge-base", "--is-ancestor"]:
+            raise subprocess.CalledProcessError(128, command, stderr="bad ref")
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        runner.merge_gate(
+            tmp_path, {"number": 4, "head_oid": "h1"}, "main",
+            repo_dir=tmp_path,
+        )
+    assert excinfo.value.returncode == 128
 
 
 def test_merge_gate_rejects_head_behind_latest_base(monkeypatch, tmp_path, caplog):
