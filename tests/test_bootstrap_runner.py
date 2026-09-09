@@ -14779,6 +14779,22 @@ def test_check_release_gates_ci_wait_times_out(monkeypatch, caplog):
     assert "release_waiting_ci" in caplog.text
 
 
+def test_check_release_gates_reports_missing_checks_permission(monkeypatch):
+    """A hosted App token's Checks permission failure is actionable."""
+    def fake_run_command(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            raise subprocess.CalledProcessError(
+                1, command,
+                stderr=("gh: Resource not accessible by integration "
+                        "(HTTP 403)"),
+            )
+        return "[]"
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    with pytest.raises(RuntimeError, match=r"lacks Checks:read"):
+        runner.check_release_gates("o/r", "main", "abc123", 99)
+
+
 def test_check_release_gates_reraises_real_gh_failure(monkeypatch):
     make_gate_gh(monkeypatch, check_runs=None)
     with pytest.raises(subprocess.CalledProcessError):
