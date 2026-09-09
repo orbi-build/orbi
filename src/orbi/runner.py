@@ -3791,13 +3791,25 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
                 f"**Orbi release docs synced**: {docs_evidence}",
             ),
         )
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_MERGED,
-            current_labels={IN_PROGRESS_LABEL},
-        )
-        run_command(
-            ["gh", "issue", "close", str(number), "--repo", source_repo],
-        )
+        try:
+            apply_label_patch(
+                number, repo=source_repo, event=EVENT_MERGED,
+                current_labels={IN_PROGRESS_LABEL},
+            )
+            run_command(
+                ["gh", "issue", "close", str(number), "--repo", source_repo],
+            )
+        except Exception:
+            # The tag and GitHub Release are already published at this
+            # point. The ai-merged transition and the Issue close are
+            # bookkeeping of that irreversible fact — a transient failure
+            # here must not fall through to the generic handler and
+            # rewrite the published result as ai-blocked (Issue #79:
+            # bypass, never a terminal rewrite; same rule as the
+            # milestone evidence below).
+            LOGGER.exception(
+                "issue=%s release_publish_closeout_failed", number,
+            )
         try:
             milestone_evidence = close_release_milestone(
                 source_repo, tag, run_id=run_id,
@@ -3812,14 +3824,22 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             milestone_evidence = (
                 "milestone evidence unavailable: " + str(exc)
             )
-        comment_issue(
-            number, repo=source_repo,
-            body=release_success_comment_body(
-                run_id, run_info, release_url, tag, release_commit,
-                scope_evidence, gate_evidence, test_evidence,
-                docs_evidence, milestone_evidence,
-            ),
-        )
+        try:
+            comment_issue(
+                number, repo=source_repo,
+                body=release_success_comment_body(
+                    run_id, run_info, release_url, tag, release_commit,
+                    scope_evidence, gate_evidence, test_evidence,
+                    docs_evidence, milestone_evidence,
+                ),
+            )
+        except Exception:
+            # Same bypass rule: the success comment is evidence of the
+            # already-published release — its failure is logged and must
+            # not rewrite the published result as ai-blocked.
+            LOGGER.exception(
+                "issue=%s release_success_comment_failed", number,
+            )
         _safe_publish(
             run_id=run_id, issue=number, source_repo=source_repo,
             role=ROLE_RELEASE,
