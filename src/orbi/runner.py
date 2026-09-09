@@ -2205,7 +2205,7 @@ def derive_release_scope_from_milestone(repo: str,
     release, never a guessed one.
     """
     raw = run_command([
-        "gh", "api", f"repos/{repo}/milestones?state=all",
+        "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
         "--paginate", "--slurp",
     ])
     milestones = parse_paginated_issue_array(raw)
@@ -2230,7 +2230,7 @@ def derive_release_scope_from_milestone(repo: str,
     def issues(state: str) -> list[dict]:
         raw = run_command([
             "gh", "api",
-            f"repos/{repo}/issues?state={state}&milestone={number}",
+            f"repos/{repo}/issues?state={state}&milestone={number}&per_page=100",
             "--paginate", "--slurp",
         ])
         return [item for item in parse_paginated_issue_array(raw)
@@ -2983,7 +2983,7 @@ def close_release_milestone(repo: str, version: str, *, run_id: str | None = Non
     is a failed check.
     """
     raw = run_command([
-        "gh", "api", f"repos/{repo}/milestones?state=all",
+        "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
         "--paginate", "--slurp",
     ])
     milestones = parse_paginated_issue_array(raw)
@@ -4584,7 +4584,7 @@ def advance_active_milestone_on_idle(
 ) -> tuple[str, str | None]:
     """Check and advance a configured milestone after no_ready_issue."""
     raw = run_command([
-        "gh", "api", f"repos/{repo}/milestones?state=all",
+        "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
         "--paginate", "--slurp",
     ], timeout=30)
     milestones = parse_paginated_issue_array(raw)
