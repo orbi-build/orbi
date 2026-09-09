@@ -2677,6 +2677,112 @@ def test_create_worktree_reuses_existing_remote_branch(monkeypatch, tmp_path):
     ]
 
 
+def test_create_worktree_existing_local_branch_is_reused_never_re_created(
+    monkeypatch, tmp_path,
+):
+    """Issue #608 (the #600 retry run 456880f8 scene): the stable branch
+    already exists (left by the previous run) — the claim takeover reuses
+    it with `worktree add --force`, never a second `-b <branch>` (which
+    is the fatal exit-255)."""
+    path = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-run1"
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[:3] == ["git", "branch", "--list"]:
+            return "orbi/owner-repo-issue-3"
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.create_worktree(
+        tmp_path, "owner/repo", 3, "run1", "base", existing_branch=True,
+    ) == path
+    assert calls == [
+        (["git", "fetch", "origin", "orbi/owner-repo-issue-3"], {"cwd": tmp_path, "timeout": runner.GIT_NETWORK_TIMEOUT_SECONDS}),
+        (["git", "branch", "--list", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
+        (["git", "worktree", "add", "--force", str(path), "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
+    ]
+
+
+def test_create_worktree_branch_override_checks_out_the_external_head(
+    monkeypatch, tmp_path,
+):
+    """Issue #608: an external takeover checks out the contributor's own
+    head branch — the identity the takeover PR is frozen on."""
+    path = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-run1"
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[:3] == ["git", "branch", "--list"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.create_worktree(
+        tmp_path, "owner/repo", 3, "run1", "base",
+        existing_branch=True, branch="fix/outer",
+    ) == path
+    assert calls == [
+        (["git", "fetch", "origin", "fix/outer"], {"cwd": tmp_path, "timeout": runner.GIT_NETWORK_TIMEOUT_SECONDS}),
+        (["git", "branch", "--list", "fix/outer"], {"cwd": tmp_path}),
+        (["git", "worktree", "add", "-b", "fix/outer", str(path), "origin/fix/outer"], {"cwd": tmp_path}),
+    ]
+
+
+def test_create_worktree_takeover_with_existing_branch_never_exits_255(tmp_path):
+    """Real-git acceptance (Issue #608 scenario a): the stable branch
+    already exists on origin — the takeover path succeeds where the bare
+    `worktree add -b <branch>` of the #600 incident exited 255."""
+    work, head = make_local_remote_pair(tmp_path)
+    repo_dir = tmp_path / "runner"
+    subprocess.run(
+        ["git", "clone", "-q", str(tmp_path / "remote.git"), str(repo_dir)],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo_dir), "config", "user.email", "t@t"],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo_dir), "config", "user.name", "t"],
+        check=True, capture_output=True,
+    )
+    # The stable branch already exists on origin (left by the previous
+    # run) — pushed from the working clone of the shared fixture.
+    subprocess.run(
+        ["git", "-C", str(work), "push", "-q", "origin",
+         "main:refs/heads/orbi/owner-repo-issue-3"],
+        check=True, capture_output=True,
+    )
+    # The previous run also left the LOCAL branch in the deployment
+    # checkout (the incident scene: `-b` cannot re-create it).
+    subprocess.run(
+        ["git", "-C", str(repo_dir), "branch",
+         "orbi/owner-repo-issue-3", head],
+        check=True, capture_output=True,
+    )
+    # The bare `git worktree add -b` of the incident scene fails (the
+    # runner journal recorded it as exit 255): `-b` never re-creates an
+    # existing branch.
+    incident = subprocess.run(
+        ["git", "-C", str(repo_dir), "worktree", "add", "-b",
+         "orbi/owner-repo-issue-3", str(tmp_path / "incident"), head],
+        capture_output=True, text=True,
+    )
+    assert incident.returncode != 0, incident
+    assert "already exists" in incident.stderr
+    # The takeover path reuses the existing branch and succeeds.
+    path = runner.create_worktree(
+        repo_dir, "owner/repo", 3, "run1", head, existing_branch=True,
+    )
+    current = subprocess.run(
+        ["git", "-C", str(path), "branch", "--show-current"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert current == "orbi/owner-repo-issue-3"
+
+
 def test_create_release_worktree_resets_leftover_worktree_to_current_commit(
     monkeypatch, tmp_path,
 ):
@@ -4380,6 +4486,160 @@ def test_verify_pr_rejects_pr_body_with_longer_issue_number(
     assert "pr_fixes_missing" in caplog.text
 
 
+def test_verify_pr_external_mode_skips_marker_and_fixes_checks(
+    monkeypatch, tmp_path,
+):
+    """Issue #608: an external takeover PR carries neither the run marker
+    nor a `Fixes #<issue>` keyword (the contributor wrote the body) —
+    `external_pr=True` verifies the same delivery WITHOUT those two body
+    checks; the Runner closes the triage Issue itself after the merge."""
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return "fix/outer"
+        if command[:2] == ["gh", "pr"]:
+            return fake_verify_pr_payload(
+                headRefName="fix/outer",
+                body="please review my fix, thanks",
+            )
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.verify_pr(
+        tmp_path, "fix/outer", "main", FAKE_RUN_ID,
+        issue=4, repo_dir=tmp_path, external_pr=True,
+    ) == FAKE_PR_URL
+
+
+def test_verify_pr_normal_mode_still_requires_marker_and_fixes(
+    monkeypatch, tmp_path,
+):
+    """The external-mode skip is opt-in: a Runner-owned PR without the
+    body contract still fails the verification."""
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"]:
+            return fake_verify_pr_payload(body="please review my fix")
+        return fake_verify_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(RuntimeError, match="run marker"):
+        runner.verify_pr(
+            tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
+            FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
+        )
+
+
+def _fake_takeover_view(monkeypatch, payload):
+    """Fake the `gh pr view` of `external_takeover_pr` with `payload`."""
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps(payload),
+    )
+
+
+def test_external_takeover_pr_fails_fast_on_a_malformed_view(
+    monkeypatch, tmp_path,
+):
+    """A `gh pr view` response that is not an object is a corrupted
+    scene: the claim fails fast (the same contract as the open-PR
+    query), it never silently proceeds."""
+    _fake_takeover_view(monkeypatch, ["not", "an", "object"])
+    with pytest.raises(RuntimeError, match="did not return an object"):
+        runner.external_takeover_pr(
+            tmp_path, "<!-- orbi:external-pr:592 -->",
+            "xqliu/orbi", "main",
+        )
+
+
+def test_external_takeover_pr_resolves_the_marked_pr(monkeypatch, tmp_path):
+    """Issue #608: the triage marker routes the claim to the external PR —
+    open and against the configured base, the takeover proceeds."""
+    _fake_takeover_view(monkeypatch, {
+        "state": "OPEN",
+        "url": "https://github.com/xqliu/orbi/pull/592",
+        "baseRefName": "main",
+        "headRefName": "fix/outer",
+        "headRefOid": "e592a11",
+    })
+    pr = runner.external_takeover_pr(
+        tmp_path,
+        "body text\n<!-- orbi:external-pr:592 -->\n",
+        "xqliu/orbi", "main",
+    )
+    assert pr is not None
+    assert pr["headRefName"] == "fix/outer"
+    assert pr["url"] == "https://github.com/xqliu/orbi/pull/592"
+
+
+def test_external_takeover_pr_ignores_a_closed_pr(monkeypatch, tmp_path):
+    """The external PR is merged/closed already: no takeover — the claim
+    proceeds as a fresh internal delivery."""
+    _fake_takeover_view(monkeypatch, {
+        "state": "CLOSED", "url": "https://github.com/xqliu/orbi/pull/592",
+        "baseRefName": "main", "headRefName": "fix/outer",
+        "headRefOid": "e592a11",
+    })
+    assert runner.external_takeover_pr(
+        tmp_path, "<!-- orbi:external-pr:592 -->",
+        "xqliu/orbi", "main",
+    ) is None
+
+
+def test_external_takeover_pr_ignores_a_pr_against_another_base(
+    monkeypatch, tmp_path,
+):
+    """The delivery loop only merges the configured protected base: a
+    PR against another branch is not a takeover."""
+    _fake_takeover_view(monkeypatch, {
+        "state": "OPEN", "url": "https://github.com/xqliu/orbi/pull/592",
+        "baseRefName": "develop", "headRefName": "fix/outer",
+        "headRefOid": "e592a11",
+    })
+    assert runner.external_takeover_pr(
+        tmp_path, "<!-- orbi:external-pr:592 -->",
+        "xqliu/orbi", "main",
+    ) is None
+
+
+def test_external_takeover_pr_returns_none_without_a_marker(monkeypatch,
+                                                            tmp_path):
+    """A body without the triage marker never reaches `gh pr view`."""
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("no marker: gh must not be called"),
+        ),
+    )
+    assert runner.external_takeover_pr(
+        tmp_path, "an ordinary issue body", "xqliu/orbi", "main",
+    ) is None
+    assert runner.external_takeover_pr(
+        tmp_path, None, "xqliu/orbi", "main",
+    ) is None
+
+
+def test_opened_pr_comment_round_trips_the_external_flag():
+    """The takeover scene comment carries `external: true` and the parser
+    restores it; a Runner-owned scene parses as non-external."""
+    body = runner.opened_pr_comment_body(
+        "a1b2c3d4",
+        "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4 "
+        "priority=normal",
+        "https://github.com/xqliu/orbi/pull/592", external=True,
+    )
+    scene = runner.parse_pr_comment(body)
+    assert scene["pr_url"] == "https://github.com/xqliu/orbi/pull/592"
+    assert scene["run_id"] == "a1b2c3d4"
+    assert bool(scene["external"]) is True
+
+    own = runner.parse_pr_comment(runner.opened_pr_comment_body(
+        "a1b2c3d4",
+        "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4 "
+        "priority=normal",
+        "https://github.com/xqliu/orbi/pull/40",
+    ))
+    assert bool(own["external"]) is False
+
+
 def test_verify_pr_queries_base_head_and_accepts_matching_pr(
     monkeypatch, tmp_path,
 ):
@@ -5774,7 +6034,7 @@ def test_main_idle_release_arm_failure_is_bypassed(monkeypatch, tmp_path, caplog
     monkeypatch.setattr(runner, "pick_next_delivery", lambda *args: None)
     monkeypatch.setattr(
         runner, "arm_release_ticket",
-        lambda *args: (_ for _ in ()).throw(RuntimeError("permission denied")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("permission denied")),
     )
     monkeypatch.setattr(runner, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
 
@@ -5952,7 +6212,7 @@ def test_main_uses_process_result_kind_without_rechecking_task_type(
     waits = []
     monkeypatch.setattr(
         runner, "wait_for_delivery",
-        lambda *args: waits.append(args),
+        lambda *args, **kwargs: waits.append(args),
     )
 
     assert runner.main(["--config", str(config)]) == 0
@@ -6008,7 +6268,7 @@ def test_main_ticket_only_finishes_without_entering_pr_delivery_wait(
     monkeypatch.setattr(runner, "process_issue", lambda *args: runner.IssueResult("ticket-only", None))
     monkeypatch.setattr(
         runner, "wait_for_delivery",
-        lambda *args: (_ for _ in ()).throw(
+        lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("ticket-only work must not enter PR delivery wait")
         ),
     )
@@ -6044,7 +6304,7 @@ def test_main_release_success_ends_tick_without_pr_delivery_wait(
     monkeypatch.setattr(runner, "process_issue", lambda *args: runner.IssueResult("release", release_url))
     monkeypatch.setattr(
         runner, "wait_for_delivery",
-        lambda *args: waits.append(args) or (
+        lambda *args, **kwargs: waits.append(args) or (
             _ for _ in ()
         ).throw(AssertionError(
             "release delivery must not enter PR delivery wait"
@@ -10313,6 +10573,8 @@ def test_wait_for_delivery_keeps_waiting_while_pr_open(
                 ]})
             calls["labels"] += 1
             return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
+        if command == ["git", "branch", "--show-current"]:
+            return "orbi/owner-repo-issue-39"
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -10379,6 +10641,8 @@ def test_wait_for_delivery_sleeps_poll_interval_between_review_rounds(
                 ]})
             calls["labels"] += 1
             return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
+        if command == ["git", "branch", "--show-current"]:
+            return "orbi/owner-repo-issue-39"
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -10432,6 +10696,8 @@ def test_wait_for_delivery_auto_merges_on_clean_review(
                     },
                 ]})
             return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
+        if command == ["git", "branch", "--show-current"]:
+            return "orbi/owner-repo-issue-39"
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -10488,6 +10754,8 @@ def test_wait_for_delivery_passes_p0_priority_to_the_review(
             return json.dumps({"labels": [
                 {"name": "ai-pr-opened"}, {"name": "p0"},
             ]})
+        if command == ["git", "branch", "--show-current"]:
+            return "orbi/owner-repo-issue-39"
         raise AssertionError(f"unexpected command: {command}")
 
     # The fake rejects anything that is not a pr/issue view.
@@ -11122,6 +11390,8 @@ def test_wait_for_delivery_runs_review_when_fix_needed(
                     "authorAssociation": "OWNER",
                 },
             ]})
+        if command == ["git", "branch", "--show-current"]:
+            return "orbi/owner-repo-issue-39"
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -11512,7 +11782,7 @@ def test_main_holds_slot_through_delivery_wait(monkeypatch, tmp_path):
     started = threading.Event()
     release = threading.Event()
 
-    def fake_wait(pr_url, iss, cfg, repo):
+    def fake_wait(pr_url, iss, cfg, repo, **kwargs):
         started.set()
         assert release.wait(timeout=10), "wait must hold the slot"
 
@@ -14225,17 +14495,15 @@ def test_derive_release_scope_from_milestone_empty_scope(monkeypatch):
     assert open_evidence == ["open Issue #255 Still open work"]
 
 
-def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None,
-                 open_prs=None):
+def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None):
     """Answer the gh calls of `check_release_gates`.
 
     `leftover_labels`: label -> [issue numbers] still open with it.
     `check_runs`: list of (name, status, conclusion) for the release
-    commit (None -> the call fails, which must propagate).
-    `open_prs`: list of (number, head_ref) open against the base.
+    commit (None -> the call fails, which must propagate). No open-PR
+    query is answered: since Issue #608 the gate never makes one.
     """
     leftover_labels = leftover_labels or {}
-    open_prs = open_prs or []
     calls = []
 
     def fake_run_command(command, **kwargs):
@@ -14251,10 +14519,6 @@ def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None,
             return json.dumps([
                 {"name": name, "status": status, "conclusion": conclusion}
                 for name, status, conclusion in check_runs
-            ])
-        if command[:3] == ["gh", "pr", "list"]:
-            return json.dumps([
-                {"number": n, "headRefName": head} for n, head in open_prs
             ])
         raise AssertionError(f"unexpected command: {command}")
 
@@ -14272,8 +14536,10 @@ def test_check_release_gates_pass_clean(monkeypatch):
     assert evidence == [
         "no open Issue carries ai-in-progress / ai-pr-opened / ai-fix-needed",
         "CI on the release commit: 2 check(s) all success/neutral/skipped",
-        "no open PR targets main",
     ]
+    # The gate never queries open PRs (Issue #608): open PRs are queue
+    # state, not a release premise.
+    assert not any(c[:3] == ["gh", "pr", "list"] for c in calls)
     # The release Issue itself is excluded from the leftover scan:
     # every leftover scan fetched the label's open Issues.
     labels = [c[c.index("--label") + 1] for c in calls
@@ -14364,7 +14630,6 @@ def test_check_release_gates_waits_for_pending_ci_then_passes(
         "no open Issue carries ai-in-progress / ai-pr-opened / ai-fix-needed",
         "CI on the release commit: 1 check(s) all success/neutral/skipped "
         "(waited 30s for pending checks)",
-        "no open PR targets main",
     ]
     # The wait is observable: one `release_waiting_ci` journal line per
     # poll and the detail passed to the progress-comment callback.
@@ -14428,17 +14693,6 @@ def test_check_release_gates_ci_wait_times_out(monkeypatch, caplog):
 def test_check_release_gates_reraises_real_gh_failure(monkeypatch):
     make_gate_gh(monkeypatch, check_runs=None)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.check_release_gates("o/r", "main", "abc123", 99)
-
-
-def test_check_release_gates_fails_on_open_pr_against_base(monkeypatch):
-    make_gate_gh(
-        monkeypatch,
-        check_runs=[],
-        open_prs=[(55, "feature/x")],
-    )
-    with pytest.raises(RuntimeError,
-                       match="PR #55 \\(head feature/x\\) is still open against main"):
         runner.check_release_gates("o/r", "main", "abc123", 99)
 
 
@@ -16150,7 +16404,7 @@ def test_reconcile_open_epics_keeps_incomplete_without_comment(monkeypatch, capl
 
 
 def test_reconcile_open_epics_failure_is_fail_open(monkeypatch, caplog):
-    monkeypatch.setattr(runner, "reconcile_open_epics", lambda *args: (_ for _ in ()).throw(RuntimeError("API down")))
+    monkeypatch.setattr(runner, "reconcile_open_epics", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
     monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args: None)
     monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args: None)
     monkeypatch.setattr(runner, "pick_issue", lambda *args: {"number": 1})

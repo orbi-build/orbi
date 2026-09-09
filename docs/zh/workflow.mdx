@@ -163,8 +163,10 @@ PR 验收时校验该关键词，缺失即 fail fast。
      pending check 是中间态——门禁等待最终结论，每次轮询一条
      `release_waiting_ci` journal 行和一次进度评论更新，上限
      `release_ci_wait_seconds`（默认 1800 秒）；等待超时以独立原因
-     失败，绝不报成 CI 失败）、
-     base 分支无 open PR。因真实 `gh` 失败而查不了的门禁算失败门禁。
+     失败，绝不报成 CI 失败）。open PR 刻意不是门禁（Issue #608，
+     维护者裁决）：open PR 是队列状态，不是发布前提——是否存在 open
+     PR、多少个、谁提的，与发版无关；滞留 PR 由交付循环自身的
+     接管/对账机制处理。因真实 `gh` 失败而查不了的门禁算失败门禁。
   4. 逐项验证 scope：`gh pr view` 必须报告 `MERGED`，否则
      `gh issue view` 必须报告 `CLOSED`。禁止解析复选框——每个 scope
      项都对照 live API 检查。

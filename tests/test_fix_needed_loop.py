@@ -64,6 +64,11 @@ def make_wait_failure_fake(monkeypatch, *, labels=("ai-pr-opened",),
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"]:
             return json.dumps({"state": "OPEN"})
+        if command[:3] == ["git", "branch", "--show-current"]:
+            # Issue #608: the delivery branch is read from the derived
+            # worktree (stable naming here; the contributor's head for an
+            # external takeover).
+            return BRANCH
         if command[:2] == ["gh", "api"]:
             api_calls.append(command)
             if "--method" not in command:

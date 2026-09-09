@@ -1915,3 +1915,232 @@ def test_wait_for_delivery_review_failure_progress_failure_still_releases(
         and "PATCH" in command
     ]
     assert patches, "the blocked-scene finish was not attempted"
+
+
+# --- Issue #608: external contributor PR takeover ------------------------------
+
+
+EXTERNAL_PR_BODY = (
+    "## CI failure: tests\n\n"
+    "- branch/PR: [PR #592](https://github.com/xqliu/orbi/pull/592)"
+    " (head branch `fix/outer`)\n"
+    "- external PR: [592](https://github.com/xqliu/orbi/pull/592) —"
+    " head branch `fix/outer` is outside the stable delivery naming\n"
+    "<!-- orbi:external-pr:592 -->\n"
+)
+
+
+def _make_takeover_gh(monkeypatch, monkeypatched, tmp_path, *, pr_state="OPEN",
+                      pr_base="main"):
+    """Fake gh for the external-takeover claim: no stable-branch PR, the
+    external PR from the body marker resolvable; progress API answered."""
+    calls = []
+    posted = []
+
+    def fake_run_command(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["gh", "issue", "list"]:
+            return "[]"
+        if command[:3] == ["gh", "pr", "list"]:
+            return "[]"
+        if command[:3] == ["gh", "pr", "view"]:
+            return json.dumps({
+                "state": pr_state, "url":
+                    "https://github.com/xqliu/orbi/pull/592",
+                "baseRefName": pr_base, "headRefName": "fix/outer",
+                "headRefOid": "e592a11",
+            })
+        if command[:2] == ["gh", "api"]:
+            if "--method" not in command:
+                return json.dumps([])
+            method = command[command.index("--method") + 1]
+            if method == "POST":
+                body = command[command.index("--field") + 1]
+                posted.append(body[len("body="):])
+                return json.dumps({"id": 77, "body": body[len("body="):],
+                                   "url": "https://x/77"})
+            return ""
+        return ""
+
+    monkeypatched.append(monkeypatch.setattr(
+        runner, "run_command", fake_run_command))
+    return calls, posted
+
+
+def test_process_issue_claims_external_pr_and_skips_run_pi(
+    monkeypatch, tmp_path,
+):
+    """Issue #608 acceptance (b): a triage Issue whose body routes to an
+    external contributor PR takes that PR over — run_pi never runs, the
+    scene comment marks the delivery external, and the result is the
+    external PR (the delivery wait reviews it FIRST)."""
+    calls, posted = _make_takeover_gh(monkeypatch, [], tmp_path)
+    patch_process_deps(monkeypatch, tmp_path)
+    worktree_calls = []
+
+    def fake_create_worktree(*args, **kwargs):
+        worktree_calls.append(kwargs)
+        path = tmp_path / "wt"
+        path.mkdir(parents=True, exist_ok=True)
+        (path / ".orbi").mkdir(exist_ok=True)
+        return path
+
+    monkeypatch.setattr(runner, "create_worktree", fake_create_worktree)
+    issue = {
+        "number": 608, "title": "external PR CI failure",
+        "body": EXTERNAL_PR_BODY,
+        "labels": [{"name": "ai-ready"}],
+    }
+    result = runner.process_issue(issue, make_config(tmp_path), "xqliu/orbi")
+    assert result.kind == "external-pr"
+    assert result.url == "https://github.com/xqliu/orbi/pull/592"
+    # The implementer never ran: the review loop is the FIRST touch.
+    assert not runner.run_pi.called
+    # The worktree was created on the contributor's head branch.
+    assert worktree_calls[0]["branch"] == "fix/outer"
+    assert worktree_calls[0]["existing_branch"] is True
+    # The run state carries the external branch identity.
+    state = json.loads(
+        (tmp_path / "wt" / ".orbi" / "run-state.json").read_text(),
+    )
+    assert state["branch"] == "fix/outer"
+    # The scene comment marks the delivery external (the resume contract).
+    scene = [
+        command[-1] for command in calls
+        if command[:2] == ["gh", "issue"] and "comment" in command
+        and "Orbi opened PR:" in command[-1]
+    ]
+    assert len(scene) == 1
+    assert "- external: true" in scene[0]
+    assert "run_id=a1b2c3d4" in scene[0]
+
+
+def test_process_issue_external_pr_closed_claims_fresh(monkeypatch, tmp_path):
+    """The external PR in the marker is no longer open (merged by a human
+    or closed): the claim is a normal fresh internal delivery."""
+    _make_takeover_gh(monkeypatch, [], tmp_path, pr_state="CLOSED")
+    patch_process_deps(monkeypatch, tmp_path)
+    issue = {
+        "number": 608, "title": "external PR CI failure",
+        "body": EXTERNAL_PR_BODY,
+        "labels": [{"name": "ai-ready"}],
+    }
+    result = runner.process_issue(issue, make_config(tmp_path), "xqliu/orbi")
+    assert result.kind == "pr"
+    assert result.url == "https://github.com/xqliu/orbi/pull/40"
+    assert runner.run_pi.called
+
+
+def _external_wait_fake(monkeypatch, *, pr_state, fail_progress=None):
+    """wait_for_delivery fake for the external takeover scenes: the PR
+    state drives the MERGED / CLOSED branches; issue close and comments
+    are recorded."""
+    close_calls = []
+    comments: list = []
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["gh", "pr", "view"]:
+            return json.dumps({"state": pr_state})
+        if command[:3] == ["gh", "issue", "close"]:
+            close_calls.append(command)
+            return ""
+        return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    return close_calls, comments
+
+
+def test_wait_for_delivery_external_merge_closes_the_triage_issue(monkeypatch):
+    """Issue #608: merging the external PR closes the triage Issue (the
+    PR body carries no `Fixes #N` for it) — 合并外部 PR 即关票."""
+    close_calls, _ = _external_wait_fake(monkeypatch, pr_state="MERGED")
+    monkeypatch.setattr(runner, "comment_issue", Mock())
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    runner.wait_for_delivery(
+        "https://github.com/xqliu/orbi/pull/592",
+        {"number": 608, "title": "t", "body": ""},
+        {"repo_dir": Path("/srv/repo"), "base_branch": "main"},
+        "xqliu/orbi", external_takeover=True,
+    )
+    assert close_calls == [
+        ["gh", "issue", "close", "608", "--repo", "xqliu/orbi"],
+    ]
+    body = runner.comment_issue.call_args.kwargs["body"]
+    assert "<!-- orbi:run=a1b2c3d4 -->" in body
+    assert "external PR" in body
+
+
+def test_wait_for_delivery_external_close_failure_never_rewrites(monkeypatch,
+                                                                 caplog):
+    """The merge already landed: a failed close/comment is logged
+    (bypass) — the delivered fact is never rewritten as a failure."""
+    _external_wait_fake(monkeypatch, pr_state="MERGED")
+
+    def failing_close(command, **kwargs):
+        if command[:3] == ["gh", "issue", "close"]:
+            raise subprocess.CalledProcessError(1, command, stderr="boom")
+        return json.dumps({"state": "MERGED"})
+
+    monkeypatch.setattr(runner, "run_command", failing_close)
+    monkeypatch.setattr(runner, "comment_issue", Mock())
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    caplog.set_level("ERROR")
+    runner.wait_for_delivery(
+        "https://github.com/xqliu/orbi/pull/592",
+        {"number": 608, "title": "t", "body": ""},
+        {"repo_dir": Path("/srv/repo"), "base_branch": "main"},
+        "xqliu/orbi", external_takeover=True,
+    )
+    assert "external_takeover_close_failed" in caplog.text
+
+
+def test_wait_for_delivery_external_closed_requeues_for_internal_redo(
+    monkeypatch,
+):
+    """Issue #608: the external PR was closed without a merge (the
+    contributor withdrew, or a maintainer rejected it) — the 放弃/不可修
+    fallback requeues the Issue (`ai-ready`) for an internal redo and
+    never marks `ai-blocked`. The supersession is explained on the PR
+    thread too: the contributor watches their PR, never the triage
+    Issue (docs/contributing.mdx)."""
+    _external_wait_fake(monkeypatch, pr_state="CLOSED")
+    edits = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda number, **kwargs: edits.append(kwargs),
+    )
+    commented = []
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda number, **kwargs: commented.append(kwargs),
+    )
+    pr_commented = []
+    monkeypatch.setattr(
+        runner, "comment_pr",
+        lambda number, **kwargs: pr_commented.append(
+            (number, kwargs["body"]),
+        ),
+    )
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    runner.wait_for_delivery(
+        "https://github.com/xqliu/orbi/pull/592",
+        {"number": 608, "title": "t", "body": ""},
+        {"repo_dir": Path("/srv/repo"), "base_branch": "main"},
+        "xqliu/orbi", external_takeover=True,
+    )
+    assert edits == [{
+        "repo": "xqliu/orbi", "add": "ai-ready",
+        "remove": "ai-pr-opened",
+    }]
+    assert any(
+        "closed without" in kwargs.get("body", "")
+        and "internal" in kwargs.get("body", "")
+        for kwargs in commented
+    )
+    # The supersession story reaches the contributor on the closed PR.
+    assert len(pr_commented) == 1
+    pr_number, pr_body = pr_commented[0]
+    assert pr_number == 592
+    assert "closed without" in pr_body and "internal" in pr_body
+    assert "Issue #608" in pr_body
+    assert "<!-- orbi:run=a1b2c3d4 -->" in pr_body

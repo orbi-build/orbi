@@ -122,6 +122,37 @@ first.
    human PRs, review and merge follow the repository's normal GitHub
    flow.
 
+## External PRs (public repository)
+
+Orbi is a public repository: external Issues and PRs are a **mainline
+input**, not an edge case. You keep full freedom over your branch name —
+the integration duty is the system's, never the contributor's (Issue
+#608).
+
+What happens to an external PR, in order:
+
+1. **CI** runs on every PR, exactly as on the maintainers' own branches.
+2. A red CI files one triage Issue per failed job, and that Issue
+   **always links the PR**. An external PR (any branch name outside the
+   Runner's internal `orbi/<owner>-<repo>-issue-<n>` delivery naming) is
+   additionally marked in the Issue body, so neither the Runner nor a
+   human reviewer can mistake it for an internal redo.
+3. When the delivery loop claims that triage Issue, it **reviews the
+   external PR first** — the same independent review loop the Runner
+   applies to its own deliveries (review findings are fixed on your
+   branch, the merge gate and CI green apply unchanged). A PR that comes
+   through review is merged, and merging it closes the triage Issue.
+4. Only an abandoned, stale or unfixable PR is superseded by an internal
+   redo — and the PR thread then explains the supersession to the
+   contributor. A withdrawn or rejected external PR returns the triage
+   Issue to the ready queue automatically.
+
+Review and merge follow the maintainers' pace; no time promises are made
+beyond this one: an external PR is never silently redone while it is
+open, and the triage trail (Issue with the PR link) is the place where
+the status is always visible. Single-repository collaboration is the
+current model — fork workflows are not part of the loop.
+
 ## What not to add
 
 The MVP boundary is intentional: no database, no message queue, no daemon

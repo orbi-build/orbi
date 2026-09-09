@@ -94,6 +94,7 @@ from orbi.delivery_labels import (
     EVENT_BLOCKED,
     EVENT_CLAIM,
     EVENT_FIX_NEEDED,
+    EVENT_REQUEUE,
     EVENT_RELEASE_WAITING,
     EVENT_MERGED,
     EVENT_PR_OPENED,
@@ -2375,7 +2376,7 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
                         ) -> list[str]:
     """Enforce the pre-release gates (Issue #98) and return their evidence.
 
-    Three gates, each checked against GitHub (never against local
+    Two gates, each checked against GitHub (never against local
     state), each failure raising with the concrete offender:
 
     1. No open Issue still carries `ai-in-progress`, `ai-pr-opened`
@@ -2393,8 +2394,14 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
        through `on_wait`), then decides on the final conclusions.
        Waiting past `ci_wait_seconds` fails with its own timeout
        reason, explicitly distinct from a CI failure.
-    3. No open PR targets the base branch — an open PR against the
-       release base would make the released commit non-final.
+
+    Open PRs are deliberately NOT a gate (Issue #608, maintainer ruling
+    2026-09-09, final): an open PR is queue state, never a release
+    premise. The release contract is the milestone's closed-Issue scope
+    check, green full tests and green CI on the release commit —
+    whether open PRs exist, how many, or who authored them says nothing
+    about the release. A stranded PR is the delivery loop's takeover /
+    reconciliation job, not the release gate's.
 
     A real `gh` failure (auth, rate limit, API error) propagates
     unchanged — a gate that cannot be checked is a failed gate.
@@ -2498,18 +2505,8 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
             f"CI on the release commit: no check runs on "
             f"{release_commit} (nothing to gate)"
         )
-    raw = run_command([
-        "gh", "pr", "list", "--repo", repo,
-        "--search", f"is:pr is:open base:{base_branch}",
-        "--json", "number,headRefName", "--limit", "50",
-    ])
-    for pr in json.loads(raw):
-        raise RuntimeError(
-            f"release gate: PR #{pr.get('number')} "
-            f"(head {pr.get('headRefName')}) is still open against "
-            f"{base_branch}"
-        )
-    evidence.append(f"no open PR targets {base_branch}")
+    # Issue #608: no open-PR gate — an open PR is queue state, not a
+    # release premise (see the docstring for the maintainer ruling).
     return evidence
 
 
@@ -4295,6 +4292,65 @@ def open_pr_for_branch(repo_dir: Path, branch: str) -> dict | None:
     return prs[0] if prs else None
 
 
+# Issue #608: the triage workflow embeds this hidden marker in the bug
+# Issue it files for an EXTERNAL contributor PR's CI failure (head branch
+# outside the stable delivery naming). The claim scan parses it and takes
+# the external PR over for review FIRST — an external PR is never
+# silently redone while it is open.
+EXTERNAL_PR_RE = re.compile(r"<!--\s*orbi:external-pr:(\d+)\s*-->")
+
+
+def external_takeover_pr(repo_dir: Path, body: str | None,
+                         source_repo: str, base_branch: str) -> dict | None:
+    """Resolve the external PR an Issue body routes to, or None.
+
+    The marker is written by the triage workflow (Issue #608); a claim of
+    that Issue must review the external PR before any internal redo. A
+    PR that is no longer open — merged by a human, closed by the
+    contributor (withdrawn) or closed as rejected — is NOT a takeover:
+    the claim proceeds as a fresh internal delivery. A PR against
+    another base is skipped the same way (the delivery loop only merges
+    the configured protected base). A real `gh` failure propagates —
+    a takeover that cannot be resolved fails the claim fail-fast, the
+    same contract as `open_pr_for_branch`.
+    """
+    if not isinstance(body, str):
+        return None
+    numbers = EXTERNAL_PR_RE.findall(body)
+    if not numbers:
+        return None
+    number = numbers[0]
+    raw = run_command([
+        "gh", "pr", "view", number, "--repo", source_repo,
+        "--json", "state,url,baseRefName,headRefName,headRefOid",
+    ], cwd=repo_dir, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
+    pr = json.loads(raw)
+    if not isinstance(pr, dict):
+        raise RuntimeError(
+            f"external PR view for #{number} did not return an object"
+        )
+    state = pr.get("state")
+    base_ref = pr.get("baseRefName")
+    if state != "OPEN":
+        LOGGER.info(
+            "external_takeover_skipped pr=%s reason=%s",
+            number, f"pr_state={state}",
+        )
+        return None
+    if base_ref != base_branch:
+        LOGGER.info(
+            "external_takeover_skipped pr=%s reason=base_mismatch "
+            "pr_base=%s configured_base=%s",
+            number, base_ref, base_branch,
+        )
+        return None
+    LOGGER.info(
+        "external_takeover pr=%s head=%s",
+        number, pr.get("headRefName"),
+    )
+    return pr
+
+
 def _run_info_fields(run_info: str) -> dict[str, str]:
     """Extract the runner-owned key/value fields for comment rendering."""
     return dict(
@@ -4317,7 +4373,8 @@ def started_pi_comment_body(run_id: str, run_info: str, branch: str,
     return field_block(run_id, headline, fields)
 
 
-def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str) -> str:
+def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
+                           external: bool = False) -> str:
     """The PR-opened comment records the recoverable run scene.
 
     It is the single source the next tick parses to resume this run on
@@ -4325,9 +4382,15 @@ def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str) -> str:
     writer of this comment, so the scene carries only what the runner
     cannot derive itself: run_id, base and PR URL. Branch and worktree
     are derived from the configured repo_dir, source_repo, Issue number
-    and run_id — a comment must never be able to name a local path.
+    and run_id — a comment must never be able to name a local path. An
+    external takeover (Issue #608) marks the scene `external`: the PR is
+    the contributor's own (no run marker, no `Fixes` keyword in its
+    body), and the delivery branch is the PR's head branch — derived
+    from the takeover worktree, never from the comment.
     """
     fields = _run_info_fields(run_info)
+    if external:
+        fields["external"] = "true"
     headline = "Orbi opened PR: " + pr_url
     return field_block(run_id, headline, fields)
 
@@ -4374,6 +4437,11 @@ def parse_pr_comment(body: str) -> dict | None:
         if not value:
             raise ValueError(f"opened PR comment is missing {key}")
     scene["run_id"] = validate_run_id(scene["run_id"])
+    # Issue #608: the optional external-takeover marker. Legacy scenes
+    # (and the Runner's own PRs) carry no `external` field — the scene
+    # then delivers the stable branch as before. It is added AFTER the
+    # required-field check: its absence is normal, never an error.
+    scene["external"] = fields.get("external", "")
     return scene
 
 
@@ -4807,7 +4875,8 @@ def worktree_path(repo_dir: Path, source_repo: str, number: int,
 def create_worktree(repo_dir: Path, source_repo: str, number: int,
                     run_id: str, base_sha: str,
                     existing: Path | None = None,
-                    existing_branch: bool = False) -> Path:
+                    existing_branch: bool = False,
+                    branch: str | None = None) -> Path:
     """Create the task worktree from the frozen base SHA, never HEAD.
 
     An existing path is reused: only a resumed run (same run id after a
@@ -4816,13 +4885,20 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
     scene (Issue #219): after a repo rename the scene's path carries
     the OLD slug, so the derived path would miss it and a second
     worktree would be created — the verified scene is returned as-is.
+
+    `branch` overrides the stable delivery branch name: an EXTERNAL
+    takeover (Issue #608) checks out the contributor's own head branch,
+    the identity the takeover PR is frozen on. With `existing_branch`
+    the named branch is fetched and reused (a local branch is reused
+    with `--force`, never a second `-b` — the exit-255 claim failure of
+    Issue #608); without it the branch is created from the frozen base.
     """
     if existing is not None and existing.is_dir():
         return existing
     path = worktree_path(repo_dir, source_repo, number, run_id)
     if path.exists():
         return path
-    branch = task_branch(source_repo, number, run_id)
+    branch = branch or task_branch(source_repo, number, run_id)
     if existing_branch:
         # The branch is the delivery identity.  Fetch it, then create the
         # run-isolated worktree from its remote HEAD rather than the base.
@@ -6362,7 +6438,8 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
               run_id: str, *, issue: int, repo_dir: Path,
               pr_repo: str | None = None,
               expected_url: str | None = None,
-              require_latest_base: bool = True) -> str:
+              require_latest_base: bool = True,
+              external_pr: bool = False) -> str:
     """Verify that exactly one open PR of the task branch is the delivery.
 
     Checks, in order: current branch, latest remote base ancestry (unless
@@ -6375,11 +6452,15 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
     failure), the run marker in the PR body, and the `Fixes #<issue>`
     keyword in the PR body (Issue #53: GitHub closes the source Issue
     natively only when the body carries the keyword, so a PR without it
-    would leave the Issue open after the merge). When `pr_repo` is
-    given (resume path), the PR's head repo must be that repo; when
-    `expected_url` is given, the verified PR URL must exactly equal the
-    recovered original PR URL (Issue #45 review: the resume must keep
-    the same PR number).
+    would leave the Issue open after the merge). With `external_pr`
+    (Issue #608: the delivery is a takeover of a contributor's own PR)
+    the two body checks are skipped — an external PR body carries
+    neither the run marker nor a `Fixes` keyword for this Issue; the
+    Issue is closed by the Runner after the merge instead. When
+    `pr_repo` is given (resume path), the PR's head repo must be that
+    repo; when `expected_url` is given, the verified PR URL must exactly
+    equal the recovered original PR URL (Issue #45 review: the resume
+    must keep the same PR number).
     """
     current_branch = run_command(
         ["git", "branch", "--show-current"], cwd=worktree,
@@ -6559,7 +6640,9 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
         )
     marker = run_marker(run_id)
     body = prs[0].get("body")
-    if not isinstance(body, str) or marker not in body:
+    if not external_pr and (
+        not isinstance(body, str) or marker not in body
+    ):
         LOGGER.error(
             "pr_run_marker_missing expected=%s branch=%s", marker, branch,
         )
@@ -6570,7 +6653,7 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
     fixes = f"Fixes #{issue}"
     # The number must match exactly, not as a digit prefix: `Fixes #41`
     # closes Issue 41, not Issue 4 (review F1, Issue #53).
-    if not re.search(rf"Fixes #{issue}(?!\d)", body):
+    if not external_pr and not re.search(rf"Fixes #{issue}(?!\d)", body):
         LOGGER.error(
             "pr_fixes_missing issue=%s branch=%s", issue, branch,
         )
@@ -6934,6 +7017,11 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
     """
     number = int(issue["number"])
     run_id = scene["run_id"]
+    # Issue #608: an external takeover scene delivers the contributor's own
+    # PR — the delivery branch is the PR's head branch, read from the
+    # takeover worktree (the worktree path stays derived from the trusted
+    # inputs; the branch is a local git fact of that worktree).
+    external = bool(scene.get("external"))
     branch = task_branch(source_repo, number, run_id)
     worktree = worktree_path(
         config["repo_dir"], source_repo, number, run_id,
@@ -6960,11 +7048,16 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
             # worktree can be recreated on the next resume), so the
             # handler below keeps the Issue in the automatic fix loop.
             raise RuntimeError(f"worktree missing: {worktree}")
+        if external:
+            branch = run_command(
+                ["git", "branch", "--show-current"], cwd=worktree,
+            )
         verified_url = verify_pr(
             worktree, branch, config["base_branch"], run_id,
             issue=number, repo_dir=config["repo_dir"],
             pr_repo=source_repo,
             expected_url=scene["pr_url"], require_latest_base=False,
+            external_pr=external,
         )
         # Issue #178: the resumed delivery is in flight from here on —
         # the Runner holds the slot and continues the review/merge
@@ -9114,6 +9207,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
     # label, so re-claiming an issue always starts a fresh run.
     existing_worktree: Path | None = None
     takeover_pr: dict | None = None
+    external_takeover = False
     stable_branch_present = False
     claim_labels = {
         label.get("name") for label in issue.get("labels", [])
@@ -9126,6 +9220,16 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
         stable_branch_present = stable_branch_exists(
             config["repo_dir"], stable_branch,
         )
+        if takeover_pr is None:
+            # Issue #608: a triage Issue whose body routes to an EXTERNAL
+            # contributor PR takes that PR over for review FIRST — the
+            # same takeover primitive as a stable-branch PR (run_pi is
+            # skipped, the PR goes straight to the delivery wait loop).
+            takeover_pr = external_takeover_pr(
+                config["repo_dir"], issue.get("body"), source_repo,
+                base_branch,
+            )
+            external_takeover = takeover_pr is not None
         route = claim_route(
             claim_labels,
             branch_exists=stable_branch_present,
@@ -9139,6 +9243,14 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
             LOGGER.info("delivery_takeover issue=%s branch=%s pr=%s",
                         number, stable_branch, takeover_pr.get("url"))
     if in_progress:
+        # Issue #608: an in-flight external takeover (the run died between
+        # the worktree creation and the opened-PR transition) must NOT
+        # resume into `run_pi` on the contributor's branch — the external
+        # PR, when still open, is the takeover delivery.
+        takeover_pr = external_takeover_pr(
+            config["repo_dir"], issue.get("body"), source_repo, base_branch,
+        )
+        external_takeover = takeover_pr is not None
         try:
             scene = worktree_resume_scene(
                 config["repo_dir"], source_repo, number,
@@ -9179,6 +9291,10 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
             ["git", "branch", "--show-current"],
             cwd=existing_worktree,
         )
+    elif external_takeover:
+        # Issue #608: the external takeover delivers the contributor's own
+        # branch — the identity the takeover PR is frozen on.
+        branch = takeover_pr["headRefName"]
     # Pickup priority (Issue #101): derived from the scanned issue's
     # labels (no extra gh call) and carried on every journal line and
     # scene comment of the attempt via `run_info`.
@@ -9238,6 +9354,12 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
             # create gap: continue from that branch rather than trying to
             # create a second local branch with the same name.
             existing_branch=stable_branch_present or takeover_pr is not None,
+            # Issue #608: an external takeover checks out the
+            # contributor's own head branch — the identity the takeover
+            # PR is frozen on.
+            branch=(
+                takeover_pr["headRefName"] if external_takeover else None
+            ),
         )
         # Issue #219: the run state file is the same-run marker —
         # written for EVERY run (a fresh one included, so a later
@@ -9344,7 +9466,9 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
         # review/merge wait loop.
         comment_issue(
             number, repo=source_repo,
-            body=opened_pr_comment_body(run_id, run_info, pr_url),
+            body=opened_pr_comment_body(
+                run_id, run_info, pr_url, external=external_takeover,
+            ),
         )
         _safe_publish(
             run_id=run_id, issue=number, source_repo=source_repo,
@@ -9377,7 +9501,13 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
             )
         except Exception:
             LOGGER.exception("issue=%s health_success_record_failed", number)
-        return IssueResult("pr", pr_url)
+        # Issue #608: an external takeover reports its own kind — the
+        # delivery wait then closes the triage Issue itself after the
+        # merge (the external PR body carries no `Fixes #N` for this
+        # Issue, so GitHub never closes it natively).
+        return IssueResult(
+            "external-pr" if external_takeover else "pr", pr_url,
+        )
     except (ModelWaitDeadError, RecoverablePiFailure) as exc:
         # Issue #227/#325: classified Pi/model infrastructure failures are
         # recoverable. Keep the claim, worktree and run-state file so the
@@ -9725,7 +9855,9 @@ def _finish_fix_needed_progress(
 
 
 def wait_for_delivery(pr_url: str, issue: dict, config: dict,
-                      source_repo: str, poll_interval: float = PI_POLL_INTERVAL) -> None:
+                      source_repo: str,
+                      poll_interval: float = PI_POLL_INTERVAL,
+                      external_takeover: bool = False) -> None:
     """Own the delivery lifecycle: hold the slot until merge or failure.
 
     The slot is acquired by `main` before the claim and must stay
@@ -9736,11 +9868,20 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
     `poll_interval` seconds (the same cadence as the Pi activity poll):
 
     - PR `MERGED` -> terminal: the delivery is done, the slot is
-      released by the caller and the next tick may claim new work;
+      released by the caller and the next tick may claim new work. An
+      EXTERNAL takeover (Issue #608) additionally closes the triage
+      Issue with the merge evidence — the contributor's PR body carries
+      no `Fixes #N` for this Issue, so GitHub never closes it natively
+      (合并外部 PR 即关票); the close is bookkeeping of an already
+      merged fact and its failure is logged, never a rewrite;
     - PR `CLOSED` without merge -> terminal failure: the Issue is
       marked `ai-blocked` (removing `ai-pr-opened`/`ai-fix-needed`) with
       a failure comment carrying the run marker, then the slot is
-      released by the caller;
+      released by the caller. An EXTERNAL takeover is the exception
+      (Issue #608): the contributor withdrew the PR or a maintainer
+      rejected it — that is the 放弃/不可修 fallback, so the Issue is
+      requeued to `ai-ready` and the next claim redoes the fix
+      internally;
     - Issue in an opened-PR state (`ai-pr-opened` awaiting review, or
       `ai-fix-needed` awaiting the next review session after a finding
       or a base conflict) -> the Runner runs the independent review of
@@ -9809,19 +9950,71 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 "issue=%s delivery_merged pr=%s; releasing the slot",
                 number, pr_url,
             )
+            if external_takeover:
+                # Issue #608: merging the external PR closes the triage
+                # Issue (the PR body has no `Fixes #N` for it). The merge
+                # already landed; a failed close is bookkeeping that is
+                # logged (bypass) — it can never rewrite the merged fact.
+                try:
+                    body = (
+                        f"{marker}\n"
+                        f"Orbi merged the external PR {pr_url}; closing "
+                        "this triage Issue as delivered by the external "
+                        f"contribution (run_id={run_id})"
+                    )
+                    comment_issue(number, repo=source_repo, body=body)
+                    run_command(
+                        ["gh", "issue", "close", str(number),
+                         "--repo", source_repo],
+                    )
+                except Exception:
+                    LOGGER.exception(
+                        "issue=%s external_takeover_close_failed pr=%s",
+                        number, pr_url,
+                    )
             return
         if state == "CLOSED":
+            # The current labels are read ONCE before the transition:
+            # the terminal patch clears every delivery-state label that
+            # is present (`ai-pr-opened`, and `ai-fix-needed` when the
+            # PR was closed while awaiting the next review session).
+            labels = issue_labels(number, source_repo)
+            if external_takeover:
+                # Issue #608: the external PR was closed without a merge
+                # (contributor withdrew, or a maintainer rejected it) —
+                # the 放弃/不可修 fallback. The Issue returns to the
+                # ready queue and the next claim redoes the fix
+                # internally; the closed PR keeps the supersession story
+                # in its thread.
+                LOGGER.info(
+                    "issue=%s external_takeover_closed pr=%s; requeuing "
+                    "for an internal redo",
+                    number, pr_url,
+                )
+                apply_label_patch(
+                    number, repo=source_repo, event=EVENT_REQUEUE,
+                    current_labels=labels,
+                )
+                body = (
+                    f"{marker}\n"
+                    f"Orbi: the external PR {pr_url} was closed without "
+                    f"a merge; the triage Issue #{number} returns to the "
+                    "ready queue and the next claim delivers the fix "
+                    f"internally (run_id={run_id})"
+                )
+                comment_issue(number, repo=source_repo, body=body)
+                # The supersession is explained on the closed PR thread
+                # too: the contributor watches their PR, never the
+                # triage Issue (docs/contributing.mdx, Issue #608).
+                comment_pr(_pr_number(pr_url), repo=source_repo, body=body)
+                return
             LOGGER.info(
                 "issue=%s delivery_closed_unmerged pr=%s; marking the "
                 "Issue ai-blocked and releasing the slot",
                 number, pr_url,
             )
-            # The current labels are read ONCE before the transition:
-            # the blocked patch clears every delivery-state label that
-            # is present (`ai-pr-opened`, and `ai-fix-needed` when the PR
-            # was closed while awaiting the next review session), so the
-            # terminal state is `ai-blocked` alone.
-            labels = issue_labels(number, source_repo)
+            # The blocked patch leaves the terminal state `ai-blocked`
+            # alone.
             apply_label_patch(
                 number, repo=source_repo, event=EVENT_BLOCKED,
                 current_labels=labels,
@@ -9977,24 +10170,33 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     config["repo_dir"], source_repo, number,
                     scene["run_id"],
                 )
-                # Derived from the same trusted inputs (never read from
-                # a comment) BEFORE the worktree check: a missing
-                # worktree is a recoverable failure whose comment must
-                # carry the full scene including the branch (Issue
-                # #50), so the branch must be set even when the
-                # directory does not exist.
-                branch = task_branch(source_repo, number, scene["run_id"])
                 # Issue #90 + #50: the worktree is derived from the
-                # configured repo_dir, source repo, Issue number and
-                # run id (never read from a comment). A missing
-                # directory is a RECOVERABLE failure: the branch still
-                # exists on the remote and the worktree can be
-                # recreated (git worktree add) on the next resume, so
-                # the handler below keeps the Issue in the automatic
-                # fix loop (ai-fix-needed) with the PR and branch
-                # preserved.
+                # configured repo_dir, source repo, Issue number and run id
+                # (never read from a comment). A missing directory is a
+                # RECOVERABLE failure: the branch still exists on the
+                # remote and the worktree can be recreated (git worktree
+                # add) on the next resume, so the handler below keeps the
+                # Issue in the automatic fix loop (ai-fix-needed) with the
+                # PR and branch preserved.
                 if not worktree.is_dir():
+                    # The failure comment must carry the full scene
+                    # including the branch (Issue #50): the stable
+                    # derivation is the best available guess when the
+                    # worktree is gone.
+                    branch = task_branch(
+                        source_repo, number, scene["run_id"],
+                    )
                     raise RuntimeError(f"worktree missing: {worktree}")
+                # The delivery branch is a local git fact of the derived
+                # worktree — the stable naming for the Runner's own
+                # deliveries, the contributor's head branch for an
+                # external takeover (Issue #608). Deriving it from the
+                # worktree keeps the whole review/merge loop
+                # branch-identity agnostic while the worktree path itself
+                # stays comment-independent.
+                branch = run_command(
+                    ["git", "branch", "--show-current"], cwd=worktree,
+                ) or task_branch(source_repo, number, scene["run_id"])
                 review_config = {
                     **config,
                     "base_sha": scene["base_sha"],
@@ -10394,6 +10596,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             return 0
         source_repo, issue, scene = selected
+        result = None
         if scene is not None:
             # An open PR is a recoverable review state: resume the
             # same run on the same branch, worktree and PR (Issue #45).
@@ -10445,14 +10648,25 @@ def main(argv: list[str] | None = None) -> int:
             result = process_issue(issue, config, source_repo)
             # `process_issue` owns task dispatch and reports its outcome;
             # do not repeat task-type predicates here (Issue #281).
-            if result.kind != "pr":
+            if result.kind not in ("pr", "external-pr"):
                 return 0
             pr_url = result.url
             assert pr_url is not None
         # The delivery is not done when the PR is open: hold the slot
         # through review -> merge and release it only after the PR is
-        # merged or terminally failed (Issue #39).
-        wait_for_delivery(pr_url, issue, config, source_repo)
+        # merged or terminally failed (Issue #39). An external takeover
+        # (Issue #608) closes the triage Issue itself after the merge —
+        # the contributor's PR carries no `Fixes #N` for it. A resumed
+        # delivery derives the scene from its trusted comment, which
+        # carries the external marker for an external takeover.
+        external_takeover = (
+            result.kind == "external-pr" if result is not None
+            else bool(scene.get("external"))
+        )
+        wait_for_delivery(
+            pr_url, issue, config, source_repo,
+            external_takeover=external_takeover,
+        )
     finally:
         slot.release()
         # The delivery is over (merged, terminally failed, or the tick
