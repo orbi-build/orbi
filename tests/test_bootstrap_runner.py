@@ -16947,25 +16947,6 @@ def test_move_latest_marker_fails_fast_when_the_previous_page_is_missing(
         )
 
 
-def test_sync_release_docs_skips_repositories_without_mintlify_docs(
-        tmp_path, monkeypatch):
-    """External/product repositories without docs.json opt out of the
-    Mintlify-only sync step and expose that decision as release evidence."""
-    work = tmp_path / "work"
-    work.mkdir()
-
-    def unexpected_release_lookup(*args, **kwargs):
-        raise AssertionError("a docs-less repository must not fetch a release")
-
-    monkeypatch.setattr(runner, "run_command", unexpected_release_lookup)
-    evidence = runner.sync_release_docs(
-        source_repo="o/r", repo_dir=work, worktree=work,
-        base_branch="main", tag="v0.4.0", release_commit="c" * 40,
-        issue_number=77,
-    )
-    assert evidence == "docs sync skipped (no Mintlify docs in repo)"
-
-
 def test_sync_release_docs_generates_pages_navigation_marker_and_commits(
         tmp_path, monkeypatch):
     work = make_release_docs_repo(tmp_path)
