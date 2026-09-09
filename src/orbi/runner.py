@@ -3313,7 +3313,8 @@ def sync_release_docs(*, source_repo: str, repo_dir: Path,
       publish time, release task Issue number);
     - moves the `(latest)` title marker from the previous latest page;
     - inserts the new version at the head of the `Releases`/`发布`
-      navigation groups in `docs/docs.json` (both languages);
+      navigation groups in `docs/docs.json` (both languages), or skips
+      this Mintlify-only step when that file is absent;
     - commits exactly those docs paths in the release worktree and
       pushes `HEAD:refs/heads/<base_branch>` under the base-sync lock
       (the release path has no PR — a direct commit to the base branch,
@@ -3325,6 +3326,10 @@ def sync_release_docs(*, source_repo: str, repo_dir: Path,
     (never overwritten). Any failure propagates so the release fails
     fast and enters `ai-blocked` like every other step.
     """
+    docs_config = worktree / "docs" / "docs.json"
+    if not docs_config.is_file():
+        return "docs sync skipped (no Mintlify docs in repo)"
+
     raw = run_command([
         "gh", "release", "view", tag, "--repo", source_repo,
         "--json", "tagName,publishedAt,url,body",
@@ -3372,12 +3377,6 @@ def sync_release_docs(*, source_repo: str, repo_dir: Path,
             )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-    docs_config = worktree / "docs" / "docs.json"
-    if not docs_config.is_file():
-        raise RuntimeError(
-            f"release {tag}: {docs_config} is missing — the docs "
-            "navigation cannot be updated"
-        )
     config_text = docs_config.read_text(encoding="utf-8")
     old_slug = current_latest_release_slug(config_text)
     if old_slug != new_slug:

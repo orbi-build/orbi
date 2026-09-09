@@ -17448,20 +17448,18 @@ def test_sync_release_docs_fails_fast_when_the_body_is_not_a_string(
     assert bad_body(["git", "rev-parse", "HEAD"], cwd=work)
 
 
-def test_sync_release_docs_fails_fast_when_docs_json_is_missing(
-        tmp_path, monkeypatch):
+def test_sync_release_docs_skips_when_docs_json_is_missing(tmp_path):
     work = make_release_docs_repo(tmp_path)
     head = git_out(work, "rev-parse", "HEAD")
     subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
                     "-m", "rel", head], check=True, capture_output=True)
     (work / "docs" / "docs.json").unlink()
-    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    with pytest.raises(RuntimeError, match="docs.json.*is missing"):
-        runner.sync_release_docs(
-            source_repo="o/r", repo_dir=work, worktree=work,
-            base_branch="main", tag="v0.4.0", release_commit=head,
-            issue_number=77,
-        )
+    evidence = runner.sync_release_docs(
+        source_repo="o/r", repo_dir=work, worktree=work,
+        base_branch="main", tag="v0.4.0", release_commit=head,
+        issue_number=77,
+    )
+    assert evidence == "docs sync skipped (no Mintlify docs in repo)"
 
 
 def test_sync_release_docs_fails_fast_on_a_real_git_diff_error(
