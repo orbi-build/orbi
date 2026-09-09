@@ -9998,11 +9998,15 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 body = (
                     f"{marker}\n"
                     f"Orbi: the external PR {pr_url} was closed without "
-                    "a merge; the Issue returns to the ready queue and "
-                    "the next claim delivers the fix internally "
-                    f"(run_id={run_id})"
+                    f"a merge; the triage Issue #{number} returns to the "
+                    "ready queue and the next claim delivers the fix "
+                    f"internally (run_id={run_id})"
                 )
                 comment_issue(number, repo=source_repo, body=body)
+                # The supersession is explained on the closed PR thread
+                # too: the contributor watches their PR, never the
+                # triage Issue (docs/contributing.mdx, Issue #608).
+                comment_pr(_pr_number(pr_url), repo=source_repo, body=body)
                 return
             LOGGER.info(
                 "issue=%s delivery_closed_unmerged pr=%s; marking the "

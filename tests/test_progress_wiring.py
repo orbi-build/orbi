@@ -2100,7 +2100,9 @@ def test_wait_for_delivery_external_closed_requeues_for_internal_redo(
     """Issue #608: the external PR was closed without a merge (the
     contributor withdrew, or a maintainer rejected it) — the 放弃/不可修
     fallback requeues the Issue (`ai-ready`) for an internal redo and
-    never marks `ai-blocked`."""
+    never marks `ai-blocked`. The supersession is explained on the PR
+    thread too: the contributor watches their PR, never the triage
+    Issue (docs/contributing.mdx)."""
     _external_wait_fake(monkeypatch, pr_state="CLOSED")
     edits = []
     monkeypatch.setattr(
@@ -2111,6 +2113,13 @@ def test_wait_for_delivery_external_closed_requeues_for_internal_redo(
     monkeypatch.setattr(
         runner, "comment_issue",
         lambda number, **kwargs: commented.append(kwargs),
+    )
+    pr_commented = []
+    monkeypatch.setattr(
+        runner, "comment_pr",
+        lambda number, **kwargs: pr_commented.append(
+            (number, kwargs["body"]),
+        ),
     )
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
     runner.wait_for_delivery(
@@ -2128,3 +2137,10 @@ def test_wait_for_delivery_external_closed_requeues_for_internal_redo(
         and "internal" in kwargs.get("body", "")
         for kwargs in commented
     )
+    # The supersession story reaches the contributor on the closed PR.
+    assert len(pr_commented) == 1
+    pr_number, pr_body = pr_commented[0]
+    assert pr_number == 592
+    assert "closed without" in pr_body and "internal" in pr_body
+    assert "Issue #608" in pr_body
+    assert "<!-- orbi:run=a1b2c3d4 -->" in pr_body
