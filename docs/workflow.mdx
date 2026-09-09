@@ -215,7 +215,10 @@ DAG, no priority numbers, no separate queues:
      (step 3's `release_ci_wait_seconds` wait), and a red or timed-out
      CI takes the existing recoverable failure path (`ai-blocked`).
      No local test execution (Issue #569) — the release flow is
-     bump → push → CI-wait → tag.
+     bump → push → CI-wait → tag. If Actions is red or times out, the
+     existing failure path blocks the release; the version bump may remain
+     on `main` as an acceptable state. The bump is idempotent, so repairing
+     CI and retrying the release safely prepares the requested version again.
   6. Tag: when the remote tag is absent, create an annotated tag at the
      release commit and push it with a plain push (never `--force`).
      When it exists it must point EXACTLY at the release commit — a

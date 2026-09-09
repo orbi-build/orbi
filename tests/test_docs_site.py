@@ -462,6 +462,21 @@ def test_docs_document_the_full_issue_to_merge_workflow():
     assert "orbi:run=" in text, "workflow must document the run marker"
 
 
+def test_release_docs_explain_ci_failure_bump_recovery():
+    """Issue #564: a red release-commit CI run may leave the version bump
+    on main; that state is acceptable because preparation is idempotent and
+    the next release retry overwrites the same metadata."""
+    english = page_text("workflow")
+    chinese = (DOCS_DIR / "zh" / "workflow.mdx").read_text(encoding="utf-8")
+    assert "version bump may remain" in english
+    assert "acceptable state" in english
+    assert "idempotent" in english
+    assert "Actions is red or times out" in english
+    assert "版本 bump 可以保留在" in chinese
+    assert "幂等" in chinese
+    assert "CI 红或等待超时" in chinese
+
+
 def test_release_state_contract_matches_terminal_code_order():
     """The release contract must describe the implemented terminal order."""
     contracts = (
