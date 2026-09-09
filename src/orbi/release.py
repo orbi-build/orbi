@@ -527,8 +527,14 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
                         delivery_waited_seconds: float = 0.0,
                         on_wait: Callable[[str], None] | None = None,
                         on_delivery_wait: Callable[[str], None] | None = None,
-                        ) -> list[str]:
+                        repo_has_ci: bool = False,
+                        ) -> tuple[list[str], bool]:
     """Enforce the pre-release gates (Issue #98) and return their evidence.
+
+    Returns ``(evidence, repo_has_ci)`` — the second element is whether
+    any check run was observed on the gated commit, so the release flow
+    can feed gate 1's observation (on the frozen base) into gate 2 (on
+    the just-pushed version commit) as ``repo_has_ci``.
 
     Two gates, each checked against GitHub (never against local
     state), each failure raising with the concrete offender:
@@ -547,7 +553,14 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
        the GitHub API for the commit is `completed` with a
        `success`/`neutral`/`skipped` conclusion (a failing, cancelled
        or error check fails the gate; no check runs at all is recorded
-       as such, not invented). A PENDING check (queued/in_progress —
+       as such, not invented — EXCEPT when the caller passes
+       ``repo_has_ci=True``, the frozen base already showed checks, so
+       this repository runs CI and an empty list on a freshly pushed
+       commit means the checks have not REGISTERED yet (GitHub creates
+       CheckRuns seconds after the push, Issue #657): the gate then
+       polls within the same budget until the first check appears and
+       never passes an empty list as "nothing to gate"). A PENDING
+       check (queued/in_progress —
        the release commit is born from the last delivery merge, so its
        CI is almost always still running, Issue #268) is not a
        conclusion: the gate polls until every check completes (one
@@ -639,6 +652,16 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
             f"{check.get('status')}/{check.get('conclusion')}"
             for check in check_runs if check.get("status") != "completed"
         ]
+        if repo_has_ci and not check_runs:
+            # Issue #657: an empty list on a just-pushed commit in a CI
+            # repository is "not registered yet", not "nothing to gate"
+            # — wait for the first check within the same budget; a
+            # timeout below fails with the wait-timeout reason.
+            pending = [
+                "the first check run to register on the just-pushed "
+                f"commit {release_commit} (GitHub creates CheckRuns "
+                "seconds after the push)"
+            ]
         if not pending:
             break
         detail = ", ".join(pending)
@@ -689,7 +712,7 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
         )
     # Issue #608: no open-PR gate — an open PR is queue state, not a
     # release premise (see the docstring for the maintainer ruling).
-    return evidence
+    return evidence, bool(check_runs)
 
 
 def prepare_release_version(worktree: Path, tag: str,
@@ -1665,7 +1688,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         target_milestone = release_target_milestone(
             issue, config.get("active_milestone"),
         )
-        gate_evidence = check_release_gates(
+        gate_evidence, repo_has_ci = check_release_gates(
             source_repo, base_branch, release_commit, number,
             milestone=target_milestone,
             # Issue #268: the gate waits out pending CI checks on the
@@ -1750,10 +1773,14 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         # Version preparation creates the commit that will be tagged. Re-run
         # the commit-specific gates so the recorded CI result and final
         # no-open-PR check cover that exact release commit, not the frozen
-        # pre-version source commit.
-        gate_evidence = check_release_gates(
+        # pre-version source commit. The just-pushed commit may hit the
+        # CheckRun registration lag, so gate 1's observation (checks on the
+        # frozen base = this repository runs CI) forbids the empty-list
+        # pass here (Issue #657).
+        gate_evidence, _ = check_release_gates(
             source_repo, base_branch, release_commit, number,
             milestone=target_milestone,
+            repo_has_ci=repo_has_ci,
             ci_wait_seconds=config.get(
                 "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
             ),
