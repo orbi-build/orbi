@@ -88,9 +88,15 @@ Adding a row is an amendment.
 5. Configuration is explicit. A value is never guessed from the repository,
    the milestone list or the environment; a missing required value fails the
    start.
-6. Comments explain the invariant a line protects, not the Issue history that
+6. Before acting on a claimed violation or requested capability, verify the
+   premise against the current code and facts; documentation may describe an
+   old world. When the premise is false, close the Issue or correct the
+   documentation rather than implementing it. For security changes, ask
+   whether the attack surface introduced by the fix is larger than the one it
+   removes.
+7. Comments explain the invariant a line protects, not the Issue history that
    produced it. History lives in commits and Issues.
-7. **Delegate to the platform.** Work the hosting platform already does is
+8. **Delegate to the platform.** Work the hosting platform already does is
    not reimplemented locally. Test acceptance is the repository's own CI
    result on the delivered commit, never a local test run: a local runner
    would have to carry every language's toolchain, and a green local run
