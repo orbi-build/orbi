@@ -2986,10 +2986,15 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
     reconciled on a later tick without requiring a new release run.
     """
     raw = run_command([
-        "gh", "api", f"repos/{repo}/milestones?state=open&per_page=100",
+        "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
         "--paginate", "--slurp",
     ])
-    milestones = parse_paginated_issue_array(raw)
+    all_milestones = parse_paginated_issue_array(raw)
+    milestones = [m for m in all_milestones if m.get("state") == "open"]
+    for milestone in all_milestones:
+        if not isinstance(milestone, dict) or milestone.get("state") not in {"open", "closed"}:
+            LOGGER.info("milestone_kept_open number=%s repo=%s reason=malformed",
+                        milestone.get("number") if isinstance(milestone, dict) else None, repo)
     releases_raw = run_command([
         "gh", "api", f"repos/{repo}/releases?per_page=100",
         "--paginate", "--slurp",
@@ -3007,7 +3012,9 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
         if not isinstance(number, int) or isinstance(number, bool) or not isinstance(title, str):
             LOGGER.info("milestone_kept_open number=%s repo=%s reason=malformed", number, repo)
             continue
-        matches = [m for m in milestones if m.get("title") == title]
+        # Closed duplicates still make the title ambiguous; do not guess
+        # which milestone a release belongs to.
+        matches = [m for m in all_milestones if m.get("title") == title]
         if len(matches) != 1:
             reason = "ambiguous title" if len(matches) > 1 else "missing title"
             LOGGER.info("milestone_kept_open number=%s repo=%s reason=%s", number, repo, reason)

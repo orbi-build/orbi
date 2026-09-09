@@ -16462,7 +16462,7 @@ def test_reconcile_release_milestones_closes_only_published_empty_milestones(mon
     milestone = _milestone(5, "v0.4.0", "open", 0)
     def fake_run(command, **kwargs):
         calls.append(command)
-        if command == ["gh", "api", "repos/o/r/milestones?state=open&per_page=100", "--paginate", "--slurp"]:
+        if command == ["gh", "api", "repos/o/r/milestones?state=all&per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[milestone]])
         if command == ["gh", "api", "repos/o/r/releases?per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[{"tag_name": "v0.4.0", "draft": False}]])
@@ -16481,7 +16481,7 @@ def test_reconcile_release_milestones_keeps_open_without_published_release_or_em
     caplog.set_level("INFO")
     milestones = [_milestone(5, "v0.4.0", "open", 1), _milestone(6, "v0.4.0", "open", 0)]
     def fake_run(command, **kwargs):
-        if command == ["gh", "api", "repos/o/r/milestones?state=open&per_page=100", "--paginate", "--slurp"]:
+        if command == ["gh", "api", "repos/o/r/milestones?state=all&per_page=100", "--paginate", "--slurp"]:
             return json.dumps([milestones])
         if command == ["gh", "api", "repos/o/r/releases?per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[{"tag_name": "v0.4.0", "draft": True}]])
@@ -16526,7 +16526,7 @@ def test_reconcile_release_milestones_keeps_malformed_or_incomplete_open(monkeyp
     caplog.set_level("INFO")
     milestones = [{"number": "bad", "title": "v0.4.0"}, _milestone(5, "v0.5.0", "open", 1)]
     def fake_run(command, **kwargs):
-        if "milestones?state=open" in command[2]:
+        if "milestones?state=all" in command[2]:
             return json.dumps([milestones])
         if "releases?per_page=100" in command[2]:
             return json.dumps([[{"tag_name": "v0.5.0", "draft": False}]])
