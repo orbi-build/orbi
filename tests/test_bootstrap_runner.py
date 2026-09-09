@@ -5407,7 +5407,7 @@ def test_advance_active_milestone_pending_creates_one_p0_ready_issue(
         calls.append(command)
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
-        return json.dumps(milestones)
+        return json.dumps([milestones])
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     with caplog.at_level("INFO"):
@@ -5432,10 +5432,10 @@ def test_advance_active_milestone_manual_notification_is_not_pickupable(
     monkeypatch.setattr(
         runner, "run_command",
         lambda command, **kwargs: calls.append(command) or (
-            "[]" if command[:3] == ["gh", "issue", "list"] else json.dumps([
+            "[]" if command[:3] == ["gh", "issue", "list"] else json.dumps([[
                 {"title": "v0.3.0", "state": "closed"},
                 {"title": "v0.4.0", "state": "open"},
-            ])
+            ]])
         ),
     )
 
@@ -5465,7 +5465,7 @@ def test_advance_active_milestone_closes_old_manual_notification_after_manual_mo
                     "body": "orbi-milestone-advance old=v0.3.0 candidates=v0.4.0",
                 },
             ])
-        return json.dumps([{"title": "v0.4.0", "state": "open"}])
+        return json.dumps([[{"title": "v0.4.0", "state": "open"}]])
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.advance_active_milestone_on_idle(
@@ -5486,7 +5486,7 @@ def test_advance_active_milestone_close_failure_is_bypassed(
 
     def fail_close(command, **kwargs):
         if command[:2] == ["gh", "api"]:
-            return json.dumps([{"title": "v0.4.0", "state": "open"}])
+            return json.dumps([[{"title": "v0.4.0", "state": "open"}]])
         raise RuntimeError("GitHub unavailable")
 
     monkeypatch.setattr(runner, "run_command", fail_close)
@@ -5506,9 +5506,9 @@ def test_advance_active_milestone_closure_is_idempotent_on_repeated_tick(
     monkeypatch.setattr(
         runner, "run_command",
         lambda command, **kwargs: calls.append(command) or (
-            "[]" if command[:3] == ["gh", "issue", "list"] else json.dumps([
+            "[]" if command[:3] == ["gh", "issue", "list"] else json.dumps([[
                 {"title": "v0.4.0", "state": "open"},
-            ])
+            ]])
         ),
     )
 
@@ -5529,10 +5529,10 @@ def test_advance_active_milestone_pending_issue_failure_is_bypassed(
             return "[]"
         if command[:3] == ["gh", "issue", "create"]:
             raise RuntimeError("GitHub unavailable")
-        return json.dumps([
+        return json.dumps([[
             {"title": "v0.3.0", "state": "closed"},
             {"title": "v0.3.1", "state": "open", "open_issues": 2},
-        ])
+        ]])
 
     monkeypatch.setattr(runner, "run_command", fail_pending)
     with caplog.at_level("ERROR"):
@@ -5550,10 +5550,10 @@ def test_advance_active_milestone_pending_is_idempotent(
     config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
     calls = []
     responses = [
-        json.dumps([
+        json.dumps([[
             {"title": "v0.3.0", "state": "closed"},
             {"title": "v0.3.1", "state": "open", "open_issues": 2},
-        ]),
+        ]]),
         '[{"number": 436}]',
     ]
     monkeypatch.setattr(
@@ -5572,11 +5572,11 @@ def test_advance_active_milestone_sorts_double_digit_versions_numerically(
     config.write_text('active_milestone = "v0.9.0"\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "run_command",
-        lambda command, **kwargs: json.dumps([
+        lambda command, **kwargs: json.dumps([[
             {"title": "v0.9.0", "state": "closed"},
             {"title": "v0.10.0", "state": "open"},
             {"title": "v0.11.0", "state": "open"},
-        ]),
+        ]]),
     )
 
     assert runner.advance_active_milestone_on_idle(
@@ -5597,7 +5597,7 @@ def test_advance_active_milestone_selects_smallest_higher_open(
     ]
     monkeypatch.setattr(
         runner, "run_command",
-        lambda command, **kwargs: json.dumps(milestones),
+        lambda command, **kwargs: json.dumps([milestones]),
     )
     with caplog.at_level("INFO"):
         assert runner.advance_active_milestone_on_idle(
@@ -5615,9 +5615,9 @@ def test_advance_active_milestone_open_reconciles_notifications_without_write(
     calls = []
     monkeypatch.setattr(
         runner, "run_command",
-        lambda command, **kwargs: calls.append(command) or json.dumps([
+        lambda command, **kwargs: calls.append(command) or json.dumps([[
             {"title": "v0.3.0", "state": "open"},
-        ]),
+        ]]),
     )
     assert runner.advance_active_milestone_on_idle("owner/repo", "v0.3.0", config) == ("open", None)
     assert len(calls) == 2
@@ -5632,11 +5632,11 @@ def test_advance_active_milestone_closed_without_candidate_logs_and_keeps_value(
     config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "run_command",
-        lambda command, **kwargs: json.dumps([
+        lambda command, **kwargs: json.dumps([[
             {"title": "v0.3.0", "state": "closed"},
             {"title": "v0.2.0", "state": "open", "open_issues": 1},
             {"title": "future", "state": "open", "open_issues": 2},
-        ]),
+        ]]),
     )
     with caplog.at_level("INFO"):
         assert runner.advance_active_milestone_on_idle(
@@ -5651,9 +5651,9 @@ def test_advance_active_milestone_missing_lists_open_milestones(monkeypatch, tmp
     config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "run_command",
-        lambda command, **kwargs: json.dumps([
+        lambda command, **kwargs: json.dumps([[
             {"title": "v0.3.1", "state": "open", "open_issues": 8},
-        ]),
+        ]]),
     )
     with pytest.raises(RuntimeError, match=r"active_milestone_missing current=v0.3.0; open milestones: v0.3.1\(8\)"):
         runner.advance_active_milestone_on_idle("owner/repo", "v0.3.0", config)
@@ -5664,10 +5664,10 @@ def test_advance_active_milestone_rejects_duplicate_title(monkeypatch, tmp_path)
     config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "run_command",
-        lambda command, **kwargs: json.dumps([
+        lambda command, **kwargs: json.dumps([[
             {"title": "v0.3.0", "state": "closed", "number": 1},
             {"title": "v0.3.0", "state": "closed", "number": 2},
-        ]),
+        ]]),
     )
     with pytest.raises(RuntimeError, match="ambiguous"):
         runner.advance_active_milestone_on_idle("owner/repo", "v0.3.0", config)
@@ -13983,10 +13983,44 @@ def test_verify_release_scope_reraises_real_gh_failure(monkeypatch):
         runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
 
 
+def test_derive_release_scope_flattens_multi_page_results(monkeypatch):
+    """发布 scope 的 Milestone 与 issues 查询必须用
+    `gh api --paginate --slurp` + `parse_paginated_issue_array` 展平各页：
+    Milestone 的 issue 超过一页（per_page=100）后，单页 `json.loads`
+    解析必崩，发布 scope 推导对该 Milestone 永久失败。"""
+    milestones = [{
+        "number": 5, "title": "v0.9.0", "state": "closed",
+        "open_issues": 0, "closed_issues": 105,
+        "url": "https://api.github.com/repos/o/r/milestones/5",
+        "html_url": "https://github.com/o/r/milestone/5",
+    }]
+    page_one = [{"number": n, "title": f"issue {n}", "state": "closed"}
+                for n in range(1, 101)]
+    page_two = [{"number": n, "title": f"issue {n}", "state": "closed"}
+                for n in range(101, 106)]
+
+    def fake_run(command, **kwargs):
+        # gh 的输出契约：--paginate --slurp 把各页收拢进一个外层数组。
+        assert "--slurp" in command
+        path = command[2]
+        if path.startswith("repos/o/r/milestones?"):
+            return json.dumps([milestones])
+        if "state=open" in path:
+            return json.dumps([[]])
+        return json.dumps([page_one, page_two])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    scope, open_evidence = runner.derive_release_scope_from_milestone(
+        "o/r", "v0.9.0",
+    )
+    assert scope == list(range(1, 106))
+    assert open_evidence == []
+
+
 def make_milestone_gh(monkeypatch, *, milestones=None, items_by_milestone=None):
     """Answer the gh API calls used for milestone issue scope derivation.
 
-    `milestones`: the `repos/o/r/milestones?state=all` payload.
+    `milestones`: the `repos/o/r/milestones?state=all&per_page=100` payload.
     `items_by_milestone`: milestone number -> `issues_closed` /
     `issues_open` lists. Pull requests are intentionally not a milestone
     scope source: the REST `/pulls` list endpoint ignores `milestone`.
@@ -13998,19 +14032,20 @@ def make_milestone_gh(monkeypatch, *, milestones=None, items_by_milestone=None):
     def fake_run_command(command, **kwargs):
         calls.append(command)
         path = command[2] if len(command) > 2 else ""
-        if path == "repos/o/r/milestones?state=all":
-            return json.dumps(milestones)
+        if path == "repos/o/r/milestones?state=all&per_page=100":
+            return json.dumps([milestones])
         if "/pulls?" in path:
             raise AssertionError(
                 "milestone scope must not query /pulls: milestone is ignored"
             )
         match = re.fullmatch(
-            r"repos/o/r/issues\?state=(\w+)&milestone=(\d+)", path,
+            r"repos/o/r/issues\?state=(\w+)&milestone=(\d+)&per_page=100",
+            path,
         )
         if match:
             state, number = match.groups()
             bucket = items_by_milestone.get(int(number), {})
-            return json.dumps(bucket.get(f"issues_{state}", []))
+            return json.dumps([bucket.get(f"issues_{state}", [])])
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
@@ -14928,9 +14963,9 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
         if command[:3] == ["gh", "issue", "list"]:
             label = command[command.index("--label") + 1]
             return json.dumps([{"number": n} for n in leftover_labels.get(label, [])])
-        if command == ["gh", "api",
-                       "repos/o/r/milestones?state=all", "--paginate"]:
-            return json.dumps([
+        if command == ["gh", "api", "repos/o/r/milestones?state=all&per_page=100",
+                       "--paginate", "--slurp"]:
+            return json.dumps([[
                 {"number": 1, "title": "v0.2.0", "state": "closed",
                  "open_issues": 0, "closed_issues": 28,
                  "url": "https://api.github.com/repos/o/r/milestones/1",
@@ -14939,7 +14974,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                  "open_issues": 0, "closed_issues": 2,
                  "url": "https://api.github.com/repos/o/r/milestones/5",
                  "html_url": "https://github.com/o/r/milestone/5"},
-            ])
+            ]])
         if command == ["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100",
                        "--paginate", "--slurp"]:
             return json.dumps([[]])
@@ -14950,13 +14985,14 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
         if command[:2] == ["gh", "api"]:
             if milestone_items is not None:
                 match = re.fullmatch(
-                    r"repos/o/r/(issues|pulls)\?state=(\w+)&milestone=(\d+)",
+                    r"repos/o/r/(issues|pulls)\?state=(\w+)&milestone=(\d+)"
+                    r"(?:&per_page=100)?",
                     command[2],
                 )
                 if match:
                     kind, item_state, number = match.groups()
                     bucket = milestone_items.get(int(number), {})
-                    return json.dumps(bucket.get(f"{kind}_{item_state}", []))
+                    return json.dumps([bucket.get(f"{kind}_{item_state}", [])])
             if check_run_pages:
                 page = check_run_pages.pop(0)
                 if not check_run_pages:
@@ -15225,7 +15261,8 @@ def test_process_release_derives_scope_from_milestone(monkeypatch):
     commands = [c for c, _ in state["commands"]]
     # The scope was derived from the milestone, not hand-listed.
     assert ["gh", "api",
-            "repos/o/r/issues?state=closed&milestone=5", "--paginate"] \
+            "repos/o/r/issues?state=closed&milestone=5&per_page=100",
+            "--paginate", "--slurp"] \
         in commands
     # The derived scope went through the existing item-by-item verify.
     (comment_number, comment_kwargs), = state["comments"]
@@ -15458,12 +15495,12 @@ def test_process_release_milestone_failure_keeps_release_successful(monkeypatch)
         # The v0.3.0 Milestone still has an open Issue: the close must
         # fail fast, but the already-published release remains successful.
         if command[:2] == ["gh", "api"] and "?state=all" in command[2]:
-            return json.dumps([
+            return json.dumps([[
                 {"number": 5, "title": "v0.3.0", "state": "open",
                  "open_issues": 1, "closed_issues": 2,
                  "url": "https://api.github.com/repos/o/r/milestones/5",
                  "html_url": "https://github.com/o/r/milestone/5"},
-            ])
+            ]])
         if command[:2] == ["gh", "api"] and "issues?milestone=5&state=open" in command[2]:
             return json.dumps([[{"number": 101, "title": "leftover"}]])
         return real(command, **kwargs)
@@ -15675,7 +15712,8 @@ def test_process_release_fails_on_scope_violation(monkeypatch):
 
 
 MILESTONE_LIST_COMMAND = [
-    "gh", "api", "repos/o/r/milestones?state=all", "--paginate",
+    "gh", "api", "repos/o/r/milestones?state=all&per_page=100",
+    "--paginate", "--slurp",
 ]
 MILESTONE_ISSUES_COMMAND = [
     "gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100",
@@ -15698,11 +15736,11 @@ def test_close_release_milestone_closes_an_open_empty_milestone(monkeypatch):
     def fake_run(command, **kwargs):
         calls.append(command)
         if command == MILESTONE_LIST_COMMAND:
-            return json.dumps([
+            return json.dumps([[
                 _milestone(4, "v0.2.0", "closed", 0),
                 _milestone(5, "v0.3.0", "open", 0),
                 _milestone(6, "v0.4.0", "open", 3),
-            ])
+            ]])
         if command == MILESTONE_ISSUES_COMMAND:
             return json.dumps([[]])
         if command == ["gh", "api", "repos/o/r/milestones/5",
@@ -15731,10 +15769,10 @@ def test_close_release_milestone_is_idempotent_when_already_closed(monkeypatch):
     def fake_run(command, **kwargs):
         calls.append(command)
         if command == MILESTONE_LIST_COMMAND:
-            return json.dumps([
+            return json.dumps([[
                 _milestone(1, "v0.2.0", "closed", 0),
                 _milestone(2, "v0.3.0", "closed", 0),
-            ])
+            ]])
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -15752,10 +15790,10 @@ def test_close_release_milestone_fails_fast_without_a_matching_title(monkeypatch
     def fake_run(command, **kwargs):
         calls.append(command)
         if command == MILESTONE_LIST_COMMAND:
-            return json.dumps([
+            return json.dumps([[
                 _milestone(1, "v0.2.0", "closed", 0),
                 _milestone(3, "v0.4.0", "open", 7),
-            ])
+            ]])
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -15773,9 +15811,9 @@ def test_close_release_milestone_fails_fast_when_open_issues_remain(monkeypatch)
     def fake_run(command, **kwargs):
         calls.append(command)
         if command == MILESTONE_LIST_COMMAND:
-            return json.dumps([
+            return json.dumps([[
                 _milestone(5, "v0.3.0", "open", 2),
-            ])
+            ]])
         if command == MILESTONE_ISSUES_COMMAND:
             return json.dumps([[{"number": 101, "title": "leftover one"},
                                 {"number": 102, "title": "leftover two"}]])
@@ -15802,10 +15840,10 @@ def test_close_release_milestone_fails_fast_on_duplicate_titles(monkeypatch):
     def fake_run(command, **kwargs):
         calls.append(command)
         if command == MILESTONE_LIST_COMMAND:
-            return json.dumps([
+            return json.dumps([[
                 _milestone(5, "v0.3.0", "open", 0),
                 _milestone(7, "v0.3.0", "open", 0),
-            ])
+            ]])
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -16018,7 +16056,7 @@ def test_close_release_milestone_reconciles_epics_when_summary_lags(monkeypatch)
     def fake_run(command, **kwargs):
         calls.append(command)
         if command == MILESTONE_LIST_COMMAND:
-            return json.dumps([_milestone(5, "v0.4.0", "open", 1)])
+            return json.dumps([[_milestone(5, "v0.4.0", "open", 1)]])
         if command == MILESTONE_ISSUES_COMMAND:
             return json.dumps([[{"number": 20}]]) if calls.count(command) == 1 else json.dumps([[]])
         if command[-1:] == ["state=closed"]:
@@ -16863,7 +16901,7 @@ def test_close_release_milestone_rejects_a_non_array_milestone_list(monkeypatch)
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    with pytest.raises(ValueError, match="must be a JSON array"):
+    with pytest.raises(ValueError, match="must be an array of arrays"):
         runner.close_release_milestone("o/r", "v0.3.0")
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["unexpected"])
