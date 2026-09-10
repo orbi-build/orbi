@@ -3,7 +3,7 @@
 # state and stay unchanged, only the visible descriptions carry the
 # Orbi brand).
 #
-# `orbi.py setup` aligns every configured source repo with this
+# `orbi setup --config orbi.toml` aligns every configured source repo with this
 # file declaratively: a missing label is created and a drifted label is
 # updated (name, color, description); nothing is ever deleted and no
 # business label (bug, enhancement, ...) is touched. The values below
