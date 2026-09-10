@@ -9253,6 +9253,395 @@ def _finish_progress(
     )))
 
 
+def _run_review_round(
+    pr_url: str, issue: dict, config: dict, source_repo: str,
+) -> bool | None:
+    """Run ONE review round of an open-PR delivery (Issue #289).
+
+    Extracted from `wait_for_delivery`'s loop body so the wait stays a
+    plain polling skeleton and one round is readable on its own: read
+    the delivery labels ONCE per round, repair a lost `ai-in-progress`
+    transition, gate on the resumable opened-PR states, then recover
+    the trusted scene, validate the frozen base, derive the
+    worktree/branch, run the independent review and classify any
+    failure (Issue #50).
+
+    Returns True when this round merged the PR (terminal success);
+    False when findings remain (`ai-fix-needed`, the label transition
+    happens inside the review itself) and the caller may poll into the
+    next round; and None when a terminal state was already handled and
+    the caller must release the slot and return: an unrecoverable
+    precondition (`ai-blocked`), a recoverable failure's full
+    `ai-fix-needed` scene (the next tick resumes the same run, branch,
+    worktree and PR), a failed `ai-in-progress` label repair, or an
+    open PR without a resumable delivery label (both `ai-blocked`).
+    """
+    number = int(issue["number"])
+    title = issue["title"]
+    run_id = current_run_id()
+    marker = run_marker(run_id) if run_id else ""
+    priority = issue_priority(issue)
+    publish = functools.partial(
+        _safe_publish, run_id=run_id, issue=number,
+        source_repo=source_repo, role=ROLE_REVIEW,
+    )
+
+    def block_label_inconsistency(labels: list[str], reason: str) -> None:
+        LOGGER.error(
+            "issue=%s delivery_label_inconsistent pr=%s reason=%s; "
+            "marking ai-blocked", number, pr_url, reason,
+        )
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_BLOCKED,
+            current_labels=labels,
+        )
+        body = (
+            f"Orbi failed: PR {pr_url} is open but the delivery labels "
+            f"could not be repaired ({reason}); the Issue is ai-blocked"
+        )
+        if marker:
+            body = f"{marker}\n{body}"
+        comment_issue(number, repo=source_repo, body=body)
+
+    labels = issue_labels(number, source_repo)
+    if IN_PROGRESS_LABEL in labels:
+        try:
+            apply_label_patch(
+                number, repo=source_repo, event=EVENT_PR_OPENED,
+                current_labels=labels,
+            )
+        except Exception as exc:
+            LOGGER.exception(
+                "issue=%s delivery_label_repair_failed pr=%s",
+                number, pr_url,
+            )
+            block_label_inconsistency(labels, str(exc))
+            return None
+        labels = [label for label in labels if label != IN_PROGRESS_LABEL]
+        labels.append(PR_OPENED_LABEL)
+        LOGGER.info(
+            "issue=%s delivery_label_repaired pr=%s from=%s to=%s",
+            number, pr_url, IN_PROGRESS_LABEL, PR_OPENED_LABEL,
+        )
+    if not (is_resumable(labels)
+            and not needs_human_intervention(labels)
+            and MERGED_LABEL not in labels):
+        block_label_inconsistency(
+            labels,
+            "open PR has no resumable delivery label",
+        )
+        return None
+    # The PR is in an opened-PR review state: run the
+    # independent review of the frozen PR on the same run
+    # (Issue #34). `ai-pr-opened` awaits review; `ai-fix-needed`
+    # awaits the next review session after a finding or a base
+    # conflict (Issue #82: the review session fixes findings in
+    # the same session, so both states run the same review). A
+    # clean verdict re-freezes the head, merges and returns
+    # True (terminal); unfixed findings or a behind/conflict
+    # gate label the Issue `ai-fix-needed` and the next
+    # iteration re-runs the same independent review. A review
+    # that cannot run is classified (Issue #50): a RECOVERABLE
+    # failure (Pi execution failure, model wait, runner
+    # exception, missing/malformed verdict, missing worktree,
+    # unpushed local commit) keeps the Issue in the automatic
+    # fix loop — `ai-fix-needed` with the full scene (run_id,
+    # PR, branch, worktree, session, phase, last activity,
+    # concrete error) on Issue AND PR, and the next timer
+    # resumes the same run, branch, worktree and PR. Only an
+    # explicit `UnrecoverableDeliveryError` (an external
+    # precondition the AI cannot safely judge or fix: an
+    # unrecoverable scene, a base-branch config change,
+    # exhausted rounds) is terminal: the Issue is marked
+    # `ai-blocked` ALONE (the opened-PR state label,
+    # `ai-pr-opened` or `ai-fix-needed`, is removed) with the
+    # explicit reason why automatic recovery is impossible.
+    worktree = None
+    branch = None
+    try:
+        try:
+            scene = resume_scene(
+                issue_comments(number, repo=source_repo),
+            )
+        except ValueError as scene_exc:
+            # Issue #50: without the trusted scene the runner
+            # cannot derive run_id, branch, worktree or PR and
+            # cannot start a review session — an external
+            # precondition the AI cannot fix by itself (the
+            # same terminal state as the scan-time
+            # `block_scene_failure`), so the handler below
+            # marks the Issue ai-blocked with the explicit
+            # reason.
+            raise UnrecoverableDeliveryError(
+                f"the resume scene is unrecoverable "
+                f"({scene_exc}); the runner cannot derive "
+                "run_id, branch, worktree or PR without the "
+                "trusted 'Orbi opened PR' comment, so "
+                "it cannot start a review session; a human "
+                "must restore the scene comment or relabel "
+                "the Issue"
+            ) from scene_exc
+        # Issue #91 + #50: the scene freezes the base the PR
+        # was opened against. The config may have moved on (or
+        # the comment is stale): reviewing or merging a PR
+        # frozen on another base against the configured one
+        # would run the freeze/merge gate on the wrong base,
+        # so fail fast before any git/Pi mutation instead of
+        # silently switching bases. A base-branch change is a
+        # human decision (Issue #50): the runner must not
+        # auto-retry a PR frozen on another base, so the
+        # handler below marks the Issue ai-blocked with the
+        # explicit reason and both base values named.
+        if scene["base_branch"] != config["base_branch"]:
+            raise UnrecoverableDeliveryError(
+                f"resume scene base_branch={scene['base_branch']} "
+                f"differs from configured base_branch="
+                f"{config['base_branch']}; the PR is frozen on a "
+                "different base and must not be reviewed or "
+                "merged against the configured one — a base "
+                "change is a human decision, so auto-retrying "
+                "would keep failing on the same mismatch"
+            )
+        worktree = worktree_path(
+            config["repo_dir"], source_repo, number,
+            scene["run_id"],
+        )
+        # Issue #90 + #50: the worktree is derived from the
+        # configured repo_dir, source repo, Issue number and run id
+        # (never read from a comment). A missing directory is a
+        # RECOVERABLE failure: the branch still exists on the
+        # remote and the worktree can be recreated (git worktree
+        # add) on the next resume, so the handler below keeps the
+        # Issue in the automatic fix loop (ai-fix-needed) with the
+        # PR and branch preserved.
+        if not worktree.is_dir():
+            # The failure comment must carry the full scene
+            # including the branch (Issue #50): the stable
+            # derivation is the best available guess when the
+            # worktree is gone.
+            branch = task_branch(
+                source_repo, number, scene["run_id"],
+            )
+            raise RuntimeError(f"worktree missing: {worktree}")
+        # The delivery branch is a local git fact of the derived
+        # worktree — the stable naming for the Runner's own
+        # deliveries, the contributor's head branch for an
+        # external takeover (Issue #608). Deriving it from the
+        # worktree keeps the whole review/merge loop
+        # branch-identity agnostic while the worktree path itself
+        # stays comment-independent.
+        branch = run_command(
+            ["git", "branch", "--show-current"], cwd=worktree,
+        ) or task_branch(source_repo, number, scene["run_id"])
+        review_config = {
+            **config,
+            "base_sha": scene["base_sha"],
+            "run_id": scene["run_id"],
+        }
+        merged = review_and_merge_if_clean(
+            worktree, branch, config["base_branch"],
+            review_config, source_repo, number,
+            title=title, priority=priority,
+        )
+    except Exception as exc:
+        detail = _failure_detail(exc)
+        if isinstance(exc, ReviewRoundsExhausted):
+            # The bounded budget is an intentional human decision
+            # point, not a Runner bug. Keep the structured event and
+            # terminal handling below, but do not emit a traceback.
+            LOGGER.error(
+                "review_rounds_exhausted_expected_terminal issue=%s "
+                "pr=%s reason=%s",
+                number, pr_url, detail,
+            )
+        else:
+            # Real delivery failures retain traceback evidence for
+            # health monitoring and diagnosis.
+            LOGGER.exception(
+                "issue=%s delivery_review_failed pr=%s", number, pr_url,
+            )
+
+        evidence = _failure_evidence(worktree, exc)
+        if is_unrecoverable_failure(exc):
+            # Issue #50: the ONLY opened-PR failure that leaves
+            # the automatic loop is an external precondition
+            # the AI cannot safely judge or fix: the Issue is
+            # marked ai-blocked ALONE (the opened-PR state
+            # label, `ai-pr-opened` or `ai-fix-needed`, is
+            # removed) and the failure comment states the
+            # explicit reason why automatic recovery is
+            # impossible.
+            # The current labels are read ONCE before the
+            # transition: the blocked patch clears every
+            # delivery-state label that is present (`ai-pr-opened`,
+            # and `ai-fix-needed` when the failure happened while
+            # awaiting the next review session — Issue #82 routes
+            # both opened-PR states into the same review), so the
+            # terminal state is `ai-blocked` alone.
+            labels = issue_labels(number, source_repo)
+            apply_label_patch(
+                number, repo=source_repo, event=EVENT_BLOCKED,
+                current_labels=labels,
+            )
+            body = (
+                f"Orbi failed: the independent review of "
+                f"PR {pr_url} failed: {detail}; this is an "
+                "external precondition the AI cannot safely "
+                "judge or fix, so it cannot be recovered "
+                "automatically (the Issue stays ai-blocked "
+                "until a human decides)"
+            )
+            body += evidence
+            if marker:
+                body = f"{marker}\n{body}"
+            comment_issue(number, repo=source_repo, body=body)
+            if run_id:
+                # Issue #79: the blocked-scene progress
+                # publishing is bypass — a 404 here must not
+                # escape the wait loop (the terminal
+                # bookkeeping above already completed and the
+                # slot must be released).
+                publish(
+                    action=lambda: ProgressPublisher(
+                        number, source_repo, run_id,
+                        run_command=run_command,
+                    ).milestone(
+                        f"blocked: the independent review of "
+                        f"PR {pr_url} failed: {detail}"
+                    ),
+                )
+                # The blocked scene carries the actual role and
+                # the completed review rounds (review round 2,
+                # PR #42): the failure happened during the
+                # independent review, and the trusted
+                # review-round comments bound the round count
+                # (GitHub is the only state store).
+                publish(
+                    action=lambda: _finish_progress(
+                        number, run_id, source_repo, worktree,
+                        branch, pr_url,
+                        f"the independent review of PR {pr_url} "
+                        f"failed: {detail}; this is an external "
+                        "precondition the AI cannot safely "
+                        "judge or fix, so it cannot be "
+                        "recovered automatically (the Issue "
+                        "stays ai-blocked until a human "
+                        "decides)",
+                        "fix the precondition above (see the "
+                        "reason) and relabel the Issue "
+                        "ai-fix-needed to resume this same PR",
+                        title=title,
+                        outcome="blocked",
+                        role=ROLE_REVIEW,
+                        review_round=review_rounds_so_far(
+                            issue_comments(number, repo=source_repo),
+                        ),
+                        priority=priority,
+                    ),
+                )
+            return None
+        # Issue #50: a RECOVERABLE failure (Pi execution
+        # failure, model wait, runner exception,
+        # missing/malformed verdict, missing worktree,
+        # unpushed local commit) keeps the Issue in the
+        # automatic fix loop: `ai-fix-needed` (the next timer
+        # resumes the same run, branch, worktree and PR — never
+        # ai-blocked, never a replacement PR). The failure
+        # comment carries the full scene and is written to the
+        # Issue AND the PR.
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_FIX_NEEDED,
+            current_labels=issue_labels(number, source_repo),
+        )
+        body = (
+            f"Orbi needs a fix: the independent review of "
+            f"PR {pr_url} failed: {detail}; the Issue stays "
+            "ai-fix-needed and the next tick resumes the same "
+            "run, branch, worktree and PR"
+        )
+        body += evidence
+        # The full scene (run_id, branch, worktree, session,
+        # phase, last activity) is always appended: a
+        # recoverable failure always happens after the scene
+        # was recovered and the worktree derived (a failure
+        # before the derivation is unrecoverable and never
+        # reaches this branch), so worktree, branch and run_id
+        # are set here. The session fields are '-' when no
+        # session file exists yet (the Pi never started or the
+        # dir is gone); a snapshot read failure is logged and
+        # reported as "no session yet" (best-effort
+        # observability, never a second failure).
+        snapshot = None
+        try:
+            snapshot = activity_snapshot(
+                worktree / ".pi-session",
+            )
+        except Exception:
+            LOGGER.exception(
+                "issue=%s activity scene failed", number,
+            )
+        if snapshot is None:
+            snapshot = {
+                "session_id": None, "session_file": None,
+                "phase": "starting",
+                "last_activity": None, "action": None,
+                "result": None,
+            }
+        body += "\n" + format_run_scene(
+            snapshot,
+            run_id=run_id or "-",
+            issue=issue_context(source_repo, number),
+            role=ROLE_REVIEW, branch=branch,
+            worktree=str(worktree),
+        )
+        if marker:
+            body = f"{marker}\n{body}"
+        comment_issue(number, repo=source_repo, body=body)
+        comment_pr(
+            _pr_number(pr_url), repo=source_repo, body=body,
+        )
+        if run_id:
+            # Issue #79: the fix-needed-scene progress
+            # publishing is bypass — a 404 here must not escape
+            # the wait loop (the label transition above already
+            # completed and the slot must be released).
+            publish(
+                action=lambda: ProgressPublisher(
+                    number, source_repo, run_id,
+                    run_command=run_command,
+                ).milestone(
+                    f"fix needed: the independent review of "
+                    f"PR {pr_url} failed: {sanitize(detail)}"
+                ),
+            )
+            publish(
+                action=lambda: _finish_progress(
+                    number, run_id, source_repo, worktree,
+                    branch, pr_url,
+                    f"the independent review of PR {pr_url} "
+                    f"failed: {detail}",
+                    "the next tick resumes the same run, branch, "
+                    "worktree and PR automatically (the Issue "
+                    "stays ai-fix-needed)",
+                    title=title,
+                    outcome="fix needed",
+                    review_round=review_rounds_so_far(
+                        issue_comments(number, repo=source_repo),
+                    ),
+                    priority=priority,
+                ),
+            )
+        return None
+    if merged:
+        LOGGER.info(
+            "issue=%s delivery_auto_merged pr=%s; releasing the "
+            "slot",
+            number, pr_url,
+        )
+        return True
+    return False
+
+
 def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                       source_repo: str,
                       poll_interval: float = PI_POLL_INTERVAL,
@@ -9324,23 +9713,6 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
         _safe_publish, run_id=run_id, issue=number,
         source_repo=source_repo, role=ROLE_REVIEW,
     )
-
-    def block_label_inconsistency(labels: list[str], reason: str) -> None:
-        LOGGER.error(
-            "issue=%s delivery_label_inconsistent pr=%s reason=%s; "
-            "marking ai-blocked", number, pr_url, reason,
-        )
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_BLOCKED,
-            current_labels=labels,
-        )
-        body = (
-            f"Orbi failed: PR {pr_url} is open but the delivery labels "
-            f"could not be repaired ({reason}); the Issue is ai-blocked"
-        )
-        if marker:
-            body = f"{marker}\n{body}"
-        comment_issue(number, repo=source_repo, body=body)
 
     while True:
         state, ci_checks = pr_delivery_status(pr_url, source_repo)
@@ -9473,349 +9845,21 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     ),
                 )
             return
-        labels = issue_labels(number, source_repo)
-        if IN_PROGRESS_LABEL in labels:
-            try:
-                apply_label_patch(
-                    number, repo=source_repo, event=EVENT_PR_OPENED,
-                    current_labels=labels,
-                )
-            except Exception as exc:
-                LOGGER.exception(
-                    "issue=%s delivery_label_repair_failed pr=%s",
-                    number, pr_url,
-                )
-                block_label_inconsistency(labels, str(exc))
-                return
-            labels = [label for label in labels if label != IN_PROGRESS_LABEL]
-            labels.append(PR_OPENED_LABEL)
-            LOGGER.info(
-                "issue=%s delivery_label_repaired pr=%s from=%s to=%s",
-                number, pr_url, IN_PROGRESS_LABEL, PR_OPENED_LABEL,
-            )
-        if (is_resumable(labels)
-                and not needs_human_intervention(labels)
-                and MERGED_LABEL not in labels):
-            # The PR is in an opened-PR review state: run the
-            # independent review of the frozen PR on the same run
-            # (Issue #34). `ai-pr-opened` awaits review; `ai-fix-needed`
-            # awaits the next review session after a finding or a base
-            # conflict (Issue #82: the review session fixes findings in
-            # the same session, so both states run the same review). A
-            # clean verdict re-freezes the head, merges and returns
-            # True (terminal); unfixed findings or a behind/conflict
-            # gate label the Issue `ai-fix-needed` and the next
-            # iteration re-runs the same independent review. A review
-            # that cannot run is classified (Issue #50): a RECOVERABLE
-            # failure (Pi execution failure, model wait, runner
-            # exception, missing/malformed verdict, missing worktree,
-            # unpushed local commit) keeps the Issue in the automatic
-            # fix loop — `ai-fix-needed` with the full scene (run_id,
-            # PR, branch, worktree, session, phase, last activity,
-            # concrete error) on Issue AND PR, and the next timer
-            # resumes the same run, branch, worktree and PR. Only an
-            # explicit `UnrecoverableDeliveryError` (an external
-            # precondition the AI cannot safely judge or fix: an
-            # unrecoverable scene, a base-branch config change,
-            # exhausted rounds) is terminal: the Issue is marked
-            # `ai-blocked` ALONE (the opened-PR state label,
-            # `ai-pr-opened` or `ai-fix-needed`, is removed) with the
-            # explicit reason why automatic recovery is impossible.
-            worktree = None
-            branch = None
-            try:
-                try:
-                    scene = resume_scene(
-                        issue_comments(number, repo=source_repo),
-                    )
-                except ValueError as scene_exc:
-                    # Issue #50: without the trusted scene the runner
-                    # cannot derive run_id, branch, worktree or PR and
-                    # cannot start a review session — an external
-                    # precondition the AI cannot fix by itself (the
-                    # same terminal state as the scan-time
-                    # `block_scene_failure`), so the handler below
-                    # marks the Issue ai-blocked with the explicit
-                    # reason.
-                    raise UnrecoverableDeliveryError(
-                        f"the resume scene is unrecoverable "
-                        f"({scene_exc}); the runner cannot derive "
-                        "run_id, branch, worktree or PR without the "
-                        "trusted 'Orbi opened PR' comment, so "
-                        "it cannot start a review session; a human "
-                        "must restore the scene comment or relabel "
-                        "the Issue"
-                    ) from scene_exc
-                # Issue #91 + #50: the scene freezes the base the PR
-                # was opened against. The config may have moved on (or
-                # the comment is stale): reviewing or merging a PR
-                # frozen on another base against the configured one
-                # would run the freeze/merge gate on the wrong base,
-                # so fail fast before any git/Pi mutation instead of
-                # silently switching bases. A base-branch change is a
-                # human decision (Issue #50): the runner must not
-                # auto-retry a PR frozen on another base, so the
-                # handler below marks the Issue ai-blocked with the
-                # explicit reason and both base values named.
-                if scene["base_branch"] != config["base_branch"]:
-                    raise UnrecoverableDeliveryError(
-                        f"resume scene base_branch={scene['base_branch']} "
-                        f"differs from configured base_branch="
-                        f"{config['base_branch']}; the PR is frozen on a "
-                        "different base and must not be reviewed or "
-                        "merged against the configured one — a base "
-                        "change is a human decision, so auto-retrying "
-                        "would keep failing on the same mismatch"
-                    )
-                worktree = worktree_path(
-                    config["repo_dir"], source_repo, number,
-                    scene["run_id"],
-                )
-                # Issue #90 + #50: the worktree is derived from the
-                # configured repo_dir, source repo, Issue number and run id
-                # (never read from a comment). A missing directory is a
-                # RECOVERABLE failure: the branch still exists on the
-                # remote and the worktree can be recreated (git worktree
-                # add) on the next resume, so the handler below keeps the
-                # Issue in the automatic fix loop (ai-fix-needed) with the
-                # PR and branch preserved.
-                if not worktree.is_dir():
-                    # The failure comment must carry the full scene
-                    # including the branch (Issue #50): the stable
-                    # derivation is the best available guess when the
-                    # worktree is gone.
-                    branch = task_branch(
-                        source_repo, number, scene["run_id"],
-                    )
-                    raise RuntimeError(f"worktree missing: {worktree}")
-                # The delivery branch is a local git fact of the derived
-                # worktree — the stable naming for the Runner's own
-                # deliveries, the contributor's head branch for an
-                # external takeover (Issue #608). Deriving it from the
-                # worktree keeps the whole review/merge loop
-                # branch-identity agnostic while the worktree path itself
-                # stays comment-independent.
-                branch = run_command(
-                    ["git", "branch", "--show-current"], cwd=worktree,
-                ) or task_branch(source_repo, number, scene["run_id"])
-                review_config = {
-                    **config,
-                    "base_sha": scene["base_sha"],
-                    "run_id": scene["run_id"],
-                }
-                merged = review_and_merge_if_clean(
-                    worktree, branch, config["base_branch"],
-                    review_config, source_repo, number,
-                    title=title, priority=priority,
-                )
-            except Exception as exc:
-                detail = _failure_detail(exc)
-                if isinstance(exc, ReviewRoundsExhausted):
-                    # The bounded budget is an intentional human decision
-                    # point, not a Runner bug. Keep the structured event and
-                    # terminal handling below, but do not emit a traceback.
-                    LOGGER.error(
-                        "review_rounds_exhausted_expected_terminal issue=%s "
-                        "pr=%s reason=%s",
-                        number, pr_url, detail,
-                    )
-                else:
-                    # Real delivery failures retain traceback evidence for
-                    # health monitoring and diagnosis.
-                    LOGGER.exception(
-                        "issue=%s delivery_review_failed pr=%s", number, pr_url,
-                    )
-
-                evidence = _failure_evidence(worktree, exc)
-                if is_unrecoverable_failure(exc):
-                    # Issue #50: the ONLY opened-PR failure that leaves
-                    # the automatic loop is an external precondition
-                    # the AI cannot safely judge or fix: the Issue is
-                    # marked ai-blocked ALONE (the opened-PR state
-                    # label, `ai-pr-opened` or `ai-fix-needed`, is
-                    # removed) and the failure comment states the
-                    # explicit reason why automatic recovery is
-                    # impossible.
-                    # The current labels are read ONCE before the
-                    # transition: the blocked patch clears every
-                    # delivery-state label that is present (`ai-pr-opened`,
-                    # and `ai-fix-needed` when the failure happened while
-                    # awaiting the next review session — Issue #82 routes
-                    # both opened-PR states into the same review), so the
-                    # terminal state is `ai-blocked` alone.
-                    labels = issue_labels(number, source_repo)
-                    apply_label_patch(
-                        number, repo=source_repo, event=EVENT_BLOCKED,
-                        current_labels=labels,
-                    )
-                    body = (
-                        f"Orbi failed: the independent review of "
-                        f"PR {pr_url} failed: {detail}; this is an "
-                        "external precondition the AI cannot safely "
-                        "judge or fix, so it cannot be recovered "
-                        "automatically (the Issue stays ai-blocked "
-                        "until a human decides)"
-                    )
-                    body += evidence
-                    if marker:
-                        body = f"{marker}\n{body}"
-                    comment_issue(number, repo=source_repo, body=body)
-                    if run_id:
-                        # Issue #79: the blocked-scene progress
-                        # publishing is bypass — a 404 here must not
-                        # escape the wait loop (the terminal
-                        # bookkeeping above already completed and the
-                        # slot must be released).
-                        publish(
-                            action=lambda: ProgressPublisher(
-                                number, source_repo, run_id,
-                                run_command=run_command,
-                            ).milestone(
-                                f"blocked: the independent review of "
-                                f"PR {pr_url} failed: {detail}"
-                            ),
-                        )
-                        # The blocked scene carries the actual role and
-                        # the completed review rounds (review round 2,
-                        # PR #42): the failure happened during the
-                        # independent review, and the trusted
-                        # review-round comments bound the round count
-                        # (GitHub is the only state store).
-                        publish(
-                            action=lambda: _finish_progress(
-                                number, run_id, source_repo, worktree,
-                                branch, pr_url,
-                                f"the independent review of PR {pr_url} "
-                                f"failed: {detail}; this is an external "
-                                "precondition the AI cannot safely "
-                                "judge or fix, so it cannot be "
-                                "recovered automatically (the Issue "
-                                "stays ai-blocked until a human "
-                                "decides)",
-                                "fix the precondition above (see the "
-                                "reason) and relabel the Issue "
-                                "ai-fix-needed to resume this same PR",
-                                title=title,
-                                outcome="blocked",
-                                role=ROLE_REVIEW,
-                                review_round=review_rounds_so_far(
-                                    issue_comments(number, repo=source_repo),
-                                ),
-                                priority=priority,
-                            ),
-                        )
-                    return
-                # Issue #50: a RECOVERABLE failure (Pi execution
-                # failure, model wait, runner exception,
-                # missing/malformed verdict, missing worktree,
-                # unpushed local commit) keeps the Issue in the
-                # automatic fix loop: `ai-fix-needed` (the next timer
-                # resumes the same run, branch, worktree and PR — never
-                # ai-blocked, never a replacement PR). The failure
-                # comment carries the full scene and is written to the
-                # Issue AND the PR.
-                apply_label_patch(
-                    number, repo=source_repo, event=EVENT_FIX_NEEDED,
-                    current_labels=issue_labels(number, source_repo),
-                )
-                body = (
-                    f"Orbi needs a fix: the independent review of "
-                    f"PR {pr_url} failed: {detail}; the Issue stays "
-                    "ai-fix-needed and the next tick resumes the same "
-                    "run, branch, worktree and PR"
-                )
-                body += evidence
-                # The full scene (run_id, branch, worktree, session,
-                # phase, last activity) is always appended: a
-                # recoverable failure always happens after the scene
-                # was recovered and the worktree derived (a failure
-                # before the derivation is unrecoverable and never
-                # reaches this branch), so worktree, branch and run_id
-                # are set here. The session fields are '-' when no
-                # session file exists yet (the Pi never started or the
-                # dir is gone); a snapshot read failure is logged and
-                # reported as "no session yet" (best-effort
-                # observability, never a second failure).
-                snapshot = None
-                try:
-                    snapshot = activity_snapshot(
-                        worktree / ".pi-session",
-                    )
-                except Exception:
-                    LOGGER.exception(
-                        "issue=%s activity scene failed", number,
-                    )
-                if snapshot is None:
-                    snapshot = {
-                        "session_id": None, "session_file": None,
-                        "phase": "starting",
-                        "last_activity": None, "action": None,
-                        "result": None,
-                    }
-                body += "\n" + format_run_scene(
-                    snapshot,
-                    run_id=run_id or "-",
-                    issue=issue_context(source_repo, number),
-                    role=ROLE_REVIEW, branch=branch,
-                    worktree=str(worktree),
-                )
-                if marker:
-                    body = f"{marker}\n{body}"
-                comment_issue(number, repo=source_repo, body=body)
-                comment_pr(
-                    _pr_number(pr_url), repo=source_repo, body=body,
-                )
-                if run_id:
-                    # Issue #79: the fix-needed-scene progress
-                    # publishing is bypass — a 404 here must not escape
-                    # the wait loop (the label transition above already
-                    # completed and the slot must be released).
-                    publish(
-                        action=lambda: ProgressPublisher(
-                            number, source_repo, run_id,
-                            run_command=run_command,
-                        ).milestone(
-                            f"fix needed: the independent review of "
-                            f"PR {pr_url} failed: {sanitize(detail)}"
-                        ),
-                    )
-                    publish(
-                        action=lambda: _finish_progress(
-                            number, run_id, source_repo, worktree,
-                            branch, pr_url,
-                            f"the independent review of PR {pr_url} "
-                            f"failed: {detail}",
-                            "the next tick resumes the same run, branch, "
-                            "worktree and PR automatically (the Issue "
-                            "stays ai-fix-needed)",
-                            title=title,
-                            outcome="fix needed",
-                            review_round=review_rounds_so_far(
-                                issue_comments(number, repo=source_repo),
-                            ),
-                            priority=priority,
-                        ),
-                    )
-                return
-            if merged:
-                LOGGER.info(
-                    "issue=%s delivery_auto_merged pr=%s; releasing the "
-                    "slot",
-                    number, pr_url,
-                )
-                return
-            # Back to the next review round: yield the cadence first
-            # (Issue #588). This tail previously had NO sleep — a red CI
-            # or unfixed findings re-ran the full reviewer session
-            # back-to-back in a hot loop while holding the slot, and
-            # poll_interval was a dead parameter.
-            time.sleep(poll_interval)
-            continue  # findings: the next iteration re-runs the review
-        block_label_inconsistency(
-            labels,
-            "open PR has no resumable delivery label",
-        )
-        return
+        # Issue #289: one OPEN round — the label read/repair, the
+        # resumable gate, one independent review of the frozen PR and
+        # the whole failure classification — lives in
+        # `_run_review_round`. True (merged this round) and None (a
+        # terminal state was already handled: ai-blocked, or the
+        # recoverable ai-fix-needed scene the next tick resumes) both
+        # end the delivery here; only False (findings) keeps polling.
+        if _run_review_round(pr_url, issue, config, source_repo) is not False:
+            return
+        # Back to the next review round: yield the cadence first
+        # (Issue #588). This tail previously had NO sleep — a red CI
+        # or unfixed findings re-ran the full reviewer session
+        # back-to-back in a hot loop while holding the slot, and
+        # poll_interval was a dead parameter.
+        time.sleep(poll_interval)
 
 
 def _preflight(config: dict) -> None:
