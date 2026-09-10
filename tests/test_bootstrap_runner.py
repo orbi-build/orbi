@@ -7353,6 +7353,17 @@ def test_stream_pi_early_exit_uses_the_flushed_journal(
     # The journal on disk proves the request went out (its response
     # arrived), so this is NOT a startup failure.
     assert " startup_failed " not in caplog.text
+    # The exit scene reports the SAME journal the classification used:
+    # a `phase=session_pending` / `last_activity=-` next to a real
+    # `session_file=` would describe the session as not-created while
+    # the recoverable decision says a request went out.
+    scene = [line for line in caplog.text.splitlines()
+             if " run_failed " in line]
+    assert len(scene) == 1
+    assert "session=sess-1" in scene[0]
+    assert "session_file=" in scene[0]
+    assert "phase=starting" in scene[0]
+    assert "last_activity=- " not in scene[0]
     # The prompt never reaches the journal.
     assert "SECRET ISSUE BODY" not in caplog.text
 

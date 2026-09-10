@@ -5463,16 +5463,20 @@ def _refresh_session_evidence(activity: dict, session_dir: Path,
     delivery). Once the process is dead the journal on disk is
     authoritative: re-read it with the SAME `known_files` baseline (a
     resumed run's previous sessions are never counted) and overwrite
-    only the fields the journal can prove. The live-only fields
+    the journal-derived fields — the session identity, the startup
+    milestones (`first_request` / `first_response`), the selected
+    provider/model and the scene fields (`phase`, `last_activity`,
+    `action`, `result`) the exit lines render. The scene must describe
+    the SAME journal the decision used; the LIVE-only fields
     (`stale_seconds`, `model_wait`, `recovery`) keep their last-poll
-    value.
+    value, because they carry the kill decisions already taken.
     """
     final = session_state(session_dir, known_files)
     if final is None:
         return activity
     for key in (
         "session_id", "session_file", "first_request", "first_response",
-        "provider", "model",
+        "provider", "model", "phase", "last_activity", "action", "result",
     ):
         if final.get(key):
             activity[key] = final[key]
