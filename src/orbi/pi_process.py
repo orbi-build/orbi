@@ -18,6 +18,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import NoReturn
 
 from orbi.pi_activity import (
     SessionWatcher,
@@ -1087,81 +1088,64 @@ def stream_pi(
             model_wait_swallowed=model_wait_swallowed,
             idle_recovery_failed=idle_recovery_failed,
         )
-    if idle_recovery_failed:
-        stale = format_duration(activity["stale_seconds"])
+    # The single `run_failed` site (Issue #292): every terminal branch
+    # computes its reason and exception and lands here, so a new log
+    # field is added once, not per branch.
+    def _fail_run(reason: str, exc: BaseException) -> NoReturn:
         LOGGER.error(
-            "run_failed %s reason=idle_recovery_stale_%s",
+            "run_failed %s reason=%s",
             format_run_scene(
                 activity, run_id=run_id, issue=issue_ref,
                 role=role, branch=branch, worktree=str(cwd),
             ),
-            stale,
+            reason,
         )
-        raise RecoverablePiFailure(
-            f"Pi session stayed idle for {stale} after idle recovery "
-            f"(TERM/KILL of pre-idle descendants); Pi was killed "
-            "(Issue #94)"
+        raise exc
+    if idle_recovery_failed:
+        stale = format_duration(activity["stale_seconds"])
+        _fail_run(
+            f"idle_recovery_stale_{stale}",
+            RecoverablePiFailure(
+                f"Pi session stayed idle for {stale} after idle recovery "
+                f"(TERM/KILL of pre-idle descendants); Pi was killed "
+                "(Issue #94)"
+            ),
         )
     if model_wait_swallowed:
         idle = format_duration(activity["stale_seconds"])
-        LOGGER.error(
-            "run_failed %s reason=model_wait_swallowed_idle_%s",
-            format_run_scene(
-                activity, run_id=run_id, issue=issue_ref,
-                role=role, branch=branch, worktree=str(cwd),
+        _fail_run(
+            f"model_wait_swallowed_idle_{idle}",
+            RecoverablePiFailure(
+                f"Pi is stuck in model_wait and the model /slots probe "
+                f"reported every slot idle for the sustained grace "
+                f"(session frozen {idle}): the model request was swallowed "
+                "(the model service process is alive and the connection is "
+                "established, but nothing is generating); Pi was killed "
+                "(Issue #233)"
             ),
-            idle,
-        )
-        raise RecoverablePiFailure(
-            f"Pi is stuck in model_wait and the model /slots probe "
-            f"reported every slot idle for the sustained grace "
-            f"(session frozen {idle}): the model request was swallowed "
-            "(the model service process is alive and the connection is "
-            "established, but nothing is generating); Pi was killed "
-            "(Issue #233)"
         )
     if model_wait_dead:
         stale = format_duration(activity["stale_seconds"])
-        LOGGER.error(
-            "run_failed %s reason=model_wait_dead_stale_%s",
-            format_run_scene(
-                activity, run_id=run_id, issue=issue_ref,
-                role=role, branch=branch, worktree=str(cwd),
-            ),
-            stale,
-        )
         # Issue #227: the classified hung-model-request failure —
         # `process_issue` keeps the Issue `ai-in-progress` (the next tick
         # resumes the same run) instead of the terminal `ai-blocked`.
-        raise ModelWaitDeadError(
-            f"Pi is stuck in model_wait with a frozen session for {stale}: "
-            "the model request is hung (the model service process is "
-            "alive but the request never completes); Pi was killed "
-            "(Issue #218)"
+        _fail_run(
+            f"model_wait_dead_stale_{stale}",
+            ModelWaitDeadError(
+                f"Pi is stuck in model_wait with a frozen session for {stale}: "
+                "the model request is hung (the model service process is "
+                "alive but the request never completes); Pi was killed "
+                "(Issue #218)"
+            ),
         )
     if timed_out:
-        reason = f"timeout_{format_duration(timeout)}"
-        LOGGER.error(
-            "run_failed %s reason=%s",
-            format_run_scene(
-                activity, run_id=run_id, issue=issue_ref,
-                role=role, branch=branch, worktree=str(cwd),
+        _fail_run(
+            f"timeout_{format_duration(timeout)}",
+            RecoverablePiTimeoutError(
+                safe_command, timeout, output=stdout, stderr=stderr,
             ),
-            reason,
-        )
-        raise RecoverablePiTimeoutError(
-            safe_command, timeout, output=stdout, stderr=stderr,
         )
     if process.returncode != 0:
-        reason = f"pi_exit_{process.returncode}"
-        LOGGER.error(
-            "run_failed %s reason=%s",
-            format_run_scene(
-                activity, run_id=run_id, issue=issue_ref,
-                role=role, branch=branch, worktree=str(cwd),
-            ),
-            reason,
-        )
         # A Pi exit after it created a session is an interrupted run: its
         # work is resumable, including exits after idle recovery.  A
         # pre-session startup failure remains terminal unless it reaches
@@ -1178,8 +1162,11 @@ def stream_pi(
             if activity["first_request"]
             else subprocess.CalledProcessError
         )
-        raise error_type(
-            process.returncode, safe_command, output=stdout, stderr=stderr,
+        _fail_run(
+            f"pi_exit_{process.returncode}",
+            error_type(
+                process.returncode, safe_command, output=stdout, stderr=stderr,
+            ),
         )
     if stderr:
         LOGGER.info("stderr=%s", stderr.rstrip())

@@ -1,3 +1,4 @@
+import ast
 import fcntl
 import json
 import logging
@@ -19122,3 +19123,46 @@ def test_load_config_does_not_treat_provider_directory_as_missing(tmp_path):
     )
     with pytest.raises(FileNotFoundError):
         runner.load_config(config_path, allow_missing_pi_providers=True)
+
+
+def _run_failed_log_sites(source: str) -> list[int]:
+    """Scan one Python source; return the line numbers of the
+    `LOGGER.error("run_failed ...")` call sites."""
+    sites: list[int] = []
+    for node in ast.walk(ast.parse(source)):
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "error"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and node.args[0].value.startswith("run_failed ")):
+            sites.append(node.lineno)
+    return sites
+
+
+def test_run_failed_pin_detects_every_error_site():
+    """The detector really detects: two `run_failed` ERROR sites produce
+    two line numbers and a non-ERROR sibling is ignored."""
+    source = (
+        "LOGGER.error('run_failed %s reason=a', s)\n"
+        "LOGGER.info('run_failed (historic)', s)\n"
+        "LOGGER.error('run_failed %s reason=b', s)\n"
+    )
+    assert _run_failed_log_sites(source) == [1, 3]
+
+
+def test_run_failed_scene_logged_in_one_place():
+    """Issue #292: the `run_failed` skeleton (the six-argument
+    `format_run_scene` + reason + raise) lives in exactly ONE place — the
+    local `_fail_run` helper in `stream_pi`; each terminal branch computes
+    its reason and exception and calls it once. A second literal
+    `LOGGER.error("run_failed ...` site is the duplicated debt this pin
+    rejects (a new log field would have to be edited per branch again)."""
+    sites = _run_failed_log_sites(
+        Path(pi_process.__file__).read_text(encoding="utf-8")
+    )
+    assert len(sites) == 1, (
+        "the run_failed scene must be logged in exactly one place (the "
+        f"_fail_run helper, Issue #292); sites at lines: {sites}"
+    )
