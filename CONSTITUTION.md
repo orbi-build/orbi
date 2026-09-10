@@ -65,7 +65,7 @@ Adding a row is an amendment.
    config) moves that domain into its own module in the same PR, tests
    included. Extraction never changes behaviour.
 3. Modules extracted from `runner.py` never import `runner`. Only the CLI
-   entry layer (`cli`, `cli_install`, `pilot_setup`) may import it, as a
+   entry layer (`cli`, `pilot_setup`) may import it, as a
    caller. Pure modules (no I/O, deterministic) are preferred;
    `delivery_labels.py` is the model.
 4. There is exactly one subprocess seam: `run_command` (and its network
