@@ -290,6 +290,74 @@ def test_resume_scene_rejects_another_app_bot_even_with_the_marker(monkeypatch):
         runner.resume_scene(comments)
 
 
+# Issue #655: `gh issue view --json comments` (GraphQL) returns
+# `author.login` without the `[bot]` suffix while REST keeps it. Both shapes
+# describe the same App credential and must be trusted; a foreign App, with
+# or without the suffix, must not.
+@pytest.mark.parametrize("login,expected", [
+    # The real GraphQL shape of this App bot (the reported failure).
+    ("orbi-dev-test", True),
+    # The REST shape of this App bot.
+    ("orbi-dev-test[bot]", True),
+    # Another App, suffix-less GraphQL shape.
+    ("other-app", False),
+    # Another App, REST shape.
+    ("other-app[bot]", False),
+    # A shared prefix must not match: the comparison is exact after
+    # normalization.
+    ("orbi-dev-test-2", False),
+])
+def test_comment_is_trusted_normalizes_optional_bot_suffix(
+    monkeypatch, login, expected,
+):
+    monkeypatch.setattr(
+        runner, "_authenticated_github_login",
+        lambda: "orbi-dev-test[bot]",
+    )
+    comment = {
+        "body": opened_pr_comment(),
+        "authorAssociation": "NONE",
+        "author": {"login": login},
+    }
+    assert runner._comment_is_trusted(comment) is expected
+
+
+def test_resume_scene_accepts_graphql_shaped_runner_app_bot(monkeypatch):
+    """End-to-end resume with the exact GraphQL author shape that failed."""
+    comments = [{
+        "body": opened_pr_comment(),
+        "authorAssociation": "NONE",
+        "author": {"login": "orbi-dev-test"},
+    }]
+    monkeypatch.setattr(
+        runner, "_authenticated_github_login",
+        lambda: "orbi-dev-test[bot]",
+    )
+    scene = runner.resume_scene(comments)
+    assert scene["run_id"] == FAKE_RUN_ID
+
+
+@pytest.mark.parametrize("author", [
+    {"login": None},
+    {"login": 7},
+    {},
+    "not-a-dict",
+])
+def test_comment_is_trusted_rejects_missing_or_non_string_login(
+    monkeypatch, author,
+):
+    monkeypatch.setattr(
+        runner, "_authenticated_github_login",
+        lambda: "orbi-dev-test[bot]",
+    )
+    comment = {
+        "body": opened_pr_comment(),
+        "authorAssociation": "NONE",
+        "author": author,
+    }
+    assert runner._comment_is_trusted(comment) is False
+
+
 # ------------------------------------------------- trusted comments (F1)
 
 

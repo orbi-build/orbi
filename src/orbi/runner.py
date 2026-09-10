@@ -4607,6 +4607,17 @@ def _authenticated_github_login() -> str:
     return active_account
 
 
+def _strip_bot_suffix(login: str) -> str:
+    """Drop the optional ``[bot]`` suffix from an App login.
+
+    ``gh issue view --json comments`` reads comments through GraphQL and
+    reports ``author.login`` without the ``[bot]`` suffix, while REST's
+    ``user.login`` keeps it (Issue #655). Both shapes name the same App
+    credential, so the suffix is normalized away before comparison.
+    """
+    return login[:-5] if login.endswith("[bot]") else login
+
+
 def _comment_is_trusted(comment: object) -> bool:
     """True when the comment is from a maintainer or this runner's App bot."""
     if not isinstance(comment, dict):
@@ -4615,11 +4626,15 @@ def _comment_is_trusted(comment: object) -> bool:
         return True
     author = comment.get("author")
     login = author.get("login") if isinstance(author, dict) else None
-    if not isinstance(login, str) or not login.endswith("[bot]"):
+    if not isinstance(login, str):
         return False
     # A copied run marker is not sufficient: the author must be the account
-    # represented by the currently authenticated installation token.
-    return login == _authenticated_github_login()
+    # represented by the currently authenticated installation token. The
+    # optional `[bot]` suffix is normalized on both sides because GraphQL
+    # drops it and REST keeps it (Issue #655).
+    return _strip_bot_suffix(login) == _strip_bot_suffix(
+        _authenticated_github_login()
+    )
 
 
 def resume_scene(comments: list[dict]) -> dict:
