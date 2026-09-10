@@ -6,6 +6,7 @@ any Pi session runs and at most every 30 seconds, post short milestone
 comments for the key events, and end with either the final delivery
 summary or the blocked scene — in the same comment.
 """
+import ast
 import json
 import subprocess
 import sys
@@ -2236,3 +2237,94 @@ def test_wait_for_delivery_external_closed_requeues_for_internal_redo(
     assert "closed without" in pr_body and "internal" in pr_body
     assert "Issue #608" in pr_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in pr_body
+
+
+def _safe_publish_pin(source: str) -> tuple[int, list[str]]:
+    """Scan one Python source; return (publish call count, violations).
+
+    The Issue #294 pin: every bare `publish(...)` call forwards exactly
+    one keyword `action` (the four constant `_safe_publish` params stay
+    in the per-function `functools.partial` binding); a direct
+    `_safe_publish(...)` call anywhere is a violation.
+    """
+    repeats: list[str] = []
+    publish_calls = 0
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)):
+            continue
+        if node.func.id == "_safe_publish":
+            repeats.append(f"line {node.lineno}: direct _safe_publish call")
+        elif node.func.id == "publish":
+            publish_calls += 1
+            bad = (["<positional>"] if node.args else []) + [
+                keyword.arg for keyword in node.keywords
+                if keyword.arg != "action"
+            ]
+            if bad:
+                repeats.append(
+                    f"line {node.lineno}: publish passes {', '.join(bad)}"
+                )
+    return publish_calls, repeats
+
+
+def test_safe_publish_pin_detects_the_boilerplate_debt():
+    """The detector really detects: a direct `_safe_publish` call, a
+    repeated context param and a positional publish arg all violate."""
+    calls, repeats = _safe_publish_pin(
+        "_safe_publish(action=f)\n"
+        "publish(action=f, run_id='r')\n"
+        "publish(f)\n"
+    )
+    assert calls == 2
+    assert len(repeats) == 3
+    assert "direct _safe_publish call" in repeats[0]
+    assert "publish passes run_id" in repeats[1]
+    assert "publish passes <positional>" in repeats[2]
+
+
+def test_safe_publish_call_sites_pass_only_action():
+    """Issue #294: the four constant `_safe_publish` params (`run_id`,
+    `issue`, `source_repo`, `role`) are bound once per function with a
+    local `publish = functools.partial(...)`. Every call site forwards
+    only `action`; a direct `_safe_publish(...)` call anywhere is the
+    boilerplate debt this pin rejects."""
+    calls, repeats = _safe_publish_pin(
+        Path(runner.__file__).read_text(encoding="utf-8")
+    )
+    assert calls, "no publish call sites found - the pin is blind"
+    assert repeats == [], (
+        "publish call sites must forward only action= (bind the "
+        f"constant context once per function, Issue #294): {repeats}"
+    )
+
+
+def test_process_ticket_only_publishes_the_bound_context(monkeypatch):
+    """Issue #294: every publish of the ticket-only path carries the
+    exact bound context (run_id, issue, source_repo, role) and only
+    the action varies per call site — the AST pin above cannot see the
+    bound values, this behavioral path can."""
+    issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
+             "labels": [{"name": "ai-ops-only"}]}
+    seen = []
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        runner, "run_ticket_agent", lambda *args, **kwargs: "content")
+    monkeypatch.setattr(runner, "ProgressPublisher", Mock())
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "")
+    monkeypatch.setattr(
+        runner, "_safe_publish", lambda **kwargs: seen.append(kwargs))
+
+    runner.process_ticket_only(issue, {"repo_dir": Path("/repo")}, "o/r")
+
+    # ensure (claim) -> delivered milestone -> finish.
+    assert len(seen) == 3
+    for kwargs in seen:
+        assert kwargs["run_id"] == "a1b2c3d4"
+        assert kwargs["issue"] == 99
+        assert kwargs["source_repo"] == "o/r"
+        assert kwargs["role"] == runner.ROLE_TICKET
+        assert callable(kwargs["action"])

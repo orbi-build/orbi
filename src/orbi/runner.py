@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import functools
 import hashlib
 import json
 import logging
@@ -3698,6 +3699,10 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
     worktree = worktree_path(
         config["repo_dir"], source_repo, number, run_id,
     )
+    publish = functools.partial(
+        _safe_publish, run_id=run_id, issue=number,
+        source_repo=source_repo, role=ROLE_RELEASE,
+    )
 
     def progress() -> dict:
         return _progress_state(
@@ -3710,9 +3715,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
     def on_delivery_wait(detail: str) -> None:
         state = progress()
         state["phase"] = f"waiting deliveries: {detail}"
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
+        publish(
             action=lambda: publisher.patch(_progress_body(state)),
         )
 
@@ -3722,9 +3725,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         # `release_waiting_ci` journal line.
         state = progress()
         state["phase"] = f"waiting CI: {detail}"
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
+        publish(
             action=lambda: publisher.patch(_progress_body(state)),
         )
 
@@ -3759,14 +3760,10 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         set_active_run(
             number, title, branch, str(worktree),
         )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
+        publish(
             action=lambda: publisher.ensure(progress_body(progress())),
         )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
+        publish(
             action=lambda: publisher.milestone(
                 f"**Orbi release started**: {run_info}",
             ),
@@ -3825,9 +3822,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             on_wait=on_ci_wait,
             on_delivery_wait=on_delivery_wait,
         )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
+        publish(
             action=lambda: publisher.milestone(
                 f"**Orbi release gates passed**: "
                 f"{'; '.join(gate_evidence)}",
@@ -3869,9 +3864,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
                 for item in open_milestone_evidence
             ]
         changelog = build_release_changelog(source_repo, declaration["scope"])
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
+        publish(
             action=lambda: publisher.milestone(
                 f"**Orbi release scope verified**: "
                 f"{'; '.join(scope_evidence)}",
@@ -3931,9 +3924,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             f"commit {release_commit} (the #268 CI-wait gate; no local "
             "test execution)"
         )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
+        publish(
             action=lambda: publisher.milestone(
                 f"**Orbi release tests passed**: {test_evidence}",
             ),
@@ -3982,9 +3973,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             scope_evidence=scope_evidence, gate_evidence=gate_evidence,
             test_evidence=test_evidence, run_id=run_id, issue_number=number,
         )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
+        publish(
             action=lambda: publisher.milestone(
                 f"**Orbi released**: {release_url}",
             ),
@@ -3994,9 +3983,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             worktree=worktree, base_branch=base_branch, tag=tag,
             release_commit=release_commit, issue_number=number,
         )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
+        publish(
             action=lambda: publisher.milestone(
                 f"**Orbi release docs synced**: {docs_evidence}",
             ),
@@ -4050,9 +4037,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             LOGGER.exception(
                 "issue=%s release_success_comment_failed", number,
             )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
+        publish(
             action=lambda: publisher.finish(progress_body(progress())),
         )
         LOGGER.info(
@@ -4081,9 +4066,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
                 f"run_id={run_id}"
             ),
         )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
+        publish(
             action=lambda: publisher.finish(progress_body(progress())),
         )
         LOGGER.info(
@@ -4101,9 +4084,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             number, repo=source_repo,
             body=release_failure_comment_body(run_id, run_info, str(exc)),
         )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
+        publish(
             action=lambda: publisher.finish(progress_body(progress())),
         )
         return ""
@@ -5628,6 +5609,10 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
     priority = issue_priority(issue)
     run_info = f"run_id={run_id} priority={priority} task_type=ticket-only"
     publisher = ProgressPublisher(number, source_repo, run_id, run_command=run_command)
+    publish = functools.partial(
+        _safe_publish, run_id=run_id, issue=number,
+        source_repo=source_repo, role=ROLE_TICKET,
+    )
     started = time.monotonic()
     apply_label_patch(
         number, repo=source_repo, event=EVENT_CLAIM,
@@ -5637,9 +5622,7 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
     )
     set_active_run(number, title, "-", "-")
     try:
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_TICKET,
+        publish(
             action=lambda: publisher.ensure(_progress_body(_progress_state(
                 issue=number, title=title, run_id=run_id, role=ROLE_TICKET,
                 branch="-", worktree=Path("-"), started=started, pr_url=None,
@@ -5667,14 +5650,10 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
         # clears the claim label directly (no `ai-merged` terminal state —
         # the Issue is closed, not merged).
         edit_issue(number, repo=source_repo, remove=IN_PROGRESS_LABEL)
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_TICKET,
+        publish(
             action=lambda: publisher.milestone(f"ticket-only delivered: {run_info}"),
         )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_TICKET,
+        publish(
             action=lambda: publisher.finish(_progress_body(_progress_state(
                 issue=number, title=title, run_id=run_id, role=ROLE_TICKET,
                 branch="-", worktree=Path("-"), started=started, pr_url=None,
@@ -5700,9 +5679,7 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
                       f"run_id={run_id}\n"
                       "No Git branch, commit, or PR was created."),
             )
-            _safe_publish(
-                run_id=run_id, issue=number, source_repo=source_repo,
-                role=ROLE_TICKET,
+            publish(
                 action=lambda: publisher.milestone(
                     f"ticket-only blocked: {sanitize(detail)} ({run_info})"
                 ),
@@ -6557,15 +6534,17 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
             )
             bound_run_id = current_run_id()
             if bound_run_id:
+                publish = functools.partial(
+                    _safe_publish, run_id=bound_run_id, issue=number,
+                    source_repo=source_repo, role=ROLE_REVIEW,
+                )
                 # Issue #79: the fix-needed/blocked-scene progress
                 # publishing is bypass — a 404 here must not abort the
                 # failure reporting (the label transition and the
                 # failure comment above already completed, and the
                 # original error is re-raised below either way).
                 if is_unrecoverable_failure(exc):
-                    _safe_publish(
-                        run_id=bound_run_id, issue=number,
-                        source_repo=source_repo, role=ROLE_REVIEW,
+                    publish(
                         action=lambda: ProgressPublisher(
                             number, source_repo, bound_run_id,
                             run_command=run_command,
@@ -6574,9 +6553,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
                             f"PR {scene['pr_url']} failed: {sanitize(detail)}"
                         ),
                     )
-                    _safe_publish(
-                        run_id=bound_run_id, issue=number,
-                        source_repo=source_repo, role=ROLE_REVIEW,
+                    publish(
                         action=lambda: _finish_blocked_progress(
                             number, bound_run_id, source_repo, worktree,
                             branch, scene["pr_url"],
@@ -6598,9 +6575,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
                         ),
                     )
                 else:
-                    _safe_publish(
-                        run_id=bound_run_id, issue=number,
-                        source_repo=source_repo, role=ROLE_REVIEW,
+                    publish(
                         action=lambda: ProgressPublisher(
                             number, source_repo, bound_run_id,
                             run_command=run_command,
@@ -6609,9 +6584,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
                             f"PR {scene['pr_url']} failed: {sanitize(detail)}"
                         ),
                     )
-                    _safe_publish(
-                        run_id=bound_run_id, issue=number,
-                        source_repo=source_repo, role=ROLE_REVIEW,
+                    publish(
                         action=lambda: _finish_fix_needed_progress(
                             number, bound_run_id, source_repo, worktree,
                             branch, scene["pr_url"],
@@ -7904,13 +7877,15 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     publisher = ProgressPublisher(
         number, source_repo, config["run_id"], run_command=run_command,
     )
+    publish = functools.partial(
+        _safe_publish, run_id=config["run_id"], issue=number,
+        source_repo=source_repo, role=ROLE_REVIEW,
+    )
     started = time.monotonic()
     # Issue #79: ensure is a bypass — a 404 here must not stop the
     # review (the delivery is already open and awaiting review; the
     # journal is the record, the progress comment is observability).
-    _safe_publish(
-        run_id=config["run_id"], issue=number,
-        source_repo=source_repo, role=ROLE_REVIEW,
+    publish(
         action=lambda: publisher.ensure(_progress_body(_progress_state(
             issue=number, title=title, run_id=config["run_id"],
             role=ROLE_REVIEW, branch=branch, worktree=worktree,
@@ -7957,18 +7932,14 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         # Issue #79: the findings publishing is bypass — a 404 here
         # must not stop the `ai-fix-needed` transition below (the next
         # review session retries the same PR either way).
-        _safe_publish(
-            run_id=config["run_id"], issue=number,
-            source_repo=source_repo, role=ROLE_REVIEW,
+        publish(
             action=lambda: publisher.milestone(
                 f"review findings: round {round}, "
                 f"{verdict['blockers']} blocker(s), "
                 f"{verdict['majors']} major(s) for PR #{pr['number']}"
             ),
         )
-        _safe_publish(
-            run_id=config["run_id"], issue=number,
-            source_repo=source_repo, role=ROLE_REVIEW,
+        publish(
             action=lambda: publisher.finish(_progress_body(
                 _progress_state(
                     issue=number, title=title, run_id=config["run_id"],
@@ -8087,18 +8058,14 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     # Issue #79: the merged publishing is bypass — the GitHub merge
     # already landed; a 404 here must not stop the `ai-merged`
     # transition and the merged PR scene comment below.
-    _safe_publish(
-        run_id=config["run_id"], issue=number,
-        source_repo=source_repo, role=ROLE_REVIEW,
+    publish(
         action=lambda: publisher.milestone(
             f"merged: {merged['url']} "
             f"(merge_commit={confirmed['merge_commit']} "
             f"review_rounds={round})"
         ),
     )
-    _safe_publish(
-        run_id=config["run_id"], issue=number,
-        source_repo=source_repo, role=ROLE_REVIEW,
+    publish(
         action=lambda: publisher.finish(_progress_body(
             _progress_state(
                 issue=number, title=title, run_id=config["run_id"],
@@ -8766,6 +8733,10 @@ def process_issue(issue: dict, config: dict, source_repo: str,
     publisher = ProgressPublisher(
         number, source_repo, run_id, run_command=run_command,
     )
+    publish = functools.partial(
+        _safe_publish, run_id=run_id, issue=number,
+        source_repo=source_repo, role=ROLE_IMPLEMENT,
+    )
     worktree: Path | None = None
     started = time.monotonic()
     # Issue #79: the `Orbi opened PR:` scene comment is the first
@@ -8831,9 +8802,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         # Issue #79: the whole ProgressPublisher path is a bypass — a
         # failure here (404, rate limit) is logged and never skips
         # `run_pi` or fails the delivery.
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_IMPLEMENT,
+        publish(
             action=lambda: publisher.ensure(_progress_body(
                 _progress_state(
                     issue=number, title=title, run_id=run_id,
@@ -8854,14 +8823,10 @@ def process_issue(issue: dict, config: dict, source_repo: str,
                     priority=priority,
                 ),
             )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_IMPLEMENT,
+        publish(
             action=lambda: _publish_plan_milestone(publisher, worktree),
         )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_IMPLEMENT,
+        publish(
             action=lambda: _publish_test_milestone(publisher, worktree),
         )
         # Issue #186: the deterministic closeout (commit boundary, base
@@ -8903,9 +8868,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
                 run_id, run_info, pr_url, external=external_takeover,
             ),
         )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_IMPLEMENT,
+        publish(
             action=lambda: publisher.finish(_progress_body(_progress_state(
                 issue=number, title=title, run_id=run_id,
                 role=ROLE_IMPLEMENT, branch=branch,
@@ -8980,9 +8943,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
             LOGGER.exception(
                 "issue=%s model_wait_recovered_comment_failed", number,
             )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_IMPLEMENT,
+        publish(
             action=lambda: publisher.finish(_progress_body(_progress_state(
                 issue=number, title=title, run_id=run_id,
                 role=ROLE_IMPLEMENT, branch=branch,
@@ -9086,17 +9047,13 @@ def process_issue(issue: dict, config: dict, source_repo: str,
             # depend on local state. Both steps are bypass (Issue #79):
             # a progress 404 here must not abort the `ai-blocked`
             # transition above or the re-raise below.
-            _safe_publish(
-                run_id=run_id, issue=number, source_repo=source_repo,
-                role=ROLE_IMPLEMENT,
+            publish(
                 action=lambda: publisher.milestone(
                     f"blocked: {sanitize(detail)} ({run_info})"
                 ),
             )
             if worktree is not None and publisher.comment_id is not None:
-                _safe_publish(
-                    run_id=run_id, issue=number,
-                    source_repo=source_repo, role=ROLE_IMPLEMENT,
+                publish(
                     action=lambda: publisher.finish(_progress_body(
                         _progress_state(
                             issue=number, title=title, run_id=run_id,
@@ -9354,6 +9311,11 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
         "slot until the PR is merged or terminally failed",
         number, pr_url, priority,
     )
+    publish = functools.partial(
+        _safe_publish, run_id=run_id, issue=number,
+        source_repo=source_repo, role=ROLE_REVIEW,
+    )
+
     def block_label_inconsistency(labels: list[str], reason: str) -> None:
         LOGGER.error(
             "issue=%s delivery_label_inconsistent pr=%s reason=%s; "
@@ -9464,9 +9426,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 # bypass — a 404 here must not escape the wait loop
                 # (the terminal bookkeeping above already completed and
                 # the slot must be released).
-                _safe_publish(
-                    run_id=run_id, issue=number,
-                    source_repo=source_repo, role=ROLE_REVIEW,
+                publish(
                     action=lambda: ProgressPublisher(
                         number, source_repo, run_id,
                         run_command=run_command,
@@ -9488,9 +9448,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 # The tracked progress comment becomes the blocked scene
                 # (Issue #18): the same terminal body the other failure
                 # paths write, with the next-step reason.
-                _safe_publish(
-                    run_id=run_id, issue=number,
-                    source_repo=source_repo, role=ROLE_REVIEW,
+                publish(
                     action=lambda: _finish_blocked_progress(
                         number, run_id, source_repo, None, None,
                         pr_url,
@@ -9698,9 +9656,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                         # escape the wait loop (the terminal
                         # bookkeeping above already completed and the
                         # slot must be released).
-                        _safe_publish(
-                            run_id=run_id, issue=number,
-                            source_repo=source_repo, role=ROLE_REVIEW,
+                        publish(
                             action=lambda: ProgressPublisher(
                                 number, source_repo, run_id,
                                 run_command=run_command,
@@ -9715,9 +9671,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                         # independent review, and the trusted
                         # review-round comments bound the round count
                         # (GitHub is the only state store).
-                        _safe_publish(
-                            run_id=run_id, issue=number,
-                            source_repo=source_repo, role=ROLE_REVIEW,
+                        publish(
                             action=lambda: _finish_blocked_progress(
                                 number, run_id, source_repo, worktree,
                                 branch, pr_url,
@@ -9805,9 +9759,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                     # publishing is bypass — a 404 here must not escape
                     # the wait loop (the label transition above already
                     # completed and the slot must be released).
-                    _safe_publish(
-                        run_id=run_id, issue=number,
-                        source_repo=source_repo, role=ROLE_REVIEW,
+                    publish(
                         action=lambda: ProgressPublisher(
                             number, source_repo, run_id,
                             run_command=run_command,
@@ -9816,9 +9768,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                             f"PR {pr_url} failed: {sanitize(detail)}"
                         ),
                     )
-                    _safe_publish(
-                        run_id=run_id, issue=number,
-                        source_repo=source_repo, role=ROLE_REVIEW,
+                    publish(
                         action=lambda: _finish_fix_needed_progress(
                             number, run_id, source_repo, worktree,
                             branch, pr_url,
