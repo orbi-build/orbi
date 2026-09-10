@@ -44,9 +44,9 @@ from orbi.delivery_labels import (
 from orbi.runner import (
     RunIdFilter,
     freeze_base,
+    list_issues,
     load_config,
     log_format,
-    parse_issue_array,
     run_command,
     validate_config,
 )
@@ -101,12 +101,10 @@ def dispatch_issue(repo: str, title: str, body: str) -> str:
 def list_labeled_issues(repo: str, label: str, state: str = "open",
                         search: str | None = None) -> list[dict]:
     """Return the newest Issues matching a label search (gh lists newest first)."""
-    raw = run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", state,
-        "--search", search or f"label:{label}",
-        "--json", "number,title,url,state", "--limit", "1",
-    ])
-    return parse_issue_array(raw)
+    return list_issues(
+        repo, state=state, search=search or f"label:{label}",
+        json_fields="number,title,url,state", limit=1,
+    )
 
 
 def current_issue(repo: str) -> dict | None:

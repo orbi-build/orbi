@@ -50,6 +50,66 @@ def test_parse_issue_list_rejects_non_list():
         runner.parse_issue_list("{}")
 
 
+def test_list_issues_builds_each_parameter_combination(monkeypatch):
+    """Issue #299: `list_issues` emits the exact `gh issue list` command
+    for each parameter combination the call sites use (search / label +
+    milestone / timeout) and returns the parsed array."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return json.dumps([{"number": 1}])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+
+    # state + search: the common ready/in-flight scan shape.
+    assert runner.list_issues(
+        "owner/repo", state="open", search="label:ai-ready",
+        json_fields="number,title", limit=200,
+    ) == [{"number": 1}]
+
+    # label + state + milestone: the release gate shape (milestone last).
+    assert runner.list_issues(
+        "owner/repo", label="ai-in-progress", state="open",
+        milestone="v0.4.3", json_fields="number", limit=50,
+    ) == [{"number": 1}]
+
+    # state + search + timeout: the idle-advance shape (timeout passed on).
+    assert runner.list_issues(
+        "owner/repo", state="all", search='in:body "marker"',
+        json_fields="number", limit=1, timeout=30,
+    ) == [{"number": 1}]
+
+    # search only (state omitted): gh defaults the state to open.
+    assert runner.list_issues(
+        "owner/repo", search="label:ai-ready",
+        json_fields="number", limit=1,
+    ) == [{"number": 1}]
+
+    assert calls == [
+        ([
+            "gh", "issue", "list", "--repo", "owner/repo",
+            "--state", "open", "--search", "label:ai-ready",
+            "--json", "number,title", "--limit", "200",
+        ], {}),
+        ([
+            "gh", "issue", "list", "--repo", "owner/repo",
+            "--label", "ai-in-progress", "--state", "open",
+            "--json", "number", "--limit", "50", "--milestone", "v0.4.3",
+        ], {}),
+        ([
+            "gh", "issue", "list", "--repo", "owner/repo",
+            "--state", "all", "--search", 'in:body "marker"',
+            "--json", "number", "--limit", "1",
+        ], {"timeout": 30}),
+        ([
+            "gh", "issue", "list", "--repo", "owner/repo",
+            "--search", "label:ai-ready",
+            "--json", "number", "--limit", "1",
+        ], {}),
+    ]
+
+
 def test_load_config_resolves_relative_paths_and_values(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text(

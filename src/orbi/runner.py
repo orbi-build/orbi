@@ -1720,6 +1720,33 @@ def parse_issue_array(raw: str) -> list[dict]:
     return issues
 
 
+def list_issues(repo: str, *, state: str | None = None,
+                label: str | None = None, milestone: str | None = None,
+                search: str | None = None, json_fields: str, limit: int,
+                timeout: int | None = None) -> list[dict]:
+    """Run one ``gh issue list`` query and return the parsed JSON array.
+
+    Issue #299: every ``gh issue list`` call site shares this single
+    command builder. The flag order mirrors the call sites it replaces
+    (``--label``/``--state``/``--search`` before ``--json``/``--limit``,
+    with ``--milestone`` appended last, exactly as the release gate did),
+    so the emitted ``gh`` command is byte-for-byte unchanged.
+    """
+    command = ["gh", "issue", "list", "--repo", repo]
+    if label is not None:
+        command += ["--label", label]
+    if state is not None:
+        command += ["--state", state]
+    if search is not None:
+        command += ["--search", search]
+    command += ["--json", json_fields, "--limit", str(limit)]
+    if milestone is not None:
+        command += ["--milestone", milestone]
+    if timeout is None:
+        return parse_issue_array(run_command(command))
+    return parse_issue_array(run_command(command, timeout=timeout))
+
+
 def parse_issue_list(raw: str) -> dict | None:
     """Return the first issue from gh's JSON array, or None when idle."""
     issues = parse_issue_array(raw)
@@ -2474,17 +2501,14 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
     evidence: list[str] = []
     open_deliveries: set[int] = set()
     for label in (IN_PROGRESS_LABEL, PR_OPENED_LABEL, FIX_NEEDED_LABEL):
-        command = [
-            "gh", "issue", "list", "--repo", repo, "--label", label,
-            "--state", "open", "--json", "number", "--limit", "50",
-        ]
-        if milestone:
-            # Issue #671: the leftover-delivery check is scoped to the
-            # release's Milestone, so an unrelated in-flight Issue can
-            # no longer block the release indefinitely.
-            command += ["--milestone", milestone]
-        raw = run_command(command)
-        for item in json.loads(raw):
+        # Issue #671: the leftover-delivery check is scoped to the
+        # release's Milestone, so an unrelated in-flight Issue can
+        # no longer block the release indefinitely.
+        issues = list_issues(
+            repo, label=label, state="open", milestone=milestone,
+            json_fields="number", limit=50,
+        )
+        for item in issues:
             number = int(item["number"])
             if number != release_number:
                 open_deliveries.add(number)
@@ -3047,10 +3071,10 @@ def reconcile_release_epics(repo: str, milestone_number: int, version: str,
 
 def reconcile_open_epics(repo: str, run_id: str) -> list[str]:
     """Sweep open Epics once per tick; ordinary pickup must not depend on it."""
-    raw = run_command(["gh", "issue", "list", "--repo", repo, "--state", "open",
-                       "--search", f"label:{EPIC_LABEL}",
-                       "--json", "number,body,labels", "--limit", "200"])
-    epics = parse_issue_array(raw)
+    epics = list_issues(
+        repo, state="open", search=f"label:{EPIC_LABEL}",
+        json_fields="number,body,labels", limit=200,
+    )
     evidence: list[str] = []
     for listed_epic in epics:
         number = listed_epic.get("number")
@@ -4196,13 +4220,10 @@ def pick_issue(repo: str, active_milestone: str | None = None,
     # of an ordinary delivery.
     for search in ready_searches(active_milestone, dispatch_label):
         try:
-            raw = run_command([
-                "gh", "issue", "list", "--repo", repo, "--state", "open",
-                "--search", search,
-                "--json", "number,title,body,labels,blockedBy",
-                "--limit", "200",
-            ])
-            issues = parse_issue_array(raw)
+            issues = list_issues(
+                repo, state="open", search=search,
+                json_fields="number,title,body,labels,blockedBy", limit=200,
+            )
         except Exception as exc:
             # Fail open (Issue #54): a failed blockedBy query must
             # never deadlock the queue. This tick claims nothing from
@@ -4224,14 +4245,12 @@ def pick_issue(repo: str, active_milestone: str | None = None,
     # gate inside `_pick_from_scan`, so the query fetches `milestone`.
     # A failed fallback query fails open exactly like any other scan.
     try:
-        raw = run_command([
-            "gh", "issue", "list", "--repo", repo, "--state", "open",
-            "--search",
-            release_fallback_search(active_milestone, dispatch_label),
-            "--json", "number,title,body,labels,blockedBy,milestone",
-            "--limit", "200",
-        ])
-        issues = parse_issue_array(raw)
+        issues = list_issues(
+            repo, state="open",
+            search=release_fallback_search(active_milestone, dispatch_label),
+            json_fields="number,title,body,labels,blockedBy,milestone",
+            limit=200,
+        )
     except Exception as exc:
         LOGGER.error(
             "blocked_by_check_failed repo=%s error=%s",
@@ -4284,23 +4303,24 @@ def pick_in_progress_issue(
         if holder is not None and holder != mine:
             return None
     label = dispatch_label or READY_LABEL
-    raw = run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", "open",
-        "--search",
-        f"label:{label} label:{IN_PROGRESS_LABEL} "
-        f"-label:{PR_OPENED_LABEL} -label:{FIX_NEEDED_LABEL} "
-        f"-label:{MERGED_LABEL} -label:{BLOCKED_LABEL} "
-        f"-label:{EPIC_LABEL}",
-        # `labels` (Issue #101): a P0 a killed runner left behind
-        # keeps its priority in the progress comment on resume.
-        # `milestone` (Issue #671): a release run killed mid-release is
-        # resumed with THIS dict, and `process_release` scopes its
-        # leftover-delivery gate to the release's own Milestone — the
-        # Issue is the authority (never `active_milestone`: a resume is
-        # not gated by a Milestone change, Issue #139).
-        "--json", "number,title,body,labels,milestone", "--limit", "1",
-    ])
-    return parse_issue_list(raw)
+    # `labels` (Issue #101): a P0 a killed runner left behind
+    # keeps its priority in the progress comment on resume.
+    # `milestone` (Issue #671): a release run killed mid-release is
+    # resumed with THIS dict, and `process_release` scopes its
+    # leftover-delivery gate to the release's own Milestone — the
+    # Issue is the authority (never `active_milestone`: a resume is
+    # not gated by a Milestone change, Issue #139).
+    issues = list_issues(
+        repo, state="open",
+        search=(
+            f"label:{label} label:{IN_PROGRESS_LABEL} "
+            f"-label:{PR_OPENED_LABEL} -label:{FIX_NEEDED_LABEL} "
+            f"-label:{MERGED_LABEL} -label:{BLOCKED_LABEL} "
+            f"-label:{EPIC_LABEL}"
+        ),
+        json_fields="number,title,body,labels,milestone", limit=1,
+    )
+    return issues[0] if issues else None
 
 
 def pick_next_issue(
@@ -4762,22 +4782,22 @@ def pick_resumable_delivery(
     for _, holder in slot_occupancy(slot_dir, max_concurrency):
         if holder is not None and holder != mine:
             return None
-    raw = run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", "open",
-        "--search",
-        # `label:a,b` is GitHub's OR within one label qualifier
-        # (verified live: repeating the qualifier matches only the
-        # first label). `ai-in-progress` is intentionally NOT excluded
-        # (Issue #178): a killed review runner leaves the backfilled
-        # in-flight label behind, and the positive qualifier above
-        # already keeps implement-phase Issues out.
-        f"label:{FIX_NEEDED_LABEL},{PR_OPENED_LABEL} "
-        f"-label:{BLOCKED_LABEL} -label:{MERGED_LABEL}",
-        # `labels` (Issue #101): a resumed P0 delivery keeps its
-        # priority in the progress comment through review/merge.
-        "--json", "number,title,state,url,labels", "--limit", "1",
-    ])
-    issues = parse_issue_array(raw)
+    # `label:a,b` is GitHub's OR within one label qualifier
+    # (verified live: repeating the qualifier matches only the
+    # first label). `ai-in-progress` is intentionally NOT excluded
+    # (Issue #178): a killed review runner leaves the backfilled
+    # in-flight label behind, and the positive qualifier above
+    # already keeps implement-phase Issues out.
+    # `labels` (Issue #101): a resumed P0 delivery keeps its
+    # priority in the progress comment through review/merge.
+    issues = list_issues(
+        repo, state="open",
+        search=(
+            f"label:{FIX_NEEDED_LABEL},{PR_OPENED_LABEL} "
+            f"-label:{BLOCKED_LABEL} -label:{MERGED_LABEL}"
+        ),
+        json_fields="number,title,state,url,labels", limit=1,
+    )
     if not issues:
         return None
     issue = issues[0]
@@ -4924,11 +4944,10 @@ def arm_release_ticket(repo: str, active_milestone: str) -> None:
         f"label:{RELEASE_LABEL} -label:{READY_LABEL} "
         f'milestone:"{active_milestone}"'
     )
-    raw = run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", "open",
-        "--search", search, "--json", "number", "--limit", "200",
-    ], timeout=30)
-    issues = parse_issue_array(raw)
+    issues = list_issues(
+        repo, state="open", search=search,
+        json_fields="number", limit=200, timeout=30,
+    )
     if not issues:
         return
     number = issues[0].get("number")
@@ -4949,11 +4968,10 @@ def _pending_milestone_issue(
     """Create one idempotent human-confirmation issue for a milestone advance."""
     titles = [str(candidate["title"]) for candidate in candidates]
     fingerprint = f"orbi-milestone-advance old={old} candidates={','.join(titles)}"
-    existing = parse_issue_array(run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", "all",
-        "--search", f'in:body "{fingerprint}"',
-        "--json", "number", "--limit", "1",
-    ], timeout=30))
+    existing = list_issues(
+        repo, state="all", search=f'in:body "{fingerprint}"',
+        json_fields="number", limit=1, timeout=30,
+    )
     if existing:
         return
     lines = [
@@ -4981,11 +4999,10 @@ def _pending_milestone_issue(
 
 def _close_stale_milestone_issues(repo: str, active_milestone: str) -> None:
     """Close manual advance notices that no longer match the config."""
-    issues = parse_issue_array(run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", "open",
-        "--search", 'in:body "orbi-milestone-advance"',
-        "--json", "number,body", "--limit", "200",
-    ], timeout=30))
+    issues = list_issues(
+        repo, state="open", search='in:body "orbi-milestone-advance"',
+        json_fields="number,body", limit=200, timeout=30,
+    )
     pattern = re.compile(r"orbi-milestone-advance old=([^ ]+)")
     for issue in issues:
         if not isinstance(issue, dict) or not isinstance(issue.get("number"), int):
@@ -5540,12 +5557,10 @@ def has_in_progress_label(number: int, repo: str) -> bool:
     the runner died) in flight — as opposed to the preserved worktrees
     of completed runs (Issue #18).
     """
-    raw = run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", "all",
-        "--search", f"label:{IN_PROGRESS_LABEL}",
-        "--json", "number", "--limit", "50",
-    ])
-    issues = parse_issue_array(raw)
+    issues = list_issues(
+        repo, state="all", search=f"label:{IN_PROGRESS_LABEL}",
+        json_fields="number", limit=50,
+    )
     return any(int(issue.get("number", -1)) == number for issue in issues)
 
 
@@ -6843,16 +6858,14 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
 def _main_ci_triage_url(repo: str, check_name: str) -> str | None:
     """Find the existing auto-created main CI issue, when present."""
     try:
-        issues = json.loads(run_command([
-            "gh", "issue", "list", "--repo", repo, "--state", "all",
-            "--search", f"CI failure: {check_name} on branch main",
-            "--json", "number,url,title", "--limit", "20",
-        ]))
+        issues = list_issues(
+            repo, state="all",
+            search=f"CI failure: {check_name} on branch main",
+            json_fields="number,url,title", limit=20,
+        )
     except Exception:
         LOGGER.exception("delivery_ci_triage_lookup_failed repo=%s check=%s",
                          repo, check_name)
-        return None
-    if not isinstance(issues, list):
         return None
     prefix = f"CI failure: {check_name} on branch main"
     for issue in issues:
