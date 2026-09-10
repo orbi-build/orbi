@@ -923,7 +923,7 @@ def test_pick_next_delivery_continues_after_scene_failure(
     monkeypatch.setattr(runner, "run_command", fake_run)
     monkeypatch.setattr(
         runner, "pick_issue",
-        lambda repo, active_milestone=None: (
+        lambda repo, active_milestone=None, **_kwargs: (
             calls.append(("ready", repo)) or ready
         ),
     )
@@ -961,7 +961,7 @@ def test_pick_next_delivery_prefers_resumable_delivery_over_ready(
     )
     monkeypatch.setattr(
         runner, "pick_issue",
-        lambda repo, active_milestone=None: calls.append(("ready", repo)) or ready,
+        lambda repo, active_milestone=None, **_kwargs: calls.append(("ready", repo)) or ready,
     )
     result = runner.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1,
@@ -983,13 +983,13 @@ def test_pick_next_delivery_falls_back_to_ready_when_no_resumable(
     )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
-        lambda repo, slot_dir, max_concurrency: (
+        lambda repo, slot_dir, max_concurrency, **_kwargs: (
             calls.append(("in_progress", repo)) or None
         ),
     )
     monkeypatch.setattr(
         runner, "pick_issue",
-        lambda repo, active_milestone=None: calls.append(("ready", repo)) or ready,
+        lambda repo, active_milestone=None, **_kwargs: calls.append(("ready", repo)) or ready,
     )
     result = runner.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1,
@@ -1016,7 +1016,7 @@ def test_pick_next_delivery_scans_sources_in_order(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         runner, "pick_issue",
-        lambda repo, active_milestone=None: calls.append(("ready", repo)) or ready,
+        lambda repo, active_milestone=None, **_kwargs: calls.append(("ready", repo)) or ready,
     )
     result = runner.pick_next_delivery(
         ["owner/first", "owner/second"], tmp_path / "slots", 1,
@@ -1036,9 +1036,9 @@ def test_pick_next_delivery_returns_none_when_nothing_to_do(
     )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
-        lambda repo, slot_dir, max_concurrency: None,
+        lambda repo, slot_dir, max_concurrency, **_kwargs: None,
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: None)
+    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: None)
     assert runner.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1,
     ) is None
@@ -1104,7 +1104,7 @@ def test_main_resumes_resumable_delivery_before_claiming_new(monkeypatch, tmp_pa
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, scene
         ),
     )
@@ -1146,7 +1146,7 @@ def test_main_still_claims_new_issue_when_no_resumable(monkeypatch, tmp_path):
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
     )
@@ -1208,7 +1208,7 @@ def test_main_continues_to_ready_delivery_after_scene_failure(
     )())
     monkeypatch.setattr(
         runner, "pick_issue",
-        lambda repo, active_milestone=None: ready,
+        lambda repo, active_milestone=None, **_kwargs: ready,
     )
     monkeypatch.setattr(
         runner, "process_issue",
