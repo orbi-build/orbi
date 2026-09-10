@@ -888,13 +888,13 @@ def test_finish_fix_needed_progress_without_run_id_is_noop(monkeypatch):
 def test_block_scene_failure_states_why_not_auto_recoverable(
         monkeypatch, caplog,
 ):
-    """Issue #50: a scene that cannot be recovered (no trusted
+    """Issue #50 + #672: a scene that cannot be recovered (no trusted
     `Orbi opened PR:` comment) is an external precondition the
     AI cannot fix by itself (the runner cannot derive run_id/branch/
     worktree/PR without it and cannot start a review session): the
-    Issue is marked ai-blocked and the comment states the EXPLICIT
+    Issue is marked ai-blocked, the comment states the EXPLICIT
     reason why automatic recovery is impossible plus the human
-    next step."""
+    next step, and the function returns so the tick continues."""
     issue = {"number": 39, "title": "task", "body": ""}
     comments = [
         {"body": "public comment", "authorAssociation": "NONE"},
@@ -909,11 +909,10 @@ def test_block_scene_failure_states_why_not_auto_recoverable(
         runner, "comment_issue",
         lambda *args, **kwargs: posted.append(kwargs["body"]),
     )
-    with pytest.raises(ValueError, match="no trusted"):
-        runner.block_scene_failure(
-            issue, ValueError("no trusted opened PR scene comment"),
-            "owner/repo", comments,
-        )
+    runner.block_scene_failure(
+        issue, ValueError("no trusted opened PR scene comment"),
+        "owner/repo", comments,
+    )
     assert edits == [
         ((39,), {"repo": "owner/repo", "add": "ai-blocked",
                  "remove": "ai-fix-needed"}),

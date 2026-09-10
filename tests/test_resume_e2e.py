@@ -738,8 +738,8 @@ def test_e2e_public_comment_scene_is_never_resumed(
     carries a perfectly formatted scene — pointing at an arbitrary local
     worktree and branch — must never become the recovery scene. The
     runner does not follow the attacker's scene: it marks the Issue
-    `ai-blocked` with the concrete reason (round-5 review, Major 2) and
-    stops the tick, without touching any git state or starting a fixer."""
+    `ai-blocked` with the concrete reason and continues the tick (Issue
+    #672), without touching any git state or starting a fixer."""
     comments: list[str] = []
     edits: list[list[str]] = []
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
@@ -758,11 +758,13 @@ def test_e2e_public_comment_scene_is_never_resumed(
         }],
     )
 
-    # The Issue looks resumable (ai-fix-needed, open), but its only
+    # The Issue looks resumable (ai-pr-opened, open), but its only
     # scene comment is public: no resume from it, no git work, no
-    # fixer — the Issue is marked ai-blocked instead.
-    with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
-        runner.pick_resumable_delivery(REPO, tmp_path / "slots", 1)
+    # fixer — the Issue is marked ai-blocked instead, and the scan
+    # returns None so the tick continues.
+    assert runner.pick_resumable_delivery(
+        REPO, tmp_path / "slots", 1,
+    ) is None
     # The blocked transition happened (add ai-blocked, remove
     # ai-fix-needed) and the failure comment names the reason...
     assert [
