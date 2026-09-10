@@ -51,30 +51,60 @@ RECENT_RUNS_KEEP = 50
 GH_TIMEOUT_SECONDS = 60
 HEALTH_MARKER_PREFIX = "orbi-health-fingerprint:"
 
-# The real systemd main-process exit lines (verified against the live
-# journal):
-#   systemd[1015]: orbi@1.service: Main process exited, code=exited,
-#                  status=1/FAILURE
-#   systemd[1015]: orbi@1.service: Main process exited, code=dumped,
-#                  status=11/SEGV
-# Only ABNORMAL main-process exits count, exactly one line per crash:
-# - status=0/SUCCESS is a healthy tick exit (a timer-driven Type=simple
-#   service exits cleanly every run — counting those would fire the
-#   crash_loop alert on every healthy deployment);
-# - "Failed with result" is NOT counted: a real crash emits it alongside
-#   the exit line (double counting would halve the threshold), and an
-#   ExecStartPre failure emits it WITHOUT the main process ever starting
-#   (a preflight problem, not a main-process crash);
-# - code=killed (e.g. status=15/TERM) is a systemd/human stop, not a
-#   crash — `orbi install-units` never stops a running Runner, so a kill
-#   is an external action outside this check's scope.
+# Two real systemd crash line shapes (verified against the live journal):
+#   systemd[1015]: orbi@1.service: Main process exited, code=exited, status=1/FAILURE
+#   systemd[1015]: orbi@1.service: Failed with result 'exit-code'.
+# A single crash usually emits BOTH — the exit line and the result line
+# land on the same or an adjacent second — and an ExecStartPre failure
+# (dirty checkout, broken CLI install, SSH transport down: the Runner
+# never starts at all) emits ONLY the result line. Both shapes must count,
+# and the pair must count ONCE (a raw line count would halve the crash
+# threshold — that dedupe lives in count_crashes, keyed on unit+clock).
+# Exclusions are by STATUS, never by code class:
+# - status=0/SUCCESS is the healthy timer-tick exit (a timer-driven
+#   Type=simple service exits cleanly every run — counting those would
+#   fire the crash_loop alert on every healthy deployment);
+# - status=15/TERM is a systemd/human stop (`orbi install-units` never
+#   stops a running Runner, so a TERM is an external action);
+# everything else counts, including code=killed status=9/KILL: the OOM
+# killer and TimeoutStopSec land there, and an OOM crash loop must alert.
 # The `.service:` prefix requirement keeps the count conservative: the
 # Runner's own journal lines can echo the words "Main process exited" when
 # logging a command, and those must never count as a crash.
 CRASH_EXIT_RE = re.compile(
-    r"\.service: Main process exited, "
-    r"code=(?:dumped|exited, status=[1-9][0-9]*/)"
+    r"\.service: Main process exited, code=(?:dumped|killed|exited), "
+    r"status=(?!0/|15/TERM)\d+/"
 )
+CRASH_FAIL_RESULT_RE = re.compile(r"\.service: Failed with result")
+
+# journalctl --user default ("short") line clock: "Sep 04 11:41:02 …" —
+# monotonic within the bounded window; enough to tell the paired result
+# line of the same crash (same or adjacent second) from a fresh crash.
+_JOURNAL_CLOCK_RE = re.compile(
+    r"^(?P<mon>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+"
+    r"(?P<day>\d{1,2})\s+(?P<h>\d{2}):(?P<m>\d{2}):(?P<s>\d{2})\b"
+)
+_UNIT_ON_LINE_RE = re.compile(r"(?P<unit>[\w.-]+@\d+\.service): ")
+_MONTH_INDEX = {
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+}
+# One crash emits its exit line and its result line at most this far apart
+# (same second in practice; +1s covers a second-boundary straddle).
+CRASH_PAIR_WINDOW_SECONDS = 1
+
+
+def _line_clock_seconds(line: str) -> int | None:
+    """Monotonic-ish seconds for a journalctl short-format line (None when
+    the clock cannot be parsed — the caller then counts conservatively)."""
+    m = _JOURNAL_CLOCK_RE.match(line)
+    if not m:
+        return None
+    return (
+        (_MONTH_INDEX[m.group("mon")] * 31 + int(m.group("day"))) * 86400
+        + int(m.group("h")) * 3600 + int(m.group("m")) * 60
+        + int(m.group("s"))
+    )
 
 # Volatile tokens stripped before fingerprinting: 8-40 hex runs (run ids,
 # SHAs), ISO-ish timestamps, and duration shapes ("30m", "6s", "1h5m",
@@ -235,16 +265,36 @@ def count_crashes(
     run_command, since_minutes: int = CRASH_WINDOW_MINUTES,
     unit_name: str | None = None,
 ) -> int:
-    """Count service crashes in the window from the systemd journal.
+    """Count crash EVENTS in the window from the systemd journal.
 
-    Counts only the real systemd exit lines (see CRASH_EXIT_RE).
+    Both crash shapes count (an abnormal main-process exit, and a
+    "Failed with result" line — the only shape an ExecStartPre failure
+    leaves). One crash usually emits both lines on the same or an
+    adjacent second: per unit, a matched line within
+    CRASH_PAIR_WINDOW_SECONDS of the previous matched line is the pair
+    half of that crash, not a new event. A matched line whose clock or
+    unit cannot be parsed counts as-is (conservative: never miss a real
+    crash to dedupe).
     """
-    return sum(
-        1 for line in crash_journal_lines(
-            run_command, since_minutes, unit_name=unit_name,
-        )
-        if CRASH_EXIT_RE.search(line)
-    )
+    last_matched: dict[str, int] = {}
+    events = 0
+    for line in crash_journal_lines(
+        run_command, since_minutes, unit_name=unit_name,
+    ):
+        if not (CRASH_EXIT_RE.search(line) or CRASH_FAIL_RESULT_RE.search(line)):
+            continue
+        unit_m = _UNIT_ON_LINE_RE.search(line)
+        clock = _line_clock_seconds(line)
+        if unit_m is None or clock is None:
+            events += 1
+            continue
+        unit = unit_m.group("unit")
+        prev = last_matched.get(unit)
+        last_matched[unit] = clock
+        if prev is not None and clock - prev <= CRASH_PAIR_WINDOW_SECONDS:
+            continue
+        events += 1
+    return events
 
 
 def classify_crash(journal_lines: list[str]) -> tuple[str, str]:
