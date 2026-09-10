@@ -195,8 +195,10 @@ DAG, no priority numbers, no separate queues:
   2. Freeze the base — the release commit is exactly
      `origin/<base_branch>` (fetched under the base-sync lock).
   3. Enforce the pre-release gates: no leftover open `ai-in-progress` /
-     `ai-pr-opened` / `ai-fix-needed` Issues (the release Issue itself
-     excluded), and CI green on the release commit (no check runs passes
+     `ai-pr-opened` / `ai-fix-needed` Issues **in the release's
+     Milestone** (Issue #671; the release Issue itself excluded; without
+     a Milestone the repository-wide scan is unchanged), and CI green on
+     the release commit (no check runs passes
      with explicit evidence; a pending check is an intermediate state —
      the gate waits for the final conclusion, one `release_waiting_ci`
      journal line and one progress-comment update per poll, up to

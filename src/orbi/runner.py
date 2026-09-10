@@ -2411,6 +2411,7 @@ def build_release_changelog(repo: str, scope: list[int]) -> str:
 
 def check_release_gates(repo: str, base_branch: str, release_commit: str,
                         release_number: int, *,
+                        milestone: str | None = None,
                         ci_wait_seconds: float = RELEASE_CI_WAIT_SECONDS,
                         delivery_wait_seconds: float = RELEASE_DELIVERIES_WAIT_SECONDS,
                         delivery_waited_seconds: float = 0.0,
@@ -2424,7 +2425,14 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
 
     1. No open Issue still carries `ai-in-progress`, `ai-pr-opened`
        or `ai-fix-needed` — the release Issue itself is excluded (it
-       carries `ai-in-progress` while the release runs).
+       carries `ai-in-progress` while the release runs). With a
+       `milestone`, the check is scoped to that Milestone (Issue #671:
+       the documented `gh issue list --milestone <title>` filter), the
+       same criterion as the #663 completeness gate: an in-flight Issue
+       of another Milestone — or of no Milestone — is not this
+       release's delivery and never blocks it. Without a `milestone`
+       there is nothing to scope by and the pre-#671 repository-wide
+       scan is unchanged.
     2. CI on the release commit is green: every check run reported by
        the GitHub API for the commit is `completed` with a
        `success`/`neutral`/`skipped` conclusion (a failing, cancelled
@@ -2455,10 +2463,16 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
     evidence: list[str] = []
     open_deliveries: set[int] = set()
     for label in (IN_PROGRESS_LABEL, PR_OPENED_LABEL, FIX_NEEDED_LABEL):
-        raw = run_command([
+        command = [
             "gh", "issue", "list", "--repo", repo, "--label", label,
             "--state", "open", "--json", "number", "--limit", "50",
-        ])
+        ]
+        if milestone:
+            # Issue #671: the leftover-delivery check is scoped to the
+            # release's Milestone, so an unrelated in-flight Issue can
+            # no longer block the release indefinitely.
+            command += ["--milestone", milestone]
+        raw = run_command(command)
         for item in json.loads(raw):
             number = int(item["number"])
             if number != release_number:
@@ -2485,8 +2499,9 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
         raise ReleaseDeliveriesWaiting(
             numbers, delivery_waited_seconds, delivery_wait_seconds,
         )
+    scope = f" in milestone {milestone!r}" if milestone else ""
     evidence.append(
-        "no open Issue carries "
+        f"no open Issue{scope} carries "
         f"{IN_PROGRESS_LABEL} / {PR_OPENED_LABEL} / {FIX_NEEDED_LABEL}"
     )
     def fetch_check_runs() -> list[dict]:
@@ -3751,8 +3766,15 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             f"base_branch={base_branch} base_sha={release_commit} "
             f"run_id={run_id} priority={priority}"
         )
+        # Issue #671: the leftover-delivery gate is scoped to the same
+        # Milestone as the #663 completeness gate — the release Issue's own
+        # GitHub Milestone, `active_milestone` fallback.
+        target_milestone = release_target_milestone(
+            issue, config.get("active_milestone"),
+        )
         gate_evidence = check_release_gates(
             source_repo, base_branch, release_commit, number,
+            milestone=target_milestone,
             # Issue #268: the gate waits out pending CI checks on the
             # release commit; the real load_config always provides the
             # key, the module constant stays the fallback for hand-built
@@ -3842,6 +3864,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         # pre-version source commit.
         gate_evidence = check_release_gates(
             source_repo, base_branch, release_commit, number,
+            milestone=target_milestone,
             ci_wait_seconds=config.get(
                 "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
             ),
