@@ -15,7 +15,7 @@ from unittest.mock import Mock, call as mock_call
 import pytest
 
 import orbi.runner as runner
-from orbi import progress
+from orbi import pi_process, progress
 
 
 def make_fake_gh(monkeypatch, comments=None, in_progress=False):
@@ -689,7 +689,7 @@ def test_process_issue_keeps_the_claim_when_the_journal_proves_the_request(
             branch="-",
         )
 
-    class StaleWatcher(runner.SessionWatcher):
+    class StaleWatcher(pi_process.SessionWatcher):
         """The live watcher of the #655 scene: its last poll predates
         the journal the dying Pi flushed."""
 
@@ -697,7 +697,7 @@ def test_process_issue_keeps_the_claim_when_the_journal_proves_the_request(
             return None
 
     monkeypatch.setattr(runner, "run_pi", fake_run_pi)
-    monkeypatch.setattr(runner, "SessionWatcher", StaleWatcher)
+    monkeypatch.setattr(pi_process, "SessionWatcher", StaleWatcher)
     # The worktree carries the stable derived name so the next tick's
     # in-flight scan can derive the same scene from it (Issue #219).
     worktree = tmp_path / ".worktrees" / "orbi-orbi-issue-18-a1b2c3d4"
