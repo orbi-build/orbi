@@ -10938,7 +10938,7 @@ def test_pr_delivery_status_ignores_malformed_check_entry(monkeypatch):
     assert runner.pr_delivery_status(PR_URL, "owner/repo") == ("OPEN", [])
 
 
-def test_finish_blocked_progress_is_a_noop_without_run_id(monkeypatch):
+def test_finish_progress_blocked_is_a_noop_without_run_id(monkeypatch):
     """Without a bound run id there is no tracked comment to update
     (the failure comment simply carries no marker)."""
     calls = []
@@ -10946,14 +10946,14 @@ def test_finish_blocked_progress_is_a_noop_without_run_id(monkeypatch):
         runner, "run_command",
         lambda command, **kwargs: calls.append(command) or "[]",
     )
-    runner._finish_blocked_progress(
+    runner._finish_progress(
         39, None, "owner/repo", None, None, "https://x/pull/46",
-        "failure", "next step", title="Blocked task",
+        "failure", "next step", title="Blocked task", outcome="blocked",
     )
     assert calls == []
 
 
-def test_finish_blocked_progress_creates_the_comment_when_missing(
+def test_finish_progress_blocked_creates_the_comment_when_missing(
     monkeypatch,
 ):
     """A run that never reached a progress comment (the runner died
@@ -10972,9 +10972,10 @@ def test_finish_blocked_progress_creates_the_comment_when_missing(
                            "url": "https://x/78"})
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    runner._finish_blocked_progress(
+    runner._finish_progress(
         39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
         "the failure", "the next step", title="Blocked task",
+        outcome="blocked",
     )
     posts = [
         command for command in api_calls
@@ -10990,12 +10991,12 @@ def test_finish_blocked_progress_creates_the_comment_when_missing(
     assert "- issue: #39 Blocked task" in body
 
 
-def test_finish_blocked_progress_carries_the_actual_role_and_round(
+def test_finish_progress_carries_the_actual_role_and_round(
     monkeypatch,
 ):
-    """The blocked scene must show the role and the review/fix round the
-    run was actually in, not the hardcoded `fix`/`0` (review round 2,
-    PR #42)."""
+    """The terminal scene must show the role and the review/fix round
+    the run was actually in, not the hardcoded `fix`/`0` (review round
+    2, PR #42)."""
     api_calls = []
 
     def fake_run(command, **kwargs):
@@ -11008,10 +11009,10 @@ def test_finish_blocked_progress_carries_the_actual_role_and_round(
                            "url": "https://x/78"})
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    runner._finish_blocked_progress(
+    runner._finish_progress(
         39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
         "the failure", "the next step", title="Blocked task",
-        role=runner.ROLE_REVIEW, review_round=2,
+        outcome="blocked", role=runner.ROLE_REVIEW, review_round=2,
     )
     posts = [
         command for command in api_calls
@@ -11023,7 +11024,7 @@ def test_finish_blocked_progress_carries_the_actual_role_and_round(
     assert "- review/fix round: 2" in body
 
 
-def test_finish_blocked_progress_defaults_to_review_round_zero(monkeypatch):
+def test_finish_progress_defaults_to_review_round_zero(monkeypatch):
     """Without explicit role/round the default is the only post-PR role
     (Issue #82: the review session fixes findings in the same session,
     so a blocked delivery is always a review failure)."""
@@ -11038,9 +11039,10 @@ def test_finish_blocked_progress_defaults_to_review_round_zero(monkeypatch):
                            "url": "https://x/78"})
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    runner._finish_blocked_progress(
+    runner._finish_progress(
         39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
         "the failure", "the next step", title="Blocked task",
+        outcome="blocked",
     )
     posts = [
         command for command in api_calls
@@ -11050,6 +11052,45 @@ def test_finish_blocked_progress_defaults_to_review_round_zero(monkeypatch):
     body = posts[0][posts[0].index("--field") + 1][len("body="):]
     assert "- role: review" in body
     assert "- review/fix round: 0" in body
+
+
+def test_finish_progress_renders_the_fix_needed_scene(monkeypatch):
+    """Issue #293: one function serves both terminal scenes — the
+    fix-needed scene (Issue #50) renders the same tracked comment with
+    the fix-needed outcome and its next step."""
+    api_calls = []
+
+    def fake_run(command, **kwargs):
+        api_calls.append(command)
+        if "--method" not in command:
+            return "[]"
+        body = command[command.index("--field") + 1]
+        return json.dumps({"id": 78, "body": body[len("body="):],
+                           "url": "https://x/78"})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    runner._finish_progress(
+        39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
+        "the failure",
+        "the next tick resumes the same run, branch, worktree and PR "
+        "automatically (the Issue stays ai-fix-needed)",
+        title="Fix task", outcome="fix needed",
+    )
+    posts = [
+        command for command in api_calls
+        if "--method" in command and "POST" in command
+    ]
+    assert len(posts) == 1
+    body = posts[0][posts[0].index("--field") + 1][len("body="):]
+    assert "Orbi fix needed" in body
+    assert "failure: the failure" in body
+    assert ("next step: the next tick resumes the same run, branch, "
+            "worktree and PR automatically (the Issue stays "
+            "ai-fix-needed)") in body
+    # The role default is the only post-PR role (Issue #82).
+    assert "- role: review" in body
+    assert "<!-- orbi:run=a1b2c3d4 -->" in body
+    assert "- issue: #39 Fix task" in body
 
 
 def test_wait_for_delivery_returns_when_pr_merged(monkeypatch, caplog):
@@ -14706,7 +14747,7 @@ def test_process_issue_keeps_normal_flow_without_release_label(
     monkeypatch.setattr(runner, "format_end_scene", lambda **k: "end")
     monkeypatch.setattr(runner, "issue_context", lambda r, n: "#n")
     monkeypatch.setattr(runner, "format_run_scene", lambda *a, **k: "scene")
-    monkeypatch.setattr(runner, "_finish_blocked_progress", Mock())
+    monkeypatch.setattr(runner, "_finish_progress", Mock())
     runner.process_issue(
         issue, {"base_branch": "main", "repo_dir": tmp_path}, "o/r",
     )
