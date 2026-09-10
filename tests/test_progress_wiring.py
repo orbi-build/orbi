@@ -8,6 +8,7 @@ summary or the blocked scene — in the same comment.
 """
 import json
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import Mock, call as mock_call
 
@@ -639,6 +640,94 @@ def test_process_issue_pi_infrastructure_failure_keeps_run_for_resume(
     assert state["run_id"] == "a1b2c3d4"
     assert any("Pi failure recovered" in str(call) for call in calls)
     assert not any("ai-blocked" in str(call) for call in edit.call_args_list)
+
+
+def test_process_issue_keeps_the_claim_when_the_journal_proves_the_request(
+    monkeypatch, tmp_path,
+):
+    """Issue #656: the REAL `stream_pi` classification of the #655
+    scene — a Pi that exits fast while its journal (flushed by the
+    dying process) holds the request and the provider error — must
+    reach `process_issue`'s recoverable branch: the Issue keeps
+    `ai-in-progress`, never gets `ai-blocked`, and the run state stays
+    for the next tick's same-run resume."""
+    calls, posted = make_fake_gh(monkeypatch)
+    patch_process_deps(monkeypatch, tmp_path)
+    records = [
+        {"type": "session", "id": "sess-1",
+         "timestamp": "2026-09-09T18:25:39.607Z", "cwd": "/w"},
+        {"type": "message", "id": "u1",
+         "timestamp": "2026-09-09T18:25:40.382Z",
+         "message": {"role": "user", "content": [
+             {"type": "text", "text": "hi"}]}},
+        {"type": "message", "id": "a1",
+         "timestamp": "2026-09-09T18:25:41.499Z",
+         "message": {
+             "role": "assistant", "content": [],
+             "stopReason": "error",
+             "errorMessage": "Codex error: The usage limit has been "
+                             "reached"}},
+    ]
+
+    def fake_run_pi(issue, worktree, config, source_repo, **kwargs):
+        session_dir = worktree / ".pi-session"
+        script = (
+            "import json, pathlib, sys\n"
+            f"d = pathlib.Path({str(session_dir)!r})\n"
+            "d.mkdir(exist_ok=True)\n"
+            f"recs = {records!r}\n"
+            "(d / 'sess.jsonl').write_text("
+            "''.join(json.dumps(r) + '\\n' for r in recs))\n"
+            "sys.stderr.write('Codex error: The usage limit has been "
+            "reached\\n')\n"
+            "sys.exit(1)\n"
+        )
+        return runner.stream_pi(
+            [sys.executable, "-c", script], cwd=worktree,
+            poll_interval=0.1, run_id=config["run_id"],
+            issue=int(issue["number"]), source_repo=source_repo,
+            branch="-",
+        )
+
+    class StaleWatcher(runner.SessionWatcher):
+        """The live watcher of the #655 scene: its last poll predates
+        the journal the dying Pi flushed."""
+
+        def _next_session_file(self):
+            return None
+
+    monkeypatch.setattr(runner, "run_pi", fake_run_pi)
+    monkeypatch.setattr(runner, "SessionWatcher", StaleWatcher)
+    # The worktree carries the stable derived name so the next tick's
+    # in-flight scan can derive the same scene from it (Issue #219).
+    worktree = tmp_path / ".worktrees" / "orbi-orbi-issue-18-a1b2c3d4"
+
+    def fake_create_worktree(*args, **kwargs):
+        worktree.mkdir(parents=True, exist_ok=True)
+        (worktree / ".orbi").mkdir(exist_ok=True)
+        return worktree
+
+    monkeypatch.setattr(runner, "create_worktree", fake_create_worktree)
+    result = runner.process_issue(
+        make_issue(), make_config(tmp_path), "xqliu/orbi",
+    )
+    assert result.kind == "failed"
+    edit = runner.edit_issue
+    # The only label transition is the claim: the Issue stays
+    # ai-in-progress (no `ai-blocked`).
+    assert edit.call_count == 1
+    assert edit.call_args.kwargs == {
+        "repo": "xqliu/orbi", "add": "ai-in-progress",
+    }
+    state = json.loads(
+        (worktree / ".orbi" / "run-state.json").read_text(),
+    )
+    assert state["run_id"] == "a1b2c3d4"
+    assert any("Pi failure recovered" in str(call) for call in calls)
+    # The next tick's in-flight restart scan resumes the SAME run.
+    assert runner.worktree_resume_scene(tmp_path, "xqliu/orbi", 18) == (
+        "a1b2c3d4", worktree,
+    )
 
 
 def test_process_issue_failure_updates_progress_comment_with_blocked_scene(

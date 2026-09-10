@@ -7305,6 +7305,69 @@ def test_stream_pi_startup_failed_without_first_request(tmp_path, caplog):
     assert "first_request=false" in lines[0]
 
 
+def test_stream_pi_early_exit_uses_the_flushed_journal(
+        tmp_path, caplog, monkeypatch,
+):
+    """Issue #656: Pi flushes its session journal while dying, so the
+    live watcher's LAST poll can predate it. The exit classification
+    must use the journal on disk, never that stale poll: in the #655
+    usage-limit scene the journal held the request and the provider
+    error, yet the exit was raised as a terminal startup failure and
+    the in-flight delivery was burned to `ai-blocked`."""
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.0, {"type": "message", "id": "u1",
+               "timestamp": fresh_timestamp(),
+               "message": {"role": "user", "content": [
+                   {"type": "text", "text": "SECRET ISSUE BODY"}]}}),
+        (0.0, {"type": "message", "id": "a1",
+               "timestamp": fresh_timestamp(1),
+               "message": {
+                   "role": "assistant", "content": [],
+                   "stopReason": "error",
+                   "errorMessage": "Codex error: The usage limit "
+                                   "has been reached"}}),
+    ]
+    command = make_fake_pi(
+        tmp_path, session_records=records, exit_code=1,
+        stderr="Codex error: The usage limit has been reached",
+    )
+
+    class StaleWatcher(runner.SessionWatcher):
+        """The live watcher of the #655 scene: its last poll ran while
+        Pi was still alive, before the dying process flushed the
+        journal, so it never bound to the session file."""
+
+        def _next_session_file(self):
+            return None
+
+    monkeypatch.setattr(runner, "SessionWatcher", StaleWatcher)
+    with caplog.at_level("INFO"):
+        with pytest.raises(runner.RecoverablePiProcessError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.1,
+                run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    # The journal on disk proves the request went out (its response
+    # arrived), so this is NOT a startup failure.
+    assert " startup_failed " not in caplog.text
+    # The exit scene reports the SAME journal the classification used:
+    # a `phase=session_pending` / `last_activity=-` next to a real
+    # `session_file=` would describe the session as not-created while
+    # the recoverable decision says a request went out.
+    scene = [line for line in caplog.text.splitlines()
+             if " run_failed " in line]
+    assert len(scene) == 1
+    assert "session=sess-1" in scene[0]
+    assert "session_file=" in scene[0]
+    assert "phase=starting" in scene[0]
+    assert "last_activity=- " not in scene[0]
+    # The prompt never reaches the journal.
+    assert "SECRET ISSUE BODY" not in caplog.text
+
+
 def test_stream_pi_startup_failed_early_exit_after_first_request(
         tmp_path, caplog,
 ):
