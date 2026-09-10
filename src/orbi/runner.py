@@ -54,9 +54,9 @@ from typing import NamedTuple
 # module is importable WITHOUT any reinstall — the #158 incident
 # class is fixed at the root. The refresh remains the safety net for
 # packaging-metadata changes (version, dependencies, entry points in
-# `pyproject.toml`). `cli_install` is a thin re-export of this
-# implementation for the tests only — the bootstrap chain never
-# imports it.
+# `pyproject.toml`). The former thin re-export module
+# `orbi.cli_install` is deleted (Issue #295): the tests import these
+# symbols directly from this module.
 from orbi.git_transport import TransportError, check_transport
 from orbi.pilot_slots import acquire_slot, slot_dir_for, slot_occupancy
 from orbi.pi_activity import (
