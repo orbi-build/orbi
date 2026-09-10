@@ -107,6 +107,20 @@ sys.stderr.write("a FRESH run started — the resume was lost")
 sys.exit(7)
 """
 
+# A fresh claim delivers a committed change (Issue #662's orphan-branch
+# e2e: the claim must not die on `worktree add -b`).
+FAKE_PI_DELIVERS = """#!/usr/bin/env python3
+import os, subprocess
+cwd = os.getcwd()
+with open(os.path.join(cwd, "work.txt"), "w", encoding="utf-8") as f:
+    f.write("delivered\\n")
+for command in (
+    ["git", "add", "."],
+    ["git", "commit", "-m", "deliver the change"],
+):
+    subprocess.run(command, cwd=cwd, check=True, capture_output=True)
+"""
+
 
 def git(repo: Path, *args: str) -> str:
     result = subprocess.run(
@@ -515,6 +529,53 @@ def test_e2e_corrupt_run_state_fails_fast_without_a_fresh_run(
     assert "corrupt" in failed[0]
     # The existing work is untouched (no fresh redo).
     assert (worktree / "work.txt").read_text() == "part-1\n"
+
+
+def test_e2e_claim_reuses_orphan_local_branch(
+    clone, tmp_path, monkeypatch, caplog,
+):
+    """Issue #662 (the #655 incident): re-claiming an Issue whose stable
+    branch was left behind by a killed run (no worktree, never pushed)
+    reuses the orphan instead of dying on `worktree add -b` (exit 255),
+    and the delivery completes — the Issue is never burned into terminal
+    `ai-blocked`."""
+    branch = f"orbi/{REPO.replace('/', '-')}-issue-{ISSUE_NUMBER}"
+    base = git(clone, "rev-parse", "HEAD")
+    git(clone, "branch", branch, base)
+    # Local-only orphan: no worktree, no remote counterpart (the #655
+    # scene verified in the incident).
+    assert git(
+        clone, "ls-remote", "--heads", "origin", f"refs/heads/{branch}",
+    ) == ""
+    assert ".worktrees" not in git(clone, "worktree", "list")
+    comments: list[str] = []
+    labels: dict[int, list[str]] = {ISSUE_NUMBER: ["ai-ready"]}
+    caplog.set_level("INFO")
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI_DELIVERS)
+    install_fake_gh(monkeypatch, comments, labels)
+    monkeypatch.setattr(runner, "new_run_id", lambda: "c3d4e5f6")
+
+    result = runner.process_issue(
+        issue(), config_for(clone, tmp_path, REPO), REPO,
+    )
+
+    # The claim succeeded: the worktree exists on the REUSED branch and
+    # the delivery completed (a PR was opened).
+    assert result.url == PR_URL
+    worktree = worktree_for(clone, REPO, "c3d4e5f6")
+    assert worktree.is_dir()
+    assert git(worktree, "branch", "--show-current") == branch
+    assert git(worktree, "show", "HEAD:work.txt") == "delivered"
+    # The orphan branch advanced on top of the base (a real delivery on
+    # the SAME branch, never a second one).
+    assert git(worktree, "rev-parse", "HEAD") != base
+    git(worktree, "merge-base", "--is-ancestor", base, "HEAD")
+    # The Issue is NOT burned into the terminal state.
+    assert "ai-blocked" not in labels[ISSUE_NUMBER]
+    assert "ai-pr-opened" in labels[ISSUE_NUMBER]
+    assert "ai-in-progress" not in labels[ISSUE_NUMBER]
+    # No exit-255 claim failure was logged.
+    assert "command_failed" not in caplog.text
 
 
 def test_git_helper_fails_fast_on_nonzero_exit(tmp_path):

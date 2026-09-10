@@ -5068,6 +5068,12 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
     the named branch is fetched and reused (a local branch is reused
     with `--force`, never a second `-b` — the exit-255 claim failure of
     Issue #608); without it the branch is created from the frozen base.
+
+    A local branch that already exists (the orphan a SIGKILLed run
+    leaves with no worktree and no remote counterpart, Issue #662) is
+    reused as-is rather than re-created with `-b`: git exits 255 on an
+    existing branch, which used to burn the re-claimed Issue into
+    terminal `ai-blocked`.
     """
     if existing is not None and existing.is_dir():
         return existing
@@ -5094,9 +5100,24 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
                 f"origin/{branch}",
             ], cwd=repo_dir)
     else:
-        run_command([
-            "git", "worktree", "add", "-b", branch, str(path), base_sha,
-        ], cwd=repo_dir)
+        # Issue #662 (the #655 incident): a SIGKILLed run can leave the
+        # stable branch behind with no worktree and no remote counterpart
+        # (a pure orphan).  `worktree add -b` cannot re-create it — git
+        # exits 255 (`fatal: a branch named ... already exists`) and the
+        # claim used to be burned into terminal `ai-blocked`.  The branch
+        # is the delivery identity, so a local one is reused as-is; only
+        # a missing branch is created from the frozen base SHA.
+        local = run_command(
+            ["git", "branch", "--list", branch], cwd=repo_dir,
+        )
+        if local.strip():
+            run_command([
+                "git", "worktree", "add", str(path), branch,
+            ], cwd=repo_dir)
+        else:
+            run_command([
+                "git", "worktree", "add", "-b", branch, str(path), base_sha,
+            ], cwd=repo_dir)
     return path
 
 
