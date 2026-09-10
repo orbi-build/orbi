@@ -4272,7 +4272,12 @@ def pick_in_progress_issue(
         f"-label:{EPIC_LABEL}",
         # `labels` (Issue #101): a P0 a killed runner left behind
         # keeps its priority in the progress comment on resume.
-        "--json", "number,title,body,labels", "--limit", "1",
+        # `milestone` (Issue #671): a release run killed mid-release is
+        # resumed with THIS dict, and `process_release` scopes its
+        # leftover-delivery gate to the release's own Milestone — the
+        # Issue is the authority (never `active_milestone`: a resume is
+        # not gated by a Milestone change, Issue #139).
+        "--json", "number,title,body,labels,milestone", "--limit", "1",
     ])
     return parse_issue_list(raw)
 

@@ -2411,7 +2411,7 @@ def test_pick_in_progress_issue_scan_excludes_epics(monkeypatch, tmp_path):
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
-        "--json", "number,title,body,labels", "--limit", "1",
+        "--json", "number,title,body,labels,milestone", "--limit", "1",
     ]]
 
 
@@ -2487,8 +2487,42 @@ def test_pick_in_progress_issue_scan_fetches_labels(monkeypatch, tmp_path):
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
-        "--json", "number,title,body,labels", "--limit", "1",
+        "--json", "number,title,body,labels,milestone", "--limit", "1",
     ]]
+
+
+def test_pick_in_progress_issue_scan_fetches_milestone(monkeypatch, tmp_path):
+    """Issue #671: the in-flight restart scan fetches `milestone` too, so
+    a release run killed mid-release and resumed by `process_release`
+    scopes its leftover-delivery gate to the release's OWN Milestone —
+    never to the config's `active_milestone`, which must not gate a
+    resume (Issue #139)."""
+    issue = {
+        "number": 664, "title": "Release v0.4.3", "body": "body",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+        "milestone": {"title": "v0.4.3"},
+    }
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return json.dumps([issue])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    resumed = runner.pick_in_progress_issue(
+        "xqliu/orbi", tmp_path / "slots", 1,
+    )
+    assert calls == [[
+        "gh", "issue", "list", "--repo", "xqliu/orbi",
+        "--state", "open", "--search",
+        "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
+        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
+        "-label:ai-epic",
+        "--json", "number,title,body,labels,milestone", "--limit", "1",
+    ]]
+    # The resumed release's gate scope is its own Milestone, not the
+    # config value.
+    assert runner.release_target_milestone(resumed, "v0.4.4") == "v0.4.3"
 
 
 def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
@@ -2518,7 +2552,7 @@ def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
-        "--json", "number,title,body,labels", "--limit", "1",
+        "--json", "number,title,body,labels,milestone", "--limit", "1",
     ]]
 
 
