@@ -301,6 +301,24 @@ def test_committed_labels_toml_covers_the_ten_platform_labels():
     )
 
 
+def test_committed_labels_toml_points_at_the_real_setup_entry():
+    """Issue #298: the labels.toml header is the usage note of the single
+    source of truth — it must name the real `orbi setup --config orbi.toml`
+    entry, never the phantom `orbi.py` (the checkout root deliberately
+    carries no such file; a flat file named like the package would shadow
+    the installed package, Issue #168)."""
+    path = Path(__file__).resolve().parent.parent / "labels.toml"
+    text = path.read_text(encoding="utf-8")
+    assert "orbi.py" not in text, (
+        "labels.toml references the non-existent `orbi.py` entry "
+        "(Issue #298)"
+    )
+    assert "orbi setup --config orbi.toml" in text, (
+        "labels.toml must name the real setup entry "
+        "`orbi setup --config orbi.toml`"
+    )
+
+
 # --- prerequisites: commands and auth ---------------------------------------
 
 
