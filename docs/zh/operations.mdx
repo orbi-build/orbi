@@ -304,8 +304,8 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
   重试提示（`retry in Ns` / `retryDelay: Ns`），没有就默认递增
   （30 秒翻倍），两者都封顶 5 分钟。行带 run id、issue、role、
   `attempt`、`next_retry_in`、重试上限 `limit`（5）和 session；
-  等待期间持有 slot（本 run 等待时不认领新 Issue）。连续 5 次 429
-  之后走既有失败路径——与非重试退出抛同一类异常（session 前终态
+  等待期间持有 slot（本 run 等待时不认领新 Issue）。5 次退避重试仍以
+  429 退出（连续 6 次 429 退出）之后走既有失败路径——与非重试退出抛同一类异常（session 前终态
   `ai-blocked` / 可恢复的中断 session）——`run_failed` 现场标记
   `reason=provider_rate_limited`。长期额度耗尽不在这里处理
   （#313 的轮换语义接管）；

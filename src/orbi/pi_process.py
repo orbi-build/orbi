@@ -118,7 +118,8 @@ PI_IDLE_RECOVERY_CYCLES = 3
 # doubles from `PI_RATE_LIMIT_BACKOFF_SECONDS` (30 s) up to the same
 # cap. The slot is held for the whole wait (the #233 positioning: the
 # Runner never claims a new Issue while this run waits). Only after
-# PI_RATE_LIMIT_RETRIES consecutive 429 exits does the EXISTING failure
+# PI_RATE_LIMIT_RETRIES backoff retries still end in a 429 exit (6
+# consecutive 429 exits at the default 5) does the EXISTING failure
 # path run — marked `reason=provider_rate_limited` so a human (or the
 # #313 rotation semantics) can take over. Long-term quota exhaustion is
 # OUT of scope here (#313): this loop only bridges short burst windows.
@@ -573,13 +574,13 @@ def stream_pi(
     (`retry in Ns` / `retryDelay: Ns`) capped at 5 minutes; without a
     hint it doubles from 30 s to the same cap. Every retry logs one
     `pi_retry_429` line (run id, attempt, next_retry_in). Only after
-    `PI_RATE_LIMIT_RETRIES` (default 5) consecutive 429 exits does the
-    EXISTING failure path run — the same error type a non-retried exit
-    raises, so the terminal semantics (pre-session `ai-blocked` /
-    recoverable interrupted session) are unchanged — with the
-    `run_failed` scene marked `reason=provider_rate_limited`. Long-term
-    quota exhaustion stays out of scope (#313); non-429 failures are
-    untouched.
+    `PI_RATE_LIMIT_RETRIES` (default 5) backoff retries still end in a
+    429 exit does the EXISTING failure path run — the same error type a
+    non-retried exit raises, so the terminal semantics (pre-session
+    `ai-blocked` / recoverable interrupted session) are unchanged —
+    with the `run_failed` scene marked `reason=provider_rate_limited`.
+    Long-term quota exhaustion stays out of scope (#313); non-429
+    failures are untouched.
 
     `progress` (Issue #18) is invoked on EVERY poll — an activity change
     or a heartbeat — with the current activity state, while the Pi

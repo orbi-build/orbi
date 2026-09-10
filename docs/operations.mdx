@@ -375,8 +375,9 @@ Stable `key=value` lines you will see:
   escalation (30 s doubling), both capped at 5 minutes. The line
   carries run id, issue, role, `attempt`, `next_retry_in`, the retry
   `limit` (5) and the session; the slot is held for the whole wait (no
-  new Issue is claimed while this run waits). After 5 consecutive 429
-  exits the EXISTING failure path runs — the same error type a
+  new Issue is claimed while this run waits). After 5 backoff retries
+  still end in a 429 exit (6 consecutive 429 exits) the EXISTING
+  failure path runs — the same error type a
   non-retried exit raises (pre-session terminal `ai-blocked` /
   recoverable interrupted session) — marked
   `reason=provider_rate_limited`. Long-term quota exhaustion is NOT
