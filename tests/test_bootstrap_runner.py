@@ -3649,9 +3649,11 @@ def _claim_race_deps(monkeypatch, tmp_path, *, freeze_side_effect=None,
     """
     if stable_branch_seq is not None:
         seq = list(stable_branch_seq)
+        # Exactly two probes consume the sequence: the scan-time probe
+        # and the pre-claim guard (Issue #658).
         monkeypatch.setattr(
             runner, "stable_branch_exists",
-            lambda repo_dir, branch: seq.pop(0) if seq else False,
+            lambda repo_dir, branch: seq.pop(0),
         )
     if freeze_side_effect is not None:
         def fake_freeze_base(repo_dir, base_branch):
@@ -3677,21 +3679,21 @@ def _claim_race_deps(monkeypatch, tmp_path, *, freeze_side_effect=None,
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
 
 
-def test_process_issue_yields_when_the_label_lands_mid_preparation(
-    monkeypatch, tmp_path,
-):
-    """Issue #658：扫描与认领写之间隔着 freeze_base 的秒级网络往返；
-    另一实例在该窗口内认领（ai-in-progress 出现）时，本实例必须让路
-    ——不打任何标签、不发失败评论、绝不能把胜者打成 ai-blocked。"""
-    state = {"in_progress": False}
+def make_claim_race_gh(monkeypatch, state):
+    """The gh fake for the #658 claim-race world.
 
+    The direct read (`gh issue view`) answers the LIVE label truth from
+    `state["in_progress"]`; the search index (`gh issue list`) answers
+    from the same state — a lagging index is modeled by flipping the
+    state only AFTER the pickup scan, exactly when the other instance's
+    claim lands. One shared guard line, driven by its own test below.
+    """
     def fake_run_command(command, **kwargs):
         if command[:3] == ["gh", "issue", "view"]:
             labels = ([{"name": "ai-in-progress"}]
                       if state["in_progress"] else [])
             return json.dumps({"labels": labels})
         if command[:3] == ["gh", "issue", "list"]:
-            # The search index lags behind the other instance's claim.
             return json.dumps(
                 [{"number": 18}] if state["in_progress"] else [],
             )
@@ -3707,6 +3709,23 @@ def test_process_issue_yields_when_the_label_lands_mid_preparation(
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
+    return fake_run_command
+
+
+def test_claim_race_gh_rejects_unexpected_commands(monkeypatch):
+    fake = make_claim_race_gh(monkeypatch, {"in_progress": False})
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake(["gh", "release", "view"])
+
+
+def test_process_issue_yields_when_the_label_lands_mid_preparation(
+    monkeypatch, tmp_path,
+):
+    """Issue #658：扫描与认领写之间隔着 freeze_base 的秒级网络往返；
+    另一实例在该窗口内认领（ai-in-progress 出现）时，本实例必须让路
+    ——不打任何标签、不发失败评论、绝不能把胜者打成 ai-blocked。"""
+    state = {"in_progress": False}
+    make_claim_race_gh(monkeypatch, state)
     _claim_race_deps(
         monkeypatch, tmp_path,
         freeze_side_effect=lambda: state.__setitem__("in_progress", True),
@@ -3725,20 +3744,7 @@ def test_process_issue_yields_when_the_stable_branch_lands_mid_preparation(
     """Issue #658 的撞分支面：扫描时 stable branch 尚不存在，freeze_base
     的窗口内被另一实例创建（它先认领）——认领写之前必须复查到并让路，
     而不是径直 create_worktree 撞分支后走 ai-blocked 失败路径。"""
-    def fake_run_command(command, **kwargs):
-        if command[:3] == ["gh", "issue", "view"]:
-            return json.dumps({"labels": [{"name": "ai-ready"}]})
-        if command[:3] == ["gh", "issue", "list"]:
-            return json.dumps([])
-        if command[:3] == ["gh", "pr", "list"]:
-            return json.dumps([])
-        if command[:2] == ["gh", "api"]:
-            if "--method" not in command:
-                return json.dumps([])
-            return ""
-        raise AssertionError(f"unexpected command: {command}")
-
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    make_claim_race_gh(monkeypatch, {"in_progress": False})
     # First probe (scan-time): absent. Second probe (the pre-claim
     # guard): the other instance created it while we were preparing.
     _claim_race_deps(
