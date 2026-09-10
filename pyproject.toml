@@ -37,7 +37,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orbi"
-version = "0.4.3"
+version = "0.4.4"
 description = "Orbi — local AI development worker: claims GitHub Issues, runs Pi in isolated worktrees, and delivers PRs (GitHub Issues + labels are the only state store)."
 readme = "README.md"
 requires-python = ">=3.14"
