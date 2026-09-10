@@ -1859,6 +1859,56 @@ def release_fallback_search(active_milestone: str | None = None) -> str:
     )
 
 
+def milestone_open_issue_count(repo: str, milestone_title: str) -> int:
+    """Return the Open-Issue count of one Milestone (Issue #663).
+
+    A single `gh api` call reads GitHub's own `open_issues` counter —
+    the authority on whether the Milestone still has unfinished work.
+    Unlike the search-based ready scans it does not depend on the search
+    index and it is not affected by a delivery-state label, so an Issue
+    temporarily outside the ready queue (`ai-blocked`, `ai-pr-opened`,
+    or not yet indexed) still counts. The title-filtered `--jq` is the
+    command documented in the Issue, verified against the live API. An
+    empty result means the Milestone could not be found: that is a
+    failed check, never a silent 0 (the caller must not release on it).
+    """
+    raw = run_command(
+        [
+            "gh", "api", f"repos/{repo}/milestones",
+            "--jq",
+            f'.[] | select(.title=="{milestone_title}") | .open_issues',
+        ],
+        timeout=30,
+    )
+    if not raw:
+        raise RuntimeError(
+            f"Milestone {milestone_title!r} not found in {repo}"
+        )
+    return int(raw)
+
+
+def release_target_milestone(
+    issue: dict, active_milestone: str | None = None,
+) -> str | None:
+    """Return the Milestone a release Issue releases (Issue #663).
+
+    The completeness gate judges the Milestone the release belongs to:
+    the Issue's own GitHub Milestone is authoritative, and the configured
+    `active_milestone` is the fallback (the release fallback scan is
+    already scoped to it). Without any Milestone there is nothing to
+    check and the release keeps the pre-#663 behavior, so the function
+    returns None and the caller skips the gate.
+    """
+    milestone = issue.get("milestone")
+    if isinstance(milestone, dict):
+        title = milestone.get("title")
+        if isinstance(title, str) and title:
+            return title
+    if isinstance(active_milestone, str) and active_milestone:
+        return active_milestone
+    return None
+
+
 def issue_priority(issue: dict) -> str:
     """Return the pickup priority of one issue (Issue #101).
 
@@ -4003,6 +4053,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
 
 def _pick_from_scan(
     issues: list[dict], repo: str, allow_release: bool = False,
+    active_milestone: str | None = None,
 ) -> dict | None:
     """Return the first claimable Issue of one scan result, else None.
 
@@ -4020,6 +4071,15 @@ def _pick_from_scan(
     ordinary scans skip an `ai-release` Issue (`release_not_claimed`) so
     a release never competes with an ordinary delivery for the slot; the
     release fallback scan passes `allow_release=True` and claims it.
+
+    A release candidate additionally passes the Milestone completeness
+    gate (Issue #663): while the Milestone still counts any other open
+    Issue (`open_issues > 1`), the release is skipped with the
+    structured `release_milestone_incomplete` line and the Issue stays
+    `ai-ready` for the next tick — a recoverable wait, never
+    `ai-blocked`. A Milestone query that cannot be evaluated skips the
+    release too (`release_milestone_check_failed`): a bad release is
+    irreversible, so the check fails safe and the next tick retries.
     """
     for issue in issues:
         if is_epic(issue):
@@ -4034,6 +4094,30 @@ def _pick_from_scan(
                 issue.get("number"), repo,
             )
             continue
+        if allow_release and is_release(issue):
+            target_milestone = release_target_milestone(
+                issue, active_milestone,
+            )
+            if target_milestone is not None:
+                try:
+                    open_issues = milestone_open_issue_count(
+                        repo, target_milestone,
+                    )
+                except Exception as exc:
+                    LOGGER.error(
+                        "release_milestone_check_failed issue=%s repo=%s "
+                        "milestone=%s error=%s",
+                        issue.get("number"), repo, target_milestone, exc,
+                    )
+                    return None
+                if open_issues > 1:
+                    LOGGER.info(
+                        "release_milestone_incomplete issue=%s repo=%s "
+                        "milestone=%s open_issues=%d",
+                        issue.get("number"), repo, target_milestone,
+                        open_issues,
+                    )
+                    continue
         blockers = open_blocker_numbers(issue)
         if blockers:
             LOGGER.info(
@@ -4100,13 +4184,15 @@ def pick_issue(repo: str, active_milestone: str | None = None) -> dict | None:
     # Release fallback (Issue #255): only when no ordinary delivery
     # (p0/bug/plain) is claimable. The query keeps `label:ai-ready` +
     # `label:ai-release` and the same delivery-state exclusions; the Epic
-    # and blockedBy guards still apply via `_pick_from_scan`. A failed
-    # fallback query fails open exactly like any other scan.
+    # and blockedBy guards still apply via `_pick_from_scan`. Issue
+    # #663: the release candidate also passes the Milestone completeness
+    # gate inside `_pick_from_scan`, so the query fetches `milestone`.
+    # A failed fallback query fails open exactly like any other scan.
     try:
         raw = run_command([
             "gh", "issue", "list", "--repo", repo, "--state", "open",
             "--search", release_fallback_search(active_milestone),
-            "--json", "number,title,body,labels,blockedBy",
+            "--json", "number,title,body,labels,blockedBy,milestone",
             "--limit", "200",
         ])
         issues = parse_issue_array(raw)
@@ -4116,7 +4202,10 @@ def pick_issue(repo: str, active_milestone: str | None = None) -> dict | None:
             repo, exc,
         )
         return None
-    return _pick_from_scan(issues, repo, allow_release=True)
+    return _pick_from_scan(
+        issues, repo, allow_release=True,
+        active_milestone=active_milestone,
+    )
 
 
 def pick_in_progress_issue(

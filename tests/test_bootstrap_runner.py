@@ -1870,6 +1870,11 @@ def test_release_fallback_scoped_to_active_milestone(monkeypatch):
     searches = []
 
     def fake_run(command, **kwargs):
+        # Issue #663: with `active_milestone` the release candidate now
+        # passes the Milestone completeness gate; this Milestone has only
+        # the release ticket itself.
+        if command[1] == "api":
+            return "1"
         searches.append(command[command.index("--search") + 1])
         if "label:ai-release" in searches[-1]:
             return json.dumps([release])
@@ -1933,6 +1938,200 @@ def test_release_fallback_scan_failure_fails_open(monkeypatch, caplog):
     with caplog.at_level("INFO"):
         assert runner.pick_issue("xqliu/orbi") is None
     assert "blocked_by_check_failed" in caplog.text
+
+
+# --- Issue #663: release Milestone completeness gate ----------------------
+
+
+def test_milestone_open_issue_count_reads_github_counter(monkeypatch):
+    """Issue #663: the completeness judgment is GitHub's own Milestone
+    `open_issues` counter, read with the one API call documented in the
+    Issue (title-filtered jq) — not the search index, not a label."""
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return "3"
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.milestone_open_issue_count("xqliu/orbi", "v0.4.2") == 3
+    assert commands == [[
+        "gh", "api", "repos/xqliu/orbi/milestones",
+        "--jq", '.[] | select(.title=="v0.4.2") | .open_issues',
+    ]]
+
+
+def test_milestone_open_issue_count_missing_milestone_raises(monkeypatch):
+    """Issue #663: an empty result (the Milestone is gone) is a failed
+    check, not a silent zero — the caller must never claim on it."""
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "")
+    with pytest.raises(RuntimeError, match="v0.4.2"):
+        runner.milestone_open_issue_count("xqliu/orbi", "v0.4.2")
+
+
+def test_release_target_milestone_prefers_issue_then_active():
+    """Issue #663: the release's Milestone is the Issue's GitHub
+    Milestone, falling back to the configured `active_milestone` (the
+    fallback scan is scoped to it). No Milestone ⇒ no gate."""
+    assert runner.release_target_milestone(
+        {"milestone": {"title": "v0.4.2"}}, None,
+    ) == "v0.4.2"
+    assert runner.release_target_milestone({}, "v0.4.2") == "v0.4.2"
+    assert runner.release_target_milestone({}, None) is None
+    assert runner.release_target_milestone(
+        {"milestone": {"title": ""}}, "v0.4.2",
+    ) == "v0.4.2"
+    assert runner.release_target_milestone({"milestone": "bad"}, None) is None
+    assert runner.release_target_milestone(
+        {"milestone": {"title": 7}}, None,
+    ) is None
+
+
+RELEASE_663 = {
+    "number": 254, "title": "release", "body": "",
+    "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+    "blockedBy": {"nodes": [], "totalCount": 0},
+    "milestone": {"title": "v0.4.2"},
+}
+
+
+def _release_scan_fake(api_result):
+    """Return a `run_command` fake: empty ordinary scans, the release
+    in the fallback scan, and `api_result` (a string or an exception)
+    for the Milestone counter query."""
+
+    def fake_run(command, **kwargs):
+        if command[1] == "api":
+            if isinstance(api_result, Exception):
+                raise api_result
+            return api_result
+        search = command[command.index("--search") + 1]
+        if "label:ai-release" in search:
+            return json.dumps([RELEASE_663])
+        return json.dumps([])
+
+    return fake_run
+
+
+def test_release_not_claimed_when_milestone_incomplete(monkeypatch, caplog):
+    """Issue #663: a release ticket is not claimed while its Milestone
+    still has open Issues — here an `ai-blocked` P0 that no ready scan
+    sees. The gate reads GitHub's own `open_issues` counter, so a
+    temporarily un-claimable Issue (ai-blocked / ai-pr-opened / not yet
+    indexed) can no longer let the release run ahead."""
+    monkeypatch.setattr(runner, "run_command", _release_scan_fake("3"))
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/orbi") is None
+    assert "release_milestone_incomplete" in caplog.text
+    assert "milestone=v0.4.2" in caplog.text
+    assert "open_issues=3" in caplog.text
+    # The Issue stays `ai-ready`: it was never claimed.
+    assert "picked issue=254" not in caplog.text
+
+
+def test_release_claimed_when_milestone_only_has_the_release(
+    monkeypatch, caplog,
+):
+    """Issue #663: with only the release ticket itself left
+    (`open_issues=1`) the release is claimed exactly as before."""
+    monkeypatch.setattr(runner, "run_command", _release_scan_fake("1"))
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/orbi") == RELEASE_663
+    assert "picked issue=254" in caplog.text
+
+
+def test_release_not_claimed_when_milestone_check_fails(monkeypatch, caplog):
+    """Issue #663: a milestone query that cannot be evaluated never
+    claims — a bad release is irreversible, so the check fails safe and
+    the next tick retries (recoverable, never `ai-blocked`)."""
+    error = subprocess.CalledProcessError(1, ["gh"], output="boom")
+    monkeypatch.setattr(runner, "run_command", _release_scan_fake(error))
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/orbi") is None
+    assert "release_milestone_check_failed" in caplog.text
+    assert "picked issue=254" not in caplog.text
+
+
+def test_release_without_milestone_claimed_without_api_call(
+    monkeypatch, caplog,
+):
+    """Issue #663: a release with no Milestone (and no configured
+    `active_milestone`) keeps the pre-#663 behavior — claimed with no
+    extra API call."""
+    release = {
+        "number": 254, "title": "release", "body": "",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    commands_seen = []
+
+    def fake_run(command, **kwargs):
+        commands_seen.append(command)
+        if "label:ai-release" in " ".join(command):
+            return json.dumps([release])
+        return json.dumps([])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/orbi") == release
+    assert not [c for c in commands_seen if c[1] == "api"]
+    assert "picked issue=254" in caplog.text
+
+
+def test_release_milestone_falls_back_to_active_milestone(
+    monkeypatch, caplog,
+):
+    """Issue #663: without a Milestone on the release Issue, the
+    configured `active_milestone` (the fallback scan's scope) is the
+    Milestone whose completeness is checked."""
+    release = {
+        "number": 254, "title": "release", "body": "",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    api_calls = []
+
+    def fake_run(command, **kwargs):
+        if command[1] == "api":
+            api_calls.append(command)
+            return "2"
+        search = command[command.index("--search") + 1]
+        if "label:ai-release" in search:
+            return json.dumps([release])
+        return json.dumps([])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue(
+            "xqliu/orbi", active_milestone="v0.3.0",
+        ) is None
+    assert api_calls
+    assert "milestone=v0.3.0" in caplog.text
+    assert "open_issues=2" in caplog.text
+
+
+def test_release_fallback_scan_fetches_milestone(monkeypatch):
+    """Issue #663: the release fallback scan fetches `milestone` so the
+    completeness gate reads the release's GitHub Milestone from the same
+    query — no extra `gh issue view`."""
+    release = {
+        "number": 254, "title": "release", "body": "",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    scans = []
+
+    def fake_run(command, **kwargs):
+        scans.append(command)
+        search = command[command.index("--search") + 1]
+        if "label:ai-release" in search:
+            return json.dumps([release])
+        return json.dumps([])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.pick_issue("xqliu/orbi") == release
+    fields = scans[-1][scans[-1].index("--json") + 1]
+    assert "milestone" in fields.split(",")
 
 
 def test_pick_issue_p0_blocked_by_open_blocker_falls_back_to_bug(
