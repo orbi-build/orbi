@@ -1206,3 +1206,21 @@ def _write_config(tmp_path: Path) -> None:
         f'repo_dir = "{repo_dir}"\n',
         encoding="utf-8",
     )
+
+
+def test_count_crashes_counts_unparseable_clock_lines_conservatively():
+    # A crash-shaped line whose clock (or unit) cannot be parsed must
+    # still count: dedupe can never be allowed to hide a real crash.
+    no_clock = (
+        "host systemd[1015]: orbi@1.service: Main process exited, "
+        "code=exited, status=1/FAILURE"
+    )
+    no_unit = (
+        "Sep 04 11:50:00 host systemd[1015]: orbi.service: Failed with "
+        "result 'exit-code'."
+    )
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": f"{no_clock}\n{no_unit}\n",
+        "journalctl --user -u orbi@2.service": "",
+    })
+    assert runner_health.count_crashes(fake) == 2
