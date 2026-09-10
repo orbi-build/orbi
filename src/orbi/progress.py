@@ -78,6 +78,18 @@ def _with_runner_marker(body: str) -> str:
     return body + "\n\n" + marker
 
 
+def quote_value(value: str) -> str:
+    """Double-quote a key=value field value when it needs quoting.
+
+    Values containing spaces or double quotes are quoted; embedded double
+    quotes are escaped as ``\\"`` so the field stays parseable as a single
+    ``key=value`` token.
+    """
+    if " " in value or '"' in value:
+        return '"' + value.replace('"', '\\"') + '"'
+    return value
+
+
 def field_block(run_id: str, headline: str, fields: dict[str, object]) -> str:
     """Render a marker-first status comment with one field per line."""
     lines = [run_marker(run_id), headline]

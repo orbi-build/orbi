@@ -1629,7 +1629,7 @@ def _fake_cli_source(monkeypatch, drifted: bool = False) -> dict:
     def fake_drift_line(source):
         if source["editable"]:
             return None
-        from orbi.pi_activity import quote_value
+        from orbi.progress import quote_value
 
         return (
             "cli_source_drift "

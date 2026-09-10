@@ -23,9 +23,9 @@ from orbi.pi_activity import (
     SessionWatcher,
     format_duration,
     format_run_scene,
-    quote_value,
     session_state,
 )
+from orbi.progress import quote_value
 from orbi.pi_recovery import (
     clk_tck,
     find_idle_descendants,
