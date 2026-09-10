@@ -2847,12 +2847,88 @@ def test_create_worktree_reuses_existing_path_for_a_resumed_run(
 def test_create_worktree_adds_branch_from_frozen_base_sha(monkeypatch, tmp_path):
     path = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-run1"
     calls = []
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)))
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "",
+    )
     assert runner.create_worktree(tmp_path, "owner/repo", 3, "run1", "abc123def456") == path
-    assert calls == [(
-        ["git", "worktree", "add", "-b", "orbi/owner-repo-issue-3", str(path), "abc123def456"],
-        {"cwd": tmp_path},
-    )]
+    assert calls == [
+        (["git", "branch", "--list", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
+        (["git", "worktree", "add", "-b", "orbi/owner-repo-issue-3", str(path), "abc123def456"],
+         {"cwd": tmp_path}),
+    ]
+
+
+def test_create_worktree_reuses_orphan_local_branch_never_exits_255(
+    monkeypatch, tmp_path,
+):
+    """Issue #662 (the #655 incident): a SIGKILLed run can leave the stable
+    branch behind with no worktree and no remote counterpart (a pure orphan).
+    `worktree add -b` cannot re-create it (the exit-255 that burned the Issue
+    into terminal ai-blocked), so the orphan branch is reused by identity."""
+    path = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-run1"
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[:3] == ["git", "branch", "--list"]:
+            return "orbi/owner-repo-issue-3"
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.create_worktree(
+        tmp_path, "owner/repo", 3, "run1", "base",
+    ) == path
+    assert calls == [
+        (["git", "branch", "--list", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
+        (["git", "worktree", "add", str(path), "orbi/owner-repo-issue-3"],
+         {"cwd": tmp_path}),
+    ]
+
+
+def test_create_worktree_reuses_orphan_local_branch_real_git(tmp_path):
+    """Real-git acceptance (Issue #662, the #655 scene): the local orphan
+    branch is checked out into the new worktree where the bare `worktree add
+    -b` exited 255 (`fatal: a branch named ... already exists`)."""
+    work, head = make_local_remote_pair(tmp_path)
+    repo_dir = tmp_path / "runner"
+    subprocess.run(
+        ["git", "clone", "-q", str(tmp_path / "remote.git"), str(repo_dir)],
+        check=True, capture_output=True,
+    )
+    for key, value in (("user.email", "t@t"), ("user.name", "t")):
+        subprocess.run(
+            ["git", "-C", str(repo_dir), "config", key, value],
+            check=True, capture_output=True,
+        )
+    # The killed claim left the branch at the base commit; it was never
+    # pushed, so origin has no counterpart (the #655 orphan).
+    subprocess.run(
+        ["git", "-C", str(repo_dir), "branch",
+         "orbi/owner-repo-issue-3", head],
+        check=True, capture_output=True,
+    )
+    remote = subprocess.run(
+        ["git", "-C", str(repo_dir), "ls-remote", "--heads", "origin",
+         "refs/heads/orbi/owner-repo-issue-3"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert remote == "", "the orphan branch must not exist on origin"
+    # The bare `git worktree add -b` of the incident fails (exit 255).
+    incident = subprocess.run(
+        ["git", "-C", str(repo_dir), "worktree", "add", "-b",
+         "orbi/owner-repo-issue-3", str(tmp_path / "incident"), head],
+        capture_output=True, text=True,
+    )
+    assert incident.returncode != 0, incident
+    assert "already exists" in incident.stderr
+    # The orphan-aware path reuses the branch instead.
+    path = runner.create_worktree(repo_dir, "owner/repo", 3, "run1", head)
+    current = subprocess.run(
+        ["git", "-C", str(path), "branch", "--show-current"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert current == "orbi/owner-repo-issue-3"
 
 
 def test_create_worktree_reuses_existing_remote_branch(monkeypatch, tmp_path):
