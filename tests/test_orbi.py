@@ -82,7 +82,7 @@ def test_list_labeled_issues_queries_github_with_label_and_state(monkeypatch):
     issue = {"number": 3, "title": "task", "url": "u"}
     calls = []
     monkeypatch.setattr(
-        orbi, "run_command",
+        runner, "run_command",
         lambda command, **kwargs: calls.append(command)
         or json.dumps([issue]),
     )
@@ -98,7 +98,7 @@ def test_list_labeled_issues_queries_github_with_label_and_state(monkeypatch):
 
 
 def test_list_labeled_issues_returns_empty_list_when_idle(monkeypatch):
-    monkeypatch.setattr(orbi, "run_command", lambda command, **kwargs: "[]")
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "[]")
     assert orbi.list_labeled_issues("xqliu/orbi", "ai-ready") == []
 
 
