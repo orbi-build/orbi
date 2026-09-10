@@ -3620,22 +3620,42 @@ def test_has_in_progress_label_fails_fast_on_malformed_output(monkeypatch):
         runner.has_in_progress_label(4, "owner/repo")
 
 
+def test_has_in_progress_label_fails_fast_on_malformed_labels(monkeypatch):
+    """view 返回 JSON 对象但 labels 字段不是数组（Issue #658）：解析
+    失败必须 fail-fast，绝不落入默认 False（那会让竞态守卫失明）。"""
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps({"labels": "ai-in-progress"}),
+    )
+    with pytest.raises(ValueError, match="labels must be a JSON array"):
+        runner.has_in_progress_label(4, "owner/repo")
+
+
 def test_has_in_progress_label_reads_directly_not_via_the_search_index(
     monkeypatch,
 ):
     """Issue #658：认领前复查必须直读（gh issue view，强一致）——不能走
     与扫描同一套最终一致的搜索索引：另一实例几秒前刚打上的
     ai-in-progress，索引可能尚未收录，复查必须看到它才能让路。"""
+    calls = []
+
     def fake_run_command(command, **kwargs):
+        calls.append(command)
         if command[:3] == ["gh", "issue", "view"]:
             return json.dumps({"labels": [{"name": "ai-in-progress"}]})
-        if command[:3] == ["gh", "issue", "list"]:
-            # The stale search index has not ingested the label yet.
-            return json.dumps([])
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     assert runner.has_in_progress_label(4, "owner/repo") is True
+    # The fixed path reads the Issue directly — the search index (which
+    # has not ingested the other instance's claim yet) is never queried.
+    assert calls == [[
+        "gh", "issue", "view", "4", "--repo", "owner/repo",
+        "--json", "labels",
+    ]]
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run_command(["gh", "issue", "list", "--search",
+                          "label:ai-in-progress"])
 
 
 def _claim_race_deps(monkeypatch, tmp_path, *, freeze_side_effect=None,
@@ -3669,14 +3689,10 @@ def _claim_race_deps(monkeypatch, tmp_path, *, freeze_side_effect=None,
     monkeypatch.setattr(
         runner, "new_run_id", lambda: "feedface",
     )
-
-    def fake_create_worktree(*args, **kwargs):
-        path = tmp_path / "wt"
-        (path / ".orbi").mkdir(parents=True, exist_ok=True)
-        return path
-
-    monkeypatch.setattr(runner, "create_worktree", fake_create_worktree)
-    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    # create_worktree/run_pi stay REAL: on the fixed path the guard
+    # yields before either is reached, and a regression that skips the
+    # guard then fails loudly on the real calls (tmp_path is no git
+    # repo) — no dead fake arms.
 
 
 def make_claim_race_gh(monkeypatch, state):
@@ -3712,8 +3728,29 @@ def make_claim_race_gh(monkeypatch, state):
     return fake_run_command
 
 
-def test_claim_race_gh_rejects_unexpected_commands(monkeypatch):
-    fake = make_claim_race_gh(monkeypatch, {"in_progress": False})
+def test_claim_race_gh_answers_every_expected_command(monkeypatch):
+    """The shared #658 fake is a contract, not a sink: every branch it
+    answers is one the claim flow issues — driven here (in_progress=True
+    arm; the False arm is driven by the two yield tests) so no arm is
+    dead in the fixed world, and anything else fails loud."""
+    fake = make_claim_race_gh(monkeypatch, {"in_progress": True})
+    assert json.loads(fake([
+        "gh", "issue", "view", "18", "--repo", "o/r", "--json", "labels",
+    ])) == {"labels": [{"name": "ai-in-progress"}]}
+    assert json.loads(fake([
+        "gh", "issue", "list", "--search", "label:ai-in-progress",
+    ])) == [{"number": 18}]
+    assert json.loads(fake(["gh", "pr", "list", "--state", "open"])) == []
+    assert fake([
+        "git", "ls-remote", "--heads", "origin", "refs/heads/x",
+    ]) == ""
+    assert json.loads(fake([
+        "gh", "api", "repos/o/r/issues/18/comments",
+    ])) == []
+    assert fake([
+        "gh", "api", "repos/o/r/issues/18/comments",
+        "--method", "POST", "--field", "body=x",
+    ]) == ""
     with pytest.raises(AssertionError, match="unexpected command"):
         fake(["gh", "release", "view"])
 
@@ -6320,8 +6357,6 @@ def test_advance_active_milestone_pending_creates_one_p0_ready_issue(
 
     def fake_run(command, **kwargs):
         calls.append(command)
-        if command[:3] == ["gh", "issue", "view"]:
-            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return json.dumps([milestones])
@@ -6442,8 +6477,6 @@ def test_advance_active_milestone_pending_issue_failure_is_bypassed(
     config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
 
     def fail_pending(command, **kwargs):
-        if command[:3] == ["gh", "issue", "view"]:
-            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         if command[:3] == ["gh", "issue", "create"]:
@@ -16278,8 +16311,6 @@ def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None,
 
     def fake_run_command(command, **kwargs):
         calls.append(command)
-        if command[:3] == ["gh", "issue", "view"]:
-            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         if command[:3] == ["gh", "issue", "list"]:
             label = command[command.index("--label") + 1]
             numbers = leftover_labels.get(label, [])
