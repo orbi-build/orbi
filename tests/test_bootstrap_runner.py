@@ -16,7 +16,7 @@ from unittest.mock import Mock
 import pytest
 
 import orbi.runner as runner
-from orbi import pi_activity, progress
+from orbi import pi_activity, pi_process, progress
 from tests.test_progress_wiring import make_fake_gh
 
 
@@ -7677,7 +7677,7 @@ def test_stream_pi_early_exit_uses_the_flushed_journal(
         stderr="Codex error: The usage limit has been reached",
     )
 
-    class StaleWatcher(runner.SessionWatcher):
+    class StaleWatcher(pi_process.SessionWatcher):
         """The live watcher of the #655 scene: its last poll ran while
         Pi was still alive, before the dying process flushed the
         journal, so it never bound to the session file."""
@@ -7685,7 +7685,7 @@ def test_stream_pi_early_exit_uses_the_flushed_journal(
         def _next_session_file(self):
             return None
 
-    monkeypatch.setattr(runner, "SessionWatcher", StaleWatcher)
+    monkeypatch.setattr(pi_process, "SessionWatcher", StaleWatcher)
     with caplog.at_level("INFO"):
         with pytest.raises(runner.RecoverablePiProcessError):
             runner.stream_pi(
@@ -7754,23 +7754,23 @@ def test_startup_failed_reason_maps_hung_first_request_to_timeout():
         "first_request": True,
         "first_response": False,
     }
-    assert runner._startup_failed_reason(
+    assert pi_process._startup_failed_reason(
         activity, returncode=0, stderr="",
         timed_out=False, model_wait_dead=True,
         model_wait_swallowed=False, idle_recovery_failed=False,
     ) == "first_response_timeout"
-    assert runner._startup_failed_reason(
+    assert pi_process._startup_failed_reason(
         activity, returncode=0, stderr="",
         timed_out=False, model_wait_dead=False,
         model_wait_swallowed=True, idle_recovery_failed=False,
     ) == "model_wait_swallowed"
     # The other failure classes keep their own reasons.
-    assert runner._startup_failed_reason(
+    assert pi_process._startup_failed_reason(
         activity, returncode=0, stderr="",
         timed_out=True, model_wait_dead=False,
         model_wait_swallowed=False, idle_recovery_failed=False,
     ) == "timeout"
-    assert runner._startup_failed_reason(
+    assert pi_process._startup_failed_reason(
         activity, returncode=0, stderr="",
         timed_out=False, model_wait_dead=False,
         model_wait_swallowed=False, idle_recovery_failed=True,
@@ -8592,7 +8592,7 @@ def test_stream_pi_swallowed_model_request_killed_fast(tmp_path, caplog,
     generating). The runner kills Pi FAST (well before the
     model_wait_dead_seconds bound) and fails fast with the
     model_wait_swallowed reason."""
-    monkeypatch.setattr(runner, "slots_idle", lambda url: True)
+    monkeypatch.setattr(pi_process, "slots_idle", lambda url: True)
     records = _frozen_model_wait_records(0.0)
     command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
     with caplog.at_level("WARNING"), pytest.raises(
@@ -8629,7 +8629,7 @@ def test_stream_pi_swallow_line_fields(tmp_path, caplog, monkeypatch):
     `model_wait_dead`): issue, idle seconds, the probe grace, the action,
     the session, the run id, the upstream connection evidence and the
     reason. The line is parseable with `pi_activity.parse_scene`."""
-    monkeypatch.setattr(runner, "slots_idle", lambda url: True)
+    monkeypatch.setattr(pi_process, "slots_idle", lambda url: True)
     records = [
         (0.0, {"type": "session", "id": "sess-233",
                "timestamp": fresh_timestamp(), "cwd": "/w"}),
@@ -8670,7 +8670,7 @@ def test_stream_pi_swallow_not_fired_while_a_slot_is_processing(
     (is_processing=true — the model is generating, a slow model, NOT a
     swallow): the swallow path never fires and the existing
     model_wait_dead_seconds bound still applies."""
-    monkeypatch.setattr(runner, "slots_idle", lambda url: False)
+    monkeypatch.setattr(pi_process, "slots_idle", lambda url: False)
     records = _frozen_model_wait_records(0.0)
     command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
     with caplog.at_level("WARNING"), pytest.raises(
@@ -8703,7 +8703,7 @@ def test_stream_pi_swallow_window_restarts_when_events_arrive(
     请求"的活会话误杀（复现日志里 idle_seconds 远小于 probe_seconds）。
     事件每 0.4s 到达一次（< probe_seconds=0.6），窗口必须在每次事件
     后重启，探测永不触发，会话自然跑完。"""
-    monkeypatch.setattr(runner, "slots_idle", lambda url: True)
+    monkeypatch.setattr(pi_process, "slots_idle", lambda url: True)
 
     def tool_result(n):
         return {"type": "message", "id": f"r{n}",
@@ -8743,7 +8743,7 @@ def test_stream_pi_swallow_probe_failure_is_inconclusive(
     None — network/JSON error): the probe is inconclusive, never an
     error, and the existing model_wait_dead_seconds bound still applies
     (the delivery is not failed by the probe)."""
-    monkeypatch.setattr(runner, "slots_idle", lambda url: None)
+    monkeypatch.setattr(pi_process, "slots_idle", lambda url: None)
     records = _frozen_model_wait_records(0.0)
     command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
     with caplog.at_level("WARNING"), pytest.raises(
@@ -8770,7 +8770,7 @@ def test_stream_pi_unconfigured_probe_keeps_dead_bound(
     no-op (the exact pre-#233 behavior) — the run is bounded by
     model_wait_dead_seconds only, and the probe is never called."""
     probe = Mock(return_value=True)
-    monkeypatch.setattr(runner, "slots_idle", probe)
+    monkeypatch.setattr(pi_process, "slots_idle", probe)
     records = _frozen_model_wait_records(0.0)
     command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
     with caplog.at_level("WARNING"), pytest.raises(
@@ -9174,11 +9174,11 @@ def test_pending_timeout_targets_unit(tmp_path, monkeypatch):
             return now_mono - 1.0  # started 1 s ago, timeout 5 s
         return now_mono - 9.0  # started 9 s ago, timeout 5 s (passed)
 
-    monkeypatch.setattr(runner, "process_start_monotonic", fake_start)
-    monkeypatch.setattr(runner, "process_ppid", lambda pid: None)
+    monkeypatch.setattr(pi_process, "process_start_monotonic", fake_start)
+    monkeypatch.setattr(pi_process, "process_ppid", lambda pid: None)
     boot_clock = getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC)
     monkeypatch.setattr(
-        runner.time, "clock_gettime",
+        pi_process.time, "clock_gettime",
         lambda clock: now_mono if clock == boot_clock else pytest.fail(
             f"unexpected clock: {clock}"
         ),
@@ -9189,7 +9189,7 @@ def test_pending_timeout_targets_unit(tmp_path, monkeypatch):
         {"pid": 3, "cmdline": "timeout 5 pytest"},
         {"pid": 4, "cmdline": "pytest"},  # no clear timeout
     ]
-    pending = runner._pending_timeout_targets(targets)
+    pending = pi_process._pending_timeout_targets(targets)
     assert [target["pid"] for target, _ in pending] == [2]
     # The deadline is the realtime now plus the remaining time.
     (target, deadline) = pending[0]
@@ -9199,20 +9199,20 @@ def test_pending_timeout_targets_unit(tmp_path, monkeypatch):
     # wrapper's deadline, even though its own command line has no
     # `timeout` token.
     monkeypatch.setattr(
-        runner, "process_ppid", lambda pid: 10 if pid == 11 else None,
+        pi_process, "process_ppid", lambda pid: 10 if pid == 11 else None,
     )
     monkeypatch.setattr(
-        runner, "process_start_monotonic",
+        pi_process, "process_start_monotonic",
         lambda pid, *, hz: now_mono - 1.0,
     )
-    pending = runner._pending_timeout_targets([
+    pending = pi_process._pending_timeout_targets([
         {"pid": 10, "cmdline": "timeout 5 sleep 300"},
         {"pid": 11, "cmdline": "sleep 300"},
     ])
     assert [target["pid"] for target, _ in pending] == [10]
 
     # An empty target list is a no-op.
-    assert runner._pending_timeout_targets([]) == []
+    assert pi_process._pending_timeout_targets([]) == []
 
 
 def make_hung_pi(tmp_path, *, child_sleep=10.0, ignore_sigterm=False,
