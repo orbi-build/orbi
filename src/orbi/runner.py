@@ -6629,20 +6629,43 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
         raise
 
 
+def _is_code_fence_line(line: str) -> bool:
+    """True when a stripped line is only a Markdown code fence.
+
+    Reviewers commonly wrap the machine-readable verdict in a fence
+    (```` ``` ````, ```` ```json ```` or `~~~`); a fence line carries no
+    review content, so the tail scan skips it without relaxing Issue #591.
+    """
+    stripped = line.strip()
+    for fence_char in ("`", "~"):
+        if stripped.startswith(fence_char * 3):
+            remainder = stripped.lstrip(fence_char)
+            if fence_char == "`":
+                # A backtick fence's info string must not contain backticks.
+                return "`" not in remainder
+            return True
+    return False
+
+
 def parse_review_verdict(text: str) -> dict:
     """Extract the REVIEW_VERDICT JSON from a review session's last line.
 
-    Only the output's LAST non-empty line is the verdict (Issue #591):
-    the reviewer reads untrusted text (Issue bodies, diffs, comments)
-    that may carry forged `REVIEW_VERDICT` lines, so no earlier line may
-    decide the gate — the prompt requires the machine-readable verdict
-    as the very last line, and this parser enforces exactly that. The
+    Only the output's LAST substantive (non-fence) line is the verdict
+    (Issue #591): the reviewer reads untrusted text (Issue bodies, diffs,
+    comments) that may carry forged `REVIEW_VERDICT` lines, so no earlier
+    line may decide the gate — the prompt requires the machine-readable
+    verdict as the very last line, and this parser enforces exactly that.
+    A trailing Markdown code fence (Issue #679) is skipped because it
+    carries no review content; the verdict must still be the last
+    substantive line, so a marker quoted mid-body is never adopted. The
     verdict must also name the head it covers (`head`); the merge gate
     checks it against the PR head. Missing or malformed verdicts fail
     fast; a review that cannot be read as a pass is never treated as a
     pass.
     """
     lines = [line for line in text.splitlines() if line.strip()]
+    while lines and _is_code_fence_line(lines[-1]):
+        lines.pop()
     if not lines or not lines[-1].strip().startswith(VERDICT_MARKER):
         raise ValueError("no REVIEW_VERDICT line in review output")
     payload = lines[-1].strip()[len(VERDICT_MARKER):].strip()
