@@ -12523,6 +12523,177 @@ def test_wait_for_delivery_logs_awaiting_without_bound_run_id(monkeypatch, caplo
     assert "orbi:run=" not in comments[0][1]["body"]
 
 
+# ---------------------------------------------------- Issue #289
+# `_run_review_round` is the per-round delivery flow extracted from
+# `wait_for_delivery` (one round = label read/repair + resumable gate
+# + one independent review + failure classification). These tests pin
+# the three-value contract the polling skeleton dispatches on:
+# True = merged this round, False = findings (next round), None = a
+# terminal state was already handled (slot released).
+
+
+def _review_round_env(
+    monkeypatch, tmp_path, *, scene_base="main", label="ai-pr-opened",
+    with_worktree=True, review_result=False,
+):
+    """Shared fake GitHub/git scene for one direct `_run_review_round`
+    call. Returns (edits, comments, reviews, publishes) capture lists;
+    `edits` carries the `edit_issue` label patches, `publishes` the
+    `_safe_publish` progress calls."""
+    def fake_run(command, **kwargs):
+        if command[-1] == "comments":
+            # The trusted scene comment.
+            return json.dumps({"comments": [{
+                "body": (
+                    "<!-- orbi:run=a1b2c3d4 -->\n"
+                    "Orbi opened PR: "
+                    f"{PR_URL} (base_branch={scene_base} "
+                    "base_sha=abc123def456 run_id=a1b2c3d4)"
+                ),
+                "authorAssociation": "OWNER",
+            }]})
+        if command[-1] == "labels":
+            return json.dumps({"labels": [{"name": label}]})
+        if command == ["git", "branch", "--show-current"]:
+            return "orbi/owner-repo-issue-39"
+        raise AssertionError(f"unexpected command: {command}")
+
+    # The fake rejects anything it does not implement.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "pr", "list"])
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    if with_worktree:
+        (tmp_path / ".worktrees"
+         / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
+    edits: list = []
+    comments: list = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: edits.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *args, **kwargs: comments.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        runner, "comment_pr",
+        lambda *args, **kwargs: comments.append((args, kwargs)),
+    )
+    reviews: list = []
+    monkeypatch.setattr(
+        runner, "review_and_merge_if_clean",
+        lambda *args, **kwargs: reviews.append((args, kwargs))
+        or review_result,
+    )
+    publishes: list = []
+    monkeypatch.setattr(
+        runner, "_safe_publish",
+        lambda **kwargs: publishes.append(kwargs),
+    )
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    return edits, comments, reviews, publishes
+
+
+def test_run_review_round_returns_true_when_review_merges(
+        monkeypatch, tmp_path,
+):
+    """Issue #289: True = the round merged the PR; the caller releases
+    the slot. No label edit and no failure comment on this path."""
+    edits, comments, reviews, _ = _review_round_env(
+        monkeypatch, tmp_path, review_result=True,
+    )
+    issue = {"number": 39, "title": "task", "body": ""}
+    outcome = runner._run_review_round(
+        PR_URL, issue,
+        {"repo_dir": tmp_path, "base_branch": "main"}, "owner/repo",
+    )
+    assert outcome is True
+    # One review on the frozen scene of the same run.
+    assert len(reviews) == 1
+    worktree, branch, base_branch, review_config, repo, number = \
+        reviews[0][0]
+    assert branch == "orbi/owner-repo-issue-39"
+    assert base_branch == "main"
+    assert review_config["run_id"] == "a1b2c3d4"
+    assert review_config["base_sha"] == "abc123def456"
+    assert repo == "owner/repo"
+    assert number == 39
+    assert edits == []
+    assert comments == []
+
+
+def test_run_review_round_returns_false_on_findings(
+        monkeypatch, tmp_path,
+):
+    """Issue #289: False = findings remain (the ai-fix-needed
+    transition happened inside the review itself); the caller yields
+    the cadence and polls the next round."""
+    edits, comments, reviews, _ = _review_round_env(monkeypatch, tmp_path)
+    issue = {"number": 39, "title": "task", "body": ""}
+    outcome = runner._run_review_round(
+        PR_URL, issue,
+        {"repo_dir": tmp_path, "base_branch": "main"}, "owner/repo",
+    )
+    assert outcome is False
+    assert len(reviews) == 1
+    assert edits == []
+    assert comments == []
+
+
+def test_run_review_round_returns_none_when_scene_base_differs(
+        monkeypatch, tmp_path,
+):
+    """Issue #289: None = terminal state handled. An unrecoverable
+    precondition (the scene froze another base, Issue #91) marks the
+    Issue ai-blocked with the failure comment; the review never runs
+    and the caller releases the slot."""
+    edits, comments, reviews, _ = _review_round_env(
+        monkeypatch, tmp_path, scene_base="develop",
+    )
+    issue = {"number": 39, "title": "task", "body": ""}
+    outcome = runner._run_review_round(
+        PR_URL, issue,
+        {"repo_dir": tmp_path, "base_branch": "main"}, "owner/repo",
+    )
+    assert outcome is None
+    assert reviews == []
+    assert edits[0][1] == {
+        "repo": "owner/repo",
+        "add": "ai-blocked",
+        "remove": "ai-pr-opened",
+    }
+    assert "Orbi failed:" in comments[0][1]["body"]
+    assert "base_branch=develop" in comments[0][1]["body"]
+    assert "base_branch=main" in comments[0][1]["body"]
+
+
+def test_run_review_round_returns_none_when_worktree_missing(
+        monkeypatch, tmp_path,
+):
+    """Issue #289: None also covers the RECOVERABLE failure (the
+    missing worktree, Issue #90): the round writes the ai-fix-needed
+    full scene (the next tick resumes) and the caller releases the
+    slot — the failure never keeps re-running inside one process."""
+    edits, comments, reviews, _ = _review_round_env(
+        monkeypatch, tmp_path, with_worktree=False,
+    )
+    issue = {"number": 39, "title": "task", "body": ""}
+    outcome = runner._run_review_round(
+        PR_URL, issue,
+        {"repo_dir": tmp_path, "base_branch": "main"}, "owner/repo",
+    )
+    assert outcome is None
+    assert reviews == []
+    assert edits[0][1] == {
+        "repo": "owner/repo",
+        "add": "ai-fix-needed",
+        "remove": "ai-pr-opened",
+    }
+    body = comments[0][1]["body"]
+    assert "Orbi needs a fix:" in body
+    assert "orbi-owner-repo-issue-39-a1b2c3d4" in body
+
+
 def test_main_holds_slot_through_delivery_wait(monkeypatch, tmp_path):
     """The slot stays occupied while the delivery awaits review: a second
     concurrent runner must see capacity_full until the PR is merged."""
