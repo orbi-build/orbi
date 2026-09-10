@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import select
 import signal
 import subprocess
@@ -107,6 +108,27 @@ PI_MODEL_WAIT_PROBE_SECONDS = 60.0
 PI_IDLE_RECOVERY_CYCLES = 3
 
 
+# Provider rate-limit retry (Issue #321): a Pi session killed by a
+# provider 429 (the free-tier burst scene — the stderr carries `429` /
+# `quota` / `RESOURCE_EXHAUSTED` / `retry in`) is TRANSIENT throttling,
+# not a task failure: the SAME session is re-spawned in the same run
+# after a backoff instead of failing into the terminal path. The backoff
+# honors the response's own retry hint (`retry in Ns` / `retryDelay:
+# Ns`) clamped to `PI_RATE_LIMIT_BACKOFF_MAX_SECONDS`; without a hint it
+# doubles from `PI_RATE_LIMIT_BACKOFF_SECONDS` (30 s) up to the same
+# cap. The slot is held for the whole wait (the #233 positioning: the
+# Runner never claims a new Issue while this run waits). Only after
+# PI_RATE_LIMIT_RETRIES backoff retries still end in a 429 exit (6
+# consecutive 429 exits at the default 5) does the EXISTING failure
+# path run — marked `reason=provider_rate_limited` so a human (or the
+# #313 rotation semantics) can take over. Long-term quota exhaustion is
+# OUT of scope here (#313): this loop only bridges short burst windows.
+PI_RATE_LIMIT_MARKERS = ("429", "quota", "resource_exhausted", "retry in")
+PI_RATE_LIMIT_RETRIES = 5
+PI_RATE_LIMIT_BACKOFF_SECONDS = 30.0
+PI_RATE_LIMIT_BACKOFF_MAX_SECONDS = 300.0
+
+
 # The bootstrap runner streams every Pi session of a run through the same
 # live activity pipeline (Issue #24/#40); implement/review share the same
 # line format and carry their role (Issue #41: one run_id end to end, the
@@ -148,6 +170,31 @@ class ModelWaitDeadError(RuntimeError):
     never an unclassified top-level exception: the recovery stays
     fail-fast (Pi killed, the slot released by the tick ending) but its
     terminal outcome goes through the recoverable delivery path."""
+
+
+class ProviderRateLimitedError(RuntimeError):
+    """The Pi session exited because the provider throttled it (a 429
+    marker on the session's stderr, Issue #321): TRANSIENT rate limiting,
+    not a task failure.
+
+    Internal to `stream_pi`'s retry loop: the loop either re-spawns the
+    session after the backoff or replays the EXISTING terminal
+    classification through `_fail_rate_limited` — it never escapes
+    `stream_pi`. The exception carries the exit scene (returncode,
+    captured streams, the refreshed session activity) so the terminal
+    replay raises exactly the error type a non-retried exit would. The
+    stderr text itself never reaches the message (only the class — the
+    same no-leak rule as the startup reasons)."""
+
+    def __init__(self, *, returncode: int, stdout: str, stderr: str,
+                 activity: dict) -> None:
+        super().__init__(
+            f"provider rate limited the Pi session (exit {returncode})"
+        )
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+        self.activity = activity
 
 
 def _drain_stream(stream, chunks: list[bytes]) -> None:
@@ -227,15 +274,20 @@ def _classify_startup_exit(stderr: str, returncode: int) -> str:
     (Issue #176).
 
     The classification is evidence-based on Pi's own stderr (the
-    minimal correlation the Issue asks for): a provider authentication
-    failure (`401`/`403`, `unauthorized`, `forbidden`, `api key`) is
-    `auth_failure`; a network timeout (`timed out`, `timeout`,
-    `etimedout`, `econnrefused`, `econnreset`, `enotfound`) is
-    `network_timeout`; anything else is the raw exit code
+    minimal correlation the Issue asks for): a provider rate limit
+    (`429` / `quota` / `RESOURCE_EXHAUSTED` / `retry in` — Issue #321)
+    is `provider_rate_limited` (checked FIRST: a throttling response
+    that happens to mention the key is still a rate limit); a provider
+    authentication failure (`401`/`403`, `unauthorized`, `forbidden`,
+    `api key`) is `auth_failure`; a network timeout (`timed out`,
+    `timeout`, `etimedout`, `econnrefused`, `econnreset`, `enotfound`)
+    is `network_timeout`; anything else is the raw exit code
     (`pi_exit_<N>`). The stderr text itself is NOT echoed into the
     reason — only the class — so no sensitive response content can
     leak into the journal.
     """
+    if _is_rate_limited(stderr):
+        return "provider_rate_limited"
     lowered = stderr.lower()
     if ("401" in lowered or "403" in lowered or "unauthorized" in lowered
             or "forbidden" in lowered or "api key" in lowered):
@@ -245,6 +297,46 @@ def _classify_startup_exit(stderr: str, returncode: int) -> str:
             or "econnreset" in lowered or "enotfound" in lowered):
         return "network_timeout"
     return f"pi_exit_{returncode}"
+
+
+# The 429 response's own retry hint, in the two shapes observed in the
+# wild (Issue #321, the #302 scene: the Google 429 text "Please retry in
+# 36.123456s" — measured 2s -> 19s -> 36s — and the google.rpc.RetryInfo
+# JSON field `"retryDelay": "36s"`).
+_RETRY_AFTER_PATTERNS = (
+    re.compile(r"retry\s+in\s+(\d+(?:\.\d+)?)\s*s", re.IGNORECASE),
+    re.compile(r"retrydelay\"?\s*[:=]\s*\"?(\d+(?:\.\d+)?)s", re.IGNORECASE),
+)
+
+
+def _is_rate_limited(stderr: str) -> bool:
+    """Whether Pi's stderr carries a provider 429 marker (Issue #321)."""
+    lowered = stderr.lower()
+    return any(marker in lowered for marker in PI_RATE_LIMIT_MARKERS)
+
+
+def _retry_after_seconds(stderr: str) -> float | None:
+    """The 429 response's own retry hint in seconds, or None (Issue
+    #321)."""
+    for pattern in _RETRY_AFTER_PATTERNS:
+        match = pattern.search(stderr)
+        if match:
+            return float(match.group(1))
+    return None
+
+
+def _backoff_seconds(attempt: int, stderr: str) -> float:
+    """The wait before retry `attempt + 1` (`attempt` is 0-based, Issue
+    #321): the response's own hint when present (capped at
+    `PI_RATE_LIMIT_BACKOFF_MAX_SECONDS`), else the default escalation —
+    `PI_RATE_LIMIT_BACKOFF_SECONDS` doubling per attempt, same cap."""
+    hinted = _retry_after_seconds(stderr)
+    if hinted is not None:
+        return min(hinted, PI_RATE_LIMIT_BACKOFF_MAX_SECONDS)
+    return min(
+        PI_RATE_LIMIT_BACKOFF_SECONDS * (2 ** attempt),
+        PI_RATE_LIMIT_BACKOFF_MAX_SECONDS,
+    )
 
 
 def _log_provider_config_loaded(*, issue_ref: str, role: str, config: dict,
@@ -302,13 +394,13 @@ def _startup_failed_reason(activity: dict, *, returncode: int,
                            idle_recovery_failed: bool) -> str:
     """The `startup_failed` reason for a failure before the first
     response (Issue #176): the kill-path class first, then the
-    root-cause evidence from Pi's stderr (`auth_failure` /
-    `network_timeout` — the missing session file is usually the
-    CONSEQUENCE of the auth/network failure, never the cause), then
-    WHERE the startup was stuck (`session_not_created` /
-    `no_first_request` / the raw early exit). `first_response_timeout`
-    is the frozen `model_wait` killed before any response (the hung
-    first request)."""
+    root-cause evidence from Pi's stderr (`provider_rate_limited` /
+    `auth_failure` / `network_timeout` — the missing session file is
+    usually the CONSEQUENCE of the rate-limit/auth/network failure,
+    never the cause), then WHERE the startup was stuck
+    (`session_not_created` / `no_first_request` / the raw early exit).
+    `first_response_timeout` is the frozen `model_wait` killed before
+    any response (the hung first request)."""
     if idle_recovery_failed:
         return "idle_recovery_stale"
     if model_wait_swallowed:
@@ -467,10 +559,28 @@ def stream_pi(
     the progress comment alone. A failure before the first response
     additionally logs `startup_failed` with the distinguishable reason
     (`session_not_created`, `no_first_request`, `auth_failure`,
-    `network_timeout`, `pi_exit_<N>`, `timeout`,
-    `first_response_timeout`, `model_wait_swallowed`,
+    `network_timeout`, `provider_rate_limited`, `pi_exit_<N>`,
+    `timeout`, `first_response_timeout`, `model_wait_swallowed`,
     `idle_recovery_stale`); the existing `run_failed` line and the
     raised failure are unchanged (fail-fast semantics preserved).
+
+    Provider rate-limit retry (Issue #321): when Pi exits non-zero and
+    its stderr carries a provider 429 marker (`429` / `quota` /
+    `RESOURCE_EXHAUSTED` / `retry in`), the exit is classified as
+    TRANSIENT throttling — not a task failure — and the SAME Pi session
+    is re-spawned IN THIS RUN after a backoff, the slot held for the
+    whole wait (the #233 positioning: no new Issue is claimed while
+    this run waits). The backoff honors the response's own retry hint
+    (`retry in Ns` / `retryDelay: Ns`) capped at 5 minutes; without a
+    hint it doubles from 30 s to the same cap. Every retry logs one
+    `pi_retry_429` line (run id, attempt, next_retry_in). Only after
+    `PI_RATE_LIMIT_RETRIES` (default 5) backoff retries still end in a
+    429 exit does the EXISTING failure path run — the same error type a
+    non-retried exit raises, so the terminal semantics (pre-session
+    `ai-blocked` / recoverable interrupted session) are unchanged —
+    with the `run_failed` scene marked `reason=provider_rate_limited`.
+    Long-term quota exhaustion stays out of scope (#313); non-429
+    failures are untouched.
 
     `progress` (Issue #18) is invoked on EVERY poll — an activity change
     or a heartbeat — with the current activity state, while the Pi
@@ -504,10 +614,10 @@ def stream_pi(
     activity field. The first new session event resets the whole
     recovery state (`pi_resumed`).
     """
-    # Issue #300: the two runner-side lifecycle hooks live in `runner` (the
-    # stop-handler state `_ACTIVE_RUN` and the issue-ref formatting); import
-    # them lazily so this module never imports `runner` at module load.
-    from orbi.runner import issue_context, set_active_pi
+    # Issue #300: the issue-ref formatting lives in `runner`; import it
+    # lazily so this module never imports `runner` at module load (the
+    # runner imports this module — Issue #266 circular-import rule).
+    from orbi.runner import issue_context
 
     # The raw pi command embeds the full prompt and Issue body; only the
     # redacted form may ever reach the journal or an exception message.
@@ -515,14 +625,123 @@ def stream_pi(
     LOGGER.info("command=%s cwd=%s", " ".join(safe_command), cwd)
     issue_ref = issue_context(source_repo, issue)
     session_dir = cwd / ".pi-session"
-    # Session files that already exist before this Pi process starts are
-    # never followed: a resumed run (same worktree) creates a NEW JSONL,
-    # and the journal must report the session of the current invocation,
-    # not the previous run's (Issue #45 round-5 review, Major 3).
-    known_files = (
-        {path for path in session_dir.glob("*.jsonl") if path.is_file()}
-        if session_dir.is_dir() else set()
+    attempt = 0
+    while True:
+        # Session files that already exist before this Pi process starts
+        # are never followed (Issue #45 round-5 review, Major 3): a
+        # resumed run — and, since Issue #321, a retried invocation —
+        # re-snapshots the baseline so the previous invocation's JSONL is
+        # never reported as this attempt's session.
+        known_files = (
+            {path for path in session_dir.glob("*.jsonl") if path.is_file()}
+            if session_dir.is_dir() else set()
+        )
+        try:
+            return _stream_pi_once(
+                command, cwd=cwd, timeout=timeout,
+                poll_interval=poll_interval,
+                idle_warn_seconds=idle_warn_seconds,
+                model_wait_dead_seconds=model_wait_dead_seconds,
+                model_wait_probe_url=model_wait_probe_url,
+                model_wait_probe_seconds=model_wait_probe_seconds,
+                run_id=run_id, issue_ref=issue_ref, branch=branch,
+                role=role, safe_command=safe_command, progress=progress,
+                pi_env=pi_env, session_dir=session_dir,
+                known_files=known_files,
+            )
+        except ProviderRateLimitedError as exc:
+            if attempt >= PI_RATE_LIMIT_RETRIES:
+                _fail_rate_limited(
+                    exc, run_id=run_id, issue_ref=issue_ref, role=role,
+                    branch=branch, cwd=cwd, safe_command=safe_command,
+                )
+            delay = _backoff_seconds(attempt, exc.stderr)
+            LOGGER.warning(
+                "pi_retry_429 run_id=%s issue=%s role=%s attempt=%d "
+                "next_retry_in=%ds limit=%d session=%s",
+                run_id, issue_ref, role, attempt + 1, int(delay),
+                PI_RATE_LIMIT_RETRIES,
+                exc.activity.get("session_id") or "-",
+            )
+            time.sleep(delay)
+            attempt += 1
+
+
+def _log_run_failed(activity: dict, *, run_id: str, issue_ref: str,
+                    role: str, branch: str, cwd: Path, reason: str) -> None:
+    """The single `run_failed` log skeleton (Issue #292): the
+    six-argument `format_run_scene` plus the reason. The `_fail_run`
+    closure of `_stream_pi_once` and the exhausted-retries terminal
+    failure (`_fail_rate_limited`, Issue #321) share it, so a new log
+    field is still added in exactly one place."""
+    LOGGER.error(
+        "run_failed %s reason=%s",
+        format_run_scene(
+            activity, run_id=run_id, issue=issue_ref,
+            role=role, branch=branch, worktree=str(cwd),
+        ),
+        reason,
     )
+
+
+def _fail_rate_limited(
+    exc: ProviderRateLimitedError, *, run_id: str, issue_ref: str,
+    role: str, branch: str, cwd: Path, safe_command: list[str],
+) -> NoReturn:
+    """The exhausted-retries terminal failure (Issue #321): the EXISTING
+    failure path — the same error type a non-retried exit raises, so the
+    terminal semantics (pre-session `ai-blocked` / recoverable
+    interrupted session) are unchanged — with the `run_failed` scene
+    marked `reason=provider_rate_limited`. The per-attempt
+    `startup_failed` lines are already in the journal (one per 429 exit
+    before the first response), so this is the single terminal log."""
+    activity = exc.activity
+    _log_run_failed(
+        activity, run_id=run_id, issue_ref=issue_ref, role=role,
+        branch=branch, cwd=cwd, reason="provider_rate_limited",
+    )
+    error_type = (
+        RecoverablePiProcessError
+        if activity["first_request"]
+        else subprocess.CalledProcessError
+    )
+    raise error_type(
+        exc.returncode, safe_command, output=exc.stdout, stderr=exc.stderr,
+    )
+
+
+def _stream_pi_once(
+    command: list[str],
+    *,
+    cwd: Path,
+    timeout: int | None,
+    poll_interval: float,
+    idle_warn_seconds: float,
+    model_wait_dead_seconds: float,
+    model_wait_probe_url: str | None,
+    model_wait_probe_seconds: float,
+    run_id: str,
+    issue_ref: str,
+    branch: str,
+    role: str,
+    safe_command: list[str],
+    progress: Callable[[dict], None] | None,
+    pi_env: dict[str, str] | None,
+    session_dir: Path,
+    known_files: set[Path],
+) -> str:
+    """Spawn and stream ONE Pi session attempt (Issue #321): the whole
+    pre-#321 `stream_pi` body — the `run_start` scene, the live
+    activity/heartbeat lines, the idle/model-wait kill paths and the
+    evidence-based exit classification. A 429-classified non-zero exit
+    raises `ProviderRateLimitedError` so the `stream_pi` retry loop can
+    back off and re-spawn; every other failure raises exactly as
+    before. The full streamer contract lives on `stream_pi`."""
+    # Issue #300: the stop-handler state `_ACTIVE_RUN` lives in `runner`;
+    # import it lazily so this module never imports `runner` at module
+    # load (the runner imports this module — Issue #266 rule).
+    from orbi.runner import set_active_pi
+
     watcher = SessionWatcher(session_dir, known_files=known_files)
     start = time.monotonic()
     # The initial state is what run_start already reported; activity lines
@@ -1090,15 +1309,13 @@ def stream_pi(
         )
     # The single `run_failed` site (Issue #292): every terminal branch
     # computes its reason and exception and lands here, so a new log
-    # field is added once, not per branch.
+    # field is added once, not per branch. The skeleton itself lives in
+    # `_log_run_failed` (shared with the #321 exhausted-retries terminal
+    # failure).
     def _fail_run(reason: str, exc: BaseException) -> NoReturn:
-        LOGGER.error(
-            "run_failed %s reason=%s",
-            format_run_scene(
-                activity, run_id=run_id, issue=issue_ref,
-                role=role, branch=branch, worktree=str(cwd),
-            ),
-            reason,
+        _log_run_failed(
+            activity, run_id=run_id, issue_ref=issue_ref, role=role,
+            branch=branch, cwd=cwd, reason=reason,
         )
         raise exc
     if idle_recovery_failed:
@@ -1146,6 +1363,16 @@ def stream_pi(
             ),
         )
     if process.returncode != 0:
+        # Issue #321: a provider 429 exit is TRANSIENT throttling, not a
+        # task failure — the `stream_pi` retry loop backs off and
+        # re-spawns this session. The refreshed activity rides on the
+        # exception so the exhausted-retries terminal failure replays
+        # the EXISTING classification below unchanged.
+        if _is_rate_limited(stderr):
+            raise ProviderRateLimitedError(
+                returncode=process.returncode,
+                stdout=stdout, stderr=stderr, activity=activity,
+            )
         # A Pi exit after it created a session is an interrupted run: its
         # work is resumable, including exits after idle recovery.  A
         # pre-session startup failure remains terminal unless it reaches

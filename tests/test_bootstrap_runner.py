@@ -7119,6 +7119,36 @@ def fake_session_records():
     ]
 
 
+def make_rate_limit_pi(tmp_path: Path, *, fail_times: int, stderr: str,
+                       stdout: str = "",
+                       records: list[tuple[float, dict]] | None = None) -> list[str]:
+    """A fake pi whose first `fail_times` invocations exit 1 with a 429
+    stderr, then succeed (Issue #321). Every invocation writes `records`
+    (the `make_fake_pi` shape) to its OWN session file — real Pi creates
+    a new JSONL per session, so a retried invocation is never bound to
+    the failed attempt's file."""
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir(exist_ok=True)
+    records_literal = repr(records or [])
+    script = (
+        "import json, os, sys\n"
+        f"session_dir = {str(session_dir)!r}\n"
+        f"counter = {str(tmp_path / '.pi-invocations')!r}\n"
+        "n = (int(open(counter).read()) if os.path.exists(counter) else 0) + 1\n"
+        "open(counter, 'w').write(str(n))\n"
+        f"records = {records_literal}\n"
+        "for delay, record in records:\n"
+        "    with open(os.path.join(session_dir, 'sess-%d.jsonl' % n),"
+        " 'a') as handle:\n"
+        "        handle.write(json.dumps(record) + '\\n')\n"
+        f"if n <= {fail_times}:\n"
+        f"    sys.stderr.write({stderr!r})\n"
+        "    sys.exit(1)\n"
+        f"sys.stdout.write({stdout!r})\n"
+    )
+    return [sys.executable, "-c", script]
+
+
 def test_log_format_has_no_python_timestamp():
     # journald already provides time, host and process (Issue #40): the
     # Python logger must not print a second timestamp.
@@ -7836,6 +7866,176 @@ def test_startup_failed_reason_maps_hung_first_request_to_timeout():
         timed_out=False, model_wait_dead=False,
         model_wait_swallowed=False, idle_recovery_failed=True,
     ) == "idle_recovery_stale"
+
+
+def test_rate_limit_marker_classification():
+    """Issue #321: the 429 evidence classes are Pi's own stderr markers —
+    `429` / `quota` / `RESOURCE_EXHAUSTED` / `retry in` — and anything
+    else stays unclassified."""
+    assert pi_process._is_rate_limited("Error 429: too many requests")
+    assert pi_process._is_rate_limited(
+        "Resource has been exhausted (e.g. check quota)")
+    assert pi_process._is_rate_limited("status: RESOURCE_EXHAUSTED")
+    assert pi_process._is_rate_limited("please RETRY IN 2s")
+    assert not pi_process._is_rate_limited("boom")
+    assert not pi_process._is_rate_limited(
+        "Error: connect ETIMEDOUT (request timed out)")
+    # The existing classes win on their own evidence: a 401 without a
+    # rate-limit marker is still an auth failure.
+    assert pi_process._classify_startup_exit(
+        "Error: 401 Unauthorized", 1) == "auth_failure"
+
+
+def test_retry_after_parsing_and_backoff():
+    """Issue #321: the backoff honors the 429 response's own retry hint
+    (`retry in Ns` / `retryDelay: Ns`, capped at ~5 minutes); without a
+    hint the default escalates 30/60/120/240 and stays at the cap."""
+    assert pi_process._retry_after_seconds(
+        "Please retry in 36.123456s. ID: abc") == 36.123456
+    assert pi_process._retry_after_seconds('"retryDelay": "37s"') == 37.0
+    assert pi_process._retry_after_seconds("retryDelay:19s") == 19.0
+    assert pi_process._retry_after_seconds("no hint here") is None
+    assert pi_process._backoff_seconds(0, "Please retry in 2s") == 2.0
+    assert pi_process._backoff_seconds(3, '"retryDelay": "36s"') == 36.0
+    # A hint longer than the cap is capped (the slot must move on).
+    assert pi_process._backoff_seconds(0, "retry in 9999s") == 300.0
+    assert pi_process._backoff_seconds(0, "") == 30.0
+    assert pi_process._backoff_seconds(1, "") == 60.0
+    assert pi_process._backoff_seconds(2, "") == 120.0
+    assert pi_process._backoff_seconds(3, "") == 240.0
+    assert pi_process._backoff_seconds(4, "") == 300.0
+    assert pi_process._backoff_seconds(9, "") == 300.0
+
+
+def test_stream_pi_rate_limited_exit_retries_then_succeeds(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #321 acceptance: a fake Pi 429 exit is retried IN THE SAME
+    RUN after the response's own retry hint — the delivery succeeds and
+    no failure is ever raised (so the Issue can never go ai-blocked on a
+    transient burst limit)."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(pi_process.time, "sleep", sleeps.append)
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=1, stdout="final answer",
+        stderr="Error: 429 RESOURCE_EXHAUSTED. Please retry in 36.5s",
+    )
+    with caplog.at_level("INFO"):
+        result = runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.05,
+            run_id="deadbeef", issue=321, source_repo="xqliu/orbi",
+            branch="b",
+        )
+    assert result == "final answer"
+    # The backoff honored the response's hint.
+    assert sleeps == [36.5]
+    retries = [line for line in caplog.text.splitlines()
+               if " pi_retry_429 " in line]
+    assert len(retries) == 1
+    assert "run_id=deadbeef" in retries[0]
+    assert "attempt=1" in retries[0]
+    assert "next_retry_in=36s" in retries[0]
+    # The same run re-spawned the session: two run_start scenes.
+    assert len([line for line in caplog.text.splitlines()
+                if " run_start " in line]) == 2
+    assert "run_failed" not in caplog.text
+
+
+def test_stream_pi_rate_limited_exhausted_takes_existing_failure_path(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #321 acceptance: 429 through every backoff retry (5) takes
+    the EXISTING failure path — the terminal pre-session classification —
+    marked `reason=provider_rate_limited` on the startup and run_failed
+    lines."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(pi_process.time, "sleep", sleeps.append)
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=99,
+        stderr='{"error":{"code":429,"message":"Resource has been '
+               'exhausted (e.g. check quota)","status":'
+               '"RESOURCE_EXHAUSTED"}}',
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=321, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    # The stderr carries no retry hint: the default escalation, then the
+    # cap. 5 retries = 6 sessions total.
+    assert sleeps == [30.0, 60.0, 120.0, 240.0, 300.0]
+    retries = [line for line in caplog.text.splitlines()
+               if " pi_retry_429 " in line]
+    assert [f"attempt={attempt}" for attempt in (1, 2, 3, 4, 5)] == [
+        field for line in retries for field in line.split()
+        if field.startswith("attempt=")
+    ]
+    assert "next_retry_in=30s" in retries[0]
+    assert len([line for line in caplog.text.splitlines()
+                if " run_start " in line]) == 6
+    starts = [line for line in caplog.text.splitlines()
+              if " startup_failed " in line]
+    assert len(starts) == 6
+    for line in starts:
+        assert "reason=provider_rate_limited" in line
+    failed = [line for line in caplog.text.splitlines()
+              if " run_failed " in line]
+    assert len(failed) == 1
+    assert "reason=provider_rate_limited" in failed[0]
+    # The existing terminal semantics: a plain CalledProcessError (pre-
+    # session), carrying the 429 stderr for the failure comment.
+    assert not isinstance(exc_info.value, runner.RecoverablePiProcessError)
+    assert "429" in (exc_info.value.stderr or "")
+
+
+def test_stream_pi_rate_limited_exhausted_mid_session_stays_recoverable(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #321: exhausting the retries after the session sent its
+    first request keeps the EXISTING recoverable classification — the
+    interrupted work stays resumable, never terminal."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(pi_process.time, "sleep", sleeps.append)
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=99, records=startup_records(),
+        stderr="Error 429: rate limited, retry in 2s",
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(runner.RecoverablePiProcessError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=321, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    assert sleeps == [2.0] * 5
+    # After the first response this is a mid-run failure: no
+    # startup_failed line, the run_failed scene carries the reason.
+    assert not any(" startup_failed " in line
+                   for line in caplog.text.splitlines())
+    failed = [line for line in caplog.text.splitlines()
+              if " run_failed " in line]
+    assert len(failed) == 1
+    assert "reason=provider_rate_limited" in failed[0]
+
+
+def test_stream_pi_non_rate_limited_exit_never_retries(tmp_path, caplog):
+    """Issue #321: the business failure semantics are untouched — a non-
+    429 exit fails exactly once, with no retry line."""
+    command = make_fake_pi(
+        tmp_path, session_records=[], stderr="boom", exit_code=1,
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(subprocess.CalledProcessError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=321, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    assert "pi_retry_429" not in caplog.text
+    assert len([line for line in caplog.text.splitlines()
+                if " run_start " in line]) == 1
 
 
 def test_stream_pi_startup_failed_auth_failure(tmp_path, caplog):

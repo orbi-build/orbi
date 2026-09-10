@@ -83,7 +83,7 @@ pi_model = "cohere/north-mini-code:free"
 
 OpenRouter 官方[限流文档](https://openrouter.ai/docs/api/reference/limits)给出的 free-model 共享政策约为：未达到要求的充值额度时 **20 次请求/日**，符合条件的账户最高 **1000 次请求/日**；具体政策、模型可用性和账户资格可能变化。这是政策级别的额度，不是逐模型实测值。2026-09-08 的快照没有为 16 个模型分别核实每日数字，所以每个模型的实测每日上限均为**未实测**。
 
-**2026-09-08** 使用原始模板和 Pi 0.85.1 的真实请求提供了具体证据：`google/gemma-4-31b-it:free` 两次返回 HTTP **429**（间隔约两分钟），响应含 `temporarily rate-limited upstream` 和 `limit_source: upstream_provider_shared_pool`；`cohere/north-mini-code:free` 返回 HTTP **200**，内容为 `ok`。429 的处理建议是稍后重试、绑定自己的 provider key，或更换 provider 路由/模型。这说明 429 可能是上游共享池的瞬时限流，不能据此断言每日额度已耗尽。保留失败 run 证据并手动选择另一个已配置模型；Orbi 不会自动轮换模型。自动的 `quota_exhausted` 分类属于 [#313](https://github.com/orbi-build/orbi/issues/313)，不由本文或模板实现。
+**2026-09-08** 使用原始模板和 Pi 0.85.1 的真实请求提供了具体证据：`google/gemma-4-31b-it:free` 两次返回 HTTP **429**（间隔约两分钟），响应含 `temporarily rate-limited upstream` 和 `limit_source: upstream_provider_shared_pool`；`cohere/north-mini-code:free` 返回 HTTP **200**，内容为 `ok`。429 的处理建议是稍后重试、绑定自己的 provider key，或更换 provider 路由/模型。这说明 429 可能是上游共享池的瞬时限流，不能据此断言每日额度已耗尽。自 [#321](https://github.com/orbi-build/orbi/issues/321) 起，瞬时 429 会在 run 内按有界退避自动重试（journal 的 `pi_retry_429` 行——从不静默）；Orbi 不会自动轮换模型——撑过全部重试仍 429 时，保留失败 run 证据并手动选择另一个已配置模型。自动的 `quota_exhausted` 分类属于 [#313](https://github.com/orbi-build/orbi/issues/313)，不由本文或模板实现。
 
 ## 接入一家新 provider
 
@@ -165,7 +165,7 @@ OpenRouter 官方[限流文档](https://openrouter.ai/docs/api/reference/limits)
 
 本机使用 provider `google` 和 model `gemini-3.8-flash` 的真实 Pi 请求约 15 秒起跑。burst 后上游返回 HTTP `429`，消息为 `You exceeded your current quota`；约 50 分钟后再次返回 HTTP `200`。这条有日期的观察说明是暂时性限流，不能证明 key 无效，也不能证明每日额度已耗尽。它只是一个账号的证据，不是额度保证。
 
-Orbi 不会在 session 中静默重试或切换 provider。保留失败 run 的证据，等待暂时性限流恢复，或在下一次运行手动选择另一家已配置的 provider：
+Orbi 从不在 session 中切换 provider；瞬时 429 会在 run 内按有界退避自动重试（Issue #321——journal 的 `pi_retry_429` 行，从不静默），撑过全部重试仍 429 的 run 依然失败。保留失败 run 的证据，或在下一次运行手动选择另一家已配置的 provider：
 
 ```toml
 pi_providers = ".orbi/pi-providers.json"
@@ -405,7 +405,7 @@ pi_model = "groq/compound"
 
 根据 Groq 的[限流表](https://console.groq.com/docs/rate-limits)，`groq/compound` 的 Free Plan 行为 **30 RPM / 250 RPD / 70K TPM**（2026-09-04 核对）。这是账号限额，不是 Orbi 承诺；实际使用前应重新查看官方表。[模型目录](https://console.groq.com/docs/models)列出该模型 131,072 token 上下文和 8,192 token 最大输出。TPM 较低，适合短小、边界清晰的 coding Issue 和小修复，不适合长上下文仓库分析。
 
-额度命中时上游返回 HTTP `429`；Orbi 不会静默重试，也不会在 session 中途切换 provider。应把该 run 视为失败，保留 Issue/worktree 证据，并在下一次运行手动选择另一家已配置的 provider。[#313](https://github.com/orbi-build/orbi/issues/313)规划了按 provider 预算和 run 边界自动轮换；在该功能实现前，不要把它当作当前行为。本指南中的真实 Groq 请求、usage 计量和 429 响应**未实测**；没有脱敏证据时不要声称 Groq Issue 已跑通。
+额度命中时上游返回 HTTP `429`；Orbi 从不在 session 中途切换 provider。瞬时 429 会在 run 内按有界退避自动重试（[#321](https://github.com/orbi-build/orbi/issues/321)——journal 的 `pi_retry_429` 行，从不静默）；撑过全部重试仍 429 的 run 依然失败：保留 Issue/worktree 证据，并在下一次运行手动选择另一家已配置的 provider。[#313](https://github.com/orbi-build/orbi/issues/313)规划了按 provider 预算和 run 边界自动轮换；在该功能实现前，不要把它当作当前行为。本指南中的真实 Groq 请求、usage 计量和 429 响应**未实测**；没有脱敏证据时不要声称 Groq Issue 已跑通。
 
 模型即使出现在 Groq 的实时目录中，也可能被组织级策略禁用。此时真实请求会返回 HTTP `403` 和 `model_permission_blocked_org`（不是 `429`）：请让组织管理员在 [Groq 组织限额设置](https://console.groq.com/settings/limits) 中启用该模型，或改选另一家已配置的 provider。HTTP `429` 表示账号额度/速率限制已触发；排障路径与组织级 `403` 不同。
 
