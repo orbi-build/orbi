@@ -14812,6 +14812,52 @@ def test_run_release_tests_path_is_gone():
     assert not hasattr(runner, "RELEASE_TEST_TIMEOUT_SECONDS")
 
 
+def test_process_release_parse_failure_publishes_final_comment(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #474: a release that fails BEFORE `publisher.ensure` (the
+    body is missing the `## Release` section) still publishes the final
+    progress comment. Before the fix `finish()` raised
+    `RuntimeError: no progress comment to update`, `_safe_publish`
+    logged a `progress_publish_failed` traceback, and the final comment
+    never landed.
+
+    Driven through the real dispatch entry `process_issue`, so the
+    release routing and the failure path are the production ones.
+    """
+    gh_calls, posted = make_fake_gh(monkeypatch)
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    issue = {
+        "number": 467,
+        "title": "Release v0.4.2",
+        "body": "this body has no release section",
+        "labels": [{"name": "ai-release"}],
+    }
+    config = {"repo_dir": tmp_path, "base_branch": "main"}
+    with caplog.at_level("INFO"):
+        result = runner.process_issue(issue, config, "orbi-build/orbi")
+    assert result == runner.IssueResult("release", "")
+    # The handled failure is terminal: `ai-blocked` ALONE.
+    edits = [c for c in gh_calls if c[:3] == ["gh", "issue", "edit"]]
+    assert edits == [[
+        "gh", "issue", "edit", "467", "--repo", "orbi-build/orbi",
+        "--add-label", "ai-blocked", "--remove-label", "ai-in-progress",
+    ]]
+    # The concrete failure scene is on the Issue.
+    comments = [c for c in gh_calls if c[:3] == ["gh", "issue", "comment"]]
+    assert any(
+        "Orbi release failed (ai-blocked)" in c[-1] for c in comments
+    )
+    # Issue #474: the final progress comment is created even though
+    # `ensure` never ran.
+    assert any("**Orbi progress**" in body for body in posted)
+    assert not any(
+        "progress_publish_failed" in record.message
+        for record in caplog.records
+    )
+    assert "no progress comment to update" not in caplog.text
+
+
 def make_local_remote_pair(tmp_path):
     """A real local 'origin' bare remote + a working clone with one commit."""
     remote = tmp_path / "remote.git"
