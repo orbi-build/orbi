@@ -9853,31 +9853,17 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
         return
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--config", type=Path,
-        default=Path(os.environ.get("ORBI_CONFIG", "orbi.toml")),
-    )
-    args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format=log_format())
-    # Stop scene (Issue #48): install the SIGTERM handler BEFORE any
-    # other step so every phase of the tick (pre-claim, claim,
-    # implement, delivery wait) stops with the active Issue context
-    # logged and the live Pi child shut down — never an orphan Pi and
-    # never only systemd's generic "Stopped" line. Python only allows
-    # signal handlers in the main thread (the CLI entry point always
-    # is; in-thread `main()` test calls skip the install).
-    if threading.current_thread() is threading.main_thread():
-        signal.signal(signal.SIGTERM, _handle_stop)
+def _preflight(config: dict) -> None:
+    """Run the Runner tick's pre-slot startup checks (fail fast).
 
-    try:
-        config = load_config(args.config)
-        validate_config(config)
-        validate_execution_source_repos(config["source_repos"])
-    except ValueError as exc:
-        LOGGER.error("config_invalid reason=%s", exc)
-        return 1
+    Every pre-claim check lives here as one reusable unit, so the tick
+    entry (`main`) stays a thin `argparse -> preflight -> slot ->
+    dispatch -> finally` spine and the same checks can be exercised
+    independently (doctor and other callers) without re-inlining them.
+    Order is significant: the editable CLI refresh and the
+    source-freshness gate precede the unit-drift and transport checks,
+    and all of them precede any slot or claim.
+    """
     # Issue #399: publish the configured active milestone for the CI
     # triage workflow. This is a bypass; delivery must continue when the
     # variable API is unavailable.
@@ -9981,6 +9967,34 @@ def main(argv: list[str] | None = None) -> int:
         runner_health.run_health_check(config, run_command=run_command)
     except Exception:
         LOGGER.exception("health_check_failed")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--config", type=Path,
+        default=Path(os.environ.get("ORBI_CONFIG", "orbi.toml")),
+    )
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format=log_format())
+    # Stop scene (Issue #48): install the SIGTERM handler BEFORE any
+    # other step so every phase of the tick (pre-claim, claim,
+    # implement, delivery wait) stops with the active Issue context
+    # logged and the live Pi child shut down — never an orphan Pi and
+    # never only systemd's generic "Stopped" line. Python only allows
+    # signal handlers in the main thread (the CLI entry point always
+    # is; in-thread `main()` test calls skip the install).
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, _handle_stop)
+
+    try:
+        config = load_config(args.config)
+        validate_config(config)
+        validate_execution_source_repos(config["source_repos"])
+    except ValueError as exc:
+        LOGGER.error("config_invalid reason=%s", exc)
+        return 1
+    _preflight(config)
     # Concurrency cap (Issue #39): take one slot BEFORE claiming anything.
     # The slot is held for the whole delivery lifecycle (implement ->
     # review -> fix -> merge) and released only after the delivery is

@@ -10247,6 +10247,32 @@ def test_main_reacquires_slot_after_previous_release(monkeypatch, tmp_path):
     assert (slot_dir / "slot-1").read_text(encoding="utf-8").strip() == str(os.getpid())
 
 
+def test_main_delegates_all_preflight_to_one_helper(
+    monkeypatch, tmp_path,
+):
+    """Issue #297: the pre-slot checks live behind one `_preflight`
+    helper, so a test reaches the normal claim flow by stubbing THAT
+    one function — not four unrelated modules. The helper receives the
+    validated config and `main` still takes the slot afterwards."""
+    seen: dict = {}
+
+    def fake_preflight(config):
+        seen["config"] = config
+
+    monkeypatch.setattr(runner, "_preflight", fake_preflight)
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    assert seen["config"]["source_repos"] == ["owner/repo"]
+    # The slot was taken only after the (stubbed) preflight ran.
+    assert (tmp_path / ".orbi" / "slots" / "slot-1").exists()
+
+
 # --- deployment consistency preflight (Issue #103) --------------------------
 
 
