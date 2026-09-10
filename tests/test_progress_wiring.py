@@ -16,6 +16,7 @@ from unittest.mock import Mock, call as mock_call
 import pytest
 
 import orbi.runner as runner
+import orbi.release as release
 from orbi import pi_process, progress
 
 
@@ -49,6 +50,10 @@ def make_fake_gh(monkeypatch, comments=None, in_progress=False):
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
+    # Issue #286: the release subsystem (orbi.release) resolves the gh
+    # primitive in its own module globals — moved-path callers of this
+    # helper must see the same fake there.
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     return calls, posted
 
 
@@ -925,6 +930,10 @@ def make_failing_gh(monkeypatch, is_failing, comments=None):
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
+    # Issue #286: the release subsystem (orbi.release) resolves the gh
+    # primitive in its own module globals — moved-path callers of this
+    # helper must see the same fake there.
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     return calls, posted
 
 
