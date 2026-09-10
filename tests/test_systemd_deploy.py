@@ -188,7 +188,7 @@ def test_drift_lines_carry_paths_hashes_and_fix_command(tmp_path):
 
 def test_drift_lines_quote_values_with_spaces(tmp_path):
     # A repo path that really carries a space: the field must be
-    # quoted (the pi_activity.quote_value convention) so the line
+    # quoted (the progress.quote_value convention) so the line
     # stays parseable.
     spaced = tmp_path / "my repo"
     repo = make_repo(spaced)

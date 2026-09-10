@@ -57,7 +57,7 @@ from orbi.delivery_labels import (
 )
 from orbi import git_transport
 from orbi import systemd_deploy
-from orbi.pi_activity import quote_value
+from orbi.progress import quote_value
 
 # Bumped whenever the setup output contract changes shape.
 # Issue #152 added the `cli=` line (the editable install step).
@@ -901,7 +901,7 @@ def format_setup(result: dict) -> list[str]:
     """Render the result document as stable key=value lines.
 
     One line per concern; values containing spaces are quoted (the
-    ``pi_activity.quote_value`` convention) so the output stays
+    ``progress.quote_value`` convention) so the output stays
     parseable.
     """
     lines = [

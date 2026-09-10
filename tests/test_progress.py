@@ -13,6 +13,20 @@ import pytest
 from orbi import progress
 
 
+def test_quote_value_quotes_only_values_with_spaces():
+    assert progress.quote_value("test") == "test"
+    assert progress.quote_value("bash pytest tests/") == (
+        '"bash pytest tests/"'
+    )
+
+
+def test_quote_value_escapes_embedded_quotes():
+    assert progress.quote_value('git commit -m "feat: x"') == (
+        '"git commit -m \\"feat: x\\""'
+    )
+    assert progress.quote_value('a"b') == '"a\\"b"'
+
+
 def test_format_status_comment_non_string_is_unchanged():
     assert progress.format_status_comment(None) is None
 

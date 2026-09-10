@@ -64,7 +64,6 @@ from orbi.pi_activity import (
     format_duration,
     format_end_scene,
     format_run_scene,
-    quote_value,
     sanitize,
 )
 from orbi.delivery_labels import (
@@ -105,6 +104,7 @@ from orbi.progress import (
     format_status_comment,
     format_elapsed,
     progress_body,
+    quote_value,
     run_marker,
     validate_run_id,
 )

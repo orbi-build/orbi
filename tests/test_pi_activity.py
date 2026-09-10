@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from orbi import pi_activity
+from orbi import progress
 
 
 def write_records(path: Path, records: list[dict]) -> None:
@@ -922,20 +923,6 @@ def test_format_duration_uses_seconds_minutes_and_hours():
     assert pi_activity.format_duration(15300) == "4h15m"
 
 
-def test_quote_value_quotes_only_values_with_spaces():
-    assert pi_activity.quote_value("test") == "test"
-    assert pi_activity.quote_value("bash pytest tests/") == (
-        '"bash pytest tests/"'
-    )
-
-
-def test_quote_value_escapes_embedded_quotes():
-    assert pi_activity.quote_value('git commit -m "feat: x"') == (
-        '"git commit -m \\"feat: x\\""'
-    )
-    assert pi_activity.quote_value('a"b') == '"a\\"b"'
-
-
 def test_format_run_scene_is_the_full_scene_logged_once():
     snapshot = {
         "session_id": "sess-1",
@@ -1049,7 +1036,7 @@ def test_parse_scene_unescapes_embedded_quotes():
 
 def test_parse_scene_round_trips_escaped_quotes():
     value = 'git commit -m "feat: a=b" && push'
-    field = f"action={pi_activity.quote_value(value)}"
+    field = f"action={progress.quote_value(value)}"
     assert pi_activity.parse_scene(field)["action"] == value
 
 

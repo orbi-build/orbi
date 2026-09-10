@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from orbi.progress import quote_value
+
 MAX_SUMMARY_LENGTH = 200
 
 # Ordered: the first matching rule wins for a bash command.
@@ -399,18 +401,6 @@ def format_duration(seconds: float) -> str:
     if minutes:
         return f"{minutes}m"
     return f"{secs}s"
-
-
-def quote_value(value: str) -> str:
-    """Double-quote a key=value field when it needs quoting.
-
-    Values containing spaces or double quotes are quoted; embedded double
-    quotes are escaped as `\\"` so the field stays parseable by
-    `parse_scene`.
-    """
-    if " " in value or '"' in value:
-        return '"' + value.replace('"', '\\"') + '"'
-    return value
 
 
 def format_run_scene(snapshot: dict, *, run_id: str, issue: str, role: str,
