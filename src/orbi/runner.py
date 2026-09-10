@@ -5817,6 +5817,70 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
     )
 
 
+def _query_open_prs(worktree: Path, branch: str) -> list:
+    """Return the task branch's open PRs as the raw `gh pr list` list.
+
+    The ONE PR-query contract shared by verify_pr and freeze_pr
+    (Issue #291): a single field set, a single ambiguity-guard limit and
+    a single parse. The limit is wide enough that the failure evidence
+    lists every ambiguous open PR (the resume audit record, Issue #495);
+    the "exactly one" decision needs no tighter bound. A non-array
+    payload is a broken `gh` response, never "zero PRs" — fail fast
+    instead of guessing.
+    """
+    raw = run_command([
+        "gh", "pr", "list", "--state", "open", "--head", branch,
+        "--json", (
+            "number,url,baseRefName,baseRefOid,"
+            "headRefName,headRefOid,headRepository,headRepositoryOwner,body"
+        ),
+        "--limit", "100",
+    ], cwd=worktree)
+    prs = json.loads(raw)
+    if not isinstance(prs, list):
+        raise RuntimeError(
+            "gh pr list --json returned a non-array payload "
+            "(expected exactly one open PR)"
+        )
+    return prs
+
+
+def _single_open_pr(worktree: Path, branch: str, base_branch: str,
+                    *, scene: str) -> dict:
+    """Return the one open delivery PR of the task branch, base validated.
+
+    The "exactly one open PR + configured base" decision shared by
+    verify_pr and freeze_pr (Issue #291); callers add their own extra
+    validations on the returned raw PR dict. `scene` names the calling
+    path: the same externally-closed-PR failure used to raise the
+    identical sentence from both paths and the log could not tell them
+    apart.
+    """
+    prs = _query_open_prs(worktree, branch)
+    if len(prs) == 0:
+        raise RuntimeError(
+            f"{scene}: no open PR for the task branch "
+            "(expected exactly one open PR)"
+        )
+    if len(prs) != 1:
+        raise RuntimeError(
+            f"{scene}: multiple open PRs for the task branch "
+            "(expected exactly one open PR)"
+        )
+    pr = prs[0]
+    base_ref = pr.get("baseRefName")
+    if base_ref != base_branch:
+        LOGGER.error(
+            "pr_base_mismatch scene=%s expected=%s actual=%s branch=%s",
+            scene, base_branch, base_ref, branch,
+        )
+        raise RuntimeError(
+            f"{scene}: PR base is {base_ref}, expected {base_branch}; "
+            "recreate the PR against the configured base branch"
+        )
+    return pr
+
+
 def verify_pr(worktree: Path, branch: str, base_branch: str,
               run_id: str, *, issue: int, repo_dir: Path,
               pr_repo: str | None = None,
@@ -5876,21 +5940,17 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
     local_head = run_command(
         ["git", "rev-parse", "HEAD"], cwd=worktree,
     )
-    raw = run_command([
-        "gh", "pr", "list", "--state", "open", "--head", branch,
-        "--json",
-        "url,baseRefName,headRefName,headRefOid,"
-        "headRepository,headRepositoryOwner,body",
-        "--limit", "100" if expected_url is not None else "2",
-    ], cwd=worktree)
-    prs = json.loads(raw)
-    if not isinstance(prs, list):
-        raise RuntimeError("expected exactly one open PR for the task branch")
-    if len(prs) != 1:
-        # A resume cannot safely select a replacement PR. Query the scene PR
-        # separately so zero open PRs (a closed/merged or missing scene PR)
-        # have a different outcome from an ambiguous branch (Issue #494).
-        if expected_url is not None:
+    if expected_url is not None:
+        # A resume cannot safely select a replacement PR, so it keeps its
+        # own exactly-one policy (Issue #291): the FULL open list is the
+        # failure audit record (Issue #495) and zero open PRs is
+        # classified against the scene PR's state (Issue #494).
+        prs = _query_open_prs(worktree, branch)
+        if len(prs) != 1:
+            # A resume cannot safely select a replacement PR. Query the scene
+            # PR separately so zero open PRs (a closed/merged or missing
+            # scene PR) have a different outcome from an ambiguous branch
+            # (Issue #494).
             scene_state = "unknown"
             try:
                 scene_pr = run_command([
@@ -5937,16 +5997,14 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
                 f"resume has multiple open PRs for the task branch: {evidence}; "
                 "the runner will not choose one"
             )
-        if len(prs) == 0:
-            raise RuntimeError(
-                "no open PR for the task branch (expected exactly one open PR)"
-            )
-        raise RuntimeError("multiple open PRs for the task branch")
-    url = prs[0].get("url")
+        pr = prs[0]
+    else:
+        pr = _single_open_pr(worktree, branch, base_branch, scene="verify_pr")
+    url = pr.get("url")
     if not url:
         raise RuntimeError("open PR has no URL")
     if pr_repo is not None:
-        head_repo = _pr_head_repo(prs[0])
+        head_repo = _pr_head_repo(pr)
         if head_repo != pr_repo:
             LOGGER.error(
                 "pr_repo_mismatch expected=%s actual=%s branch=%s",
@@ -5960,21 +6018,23 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
                 f"PR head repo is {head_repo}, expected {pr_repo}; the "
                 "resume must keep the PR of the configured source repo"
             )
-    base_ref = prs[0].get("baseRefName")
-    if base_ref != base_branch:
+    # The non-resume base validation lives in _single_open_pr (Issue #291);
+    # the resume keeps its typed failure with the full run evidence.
+    base_ref = pr.get("baseRefName")
+    if expected_url is not None and base_ref != base_branch:
         LOGGER.error(
-            "pr_base_mismatch expected=%s actual=%s branch=%s",
+            "pr_base_mismatch scene=verify_pr_resume expected=%s "
+            "actual=%s branch=%s",
             base_branch, base_ref, branch,
         )
-        error_type = ResumeVerificationError if expected_url is not None else RuntimeError
-        raise error_type(
+        raise ResumeVerificationError(
             f"resume PR validation: run_id={run_id} branch={branch} "
             f"open_pr_count=1 open_prs={[url]} "
-            f"scene_pr={expected_url or '-'} scene_pr_state=OPEN; "
+            f"scene_pr={expected_url} scene_pr_state=OPEN; "
             f"PR base is {base_ref}, expected {base_branch}; recreate the "
             "PR against the configured base branch"
         )
-    head_oid = prs[0].get("headRefOid")
+    head_oid = pr.get("headRefOid")
     if head_oid != local_head:
         # Issue #50 (the #158 `d13b0c56` scene): the local HEAD may be
         # AHEAD of the remote PR head — a commit made by a killed
@@ -6010,7 +6070,7 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
             head_oid, local_head, branch,
         )
     marker = run_marker(run_id)
-    body = prs[0].get("body")
+    body = pr.get("body")
     if not external_pr and (
         not isinstance(body, str) or marker not in body
     ):
@@ -6680,29 +6740,11 @@ def review_has_findings(verdict: dict) -> bool:
 
 def freeze_pr(worktree: Path, branch: str, base_branch: str) -> dict:
     """Freeze the exact base/head SHA of the one open PR for a task branch."""
-    raw = run_command([
-        "gh", "pr", "list", "--state", "open", "--head", branch,
-        "--json", "number,url,baseRefName,baseRefOid,headRefName,headRefOid",
-        "--limit", "2",
-    ], cwd=worktree)
-    prs = json.loads(raw)
-    if not isinstance(prs, list) or len(prs) != 1:
-        raise RuntimeError("expected exactly one open PR for the task branch")
-    pr = prs[0]
-    base_ref = pr.get("baseRefName")
-    if base_ref != base_branch:
-        LOGGER.error(
-            "pr_base_mismatch expected=%s actual=%s branch=%s",
-            base_branch, base_ref, branch,
-        )
-        raise RuntimeError(
-            f"PR base is {base_ref}, expected {base_branch}; the merge gate "
-            "only accepts the configured protected branch"
-        )
+    pr = _single_open_pr(worktree, branch, base_branch, scene="freeze_pr")
     return {
         "number": pr["number"],
         "url": pr["url"],
-        "base_ref": base_ref,
+        "base_ref": pr.get("baseRefName"),
         "base_oid": pr["baseRefOid"],
         "head_ref": pr["headRefName"],
         "head_oid": pr["headRefOid"],

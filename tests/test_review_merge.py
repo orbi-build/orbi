@@ -245,6 +245,101 @@ def test_review_has_findings_helper():
 
 
 # ---------------------------------------------------------------------------
+# single open PR query contract (Issue #291)
+# ---------------------------------------------------------------------------
+
+UNIFIED_PR_LIST_COMMAND = [
+    "gh", "pr", "list", "--state", "open", "--head",
+    "orbi/owner-repo-issue-4",
+    "--json", (
+        "number,url,baseRefName,baseRefOid,"
+        "headRefName,headRefOid,headRepository,headRepositoryOwner,body"
+    ),
+    "--limit", "100",
+]
+
+
+def test_query_open_prs_owns_the_shared_query_contract(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return json.dumps([{"number": 4, "url": "u4"}])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    prs = runner._query_open_prs(tmp_path, "orbi/owner-repo-issue-4")
+    assert prs == [{"number": 4, "url": "u4"}]
+    assert calls == [UNIFIED_PR_LIST_COMMAND]
+
+
+def test_query_open_prs_rejects_non_array_payload(monkeypatch, tmp_path):
+    monkeypatch.setattr(runner, "run_command", lambda *a, **k: "{}")
+    with pytest.raises(RuntimeError, match="non-array payload"):
+        runner._query_open_prs(tmp_path, "orbi/owner-repo-issue-4")
+
+
+def test_single_open_pr_returns_the_raw_pr_dict(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        runner, "run_command", lambda *a, **k: _pr_json(),
+    )
+    pr = runner._single_open_pr(
+        tmp_path, "orbi/owner-repo-issue-4", "main", scene="freeze_pr",
+    )
+    assert pr["number"] == 4
+    assert pr["baseRefName"] == "main"
+
+
+def test_single_open_pr_names_the_scene_when_no_pr_is_open(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(runner, "run_command", lambda *a, **k: "[]")
+    with pytest.raises(
+        RuntimeError, match="freeze_pr: no open PR for the task branch",
+    ):
+        runner._single_open_pr(
+            tmp_path, "orbi/owner-repo-issue-4", "main", scene="freeze_pr",
+        )
+
+
+def test_single_open_pr_names_the_scene_when_multiple_are_open(
+    monkeypatch, tmp_path,
+):
+    two = json.dumps([
+        {"number": 4, "url": "u4", "baseRefName": "main",
+         "baseRefOid": "b1", "headRefName": "h", "headRefOid": "h1"},
+        {"number": 5, "url": "u5", "baseRefName": "main",
+         "baseRefOid": "b1", "headRefName": "h", "headRefOid": "h2"},
+    ])
+    monkeypatch.setattr(runner, "run_command", lambda *a, **k: two)
+    with pytest.raises(
+        RuntimeError,
+        match="verify_pr: multiple open PRs for the task branch",
+    ):
+        runner._single_open_pr(
+            tmp_path, "orbi/owner-repo-issue-4", "main", scene="verify_pr",
+        )
+
+
+def test_single_open_pr_rejects_wrong_base_and_names_the_scene_in_the_log(
+    monkeypatch, tmp_path, caplog,
+):
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda *a, **k: _pr_json(base="develop"),
+    )
+    with caplog.at_level("ERROR"), pytest.raises(
+        RuntimeError, match="freeze_pr: PR base is develop, expected main",
+    ):
+        runner._single_open_pr(
+            tmp_path, "orbi/owner-repo-issue-4", "main", scene="freeze_pr",
+        )
+    assert (
+        "pr_base_mismatch scene=freeze_pr expected=main actual=develop"
+        in caplog.text
+    )
+
+
+# ---------------------------------------------------------------------------
 # freeze_pr
 # ---------------------------------------------------------------------------
 
@@ -275,12 +370,8 @@ def test_freeze_pr_returns_frozen_base_and_head(monkeypatch, tmp_path):
     assert pr["base_oid"] == "b1"
     assert pr["head_oid"] == "h1"
     assert pr["url"].endswith("/pull/4")
-    assert calls == [[
-        "gh", "pr", "list", "--state", "open", "--head",
-        "orbi/owner-repo-issue-4",
-        "--json", "number,url,baseRefName,baseRefOid,headRefName,headRefOid",
-        "--limit", "2",
-    ]]
+    # Issue #291: freeze_pr issues the ONE shared PR query contract.
+    assert calls == [UNIFIED_PR_LIST_COMMAND]
 
 
 def test_freeze_pr_rejects_wrong_base(monkeypatch, tmp_path):

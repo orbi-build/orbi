@@ -1349,6 +1349,47 @@ def test_verify_pr_resume_rejects_stale_or_ambiguous_scene_with_evidence(
     assert any(command[:3] == ["gh", "pr", "view"] for command in commands)
 
 
+def test_verify_pr_resume_rejects_pr_based_on_wrong_branch_with_evidence(
+    monkeypatch, tmp_path,
+):
+    """Issue #291: the shared base check covers the non-resume path via
+    _single_open_pr; the resume keeps its typed failure with the run
+    evidence."""
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return FAKE_BRANCH
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "head"
+        if command[:3] == ["gh", "pr", "list"]:
+            return json.dumps([{
+                "url": FAKE_PR_URL,
+                "baseRefName": "develop",
+                "headRepository": {"name": "repo"},
+                "headRepositoryOwner": {"login": "owner"},
+            }])
+        raise AssertionError(command)
+
+    with pytest.raises(AssertionError):
+        fake_run(["unexpected"])
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(
+        runner.ResumeVerificationError,
+        match="PR base is develop, expected main",
+    ) as excinfo:
+        runner.verify_pr(
+            worktree, FAKE_BRANCH, "main", FAKE_RUN_ID, issue=9,
+            repo_dir=tmp_path, pr_repo="owner/repo",
+            expected_url=FAKE_PR_URL, require_latest_base=False,
+        )
+    message = str(excinfo.value)
+    assert "resume PR validation:" in message
+    assert "open_pr_count=1" in message
+    assert FAKE_PR_URL in message
+
+
 def test_verify_pr_non_resume_rejects_multiple_open_prs(
     monkeypatch, tmp_path,
 ):

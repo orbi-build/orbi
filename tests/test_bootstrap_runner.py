@@ -4671,8 +4671,11 @@ def test_verify_pr_fetches_under_the_base_sync_lock(
 
 
 def test_verify_pr_rejects_pr_without_url(monkeypatch, tmp_path):
+    # Issue #291: the shared base check runs first, so the fixture must
+    # carry a valid base to actually reach the URL check.
     outputs = iter([
-        f"orbi/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA, "[{}]",
+        f"orbi/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA,
+        json.dumps([{"baseRefName": "main"}]),
     ])
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="open PR has no URL"):
@@ -5077,14 +5080,15 @@ def test_verify_pr_queries_base_head_and_accepts_matching_pr(
         issue=4, repo_dir=tmp_path,
     ) == "https://github.com/orbi-build/orbi/pull/4"
     assert ["git", "rev-parse", "HEAD"] in calls
+    # Issue #291: verify_pr issues the ONE shared PR query contract.
     assert [
         "gh", "pr", "list", "--state", "open", "--head",
         f"orbi/issue-4-{FAKE_RUN_ID}",
         "--json", (
-            "url,baseRefName,headRefName,headRefOid,"
-            "headRepository,headRepositoryOwner,body"
+            "number,url,baseRefName,baseRefOid,"
+            "headRefName,headRefOid,headRepository,headRepositoryOwner,body"
         ),
-        "--limit", "2",
+        "--limit", "100",
     ] in calls
 
 
