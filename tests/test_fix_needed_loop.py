@@ -867,7 +867,7 @@ def test_verify_resumed_pr_unrecoverable_failure_removes_leftover_fix_needed_lab
     ]
 
 
-def test_finish_fix_needed_progress_without_run_id_is_noop(monkeypatch):
+def test_finish_progress_fix_needed_without_run_id_is_noop(monkeypatch):
     """Issue #50: the fix-needed progress scene is bound to the run id
     (the hidden marker); without one it is a no-op (no gh traffic)."""
     api_calls = []
@@ -875,9 +875,10 @@ def test_finish_fix_needed_progress_without_run_id_is_noop(monkeypatch):
         runner, "run_command",
         lambda *args, **kwargs: api_calls.append(args) or "",
     )
-    assert runner._finish_fix_needed_progress(
+    assert runner._finish_progress(
         39, None, "owner/repo", None, None, PR_URL, "the failure",
-        "task",
+        "the next tick resumes the same run", title="task",
+        outcome="fix needed",
     ) is None
     assert api_calls == []
 

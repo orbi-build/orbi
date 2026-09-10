@@ -6554,7 +6554,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
                         ),
                     )
                     publish(
-                        action=lambda: _finish_blocked_progress(
+                        action=lambda: _finish_progress(
                             number, bound_run_id, source_repo, worktree,
                             branch, scene["pr_url"],
                             f"the resume verification of PR "
@@ -6567,6 +6567,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
                             "reason) and relabel the Issue "
                             "ai-fix-needed to resume this same PR",
                             title=issue["title"],
+                            outcome="blocked",
                             role=ROLE_REVIEW,
                             review_round=review_rounds_so_far(
                                 issue_comments(number, repo=source_repo),
@@ -6585,12 +6586,16 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
                         ),
                     )
                     publish(
-                        action=lambda: _finish_fix_needed_progress(
+                        action=lambda: _finish_progress(
                             number, bound_run_id, source_repo, worktree,
                             branch, scene["pr_url"],
                             f"the resume verification of PR "
                             f"{scene['pr_url']} failed: {detail}",
+                            "the next tick resumes the same run, branch, "
+                            "worktree and PR automatically (the Issue "
+                            "stays ai-fix-needed)",
                             title=issue["title"],
+                            outcome="fix needed",
                             review_round=review_rounds_so_far(
                                 issue_comments(number, repo=source_repo),
                             ),
@@ -9160,31 +9165,34 @@ def issue_labels(number: int, repo: str) -> list[str]:
     return names
 
 
-def _finish_blocked_progress(
+def _finish_progress(
     number: int, run_id: str | None, source_repo: str,
     worktree: Path | None, branch: str | None, pr_url: str,
-    detail: str, next_step: str, title: str,
+    detail: str, next_step: str, title: str, outcome: str,
     role: str = ROLE_REVIEW, review_round: int = 0,
     priority: str = "normal",
 ) -> None:
-    """Finish the tracked progress comment with the blocked scene.
+    """Finish the tracked progress comment with the terminal scene.
 
-    `title` is the issue's GitHub title (Issue #100): the blocked scene
-    shows `#<number> <title>` like every other progress scene; it is
-    required, never fabricated.
+    One function for both terminal scenes (Issue #293): `outcome` is
+    the scene headline — `blocked` (Issue #18: the terminal failure,
+    the same body the `process_issue` failure path writes) or
+    `fix needed` (Issue #50: the recoverable failure that keeps the
+    Issue in the automatic fix loop, the next timer resuming the same
+    run, branch, worktree and PR). `title` is the issue's GitHub title
+    (Issue #100): the scene shows `#<number> <title>` like every other
+    progress scene; it is required, never fabricated.
 
-    The contract (Issue #18): on failure the progress comment becomes
-    the blocked scene with the next-step reason — the same terminal
-    body the `process_issue` failure path writes. `ensure` finds the
-    run's existing progress comment by its hidden marker (PATCHing it
-    in place) or creates it when the run never reached one; either way
-    the blocked scene is the final state. `role` and `review_round`
-    are the actual role and completed review rounds of the blocked run
-    (review round 2, PR #42): the caller derives them from the
-    Issue's trusted review-round comments, so the terminal comment
-    never shows a stale hardcoded role/round. Issue #82: the only
-    post-PR role is `review` (the review session fixes findings in the
-    same session), so the default is `ROLE_REVIEW`.
+    `ensure` finds the run's existing progress comment by its hidden
+    marker (PATCHing it in place) or creates it when the run never
+    reached one; either way the scene is the final state. `role`,
+    `review_round` and `priority` are the actual role, completed
+    review rounds and pickup priority of the run: the caller derives
+    them from the Issue's trusted review-round comments and labels,
+    so the terminal comment never shows a stale hardcoded role/round
+    (review round 2, PR #42). Issue #82: the only post-PR role is
+    `review` (the review session fixes findings in the same session),
+    so the default is `ROLE_REVIEW`.
     """
     if run_id is None:
         return
@@ -9197,50 +9205,9 @@ def _finish_blocked_progress(
         started=time.monotonic(), pr_url=pr_url,
         review_round=review_round, priority=priority,
     ), outcome=(
-        "**Orbi blocked**\n\n"
+        f"**Orbi {outcome}**\n\n"
         f"failure: {detail}\n"
         f"next step: {next_step}"
-    )))
-
-
-def _finish_fix_needed_progress(
-    number: int, run_id: str | None, source_repo: str,
-    worktree: Path | None, branch: str | None, pr_url: str,
-    detail: str, title: str,
-    review_round: int = 0, priority: str = "normal",
-) -> None:
-    """Finish the tracked progress comment with the fix-needed scene
-    (Issue #50).
-
-    The contract (Issue #18): on a RECOVERABLE failure the progress
-    comment becomes the fix-needed scene with the next-step reason —
-    the Issue stays in the automatic fix loop (`ai-fix-needed`) and the
-    next timer resumes the same run, branch, worktree and PR. `ensure`
-    finds the run's existing progress comment by its hidden marker
-    (PATCHing it in place) or creates it when the run never reached
-    one; either way the fix-needed scene is the final state of this
-    tick. `title` is required — the GitHub issue data contract
-    guarantees a non-empty string title (every runner scan fetches it),
-    never fabricated. `review_round` and `priority` are the actual
-    completed review rounds and pickup priority of the run (the caller
-    derives them from the Issue's trusted review-round comments and
-    labels), so the scene never shows a stale hardcoded value.
-    """
-    if run_id is None:
-        return
-    publisher = ProgressPublisher(
-        number, source_repo, run_id, run_command=run_command,
-    )
-    publisher.ensure(_progress_body(_progress_state(
-        issue=number, title=title, run_id=run_id, role=ROLE_REVIEW,
-        branch=branch or "-", worktree=worktree or Path("-"),
-        started=time.monotonic(), pr_url=pr_url,
-        review_round=review_round, priority=priority,
-    ), outcome=(
-        "**Orbi fix needed**\n\n"
-        f"failure: {detail}\n"
-        "next step: the next tick resumes the same run, branch, "
-        "worktree and PR automatically (the Issue stays ai-fix-needed)"
     )))
 
 
@@ -9449,7 +9416,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 # (Issue #18): the same terminal body the other failure
                 # paths write, with the next-step reason.
                 publish(
-                    action=lambda: _finish_blocked_progress(
+                    action=lambda: _finish_progress(
                         number, run_id, source_repo, None, None,
                         pr_url,
                         f"PR {pr_url} was closed without a merge; the "
@@ -9458,6 +9425,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                         "the delivery or start a fresh run on the "
                         "Issue",
                         title=title,
+                        outcome="blocked",
                         role=ROLE_REVIEW, review_round=blocked_round,
                         priority=priority,
                     ),
@@ -9672,7 +9640,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                         # review-round comments bound the round count
                         # (GitHub is the only state store).
                         publish(
-                            action=lambda: _finish_blocked_progress(
+                            action=lambda: _finish_progress(
                                 number, run_id, source_repo, worktree,
                                 branch, pr_url,
                                 f"the independent review of PR {pr_url} "
@@ -9686,6 +9654,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                                 "reason) and relabel the Issue "
                                 "ai-fix-needed to resume this same PR",
                                 title=title,
+                                outcome="blocked",
                                 role=ROLE_REVIEW,
                                 review_round=review_rounds_so_far(
                                     issue_comments(number, repo=source_repo),
@@ -9769,12 +9738,16 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                         ),
                     )
                     publish(
-                        action=lambda: _finish_fix_needed_progress(
+                        action=lambda: _finish_progress(
                             number, run_id, source_repo, worktree,
                             branch, pr_url,
                             f"the independent review of PR {pr_url} "
                             f"failed: {detail}",
+                            "the next tick resumes the same run, branch, "
+                            "worktree and PR automatically (the Issue "
+                            "stays ai-fix-needed)",
                             title=title,
+                            outcome="fix needed",
                             review_round=review_rounds_so_far(
                                 issue_comments(number, repo=source_repo),
                             ),
