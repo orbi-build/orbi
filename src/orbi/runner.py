@@ -6513,155 +6513,27 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
             "issue=%s resume_pr_verification_failed pr=%s branch=%s",
             number, scene["pr_url"], branch,
         )
-        detail = _failure_detail(exc)
         try:
-            if is_unrecoverable_failure(exc):
-                # Issue #50: an external precondition the AI cannot
-                # safely judge or fix is terminal: `ai-blocked` ALONE
-                # (the opened-PR state label is removed, and a leftover
-                # `ai-fix-needed` too) with the explicit reason why
-                # automatic recovery is impossible.
-                # The current labels are read ONCE before the
-                # transition: the blocked patch clears every
-                # delivery-state label that is present (`ai-pr-opened`,
-                # and a leftover `ai-fix-needed` too), so the terminal
-                # state is `ai-blocked` alone.
-                labels = issue_labels(number, source_repo)
-                apply_label_patch(
-                    number, repo=source_repo, event=EVENT_BLOCKED,
-                    current_labels=labels,
-                )
-                body = (
-                    f"Orbi failed: the resume verification of "
-                    f"PR {scene['pr_url']} failed: {detail}; this is an "
-                    "external precondition the AI cannot safely judge "
-                    "or fix, so it cannot be recovered automatically "
-                    "(the Issue stays ai-blocked until a human "
-                    "decides); the PR, branch "
-                    f"{branch} and worktree {worktree} are preserved"
-                )
-            else:
-                # Issue #50: a RECOVERABLE failure (the #158 `d13b0c56`
-                # scene: the reviewer committed a fix locally but was
-                # killed before `git push`, so the remote PR head is
-                # still the old one) keeps the Issue in the automatic
-                # fix loop: `ai-fix-needed` (the next timer pushes the
-                # local commit and continues on the same PR), never
-                # `ai-blocked`. The failure comment carries the full
-                # scene and is written to the Issue AND the PR.
-                apply_label_patch(
-                    number, repo=source_repo, event=EVENT_FIX_NEEDED,
-                    current_labels=issue_labels(number, source_repo),
-                )
-                body = (
-                    f"Orbi needs a fix: the resume verification "
-                    f"of PR {scene['pr_url']} failed: {detail}; the "
-                    "Issue stays ai-fix-needed and the next tick "
-                    "resumes the same run, branch, worktree and PR"
-                )
-                # The session fields are '-' when no session file
-                # exists yet (the Pi never started or the dir is
-                # gone); a snapshot read failure is logged and
-                # reported as "no session yet" (best-effort
-                # observability, never a second failure).
-                snapshot = None
-                try:
-                    snapshot = activity_snapshot(worktree / ".pi-session")
-                except Exception:
-                    LOGGER.exception(
-                        "issue=%s activity scene failed", number,
-                    )
-                if snapshot is None:
-                    snapshot = {
-                        "session_id": None, "session_file": None,
-                        "phase": "starting",
-                        "last_activity": None, "action": None,
-                        "result": None,
-                    }
-                body += "\n" + format_run_scene(
-                    snapshot,
-                    run_id=run_id, issue=issue_context(
-                        source_repo, number,
-                    ),
-                    role=ROLE_REVIEW, branch=branch,
-                    worktree=str(worktree),
-                )
-            if current_run_id():
-                body = f"{run_marker(current_run_id())}\n{body}"
-            comment_issue(number, repo=source_repo, body=body)
-            comment_pr(
-                _pr_number(scene["pr_url"]), repo=source_repo, body=body,
+            # The shared classified reporter (Issue #288): recoverable
+            # -> `ai-fix-needed` with the full scene on Issue AND PR,
+            # unrecoverable -> `ai-blocked` ALONE — the PR, branch and
+            # worktree stay intact either way. `run_id` is the id the
+            # tick BOUND (Issue #41): without it the comment carries no
+            # marker and the progress publishing is skipped, whatever
+            # the recovered scene says.
+            report_delivery_failure(
+                exc, issue=issue, source_repo=source_repo,
+                run_id=current_run_id(), pr_url=scene["pr_url"],
+                worktree=worktree, branch=branch, role=ROLE_REVIEW,
+                cause=(
+                    f"the resume verification of PR {scene['pr_url']} "
+                    f"failed: {_failure_detail(exc)}"
+                ),
+                blocked_suffix=(
+                    f"; the PR, branch {branch} and worktree {worktree} "
+                    "are preserved"
+                ),
             )
-            bound_run_id = current_run_id()
-            if bound_run_id:
-                publish = functools.partial(
-                    _safe_publish, run_id=bound_run_id, issue=number,
-                    source_repo=source_repo, role=ROLE_REVIEW,
-                )
-                # Issue #79: the fix-needed/blocked-scene progress
-                # publishing is bypass — a 404 here must not abort the
-                # failure reporting (the label transition and the
-                # failure comment above already completed, and the
-                # original error is re-raised below either way).
-                if is_unrecoverable_failure(exc):
-                    publish(
-                        action=lambda: ProgressPublisher(
-                            number, source_repo, bound_run_id,
-                            run_command=run_command,
-                        ).milestone(
-                            f"blocked: the resume verification of "
-                            f"PR {scene['pr_url']} failed: {sanitize(detail)}"
-                        ),
-                    )
-                    publish(
-                        action=lambda: _finish_progress(
-                            number, bound_run_id, source_repo, worktree,
-                            branch, scene["pr_url"],
-                            f"the resume verification of PR "
-                            f"{scene['pr_url']} failed: {detail}; this "
-                            "is an external precondition the AI cannot "
-                            "safely judge or fix, so it cannot be "
-                            "recovered automatically (the Issue stays "
-                            "ai-blocked until a human decides)",
-                            "fix the precondition above (see the "
-                            "reason) and relabel the Issue "
-                            "ai-fix-needed to resume this same PR",
-                            title=issue["title"],
-                            outcome="blocked",
-                            role=ROLE_REVIEW,
-                            review_round=review_rounds_so_far(
-                                issue_comments(number, repo=source_repo),
-                            ),
-                            priority=issue_priority(issue),
-                        ),
-                    )
-                else:
-                    publish(
-                        action=lambda: ProgressPublisher(
-                            number, source_repo, bound_run_id,
-                            run_command=run_command,
-                        ).milestone(
-                            f"fix needed: the resume verification of "
-                            f"PR {scene['pr_url']} failed: {sanitize(detail)}"
-                        ),
-                    )
-                    publish(
-                        action=lambda: _finish_progress(
-                            number, bound_run_id, source_repo, worktree,
-                            branch, scene["pr_url"],
-                            f"the resume verification of PR "
-                            f"{scene['pr_url']} failed: {detail}",
-                            "the next tick resumes the same run, branch, "
-                            "worktree and PR automatically (the Issue "
-                            "stays ai-fix-needed)",
-                            title=issue["title"],
-                            outcome="fix needed",
-                            review_round=review_rounds_so_far(
-                                issue_comments(number, repo=source_repo),
-                            ),
-                            priority=issue_priority(issue),
-                        ),
-                    )
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
         raise
@@ -9035,88 +8907,33 @@ def process_issue(issue: dict, config: dict, source_repo: str,
             )
         except Exception:
             LOGGER.exception("issue=%s health_failure_record_failed", number)
-        scene = ""
-        if worktree is not None:
-            try:
-                snapshot = activity_snapshot(worktree / ".pi-session")
-                if snapshot is None:
-                    # No session file yet: the scene still carries the full
-                    # debug entry (worktree, branch) with '-' session fields.
-                    snapshot = {
-                        "session_id": None, "session_file": None,
-                        "phase": "starting", "last_activity": None,
-                        "action": None, "result": None,
-                    }
-                scene = format_run_scene(
-                    snapshot,
-                    run_id=run_id, issue=issue_context(source_repo, number),
-                    role=ROLE_IMPLEMENT, branch=branch, worktree=str(worktree),
-                )
-            except Exception:
-                LOGGER.exception("issue=%s activity scene failed", number)
-        # Issue #256: the terminal worktree cleanup is gated on the
-        # `ai-blocked` transition ACTUALLY reaching GitHub — a simulated
-        # kill (the failure path's label edit never lands) leaves the
-        # Issue recoverable (ai-in-progress), so the scene must be kept
-        # for the same-run resume.
-        blocked_transition_done = False
         try:
-            # The claim label is removed on every failure; when the
-            # delivery already made the opened-PR transition (the
-            # scene-comment failure of Issue #79), the opened-PR label
-            # is removed too, so the terminal state is `ai-blocked`
-            # ALONE — never `ai-pr-opened` + `ai-blocked` (docs/workflow.mdx
-            # label lifecycle: `ai-pr-opened` is removed on terminal failure).
-            # The current delivery-state label is derived from the
-            # `pr_opened` flag (the only label present at this point):
-            # `ai-pr-opened` when the PR transition landed, otherwise
-            # `ai-in-progress` (the claim label).
-            apply_label_patch(
-                number, repo=source_repo, event=EVENT_BLOCKED,
+            # The shared terminal reporter (Issue #288): every failure
+            # reaching this handler is terminal by design (the
+            # recoverable Pi failures have their own handler above), so
+            # it never classifies — `ai-blocked` with the plain
+            # `Orbi failed` template. The current delivery-state label
+            # is derived from the `pr_opened` flag (the only label
+            # present at this point): `ai-pr-opened` when the PR
+            # transition landed, otherwise `ai-in-progress` (the claim
+            # label) — docs/workflow.mdx label lifecycle:
+            # `ai-pr-opened` is removed on terminal failure.
+            report_delivery_failure(
+                exc, issue=issue, source_repo=source_repo,
+                run_id=run_id, pr_url=None,
+                worktree=worktree, branch=branch, role=ROLE_IMPLEMENT,
+                cause=f"{_failure_detail(exc)} ({run_info})",
+                classify=False, evidence=True,
                 current_labels=(
                     {PR_OPENED_LABEL} if pr_opened else {IN_PROGRESS_LABEL}
                 ),
-            )
-            blocked_transition_done = True
-            detail = _failure_detail(exc)
-            evidence = _failure_evidence(worktree, exc)
-            body = (
-                f"{run_marker(run_id)}\n"
-                f"Orbi failed: {detail} ({run_info})"
-            )
-            if scene:
-                body += f" {scene}"
-            body += evidence
-            comment_issue(number, repo=source_repo, body=body)
-            # The blocked milestone is posted even when the worktree was
-            # never created or the progress comment was never ensured:
-            # the mobile notification of the terminal failure must not
-            # depend on local state. Both steps are bypass (Issue #79):
-            # a progress 404 here must not abort the `ai-blocked`
-            # transition above or the re-raise below.
-            publish(
-                action=lambda: publisher.milestone(
-                    f"blocked: {sanitize(detail)} ({run_info})"
+                review_round=0,
+                finish=(
+                    worktree is not None
+                    and publisher.comment_id is not None
                 ),
+                publisher=publisher,
             )
-            if worktree is not None and publisher.comment_id is not None:
-                publish(
-                    action=lambda: publisher.finish(_progress_body(
-                        _progress_state(
-                            issue=number, title=title, run_id=run_id,
-                            role=ROLE_IMPLEMENT, branch=branch,
-                            worktree=worktree, started=started,
-                            pr_url=None, review_round=0,
-                            priority=priority,
-                        ), outcome=(
-                            "**Orbi blocked**\n\n"
-                            f"failure: {detail}\n"
-                            "next step: fix the failure above and "
-                            "re-run this Issue (a new run id is "
-                            "created automatically)"
-                        ),
-                    )),
-                )
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
         else:
@@ -9128,7 +8945,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
             # the simulated-kill scene (blocked transition never landed)
             # never reach this branch — the worktree is kept for the
             # same-run resume.
-            if worktree is not None and blocked_transition_done:
+            if worktree is not None:
                 cleanup_task_worktree(
                     worktree, config["repo_dir"], run_id=run_id,
                     issue=number,
@@ -9207,6 +9024,24 @@ def issue_labels(number: int, repo: str) -> list[str]:
     return names
 
 
+def _finish_progress_body(*, number: int, title: str, run_id: str,
+                          role: str, branch: str | None,
+                          worktree: Path | None, pr_url: str | None,
+                          review_round: int, priority: str, detail: str,
+                          next_step: str, outcome: str) -> str:
+    """Render the terminal progress scene shared by every finish path."""
+    return _progress_body(_progress_state(
+        issue=number, title=title, run_id=run_id, role=role,
+        branch=branch or "-", worktree=worktree or Path("-"),
+        started=time.monotonic(), pr_url=pr_url,
+        review_round=review_round, priority=priority,
+    ), outcome=(
+        f"**Orbi {outcome}**\n\n"
+        f"failure: {detail}\n"
+        f"next step: {next_step}"
+    ))
+
+
 def _finish_progress(
     number: int, run_id: str | None, source_repo: str,
     worktree: Path | None, branch: str | None, pr_url: str,
@@ -9241,16 +9076,238 @@ def _finish_progress(
     publisher = ProgressPublisher(
         number, source_repo, run_id, run_command=run_command,
     )
-    publisher.ensure(_progress_body(_progress_state(
-        issue=number, title=title, run_id=run_id, role=role,
-        branch=branch or "-", worktree=worktree or Path("-"),
-        started=time.monotonic(), pr_url=pr_url,
-        review_round=review_round, priority=priority,
-    ), outcome=(
-        f"**Orbi {outcome}**\n\n"
-        f"failure: {detail}\n"
-        f"next step: {next_step}"
-    )))
+    publisher.ensure(_finish_progress_body(
+        number=number, title=title, run_id=run_id, role=role,
+        branch=branch, worktree=worktree, pr_url=pr_url,
+        review_round=review_round, priority=priority, detail=detail,
+        next_step=next_step, outcome=outcome,
+    ))
+
+
+# Issue #288: the failure-scene snapshot placeholder — the fields a
+# failure comment shows when no session file exists yet (the Pi never
+# started or the session dir is gone). One constant for every reporter.
+_SNAPSHOT_PLACEHOLDER: dict = {
+    "session_id": None, "session_file": None,
+    "phase": "starting",
+    "last_activity": None, "action": None,
+    "result": None,
+}
+
+
+def _snapshot_or_placeholder(session_dir: Path, *, number: int) -> dict:
+    """Best-effort activity snapshot for a failure scene (Issue #288).
+
+    The watcher state when a session file exists, the placeholder scene
+    when none does yet, and the placeholder again — with the read
+    failure logged — when the snapshot itself fails: best-effort
+    observability, never a second failure.
+    """
+    try:
+        snapshot = activity_snapshot(session_dir)
+    except Exception:
+        LOGGER.exception("issue=%s activity scene failed", number)
+        return dict(_SNAPSHOT_PLACEHOLDER)
+    return snapshot if snapshot is not None else dict(_SNAPSHOT_PLACEHOLDER)
+
+
+# The fixed phrases of the two failure templates (Issue #50): the
+# classified blocked branch names WHY automatic recovery is impossible,
+# the recoverable branch names the automatic next step.
+_BLOCKED_PRECONDITION_PHRASE = (
+    "; this is an external precondition the AI cannot safely judge or "
+    "fix, so it cannot be recovered automatically (the Issue stays "
+    "ai-blocked until a human decides)"
+)
+_FIX_NEEDED_PHRASE = (
+    "; the Issue stays ai-fix-needed and the next tick resumes the "
+    "same run, branch, worktree and PR"
+)
+
+
+def report_delivery_failure(
+    exc: BaseException, *, issue: dict, source_repo: str,
+    run_id: str | None, pr_url: str | None, worktree: Path | None,
+    branch: str | None, role: str, cause: str, evidence: bool = False,
+    classify: bool = True, current_labels: set[str] | None = None,
+    blocked_suffix: str = "", review_round: int | None = None,
+    finish: bool = True, publisher: ProgressPublisher | None = None,
+) -> str:
+    """Report one delivery failure through the Issue #50 flow (Issue #288).
+
+    The single implementation of the flow previously hand-copied in
+    `verify_resumed_pr`, `_run_review_round` and `process_issue`:
+    classify the exception, transition the label (`ai-blocked` ALONE
+    for an explicit `UnrecoverableDeliveryError`, `ai-fix-needed` for
+    every recoverable failure), assemble the failure body (fixed
+    phrase + `cause` + run scene + evidence), prefix the run marker,
+    comment the Issue (the PR too on the recoverable branch — the
+    terminal blocked state is Issue-only), then publish the milestone
+    and the terminal progress scene as a pure bypass (Issue #79). The
+    milestone text is `blocked|fix needed: {cause}` — untruncated, so
+    the concrete reason (a missing worktree path, a round-exhaustion
+    reason) stays visible in the mobile notification. Returns the
+    outcome, `"blocked"` or `"fix needed"`.
+
+    `classify=False` forces the terminal branch (the implement-phase
+    handler: every failure reaching it is terminal by design — the
+    recoverable Pi failures have their own handler); the body is then
+    the plain `Orbi failed:` template and the run scene is
+    space-joined to the FIRST body line, where `format_status_comment`
+    lifts its fields into the structured-alert field block.
+    `current_labels` pins the label-patch source (the implement-phase
+    handler derives the current delivery label locally); None reads
+    the labels from GitHub. `blocked_suffix` extends the classified
+    blocked body (the resume verification's preserved-PR note).
+    `review_round` pins the terminal scene's round (the implement
+    phase has none); None computes `review_rounds_so_far` lazily
+    inside the finish publish (a history-read failure there is bypass,
+    never a second failure). `finish=False` skips the progress scene
+    (the tracked progress comment does not exist and the milestone
+    alone carries the notification). `publisher` is the run's LIVE
+    progress publisher when the caller holds one: its `finish` then
+    PATCHes the tracked comment directly instead of relocating it by
+    the run marker. `evidence` appends the bounded
+    `_failure_evidence` block after the scene.
+
+    The function raises on its own failures (label patch, comment):
+    the callers keep their reporting-error semantics (the review loop
+    fails fast; the other two log `failure reporting failed` and
+    continue to their terminal return / re-raise).
+    """
+    number = int(issue["number"])
+    title = issue["title"]
+    priority = issue_priority(issue)
+    blocked = not classify or is_unrecoverable_failure(exc)
+
+    def scene_line() -> str | None:
+        """The run scene for the body, or None when omitted.
+
+        The classified reporters degrade a failed snapshot read to the
+        '-' placeholder (the debug entry still carries worktree and
+        branch, Issue #50); the implement-phase first-line scene is
+        omitted entirely on a failed read — the structured-alert field
+        block then shows only the failure's own fields (the pinned
+        #256 isolation).
+        """
+        if classify:
+            snapshot = _snapshot_or_placeholder(
+                worktree / ".pi-session", number=number,
+            )
+        else:
+            try:
+                snapshot = activity_snapshot(worktree / ".pi-session")
+            except Exception:
+                LOGGER.exception("issue=%s activity scene failed", number)
+                return None
+            if snapshot is None:
+                snapshot = dict(_SNAPSHOT_PLACEHOLDER)
+        return format_run_scene(
+            snapshot,
+            run_id=run_id or "-",
+            issue=issue_context(source_repo, number),
+            role=role, branch=branch or "-", worktree=str(worktree),
+        )
+
+    labels = (
+        current_labels if current_labels is not None
+        else issue_labels(number, source_repo)
+    )
+    if blocked:
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_BLOCKED,
+            current_labels=labels,
+        )
+        body = f"Orbi failed: {cause}"
+        if classify:
+            body += _BLOCKED_PRECONDITION_PHRASE + blocked_suffix
+        elif worktree is not None:
+            scene = scene_line()
+            if scene is not None:
+                # The scene fields join the FIRST body line, where
+                # `format_status_comment` lifts them into the
+                # structured-alert field block.
+                body += f" {scene}"
+        outcome = "blocked"
+    else:
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_FIX_NEEDED,
+            current_labels=labels,
+        )
+        body = f"Orbi needs a fix: {cause}{_FIX_NEEDED_PHRASE}"
+        # The full scene is always appended: a recoverable failure
+        # happens after the worktree was derived (a failure before the
+        # derivation is unrecoverable and never reaches this branch).
+        body += f"\n{scene_line()}"
+        outcome = "fix needed"
+    if evidence:
+        body += _failure_evidence(worktree, exc)
+    if run_id:
+        body = f"{run_marker(run_id)}\n{body}"
+    comment_issue(number, repo=source_repo, body=body)
+    if pr_url and not blocked:
+        # The recoverable scene is written to the PR too (Issue #50):
+        # the next review session and any human watcher see it where
+        # the delivery lives. A blocked Issue is terminal — Issue only.
+        comment_pr(_pr_number(pr_url), repo=source_repo, body=body)
+    if run_id:
+        # One publisher for the milestone and the terminal scene: the
+        # run's LIVE publisher when the caller holds one (its `finish`
+        # PATCHes the tracked comment directly, comment id already
+        # known), a fresh one otherwise (`finish` then locates-or-
+        # creates the tracked comment by the run marker).
+        target = (
+            publisher if publisher is not None
+            else ProgressPublisher(
+                number, source_repo, run_id, run_command=run_command,
+            )
+        )
+        publish = functools.partial(
+            _safe_publish, run_id=run_id, issue=number,
+            source_repo=source_repo, role=role,
+        )
+        if outcome == "blocked":
+            publish(action=lambda: target.milestone(
+                f"blocked: {cause}",
+            ))
+            if classify:
+                finish_failure = f"{cause}{_BLOCKED_PRECONDITION_PHRASE}"
+                next_step = (
+                    "fix the precondition above (see the reason) and "
+                    "relabel the Issue ai-fix-needed to resume this "
+                    "same PR"
+                )
+            else:
+                finish_failure = cause
+                next_step = (
+                    "fix the failure above and re-run this Issue (a "
+                    "new run id is created automatically)"
+                )
+            finish_outcome = "blocked"
+        else:
+            publish(action=lambda: target.milestone(
+                f"fix needed: {cause}",
+            ))
+            finish_failure = cause
+            next_step = (
+                "the next tick resumes the same run, branch, worktree "
+                "and PR automatically (the Issue stays ai-fix-needed)"
+            )
+            finish_outcome = "fix needed"
+        if finish:
+            publish(action=lambda: target.finish(_finish_progress_body(
+                number=number, title=title, run_id=run_id, role=role,
+                branch=branch, worktree=worktree, pr_url=pr_url,
+                review_round=(
+                    review_round if review_round is not None
+                    else review_rounds_so_far(
+                        issue_comments(number, repo=source_repo),
+                    )
+                ),
+                priority=priority, detail=finish_failure,
+                next_step=next_step, outcome=finish_outcome,
+            )))
+    return outcome
 
 
 def _run_review_round(
@@ -9281,10 +9338,6 @@ def _run_review_round(
     run_id = current_run_id()
     marker = run_marker(run_id) if run_id else ""
     priority = issue_priority(issue)
-    publish = functools.partial(
-        _safe_publish, run_id=run_id, issue=number,
-        source_repo=source_repo, role=ROLE_REVIEW,
-    )
 
     def block_label_inconsistency(labels: list[str], reason: str) -> None:
         LOGGER.error(
@@ -9460,177 +9513,18 @@ def _run_review_round(
             LOGGER.exception(
                 "issue=%s delivery_review_failed pr=%s", number, pr_url,
             )
-
-        evidence = _failure_evidence(worktree, exc)
-        if is_unrecoverable_failure(exc):
-            # Issue #50: the ONLY opened-PR failure that leaves
-            # the automatic loop is an external precondition
-            # the AI cannot safely judge or fix: the Issue is
-            # marked ai-blocked ALONE (the opened-PR state
-            # label, `ai-pr-opened` or `ai-fix-needed`, is
-            # removed) and the failure comment states the
-            # explicit reason why automatic recovery is
-            # impossible.
-            # The current labels are read ONCE before the
-            # transition: the blocked patch clears every
-            # delivery-state label that is present (`ai-pr-opened`,
-            # and `ai-fix-needed` when the failure happened while
-            # awaiting the next review session — Issue #82 routes
-            # both opened-PR states into the same review), so the
-            # terminal state is `ai-blocked` alone.
-            labels = issue_labels(number, source_repo)
-            apply_label_patch(
-                number, repo=source_repo, event=EVENT_BLOCKED,
-                current_labels=labels,
-            )
-            body = (
-                f"Orbi failed: the independent review of "
-                f"PR {pr_url} failed: {detail}; this is an "
-                "external precondition the AI cannot safely "
-                "judge or fix, so it cannot be recovered "
-                "automatically (the Issue stays ai-blocked "
-                "until a human decides)"
-            )
-            body += evidence
-            if marker:
-                body = f"{marker}\n{body}"
-            comment_issue(number, repo=source_repo, body=body)
-            if run_id:
-                # Issue #79: the blocked-scene progress
-                # publishing is bypass — a 404 here must not
-                # escape the wait loop (the terminal
-                # bookkeeping above already completed and the
-                # slot must be released).
-                publish(
-                    action=lambda: ProgressPublisher(
-                        number, source_repo, run_id,
-                        run_command=run_command,
-                    ).milestone(
-                        f"blocked: the independent review of "
-                        f"PR {pr_url} failed: {detail}"
-                    ),
-                )
-                # The blocked scene carries the actual role and
-                # the completed review rounds (review round 2,
-                # PR #42): the failure happened during the
-                # independent review, and the trusted
-                # review-round comments bound the round count
-                # (GitHub is the only state store).
-                publish(
-                    action=lambda: _finish_progress(
-                        number, run_id, source_repo, worktree,
-                        branch, pr_url,
-                        f"the independent review of PR {pr_url} "
-                        f"failed: {detail}; this is an external "
-                        "precondition the AI cannot safely "
-                        "judge or fix, so it cannot be "
-                        "recovered automatically (the Issue "
-                        "stays ai-blocked until a human "
-                        "decides)",
-                        "fix the precondition above (see the "
-                        "reason) and relabel the Issue "
-                        "ai-fix-needed to resume this same PR",
-                        title=title,
-                        outcome="blocked",
-                        role=ROLE_REVIEW,
-                        review_round=review_rounds_so_far(
-                            issue_comments(number, repo=source_repo),
-                        ),
-                        priority=priority,
-                    ),
-                )
-            return None
-        # Issue #50: a RECOVERABLE failure (Pi execution
-        # failure, model wait, runner exception,
-        # missing/malformed verdict, missing worktree,
-        # unpushed local commit) keeps the Issue in the
-        # automatic fix loop: `ai-fix-needed` (the next timer
-        # resumes the same run, branch, worktree and PR — never
-        # ai-blocked, never a replacement PR). The failure
-        # comment carries the full scene and is written to the
-        # Issue AND the PR.
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_FIX_NEEDED,
-            current_labels=issue_labels(number, source_repo),
+        # The shared classified reporter (Issue #288): recoverable ->
+        # `ai-fix-needed` with the full scene on Issue AND PR,
+        # unrecoverable -> `ai-blocked` ALONE. No wrapper: a reporting
+        # failure here fails the tick fast (the slot is released by
+        # `main`'s `finally`), exactly like any other Runner bug.
+        report_delivery_failure(
+            exc, issue=issue, source_repo=source_repo,
+            run_id=run_id, pr_url=pr_url,
+            worktree=worktree, branch=branch, role=ROLE_REVIEW,
+            cause=f"the independent review of PR {pr_url} failed: {detail}",
+            evidence=True,
         )
-        body = (
-            f"Orbi needs a fix: the independent review of "
-            f"PR {pr_url} failed: {detail}; the Issue stays "
-            "ai-fix-needed and the next tick resumes the same "
-            "run, branch, worktree and PR"
-        )
-        body += evidence
-        # The full scene (run_id, branch, worktree, session,
-        # phase, last activity) is always appended: a
-        # recoverable failure always happens after the scene
-        # was recovered and the worktree derived (a failure
-        # before the derivation is unrecoverable and never
-        # reaches this branch), so worktree, branch and run_id
-        # are set here. The session fields are '-' when no
-        # session file exists yet (the Pi never started or the
-        # dir is gone); a snapshot read failure is logged and
-        # reported as "no session yet" (best-effort
-        # observability, never a second failure).
-        snapshot = None
-        try:
-            snapshot = activity_snapshot(
-                worktree / ".pi-session",
-            )
-        except Exception:
-            LOGGER.exception(
-                "issue=%s activity scene failed", number,
-            )
-        if snapshot is None:
-            snapshot = {
-                "session_id": None, "session_file": None,
-                "phase": "starting",
-                "last_activity": None, "action": None,
-                "result": None,
-            }
-        body += "\n" + format_run_scene(
-            snapshot,
-            run_id=run_id or "-",
-            issue=issue_context(source_repo, number),
-            role=ROLE_REVIEW, branch=branch,
-            worktree=str(worktree),
-        )
-        if marker:
-            body = f"{marker}\n{body}"
-        comment_issue(number, repo=source_repo, body=body)
-        comment_pr(
-            _pr_number(pr_url), repo=source_repo, body=body,
-        )
-        if run_id:
-            # Issue #79: the fix-needed-scene progress
-            # publishing is bypass — a 404 here must not escape
-            # the wait loop (the label transition above already
-            # completed and the slot must be released).
-            publish(
-                action=lambda: ProgressPublisher(
-                    number, source_repo, run_id,
-                    run_command=run_command,
-                ).milestone(
-                    f"fix needed: the independent review of "
-                    f"PR {pr_url} failed: {sanitize(detail)}"
-                ),
-            )
-            publish(
-                action=lambda: _finish_progress(
-                    number, run_id, source_repo, worktree,
-                    branch, pr_url,
-                    f"the independent review of PR {pr_url} "
-                    f"failed: {detail}",
-                    "the next tick resumes the same run, branch, "
-                    "worktree and PR automatically (the Issue "
-                    "stays ai-fix-needed)",
-                    title=title,
-                    outcome="fix needed",
-                    review_round=review_rounds_so_far(
-                        issue_comments(number, repo=source_repo),
-                    ),
-                    priority=priority,
-                ),
-            )
         return None
     if merged:
         LOGGER.info(
