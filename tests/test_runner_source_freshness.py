@@ -391,7 +391,7 @@ def test_main_source_gate_clean_proceeds_to_claim(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
     assert (tmp_path / ".orbi" / "slots" / "slot-1").exists()

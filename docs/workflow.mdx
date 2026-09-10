@@ -284,3 +284,39 @@ Task dependencies between Issues use GitHub's native `blockedBy`
 relation (`gh issue edit N --add-blocked-by M`); the Runner reads the
 field and skips Issues with open blockers. `Depends on #N` lines in an
 Issue body are not parsed.
+
+## Repository-level delivery policy (`.github/orbi.toml`)
+
+A repository can version its **delivery policy** as code. At claim the
+Runner reads `.github/orbi.toml` from the repository's **default branch
+tip** through the GitHub contents API — never the task branch, never the
+local worktree — and applies its whitelisted keys **per key** over the
+host `orbi.toml`. A repository without that file behaves exactly as
+before (zero change).
+
+Only delivery-policy keys are allowed:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `base_branch` | string | Delivery base branch for this repository; absent falls back to the matching `[[repositories]].base_branch`, else the host `base_branch`. |
+| `active_milestone` | string | The fresh-claim Milestone scope for this repository. |
+| `test_command` | string | The repository's test command, injected into the implementer prompt. |
+| `context_files` | string[] | Repository-relative context files; existence and a size cap are checked before injection. |
+| `dispatch_label` | string | The claim label for this repository (default `ai-ready`); the delivery lifecycle labels stay host constants. |
+
+```toml
+# .github/orbi.toml
+base_branch = "beta"
+active_milestone = "v0.5.0"
+test_command = "pytest -q"
+context_files = ["AGENTS.md"]
+```
+
+Every other key is rejected: an unknown key, a host-only
+identity/security key (see [Security](/security)), invalid TOML or a
+wrong type fails the claim fast with the offending key names and the
+Issue becomes `ai-blocked` — one repository's bad file never affects
+another pool. The run comment records `repo_config: <sha>`; when the sha
+differs from the previous run, the change is annotated
+(`repo-config-changed`) with the effective policy diff, so a change is
+always visible on the run.

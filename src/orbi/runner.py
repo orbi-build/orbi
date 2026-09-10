@@ -103,6 +103,15 @@ from orbi.delivery_labels import (
     label_patch,
     needs_human_intervention,
 )
+from orbi.repo_config import (
+    REPO_CONFIG_PATH,
+    RepoConfigError,
+    read_repo_config,
+    read_repo_config_at,
+    repo_config_audit,
+    resolve_policy,
+    validate_context_file,
+)
 from orbi.progress import (
     RUN_MARKER_PATTERN,
     ProgressPublisher,
@@ -1464,13 +1473,101 @@ def parse_repositories(entries: object, base: Path) -> list[dict]:
             raise ValueError(
                 f"duplicate repositories name: {entry['name']!r}"
             )
+        # Issue #527: the optional repository config path (default
+        # `.github/orbi.toml`) — a string, no path resolution (it is a
+        # repository-relative path read through the GitHub contents API,
+        # never the local checkout).
+        config_path = entry.get("config_path", REPO_CONFIG_PATH)
+        if not isinstance(config_path, str) or not config_path:
+            raise ValueError(
+                f"repositories[{index}].config_path must be a non-empty "
+                "string"
+            )
         repos.append({
             "name": entry["name"],
             "path": _config_path(entry["path"], base),
             "github": entry["github"],
             "base_branch": entry["base_branch"],
+            "config_path": config_path,
         })
     return repos
+
+
+def repository_config_path(config: dict, source_repo: str) -> str:
+    """The repository config path of one source repo (Issue #527).
+
+    The optional `[[repositories]].config_path` wins when its `github`
+    entry matches the source repo; otherwise the single default location
+    `.github/orbi.toml` applies.
+    """
+    for repo in config.get("repositories", []):
+        if repo.get("github") == source_repo:
+            return repo.get("config_path", REPO_CONFIG_PATH)
+    return REPO_CONFIG_PATH
+
+
+def repository_base_branch(config: dict, source_repo: str) -> str:
+    """The fallback base branch of one source repo (Issue #527, D3).
+
+    A repository config that omits `base_branch` falls back to its
+    `[[repositories]]` entry's `base_branch` when one matches the source
+    repo, else the host `base_branch`.
+    """
+    for repo in config.get("repositories", []):
+        if repo.get("github") == source_repo:
+            return repo["base_branch"]
+    return config["base_branch"]
+
+
+def load_repo_policy(config: dict, source_repo: str) -> dict | None:
+    """Read and validate one source repo's policy file (Issue #527).
+
+    Returns the `{"sha", "policy"}` record, or `None` when the repository
+    has no policy file. A malformed/forbidden file raises
+    :class:`RepoConfigError` — the caller fails the claim fast.
+    """
+    return read_repo_config(
+        source_repo,
+        path=repository_config_path(config, source_repo),
+        run_command=run_command,
+    )
+
+
+def apply_repo_policy(config: dict, source_repo: str,
+                     record: dict) -> dict:
+    """Resolve one repo's policy over the host fallback (Issue #527, D3)."""
+    fallback = {
+        **config,
+        "base_branch": repository_base_branch(config, source_repo),
+    }
+    return resolve_policy(fallback, record["policy"])
+
+
+def previous_repo_config_sha(number: int, source_repo: str) -> str | None:
+    """The sha recorded by the previous run of this Issue (Issue #527, D4).
+
+    Scans the trusted Orbi comments for the `repo_config` field of the
+    newest run. Best-effort audit: a read failure is logged and returns
+    `None` (the change annotation is then omitted, never a delivery
+    failure).
+    """
+    try:
+        comments = issue_comments(number, repo=source_repo)
+    except Exception:
+        LOGGER.warning(
+            "issue=%s repo_config_previous_lookup_failed", number,
+        )
+        return None
+    for comment in reversed(comments):
+        if not _comment_is_trusted(comment):
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        match = re.search(r"(?m)^-\s*repo_config:\s*([0-9a-f]{7,64})\s*$", body)
+        if match:
+            return match.group(1)
+    return None
 
 
 def render_prompt(template: str, values: dict[str, str]) -> str:
@@ -1808,7 +1905,8 @@ READY_SCAN_EXCLUSIONS = (
 )
 
 
-def ready_searches(active_milestone: str | None = None) -> tuple[str, str, str]:
+def ready_searches(active_milestone: str | None = None,
+                   dispatch_label: str = READY_LABEL) -> tuple[str, str, str]:
     """Return the three ready scans (p0, bug, plain) in pickup order.
 
     With a configured `active_milestone` (Issue #139) every scan
@@ -1829,14 +1927,18 @@ def ready_searches(active_milestone: str | None = None) -> tuple[str, str, str]:
     scope = (
         f' milestone:"{active_milestone}"' if active_milestone else ""
     )
+    # Issue #527: the claim label is a delivery-policy key; the lifecycle
+    # labels (`ai-in-progress`/`ai-merged`/...) stay host constants.
+    label = dispatch_label or READY_LABEL
     return (
-        f"label:ai-ready label:{P0_LABEL}{scope} {READY_SCAN_EXCLUSIONS}",
-        f"label:ai-ready label:bug{scope} {READY_SCAN_EXCLUSIONS}",
-        f"label:ai-ready{scope} {READY_SCAN_EXCLUSIONS}",
+        f"label:{label} label:{P0_LABEL}{scope} {READY_SCAN_EXCLUSIONS}",
+        f"label:{label} label:bug{scope} {READY_SCAN_EXCLUSIONS}",
+        f"label:{label}{scope} {READY_SCAN_EXCLUSIONS}",
     )
 
 
-def release_fallback_search(active_milestone: str | None = None) -> str:
+def release_fallback_search(active_milestone: str | None = None,
+                            dispatch_label: str = READY_LABEL) -> str:
     """Return the release fallback scan query (Issue #255).
 
     A Release task is a closing action and must never compete with an
@@ -1853,8 +1955,9 @@ def release_fallback_search(active_milestone: str | None = None) -> str:
     scope = (
         f' milestone:"{active_milestone}"' if active_milestone else ""
     )
+    label = dispatch_label or READY_LABEL
     return (
-        f"label:{READY_LABEL} label:{RELEASE_LABEL}{scope} "
+        f"label:{label} label:{RELEASE_LABEL}{scope} "
         f"{READY_SCAN_EXCLUSIONS}"
     )
 
@@ -4157,7 +4260,8 @@ def _pick_from_scan(
     return None
 
 
-def pick_issue(repo: str, active_milestone: str | None = None) -> dict | None:
+def pick_issue(repo: str, active_milestone: str | None = None,
+               dispatch_label: str = READY_LABEL) -> dict | None:
     # A merged delivery keeps `ai-ready` + `ai-merged` on the (still
     # open) Issue; `ai-merged` is the success terminal state, so it is
     # excluded from the ready scan like every other delivery state.
@@ -4182,7 +4286,7 @@ def pick_issue(repo: str, active_milestone: str | None = None) -> dict | None:
     # fallback scan that runs AFTER all three found nothing claimable —
     # a release is a closing action and must never take the slot ahead
     # of an ordinary delivery.
-    for search in ready_searches(active_milestone):
+    for search in ready_searches(active_milestone, dispatch_label):
         try:
             raw = run_command([
                 "gh", "issue", "list", "--repo", repo, "--state", "open",
@@ -4214,7 +4318,8 @@ def pick_issue(repo: str, active_milestone: str | None = None) -> dict | None:
     try:
         raw = run_command([
             "gh", "issue", "list", "--repo", repo, "--state", "open",
-            "--search", release_fallback_search(active_milestone),
+            "--search",
+            release_fallback_search(active_milestone, dispatch_label),
             "--json", "number,title,body,labels,blockedBy,milestone",
             "--limit", "200",
         ])
@@ -4399,14 +4504,15 @@ def task_branch(source_repo: str, number: int, run_id: str | None = None) -> str
 
 
 def claim_route(labels: set[str], *, branch_exists: bool,
-                open_pr: bool) -> str:
+                open_pr: bool, ready_label: str = READY_LABEL) -> str:
     """Choose the fresh-claim action from the physical GitHub scene.
 
     This is deliberately pure: labels are the event and branch/PR existence
     is the observed physical state.  The existing review loop handles the
-    returned ``review`` route.
+    returned ``review`` route. `ready_label` is the repository's dispatch
+    label (Issue #527; default `ai-ready`).
     """
-    if open_pr and READY_LABEL in labels:
+    if open_pr and ready_label in labels:
         return "review"
     if open_pr and (PR_OPENED_LABEL in labels or FIX_NEEDED_LABEL in labels):
         return "review"
@@ -4509,11 +4615,19 @@ def _run_info_fields(run_info: str) -> dict[str, str]:
 
 
 def started_pi_comment_body(run_id: str, run_info: str, branch: str,
-                            worktree: Path) -> str:
-    """The start comment doubles as the recoverable run scene (Issue #45)."""
+                            worktree: Path,
+                            extra_fields: dict | None = None) -> str:
+    """The start comment doubles as the recoverable run scene (Issue #45).
+
+    `extra_fields` carries the repo-config audit fields (Issue #527, D4);
+    their values may contain spaces, so they are rendered by the field
+    block and never spliced into the space-separated `run_info`.
+    """
     fields = _run_info_fields(run_info)
     fields["branch"] = str(branch)
     fields["worktree"] = str(worktree)
+    if extra_fields:
+        fields.update(extra_fields)
     info = _run_info_fields(run_info)
     headline = "Orbi started Pi: " + " ".join(
         f"{key}={info[key]}" for key in ("run_id", "priority")
@@ -4826,6 +4940,40 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
         LOGGER.exception("issue=%s failure reporting failed", number)
 
 
+def block_repo_config_failure(number: int, source_repo: str,
+                              error: ValueError, run_id: str,
+                              current_labels=()) -> None:
+    """Mark an Issue `ai-blocked` when its repo config is invalid (#527).
+
+    The strict repository schema is a fail-fast precondition: a file that
+    exists on the default branch but carries an unknown/host-only key, a
+    wrong type or invalid TOML blocks the claim with the concrete reason
+    and the offending key names. The failure is scoped to this repository
+    only (a sibling pool's valid config is unaffected). A failure of the
+    reporting itself is logged, never raised, so the tick still ends
+    cleanly (`main` releases the slot in its `finally`).
+    """
+    try:
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_BLOCKED,
+            current_labels=set(current_labels),
+        )
+        comment_issue(
+            number, repo=source_repo,
+            body=(
+                f"{run_marker(run_id)}\n"
+                f"Orbi failed: repository config is invalid: {error}; "
+                "this is a fail-fast repository precondition the AI does "
+                "not fix "
+                "itself — correct the file on the default branch "
+                "(remove the host-only/unknown key or fix the value) and "
+                "relabel the Issue ai-ready for a new run"
+            ),
+        )
+    except Exception:
+        LOGGER.exception("issue=%s repo_config_failure_report_failed", number)
+
+
 def _parse_version_title(title: object) -> tuple[int, int, int] | None:
     """Parse a strict ``v<major>.<minor>.<patch>`` milestone title."""
     if not isinstance(title, str):
@@ -5035,7 +5183,7 @@ def advance_active_milestone_on_idle(
 
 def pick_next_delivery(
     repos: list[str], slot_dir: Path, max_concurrency: int,
-    active_milestone: str | None = None,
+    active_milestone: str | None = None, config: dict | None = None,
 ) -> tuple[str, dict, dict | None] | None:
     """Scan sources in order: resumable PRs, in-flight restarts, ready.
 
@@ -5087,10 +5235,38 @@ def pick_next_delivery(
         if issue is not None:
             return repo, issue, None
     for repo in repos:
-        issue = pick_issue(repo, active_milestone)
+        issue = _pick_issue_with_repo_policy(repo, active_milestone, config)
         if issue is not None:
             return repo, issue, None
     return None
+
+
+def _pick_issue_with_repo_policy(
+    repo: str, active_milestone: str | None, config: dict | None,
+) -> dict | None:
+    """Fresh ready scan with the repo's scan keys (Issue #527).
+
+    `dispatch_label` and `active_milestone` are resolved from the
+    repository policy before the scan. The read is fail-open and a
+    malformed repository file is ignored here (host keys keep the scan
+    alive): `process_issue` re-reads the file at claim and blocks the
+    Issue with the readable reason instead of silently claiming nothing.
+    """
+    if config is None:
+        return pick_issue(repo, active_milestone)
+    try:
+        record = load_repo_policy(config, repo)
+    except RepoConfigError as exc:
+        LOGGER.error(
+            "repo_config_invalid repo=%s reason=%s", repo, exc,
+        )
+        record = None
+    policy = record["policy"] if record else {}
+    milestone = policy.get("active_milestone", active_milestone)
+    label = policy.get("dispatch_label", READY_LABEL)
+    if label == READY_LABEL:
+        return pick_issue(repo, milestone)
+    return pick_issue(repo, milestone, dispatch_label=label)
 
 
 def worktree_path(repo_dir: Path, source_repo: str, number: int,
@@ -6647,6 +6823,12 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
     # into a missing directory fails the command outright).
     (worktree / ".orbi").mkdir(exist_ok=True)
     started = time.monotonic()
+    # Issue #527: the repository policy's context files are
+    # repository-relative; resolve them against the delivery worktree and
+    # enforce existence + the size cap before injection (D2).
+    context_files = list(config["context_files"])
+    for relative in config.get("repo_context_files", []):
+        context_files.append(validate_context_file(worktree, relative))
     system_prompt = render_prompt(
         config["prompt"].read_text(encoding="utf-8"),
         {
@@ -6656,13 +6838,19 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
             "ISSUE_TITLE": issue["title"],
             "ISSUE_BODY": issue.get("body", ""),
             "WORKSPACE_ROOT": str(config["workspace_root"]),
-            "CONTEXT_FILES": "\n".join(str(path) for path in config["context_files"]),
+            "CONTEXT_FILES": "\n".join(str(path) for path in context_files),
             "SKILLS": "\n".join(
                 str(path)
                 for path in _skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)
             ),
             "BASE_BRANCH": config["base_branch"],
             "BASE_SHA": config["base_sha"],
+            # Issue #527: a repository-declared test command (absent ->
+            # the agent follows its own test contract, as before #527).
+            "TEST_COMMAND": (
+                (config.get("test_command") or "").strip()
+                or "(not declared)"
+            ),
             "RUN_ID": config["run_id"],
             # Issue #186: the implementer prompt no longer carries the
             # base-sync lock (the base fetch is the Runner's operation);
@@ -9419,7 +9607,15 @@ class IssueResult(NamedTuple):
     url: str | None
 
 
-def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
+# Sentinel for `process_issue`'s repository-policy argument (Issue #527):
+# `main` resolves the policy once for the whole delivery (resume verify,
+# claim, review/merge) and passes the record in; a direct caller that omits
+# it gets the claim-time read (and the fail-fast block) here.
+_REPO_CONFIG_UNSET = object()
+
+
+def process_issue(issue: dict, config: dict, source_repo: str,
+                  repo_config_record: object = _REPO_CONFIG_UNSET) -> IssueResult:
     number = int(issue["number"])
     # Issue #100: the progress comment's issue line shows the number
     # AND the title in every scene. The scanned issue dict always
@@ -9436,13 +9632,60 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
     if is_ticket_only(issue):
         process_ticket_only(issue, config, source_repo)
         return IssueResult("ticket-only", None)
-    base_branch = config["base_branch"]
     # The run id is generated once per attempt and bound BEFORE any
     # other step is logged, so every journal line of the attempt
     # carries it — including the claim-time lines of the restart resume
-    # scan below (Issue #41; review round 3, PR #42).
+    # scan below (Issue #41; review round 3, PR #42). It is bound before
+    # the repository-policy read (Issue #527) so a forbidden/malformed
+    # repository file blocks the claim with a run-marked comment.
     run_id = new_run_id()
     set_run_id(run_id)
+    # Repository-level config-as-code (Issue #527): read `.github/orbi.toml`
+    # (or the entry's `config_path`) from the source repo's default branch
+    # tip and apply its whitelisted delivery-policy keys per key over the
+    # host config (D3). A missing file is a no-op (byte-identical
+    # pre-#527 behavior); a file that exists but violates the schema blocks
+    # this claim fast with the offending keys.
+    repo_config_fields: dict = {}
+    if repo_config_record is _REPO_CONFIG_UNSET:
+        try:
+            repo_config_record = load_repo_policy(config, source_repo)
+        except RepoConfigError as exc:
+            LOGGER.error(
+                "issue=%s repo_config_invalid source_repo=%s reason=%s",
+                number, source_repo, exc,
+            )
+            block_repo_config_failure(
+                number, source_repo, exc, run_id,
+                current_labels={
+                    label.get("name") for label in issue.get("labels", [])
+                    if isinstance(label, dict)
+                    and isinstance(label.get("name"), str)
+                },
+            )
+            return IssueResult("failed", None)
+    if repo_config_record is not None:
+        config = apply_repo_policy(config, source_repo, repo_config_record)
+        # D4 change visibility: the previous run's sha is read from the
+        # trusted Orbi comments (best-effort audit), and the previous
+        # policy is re-read from its blob for the effective diff summary.
+        previous_sha = previous_repo_config_sha(number, source_repo)
+        previous_policy = (
+            read_repo_config_at(
+                source_repo, previous_sha,
+                path=repository_config_path(config, source_repo),
+                run_command=run_command,
+            ) if previous_sha else None
+        )
+        repo_config_fields = repo_config_audit(
+            repo_config_record["sha"], repo_config_record["policy"],
+            previous_sha=previous_sha,
+            previous_policy=previous_policy,
+        )
+    base_branch = config["base_branch"]
+    # The claim label is a delivery-policy key (Issue #527); the lifecycle
+    # labels stay host constants.
+    dispatch_label = config.get("dispatch_label", READY_LABEL)
     # Restart resume (Issue #18): a killed runner leaves the task
     # worktree and the `ai-in-progress` label behind. Only in that state
     # the newest worktree's run id is reused, so the same hidden-marker
@@ -9458,7 +9701,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
         if isinstance(label, dict) and isinstance(label.get("name"), str)
     }
     in_progress = has_in_progress_label(number, source_repo)
-    if not in_progress and READY_LABEL in claim_labels:
+    if not in_progress and dispatch_label in claim_labels:
         stable_branch = task_branch(source_repo, number)
         takeover_pr = open_pr_for_branch(config["repo_dir"], stable_branch)
         stable_branch_present = stable_branch_exists(
@@ -9478,6 +9721,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
             claim_labels,
             branch_exists=stable_branch_present,
             open_pr=takeover_pr is not None,
+            ready_label=dispatch_label,
         )
         LOGGER.info(
             "fresh_claim_route issue=%s branch=%s route=%s open_pr=%s",
@@ -9547,6 +9791,11 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
         f"base_branch={base_branch} base_sha={base_sha} run_id={run_id} "
         f"priority={priority}"
     )
+    if repo_config_record is not None:
+        # Issue #527 D4: the run comment carries the repository config sha
+        # (the file blob at the default branch tip) so a policy change is
+        # always visible on the run.
+        run_info += f" repo_config={repo_config_record['sha']}"
     LOGGER.info(
         "issue=%s %s", number, run_info,
     )
@@ -9637,7 +9886,10 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
         config = {**config, "base_sha": base_sha, "run_id": run_id}
         comment_issue(
             number, repo=source_repo,
-            body=started_pi_comment_body(run_id, run_info, branch, worktree),
+            body=started_pi_comment_body(
+                run_id, run_info, branch, worktree,
+                extra_fields=repo_config_fields,
+            ),
         )
         # Issue #79: the whole ProgressPublisher path is a bypass — a
         # failure here (404, rate limit) is logged and never skips
@@ -10811,6 +11063,7 @@ def main(argv: list[str] | None = None) -> int:
             config["source_repos"], config["slot_dir"],
             config["max_concurrency"],
             config["active_milestone"],
+            config=config,
         )
         if selected is None:
             LOGGER.info(
@@ -10850,6 +11103,33 @@ def main(argv: list[str] | None = None) -> int:
                     )
             return 0
         source_repo, issue, scene = selected
+        # Issue #527: resolve the repository-level policy ONCE for the whole
+        # delivery. The effective base branch/milestone must drive the
+        # resume verification, the claim and the review/merge loop, and a
+        # malformed repository file blocks the claim fast with the offending
+        # keys (one repository's bad file never affects another pool).
+        try:
+            repo_config_record = load_repo_policy(config, source_repo)
+        except RepoConfigError as exc:
+            run_id = (
+                scene["run_id"] if scene is not None
+                else (current_run_id() or new_run_id())
+            )
+            LOGGER.error(
+                "repo_config_invalid source_repo=%s reason=%s",
+                source_repo, exc,
+            )
+            block_repo_config_failure(
+                int(issue["number"]), source_repo, exc, run_id,
+                current_labels={
+                    label.get("name") for label in issue.get("labels", [])
+                    if isinstance(label, dict)
+                    and isinstance(label.get("name"), str)
+                },
+            )
+            return 0
+        if repo_config_record is not None:
+            config = apply_repo_policy(config, source_repo, repo_config_record)
         result = None
         if scene is not None:
             # An open PR is a recoverable review state: resume the
@@ -10899,7 +11179,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 0
         else:
-            result = process_issue(issue, config, source_repo)
+            result = process_issue(
+                issue, config, source_repo, repo_config_record,
+            )
             # `process_issue` owns task dispatch and reports its outcome;
             # do not repeat task-type predicates here (Issue #281).
             if result.kind not in ("pr", "external-pr"):

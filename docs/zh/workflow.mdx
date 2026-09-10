@@ -229,3 +229,35 @@ PR 验收时校验该关键词，缺失即 fail fast。
 Issue 之间的任务依赖用 GitHub 原生 `blockedBy` 关系（`gh issue edit N
 --add-blocked-by M`）；Runner 读该字段并跳过有未关闭 blocker 的 Issue。
 Issue body 里的 `Depends on #N` 行不被解析。
+
+## 仓库级交付策略（`.github/orbi.toml`）
+
+仓库可以把**交付策略**作为代码版本化。claim 时 Runner 通过 GitHub
+contents API 读取仓库**默认分支 tip** 上的 `.github/orbi.toml`——
+绝不读任务分支、绝不读本地 worktree——并按**按键分域**把白名单键应用
+到宿主 `orbi.toml` 之上。没有该文件的仓库行为与之前完全一致（零变化）。
+
+只允许交付策略键：
+
+| 键 | 类型 | 含义 |
+| --- | --- | --- |
+| `base_branch` | string | 该仓库的交付 base 分支；缺席时回退到匹配的 `[[repositories]].base_branch`，否则回退宿主 `base_branch`。 |
+| `active_milestone` | string | 该仓库 fresh claim 的 Milestone 范围。 |
+| `test_command` | string | 该仓库的测试命令，注入实现者 prompt。 |
+| `context_files` | string[] | 仓库内相对路径的上下文文件；注入前校验存在性与大小上限。 |
+| `dispatch_label` | string | 该仓库的认领标签（默认 `ai-ready`）；交付生命周期标签恒为宿主常量。 |
+
+```toml
+# .github/orbi.toml
+base_branch = "beta"
+active_milestone = "v0.5.0"
+test_command = "pytest -q"
+context_files = ["AGENTS.md"]
+```
+
+其他键一律拒绝：未知键、host-only 身份/安全键（见
+[安全](/zh/security)）、坏 TOML 或类型错误都会让 claim fail-fast 并
+在错误里列出违规键，Issue 进入 `ai-blocked`——一个仓库的坏文件绝不
+影响其他池。run 评论记录 `repo_config: <sha>`；与上一 run 的 sha
+不同时附 `repo-config-changed` 标注与有效键值 diff，让变更始终在 run
+上可见。

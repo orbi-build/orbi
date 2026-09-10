@@ -675,12 +675,16 @@ def test_load_config_parses_repositories_registry(tmp_path):
             "path": (tmp_path / "checkouts" / "pilot").resolve(),
             "github": "owner/pilot",
             "base_branch": "main",
+            # Issue #527: the optional repository config path defaults to
+            # the single `.github/orbi.toml` location.
+            "config_path": ".github/orbi.toml",
         },
         {
             "name": "ceo",
             "path": (tmp_path / "checkouts" / "ceo").resolve(),
             "github": "owner/ceo",
             "base_branch": "develop",
+            "config_path": ".github/orbi.toml",
         },
     ]
 
@@ -872,6 +876,8 @@ def test_prompt_template_requires_fixes_keyword_for_the_source_issue():
         "SKILLS": "",
         "BASE_BRANCH": "main",
         "BASE_SHA": "abc123",
+        # Issue #527: the repository-declared test command placeholder.
+        "TEST_COMMAND": "(not declared)",
         "RUN_ID": "a2241189",
         "BASE_SYNC_LOCK": "/checkout/.orbi/base-sync.lock",
     })
@@ -2612,7 +2618,7 @@ def test_pick_next_delivery_recovers_in_flight_issue_before_ready(
             in_flight if repo == "r1" else None
         ),
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: ready)
+    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: ready)
     assert runner.pick_next_delivery(
         ["r1", "r2"], tmp_path / "slots", 1,
     ) == ("r1", in_flight, None)
@@ -2636,7 +2642,7 @@ def test_pick_next_delivery_keeps_resumable_delivery_first(
         runner, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency: in_flight,
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: in_flight)
+    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: in_flight)
     assert runner.pick_next_delivery(
         ["r1", "r2"], tmp_path / "slots", 1,
     ) == ("r2", resumable, scene)
@@ -2654,7 +2660,7 @@ def test_pick_next_delivery_falls_through_to_ready_when_no_in_flight(
         runner, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency: None,
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: ready)
+    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: ready)
     assert runner.pick_next_delivery(
         ["r1"], tmp_path / "slots", 1,
     ) == ("r1", ready, None)
@@ -2671,7 +2677,7 @@ def test_pick_next_delivery_returns_none_when_all_scans_empty(
         runner, "pick_in_progress_issue",
         lambda repo, slot_dir, max_concurrency: None,
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: None)
+    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: None)
     assert runner.pick_next_delivery(
         ["r1"], tmp_path / "slots", 1,
     ) is None
@@ -2681,7 +2687,7 @@ def test_pick_next_issue_returns_first_ready_source(monkeypatch):
     issue = {"number": 1, "title": "pilot", "body": ""}
     calls = []
 
-    def pick(repo, active_milestone=None):
+    def pick(repo, active_milestone=None, **_kwargs):
         calls.append(repo)
         return issue if repo == "xqliu/orbi-backlog" else None
 
@@ -2696,7 +2702,7 @@ def test_pick_next_issue_falls_through_to_second_source(monkeypatch):
     issue = {"number": 2, "title": "pilot", "body": ""}
     calls = []
 
-    def pick(repo, active_milestone=None):
+    def pick(repo, active_milestone=None, **_kwargs):
         calls.append(repo)
         return issue if repo == "xqliu/orbi" else None
 
@@ -2708,7 +2714,7 @@ def test_pick_next_issue_falls_through_to_second_source(monkeypatch):
 
 
 def test_pick_next_issue_returns_none_when_all_sources_empty(monkeypatch):
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: None)
+    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: None)
     assert runner.pick_next_issue(["xqliu/orbi-backlog", "xqliu/orbi"]) is None
 
 
@@ -6358,7 +6364,7 @@ def test_main_idle_release_arm_failure_is_bypassed(monkeypatch, tmp_path, caplog
         'source_repos = ["owner/repo"]\nactive_milestone = "v0.4.0"\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args: None)
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         runner, "arm_release_ticket",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("permission denied")),
@@ -6382,7 +6388,7 @@ def test_main_idle_advance_failure_is_bypassed(monkeypatch, tmp_path, caplog):
         'source_repos = ["owner/repo"]\nactive_milestone = "v0.4.0"\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args: None)
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         runner, "advance_active_milestone_on_idle",
@@ -6411,7 +6417,7 @@ def _write_prompts(tmp_path):
 def test_main_returns_zero_when_queue_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
@@ -6433,12 +6439,12 @@ def test_main_passes_configured_active_milestone_to_the_claim_scan(
     )
     seen = {}
 
-    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None):
+    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs):
         seen["milestone"] = active_milestone
         return None
 
     monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
-    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args: None)
+    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
     assert runner.main(["--config", str(config)]) == 0
     assert seen["milestone"] == "v0.2.0"
@@ -6454,8 +6460,8 @@ def test_main_advances_milestone_only_after_no_ready_issue(
         encoding="utf-8",
     )
     calls = []
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args: None)
-    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args: None)
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         runner, "advance_active_milestone_on_idle",
         lambda *args, **kwargs: calls.append((args, kwargs)),
@@ -6479,8 +6485,8 @@ def test_main_passes_disabled_auto_next_milestone_to_idle_advance(
         encoding="utf-8",
     )
     seen = {}
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args: None)
-    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args: None)
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         runner, "advance_active_milestone_on_idle",
         lambda *args, **kwargs: seen.update(kwargs),
@@ -6499,7 +6505,7 @@ def test_main_passes_none_active_milestone_when_unconfigured(
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     seen = {}
 
-    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None):
+    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs):
         seen["milestone"] = active_milestone
         return None
 
@@ -6517,7 +6523,7 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "xqliu/orbi", issue, None
         ),
     )
@@ -6545,7 +6551,7 @@ def test_main_uses_process_result_kind_without_rechecking_task_type(
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
     )
@@ -6590,7 +6596,7 @@ def test_main_ends_tick_when_process_issue_delivers_nothing(
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
     )
@@ -6617,7 +6623,7 @@ def test_main_ticket_only_finishes_without_entering_pr_delivery_wait(
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
     )
@@ -6653,7 +6659,7 @@ def test_main_release_success_ends_tick_without_pr_delivery_wait(
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
     )
@@ -6695,7 +6701,7 @@ def test_main_routes_fix_needed_resume_to_delivery_wait(
     }
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, scene,
         ),
     )
@@ -6741,7 +6747,7 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
     }
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, scene,
         ),
     )
@@ -10087,7 +10093,7 @@ def test_main_capacity_full_does_not_pick_issue_or_call_pi(
     held = pilot_slots.acquire_slot(slot_dir, 1, os.getpid())
     assert held is not None
 
-    def fail_if_called(repos, slot_dir, max_concurrency, active_milestone=None):
+    def fail_if_called(repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs):
         raise AssertionError("pick_next_delivery must not run when capacity is full")
 
     monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
@@ -10118,7 +10124,7 @@ def test_main_holds_slot_while_processing_issue(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     seen = {}
 
-    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None):
+    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs):
         seen["occupancy"] = pilot_slots.slot_occupancy(
             tmp_path / ".orbi" / "slots", 1,
         )
@@ -10140,7 +10146,7 @@ def test_main_reacquires_slot_after_previous_release(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
 
     assert runner.main(["--config", str(config)]) == 0
@@ -10303,7 +10309,7 @@ def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
@@ -10387,7 +10393,7 @@ def test_main_unit_drift_clean_proceeds_to_claim(monkeypatch, tmp_path,
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
@@ -10412,7 +10418,7 @@ def test_main_preflight_receives_the_configured_repo_dir(
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen == [tmp_path]
@@ -10491,7 +10497,7 @@ def test_main_transport_check_clean_proceeds_to_claim(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
@@ -10526,7 +10532,7 @@ def test_main_transport_preflight_receives_the_configured_args(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen["repo_dir"] == tmp_path
@@ -10562,7 +10568,7 @@ def test_main_transport_preflight_honors_the_https_config(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
@@ -10598,7 +10604,7 @@ def test_main_cli_install_refresh_runs_before_slot_and_claim(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen["repo_dir"] == tmp_path
@@ -10647,7 +10653,7 @@ def test_main_cli_refresh_uses_deploy_home_not_repo_dir(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen["repo_dir"] == home
@@ -10689,7 +10695,7 @@ def test_main_unit_drift_check_uses_deploy_home(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen == [home]
@@ -12234,7 +12240,7 @@ def test_main_holds_slot_through_delivery_wait(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
     )
@@ -13982,7 +13988,7 @@ def test_main_installs_the_stop_handler(monkeypatch, tmp_path):
     repo.mkdir()
     (repo / ".git").mkdir()
     monkeypatch.setattr(
-        runner, "pick_next_delivery", lambda *args: None,
+        runner, "pick_next_delivery", lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(runner, "acquire_slot", lambda *args: Mock(release=lambda: None))
     monkeypatch.setattr(runner, "refresh_cli_install", lambda *a, **k: "unchanged")
@@ -17142,8 +17148,8 @@ def test_reconcile_release_milestones_keeps_malformed_or_incomplete_open(monkeyp
 
 def test_reconcile_open_epics_failure_is_fail_open(monkeypatch, caplog):
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
-    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args: None)
-    monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args: None)
+    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_issue", lambda *args: {"number": 1})
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "abc12345")
     result = runner.pick_next_delivery(["o/r"], Path("/tmp/slots"), 1)
@@ -17156,9 +17162,9 @@ def test_reconcile_open_epics_runs_on_a_fresh_tick(monkeypatch):
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda repo, run_id: calls.append((repo, run_id)))
-    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args: None)
-    monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args: None)
-    monkeypatch.setattr(runner, "pick_issue", lambda *args: None)
+    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "pick_issue", lambda *args, **kwargs: None)
     assert runner.pick_next_delivery(["o/r"], Path("/tmp/slots"), 1) is None
     assert calls == [("o/r", "a1b2c3d4")]
 
