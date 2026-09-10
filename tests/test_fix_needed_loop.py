@@ -129,6 +129,62 @@ def test_is_unrecoverable_failure_false_for_recoverable_failures(exc):
     assert not runner.is_unrecoverable_failure(exc)
 
 
+# --------------------------------------------- snapshot placeholder (Issue #288)
+
+
+def test_snapshot_or_placeholder_returns_the_watcher_state(tmp_path):
+    """Issue #288: a readable session dir yields the real snapshot —
+    the same state the failure comment's scene has always shown."""
+    _write_session(tmp_path)
+    snapshot = runner._snapshot_or_placeholder(
+        tmp_path / ".pi-session", number=39,
+    )
+    assert snapshot["session_id"] == "sess-1"
+    assert snapshot["session_file"] == str(
+        tmp_path / ".pi-session" / "sess.jsonl",
+    )
+
+
+def test_snapshot_or_placeholder_returns_placeholder_without_session(
+        tmp_path,
+):
+    """Issue #288: no session file yet (the Pi never started or the dir
+    is gone) yields the placeholder scene, fresh per call — the shared
+    constant is never handed out for mutation."""
+    first = runner._snapshot_or_placeholder(
+        tmp_path / ".pi-session", number=39,
+    )
+    assert first == {
+        "session_id": None, "session_file": None,
+        "phase": "starting", "last_activity": None,
+        "action": None, "result": None,
+    }
+    first["phase"] = "mutated"
+    assert runner._snapshot_or_placeholder(
+        tmp_path / ".pi-session", number=39,
+    )["phase"] == "starting"
+
+
+def test_snapshot_or_placeholder_logs_a_failed_read(
+        monkeypatch, caplog, tmp_path,
+):
+    """Issue #288: a failing snapshot read is best-effort observability —
+    it is logged and degrades to the placeholder, never a second
+    failure of the reporting path."""
+
+    def failing_snapshot(*args, **kwargs):
+        raise OSError("session file unreadable")
+
+    monkeypatch.setattr(runner, "activity_snapshot", failing_snapshot)
+    caplog.set_level("INFO")
+    snapshot = runner._snapshot_or_placeholder(
+        tmp_path / ".pi-session", number=39,
+    )
+    assert snapshot["session_id"] is None
+    assert snapshot["phase"] == "starting"
+    assert "activity scene failed" in caplog.text
+
+
 # ------------------------------------------------- wait_for_delivery: recoverable
 
 
