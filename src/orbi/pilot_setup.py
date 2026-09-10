@@ -102,9 +102,10 @@ REQUIRED_LABELS = (
     # the deterministic release state machine (never `run_pi`), so the
     # label is platform state the setup entry must guarantee.
     "ai-release",
-    # Ticket-only marker (Issue #209): content is delivered directly in
-    # the Issue, so setup must provision this explicit, auditable type.
-    "ai-ticket-only",
+    # Ops-only marker (Issue #209, renamed #530): a no-git-delivery ops
+    # task is delivered directly in the Issue, so setup must provision
+    # this explicit, auditable type.
+    "ai-ops-only",
 )
 COLOR_PATTERN = re.compile(r"^[0-9a-fA-F]{6}$")
 

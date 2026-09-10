@@ -6610,7 +6610,7 @@ def test_main_ticket_only_finishes_without_entering_pr_delivery_wait(
     """Ticket-only work has no PR, so the normal review/merge wait is invalid."""
     issue = {
         "number": 12, "title": "Launch copy", "body": "Write copy",
-        "labels": [{"name": "ai-ready"}, {"name": "ai-ticket-only"}],
+        "labels": [{"name": "ai-ready"}, {"name": "ai-ops-only"}],
     }
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
@@ -14452,9 +14452,9 @@ def test_process_issue_routes_release_to_process_release(monkeypatch):
 
 
 def test_is_ticket_only_requires_the_explicit_label():
-    assert runner.is_ticket_only({"labels": [{"name": "ai-ticket-only"}]}) is True
+    assert runner.is_ticket_only({"labels": [{"name": "ai-ops-only"}]}) is True
     assert runner.is_ticket_only({"labels": [{"name": "marketing"}]}) is False
-    assert runner.is_ticket_only({"labels": "ai-ticket-only"}) is False
+    assert runner.is_ticket_only({"labels": "ai-ops-only"}) is False
 
 
 def test_run_ticket_agent_uses_a_temporary_session_without_git(monkeypatch, tmp_path):
@@ -14534,7 +14534,7 @@ def test_progress_state_passes_startup_sub_phase_to_comment(tmp_path):
 def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch):
     """A labeled content task is delivered in its Issue, never through Git."""
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
-             "labels": [{"name": "ai-ready"}, {"name": "ai-ticket-only"}]}
+             "labels": [{"name": "ai-ready"}, {"name": "ai-ops-only"}]}
     edits = []
     comments = []
     commands = []
@@ -14566,7 +14566,7 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
 
 def test_process_ticket_only_rejects_empty_agent_content(monkeypatch):
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
-             "labels": [{"name": "ai-ticket-only"}]}
+             "labels": [{"name": "ai-ops-only"}]}
     edits = []
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
@@ -14583,7 +14583,7 @@ def test_process_ticket_only_rejects_empty_agent_content(monkeypatch):
 
 def test_process_ticket_only_failure_marks_blocked_without_git_delivery(monkeypatch):
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
-             "labels": [{"name": "ai-ticket-only"}]}
+             "labels": [{"name": "ai-ops-only"}]}
     edits = []
     comments = []
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
@@ -14606,7 +14606,7 @@ def test_process_ticket_only_failure_marks_blocked_without_git_delivery(monkeypa
 
 def test_process_ticket_only_keeps_original_error_when_failure_reporting_fails(monkeypatch):
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
-             "labels": [{"name": "ai-ticket-only"}]}
+             "labels": [{"name": "ai-ops-only"}]}
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)

@@ -7,9 +7,14 @@ transitions, illegal combinations, and the pickup/resume/human-intervention
 decisions — including that `p0`/`bug`/`ai-epic`/`blockedBy` are NOT
 modeled as delivery lifecycle states.
 """
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from orbi import delivery_labels as dl
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 # --- label_patch: normal transitions ---------------------------------
@@ -242,3 +247,25 @@ def test_needs_human_intervention_true_only_for_ai_blocked():
     assert dl.needs_human_intervention({"ai-ready", "ai-pr-opened"}) is False
     assert dl.needs_human_intervention({"ai-ready", "ai-fix-needed"}) is False
     assert dl.needs_human_intervention({"ai-ready"}) is False
+
+
+# --- the ops-only marker name (Issue #530) --------------------------------
+
+# Composed so this guard file does not contain the very name it forbids
+# (acceptance criterion: the old literal has zero hits in the repo).
+_OLD_OPS_LABEL = "ai-" "ticket-only"
+
+
+def test_ops_only_label_is_the_renamed_marker_with_no_stale_reference():
+    """Issue #530: the no-git-delivery ops marker is `ai-ops-only`; the
+    old label name must survive nowhere in the tracked tree.
+
+    `git grep` reads only tracked files, so run artifacts and Pi session
+    logs can never decide this contract.
+    """
+    assert dl.TICKET_ONLY_LABEL == "ai-ops-only"
+    result = subprocess.run(
+        ["git", "grep", "-n", _OLD_OPS_LABEL],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    assert result.returncode == 1, result.stdout  # 1 = no match

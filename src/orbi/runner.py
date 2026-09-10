@@ -222,7 +222,7 @@ _CURRENT_RUN_ID: str | None = None
 # GitHub labels are the only state store (Issue #45). The delivery
 # lifecycle states (`ai-in-progress`, `ai-pr-opened`, `ai-fix-needed`,
 # `ai-merged`, `ai-blocked`), the scheduling-metadata labels (`p0`,
-# `bug`, `ai-epic`, `ai-release`, `ai-ticket-only`), the event → label
+# `bug`, `ai-epic`, `ai-release`, `ai-ops-only`), the event → label
 # patch transition rules, and the pickup/resume/human-intervention
 # decisions all live in `orbi.delivery_labels` (Issue #175) — the single
 # source of truth. They are imported above; `p0`/`bug`/`ai-epic` are
