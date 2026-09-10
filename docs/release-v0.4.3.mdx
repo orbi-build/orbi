@@ -1,0 +1,48 @@
+# v0.4.3 release (latest)
+
+`v0.4.3` was published 2026-09-10T03:43:55Z as the GitHub Release [v0.4.3](https://github.com/orbi-build/orbi/releases/tag/v0.4.3) (release task: Issue #664).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.4.3` | annotated tag `119301a75d0646963ce53f40f4fa1007952ebe59` | commit `acb96f8c9938d49318c6c5b0c4882ebd333e509a` |
+
+## Release notes
+
+## Changelog
+
+### Reliability and recovery
+
+- P0：残留孤儿分支让 git worktree add -b 失败（exit 255），被烧成终态 ai-blocked 且不自愈 ([Issue #662](https://github.com/orbi-build/orbi/issues/662); [PR #667](https://github.com/orbi-build/orbi/pull/667))
+- P0：release fallback 不校验 milestone 完整性，blocker 未完成时抢跑并推出 bump commit ([Issue #663](https://github.com/orbi-build/orbi/issues/663); [PR #665](https://github.com/orbi-build/orbi/pull/665))
+- P0：resume_scene 的 ValueError 未被捕获，一张状态损坏的 Issue 让整个 runner tick 崩溃退出 ([Issue #672](https://github.com/orbi-build/orbi/issues/672); [PR #673](https://github.com/orbi-build/orbi/pull/673))
+
+### Bug fixes
+
+- P0：GraphQL 的 author.login 不带 [bot] 后缀，_comment_is_trusted 对真实 bot 评论恒假，托管交付评审仍全线阻塞（#648 未完全解决） ([Issue #655](https://github.com/orbi-build/orbi/issues/655); [PR #669](https://github.com/orbi-build/orbi/pull/669))
+- P0：release 的未完成交付检查扫描全仓，与本次发布无关的在途票无限期阻塞发布 ([Issue #671](https://github.com/orbi-build/orbi/issues/671); [PR #674](https://github.com/orbi-build/orbi/pull/674))
+
+- tag: `v0.4.3`
+- release commit: `acb96f8c9938d49318c6c5b0c4882ebd333e509a`
+- release task: Issue #664
+
+## Scope (verified item by item)
+
+- Issue #655 closed
+- Issue #662 closed
+- Issue #663 closed
+- Issue #671 closed
+- Issue #672 closed
+- NOT released (still open in milestone v0.4.3): open Issue #664 Release task：发布 v0.4.3（承接 v0.4.2 未发布的三张 P0）并完成远端交付对账
+
+## Pre-release gates
+
+- no open Issue in milestone 'v0.4.3' carries ai-in-progress / ai-pr-opened / ai-fix-needed
+- CI on the release commit: 4 check(s) all success/neutral/skipped (waited 270s for pending checks)
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit acb96f8c9938d49318c6c5b0c4882ebd333e509a (the #268 CI-wait gate; no local test execution)
+
+run_id=8d82aa21
