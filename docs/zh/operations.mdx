@@ -247,9 +247,10 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
   说明启动卡在哪（`session_created=true|false`、
   `first_request=true|false`）加可区分的 `reason=`——
   `session_not_created`（Pi 退出前没创建 session 文件）、
-  `no_first_request`（session 存在但没有首个请求）、`auth_failure` /
-  `network_timeout`（从 Pi 的 stderr 分类——只记类别、从不记文本）、
-  `pi_exit_<N>`（提前退出码）、`timeout`（run deadline）、
+  `no_first_request`（session 存在但没有首个请求）、
+  `provider_rate_limited`（provider 429——Issue #321）、
+  `auth_failure` / `network_timeout`（从 Pi 的 stderr 分类——只记类别、
+  从不记文本）、`pi_exit_<N>`（提前退出码）、`timeout`（run deadline）、
   `first_response_timeout`（冻结的 `model_wait` 在响应前被杀——挂死的
   首个请求）、`model_wait_swallowed` 和 `idle_recovery_stale`
   （既有 kill 路径）。既有的 `run_failed` 现场行和抛出的失败不变——
@@ -296,11 +297,27 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
   不是 hang。Runner 每次 stall 记一条 `pi_idle_wait` 行（run id、
   pid、cmdline、deadline），并在 progress 评论里报告 `recovery=wait`；
   先过一个完整 idle 窗口的宽限再升级，之后每个窗口重新评估；
+- `pi_retry_429` — provider 限流重试每次一次 WARNING（Issue #321）：
+  Pi 非零退出且 stderr 带 429 标记（`429` / `quota` /
+  `RESOURCE_EXHAUSTED` / `retry in`）——这是瞬时限流，不是任务失败。
+  同一个 Pi 会话在同一个 run 里退避后重新拉起：优先用 429 响应自带的
+  重试提示（`retry in Ns` / `retryDelay: Ns`），没有就默认递增
+  （30 秒翻倍），两者都封顶 5 分钟。行带 run id、issue、role、
+  `attempt`、`next_retry_in`、重试上限 `limit`（5）和 session；
+  等待期间持有 slot（本 run 等待时不认领新 Issue）。连续 5 次 429
+  之后走既有失败路径——与非重试退出抛同一类异常（session 前终态
+  `ai-blocked` / 可恢复的中断 session）——`run_failed` 现场标记
+  `reason=provider_rate_limited`。长期额度耗尽不在这里处理
+  （#313 的轮换语义接管）；
 - `run_failed` — 完整现场加原因（`pi_exit_N`、`timeout_...s`，或
   `model_wait_swallowed_idle_...s`——`/slots` 探针确认所有 slot 持续
-  空闲（Issue #233）Runner 快速杀掉 Pi，或 `model_wait_dead_stale_...s`
+  空闲（Issue #233）Runner 快速杀掉 Pi，`model_wait_dead_stale_...s`
   ——冻结的 `model_wait` 超过配置的 `model_wait_dead_seconds`（默认
-  1800 秒，Issue #228）判定模型请求挂死，Runner 杀掉 Pi）。
+  1800 秒，Issue #228）判定模型请求挂死，Runner 杀掉 Pi，
+  `idle_recovery_stale_...s`——session 连续 `PI_IDLE_RECOVERY_CYCLES`
+  （默认 3）个 idle 窗口保持空闲、Runner 杀掉 Pi，或
+  `provider_rate_limited`——provider 429 在本轮全部退避重试后仍失败
+  （Issue #321））。
 
 idle 告警和模型请求挂死 kill 是日志/健康阈值——它们不是每 5 分钟
 调度，也不是业务任务 timeout。

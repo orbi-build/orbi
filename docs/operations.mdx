@@ -295,7 +295,8 @@ Stable `key=value` lines you will see:
   (`session_created=true|false`, `first_request=true|false`) plus the
   distinguishable `reason=` — `session_not_created` (Pi exited before
   creating its session file), `no_first_request` (session exists, no
-  first request), `auth_failure` / `network_timeout` (classified from
+  first request), `provider_rate_limited` (a provider 429 — Issue
+  #321), `auth_failure` / `network_timeout` (classified from
   Pi's stderr — the class only, never the text), `pi_exit_<N>` (the
   early exit code), `timeout` (the run deadline),
   `first_response_timeout` (a frozen `model_wait` killed before any
@@ -365,15 +366,32 @@ Stable `key=value` lines you will see:
   name guess; only Pi descendants are ever signaled), then SIGKILLs a
   target that survived; each line carries run id, pid, cmdline and
   result (`sent` / `already_dead` / `no_target` / `failed: ...`);
+- `pi_retry_429` — one WARNING per provider rate-limit retry (Issue
+  #321): Pi exited non-zero and its stderr carries a 429 marker
+  (`429` / `quota` / `RESOURCE_EXHAUSTED` / `retry in`) — TRANSIENT
+  throttling, not a task failure. The SAME Pi session is re-spawned in
+  the same run after a backoff: the response's own retry hint
+  (`retry in Ns` / `retryDelay: Ns`) when present, else the default
+  escalation (30 s doubling), both capped at 5 minutes. The line
+  carries run id, issue, role, `attempt`, `next_retry_in`, the retry
+  `limit` (5) and the session; the slot is held for the whole wait (no
+  new Issue is claimed while this run waits). After 5 consecutive 429
+  exits the EXISTING failure path runs — the same error type a
+  non-retried exit raises (pre-session terminal `ai-blocked` /
+  recoverable interrupted session) — marked
+  `reason=provider_rate_limited`. Long-term quota exhaustion is NOT
+  handled here (the #313 rotation semantics own it);
 - `run_failed` — the full scene plus the reason
   (`pi_exit_N`, `timeout_...s`, `model_wait_swallowed_idle_...s` when
   the `/slots` probe confirms every slot idle for the sustained grace
   (Issue #233) and the Runner kills the Pi session fast,
   `model_wait_dead_stale_...s` when a frozen `model_wait` past the
   configured `model_wait_dead_seconds` (default 1800 s, Issue #228)
-  declares the model request hung, or `idle_recovery_stale_...s` when
+  declares the model request hung, `idle_recovery_stale_...s` when
   the session stayed idle for `PI_IDLE_RECOVERY_CYCLES` (default 3)
-  consecutive idle windows and the Runner kills the Pi session itself).
+  consecutive idle windows and the Runner kills the Pi session itself,
+  or `provider_rate_limited` when a provider 429 survived every
+  in-run backoff retry (Issue #321)).
 
 The idle warning, the idle recovery and the hung-model-request kill are
 log/health thresholds — they are not the 5-minute schedule and not a
