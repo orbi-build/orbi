@@ -16392,13 +16392,18 @@ def test_check_release_gates_scopes_leftover_scan_to_the_milestone(monkeypatch):
         leftover_milestones={7: "v0.4.4", 8: None},
         check_runs=[],
     )
-    evidence = release.check_release_gates(
+    evidence, repo_has_ci = release.check_release_gates(
         "o/r", "main", "abc123", 99, milestone="v0.4.3",
     )
-    assert evidence[0] == (
+    assert evidence == [
         "no open Issue in milestone 'v0.4.3' carries "
-        "ai-in-progress / ai-pr-opened / ai-fix-needed"
-    )
+        "ai-in-progress / ai-pr-opened / ai-fix-needed",
+        # Issue #657: no check runs at all is recorded as evidence; the
+        # repo_has_ci flag decides whether that is a pass or a wait.
+        "CI on the release commit: no check runs on abc123 (nothing to "
+        "gate)",
+    ]
+    assert repo_has_ci is False  # no check runs seen anywhere -> not proven
     scans = [c for c in calls if c[:3] == ["gh", "issue", "list"]]
     assert scans and all(
         c[c.index("--milestone") + 1] == "v0.4.3" for c in scans
@@ -16414,7 +16419,7 @@ def test_check_release_gates_ignores_leftover_outside_the_milestone(monkeypatch)
         leftover_milestones={657: None, 658: None},
         check_runs=[],
     )
-    evidence = release.check_release_gates(
+    evidence, _ = release.check_release_gates(
         "o/r", "main", "abc123", 99, milestone="v0.4.3",
     )
     assert evidence[0].startswith("no open Issue in milestone 'v0.4.3'")
