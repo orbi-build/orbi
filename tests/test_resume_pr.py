@@ -462,10 +462,14 @@ def gh_comments_payload(comments: list[str],
     })
 
 
-def issue_payload(state: str = "OPEN") -> str:
+def issue_payload(state: str = "OPEN",
+                  labels: list[str] | None = None) -> str:
+    if labels is None:
+        labels = ["ai-fix-needed"]
     return json.dumps([
         {"number": 9, "title": "ship", "state": state,
-         "url": "https://github.com/owner/repo/issues/9"},
+         "url": "https://github.com/owner/repo/issues/9",
+         "labels": [{"name": name} for name in labels]},
     ])
 
 
@@ -649,8 +653,8 @@ def test_pick_resumable_delivery_blocks_issue_without_scene_comment(
     monkeypatch, caplog, tmp_path,
 ):
     """An `ai-fix-needed` Issue whose comment history carries no trusted
-    opened-PR comment at all cannot be resumed: blocked, not skipped
-    (round-5 review, Major 2)."""
+    opened-PR comment at all cannot be resumed: it is blocked and the
+    scan returns None so the tick continues (Issue #672)."""
     edits: list[list[str]] = []
     comments: list[str] = []
     monkeypatch.setattr(
@@ -663,14 +667,47 @@ def test_pick_resumable_delivery_blocks_issue_without_scene_comment(
         ),
     )
     caplog.set_level("ERROR")
-    with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
-        runner.pick_resumable_delivery(
-            "owner/repo", tmp_path / "slots", 1,
-        )
+    assert runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+    ) is None
     assert edits == [[
         "gh", "issue", "edit", "9", "--repo", "owner/repo",
         "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
     ]]
+    assert "Orbi failed:" in comments[0]
+    assert "issue=9 resume scene is malformed" in caplog.text
+
+
+def test_pick_resumable_delivery_blocks_pr_opened_issue_without_scene(
+    monkeypatch, caplog, tmp_path,
+):
+    """Issue #672 (the incident scene): an `ai-pr-opened` Issue with no
+    trusted scene comment is a single-Issue failure. The scan adds
+    `ai-blocked` and returns None so the tick keeps going — it never
+    crashes the tick. The erroneous `ai-pr-opened` label is deliberately
+    left for a human: cleaning it is a separate state-inference problem
+    (Issue #672 scope)."""
+    edits: list[list[str]] = []
+    comments: list[str] = []
+    monkeypatch.setattr(
+        runner, "run_command",
+        make_pick_fake(
+            issue_payload(labels=["ai-pr-opened"]),
+            gh_comments_payload(["only a human comment here"]),
+            edits=edits,
+            comments=comments,
+        ),
+    )
+    caplog.set_level("ERROR")
+    assert runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+    ) is None
+    assert edits == [[
+        "gh", "issue", "edit", "9", "--repo", "owner/repo",
+        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
+    ]]
+    # The erroneous ai-pr-opened label is NOT auto-cleaned (Issue #672).
+    assert "ai-pr-opened" not in edits[0]
     assert "Orbi failed:" in comments[0]
     assert "issue=9 resume scene is malformed" in caplog.text
 
@@ -692,9 +729,8 @@ def test_pick_resumable_delivery_blocks_issue_when_scene_is_malformed(
 ):
     """A trusted opened-PR comment with a missing/invalid scene field is
     an unresolvable recovery state: the Issue is marked `ai-blocked` with
-    the concrete reason and the tick stops — it is never silently
-    skipped while a fresh task starts ahead of it (round-5 review,
-    Major 2)."""
+    the concrete reason and the scan returns None so the tick continues
+    (Issue #672)."""
     calls = []
     edits: list[list[str]] = []
     comments: list[str] = []
@@ -714,10 +750,9 @@ def test_pick_resumable_delivery_blocks_issue_when_scene_is_malformed(
 
     monkeypatch.setattr(runner, "run_command", counting)
     caplog.set_level("ERROR")
-    with pytest.raises(ValueError, match="missing run_id"):
-        runner.pick_resumable_delivery(
-            "owner/repo", tmp_path / "slots", 1,
-        )
+    assert runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+    ) is None
     # The blocked transition: add ai-blocked, remove ai-fix-needed...
     assert edits == [[
         "gh", "issue", "edit", "9", "--repo", "owner/repo",
@@ -753,10 +788,9 @@ def test_pick_resumable_delivery_blocks_issue_when_no_trusted_scene(
 
     monkeypatch.setattr(runner, "run_command", counting)
     caplog.set_level("ERROR")
-    with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
-        runner.pick_resumable_delivery(
-            "owner/repo", tmp_path / "slots", 1,
-        )
+    assert runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+    ) is None
     assert edits == [[
         "gh", "issue", "edit", "9", "--repo", "owner/repo",
         "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
@@ -788,10 +822,9 @@ def test_pick_resumable_delivery_scene_failure_carries_marker_when_present(
         return fake(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", counting)
-    with pytest.raises(ValueError, match="missing run_id"):
-        runner.pick_resumable_delivery(
-            "owner/repo", tmp_path / "slots", 1,
-        )
+    assert runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+    ) is None
     assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in comments[0]
 
 
@@ -819,18 +852,19 @@ def test_pick_resumable_delivery_scene_failure_skips_bodyless_comments(
         comments=comments,
     )
     monkeypatch.setattr(runner, "run_command", fake)
-    with pytest.raises(ValueError, match="missing run_id"):
-        runner.pick_resumable_delivery(
-            "owner/repo", tmp_path / "slots", 1,
-        )
+    assert runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+    ) is None
     assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in comments[0]
 
 
-def test_pick_resumable_delivery_scene_failure_preserves_error_when_reporting_fails(
+def test_pick_resumable_delivery_scene_failure_logs_reporting_failure(
     monkeypatch, caplog, tmp_path,
 ):
-    """When the blocked transition itself cannot be reported, the
-    original scene error is still re-raised (the tick still stops)."""
+    """When the blocked transition itself cannot be reported (Issue
+    #672), the failure is logged and the scan still returns None: the
+    Issue stays in its opened-PR state so the next tick retries, and the
+    runner never stalls on it."""
 
     fake = make_pick_fake(
         issue_payload(),
@@ -843,12 +877,10 @@ def test_pick_resumable_delivery_scene_failure_preserves_error_when_reporting_fa
         return fake(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    with caplog.at_level("ERROR"), pytest.raises(
-        ValueError, match="no 'Orbi opened PR' comment",
-    ):
-        runner.pick_resumable_delivery(
+    with caplog.at_level("ERROR"):
+        assert runner.pick_resumable_delivery(
             "owner/repo", tmp_path / "slots", 1,
-        )
+        ) is None
     assert "failure reporting failed" in caplog.text
     # The fake's edit/comment branches are reachable without capture
     # lists too (edits=None / comments=None): they simply do not record.
@@ -859,26 +891,59 @@ def test_pick_resumable_delivery_scene_failure_preserves_error_when_reporting_fa
     ]) == ""
 
 
-def test_pick_next_delivery_stops_when_scene_is_malformed(
+def test_pick_next_delivery_continues_after_scene_failure(
     monkeypatch, tmp_path,
 ):
-    """A malformed scene re-raises: the tick stops and no fresh task
-    starts ahead of the broken delivery (round-5 review, Major 2)."""
-    def broken(repo, slot_dir, max_concurrency):
-        raise ValueError("no 'Orbi opened PR' comment")
-
+    """Issue #672: a corrupted resumable Issue is blocked and the scan
+    falls through to the ready queue in the SAME tick (never stops the
+    tick ahead of a valid delivery)."""
+    edits: list[list[str]] = []
+    comments: list[str] = []
+    ready = {"number": 10, "title": "new"}
     calls = []
-    monkeypatch.setattr(runner, "pick_resumable_delivery", broken)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return "[]"
+        if command[:3] == ["gh", "issue", "list"]:
+            search = command[command.index("--search") + 1]
+            if "label:ai-fix-needed,ai-pr-opened" in search:
+                return issue_payload(labels=["ai-pr-opened"])
+            return "[]"
+        if command[:3] == ["gh", "issue", "view"]:
+            return gh_comments_payload(["only a human comment here"])
+        if command[:3] == ["gh", "issue", "edit"]:
+            edits.append(command)
+            return ""
+        if command[:3] == ["gh", "issue", "comment"]:
+            comments.append(command[-1])
+            return ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
     monkeypatch.setattr(
         runner, "pick_issue",
-        lambda repo, active_milestone=None: calls.append(("ready", repo)) or {"number": 10},
+        lambda repo, active_milestone=None: (
+            calls.append(("ready", repo)) or ready
+        ),
     )
-    with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
-        runner.pick_next_delivery(
-            ["owner/repo"], tmp_path / "slots", 1,
-        )
-    # The ready queue was never consulted: no fresh claim started.
-    assert calls == []
+    result = runner.pick_next_delivery(
+        ["owner/repo"], tmp_path / "slots", 1,
+    )
+    # The ready queue was consulted in the same tick: the corrupted
+    # Issue was scoped to a single-ticket block, not a tick stop.
+    assert result == ("owner/repo", ready, None)
+    assert calls == [("ready", "owner/repo")]
+    assert edits == [[
+        "gh", "issue", "edit", "9", "--repo", "owner/repo",
+        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
+    ]]
+    assert len(comments) == 1
+    assert "Orbi failed:" in comments[0]
+    # The fake rejects anything but its own traffic (same guard pattern
+    # as `make_pick_fake`).
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "pr", "list"])
 
 
 def test_pick_next_delivery_prefers_resumable_delivery_over_ready(
@@ -1096,6 +1161,75 @@ def test_main_still_claims_new_issue_when_no_resumable(monkeypatch, tmp_path):
     assert len(processed) == 1
     assert processed[0][0] is issue
     assert processed[0][2] == "owner/repo"
+
+
+def test_main_continues_to_ready_delivery_after_scene_failure(
+    monkeypatch, tmp_path,
+):
+    """Issue #672 acceptance (real dispatch): one corrupted resumable
+    Issue (`ai-pr-opened`, no trusted scene) is marked `ai-blocked` with
+    a reason, the SAME tick delivers the next ready Issue, and `main()`
+    returns 0 — the runner no longer dies with status=1 on it."""
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "prompt.md").write_text("prompt", encoding="utf-8")
+    (prompts / "prompt_review.md").write_text("review", encoding="utf-8")
+    config = tmp_path / "orbi.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    ready = {"number": 10, "title": "new", "body": ""}
+    edits: list[list[str]] = []
+    comments: list[str] = []
+    processed = []
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return "[]"
+        if command[:3] == ["gh", "issue", "list"]:
+            search = command[command.index("--search") + 1]
+            if "label:ai-fix-needed,ai-pr-opened" in search:
+                return issue_payload(labels=["ai-pr-opened"])
+            return "[]"
+        if command[:3] == ["gh", "issue", "view"]:
+            return gh_comments_payload(["only a human comment here"])
+        if command[:3] == ["gh", "issue", "edit"]:
+            edits.append(command)
+            return ""
+        if command[:3] == ["gh", "issue", "comment"]:
+            comments.append(command[-1])
+            return ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(
+        runner, "sync_active_milestone_variable", lambda *a, **k: None,
+    )
+    monkeypatch.setattr(runner, "acquire_slot", lambda *a, **k: type(
+        "Slot", (), {"release": lambda self: None},
+    )())
+    monkeypatch.setattr(
+        runner, "pick_issue",
+        lambda repo, active_milestone=None: ready,
+    )
+    monkeypatch.setattr(
+        runner, "process_issue",
+        lambda *args, **kwargs: processed.append(args)
+        or runner.IssueResult("pr", FAKE_PR_URL),
+    )
+    monkeypatch.setattr(runner, "wait_for_delivery", lambda *a, **k: None)
+    assert runner.main(["--config", str(config)]) == 0
+    # The corrupted Issue was scoped to a single-ticket block...
+    assert edits == [[
+        "gh", "issue", "edit", "9", "--repo", "owner/repo",
+        "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
+    ]]
+    assert len(comments) == 1
+    assert "Orbi failed:" in comments[0]
+    # ...and the same tick delivered the next ready Issue.
+    assert processed[0][0] is ready
+    assert processed[0][2] == "owner/repo"
+    # The fake rejects anything but its own traffic.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "pr", "list"])
 
 
 # --------------------------- resume PR verification (Issue #89)

@@ -4683,11 +4683,12 @@ def pick_resumable_delivery(
     positive `label:ai-fix-needed,ai-pr-opened` qualifier already
     restricts the scan to opened-PR Issues (an implement-phase Issue
     has `ai-ready`+`ai-in-progress` but neither opened-PR label, so it
-    never matches). A scene that cannot
-    be recovered is an unresolvable state: the Issue is marked
-    `ai-blocked` with the concrete reason and the error re-raised, so
-    the tick stops instead of silently skipping the delivery while a
-    fresh task starts ahead of it.
+    never matches). A scene that cannot be recovered is a SINGLE-Issue
+    failure (Issue #672): the Issue is marked `ai-blocked` with the
+    concrete reason (`block_scene_failure`) and the scan reports no
+    resumable delivery, so the tick continues with the in-flight and
+    ready scans and exits 0 — one corrupted Issue must never make every
+    tick crash while the whole queue waits.
 
     The scan runs only when no OTHER runner is live (the same guard as
     `pick_in_progress_issue`, Issue #39 slot semantics): a slot held by
@@ -4728,18 +4729,30 @@ def pick_resumable_delivery(
     try:
         scene = resume_scene(comments)
     except ValueError as exc:
+        # Issue #672: a malformed scene is scoped to this one Issue. The
+        # Issue is marked `ai-blocked` with the concrete reason, then the
+        # scan reports "no resumable delivery" so `pick_next_delivery`
+        # keeps scanning the in-flight restart and ready queues in the
+        # SAME tick (and exits 0) instead of letting the `ValueError`
+        # bubble out of `main` and kill the whole tick — the incident
+        # where one corrupted Issue stalled the entire queue every round.
         block_scene_failure(issue, exc, repo, comments)
+        return None
     return issue, scene
 
 
 def block_scene_failure(issue: dict, error: ValueError, repo: str,
                         comments: list[dict]) -> None:
-    """Mark an `ai-fix-needed` Issue `ai-blocked` when its scene is
-    malformed, then re-raise so the tick stops (Issue #45).
+    """Mark an opened-PR Issue `ai-blocked` when its scene is malformed.
 
-    The failure comment carries the run marker recovered from a trusted
-    comment when it is present — the same run id, never a new or
-    guessed one. The PR, branch and worktree stay intact.
+    The blocked transition is scoped to this one Issue (Issue #672): the
+    caller continues the tick, so a malformed scene never crashes the
+    whole runner. The failure comment carries the run marker recovered
+    from a trusted comment when it is present — the same run id, never a
+    new or guessed one. The PR, branch and worktree stay intact. A
+    failure of the reporting itself is logged, never raised: the Issue
+    then stays in its opened-PR state and the next tick retries the
+    block.
     """
     number = int(issue["number"])
     LOGGER.error(
@@ -4783,7 +4796,6 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
         )
     except Exception:
         LOGGER.exception("issue=%s failure reporting failed", number)
-    raise error
 
 
 def _parse_version_title(title: object) -> tuple[int, int, int] | None:
