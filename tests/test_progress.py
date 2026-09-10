@@ -763,7 +763,44 @@ def test_publisher_finish_patches_final_summary_into_tracked_comment():
     ]
 
 
-def test_publisher_finish_fails_fast_without_tracked_comment():
-    publisher, _ = make_publisher()
-    with pytest.raises(RuntimeError, match="no progress comment"):
-        publisher.finish("summary")
+def test_publisher_finish_creates_final_comment_without_tracked_one():
+    # Issue #474: a run that fails before `ensure` (release declaration
+    # parse error) still publishes its final result. `finish` creates
+    # the progress comment instead of raising "no progress comment".
+    publisher, calls = make_publisher()
+    publisher.finish("final delivery summary")
+    assert publisher.comment_id == 42
+    assert calls == [
+        [
+            "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+            "--paginate",
+        ],
+        [
+            "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+            "--method", "POST",
+            "--field", "body=final delivery summary",
+        ],
+    ]
+
+
+def test_publisher_finish_resumes_existing_comment_without_tracked_one():
+    # Issue #474: a resumed run whose publisher has not run `ensure` yet
+    # must PATCH the run's existing progress comment, never duplicate it.
+    publisher, calls = make_publisher(comments=[
+        {
+            "id": 7,
+            "body": (
+                "<!-- orbi:run=abc12345 -->\n\n"
+                "**Orbi progress**"
+            ),
+        },
+    ])
+    publisher.finish("final delivery summary")
+    assert publisher.comment_id == 7
+    assert calls[-1] == [
+        "gh", "api", "repos/xqliu/orbi/issues/comments/7",
+        "--method", "PATCH", "--field", "body=final delivery summary",
+    ]
+    assert not any(
+        "POST" in command for command in calls
+    ), "a resumed finish must not post a duplicate comment"

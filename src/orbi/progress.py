@@ -250,8 +250,10 @@ class ProgressPublisher:
     plus the progress header (PATCHing it when it exists, POSTing it when
     it does not) and tracks its id; the run's other marker-carrying
     comments (scene comments, milestones) are never touched.
-    `patch` and `finish` update the tracked comment in place and fail
-    fast when no comment is tracked yet. `milestone` posts a short
+    `patch` updates the tracked comment in place and fails fast when no
+    comment is tracked yet; `finish` publishes the final outcome on the
+    tracked comment, or locates/creates it like `ensure` when the run
+    never got that far (Issue #474). `milestone` posts a short
     standalone comment. Every call goes through `run_command` (gh api)
     and raises on any error.
     """
@@ -360,5 +362,16 @@ class ProgressPublisher:
         ))
 
     def finish(self, body: str) -> None:
-        """Replace the tracked comment with the final outcome body."""
+        """Publish the final outcome body on the run's progress comment.
+
+        When no comment is tracked yet — a run that fails before
+        `ensure` (Issue #474: a release declaration parse error calls
+        `finish` first) — the final outcome is still published: the
+        run's progress comment is located or created exactly like
+        `ensure`, never a `RuntimeError` and never a duplicate comment
+        for a resumed run.
+        """
+        if self.comment_id is None:
+            self.ensure(body)
+            return
         self.patch(body)
