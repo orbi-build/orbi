@@ -74,7 +74,7 @@ VALID_DEFS = [
     # so it is part of the platform label set.
     {"name": "ai-release", "color": "5319e7", "description": "release"},
     # Issue #209: ticket-only content is a separately dispatched type.
-    {"name": "ai-ticket-only", "color": "0e8a16", "description": "ticket"},
+    {"name": "ai-ops-only", "color": "0e8a16", "description": "ticket"},
 ]
 
 
@@ -233,7 +233,7 @@ def test_load_label_defs_parses_all_ten_platform_labels(tmp_path):
     assert [entry["name"] for entry in defs] == [
         "ai-ready", "ai-in-progress", "ai-pr-opened",
         "ai-fix-needed", "ai-merged", "ai-blocked", "p0", "ai-epic",
-        "ai-release", "ai-ticket-only",
+        "ai-release", "ai-ops-only",
     ]
     assert defs[0] == {
         "name": "ai-ready", "color": "1d76db", "description": "dispatched",
@@ -299,6 +299,16 @@ def test_committed_labels_toml_covers_the_ten_platform_labels():
     assert [entry["name"] for entry in defs] == list(
         pilot_setup.REQUIRED_LABELS,
     )
+
+
+def test_committed_labels_toml_descriptions_fit_the_github_limit():
+    """Issue #530: labels.toml is the source of truth `orbi setup` syncs
+    to GitHub, and the real GitHub API rejects a description longer than
+    100 characters (`gh label edit` → HTTP 422 "description is too long"
+    on the live repos). A longer description would fail every setup run."""
+    path = Path(__file__).resolve().parent.parent / "labels.toml"
+    for entry in pilot_setup.load_label_defs(path):
+        assert len(entry["description"]) <= 100, entry["name"]
 
 
 def test_committed_labels_toml_points_at_the_real_setup_entry():

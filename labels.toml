@@ -59,6 +59,6 @@ color = "5319e7"
 description = "Release task: Runner runs the deterministic release state machine (tag + GitHub Release)"
 
 [[label]]
-name = "ai-ticket-only"
+name = "ai-ops-only"
 color = "0e8a16"
-description = "Content task: Agent posts the deliverable directly to the Issue without Git delivery"
+description = "Ops-only task: no git delivery — Runner runs non-committable steps and posts evidence to the Issue"
