@@ -110,6 +110,24 @@ def test_parse_repo_config_type_errors_fail_fast(text):
         repo_config.parse_repo_config(text)
 
 
+@pytest.mark.parametrize(
+    "label", ["ai-in-progress", "ai-pr-opened", "ai-merged", "ai-blocked"],
+)
+def test_parse_repo_config_rejects_a_lifecycle_dispatch_label(label):
+    """Issue #527 D2: the delivery lifecycle labels stay host constants —
+    a claim label that IS one of them would make the ready scan
+    self-contradictory (`label:ai-merged ... -label:ai-merged`) and
+    silently stop claiming."""
+    with pytest.raises(repo_config.RepoConfigError, match="lifecycle"):
+        repo_config.parse_repo_config(f'dispatch_label = "{label}"\n')
+
+
+def test_parse_repo_config_accepts_ai_ready_as_the_dispatch_label():
+    assert repo_config.parse_repo_config('dispatch_label = "ai-ready"\n') == {
+        "dispatch_label": "ai-ready",
+    }
+
+
 def test_context_files_rejects_absolute_posix_path():
     with pytest.raises(repo_config.RepoConfigError, match="repository-relative"):
         repo_config.parse_repo_config('context_files = ["/tmp/x"]\n')
@@ -321,6 +339,68 @@ def test_validate_context_file_too_large_fails_fast(tmp_path):
 
 
 # --- runner wiring ----------------------------------------------------------
+
+def test_pick_next_delivery_in_flight_scan_uses_the_repo_dispatch_label(
+    monkeypatch, tmp_path,
+):
+    """Issue #527: the in-flight restart scan resolves the SAME repository
+    policy as the ready scan. A repository whose `.github/orbi.toml`
+    replaces `ai-ready` must still recover a killed run (the Issue #18
+    acceptance "a dead run is resumed, never skipped") instead of
+    stranding it forever in `ai-in-progress`."""
+    in_flight = {"number": 2, "title": "in flight", "body": ""}
+    searches = []
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _record('dispatch_label = "repo-ready"\n')(command)
+        searches.append(command[command.index("--search") + 1])
+        return json.dumps([in_flight] if "in-progress" in searches[-1] else [])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "reconcile_open_epics", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner, "reconcile_release_milestones", lambda *a, **k: None,
+    )
+    config = {"repositories": []}
+    assert runner.pick_next_delivery(
+        ["owner/repo"], tmp_path / "slots", 1, config=config,
+    ) == ("owner/repo", in_flight, None)
+    # The resumable-PR scan ran first, then the in-flight scan with the
+    # repository's own claim label; the ready scan was never reached.
+    assert len(searches) == 2
+    assert "label:repo-ready label:ai-in-progress" in searches[-1]
+    assert "label:ai-ready" not in searches[-1]
+
+
+def test_pick_next_delivery_in_flight_scan_falls_back_on_a_malformed_file(
+    monkeypatch, tmp_path,
+):
+    """A malformed repository file must not break the scans (the read is
+    fail-open; `process_issue` blocks the claim with the reason): the
+    in-flight scan keeps the host claim label."""
+    searches = []
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return json.dumps({"sha": "x", "content": _b64("nope = 1\n")})
+        searches.append(command[command.index("--search") + 1])
+        return json.dumps([])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "reconcile_open_epics", lambda *a, **k: None)
+    monkeypatch.setattr(
+        runner, "reconcile_release_milestones", lambda *a, **k: None,
+    )
+    assert runner.pick_next_delivery(
+        ["owner/repo"], tmp_path / "slots", 1,
+        config={"repositories": []},
+    ) is None
+    assert any(
+        search.startswith("label:ai-ready label:ai-in-progress")
+        for search in searches
+    )
+
 
 def test_repository_config_path_defaults_and_honors_the_entry():
     config = {

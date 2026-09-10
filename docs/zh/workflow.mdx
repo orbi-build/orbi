@@ -236,6 +236,8 @@ Issue body 里的 `Depends on #N` 行不被解析。
 contents API 读取仓库**默认分支 tip** 上的 `.github/orbi.toml`——
 绝不读任务分支、绝不读本地 worktree——并按**按键分域**把白名单键应用
 到宿主 `orbi.toml` 之上。没有该文件的仓库行为与之前完全一致（零变化）。
+位置固定，只有文件名可用 `[[repositories]]` 条目的可选字段
+`config_path`（默认 `.github/orbi.toml`）覆盖。
 
 只允许交付策略键：
 
@@ -258,6 +260,13 @@ context_files = ["AGENTS.md"]
 其他键一律拒绝：未知键、host-only 身份/安全键（见
 [安全](/zh/security)）、坏 TOML 或类型错误都会让 claim fail-fast 并
 在错误里列出违规键，Issue 进入 `ai-blocked`——一个仓库的坏文件绝不
-影响其他池。run 评论记录 `repo_config: <sha>`；与上一 run 的 sha
-不同时附 `repo-config-changed` 标注与有效键值 diff，让变更始终在 run
-上可见。
+影响其他池。`dispatch_label` 不得是交付生命周期标签
+（`ai-in-progress`、`ai-merged` 等）：那些恒为宿主常量。阻塞落在
+claim 选中的那个 Issue 上；`dispatch_label` 不是 `ai-ready` 的仓库在
+文件本身坏掉时没有 `ai-ready` 候选 Issue 可阻塞，此时 fail-fast 原因
+只在 journal 的 `repo_config_invalid` 行（不改标签、不发评论）。run 评论记录
+`repo_config: <sha>`；与上一 run 的 sha 不同时附 `repo_config_changed`
+标注，且当前一版内容可读时附有效键值 diff `repo_config_diff`，让变更
+始终在 run 上可见。传输原因（限流、网络）导致的读取失败只记一行
+`repo_config_read_failed` 并回退宿主配置——该降级在 run 评论上表现为
+缺少 `repo_config` 字段。

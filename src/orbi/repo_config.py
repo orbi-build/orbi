@@ -30,6 +30,8 @@ import tomllib
 from pathlib import PurePosixPath
 from typing import Callable
 
+from orbi.delivery_labels import LIFECYCLE_STATES, READY_LABEL
+
 LOGGER = logging.getLogger("orbi.bootstrap")
 
 # Decision D1: one location, `.github/` (the GitHub automation-config
@@ -156,6 +158,15 @@ def _validate_value(key: str, value: object, *, source: str) -> object:
     if not isinstance(value, str) or not value:
         raise RepoConfigError(
             f"{source}: {key} must be a non-empty string"
+        )
+    if key == "dispatch_label" and value in LIFECYCLE_STATES - {READY_LABEL}:
+        # Decision D2: the delivery lifecycle labels stay host constants.
+        # A claim label that IS one of them would make the ready scan
+        # self-contradictory (`label:ai-merged ... -label:ai-merged`) and
+        # silently stop claiming — reject it with the concrete reason.
+        raise RepoConfigError(
+            f"{source}: dispatch_label must not be a delivery lifecycle "
+            f"label ({value!r})"
         )
     return value
 

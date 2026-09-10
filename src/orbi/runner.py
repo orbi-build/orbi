@@ -4338,8 +4338,15 @@ def pick_issue(repo: str, active_milestone: str | None = None,
 
 def pick_in_progress_issue(
     repo: str, slot_dir: Path, max_concurrency: int,
+    dispatch_label: str = READY_LABEL,
 ) -> dict | None:
     """Return one in-flight Issue a killed runner left behind.
+
+    `dispatch_label` is the repository's claim label (Issue #527): a
+    repository policy may replace `ai-ready` with its own label, and the
+    in-flight scan must find the SAME queue entry the ready scan used —
+    otherwise a killed (or model-wait-recovered) run would be stranded
+    forever in a repository with a custom dispatch label.
 
     A SIGKILLed runner leaves the task worktree and the `ai-in-progress`
     claim label behind (the failure path never ran); the Issue keeps
@@ -4368,10 +4375,11 @@ def pick_in_progress_issue(
     for _, holder in slot_occupancy(slot_dir, max_concurrency):
         if holder is not None and holder != mine:
             return None
+    label = dispatch_label or READY_LABEL
     raw = run_command([
         "gh", "issue", "list", "--repo", repo, "--state", "open",
         "--search",
-        "label:ai-ready label:ai-in-progress "
+        f"label:{label} label:{IN_PROGRESS_LABEL} "
         f"-label:{PR_OPENED_LABEL} -label:{FIX_NEEDED_LABEL} "
         f"-label:{MERGED_LABEL} -label:{BLOCKED_LABEL} "
         f"-label:{EPIC_LABEL}",
@@ -5229,8 +5237,10 @@ def pick_next_delivery(
             issue, scene = selected
             return repo, issue, scene
     for repo in repos:
+        _, dispatch_label = _repo_scan_keys(config, repo, active_milestone)
         issue = pick_in_progress_issue(
             repo, slot_dir, max_concurrency,
+            dispatch_label=dispatch_label,
         )
         if issue is not None:
             return repo, issue, None
@@ -5241,19 +5251,18 @@ def pick_next_delivery(
     return None
 
 
-def _pick_issue_with_repo_policy(
-    repo: str, active_milestone: str | None, config: dict | None,
-) -> dict | None:
-    """Fresh ready scan with the repo's scan keys (Issue #527).
+def _repo_scan_keys(
+    config: dict | None, repo: str, active_milestone: str | None,
+) -> tuple[str | None, str]:
+    """Resolve one source repo's scan keys from its policy (Issue #527).
 
-    `dispatch_label` and `active_milestone` are resolved from the
-    repository policy before the scan. The read is fail-open and a
-    malformed repository file is ignored here (host keys keep the scan
+    Returns `(active_milestone, dispatch_label)`. The read is fail-open and
+    a malformed repository file is ignored here (host keys keep the scan
     alive): `process_issue` re-reads the file at claim and blocks the
     Issue with the readable reason instead of silently claiming nothing.
     """
     if config is None:
-        return pick_issue(repo, active_milestone)
+        return active_milestone, READY_LABEL
     try:
         record = load_repo_policy(config, repo)
     except RepoConfigError as exc:
@@ -5261,12 +5270,29 @@ def _pick_issue_with_repo_policy(
             "repo_config_invalid repo=%s reason=%s", repo, exc,
         )
         record = None
-    policy = record["policy"] if record else {}
-    milestone = policy.get("active_milestone", active_milestone)
-    label = policy.get("dispatch_label", READY_LABEL)
-    if label == READY_LABEL:
+    if record is None:
+        return active_milestone, READY_LABEL
+    policy = record["policy"]
+    return (
+        policy.get("active_milestone", active_milestone),
+        policy.get("dispatch_label", READY_LABEL),
+    )
+
+
+def _pick_issue_with_repo_policy(
+    repo: str, active_milestone: str | None, config: dict | None,
+) -> dict | None:
+    """Fresh ready scan with the repo's scan keys (Issue #527).
+
+    `dispatch_label` and `active_milestone` are resolved from the
+    repository policy before the scan (see `_repo_scan_keys`).
+    """
+    milestone, dispatch_label = _repo_scan_keys(
+        config, repo, active_milestone,
+    )
+    if dispatch_label == READY_LABEL:
         return pick_issue(repo, milestone)
-    return pick_issue(repo, milestone, dispatch_label=label)
+    return pick_issue(repo, milestone, dispatch_label=dispatch_label)
 
 
 def worktree_path(repo_dir: Path, source_repo: str, number: int,

@@ -983,7 +983,7 @@ def test_pick_next_delivery_falls_back_to_ready_when_no_resumable(
     )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
-        lambda repo, slot_dir, max_concurrency: (
+        lambda repo, slot_dir, max_concurrency, **_kwargs: (
             calls.append(("in_progress", repo)) or None
         ),
     )
@@ -1036,7 +1036,7 @@ def test_pick_next_delivery_returns_none_when_nothing_to_do(
     )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
-        lambda repo, slot_dir, max_concurrency: None,
+        lambda repo, slot_dir, max_concurrency, **_kwargs: None,
     )
     monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: None)
     assert runner.pick_next_delivery(

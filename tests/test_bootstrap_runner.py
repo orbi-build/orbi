@@ -2562,6 +2562,34 @@ def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
     ]]
 
 
+def test_pick_in_progress_issue_uses_the_repo_dispatch_label(
+    monkeypatch, tmp_path,
+):
+    """Issue #527: a repository that replaced `ai-ready` with its own
+    claim label keeps the restart-resume path — the in-flight scan must
+    search the SAME queue entry the ready scan used, otherwise a killed
+    (or model-wait-recovered) run is stranded forever."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return json.dumps([])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.pick_in_progress_issue(
+        "xqliu/orbi", tmp_path / "slots", 1,
+        dispatch_label="repo-ready",
+    ) is None
+    assert calls == [[
+        "gh", "issue", "list", "--repo", "xqliu/orbi",
+        "--state", "open", "--search",
+        "label:repo-ready label:ai-in-progress -label:ai-pr-opened "
+        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
+        "-label:ai-epic",
+        "--json", "number,title,body,labels,milestone", "--limit", "1",
+    ]]
+
+
 def test_pick_in_progress_issue_returns_none_when_idle(
     monkeypatch, tmp_path,
 ):
@@ -2614,7 +2642,7 @@ def test_pick_next_delivery_recovers_in_flight_issue_before_ready(
     )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
-        lambda repo, slot_dir, max_concurrency: (
+        lambda repo, slot_dir, max_concurrency, **_kwargs: (
             in_flight if repo == "r1" else None
         ),
     )
@@ -2640,7 +2668,7 @@ def test_pick_next_delivery_keeps_resumable_delivery_first(
     )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
-        lambda repo, slot_dir, max_concurrency: in_flight,
+        lambda repo, slot_dir, max_concurrency, **_kwargs: in_flight,
     )
     monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: in_flight)
     assert runner.pick_next_delivery(
@@ -2658,7 +2686,7 @@ def test_pick_next_delivery_falls_through_to_ready_when_no_in_flight(
     )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
-        lambda repo, slot_dir, max_concurrency: None,
+        lambda repo, slot_dir, max_concurrency, **_kwargs: None,
     )
     monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: ready)
     assert runner.pick_next_delivery(
@@ -2675,7 +2703,7 @@ def test_pick_next_delivery_returns_none_when_all_scans_empty(
     )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
-        lambda repo, slot_dir, max_concurrency: None,
+        lambda repo, slot_dir, max_concurrency, **_kwargs: None,
     )
     monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: None)
     assert runner.pick_next_delivery(

@@ -292,7 +292,9 @@ Runner reads `.github/orbi.toml` from the repository's **default branch
 tip** through the GitHub contents API — never the task branch, never the
 local worktree — and applies its whitelisted keys **per key** over the
 host `orbi.toml`. A repository without that file behaves exactly as
-before (zero change).
+before (zero change). The location is fixed; only the file NAME may be
+overridden per source repo with the optional `[[repositories]]` entry
+field `config_path` (default `.github/orbi.toml`).
 
 Only delivery-policy keys are allowed:
 
@@ -316,7 +318,16 @@ Every other key is rejected: an unknown key, a host-only
 identity/security key (see [Security](/security)), invalid TOML or a
 wrong type fails the claim fast with the offending key names and the
 Issue becomes `ai-blocked` — one repository's bad file never affects
-another pool. The run comment records `repo_config: <sha>`; when the sha
-differs from the previous run, the change is annotated
-(`repo-config-changed`) with the effective policy diff, so a change is
-always visible on the run.
+another pool. `dispatch_label` must not be a delivery lifecycle label
+(`ai-in-progress`, `ai-merged`, …): those stay host constants. The block
+lands on the Issue the claim selected; a repository whose
+`dispatch_label` is not `ai-ready` has no `ai-ready` candidate to block
+when the file itself is malformed, so the fail-fast reason is the
+journal's `repo_config_invalid` line (no label change, no comment). The
+run comment records `repo_config: <sha>`; when the sha differs from the
+previous run it also carries the `repo_config_changed` annotation and,
+when the previous content is readable, the effective policy diff as
+`repo_config_diff`, so a change is always visible on the run. A read
+that fails for a transport reason (rate limit, network) is logged as
+`repo_config_read_failed` and the host config applies — the degradation
+is visible as the missing `repo_config` field on the run comment.
