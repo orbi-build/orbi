@@ -161,8 +161,10 @@ PR 验收时校验该关键词，缺失即 fail fast。
      都 fail fast。
   2. 冻结 base——release commit 就是 `origin/<base_branch>`（在
      base-sync 锁下 fetch）。
-  3. 执行发布前门禁：无遗留 open 的 `ai-in-progress` /
-     `ai-pr-opened` / `ai-fix-needed` Issue（release Issue 本身除外）、
+  3. 执行发布前门禁：**release 所属 Milestone 内**无遗留 open 的
+     `ai-in-progress` / `ai-pr-opened` / `ai-fix-needed` Issue
+     （Issue #671；release Issue 本身除外；无 Milestone 时仍按全仓
+     扫描）、
      release commit 的 CI 全绿（no check runs passes 带明确证据；
      pending check 是中间态——门禁等待最终结论，每次轮询一条
      `release_waiting_ci` journal 行和一次进度评论更新，上限

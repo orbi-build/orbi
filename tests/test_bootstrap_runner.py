@@ -2411,7 +2411,7 @@ def test_pick_in_progress_issue_scan_excludes_epics(monkeypatch, tmp_path):
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
-        "--json", "number,title,body,labels", "--limit", "1",
+        "--json", "number,title,body,labels,milestone", "--limit", "1",
     ]]
 
 
@@ -2487,8 +2487,42 @@ def test_pick_in_progress_issue_scan_fetches_labels(monkeypatch, tmp_path):
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
-        "--json", "number,title,body,labels", "--limit", "1",
+        "--json", "number,title,body,labels,milestone", "--limit", "1",
     ]]
+
+
+def test_pick_in_progress_issue_scan_fetches_milestone(monkeypatch, tmp_path):
+    """Issue #671: the in-flight restart scan fetches `milestone` too, so
+    a release run killed mid-release and resumed by `process_release`
+    scopes its leftover-delivery gate to the release's OWN Milestone —
+    never to the config's `active_milestone`, which must not gate a
+    resume (Issue #139)."""
+    issue = {
+        "number": 664, "title": "Release v0.4.3", "body": "body",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+        "milestone": {"title": "v0.4.3"},
+    }
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return json.dumps([issue])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    resumed = runner.pick_in_progress_issue(
+        "xqliu/orbi", tmp_path / "slots", 1,
+    )
+    assert calls == [[
+        "gh", "issue", "list", "--repo", "xqliu/orbi",
+        "--state", "open", "--search",
+        "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
+        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
+        "-label:ai-epic",
+        "--json", "number,title,body,labels,milestone", "--limit", "1",
+    ]]
+    # The resumed release's gate scope is its own Milestone, not the
+    # config value.
+    assert runner.release_target_milestone(resumed, "v0.4.4") == "v0.4.3"
 
 
 def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
@@ -2518,7 +2552,7 @@ def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
-        "--json", "number,title,body,labels", "--limit", "1",
+        "--json", "number,title,body,labels,milestone", "--limit", "1",
     ]]
 
 
@@ -14922,22 +14956,35 @@ def test_derive_release_scope_from_milestone_empty_scope(monkeypatch):
     assert open_evidence == ["open Issue #255 Still open work"]
 
 
-def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None):
+def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None,
+                 leftover_milestones=None):
     """Answer the gh calls of `check_release_gates`.
 
     `leftover_labels`: label -> [issue numbers] still open with it.
     `check_runs`: list of (name, status, conclusion) for the release
     commit (None -> the call fails, which must propagate). No open-PR
     query is answered: since Issue #608 the gate never makes one.
+    `leftover_milestones`: issue number -> Milestone title (or None).
+    When a leftover scan carries the documented `--milestone <title>`
+    flag (Issue #671) only the Issues with that Milestone are answered —
+    the real filter is server-side.
     """
     leftover_labels = leftover_labels or {}
+    leftover_milestones = leftover_milestones or {}
     calls = []
 
     def fake_run_command(command, **kwargs):
         calls.append(command)
         if command[:3] == ["gh", "issue", "list"]:
             label = command[command.index("--label") + 1]
-            return json.dumps([{"number": n} for n in leftover_labels.get(label, [])])
+            numbers = leftover_labels.get(label, [])
+            if "--milestone" in command:
+                milestone = command[command.index("--milestone") + 1]
+                numbers = [
+                    n for n in numbers
+                    if leftover_milestones.get(n) == milestone
+                ]
+            return json.dumps([{"number": n} for n in numbers])
         if command[:2] == ["gh", "api"]:
             if check_runs is None:
                 raise subprocess.CalledProcessError(
@@ -15137,6 +15184,73 @@ def test_check_release_gates_reraises_real_gh_failure(monkeypatch):
     make_gate_gh(monkeypatch, check_runs=None)
     with pytest.raises(subprocess.CalledProcessError):
         runner.check_release_gates("o/r", "main", "abc123", 99)
+
+
+def test_check_release_gates_scopes_leftover_scan_to_the_milestone(monkeypatch):
+    """Issue #671: the leftover-delivery scan is limited to the release's
+    Milestone through the documented `gh issue list --milestone` flag, and
+    the evidence names the scope."""
+    calls = make_gate_gh(
+        monkeypatch,
+        leftover_labels={"ai-fix-needed": [7, 8]},
+        leftover_milestones={7: "v0.4.4", 8: None},
+        check_runs=[],
+    )
+    evidence = runner.check_release_gates(
+        "o/r", "main", "abc123", 99, milestone="v0.4.3",
+    )
+    assert evidence[0] == (
+        "no open Issue in milestone 'v0.4.3' carries "
+        "ai-in-progress / ai-pr-opened / ai-fix-needed"
+    )
+    scans = [c for c in calls if c[:3] == ["gh", "issue", "list"]]
+    assert scans and all(
+        c[c.index("--milestone") + 1] == "v0.4.3" for c in scans
+    )
+
+
+def test_check_release_gates_ignores_leftover_outside_the_milestone(monkeypatch):
+    """Issue #671 (the v0.4.3 scene): an unrelated in-flight ticket with no
+    Milestone no longer blocks the release."""
+    make_gate_gh(
+        monkeypatch,
+        leftover_labels={"ai-fix-needed": [657, 658]},
+        leftover_milestones={657: None, 658: None},
+        check_runs=[],
+    )
+    evidence = runner.check_release_gates(
+        "o/r", "main", "abc123", 99, milestone="v0.4.3",
+    )
+    assert evidence[0].startswith("no open Issue in milestone 'v0.4.3'")
+
+
+def test_check_release_gates_still_waits_on_leftover_in_the_milestone(monkeypatch):
+    """Issue #671: the wait behavior is unchanged for in-flight tickets that
+    DO belong to the released Milestone."""
+    make_gate_gh(
+        monkeypatch,
+        leftover_labels={"ai-fix-needed": [7, 8]},
+        leftover_milestones={7: "v0.4.3", 8: "v0.4.4"},
+        check_runs=[],
+    )
+    with pytest.raises(runner.ReleaseDeliveriesWaiting) as excinfo:
+        runner.check_release_gates(
+            "o/r", "main", "abc123", 99, milestone="v0.4.3",
+        )
+    assert excinfo.value.issue_numbers == [7]
+
+
+def test_check_release_gates_without_milestone_keeps_full_repo_scan(monkeypatch):
+    """Issue #671: without a Milestone there is nothing to scope by — the
+    pre-#671 full-repo scan is unchanged (never a `--milestone` flag)."""
+    calls = make_gate_gh(
+        monkeypatch,
+        leftover_labels={"ai-fix-needed": [7]},
+        check_runs=[],
+    )
+    with pytest.raises(runner.ReleaseDeliveriesWaiting):
+        runner.check_release_gates("o/r", "main", "abc123", 99)
+    assert not any("--milestone" in c for c in calls)
 
 
 def test_run_release_tests_path_is_gone():
@@ -15802,7 +15916,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                              tag_commit=None, release_url="https://github.com/o/r/releases/tag/v0.3.0",
                              in_progress=False, existing_run_id=None,
                              check_run_pages=None, milestone_items=None,
-                             leftover_labels=None):
+                             leftover_labels=None, leftover_milestones=None):
     """Full fake environment for `process_release`.
 
     Returns a dict of captured state: edit_issue / comment_issue calls,
@@ -15813,8 +15927,12 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     `milestone_items` (Issue #253) answers the milestone scope-derivation
     queries: milestone number -> dict with keys `issues_closed` /
     `issues_open` / `pulls_closed` / `pulls_open`.
+    `leftover_milestones` (Issue #671) maps a leftover Issue number to its
+    Milestone title (None = no Milestone) so the `gh issue list --milestone`
+    filter is modelled server-side.
     """
     leftover_labels = leftover_labels or {}
+    leftover_milestones = leftover_milestones or {}
     state = {
         "edits": [], "comments": [], "commands": [],
         "run_ids": [], "active_runs": [], "sync_docs_calls": [],
@@ -15861,7 +15979,14 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             )
         if command[:3] == ["gh", "issue", "list"]:
             label = command[command.index("--label") + 1]
-            return json.dumps([{"number": n} for n in leftover_labels.get(label, [])])
+            numbers = leftover_labels.get(label, [])
+            if "--milestone" in command:
+                milestone = command[command.index("--milestone") + 1]
+                numbers = [
+                    n for n in numbers
+                    if leftover_milestones.get(n) == milestone
+                ]
+            return json.dumps([{"number": n} for n in numbers])
         if command == ["gh", "api", "repos/o/r/milestones?state=all&per_page=100",
                        "--paginate", "--slurp"]:
             return json.dumps([[
@@ -15982,6 +16107,55 @@ def test_process_release_waiting_returns_ready_and_records_open_deliveries(monke
     waiting = [k["body"] for n, k in state["comments"]
                if n == 99 and "waiting for deliveries" in k["body"]]
     assert waiting and "open_deliveries: #7, #8" in waiting[0]
+
+
+def test_process_release_ignores_unrelated_milestone_deliveries(monkeypatch):
+    """Issue #671 acceptance (green): a no-Milestone in-flight ticket no
+    longer blocks the release of Milestone v0.3.0 — the leftover scan is
+    scoped through the documented `gh issue list --milestone` flag."""
+    state = make_release_process_env(
+        monkeypatch,
+        leftover_labels={"ai-fix-needed": [8]},
+        leftover_milestones={8: None},
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+             "milestone": {"title": "v0.3.0"}}
+    url = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert url == "https://github.com/o/r/releases/tag/v0.3.0"
+    assert not [
+        k["body"] for n, k in state["comments"]
+        if n == 99 and "waiting for deliveries" in k["body"]
+    ]
+    scans = [c for c, _ in state["commands"]
+             if c[:3] == ["gh", "issue", "list"]]
+    assert scans and all(
+        c[c.index("--milestone") + 1] == "v0.3.0" for c in scans
+    )
+
+
+def test_process_release_still_waits_for_same_milestone_deliveries(monkeypatch):
+    """Issue #671: an in-flight ticket of the released Milestone still
+    blocks — the recoverable wait semantics are unchanged."""
+    state = make_release_process_env(
+        monkeypatch,
+        leftover_labels={"ai-in-progress": [7]},
+        leftover_milestones={7: "v0.3.0"},
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+             "milestone": {"title": "v0.3.0"}}
+    result = runner.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert result == ""
+    waiting = [k["body"] for n, k in state["comments"]
+               if n == 99 and "waiting for deliveries" in k["body"]]
+    assert waiting and "open_deliveries: #7" in waiting[0]
 
 
 def test_process_release_wait_timeout_uses_persisted_wait_start(monkeypatch):
