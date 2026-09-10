@@ -32,7 +32,6 @@ import logging
 import math
 import os
 import re
-import select
 import shutil
 import signal
 import subprocess
@@ -60,26 +59,13 @@ from typing import NamedTuple
 # imports it.
 from orbi.git_transport import TransportError, check_transport
 from orbi.pilot_slots import acquire_slot, slot_dir_for, slot_occupancy
-from orbi.pi_recovery import (
-    clk_tck,
-    find_idle_descendants,
-    pid_alive,
-    process_ppid,
-    process_start_monotonic,
-    signal_pid,
-    slots_idle,
-    timeout_duration,
-    upstream_alive,
-)
 from orbi.pi_activity import (
-    SessionWatcher,
     activity_snapshot,
     format_duration,
     format_end_scene,
     format_run_scene,
     quote_value,
     sanitize,
-    session_state,
 )
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
