@@ -1,0 +1,45 @@
+# v0.4.2 发布（最新）
+
+`v0.4.2` 于 2026-09-10T01:12:29Z 发布为 GitHub Release [v0.4.2](https://github.com/orbi-build/orbi/releases/tag/v0.4.2)（release task：Issue #660）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.4.2` | 注解 tag `6f22826d36784a07e142627eeb3c0c1125670e9d` | 提交 `ac7d7f8f4a4ca9999917f45cdbeb0db90554ca57` |
+
+## Release notes
+
+## Changelog
+
+### Reliability and recovery
+
+- P0：RecoverablePiProcessError 被打成终态 ai-blocked，与「the run is recoverable, next tick resumes」自相矛盾，额度用尽即烧毁在途交付 ([Issue #656](https://github.com/orbi-build/orbi/issues/656); [PR #661](https://github.com/orbi-build/orbi/pull/661))
+
+### Observability
+
+- Orbi 执行异常: RuntimeError: no progress comment to update（release 早期失败时 finish() 无评论可更新） ([Issue #474](https://github.com/orbi-build/orbi/issues/474); [PR #659](https://github.com/orbi-build/orbi/pull/659))
+
+- tag: `v0.4.2`
+- release commit: `ac7d7f8f4a4ca9999917f45cdbeb0db90554ca57`
+- release task: Issue #660
+
+## Scope (verified item by item)
+
+- Issue #474 closed
+- Issue #656 closed
+- NOT released (still open in milestone v0.4.2): open Issue #663 P0：release fallback 不校验 milestone 完整性，blocker 未完成时抢跑并推出 bump commit
+- NOT released (still open in milestone v0.4.2): open Issue #662 P0：残留孤儿分支让 git worktree add -b 失败（exit 255），被烧成终态 ai-blocked 且不自愈
+- NOT released (still open in milestone v0.4.2): open Issue #660 Release task：发布 v0.4.2（e2e 解 block 版本）并完成远端交付对账
+- NOT released (still open in milestone v0.4.2): open Issue #655 P0：GraphQL 的 author.login 不带 [bot] 后缀，_comment_is_trusted 对真实 bot 评论恒假，托管交付评审仍全线阻塞（#648 未完全解决）
+
+## Pre-release gates
+
+- no open Issue carries ai-in-progress / ai-pr-opened / ai-fix-needed
+- CI on the release commit: 4 check(s) all success/neutral/skipped
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit ac7d7f8f4a4ca9999917f45cdbeb0db90554ca57 (the #268 CI-wait gate; no local test execution)
+
+run_id=da7c4a0e
