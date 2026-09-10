@@ -17,6 +17,7 @@ from unittest.mock import Mock
 import pytest
 
 import orbi.runner as runner
+import orbi.release as release
 from orbi import pi_activity, pi_process, progress
 from tests.test_progress_wiring import make_fake_gh
 
@@ -14912,7 +14913,7 @@ LEGACY_TEST_COMMAND_DECLARATION_BODY = RELEASE_DECLARATION_BODY.replace(
 
 
 def test_parse_release_declaration_returns_all_fields():
-    decl = runner.parse_release_declaration(RELEASE_DECLARATION_BODY)
+    decl = release.parse_release_declaration(RELEASE_DECLARATION_BODY)
     assert decl == {
         "version": "v0.3.0",
         "base_branch": "main",
@@ -14927,12 +14928,12 @@ def test_parse_release_declaration_does_not_require_test_command():
     """Issue #569: the declaration carries NO local test contract —
     release test acceptance is the GitHub Actions CI result on the
     release commit (the #268 CI-wait gate)."""
-    decl = runner.parse_release_declaration(RELEASE_DECLARATION_BODY)
+    decl = release.parse_release_declaration(RELEASE_DECLARATION_BODY)
     assert decl["test_command"] is None
 
 
 def test_parse_release_declaration_ignores_a_legacy_test_command():
-    decl = runner.parse_release_declaration(
+    decl = release.parse_release_declaration(
         LEGACY_TEST_COMMAND_DECLARATION_BODY,
     )
     assert decl["test_command"] == "scripts/test"
@@ -14945,21 +14946,21 @@ def test_parse_release_declaration_rejects_test_timeout_seconds():
         "- scope:", "- test_timeout_seconds: 42\n- scope:",
     )
     with pytest.raises(ValueError, match="unknown field"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_accepts_package_json_version_file():
     body = RELEASE_DECLARATION_BODY.replace(
         "- version: v0.3.0\n", "- version: v0.3.0\n- version_file: package.json\n",
     )
-    assert runner.parse_release_declaration(body)["version_file"] == "package.json"
+    assert release.parse_release_declaration(body)["version_file"] == "package.json"
 
 
 def test_parse_release_declaration_accepts_none_version_file():
     body = RELEASE_DECLARATION_BODY.replace(
         "- version: v0.3.0\n", "- version: v0.3.0\n- version_file: none\n",
     )
-    assert runner.parse_release_declaration(body)["version_file"] == "none"
+    assert release.parse_release_declaration(body)["version_file"] == "none"
 
 
 @pytest.mark.parametrize(
@@ -14972,7 +14973,7 @@ def test_parse_release_declaration_accepts_ecosystem_version_file(version_file):
         "- version: v0.3.0\n",
         f"- version: v0.3.0\n- version_file: {version_file}\n",
     )
-    assert runner.parse_release_declaration(body)["version_file"] == version_file
+    assert release.parse_release_declaration(body)["version_file"] == version_file
 
 
 def test_parse_release_declaration_rejects_invalid_version_file():
@@ -14980,24 +14981,24 @@ def test_parse_release_declaration_rejects_invalid_version_file():
         "- version: v0.3.0\n", "- version: v0.3.0\n- version_file: version.txt\n",
     )
     with pytest.raises(ValueError, match="version_file"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_requires_the_release_section():
     with pytest.raises(ValueError, match="## Release"):
-        runner.parse_release_declaration("no section here\n")
+        release.parse_release_declaration("no section here\n")
 
 
 def test_parse_release_declaration_requires_version():
     body = RELEASE_DECLARATION_BODY.replace("- version: v0.3.0\n", "")
     with pytest.raises(ValueError, match="version"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_requires_base_branch():
     body = RELEASE_DECLARATION_BODY.replace("- base_branch: main\n", "")
     with pytest.raises(ValueError, match="base_branch"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_requires_scope():
@@ -15005,14 +15006,14 @@ def test_parse_release_declaration_requires_scope():
              if not line.strip().startswith("- #")]
     body = "\n".join(line for line in lines if line.strip() != "- scope:") + "\n"
     with pytest.raises(ValueError, match="scope"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_empty_scope():
     lines = [line for line in RELEASE_DECLARATION_BODY.splitlines()
              if not line.strip().startswith("- #")]
     with pytest.raises(ValueError, match="scope"):
-        runner.parse_release_declaration("\n".join(lines) + "\n")
+        release.parse_release_declaration("\n".join(lines) + "\n")
 
 
 def test_parse_release_declaration_rejects_duplicate_field():
@@ -15020,7 +15021,7 @@ def test_parse_release_declaration_rejects_duplicate_field():
         "\n## Notes", "\n- version: v9.9.9\n\n## Notes",
     )
     with pytest.raises(ValueError, match="version"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_unknown_key():
@@ -15028,7 +15029,7 @@ def test_parse_release_declaration_rejects_unknown_key():
         "\n## Notes", "\n- channel: stable\n\n## Notes",
     )
     with pytest.raises(ValueError, match="channel"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_version_with_space():
@@ -15036,32 +15037,32 @@ def test_parse_release_declaration_rejects_version_with_space():
         "- version: v0.3.0", "- version: v0.3 .0",
     )
     with pytest.raises(ValueError, match="version"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_empty_value():
     body = RELEASE_DECLARATION_BODY.replace("- base_branch: main",
                                             "- base_branch:")
     with pytest.raises(ValueError, match="base_branch"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_malformed_scope_item():
     body = RELEASE_DECLARATION_BODY.replace("  - #123", "  - #abc")
     with pytest.raises(ValueError, match="scope item"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_scope_item_without_hash():
     body = RELEASE_DECLARATION_BODY.replace("  - #123", "  - 123")
     with pytest.raises(ValueError, match="scope item"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_zero_scope_item():
     body = RELEASE_DECLARATION_BODY.replace("  - #123", "  - #0")
     with pytest.raises(ValueError, match="scope item"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 RELEASE_MILESTONE_DECLARATION_BODY = """Ship v0.3.0 to the remote.
@@ -15079,7 +15080,7 @@ RELEASE_MILESTONE_DECLARATION_BODY = """Ship v0.3.0 to the remote.
 
 
 def test_parse_release_declaration_scope_from_milestone():
-    decl = runner.parse_release_declaration(RELEASE_MILESTONE_DECLARATION_BODY)
+    decl = release.parse_release_declaration(RELEASE_MILESTONE_DECLARATION_BODY)
     assert decl == {
         "version": "v0.3.0",
         "base_branch": "main",
@@ -15091,7 +15092,7 @@ def test_parse_release_declaration_scope_from_milestone():
 
 
 def test_parse_release_declaration_manual_scope_has_no_milestone():
-    decl = runner.parse_release_declaration(RELEASE_DECLARATION_BODY)
+    decl = release.parse_release_declaration(RELEASE_DECLARATION_BODY)
     assert decl["scope_from_milestone"] is None
 
 
@@ -15100,7 +15101,7 @@ def test_parse_release_declaration_rejects_scope_and_scope_from_milestone():
         "\n## Notes", "\n- scope:\n  - #123\n\n## Notes",
     )
     with pytest.raises(ValueError, match="exactly one"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_empty_scope_from_milestone():
@@ -15108,7 +15109,7 @@ def test_parse_release_declaration_rejects_empty_scope_from_milestone():
         "- scope_from_milestone: v0.3.0", "- scope_from_milestone:",
     )
     with pytest.raises(ValueError, match="scope_from_milestone"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_scope_from_milestone_with_space():
@@ -15116,7 +15117,7 @@ def test_parse_release_declaration_rejects_scope_from_milestone_with_space():
         "- scope_from_milestone: v0.3.0", "- scope_from_milestone: v0.3 .0",
     )
     with pytest.raises(ValueError, match="scope_from_milestone"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_is_release_detects_the_label():
@@ -15136,7 +15137,7 @@ def test_process_issue_routes_release_to_process_release(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0", "body": "",
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     calls = []
-    monkeypatch.setattr(runner, "process_release",
+    monkeypatch.setattr(release, "process_release",
                         lambda i, c, r: calls.append("release") or "rel-url")
     monkeypatch.setattr(runner, "run_pi", Mock(
         side_effect=AssertionError("run_pi must not run for a release task")))
@@ -15401,6 +15402,7 @@ def make_scope_gh(monkeypatch, *, pr_state_map=None, issue_state_map=None):
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     return calls
 
 
@@ -15410,7 +15412,7 @@ def test_verify_release_scope_evidence_for_pr_and_issue(monkeypatch):
         pr_state_map={123: ("MERGED", "aaa111")},
         issue_state_map={124: "CLOSED"},
     )
-    evidence = runner.verify_release_scope("o/r", [123, 124], Path("/repo"), "release123")
+    evidence = release.verify_release_scope("o/r", [123, 124], Path("/repo"), "release123")
     assert evidence == [
         "PR #123 merged (mergeCommit=aaa111)",
         "Issue #124 closed",
@@ -15420,7 +15422,7 @@ def test_verify_release_scope_evidence_for_pr_and_issue(monkeypatch):
 def test_verify_release_scope_fails_on_unmerged_pr(monkeypatch):
     make_scope_gh(monkeypatch, pr_state_map={123: ("OPEN", None)})
     with pytest.raises(RuntimeError, match="PR #123 is not merged"):
-        runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
+        release.verify_release_scope("o/r", [123], Path("/repo"), "release123")
 
 
 def test_verify_release_scope_rejects_merged_pr_outside_release_base(
@@ -15434,9 +15436,10 @@ def test_verify_release_scope_rejects_merged_pr_outside_release_base(
             raise subprocess.CalledProcessError(1, command)
         return original(command, **kwargs)
 
+    monkeypatch.setattr(release, "run_command", not_an_ancestor)
     monkeypatch.setattr(runner, "run_command", not_an_ancestor)
     with pytest.raises(RuntimeError, match="not contained in release commit"):
-        runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
+        release.verify_release_scope("o/r", [123], Path("/repo"), "release123")
 
 
 def test_verify_release_scope_reraises_git_ancestry_check_failure(
@@ -15449,16 +15452,17 @@ def test_verify_release_scope_reraises_git_ancestry_check_failure(
             raise subprocess.CalledProcessError(128, command, stderr="bad object")
         return original(command, **kwargs)
 
+    monkeypatch.setattr(release, "run_command", git_failure)
     monkeypatch.setattr(runner, "run_command", git_failure)
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
-        runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
+        release.verify_release_scope("o/r", [123], Path("/repo"), "release123")
     assert excinfo.value.stderr == "bad object"
 
 
 def test_verify_release_scope_fails_on_unclosed_issue(monkeypatch):
     make_scope_gh(monkeypatch, issue_state_map={124: "OPEN"})
     with pytest.raises(RuntimeError, match="Issue #124 is not closed"):
-        runner.verify_release_scope("o/r", [124], Path("/repo"), "release123")
+        release.verify_release_scope("o/r", [124], Path("/repo"), "release123")
 
 
 def test_verify_release_scope_fails_on_merged_pr_without_merge_commit(
@@ -15466,13 +15470,13 @@ def test_verify_release_scope_fails_on_merged_pr_without_merge_commit(
     # A MERGED PR without merge-commit evidence is not evidence.
     make_scope_gh(monkeypatch, pr_state_map={123: ("MERGED", None)})
     with pytest.raises(RuntimeError, match="no merge commit evidence"):
-        runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
+        release.verify_release_scope("o/r", [123], Path("/repo"), "release123")
 
 
 def test_verify_release_scope_fails_on_unknown_item(monkeypatch):
     make_scope_gh(monkeypatch)
     with pytest.raises(RuntimeError, match="neither a PR nor an Issue"):
-        runner.verify_release_scope("o/r", [999], Path("/repo"), "release123")
+        release.verify_release_scope("o/r", [999], Path("/repo"), "release123")
 
 
 def test_verify_release_scope_reraises_real_gh_failure(monkeypatch):
@@ -15483,9 +15487,10 @@ def test_verify_release_scope_reraises_real_gh_failure(monkeypatch):
         raise subprocess.CalledProcessError(
             1, command, stderr="HTTP 403: rate limited",
         )
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
+        release.verify_release_scope("o/r", [123], Path("/repo"), "release123")
 
 
 def test_derive_release_scope_flattens_multi_page_results(monkeypatch):
@@ -15514,8 +15519,9 @@ def test_derive_release_scope_flattens_multi_page_results(monkeypatch):
             return json.dumps([[]])
         return json.dumps([page_one, page_two])
 
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
-    scope, open_evidence = runner.derive_release_scope_from_milestone(
+    scope, open_evidence = release.derive_release_scope_from_milestone(
         "o/r", "v0.9.0",
     )
     assert scope == list(range(1, 106))
@@ -15554,6 +15560,7 @@ def make_milestone_gh(monkeypatch, *, milestones=None, items_by_milestone=None):
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     return calls
 
 
@@ -15586,7 +15593,7 @@ def test_derive_release_scope_from_milestone_filters_pr_objects_from_issues(
             ],
         }},
     )
-    scope, open_evidence = runner.derive_release_scope_from_milestone(
+    scope, open_evidence = release.derive_release_scope_from_milestone(
         "o/r", "v0.3.0",
     )
     assert scope == [160, 168]
@@ -15608,7 +15615,7 @@ def test_derive_release_scope_from_milestone_lists_open_items(monkeypatch):
             ],
         }},
     )
-    scope, open_evidence = runner.derive_release_scope_from_milestone(
+    scope, open_evidence = release.derive_release_scope_from_milestone(
         "o/r", "v0.3.0",
     )
     assert scope == [160]
@@ -15619,7 +15626,7 @@ def test_derive_release_scope_from_milestone_fails_when_missing(monkeypatch):
     make_milestone_gh(monkeypatch, milestones=[])
     with pytest.raises(
             RuntimeError, match="no Milestone with the exact title"):
-        runner.derive_release_scope_from_milestone("o/r", "v0.9.9")
+        release.derive_release_scope_from_milestone("o/r", "v0.9.9")
 
 
 def test_derive_release_scope_from_milestone_fails_on_ambiguous_title(
@@ -15632,7 +15639,7 @@ def test_derive_release_scope_from_milestone_fails_on_ambiguous_title(
         ],
     )
     with pytest.raises(RuntimeError, match="ambiguous"):
-        runner.derive_release_scope_from_milestone("o/r", "v0.3.0")
+        release.derive_release_scope_from_milestone("o/r", "v0.3.0")
 
 
 def test_derive_release_scope_from_milestone_empty_scope(monkeypatch):
@@ -15645,7 +15652,7 @@ def test_derive_release_scope_from_milestone_empty_scope(monkeypatch):
             ],
         }},
     )
-    scope, open_evidence = runner.derive_release_scope_from_milestone(
+    scope, open_evidence = release.derive_release_scope_from_milestone(
         "o/r", "v0.3.0",
     )
     assert scope == []
@@ -15692,6 +15699,9 @@ def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None,
             ])
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run_command)
+    # the staying helpers the moved gates call (`list_issues`) resolve
+    # the primitive in the runner globals.
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     return calls
 
@@ -15702,7 +15712,7 @@ def test_check_release_gates_pass_clean(monkeypatch):
         check_runs=[("tests", "completed", "success"),
                     ("lint", "completed", "skipped")],
     )
-    evidence = runner.check_release_gates("o/r", "main", "abc123", 99)
+    evidence = release.check_release_gates("o/r", "main", "abc123", 99)
     assert evidence == [
         "no open Issue carries ai-in-progress / ai-pr-opened / ai-fix-needed",
         "CI on the release commit: 2 check(s) all success/neutral/skipped",
@@ -15723,7 +15733,7 @@ def test_check_release_gates_excludes_the_release_issue_itself(monkeypatch):
         leftover_labels={"ai-in-progress": [99]},  # the release Issue
         check_runs=[],
     )
-    evidence = runner.check_release_gates("o/r", "main", "abc123", 99)
+    evidence = release.check_release_gates("o/r", "main", "abc123", 99)
     assert evidence[0].startswith("no open Issue carries")
 
 
@@ -15734,7 +15744,7 @@ def test_check_release_gates_fails_on_leftover_in_progress(monkeypatch):
         check_runs=[],
     )
     with pytest.raises(runner.ReleaseDeliveriesWaiting) as excinfo:
-        runner.check_release_gates("o/r", "main", "abc123", 99)
+        release.check_release_gates("o/r", "main", "abc123", 99)
     assert excinfo.value.issue_numbers == [7]
 
 
@@ -15745,14 +15755,14 @@ def test_check_release_gates_fails_on_leftover_fix_needed(monkeypatch):
         check_runs=[],
     )
     with pytest.raises(runner.ReleaseDeliveriesWaiting) as excinfo:
-        runner.check_release_gates("o/r", "main", "abc123", 99)
+        release.check_release_gates("o/r", "main", "abc123", 99)
     assert excinfo.value.issue_numbers == [8]
 
 
 def test_check_release_gates_delivery_wait_timeout_is_not_ci_failure(monkeypatch):
     make_gate_gh(monkeypatch, leftover_labels={"ai-in-progress": [7]}, check_runs=[])
     with pytest.raises(RuntimeError, match="delivery wait timeout, not a CI failure"):
-        runner.check_release_gates("o/r", "main", "abc123", 99,
+        release.check_release_gates("o/r", "main", "abc123", 99,
                                    delivery_wait_seconds=5,
                                    delivery_waited_seconds=5)
 
@@ -15763,7 +15773,7 @@ def test_check_release_gates_fails_on_failing_ci(monkeypatch):
         check_runs=[("tests", "completed", "failure")],
     )
     with pytest.raises(RuntimeError, match="check 'tests' is completed/failure"):
-        runner.check_release_gates("o/r", "main", "abc123", 99)
+        release.check_release_gates("o/r", "main", "abc123", 99)
 
 
 def test_check_release_gates_waits_for_pending_ci_then_passes(
@@ -15789,11 +15799,12 @@ def test_check_release_gates_waits_for_pending_ci_then_passes(
             ])
         return "[]"  # the label scans and the open-PR scan
 
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
     waits = []
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
-        evidence = runner.check_release_gates(
+        evidence = release.check_release_gates(
             "o/r", "main", "abc123", 99, on_wait=waits.append,
         )
     assert evidence == [
@@ -15829,10 +15840,11 @@ def test_check_release_gates_waits_then_fails_on_final_ci_failure(
             ])
         return "[]"
 
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
     with pytest.raises(RuntimeError, match="check 'tests' is completed/failure"):
-        runner.check_release_gates("o/r", "main", "abc123", 99)
+        release.check_release_gates("o/r", "main", "abc123", 99)
 
 
 def test_check_release_gates_ci_wait_times_out(monkeypatch, caplog):
@@ -15846,6 +15858,7 @@ def test_check_release_gates_ci_wait_times_out(monkeypatch, caplog):
             ])
         return "[]"
 
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"), pytest.raises(
@@ -15853,7 +15866,7 @@ def test_check_release_gates_ci_wait_times_out(monkeypatch, caplog):
         match=r"waiting for CI on the release commit abc123 "
               r"timed out after 7s.*not a CI failure",
     ):
-        runner.check_release_gates("o/r", "main", "abc123", 99,
+        release.check_release_gates("o/r", "main", "abc123", 99,
                                    ci_wait_seconds=7.0)
     # The deadline is exact even when the poll interval exceeds the
     # remaining budget (the sleep step is capped, never overshot).
@@ -15871,15 +15884,16 @@ def test_check_release_gates_reports_missing_checks_permission(monkeypatch):
             )
         return "[]"
 
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     with pytest.raises(RuntimeError, match=r"lacks Checks:read"):
-        runner.check_release_gates("o/r", "main", "abc123", 99)
+        release.check_release_gates("o/r", "main", "abc123", 99)
 
 
 def test_check_release_gates_reraises_real_gh_failure(monkeypatch):
     make_gate_gh(monkeypatch, check_runs=None)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.check_release_gates("o/r", "main", "abc123", 99)
+        release.check_release_gates("o/r", "main", "abc123", 99)
 
 
 def test_check_release_gates_scopes_leftover_scan_to_the_milestone(monkeypatch):
@@ -15892,7 +15906,7 @@ def test_check_release_gates_scopes_leftover_scan_to_the_milestone(monkeypatch):
         leftover_milestones={7: "v0.4.4", 8: None},
         check_runs=[],
     )
-    evidence = runner.check_release_gates(
+    evidence = release.check_release_gates(
         "o/r", "main", "abc123", 99, milestone="v0.4.3",
     )
     assert evidence[0] == (
@@ -15914,7 +15928,7 @@ def test_check_release_gates_ignores_leftover_outside_the_milestone(monkeypatch)
         leftover_milestones={657: None, 658: None},
         check_runs=[],
     )
-    evidence = runner.check_release_gates(
+    evidence = release.check_release_gates(
         "o/r", "main", "abc123", 99, milestone="v0.4.3",
     )
     assert evidence[0].startswith("no open Issue in milestone 'v0.4.3'")
@@ -15930,7 +15944,7 @@ def test_check_release_gates_still_waits_on_leftover_in_the_milestone(monkeypatc
         check_runs=[],
     )
     with pytest.raises(runner.ReleaseDeliveriesWaiting) as excinfo:
-        runner.check_release_gates(
+        release.check_release_gates(
             "o/r", "main", "abc123", 99, milestone="v0.4.3",
         )
     assert excinfo.value.issue_numbers == [7]
@@ -15945,7 +15959,7 @@ def test_check_release_gates_without_milestone_keeps_full_repo_scan(monkeypatch)
         check_runs=[],
     )
     with pytest.raises(runner.ReleaseDeliveriesWaiting):
-        runner.check_release_gates("o/r", "main", "abc123", 99)
+        release.check_release_gates("o/r", "main", "abc123", 99)
     assert not any("--milestone" in c for c in calls)
 
 
@@ -15974,7 +15988,7 @@ def test_process_release_parse_failure_publishes_final_comment(
     release routing and the failure path are the production ones.
     """
     gh_calls, posted = make_fake_gh(monkeypatch)
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(release, "new_run_id", lambda: "a1b2c3d4")
     issue = {
         "number": 467,
         "title": "Release v0.4.2",
@@ -16064,11 +16078,12 @@ def test_prepare_release_version_updates_sources_and_commits(tmp_path, monkeypat
     )
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        release, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "newsha",
     )
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "newsha")
 
-    assert runner.prepare_release_version(
+    assert release.prepare_release_version(
         work, "v0.3.0", "main",
     ) == "newsha"
     assert 'version = "0.3.0"' in (work / "pyproject.toml").read_text()
@@ -16094,11 +16109,12 @@ def test_prepare_release_version_updates_package_json(tmp_path, monkeypatch):
     )
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        release, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "newsha",
     )
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "newsha")
 
-    assert runner.prepare_release_version(
+    assert release.prepare_release_version(
         work, "v0.3.0", "main", "package.json",
     ) == "newsha"
     assert '"version": "0.3.0"' in (work / "package.json").read_text()
@@ -16146,11 +16162,12 @@ def test_prepare_release_version_updates_ecosystem_file(
     (work / version_file).write_text(source, encoding="utf-8")
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        release, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "newsha",
     )
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "newsha")
 
-    assert runner.prepare_release_version(
+    assert release.prepare_release_version(
         work, "v0.3.0", "main", version_file,
     ) == "newsha"
     updated = (work / version_file).read_text(encoding="utf-8")
@@ -16167,10 +16184,11 @@ def test_prepare_release_version_ecosystem_file_is_idempotent(tmp_path, monkeypa
     (work / "gradle.properties").write_text("version=0.3.0\n", encoding="utf-8")
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        release, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "head",
     )
-    assert runner.prepare_release_version(
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
+    assert release.prepare_release_version(
         work, "v0.3.0", "main", "gradle.properties",
     ) == "head"
     assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": work})]
@@ -16181,7 +16199,7 @@ def test_prepare_release_version_rejects_unparseable_ecosystem_file(tmp_path):
     work.mkdir()
     (work / "build.gradle").write_text("plugins {}\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="build.gradle"):
-        runner.prepare_release_version(work, "v0.3.0", "main", "build.gradle")
+        release.prepare_release_version(work, "v0.3.0", "main", "build.gradle")
 
 
 def test_prepare_release_version_rejects_cargo_without_package_version(tmp_path):
@@ -16189,22 +16207,23 @@ def test_prepare_release_version_rejects_cargo_without_package_version(tmp_path)
     work.mkdir()
     (work / "Cargo.toml").write_text("[package]\nname = \"demo\"\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="Cargo.toml"):
-        runner.prepare_release_version(work, "v0.3.0", "main", "Cargo.toml")
+        release.prepare_release_version(work, "v0.3.0", "main", "Cargo.toml")
 
 
 def test_prepare_release_version_none_does_not_require_a_file(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        release, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "head",
     )
-    assert runner.prepare_release_version(tmp_path, "v0.3.0", "main", "none") == "head"
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
+    assert release.prepare_release_version(tmp_path, "v0.3.0", "main", "none") == "head"
     assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": tmp_path})]
 
 
 def test_prepare_release_version_rejects_unrecognized_file(tmp_path):
     with pytest.raises(ValueError, match="version_file"):
-        runner.prepare_release_version(tmp_path, "v0.3.0", "main", "VERSION")
+        release.prepare_release_version(tmp_path, "v0.3.0", "main", "VERSION")
 
 
 def test_prepare_release_version_package_json_is_idempotent(tmp_path, monkeypatch):
@@ -16215,11 +16234,12 @@ def test_prepare_release_version_package_json_is_idempotent(tmp_path, monkeypatc
     )
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        release, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "head",
     )
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
 
-    assert runner.prepare_release_version(
+    assert release.prepare_release_version(
         work, "v0.3.0", "main", "package.json",
     ) == "head"
     assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": work})]
@@ -16227,7 +16247,7 @@ def test_prepare_release_version_package_json_is_idempotent(tmp_path, monkeypatc
 
 def test_prepare_release_version_rejects_invalid_version_file(tmp_path):
     with pytest.raises(ValueError, match="version_file"):
-        runner.prepare_release_version(tmp_path, "v0.3.0", "main", "version.txt")
+        release.prepare_release_version(tmp_path, "v0.3.0", "main", "version.txt")
 
 
 def test_prepare_release_version_rejects_invalid_package_json(tmp_path):
@@ -16235,7 +16255,7 @@ def test_prepare_release_version_rejects_invalid_package_json(tmp_path):
     work.mkdir()
     (work / "package.json").write_text("not json", encoding="utf-8")
     with pytest.raises(RuntimeError, match="not valid JSON"):
-        runner.prepare_release_version(work, "v0.3.0", "main", "package.json")
+        release.prepare_release_version(work, "v0.3.0", "main", "package.json")
 
 
 def test_prepare_release_version_rejects_package_without_version(tmp_path):
@@ -16243,7 +16263,7 @@ def test_prepare_release_version_rejects_package_without_version(tmp_path):
     work.mkdir()
     (work / "package.json").write_text("{}", encoding="utf-8")
     with pytest.raises(RuntimeError, match="version field"):
-        runner.prepare_release_version(work, "v0.3.0", "main", "package.json")
+        release.prepare_release_version(work, "v0.3.0", "main", "package.json")
 
 
 def test_prepare_release_version_none_does_not_change_files(tmp_path, monkeypatch):
@@ -16253,18 +16273,19 @@ def test_prepare_release_version_none_does_not_change_files(tmp_path, monkeypatc
     marker.write_text("unchanged\n", encoding="utf-8")
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        release, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "head",
     )
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
 
-    assert runner.prepare_release_version(work, "v0.3.0", "main", "none") == "head"
+    assert release.prepare_release_version(work, "v0.3.0", "main", "none") == "head"
     assert marker.read_text() == "unchanged\n"
     assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": work})]
 
 
 def test_prepare_release_version_rejects_non_tag_version(tmp_path):
     with pytest.raises(ValueError, match="release version"):
-        runner.prepare_release_version(tmp_path, "0.3.0", "main")
+        release.prepare_release_version(tmp_path, "0.3.0", "main")
 
 
 def test_prepare_release_version_rejects_disagreeing_sources(tmp_path):
@@ -16278,7 +16299,7 @@ def test_prepare_release_version_rejects_disagreeing_sources(tmp_path):
         '__version__ = "0.1.0"\n', encoding="utf-8",
     )
     with pytest.raises(RuntimeError, match="sources disagree"):
-        runner.prepare_release_version(work, "v0.3.0", "main")
+        release.prepare_release_version(work, "v0.3.0", "main")
 
 
 def test_prepare_release_version_rejects_missing_source_declaration(tmp_path):
@@ -16290,7 +16311,7 @@ def test_prepare_release_version_rejects_missing_source_declaration(tmp_path):
         '__version__ = "0.2.0"\n', encoding="utf-8",
     )
     with pytest.raises(RuntimeError, match="exactly one"):
-        runner.prepare_release_version(work, "v0.3.0", "main")
+        release.prepare_release_version(work, "v0.3.0", "main")
 
 
 def test_prepare_release_version_is_idempotent(tmp_path, monkeypatch):
@@ -16305,16 +16326,17 @@ def test_prepare_release_version_is_idempotent(tmp_path, monkeypatch):
     )
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        release, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "head",
     )
-    assert runner.prepare_release_version(work, "v0.3.0", "main") == "head"
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
+    assert release.prepare_release_version(work, "v0.3.0", "main") == "head"
     assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": work})]
 
 
 def test_release_tag_commit_returns_none_for_missing_remote_tag(tmp_path):
     work, _ = make_local_remote_pair(tmp_path)
-    assert runner.release_tag_commit(work, "v9.9.9") is None
+    assert release.release_tag_commit(work, "v9.9.9") is None
 
 
 def test_release_tag_commit_returns_the_tagged_commit(tmp_path):
@@ -16327,16 +16349,17 @@ def test_release_tag_commit_returns_the_tagged_commit(tmp_path):
         ["git", "-C", str(work), "push", "origin", "v0.1.0"],
         check=True, capture_output=True,
     )
-    assert runner.release_tag_commit(work, "v0.1.0") == head
+    assert release.release_tag_commit(work, "v0.1.0") == head
 
 
 def test_release_tag_commit_reraises_real_fetch_failure(tmp_path, monkeypatch):
     work, _ = make_local_remote_pair(tmp_path)
     def fail(command, **kwargs):
         raise subprocess.CalledProcessError(1, command, stderr="boom")
+    monkeypatch.setattr(release, "run_command", fail)
     monkeypatch.setattr(runner, "run_command", fail)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.release_tag_commit(work, "v0.1.0")
+        release.release_tag_commit(work, "v0.1.0")
 
 
 def test_release_tag_commit_never_reads_a_network_failure_as_missing_tag(
@@ -16352,9 +16375,10 @@ def test_release_tag_commit_never_reads_a_network_failure_as_missing_tag(
         assert command[1] == "ls-remote"
         raise subprocess.CalledProcessError(128, command, stderr="boom")
 
+    monkeypatch.setattr(release, "run_git_network_command", fail_ls_remote)
     monkeypatch.setattr(runner, "run_git_network_command", fail_ls_remote)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.release_tag_commit(work, "v0.1.0")
+        release.release_tag_commit(work, "v0.1.0")
 
 
 def test_ensure_release_tag_pushed_creates_and_pushes_when_no_local_tag(
@@ -16366,8 +16390,9 @@ def test_ensure_release_tag_pushed_creates_and_pushes_when_no_local_tag(
     def fake_push(command, **kwargs):
         pushed.append(command)
 
+    monkeypatch.setattr(release, "run_git_network_command", fake_push)
     monkeypatch.setattr(runner, "run_git_network_command", fake_push)
-    runner.ensure_release_tag_pushed(work, "v0.1.0", head)
+    release.ensure_release_tag_pushed(work, "v0.1.0", head)
     tag_type = subprocess.run(
         ["git", "-C", str(work), "cat-file", "-t", "v0.1.0"],
         check=True, capture_output=True, text=True,
@@ -16391,8 +16416,9 @@ def test_ensure_release_tag_pushed_repushes_local_residue(tmp_path, monkeypatch)
     def fake_push(command, **kwargs):
         pushed.append(command)
 
+    monkeypatch.setattr(release, "run_git_network_command", fake_push)
     monkeypatch.setattr(runner, "run_git_network_command", fake_push)
-    runner.ensure_release_tag_pushed(work, "v0.1.0", head)
+    release.ensure_release_tag_pushed(work, "v0.1.0", head)
     assert pushed == [["git", "push", "origin", "refs/tags/v0.1.0"]]
 
 
@@ -16414,7 +16440,7 @@ def test_ensure_release_tag_pushed_fails_fast_on_residue_pointing_elsewhere(
         check=True, capture_output=True,
     )
     with pytest.raises(RuntimeError, match="never moved or overwritten"):
-        runner.ensure_release_tag_pushed(work, "v0.1.0", head)
+        release.ensure_release_tag_pushed(work, "v0.1.0", head)
 
 
 def make_release_gh(monkeypatch, *, release_exists=False,
@@ -16444,6 +16470,7 @@ def make_release_gh(monkeypatch, *, release_exists=False,
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     return calls
 
 
@@ -16478,8 +16505,9 @@ def test_build_release_changelog_groups_descriptions_links_and_orders(monkeypatc
         assert command[:3] == ["gh", "issue", "view"]
         return json.dumps(source[int(command[3])])
 
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
-    changelog = runner.build_release_changelog("o/r", [30, 10, 20])
+    changelog = release.build_release_changelog("o/r", [30, 10, 20])
     assert changelog == """## Changelog
 
 ### Deployment and operations
@@ -16496,13 +16524,13 @@ def test_build_release_changelog_groups_descriptions_links_and_orders(monkeypatc
 
 
 def test_release_changelog_category_covers_reliability_bug_and_features():
-    assert runner.release_changelog_category({
+    assert release.release_changelog_category({
         "title": "Recover a stalled delivery", "labels": [],
     }) == "Reliability and recovery"
-    assert runner.release_changelog_category({
+    assert release.release_changelog_category({
         "title": "Fix an unrelated failure", "labels": [{"name": "bug"}],
     }) == "Bug fixes"
-    assert runner.release_changelog_category({
+    assert release.release_changelog_category({
         "title": "Add a provider setting", "labels": "malformed",
     }) == "Features"
 
@@ -16515,28 +16543,39 @@ def test_build_release_changelog_fails_on_empty_or_malformed_evidence(monkeypatc
         {"number": 10, "title": "Useful title", "body": "detail", "url": "https://github.com/o/r/issues/10", "labels": [], "closedByPullRequestsReferences": [{"number": "bad", "url": "https://github.com/o/r/pull/20"}]},
     ]
     for item in bad_items:
+        monkeypatch.setattr(release, "run_command", lambda *args, item=item, **kwargs: json.dumps(item))
         monkeypatch.setattr(runner, "run_command", lambda *args, item=item, **kwargs: json.dumps(item))
         with pytest.raises(ValueError, match="release changelog"):
-            runner.build_release_changelog("o/r", [10])
+            release.build_release_changelog("o/r", [10])
+    monkeypatch.setattr(release, "run_command", lambda *args, **kwargs: json.dumps({
+        "number": 10, "title": "", "body": "\nConcrete summary\n",
+        "url": "https://github.com/o/r/issues/10", "labels": [],
+        "closedByPullRequestsReferences": [],
+    }))
     monkeypatch.setattr(runner, "run_command", lambda *args, **kwargs: json.dumps({
         "number": 10, "title": "", "body": "\nConcrete summary\n",
         "url": "https://github.com/o/r/issues/10", "labels": [],
         "closedByPullRequestsReferences": [],
     }))
-    assert "Concrete summary" in runner.build_release_changelog("o/r", [10])
+    assert "Concrete summary" in release.build_release_changelog("o/r", [10])
+    monkeypatch.setattr(release, "run_command", lambda *args, **kwargs: json.dumps({
+        "number": 10, "title": "Merge direct release work", "body": "",
+        "url": "https://github.com/o/r/pull/10", "labels": [],
+        "closedByPullRequestsReferences": [],
+    }))
     monkeypatch.setattr(runner, "run_command", lambda *args, **kwargs: json.dumps({
         "number": 10, "title": "Merge direct release work", "body": "",
         "url": "https://github.com/o/r/pull/10", "labels": [],
         "closedByPullRequestsReferences": [],
     }))
     assert "[PR #10](https://github.com/o/r/pull/10)" in (
-        runner.build_release_changelog("o/r", [10])
+        release.build_release_changelog("o/r", [10])
     )
 
 
 def test_publish_release_creates_when_missing_and_returns_url(monkeypatch):
     calls = make_release_gh(monkeypatch, release_exists=False)
-    url = runner.publish_release(
+    url = release.publish_release(
         repo="o/r", tag="v0.3.0", version="v0.3.0",
         release_commit="abc123", changelog="## Changelog\n\n### Features\n\n- A useful change ([Issue #123](https://github.com/o/r/issues/123))",
         scope_evidence=["PR #123 merged (mergeCommit=aaa111)"],
@@ -16566,7 +16605,7 @@ def test_publish_release_creates_when_missing_and_returns_url(monkeypatch):
 
 def test_publish_release_reuses_the_existing_release(monkeypatch):
     calls = make_release_gh(monkeypatch, release_exists=True)
-    url = runner.publish_release(
+    url = release.publish_release(
         repo="o/r", tag="v0.3.0", version="v0.3.0",
         release_commit="abc123", changelog="## Changelog",
         scope_evidence=[], gate_evidence=[], test_evidence="ok",
@@ -16581,7 +16620,7 @@ def test_publish_release_upgrades_existing_notes_without_a_changelog(monkeypatch
     calls = make_release_gh(
         monkeypatch, release_exists=True, release_body="# v0.2.0\n\nIssue #10 closed",
     )
-    runner.publish_release(
+    release.publish_release(
         repo="o/r", tag="v0.2.0", version="v0.2.0",
         release_commit="abc123", changelog="## Changelog\n\n### Features\n\n- Useful change",
         scope_evidence=[], gate_evidence=[], test_evidence="ok",
@@ -16598,9 +16637,10 @@ def test_publish_release_reraises_real_gh_failure(monkeypatch):
         raise subprocess.CalledProcessError(
             1, command, stderr="HTTP 403: rate limited",
         )
+    monkeypatch.setattr(release, "run_command", fail)
     monkeypatch.setattr(runner, "run_command", fail)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.publish_release(
+        release.publish_release(
             repo="o/r", tag="v0.3.0", version="v0.3.0",
             release_commit="abc123", changelog="## Changelog",
             scope_evidence=[], gate_evidence=[], test_evidence="ok",
@@ -16745,37 +16785,38 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             return ""
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "set_run_id",
+    monkeypatch.setattr(release, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(release, "set_run_id",
                         lambda rid: state["run_ids"].append(rid))
-    monkeypatch.setattr(runner, "has_in_progress_label",
+    monkeypatch.setattr(release, "has_in_progress_label",
                         lambda n, r: in_progress)
-    monkeypatch.setattr(runner, "latest_run_id",
+    monkeypatch.setattr(release, "latest_run_id",
                         lambda r, s, n: existing_run_id)
-    monkeypatch.setattr(runner, "freeze_base", lambda r, b: "abc123")
+    monkeypatch.setattr(release, "freeze_base", lambda r, b: "abc123")
     monkeypatch.setattr(runner, "edit_issue",
                         lambda n, **k: state["edits"].append((n, k)))
-    monkeypatch.setattr(runner, "comment_issue",
+    monkeypatch.setattr(release, "comment_issue",
                         lambda n, **k: state["comments"].append((n, k)))
     monkeypatch.setattr(runner, "create_worktree",
                         lambda *a: Path("/wt"))
-    monkeypatch.setattr(runner, "create_release_worktree",
+    monkeypatch.setattr(release, "create_release_worktree",
                         lambda *a: Path("/wt"))
-    monkeypatch.setattr(runner, "ProgressPublisher", Mock())
-    monkeypatch.setattr(runner, "_safe_publish", lambda **k: None)
-    monkeypatch.setattr(runner, "set_active_run",
+    monkeypatch.setattr(release, "ProgressPublisher", Mock())
+    monkeypatch.setattr(release, "_safe_publish", lambda **k: None)
+    monkeypatch.setattr(release, "set_active_run",
                         lambda *a: state["active_runs"].append(a))
-    monkeypatch.setattr(runner, "LOGGER", Mock())
-    monkeypatch.setattr(runner, "release_tag_commit",
+    monkeypatch.setattr(release, "LOGGER", Mock())
+    monkeypatch.setattr(release, "release_tag_commit",
                         lambda r, t: tag_commit)
-    monkeypatch.setattr(runner, "prepare_release_version",
+    monkeypatch.setattr(release, "prepare_release_version",
                         lambda worktree, tag, base_branch: "abc123")
     monkeypatch.setattr(
-        runner, "refresh_cli_install",
+        release, "refresh_cli_install",
         lambda worktree, **kwargs: "installed",
     )
-    monkeypatch.setattr(runner, "publish_release", lambda **k: release_url)
+    monkeypatch.setattr(release, "publish_release", lambda **k: release_url)
     # Issue #275: the docs sync step is covered by its own unit tests
     # (real git repos); here it is stubbed so the orchestration order is
     # what is asserted.
@@ -16783,7 +16824,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
         state["sync_docs_calls"].append(kwargs)
         return "docs release notes for " + kwargs["tag"] + " synced to base"
 
-    monkeypatch.setattr(runner, "sync_release_docs", fake_sync_docs)
+    monkeypatch.setattr(release, "sync_release_docs", fake_sync_docs)
     return state
 
 
@@ -16794,7 +16835,7 @@ def test_process_release_waiting_returns_ready_and_records_open_deliveries(monke
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == ""
@@ -16818,7 +16859,7 @@ def test_process_release_ignores_unrelated_milestone_deliveries(monkeypatch):
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
              "milestone": {"title": "v0.3.0"}}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
@@ -16845,7 +16886,7 @@ def test_process_release_still_waits_for_same_milestone_deliveries(monkeypatch):
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
              "milestone": {"title": "v0.3.0"}}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == ""
@@ -16858,7 +16899,7 @@ def test_process_release_wait_timeout_uses_persisted_wait_start(monkeypatch):
     state = make_release_process_env(
         monkeypatch, leftover_labels={"ai-in-progress": [7]},
     )
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [
+    monkeypatch.setattr(release, "issue_comments", lambda *a, **k: [
         {
             "authorAssociation": "MEMBER",
             "body": "<!-- orbi:run=aaaaaaaa -->\n"
@@ -16883,7 +16924,7 @@ def test_process_release_wait_timeout_uses_persisted_wait_start(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main",
                 "release_deliveries_wait_seconds": 5}, "o/r",
     )
@@ -16895,7 +16936,7 @@ def test_process_release_uses_declared_package_version_file(monkeypatch):
     state = make_release_process_env(monkeypatch)
     seen = []
     monkeypatch.setattr(
-        runner, "prepare_release_version",
+        release, "prepare_release_version",
         lambda *args: seen.append(args) or "abc123",
     )
     body = RELEASE_DECLARATION_BODY.replace(
@@ -16903,7 +16944,7 @@ def test_process_release_uses_declared_package_version_file(monkeypatch):
     )
     issue = {"number": 99, "title": "Release v0.3.0", "body": body,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    runner.process_release(issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r")
+    release.process_release(issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r")
     assert seen == [(Path("/wt"), "v0.3.0", "main", "package.json")]
 
 
@@ -16912,7 +16953,7 @@ def test_process_release_success_end_to_end(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
@@ -16987,7 +17028,7 @@ def test_process_release_refreshes_deployment_cli_after_version_bump(
     )
     order = []
     monkeypatch.setattr(
-        runner, "prepare_release_version",
+        release, "prepare_release_version",
         lambda worktree, tag, base_branch: order.append("version") or "abc123",
     )
 
@@ -16998,12 +17039,12 @@ def test_process_release_refreshes_deployment_cli_after_version_bump(
         assert kwargs["run_command"] is runner.run_command
         return "installed"
 
-    monkeypatch.setattr(runner, "refresh_cli_install", refresh)
+    monkeypatch.setattr(release, "refresh_cli_install", refresh)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
 
-    assert runner.process_release(
+    assert release.process_release(
         issue,
         {"repo_dir": source,
          "deploy_home": deployment,
@@ -17027,7 +17068,7 @@ def test_process_release_derives_scope_from_milestone(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_MILESTONE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
@@ -17060,14 +17101,14 @@ def test_process_release_lists_open_milestone_items(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_MILESTONE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     # Open items are surfaced as a warning and in the auditable success
     # comment — never silently swallowed, never part of the scope.
     warn_calls = [
-        c.args for c in runner.LOGGER.warning.call_args_list
+        c.args for c in release.LOGGER.warning.call_args_list
         if c.args and "release_milestone_open_items" in str(c.args)
     ]
     assert len(warn_calls) == 1
@@ -17092,7 +17133,7 @@ def test_process_release_fails_on_empty_derived_scope(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_MILESTONE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == ""
@@ -17122,18 +17163,18 @@ def test_process_release_waits_for_pending_ci_and_succeeds(monkeypatch):
         # progress-comment wait reflection is actually recorded.
         kwargs["action"]()
 
-    monkeypatch.setattr(runner, "_safe_publish", run_publish_actions)
+    monkeypatch.setattr(release, "_safe_publish", run_publish_actions)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     assert not any(k.get("add") == "ai-blocked" for _, k in state["edits"])
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged",
                                        "remove": "ai-in-progress"})
-    publisher = runner.ProgressPublisher.return_value
+    publisher = release.ProgressPublisher.return_value
     patched = [c.args[0] for c in publisher.patch.call_args_list]
     assert any("waiting CI: check 'tests' is in_progress/None" in body
                for body in patched)
@@ -17152,7 +17193,7 @@ def test_process_release_ci_wait_timeout_blocks_with_distinct_reason(
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue,
         {"repo_dir": Path("/r"), "base_branch": "main",
          "release_ci_wait_seconds": 0},
@@ -17181,7 +17222,7 @@ def test_process_release_gate_failure_blocks_and_returns_cleanly(monkeypatch):
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
 
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
 
@@ -17212,7 +17253,7 @@ def test_process_release_publish_closeout_failure_keeps_release_result(
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     # The published release result stands; the closeout failure never
@@ -17221,7 +17262,7 @@ def test_process_release_publish_closeout_failure_keeps_release_result(
     assert not any(k.get("add") == "ai-blocked" for _, k in state["edits"])
     assert any(
         "release_publish_closeout_failed" in str(call)
-        for call in runner.LOGGER.exception.call_args_list
+        for call in release.LOGGER.exception.call_args_list
     )
 
 
@@ -17239,11 +17280,11 @@ def test_process_release_success_comment_failure_keeps_release_result(
         # failing unconditionally fails exactly that comment.
         raise RuntimeError("GitHub unavailable")
 
-    monkeypatch.setattr(runner, "comment_issue", failing_comment)
+    monkeypatch.setattr(release, "comment_issue", failing_comment)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     # The published release result stands; the failed evidence comment
@@ -17256,7 +17297,7 @@ def test_process_release_success_comment_failure_keeps_release_result(
     assert not state["comments"]
     assert any(
         "release_success_comment_failed" in str(call)
-        for call in runner.LOGGER.exception.call_args_list
+        for call in release.LOGGER.exception.call_args_list
     )
 
 
@@ -17278,11 +17319,12 @@ def test_process_release_milestone_failure_keeps_release_successful(monkeypatch)
             return json.dumps([[{"number": 101, "title": "leftover"}]])
         return real(command, **kwargs)
 
+    monkeypatch.setattr(release, "run_command", milestone_failing)
     monkeypatch.setattr(runner, "run_command", milestone_failing)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == "https://github.com/o/r/releases/tag/v0.3.0"
@@ -17313,11 +17355,11 @@ def test_process_release_docs_sync_failure_fails_fast_and_blocks(monkeypatch):
             "(non-fast-forward)"
         )
 
-    monkeypatch.setattr(runner, "sync_release_docs", sync_failing)
+    monkeypatch.setattr(release, "sync_release_docs", sync_failing)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == ""
@@ -17344,7 +17386,7 @@ def test_process_release_reuses_the_run_id_on_resume(monkeypatch):
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"},
                         {"name": "ai-in-progress"}]}
-    runner.process_release(
+    release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     # The fresh id is generated first (the normal-path rule), then the
@@ -17358,7 +17400,7 @@ def test_process_release_fails_on_malformed_declaration(monkeypatch):
     state = make_release_process_env(monkeypatch)
     issue = {"number": 99, "title": "Release v0.3.0", "body": "no section",
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == ""
@@ -17384,7 +17426,7 @@ def test_process_release_ignores_a_legacy_test_command_and_never_runs_it(monkeyp
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": LEGACY_TEST_COMMAND_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == "https://github.com/o/r/releases/tag/v0.3.0"
@@ -17392,7 +17434,7 @@ def test_process_release_ignores_a_legacy_test_command_and_never_runs_it(monkeyp
                                        "remove": "ai-in-progress"})
     assert not [c for c, _ in state["commands"] if c[:1] == ["timeout"]]
     ignored = [
-        call for call in runner.LOGGER.info.call_args_list
+        call for call in release.LOGGER.info.call_args_list
         if "release_test_command_ignored" in str(call)
     ]
     assert len(ignored) == 1
@@ -17416,11 +17458,12 @@ def test_process_release_fails_on_tag_mismatch_without_moving_it(monkeypatch):
             )
         return real_run(command, **kwargs)
 
+    monkeypatch.setattr(release, "run_command", merge_base_failing)
     monkeypatch.setattr(runner, "run_command", merge_base_failing)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == ""
@@ -17439,7 +17482,7 @@ def test_process_release_reuses_a_matching_existing_tag(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
@@ -17451,12 +17494,12 @@ def test_process_release_reuses_a_matching_existing_tag(monkeypatch):
 def test_process_release_recovers_existing_ancestor_tag(monkeypatch):
     state = make_release_process_env(monkeypatch, tag_commit="tag123")
     monkeypatch.setattr(
-        runner, "tag_commit_is_ancestor_of_base", lambda *args: True,
+        release, "tag_commit_is_ancestor_of_base", lambda *args: True,
     )
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    assert runner.process_release(
+    assert release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     ) == "https://github.com/o/r/releases/tag/v0.3.0"
     assert state["sync_docs_calls"][0]["release_commit"] == "tag123"
@@ -17472,11 +17515,12 @@ def test_process_release_fails_on_scope_violation(monkeypatch):
                 "number": 123, "state": "OPEN", "mergeCommit": None,
             })
         return real(command, **kwargs)
+    monkeypatch.setattr(release, "run_command", scope_failing)
     monkeypatch.setattr(runner, "run_command", scope_failing)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == ""
@@ -17521,8 +17565,9 @@ def test_close_release_milestone_closes_an_open_empty_milestone(monkeypatch):
             return json.dumps(_milestone(5, "v0.3.0", "closed", 0))
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
-    evidence = runner.close_release_milestone("o/r", "v0.3.0")
+    evidence = release.close_release_milestone("o/r", "v0.3.0")
     # The close uses the official REST contract
     # (PATCH /repos/{owner}/{repo}/milestones/{number}, state=closed)
     # and the list query asks for ALL states (the idempotent case needs
@@ -17548,8 +17593,9 @@ def test_close_release_milestone_is_idempotent_when_already_closed(monkeypatch):
             ]])
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
-    evidence = runner.close_release_milestone("o/r", "v0.3.0")
+    evidence = release.close_release_milestone("o/r", "v0.3.0")
     # Already closed: no mutation at all (no PATCH, no reopen).
     assert calls == [MILESTONE_LIST_COMMAND]
     assert "already closed" in evidence
@@ -17569,9 +17615,10 @@ def test_close_release_milestone_fails_fast_without_a_matching_title(monkeypatch
             ]])
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="no Milestone with the exact title"):
-        runner.close_release_milestone("o/r", "v0.3.0")
+        release.close_release_milestone("o/r", "v0.3.0")
     # No mutation, no fuzzy match against a different Milestone.
     assert calls == [MILESTONE_LIST_COMMAND]
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -17592,9 +17639,10 @@ def test_close_release_milestone_fails_fast_when_open_issues_remain(monkeypatch)
                                 {"number": 102, "title": "leftover two"}]])
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="Milestone #5") as excinfo:
-        runner.close_release_milestone("o/r", "v0.3.0")
+        release.close_release_milestone("o/r", "v0.3.0")
     # The error carries the version, the Milestone number/url and the
     # open issue list — never a silent skip.
     assert "v0.3.0" in str(excinfo.value)
@@ -17619,9 +17667,10 @@ def test_close_release_milestone_fails_fast_on_duplicate_titles(monkeypatch):
             ]])
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="ambiguous") as excinfo:
-        runner.close_release_milestone("o/r", "v0.3.0")
+        release.close_release_milestone("o/r", "v0.3.0")
     # Both candidates are named; neither is closed.
     assert "#5" in str(excinfo.value)
     assert "#7" in str(excinfo.value)
@@ -17909,9 +17958,10 @@ def test_close_release_milestone_reconciles_epics_when_summary_lags(monkeypatch)
         if command[-1:] == ["state=closed"]:
             return ""
         raise AssertionError(command)
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "reconcile_release_epics", lambda *args: ["Epic #20 closed"])
-    result = runner.close_release_milestone("o/r", "v0.4.0", run_id="abc12345")
+    monkeypatch.setattr(release, "reconcile_release_epics", lambda *args: ["Epic #20 closed"])
+    result = release.close_release_milestone("o/r", "v0.4.0", run_id="abc12345")
     assert "Epic #20 closed" in result
     assert any(command[-1:] == ["state=closed"] for command in calls)
     with pytest.raises(AssertionError):
@@ -18091,13 +18141,14 @@ def fake_gh_release_view(monkeypatch, *, body: str, tag: str = "v0.4.0",
         return real(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", mixed)
+    monkeypatch.setattr(release, "run_command", mixed)
     return real
 
 
 def test_release_docs_page_en_carries_meta_and_body_without_duplicate_heading():
     tag_object = "t" * 40
     release_commit = "c" * 40
-    page = runner.release_docs_page(
+    page = release.release_docs_page(
         version="v0.4.0", tag_object=tag_object,
         release_commit=release_commit,
         published_at="2026-09-08T12:00:00Z",
@@ -18116,7 +18167,7 @@ def test_release_docs_page_en_carries_meta_and_body_without_duplicate_heading():
 
 
 def test_release_docs_page_zh_uses_the_chinese_title_and_table():
-    page = runner.release_docs_page(
+    page = release.release_docs_page(
         version="v0.4.0", tag_object="t" * 40, release_commit="c" * 40,
         published_at="2026-09-08T12:00:00Z",
         release_url="https://github.com/o/r/releases/tag/v0.4.0",
@@ -18132,7 +18183,7 @@ def test_release_docs_page_zh_uses_the_chinese_title_and_table():
 
 
 def test_release_docs_page_keeps_a_body_without_leading_heading():
-    page = runner.release_docs_page(
+    page = release.release_docs_page(
         version="v0.4.0", tag_object="t" * 40, release_commit="c" * 40,
         published_at="2026-09-08T12:00:00Z",
         release_url="https://github.com/o/r/releases/tag/v0.4.0",
@@ -18145,7 +18196,7 @@ def test_release_docs_page_keeps_a_body_without_leading_heading():
 
 def test_update_release_navigation_inserts_the_new_version_first_in_both_groups():
     config_text = release_docs_fixture_config()
-    new_text, changed = runner.update_release_navigation(
+    new_text, changed = release.update_release_navigation(
         config_text, "release-v0.4.0",
     )
     assert changed is True
@@ -18163,7 +18214,7 @@ def test_update_release_navigation_inserts_the_new_version_first_in_both_groups(
 
 def test_update_release_navigation_is_idempotent_when_already_listed():
     config_text = release_docs_fixture_config("release-v0.4.0")
-    new_text, changed = runner.update_release_navigation(
+    new_text, changed = release.update_release_navigation(
         config_text, "release-v0.4.0",
     )
     assert changed is False
@@ -18177,7 +18228,7 @@ def test_move_latest_marker_strips_the_marker_from_both_previous_pages(tmp_path)
     zh = work / "docs" / "zh" / "release-v0.1.2.mdx"
     en.write_text("# v0.1.2 release (latest)\n\nrest\n", encoding="utf-8")
     zh.write_text("# v0.1.2 发布（最新）\n\n余下内容\n", encoding="utf-8")
-    changed = runner.move_latest_marker(
+    changed = release.move_latest_marker(
         work, "release-v0.1.2", "release-v0.4.0", resume=False,
     )
     assert changed == ["docs/release-v0.1.2.mdx",
@@ -18196,7 +18247,7 @@ def test_move_latest_marker_fails_fast_when_the_marker_is_missing(tmp_path):
         "# v0.1.2 发布\n\n余下内容\n", encoding="utf-8",
     )
     with pytest.raises(RuntimeError, match=r"does not carry the \(latest\)"):
-        runner.move_latest_marker(
+        release.move_latest_marker(
             work, "release-v0.1.2", "release-v0.4.0", resume=False,
         )
 
@@ -18220,7 +18271,7 @@ def test_move_latest_marker_accepts_an_already_moved_marker_on_resume(
     (work / "docs" / "zh" / "release-v0.4.0.mdx").write_text(
         "# v0.4.0 发布（最新）\n\n新\n", encoding="utf-8",
     )
-    assert runner.move_latest_marker(
+    assert release.move_latest_marker(
         work, "release-v0.1.2", "release-v0.4.0", resume=True,
     ) == []
 
@@ -18230,7 +18281,7 @@ def test_move_latest_marker_fails_fast_when_the_previous_page_is_missing(
     work = tmp_path / "work"
     (work / "docs").mkdir(parents=True)
     with pytest.raises(RuntimeError, match="is missing"):
-        runner.move_latest_marker(
+        release.move_latest_marker(
             work, "release-v0.1.2", "release-v0.4.0", resume=False,
         )
 
@@ -18242,7 +18293,7 @@ def test_sync_release_docs_generates_pages_navigation_marker_and_commits(
     subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
                     "-m", "rel", head], check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    evidence = runner.sync_release_docs(
+    evidence = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
@@ -18293,14 +18344,14 @@ def test_sync_release_docs_is_idempotent_on_rerun(tmp_path, monkeypatch):
     subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
                     "-m", "rel", head], check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    first = runner.sync_release_docs(
+    first = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
     )
     after_first_head = git_out(work, "rev-parse", "HEAD")
     en_before = (work / "docs" / "release-v0.4.0.mdx").read_text(encoding="utf-8")
-    second = runner.sync_release_docs(
+    second = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
@@ -18332,9 +18383,10 @@ def test_sync_release_docs_resume_after_failed_push_recommits_normally(
     def failing_push(command, **kwargs):
         raise subprocess.CalledProcessError(1, command, stderr="boom")
 
+    monkeypatch.setattr(release, "run_git_network_command", failing_push)
     monkeypatch.setattr(runner, "run_git_network_command", failing_push)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
@@ -18347,8 +18399,9 @@ def test_sync_release_docs_resume_after_failed_push_recommits_normally(
     # 重放（对 release_commit 的一条 `git reset --hard`）。
     subprocess.run(["git", "-C", str(work), "reset", "--hard", head],
                    check=True, capture_output=True)
+    monkeypatch.setattr(release, "run_git_network_command", original)
     monkeypatch.setattr(runner, "run_git_network_command", original)
-    evidence = runner.sync_release_docs(
+    evidence = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
@@ -18374,7 +18427,7 @@ def test_sync_release_docs_stale_tracking_ref_is_not_a_false_recovery(
     subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
                     "-m", "rel", head], check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    runner.sync_release_docs(
+    release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
@@ -18388,8 +18441,9 @@ def test_sync_release_docs_stale_tracking_ref_is_not_a_false_recovery(
     # the fixed world where the push never happens — the assertion below
     # is what fails if it ever does.
     no_push = Mock()
+    monkeypatch.setattr(release, "run_git_network_command", no_push)
     monkeypatch.setattr(runner, "run_git_network_command", no_push)
-    evidence = runner.sync_release_docs(
+    evidence = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
@@ -18429,9 +18483,10 @@ def test_sync_release_docs_resumes_after_a_partial_step(tmp_path, monkeypatch):
             )
         return gh_view(command, **kwargs)
 
+    monkeypatch.setattr(release, "run_command", crash_before_commit)
     monkeypatch.setattr(runner, "run_command", crash_before_commit)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
@@ -18445,8 +18500,9 @@ def test_sync_release_docs_resumes_after_a_partial_step(tmp_path, monkeypatch):
         git_out(work, "rev-parse", "HEAD")
     # The re-run finishes: marker move is a lenient no-op, the nav is
     # updated, one commit lands on main.
+    monkeypatch.setattr(release, "run_command", gh_view)
     monkeypatch.setattr(runner, "run_command", gh_view)
-    evidence = runner.sync_release_docs(
+    evidence = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
@@ -18475,7 +18531,7 @@ def test_sync_release_docs_fails_fast_when_the_existing_page_differs(
                    check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
     with pytest.raises(RuntimeError, match="already exists with different"):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
@@ -18496,7 +18552,7 @@ def test_sync_release_docs_fails_fast_when_the_previous_latest_lacks_the_marker(
                     "-m", "rel", head], check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
     with pytest.raises(RuntimeError, match=r"does not carry the \(latest\)"):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
@@ -18511,7 +18567,7 @@ def test_sync_release_docs_fails_fast_on_an_empty_release_body(
                     "-m", "rel", head], check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body="   ")
     with pytest.raises(RuntimeError, match="body is empty"):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
@@ -18526,7 +18582,7 @@ def test_sync_release_docs_propagates_a_missing_release(tmp_path, monkeypatch):
                     "-m", "rel", head], check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body="x", raise_not_found=True)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
@@ -18540,7 +18596,7 @@ def test_sync_release_docs_fails_fast_when_the_base_advanced(
     subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
                     "-m", "rel", old_head], check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    runner.sync_release_docs(
+    release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=old_head,
         issue_number=77,
@@ -18566,9 +18622,10 @@ def test_sync_release_docs_fails_fast_when_the_base_advanced(
             })
         return real_run(command, **kwargs)
 
+    monkeypatch.setattr(release, "run_command", view_v041)
     monkeypatch.setattr(runner, "run_command", view_v041)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=stale,
             base_branch="main", tag="v0.4.1", release_commit=old_head,
             issue_number=78,
@@ -18587,7 +18644,7 @@ def test_sync_release_docs_fails_fast_when_the_tag_is_missing_locally(
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040,
                          tag="v0.9.9")
     with pytest.raises(subprocess.CalledProcessError):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.9.9", release_commit=head,
             issue_number=77,
@@ -18596,7 +18653,7 @@ def test_sync_release_docs_fails_fast_when_the_tag_is_missing_locally(
 
 def test_release_docs_page_rejects_an_unknown_language():
     with pytest.raises(ValueError, match="not supported"):
-        runner.release_docs_page(
+        release.release_docs_page(
             version="v0.4.0", tag_object="t" * 40,
             release_commit="c" * 40, published_at="2026-09-08T12:00:00Z",
             release_url="https://github.com/o/r/releases/tag/v0.4.0",
@@ -18615,7 +18672,7 @@ def test_release_docs_page_drops_html_comment_lines_but_keeps_the_run_id():
         "<!-- orbi:run=a1b2c3d4 -->\n"
         "run_id=a1b2c3d4"
     )
-    page = runner.release_docs_page(
+    page = release.release_docs_page(
         version="v0.4.0", tag_object="t" * 40, release_commit="c" * 40,
         published_at="2026-09-08T12:00:00Z",
         release_url="https://github.com/o/r/releases/tag/v0.4.0",
@@ -18627,7 +18684,7 @@ def test_release_docs_page_drops_html_comment_lines_but_keeps_the_run_id():
 
 
 def test_release_docs_page_handles_a_body_without_any_lines():
-    page = runner.release_docs_page(
+    page = release.release_docs_page(
         version="v0.4.0", tag_object="t" * 40, release_commit="c" * 40,
         published_at="2026-09-08T12:00:00Z",
         release_url="https://github.com/o/r/releases/tag/v0.4.0",
@@ -18639,7 +18696,7 @@ def test_release_docs_page_handles_a_body_without_any_lines():
 
 def test_current_latest_release_slug_returns_the_first_en_release_page():
     config_text = release_docs_fixture_config()
-    assert runner.current_latest_release_slug(config_text) == \
+    assert release.current_latest_release_slug(config_text) == \
         "release-v0.1.2"
 
 
@@ -18648,7 +18705,7 @@ def test_current_latest_release_slug_fails_fast_on_an_empty_release_group():
     config = json.loads(config_text)
     config["navigation"]["languages"][0]["groups"][1]["pages"] = []
     with pytest.raises(RuntimeError, match="has no pages"):
-        runner.current_latest_release_slug(
+        release.current_latest_release_slug(
             json.dumps(config),
         )
 
@@ -18660,7 +18717,7 @@ def test_current_latest_release_slug_fails_fast_without_an_en_release_group():
         config["navigation"]["languages"][1],
     ]
     with pytest.raises(RuntimeError, match="no English Releases group"):
-        runner.current_latest_release_slug(
+        release.current_latest_release_slug(
             json.dumps(config, ensure_ascii=False),
         )
 
@@ -18674,7 +18731,7 @@ def test_current_latest_release_slug_fails_fast_when_en_lacks_a_release_group():
         {"group": "Getting Started", "pages": ["index"]},
     ]
     with pytest.raises(RuntimeError, match="no English Releases group"):
-        runner.current_latest_release_slug(json.dumps(config))
+        release.current_latest_release_slug(json.dumps(config))
 
 
 def test_update_release_navigation_fails_fast_when_only_one_group_exists():
@@ -18684,7 +18741,7 @@ def test_update_release_navigation_fails_fast_when_only_one_group_exists():
         config["navigation"]["languages"][0],
     ]
     with pytest.raises(RuntimeError, match="expected exactly two release"):
-        runner.update_release_navigation(
+        release.update_release_navigation(
             json.dumps(config), "release-v0.4.0",
         )
 
@@ -18702,7 +18759,7 @@ def test_move_latest_marker_fails_fast_on_resume_when_the_new_page_is_missing(
         "# v0.1.2 发布\n\n余下内容\n", encoding="utf-8",
     )
     with pytest.raises(RuntimeError, match=r"does not carry the \(latest\)"):
-        runner.move_latest_marker(
+        release.move_latest_marker(
             work, "release-v0.1.2", "release-v0.4.0", resume=True,
         )
 
@@ -18725,9 +18782,10 @@ def test_sync_release_docs_fails_fast_when_the_body_is_not_a_string(
             })
         return real(command, **kwargs)
 
+    monkeypatch.setattr(release, "run_command", bad_body)
     monkeypatch.setattr(runner, "run_command", bad_body)
     with pytest.raises(RuntimeError, match="body is empty"):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
@@ -18743,7 +18801,7 @@ def test_sync_release_docs_skips_when_docs_json_is_missing(tmp_path):
     subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
                     "-m", "rel", head], check=True, capture_output=True)
     (work / "docs" / "docs.json").unlink()
-    evidence = runner.sync_release_docs(
+    evidence = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
@@ -18767,9 +18825,10 @@ def test_sync_release_docs_fails_fast_on_a_real_git_diff_error(
             )
         return real(command, **kwargs)
 
+    monkeypatch.setattr(release, "run_command", diff_failing)
     monkeypatch.setattr(runner, "run_command", diff_failing)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
@@ -18788,9 +18847,9 @@ def test_tag_commit_is_ancestor_of_base_true_when_ancestor(tmp_path):
     subprocess.run(["git", "-C", str(work), "commit", "-m", "docs"],
                    check=True, capture_output=True)
     docs_head = git_out(work, "rev-parse", "HEAD")
-    assert runner.tag_commit_is_ancestor_of_base(
+    assert release.tag_commit_is_ancestor_of_base(
         tag_commit, docs_head, work) is True
-    assert runner.tag_commit_is_ancestor_of_base(
+    assert release.tag_commit_is_ancestor_of_base(
         docs_head, tag_commit, work) is False
 
 
@@ -18809,7 +18868,7 @@ def test_tag_commit_is_ancestor_of_base_false_on_unrelated_commits(
     subprocess.run(["git", "-C", str(work), "commit", "-m", "side"],
                    check=True, capture_output=True)
     side_head = git_out(work, "rev-parse", "HEAD")
-    assert runner.tag_commit_is_ancestor_of_base(
+    assert release.tag_commit_is_ancestor_of_base(
         side_head, base, work) is False
 
 
@@ -18824,11 +18883,11 @@ def test_process_release_resumes_after_docs_sync_advanced_the_base(
     # The frozen base is the docs commit (a descendant of the tag commit);
     # the env's fake_run_command answers "ancestor" for the merge-base
     # check.
-    monkeypatch.setattr(runner, "freeze_base", lambda r, b: "docs456")
+    monkeypatch.setattr(release, "freeze_base", lambda r, b: "docs456")
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    release_url = runner.process_release(
+    release_url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert release_url == "https://github.com/o/r/releases/tag/v0.3.0"
@@ -18844,9 +18903,10 @@ def test_close_release_milestone_rejects_a_non_array_milestone_list(monkeypatch)
             return json.dumps({"number": 5, "title": "v0.3.0"})
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(ValueError, match="must be an array of arrays"):
-        runner.close_release_milestone("o/r", "v0.3.0")
+        release.close_release_milestone("o/r", "v0.3.0")
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["unexpected"])
 
@@ -18859,22 +18919,23 @@ def test_close_release_milestone_reraises_a_real_gh_failure(monkeypatch):
             )
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.close_release_milestone("o/r", "v0.3.0")
+        release.close_release_milestone("o/r", "v0.3.0")
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["unexpected"])
 
 
 def test_parse_release_declaration_rejects_non_string_body():
     with pytest.raises(ValueError, match="must be a string"):
-        runner.parse_release_declaration(123)
+        release.parse_release_declaration(123)
 
 
 def test_parse_release_declaration_rejects_empty_section():
     # `## Release` is the very last line: the section holds no fields.
     with pytest.raises(ValueError, match="version"):
-        runner.parse_release_declaration("Ship it.\n\n## Release\n")
+        release.parse_release_declaration("Ship it.\n\n## Release\n")
 
 
 def test_parse_release_declaration_rejects_colonless_field_line():
@@ -18884,19 +18945,19 @@ def test_parse_release_declaration_rejects_colonless_field_line():
         "## Release\n", "## Release\n\n- broken\n",
     )
     with pytest.raises(ValueError, match=r"field 'broken' is malformed"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_inline_scope_value():
     body = RELEASE_DECLARATION_BODY.replace("- scope:\n", "- scope: 123\n")
     with pytest.raises(ValueError, match="not an inline value"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_plain_line_in_scope():
     body = RELEASE_DECLARATION_BODY.replace("  - #123", "hello")
     with pytest.raises(ValueError, match=r"scope item 'hello' is malformed"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_plain_line_outside_scope():
@@ -18907,7 +18968,7 @@ def test_parse_release_declaration_rejects_plain_line_outside_scope():
         "## Release\n", "## Release\n\nhello\n",
     )
     with pytest.raises(ValueError, match=r"line 'hello' is not a"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_verify_release_scope_reraises_real_issue_gh_failure(monkeypatch):
@@ -18924,9 +18985,10 @@ def test_verify_release_scope_reraises_real_issue_gh_failure(monkeypatch):
             )
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fail)
     monkeypatch.setattr(runner, "run_command", fail)
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
-        runner.verify_release_scope("o/r", [7], Path("/repo"), "release123")
+        release.verify_release_scope("o/r", [7], Path("/repo"), "release123")
     assert "HTTP 403: rate limited" in str(excinfo.value.stderr)
     # The fake rejects anything that is not pr/issue view traffic.
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -18943,7 +19005,7 @@ def test_process_release_keeps_the_fresh_id_when_no_run_id_is_recoverable(
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"},
                         {"name": "ai-in-progress"}]}
-    runner.process_release(
+    release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert state["run_ids"] == ["a1b2c3d4"]
@@ -18962,18 +19024,18 @@ def test_process_release_publishes_the_release_role_progress_body(
         publishes.append(kwargs)
         kwargs["action"]()
 
-    monkeypatch.setattr(runner, "_safe_publish", publish)
+    monkeypatch.setattr(release, "_safe_publish", publish)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     assert publishes, "no progress publish happened"
     assert all(kwargs["role"] == "release" for kwargs in publishes)
     assert all(kwargs["issue"] == 99 for kwargs in publishes)
-    publisher = runner.ProgressPublisher.return_value
+    publisher = release.ProgressPublisher.return_value
     assert publisher.ensure.call_count == 1
     body = publisher.ensure.call_args[0][0]
     assert "<!-- orbi:run=a1b2c3d4 -->" in body
@@ -18989,7 +19051,7 @@ def test_process_release_fails_on_scope_item_that_is_neither(monkeypatch):
     state = make_release_process_env(monkeypatch, body=body)
     issue = {"number": 99, "title": "Release v0.3.0", "body": body,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == ""
@@ -19025,9 +19087,9 @@ def test_release_process_env_fake_answers_the_real_tag_probe(tmp_path,
                                                              monkeypatch):
     # The env fake answers the `git ls-remote` of the REAL
     # `release_tag_commit` (the lock is taken for real on tmp_path).
-    real_release_tag_commit = runner.release_tag_commit
+    real_release_tag_commit = release.release_tag_commit
     make_release_process_env(monkeypatch)
-    monkeypatch.setattr(runner, "release_tag_commit",
+    monkeypatch.setattr(release, "release_tag_commit",
                         real_release_tag_commit)
 
     def fake(command, **kwargs):
@@ -19036,10 +19098,11 @@ def test_release_process_env_fake_answers_the_real_tag_probe(tmp_path,
                     "abc123\trefs/tags/v0.3.0^{}\n")
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake)
     monkeypatch.setattr(runner, "run_command", fake)
     with pytest.raises(AssertionError, match="unexpected command"):
         fake(["git", "fetch", "origin"])
-    assert runner.release_tag_commit(tmp_path, "v0.3.0") == "abc123"
+    assert release.release_tag_commit(tmp_path, "v0.3.0") == "abc123"
 
 
 # --- Issue #186: deliver_pr — the Runner owns the deterministic closeout ----

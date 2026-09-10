@@ -23,6 +23,7 @@ import re
 from pathlib import Path
 
 import orbi.runner as runner
+import orbi.release as release
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
@@ -482,7 +483,7 @@ def test_release_state_contract_matches_terminal_code_order():
     contracts = (
         page_text("workflow"),
         (DOCS_DIR / "zh" / "workflow.mdx").read_text(encoding="utf-8"),
-        inspect.getdoc(runner.process_release),
+        inspect.getdoc(release.process_release),
     )
     for text in contracts:
         step9 = re.search(
