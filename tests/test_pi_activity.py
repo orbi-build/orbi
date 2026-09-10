@@ -884,6 +884,34 @@ def test_activity_snapshot_scans_newest_session_file(tmp_path):
     assert snapshot["changed"] is False
 
 
+def test_session_state_reads_the_journal_with_a_known_files_baseline(
+    tmp_path,
+):
+    """Issue #656: `session_state` re-reads the journal on disk with the
+    same baseline as the live watcher — a file that existed before the
+    tracked Pi started (a resumed run's previous session) is never
+    counted, while the new session is."""
+    previous = tmp_path / "previous.jsonl"
+    write_records(previous, [SESSION_RECORD, ASSISTANT_TOOL_CALL])
+    old = os.stat(previous).st_mtime - 100
+    os.utime(previous, (old, old))
+    assert pi_activity.session_state(
+        tmp_path, {previous},
+    ) is None
+    current = tmp_path / "current.jsonl"
+    write_records(current, [SESSION_RECORD, USER_RECORD])
+    state = pi_activity.session_state(tmp_path, {previous})
+    assert state["session_file"] == str(current)
+    assert state["first_request"] is True
+    # The full-scan form (known_files=None) is the pre-#656 behavior.
+    assert pi_activity.session_state(tmp_path)["session_file"] == \
+        str(current)
+
+
+def test_session_state_returns_none_without_a_session_file(tmp_path):
+    assert pi_activity.session_state(tmp_path, set()) is None
+
+
 def test_format_duration_uses_seconds_minutes_and_hours():
     assert pi_activity.format_duration(0) == "0s"
     assert pi_activity.format_duration(0.5) == "0.5s"

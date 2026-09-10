@@ -360,13 +360,29 @@ class SessionWatcher:
             self.phase = name
 
 
-def activity_snapshot(session_dir: Path) -> dict | None:
-    """Full-scan the newest session file; None when no session exists yet."""
-    watcher = SessionWatcher(session_dir)
+def session_state(session_dir: Path,
+                  known_files: set[Path] | None = None) -> dict | None:
+    """Read the session journal on disk NOW; None when no session file
+    is visible (Issue #656).
+
+    The known_files-aware sibling of `activity_snapshot`: the live
+    watcher's last poll can predate the journal (a dying Pi flushes it
+    on exit), so a decision that must use what Pi ACTUALLY did re-reads
+    it here. `known_files` keeps the live watcher's baseline — the
+    sessions that existed before the tracked Pi started (a resumed
+    run's previous JSONL) are never counted; `None` is the original
+    full-scan semantics.
+    """
+    watcher = SessionWatcher(session_dir, known_files=known_files)
     watcher.poll()
     if watcher.session_file is None:
         return None
     return watcher.state()
+
+
+def activity_snapshot(session_dir: Path) -> dict | None:
+    """Full-scan the newest session file; None when no session exists yet."""
+    return session_state(session_dir)
 
 
 def format_duration(seconds: float) -> str:

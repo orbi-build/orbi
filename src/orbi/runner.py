@@ -79,6 +79,7 @@ from orbi.pi_activity import (
     format_run_scene,
     quote_value,
     sanitize,
+    session_state,
 )
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
@@ -5450,6 +5451,34 @@ def _startup_failed_reason(activity: dict, *, returncode: int,
     return classified
 
 
+def _refresh_session_evidence(activity: dict, session_dir: Path,
+                              known_files: set[Path]) -> dict:
+    """Refresh the journal-derived fields of `activity` from disk (#656).
+
+    The live watcher polls on `PI_POLL_INTERVAL`, so its LAST poll can
+    run while Pi is still alive: Pi flushes its session journal while
+    dying, and the exit decision then used a state that never saw the
+    request (the #655 usage-limit scene — the exit was classified as a
+    startup failure and the terminal `ai-blocked` burned the in-flight
+    delivery). Once the process is dead the journal on disk is
+    authoritative: re-read it with the SAME `known_files` baseline (a
+    resumed run's previous sessions are never counted) and overwrite
+    only the fields the journal can prove. The live-only fields
+    (`stale_seconds`, `model_wait`, `recovery`) keep their last-poll
+    value.
+    """
+    final = session_state(session_dir, known_files)
+    if final is None:
+        return activity
+    for key in (
+        "session_id", "session_file", "first_request", "first_response",
+        "provider", "model",
+    ):
+        if final.get(key):
+            activity[key] = final[key]
+    return activity
+
+
 def _pending_timeout_targets(targets: list[dict]) -> list[tuple[dict, float]]:
     """The pre-idle descendants still INSIDE an explicit `timeout`
     deadline (Issue #169): `[(target, deadline_epoch), ...]`.
@@ -6154,6 +6183,12 @@ def stream_pi(
         _drain_stream(process.stderr, stderr_chunks)
     stdout = _decode_chunks(stdout_chunks)
     stderr = _decode_chunks(stderr_chunks)
+    # Issue #656: the last live poll can predate the journal Pi flushed
+    # while dying — refresh the journal evidence before the startup
+    # line and the exit classification read it.
+    activity = _refresh_session_evidence(
+        activity, session_dir, known_files,
+    )
     # Startup failure (Issue #176): a failure before the first response
     # is a STARTUP failure — the line says where the startup was stuck
     # with a distinguishable reason. After the first response the
@@ -6252,7 +6287,9 @@ def stream_pi(
             # journal; an exit before the first request is still a startup
             # failure (for example provider initialization) and must keep
             # the existing terminal failure behavior.  Only an interrupted
-            # session after a request has actually started is resumable.
+            # session after a request has actually started is resumable —
+            # and that is judged from the journal on disk (Issue #656),
+            # never from a live poll that can predate it.
             RecoverablePiProcessError
             if activity["first_request"]
             else subprocess.CalledProcessError
