@@ -19,7 +19,12 @@ gh 2.97):
   existing Issue instead of creating a second one.
 - A monitored run concluded `success`: every SUCCEEDED job's fingerprint is
   matched against the open triage Issues; a match gets the recovery run
-  evidence as a comment and is closed (`state_reason: completed`).
+  evidence as a comment. It is closed (`state_reason: completed`) only with
+  fix evidence — the recovery run's head SHA differs from every failure SHA
+  recorded on the Issue (body + re-occurrence comments), or the run's
+  associated PR body carries a closing reference to it. A green re-run of
+  the SAME commit that failed is a flaky pass, not a fix (Issue #715): the
+  comment is appended and the Issue stays open.
 - Anything else (another workflow, another event, a push off `main`, any
   other conclusion) is a logged no-op with exit 0.
 
@@ -88,6 +93,13 @@ EXTERNAL_PR_MARKER = "orbi:external-pr:"
 EXTERNAL_PR_RE = re.compile(
     r"<!--\s*" + re.escape(EXTERNAL_PR_MARKER) + r"(\d+)\s*-->"
 )
+# Issue #715: the recovery guard's failure-evidence markers. The `- commit:`
+# line is written by `build_failure_body` (the Issue body) and by
+# `build_reoccurrence_comment` (one comment per re-occurrence); only comments
+# starting with REOCCURRENCE_PREFIX are failure evidence — a recovery comment
+# records the recovery run's SHA, which must never count as a failure.
+REOCCURRENCE_PREFIX = "CI failure re-occurred"
+COMMIT_LINE_RE = re.compile(r"- commit: `([0-9a-f]{40})`")
 
 
 class GhApiError(Exception):
@@ -174,6 +186,19 @@ def issue_fingerprints(body: str) -> list[str]:
         if value not in seen:
             seen.append(value)
     return seen
+
+
+def recorded_failure_shas(body: str, comments: list[str]) -> set[str]:
+    """Every failure head SHA recorded on an Issue (Issue #715).
+
+    The body's `- commit:` line plus the `- commit:` line of each
+    re-occurrence comment; other comments never carry failure evidence.
+    """
+    shas = set(COMMIT_LINE_RE.findall(body))
+    for comment in comments:
+        if comment.startswith(REOCCURRENCE_PREFIX):
+            shas.update(COMMIT_LINE_RE.findall(comment))
+    return shas
 
 
 def triage_scope(run: dict) -> tuple[str, str]:
@@ -326,9 +351,11 @@ def build_failure_body(
         "",
         "### Dedup and recovery",
         "A re-run of the same failure (same workflow/job/branch fingerprint)",
-        "updates this Issue instead of creating a new one; when a later",
-        "successful CI run of the same workflow/job/branch matches, this",
-        "Issue is closed as completed with the recovery run evidence.",
+        "updates this Issue instead of creating a new one. A later successful",
+        "run of the same workflow/job/branch closes this Issue only with fix",
+        "evidence: a different head commit, or a closing reference to this",
+        "Issue on its PR (Issue #715) — a green re-run of the same commit is",
+        "recorded as recovery evidence while this Issue stays open.",
         "",
     ]
     if external_pr is not None:
@@ -342,7 +369,7 @@ def build_failure_body(
 def build_reoccurrence_comment(run: dict, job: dict) -> str:
     """The evidence appended to an existing target when the failure repeats."""
     return "\n".join([
-        f"CI failure re-occurred (job `{job['name']}`, same fingerprint):",
+        f"{REOCCURRENCE_PREFIX} (job `{job['name']}`, same fingerprint):",
         "",
         f"- workflow: `{CI_WORKFLOW_NAME}` (`{CI_WORKFLOW_PATH}`)",
         f"- event: `{run.get('event')}`",
@@ -359,9 +386,13 @@ def build_reoccurrence_comment(run: dict, job: dict) -> str:
     ])
 
 
-def build_recovery_comment(run: dict, job: dict) -> str:
-    """The recovery evidence appended before the Issue is closed."""
-    return "\n".join([
+def build_recovery_comment(run: dict, job: dict, *, closing: bool) -> str:
+    """The recovery evidence appended to the matched Issue.
+
+    `closing=False` records the same-commit flaky-pass verdict and keeps the
+    Issue open (Issue #715).
+    """
+    lines = [
         f"CI recovered: job `{job['name']}` passed with the same fingerprint:",
         "",
         f"- commit: `{run.get('head_sha')}`",
@@ -370,9 +401,21 @@ def build_recovery_comment(run: dict, job: dict) -> str:
         f"- run URL: {run.get('html_url')}",
         f"- triggered at: `{run.get('run_started_at')}`",
         "",
-        "Closing as completed (recovery verified by the `CI Failure Issue`"
-        " workflow, `.github/workflows/ci-failure-issue.yml`).",
-    ])
+    ]
+    if closing:
+        lines.append(
+            "Closing as completed (recovery verified by the `CI Failure Issue`"
+            " workflow, `.github/workflows/ci-failure-issue.yml`)."
+        )
+    else:
+        lines.append(
+            "Not closing: this recovery run used a head commit that previously"
+            " failed with this fingerprint and no closing reference"
+            " (`Fixes #N`) is associated with it — nothing was fixed; this"
+            " looks like a flaky pass. The Issue stays open for a real fix"
+            " (Issue #715)."
+        )
+    return "\n".join(lines)
 
 
 def resolve_pr_number(owner: str, repo: str, head_sha: str) -> int | None:
@@ -621,13 +664,54 @@ def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
             )
 
 
+def fetch_issue_comments(owner: str, repo: str, number: int) -> list[str]:
+    """The Issue's comments, their bodies only (verified shape: a list)."""
+    data = gh_api(
+        f"repos/{owner}/{repo}/issues/{number}/comments?per_page=100"
+    )
+    if not isinstance(data, list):
+        fail("fetch_issue_comments", f"comments API did not return a list: {data!r}")
+    return [
+        item["body"]
+        for item in data
+        if isinstance(item, dict) and isinstance(item.get("body"), str)
+    ]
+
+
+def recovery_closing_reference(
+    run: dict, owner: str, repo: str, issue_number: int,
+) -> bool:
+    """True when the recovery run's head commit resolves to a PR whose body
+    references the Issue with a GitHub closing keyword (`Fixes #N`) — the
+    same contract `active_source_issue` applies (Issue #715).
+
+    `run["head_sha"]` must be a usable string; the caller guards that.
+    """
+    pr_number = resolve_pr_number(owner, repo, run["head_sha"])
+    if pr_number is None:
+        return False
+    pull = fetch_pull_request(owner, repo, pr_number)
+    body = pull.get("body") if pull else None
+    if not isinstance(body, str):
+        return False
+    return issue_number in closing_issue_numbers(body, owner, repo)
+
+
 def triage_recovery(run: dict, owner: str, repo: str, jobs: list) -> None:
-    """Close the Issue of every succeeded job with the recovery evidence."""
+    """Close the Issue of every succeeded job with the recovery evidence.
+
+    Issue #715: a close needs fix evidence — the recovery run's head SHA
+    differs from every failure SHA recorded on the Issue (body + re-occurrence
+    comments), or the run's associated PR body carries a closing reference to
+    it. A green re-run of the same commit that failed is a flaky pass: the
+    recovery evidence is appended and the Issue stays open.
+    """
     succeeded = jobs_with_conclusion(jobs, (SUCCESS_CONCLUSION,))
     if not succeeded:
         log(f"ignored reason=no_succeeded_jobs run_id={run.get('id')}")
         return
     index = index_open_issues(owner, repo)
+    recovery_sha = run.get("head_sha")
     for item in succeeded:
         value = fingerprint(
             run.get("event"), run.get("head_branch", ""), item["name"],
@@ -637,14 +721,35 @@ def triage_recovery(run: dict, owner: str, repo: str, jobs: list) -> None:
         if match is None:
             log(f"recovery_no_match job={item['name']} run_id={run.get('id')}")
             continue
+        number = match["number"]
+        failure_shas = recorded_failure_shas(
+            match["body"],
+            fetch_issue_comments(owner, repo, number),
+        )
+        if not isinstance(recovery_sha, str) or not recovery_sha:
+            verified = False
+            reason = "reason=no_head_sha"
+        elif recovery_sha not in failure_shas:
+            verified = True
+            reason = ""
+        else:
+            verified = recovery_closing_reference(run, owner, repo, number)
+            reason = "" if verified else "reason=same_head_sha"
         comment_issue(
-            owner, repo, match["number"], build_recovery_comment(run, item),
+            owner, repo, number,
+            build_recovery_comment(run, item, closing=verified),
         )
-        close_issue(owner, repo, match["number"])
-        log(
-            f"recovered issue={match['number']} job={item['name']}"
-            f" run_id={run.get('id')}"
-        )
+        if verified:
+            close_issue(owner, repo, number)
+            log(
+                f"recovered issue={number} job={item['name']}"
+                f" run_id={run.get('id')}"
+            )
+        else:
+            log(
+                f"recovery_unverified issue={number} job={item['name']}"
+                f" run_id={run.get('id')} {reason}"
+            )
 
 
 def main() -> None:
