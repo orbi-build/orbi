@@ -30,6 +30,12 @@ SCRIPT = REPO_ROOT / "tools" / "ci_failure_triage.py"
 
 OWNER_REPO = "orbi-run/test-repo"
 HEAD_SHA = "abc123def456abc123def456abc123de"
+# Full-length SHAs (the real REST shape) for the Issue #715 recovery-guard
+# scenarios: the guard parses recorded `- commit:` lines and compares them
+# with the recovery run's head SHA.
+FAILURE_SHA = "1111111111111111111111111111111111111111"
+RECURRENCE_SHA = "2222222222222222222222222222222222222222"
+FIX_SHA = "3333333333333333333333333333333333333333"
 RUN_URL = "https://github.com/orbi-run/test-repo/actions/runs/42"
 JOB_URL = "https://github.com/orbi-run/test-repo/actions/runs/42/job/9"
 TRIGGERED_AT = "2026-09-05T05:12:11Z"
@@ -119,6 +125,10 @@ def ep_comment(number):
     return f"repos/{OWNER_REPO}/issues/{number}/comments"
 
 
+def ep_issue_comments(number):
+    return f"repos/{OWNER_REPO}/issues/{number}/comments?per_page=100"
+
+
 def ep_patch(number):
     return f"repos/{OWNER_REPO}/issues/{number}"
 
@@ -167,6 +177,19 @@ def triage_issue(number: int, fingerprints: list[str], state="open") -> dict:
     """An Issue as the REST list endpoint returns it (auto-created shape)."""
     body = "CI failure body\n" + "\n".join(marker(fp) for fp in fingerprints)
     return {"number": number, "state": state, "body": body, "title": "CI failure"}
+
+
+def recorded_issue(number: int, fingerprint_value: str, failure_run: dict) -> dict:
+    """An Issue whose body is EXACTLY what `build_failure_body` writes for
+    the failure run — including the `- commit:` line the recovery guard
+    parses (Issue #715)."""
+    body = mod.build_failure_body(failure_run, job(), None, fingerprint_value)
+    return {"number": number, "state": "open", "body": body, "title": "CI failure"}
+
+
+def recovery_event(head_sha, run_id=43, **over) -> dict:
+    """A successful monitored run at `head_sha` (the recovery guard input)."""
+    return run_event(conclusion="success", id=run_id, head_sha=head_sha, **over)
 
 
 def write_event(monkeypatch, tmp_path, payload):
@@ -807,6 +830,7 @@ def test_recovery_closes_the_matching_issue_with_run_evidence(
         "total_count": 1, "jobs": [job(conclusion="success")],
     }
     gh.routes[ep_issues_list()] = [triage_issue(7, [fp])]
+    gh.routes[ep_issue_comments(7)] = []
     mod.main()
     comments = gh.calls_to(ep_comment(7), "POST")
     assert len(comments) == 1
@@ -846,6 +870,255 @@ def test_recovery_only_considers_succeeded_jobs(gh, monkeypatch, tmp_path):
     mod.main()
     assert gh.calls_to(ep_patch(7), "PATCH") == []
     assert gh.calls_to(ep_comment(7), "POST") == []
+
+
+# ---------------------------------------------------------------------------
+# Recovery guard (Issue #715): a close needs real fix evidence
+# ---------------------------------------------------------------------------
+
+
+def test_recovery_same_head_sha_keeps_the_issue_open(
+    gh, monkeypatch, tmp_path, capsys
+):
+    """Acceptance (Issue #715): a green RE-RUN of the exact commit that
+    failed is a flaky pass, not a fix — the recovery evidence is appended
+    and the Issue stays open."""
+    fp = mod.fingerprint("push", "main", "tests")
+    write_event(monkeypatch, tmp_path, recovery_event(FAILURE_SHA))
+    gh.routes[ep_jobs(43)] = {
+        "total_count": 1, "jobs": [job(conclusion="success")],
+    }
+    gh.routes[ep_issues_list()] = [
+        recorded_issue(7, fp, run_event(head_sha=FAILURE_SHA)["workflow_run"])
+    ]
+    gh.routes[ep_issue_comments(7)] = []
+    gh.routes[ep_pulls(FAILURE_SHA)] = []
+    mod.main()
+    comments = gh.calls_to(ep_comment(7), "POST")
+    assert len(comments) == 1
+    body = comments[0]["payload"]["body"]
+    assert "CI recovered" in body
+    assert "Closing as completed" not in body
+    assert gh.calls_to(ep_patch(7), "PATCH") == []
+    err = capsys.readouterr().err
+    assert "recovery_unverified issue=7" in err
+    assert "reason=same_head_sha" in err
+
+
+def test_recovery_after_n_recurrences_same_sha_keeps_the_issue_open(
+    gh, monkeypatch, tmp_path
+):
+    """Acceptance (Issue #715, Nth recurrence): failure at FAILURE_SHA (body),
+    recurrences at FAILURE_SHA and RECURRENCE_SHA (comments), then a green
+    re-run of RECURRENCE_SHA — the recovery run's SHA matches the LATEST
+    recorded failure, so the Issue must stay open. Only comments carrying
+    the re-occurrence prefix are failure evidence."""
+    fp = mod.fingerprint("push", "main", "tests")
+    write_event(monkeypatch, tmp_path, recovery_event(RECURRENCE_SHA))
+    gh.routes[ep_jobs(43)] = {
+        "total_count": 1, "jobs": [job(conclusion="success")],
+    }
+    gh.routes[ep_issues_list()] = [
+        recorded_issue(7, fp, run_event(head_sha=FAILURE_SHA)["workflow_run"])
+    ]
+    gh.routes[ep_issue_comments(7)] = [
+        {"body": mod.build_reoccurrence_comment(
+            run_event(head_sha=FAILURE_SHA, run_attempt=2)["workflow_run"], job(),
+        )},
+        {"body": mod.build_reoccurrence_comment(
+            run_event(head_sha=RECURRENCE_SHA, run_attempt=3)["workflow_run"], job(),
+        )},
+        {"body": "a human comment mentioning - commit: `c0ffee` offline"},
+        {"body": mod.build_recovery_comment(
+            recovery_event(RECURRENCE_SHA)["workflow_run"], job(), closing=False,
+        )},
+    ]
+    gh.routes[ep_pulls(RECURRENCE_SHA)] = []
+    mod.main()
+    assert gh.calls_to(ep_patch(7), "PATCH") == []
+    assert len(gh.calls_to(ep_comment(7), "POST")) == 1
+
+
+def test_recovery_new_head_sha_still_closes(gh, monkeypatch, tmp_path, capsys):
+    """A recovery run on a different head commit carries the fix evidence:
+    the Issue is closed exactly as before (Issue #715 leaves this path
+    unchanged), and no PR resolution is spent once the SHA check verified."""
+    fp = mod.fingerprint("push", "main", "tests")
+    write_event(monkeypatch, tmp_path, recovery_event(FIX_SHA))
+    gh.routes[ep_jobs(43)] = {
+        "total_count": 1, "jobs": [job(conclusion="success")],
+    }
+    gh.routes[ep_issues_list()] = [
+        recorded_issue(7, fp, run_event(head_sha=FAILURE_SHA)["workflow_run"])
+    ]
+    gh.routes[ep_issue_comments(7)] = []
+    mod.main()
+    body = gh.calls_to(ep_comment(7), "POST")[0]["payload"]["body"]
+    assert "Closing as completed" in body
+    patches = gh.calls_to(ep_patch(7), "PATCH")
+    assert len(patches) == 1
+    assert patches[0]["payload"] == {"state": "closed", "state_reason": "completed"}
+    assert "ci_triage recovered issue=7" in capsys.readouterr().err
+    assert gh.calls_to(ep_pulls(FIX_SHA), "GET") == []
+
+
+def test_recovery_same_head_sha_with_closing_reference_closes(
+    gh, monkeypatch, tmp_path, capsys
+):
+    """Acceptance (Issue #715): even on the same head SHA, an associated PR
+    body carrying `Fixes #N` for THIS Issue still closes it (behavior
+    unchanged for real fix deliveries)."""
+    fp = mod.fingerprint("push", "main", "tests")
+    write_event(monkeypatch, tmp_path, recovery_event(FAILURE_SHA))
+    gh.routes[ep_jobs(43)] = {
+        "total_count": 1, "jobs": [job(conclusion="success")],
+    }
+    gh.routes[ep_issues_list()] = [
+        recorded_issue(7, fp, run_event(head_sha=FAILURE_SHA)["workflow_run"])
+    ]
+    gh.routes[ep_issue_comments(7)] = []
+    gh.routes[ep_pulls(FAILURE_SHA)] = [{"number": 328}]
+    gh.routes[ep_pr()] = {"number": 328, "body": "Fixes #7"}
+    mod.main()
+    patches = gh.calls_to(ep_patch(7), "PATCH")
+    assert len(patches) == 1
+    assert patches[0]["payload"] == {"state": "closed", "state_reason": "completed"}
+    assert "ci_triage recovered issue=7" in capsys.readouterr().err
+
+
+def test_recovery_same_head_sha_reference_to_another_issue_keeps_open(
+    gh, monkeypatch, tmp_path
+):
+    """The closing reference must name THIS Issue, not another one."""
+    fp = mod.fingerprint("push", "main", "tests")
+    write_event(monkeypatch, tmp_path, recovery_event(FAILURE_SHA))
+    gh.routes[ep_jobs(43)] = {
+        "total_count": 1, "jobs": [job(conclusion="success")],
+    }
+    gh.routes[ep_issues_list()] = [
+        recorded_issue(7, fp, run_event(head_sha=FAILURE_SHA)["workflow_run"])
+    ]
+    gh.routes[ep_issue_comments(7)] = []
+    gh.routes[ep_pulls(FAILURE_SHA)] = [{"number": 328}]
+    gh.routes[ep_pr()] = {"number": 328, "body": "Fixes #999"}
+    mod.main()
+    assert gh.calls_to(ep_patch(7), "PATCH") == []
+    assert len(gh.calls_to(ep_comment(7), "POST")) == 1
+
+
+def test_recovery_same_head_sha_without_associated_pr_keeps_open(
+    gh, monkeypatch, tmp_path
+):
+    fp = mod.fingerprint("push", "main", "tests")
+    write_event(monkeypatch, tmp_path, recovery_event(FAILURE_SHA))
+    gh.routes[ep_jobs(43)] = {
+        "total_count": 1, "jobs": [job(conclusion="success")],
+    }
+    gh.routes[ep_issues_list()] = [
+        recorded_issue(7, fp, run_event(head_sha=FAILURE_SHA)["workflow_run"])
+    ]
+    gh.routes[ep_issue_comments(7)] = []
+    gh.routes[ep_pulls(FAILURE_SHA)] = []
+    mod.main()
+    assert gh.calls_to(ep_patch(7), "PATCH") == []
+    assert gh.calls_to(ep_pr(), "GET") == []
+
+
+def test_recovery_same_head_sha_pr_without_body_keeps_open(
+    gh, monkeypatch, tmp_path
+):
+    fp = mod.fingerprint("push", "main", "tests")
+    write_event(monkeypatch, tmp_path, recovery_event(FAILURE_SHA))
+    gh.routes[ep_jobs(43)] = {
+        "total_count": 1, "jobs": [job(conclusion="success")],
+    }
+    gh.routes[ep_issues_list()] = [
+        recorded_issue(7, fp, run_event(head_sha=FAILURE_SHA)["workflow_run"])
+    ]
+    gh.routes[ep_issue_comments(7)] = []
+    gh.routes[ep_pulls(FAILURE_SHA)] = [{"number": 328}]
+    gh.routes[ep_pr()] = {"number": 328}
+    mod.main()
+    assert gh.calls_to(ep_patch(7), "PATCH") == []
+
+
+def test_recovery_run_without_head_sha_keeps_the_issue_open(
+    gh, monkeypatch, tmp_path, capsys
+):
+    """No head SHA means no comparable fix evidence: comment only, and no
+    PR resolution call is spent."""
+    fp = mod.fingerprint("push", "main", "tests")
+    write_event(monkeypatch, tmp_path, recovery_event(None))
+    gh.routes[ep_jobs(43)] = {
+        "total_count": 1, "jobs": [job(conclusion="success")],
+    }
+    gh.routes[ep_issues_list()] = [
+        recorded_issue(7, fp, run_event(head_sha=FAILURE_SHA)["workflow_run"])
+    ]
+    gh.routes[ep_issue_comments(7)] = []
+    mod.main()
+    assert gh.calls_to(ep_patch(7), "PATCH") == []
+    assert not any(
+        call["endpoint"].startswith(f"repos/{OWNER_REPO}/commits/")
+        for call in gh.calls
+    )
+    err = capsys.readouterr().err
+    assert "recovery_unverified issue=7" in err
+    assert "reason=no_head_sha" in err
+
+
+def test_recorded_failure_shas_uses_body_and_reoccurrence_comments_only():
+    """The failure evidence set: the body's `- commit:` line plus the
+    `- commit:` line of every RE-OCCURRENCE comment. Recovery comments and
+    unprefixed comments never count as failure evidence (Issue #715)."""
+    body = f"evidence\n- commit: `{FAILURE_SHA}`\n"
+    comments = [
+        mod.build_reoccurrence_comment(
+            run_event(head_sha=RECURRENCE_SHA)["workflow_run"], job(),
+        ),
+        mod.build_recovery_comment(
+            recovery_event(FAILURE_SHA)["workflow_run"], job(), closing=False,
+        ),
+        f"a plain comment quoting - commit: `{FIX_SHA}` offline",
+    ]
+    assert mod.recorded_failure_shas(body, comments) == {FAILURE_SHA, RECURRENCE_SHA}
+
+
+def test_recovery_comment_tail_reflects_the_closing_decision():
+    run = recovery_event(FAILURE_SHA)["workflow_run"]
+    closing = mod.build_recovery_comment(run, job(), closing=True)
+    kept_open = mod.build_recovery_comment(run, job(), closing=False)
+    assert "Closing as completed" in closing
+    assert "Closing as completed" not in kept_open
+    assert "CI recovered" in kept_open
+    assert f"- commit: `{FAILURE_SHA}`" in kept_open
+    assert "Not closing" in kept_open
+
+
+def test_fetch_issue_comments_returns_comment_bodies_only(gh):
+    gh.routes[ep_issue_comments(7)] = [
+        {"body": "one"},
+        {"id": 2},   # no body
+        "junk",      # not an object
+    ]
+    assert mod.fetch_issue_comments("orbi-run", "test-repo", 7) == ["one"]
+
+
+def test_recovery_comments_api_malformed_response_fails_fast(
+    gh, monkeypatch, tmp_path
+):
+    fp = mod.fingerprint("push", "main", "tests")
+    write_event(monkeypatch, tmp_path, recovery_event(FIX_SHA))
+    gh.routes[ep_jobs(43)] = {
+        "total_count": 1, "jobs": [job(conclusion="success")],
+    }
+    gh.routes[ep_issues_list()] = [
+        recorded_issue(7, fp, run_event(head_sha=FAILURE_SHA)["workflow_run"])
+    ]
+    gh.routes[ep_issue_comments(7)] = {"unexpected": "object"}
+    with pytest.raises(SystemExit) as exc:
+        mod.main()
+    assert exc.value.code == 1
 
 
 # ---------------------------------------------------------------------------
