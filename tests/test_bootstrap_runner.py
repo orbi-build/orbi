@@ -16449,7 +16449,7 @@ def test_check_release_gates_pass_clean(monkeypatch):
         check_runs=[("tests", "completed", "success"),
                     ("lint", "completed", "skipped")],
     )
-    evidence = release.check_release_gates("o/r", "main", "abc123", 99)
+    evidence, _ = release.check_release_gates("o/r", "main", "abc123", 99)
     assert evidence == [
         "no open Issue carries ai-in-progress / ai-pr-opened / ai-fix-needed",
         "CI on the release commit: 2 check(s) all success/neutral/skipped",
@@ -16464,13 +16464,87 @@ def test_check_release_gates_pass_clean(monkeypatch):
     assert labels == ["ai-in-progress", "ai-pr-opened", "ai-fix-needed"]
 
 
+def make_registration_lag_gh(monkeypatch, api_responses):
+    """Answer the gh calls of `check_release_gates` for the #657 world.
+
+    `api_responses`: popped once per `gh api` poll — each entry is the
+    (name, status, conclusion) list for that poll (`[]` = no check run
+    registered yet). The leftover-label scans always answer empty. The
+    returned fake raises on any unexpected command (one shared guard
+    line, driven by its own test below).
+    """
+    def fake_run_command(command, **kwargs):
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([])
+        if command[:2] == ["gh", "api"]:
+            return json.dumps([
+                {"name": name, "status": status, "conclusion": conclusion}
+                for name, status, conclusion in api_responses.pop(0)
+            ])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(release, "run_command", fake_run_command)
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    return fake_run_command
+
+
+def test_registration_lag_gh_rejects_unexpected_commands(monkeypatch):
+    fake = make_registration_lag_gh(monkeypatch, api_responses=[[]])
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake(["gh", "pr", "list"])
+
+
+def test_check_release_gates_waits_for_late_registered_checks(monkeypatch):
+    """repo_has_ci=True 时空 check-runs = 首个 check 尚未注册（Issue
+    #657）：gate 2 跑在刚 push 到 base 的版本提交上，GitHub 创建
+    CheckRun 有秒级滞后，空列表绝不能立即按 "nothing to gate" 放行——
+    必须在同一预算内轮询等首个 check 出现，再按其结论判门。"""
+    make_registration_lag_gh(monkeypatch, api_responses=[
+        [],                                   # first poll: not registered yet
+        [("tests", "completed", "success")],  # second poll: registered, green
+    ])
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+    evidence, has_ci = release.check_release_gates(
+        "o/r", "main", "abc123", 99, repo_has_ci=True,
+    )
+    assert has_ci is True
+    assert not any("nothing to gate" in line for line in evidence)
+    assert any("1 check(s) all success" in line for line in evidence)
+    assert any("waited" in line for line in evidence)
+
+
+def test_check_release_gates_times_out_when_ci_never_registers(monkeypatch):
+    """repo_has_ci=True 且 check-runs 恒为空：等待宽限耗尽后必须按
+    wait-timeout 失败（不是 CI 失败、更不是放行），下 tick 可恢复重试
+    （Issue #657）。"""
+    make_registration_lag_gh(
+        monkeypatch, api_responses=[[], [], [], [], [], []],
+    )
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+    with pytest.raises(RuntimeError, match="wait timeout, not a CI failure"):
+        release.check_release_gates(
+            "o/r", "main", "abc123", 99,
+            repo_has_ci=True, ci_wait_seconds=60,
+        )
+
+
+def test_check_release_gates_empty_without_ci_still_passes(monkeypatch):
+    """repo_has_ci=False（门控提交上无任何 check）＝无 CI 仓库：空列表
+    仍立即放行，"nothing to gate" 语义保持（Issue #657 的判据只收紧
+    有 CI 的仓库）。"""
+    make_registration_lag_gh(monkeypatch, api_responses=[[]])
+    evidence, has_ci = release.check_release_gates("o/r", "main", "abc123", 99)
+    assert has_ci is False
+    assert any("nothing to gate" in line for line in evidence)
+
+
 def test_check_release_gates_excludes_the_release_issue_itself(monkeypatch):
     make_gate_gh(
         monkeypatch,
         leftover_labels={"ai-in-progress": [99]},  # the release Issue
         check_runs=[],
     )
-    evidence = release.check_release_gates("o/r", "main", "abc123", 99)
+    evidence, _ = release.check_release_gates("o/r", "main", "abc123", 99)
     assert evidence[0].startswith("no open Issue carries")
 
 
@@ -16541,7 +16615,7 @@ def test_check_release_gates_waits_for_pending_ci_then_passes(
     monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
     waits = []
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
-        evidence = release.check_release_gates(
+        evidence, _ = release.check_release_gates(
             "o/r", "main", "abc123", 99, on_wait=waits.append,
         )
     assert evidence == [
@@ -16643,13 +16717,18 @@ def test_check_release_gates_scopes_leftover_scan_to_the_milestone(monkeypatch):
         leftover_milestones={7: "v0.4.4", 8: None},
         check_runs=[],
     )
-    evidence = release.check_release_gates(
+    evidence, repo_has_ci = release.check_release_gates(
         "o/r", "main", "abc123", 99, milestone="v0.4.3",
     )
-    assert evidence[0] == (
+    assert evidence == [
         "no open Issue in milestone 'v0.4.3' carries "
-        "ai-in-progress / ai-pr-opened / ai-fix-needed"
-    )
+        "ai-in-progress / ai-pr-opened / ai-fix-needed",
+        # Issue #657: no check runs at all is recorded as evidence; the
+        # repo_has_ci flag decides whether that is a pass or a wait.
+        "CI on the release commit: no check runs on abc123 (nothing to "
+        "gate)",
+    ]
+    assert repo_has_ci is False  # no check runs seen anywhere -> not proven
     scans = [c for c in calls if c[:3] == ["gh", "issue", "list"]]
     assert scans and all(
         c[c.index("--milestone") + 1] == "v0.4.3" for c in scans
@@ -16665,7 +16744,7 @@ def test_check_release_gates_ignores_leftover_outside_the_milestone(monkeypatch)
         leftover_milestones={657: None, 658: None},
         check_runs=[],
     )
-    evidence = release.check_release_gates(
+    evidence, _ = release.check_release_gates(
         "o/r", "main", "abc123", 99, milestone="v0.4.3",
     )
     assert evidence[0].startswith("no open Issue in milestone 'v0.4.3'")
