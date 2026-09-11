@@ -277,7 +277,11 @@ def verify_release_scope(repo: str, scope: list[int], repo_dir: Path,
     error when the number is an Issue, verified against the live CLI)
     and, failing that, as an Issue (`gh issue view`). A PR must be
     `MERGED` and its merge commit must be an ancestor of the frozen
-    release commit; an Issue must be `CLOSED`. This ancestor check proves
+    release commit; an Issue must be `CLOSED` with `stateReason`
+    `COMPLETED` (Issue #707): a `NOT_PLANNED` closure (duplicate /
+    won't fix) is not a delivery — its evidence line visibly annotates
+    the exclusion instead of silently counting the ticket into the
+    release. This ancestor check proves
     the scoped PR is actually contained in the tag, rather than merely
     having been merged into some other branch. An item that is neither, a
     PR that is not merged/in the release base, or an Issue that is not
@@ -322,7 +326,7 @@ def verify_release_scope(repo: str, scope: list[int], repo_dir: Path,
         try:
             raw = run_command([
                 "gh", "issue", "view", str(number), "--repo", repo,
-                "--json", "number,state",
+                "--json", "number,state,stateReason",
             ])
         except subprocess.CalledProcessError as exc:
             if "Could not resolve to an Issue" not in (exc.stderr or ""):
@@ -338,7 +342,15 @@ def verify_release_scope(repo: str, scope: list[int], repo_dir: Path,
                 f"release scope Issue #{number} is not closed "
                 f"(state={state})"
             )
-        evidence.append(f"Issue #{number} closed")
+        if issue.get("stateReason") == "NOT_PLANNED":
+            # Issue #707: a NOT_PLANNED closure (duplicate / won't fix)
+            # is not released work — annotate the exclusion visibly
+            # instead of silently counting the ticket into the release.
+            evidence.append(
+                f"Issue #{number} closed (not planned, excluded)"
+            )
+        else:
+            evidence.append(f"Issue #{number} closed")
     return evidence
 
 
@@ -459,10 +471,15 @@ def build_release_changelog(repo: str, scope: list[int]) -> str:
     """Render deterministic readable notes from live scoped Issue evidence.
 
     The official ``gh issue view --json`` contract supplies each Issue's
-    title, body, URL, labels, and closing PR references.  A title is the
-    concise change description; when it is absent, the first non-empty body
-    line is usable summary evidence.  Missing or malformed evidence is an
-    unsafe release input and fails before a tag or Release is created.
+    title, body, URL, labels, stateReason, and closing PR references.  A
+    title is the concise change description; when it is absent, the first
+    non-empty body line is usable summary evidence.  A NOT_PLANNED-closed
+    Issue is not released work (Issue #707) — it is excluded from the
+    Changelog (the Scope evidence annotates the exclusion).  A closing
+    PR's link is written only when `gh pr view` reports the PR MERGED:
+    an unmerged PR never appears in the release notes.  Missing or
+    malformed evidence is an unsafe release input and fails before a tag
+    or Release is created.
     """
     grouped: dict[str, list[tuple[int, str]]] = {
         category: [] for category in RELEASE_CHANGELOG_CATEGORIES
@@ -470,9 +487,16 @@ def build_release_changelog(repo: str, scope: list[int]) -> str:
     for number in scope:
         raw = run_command([
             "gh", "issue", "view", str(number), "--repo", repo, "--json",
-            "number,title,body,url,labels,closedByPullRequestsReferences",
+            "number,title,body,url,labels,stateReason,"
+            "closedByPullRequestsReferences",
         ])
         item = json.loads(raw)
+        if item.get("stateReason") == "NOT_PLANNED":
+            LOGGER.info(
+                "release_changelog_issue_excluded number=%d "
+                "reason=NOT_PLANNED", number,
+            )
+            continue
         issue_url = item.get("url")
         issue_path = f"https://github.com/{repo}/issues/{number}"
         pull_path = f"https://github.com/{repo}/pull/{number}"
@@ -506,6 +530,18 @@ def build_release_changelog(repo: str, scope: list[int]) -> str:
                 raise ValueError(
                     f"release changelog Issue #{number} has malformed PR evidence"
                 )
+            # Issue #707: an unmerged PR is not released content — its
+            # link never enters the release notes.
+            pr_state = json.loads(run_command([
+                "gh", "pr", "view", str(pr_number), "--repo", repo,
+                "--json", "state",
+            ])).get("state")
+            if pr_state != "MERGED":
+                LOGGER.info(
+                    "release_changelog_pr_link_dropped issue=%d pr=%d "
+                    "state=%s", number, pr_number, pr_state,
+                )
+                continue
             links.append(f"[PR #{pr_number}]({pr_url})")
         grouped[release_changelog_category(item)].append(
             (number, f"- {summary} ({'; '.join(links)})")
