@@ -69,15 +69,16 @@ from orbi.pi_activity import (
 )
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
+    CONTENT_ONLY_LABEL,
     EPIC_LABEL,
     FIX_NEEDED_LABEL,
     IN_PROGRESS_LABEL,
     MERGED_LABEL,
+    OPS_LABEL,
     P0_LABEL,
     PR_OPENED_LABEL,
     READY_LABEL,
     RELEASE_LABEL,
-    TICKET_ONLY_LABEL,
     EVENT_BLOCKED,
     EVENT_CLAIM,
     EVENT_FIX_NEEDED,
@@ -3679,11 +3680,32 @@ def has_in_progress_label(number: int, repo: str) -> bool:
     return any(int(issue.get("number", -1)) == number for issue in issues)
 
 
-def is_ticket_only(issue: dict) -> bool:
-    """Return True only for the explicit ticket-only task marker (#209)."""
+def is_content_only(issue: dict) -> bool:
+    """Return True only for the explicit content-only task marker.
+
+    Issue #209 introduced the content agent; #530 renamed its label and
+    #537 gave that name to the full-execution ops path — the content
+    path dispatches on `ai-content-only` now.
+    """
     labels = issue.get("labels", [])
     return isinstance(labels, list) and any(
-        isinstance(label, dict) and label.get("name") == TICKET_ONLY_LABEL
+        isinstance(label, dict) and label.get("name") == CONTENT_ONLY_LABEL
+        for label in labels
+    )
+
+
+def is_ops(issue: dict) -> bool:
+    """Return True only for the explicit ops task marker (Issue #537).
+
+    An ops ticket runs the SAME full-execution session as a dev ticket
+    (worktree, shell, network — no command whitelist exists); the ops
+    playbook replaces the dev one and the deliverable is the evidence
+    posted on the Issue, unless the session commits code (then the
+    delivery takes the normal PR ceremony).
+    """
+    labels = issue.get("labels", [])
+    return isinstance(labels, list) and any(
+        isinstance(label, dict) and label.get("name") == OPS_LABEL
         for label in labels
     )
 
@@ -4385,6 +4407,31 @@ def cleanup_task_worktree(worktree: Path, repo_dir: Path, *, run_id: str,
         )
 
 
+def _agent_delivery_boundary(worktree: Path) -> tuple[str, str]:
+    """Return the agent's commit boundary as (HEAD, dirty status).
+
+    The Runner-owned runtime paths are pinned in the worktree's LOCAL
+    exclude BEFORE the check (Issue #256), so a task that renamed the
+    tracked .gitignore (the #246 scene) cannot make the Runner's own
+    state look like agent leftovers. Only Runner-owned runtime paths
+    that remain (the exclude write raced or the path appeared after it)
+    are repaired by re-writing the exclude — deterministic, no git add,
+    no deletion, no arbitrary whitelisting. Shared by the dev closeout
+    (`deliver_pr`) and the ops closeout (Issue #537).
+    """
+    apply_runner_runtime_excludes(worktree)
+    dirty = run_command(["git", "status", "--porcelain"], cwd=worktree)
+    if dirty and _is_runner_runtime_only(dirty):
+        apply_runner_runtime_excludes(worktree)
+        LOGGER.info(
+            "runner_runtime_exclude_repaired status=%s",
+            " ".join(dirty.splitlines()),
+        )
+        dirty = run_command(["git", "status", "--porcelain"], cwd=worktree)
+    head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
+    return head, dirty
+
+
 def deliver_pr(worktree: Path, branch: str, base_branch: str,
                base_sha: str, run_id: str, *, issue: int,
                issue_title: str, repo_dir: Path) -> str:
@@ -4419,23 +4466,8 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
             f"Pi changed branch: expected={branch} actual={current_branch}"
         )
     # Commit boundary (Issue #186 + #256): the Agent's delivery is the
-    # committed worktree state. The Runner-owned runtime paths are
-    # pinned in the worktree's LOCAL exclude BEFORE the check, so a task
-    # that renamed the tracked .gitignore (the #246 scene) cannot make
-    # the Runner's own state look like agent leftovers.
-    apply_runner_runtime_excludes(worktree)
-    dirty = run_command(["git", "status", "--porcelain"], cwd=worktree)
-    if dirty and _is_runner_runtime_only(dirty):
-        # Only Runner-owned runtime paths remain (the exclude write raced
-        # or the path appeared after it): re-write the exclude and
-        # re-check. The repair is deterministic — no git add, no
-        # deletion, no arbitrary whitelisting.
-        apply_runner_runtime_excludes(worktree)
-        LOGGER.info(
-            "runner_runtime_exclude_repaired branch=%s status=%s",
-            branch, " ".join(dirty.splitlines()),
-        )
-        dirty = run_command(["git", "status", "--porcelain"], cwd=worktree)
+    # committed worktree state.
+    local_head, dirty = _agent_delivery_boundary(worktree)
     if dirty:
         LOGGER.error(
             "delivery_uncommitted_changes branch=%s status=%s",
@@ -4446,7 +4478,6 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
             f"({dirty.strip()}); the runner never commits uncommitted "
             "changes or expands the agent's commit boundary"
         )
-    local_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
     if local_head == base_sha:
         LOGGER.error(
             "delivery_no_commit branch=%s head=%s",
@@ -6591,9 +6622,15 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         from orbi import release
 
         return IssueResult("release", release.process_release(issue, config, source_repo))
-    if is_ticket_only(issue):
+    if is_content_only(issue):
         process_ticket_only(issue, config, source_repo)
         return IssueResult("ticket-only", None)
+    # Ops task (Issue #537): a full-execution session — the SAME claim,
+    # worktree and run machinery as the dev path below (no command
+    # whitelist exists anywhere), with the ops playbook instead of the
+    # dev one and an evidence-on-the-Issue closeout when the session
+    # delivers no commit.
+    ops = is_ops(issue)
     # The run id is generated once per attempt and bound BEFORE any
     # other step is logged, so every journal line of the attempt
     # carries it — including the claim-time lines of the restart resume
@@ -6753,6 +6790,8 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         f"base_branch={base_branch} base_sha={base_sha} run_id={run_id} "
         f"priority={priority}"
     )
+    if ops:
+        run_info += " task_type=ops"
     if repo_config_record is not None:
         # Issue #527 D4: the run comment carries the repository config sha
         # (the file blob at the default branch tip) so a policy change is
@@ -6850,6 +6889,16 @@ def process_issue(issue: dict, config: dict, source_repo: str,
                 (snapshot.get("session_id") if snapshot else None) or "-",
             )
         config = {**config, "base_sha": base_sha, "run_id": run_id}
+        if ops:
+            config = {
+                **config,
+                # Issue #537: the ops session runs the ops playbook — the
+                # sibling of the configured dev prompt (a custom prompt
+                # deployment carries prompt_ops.md next to it). A missing
+                # file fails the run fast through the delivery failure
+                # path with the exact path in the comment.
+                "prompt": config["prompt"].with_name("prompt_ops.md"),
+            }
         comment_issue(
             number, repo=source_repo,
             body=started_pi_comment_body(
@@ -6887,6 +6936,68 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         publish(
             action=lambda: _publish_test_milestone(publisher, worktree),
         )
+        if ops:
+            # Issue #537: an ops delivery without a commit is COMPLETE —
+            # the evidence the session posted on the Issue (per-step real
+            # command output / API responses, the #526 fact culture) is
+            # the deliverable. Pure ops actions take no PR ceremony; the
+            # terminal transition mirrors the content path (the claim
+            # label is removed, the Issue is closed; the worktree stays
+            # as the run's evidence). Committed code (or uncommitted
+            # leftovers) falls through to the deterministic closeout
+            # below: committed ops code takes the normal PR ceremony,
+            # leftovers fail fast there (the runner never commits
+            # uncommitted changes).
+            head, dirty = _agent_delivery_boundary(worktree)
+            if head == base_sha and not dirty:
+                run_command([
+                    "gh", "issue", "close", str(number),
+                    "--repo", source_repo,
+                ])
+                edit_issue(
+                    number, repo=source_repo, remove=IN_PROGRESS_LABEL,
+                )
+                publish(
+                    action=lambda: publisher.milestone(
+                        f"ops delivered: {run_info}",
+                    ),
+                )
+                publish(
+                    action=lambda: publisher.finish(_progress_body(
+                        _progress_state(
+                            issue=number, title=title, run_id=run_id,
+                            role=ROLE_IMPLEMENT, branch=branch,
+                            worktree=worktree, started=started,
+                            pr_url=None, review_round=0, priority=priority,
+                        ),
+                        outcome="**Orbi ops delivered**",
+                    )),
+                )
+                LOGGER.info(
+                    "run_end %s",
+                    format_end_scene(
+                        run_id=run_id,
+                        issue=issue_context(source_repo, number),
+                        role=ROLE_IMPLEMENT, result="ops_delivered",
+                        elapsed=time.monotonic() - started,
+                        pr="-", commit=head,
+                    ),
+                )
+                # Issue #266: the delivered outcome breaks any failure
+                # streak of this Issue in the health history. Pure
+                # bypass: a state-write failure never changes the
+                # delivery outcome.
+                try:
+                    runner_health.record_run_attempt(
+                        runner_health.health_state_path(config["repo_dir"]),
+                        repo=source_repo, issue=number, run_id=run_id,
+                        outcome="ops_delivered", fingerprint="",
+                    )
+                except Exception:
+                    LOGGER.exception(
+                        "issue=%s health_success_record_failed", number,
+                    )
+                return IssueResult("ops", None)
         # Issue #186: the deterministic closeout (commit boundary, base
         # freshness + absorb, plain push, PR creation, PR verification)
         # is the Runner's job — the agent stopped at the committed

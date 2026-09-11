@@ -73,8 +73,10 @@ VALID_DEFS = [
     # scan routes `ai-ready`+`ai-release` to the release state machine),
     # so it is part of the platform label set.
     {"name": "ai-release", "color": "5319e7", "description": "release"},
-    # Issue #209: ticket-only content is a separately dispatched type.
-    {"name": "ai-ops-only", "color": "0e8a16", "description": "ticket"},
+    # Issue #209/#537: ticket-only content is a separately dispatched
+    # type; the content marker moved off the ops name to its own label.
+    {"name": "ai-content-only", "color": "d4c5f9", "description": "content"},
+    {"name": "ai-ops-only", "color": "0e8a16", "description": "ops"},
 ]
 
 
@@ -227,13 +229,13 @@ def test_fake_run_factory_rejects_an_unexpected_command():
 # --- labels.toml: the single source of truth -------------------------------
 
 
-def test_load_label_defs_parses_all_ten_platform_labels(tmp_path):
+def test_load_label_defs_parses_all_eleven_platform_labels(tmp_path):
     path = write_labels_toml(tmp_path, VALID_DEFS)
     defs = pilot_setup.load_label_defs(path)
     assert [entry["name"] for entry in defs] == [
         "ai-ready", "ai-in-progress", "ai-pr-opened",
         "ai-fix-needed", "ai-merged", "ai-blocked", "p0", "ai-epic",
-        "ai-release", "ai-ops-only",
+        "ai-release", "ai-content-only", "ai-ops-only",
     ]
     assert defs[0] == {
         "name": "ai-ready", "color": "1d76db", "description": "dispatched",
@@ -291,8 +293,8 @@ def test_load_label_defs_rejects_malformed_toml(tmp_path):
         pilot_setup.load_label_defs(path)
 
 
-def test_committed_labels_toml_covers_the_ten_platform_labels():
-    """The committed labels.toml (repo root) must define exactly the 10
+def test_committed_labels_toml_covers_the_eleven_platform_labels():
+    """The committed labels.toml (repo root) must define exactly the 11
     platform labels with valid colors and non-empty descriptions."""
     path = Path(__file__).resolve().parent.parent / "labels.toml"
     defs = pilot_setup.load_label_defs(path)
@@ -633,8 +635,8 @@ def test_align_labels_creates_missing_and_edits_drifted(tmp_path):
         run_command=fake_run,
     )
     assert result["repo"] == "xqliu/orbi"
-    assert result["aligned"] == 10
-    assert result["total"] == 10
+    assert result["aligned"] == 11
+    assert result["total"] == 11
     # Only the drifted p0 label is written; ai-ready already matches and
     # the business label `bug` is never touched.
     creates = [c for c in calls if c[:3] == ["gh", "label", "create"]]
@@ -656,7 +658,7 @@ def test_align_labels_is_idempotent_when_everything_matches(tmp_path):
         pilot_setup.load_label_defs(repo / "labels.toml"),
         run_command=fake_run,
     )
-    assert result["aligned"] == 10
+    assert result["aligned"] == 11
     assert [c for c in calls if c[:3] == ["gh", "label", "create"]] == []
 
 
@@ -669,9 +671,9 @@ def test_align_labels_reports_partial_alignment(tmp_path):
         pilot_setup.load_label_defs(repo / "labels.toml"),
         run_command=fake_run,
     )
-    assert result["aligned"] == 10
-    assert result["total"] == 10
-    assert len([c for c in calls if c[:3] == ["gh", "label", "create"]]) == 10
+    assert result["aligned"] == 11
+    assert result["total"] == 11
+    assert len([c for c in calls if c[:3] == ["gh", "label", "create"]]) == 11
 
 
 def test_align_labels_fails_fast_on_a_label_write_error(tmp_path):
@@ -1328,7 +1330,7 @@ def test_run_setup_success_reports_all_steps(tmp_path):
             "repo": "xqliu/orbi",
             "permission": "ADMIN",
             "default_branch": "main",
-            "labels": {"aligned": 10, "total": 10},
+            "labels": {"aligned": 11, "total": 11},
         },
     ]
     assert result["service"]["installed"] is True
