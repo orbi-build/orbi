@@ -695,11 +695,14 @@ def test_process_issue_repeated_recoverable_failure_updates_one_comment(
         if command[:2] == ["gh", "issue"] and "comment" in command:
             comments.append({"id": next(next_id), "body": command[-1]})
             return ""
-        if command[:3] == ["gh", "issue", "list"]:
-            # Restart-resume scan (Issue #18): fresh claim each tick;
-            # the run id stays pinned by patch_process_deps, so both
-            # ticks are the SAME run retrying.
-            return "[]"
+        if command[:3] == ["gh", "issue", "view"]:
+            # The pre-claim in-progress recheck reads the Issue
+            # directly (Issue #658): a fresh claim — `ai-ready`, never
+            # `ai-in-progress`, so the restart-resume scan is skipped
+            # and each tick re-claims; the run id stays pinned by
+            # patch_process_deps, so both ticks are the SAME run
+            # retrying.
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_gh)
