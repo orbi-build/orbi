@@ -20645,3 +20645,71 @@ def test_run_failed_scene_logged_in_one_place():
         "the run_failed scene must be logged in exactly one place (the "
         f"_fail_run helper, Issue #292); sites at lines: {sites}"
     )
+
+
+def test_process_issue_yields_when_the_label_lands_in_the_scan_window(
+    monkeypatch, tmp_path,
+):
+    """Issue #724：认领竞态窗口的前半段——扫描快照还没有 ai-in-progress、
+    首次直读却已经看到 = 另一个实例就在本 tick 刚认领。此时必须让路，
+    绝不能复用活 run 的 worktree/run_id 启动第二个 Pi（或降级开双交付）。
+    真孤儿（标签在快照和直读里都有）照旧走 resume，不受此守卫影响。"""
+    make_claim_race_gh(monkeypatch, {"in_progress": True})
+    _claim_race_deps(monkeypatch, tmp_path)
+    monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [
+        (tmp_path / "slot-0", 424242)])
+    monkeypatch.setattr(runner, "run_pi", Mock(
+        side_effect=AssertionError("must not start a second Pi over a live run")))
+    issue = {"number": 18, "title": "t", "body": "b",
+             "labels": [{"name": "ai-ready"}]}
+    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+              "base_branch": "main", "slot_dir": tmp_path / "slots",
+              "max_concurrency": 2}
+    result = runner.process_issue(issue, config, "owner/repo")
+    assert result == runner.IssueResult("claim-yielded", None)
+
+
+def test_process_issue_scan_window_orphan_resumes_when_no_runner_live(
+    monkeypatch, tmp_path,
+):
+    """Issue #724 的另一半（#18/#668 契约的当代钉子）：同样的滞后快照
+    形态，但没有任何其他活 runner 持槽 = 死 runner 留下的孤儿——必须照
+    旧 resume（复用 run_id 进 run_pi），绝不能误让路把重启恢复拖慢
+    一拍。"""
+    make_claim_race_gh(monkeypatch, {"in_progress": True})
+    _claim_race_deps(monkeypatch, tmp_path)
+    monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [
+        (tmp_path / "slot-0", None), (tmp_path / "slot-1", os.getpid())])
+    monkeypatch.setattr(runner, "apply_label_patch", Mock())
+    monkeypatch.setattr(runner, "create_worktree", Mock(
+        side_effect=AssertionError("orphan must resume")))
+    issue = {"number": 18, "title": "t", "body": "b",
+             "labels": [{"name": "ai-ready"}]}
+    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+              "base_branch": "main", "slot_dir": tmp_path / "slots",
+              "max_concurrency": 2}
+    result = runner.process_issue(issue, config, "owner/repo")
+    # 交付失败的收尾细节由既有 resume 测试族钉住；这里只钉"没误让路"。
+    assert result != runner.IssueResult("claim-yielded", None)
+
+
+def test_process_issue_claim_yield_guard_honors_custom_dispatch_label(
+    monkeypatch, tmp_path,
+):
+    """Issue #724：让路守卫的标签谓词必须用仓库的 dispatch_label（#527），
+    而不是写死的 ai-ready——自定义标签仓库的票永远不带 ai-ready，守卫
+    在那里整段失效，#658 竞态原样复活。"""
+    state = {"in_progress": False}
+    make_claim_race_gh(monkeypatch, state)
+    _claim_race_deps(
+        monkeypatch, tmp_path,
+        freeze_side_effect=lambda: state.__setitem__("in_progress", True),
+    )
+    monkeypatch.setattr(runner, "run_pi", Mock(
+        side_effect=AssertionError("must not claim behind a live claimant")))
+    issue = {"number": 18, "title": "t", "body": "b",
+             "labels": [{"name": "repo-ready"}]}
+    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+              "base_branch": "main", "dispatch_label": "repo-ready"}
+    result = runner.process_issue(issue, config, "owner/repo")
+    assert result == runner.IssueResult("claim-yielded", None)
