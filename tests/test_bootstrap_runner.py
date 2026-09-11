@@ -7960,10 +7960,11 @@ def test_stream_pi_rate_limited_exit_retries_then_succeeds(
 def test_stream_pi_rate_limited_exhausted_takes_existing_failure_path(
     tmp_path, monkeypatch, caplog,
 ):
-    """Issue #321 acceptance: 429 through every backoff retry (5) takes
-    the EXISTING failure path — the terminal pre-session classification —
-    marked `reason=provider_rate_limited` on the startup and run_failed
-    lines."""
+    """Issue #698 acceptance: 429 through every backoff retry (5) is a
+    TERMINAL delivery failure — `RateLimitExhaustedError` (never a
+    recoverable resume), marked `reason=provider_rate_limited` on the
+    startup and run_failed lines, with the cumulative count and the
+    quota-not-task repair action in the operator-facing message."""
     sleeps: list[float] = []
     monkeypatch.setattr(pi_process.time, "sleep", sleeps.append)
     command = make_rate_limit_pi(
@@ -7973,7 +7974,7 @@ def test_stream_pi_rate_limited_exhausted_takes_existing_failure_path(
                '"RESOURCE_EXHAUSTED"}}',
     )
     with caplog.at_level("INFO"):
-        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        with pytest.raises(pi_process.RateLimitExhaustedError) as exc_info:
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.05,
                 run_id="deadbeef", issue=321, source_repo="xqliu/orbi",
@@ -8000,18 +8001,23 @@ def test_stream_pi_rate_limited_exhausted_takes_existing_failure_path(
               if " run_failed " in line]
     assert len(failed) == 1
     assert "reason=provider_rate_limited" in failed[0]
-    # The existing terminal semantics: a plain CalledProcessError (pre-
-    # session), carrying the 429 stderr for the failure comment.
-    assert not isinstance(exc_info.value, runner.RecoverablePiProcessError)
-    assert "429" in (exc_info.value.stderr or "")
+    # Terminal, never recoverable (Issue #698: the exhausted limit must
+    # not resume the same run). The message is the operator-facing cause:
+    # the cumulative count and the repair action.
+    assert not isinstance(exc_info.value, runner.RecoverablePiFailure)
+    message = str(exc_info.value)
+    assert "provider rate limit retries exhausted" in message
+    assert "6 consecutive 429 exits" in message
+    assert "limit=5" in message
+    assert "relabel the Issue ai-ready" in message
 
 
-def test_stream_pi_rate_limited_exhausted_mid_session_stays_recoverable(
+def test_stream_pi_rate_limited_exhausted_mid_session_terminates(
     tmp_path, monkeypatch, caplog,
 ):
-    """Issue #321: exhausting the retries after the session sent its
-    first request keeps the EXISTING recoverable classification — the
-    interrupted work stays resumable, never terminal."""
+    """Issue #698: exhausting the retries after the session sent its
+    first request is TERMINAL too — the exhausted limit must never resume
+    the same run, whatever the session had already produced."""
     sleeps: list[float] = []
     monkeypatch.setattr(pi_process.time, "sleep", sleeps.append)
     command = make_rate_limit_pi(
@@ -8019,13 +8025,15 @@ def test_stream_pi_rate_limited_exhausted_mid_session_stays_recoverable(
         stderr="Error 429: rate limited, retry in 2s",
     )
     with caplog.at_level("INFO"):
-        with pytest.raises(runner.RecoverablePiProcessError):
+        with pytest.raises(pi_process.RateLimitExhaustedError) as exc_info:
             runner.stream_pi(
                 command, cwd=tmp_path, poll_interval=0.05,
                 run_id="deadbeef", issue=321, source_repo="xqliu/orbi",
                 branch="b",
             )
     assert sleeps == [2.0] * 5
+    assert not isinstance(exc_info.value, runner.RecoverablePiFailure)
+    assert "provider rate limit retries exhausted" in str(exc_info.value)
     # After the first response this is a mid-run failure: no
     # startup_failed line, the run_failed scene carries the reason.
     assert not any(" startup_failed " in line
@@ -8034,6 +8042,191 @@ def test_stream_pi_rate_limited_exhausted_mid_session_stays_recoverable(
               if " run_failed " in line]
     assert len(failed) == 1
     assert "reason=provider_rate_limited" in failed[0]
+
+
+def test_stream_pi_429_attempts_persist_across_invocations(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #698 acceptance: the `pi_retry_429` attempt count is
+    cumulative per run_id — a resumed (restarted) runner invocation
+    continues where the killed one stopped, never back at 1. The
+    termination guard (sleep raising on the Nth call) simulates the
+    runner dying mid-backoff, Issue #95."""
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=99, stderr="Error 429: rate limited, retry in 2s",
+    )
+
+    def guard(after: int):
+        """A time.sleep that lets `after` calls pass, then raises: the
+        runner dies mid-backoff (termination guard, Issue #95)."""
+        calls = {"n": 0}
+
+        def _sleep(seconds):
+            calls["n"] += 1
+            if calls["n"] > after:
+                raise RuntimeError("test termination guard")
+
+        return _sleep
+
+    # Invocation 1 (the original runner process): two backoffs survive,
+    # the process dies during the third wait — AFTER the third retry was
+    # persisted (the file below proves persist-before-sleep).
+    monkeypatch.setattr(pi_process.time, "sleep", guard(2))
+    with caplog.at_level("INFO"):
+        with pytest.raises(RuntimeError, match="termination guard"):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=698, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    assert json.loads(
+        pi_process.pi_429_attempts_path(tmp_path).read_text()
+    ) == {"run_id": "deadbeef", "attempts": 3}
+
+    # Invocation 2 (the restart scan resumed the same run): the counter
+    # continues — the next retry line says attempt=4, never attempt=1.
+    monkeypatch.setattr(pi_process.time, "sleep", guard(0))
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        with pytest.raises(RuntimeError, match="termination guard"):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=698, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    retries = [line for line in caplog.text.splitlines()
+               if " pi_retry_429 " in line]
+    assert [field for line in retries for field in line.split()
+            if field.startswith("attempt=")] == ["attempt=4"]
+    assert json.loads(
+        pi_process.pi_429_attempts_path(tmp_path).read_text()
+    ) == {"run_id": "deadbeef", "attempts": 4}
+
+
+def test_stream_pi_429_exhaustion_across_restarts_is_terminal(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #698 acceptance: the CUMULATIVE count reaches the limit —
+    a resumed invocation whose counter already sits at limit-1 terminates
+    on its next 429 exit instead of restarting a full backoff cycle."""
+    pi_process._record_429_attempts(tmp_path, "deadbeef", 4)
+    sleeps: list[float] = []
+    monkeypatch.setattr(pi_process.time, "sleep", sleeps.append)
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=99, stderr="Error 429: rate limited, retry in 2s",
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(pi_process.RateLimitExhaustedError) as exc_info:
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=698, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    # One backoff retry (the 5th cumulative), then the 6th 429 exit is
+    # terminal — one session, not a fresh 5-retry cycle.
+    assert sleeps == [2.0]
+    retries = [line for line in caplog.text.splitlines()
+               if " pi_retry_429 " in line]
+    assert [field for line in retries for field in line.split()
+            if field.startswith("attempt=")] == ["attempt=5"]
+    assert not isinstance(exc_info.value, runner.RecoverablePiFailure)
+    assert "6 consecutive 429 exits" in str(exc_info.value)
+
+
+def test_stream_pi_429_terminal_resets_counter_for_human_retry(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #698: the terminal exhaustion spent this run's backoff
+    budget and CLEARS the persisted counter, so the documented repair
+    (relabel ai-ready) starts a FULL fresh budget even when the retry
+    reuses the SAME worktree and run_id — the open-PR review resume
+    does exactly that. Without the reset the repair would terminal-exit
+    on the first new 429 (zero budget) and the Issue would block
+    again on its first transient hiccup."""
+    pi_process._record_429_attempts(tmp_path, "deadbeef", 5)
+    sleeps: list[float] = []
+    monkeypatch.setattr(pi_process.time, "sleep", sleeps.append)
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=99, stderr="Error 429: rate limited, retry in 2s",
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(pi_process.RateLimitExhaustedError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=698, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    # Terminal on the first 429 (the budget was already spent), and the
+    # counter file is gone.
+    assert sleeps == []
+    assert not pi_process.pi_429_attempts_path(tmp_path).exists()
+    # The human-requeued retry (same worktree, same run_id) has the full
+    # budget again: five backoff retries before the next terminal.
+    sleeps.clear()
+    with pytest.raises(pi_process.RateLimitExhaustedError):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.05,
+            run_id="deadbeef", issue=698, source_repo="xqliu/orbi",
+            branch="b",
+        )
+    assert sleeps == [2.0] * 5
+
+
+def test_stream_pi_429_terminal_survives_a_failed_counter_clear(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #698: the terminal decision never depends on its own
+    artifact cleanup — a failing counter unlink is one warning line and
+    the RateLimitExhaustedError still raises."""
+    pi_process._record_429_attempts(tmp_path, "deadbeef", 5)
+    monkeypatch.setattr(pi_process.time, "sleep", [])
+
+    def broken_unlink(self, *args, **kwargs):
+        raise OSError("read-only fs")
+
+    monkeypatch.setattr(pi_process.Path, "unlink", broken_unlink)
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=99, stderr="Error 429: rate limited, retry in 2s",
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(pi_process.RateLimitExhaustedError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=698, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    assert "pi_429_attempts_clear_failed" in caplog.text
+
+
+def test_429_attempt_counter_file_round_trip(tmp_path, monkeypatch, caplog):
+    """The persisted counter is per-run and fails safe: absent, corrupt,
+    foreign-run or invalid files all read as 0 (worst case = today's
+    behavior, never a false terminal), and a failed write never breaks
+    the retry loop."""
+    assert pi_process._load_429_attempts(tmp_path, "deadbeef") == 0
+    pi_process._record_429_attempts(tmp_path, "deadbeef", 3)
+    assert pi_process._load_429_attempts(tmp_path, "deadbeef") == 3
+    # Another run never inherits this run's count.
+    assert pi_process._load_429_attempts(tmp_path, "c0ffee00") == 0
+    path = pi_process.pi_429_attempts_path(tmp_path)
+    with caplog.at_level("INFO"):
+        for corrupt in (
+            "{not json",
+            json.dumps({"run_id": "deadbeef", "attempts": "many"}),
+            json.dumps({"run_id": "deadbeef", "attempts": -2}),
+            json.dumps({"attempts": 3}),
+            json.dumps(["deadbeef", 3]),
+        ):
+            path.write_text(corrupt)
+            assert pi_process._load_429_attempts(tmp_path, "deadbeef") == 0
+        assert "pi_429_attempts" in caplog.text
+
+        def broken_write(self, *args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(pi_process.Path, "write_text", broken_write)
+        pi_process._record_429_attempts(tmp_path, "deadbeef", 4)
+        assert "pi_429_attempts" in caplog.text
 
 
 def test_stream_pi_non_rate_limited_exit_never_retries(tmp_path, caplog):

@@ -104,6 +104,19 @@ def test_is_unrecoverable_failure_true_only_for_explicit_error():
     )
 
 
+def test_is_unrecoverable_failure_true_for_rate_limit_exhaustion():
+    # Issue #698: the exhausted 429 backoff budget is an external
+    # provider-quota precondition the AI cannot fix. The recoverable
+    # classification would resume the open-PR review with the persisted
+    # counter already at the limit — one 429 exit per tick, forever:
+    # exactly the unbounded loop the issue bans.
+    assert runner.is_unrecoverable_failure(
+        runner.RateLimitExhaustedError(
+            "provider rate limit retries exhausted",
+        ),
+    )
+
+
 @pytest.mark.parametrize("exc", [
     RuntimeError(
         "Pi is stuck in model_wait with a frozen session for 10m: "

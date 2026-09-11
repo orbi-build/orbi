@@ -127,6 +127,7 @@ from orbi.pi_process import (
     PI_POLL_INTERVAL,
     ROLE_IMPLEMENT,
     ModelWaitDeadError,
+    RateLimitExhaustedError,
     RecoverablePiFailure,
     RecoverablePiProcessError,
     RecoverablePiTimeoutError,
@@ -284,8 +285,13 @@ class ReviewRoundsExhausted(UnrecoverableDeliveryError):
 def is_unrecoverable_failure(exc: BaseException) -> bool:
     """Issue #50: classify one delivery failure.
 
-    True ONLY for an explicit `UnrecoverableDeliveryError` (an external
-    precondition the AI cannot safely judge or fix). Every other
+    True for an explicit `UnrecoverableDeliveryError` (an external
+    precondition the AI cannot safely judge or fix) and for the #698
+    provider-quota exhaustion (`RateLimitExhaustedError`): the backoff
+    budget of the delivery attempt is spent on an external condition,
+    and a recoverable classification would resume the open-PR review
+    with the persisted counter already at the limit — one 429 exit per
+    tick, forever, the unbounded loop the issue bans. Every other
     failure — Pi execution failure (pi exit, upstream dead, idle
     recovery), timeout, runner exception, missing/malformed verdict,
     missing worktree, unpushed local commit, gate failure — is
@@ -293,7 +299,9 @@ def is_unrecoverable_failure(exc: BaseException) -> bool:
     resumes the same run, branch, worktree and PR. A single failure
     must never permanently stop an Issue.
     """
-    return isinstance(exc, UnrecoverableDeliveryError)
+    return isinstance(
+        exc, (UnrecoverableDeliveryError, RateLimitExhaustedError),
+    )
 
 
 class RunIdFilter(logging.Filter):

@@ -10,6 +10,7 @@ imported lazily inside `stream_pi` so this module never imports `runner`
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -119,14 +120,88 @@ PI_IDLE_RECOVERY_CYCLES = 3
 # cap. The slot is held for the whole wait (the #233 positioning: the
 # Runner never claims a new Issue while this run waits). Only after
 # PI_RATE_LIMIT_RETRIES backoff retries still end in a 429 exit (6
-# consecutive 429 exits at the default 5) does the EXISTING failure
-# path run — marked `reason=provider_rate_limited` so a human (or the
-# #313 rotation semantics) can take over. Long-term quota exhaustion is
-# OUT of scope here (#313): this loop only bridges short burst windows.
+# consecutive 429 exits at the default 5) does the terminal failure run
+# — `RateLimitExhaustedError` (`ai-blocked`), with the cumulative count
+# and the quota repair action in the message (Issue #698: the count is
+# the RUN's, persisted across restarts, so the limit actually bites).
+# Long-term quota exhaustion is OUT of scope here (#313): this loop
+# only bridges short burst windows.
 PI_RATE_LIMIT_MARKERS = ("429", "quota", "resource_exhausted", "retry in")
 PI_RATE_LIMIT_RETRIES = 5
 PI_RATE_LIMIT_BACKOFF_SECONDS = 30.0
 PI_RATE_LIMIT_BACKOFF_MAX_SECONDS = 300.0
+
+
+# The 429 retry counter is per-DELIVERY-ATTEMPT state, not per-process
+# state (Issue #698): the pre-#698 counter lived in a `stream_pi` local
+# and reset on every runner restart, so `PI_RATE_LIMIT_RETRIES` was
+# unreachable as a terminal outcome (the beta incident: 22 restarts,
+# 19×429, zero output, the Issue stuck `ai-in-progress`). The count is
+# persisted in the task worktree's gitignored `.orbi/` run dir — a
+# resumed run (same run_id, same worktree) continues where the killed
+# process stopped, and the worktree dies with the terminal cleanup, so a
+# NEW attempt (new run_id, new worktree) starts from 0. The terminal
+# itself also clears the file: the documented repair (relabel ai-ready)
+# must get a full fresh budget even when the retry reuses the SAME
+# worktree and run_id — the open-PR review resume does exactly that.
+PI_429_ATTEMPTS_FILENAME = "pi-429-attempts.json"
+
+
+def pi_429_attempts_path(cwd: Path) -> Path:
+    """The persisted 429 retry counter file of one task worktree."""
+    return cwd / ".orbi" / PI_429_ATTEMPTS_FILENAME
+
+
+def _load_429_attempts(cwd: Path, run_id: str) -> int:
+    """Return the cumulative 429 retry count of this run, or 0.
+
+    An unreadable, malformed or foreign-run file counts as 0 with one
+    warning line: the worst case is the pre-#698 behavior (the count
+    restarts), never a false terminal — the delivery must not fail on
+    its own observability artifact.
+    """
+    path = pi_429_attempts_path(cwd)
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return 0
+    except (OSError, ValueError):
+        LOGGER.warning(
+            "pi_429_attempts_reset path=%s reason=unreadable", path,
+        )
+        return 0
+    valid = (
+        isinstance(state, dict)
+        and state.get("run_id") == run_id
+        and isinstance(state.get("attempts"), int)
+        and not isinstance(state.get("attempts"), bool)
+        and state["attempts"] >= 0
+    )
+    if not valid:
+        LOGGER.warning(
+            "pi_429_attempts_reset path=%s reason=foreign_or_invalid",
+            path,
+        )
+        return 0
+    return state["attempts"]
+
+
+def _record_429_attempts(cwd: Path, run_id: str, attempts: int) -> None:
+    """Persist the cumulative count BEFORE the backoff sleep (Issue
+    #698): a kill during the wait keeps every retry already spent. A
+    failed write never breaks the retry loop — the in-memory count
+    still bounds this invocation."""
+    path = pi_429_attempts_path(cwd)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"run_id": run_id, "attempts": attempts}) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        LOGGER.warning(
+            "pi_429_attempts_write_failed path=%s", path,
+        )
 
 
 # The bootstrap runner streams every Pi session of a run through the same
@@ -178,13 +253,13 @@ class ProviderRateLimitedError(RuntimeError):
     not a task failure.
 
     Internal to `stream_pi`'s retry loop: the loop either re-spawns the
-    session after the backoff or replays the EXISTING terminal
-    classification through `_fail_rate_limited` — it never escapes
-    `stream_pi`. The exception carries the exit scene (returncode,
-    captured streams, the refreshed session activity) so the terminal
-    replay raises exactly the error type a non-retried exit would. The
-    stderr text itself never reaches the message (only the class — the
-    same no-leak rule as the startup reasons)."""
+    session after the backoff or raises the terminal
+    `RateLimitExhaustedError` through `_fail_rate_limited` — it never
+    escapes `stream_pi` itself. The exception carries the exit scene
+    (returncode, captured streams, the refreshed session activity) for
+    the retry logs and the terminal failure. The stderr text itself
+    never reaches a message (only the class — the same no-leak rule as
+    the startup reasons)."""
 
     def __init__(self, *, returncode: int, stdout: str, stderr: str,
                  activity: dict) -> None:
@@ -195,6 +270,30 @@ class ProviderRateLimitedError(RuntimeError):
         self.stdout = stdout
         self.stderr = stderr
         self.activity = activity
+
+
+class RateLimitExhaustedError(RuntimeError):
+    """The rate-limit backoff budget of one delivery attempt is
+    exhausted (Issue #698): `PI_RATE_LIMIT_RETRIES` cumulative 429 exits
+    across every restart of the same run_id — TERMINAL, never a
+    recoverable resume.
+
+    Deliberately NOT a `RecoverablePiFailure`: the pre-#698 recoverable
+    replay resumed the same run with a reset counter — the unbounded
+    loop this issue fixes. A persistently throttled provider is an
+    external condition the runner must stop retrying, and it must stop
+    in BOTH phases: the implement phase's generic handler terminates
+    the delivery (`ai-blocked` — the documented no-PR failure terminal;
+    `ai-fix-needed` is an opened-PR state a no-PR Issue cannot resume
+    from), and the opened-PR review phase classifies it through
+    `is_unrecoverable_failure` — the recoverable `ai-fix-needed` there
+    would resume the review with the persisted counter already at the
+    limit: one 429 exit per tick, forever. The failure message is the
+    operator-facing cause and repair: relabel `ai-ready` to retry after
+    the quota window resets (the terminal clears the persisted counter,
+    so the human-requeued retry starts with a full budget — in the
+    review phase it reuses the same worktree and run_id). The operator
+    must see the provider quota, not the task, as the cause."""
 
 
 def _drain_stream(stream, chunks: list[bytes]) -> None:
@@ -839,13 +938,14 @@ def stream_pi(
     (`retry in Ns` / `retryDelay: Ns`) capped at 5 minutes; without a
     hint it doubles from 30 s to the same cap. Every retry logs one
     `pi_retry_429` line (run id, attempt, next_retry_in). Only after
-    `PI_RATE_LIMIT_RETRIES` (default 5) backoff retries still end in a
-    429 exit does the EXISTING failure path run — the same error type a
-    non-retried exit raises, so the terminal semantics (pre-session
-    `ai-blocked` / recoverable interrupted session) are unchanged —
-    with the `run_failed` scene marked `reason=provider_rate_limited`.
-    Long-term quota exhaustion stays out of scope (#313); non-429
-    failures are untouched.
+    `PI_RATE_LIMIT_RETRIES` (default 5) CUMULATIVE backoff retries still
+    end in a 429 exit does the terminal failure run —
+    `RateLimitExhaustedError`, never a recoverable resume (Issue #698:
+    the attempt count is persisted per run in the worktree's `.orbi/`
+    dir, so it keeps rising across runner restarts and the limit
+    actually bites) — with the `run_failed` scene marked
+    `reason=provider_rate_limited`. Long-term quota exhaustion stays out
+    of scope (#313); non-429 failures are untouched.
 
     `progress` (Issue #18) is invoked on EVERY poll — an activity change
     or a heartbeat — with the current activity state, while the Pi
@@ -890,7 +990,9 @@ def stream_pi(
     LOGGER.info("command=%s cwd=%s", " ".join(safe_command), cwd)
     issue_ref = issue_context(source_repo, issue)
     session_dir = cwd / ".pi-session"
-    attempt = 0
+    # Issue #698: the counter is the RUN's, not this invocation's — a
+    # resumed run continues where the killed process stopped.
+    attempt = _load_429_attempts(cwd, run_id)
     while True:
         # Session files that already exist before this Pi process starts
         # are never followed (Issue #45 round-5 review, Major 3): a
@@ -917,19 +1019,23 @@ def stream_pi(
         except ProviderRateLimitedError as exc:
             if attempt >= PI_RATE_LIMIT_RETRIES:
                 _fail_rate_limited(
-                    exc, run_id=run_id, issue_ref=issue_ref, role=role,
-                    branch=branch, cwd=cwd, safe_command=safe_command,
+                    exc, attempts=attempt, run_id=run_id,
+                    issue_ref=issue_ref, role=role, branch=branch,
+                    cwd=cwd,
                 )
             delay = _backoff_seconds(attempt, exc.stderr)
+            attempt += 1
+            # Persisted BEFORE the sleep: a kill during the wait keeps
+            # every retry already spent (Issue #698).
+            _record_429_attempts(cwd, run_id, attempt)
             LOGGER.warning(
                 "pi_retry_429 run_id=%s issue=%s role=%s attempt=%d "
                 "next_retry_in=%ds limit=%d session=%s",
-                run_id, issue_ref, role, attempt + 1, int(delay),
+                run_id, issue_ref, role, attempt, int(delay),
                 PI_RATE_LIMIT_RETRIES,
                 exc.activity.get("session_id") or "-",
             )
             time.sleep(delay)
-            attempt += 1
 
 
 def _log_run_failed(activity: dict, *, run_id: str, issue_ref: str,
@@ -950,14 +1056,20 @@ def _log_run_failed(activity: dict, *, run_id: str, issue_ref: str,
 
 
 def _fail_rate_limited(
-    exc: ProviderRateLimitedError, *, run_id: str, issue_ref: str,
-    role: str, branch: str, cwd: Path, safe_command: list[str],
+    exc: ProviderRateLimitedError, *, attempts: int, run_id: str,
+    issue_ref: str, role: str, branch: str, cwd: Path,
 ) -> NoReturn:
-    """The exhausted-retries terminal failure (Issue #321): the EXISTING
-    failure path — the same error type a non-retried exit raises, so the
-    terminal semantics (pre-session `ai-blocked` / recoverable
-    interrupted session) are unchanged — with the `run_failed` scene
-    marked `reason=provider_rate_limited`. The per-attempt
+    """The exhausted-retries terminal failure (Issue #321, terminal since
+    #698): `attempts` cumulative 429 exits (the RUN's count, persisted
+    across restarts) have burned the backoff budget, so the delivery
+    terminates — `RateLimitExhaustedError` is never a recoverable resume
+    (the classification is terminal in both phases, implement and
+    opened-PR review). The terminal also CLEARS the persisted counter:
+    this attempt's budget is spent and reported on the Issue, and the
+    documented repair (relabel ai-ready) must start a FULL fresh budget
+    even when the retry reuses the same worktree and run_id. A failed
+    clear is one warning line — the terminal decision never depends on
+    its own artifact cleanup. The per-attempt
     `startup_failed` lines are already in the journal (one per 429 exit
     before the first response), so this is the single terminal log."""
     activity = exc.activity
@@ -965,13 +1077,18 @@ def _fail_rate_limited(
         activity, run_id=run_id, issue_ref=issue_ref, role=role,
         branch=branch, cwd=cwd, reason="provider_rate_limited",
     )
-    error_type = (
-        RecoverablePiProcessError
-        if activity["first_request"]
-        else subprocess.CalledProcessError
-    )
-    raise error_type(
-        exc.returncode, safe_command, output=exc.stdout, stderr=exc.stderr,
+    try:
+        pi_429_attempts_path(cwd).unlink(missing_ok=True)
+    except OSError:
+        LOGGER.warning(
+            "pi_429_attempts_clear_failed path=%s",
+            pi_429_attempts_path(cwd),
+        )
+    raise RateLimitExhaustedError(
+        f"provider rate limit retries exhausted: {attempts + 1} "
+        f"consecutive 429 exits (limit={PI_RATE_LIMIT_RETRIES} retries); "
+        "the cause is the provider quota, not the task; repair: relabel "
+        "the Issue ai-ready to retry after the quota window resets"
     )
 
 
@@ -1431,8 +1548,8 @@ def _stream_pi_once(
         # Issue #321: a provider 429 exit is TRANSIENT throttling, not a
         # task failure — the `stream_pi` retry loop backs off and
         # re-spawns this session. The refreshed activity rides on the
-        # exception so the exhausted-retries terminal failure replays
-        # the EXISTING classification below unchanged.
+        # exception so the retry logs and the exhausted-retries terminal
+        # failure carry the exit scene.
         if _is_rate_limited(stderr):
             raise ProviderRateLimitedError(
                 returncode=process.returncode,
