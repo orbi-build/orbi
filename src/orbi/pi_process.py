@@ -140,7 +140,10 @@ PI_RATE_LIMIT_BACKOFF_MAX_SECONDS = 300.0
 # persisted in the task worktree's gitignored `.orbi/` run dir — a
 # resumed run (same run_id, same worktree) continues where the killed
 # process stopped, and the worktree dies with the terminal cleanup, so a
-# NEW attempt (new run_id, new worktree) starts from 0.
+# NEW attempt (new run_id, new worktree) starts from 0. The terminal
+# itself also clears the file: the documented repair (relabel ai-ready)
+# must get a full fresh budget even when the retry reuses the SAME
+# worktree and run_id — the open-PR review resume does exactly that.
 PI_429_ATTEMPTS_FILENAME = "pi-429-attempts.json"
 
 
@@ -278,15 +281,19 @@ class RateLimitExhaustedError(RuntimeError):
     Deliberately NOT a `RecoverablePiFailure`: the pre-#698 recoverable
     replay resumed the same run with a reset counter — the unbounded
     loop this issue fixes. A persistently throttled provider is an
-    external condition the runner must stop retrying: `process_issue`'s
-    generic handler terminates the delivery (`ai-blocked` — the
-    documented no-PR failure terminal; `ai-fix-needed` is an opened-PR
-    state a no-PR Issue cannot resume from) with this message as the
-    operator-facing cause. The retry is a human decision: relabel
-    `ai-ready` and the new run starts with a fresh worktree and counter.
-    The message carries the cumulative count and the repair action —
-    the operator must see the provider quota, not the task, as the
-    cause."""
+    external condition the runner must stop retrying, and it must stop
+    in BOTH phases: the implement phase's generic handler terminates
+    the delivery (`ai-blocked` — the documented no-PR failure terminal;
+    `ai-fix-needed` is an opened-PR state a no-PR Issue cannot resume
+    from), and the opened-PR review phase classifies it through
+    `is_unrecoverable_failure` — the recoverable `ai-fix-needed` there
+    would resume the review with the persisted counter already at the
+    limit: one 429 exit per tick, forever. The failure message is the
+    operator-facing cause and repair: relabel `ai-ready` to retry after
+    the quota window resets (the terminal clears the persisted counter,
+    so the human-requeued retry starts with a full budget — in the
+    review phase it reuses the same worktree and run_id). The operator
+    must see the provider quota, not the task, as the cause."""
 
 
 def _drain_stream(stream, chunks: list[bytes]) -> None:
@@ -1055,9 +1062,14 @@ def _fail_rate_limited(
     """The exhausted-retries terminal failure (Issue #321, terminal since
     #698): `attempts` cumulative 429 exits (the RUN's count, persisted
     across restarts) have burned the backoff budget, so the delivery
-    terminates — `RateLimitExhaustedError` is never a recoverable resume.
-    `process_issue`'s generic handler turns it into `ai-blocked` with
-    this message as the operator-facing cause. The per-attempt
+    terminates — `RateLimitExhaustedError` is never a recoverable resume
+    (the classification is terminal in both phases, implement and
+    opened-PR review). The terminal also CLEARS the persisted counter:
+    this attempt's budget is spent and reported on the Issue, and the
+    documented repair (relabel ai-ready) must start a FULL fresh budget
+    even when the retry reuses the same worktree and run_id. A failed
+    clear is one warning line — the terminal decision never depends on
+    its own artifact cleanup. The per-attempt
     `startup_failed` lines are already in the journal (one per 429 exit
     before the first response), so this is the single terminal log."""
     activity = exc.activity
@@ -1065,6 +1077,13 @@ def _fail_rate_limited(
         activity, run_id=run_id, issue_ref=issue_ref, role=role,
         branch=branch, cwd=cwd, reason="provider_rate_limited",
     )
+    try:
+        pi_429_attempts_path(cwd).unlink(missing_ok=True)
+    except OSError:
+        LOGGER.warning(
+            "pi_429_attempts_clear_failed path=%s",
+            pi_429_attempts_path(cwd),
+        )
     raise RateLimitExhaustedError(
         f"provider rate limit retries exhausted: {attempts + 1} "
         f"consecutive 429 exits (limit={PI_RATE_LIMIT_RETRIES} retries); "

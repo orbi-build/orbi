@@ -8133,6 +8133,45 @@ def test_stream_pi_429_exhaustion_across_restarts_is_terminal(
     assert "6 consecutive 429 exits" in str(exc_info.value)
 
 
+def test_stream_pi_429_terminal_resets_counter_for_human_retry(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #698: the terminal exhaustion spent this run's backoff
+    budget and CLEARS the persisted counter, so the documented repair
+    (relabel ai-ready) starts a FULL fresh budget even when the retry
+    reuses the SAME worktree and run_id — the open-PR review resume
+    does exactly that. Without the reset the repair would terminal-exit
+    on the first new 429 (zero budget) and the Issue would block
+    again on its first transient hiccup."""
+    pi_process._record_429_attempts(tmp_path, "deadbeef", 5)
+    sleeps: list[float] = []
+    monkeypatch.setattr(pi_process.time, "sleep", sleeps.append)
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=99, stderr="Error 429: rate limited, retry in 2s",
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(pi_process.RateLimitExhaustedError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=698, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    # Terminal on the first 429 (the budget was already spent), and the
+    # counter file is gone.
+    assert sleeps == []
+    assert not pi_process.pi_429_attempts_path(tmp_path).exists()
+    # The human-requeued retry (same worktree, same run_id) has the full
+    # budget again: five backoff retries before the next terminal.
+    sleeps.clear()
+    with pytest.raises(pi_process.RateLimitExhaustedError):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.05,
+            run_id="deadbeef", issue=698, source_repo="xqliu/orbi",
+            branch="b",
+        )
+    assert sleeps == [2.0] * 5
+
+
 def test_429_attempt_counter_file_round_trip(tmp_path, monkeypatch, caplog):
     """The persisted counter is per-run and fails safe: absent, corrupt,
     foreign-run or invalid files all read as 0 (worst case = today's
