@@ -1,0 +1,63 @@
+# v0.4.6 release (latest)
+
+`v0.4.6` was published 2026-09-11T06:06:15Z as the GitHub Release [v0.4.6](https://github.com/orbi-build/orbi/releases/tag/v0.4.6) (release task: Issue #706).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.4.6` | annotated tag `a6b18b74b03acc64171d9c500543da0692dfb248` | commit `000ceee47fab50549b6d83e9f66085d396f9a06d` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- 技术债：把发布子系统（17 个函数 / 1018 行）从 runner.py 移入 release.py ([Issue #286](https://github.com/orbi-build/orbi/issues/286); [PR #696](https://github.com/orbi-build/orbi/pull/696))
+- 部署基准可配置：core 运行前不再无条件追 origin/main，支持 update_channel（分支 / 最新 release / 钉 tag/commit） ([Issue #534](https://github.com/orbi-build/orbi/issues/534))
+- Bug: check_release_gates 对刚 push 的 release 提交空 check-runs 判定 nothing to gate——CI 注册滞后窗口内带病提交过门（假成功） ([Issue #657](https://github.com/orbi-build/orbi/issues/657); [PR #670](https://github.com/orbi-build/orbi/pull/670))
+
+### Reliability and recovery
+
+- Bug: 双实例认领同一 Issue 的 TOCTOU——复查走搜索索引（最终一致）形同虚设，败者把在途交付打成 ai-blocked ([Issue #658](https://github.com/orbi-build/orbi/issues/658); [PR #668](https://github.com/orbi-build/orbi/pull/668))
+- 并发认领竞态：同一 Issue 被两个 run 同时认领，后者 push 失败将已成功交付的票误标 ai-blocked ([Issue #702](https://github.com/orbi-build/orbi/issues/702); [PR #705](https://github.com/orbi-build/orbi/pull/705))
+
+### Deployment and operations
+
+- ops 票需要完整执行能力（部署/写 GitHub/任意平台 CLI）：复用完整执行代理 + ops 剧本，废弃白名单沙箱方案 ([Issue #537](https://github.com/orbi-build/orbi/issues/537); [PR #703](https://github.com/orbi-build/orbi/pull/703))
+- P0：示例配置本身跑不起来——.orbi.example.toml 的两个 source_repos 被 runner 拒绝，而 cli 不校验导致 doctor 全绿 ([Issue #697](https://github.com/orbi-build/orbi/issues/697); [PR #700](https://github.com/orbi-build/orbi/pull/700))
+
+### Bug fixes
+
+- runner_health 崩溃计数把正常退出/预检失败计入，健康部署常驻 crash_loop 误报并派发幻影 ai-ready 任务；一次真实崩溃双行计数使阈值折半 ([Issue #617](https://github.com/orbi-build/orbi/issues/617); [PR #619](https://github.com/orbi-build/orbi/pull/619))
+- P0：429 重试计数随进程重启归零，limit=5 永不生效——交付无限循环、永不转 ai-fix-needed ([Issue #698](https://github.com/orbi-build/orbi/issues/698); [PR #701](https://github.com/orbi-build/orbi/pull/701))
+- CI failure: tests on branch fix/claim-race-yield (pull_request) ([Issue #704](https://github.com/orbi-build/orbi/issues/704))
+
+- tag: `v0.4.6`
+- release commit: `000ceee47fab50549b6d83e9f66085d396f9a06d`
+- release task: Issue #706
+
+## Scope (verified item by item)
+
+- Issue #704 closed
+- Issue #702 closed
+- Issue #698 closed
+- Issue #697 closed
+- Issue #658 closed
+- Issue #657 closed
+- Issue #617 closed
+- Issue #537 closed
+- Issue #534 closed
+- Issue #286 closed
+
+## Pre-release gates
+
+- no open Issue in milestone 'v0.4.6' carries ai-in-progress / ai-pr-opened / ai-fix-needed
+- CI on the release commit: 1 check(s) all success/neutral/skipped
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit 000ceee47fab50549b6d83e9f66085d396f9a06d (the #268 CI-wait gate; no local test execution)
+
+run_id=27888bbd
