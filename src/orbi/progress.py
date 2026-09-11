@@ -83,6 +83,18 @@ def _without_runner_marker(body: str) -> str:
     return _RUNNER_MARKER_PATTERN.sub("", body).rstrip()
 
 
+def quote_value(value: str) -> str:
+    """Double-quote a key=value field value when it needs quoting.
+
+    Values containing spaces or double quotes are quoted; embedded double
+    quotes are escaped as ``\\"`` so the field stays parseable as a single
+    ``key=value`` token.
+    """
+    if " " in value or '"' in value:
+        return '"' + value.replace('"', '\\"') + '"'
+    return value
+
+
 def field_block(run_id: str, headline: str, fields: dict[str, object]) -> str:
     """Render a marker-first status comment with one field per line."""
     lines = [run_marker(run_id), headline]
@@ -255,8 +267,10 @@ class ProgressPublisher:
     plus the progress header (PATCHing it when it exists, POSTing it when
     it does not) and tracks its id; the run's other marker-carrying
     comments (scene comments, milestones) are never touched.
-    `patch` and `finish` update the tracked comment in place and fail
-    fast when no comment is tracked yet. `milestone` posts a short
+    `patch` updates the tracked comment in place and fails fast when no
+    comment is tracked yet; `finish` publishes the final outcome on the
+    tracked comment, or locates/creates it like `ensure` when the run
+    never got that far (Issue #474). `milestone` posts a short
     standalone comment. `failure_scene` updates the run's identical
     recoverable-failure comment in place instead of appending a duplicate
     (Issue #645). Every call goes through `run_command` (gh api)
@@ -390,5 +404,16 @@ class ProgressPublisher:
         self._post_comment(rendered)
 
     def finish(self, body: str) -> None:
-        """Replace the tracked comment with the final outcome body."""
+        """Publish the final outcome body on the run's progress comment.
+
+        When no comment is tracked yet — a run that fails before
+        `ensure` (Issue #474: a release declaration parse error calls
+        `finish` first) — the final outcome is still published: the
+        run's progress comment is located or created exactly like
+        `ensure`, never a `RuntimeError` and never a duplicate comment
+        for a resumed run.
+        """
+        if self.comment_id is None:
+            self.ensure(body)
+            return
         self.patch(body)

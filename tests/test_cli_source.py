@@ -24,7 +24,7 @@ from types import ModuleType
 import pytest
 
 from orbi import cli_source
-from orbi.pi_activity import quote_value
+from orbi.progress import quote_value
 
 
 def _fake_module_file(path: str) -> ModuleType:
@@ -154,7 +154,7 @@ def test_drift_line_carries_source_expected_and_fix(tmp_path, monkeypatch):
     assert f"source={quote_value(str(source['actual']))}" in line
     assert f"expected={quote_value(str(repo.resolve()))}" in line
     # The fix command carries spaces, so the field is quoted (the
-    # pi_activity.quote_value convention, like every unit_drift line).
+    # progress.quote_value convention, like every unit_drift line).
     assert (
         f"fix={quote_value(cli_source.reinstall_command(repo))}"
     ) in line

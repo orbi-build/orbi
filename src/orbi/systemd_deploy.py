@@ -30,7 +30,7 @@ import os
 import re
 from pathlib import Path
 
-from orbi.pi_activity import quote_value
+from orbi.progress import quote_value
 
 LOGGER = logging.getLogger("orbi.systemd_deploy")
 
@@ -222,7 +222,7 @@ def drift_lines(status: list[dict]) -> list[str]:
 
     Every line carries the repo path, the installed path, both hashes
     and the idempotent fix command (Issue #103). Values containing
-    spaces are quoted (the pi_activity.quote_value convention) so the
+    spaces are quoted (the progress.quote_value convention) so the
     line stays parseable.
     """
     lines: list[str] = []

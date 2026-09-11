@@ -44,11 +44,12 @@ from orbi.delivery_labels import (
 from orbi.runner import (
     RunIdFilter,
     freeze_base,
+    list_issues,
     load_config,
     log_format,
-    parse_issue_array,
     run_command,
     validate_config,
+    validate_execution_source_repos,
 )
 from orbi import pilot_setup
 from orbi.pilot_slots import slot_occupancy
@@ -101,12 +102,10 @@ def dispatch_issue(repo: str, title: str, body: str) -> str:
 def list_labeled_issues(repo: str, label: str, state: str = "open",
                         search: str | None = None) -> list[dict]:
     """Return the newest Issues matching a label search (gh lists newest first)."""
-    raw = run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", state,
-        "--search", search or f"label:{label}",
-        "--json", "number,title,url,state", "--limit", "1",
-    ])
-    return parse_issue_array(raw)
+    return list_issues(
+        repo, state=state, search=search or f"label:{label}",
+        json_fields="number,title,url,state", limit=1,
+    )
 
 
 def current_issue(repo: str) -> dict | None:
@@ -670,6 +669,10 @@ def main(argv: list[str] | None = None) -> int:
             allow_missing_pi_providers=args.command in ("setup", "doctor"),
         )
         validate_config(config)
+        # Issue #697: every command path (doctor included) enforces the
+        # same single-source-repo contract as runner.main, so a config
+        # the Runner will reject is reported instead of all-green.
+        validate_execution_source_repos(config["source_repos"])
     except (ValueError, pilot_setup.SetupError) as exc:
         if args.command == "setup":
             print(f"setup_failed reason={exc}", file=sys.stderr)

@@ -25,10 +25,10 @@ This module is READ-ONLY: it reports the running process's
 ``orbi`` import source against the configured ``repo_dir`` and
 the exact fix command. The fix is a HUMAN/setup step (``orbi
 setup`` runs it idempotently). Since Issue #158 the Runner ALSO
-refreshes the editable install at start (``cli_install``) when the
-packaging inputs changed — under the SAME base-sync flock the
-``ExecStartPre`` preflight takes, so two concurrent service instances
-still never race the tool env.
+refreshes the editable install at start (``refresh_cli_install``)
+when the packaging inputs changed — under the SAME base-sync flock
+the ``ExecStartPre`` preflight takes, so two concurrent service
+instances still never race the tool env.
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ import shutil
 from pathlib import Path
 
 import orbi
-from orbi.pi_activity import quote_value
+from orbi.progress import quote_value
 
 # Use the PATH-resolved Python 3 command so the editable install has the same
 # interpreter contract in the systemd unit and in the Python-side refresh.
@@ -132,7 +132,7 @@ def drift_line(source: dict) -> str | None:
     the exact fix command (the editable force reinstall — the repair
     that makes the ExecStartPre sync reachable by the next CLI
     process). Values containing spaces are quoted (the
-    pi_activity.quote_value convention, like every unit_drift line).
+    progress.quote_value convention, like every unit_drift line).
     """
     if source["editable"]:
         return None

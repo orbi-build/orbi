@@ -57,7 +57,7 @@ from orbi.delivery_labels import (
 )
 from orbi import git_transport
 from orbi import systemd_deploy
-from orbi.pi_activity import quote_value
+from orbi.progress import quote_value
 
 # Bumped whenever the setup output contract changes shape.
 # Issue #152 added the `cli=` line (the editable install step).
@@ -102,9 +102,14 @@ REQUIRED_LABELS = (
     # the deterministic release state machine (never `run_pi`), so the
     # label is platform state the setup entry must guarantee.
     "ai-release",
-    # Ticket-only marker (Issue #209): content is delivered directly in
+    # Content-only marker (Issue #209/#537): the pure content agent
+    # delivers text directly in the Issue (no execution, no git), so
+    # setup must provision this explicit, auditable type.
+    "ai-content-only",
+    # Ops marker (Issue #537): a full-execution session (shell/gh/
+    # network, the ops playbook) whose deliverable is evidence posted to
     # the Issue, so setup must provision this explicit, auditable type.
-    "ai-ticket-only",
+    "ai-ops-only",
 )
 COLOR_PATTERN = re.compile(r"^[0-9a-fA-F]{6}$")
 
@@ -900,7 +905,7 @@ def format_setup(result: dict) -> list[str]:
     """Render the result document as stable key=value lines.
 
     One line per concern; values containing spaces are quoted (the
-    ``pi_activity.quote_value`` convention) so the output stays
+    ``progress.quote_value`` convention) so the output stays
     parseable.
     """
     lines = [

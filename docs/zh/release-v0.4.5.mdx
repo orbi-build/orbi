@@ -1,0 +1,66 @@
+# v0.4.5 发布
+
+`v0.4.5` 于 2026-09-11T00:20:38Z 发布为 GitHub Release [v0.4.5](https://github.com/orbi-build/orbi/releases/tag/v0.4.5)（release task：Issue #699）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.4.5` | 注解 tag `54b450ca2991adfd183c15205cc00201e0dc36cd` | 提交 `a7533fa8df43ae600ef532b9f14f2866cc6f0170` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- 技术债：stream_pi 728 行、16 参数、19 个可变循环状态变量 ([Issue #287](https://github.com/orbi-build/orbi/issues/287); [PR #694](https://github.com/orbi-build/orbi/pull/694))
+- 技术债：失败上报逻辑在三处逐字复制 ([Issue #288](https://github.com/orbi-build/orbi/issues/288); [PR #693](https://github.com/orbi-build/orbi/pull/693))
+- 技术债：wait_for_delivery 把轮询循环与完整评审交付流程混在一个 426 行函数里 ([Issue #289](https://github.com/orbi-build/orbi/issues/289); [PR #692](https://github.com/orbi-build/orbi/pull/692))
+- 技术债：verify_pr / freeze_pr 重复实现同一段 PR 查询校验 ([Issue #291](https://github.com/orbi-build/orbi/issues/291); [PR #690](https://github.com/orbi-build/orbi/pull/690))
+- 技术债：五个终止分支重复同一段 run_failed 日志骨架 ([Issue #292](https://github.com/orbi-build/orbi/issues/292); [PR #688](https://github.com/orbi-build/orbi/pull/688))
+- 技术债：两个进度收尾函数近乎逐行重复 ([Issue #293](https://github.com/orbi-build/orbi/issues/293); [PR #687](https://github.com/orbi-build/orbi/pull/687))
+- 技术债：_safe_publish 样板重复 37 次 ([Issue #294](https://github.com/orbi-build/orbi/issues/294); [PR #686](https://github.com/orbi-build/orbi/pull/686))
+- 技术债：quote_value 通用原语放在 Pi 会话解析模块里 ([Issue #296](https://github.com/orbi-build/orbi/issues/296); [PR #684](https://github.com/orbi-build/orbi/pull/684))
+
+### Reliability and recovery
+
+- Runner: Pi 429（限流）按 Retry-After 指数退避自动重试，不再直接 ai-blocked ([Issue #321](https://github.com/orbi-build/orbi/issues/321); [PR #689](https://github.com/orbi-build/orbi/pull/689))
+
+### Deployment and operations
+
+- 技术债：cli_install.py 是纯转发模块，承诺了一个不存在的边界 ([Issue #295](https://github.com/orbi-build/orbi/issues/295); [PR #685](https://github.com/orbi-build/orbi/pull/685))
+
+### Bug fixes
+
+- CI failure: tests on branch fix/release-ci-empty-checkruns (pull_request) ([Issue #691](https://github.com/orbi-build/orbi/issues/691))
+
+- tag: `v0.4.5`
+- release commit: `a7533fa8df43ae600ef532b9f14f2866cc6f0170`
+- release task: Issue #699
+
+## Scope (verified item by item)
+
+- Issue #287 closed
+- Issue #288 closed
+- Issue #289 closed
+- Issue #291 closed
+- Issue #292 closed
+- Issue #293 closed
+- Issue #294 closed
+- Issue #295 closed
+- Issue #296 closed
+- Issue #321 closed
+- Issue #691 closed
+- NOT released (still open in milestone v0.4.5): open Issue #699 Release task：发布 v0.4.5（Runner 结构整理 + 429 退避）并完成远端交付对账
+
+## Pre-release gates
+
+- no open Issue in milestone 'v0.4.5' carries ai-in-progress / ai-pr-opened / ai-fix-needed
+- CI on the release commit: 4 check(s) all success/neutral/skipped (waited 240s for pending checks)
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit a7533fa8df43ae600ef532b9f14f2866cc6f0170 (the #268 CI-wait gate; no local test execution)
+
+run_id=697a8744

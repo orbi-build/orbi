@@ -346,20 +346,135 @@ CRASH_LINE = (
     "Sep 04 11:41:02 host systemd[1015]: orbi@1.service: Main process "
     "exited, code=exited, status=1/FAILURE"
 )
-FAILED_RESULT_LINE = (
-    "Sep 04 11:45:00 host systemd[1015]: orbi@2.service: Failed with "
+# The result line of the SAME crash as CRASH_LINE (same unit, same
+# second) — review round 1: "Failed with result" must count, deduped.
+CRASH_RESULT_LINE = (
+    "Sep 04 11:41:02 host systemd[1015]: orbi@1.service: Failed with "
     "result 'exit-code'."
 )
+# Distinct crash events need distinct clocks: one unit cannot crash twice
+# in the same second, and count_crashes dedupes the same-second pair.
+CRASH_LINE_2 = (
+    "Sep 04 11:42:10 host systemd[1015]: orbi@1.service: Main process "
+    "exited, code=exited, status=1/FAILURE"
+)
+CRASH_LINE_3 = (
+    "Sep 04 11:43:30 host systemd[1015]: orbi@1.service: Main process "
+    "exited, code=exited, status=1/FAILURE"
+)
+THREE_CRASH_JOURNAL = f"{CRASH_LINE}\n{CRASH_LINE_2}\n{CRASH_LINE_3}\n"
 
 
 def test_count_crashes_counts_real_systemd_exit_lines():
+    second_crash = (
+        "Sep 04 11:43:10 host systemd[1015]: orbi@1.service: Main process "
+        "exited, code=exited, status=216/GROUP"
+    )
     fake = FakeRunCommand({
         "journalctl --user -u orbi@1.service":
-            f"{CRASH_LINE}\n{CRASH_LINE}\n",
-        "journalctl --user -u orbi@2.service":
-            f"{FAILED_RESULT_LINE}\n",
+            f"{CRASH_LINE}\n{CRASH_RESULT_LINE}\n{second_crash}\n",
+        "journalctl --user -u orbi@2.service": "",
     })
-    assert runner_health.count_crashes(fake) == 3
+    # Two distinct crashes (11:41:02 and 11:43:10); the result line of
+    # the first is a pair half, not a third event.
+    assert runner_health.count_crashes(fake) == 2
+
+
+def test_count_crashes_ignores_clean_exits_and_term_stops():
+    clean_exit = (
+        "Sep 04 11:40:00 host systemd[1015]: orbi@1.service: Main process "
+        "exited, code=exited, status=0/SUCCESS (success)"
+    )
+    stopped_by_systemd = (
+        "Sep 04 11:41:00 host systemd[1015]: orbi@1.service: Main process "
+        "exited, code=killed, status=15/TERM"
+    )
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service":
+            f"{clean_exit}\n{stopped_by_systemd}\n",
+        "journalctl --user -u orbi@2.service": "",
+    })
+    # status=0 is a healthy tick exit; status=15/TERM is a systemd/human
+    # stop. Neither is a crash.
+    assert runner_health.count_crashes(fake) == 0
+
+
+def test_count_crashes_counts_oom_kills():
+    # Review round 1: code=killed status=9/KILL is the OOM killer (and
+    # TimeoutStopSec) — a textbook crash loop; it must count.
+    oom_kill = (
+        "Sep 04 11:42:00 host systemd[1015]: orbi@1.service: Main process "
+        "exited, code=killed, status=9/KILL"
+    )
+    oom_result = (
+        "Sep 04 11:42:00 host systemd[1015]: orbi@1.service: Failed with "
+        "result 'oom'."
+    )
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": f"{oom_kill}\n{oom_result}\n",
+        "journalctl --user -u orbi@2.service": "",
+    })
+    assert runner_health.count_crashes(fake) == 1
+
+
+def test_count_crashes_counts_exec_start_pre_failures():
+    # Review round 1: an ExecStartPre failure (dirty checkout, broken CLI
+    # install, SSH transport down) leaves ONLY the result line — the main
+    # process never started. This is the never-starts class the alert
+    # exists for; dropping "Failed with result" would silence it forever.
+    preflight_only = (
+        "Sep 04 11:44:00 host systemd[1015]: orbi@1.service: Failed with "
+        "result 'exit-code'."
+    )
+    other_unit_same_second = (
+        "Sep 04 11:44:00 host systemd[1015]: orbi@2.service: Failed with "
+        "result 'exit-code'."
+    )
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": f"{preflight_only}\n",
+        "journalctl --user -u orbi@2.service": f"{other_unit_same_second}\n",
+    })
+    # Counts once per unit: the dedupe key is unit+clock, so two units
+    # failing in the same second are two events.
+    assert runner_health.count_crashes(fake) == 2
+
+
+def test_count_crashes_dedupes_a_second_boundary_straddle():
+    straddled_result = (
+        "Sep 04 11:41:03 host systemd[1015]: orbi@1.service: Failed with "
+        "result 'exit-code'."
+    )
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service":
+            f"{CRASH_LINE}\n{straddled_result}\n",
+        "journalctl --user -u orbi@2.service": "",
+    })
+    # The exit line at 11:41:02 and the result line at 11:41:03 are the
+    # same crash (CRASH_PAIR_WINDOW_SECONDS covers the straddle).
+    assert runner_health.count_crashes(fake) == 1
+
+
+def test_count_crashes_counts_each_crash_once():
+    crashed_then_failed = f"{CRASH_LINE}\n{CRASH_RESULT_LINE}\n"
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": crashed_then_failed,
+        "journalctl --user -u orbi@2.service": "",
+    })
+    # One real crash emits BOTH the exit line and the Failed-with-result
+    # line; the count must stay 1 so the threshold keeps its meaning.
+    assert runner_health.count_crashes(fake) == 1
+
+
+def test_count_crashes_counts_core_dumps():
+    dumped = (
+        "Sep 04 11:42:00 host systemd[1015]: orbi@1.service: Main process "
+        "exited, code=dumped, status=11/SEGV"
+    )
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": f"{dumped}\n",
+        "journalctl --user -u orbi@2.service": "",
+    })
+    assert runner_health.count_crashes(fake) == 1
 
 
 def test_count_crashes_ignores_non_crash_lines():
@@ -543,7 +658,7 @@ def test_repeated_failure_alerts_again_after_drifting_failures_and_a_break(
 def test_crash_loop_creates_one_deduplicated_bug_issue(tmp_path):
     write_state(tmp_path, {"runs": [], "last_pickup_ts": time.time(),
                            "alerted": []})
-    journal = f"{CRASH_LINE}\n{CRASH_LINE}\n{CRASH_LINE}\n"
+    journal = THREE_CRASH_JOURNAL
     fake = FakeRunCommand({
         "journalctl --user -u orbi@1.service": journal,
         "journalctl --user -u orbi@2.service": "",
@@ -584,7 +699,7 @@ def test_run_health_check_with_unit_name_watches_the_renamed_units(tmp_path):
     # the alert, and no query may target the nonexistent default units.
     write_state(tmp_path, {"runs": [], "last_pickup_ts": time.time(),
                            "alerted": []})
-    journal = f"{CRASH_LINE}\n{CRASH_LINE}\n{CRASH_LINE}\n"
+    journal = THREE_CRASH_JOURNAL
     fake = FakeRunCommand({
         "journalctl --user -u orbi-x@1.service": journal,
         "journalctl --user -u orbi-x@2.service": "",
@@ -813,7 +928,7 @@ def test_config_caused_crash_loop_is_non_dispatchable(tmp_path):
     write_state(tmp_path, {"runs": [], "last_pickup_ts": time.time(),
                            "alerted": []})
     journal = (
-        f"{CRASH_LINE}\n{CONFIG_REASON_LINE}\n{CRASH_LINE}\n{CRASH_LINE}\n"
+        f"{CRASH_LINE}\n{CONFIG_REASON_LINE}\n{CRASH_LINE_2}\n{CRASH_LINE_3}\n"
     )
     fake = FakeRunCommand({
         "journalctl --user -u orbi@1.service": journal,
@@ -844,7 +959,7 @@ def test_bug_caused_crash_loop_is_dispatchable_with_reason(tmp_path):
     write_state(tmp_path, {"runs": [], "last_pickup_ts": time.time(),
                            "alerted": []})
     journal = (
-        f"{CRASH_LINE}\n{BUG_REASON_LINE}\n{CRASH_LINE}\n{CRASH_LINE}\n"
+        f"{CRASH_LINE}\n{BUG_REASON_LINE}\n{CRASH_LINE_2}\n{CRASH_LINE_3}\n"
     )
     fake = FakeRunCommand({
         "journalctl --user -u orbi@1.service": journal,
@@ -869,7 +984,7 @@ def test_health_alert_repo_override_wins(tmp_path):
     deploy-home origin lookup (fork/private deployments)."""
     write_state(tmp_path, {"runs": [], "last_pickup_ts": time.time(),
                            "alerted": []})
-    journal = f"{CRASH_LINE}\n{CRASH_LINE}\n{CRASH_LINE}\n"
+    journal = THREE_CRASH_JOURNAL
     override = "fork-owner/orbi-fork"
     fake = FakeRunCommand({
         "journalctl --user -u orbi@1.service": journal,
@@ -891,7 +1006,7 @@ def test_undeterminable_alert_repo_skips_the_issue(tmp_path, caplog):
     skipped (bypass) — never filed in the delivery repo, never guessed."""
     write_state(tmp_path, {"runs": [], "last_pickup_ts": time.time(),
                            "alerted": []})
-    journal = f"{CRASH_LINE}\n{CRASH_LINE}\n{CRASH_LINE}\n"
+    journal = THREE_CRASH_JOURNAL
     fake = FakeRunCommand({
         "journalctl --user -u orbi@1.service": journal,
         "journalctl --user -u orbi@2.service": "",
@@ -961,6 +1076,9 @@ def test_process_issue_pickup_record_failure_is_bypass(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            # Fresh claim: no ai-in-progress (Issue #658 direct read).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return "0123456789abcdef0123456789abcdef01234567"
@@ -1010,6 +1128,9 @@ def test_process_issue_failure_record_failure_is_bypass(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            # Fresh claim: no ai-in-progress (Issue #658 direct read).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return ""
@@ -1091,3 +1212,21 @@ def _write_config(tmp_path: Path) -> None:
         f'repo_dir = "{repo_dir}"\n',
         encoding="utf-8",
     )
+
+
+def test_count_crashes_counts_unparseable_clock_lines_conservatively():
+    # A crash-shaped line whose clock (or unit) cannot be parsed must
+    # still count: dedupe can never be allowed to hide a real crash.
+    no_clock = (
+        "host systemd[1015]: orbi@1.service: Main process exited, "
+        "code=exited, status=1/FAILURE"
+    )
+    no_unit = (
+        "Sep 04 11:50:00 host systemd[1015]: orbi.service: Failed with "
+        "result 'exit-code'."
+    )
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": f"{no_clock}\n{no_unit}\n",
+        "journalctl --user -u orbi@2.service": "",
+    })
+    assert runner_health.count_crashes(fake) == 2

@@ -83,3 +83,42 @@ Orbi keeps local state that never leaves the machine:
 If you run Orbi on a shared machine, give the Runner user its own
 home directory so the config, worktrees and KV files stay private to that
 user.
+
+## Repository-level config: the trust model
+
+A repository may carry a delivery-policy file at `.github/orbi.toml`
+(see [Workflow](/workflow)). It is read from the **default branch tip**
+at claim time. The trust argument for allowing it is the same one that
+already applies to CI workflows:
+
+- A **contributor without merge rights** cannot land the file on the
+  default branch, so it is out of scope.
+- A **maintainer who can merge** already controls CI workflows on the
+  default branch — arbitrary code execution plus the repository's
+  secrets. The marginal risk of a policy key is therefore ≈ 0.
+- **Orbi itself** can merge its own reviewed output, unlike
+  Dependabot/Renovate. If prompt injection ever crossed the review gate,
+  the worst case for a whitelisted policy key is a **visible, reversible
+  policy change** — the run comment always records `repo_config: <sha>`
+  and annotates a change with its effective diff.
+
+The red line is **credential routing**. Keys that decide where
+`ORBI_GITHUB_TOKEN` and the model API keys are sent — `pi_provider`,
+`pi_model`, `pi_thinking`, `pi_providers`, `pi_extensions`, the
+`model_wait_probe_url` endpoint and every other endpoint/key field —
+stay permanently host-only. A deployment host serves several pools
+(zcode-website / zcode-e2e / production), so one compromised repository
+config must not be able to redirect all host credentials or move work
+across pools. For the same reason `source_repos`/`repo_dir`/
+`deploy_home`/`workspace_root` (cross-pool movement) and
+`prompt`/`prompt_review`/`skills` (a persistent injection channel into
+the system context) are host-only. A repository file that declares any
+host-only or unknown key fails the claim fast and the Issue becomes
+`ai-blocked` with the offending keys named.
+
+Only these five delivery-policy keys are repository-writable:
+`base_branch`, `active_milestone`, `test_command`, `context_files` and
+`dispatch_label`. Because a policy change is a default-branch change,
+protect the file with GitHub's native review mechanism — add
+`.github/orbi.toml` to `CODEOWNERS` so changing it requires an owner's
+review.

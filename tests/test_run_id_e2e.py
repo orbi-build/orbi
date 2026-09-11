@@ -206,6 +206,14 @@ def install_fake_gh(monkeypatch, comments: list[str],
                             if label in current:
                                 current.remove(label)
                     return ""
+                if command[2] == "view":
+                    # The pre-claim in-progress recheck reads the Issue
+                    # directly (Issue #658): answer from the tracked
+                    # labels, like the real GitHub state.
+                    tracked = (labels or {}).get(int(command[3]), [])
+                    return json.dumps({"labels": [
+                        {"name": label} for label in tracked
+                    ]})
                 if command[2] == "list":
                     # The restart-resume scan (Issue #18): answer from
                     # the tracked labels, like the real GitHub state.

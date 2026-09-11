@@ -73,7 +73,8 @@ FORBIDDEN_MECHANISM_NEEDLES = (
     "ai-merged",
     "ai-epic",
     "ai-release",
-    "ai-ticket-only",
+    "ai-content-only",
+    "ai-ops-only",
     "`p0`",
     # label initialization commands (docs/setup.mdx)
     "gh label create",

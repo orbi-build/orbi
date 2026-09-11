@@ -1,7 +1,8 @@
 # Copy this file to orbi.toml and edit it for your machine.
+# Exactly ONE source repository until multi-repo workspaces ship
+# (Issue #133): multiple entries fail fast at startup.
 source_repos = [
   "OWNER/PILOT-REPO",
-  "OWNER/BACKLOG-REPO",
 ]
 
 repo_dir = "."

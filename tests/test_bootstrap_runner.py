@@ -1,3 +1,4 @@
+import ast
 import fcntl
 import json
 import logging
@@ -16,7 +17,8 @@ from unittest.mock import Mock
 import pytest
 
 import orbi.runner as runner
-from orbi import pi_activity, progress
+import orbi.release as release
+from orbi import pi_activity, pi_process, progress
 from tests.test_progress_wiring import make_fake_gh
 
 
@@ -50,6 +52,66 @@ def test_parse_issue_list_rejects_non_list():
         runner.parse_issue_list("{}")
 
 
+def test_list_issues_builds_each_parameter_combination(monkeypatch):
+    """Issue #299: `list_issues` emits the exact `gh issue list` command
+    for each parameter combination the call sites use (search / label +
+    milestone / timeout) and returns the parsed array."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return json.dumps([{"number": 1}])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+
+    # state + search: the common ready/in-flight scan shape.
+    assert runner.list_issues(
+        "owner/repo", state="open", search="label:ai-ready",
+        json_fields="number,title", limit=200,
+    ) == [{"number": 1}]
+
+    # label + state + milestone: the release gate shape (milestone last).
+    assert runner.list_issues(
+        "owner/repo", label="ai-in-progress", state="open",
+        milestone="v0.4.3", json_fields="number", limit=50,
+    ) == [{"number": 1}]
+
+    # state + search + timeout: the idle-advance shape (timeout passed on).
+    assert runner.list_issues(
+        "owner/repo", state="all", search='in:body "marker"',
+        json_fields="number", limit=1, timeout=30,
+    ) == [{"number": 1}]
+
+    # search only (state omitted): gh defaults the state to open.
+    assert runner.list_issues(
+        "owner/repo", search="label:ai-ready",
+        json_fields="number", limit=1,
+    ) == [{"number": 1}]
+
+    assert calls == [
+        ([
+            "gh", "issue", "list", "--repo", "owner/repo",
+            "--state", "open", "--search", "label:ai-ready",
+            "--json", "number,title", "--limit", "200",
+        ], {}),
+        ([
+            "gh", "issue", "list", "--repo", "owner/repo",
+            "--label", "ai-in-progress", "--state", "open",
+            "--json", "number", "--limit", "50", "--milestone", "v0.4.3",
+        ], {}),
+        ([
+            "gh", "issue", "list", "--repo", "owner/repo",
+            "--state", "all", "--search", 'in:body "marker"',
+            "--json", "number", "--limit", "1",
+        ], {"timeout": 30}),
+        ([
+            "gh", "issue", "list", "--repo", "owner/repo",
+            "--search", "label:ai-ready",
+            "--json", "number", "--limit", "1",
+        ], {}),
+    ]
+
+
 def test_load_config_resolves_relative_paths_and_values(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text(
@@ -73,6 +135,17 @@ def test_validate_execution_source_repos_rejects_multiple_checkouts():
         runner.validate_execution_source_repos(
             ["owner/first", "owner/second"],
         )
+
+
+def test_example_config_passes_execution_source_repos_validation():
+    """Issue #697: README tells a new user to copy the committed example
+    (`cp .orbi.example.toml orbi.toml`), so the example must be a config
+    the Runner accepts — exactly one source repository until multi-repo
+    workspaces are available (Issue #133)."""
+    example = Path(__file__).resolve().parent.parent / ".orbi.example.toml"
+    config = runner.load_config(example)
+    assert len(config["source_repos"]) == 1
+    runner.validate_execution_source_repos(config["source_repos"])
 
 
 def test_load_config_requires_source_repos(tmp_path):
@@ -675,12 +748,16 @@ def test_load_config_parses_repositories_registry(tmp_path):
             "path": (tmp_path / "checkouts" / "pilot").resolve(),
             "github": "owner/pilot",
             "base_branch": "main",
+            # Issue #527: the optional repository config path defaults to
+            # the single `.github/orbi.toml` location.
+            "config_path": ".github/orbi.toml",
         },
         {
             "name": "ceo",
             "path": (tmp_path / "checkouts" / "ceo").resolve(),
             "github": "owner/ceo",
             "base_branch": "develop",
+            "config_path": ".github/orbi.toml",
         },
     ]
 
@@ -872,6 +949,8 @@ def test_prompt_template_requires_fixes_keyword_for_the_source_issue():
         "SKILLS": "",
         "BASE_BRANCH": "main",
         "BASE_SHA": "abc123",
+        # Issue #527: the repository-declared test command placeholder.
+        "TEST_COMMAND": "(not declared)",
         "RUN_ID": "a2241189",
         "BASE_SYNC_LOCK": "/checkout/.orbi/base-sync.lock",
     })
@@ -1870,6 +1949,11 @@ def test_release_fallback_scoped_to_active_milestone(monkeypatch):
     searches = []
 
     def fake_run(command, **kwargs):
+        # Issue #663: with `active_milestone` the release candidate now
+        # passes the Milestone completeness gate; this Milestone has only
+        # the release ticket itself.
+        if command[1] == "api":
+            return "1"
         searches.append(command[command.index("--search") + 1])
         if "label:ai-release" in searches[-1]:
             return json.dumps([release])
@@ -1933,6 +2017,200 @@ def test_release_fallback_scan_failure_fails_open(monkeypatch, caplog):
     with caplog.at_level("INFO"):
         assert runner.pick_issue("xqliu/orbi") is None
     assert "blocked_by_check_failed" in caplog.text
+
+
+# --- Issue #663: release Milestone completeness gate ----------------------
+
+
+def test_milestone_open_issue_count_reads_github_counter(monkeypatch):
+    """Issue #663: the completeness judgment is GitHub's own Milestone
+    `open_issues` counter, read with the one API call documented in the
+    Issue (title-filtered jq) — not the search index, not a label."""
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        return "3"
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.milestone_open_issue_count("xqliu/orbi", "v0.4.2") == 3
+    assert commands == [[
+        "gh", "api", "repos/xqliu/orbi/milestones",
+        "--jq", '.[] | select(.title=="v0.4.2") | .open_issues',
+    ]]
+
+
+def test_milestone_open_issue_count_missing_milestone_raises(monkeypatch):
+    """Issue #663: an empty result (the Milestone is gone) is a failed
+    check, not a silent zero — the caller must never claim on it."""
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "")
+    with pytest.raises(RuntimeError, match="v0.4.2"):
+        runner.milestone_open_issue_count("xqliu/orbi", "v0.4.2")
+
+
+def test_release_target_milestone_prefers_issue_then_active():
+    """Issue #663: the release's Milestone is the Issue's GitHub
+    Milestone, falling back to the configured `active_milestone` (the
+    fallback scan is scoped to it). No Milestone ⇒ no gate."""
+    assert runner.release_target_milestone(
+        {"milestone": {"title": "v0.4.2"}}, None,
+    ) == "v0.4.2"
+    assert runner.release_target_milestone({}, "v0.4.2") == "v0.4.2"
+    assert runner.release_target_milestone({}, None) is None
+    assert runner.release_target_milestone(
+        {"milestone": {"title": ""}}, "v0.4.2",
+    ) == "v0.4.2"
+    assert runner.release_target_milestone({"milestone": "bad"}, None) is None
+    assert runner.release_target_milestone(
+        {"milestone": {"title": 7}}, None,
+    ) is None
+
+
+RELEASE_663 = {
+    "number": 254, "title": "release", "body": "",
+    "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+    "blockedBy": {"nodes": [], "totalCount": 0},
+    "milestone": {"title": "v0.4.2"},
+}
+
+
+def _release_scan_fake(api_result):
+    """Return a `run_command` fake: empty ordinary scans, the release
+    in the fallback scan, and `api_result` (a string or an exception)
+    for the Milestone counter query."""
+
+    def fake_run(command, **kwargs):
+        if command[1] == "api":
+            if isinstance(api_result, Exception):
+                raise api_result
+            return api_result
+        search = command[command.index("--search") + 1]
+        if "label:ai-release" in search:
+            return json.dumps([RELEASE_663])
+        return json.dumps([])
+
+    return fake_run
+
+
+def test_release_not_claimed_when_milestone_incomplete(monkeypatch, caplog):
+    """Issue #663: a release ticket is not claimed while its Milestone
+    still has open Issues — here an `ai-blocked` P0 that no ready scan
+    sees. The gate reads GitHub's own `open_issues` counter, so a
+    temporarily un-claimable Issue (ai-blocked / ai-pr-opened / not yet
+    indexed) can no longer let the release run ahead."""
+    monkeypatch.setattr(runner, "run_command", _release_scan_fake("3"))
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/orbi") is None
+    assert "release_milestone_incomplete" in caplog.text
+    assert "milestone=v0.4.2" in caplog.text
+    assert "open_issues=3" in caplog.text
+    # The Issue stays `ai-ready`: it was never claimed.
+    assert "picked issue=254" not in caplog.text
+
+
+def test_release_claimed_when_milestone_only_has_the_release(
+    monkeypatch, caplog,
+):
+    """Issue #663: with only the release ticket itself left
+    (`open_issues=1`) the release is claimed exactly as before."""
+    monkeypatch.setattr(runner, "run_command", _release_scan_fake("1"))
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/orbi") == RELEASE_663
+    assert "picked issue=254" in caplog.text
+
+
+def test_release_not_claimed_when_milestone_check_fails(monkeypatch, caplog):
+    """Issue #663: a milestone query that cannot be evaluated never
+    claims — a bad release is irreversible, so the check fails safe and
+    the next tick retries (recoverable, never `ai-blocked`)."""
+    error = subprocess.CalledProcessError(1, ["gh"], output="boom")
+    monkeypatch.setattr(runner, "run_command", _release_scan_fake(error))
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/orbi") is None
+    assert "release_milestone_check_failed" in caplog.text
+    assert "picked issue=254" not in caplog.text
+
+
+def test_release_without_milestone_claimed_without_api_call(
+    monkeypatch, caplog,
+):
+    """Issue #663: a release with no Milestone (and no configured
+    `active_milestone`) keeps the pre-#663 behavior — claimed with no
+    extra API call."""
+    release = {
+        "number": 254, "title": "release", "body": "",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    commands_seen = []
+
+    def fake_run(command, **kwargs):
+        commands_seen.append(command)
+        if "label:ai-release" in " ".join(command):
+            return json.dumps([release])
+        return json.dumps([])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue("xqliu/orbi") == release
+    assert not [c for c in commands_seen if c[1] == "api"]
+    assert "picked issue=254" in caplog.text
+
+
+def test_release_milestone_falls_back_to_active_milestone(
+    monkeypatch, caplog,
+):
+    """Issue #663: without a Milestone on the release Issue, the
+    configured `active_milestone` (the fallback scan's scope) is the
+    Milestone whose completeness is checked."""
+    release = {
+        "number": 254, "title": "release", "body": "",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    api_calls = []
+
+    def fake_run(command, **kwargs):
+        if command[1] == "api":
+            api_calls.append(command)
+            return "2"
+        search = command[command.index("--search") + 1]
+        if "label:ai-release" in search:
+            return json.dumps([release])
+        return json.dumps([])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with caplog.at_level("INFO"):
+        assert runner.pick_issue(
+            "xqliu/orbi", active_milestone="v0.3.0",
+        ) is None
+    assert api_calls
+    assert "milestone=v0.3.0" in caplog.text
+    assert "open_issues=2" in caplog.text
+
+
+def test_release_fallback_scan_fetches_milestone(monkeypatch):
+    """Issue #663: the release fallback scan fetches `milestone` so the
+    completeness gate reads the release's GitHub Milestone from the same
+    query — no extra `gh issue view`."""
+    release = {
+        "number": 254, "title": "release", "body": "",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+        "blockedBy": {"nodes": [], "totalCount": 0},
+    }
+    scans = []
+
+    def fake_run(command, **kwargs):
+        scans.append(command)
+        search = command[command.index("--search") + 1]
+        if "label:ai-release" in search:
+            return json.dumps([release])
+        return json.dumps([])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.pick_issue("xqliu/orbi") == release
+    fields = scans[-1][scans[-1].index("--json") + 1]
+    assert "milestone" in fields.split(",")
 
 
 def test_pick_issue_p0_blocked_by_open_blocker_falls_back_to_bug(
@@ -2212,7 +2490,7 @@ def test_pick_in_progress_issue_scan_excludes_epics(monkeypatch, tmp_path):
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
-        "--json", "number,title,body,labels", "--limit", "1",
+        "--json", "number,title,body,labels,milestone", "--limit", "1",
     ]]
 
 
@@ -2288,8 +2566,42 @@ def test_pick_in_progress_issue_scan_fetches_labels(monkeypatch, tmp_path):
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
-        "--json", "number,title,body,labels", "--limit", "1",
+        "--json", "number,title,body,labels,milestone", "--limit", "1",
     ]]
+
+
+def test_pick_in_progress_issue_scan_fetches_milestone(monkeypatch, tmp_path):
+    """Issue #671: the in-flight restart scan fetches `milestone` too, so
+    a release run killed mid-release and resumed by `process_release`
+    scopes its leftover-delivery gate to the release's OWN Milestone —
+    never to the config's `active_milestone`, which must not gate a
+    resume (Issue #139)."""
+    issue = {
+        "number": 664, "title": "Release v0.4.3", "body": "body",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+        "milestone": {"title": "v0.4.3"},
+    }
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return json.dumps([issue])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    resumed = runner.pick_in_progress_issue(
+        "xqliu/orbi", tmp_path / "slots", 1,
+    )
+    assert calls == [[
+        "gh", "issue", "list", "--repo", "xqliu/orbi",
+        "--state", "open", "--search",
+        "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
+        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
+        "-label:ai-epic",
+        "--json", "number,title,body,labels,milestone", "--limit", "1",
+    ]]
+    # The resumed release's gate scope is its own Milestone, not the
+    # config value.
+    assert runner.release_target_milestone(resumed, "v0.4.4") == "v0.4.3"
 
 
 def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
@@ -2319,7 +2631,35 @@ def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
         "label:ai-ready label:ai-in-progress -label:ai-pr-opened "
         "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
         "-label:ai-epic",
-        "--json", "number,title,body,labels", "--limit", "1",
+        "--json", "number,title,body,labels,milestone", "--limit", "1",
+    ]]
+
+
+def test_pick_in_progress_issue_uses_the_repo_dispatch_label(
+    monkeypatch, tmp_path,
+):
+    """Issue #527: a repository that replaced `ai-ready` with its own
+    claim label keeps the restart-resume path — the in-flight scan must
+    search the SAME queue entry the ready scan used, otherwise a killed
+    (or model-wait-recovered) run is stranded forever."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return json.dumps([])
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.pick_in_progress_issue(
+        "xqliu/orbi", tmp_path / "slots", 1,
+        dispatch_label="repo-ready",
+    ) is None
+    assert calls == [[
+        "gh", "issue", "list", "--repo", "xqliu/orbi",
+        "--state", "open", "--search",
+        "label:repo-ready label:ai-in-progress -label:ai-pr-opened "
+        "-label:ai-fix-needed -label:ai-merged -label:ai-blocked "
+        "-label:ai-epic",
+        "--json", "number,title,body,labels,milestone", "--limit", "1",
     ]]
 
 
@@ -2375,11 +2715,11 @@ def test_pick_next_delivery_recovers_in_flight_issue_before_ready(
     )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
-        lambda repo, slot_dir, max_concurrency: (
+        lambda repo, slot_dir, max_concurrency, **_kwargs: (
             in_flight if repo == "r1" else None
         ),
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: ready)
+    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: ready)
     assert runner.pick_next_delivery(
         ["r1", "r2"], tmp_path / "slots", 1,
     ) == ("r1", in_flight, None)
@@ -2401,9 +2741,9 @@ def test_pick_next_delivery_keeps_resumable_delivery_first(
     )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
-        lambda repo, slot_dir, max_concurrency: in_flight,
+        lambda repo, slot_dir, max_concurrency, **_kwargs: in_flight,
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: in_flight)
+    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: in_flight)
     assert runner.pick_next_delivery(
         ["r1", "r2"], tmp_path / "slots", 1,
     ) == ("r2", resumable, scene)
@@ -2419,9 +2759,9 @@ def test_pick_next_delivery_falls_through_to_ready_when_no_in_flight(
     )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
-        lambda repo, slot_dir, max_concurrency: None,
+        lambda repo, slot_dir, max_concurrency, **_kwargs: None,
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: ready)
+    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: ready)
     assert runner.pick_next_delivery(
         ["r1"], tmp_path / "slots", 1,
     ) == ("r1", ready, None)
@@ -2436,9 +2776,9 @@ def test_pick_next_delivery_returns_none_when_all_scans_empty(
     )
     monkeypatch.setattr(
         runner, "pick_in_progress_issue",
-        lambda repo, slot_dir, max_concurrency: None,
+        lambda repo, slot_dir, max_concurrency, **_kwargs: None,
     )
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: None)
+    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: None)
     assert runner.pick_next_delivery(
         ["r1"], tmp_path / "slots", 1,
     ) is None
@@ -2448,7 +2788,7 @@ def test_pick_next_issue_returns_first_ready_source(monkeypatch):
     issue = {"number": 1, "title": "pilot", "body": ""}
     calls = []
 
-    def pick(repo, active_milestone=None):
+    def pick(repo, active_milestone=None, **_kwargs):
         calls.append(repo)
         return issue if repo == "xqliu/orbi-backlog" else None
 
@@ -2463,7 +2803,7 @@ def test_pick_next_issue_falls_through_to_second_source(monkeypatch):
     issue = {"number": 2, "title": "pilot", "body": ""}
     calls = []
 
-    def pick(repo, active_milestone=None):
+    def pick(repo, active_milestone=None, **_kwargs):
         calls.append(repo)
         return issue if repo == "xqliu/orbi" else None
 
@@ -2475,7 +2815,7 @@ def test_pick_next_issue_falls_through_to_second_source(monkeypatch):
 
 
 def test_pick_next_issue_returns_none_when_all_sources_empty(monkeypatch):
-    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None: None)
+    monkeypatch.setattr(runner, "pick_issue", lambda repo, active_milestone=None, **_kwargs: None)
     assert runner.pick_next_issue(["xqliu/orbi-backlog", "xqliu/orbi"]) is None
 
 
@@ -2648,12 +2988,88 @@ def test_create_worktree_reuses_existing_path_for_a_resumed_run(
 def test_create_worktree_adds_branch_from_frozen_base_sha(monkeypatch, tmp_path):
     path = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-run1"
     calls = []
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)))
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "",
+    )
     assert runner.create_worktree(tmp_path, "owner/repo", 3, "run1", "abc123def456") == path
-    assert calls == [(
-        ["git", "worktree", "add", "-b", "orbi/owner-repo-issue-3", str(path), "abc123def456"],
-        {"cwd": tmp_path},
-    )]
+    assert calls == [
+        (["git", "branch", "--list", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
+        (["git", "worktree", "add", "-b", "orbi/owner-repo-issue-3", str(path), "abc123def456"],
+         {"cwd": tmp_path}),
+    ]
+
+
+def test_create_worktree_reuses_orphan_local_branch_never_exits_255(
+    monkeypatch, tmp_path,
+):
+    """Issue #662 (the #655 incident): a SIGKILLed run can leave the stable
+    branch behind with no worktree and no remote counterpart (a pure orphan).
+    `worktree add -b` cannot re-create it (the exit-255 that burned the Issue
+    into terminal ai-blocked), so the orphan branch is reused by identity."""
+    path = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-run1"
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[:3] == ["git", "branch", "--list"]:
+            return "orbi/owner-repo-issue-3"
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    assert runner.create_worktree(
+        tmp_path, "owner/repo", 3, "run1", "base",
+    ) == path
+    assert calls == [
+        (["git", "branch", "--list", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
+        (["git", "worktree", "add", str(path), "orbi/owner-repo-issue-3"],
+         {"cwd": tmp_path}),
+    ]
+
+
+def test_create_worktree_reuses_orphan_local_branch_real_git(tmp_path):
+    """Real-git acceptance (Issue #662, the #655 scene): the local orphan
+    branch is checked out into the new worktree where the bare `worktree add
+    -b` exited 255 (`fatal: a branch named ... already exists`)."""
+    work, head = make_local_remote_pair(tmp_path)
+    repo_dir = tmp_path / "runner"
+    subprocess.run(
+        ["git", "clone", "-q", str(tmp_path / "remote.git"), str(repo_dir)],
+        check=True, capture_output=True,
+    )
+    for key, value in (("user.email", "t@t"), ("user.name", "t")):
+        subprocess.run(
+            ["git", "-C", str(repo_dir), "config", key, value],
+            check=True, capture_output=True,
+        )
+    # The killed claim left the branch at the base commit; it was never
+    # pushed, so origin has no counterpart (the #655 orphan).
+    subprocess.run(
+        ["git", "-C", str(repo_dir), "branch",
+         "orbi/owner-repo-issue-3", head],
+        check=True, capture_output=True,
+    )
+    remote = subprocess.run(
+        ["git", "-C", str(repo_dir), "ls-remote", "--heads", "origin",
+         "refs/heads/orbi/owner-repo-issue-3"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert remote == "", "the orphan branch must not exist on origin"
+    # The bare `git worktree add -b` of the incident fails (exit 255).
+    incident = subprocess.run(
+        ["git", "-C", str(repo_dir), "worktree", "add", "-b",
+         "orbi/owner-repo-issue-3", str(tmp_path / "incident"), head],
+        capture_output=True, text=True,
+    )
+    assert incident.returncode != 0, incident
+    assert "already exists" in incident.stderr
+    # The orphan-aware path reuses the branch instead.
+    path = runner.create_worktree(repo_dir, "owner/repo", 3, "run1", head)
+    current = subprocess.run(
+        ["git", "-C", str(path), "branch", "--show-current"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert current == "orbi/owner-repo-issue-3"
 
 
 def test_create_worktree_reuses_existing_remote_branch(monkeypatch, tmp_path):
@@ -3178,29 +3594,205 @@ def test_has_in_progress_label_checks_the_issue_label(monkeypatch, tmp_path):
 
     def fake_run(command, **kwargs):
         calls.append(command)
-        return json.dumps([{"number": 4}])
+        return json.dumps({"labels": [{"name": "ai-in-progress"}]})
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.has_in_progress_label(4, "owner/repo") is True
     assert calls == [[
-        "gh", "issue", "list", "--repo", "owner/repo", "--state", "all",
-        "--search", "label:ai-in-progress",
-        "--json", "number", "--limit", "50",
+        "gh", "issue", "view", "4", "--repo", "owner/repo",
+        "--json", "labels",
     ]]
 
 
 def test_has_in_progress_label_is_false_without_the_label(monkeypatch):
     monkeypatch.setattr(
         runner, "run_command",
-        lambda command, **kwargs: json.dumps([{"number": 5}]),
+        lambda command, **kwargs: json.dumps(
+            {"labels": [{"name": "ai-fix-needed"}]},
+        ),
     )
     assert runner.has_in_progress_label(4, "owner/repo") is False
 
 
 def test_has_in_progress_label_fails_fast_on_malformed_output(monkeypatch):
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "{}")
-    with pytest.raises(ValueError, match="issue list must be a JSON array"):
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "[]")
+    with pytest.raises(ValueError, match="issue view must return a JSON object"):
         runner.has_in_progress_label(4, "owner/repo")
+
+
+def test_has_in_progress_label_fails_fast_on_malformed_labels(monkeypatch):
+    """view 返回 JSON 对象但 labels 字段不是数组（Issue #658）：解析
+    失败必须 fail-fast，绝不落入默认 False（那会让竞态守卫失明）。"""
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps({"labels": "ai-in-progress"}),
+    )
+    with pytest.raises(ValueError, match="labels must be a JSON array"):
+        runner.has_in_progress_label(4, "owner/repo")
+
+
+def test_has_in_progress_label_reads_directly_not_via_the_search_index(
+    monkeypatch,
+):
+    """Issue #658：认领前复查必须直读（gh issue view，强一致）——不能走
+    与扫描同一套最终一致的搜索索引：另一实例几秒前刚打上的
+    ai-in-progress，索引可能尚未收录，复查必须看到它才能让路。"""
+    calls = []
+
+    def fake_run_command(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    assert runner.has_in_progress_label(4, "owner/repo") is True
+    # The fixed path reads the Issue directly — the search index (which
+    # has not ingested the other instance's claim yet) is never queried.
+    assert calls == [[
+        "gh", "issue", "view", "4", "--repo", "owner/repo",
+        "--json", "labels",
+    ]]
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run_command(["gh", "issue", "list", "--search",
+                          "label:ai-in-progress"])
+
+
+def _claim_race_deps(monkeypatch, tmp_path, *, freeze_side_effect=None,
+                     stable_branch_seq=None):
+    """Minimal process_issue deps for the #658 claim-race tests.
+
+    Everything after the claim decision is irrelevant (the guard must
+    fire before any of it); run_pi returning normally keeps the
+    unguarded path moving so its downstream label writes become
+    observable — that is exactly what the red assertions catch.
+    """
+    if stable_branch_seq is not None:
+        seq = list(stable_branch_seq)
+        # Exactly two probes consume the sequence: the scan-time probe
+        # and the pre-claim guard (Issue #658).
+        monkeypatch.setattr(
+            runner, "stable_branch_exists",
+            lambda repo_dir, branch: seq.pop(0),
+        )
+    if freeze_side_effect is not None:
+        def fake_freeze_base(repo_dir, base_branch):
+            freeze_side_effect()
+            return "0123456789abcdef0123456789abcdef01234567"
+        monkeypatch.setattr(runner, "freeze_base", fake_freeze_base)
+    else:
+        monkeypatch.setattr(
+            runner, "freeze_base",
+            lambda repo_dir, base_branch:
+                "0123456789abcdef0123456789abcdef01234567",
+        )
+    monkeypatch.setattr(
+        runner, "new_run_id", lambda: "feedface",
+    )
+    # create_worktree/run_pi stay REAL: on the fixed path the guard
+    # yields before either is reached, and a regression that skips the
+    # guard then fails loudly on the real calls (tmp_path is no git
+    # repo) — no dead fake arms.
+
+
+def make_claim_race_gh(monkeypatch, state):
+    """The gh fake for the #658 claim-race world.
+
+    The direct read (`gh issue view`) answers the LIVE label truth from
+    `state["in_progress"]`; the search index (`gh issue list`) answers
+    from the same state — a lagging index is modeled by flipping the
+    state only AFTER the pickup scan, exactly when the other instance's
+    claim lands. One shared guard line, driven by its own test below.
+    """
+    def fake_run_command(command, **kwargs):
+        if command[:3] == ["gh", "issue", "view"]:
+            labels = ([{"name": "ai-in-progress"}]
+                      if state["in_progress"] else [])
+            return json.dumps({"labels": labels})
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps(
+                [{"number": 18}] if state["in_progress"] else [],
+            )
+        if command[:3] == ["gh", "pr", "list"]:
+            return json.dumps([])
+        if command[:2] == ["git", "ls-remote"]:
+            # The scan-time stable-branch probe (before the race lands).
+            return ""
+        if command[:2] == ["gh", "api"]:
+            if "--method" not in command:
+                return json.dumps([])
+            return ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    return fake_run_command
+
+
+def test_claim_race_gh_answers_every_expected_command(monkeypatch):
+    """The shared #658 fake is a contract, not a sink: every branch it
+    answers is one the claim flow issues — driven here (in_progress=True
+    arm; the False arm is driven by the two yield tests) so no arm is
+    dead in the fixed world, and anything else fails loud."""
+    fake = make_claim_race_gh(monkeypatch, {"in_progress": True})
+    assert json.loads(fake([
+        "gh", "issue", "view", "18", "--repo", "o/r", "--json", "labels",
+    ])) == {"labels": [{"name": "ai-in-progress"}]}
+    assert json.loads(fake([
+        "gh", "issue", "list", "--search", "label:ai-in-progress",
+    ])) == [{"number": 18}]
+    assert json.loads(fake(["gh", "pr", "list", "--state", "open"])) == []
+    assert fake([
+        "git", "ls-remote", "--heads", "origin", "refs/heads/x",
+    ]) == ""
+    assert json.loads(fake([
+        "gh", "api", "repos/o/r/issues/18/comments",
+    ])) == []
+    assert fake([
+        "gh", "api", "repos/o/r/issues/18/comments",
+        "--method", "POST", "--field", "body=x",
+    ]) == ""
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake(["gh", "release", "view"])
+
+
+def test_process_issue_yields_when_the_label_lands_mid_preparation(
+    monkeypatch, tmp_path,
+):
+    """Issue #658：扫描与认领写之间隔着 freeze_base 的秒级网络往返；
+    另一实例在该窗口内认领（ai-in-progress 出现）时，本实例必须让路
+    ——不打任何标签、不发失败评论、绝不能把胜者打成 ai-blocked。"""
+    state = {"in_progress": False}
+    make_claim_race_gh(monkeypatch, state)
+    _claim_race_deps(
+        monkeypatch, tmp_path,
+        freeze_side_effect=lambda: state.__setitem__("in_progress", True),
+    )
+    issue = {"number": 18, "title": "t", "body": "b",
+             "labels": [{"name": "ai-ready"}]}
+    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+              "base_branch": "main"}
+    result = runner.process_issue(issue, config, "owner/repo")
+    assert result == runner.IssueResult("claim-yielded", None)
+
+
+def test_process_issue_yields_when_the_stable_branch_lands_mid_preparation(
+    monkeypatch, tmp_path,
+):
+    """Issue #658 的撞分支面：扫描时 stable branch 尚不存在，freeze_base
+    的窗口内被另一实例创建（它先认领）——认领写之前必须复查到并让路，
+    而不是径直 create_worktree 撞分支后走 ai-blocked 失败路径。"""
+    make_claim_race_gh(monkeypatch, {"in_progress": False})
+    # First probe (scan-time): absent. Second probe (the pre-claim
+    # guard): the other instance created it while we were preparing.
+    _claim_race_deps(
+        monkeypatch, tmp_path, stable_branch_seq=[False, True],
+    )
+    issue = {"number": 18, "title": "t", "body": "b",
+             "labels": [{"name": "ai-ready"}]}
+    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+              "base_branch": "main"}
+    result = runner.process_issue(issue, config, "owner/repo")
+    assert result == runner.IssueResult("claim-yielded", None)
 
 
 def test_process_issue_resumes_existing_run_and_same_progress_comment(
@@ -3231,6 +3823,8 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
                 # The existing progress comment of the dead run.
                 return json.dumps([existing_comment])
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # The Issue still carries `ai-in-progress` (the runner died).
             return json.dumps([{"number": 4}])
@@ -3312,6 +3906,110 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     assert "- branch: orbi/xqliu-orbi-backlog-issue-4" in last_body
 
 
+def test_process_issue_second_tick_behind_the_index_resumes_not_reclaims(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #658 单实例面（xqliu 09-11 生产现场，orbi#702 并入 #658）：
+    同一 timer 的两次 tick 竞争同一张票——第一次 tick 早已完成认领
+    （`ai-in-progress` 落位在本 tick 之前，worktree 的 run 在飞），而搜索
+    索引滞后，把这张票连同陈旧的 `ai-ready` labels 快照一起递给本 tick。
+    认领复查的 `gh issue view` 直读必须看到标签：本 tick 走 resume 复用
+    在飞 run 的 id，绝不 fresh claim（不消费新 run_id、不建第二个分支
+    把在途交付撞成 push rejected → ai-blocked）——修复不依赖
+    `max_concurrency` 的取值，单实例双 tick 与双实例同根因。"""
+    existing_comment = {
+        "id": 77,
+        "body": (
+            "<!-- orbi:run=a1b2c3d4 -->\n\n"
+            "**Orbi progress**\n\nfirst tick's run is in flight"
+        ),
+    }
+    gh_calls, posted = make_fake_gh(
+        monkeypatch, comments=[existing_comment], in_progress=True,
+    )
+    branch = "orbi/xqliu-orbi-backlog-issue-4"
+    head = "0123456789abcdef0123456789abcdef01234567"
+
+    def fake_run(command, **kwargs):
+        gh_calls.append(command)
+        if command[:2] == ["gh", "api"]:
+            if "--method" not in command:
+                # The in-flight run's progress comment.
+                return json.dumps([existing_comment])
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            # The strongly-consistent direct read: the label the first
+            # tick wrote IS live truth, no matter how stale the index
+            # that delivered the Issue was.
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
+        if command[:2] == ["gh", "issue"]:
+            return ""
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps([{
+                "url": "https://github.com/orbi-build/orbi/pull/4",
+                "baseRefName": "main",
+                "headRefName": branch,
+                "headRefOid": head,
+                "headRepository": {"name": "orbi"},
+                "headRepositoryOwner": {"login": "orbi-build"},
+                "body": "<!-- orbi:run=a1b2c3d4 -->\n\nFixes #4\n\nPlan",
+            }])
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return branch
+        if command[:2] == ["git", "rev-parse"]:
+            return head
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(
+        runner, "freeze_base",
+        lambda repo_dir, base_branch: "abc123def456",
+    )
+    # If a regression makes this tick a FRESH claim, the fresh id leaks
+    # into the scene comments and the assertions below catch it.
+    monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
+    monkeypatch.setattr(
+        runner, "worktree_resume_scene", lambda repo_dir, source_repo, number:
+        ("a1b2c3d4", tmp_path / "wt"),
+    )
+    monkeypatch.setattr(
+        runner, "create_worktree",
+        lambda *args, **kwargs: tmp_path / "wt",
+    )
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    # The stale scan snapshot: still showing ai-ready even though the
+    # first tick already claimed the Issue.
+    issue = {"number": 4, "title": "Fix", "body": "Body",
+             "labels": [{"name": "ai-ready"}]}
+    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+              "base_branch": "main"}
+    with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
+        result = runner.process_issue(
+            issue, config, "xqliu/orbi-backlog",
+        )
+    assert result == runner.IssueResult(
+        "pr", "https://github.com/orbi-build/orbi/pull/4",
+    )
+    # The direct read routed this tick into the resume: the in-flight
+    # run's id owns every scene comment — a fresh claim never starts.
+    assert "fresh_claim_route" not in caplog.text
+    assert "resuming_run" in caplog.text
+    # And the claim recheck never asked the lagging index for the label
+    # (the pre-#658 list search): the direct read is the only source.
+    assert not any(
+        command[:3] == ["gh", "issue", "list"] for command in gh_calls
+    )
+    scene_bodies = [
+        call[-1] for call in gh_calls
+        if call[:2] == ["gh", "issue"] and "comment" in call
+    ]
+    assert scene_bodies, "no scene comment was published"
+    for body in scene_bodies:
+        assert "ffffeeee" not in body
+    # And the claim-time label write stayed the shared idempotent patch
+    # (run=a1b2c3d4 marker), never a second run's footprint.
+
+
 def test_process_issue_binds_run_id_before_the_resume_scan(
     monkeypatch, tmp_path, caplog,
 ):
@@ -3327,6 +4025,8 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
         gh_calls.append(command)
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps([{"number": 4}])
         if command[:2] == ["gh", "issue"]:
@@ -3397,6 +4097,8 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
         gh_calls.append(command)
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # No `ai-in-progress` label: the previous run finished.
             return "[]"
@@ -3465,6 +4167,8 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
         gh_calls.append(command)
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps([{"number": 4}])
         if command[:2] == ["gh", "issue"]:
@@ -3539,6 +4243,11 @@ def _resume_wiring_setup(monkeypatch, tmp_path, *, in_progress: bool,
         gh_calls.append(command)
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [
+                {"name": "ai-in-progress"}] if in_progress
+                else [{"name": "ai-ready"}],
+            })
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps(
                 [{"number": 4}] if in_progress else [],
@@ -4267,8 +4976,11 @@ def test_verify_pr_fetches_under_the_base_sync_lock(
 
 
 def test_verify_pr_rejects_pr_without_url(monkeypatch, tmp_path):
+    # Issue #291: the shared base check runs first, so the fixture must
+    # carry a valid base to actually reach the URL check.
     outputs = iter([
-        f"orbi/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA, "[{}]",
+        f"orbi/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA,
+        json.dumps([{"baseRefName": "main"}]),
     ])
     monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="open PR has no URL"):
@@ -4673,14 +5385,15 @@ def test_verify_pr_queries_base_head_and_accepts_matching_pr(
         issue=4, repo_dir=tmp_path,
     ) == "https://github.com/orbi-build/orbi/pull/4"
     assert ["git", "rev-parse", "HEAD"] in calls
+    # Issue #291: verify_pr issues the ONE shared PR query contract.
     assert [
         "gh", "pr", "list", "--state", "open", "--head",
         f"orbi/issue-4-{FAKE_RUN_ID}",
         "--json", (
-            "url,baseRefName,headRefName,headRefOid,"
-            "headRepository,headRepositoryOwner,body"
+            "number,url,baseRefName,baseRefOid,"
+            "headRefName,headRefOid,headRepository,headRepositoryOwner,body"
         ),
-        "--limit", "2",
+        "--limit", "100",
     ] in calls
 
 
@@ -4844,6 +5557,8 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
         gh_calls.append(command)
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -4945,6 +5660,8 @@ def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, c
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -4983,6 +5700,8 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5056,6 +5775,8 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5139,6 +5860,8 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5228,6 +5951,8 @@ def test_process_issue_model_wait_failure_records_health_attempt(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5284,6 +6009,8 @@ def test_process_issue_three_recoverable_failures_raise_health_finding(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return ""
@@ -5334,6 +6061,8 @@ def test_process_issue_success_records_health_streak_break(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return "0123456789abcdef0123456789abcdef01234567"
@@ -5394,6 +6123,8 @@ def test_process_issue_recoverable_health_record_failure_is_bypassed(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return ""
@@ -5443,6 +6174,8 @@ def test_process_issue_success_health_record_failure_is_bypassed(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return "0123456789abcdef0123456789abcdef01234567"
@@ -5513,6 +6246,8 @@ def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
                     "gh api comment POST failed: API rate limit exceeded",
                 )
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5585,6 +6320,8 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5658,6 +6395,8 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
             # test_process_issue_failure_path_progress_failure_keeps_
             # blocked_transition.)
             raise RuntimeError("github report failed")
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -6054,7 +6793,7 @@ def test_main_idle_release_arm_failure_is_bypassed(monkeypatch, tmp_path, caplog
         'source_repos = ["owner/repo"]\nactive_milestone = "v0.4.0"\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args: None)
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         runner, "arm_release_ticket",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("permission denied")),
@@ -6078,7 +6817,7 @@ def test_main_idle_advance_failure_is_bypassed(monkeypatch, tmp_path, caplog):
         'source_repos = ["owner/repo"]\nactive_milestone = "v0.4.0"\n',
         encoding="utf-8",
     )
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args: None)
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         runner, "advance_active_milestone_on_idle",
@@ -6107,7 +6846,7 @@ def _write_prompts(tmp_path):
 def test_main_returns_zero_when_queue_empty(monkeypatch, tmp_path):
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
@@ -6129,12 +6868,12 @@ def test_main_passes_configured_active_milestone_to_the_claim_scan(
     )
     seen = {}
 
-    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None):
+    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs):
         seen["milestone"] = active_milestone
         return None
 
     monkeypatch.setattr(runner, "pick_next_delivery", fake_pick)
-    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args: None)
+    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "advance_active_milestone_on_idle", lambda *args, **kwargs: None)
     assert runner.main(["--config", str(config)]) == 0
     assert seen["milestone"] == "v0.2.0"
@@ -6150,8 +6889,8 @@ def test_main_advances_milestone_only_after_no_ready_issue(
         encoding="utf-8",
     )
     calls = []
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args: None)
-    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args: None)
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         runner, "advance_active_milestone_on_idle",
         lambda *args, **kwargs: calls.append((args, kwargs)),
@@ -6175,8 +6914,8 @@ def test_main_passes_disabled_auto_next_milestone_to_idle_advance(
         encoding="utf-8",
     )
     seen = {}
-    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args: None)
-    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args: None)
+    monkeypatch.setattr(runner, "pick_next_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "arm_release_ticket", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         runner, "advance_active_milestone_on_idle",
         lambda *args, **kwargs: seen.update(kwargs),
@@ -6195,7 +6934,7 @@ def test_main_passes_none_active_milestone_when_unconfigured(
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     seen = {}
 
-    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None):
+    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs):
         seen["milestone"] = active_milestone
         return None
 
@@ -6213,7 +6952,7 @@ def test_main_processes_one_issue(monkeypatch, tmp_path):
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "xqliu/orbi", issue, None
         ),
     )
@@ -6241,7 +6980,7 @@ def test_main_uses_process_result_kind_without_rechecking_task_type(
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
     )
@@ -6250,7 +6989,13 @@ def test_main_uses_process_result_kind_without_rechecking_task_type(
         lambda *args: runner.IssueResult("pr", "https://x/y/pull/281"),
     )
     monkeypatch.setattr(
-        runner, "is_ticket_only",
+        runner, "is_content_only",
+        lambda issue: (_ for _ in ()).throw(
+            AssertionError("main must not recheck task type")
+        ),
+    )
+    monkeypatch.setattr(
+        runner, "is_ops",
         lambda issue: (_ for _ in ()).throw(
             AssertionError("main must not recheck task type")
         ),
@@ -6286,7 +7031,7 @@ def test_main_ends_tick_when_process_issue_delivers_nothing(
     config.write_text("source_repos = [\"owner/repo\"]\nprompt = \"prompt.md\"\n", encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
     )
@@ -6306,14 +7051,14 @@ def test_main_ticket_only_finishes_without_entering_pr_delivery_wait(
     """Ticket-only work has no PR, so the normal review/merge wait is invalid."""
     issue = {
         "number": 12, "title": "Launch copy", "body": "Write copy",
-        "labels": [{"name": "ai-ready"}, {"name": "ai-ticket-only"}],
+        "labels": [{"name": "ai-ready"}, {"name": "ai-content-only"}],
     }
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
     )
@@ -6349,7 +7094,7 @@ def test_main_release_success_ends_tick_without_pr_delivery_wait(
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
     )
@@ -6391,7 +7136,7 @@ def test_main_routes_fix_needed_resume_to_delivery_wait(
     }
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, scene,
         ),
     )
@@ -6437,7 +7182,7 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
     }
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, scene,
         ),
     )
@@ -6502,6 +7247,8 @@ def test_process_issue_failure_without_session_still_carries_scene(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -6584,6 +7331,8 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -6636,6 +7385,8 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -6718,6 +7469,36 @@ def fake_session_records():
                    {"type": "toolCall", "id": "t1", "name": "bash",
                     "arguments": {"command": "pytest tests/"}}]}}),
     ]
+
+
+def make_rate_limit_pi(tmp_path: Path, *, fail_times: int, stderr: str,
+                       stdout: str = "",
+                       records: list[tuple[float, dict]] | None = None) -> list[str]:
+    """A fake pi whose first `fail_times` invocations exit 1 with a 429
+    stderr, then succeed (Issue #321). Every invocation writes `records`
+    (the `make_fake_pi` shape) to its OWN session file — real Pi creates
+    a new JSONL per session, so a retried invocation is never bound to
+    the failed attempt's file."""
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir(exist_ok=True)
+    records_literal = repr(records or [])
+    script = (
+        "import json, os, sys\n"
+        f"session_dir = {str(session_dir)!r}\n"
+        f"counter = {str(tmp_path / '.pi-invocations')!r}\n"
+        "n = (int(open(counter).read()) if os.path.exists(counter) else 0) + 1\n"
+        "open(counter, 'w').write(str(n))\n"
+        f"records = {records_literal}\n"
+        "for delay, record in records:\n"
+        "    with open(os.path.join(session_dir, 'sess-%d.jsonl' % n),"
+        " 'a') as handle:\n"
+        "        handle.write(json.dumps(record) + '\\n')\n"
+        f"if n <= {fail_times}:\n"
+        f"    sys.stderr.write({stderr!r})\n"
+        "    sys.exit(1)\n"
+        f"sys.stdout.write({stdout!r})\n"
+    )
+    return [sys.executable, "-c", script]
 
 
 def test_log_format_has_no_python_timestamp():
@@ -7310,6 +8091,69 @@ def test_stream_pi_startup_failed_without_first_request(tmp_path, caplog):
     assert "first_request=false" in lines[0]
 
 
+def test_stream_pi_early_exit_uses_the_flushed_journal(
+        tmp_path, caplog, monkeypatch,
+):
+    """Issue #656: Pi flushes its session journal while dying, so the
+    live watcher's LAST poll can predate it. The exit classification
+    must use the journal on disk, never that stale poll: in the #655
+    usage-limit scene the journal held the request and the provider
+    error, yet the exit was raised as a terminal startup failure and
+    the in-flight delivery was burned to `ai-blocked`."""
+    records = [
+        (0.0, {"type": "session", "id": "sess-1",
+               "timestamp": fresh_timestamp(), "cwd": "/w"}),
+        (0.0, {"type": "message", "id": "u1",
+               "timestamp": fresh_timestamp(),
+               "message": {"role": "user", "content": [
+                   {"type": "text", "text": "SECRET ISSUE BODY"}]}}),
+        (0.0, {"type": "message", "id": "a1",
+               "timestamp": fresh_timestamp(1),
+               "message": {
+                   "role": "assistant", "content": [],
+                   "stopReason": "error",
+                   "errorMessage": "Codex error: The usage limit "
+                                   "has been reached"}}),
+    ]
+    command = make_fake_pi(
+        tmp_path, session_records=records, exit_code=1,
+        stderr="Codex error: The usage limit has been reached",
+    )
+
+    class StaleWatcher(pi_process.SessionWatcher):
+        """The live watcher of the #655 scene: its last poll ran while
+        Pi was still alive, before the dying process flushed the
+        journal, so it never bound to the session file."""
+
+        def _next_session_file(self):
+            return None
+
+    monkeypatch.setattr(pi_process, "SessionWatcher", StaleWatcher)
+    with caplog.at_level("INFO"):
+        with pytest.raises(runner.RecoverablePiProcessError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.1,
+                run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    # The journal on disk proves the request went out (its response
+    # arrived), so this is NOT a startup failure.
+    assert " startup_failed " not in caplog.text
+    # The exit scene reports the SAME journal the classification used:
+    # a `phase=session_pending` / `last_activity=-` next to a real
+    # `session_file=` would describe the session as not-created while
+    # the recoverable decision says a request went out.
+    scene = [line for line in caplog.text.splitlines()
+             if " run_failed " in line]
+    assert len(scene) == 1
+    assert "session=sess-1" in scene[0]
+    assert "session_file=" in scene[0]
+    assert "phase=starting" in scene[0]
+    assert "last_activity=- " not in scene[0]
+    # The prompt never reaches the journal.
+    assert "SECRET ISSUE BODY" not in caplog.text
+
+
 def test_stream_pi_startup_failed_early_exit_after_first_request(
         tmp_path, caplog,
 ):
@@ -7353,27 +8197,390 @@ def test_startup_failed_reason_maps_hung_first_request_to_timeout():
         "first_request": True,
         "first_response": False,
     }
-    assert runner._startup_failed_reason(
+    assert pi_process._startup_failed_reason(
         activity, returncode=0, stderr="",
         timed_out=False, model_wait_dead=True,
         model_wait_swallowed=False, idle_recovery_failed=False,
     ) == "first_response_timeout"
-    assert runner._startup_failed_reason(
+    assert pi_process._startup_failed_reason(
         activity, returncode=0, stderr="",
         timed_out=False, model_wait_dead=False,
         model_wait_swallowed=True, idle_recovery_failed=False,
     ) == "model_wait_swallowed"
     # The other failure classes keep their own reasons.
-    assert runner._startup_failed_reason(
+    assert pi_process._startup_failed_reason(
         activity, returncode=0, stderr="",
         timed_out=True, model_wait_dead=False,
         model_wait_swallowed=False, idle_recovery_failed=False,
     ) == "timeout"
-    assert runner._startup_failed_reason(
+    assert pi_process._startup_failed_reason(
         activity, returncode=0, stderr="",
         timed_out=False, model_wait_dead=False,
         model_wait_swallowed=False, idle_recovery_failed=True,
     ) == "idle_recovery_stale"
+
+
+def test_rate_limit_marker_classification():
+    """Issue #321: the 429 evidence classes are Pi's own stderr markers —
+    `429` / `quota` / `RESOURCE_EXHAUSTED` / `retry in` — and anything
+    else stays unclassified."""
+    assert pi_process._is_rate_limited("Error 429: too many requests")
+    assert pi_process._is_rate_limited(
+        "Resource has been exhausted (e.g. check quota)")
+    assert pi_process._is_rate_limited("status: RESOURCE_EXHAUSTED")
+    assert pi_process._is_rate_limited("please RETRY IN 2s")
+    assert not pi_process._is_rate_limited("boom")
+    assert not pi_process._is_rate_limited(
+        "Error: connect ETIMEDOUT (request timed out)")
+    # The existing classes win on their own evidence: a 401 without a
+    # rate-limit marker is still an auth failure.
+    assert pi_process._classify_startup_exit(
+        "Error: 401 Unauthorized", 1) == "auth_failure"
+
+
+def test_retry_after_parsing_and_backoff():
+    """Issue #321: the backoff honors the 429 response's own retry hint
+    (`retry in Ns` / `retryDelay: Ns`, capped at ~5 minutes); without a
+    hint the default escalates 30/60/120/240 and stays at the cap."""
+    assert pi_process._retry_after_seconds(
+        "Please retry in 36.123456s. ID: abc") == 36.123456
+    assert pi_process._retry_after_seconds('"retryDelay": "37s"') == 37.0
+    assert pi_process._retry_after_seconds("retryDelay:19s") == 19.0
+    assert pi_process._retry_after_seconds("no hint here") is None
+    assert pi_process._backoff_seconds(0, "Please retry in 2s") == 2.0
+    assert pi_process._backoff_seconds(3, '"retryDelay": "36s"') == 36.0
+    # A hint longer than the cap is capped (the slot must move on).
+    assert pi_process._backoff_seconds(0, "retry in 9999s") == 300.0
+    assert pi_process._backoff_seconds(0, "") == 30.0
+    assert pi_process._backoff_seconds(1, "") == 60.0
+    assert pi_process._backoff_seconds(2, "") == 120.0
+    assert pi_process._backoff_seconds(3, "") == 240.0
+    assert pi_process._backoff_seconds(4, "") == 300.0
+    assert pi_process._backoff_seconds(9, "") == 300.0
+
+
+def test_stream_pi_rate_limited_exit_retries_then_succeeds(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #321 acceptance: a fake Pi 429 exit is retried IN THE SAME
+    RUN after the response's own retry hint — the delivery succeeds and
+    no failure is ever raised (so the Issue can never go ai-blocked on a
+    transient burst limit)."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(pi_process.time, "sleep", sleeps.append)
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=1, stdout="final answer",
+        stderr="Error: 429 RESOURCE_EXHAUSTED. Please retry in 36.5s",
+    )
+    with caplog.at_level("INFO"):
+        result = runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.05,
+            run_id="deadbeef", issue=321, source_repo="xqliu/orbi",
+            branch="b",
+        )
+    assert result == "final answer"
+    # The backoff honored the response's hint.
+    assert sleeps == [36.5]
+    retries = [line for line in caplog.text.splitlines()
+               if " pi_retry_429 " in line]
+    assert len(retries) == 1
+    assert "run_id=deadbeef" in retries[0]
+    assert "attempt=1" in retries[0]
+    assert "next_retry_in=36s" in retries[0]
+    # The same run re-spawned the session: two run_start scenes.
+    assert len([line for line in caplog.text.splitlines()
+                if " run_start " in line]) == 2
+    assert "run_failed" not in caplog.text
+
+
+def test_stream_pi_rate_limited_exhausted_takes_existing_failure_path(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #698 acceptance: 429 through every backoff retry (5) is a
+    TERMINAL delivery failure — `RateLimitExhaustedError` (never a
+    recoverable resume), marked `reason=provider_rate_limited` on the
+    startup and run_failed lines, with the cumulative count and the
+    quota-not-task repair action in the operator-facing message."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(pi_process.time, "sleep", sleeps.append)
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=99,
+        stderr='{"error":{"code":429,"message":"Resource has been '
+               'exhausted (e.g. check quota)","status":'
+               '"RESOURCE_EXHAUSTED"}}',
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(pi_process.RateLimitExhaustedError) as exc_info:
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=321, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    # The stderr carries no retry hint: the default escalation, then the
+    # cap. 5 retries = 6 sessions total.
+    assert sleeps == [30.0, 60.0, 120.0, 240.0, 300.0]
+    retries = [line for line in caplog.text.splitlines()
+               if " pi_retry_429 " in line]
+    assert [f"attempt={attempt}" for attempt in (1, 2, 3, 4, 5)] == [
+        field for line in retries for field in line.split()
+        if field.startswith("attempt=")
+    ]
+    assert "next_retry_in=30s" in retries[0]
+    assert len([line for line in caplog.text.splitlines()
+                if " run_start " in line]) == 6
+    starts = [line for line in caplog.text.splitlines()
+              if " startup_failed " in line]
+    assert len(starts) == 6
+    for line in starts:
+        assert "reason=provider_rate_limited" in line
+    failed = [line for line in caplog.text.splitlines()
+              if " run_failed " in line]
+    assert len(failed) == 1
+    assert "reason=provider_rate_limited" in failed[0]
+    # Terminal, never recoverable (Issue #698: the exhausted limit must
+    # not resume the same run). The message is the operator-facing cause:
+    # the cumulative count and the repair action.
+    assert not isinstance(exc_info.value, runner.RecoverablePiFailure)
+    message = str(exc_info.value)
+    assert "provider rate limit retries exhausted" in message
+    assert "6 consecutive 429 exits" in message
+    assert "limit=5" in message
+    assert "relabel the Issue ai-ready" in message
+
+
+def test_stream_pi_rate_limited_exhausted_mid_session_terminates(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #698: exhausting the retries after the session sent its
+    first request is TERMINAL too — the exhausted limit must never resume
+    the same run, whatever the session had already produced."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(pi_process.time, "sleep", sleeps.append)
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=99, records=startup_records(),
+        stderr="Error 429: rate limited, retry in 2s",
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(pi_process.RateLimitExhaustedError) as exc_info:
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=321, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    assert sleeps == [2.0] * 5
+    assert not isinstance(exc_info.value, runner.RecoverablePiFailure)
+    assert "provider rate limit retries exhausted" in str(exc_info.value)
+    # After the first response this is a mid-run failure: no
+    # startup_failed line, the run_failed scene carries the reason.
+    assert not any(" startup_failed " in line
+                   for line in caplog.text.splitlines())
+    failed = [line for line in caplog.text.splitlines()
+              if " run_failed " in line]
+    assert len(failed) == 1
+    assert "reason=provider_rate_limited" in failed[0]
+
+
+def test_stream_pi_429_attempts_persist_across_invocations(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #698 acceptance: the `pi_retry_429` attempt count is
+    cumulative per run_id — a resumed (restarted) runner invocation
+    continues where the killed one stopped, never back at 1. The
+    termination guard (sleep raising on the Nth call) simulates the
+    runner dying mid-backoff, Issue #95."""
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=99, stderr="Error 429: rate limited, retry in 2s",
+    )
+
+    def guard(after: int):
+        """A time.sleep that lets `after` calls pass, then raises: the
+        runner dies mid-backoff (termination guard, Issue #95)."""
+        calls = {"n": 0}
+
+        def _sleep(seconds):
+            calls["n"] += 1
+            if calls["n"] > after:
+                raise RuntimeError("test termination guard")
+
+        return _sleep
+
+    # Invocation 1 (the original runner process): two backoffs survive,
+    # the process dies during the third wait — AFTER the third retry was
+    # persisted (the file below proves persist-before-sleep).
+    monkeypatch.setattr(pi_process.time, "sleep", guard(2))
+    with caplog.at_level("INFO"):
+        with pytest.raises(RuntimeError, match="termination guard"):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=698, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    assert json.loads(
+        pi_process.pi_429_attempts_path(tmp_path).read_text()
+    ) == {"run_id": "deadbeef", "attempts": 3}
+
+    # Invocation 2 (the restart scan resumed the same run): the counter
+    # continues — the next retry line says attempt=4, never attempt=1.
+    monkeypatch.setattr(pi_process.time, "sleep", guard(0))
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        with pytest.raises(RuntimeError, match="termination guard"):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=698, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    retries = [line for line in caplog.text.splitlines()
+               if " pi_retry_429 " in line]
+    assert [field for line in retries for field in line.split()
+            if field.startswith("attempt=")] == ["attempt=4"]
+    assert json.loads(
+        pi_process.pi_429_attempts_path(tmp_path).read_text()
+    ) == {"run_id": "deadbeef", "attempts": 4}
+
+
+def test_stream_pi_429_exhaustion_across_restarts_is_terminal(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #698 acceptance: the CUMULATIVE count reaches the limit —
+    a resumed invocation whose counter already sits at limit-1 terminates
+    on its next 429 exit instead of restarting a full backoff cycle."""
+    pi_process._record_429_attempts(tmp_path, "deadbeef", 4)
+    sleeps: list[float] = []
+    monkeypatch.setattr(pi_process.time, "sleep", sleeps.append)
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=99, stderr="Error 429: rate limited, retry in 2s",
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(pi_process.RateLimitExhaustedError) as exc_info:
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=698, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    # One backoff retry (the 5th cumulative), then the 6th 429 exit is
+    # terminal — one session, not a fresh 5-retry cycle.
+    assert sleeps == [2.0]
+    retries = [line for line in caplog.text.splitlines()
+               if " pi_retry_429 " in line]
+    assert [field for line in retries for field in line.split()
+            if field.startswith("attempt=")] == ["attempt=5"]
+    assert not isinstance(exc_info.value, runner.RecoverablePiFailure)
+    assert "6 consecutive 429 exits" in str(exc_info.value)
+
+
+def test_stream_pi_429_terminal_resets_counter_for_human_retry(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #698: the terminal exhaustion spent this run's backoff
+    budget and CLEARS the persisted counter, so the documented repair
+    (relabel ai-ready) starts a FULL fresh budget even when the retry
+    reuses the SAME worktree and run_id — the open-PR review resume
+    does exactly that. Without the reset the repair would terminal-exit
+    on the first new 429 (zero budget) and the Issue would block
+    again on its first transient hiccup."""
+    pi_process._record_429_attempts(tmp_path, "deadbeef", 5)
+    sleeps: list[float] = []
+    monkeypatch.setattr(pi_process.time, "sleep", sleeps.append)
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=99, stderr="Error 429: rate limited, retry in 2s",
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(pi_process.RateLimitExhaustedError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=698, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    # Terminal on the first 429 (the budget was already spent), and the
+    # counter file is gone.
+    assert sleeps == []
+    assert not pi_process.pi_429_attempts_path(tmp_path).exists()
+    # The human-requeued retry (same worktree, same run_id) has the full
+    # budget again: five backoff retries before the next terminal.
+    sleeps.clear()
+    with pytest.raises(pi_process.RateLimitExhaustedError):
+        runner.stream_pi(
+            command, cwd=tmp_path, poll_interval=0.05,
+            run_id="deadbeef", issue=698, source_repo="xqliu/orbi",
+            branch="b",
+        )
+    assert sleeps == [2.0] * 5
+
+
+def test_stream_pi_429_terminal_survives_a_failed_counter_clear(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #698: the terminal decision never depends on its own
+    artifact cleanup — a failing counter unlink is one warning line and
+    the RateLimitExhaustedError still raises."""
+    pi_process._record_429_attempts(tmp_path, "deadbeef", 5)
+    monkeypatch.setattr(pi_process.time, "sleep", [])
+
+    def broken_unlink(self, *args, **kwargs):
+        raise OSError("read-only fs")
+
+    monkeypatch.setattr(pi_process.Path, "unlink", broken_unlink)
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=99, stderr="Error 429: rate limited, retry in 2s",
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(pi_process.RateLimitExhaustedError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=698, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    assert "pi_429_attempts_clear_failed" in caplog.text
+
+
+def test_429_attempt_counter_file_round_trip(tmp_path, monkeypatch, caplog):
+    """The persisted counter is per-run and fails safe: absent, corrupt,
+    foreign-run or invalid files all read as 0 (worst case = today's
+    behavior, never a false terminal), and a failed write never breaks
+    the retry loop."""
+    assert pi_process._load_429_attempts(tmp_path, "deadbeef") == 0
+    pi_process._record_429_attempts(tmp_path, "deadbeef", 3)
+    assert pi_process._load_429_attempts(tmp_path, "deadbeef") == 3
+    # Another run never inherits this run's count.
+    assert pi_process._load_429_attempts(tmp_path, "c0ffee00") == 0
+    path = pi_process.pi_429_attempts_path(tmp_path)
+    with caplog.at_level("INFO"):
+        for corrupt in (
+            "{not json",
+            json.dumps({"run_id": "deadbeef", "attempts": "many"}),
+            json.dumps({"run_id": "deadbeef", "attempts": -2}),
+            json.dumps({"attempts": 3}),
+            json.dumps(["deadbeef", 3]),
+        ):
+            path.write_text(corrupt)
+            assert pi_process._load_429_attempts(tmp_path, "deadbeef") == 0
+        assert "pi_429_attempts" in caplog.text
+
+        def broken_write(self, *args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(pi_process.Path, "write_text", broken_write)
+        pi_process._record_429_attempts(tmp_path, "deadbeef", 4)
+        assert "pi_429_attempts" in caplog.text
+
+
+def test_stream_pi_non_rate_limited_exit_never_retries(tmp_path, caplog):
+    """Issue #321: the business failure semantics are untouched — a non-
+    429 exit fails exactly once, with no retry line."""
+    command = make_fake_pi(
+        tmp_path, session_records=[], stderr="boom", exit_code=1,
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(subprocess.CalledProcessError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=321, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    assert "pi_retry_429" not in caplog.text
+    assert len([line for line in caplog.text.splitlines()
+                if " run_start " in line]) == 1
 
 
 def test_stream_pi_startup_failed_auth_failure(tmp_path, caplog):
@@ -8191,7 +9398,7 @@ def test_stream_pi_swallowed_model_request_killed_fast(tmp_path, caplog,
     generating). The runner kills Pi FAST (well before the
     model_wait_dead_seconds bound) and fails fast with the
     model_wait_swallowed reason."""
-    monkeypatch.setattr(runner, "slots_idle", lambda url: True)
+    monkeypatch.setattr(pi_process, "slots_idle", lambda url: True)
     records = _frozen_model_wait_records(0.0)
     command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
     with caplog.at_level("WARNING"), pytest.raises(
@@ -8228,7 +9435,7 @@ def test_stream_pi_swallow_line_fields(tmp_path, caplog, monkeypatch):
     `model_wait_dead`): issue, idle seconds, the probe grace, the action,
     the session, the run id, the upstream connection evidence and the
     reason. The line is parseable with `pi_activity.parse_scene`."""
-    monkeypatch.setattr(runner, "slots_idle", lambda url: True)
+    monkeypatch.setattr(pi_process, "slots_idle", lambda url: True)
     records = [
         (0.0, {"type": "session", "id": "sess-233",
                "timestamp": fresh_timestamp(), "cwd": "/w"}),
@@ -8269,7 +9476,7 @@ def test_stream_pi_swallow_not_fired_while_a_slot_is_processing(
     (is_processing=true — the model is generating, a slow model, NOT a
     swallow): the swallow path never fires and the existing
     model_wait_dead_seconds bound still applies."""
-    monkeypatch.setattr(runner, "slots_idle", lambda url: False)
+    monkeypatch.setattr(pi_process, "slots_idle", lambda url: False)
     records = _frozen_model_wait_records(0.0)
     command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
     with caplog.at_level("WARNING"), pytest.raises(
@@ -8302,7 +9509,7 @@ def test_stream_pi_swallow_window_restarts_when_events_arrive(
     请求"的活会话误杀（复现日志里 idle_seconds 远小于 probe_seconds）。
     事件每 0.4s 到达一次（< probe_seconds=0.6），窗口必须在每次事件
     后重启，探测永不触发，会话自然跑完。"""
-    monkeypatch.setattr(runner, "slots_idle", lambda url: True)
+    monkeypatch.setattr(pi_process, "slots_idle", lambda url: True)
 
     def tool_result(n):
         return {"type": "message", "id": f"r{n}",
@@ -8342,7 +9549,7 @@ def test_stream_pi_swallow_probe_failure_is_inconclusive(
     None — network/JSON error): the probe is inconclusive, never an
     error, and the existing model_wait_dead_seconds bound still applies
     (the delivery is not failed by the probe)."""
-    monkeypatch.setattr(runner, "slots_idle", lambda url: None)
+    monkeypatch.setattr(pi_process, "slots_idle", lambda url: None)
     records = _frozen_model_wait_records(0.0)
     command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
     with caplog.at_level("WARNING"), pytest.raises(
@@ -8369,7 +9576,7 @@ def test_stream_pi_unconfigured_probe_keeps_dead_bound(
     no-op (the exact pre-#233 behavior) — the run is bounded by
     model_wait_dead_seconds only, and the probe is never called."""
     probe = Mock(return_value=True)
-    monkeypatch.setattr(runner, "slots_idle", probe)
+    monkeypatch.setattr(pi_process, "slots_idle", probe)
     records = _frozen_model_wait_records(0.0)
     command = make_fake_pi(tmp_path, session_records=records, sleep=10.0)
     with caplog.at_level("WARNING"), pytest.raises(
@@ -8773,11 +9980,11 @@ def test_pending_timeout_targets_unit(tmp_path, monkeypatch):
             return now_mono - 1.0  # started 1 s ago, timeout 5 s
         return now_mono - 9.0  # started 9 s ago, timeout 5 s (passed)
 
-    monkeypatch.setattr(runner, "process_start_monotonic", fake_start)
-    monkeypatch.setattr(runner, "process_ppid", lambda pid: None)
+    monkeypatch.setattr(pi_process, "process_start_monotonic", fake_start)
+    monkeypatch.setattr(pi_process, "process_ppid", lambda pid: None)
     boot_clock = getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC)
     monkeypatch.setattr(
-        runner.time, "clock_gettime",
+        pi_process.time, "clock_gettime",
         lambda clock: now_mono if clock == boot_clock else pytest.fail(
             f"unexpected clock: {clock}"
         ),
@@ -8788,7 +9995,7 @@ def test_pending_timeout_targets_unit(tmp_path, monkeypatch):
         {"pid": 3, "cmdline": "timeout 5 pytest"},
         {"pid": 4, "cmdline": "pytest"},  # no clear timeout
     ]
-    pending = runner._pending_timeout_targets(targets)
+    pending = pi_process._pending_timeout_targets(targets)
     assert [target["pid"] for target, _ in pending] == [2]
     # The deadline is the realtime now plus the remaining time.
     (target, deadline) = pending[0]
@@ -8798,20 +10005,245 @@ def test_pending_timeout_targets_unit(tmp_path, monkeypatch):
     # wrapper's deadline, even though its own command line has no
     # `timeout` token.
     monkeypatch.setattr(
-        runner, "process_ppid", lambda pid: 10 if pid == 11 else None,
+        pi_process, "process_ppid", lambda pid: 10 if pid == 11 else None,
     )
     monkeypatch.setattr(
-        runner, "process_start_monotonic",
+        pi_process, "process_start_monotonic",
         lambda pid, *, hz: now_mono - 1.0,
     )
-    pending = runner._pending_timeout_targets([
+    pending = pi_process._pending_timeout_targets([
         {"pid": 10, "cmdline": "timeout 5 sleep 300"},
         {"pid": 11, "cmdline": "sleep 300"},
     ])
     assert [target["pid"] for target, _ in pending] == [10]
 
     # An empty target list is a no-op.
-    assert runner._pending_timeout_targets([]) == []
+    assert pi_process._pending_timeout_targets([]) == []
+
+
+def make_idle_recovery_tracker(monkeypatch, *, window=0.3, targets=None,
+                               pending=None, alive=True):
+    """A `IdleRecoveryTracker` wired to fake /proc primitives (Issue
+    #287): `find_idle_descendants` returns `targets`, the pending-
+    timeout computation returns `pending` (a list of
+    `(target, deadline)`), signals are recorded instead of delivered,
+    and the monotonic clock is a mutable dict the test advances."""
+    targets = [{"pid": 4242, "cmdline": "sleep 300", "start_epoch": 1.0}] \
+        if targets is None else targets
+    pending = [] if pending is None else pending
+    state = {
+        "signals": [],           # [(pid, signal)]
+        "mono": 1000.0,          # the fake monotonic clock
+        "pending_calls": 0,
+    }
+    monkeypatch.setattr(
+        pi_process, "find_idle_descendants",
+        lambda pid, epoch: targets,
+    )
+    monkeypatch.setattr(
+        pi_process, "_pending_timeout_targets",
+        lambda targets: (state.__setitem__(
+            "pending_calls", state["pending_calls"] + 1
+        ) or pending),
+    )
+    monkeypatch.setattr(
+        pi_process, "signal_pid",
+        lambda pid, sig, *, expected_start_epoch=None, btime=None, hz=None:
+        state["signals"].append((pid, sig)) or "sent",
+    )
+    monkeypatch.setattr(pi_process, "pid_alive", lambda pid: alive)
+    monkeypatch.setattr(
+        pi_process.time, "monotonic", lambda: state["mono"],
+    )
+    state["tracker"] = pi_process.IdleRecoveryTracker(
+        window, run_id="deadbeef", issue_ref="xqliu/orbi#94",
+        role="implement",
+    )
+    return state
+
+
+def test_idle_recovery_tracker_escalation_pacing(monkeypatch, caplog):
+    """Issue #287 (the extracted strategy, window pacing): a surviving
+    target's first observation is the grace window (recorded, nothing
+    signaled — Issue #181), the flip window TERMs it, the SAME window
+    never escalates further, the next window SIGKILLs it, and the
+    `PI_IDLE_RECOVERY_CYCLES`-th window flips `exhausted` — the loop's
+    signal to kill the Pi session."""
+    state = make_idle_recovery_tracker(monkeypatch)
+    tracker = state["tracker"]
+    with caplog.at_level("WARNING"):
+        assert tracker.state is None
+        assert tracker.exhausted is False
+        tracker.open_window()
+        # Window 1: the first observation — the grace window, no signal
+        # (Issue #181: one "alive" observation is not evidence).
+        tracker.escalate(7)
+        assert tracker.state == "wait"
+        assert state["signals"] == []
+        # Same window (silence still below the window length): the
+        # target is inside its grace cycle — still nothing signaled.
+        state["mono"] += 0.1
+        tracker.escalate(7)
+        assert tracker.state == "wait"
+        assert state["signals"] == []
+        # Window 2: the evidence flips (still alive one full window) —
+        # the TERM.
+        state["mono"] += 0.25
+        tracker.escalate(7)
+        assert tracker.state == "term"
+        assert state["signals"] == [(4242, signal.SIGTERM)]
+        # Window 3 (PI_IDLE_RECOVERY_CYCLES): the KILL, and the same
+        # exhausted decision — the loop kills the Pi session; the
+        # tracker only reports it. The clock moves a hair past one
+        # window: an exact `+0.3` floors back into window 1 after the
+        # floating-point subtraction in `escalate`.
+        state["mono"] += 0.31
+        tracker.escalate(7)
+        assert tracker.state == "kill"
+        assert state["signals"][-1] == (4242, signal.SIGKILL)
+        assert tracker.exhausted is True
+    # The journal lines carry the run correlation fields.
+    term = [line for line in caplog.text.splitlines()
+            if " pi_idle_term " in line]
+    assert len(term) == 1 and "result=sent" in term[0]
+    assert "run=deadbeef" in term[0]
+    assert "issue=xqliu/orbi#94" in term[0]
+    assert "pid=4242" in term[0]
+    assert 'cmdline="sleep 300"' in term[0]
+    kill = [line for line in caplog.text.splitlines()
+            if " pi_idle_kill " in line]
+    assert len(kill) == 1 and "result=sent" in kill[0]
+
+
+def test_idle_recovery_tracker_kill_step_skipped_same_window(monkeypatch):
+    """Issue #287: after a no_target TERM step (`result=no_target`
+    advances the step without signaling) the KILL step still waits for
+    the NEXT window — the escalation is paced in idle windows, never in
+    polls."""
+    state = make_idle_recovery_tracker(monkeypatch, targets=[])
+    tracker = state["tracker"]
+    tracker.open_window()
+    tracker.escalate(7)  # window 1: no_target, step -> 1
+    assert tracker.state is None
+    tracker.escalate(7)  # still window 1: the KILL step must not run
+    assert tracker.state is None
+    state["mono"] += 0.31  # a hair past one window (see the pacing test)
+    tracker.escalate(7)  # window 2: the (empty) KILL step
+    assert tracker.state == "kill"
+
+
+def test_idle_recovery_tracker_kill_reports_already_dead(
+    monkeypatch, caplog,
+):
+    """Issue #287: a target the TERM already killed between polls is
+    reported `result=already_dead` in the KILL window and is not
+    signaled again."""
+    state = make_idle_recovery_tracker(monkeypatch)
+    tracker = state["tracker"]
+    monkeypatch.setattr(pi_process, "pid_alive", lambda pid: False)
+    with caplog.at_level("WARNING"):
+        tracker.open_window()
+        tracker.escalate(7)  # window 1: the grace observation
+        state["mono"] += 0.35
+        tracker.escalate(7)  # window 2: the flip TERM
+        state["mono"] += 0.3
+        tracker.escalate(7)  # window 3: the KILL step
+        assert tracker.state == "kill"
+        assert tracker.exhausted is True
+    assert state["signals"] == [(4242, signal.SIGTERM)]
+    kill = [line for line in caplog.text.splitlines()
+            if " pi_idle_kill " in line]
+    assert len(kill) == 1
+    assert "result=already_dead" in kill[0]
+
+
+def test_idle_recovery_tracker_reset_clears_state(monkeypatch):
+    """Issue #287: `reset()` (the loop calls it when a session event
+    ends the stall) clears the window, the displayed state, the tracked
+    targets AND the exhaustion decision — a later stall starts a fresh
+    escalation at the grace window, not at the session kill."""
+    state = make_idle_recovery_tracker(monkeypatch)
+    tracker = state["tracker"]
+    tracker.open_window()
+    state["mono"] += 0.9  # straight to cycle 3
+    tracker.escalate(7)
+    assert tracker.exhausted is True
+    tracker.reset()
+    assert tracker.state is None
+    assert tracker.exhausted is False
+    # A fresh window escalates from the grace window again (no signal
+    # — the old escalation left no residue).
+    tracker.open_window()
+    tracker.escalate(7)
+    assert tracker.state == "wait"
+    assert state["signals"] == []
+    assert tracker.exhausted is False
+
+
+def test_idle_recovery_tracker_wait_decision_logged_once_then_flip(
+    monkeypatch, caplog,
+):
+    """Issue #287 (the #105/#169/#181 evidence chain, strategy level):
+    a target inside its `timeout` deadline is WAITED for — one
+    `pi_idle_wait` decision line, no signal; past the deadline the
+    first observation is the grace window (recorded, no signal, no
+    second wait line); one full window later the flip delivers the
+    TERM."""
+    target = {"pid": 7, "cmdline": "timeout 5 sleep 300",
+              "start_epoch": 1.0}
+    pending = [(target, 9999999999.0)]  # inside the deadline
+    state = make_idle_recovery_tracker(
+        monkeypatch, targets=[target], pending=pending,
+    )
+    tracker = state["tracker"]
+    with caplog.at_level("WARNING"):
+        tracker.open_window()
+        # Window 1: inside the deadline — the wait decision, once.
+        tracker.escalate(7)
+        assert tracker.state == "wait"
+        assert state["signals"] == []
+        # Same window, deadline now passed: the grace window — the
+        # target is recorded, nothing is signaled, no second wait line.
+        pending.clear()
+        state["mono"] += 0.1
+        tracker.escalate(7)
+        assert tracker.state == "wait"
+        assert state["signals"] == []
+        # One full window later, still alive: the evidence flips, TERM.
+        state["mono"] += 0.25
+        tracker.escalate(7)
+        assert tracker.state == "term"
+        assert state["signals"] == [(7, signal.SIGTERM)]
+    waits = [line for line in caplog.text.splitlines()
+             if " pi_idle_wait " in line]
+    assert len(waits) == 1, caplog.text
+    assert "pid=7" in waits[0]
+    assert "deadline=" in waits[0]
+
+
+def test_idle_recovery_tracker_no_target_clears_state(monkeypatch, caplog):
+    """Issue #287: with NO pre-idle descendants (Pi itself is stuck)
+    the TERM step logs `result=no_target` without a pid, the displayed
+    state is cleared (not `wait`/`term`), and the escalation still
+    advances to the bounded session kill."""
+    state = make_idle_recovery_tracker(monkeypatch, targets=[])
+    tracker = state["tracker"]
+    with caplog.at_level("WARNING"):
+        tracker.open_window()
+        tracker.escalate(7)
+        assert tracker.state is None
+        assert state["signals"] == []
+        state["mono"] += 0.31  # a hair past one window
+        tracker.escalate(7)
+        assert tracker.state == "kill"
+        state["mono"] += 0.31
+        tracker.escalate(7)
+        assert tracker.exhausted is True
+    terms = [line for line in caplog.text.splitlines()
+             if " pi_idle_term " in line]
+    assert len(terms) == 1
+    assert "result=no_target" in terms[0]
+    assert " pid=" not in terms[0]
 
 
 def make_hung_pi(tmp_path, *, child_sleep=10.0, ignore_sigterm=False,
@@ -9720,7 +11152,7 @@ def test_main_capacity_full_does_not_pick_issue_or_call_pi(
     held = pilot_slots.acquire_slot(slot_dir, 1, os.getpid())
     assert held is not None
 
-    def fail_if_called(repos, slot_dir, max_concurrency, active_milestone=None):
+    def fail_if_called(repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs):
         raise AssertionError("pick_next_delivery must not run when capacity is full")
 
     monkeypatch.setattr(runner, "pick_next_delivery", fail_if_called)
@@ -9751,7 +11183,7 @@ def test_main_holds_slot_while_processing_issue(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     seen = {}
 
-    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None):
+    def fake_pick(repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs):
         seen["occupancy"] = pilot_slots.slot_occupancy(
             tmp_path / ".orbi" / "slots", 1,
         )
@@ -9773,7 +11205,7 @@ def test_main_reacquires_slot_after_previous_release(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
 
     assert runner.main(["--config", str(config)]) == 0
@@ -9784,6 +11216,32 @@ def test_main_reacquires_slot_after_previous_release(monkeypatch, tmp_path):
     # ... so the next run takes the slot again.
     assert runner.main(["--config", str(config)]) == 0
     assert (slot_dir / "slot-1").read_text(encoding="utf-8").strip() == str(os.getpid())
+
+
+def test_main_delegates_all_preflight_to_one_helper(
+    monkeypatch, tmp_path,
+):
+    """Issue #297: the pre-slot checks live behind one `_preflight`
+    helper, so a test reaches the normal claim flow by stubbing THAT
+    one function — not four unrelated modules. The helper receives the
+    validated config and `main` still takes the slot afterwards."""
+    seen: dict = {}
+
+    def fake_preflight(config):
+        seen["config"] = config
+
+    monkeypatch.setattr(runner, "_preflight", fake_preflight)
+    _write_prompts(tmp_path)
+    config = tmp_path / "orbi.toml"
+    config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    monkeypatch.setattr(
+        runner, "pick_next_delivery",
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
+    )
+    assert runner.main(["--config", str(config)]) == 0
+    assert seen["config"]["source_repos"] == ["owner/repo"]
+    # The slot was taken only after the (stubbed) preflight ran.
+    assert (tmp_path / ".orbi" / "slots" / "slot-1").exists()
 
 
 # --- deployment consistency preflight (Issue #103) --------------------------
@@ -9936,7 +11394,7 @@ def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
@@ -10020,7 +11478,7 @@ def test_main_unit_drift_clean_proceeds_to_claim(monkeypatch, tmp_path,
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
@@ -10045,7 +11503,7 @@ def test_main_preflight_receives_the_configured_repo_dir(
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen == [tmp_path]
@@ -10124,7 +11582,7 @@ def test_main_transport_check_clean_proceeds_to_claim(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
@@ -10159,7 +11617,7 @@ def test_main_transport_preflight_receives_the_configured_args(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen["repo_dir"] == tmp_path
@@ -10195,7 +11653,7 @@ def test_main_transport_preflight_honors_the_https_config(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
@@ -10231,7 +11689,7 @@ def test_main_cli_install_refresh_runs_before_slot_and_claim(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen["repo_dir"] == tmp_path
@@ -10280,7 +11738,7 @@ def test_main_cli_refresh_uses_deploy_home_not_repo_dir(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen["repo_dir"] == home
@@ -10322,7 +11780,7 @@ def test_main_unit_drift_check_uses_deploy_home(
     )
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: None,
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
     assert seen == [home]
@@ -10368,72 +11826,6 @@ def test_main_cli_install_failure_fails_fast_before_slot_and_claim(
             runner.main(["--config", str(config)])
     # No slot was taken and nothing was claimed.
     assert not (tmp_path / ".orbi" / "slots").exists()
-
-
-def test_bootstrap_chain_loads_and_refreshes_when_cli_install_is_unmapped(
-    tmp_path,
-):
-    """Issue #158 acceptance (the incident itself, one module later):
-    the editable finder's module MAPPING is generated at INSTALL time
-    from `pyproject.toml`, so right after this PR merges, the INSTALLED
-    finder does not map `cli_install` yet — and the bootstrap chain
-    (`orbi.cli` -> `orbi.runner`) must still LOAD in that
-    tool env, with the refresh REACHABLE: the refresh implementation
-    lives in `runner` itself (a separate new module would not be
-    importable in the stale-finder env, and the very refresh that
-    reinstalls the tool env could never run — the #158 incident, one
-    module later). Load a fresh `orbi.runner` with
-    `orbi.cli_install` blocked from the import system: it must
-    import cleanly and its `refresh_cli_install` gate must run (the
-    unchanged path needs no uv call and no other new module)."""
-    class _BlockCliInstall:
-        """Meta path finder that hides the `orbi.cli_install`
-        module."""
-
-        def find_spec(self, fullname, path=None, target=None):
-            if fullname == "orbi.cli_install":
-                raise ModuleNotFoundError(
-                    "No module named 'orbi.cli_install'",
-                    name=fullname,
-                )
-            return None
-
-    hook = _BlockCliInstall()
-    # The hook hides exactly the module under test and nothing else.
-    with pytest.raises(ModuleNotFoundError, match="cli_install"):
-        hook.find_spec("orbi.cli_install")
-    assert hook.find_spec("some_other_module") is None
-    import orbi
-    saved = sys.modules.pop("orbi.runner")
-    sys.meta_path.insert(0, hook)
-    try:
-        import orbi.runner as fresh_runner
-    finally:
-        sys.meta_path.remove(hook)
-        # Restore BOTH the sys.modules entry and the package attribute:
-        # the fresh import binds `orbi.runner` to the new module
-        # instance, and leaving it would shadow the original for every
-        # later test in the session.
-        sys.modules["orbi.runner"] = saved
-        orbi.runner = saved
-    module = fresh_runner
-    # The fresh module loaded with `cli_install` unmapped: the chain
-    # is importable in the stale-finder tool env, so the next systemd
-    # start reaches `main()` and the refresh can repair the finder.
-    assert module.main is not None
-    # The refresh gate itself runs in the stale env (unchanged path:
-    # no uv call, no other new module needed).
-    (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "a"\n', encoding="utf-8",
-    )
-    module.write_install_state(
-        tmp_path, module.packaging_fingerprint(tmp_path),
-    )
-    calls = []
-    assert module.refresh_cli_install(
-        tmp_path, run_command=lambda *a, **k: calls.append(1),
-    ) == "unchanged"
-    assert calls == []
 
 
 # --- delivery lifecycle: slot held until merge or terminal failure ----------
@@ -10517,7 +11909,7 @@ def test_pr_delivery_status_ignores_malformed_check_entry(monkeypatch):
     assert runner.pr_delivery_status(PR_URL, "owner/repo") == ("OPEN", [])
 
 
-def test_finish_blocked_progress_is_a_noop_without_run_id(monkeypatch):
+def test_finish_progress_blocked_is_a_noop_without_run_id(monkeypatch):
     """Without a bound run id there is no tracked comment to update
     (the failure comment simply carries no marker)."""
     calls = []
@@ -10525,14 +11917,14 @@ def test_finish_blocked_progress_is_a_noop_without_run_id(monkeypatch):
         runner, "run_command",
         lambda command, **kwargs: calls.append(command) or "[]",
     )
-    runner._finish_blocked_progress(
+    runner._finish_progress(
         39, None, "owner/repo", None, None, "https://x/pull/46",
-        "failure", "next step", title="Blocked task",
+        "failure", "next step", title="Blocked task", outcome="blocked",
     )
     assert calls == []
 
 
-def test_finish_blocked_progress_creates_the_comment_when_missing(
+def test_finish_progress_blocked_creates_the_comment_when_missing(
     monkeypatch,
 ):
     """A run that never reached a progress comment (the runner died
@@ -10551,9 +11943,10 @@ def test_finish_blocked_progress_creates_the_comment_when_missing(
                            "url": "https://x/78"})
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    runner._finish_blocked_progress(
+    runner._finish_progress(
         39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
         "the failure", "the next step", title="Blocked task",
+        outcome="blocked",
     )
     posts = [
         command for command in api_calls
@@ -10569,12 +11962,12 @@ def test_finish_blocked_progress_creates_the_comment_when_missing(
     assert "- issue: #39 Blocked task" in body
 
 
-def test_finish_blocked_progress_carries_the_actual_role_and_round(
+def test_finish_progress_carries_the_actual_role_and_round(
     monkeypatch,
 ):
-    """The blocked scene must show the role and the review/fix round the
-    run was actually in, not the hardcoded `fix`/`0` (review round 2,
-    PR #42)."""
+    """The terminal scene must show the role and the review/fix round
+    the run was actually in, not the hardcoded `fix`/`0` (review round
+    2, PR #42)."""
     api_calls = []
 
     def fake_run(command, **kwargs):
@@ -10587,10 +11980,10 @@ def test_finish_blocked_progress_carries_the_actual_role_and_round(
                            "url": "https://x/78"})
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    runner._finish_blocked_progress(
+    runner._finish_progress(
         39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
         "the failure", "the next step", title="Blocked task",
-        role=runner.ROLE_REVIEW, review_round=2,
+        outcome="blocked", role=runner.ROLE_REVIEW, review_round=2,
     )
     posts = [
         command for command in api_calls
@@ -10602,7 +11995,7 @@ def test_finish_blocked_progress_carries_the_actual_role_and_round(
     assert "- review/fix round: 2" in body
 
 
-def test_finish_blocked_progress_defaults_to_review_round_zero(monkeypatch):
+def test_finish_progress_defaults_to_review_round_zero(monkeypatch):
     """Without explicit role/round the default is the only post-PR role
     (Issue #82: the review session fixes findings in the same session,
     so a blocked delivery is always a review failure)."""
@@ -10617,9 +12010,10 @@ def test_finish_blocked_progress_defaults_to_review_round_zero(monkeypatch):
                            "url": "https://x/78"})
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    runner._finish_blocked_progress(
+    runner._finish_progress(
         39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
         "the failure", "the next step", title="Blocked task",
+        outcome="blocked",
     )
     posts = [
         command for command in api_calls
@@ -10629,6 +12023,45 @@ def test_finish_blocked_progress_defaults_to_review_round_zero(monkeypatch):
     body = posts[0][posts[0].index("--field") + 1][len("body="):]
     assert "- role: review" in body
     assert "- review/fix round: 0" in body
+
+
+def test_finish_progress_renders_the_fix_needed_scene(monkeypatch):
+    """Issue #293: one function serves both terminal scenes — the
+    fix-needed scene (Issue #50) renders the same tracked comment with
+    the fix-needed outcome and its next step."""
+    api_calls = []
+
+    def fake_run(command, **kwargs):
+        api_calls.append(command)
+        if "--method" not in command:
+            return "[]"
+        body = command[command.index("--field") + 1]
+        return json.dumps({"id": 78, "body": body[len("body="):],
+                           "url": "https://x/78"})
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    runner._finish_progress(
+        39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
+        "the failure",
+        "the next tick resumes the same run, branch, worktree and PR "
+        "automatically (the Issue stays ai-fix-needed)",
+        title="Fix task", outcome="fix needed",
+    )
+    posts = [
+        command for command in api_calls
+        if "--method" in command and "POST" in command
+    ]
+    assert len(posts) == 1
+    body = posts[0][posts[0].index("--field") + 1][len("body="):]
+    assert "Orbi fix needed" in body
+    assert "failure: the failure" in body
+    assert ("next step: the next tick resumes the same run, branch, "
+            "worktree and PR automatically (the Issue stays "
+            "ai-fix-needed)") in body
+    # The role default is the only post-PR role (Issue #82).
+    assert "- role: review" in body
+    assert "<!-- orbi:run=a1b2c3d4 -->" in body
+    assert "- issue: #39 Fix task" in body
 
 
 def test_wait_for_delivery_returns_when_pr_merged(monkeypatch, caplog):
@@ -11856,6 +13289,177 @@ def test_wait_for_delivery_logs_awaiting_without_bound_run_id(monkeypatch, caplo
     assert "orbi:run=" not in comments[0][1]["body"]
 
 
+# ---------------------------------------------------- Issue #289
+# `_run_review_round` is the per-round delivery flow extracted from
+# `wait_for_delivery` (one round = label read/repair + resumable gate
+# + one independent review + failure classification). These tests pin
+# the three-value contract the polling skeleton dispatches on:
+# True = merged this round, False = findings (next round), None = a
+# terminal state was already handled (slot released).
+
+
+def _review_round_env(
+    monkeypatch, tmp_path, *, scene_base="main", label="ai-pr-opened",
+    with_worktree=True, review_result=False,
+):
+    """Shared fake GitHub/git scene for one direct `_run_review_round`
+    call. Returns (edits, comments, reviews, publishes) capture lists;
+    `edits` carries the `edit_issue` label patches, `publishes` the
+    `_safe_publish` progress calls."""
+    def fake_run(command, **kwargs):
+        if command[-1] == "comments":
+            # The trusted scene comment.
+            return json.dumps({"comments": [{
+                "body": (
+                    "<!-- orbi:run=a1b2c3d4 -->\n"
+                    "Orbi opened PR: "
+                    f"{PR_URL} (base_branch={scene_base} "
+                    "base_sha=abc123def456 run_id=a1b2c3d4)"
+                ),
+                "authorAssociation": "OWNER",
+            }]})
+        if command[-1] == "labels":
+            return json.dumps({"labels": [{"name": label}]})
+        if command == ["git", "branch", "--show-current"]:
+            return "orbi/owner-repo-issue-39"
+        raise AssertionError(f"unexpected command: {command}")
+
+    # The fake rejects anything it does not implement.
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "pr", "list"])
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    if with_worktree:
+        (tmp_path / ".worktrees"
+         / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
+    edits: list = []
+    comments: list = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: edits.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *args, **kwargs: comments.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        runner, "comment_pr",
+        lambda *args, **kwargs: comments.append((args, kwargs)),
+    )
+    reviews: list = []
+    monkeypatch.setattr(
+        runner, "review_and_merge_if_clean",
+        lambda *args, **kwargs: reviews.append((args, kwargs))
+        or review_result,
+    )
+    publishes: list = []
+    monkeypatch.setattr(
+        runner, "_safe_publish",
+        lambda **kwargs: publishes.append(kwargs),
+    )
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    return edits, comments, reviews, publishes
+
+
+def test_run_review_round_returns_true_when_review_merges(
+        monkeypatch, tmp_path,
+):
+    """Issue #289: True = the round merged the PR; the caller releases
+    the slot. No label edit and no failure comment on this path."""
+    edits, comments, reviews, _ = _review_round_env(
+        monkeypatch, tmp_path, review_result=True,
+    )
+    issue = {"number": 39, "title": "task", "body": ""}
+    outcome = runner._run_review_round(
+        PR_URL, issue,
+        {"repo_dir": tmp_path, "base_branch": "main"}, "owner/repo",
+    )
+    assert outcome is True
+    # One review on the frozen scene of the same run.
+    assert len(reviews) == 1
+    worktree, branch, base_branch, review_config, repo, number = \
+        reviews[0][0]
+    assert branch == "orbi/owner-repo-issue-39"
+    assert base_branch == "main"
+    assert review_config["run_id"] == "a1b2c3d4"
+    assert review_config["base_sha"] == "abc123def456"
+    assert repo == "owner/repo"
+    assert number == 39
+    assert edits == []
+    assert comments == []
+
+
+def test_run_review_round_returns_false_on_findings(
+        monkeypatch, tmp_path,
+):
+    """Issue #289: False = findings remain (the ai-fix-needed
+    transition happened inside the review itself); the caller yields
+    the cadence and polls the next round."""
+    edits, comments, reviews, _ = _review_round_env(monkeypatch, tmp_path)
+    issue = {"number": 39, "title": "task", "body": ""}
+    outcome = runner._run_review_round(
+        PR_URL, issue,
+        {"repo_dir": tmp_path, "base_branch": "main"}, "owner/repo",
+    )
+    assert outcome is False
+    assert len(reviews) == 1
+    assert edits == []
+    assert comments == []
+
+
+def test_run_review_round_returns_none_when_scene_base_differs(
+        monkeypatch, tmp_path,
+):
+    """Issue #289: None = terminal state handled. An unrecoverable
+    precondition (the scene froze another base, Issue #91) marks the
+    Issue ai-blocked with the failure comment; the review never runs
+    and the caller releases the slot."""
+    edits, comments, reviews, _ = _review_round_env(
+        monkeypatch, tmp_path, scene_base="develop",
+    )
+    issue = {"number": 39, "title": "task", "body": ""}
+    outcome = runner._run_review_round(
+        PR_URL, issue,
+        {"repo_dir": tmp_path, "base_branch": "main"}, "owner/repo",
+    )
+    assert outcome is None
+    assert reviews == []
+    assert edits[0][1] == {
+        "repo": "owner/repo",
+        "add": "ai-blocked",
+        "remove": "ai-pr-opened",
+    }
+    assert "Orbi failed:" in comments[0][1]["body"]
+    assert "base_branch=develop" in comments[0][1]["body"]
+    assert "base_branch=main" in comments[0][1]["body"]
+
+
+def test_run_review_round_returns_none_when_worktree_missing(
+        monkeypatch, tmp_path,
+):
+    """Issue #289: None also covers the RECOVERABLE failure (the
+    missing worktree, Issue #90): the round writes the ai-fix-needed
+    full scene (the next tick resumes) and the caller releases the
+    slot — the failure never keeps re-running inside one process."""
+    edits, comments, reviews, _ = _review_round_env(
+        monkeypatch, tmp_path, with_worktree=False,
+    )
+    issue = {"number": 39, "title": "task", "body": ""}
+    outcome = runner._run_review_round(
+        PR_URL, issue,
+        {"repo_dir": tmp_path, "base_branch": "main"}, "owner/repo",
+    )
+    assert outcome is None
+    assert reviews == []
+    assert edits[0][1] == {
+        "repo": "owner/repo",
+        "add": "ai-fix-needed",
+        "remove": "ai-pr-opened",
+    }
+    body = comments[0][1]["body"]
+    assert "Orbi needs a fix:" in body
+    assert "orbi-owner-repo-issue-39-a1b2c3d4" in body
+
+
 def test_main_holds_slot_through_delivery_wait(monkeypatch, tmp_path):
     """The slot stays occupied while the delivery awaits review: a second
     concurrent runner must see capacity_full until the PR is merged."""
@@ -11867,7 +13471,7 @@ def test_main_holds_slot_through_delivery_wait(monkeypatch, tmp_path):
     _write_prompts(tmp_path)
     monkeypatch.setattr(
         runner, "pick_next_delivery",
-        lambda repos, slot_dir, max_concurrency, active_milestone=None: (
+        lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: (
             "owner/repo", issue, None
         ),
     )
@@ -13615,7 +15219,7 @@ def test_main_installs_the_stop_handler(monkeypatch, tmp_path):
     repo.mkdir()
     (repo / ".git").mkdir()
     monkeypatch.setattr(
-        runner, "pick_next_delivery", lambda *args: None,
+        runner, "pick_next_delivery", lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(runner, "acquire_slot", lambda *args: Mock(release=lambda: None))
     monkeypatch.setattr(runner, "refresh_cli_install", lambda *a, **k: "unchanged")
@@ -13849,7 +15453,7 @@ LEGACY_TEST_COMMAND_DECLARATION_BODY = RELEASE_DECLARATION_BODY.replace(
 
 
 def test_parse_release_declaration_returns_all_fields():
-    decl = runner.parse_release_declaration(RELEASE_DECLARATION_BODY)
+    decl = release.parse_release_declaration(RELEASE_DECLARATION_BODY)
     assert decl == {
         "version": "v0.3.0",
         "base_branch": "main",
@@ -13864,12 +15468,12 @@ def test_parse_release_declaration_does_not_require_test_command():
     """Issue #569: the declaration carries NO local test contract —
     release test acceptance is the GitHub Actions CI result on the
     release commit (the #268 CI-wait gate)."""
-    decl = runner.parse_release_declaration(RELEASE_DECLARATION_BODY)
+    decl = release.parse_release_declaration(RELEASE_DECLARATION_BODY)
     assert decl["test_command"] is None
 
 
 def test_parse_release_declaration_ignores_a_legacy_test_command():
-    decl = runner.parse_release_declaration(
+    decl = release.parse_release_declaration(
         LEGACY_TEST_COMMAND_DECLARATION_BODY,
     )
     assert decl["test_command"] == "scripts/test"
@@ -13882,21 +15486,21 @@ def test_parse_release_declaration_rejects_test_timeout_seconds():
         "- scope:", "- test_timeout_seconds: 42\n- scope:",
     )
     with pytest.raises(ValueError, match="unknown field"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_accepts_package_json_version_file():
     body = RELEASE_DECLARATION_BODY.replace(
         "- version: v0.3.0\n", "- version: v0.3.0\n- version_file: package.json\n",
     )
-    assert runner.parse_release_declaration(body)["version_file"] == "package.json"
+    assert release.parse_release_declaration(body)["version_file"] == "package.json"
 
 
 def test_parse_release_declaration_accepts_none_version_file():
     body = RELEASE_DECLARATION_BODY.replace(
         "- version: v0.3.0\n", "- version: v0.3.0\n- version_file: none\n",
     )
-    assert runner.parse_release_declaration(body)["version_file"] == "none"
+    assert release.parse_release_declaration(body)["version_file"] == "none"
 
 
 @pytest.mark.parametrize(
@@ -13909,7 +15513,7 @@ def test_parse_release_declaration_accepts_ecosystem_version_file(version_file):
         "- version: v0.3.0\n",
         f"- version: v0.3.0\n- version_file: {version_file}\n",
     )
-    assert runner.parse_release_declaration(body)["version_file"] == version_file
+    assert release.parse_release_declaration(body)["version_file"] == version_file
 
 
 def test_parse_release_declaration_rejects_invalid_version_file():
@@ -13917,24 +15521,24 @@ def test_parse_release_declaration_rejects_invalid_version_file():
         "- version: v0.3.0\n", "- version: v0.3.0\n- version_file: version.txt\n",
     )
     with pytest.raises(ValueError, match="version_file"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_requires_the_release_section():
     with pytest.raises(ValueError, match="## Release"):
-        runner.parse_release_declaration("no section here\n")
+        release.parse_release_declaration("no section here\n")
 
 
 def test_parse_release_declaration_requires_version():
     body = RELEASE_DECLARATION_BODY.replace("- version: v0.3.0\n", "")
     with pytest.raises(ValueError, match="version"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_requires_base_branch():
     body = RELEASE_DECLARATION_BODY.replace("- base_branch: main\n", "")
     with pytest.raises(ValueError, match="base_branch"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_requires_scope():
@@ -13942,14 +15546,14 @@ def test_parse_release_declaration_requires_scope():
              if not line.strip().startswith("- #")]
     body = "\n".join(line for line in lines if line.strip() != "- scope:") + "\n"
     with pytest.raises(ValueError, match="scope"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_empty_scope():
     lines = [line for line in RELEASE_DECLARATION_BODY.splitlines()
              if not line.strip().startswith("- #")]
     with pytest.raises(ValueError, match="scope"):
-        runner.parse_release_declaration("\n".join(lines) + "\n")
+        release.parse_release_declaration("\n".join(lines) + "\n")
 
 
 def test_parse_release_declaration_rejects_duplicate_field():
@@ -13957,7 +15561,7 @@ def test_parse_release_declaration_rejects_duplicate_field():
         "\n## Notes", "\n- version: v9.9.9\n\n## Notes",
     )
     with pytest.raises(ValueError, match="version"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_unknown_key():
@@ -13965,7 +15569,7 @@ def test_parse_release_declaration_rejects_unknown_key():
         "\n## Notes", "\n- channel: stable\n\n## Notes",
     )
     with pytest.raises(ValueError, match="channel"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_version_with_space():
@@ -13973,32 +15577,32 @@ def test_parse_release_declaration_rejects_version_with_space():
         "- version: v0.3.0", "- version: v0.3 .0",
     )
     with pytest.raises(ValueError, match="version"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_empty_value():
     body = RELEASE_DECLARATION_BODY.replace("- base_branch: main",
                                             "- base_branch:")
     with pytest.raises(ValueError, match="base_branch"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_malformed_scope_item():
     body = RELEASE_DECLARATION_BODY.replace("  - #123", "  - #abc")
     with pytest.raises(ValueError, match="scope item"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_scope_item_without_hash():
     body = RELEASE_DECLARATION_BODY.replace("  - #123", "  - 123")
     with pytest.raises(ValueError, match="scope item"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_zero_scope_item():
     body = RELEASE_DECLARATION_BODY.replace("  - #123", "  - #0")
     with pytest.raises(ValueError, match="scope item"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 RELEASE_MILESTONE_DECLARATION_BODY = """Ship v0.3.0 to the remote.
@@ -14016,7 +15620,7 @@ RELEASE_MILESTONE_DECLARATION_BODY = """Ship v0.3.0 to the remote.
 
 
 def test_parse_release_declaration_scope_from_milestone():
-    decl = runner.parse_release_declaration(RELEASE_MILESTONE_DECLARATION_BODY)
+    decl = release.parse_release_declaration(RELEASE_MILESTONE_DECLARATION_BODY)
     assert decl == {
         "version": "v0.3.0",
         "base_branch": "main",
@@ -14028,7 +15632,7 @@ def test_parse_release_declaration_scope_from_milestone():
 
 
 def test_parse_release_declaration_manual_scope_has_no_milestone():
-    decl = runner.parse_release_declaration(RELEASE_DECLARATION_BODY)
+    decl = release.parse_release_declaration(RELEASE_DECLARATION_BODY)
     assert decl["scope_from_milestone"] is None
 
 
@@ -14037,7 +15641,7 @@ def test_parse_release_declaration_rejects_scope_and_scope_from_milestone():
         "\n## Notes", "\n- scope:\n  - #123\n\n## Notes",
     )
     with pytest.raises(ValueError, match="exactly one"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_empty_scope_from_milestone():
@@ -14045,7 +15649,7 @@ def test_parse_release_declaration_rejects_empty_scope_from_milestone():
         "- scope_from_milestone: v0.3.0", "- scope_from_milestone:",
     )
     with pytest.raises(ValueError, match="scope_from_milestone"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_scope_from_milestone_with_space():
@@ -14053,7 +15657,7 @@ def test_parse_release_declaration_rejects_scope_from_milestone_with_space():
         "- scope_from_milestone: v0.3.0", "- scope_from_milestone: v0.3 .0",
     )
     with pytest.raises(ValueError, match="scope_from_milestone"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_is_release_detects_the_label():
@@ -14073,7 +15677,7 @@ def test_process_issue_routes_release_to_process_release(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0", "body": "",
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     calls = []
-    monkeypatch.setattr(runner, "process_release",
+    monkeypatch.setattr(release, "process_release",
                         lambda i, c, r: calls.append("release") or "rel-url")
     monkeypatch.setattr(runner, "run_pi", Mock(
         side_effect=AssertionError("run_pi must not run for a release task")))
@@ -14084,10 +15688,26 @@ def test_process_issue_routes_release_to_process_release(monkeypatch):
     assert calls == ["release"]
 
 
-def test_is_ticket_only_requires_the_explicit_label():
-    assert runner.is_ticket_only({"labels": [{"name": "ai-ticket-only"}]}) is True
-    assert runner.is_ticket_only({"labels": [{"name": "marketing"}]}) is False
-    assert runner.is_ticket_only({"labels": "ai-ticket-only"}) is False
+def test_is_content_only_requires_the_explicit_label():
+    """Issue #537: the content（纯内容）path dispatches on
+    `ai-content-only`; the old `ai-ops-only` name now means ops."""
+    assert runner.is_content_only(
+        {"labels": [{"name": "ai-content-only"}]},
+    ) is True
+    assert runner.is_content_only(
+        {"labels": [{"name": "ai-ops-only"}]},
+    ) is False
+    assert runner.is_content_only({"labels": [{"name": "marketing"}]}) is False
+    assert runner.is_content_only({"labels": "ai-content-only"}) is False
+
+
+def test_is_ops_requires_the_explicit_label():
+    """Issue #537: `ai-ops-only` is the full-execution ops marker — it
+    must NOT dispatch the content agent anymore."""
+    assert runner.is_ops({"labels": [{"name": "ai-ops-only"}]}) is True
+    assert runner.is_ops({"labels": [{"name": "ai-content-only"}]}) is False
+    assert runner.is_ops({"labels": [{"name": "marketing"}]}) is False
+    assert runner.is_ops({"labels": "ai-ops-only"}) is False
 
 
 def test_run_ticket_agent_uses_a_temporary_session_without_git(monkeypatch, tmp_path):
@@ -14167,7 +15787,7 @@ def test_progress_state_passes_startup_sub_phase_to_comment(tmp_path):
 def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch):
     """A labeled content task is delivered in its Issue, never through Git."""
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
-             "labels": [{"name": "ai-ready"}, {"name": "ai-ticket-only"}]}
+             "labels": [{"name": "ai-ready"}, {"name": "ai-content-only"}]}
     edits = []
     comments = []
     commands = []
@@ -14199,7 +15819,7 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
 
 def test_process_ticket_only_rejects_empty_agent_content(monkeypatch):
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
-             "labels": [{"name": "ai-ticket-only"}]}
+             "labels": [{"name": "ai-content-only"}]}
     edits = []
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
@@ -14216,7 +15836,7 @@ def test_process_ticket_only_rejects_empty_agent_content(monkeypatch):
 
 def test_process_ticket_only_failure_marks_blocked_without_git_delivery(monkeypatch):
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
-             "labels": [{"name": "ai-ticket-only"}]}
+             "labels": [{"name": "ai-content-only"}]}
     edits = []
     comments = []
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
@@ -14239,7 +15859,7 @@ def test_process_ticket_only_failure_marks_blocked_without_git_delivery(monkeypa
 
 def test_process_ticket_only_keeps_original_error_when_failure_reporting_fails(monkeypatch):
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
-             "labels": [{"name": "ai-ticket-only"}]}
+             "labels": [{"name": "ai-content-only"}]}
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
@@ -14285,13 +15905,200 @@ def test_process_issue_keeps_normal_flow_without_release_label(
     monkeypatch.setattr(runner, "format_end_scene", lambda **k: "end")
     monkeypatch.setattr(runner, "issue_context", lambda r, n: "#n")
     monkeypatch.setattr(runner, "format_run_scene", lambda *a, **k: "scene")
-    monkeypatch.setattr(runner, "_finish_blocked_progress", Mock())
+    monkeypatch.setattr(runner, "_finish_progress", Mock())
     runner.process_issue(
         issue, {"base_branch": "main", "repo_dir": tmp_path}, "o/r",
     )
 
 
-def make_scope_gh(monkeypatch, *, pr_state_map=None, issue_state_map=None):
+def _ops_issue_mocks(monkeypatch, tmp_path, *, head_sha: str, dirty: str):
+    """Shared mock set for the `process_issue` ops-dispatch tests.
+
+    `head_sha` answers `git rev-parse HEAD` (the frozen base means the
+    session delivered no commit); `dirty` answers `git status
+    --porcelain`. Every `gh`/`git`/pi collaborator is captured.
+    """
+    issue = {
+        "number": 99, "title": "Merge the beta PR and verify deploy",
+        "body": "Merge PR #7 into main, then verify the deployment.",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-ops-only"}],
+    }
+    commands: list[list[str]] = []
+    configs: list[dict] = []
+    monkeypatch.setattr(runner, "is_release", lambda i: False)
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(runner, "set_run_id", lambda rid: None)
+    monkeypatch.setattr(runner, "has_in_progress_label", lambda n, r: False)
+    monkeypatch.setattr(runner, "freeze_base", lambda r, b: "abc123")
+    monkeypatch.setattr(runner, "edit_issue", Mock())
+    monkeypatch.setattr(runner, "set_active_run", Mock())
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    monkeypatch.setattr(runner, "create_worktree", lambda *a, **k: worktree)
+    monkeypatch.setattr(runner, "comment_issue", Mock())
+    monkeypatch.setattr(runner, "ProgressPublisher", Mock())
+    monkeypatch.setattr(runner, "activity_snapshot", lambda p: None)
+    monkeypatch.setattr(runner, "_safe_publish", lambda **k: None)
+    monkeypatch.setattr(
+        runner, "run_pi",
+        lambda issue_arg, wt, config, repo, **k: configs.append(config),
+    )
+    monkeypatch.setattr(runner.runner_health, "record_run_attempt", Mock())
+    monkeypatch.setattr(runner.runner_health, "record_pickup", Mock())
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        if command[:2] == ["git", "rev-parse"]:
+            return head_sha
+        if command[:2] == ["git", "status"]:
+            return dirty
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    return issue, commands, worktree, configs
+
+
+def test_process_issue_ops_without_commit_closes_with_evidence(
+    monkeypatch, tmp_path,
+):
+    """Issue #537: a pure-ops session (real shell/gh work, evidence
+    comments, no commit) is COMPLETE — the Runner closes the Issue,
+    removes the claim label, and never enters the PR ceremony."""
+    issue, commands, worktree, configs = _ops_issue_mocks(
+        monkeypatch, tmp_path, head_sha="abc123", dirty="",
+    )
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "prompt.md").write_text("dev", encoding="utf-8")
+    ops_prompt = prompts / "prompt_ops.md"
+    ops_prompt.write_text("ops playbook", encoding="utf-8")
+    monkeypatch.setattr(
+        runner, "deliver_pr",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("pure ops delivery must not open a PR")
+        ),
+    )
+    monkeypatch.setattr(runner, "format_end_scene", lambda **k: "end")
+
+    result = runner.process_issue(
+        issue, {"base_branch": "main", "repo_dir": tmp_path,
+                "prompt": prompts / "prompt.md"},
+        "o/r",
+    )
+
+    assert result == runner.IssueResult("ops", None)
+    # The full-execution session ran with the OPS playbook, not the dev
+    # one — and with the same worktree machinery (no --no-tools content
+    # agent).
+    assert len(configs) == 1
+    assert configs[0]["prompt"] == ops_prompt
+    # Terminal transition mirrors the content path: close + claim label
+    # removed. No PR, no push.
+    assert ["gh", "issue", "close", "99", "--repo", "o/r"] in commands
+    # The claim added the label at pickup; the delivery removes it.
+    runner.edit_issue.assert_any_call(
+        99, repo="o/r", remove=runner.IN_PROGRESS_LABEL,
+    )
+
+
+def test_process_issue_ops_health_record_failure_is_a_bypass(
+    monkeypatch, tmp_path,
+):
+    """Issue #537/#266: the health state write is pure bypass — a state
+    failure never turns a delivered pure-ops run into a failed one."""
+    issue, commands, worktree, configs = _ops_issue_mocks(
+        monkeypatch, tmp_path, head_sha="abc123", dirty="",
+    )
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "prompt.md").write_text("dev", encoding="utf-8")
+    (prompts / "prompt_ops.md").write_text("ops playbook", encoding="utf-8")
+    monkeypatch.setattr(
+        runner.runner_health, "record_run_attempt",
+        Mock(side_effect=OSError("state file unwritable")),
+    )
+    monkeypatch.setattr(runner, "deliver_pr", Mock())
+    monkeypatch.setattr(runner, "format_end_scene", lambda **k: "end")
+
+    result = runner.process_issue(
+        issue, {"base_branch": "main", "repo_dir": tmp_path,
+                "prompt": prompts / "prompt.md"},
+        "o/r",
+    )
+
+    assert result == runner.IssueResult("ops", None)
+
+
+def test_process_issue_ops_with_commit_takes_the_pr_ceremony(
+    monkeypatch, tmp_path,
+):
+    """Issue #537: an ops session that commits code (e.g. a
+    wrangler.toml change) is delivered through the SAME deterministic
+    closeout as a dev ticket — push + PR, `ai-pr-opened`."""
+    issue, commands, worktree, configs = _ops_issue_mocks(
+        monkeypatch, tmp_path, head_sha="def456", dirty="",
+    )
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "prompt.md").write_text("dev", encoding="utf-8")
+    (prompts / "prompt_ops.md").write_text("ops playbook", encoding="utf-8")
+    deliver_calls: list[tuple] = []
+    monkeypatch.setattr(
+        runner, "deliver_pr",
+        lambda *a, **k: deliver_calls.append(a) or (
+            "https://github.com/o/r/pull/7"
+        ),
+    )
+    monkeypatch.setattr(runner, "format_end_scene", lambda **k: "end")
+
+    result = runner.process_issue(
+        issue, {"base_branch": "main", "repo_dir": tmp_path,
+                "prompt": prompts / "prompt.md"},
+        "o/r",
+    )
+
+    assert result == runner.IssueResult("pr", "https://github.com/o/r/pull/7")
+    assert len(deliver_calls) == 1
+    assert any(c[:2] == ["git", "rev-parse"] for c in commands)
+
+
+def test_process_issue_ops_with_uncommitted_leftovers_fails_fast(
+    monkeypatch, tmp_path,
+):
+    """Issue #537: no commit but uncommitted leftovers is neither a pure
+    ops delivery nor a code delivery — the deterministic closeout's
+    fail-fast (never commit uncommitted changes) applies."""
+    issue, commands, worktree, configs = _ops_issue_mocks(
+        monkeypatch, tmp_path, head_sha="abc123", dirty=" M a.txt\n",
+    )
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "prompt.md").write_text("dev", encoding="utf-8")
+    (prompts / "prompt_ops.md").write_text("ops playbook", encoding="utf-8")
+
+    def failing_deliver_pr(*a, **k):
+        raise RuntimeError(
+            "the agent left uncommitted changes in the worktree"
+        )
+
+    monkeypatch.setattr(runner, "deliver_pr", failing_deliver_pr)
+
+    result = runner.process_issue(
+        issue, {"base_branch": "main", "repo_dir": tmp_path,
+                "prompt": prompts / "prompt.md"},
+        "o/r",
+    )
+
+    # The failure path reports the terminal state; the Issue is blocked.
+    assert result == runner.IssueResult("failed", None)
+    runner.edit_issue.assert_any_call(
+        99, repo="o/r", add=runner.BLOCKED_LABEL,
+        remove=runner.IN_PROGRESS_LABEL,
+    )
+
+
+def make_scope_gh(monkeypatch, *, pr_state_map=None, issue_state_map=None,
+                  issue_reason_map=None):
     """Answer `gh pr view` / `gh issue view` for scope verification.
 
     `pr_state_map`: number -> (state, merge_commit_oid) for PRs; a
@@ -14299,9 +16106,12 @@ def make_scope_gh(monkeypatch, *, pr_state_map=None, issue_state_map=None):
     "Could not resolve to a PullRequest" error).
     `issue_state_map`: number -> state for Issues; a number absent from
     BOTH maps is neither.
+    `issue_reason_map`: number -> stateReason for Issues (absent = the
+    null/legacy closure reason).
     """
     pr_state_map = pr_state_map or {}
     issue_state_map = issue_state_map or {}
+    issue_reason_map = issue_reason_map or {}
     calls = []
 
     def fake_run_command(command, **kwargs):
@@ -14332,12 +16142,16 @@ def make_scope_gh(monkeypatch, *, pr_state_map=None, issue_state_map=None):
                         f"the number of {number}."
                     ),
                 )
-            return json.dumps({"number": number, "state": issue_state_map[number]})
+            return json.dumps({
+                "number": number, "state": issue_state_map[number],
+                "stateReason": issue_reason_map.get(number),
+            })
         if command[:3] == ["git", "merge-base", "--is-ancestor"]:
             return ""
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     return calls
 
 
@@ -14347,17 +16161,37 @@ def test_verify_release_scope_evidence_for_pr_and_issue(monkeypatch):
         pr_state_map={123: ("MERGED", "aaa111")},
         issue_state_map={124: "CLOSED"},
     )
-    evidence = runner.verify_release_scope("o/r", [123, 124], Path("/repo"), "release123")
+    evidence = release.verify_release_scope("o/r", [123, 124], Path("/repo"), "release123")
     assert evidence == [
         "PR #123 merged (mergeCommit=aaa111)",
         "Issue #124 closed",
     ]
 
 
+def test_verify_release_scope_annotates_not_planned_and_counts_completed(
+        monkeypatch):
+    """Issue #707: a CLOSED Issue counts as released only when its
+    stateReason is COMPLETED; a NOT_PLANNED closure (duplicate / won't
+    fix) is never a delivery — the Scope evidence annotates it as
+    excluded instead of silently counting it in."""
+    make_scope_gh(
+        monkeypatch,
+        issue_state_map={124: "CLOSED", 125: "CLOSED"},
+        issue_reason_map={124: "COMPLETED", 125: "NOT_PLANNED"},
+    )
+    evidence = release.verify_release_scope(
+        "o/r", [124, 125], Path("/repo"), "release123",
+    )
+    assert evidence == [
+        "Issue #124 closed",
+        "Issue #125 closed (not planned, excluded)",
+    ]
+
+
 def test_verify_release_scope_fails_on_unmerged_pr(monkeypatch):
     make_scope_gh(monkeypatch, pr_state_map={123: ("OPEN", None)})
     with pytest.raises(RuntimeError, match="PR #123 is not merged"):
-        runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
+        release.verify_release_scope("o/r", [123], Path("/repo"), "release123")
 
 
 def test_verify_release_scope_rejects_merged_pr_outside_release_base(
@@ -14371,9 +16205,10 @@ def test_verify_release_scope_rejects_merged_pr_outside_release_base(
             raise subprocess.CalledProcessError(1, command)
         return original(command, **kwargs)
 
+    monkeypatch.setattr(release, "run_command", not_an_ancestor)
     monkeypatch.setattr(runner, "run_command", not_an_ancestor)
     with pytest.raises(RuntimeError, match="not contained in release commit"):
-        runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
+        release.verify_release_scope("o/r", [123], Path("/repo"), "release123")
 
 
 def test_verify_release_scope_reraises_git_ancestry_check_failure(
@@ -14386,16 +16221,17 @@ def test_verify_release_scope_reraises_git_ancestry_check_failure(
             raise subprocess.CalledProcessError(128, command, stderr="bad object")
         return original(command, **kwargs)
 
+    monkeypatch.setattr(release, "run_command", git_failure)
     monkeypatch.setattr(runner, "run_command", git_failure)
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
-        runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
+        release.verify_release_scope("o/r", [123], Path("/repo"), "release123")
     assert excinfo.value.stderr == "bad object"
 
 
 def test_verify_release_scope_fails_on_unclosed_issue(monkeypatch):
     make_scope_gh(monkeypatch, issue_state_map={124: "OPEN"})
     with pytest.raises(RuntimeError, match="Issue #124 is not closed"):
-        runner.verify_release_scope("o/r", [124], Path("/repo"), "release123")
+        release.verify_release_scope("o/r", [124], Path("/repo"), "release123")
 
 
 def test_verify_release_scope_fails_on_merged_pr_without_merge_commit(
@@ -14403,13 +16239,13 @@ def test_verify_release_scope_fails_on_merged_pr_without_merge_commit(
     # A MERGED PR without merge-commit evidence is not evidence.
     make_scope_gh(monkeypatch, pr_state_map={123: ("MERGED", None)})
     with pytest.raises(RuntimeError, match="no merge commit evidence"):
-        runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
+        release.verify_release_scope("o/r", [123], Path("/repo"), "release123")
 
 
 def test_verify_release_scope_fails_on_unknown_item(monkeypatch):
     make_scope_gh(monkeypatch)
     with pytest.raises(RuntimeError, match="neither a PR nor an Issue"):
-        runner.verify_release_scope("o/r", [999], Path("/repo"), "release123")
+        release.verify_release_scope("o/r", [999], Path("/repo"), "release123")
 
 
 def test_verify_release_scope_reraises_real_gh_failure(monkeypatch):
@@ -14420,9 +16256,10 @@ def test_verify_release_scope_reraises_real_gh_failure(monkeypatch):
         raise subprocess.CalledProcessError(
             1, command, stderr="HTTP 403: rate limited",
         )
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.verify_release_scope("o/r", [123], Path("/repo"), "release123")
+        release.verify_release_scope("o/r", [123], Path("/repo"), "release123")
 
 
 def test_derive_release_scope_flattens_multi_page_results(monkeypatch):
@@ -14451,8 +16288,9 @@ def test_derive_release_scope_flattens_multi_page_results(monkeypatch):
             return json.dumps([[]])
         return json.dumps([page_one, page_two])
 
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
-    scope, open_evidence = runner.derive_release_scope_from_milestone(
+    scope, open_evidence = release.derive_release_scope_from_milestone(
         "o/r", "v0.9.0",
     )
     assert scope == list(range(1, 106))
@@ -14491,6 +16329,7 @@ def make_milestone_gh(monkeypatch, *, milestones=None, items_by_milestone=None):
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     return calls
 
 
@@ -14523,7 +16362,7 @@ def test_derive_release_scope_from_milestone_filters_pr_objects_from_issues(
             ],
         }},
     )
-    scope, open_evidence = runner.derive_release_scope_from_milestone(
+    scope, open_evidence = release.derive_release_scope_from_milestone(
         "o/r", "v0.3.0",
     )
     assert scope == [160, 168]
@@ -14545,7 +16384,7 @@ def test_derive_release_scope_from_milestone_lists_open_items(monkeypatch):
             ],
         }},
     )
-    scope, open_evidence = runner.derive_release_scope_from_milestone(
+    scope, open_evidence = release.derive_release_scope_from_milestone(
         "o/r", "v0.3.0",
     )
     assert scope == [160]
@@ -14556,7 +16395,7 @@ def test_derive_release_scope_from_milestone_fails_when_missing(monkeypatch):
     make_milestone_gh(monkeypatch, milestones=[])
     with pytest.raises(
             RuntimeError, match="no Milestone with the exact title"):
-        runner.derive_release_scope_from_milestone("o/r", "v0.9.9")
+        release.derive_release_scope_from_milestone("o/r", "v0.9.9")
 
 
 def test_derive_release_scope_from_milestone_fails_on_ambiguous_title(
@@ -14569,7 +16408,7 @@ def test_derive_release_scope_from_milestone_fails_on_ambiguous_title(
         ],
     )
     with pytest.raises(RuntimeError, match="ambiguous"):
-        runner.derive_release_scope_from_milestone("o/r", "v0.3.0")
+        release.derive_release_scope_from_milestone("o/r", "v0.3.0")
 
 
 def test_derive_release_scope_from_milestone_empty_scope(monkeypatch):
@@ -14582,29 +16421,42 @@ def test_derive_release_scope_from_milestone_empty_scope(monkeypatch):
             ],
         }},
     )
-    scope, open_evidence = runner.derive_release_scope_from_milestone(
+    scope, open_evidence = release.derive_release_scope_from_milestone(
         "o/r", "v0.3.0",
     )
     assert scope == []
     assert open_evidence == ["open Issue #255 Still open work"]
 
 
-def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None):
+def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None,
+                 leftover_milestones=None):
     """Answer the gh calls of `check_release_gates`.
 
     `leftover_labels`: label -> [issue numbers] still open with it.
     `check_runs`: list of (name, status, conclusion) for the release
     commit (None -> the call fails, which must propagate). No open-PR
     query is answered: since Issue #608 the gate never makes one.
+    `leftover_milestones`: issue number -> Milestone title (or None).
+    When a leftover scan carries the documented `--milestone <title>`
+    flag (Issue #671) only the Issues with that Milestone are answered —
+    the real filter is server-side.
     """
     leftover_labels = leftover_labels or {}
+    leftover_milestones = leftover_milestones or {}
     calls = []
 
     def fake_run_command(command, **kwargs):
         calls.append(command)
         if command[:3] == ["gh", "issue", "list"]:
             label = command[command.index("--label") + 1]
-            return json.dumps([{"number": n} for n in leftover_labels.get(label, [])])
+            numbers = leftover_labels.get(label, [])
+            if "--milestone" in command:
+                milestone = command[command.index("--milestone") + 1]
+                numbers = [
+                    n for n in numbers
+                    if leftover_milestones.get(n) == milestone
+                ]
+            return json.dumps([{"number": n} for n in numbers])
         if command[:2] == ["gh", "api"]:
             if check_runs is None:
                 raise subprocess.CalledProcessError(
@@ -14616,6 +16468,9 @@ def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None):
             ])
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run_command)
+    # the staying helpers the moved gates call (`list_issues`) resolve
+    # the primitive in the runner globals.
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     return calls
 
@@ -14626,7 +16481,7 @@ def test_check_release_gates_pass_clean(monkeypatch):
         check_runs=[("tests", "completed", "success"),
                     ("lint", "completed", "skipped")],
     )
-    evidence = runner.check_release_gates("o/r", "main", "abc123", 99)
+    evidence, _ = release.check_release_gates("o/r", "main", "abc123", 99)
     assert evidence == [
         "no open Issue carries ai-in-progress / ai-pr-opened / ai-fix-needed",
         "CI on the release commit: 2 check(s) all success/neutral/skipped",
@@ -14641,13 +16496,87 @@ def test_check_release_gates_pass_clean(monkeypatch):
     assert labels == ["ai-in-progress", "ai-pr-opened", "ai-fix-needed"]
 
 
+def make_registration_lag_gh(monkeypatch, api_responses):
+    """Answer the gh calls of `check_release_gates` for the #657 world.
+
+    `api_responses`: popped once per `gh api` poll — each entry is the
+    (name, status, conclusion) list for that poll (`[]` = no check run
+    registered yet). The leftover-label scans always answer empty. The
+    returned fake raises on any unexpected command (one shared guard
+    line, driven by its own test below).
+    """
+    def fake_run_command(command, **kwargs):
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([])
+        if command[:2] == ["gh", "api"]:
+            return json.dumps([
+                {"name": name, "status": status, "conclusion": conclusion}
+                for name, status, conclusion in api_responses.pop(0)
+            ])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(release, "run_command", fake_run_command)
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    return fake_run_command
+
+
+def test_registration_lag_gh_rejects_unexpected_commands(monkeypatch):
+    fake = make_registration_lag_gh(monkeypatch, api_responses=[[]])
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake(["gh", "pr", "list"])
+
+
+def test_check_release_gates_waits_for_late_registered_checks(monkeypatch):
+    """repo_has_ci=True 时空 check-runs = 首个 check 尚未注册（Issue
+    #657）：gate 2 跑在刚 push 到 base 的版本提交上，GitHub 创建
+    CheckRun 有秒级滞后，空列表绝不能立即按 "nothing to gate" 放行——
+    必须在同一预算内轮询等首个 check 出现，再按其结论判门。"""
+    make_registration_lag_gh(monkeypatch, api_responses=[
+        [],                                   # first poll: not registered yet
+        [("tests", "completed", "success")],  # second poll: registered, green
+    ])
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+    evidence, has_ci = release.check_release_gates(
+        "o/r", "main", "abc123", 99, repo_has_ci=True,
+    )
+    assert has_ci is True
+    assert not any("nothing to gate" in line for line in evidence)
+    assert any("1 check(s) all success" in line for line in evidence)
+    assert any("waited" in line for line in evidence)
+
+
+def test_check_release_gates_times_out_when_ci_never_registers(monkeypatch):
+    """repo_has_ci=True 且 check-runs 恒为空：等待宽限耗尽后必须按
+    wait-timeout 失败（不是 CI 失败、更不是放行），下 tick 可恢复重试
+    （Issue #657）。"""
+    make_registration_lag_gh(
+        monkeypatch, api_responses=[[], [], [], [], [], []],
+    )
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+    with pytest.raises(RuntimeError, match="wait timeout, not a CI failure"):
+        release.check_release_gates(
+            "o/r", "main", "abc123", 99,
+            repo_has_ci=True, ci_wait_seconds=60,
+        )
+
+
+def test_check_release_gates_empty_without_ci_still_passes(monkeypatch):
+    """repo_has_ci=False（门控提交上无任何 check）＝无 CI 仓库：空列表
+    仍立即放行，"nothing to gate" 语义保持（Issue #657 的判据只收紧
+    有 CI 的仓库）。"""
+    make_registration_lag_gh(monkeypatch, api_responses=[[]])
+    evidence, has_ci = release.check_release_gates("o/r", "main", "abc123", 99)
+    assert has_ci is False
+    assert any("nothing to gate" in line for line in evidence)
+
+
 def test_check_release_gates_excludes_the_release_issue_itself(monkeypatch):
     make_gate_gh(
         monkeypatch,
         leftover_labels={"ai-in-progress": [99]},  # the release Issue
         check_runs=[],
     )
-    evidence = runner.check_release_gates("o/r", "main", "abc123", 99)
+    evidence, _ = release.check_release_gates("o/r", "main", "abc123", 99)
     assert evidence[0].startswith("no open Issue carries")
 
 
@@ -14658,7 +16587,7 @@ def test_check_release_gates_fails_on_leftover_in_progress(monkeypatch):
         check_runs=[],
     )
     with pytest.raises(runner.ReleaseDeliveriesWaiting) as excinfo:
-        runner.check_release_gates("o/r", "main", "abc123", 99)
+        release.check_release_gates("o/r", "main", "abc123", 99)
     assert excinfo.value.issue_numbers == [7]
 
 
@@ -14669,14 +16598,14 @@ def test_check_release_gates_fails_on_leftover_fix_needed(monkeypatch):
         check_runs=[],
     )
     with pytest.raises(runner.ReleaseDeliveriesWaiting) as excinfo:
-        runner.check_release_gates("o/r", "main", "abc123", 99)
+        release.check_release_gates("o/r", "main", "abc123", 99)
     assert excinfo.value.issue_numbers == [8]
 
 
 def test_check_release_gates_delivery_wait_timeout_is_not_ci_failure(monkeypatch):
     make_gate_gh(monkeypatch, leftover_labels={"ai-in-progress": [7]}, check_runs=[])
     with pytest.raises(RuntimeError, match="delivery wait timeout, not a CI failure"):
-        runner.check_release_gates("o/r", "main", "abc123", 99,
+        release.check_release_gates("o/r", "main", "abc123", 99,
                                    delivery_wait_seconds=5,
                                    delivery_waited_seconds=5)
 
@@ -14687,7 +16616,7 @@ def test_check_release_gates_fails_on_failing_ci(monkeypatch):
         check_runs=[("tests", "completed", "failure")],
     )
     with pytest.raises(RuntimeError, match="check 'tests' is completed/failure"):
-        runner.check_release_gates("o/r", "main", "abc123", 99)
+        release.check_release_gates("o/r", "main", "abc123", 99)
 
 
 def test_check_release_gates_waits_for_pending_ci_then_passes(
@@ -14713,11 +16642,12 @@ def test_check_release_gates_waits_for_pending_ci_then_passes(
             ])
         return "[]"  # the label scans and the open-PR scan
 
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
     waits = []
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
-        evidence = runner.check_release_gates(
+        evidence, _ = release.check_release_gates(
             "o/r", "main", "abc123", 99, on_wait=waits.append,
         )
     assert evidence == [
@@ -14753,10 +16683,11 @@ def test_check_release_gates_waits_then_fails_on_final_ci_failure(
             ])
         return "[]"
 
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
     with pytest.raises(RuntimeError, match="check 'tests' is completed/failure"):
-        runner.check_release_gates("o/r", "main", "abc123", 99)
+        release.check_release_gates("o/r", "main", "abc123", 99)
 
 
 def test_check_release_gates_ci_wait_times_out(monkeypatch, caplog):
@@ -14770,6 +16701,7 @@ def test_check_release_gates_ci_wait_times_out(monkeypatch, caplog):
             ])
         return "[]"
 
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"), pytest.raises(
@@ -14777,7 +16709,7 @@ def test_check_release_gates_ci_wait_times_out(monkeypatch, caplog):
         match=r"waiting for CI on the release commit abc123 "
               r"timed out after 7s.*not a CI failure",
     ):
-        runner.check_release_gates("o/r", "main", "abc123", 99,
+        release.check_release_gates("o/r", "main", "abc123", 99,
                                    ci_wait_seconds=7.0)
     # The deadline is exact even when the poll interval exceeds the
     # remaining budget (the sleep step is capped, never overshot).
@@ -14795,15 +16727,88 @@ def test_check_release_gates_reports_missing_checks_permission(monkeypatch):
             )
         return "[]"
 
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     with pytest.raises(RuntimeError, match=r"lacks Checks:read"):
-        runner.check_release_gates("o/r", "main", "abc123", 99)
+        release.check_release_gates("o/r", "main", "abc123", 99)
 
 
 def test_check_release_gates_reraises_real_gh_failure(monkeypatch):
     make_gate_gh(monkeypatch, check_runs=None)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.check_release_gates("o/r", "main", "abc123", 99)
+        release.check_release_gates("o/r", "main", "abc123", 99)
+
+
+def test_check_release_gates_scopes_leftover_scan_to_the_milestone(monkeypatch):
+    """Issue #671: the leftover-delivery scan is limited to the release's
+    Milestone through the documented `gh issue list --milestone` flag, and
+    the evidence names the scope."""
+    calls = make_gate_gh(
+        monkeypatch,
+        leftover_labels={"ai-fix-needed": [7, 8]},
+        leftover_milestones={7: "v0.4.4", 8: None},
+        check_runs=[],
+    )
+    evidence, repo_has_ci = release.check_release_gates(
+        "o/r", "main", "abc123", 99, milestone="v0.4.3",
+    )
+    assert evidence == [
+        "no open Issue in milestone 'v0.4.3' carries "
+        "ai-in-progress / ai-pr-opened / ai-fix-needed",
+        # Issue #657: no check runs at all is recorded as evidence; the
+        # repo_has_ci flag decides whether that is a pass or a wait.
+        "CI on the release commit: no check runs on abc123 (nothing to "
+        "gate)",
+    ]
+    assert repo_has_ci is False  # no check runs seen anywhere -> not proven
+    scans = [c for c in calls if c[:3] == ["gh", "issue", "list"]]
+    assert scans and all(
+        c[c.index("--milestone") + 1] == "v0.4.3" for c in scans
+    )
+
+
+def test_check_release_gates_ignores_leftover_outside_the_milestone(monkeypatch):
+    """Issue #671 (the v0.4.3 scene): an unrelated in-flight ticket with no
+    Milestone no longer blocks the release."""
+    make_gate_gh(
+        monkeypatch,
+        leftover_labels={"ai-fix-needed": [657, 658]},
+        leftover_milestones={657: None, 658: None},
+        check_runs=[],
+    )
+    evidence, _ = release.check_release_gates(
+        "o/r", "main", "abc123", 99, milestone="v0.4.3",
+    )
+    assert evidence[0].startswith("no open Issue in milestone 'v0.4.3'")
+
+
+def test_check_release_gates_still_waits_on_leftover_in_the_milestone(monkeypatch):
+    """Issue #671: the wait behavior is unchanged for in-flight tickets that
+    DO belong to the released Milestone."""
+    make_gate_gh(
+        monkeypatch,
+        leftover_labels={"ai-fix-needed": [7, 8]},
+        leftover_milestones={7: "v0.4.3", 8: "v0.4.4"},
+        check_runs=[],
+    )
+    with pytest.raises(runner.ReleaseDeliveriesWaiting) as excinfo:
+        release.check_release_gates(
+            "o/r", "main", "abc123", 99, milestone="v0.4.3",
+        )
+    assert excinfo.value.issue_numbers == [7]
+
+
+def test_check_release_gates_without_milestone_keeps_full_repo_scan(monkeypatch):
+    """Issue #671: without a Milestone there is nothing to scope by — the
+    pre-#671 full-repo scan is unchanged (never a `--milestone` flag)."""
+    calls = make_gate_gh(
+        monkeypatch,
+        leftover_labels={"ai-fix-needed": [7]},
+        check_runs=[],
+    )
+    with pytest.raises(runner.ReleaseDeliveriesWaiting):
+        release.check_release_gates("o/r", "main", "abc123", 99)
+    assert not any("--milestone" in c for c in calls)
 
 
 def test_run_release_tests_path_is_gone():
@@ -14815,6 +16820,52 @@ def test_run_release_tests_path_is_gone():
     assert not hasattr(runner, "create_repair_issue")
     assert not hasattr(runner, "release_test_evidence")
     assert not hasattr(runner, "RELEASE_TEST_TIMEOUT_SECONDS")
+
+
+def test_process_release_parse_failure_publishes_final_comment(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #474: a release that fails BEFORE `publisher.ensure` (the
+    body is missing the `## Release` section) still publishes the final
+    progress comment. Before the fix `finish()` raised
+    `RuntimeError: no progress comment to update`, `_safe_publish`
+    logged a `progress_publish_failed` traceback, and the final comment
+    never landed.
+
+    Driven through the real dispatch entry `process_issue`, so the
+    release routing and the failure path are the production ones.
+    """
+    gh_calls, posted = make_fake_gh(monkeypatch)
+    monkeypatch.setattr(release, "new_run_id", lambda: "a1b2c3d4")
+    issue = {
+        "number": 467,
+        "title": "Release v0.4.2",
+        "body": "this body has no release section",
+        "labels": [{"name": "ai-release"}],
+    }
+    config = {"repo_dir": tmp_path, "base_branch": "main"}
+    with caplog.at_level("INFO"):
+        result = runner.process_issue(issue, config, "orbi-build/orbi")
+    assert result == runner.IssueResult("release", "")
+    # The handled failure is terminal: `ai-blocked` ALONE.
+    edits = [c for c in gh_calls if c[:3] == ["gh", "issue", "edit"]]
+    assert edits == [[
+        "gh", "issue", "edit", "467", "--repo", "orbi-build/orbi",
+        "--add-label", "ai-blocked", "--remove-label", "ai-in-progress",
+    ]]
+    # The concrete failure scene is on the Issue.
+    comments = [c for c in gh_calls if c[:3] == ["gh", "issue", "comment"]]
+    assert any(
+        "Orbi release failed (ai-blocked)" in c[-1] for c in comments
+    )
+    # Issue #474: the final progress comment is created even though
+    # `ensure` never ran.
+    assert any("**Orbi progress**" in body for body in posted)
+    assert not any(
+        "progress_publish_failed" in record.message
+        for record in caplog.records
+    )
+    assert "no progress comment to update" not in caplog.text
 
 
 def make_local_remote_pair(tmp_path):
@@ -14875,11 +16926,12 @@ def test_prepare_release_version_updates_sources_and_commits(tmp_path, monkeypat
     )
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        release, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "newsha",
     )
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "newsha")
 
-    assert runner.prepare_release_version(
+    assert release.prepare_release_version(
         work, "v0.3.0", "main",
     ) == "newsha"
     assert 'version = "0.3.0"' in (work / "pyproject.toml").read_text()
@@ -14905,11 +16957,12 @@ def test_prepare_release_version_updates_package_json(tmp_path, monkeypatch):
     )
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        release, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "newsha",
     )
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "newsha")
 
-    assert runner.prepare_release_version(
+    assert release.prepare_release_version(
         work, "v0.3.0", "main", "package.json",
     ) == "newsha"
     assert '"version": "0.3.0"' in (work / "package.json").read_text()
@@ -14957,11 +17010,12 @@ def test_prepare_release_version_updates_ecosystem_file(
     (work / version_file).write_text(source, encoding="utf-8")
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        release, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "newsha",
     )
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "newsha")
 
-    assert runner.prepare_release_version(
+    assert release.prepare_release_version(
         work, "v0.3.0", "main", version_file,
     ) == "newsha"
     updated = (work / version_file).read_text(encoding="utf-8")
@@ -14978,10 +17032,11 @@ def test_prepare_release_version_ecosystem_file_is_idempotent(tmp_path, monkeypa
     (work / "gradle.properties").write_text("version=0.3.0\n", encoding="utf-8")
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        release, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "head",
     )
-    assert runner.prepare_release_version(
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
+    assert release.prepare_release_version(
         work, "v0.3.0", "main", "gradle.properties",
     ) == "head"
     assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": work})]
@@ -14992,7 +17047,7 @@ def test_prepare_release_version_rejects_unparseable_ecosystem_file(tmp_path):
     work.mkdir()
     (work / "build.gradle").write_text("plugins {}\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="build.gradle"):
-        runner.prepare_release_version(work, "v0.3.0", "main", "build.gradle")
+        release.prepare_release_version(work, "v0.3.0", "main", "build.gradle")
 
 
 def test_prepare_release_version_rejects_cargo_without_package_version(tmp_path):
@@ -15000,22 +17055,23 @@ def test_prepare_release_version_rejects_cargo_without_package_version(tmp_path)
     work.mkdir()
     (work / "Cargo.toml").write_text("[package]\nname = \"demo\"\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="Cargo.toml"):
-        runner.prepare_release_version(work, "v0.3.0", "main", "Cargo.toml")
+        release.prepare_release_version(work, "v0.3.0", "main", "Cargo.toml")
 
 
 def test_prepare_release_version_none_does_not_require_a_file(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        release, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "head",
     )
-    assert runner.prepare_release_version(tmp_path, "v0.3.0", "main", "none") == "head"
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
+    assert release.prepare_release_version(tmp_path, "v0.3.0", "main", "none") == "head"
     assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": tmp_path})]
 
 
 def test_prepare_release_version_rejects_unrecognized_file(tmp_path):
     with pytest.raises(ValueError, match="version_file"):
-        runner.prepare_release_version(tmp_path, "v0.3.0", "main", "VERSION")
+        release.prepare_release_version(tmp_path, "v0.3.0", "main", "VERSION")
 
 
 def test_prepare_release_version_package_json_is_idempotent(tmp_path, monkeypatch):
@@ -15026,11 +17082,12 @@ def test_prepare_release_version_package_json_is_idempotent(tmp_path, monkeypatc
     )
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        release, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "head",
     )
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
 
-    assert runner.prepare_release_version(
+    assert release.prepare_release_version(
         work, "v0.3.0", "main", "package.json",
     ) == "head"
     assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": work})]
@@ -15038,7 +17095,7 @@ def test_prepare_release_version_package_json_is_idempotent(tmp_path, monkeypatc
 
 def test_prepare_release_version_rejects_invalid_version_file(tmp_path):
     with pytest.raises(ValueError, match="version_file"):
-        runner.prepare_release_version(tmp_path, "v0.3.0", "main", "version.txt")
+        release.prepare_release_version(tmp_path, "v0.3.0", "main", "version.txt")
 
 
 def test_prepare_release_version_rejects_invalid_package_json(tmp_path):
@@ -15046,7 +17103,7 @@ def test_prepare_release_version_rejects_invalid_package_json(tmp_path):
     work.mkdir()
     (work / "package.json").write_text("not json", encoding="utf-8")
     with pytest.raises(RuntimeError, match="not valid JSON"):
-        runner.prepare_release_version(work, "v0.3.0", "main", "package.json")
+        release.prepare_release_version(work, "v0.3.0", "main", "package.json")
 
 
 def test_prepare_release_version_rejects_package_without_version(tmp_path):
@@ -15054,7 +17111,7 @@ def test_prepare_release_version_rejects_package_without_version(tmp_path):
     work.mkdir()
     (work / "package.json").write_text("{}", encoding="utf-8")
     with pytest.raises(RuntimeError, match="version field"):
-        runner.prepare_release_version(work, "v0.3.0", "main", "package.json")
+        release.prepare_release_version(work, "v0.3.0", "main", "package.json")
 
 
 def test_prepare_release_version_none_does_not_change_files(tmp_path, monkeypatch):
@@ -15064,18 +17121,19 @@ def test_prepare_release_version_none_does_not_change_files(tmp_path, monkeypatc
     marker.write_text("unchanged\n", encoding="utf-8")
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        release, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "head",
     )
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
 
-    assert runner.prepare_release_version(work, "v0.3.0", "main", "none") == "head"
+    assert release.prepare_release_version(work, "v0.3.0", "main", "none") == "head"
     assert marker.read_text() == "unchanged\n"
     assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": work})]
 
 
 def test_prepare_release_version_rejects_non_tag_version(tmp_path):
     with pytest.raises(ValueError, match="release version"):
-        runner.prepare_release_version(tmp_path, "0.3.0", "main")
+        release.prepare_release_version(tmp_path, "0.3.0", "main")
 
 
 def test_prepare_release_version_rejects_disagreeing_sources(tmp_path):
@@ -15089,7 +17147,7 @@ def test_prepare_release_version_rejects_disagreeing_sources(tmp_path):
         '__version__ = "0.1.0"\n', encoding="utf-8",
     )
     with pytest.raises(RuntimeError, match="sources disagree"):
-        runner.prepare_release_version(work, "v0.3.0", "main")
+        release.prepare_release_version(work, "v0.3.0", "main")
 
 
 def test_prepare_release_version_rejects_missing_source_declaration(tmp_path):
@@ -15101,7 +17159,7 @@ def test_prepare_release_version_rejects_missing_source_declaration(tmp_path):
         '__version__ = "0.2.0"\n', encoding="utf-8",
     )
     with pytest.raises(RuntimeError, match="exactly one"):
-        runner.prepare_release_version(work, "v0.3.0", "main")
+        release.prepare_release_version(work, "v0.3.0", "main")
 
 
 def test_prepare_release_version_is_idempotent(tmp_path, monkeypatch):
@@ -15116,16 +17174,17 @@ def test_prepare_release_version_is_idempotent(tmp_path, monkeypatch):
     )
     calls = []
     monkeypatch.setattr(
-        runner, "run_command",
+        release, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "head",
     )
-    assert runner.prepare_release_version(work, "v0.3.0", "main") == "head"
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
+    assert release.prepare_release_version(work, "v0.3.0", "main") == "head"
     assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": work})]
 
 
 def test_release_tag_commit_returns_none_for_missing_remote_tag(tmp_path):
     work, _ = make_local_remote_pair(tmp_path)
-    assert runner.release_tag_commit(work, "v9.9.9") is None
+    assert release.release_tag_commit(work, "v9.9.9") is None
 
 
 def test_release_tag_commit_returns_the_tagged_commit(tmp_path):
@@ -15138,16 +17197,17 @@ def test_release_tag_commit_returns_the_tagged_commit(tmp_path):
         ["git", "-C", str(work), "push", "origin", "v0.1.0"],
         check=True, capture_output=True,
     )
-    assert runner.release_tag_commit(work, "v0.1.0") == head
+    assert release.release_tag_commit(work, "v0.1.0") == head
 
 
 def test_release_tag_commit_reraises_real_fetch_failure(tmp_path, monkeypatch):
     work, _ = make_local_remote_pair(tmp_path)
     def fail(command, **kwargs):
         raise subprocess.CalledProcessError(1, command, stderr="boom")
+    monkeypatch.setattr(release, "run_command", fail)
     monkeypatch.setattr(runner, "run_command", fail)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.release_tag_commit(work, "v0.1.0")
+        release.release_tag_commit(work, "v0.1.0")
 
 
 def test_release_tag_commit_never_reads_a_network_failure_as_missing_tag(
@@ -15163,9 +17223,10 @@ def test_release_tag_commit_never_reads_a_network_failure_as_missing_tag(
         assert command[1] == "ls-remote"
         raise subprocess.CalledProcessError(128, command, stderr="boom")
 
+    monkeypatch.setattr(release, "run_git_network_command", fail_ls_remote)
     monkeypatch.setattr(runner, "run_git_network_command", fail_ls_remote)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.release_tag_commit(work, "v0.1.0")
+        release.release_tag_commit(work, "v0.1.0")
 
 
 def test_ensure_release_tag_pushed_creates_and_pushes_when_no_local_tag(
@@ -15177,8 +17238,9 @@ def test_ensure_release_tag_pushed_creates_and_pushes_when_no_local_tag(
     def fake_push(command, **kwargs):
         pushed.append(command)
 
+    monkeypatch.setattr(release, "run_git_network_command", fake_push)
     monkeypatch.setattr(runner, "run_git_network_command", fake_push)
-    runner.ensure_release_tag_pushed(work, "v0.1.0", head)
+    release.ensure_release_tag_pushed(work, "v0.1.0", head)
     tag_type = subprocess.run(
         ["git", "-C", str(work), "cat-file", "-t", "v0.1.0"],
         check=True, capture_output=True, text=True,
@@ -15202,8 +17264,9 @@ def test_ensure_release_tag_pushed_repushes_local_residue(tmp_path, monkeypatch)
     def fake_push(command, **kwargs):
         pushed.append(command)
 
+    monkeypatch.setattr(release, "run_git_network_command", fake_push)
     monkeypatch.setattr(runner, "run_git_network_command", fake_push)
-    runner.ensure_release_tag_pushed(work, "v0.1.0", head)
+    release.ensure_release_tag_pushed(work, "v0.1.0", head)
     assert pushed == [["git", "push", "origin", "refs/tags/v0.1.0"]]
 
 
@@ -15225,7 +17288,7 @@ def test_ensure_release_tag_pushed_fails_fast_on_residue_pointing_elsewhere(
         check=True, capture_output=True,
     )
     with pytest.raises(RuntimeError, match="never moved or overwritten"):
-        runner.ensure_release_tag_pushed(work, "v0.1.0", head)
+        release.ensure_release_tag_pushed(work, "v0.1.0", head)
 
 
 def make_release_gh(monkeypatch, *, release_exists=False,
@@ -15255,6 +17318,7 @@ def make_release_gh(monkeypatch, *, release_exists=False,
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     return calls
 
 
@@ -15286,11 +17350,16 @@ def test_build_release_changelog_groups_descriptions_links_and_orders(monkeypatc
     }
 
     def fake_run_command(command, **kwargs):
-        assert command[:3] == ["gh", "issue", "view"]
+        # Issue #707: every closedBy PR link is merged-checked before it
+        # is written; this test's PRs are all merged.
+        if command[:3] == ["gh", "pr", "view"]:
+            return json.dumps({"number": int(command[3]), "state": "MERGED"})
+        assert command[:3] == ["gh", "issue", "view"], command
         return json.dumps(source[int(command[3])])
 
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
-    changelog = runner.build_release_changelog("o/r", [30, 10, 20])
+    changelog = release.build_release_changelog("o/r", [30, 10, 20])
     assert changelog == """## Changelog
 
 ### Deployment and operations
@@ -15306,14 +17375,73 @@ def test_build_release_changelog_groups_descriptions_links_and_orders(monkeypatc
 - Explain the full setup workflow ([Issue #20](https://github.com/o/r/issues/20))"""
 
 
+def test_build_release_changelog_skips_not_planned_issues(monkeypatch):
+    """Issue #707 (the v0.4.6 scene): #702 was closed NOT_PLANNED as a
+    duplicate — it must not enter the Changelog, and its unmerged
+    closedBy PR (#705) must not leak in through any entry."""
+    item = {
+        "number": 702, "title": "Duplicate delivery ticket",
+        "body": "Duplicate of #658",
+        "url": "https://github.com/o/r/issues/702", "labels": [],
+        "stateReason": "NOT_PLANNED",
+        "closedByPullRequestsReferences": [{
+            "number": 705, "url": "https://github.com/o/r/pull/705",
+        }],
+    }
+
+    def fake_run_command(command, **kwargs):
+        # Any second command (e.g. a pr view) would fail this assert: a
+        # NOT_PLANNED issue is skipped before its closedBy PRs are read.
+        assert command[:3] == ["gh", "issue", "view"], command
+        return json.dumps(item)
+
+    monkeypatch.setattr(release, "run_command", fake_run_command)
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    changelog = release.build_release_changelog("o/r", [702])
+    assert "#702" not in changelog
+    assert "#705" not in changelog
+    assert "Duplicate delivery ticket" not in changelog
+
+
+def test_build_release_changelog_omits_unmerged_pr_links(monkeypatch):
+    """Issue #707: a closedBy PR link is written only when the PR is
+    actually MERGED — an OPEN PR never appears in the release notes."""
+    source = {
+        10: {
+            "number": 10, "title": "Ship the claim-race fix",
+            "body": "detail",
+            "url": "https://github.com/o/r/issues/10", "labels": [],
+            "stateReason": "COMPLETED",
+            "closedByPullRequestsReferences": [
+                {"number": 11, "url": "https://github.com/o/r/pull/11"},
+                {"number": 705, "url": "https://github.com/o/r/pull/705"},
+            ],
+        },
+    }
+    pr_states = {11: "MERGED", 705: "OPEN"}
+
+    def fake_run_command(command, **kwargs):
+        if command[:3] == ["gh", "pr", "view"]:
+            number = int(command[3])
+            return json.dumps({"number": number, "state": pr_states[number]})
+        assert command[:3] == ["gh", "issue", "view"], command
+        return json.dumps(source[int(command[3])])
+
+    monkeypatch.setattr(release, "run_command", fake_run_command)
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    changelog = release.build_release_changelog("o/r", [10])
+    assert "[PR #11](https://github.com/o/r/pull/11)" in changelog
+    assert "#705" not in changelog
+
+
 def test_release_changelog_category_covers_reliability_bug_and_features():
-    assert runner.release_changelog_category({
+    assert release.release_changelog_category({
         "title": "Recover a stalled delivery", "labels": [],
     }) == "Reliability and recovery"
-    assert runner.release_changelog_category({
+    assert release.release_changelog_category({
         "title": "Fix an unrelated failure", "labels": [{"name": "bug"}],
     }) == "Bug fixes"
-    assert runner.release_changelog_category({
+    assert release.release_changelog_category({
         "title": "Add a provider setting", "labels": "malformed",
     }) == "Features"
 
@@ -15326,28 +17454,39 @@ def test_build_release_changelog_fails_on_empty_or_malformed_evidence(monkeypatc
         {"number": 10, "title": "Useful title", "body": "detail", "url": "https://github.com/o/r/issues/10", "labels": [], "closedByPullRequestsReferences": [{"number": "bad", "url": "https://github.com/o/r/pull/20"}]},
     ]
     for item in bad_items:
+        monkeypatch.setattr(release, "run_command", lambda *args, item=item, **kwargs: json.dumps(item))
         monkeypatch.setattr(runner, "run_command", lambda *args, item=item, **kwargs: json.dumps(item))
         with pytest.raises(ValueError, match="release changelog"):
-            runner.build_release_changelog("o/r", [10])
+            release.build_release_changelog("o/r", [10])
+    monkeypatch.setattr(release, "run_command", lambda *args, **kwargs: json.dumps({
+        "number": 10, "title": "", "body": "\nConcrete summary\n",
+        "url": "https://github.com/o/r/issues/10", "labels": [],
+        "closedByPullRequestsReferences": [],
+    }))
     monkeypatch.setattr(runner, "run_command", lambda *args, **kwargs: json.dumps({
         "number": 10, "title": "", "body": "\nConcrete summary\n",
         "url": "https://github.com/o/r/issues/10", "labels": [],
         "closedByPullRequestsReferences": [],
     }))
-    assert "Concrete summary" in runner.build_release_changelog("o/r", [10])
+    assert "Concrete summary" in release.build_release_changelog("o/r", [10])
+    monkeypatch.setattr(release, "run_command", lambda *args, **kwargs: json.dumps({
+        "number": 10, "title": "Merge direct release work", "body": "",
+        "url": "https://github.com/o/r/pull/10", "labels": [],
+        "closedByPullRequestsReferences": [],
+    }))
     monkeypatch.setattr(runner, "run_command", lambda *args, **kwargs: json.dumps({
         "number": 10, "title": "Merge direct release work", "body": "",
         "url": "https://github.com/o/r/pull/10", "labels": [],
         "closedByPullRequestsReferences": [],
     }))
     assert "[PR #10](https://github.com/o/r/pull/10)" in (
-        runner.build_release_changelog("o/r", [10])
+        release.build_release_changelog("o/r", [10])
     )
 
 
 def test_publish_release_creates_when_missing_and_returns_url(monkeypatch):
     calls = make_release_gh(monkeypatch, release_exists=False)
-    url = runner.publish_release(
+    url = release.publish_release(
         repo="o/r", tag="v0.3.0", version="v0.3.0",
         release_commit="abc123", changelog="## Changelog\n\n### Features\n\n- A useful change ([Issue #123](https://github.com/o/r/issues/123))",
         scope_evidence=["PR #123 merged (mergeCommit=aaa111)"],
@@ -15377,7 +17516,7 @@ def test_publish_release_creates_when_missing_and_returns_url(monkeypatch):
 
 def test_publish_release_reuses_the_existing_release(monkeypatch):
     calls = make_release_gh(monkeypatch, release_exists=True)
-    url = runner.publish_release(
+    url = release.publish_release(
         repo="o/r", tag="v0.3.0", version="v0.3.0",
         release_commit="abc123", changelog="## Changelog",
         scope_evidence=[], gate_evidence=[], test_evidence="ok",
@@ -15392,7 +17531,7 @@ def test_publish_release_upgrades_existing_notes_without_a_changelog(monkeypatch
     calls = make_release_gh(
         monkeypatch, release_exists=True, release_body="# v0.2.0\n\nIssue #10 closed",
     )
-    runner.publish_release(
+    release.publish_release(
         repo="o/r", tag="v0.2.0", version="v0.2.0",
         release_commit="abc123", changelog="## Changelog\n\n### Features\n\n- Useful change",
         scope_evidence=[], gate_evidence=[], test_evidence="ok",
@@ -15409,9 +17548,10 @@ def test_publish_release_reraises_real_gh_failure(monkeypatch):
         raise subprocess.CalledProcessError(
             1, command, stderr="HTTP 403: rate limited",
         )
+    monkeypatch.setattr(release, "run_command", fail)
     monkeypatch.setattr(runner, "run_command", fail)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.publish_release(
+        release.publish_release(
             repo="o/r", tag="v0.3.0", version="v0.3.0",
             release_commit="abc123", changelog="## Changelog",
             scope_evidence=[], gate_evidence=[], test_evidence="ok",
@@ -15423,7 +17563,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                              tag_commit=None, release_url="https://github.com/o/r/releases/tag/v0.3.0",
                              in_progress=False, existing_run_id=None,
                              check_run_pages=None, milestone_items=None,
-                             leftover_labels=None):
+                             leftover_labels=None, leftover_milestones=None):
     """Full fake environment for `process_release`.
 
     Returns a dict of captured state: edit_issue / comment_issue calls,
@@ -15434,8 +17574,12 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
     `milestone_items` (Issue #253) answers the milestone scope-derivation
     queries: milestone number -> dict with keys `issues_closed` /
     `issues_open` / `pulls_closed` / `pulls_open`.
+    `leftover_milestones` (Issue #671) maps a leftover Issue number to its
+    Milestone title (None = no Milestone) so the `gh issue list --milestone`
+    filter is modelled server-side.
     """
     leftover_labels = leftover_labels or {}
+    leftover_milestones = leftover_milestones or {}
     state = {
         "edits": [], "comments": [], "commands": [],
         "run_ids": [], "active_runs": [], "sync_docs_calls": [],
@@ -15462,8 +17606,11 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             if fields == "comments":
                 return json.dumps({"comments": []})
             number = int(command[3])
-            if fields == "number,state" and number == 124:
-                return json.dumps({"number": 124, "state": "CLOSED"})
+            if fields == "number,state,stateReason" and number == 124:
+                return json.dumps({
+                    "number": 124, "state": "CLOSED",
+                    "stateReason": "COMPLETED",
+                })
             if fields.startswith("number,title,") and number in (123, 124):
                 return json.dumps({
                     "number": number,
@@ -15471,6 +17618,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                     "body": "Concrete release behavior.",
                     "url": f"https://github.com/o/r/issues/{number}",
                     "labels": [],
+                    "stateReason": "COMPLETED",
                     "closedByPullRequestsReferences": [],
                 })
             raise subprocess.CalledProcessError(
@@ -15482,7 +17630,14 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             )
         if command[:3] == ["gh", "issue", "list"]:
             label = command[command.index("--label") + 1]
-            return json.dumps([{"number": n} for n in leftover_labels.get(label, [])])
+            numbers = leftover_labels.get(label, [])
+            if "--milestone" in command:
+                milestone = command[command.index("--milestone") + 1]
+                numbers = [
+                    n for n in numbers
+                    if leftover_milestones.get(n) == milestone
+                ]
+            return json.dumps([{"number": n} for n in numbers])
         if command == ["gh", "api", "repos/o/r/milestones?state=all&per_page=100",
                        "--paginate", "--slurp"]:
             return json.dumps([[
@@ -15545,37 +17700,38 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             return ""
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "set_run_id",
+    monkeypatch.setattr(release, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(release, "set_run_id",
                         lambda rid: state["run_ids"].append(rid))
-    monkeypatch.setattr(runner, "has_in_progress_label",
+    monkeypatch.setattr(release, "has_in_progress_label",
                         lambda n, r: in_progress)
-    monkeypatch.setattr(runner, "latest_run_id",
+    monkeypatch.setattr(release, "latest_run_id",
                         lambda r, s, n: existing_run_id)
-    monkeypatch.setattr(runner, "freeze_base", lambda r, b: "abc123")
+    monkeypatch.setattr(release, "freeze_base", lambda r, b: "abc123")
     monkeypatch.setattr(runner, "edit_issue",
                         lambda n, **k: state["edits"].append((n, k)))
-    monkeypatch.setattr(runner, "comment_issue",
+    monkeypatch.setattr(release, "comment_issue",
                         lambda n, **k: state["comments"].append((n, k)))
     monkeypatch.setattr(runner, "create_worktree",
                         lambda *a: Path("/wt"))
-    monkeypatch.setattr(runner, "create_release_worktree",
+    monkeypatch.setattr(release, "create_release_worktree",
                         lambda *a: Path("/wt"))
-    monkeypatch.setattr(runner, "ProgressPublisher", Mock())
-    monkeypatch.setattr(runner, "_safe_publish", lambda **k: None)
-    monkeypatch.setattr(runner, "set_active_run",
+    monkeypatch.setattr(release, "ProgressPublisher", Mock())
+    monkeypatch.setattr(release, "_safe_publish", lambda **k: None)
+    monkeypatch.setattr(release, "set_active_run",
                         lambda *a: state["active_runs"].append(a))
-    monkeypatch.setattr(runner, "LOGGER", Mock())
-    monkeypatch.setattr(runner, "release_tag_commit",
+    monkeypatch.setattr(release, "LOGGER", Mock())
+    monkeypatch.setattr(release, "release_tag_commit",
                         lambda r, t: tag_commit)
-    monkeypatch.setattr(runner, "prepare_release_version",
+    monkeypatch.setattr(release, "prepare_release_version",
                         lambda worktree, tag, base_branch: "abc123")
     monkeypatch.setattr(
-        runner, "refresh_cli_install",
+        release, "refresh_cli_install",
         lambda worktree, **kwargs: "installed",
     )
-    monkeypatch.setattr(runner, "publish_release", lambda **k: release_url)
+    monkeypatch.setattr(release, "publish_release", lambda **k: release_url)
     # Issue #275: the docs sync step is covered by its own unit tests
     # (real git repos); here it is stubbed so the orchestration order is
     # what is asserted.
@@ -15583,7 +17739,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
         state["sync_docs_calls"].append(kwargs)
         return "docs release notes for " + kwargs["tag"] + " synced to base"
 
-    monkeypatch.setattr(runner, "sync_release_docs", fake_sync_docs)
+    monkeypatch.setattr(release, "sync_release_docs", fake_sync_docs)
     return state
 
 
@@ -15594,7 +17750,7 @@ def test_process_release_waiting_returns_ready_and_records_open_deliveries(monke
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == ""
@@ -15605,11 +17761,60 @@ def test_process_release_waiting_returns_ready_and_records_open_deliveries(monke
     assert waiting and "open_deliveries: #7, #8" in waiting[0]
 
 
+def test_process_release_ignores_unrelated_milestone_deliveries(monkeypatch):
+    """Issue #671 acceptance (green): a no-Milestone in-flight ticket no
+    longer blocks the release of Milestone v0.3.0 — the leftover scan is
+    scoped through the documented `gh issue list --milestone` flag."""
+    state = make_release_process_env(
+        monkeypatch,
+        leftover_labels={"ai-fix-needed": [8]},
+        leftover_milestones={8: None},
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+             "milestone": {"title": "v0.3.0"}}
+    url = release.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert url == "https://github.com/o/r/releases/tag/v0.3.0"
+    assert not [
+        k["body"] for n, k in state["comments"]
+        if n == 99 and "waiting for deliveries" in k["body"]
+    ]
+    scans = [c for c, _ in state["commands"]
+             if c[:3] == ["gh", "issue", "list"]]
+    assert scans and all(
+        c[c.index("--milestone") + 1] == "v0.3.0" for c in scans
+    )
+
+
+def test_process_release_still_waits_for_same_milestone_deliveries(monkeypatch):
+    """Issue #671: an in-flight ticket of the released Milestone still
+    blocks — the recoverable wait semantics are unchanged."""
+    state = make_release_process_env(
+        monkeypatch,
+        leftover_labels={"ai-in-progress": [7]},
+        leftover_milestones={7: "v0.3.0"},
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
+             "milestone": {"title": "v0.3.0"}}
+    result = release.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert result == ""
+    waiting = [k["body"] for n, k in state["comments"]
+               if n == 99 and "waiting for deliveries" in k["body"]]
+    assert waiting and "open_deliveries: #7" in waiting[0]
+
+
 def test_process_release_wait_timeout_uses_persisted_wait_start(monkeypatch):
     state = make_release_process_env(
         monkeypatch, leftover_labels={"ai-in-progress": [7]},
     )
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [
+    monkeypatch.setattr(release, "issue_comments", lambda *a, **k: [
         {
             "authorAssociation": "MEMBER",
             "body": "<!-- orbi:run=aaaaaaaa -->\n"
@@ -15634,7 +17839,7 @@ def test_process_release_wait_timeout_uses_persisted_wait_start(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main",
                 "release_deliveries_wait_seconds": 5}, "o/r",
     )
@@ -15646,7 +17851,7 @@ def test_process_release_uses_declared_package_version_file(monkeypatch):
     state = make_release_process_env(monkeypatch)
     seen = []
     monkeypatch.setattr(
-        runner, "prepare_release_version",
+        release, "prepare_release_version",
         lambda *args: seen.append(args) or "abc123",
     )
     body = RELEASE_DECLARATION_BODY.replace(
@@ -15654,7 +17859,7 @@ def test_process_release_uses_declared_package_version_file(monkeypatch):
     )
     issue = {"number": 99, "title": "Release v0.3.0", "body": body,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    runner.process_release(issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r")
+    release.process_release(issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r")
     assert seen == [(Path("/wt"), "v0.3.0", "main", "package.json")]
 
 
@@ -15663,7 +17868,7 @@ def test_process_release_success_end_to_end(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
@@ -15738,7 +17943,7 @@ def test_process_release_refreshes_deployment_cli_after_version_bump(
     )
     order = []
     monkeypatch.setattr(
-        runner, "prepare_release_version",
+        release, "prepare_release_version",
         lambda worktree, tag, base_branch: order.append("version") or "abc123",
     )
 
@@ -15749,12 +17954,12 @@ def test_process_release_refreshes_deployment_cli_after_version_bump(
         assert kwargs["run_command"] is runner.run_command
         return "installed"
 
-    monkeypatch.setattr(runner, "refresh_cli_install", refresh)
+    monkeypatch.setattr(release, "refresh_cli_install", refresh)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
 
-    assert runner.process_release(
+    assert release.process_release(
         issue,
         {"repo_dir": source,
          "deploy_home": deployment,
@@ -15778,7 +17983,7 @@ def test_process_release_derives_scope_from_milestone(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_MILESTONE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
@@ -15811,14 +18016,14 @@ def test_process_release_lists_open_milestone_items(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_MILESTONE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     # Open items are surfaced as a warning and in the auditable success
     # comment — never silently swallowed, never part of the scope.
     warn_calls = [
-        c.args for c in runner.LOGGER.warning.call_args_list
+        c.args for c in release.LOGGER.warning.call_args_list
         if c.args and "release_milestone_open_items" in str(c.args)
     ]
     assert len(warn_calls) == 1
@@ -15843,7 +18048,7 @@ def test_process_release_fails_on_empty_derived_scope(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_MILESTONE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == ""
@@ -15873,18 +18078,18 @@ def test_process_release_waits_for_pending_ci_and_succeeds(monkeypatch):
         # progress-comment wait reflection is actually recorded.
         kwargs["action"]()
 
-    monkeypatch.setattr(runner, "_safe_publish", run_publish_actions)
+    monkeypatch.setattr(release, "_safe_publish", run_publish_actions)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     assert not any(k.get("add") == "ai-blocked" for _, k in state["edits"])
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged",
                                        "remove": "ai-in-progress"})
-    publisher = runner.ProgressPublisher.return_value
+    publisher = release.ProgressPublisher.return_value
     patched = [c.args[0] for c in publisher.patch.call_args_list]
     assert any("waiting CI: check 'tests' is in_progress/None" in body
                for body in patched)
@@ -15903,7 +18108,7 @@ def test_process_release_ci_wait_timeout_blocks_with_distinct_reason(
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue,
         {"repo_dir": Path("/r"), "base_branch": "main",
          "release_ci_wait_seconds": 0},
@@ -15932,7 +18137,7 @@ def test_process_release_gate_failure_blocks_and_returns_cleanly(monkeypatch):
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
 
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
 
@@ -15963,7 +18168,7 @@ def test_process_release_publish_closeout_failure_keeps_release_result(
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     # The published release result stands; the closeout failure never
@@ -15972,7 +18177,7 @@ def test_process_release_publish_closeout_failure_keeps_release_result(
     assert not any(k.get("add") == "ai-blocked" for _, k in state["edits"])
     assert any(
         "release_publish_closeout_failed" in str(call)
-        for call in runner.LOGGER.exception.call_args_list
+        for call in release.LOGGER.exception.call_args_list
     )
 
 
@@ -15990,11 +18195,11 @@ def test_process_release_success_comment_failure_keeps_release_result(
         # failing unconditionally fails exactly that comment.
         raise RuntimeError("GitHub unavailable")
 
-    monkeypatch.setattr(runner, "comment_issue", failing_comment)
+    monkeypatch.setattr(release, "comment_issue", failing_comment)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     # The published release result stands; the failed evidence comment
@@ -16007,7 +18212,7 @@ def test_process_release_success_comment_failure_keeps_release_result(
     assert not state["comments"]
     assert any(
         "release_success_comment_failed" in str(call)
-        for call in runner.LOGGER.exception.call_args_list
+        for call in release.LOGGER.exception.call_args_list
     )
 
 
@@ -16029,11 +18234,12 @@ def test_process_release_milestone_failure_keeps_release_successful(monkeypatch)
             return json.dumps([[{"number": 101, "title": "leftover"}]])
         return real(command, **kwargs)
 
+    monkeypatch.setattr(release, "run_command", milestone_failing)
     monkeypatch.setattr(runner, "run_command", milestone_failing)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == "https://github.com/o/r/releases/tag/v0.3.0"
@@ -16064,11 +18270,11 @@ def test_process_release_docs_sync_failure_fails_fast_and_blocks(monkeypatch):
             "(non-fast-forward)"
         )
 
-    monkeypatch.setattr(runner, "sync_release_docs", sync_failing)
+    monkeypatch.setattr(release, "sync_release_docs", sync_failing)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == ""
@@ -16095,7 +18301,7 @@ def test_process_release_reuses_the_run_id_on_resume(monkeypatch):
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"},
                         {"name": "ai-in-progress"}]}
-    runner.process_release(
+    release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     # The fresh id is generated first (the normal-path rule), then the
@@ -16109,7 +18315,7 @@ def test_process_release_fails_on_malformed_declaration(monkeypatch):
     state = make_release_process_env(monkeypatch)
     issue = {"number": 99, "title": "Release v0.3.0", "body": "no section",
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == ""
@@ -16135,7 +18341,7 @@ def test_process_release_ignores_a_legacy_test_command_and_never_runs_it(monkeyp
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": LEGACY_TEST_COMMAND_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == "https://github.com/o/r/releases/tag/v0.3.0"
@@ -16143,7 +18349,7 @@ def test_process_release_ignores_a_legacy_test_command_and_never_runs_it(monkeyp
                                        "remove": "ai-in-progress"})
     assert not [c for c, _ in state["commands"] if c[:1] == ["timeout"]]
     ignored = [
-        call for call in runner.LOGGER.info.call_args_list
+        call for call in release.LOGGER.info.call_args_list
         if "release_test_command_ignored" in str(call)
     ]
     assert len(ignored) == 1
@@ -16167,11 +18373,12 @@ def test_process_release_fails_on_tag_mismatch_without_moving_it(monkeypatch):
             )
         return real_run(command, **kwargs)
 
+    monkeypatch.setattr(release, "run_command", merge_base_failing)
     monkeypatch.setattr(runner, "run_command", merge_base_failing)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == ""
@@ -16190,7 +18397,7 @@ def test_process_release_reuses_a_matching_existing_tag(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
@@ -16202,12 +18409,12 @@ def test_process_release_reuses_a_matching_existing_tag(monkeypatch):
 def test_process_release_recovers_existing_ancestor_tag(monkeypatch):
     state = make_release_process_env(monkeypatch, tag_commit="tag123")
     monkeypatch.setattr(
-        runner, "tag_commit_is_ancestor_of_base", lambda *args: True,
+        release, "tag_commit_is_ancestor_of_base", lambda *args: True,
     )
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    assert runner.process_release(
+    assert release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     ) == "https://github.com/o/r/releases/tag/v0.3.0"
     assert state["sync_docs_calls"][0]["release_commit"] == "tag123"
@@ -16223,11 +18430,12 @@ def test_process_release_fails_on_scope_violation(monkeypatch):
                 "number": 123, "state": "OPEN", "mergeCommit": None,
             })
         return real(command, **kwargs)
+    monkeypatch.setattr(release, "run_command", scope_failing)
     monkeypatch.setattr(runner, "run_command", scope_failing)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == ""
@@ -16272,8 +18480,9 @@ def test_close_release_milestone_closes_an_open_empty_milestone(monkeypatch):
             return json.dumps(_milestone(5, "v0.3.0", "closed", 0))
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
-    evidence = runner.close_release_milestone("o/r", "v0.3.0")
+    evidence = release.close_release_milestone("o/r", "v0.3.0")
     # The close uses the official REST contract
     # (PATCH /repos/{owner}/{repo}/milestones/{number}, state=closed)
     # and the list query asks for ALL states (the idempotent case needs
@@ -16299,8 +18508,9 @@ def test_close_release_milestone_is_idempotent_when_already_closed(monkeypatch):
             ]])
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
-    evidence = runner.close_release_milestone("o/r", "v0.3.0")
+    evidence = release.close_release_milestone("o/r", "v0.3.0")
     # Already closed: no mutation at all (no PATCH, no reopen).
     assert calls == [MILESTONE_LIST_COMMAND]
     assert "already closed" in evidence
@@ -16320,9 +18530,10 @@ def test_close_release_milestone_fails_fast_without_a_matching_title(monkeypatch
             ]])
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="no Milestone with the exact title"):
-        runner.close_release_milestone("o/r", "v0.3.0")
+        release.close_release_milestone("o/r", "v0.3.0")
     # No mutation, no fuzzy match against a different Milestone.
     assert calls == [MILESTONE_LIST_COMMAND]
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -16343,9 +18554,10 @@ def test_close_release_milestone_fails_fast_when_open_issues_remain(monkeypatch)
                                 {"number": 102, "title": "leftover two"}]])
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="Milestone #5") as excinfo:
-        runner.close_release_milestone("o/r", "v0.3.0")
+        release.close_release_milestone("o/r", "v0.3.0")
     # The error carries the version, the Milestone number/url and the
     # open issue list — never a silent skip.
     assert "v0.3.0" in str(excinfo.value)
@@ -16370,9 +18582,10 @@ def test_close_release_milestone_fails_fast_on_duplicate_titles(monkeypatch):
             ]])
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="ambiguous") as excinfo:
-        runner.close_release_milestone("o/r", "v0.3.0")
+        release.close_release_milestone("o/r", "v0.3.0")
     # Both candidates are named; neither is closed.
     assert "#5" in str(excinfo.value)
     assert "#7" in str(excinfo.value)
@@ -16589,8 +18802,8 @@ def test_reconcile_release_milestones_keeps_malformed_or_incomplete_open(monkeyp
 
 def test_reconcile_open_epics_failure_is_fail_open(monkeypatch, caplog):
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
-    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args: None)
-    monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args: None)
+    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_issue", lambda *args: {"number": 1})
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "abc12345")
     result = runner.pick_next_delivery(["o/r"], Path("/tmp/slots"), 1)
@@ -16603,9 +18816,9 @@ def test_reconcile_open_epics_runs_on_a_fresh_tick(monkeypatch):
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda repo, run_id: calls.append((repo, run_id)))
-    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args: None)
-    monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args: None)
-    monkeypatch.setattr(runner, "pick_issue", lambda *args: None)
+    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "pick_issue", lambda *args, **kwargs: None)
     assert runner.pick_next_delivery(["o/r"], Path("/tmp/slots"), 1) is None
     assert calls == [("o/r", "a1b2c3d4")]
 
@@ -16660,9 +18873,10 @@ def test_close_release_milestone_reconciles_epics_when_summary_lags(monkeypatch)
         if command[-1:] == ["state=closed"]:
             return ""
         raise AssertionError(command)
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "reconcile_release_epics", lambda *args: ["Epic #20 closed"])
-    result = runner.close_release_milestone("o/r", "v0.4.0", run_id="abc12345")
+    monkeypatch.setattr(release, "reconcile_release_epics", lambda *args: ["Epic #20 closed"])
+    result = release.close_release_milestone("o/r", "v0.4.0", run_id="abc12345")
     assert "Epic #20 closed" in result
     assert any(command[-1:] == ["state=closed"] for command in calls)
     with pytest.raises(AssertionError):
@@ -16842,13 +19056,14 @@ def fake_gh_release_view(monkeypatch, *, body: str, tag: str = "v0.4.0",
         return real(command, **kwargs)
 
     monkeypatch.setattr(runner, "run_command", mixed)
+    monkeypatch.setattr(release, "run_command", mixed)
     return real
 
 
 def test_release_docs_page_en_carries_meta_and_body_without_duplicate_heading():
     tag_object = "t" * 40
     release_commit = "c" * 40
-    page = runner.release_docs_page(
+    page = release.release_docs_page(
         version="v0.4.0", tag_object=tag_object,
         release_commit=release_commit,
         published_at="2026-09-08T12:00:00Z",
@@ -16867,7 +19082,7 @@ def test_release_docs_page_en_carries_meta_and_body_without_duplicate_heading():
 
 
 def test_release_docs_page_zh_uses_the_chinese_title_and_table():
-    page = runner.release_docs_page(
+    page = release.release_docs_page(
         version="v0.4.0", tag_object="t" * 40, release_commit="c" * 40,
         published_at="2026-09-08T12:00:00Z",
         release_url="https://github.com/o/r/releases/tag/v0.4.0",
@@ -16883,7 +19098,7 @@ def test_release_docs_page_zh_uses_the_chinese_title_and_table():
 
 
 def test_release_docs_page_keeps_a_body_without_leading_heading():
-    page = runner.release_docs_page(
+    page = release.release_docs_page(
         version="v0.4.0", tag_object="t" * 40, release_commit="c" * 40,
         published_at="2026-09-08T12:00:00Z",
         release_url="https://github.com/o/r/releases/tag/v0.4.0",
@@ -16896,7 +19111,7 @@ def test_release_docs_page_keeps_a_body_without_leading_heading():
 
 def test_update_release_navigation_inserts_the_new_version_first_in_both_groups():
     config_text = release_docs_fixture_config()
-    new_text, changed = runner.update_release_navigation(
+    new_text, changed = release.update_release_navigation(
         config_text, "release-v0.4.0",
     )
     assert changed is True
@@ -16914,7 +19129,7 @@ def test_update_release_navigation_inserts_the_new_version_first_in_both_groups(
 
 def test_update_release_navigation_is_idempotent_when_already_listed():
     config_text = release_docs_fixture_config("release-v0.4.0")
-    new_text, changed = runner.update_release_navigation(
+    new_text, changed = release.update_release_navigation(
         config_text, "release-v0.4.0",
     )
     assert changed is False
@@ -16928,7 +19143,7 @@ def test_move_latest_marker_strips_the_marker_from_both_previous_pages(tmp_path)
     zh = work / "docs" / "zh" / "release-v0.1.2.mdx"
     en.write_text("# v0.1.2 release (latest)\n\nrest\n", encoding="utf-8")
     zh.write_text("# v0.1.2 发布（最新）\n\n余下内容\n", encoding="utf-8")
-    changed = runner.move_latest_marker(
+    changed = release.move_latest_marker(
         work, "release-v0.1.2", "release-v0.4.0", resume=False,
     )
     assert changed == ["docs/release-v0.1.2.mdx",
@@ -16947,7 +19162,7 @@ def test_move_latest_marker_fails_fast_when_the_marker_is_missing(tmp_path):
         "# v0.1.2 发布\n\n余下内容\n", encoding="utf-8",
     )
     with pytest.raises(RuntimeError, match=r"does not carry the \(latest\)"):
-        runner.move_latest_marker(
+        release.move_latest_marker(
             work, "release-v0.1.2", "release-v0.4.0", resume=False,
         )
 
@@ -16971,7 +19186,7 @@ def test_move_latest_marker_accepts_an_already_moved_marker_on_resume(
     (work / "docs" / "zh" / "release-v0.4.0.mdx").write_text(
         "# v0.4.0 发布（最新）\n\n新\n", encoding="utf-8",
     )
-    assert runner.move_latest_marker(
+    assert release.move_latest_marker(
         work, "release-v0.1.2", "release-v0.4.0", resume=True,
     ) == []
 
@@ -16981,7 +19196,7 @@ def test_move_latest_marker_fails_fast_when_the_previous_page_is_missing(
     work = tmp_path / "work"
     (work / "docs").mkdir(parents=True)
     with pytest.raises(RuntimeError, match="is missing"):
-        runner.move_latest_marker(
+        release.move_latest_marker(
             work, "release-v0.1.2", "release-v0.4.0", resume=False,
         )
 
@@ -16993,7 +19208,7 @@ def test_sync_release_docs_generates_pages_navigation_marker_and_commits(
     subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
                     "-m", "rel", head], check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    evidence = runner.sync_release_docs(
+    evidence = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
@@ -17044,14 +19259,14 @@ def test_sync_release_docs_is_idempotent_on_rerun(tmp_path, monkeypatch):
     subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
                     "-m", "rel", head], check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    first = runner.sync_release_docs(
+    first = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
     )
     after_first_head = git_out(work, "rev-parse", "HEAD")
     en_before = (work / "docs" / "release-v0.4.0.mdx").read_text(encoding="utf-8")
-    second = runner.sync_release_docs(
+    second = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
@@ -17083,9 +19298,10 @@ def test_sync_release_docs_resume_after_failed_push_recommits_normally(
     def failing_push(command, **kwargs):
         raise subprocess.CalledProcessError(1, command, stderr="boom")
 
+    monkeypatch.setattr(release, "run_git_network_command", failing_push)
     monkeypatch.setattr(runner, "run_git_network_command", failing_push)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
@@ -17098,8 +19314,9 @@ def test_sync_release_docs_resume_after_failed_push_recommits_normally(
     # 重放（对 release_commit 的一条 `git reset --hard`）。
     subprocess.run(["git", "-C", str(work), "reset", "--hard", head],
                    check=True, capture_output=True)
+    monkeypatch.setattr(release, "run_git_network_command", original)
     monkeypatch.setattr(runner, "run_git_network_command", original)
-    evidence = runner.sync_release_docs(
+    evidence = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
@@ -17125,7 +19342,7 @@ def test_sync_release_docs_stale_tracking_ref_is_not_a_false_recovery(
     subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
                     "-m", "rel", head], check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    runner.sync_release_docs(
+    release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
@@ -17139,8 +19356,9 @@ def test_sync_release_docs_stale_tracking_ref_is_not_a_false_recovery(
     # the fixed world where the push never happens — the assertion below
     # is what fails if it ever does.
     no_push = Mock()
+    monkeypatch.setattr(release, "run_git_network_command", no_push)
     monkeypatch.setattr(runner, "run_git_network_command", no_push)
-    evidence = runner.sync_release_docs(
+    evidence = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
@@ -17180,9 +19398,10 @@ def test_sync_release_docs_resumes_after_a_partial_step(tmp_path, monkeypatch):
             )
         return gh_view(command, **kwargs)
 
+    monkeypatch.setattr(release, "run_command", crash_before_commit)
     monkeypatch.setattr(runner, "run_command", crash_before_commit)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
@@ -17196,8 +19415,9 @@ def test_sync_release_docs_resumes_after_a_partial_step(tmp_path, monkeypatch):
         git_out(work, "rev-parse", "HEAD")
     # The re-run finishes: marker move is a lenient no-op, the nav is
     # updated, one commit lands on main.
+    monkeypatch.setattr(release, "run_command", gh_view)
     monkeypatch.setattr(runner, "run_command", gh_view)
-    evidence = runner.sync_release_docs(
+    evidence = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
@@ -17226,7 +19446,7 @@ def test_sync_release_docs_fails_fast_when_the_existing_page_differs(
                    check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
     with pytest.raises(RuntimeError, match="already exists with different"):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
@@ -17247,7 +19467,7 @@ def test_sync_release_docs_fails_fast_when_the_previous_latest_lacks_the_marker(
                     "-m", "rel", head], check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
     with pytest.raises(RuntimeError, match=r"does not carry the \(latest\)"):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
@@ -17262,7 +19482,7 @@ def test_sync_release_docs_fails_fast_on_an_empty_release_body(
                     "-m", "rel", head], check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body="   ")
     with pytest.raises(RuntimeError, match="body is empty"):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
@@ -17277,7 +19497,7 @@ def test_sync_release_docs_propagates_a_missing_release(tmp_path, monkeypatch):
                     "-m", "rel", head], check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body="x", raise_not_found=True)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
@@ -17291,7 +19511,7 @@ def test_sync_release_docs_fails_fast_when_the_base_advanced(
     subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
                     "-m", "rel", old_head], check=True, capture_output=True)
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
-    runner.sync_release_docs(
+    release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=old_head,
         issue_number=77,
@@ -17317,9 +19537,10 @@ def test_sync_release_docs_fails_fast_when_the_base_advanced(
             })
         return real_run(command, **kwargs)
 
+    monkeypatch.setattr(release, "run_command", view_v041)
     monkeypatch.setattr(runner, "run_command", view_v041)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=stale,
             base_branch="main", tag="v0.4.1", release_commit=old_head,
             issue_number=78,
@@ -17338,7 +19559,7 @@ def test_sync_release_docs_fails_fast_when_the_tag_is_missing_locally(
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040,
                          tag="v0.9.9")
     with pytest.raises(subprocess.CalledProcessError):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.9.9", release_commit=head,
             issue_number=77,
@@ -17347,7 +19568,7 @@ def test_sync_release_docs_fails_fast_when_the_tag_is_missing_locally(
 
 def test_release_docs_page_rejects_an_unknown_language():
     with pytest.raises(ValueError, match="not supported"):
-        runner.release_docs_page(
+        release.release_docs_page(
             version="v0.4.0", tag_object="t" * 40,
             release_commit="c" * 40, published_at="2026-09-08T12:00:00Z",
             release_url="https://github.com/o/r/releases/tag/v0.4.0",
@@ -17366,7 +19587,7 @@ def test_release_docs_page_drops_html_comment_lines_but_keeps_the_run_id():
         "<!-- orbi:run=a1b2c3d4 -->\n"
         "run_id=a1b2c3d4"
     )
-    page = runner.release_docs_page(
+    page = release.release_docs_page(
         version="v0.4.0", tag_object="t" * 40, release_commit="c" * 40,
         published_at="2026-09-08T12:00:00Z",
         release_url="https://github.com/o/r/releases/tag/v0.4.0",
@@ -17378,7 +19599,7 @@ def test_release_docs_page_drops_html_comment_lines_but_keeps_the_run_id():
 
 
 def test_release_docs_page_handles_a_body_without_any_lines():
-    page = runner.release_docs_page(
+    page = release.release_docs_page(
         version="v0.4.0", tag_object="t" * 40, release_commit="c" * 40,
         published_at="2026-09-08T12:00:00Z",
         release_url="https://github.com/o/r/releases/tag/v0.4.0",
@@ -17390,7 +19611,7 @@ def test_release_docs_page_handles_a_body_without_any_lines():
 
 def test_current_latest_release_slug_returns_the_first_en_release_page():
     config_text = release_docs_fixture_config()
-    assert runner.current_latest_release_slug(config_text) == \
+    assert release.current_latest_release_slug(config_text) == \
         "release-v0.1.2"
 
 
@@ -17399,7 +19620,7 @@ def test_current_latest_release_slug_fails_fast_on_an_empty_release_group():
     config = json.loads(config_text)
     config["navigation"]["languages"][0]["groups"][1]["pages"] = []
     with pytest.raises(RuntimeError, match="has no pages"):
-        runner.current_latest_release_slug(
+        release.current_latest_release_slug(
             json.dumps(config),
         )
 
@@ -17411,7 +19632,7 @@ def test_current_latest_release_slug_fails_fast_without_an_en_release_group():
         config["navigation"]["languages"][1],
     ]
     with pytest.raises(RuntimeError, match="no English Releases group"):
-        runner.current_latest_release_slug(
+        release.current_latest_release_slug(
             json.dumps(config, ensure_ascii=False),
         )
 
@@ -17425,7 +19646,7 @@ def test_current_latest_release_slug_fails_fast_when_en_lacks_a_release_group():
         {"group": "Getting Started", "pages": ["index"]},
     ]
     with pytest.raises(RuntimeError, match="no English Releases group"):
-        runner.current_latest_release_slug(json.dumps(config))
+        release.current_latest_release_slug(json.dumps(config))
 
 
 def test_update_release_navigation_fails_fast_when_only_one_group_exists():
@@ -17435,7 +19656,7 @@ def test_update_release_navigation_fails_fast_when_only_one_group_exists():
         config["navigation"]["languages"][0],
     ]
     with pytest.raises(RuntimeError, match="expected exactly two release"):
-        runner.update_release_navigation(
+        release.update_release_navigation(
             json.dumps(config), "release-v0.4.0",
         )
 
@@ -17453,7 +19674,7 @@ def test_move_latest_marker_fails_fast_on_resume_when_the_new_page_is_missing(
         "# v0.1.2 发布\n\n余下内容\n", encoding="utf-8",
     )
     with pytest.raises(RuntimeError, match=r"does not carry the \(latest\)"):
-        runner.move_latest_marker(
+        release.move_latest_marker(
             work, "release-v0.1.2", "release-v0.4.0", resume=True,
         )
 
@@ -17476,9 +19697,10 @@ def test_sync_release_docs_fails_fast_when_the_body_is_not_a_string(
             })
         return real(command, **kwargs)
 
+    monkeypatch.setattr(release, "run_command", bad_body)
     monkeypatch.setattr(runner, "run_command", bad_body)
     with pytest.raises(RuntimeError, match="body is empty"):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
@@ -17494,7 +19716,7 @@ def test_sync_release_docs_skips_when_docs_json_is_missing(tmp_path):
     subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
                     "-m", "rel", head], check=True, capture_output=True)
     (work / "docs" / "docs.json").unlink()
-    evidence = runner.sync_release_docs(
+    evidence = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
         issue_number=77,
@@ -17518,9 +19740,10 @@ def test_sync_release_docs_fails_fast_on_a_real_git_diff_error(
             )
         return real(command, **kwargs)
 
+    monkeypatch.setattr(release, "run_command", diff_failing)
     monkeypatch.setattr(runner, "run_command", diff_failing)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.sync_release_docs(
+        release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
             base_branch="main", tag="v0.4.0", release_commit=head,
             issue_number=77,
@@ -17539,9 +19762,9 @@ def test_tag_commit_is_ancestor_of_base_true_when_ancestor(tmp_path):
     subprocess.run(["git", "-C", str(work), "commit", "-m", "docs"],
                    check=True, capture_output=True)
     docs_head = git_out(work, "rev-parse", "HEAD")
-    assert runner.tag_commit_is_ancestor_of_base(
+    assert release.tag_commit_is_ancestor_of_base(
         tag_commit, docs_head, work) is True
-    assert runner.tag_commit_is_ancestor_of_base(
+    assert release.tag_commit_is_ancestor_of_base(
         docs_head, tag_commit, work) is False
 
 
@@ -17560,7 +19783,7 @@ def test_tag_commit_is_ancestor_of_base_false_on_unrelated_commits(
     subprocess.run(["git", "-C", str(work), "commit", "-m", "side"],
                    check=True, capture_output=True)
     side_head = git_out(work, "rev-parse", "HEAD")
-    assert runner.tag_commit_is_ancestor_of_base(
+    assert release.tag_commit_is_ancestor_of_base(
         side_head, base, work) is False
 
 
@@ -17575,11 +19798,11 @@ def test_process_release_resumes_after_docs_sync_advanced_the_base(
     # The frozen base is the docs commit (a descendant of the tag commit);
     # the env's fake_run_command answers "ancestor" for the merge-base
     # check.
-    monkeypatch.setattr(runner, "freeze_base", lambda r, b: "docs456")
+    monkeypatch.setattr(release, "freeze_base", lambda r, b: "docs456")
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    release_url = runner.process_release(
+    release_url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert release_url == "https://github.com/o/r/releases/tag/v0.3.0"
@@ -17595,9 +19818,10 @@ def test_close_release_milestone_rejects_a_non_array_milestone_list(monkeypatch)
             return json.dumps({"number": 5, "title": "v0.3.0"})
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(ValueError, match="must be an array of arrays"):
-        runner.close_release_milestone("o/r", "v0.3.0")
+        release.close_release_milestone("o/r", "v0.3.0")
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["unexpected"])
 
@@ -17610,22 +19834,23 @@ def test_close_release_milestone_reraises_a_real_gh_failure(monkeypatch):
             )
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
     with pytest.raises(subprocess.CalledProcessError):
-        runner.close_release_milestone("o/r", "v0.3.0")
+        release.close_release_milestone("o/r", "v0.3.0")
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["unexpected"])
 
 
 def test_parse_release_declaration_rejects_non_string_body():
     with pytest.raises(ValueError, match="must be a string"):
-        runner.parse_release_declaration(123)
+        release.parse_release_declaration(123)
 
 
 def test_parse_release_declaration_rejects_empty_section():
     # `## Release` is the very last line: the section holds no fields.
     with pytest.raises(ValueError, match="version"):
-        runner.parse_release_declaration("Ship it.\n\n## Release\n")
+        release.parse_release_declaration("Ship it.\n\n## Release\n")
 
 
 def test_parse_release_declaration_rejects_colonless_field_line():
@@ -17635,19 +19860,19 @@ def test_parse_release_declaration_rejects_colonless_field_line():
         "## Release\n", "## Release\n\n- broken\n",
     )
     with pytest.raises(ValueError, match=r"field 'broken' is malformed"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_inline_scope_value():
     body = RELEASE_DECLARATION_BODY.replace("- scope:\n", "- scope: 123\n")
     with pytest.raises(ValueError, match="not an inline value"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_plain_line_in_scope():
     body = RELEASE_DECLARATION_BODY.replace("  - #123", "hello")
     with pytest.raises(ValueError, match=r"scope item 'hello' is malformed"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_parse_release_declaration_rejects_plain_line_outside_scope():
@@ -17658,7 +19883,7 @@ def test_parse_release_declaration_rejects_plain_line_outside_scope():
         "## Release\n", "## Release\n\nhello\n",
     )
     with pytest.raises(ValueError, match=r"line 'hello' is not a"):
-        runner.parse_release_declaration(body)
+        release.parse_release_declaration(body)
 
 
 def test_verify_release_scope_reraises_real_issue_gh_failure(monkeypatch):
@@ -17675,9 +19900,10 @@ def test_verify_release_scope_reraises_real_issue_gh_failure(monkeypatch):
             )
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fail)
     monkeypatch.setattr(runner, "run_command", fail)
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
-        runner.verify_release_scope("o/r", [7], Path("/repo"), "release123")
+        release.verify_release_scope("o/r", [7], Path("/repo"), "release123")
     assert "HTTP 403: rate limited" in str(excinfo.value.stderr)
     # The fake rejects anything that is not pr/issue view traffic.
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -17694,7 +19920,7 @@ def test_process_release_keeps_the_fresh_id_when_no_run_id_is_recoverable(
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"},
                         {"name": "ai-in-progress"}]}
-    runner.process_release(
+    release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert state["run_ids"] == ["a1b2c3d4"]
@@ -17713,18 +19939,18 @@ def test_process_release_publishes_the_release_role_progress_body(
         publishes.append(kwargs)
         kwargs["action"]()
 
-    monkeypatch.setattr(runner, "_safe_publish", publish)
+    monkeypatch.setattr(release, "_safe_publish", publish)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = runner.process_release(
+    url = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     assert publishes, "no progress publish happened"
     assert all(kwargs["role"] == "release" for kwargs in publishes)
     assert all(kwargs["issue"] == 99 for kwargs in publishes)
-    publisher = runner.ProgressPublisher.return_value
+    publisher = release.ProgressPublisher.return_value
     assert publisher.ensure.call_count == 1
     body = publisher.ensure.call_args[0][0]
     assert "<!-- orbi:run=a1b2c3d4 -->" in body
@@ -17740,7 +19966,7 @@ def test_process_release_fails_on_scope_item_that_is_neither(monkeypatch):
     state = make_release_process_env(monkeypatch, body=body)
     issue = {"number": 99, "title": "Release v0.3.0", "body": body,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = runner.process_release(
+    result = release.process_release(
         issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
     )
     assert result == ""
@@ -17776,9 +20002,9 @@ def test_release_process_env_fake_answers_the_real_tag_probe(tmp_path,
                                                              monkeypatch):
     # The env fake answers the `git ls-remote` of the REAL
     # `release_tag_commit` (the lock is taken for real on tmp_path).
-    real_release_tag_commit = runner.release_tag_commit
+    real_release_tag_commit = release.release_tag_commit
     make_release_process_env(monkeypatch)
-    monkeypatch.setattr(runner, "release_tag_commit",
+    monkeypatch.setattr(release, "release_tag_commit",
                         real_release_tag_commit)
 
     def fake(command, **kwargs):
@@ -17787,10 +20013,11 @@ def test_release_process_env_fake_answers_the_real_tag_probe(tmp_path,
                     "abc123\trefs/tags/v0.3.0^{}\n")
         raise AssertionError(f"unexpected command: {command}")
 
+    monkeypatch.setattr(release, "run_command", fake)
     monkeypatch.setattr(runner, "run_command", fake)
     with pytest.raises(AssertionError, match="unexpected command"):
         fake(["git", "fetch", "origin"])
-    assert runner.release_tag_commit(tmp_path, "v0.3.0") == "abc123"
+    assert release.release_tag_commit(tmp_path, "v0.3.0") == "abc123"
 
 
 # --- Issue #186: deliver_pr — the Runner owns the deterministic closeout ----
@@ -18474,3 +20701,46 @@ def test_load_config_does_not_treat_provider_directory_as_missing(tmp_path):
     )
     with pytest.raises(FileNotFoundError):
         runner.load_config(config_path, allow_missing_pi_providers=True)
+
+
+def _run_failed_log_sites(source: str) -> list[int]:
+    """Scan one Python source; return the line numbers of the
+    `LOGGER.error("run_failed ...")` call sites."""
+    sites: list[int] = []
+    for node in ast.walk(ast.parse(source)):
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "error"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and node.args[0].value.startswith("run_failed ")):
+            sites.append(node.lineno)
+    return sites
+
+
+def test_run_failed_pin_detects_every_error_site():
+    """The detector really detects: two `run_failed` ERROR sites produce
+    two line numbers and a non-ERROR sibling is ignored."""
+    source = (
+        "LOGGER.error('run_failed %s reason=a', s)\n"
+        "LOGGER.info('run_failed (historic)', s)\n"
+        "LOGGER.error('run_failed %s reason=b', s)\n"
+    )
+    assert _run_failed_log_sites(source) == [1, 3]
+
+
+def test_run_failed_scene_logged_in_one_place():
+    """Issue #292: the `run_failed` skeleton (the six-argument
+    `format_run_scene` + reason + raise) lives in exactly ONE place — the
+    local `_fail_run` helper in `stream_pi`; each terminal branch computes
+    its reason and exception and calls it once. A second literal
+    `LOGGER.error("run_failed ...` site is the duplicated debt this pin
+    rejects (a new log field would have to be edited per branch again)."""
+    sites = _run_failed_log_sites(
+        Path(pi_process.__file__).read_text(encoding="utf-8")
+    )
+    assert len(sites) == 1, (
+        "the run_failed scene must be logged in exactly one place (the "
+        f"_fail_run helper, Issue #292); sites at lines: {sites}"
+    )

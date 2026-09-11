@@ -104,6 +104,19 @@ def test_is_unrecoverable_failure_true_only_for_explicit_error():
     )
 
 
+def test_is_unrecoverable_failure_true_for_rate_limit_exhaustion():
+    # Issue #698: the exhausted 429 backoff budget is an external
+    # provider-quota precondition the AI cannot fix. The recoverable
+    # classification would resume the open-PR review with the persisted
+    # counter already at the limit — one 429 exit per tick, forever:
+    # exactly the unbounded loop the issue bans.
+    assert runner.is_unrecoverable_failure(
+        runner.RateLimitExhaustedError(
+            "provider rate limit retries exhausted",
+        ),
+    )
+
+
 @pytest.mark.parametrize("exc", [
     RuntimeError(
         "Pi is stuck in model_wait with a frozen session for 10m: "
@@ -127,6 +140,62 @@ def test_is_unrecoverable_failure_false_for_recoverable_failures(exc):
     # Issue #50: every failure the AI can still diagnose, fix and
     # verify on the same run/PR stays in the automatic fix loop.
     assert not runner.is_unrecoverable_failure(exc)
+
+
+# --------------------------------------------- snapshot placeholder (Issue #288)
+
+
+def test_snapshot_or_placeholder_returns_the_watcher_state(tmp_path):
+    """Issue #288: a readable session dir yields the real snapshot —
+    the same state the failure comment's scene has always shown."""
+    _write_session(tmp_path)
+    snapshot = runner._snapshot_or_placeholder(
+        tmp_path / ".pi-session", number=39,
+    )
+    assert snapshot["session_id"] == "sess-1"
+    assert snapshot["session_file"] == str(
+        tmp_path / ".pi-session" / "sess.jsonl",
+    )
+
+
+def test_snapshot_or_placeholder_returns_placeholder_without_session(
+        tmp_path,
+):
+    """Issue #288: no session file yet (the Pi never started or the dir
+    is gone) yields the placeholder scene, fresh per call — the shared
+    constant is never handed out for mutation."""
+    first = runner._snapshot_or_placeholder(
+        tmp_path / ".pi-session", number=39,
+    )
+    assert first == {
+        "session_id": None, "session_file": None,
+        "phase": "starting", "last_activity": None,
+        "action": None, "result": None,
+    }
+    first["phase"] = "mutated"
+    assert runner._snapshot_or_placeholder(
+        tmp_path / ".pi-session", number=39,
+    )["phase"] == "starting"
+
+
+def test_snapshot_or_placeholder_logs_a_failed_read(
+        monkeypatch, caplog, tmp_path,
+):
+    """Issue #288: a failing snapshot read is best-effort observability —
+    it is logged and degrades to the placeholder, never a second
+    failure of the reporting path."""
+
+    def failing_snapshot(*args, **kwargs):
+        raise OSError("session file unreadable")
+
+    monkeypatch.setattr(runner, "activity_snapshot", failing_snapshot)
+    caplog.set_level("INFO")
+    snapshot = runner._snapshot_or_placeholder(
+        tmp_path / ".pi-session", number=39,
+    )
+    assert snapshot["session_id"] is None
+    assert snapshot["phase"] == "starting"
+    assert "activity scene failed" in caplog.text
 
 
 # ------------------------------------------------- wait_for_delivery: recoverable
@@ -867,7 +936,7 @@ def test_verify_resumed_pr_unrecoverable_failure_removes_leftover_fix_needed_lab
     ]
 
 
-def test_finish_fix_needed_progress_without_run_id_is_noop(monkeypatch):
+def test_finish_progress_fix_needed_without_run_id_is_noop(monkeypatch):
     """Issue #50: the fix-needed progress scene is bound to the run id
     (the hidden marker); without one it is a no-op (no gh traffic)."""
     api_calls = []
@@ -875,9 +944,10 @@ def test_finish_fix_needed_progress_without_run_id_is_noop(monkeypatch):
         runner, "run_command",
         lambda *args, **kwargs: api_calls.append(args) or "",
     )
-    assert runner._finish_fix_needed_progress(
+    assert runner._finish_progress(
         39, None, "owner/repo", None, None, PR_URL, "the failure",
-        "task",
+        "the next tick resumes the same run", title="task",
+        outcome="fix needed",
     ) is None
     assert api_calls == []
 
@@ -888,13 +958,13 @@ def test_finish_fix_needed_progress_without_run_id_is_noop(monkeypatch):
 def test_block_scene_failure_states_why_not_auto_recoverable(
         monkeypatch, caplog,
 ):
-    """Issue #50: a scene that cannot be recovered (no trusted
+    """Issue #50 + #672: a scene that cannot be recovered (no trusted
     `Orbi opened PR:` comment) is an external precondition the
     AI cannot fix by itself (the runner cannot derive run_id/branch/
     worktree/PR without it and cannot start a review session): the
-    Issue is marked ai-blocked and the comment states the EXPLICIT
+    Issue is marked ai-blocked, the comment states the EXPLICIT
     reason why automatic recovery is impossible plus the human
-    next step."""
+    next step, and the function returns so the tick continues."""
     issue = {"number": 39, "title": "task", "body": ""}
     comments = [
         {"body": "public comment", "authorAssociation": "NONE"},
@@ -909,11 +979,10 @@ def test_block_scene_failure_states_why_not_auto_recoverable(
         runner, "comment_issue",
         lambda *args, **kwargs: posted.append(kwargs["body"]),
     )
-    with pytest.raises(ValueError, match="no trusted"):
-        runner.block_scene_failure(
-            issue, ValueError("no trusted opened PR scene comment"),
-            "owner/repo", comments,
-        )
+    runner.block_scene_failure(
+        issue, ValueError("no trusted opened PR scene comment"),
+        "owner/repo", comments,
+    )
     assert edits == [
         ((39,), {"repo": "owner/repo", "add": "ai-blocked",
                  "remove": "ai-fix-needed"}),

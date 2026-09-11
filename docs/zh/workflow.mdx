@@ -96,6 +96,35 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 | `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支 |
 | `ai-blocked` | 只用于 AI 无法安全判断或修复的外部前置条件（Issue #50）；blocked comment 写明为什么不能自动恢复；人工必须决定下一步 |
 
+## 票派发：content、dev、ops
+
+`ai-ready` 是所有任务类型的执行开关；第二个标签选择类型（Issue
+#537）。共三类——派发时每个 Issue 选定其一：
+
+| 票类型 | 标签 | Runner 做什么 |
+|---|---|---|
+| dev（默认） | `ai-ready` | 完整交付链：worktree、开发剧本、一个 PR、独立审查、合并 |
+| ops | `ai-ready` + `ai-ops-only` | 同一个完整执行会话（worktree、shell、网络——实现里不存在任何命令白名单），但用 ops 剧本替代开发剧本。交付物 = 回到票上的证据；会话若附带代码 commit，则照常走 PR 流程 |
+| content | `ai-ready` + `ai-content-only` | 内容代理：文本进、文本出，以 Issue 评论交付——无执行、无 git；交付后关闭 Issue |
+
+ops 语义（Issue #537）：
+
+- **信任边界是（凭据，票面）——不是命令白名单。** 会话原样获得 runner
+  的全部环境（gh 凭据、`CLOUDFLARE_API_TOKEN`、AWS keys 等，外加
+  deploy home 的 `.orbi/env` 文件）；凭据给多宽是用户的决定，runner
+  不做二次裁剪。
+- **票面即授权。** 会话只执行票面写明的 ops 动作（合并哪个 PR、部署
+  哪个环境）；票面之外的动作回帖说明并停。人工审批门（environment
+  approval、Release 批准）不由会话代行——这是提示词约定，不是执法代码。
+- **交付 = 证据**（Issue #526 的事实文化）：每一步把真实命令与真实
+  输出 / API 返回原文贴到票上；未执行的步骤如实标注未执行。纯 ops 运行
+  （无 commit）以 Runner 关闭 Issue 并摘除 `ai-in-progress` 收尾——
+  无 PR。附带代码 commit 则照常走 PR 路径（审查 + 合并）。
+
+Issue #537 之前，`ai-ops-only` 标签派发的是内容代理（#530 只改了名，
+模式未变——名字承诺 ops，模式仍是纯内容）；现在 content 路径派发到
+`ai-content-only`，`ai-ops-only` 是完整执行的 ops 路径。
+
 ## Run marker 与 run_id
 
 每个任务 attempt 生成一个 `run_id`（8 位 hex，例如 `e07383c2`），该
@@ -161,8 +190,10 @@ PR 验收时校验该关键词，缺失即 fail fast。
      都 fail fast。
   2. 冻结 base——release commit 就是 `origin/<base_branch>`（在
      base-sync 锁下 fetch）。
-  3. 执行发布前门禁：无遗留 open 的 `ai-in-progress` /
-     `ai-pr-opened` / `ai-fix-needed` Issue（release Issue 本身除外）、
+  3. 执行发布前门禁：**release 所属 Milestone 内**无遗留 open 的
+     `ai-in-progress` / `ai-pr-opened` / `ai-fix-needed` Issue
+     （Issue #671；release Issue 本身除外；无 Milestone 时仍按全仓
+     扫描）、
      release commit 的 CI 全绿（no check runs passes 带明确证据；
      pending check 是中间态——门禁等待最终结论，每次轮询一条
      `release_waiting_ci` journal 行和一次进度评论更新，上限
@@ -172,7 +203,10 @@ PR 验收时校验该关键词，缺失即 fail fast。
      PR、多少个、谁提的，与发版无关；滞留 PR 由交付循环自身的
      接管/对账机制处理。因真实 `gh` 失败而查不了的门禁算失败门禁。
   4. 逐项验证 scope：`gh pr view` 必须报告 `MERGED`，否则
-     `gh issue view` 必须报告 `CLOSED`。禁止解析复选框——每个 scope
+     `gh issue view` 必须报告 `CLOSED` 且 `stateReason` 为
+     `COMPLETED`——`NOT_PLANNED` 关闭（重复/不做）的票在 Scope 证据里
+     标注为排除、绝不进入 Changelog，Changelog 的 PR 链接只在 PR 已
+     合并时才写入（Issue #707）。禁止解析复选框——每个 scope
      项都对照 live API 检查。
   5. 测试验收就是 release commit 的 CI-wait 门：版本 bump 之后，门禁会对
      该 commit 重跑（步骤 3 的 `release_ci_wait_seconds` 等待），CI 红或
@@ -227,3 +261,44 @@ PR 验收时校验该关键词，缺失即 fail fast。
 Issue 之间的任务依赖用 GitHub 原生 `blockedBy` 关系（`gh issue edit N
 --add-blocked-by M`）；Runner 读该字段并跳过有未关闭 blocker 的 Issue。
 Issue body 里的 `Depends on #N` 行不被解析。
+
+## 仓库级交付策略（`.github/orbi.toml`）
+
+仓库可以把**交付策略**作为代码版本化。claim 时 Runner 通过 GitHub
+contents API 读取仓库**默认分支 tip** 上的 `.github/orbi.toml`——
+绝不读任务分支、绝不读本地 worktree——并按**按键分域**把白名单键应用
+到宿主 `orbi.toml` 之上。没有该文件的仓库行为与之前完全一致（零变化）。
+位置固定，只有文件名可用 `[[repositories]]` 条目的可选字段
+`config_path`（默认 `.github/orbi.toml`）覆盖。
+
+只允许交付策略键：
+
+| 键 | 类型 | 含义 |
+| --- | --- | --- |
+| `base_branch` | string | 该仓库的交付 base 分支；缺席时回退到匹配的 `[[repositories]].base_branch`，否则回退宿主 `base_branch`。 |
+| `active_milestone` | string | 该仓库 fresh claim 的 Milestone 范围。 |
+| `test_command` | string | 该仓库的测试命令，注入实现者 prompt。 |
+| `context_files` | string[] | 仓库内相对路径的上下文文件；注入前校验存在性与大小上限。 |
+| `dispatch_label` | string | 该仓库的认领标签（默认 `ai-ready`）；交付生命周期标签恒为宿主常量。 |
+
+```toml
+# .github/orbi.toml
+base_branch = "beta"
+active_milestone = "v0.5.0"
+test_command = "pytest -q"
+context_files = ["AGENTS.md"]
+```
+
+其他键一律拒绝：未知键、host-only 身份/安全键（见
+[安全](/zh/security)）、坏 TOML 或类型错误都会让 claim fail-fast 并
+在错误里列出违规键，Issue 进入 `ai-blocked`——一个仓库的坏文件绝不
+影响其他池。`dispatch_label` 不得是交付生命周期标签
+（`ai-in-progress`、`ai-merged` 等）：那些恒为宿主常量。阻塞落在
+claim 选中的那个 Issue 上；`dispatch_label` 不是 `ai-ready` 的仓库在
+文件本身坏掉时没有 `ai-ready` 候选 Issue 可阻塞，此时 fail-fast 原因
+只在 journal 的 `repo_config_invalid` 行（不改标签、不发评论）。run 评论记录
+`repo_config: <sha>`；与上一 run 的 sha 不同时附 `repo_config_changed`
+标注，且当前一版内容可读时附有效键值 diff `repo_config_diff`，让变更
+始终在 run 上可见。传输原因（限流、网络）导致的读取失败只记一行
+`repo_config_read_failed` 并回退宿主配置——该降级在 run 评论上表现为
+缺少 `repo_config` 字段。

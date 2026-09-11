@@ -26,13 +26,13 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import functools
 import hashlib
 import json
 import logging
 import math
 import os
 import re
-import select
 import shutil
 import signal
 import subprocess
@@ -55,42 +55,30 @@ from typing import NamedTuple
 # module is importable WITHOUT any reinstall — the #158 incident
 # class is fixed at the root. The refresh remains the safety net for
 # packaging-metadata changes (version, dependencies, entry points in
-# `pyproject.toml`). `cli_install` is a thin re-export of this
-# implementation for the tests only — the bootstrap chain never
-# imports it.
+# `pyproject.toml`). The former thin re-export module
+# `orbi.cli_install` is deleted (Issue #295): the tests import these
+# symbols directly from this module.
 from orbi.git_transport import TransportError, check_transport
 from orbi.pilot_slots import acquire_slot, slot_dir_for, slot_occupancy
-from orbi.pi_recovery import (
-    clk_tck,
-    find_idle_descendants,
-    pid_alive,
-    process_ppid,
-    process_start_monotonic,
-    signal_pid,
-    slots_idle,
-    timeout_duration,
-    upstream_alive,
-)
 from orbi.pi_activity import (
-    SessionWatcher,
     activity_snapshot,
     format_duration,
     format_end_scene,
     format_run_scene,
-    quote_value,
     sanitize,
 )
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
+    CONTENT_ONLY_LABEL,
     EPIC_LABEL,
     FIX_NEEDED_LABEL,
     IN_PROGRESS_LABEL,
     MERGED_LABEL,
+    OPS_LABEL,
     P0_LABEL,
     PR_OPENED_LABEL,
     READY_LABEL,
     RELEASE_LABEL,
-    TICKET_ONLY_LABEL,
     EVENT_BLOCKED,
     EVENT_CLAIM,
     EVENT_FIX_NEEDED,
@@ -102,6 +90,15 @@ from orbi.delivery_labels import (
     label_patch,
     needs_human_intervention,
 )
+from orbi.repo_config import (
+    REPO_CONFIG_PATH,
+    RepoConfigError,
+    read_repo_config,
+    read_repo_config_at,
+    repo_config_audit,
+    resolve_policy,
+    validate_context_file,
+)
 from orbi.progress import (
     RUN_MARKER_PATTERN,
     ProgressPublisher,
@@ -109,6 +106,7 @@ from orbi.progress import (
     format_status_comment,
     format_elapsed,
     progress_body,
+    quote_value,
     run_marker,
     validate_run_id,
 )
@@ -121,6 +119,23 @@ from orbi.systemd_deploy import (
 )
 
 
+from orbi import pi_process
+from orbi.pi_process import (
+    PI_IDLE_RECOVERY_CYCLES,
+    PI_IDLE_WARN_SECONDS,
+    PI_MODEL_WAIT_DEAD_SECONDS,
+    PI_MODEL_WAIT_PROBE_SECONDS,
+    PI_POLL_INTERVAL,
+    ROLE_IMPLEMENT,
+    ModelWaitDeadError,
+    RateLimitExhaustedError,
+    RecoverablePiFailure,
+    RecoverablePiProcessError,
+    RecoverablePiTimeoutError,
+    _log_provider_config_loaded,
+    stream_pi,
+)
+
 LOGGER = logging.getLogger("orbi.bootstrap")
 
 # Machine-readable verdict line the reviewer session must end with, and the
@@ -128,67 +143,11 @@ LOGGER = logging.getLogger("orbi.bootstrap")
 VERDICT_MARKER = "REVIEW_VERDICT"
 MAX_REVIEW_ROUNDS = 5
 
-# Live activity polling while Pi runs (Issue #24): every poll the journal
-# gets either an `activity` line (something changed) or a `heartbeat` line
-# (nothing changed; the idle time is carried on the line itself).
-PI_POLL_INTERVAL = 15.0
 # Automatic observability (Issue #18): the GitHub progress comment is
 # PATCHed on every activity change and at most every 30 seconds while a
 # Pi session runs, so a mobile user sees live progress without any
 # command. The journal cadence is the poll interval above.
 PI_HEARTBEAT_SECONDS = 30.0
-# Idle warning (Issue #18): no model/session activity for 5 minutes
-# (and the model is not expected to reply next) logs one `pi_idle`
-# warning; the first new session event after it logs `pi_resumed`.
-# A slow active model (model_wait, Issue #40) is never reported idle.
-PI_IDLE_WARN_SECONDS = 300.0
-# Hung-model-request detection (Issue #75, safe recovery since Issue
-# #218): while the newest session event is a tool result (model_wait)
-# the model is expected to reply next. A real (slow) model keeps
-# producing session events; a HUNG model request (the model service
-# process alive but the request never completes, or the upstream dead:
-# llama/proxy timeout, connection drop) freezes the session JSONL while
-# Pi sits in epoll_wait. Once the silence in model_wait reaches this
-# threshold the request is declared hung: Pi is killed (the connection
-# state is logged as `upstream_alive` evidence, never a veto — process
-# alive ≠ responding) and the run fails fast through the normal
-# failure path (the slot is released by the kernel when the Runner
-# exits, the next tick resumes the same run or claims the next
-# Issue). This is NOT a business timeout: it only fires while the
-# session file is frozen (stale seconds), never while events keep
-# arriving — a slow generation survives. It measures silence between
-# COMPLETE session events (Pi does not stream token-level progress
-# into the JSONL), not token-level model progress. Configurable since
-# Issue #228: the TOML field `model_wait_dead_seconds` overrides this
-# default (1800 s, 30 minutes — a slow local model, e.g. Qwen 27B at
-# ~17 tokens/s behind a llama-server with a 1200 s request timeout,
-# must survive a 10-minute complete message; the pre-#228 default of
-# 600 s killed them at exactly 10 minutes, #176/#175/#173/#168).
-PI_MODEL_WAIT_DEAD_SECONDS = 1800.0
-# Swallowed-model-request probe (Issue #233): while Pi is frozen in
-# model_wait the Runner probes the model's /slots endpoint (the
-# `model_wait_probe_url` config). When EVERY slot reports idle
-# (is_processing=false) for this sustained grace the request was
-# SWALLOWED (the model process is alive and the connection ESTABLISHED,
-# but nothing is generating — the #231 scene) and the Pi session is
-# killed fast, well before the `model_wait_dead_seconds` bound. The
-# grace is short (60 s) compared to the dead-request threshold (30 min
-# default) so a swallow is recovered in ~1 minute, not ~30; it is long
-# enough that a request still being scheduled into the slot (the brief
-# accept->schedule window) is never misread as a swallow. The probe is
-# a pure bypass (Issue #79): a probe failure is inconclusive and the
-# `model_wait_dead_seconds` bound still applies. The TOML field
-# `model_wait_probe_seconds` overrides this default.
-PI_MODEL_WAIT_PROBE_SECONDS = 60.0
-# Idle-stall recovery (Issue #94): a stalled (non-model_wait) session
-# is recovered automatically instead of only warning. Measured in idle
-# windows of `idle_warn_seconds`: at the first window the pre-idle
-# descendants (the hung tools) get SIGTERM (the failure signal reaches
-# the model), at the second window a target that survived gets
-# SIGKILL, and after `PI_IDLE_RECOVERY_CYCLES` consecutive idle windows
-# the Pi session itself is killed and the run fails fast through the
-# normal `ai-blocked` path — the slot is never held forever.
-PI_IDLE_RECOVERY_CYCLES = 3
 # Stop-handler grace (Issue #48): when the Runner is stopped with SIGTERM
 # while a Pi delivery is in flight, the handler must not wait forever for
 # the Pi child to exit. systemd gives `TimeoutStopSec` (default 90s) before
@@ -199,13 +158,8 @@ PI_IDLE_RECOVERY_CYCLES = 3
 # own deadline — a clean signal stop, never `failed`/`timeout`.
 STOP_CHILD_GRACE_SECONDS = 15.0
 
-# The bootstrap runner streams every Pi session of a run through the same
-# live activity pipeline (Issue #24/#40); implement/review share the same
-# line format and carry their role (Issue #41: one run_id end to end, the
-# roles are steps of the same run). Issue #82 removed the cold-start fixer
-# role: the review session fixes findings in the same session, so a run
-# has at most two Pi sessions (implement, then review).
-ROLE_IMPLEMENT = "implement"
+# Non-implement Pi session roles (Issue #41/#82). `ROLE_IMPLEMENT` is the
+# default role of a delivery Pi session and lives in `orbi.pi_process`.
 ROLE_REVIEW = "review"
 ROLE_RELEASE = "release"
 ROLE_TICKET = "ticket"
@@ -221,7 +175,7 @@ _CURRENT_RUN_ID: str | None = None
 # GitHub labels are the only state store (Issue #45). The delivery
 # lifecycle states (`ai-in-progress`, `ai-pr-opened`, `ai-fix-needed`,
 # `ai-merged`, `ai-blocked`), the scheduling-metadata labels (`p0`,
-# `bug`, `ai-epic`, `ai-release`, `ai-ticket-only`), the event → label
+# `bug`, `ai-epic`, `ai-release`, `ai-ops-only`), the event → label
 # patch transition rules, and the pickup/resume/human-intervention
 # decisions all live in `orbi.delivery_labels` (Issue #175) — the single
 # source of truth. They are imported above; `p0`/`bug`/`ai-epic` are
@@ -262,40 +216,6 @@ MERGEABLE_POLL_INTERVAL = 5.0
 TRUSTED_COMMENT_ASSOCIATIONS = frozenset({
     "OWNER", "MAINTAINER", "MEMBER", "COLLABORATOR",
 })
-
-
-class RecoverablePiFailure(RuntimeError):
-    """A Pi process failure that leaves the run resumable.
-
-    The session may have failed because the model/process infrastructure was
-    unavailable (including idle recovery).  The worktree and run-state file
-    must survive so the next pickup resumes this run instead of starting a
-    fresh attempt.
-    """
-
-
-class RecoverablePiProcessError(subprocess.CalledProcessError, RecoverablePiFailure):
-    """Pi exited non-zero; retain CalledProcessError diagnostics."""
-
-
-class RecoverablePiTimeoutError(subprocess.TimeoutExpired, RecoverablePiFailure):
-    """Pi exceeded its bounded execution window."""
-
-
-class ModelWaitDeadError(RuntimeError):
-    """The hung-model-request recovery (Issue #218/#228) killed the Pi
-    session: the model request is HUNG (the model service process is alive
-    but the request never completes, the session JSONL froze in
-    `model_wait` past `model_wait_dead_seconds`).
-
-    This is a CLASSIFIED, AI-recoverable delivery failure (Issue #227):
-    the worktree keeps the interrupted work and the run state file is
-    intact, so `process_issue` keeps the Issue `ai-in-progress` and the
-    next tick's in-flight restart scan resumes the SAME run (same run id,
-    branch, worktree, progress comment). It is never `ai-blocked` and
-    never an unclassified top-level exception: the recovery stays
-    fail-fast (Pi killed, the slot released by the tick ending) but its
-    terminal outcome goes through the recoverable delivery path."""
 
 
 class ReleaseDeliveriesWaiting(RuntimeError):
@@ -366,8 +286,13 @@ class ReviewRoundsExhausted(UnrecoverableDeliveryError):
 def is_unrecoverable_failure(exc: BaseException) -> bool:
     """Issue #50: classify one delivery failure.
 
-    True ONLY for an explicit `UnrecoverableDeliveryError` (an external
-    precondition the AI cannot safely judge or fix). Every other
+    True for an explicit `UnrecoverableDeliveryError` (an external
+    precondition the AI cannot safely judge or fix) and for the #698
+    provider-quota exhaustion (`RateLimitExhaustedError`): the backoff
+    budget of the delivery attempt is spent on an external condition,
+    and a recoverable classification would resume the open-PR review
+    with the persisted counter already at the limit — one 429 exit per
+    tick, forever, the unbounded loop the issue bans. Every other
     failure — Pi execution failure (pi exit, upstream dead, idle
     recovery), timeout, runner exception, missing/malformed verdict,
     missing worktree, unpushed local commit, gate failure — is
@@ -375,7 +300,9 @@ def is_unrecoverable_failure(exc: BaseException) -> bool:
     resumes the same run, branch, worktree and PR. A single failure
     must never permanently stop an Issue.
     """
-    return isinstance(exc, UnrecoverableDeliveryError)
+    return isinstance(
+        exc, (UnrecoverableDeliveryError, RateLimitExhaustedError),
+    )
 
 
 class RunIdFilter(logging.Filter):
@@ -392,6 +319,7 @@ LOGGER.addFilter(RunIdFilter())
 # prefix as every other Runner line (the RunIdFilter is attached per
 # logger; the health module must not import this one — circular).
 runner_health.LOGGER.addFilter(RunIdFilter())
+pi_process.LOGGER.addFilter(RunIdFilter())
 
 
 def set_run_id(run_id: str) -> None:
@@ -1463,13 +1391,101 @@ def parse_repositories(entries: object, base: Path) -> list[dict]:
             raise ValueError(
                 f"duplicate repositories name: {entry['name']!r}"
             )
+        # Issue #527: the optional repository config path (default
+        # `.github/orbi.toml`) — a string, no path resolution (it is a
+        # repository-relative path read through the GitHub contents API,
+        # never the local checkout).
+        config_path = entry.get("config_path", REPO_CONFIG_PATH)
+        if not isinstance(config_path, str) or not config_path:
+            raise ValueError(
+                f"repositories[{index}].config_path must be a non-empty "
+                "string"
+            )
         repos.append({
             "name": entry["name"],
             "path": _config_path(entry["path"], base),
             "github": entry["github"],
             "base_branch": entry["base_branch"],
+            "config_path": config_path,
         })
     return repos
+
+
+def repository_config_path(config: dict, source_repo: str) -> str:
+    """The repository config path of one source repo (Issue #527).
+
+    The optional `[[repositories]].config_path` wins when its `github`
+    entry matches the source repo; otherwise the single default location
+    `.github/orbi.toml` applies.
+    """
+    for repo in config.get("repositories", []):
+        if repo.get("github") == source_repo:
+            return repo.get("config_path", REPO_CONFIG_PATH)
+    return REPO_CONFIG_PATH
+
+
+def repository_base_branch(config: dict, source_repo: str) -> str:
+    """The fallback base branch of one source repo (Issue #527, D3).
+
+    A repository config that omits `base_branch` falls back to its
+    `[[repositories]]` entry's `base_branch` when one matches the source
+    repo, else the host `base_branch`.
+    """
+    for repo in config.get("repositories", []):
+        if repo.get("github") == source_repo:
+            return repo["base_branch"]
+    return config["base_branch"]
+
+
+def load_repo_policy(config: dict, source_repo: str) -> dict | None:
+    """Read and validate one source repo's policy file (Issue #527).
+
+    Returns the `{"sha", "policy"}` record, or `None` when the repository
+    has no policy file. A malformed/forbidden file raises
+    :class:`RepoConfigError` — the caller fails the claim fast.
+    """
+    return read_repo_config(
+        source_repo,
+        path=repository_config_path(config, source_repo),
+        run_command=run_command,
+    )
+
+
+def apply_repo_policy(config: dict, source_repo: str,
+                     record: dict) -> dict:
+    """Resolve one repo's policy over the host fallback (Issue #527, D3)."""
+    fallback = {
+        **config,
+        "base_branch": repository_base_branch(config, source_repo),
+    }
+    return resolve_policy(fallback, record["policy"])
+
+
+def previous_repo_config_sha(number: int, source_repo: str) -> str | None:
+    """The sha recorded by the previous run of this Issue (Issue #527, D4).
+
+    Scans the trusted Orbi comments for the `repo_config` field of the
+    newest run. Best-effort audit: a read failure is logged and returns
+    `None` (the change annotation is then omitted, never a delivery
+    failure).
+    """
+    try:
+        comments = issue_comments(number, repo=source_repo)
+    except Exception:
+        LOGGER.warning(
+            "issue=%s repo_config_previous_lookup_failed", number,
+        )
+        return None
+    for comment in reversed(comments):
+        if not _comment_is_trusted(comment):
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        match = re.search(r"(?m)^-\s*repo_config:\s*([0-9a-f]{7,64})\s*$", body)
+        if match:
+            return match.group(1)
+    return None
 
 
 def render_prompt(template: str, values: dict[str, str]) -> str:
@@ -1714,6 +1730,33 @@ def parse_issue_array(raw: str) -> list[dict]:
     return issues
 
 
+def list_issues(repo: str, *, state: str | None = None,
+                label: str | None = None, milestone: str | None = None,
+                search: str | None = None, json_fields: str, limit: int,
+                timeout: int | None = None) -> list[dict]:
+    """Run one ``gh issue list`` query and return the parsed JSON array.
+
+    Issue #299: every ``gh issue list`` call site shares this single
+    command builder. The flag order mirrors the call sites it replaces
+    (``--label``/``--state``/``--search`` before ``--json``/``--limit``,
+    with ``--milestone`` appended last, exactly as the release gate did),
+    so the emitted ``gh`` command is byte-for-byte unchanged.
+    """
+    command = ["gh", "issue", "list", "--repo", repo]
+    if label is not None:
+        command += ["--label", label]
+    if state is not None:
+        command += ["--state", state]
+    if search is not None:
+        command += ["--search", search]
+    command += ["--json", json_fields, "--limit", str(limit)]
+    if milestone is not None:
+        command += ["--milestone", milestone]
+    if timeout is None:
+        return parse_issue_array(run_command(command))
+    return parse_issue_array(run_command(command, timeout=timeout))
+
+
 def parse_issue_list(raw: str) -> dict | None:
     """Return the first issue from gh's JSON array, or None when idle."""
     issues = parse_issue_array(raw)
@@ -1807,7 +1850,8 @@ READY_SCAN_EXCLUSIONS = (
 )
 
 
-def ready_searches(active_milestone: str | None = None) -> tuple[str, str, str]:
+def ready_searches(active_milestone: str | None = None,
+                   dispatch_label: str = READY_LABEL) -> tuple[str, str, str]:
     """Return the three ready scans (p0, bug, plain) in pickup order.
 
     With a configured `active_milestone` (Issue #139) every scan
@@ -1828,14 +1872,18 @@ def ready_searches(active_milestone: str | None = None) -> tuple[str, str, str]:
     scope = (
         f' milestone:"{active_milestone}"' if active_milestone else ""
     )
+    # Issue #527: the claim label is a delivery-policy key; the lifecycle
+    # labels (`ai-in-progress`/`ai-merged`/...) stay host constants.
+    label = dispatch_label or READY_LABEL
     return (
-        f"label:ai-ready label:{P0_LABEL}{scope} {READY_SCAN_EXCLUSIONS}",
-        f"label:ai-ready label:bug{scope} {READY_SCAN_EXCLUSIONS}",
-        f"label:ai-ready{scope} {READY_SCAN_EXCLUSIONS}",
+        f"label:{label} label:{P0_LABEL}{scope} {READY_SCAN_EXCLUSIONS}",
+        f"label:{label} label:bug{scope} {READY_SCAN_EXCLUSIONS}",
+        f"label:{label}{scope} {READY_SCAN_EXCLUSIONS}",
     )
 
 
-def release_fallback_search(active_milestone: str | None = None) -> str:
+def release_fallback_search(active_milestone: str | None = None,
+                            dispatch_label: str = READY_LABEL) -> str:
     """Return the release fallback scan query (Issue #255).
 
     A Release task is a closing action and must never compete with an
@@ -1852,10 +1900,61 @@ def release_fallback_search(active_milestone: str | None = None) -> str:
     scope = (
         f' milestone:"{active_milestone}"' if active_milestone else ""
     )
+    label = dispatch_label or READY_LABEL
     return (
-        f"label:{READY_LABEL} label:{RELEASE_LABEL}{scope} "
+        f"label:{label} label:{RELEASE_LABEL}{scope} "
         f"{READY_SCAN_EXCLUSIONS}"
     )
+
+
+def milestone_open_issue_count(repo: str, milestone_title: str) -> int:
+    """Return the Open-Issue count of one Milestone (Issue #663).
+
+    A single `gh api` call reads GitHub's own `open_issues` counter —
+    the authority on whether the Milestone still has unfinished work.
+    Unlike the search-based ready scans it does not depend on the search
+    index and it is not affected by a delivery-state label, so an Issue
+    temporarily outside the ready queue (`ai-blocked`, `ai-pr-opened`,
+    or not yet indexed) still counts. The title-filtered `--jq` is the
+    command documented in the Issue, verified against the live API. An
+    empty result means the Milestone could not be found: that is a
+    failed check, never a silent 0 (the caller must not release on it).
+    """
+    raw = run_command(
+        [
+            "gh", "api", f"repos/{repo}/milestones",
+            "--jq",
+            f'.[] | select(.title=="{milestone_title}") | .open_issues',
+        ],
+        timeout=30,
+    )
+    if not raw:
+        raise RuntimeError(
+            f"Milestone {milestone_title!r} not found in {repo}"
+        )
+    return int(raw)
+
+
+def release_target_milestone(
+    issue: dict, active_milestone: str | None = None,
+) -> str | None:
+    """Return the Milestone a release Issue releases (Issue #663).
+
+    The completeness gate judges the Milestone the release belongs to:
+    the Issue's own GitHub Milestone is authoritative, and the configured
+    `active_milestone` is the fallback (the release fallback scan is
+    already scoped to it). Without any Milestone there is nothing to
+    check and the release keeps the pre-#663 behavior, so the function
+    returns None and the caller skips the gate.
+    """
+    milestone = issue.get("milestone")
+    if isinstance(milestone, dict):
+        title = milestone.get("title")
+        if isinstance(title, str) and title:
+            return title
+    if isinstance(active_milestone, str) and active_milestone:
+        return active_milestone
+    return None
 
 
 def issue_priority(issue: dict) -> str:
@@ -1916,858 +2015,6 @@ def is_release(issue: dict) -> bool:
     return False
 
 
-def parse_release_declaration(body: str) -> dict:
-    """Strictly parse the `## Release` section of a release Issue body.
-
-    The declaration is the machine-readable contract of a Release task
-    (Issue #98) — the only state a release run reads from the Issue
-    body (checkboxes are never parsed):
-
-    ```markdown
-    ## Release
-
-    - version: v0.3.0
-    - base_branch: main
-    - scope:
-      - #123
-      - #124
-    ```
-
-    or, instead of the hand-listed `scope`, the scope derived from the
-    Milestone whose title is the release version (Issue #253):
-
-    ```markdown
-    - scope_from_milestone: v0.3.0
-    ```
-
-    `version` is the exact tag name (no spaces) and `base_branch` the
-    branch the release commit is frozen from. The declaration carries
-    NO local test contract (Issue #569): test acceptance is the GitHub
-    Actions CI result on the release commit (the #268 CI-wait gate), so
-    `test_command` is not part of the contract — a legacy body that
-    still declares it is accepted with the field ignored (one
-    `release_test_command_ignored` evidence line at run time) and never
-    executed. `scope` lists the Issue/PR numbers verified one by one.
-    Optional `version_file` selects a supported ecosystem metadata file
-    (the default is `pyproject.toml`) or `none` to skip version metadata changes.
-    Exactly one of `scope` / `scope_from_milestone` must be present:
-    both (conflict) or neither fails fast. `scope_from_milestone` is
-    the Milestone TITLE (no spaces); its scope is derived later by
-    `derive_release_scope_from_milestone`. Every other deviation fails
-    fast with the concrete field: missing section, missing or
-    duplicated field, unknown key, empty value, empty scope or a
-    malformed scope item. No guessing.
-    """
-    if not isinstance(body, str):
-        raise ValueError("release declaration body must be a string")
-    lines = body.splitlines()
-    try:
-        start = next(
-            i for i, line in enumerate(lines)
-            if line.strip() == RELEASE_SECTION
-        )
-    except StopIteration:
-        raise ValueError(
-            f"release Issue body is missing the `{RELEASE_SECTION}` "
-            "section with version, base_branch and scope or "
-            "scope_from_milestone"
-        ) from None
-    section: list[str] = []
-    for line in lines[start + 1:]:
-        if line.lstrip().startswith("## "):
-            break
-        section.append(line)
-    fields: dict[str, str] = {}
-    scope: list[int] = []
-    scope_open = False
-    for line in section:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.startswith("- "):
-            content = stripped[2:].strip()
-            if scope_open and re.fullmatch(r"#\d+", content):
-                number = int(content[1:])
-                if number < 1:
-                    raise ValueError(
-                        f"release declaration scope item {content!r} "
-                        "must be a positive Issue or PR number"
-                    )
-                scope.append(number)
-                continue
-            if scope_open and ":" not in content:
-                raise ValueError(
-                    f"release declaration scope item {content!r} is "
-                    "malformed (expected `  - #N`)"
-                )
-            # A `- key: value` line closes the scope list (and a
-            # duplicated or unknown key is caught below).
-            scope_open = False
-            key, sep, value = content.partition(":")
-            if not sep:
-                raise ValueError(
-                    f"release declaration field {key.strip()!r} is "
-                    "malformed (expected `- key: value`)"
-                )
-            key = key.strip()
-            value = value.strip()
-            if key in fields:
-                raise ValueError(
-                    f"release declaration field {key!r} is duplicated"
-                )
-            if key == "scope":
-                if value:
-                    raise ValueError(
-                        "release declaration `scope` must be a list of "
-                        "`  - #N` items, not an inline value"
-                    )
-                scope_open = True
-                fields["scope"] = ""
-            # `test_command` stays a KNOWN key (Issue #569): a legacy
-            # body may still declare it — accepted, ignored, never
-            # executed.
-            elif key in ("version", "base_branch", "test_command",
-                         "scope_from_milestone", "version_file"):
-                fields[key] = value
-            else:
-                raise ValueError(
-                    f"release declaration has the unknown field {key!r} "
-                    "(expected version, base_branch, scope, "
-                    "scope_from_milestone or version_file)"
-                )
-        elif scope_open:
-            raise ValueError(
-                f"release declaration scope item {stripped!r} is "
-                "malformed (expected `  - #N`)"
-            )
-        else:
-            raise ValueError(
-                f"release declaration line {stripped!r} is not a "
-                "`- key: value` field or a scope item"
-            )
-    for key in ("version", "base_branch"):
-        if key not in fields:
-            raise ValueError(
-                f"release declaration is missing the `{key}` field"
-            )
-        if not fields[key]:
-            raise ValueError(
-                f"release declaration field `{key}` is empty"
-            )
-    if "scope" in fields and "scope_from_milestone" in fields:
-        raise ValueError(
-            "release declaration must use exactly one of `scope` or "
-            "`scope_from_milestone`, not both"
-        )
-    if "scope" not in fields and "scope_from_milestone" not in fields:
-        raise ValueError(
-            "release declaration is missing the `scope` field or the "
-            "`scope_from_milestone` field (exactly one of the two)"
-        )
-    if "scope" in fields and not scope:
-        raise ValueError(
-            "release declaration `scope` must list at least one "
-            "`  - #N` Issue or PR number"
-        )
-    for key in ("version", "base_branch"):
-        if any(ch.isspace() for ch in fields[key]):
-            raise ValueError(
-                f"release declaration field `{key}` must not contain "
-                "spaces"
-            )
-    if "scope_from_milestone" in fields:
-        if not fields["scope_from_milestone"]:
-            raise ValueError(
-                "release declaration field `scope_from_milestone` is "
-                "empty"
-            )
-        if any(ch.isspace() for ch in fields["scope_from_milestone"]):
-            raise ValueError(
-                "release declaration field `scope_from_milestone` must "
-                "not contain spaces"
-            )
-    version_file = fields.get("version_file", "pyproject.toml")
-    if version_file not in (
-        "pyproject.toml", "package.json", "pom.xml", "build.gradle",
-        "build.gradle.kts", "gradle.properties", "Cargo.toml",
-        "composer.json", "pubspec.yaml", "none",
-    ):
-        raise ValueError(
-            "release declaration field `version_file` is not supported"
-        )
-    return {
-        "version": fields["version"],
-        "base_branch": fields["base_branch"],
-        # Issue #569: a legacy field, accepted and ignored — never executed.
-        "test_command": fields.get("test_command"),
-        "scope": scope,
-        "scope_from_milestone": fields.get("scope_from_milestone"),
-        "version_file": version_file,
-    }
-
-
-def verify_release_scope(repo: str, scope: list[int], repo_dir: Path,
-                         release_commit: str) -> list[str]:
-    """Verify every release scope item ONE BY ONE (Issue #98).
-
-    The scope is verified against GitHub, never by parsing Issue-body
-    checkboxes: each number is probed as a PR first (`gh pr view` —
-    which exits 1 with the real "Could not resolve to a PullRequest"
-    error when the number is an Issue, verified against the live CLI)
-    and, failing that, as an Issue (`gh issue view`). A PR must be
-    `MERGED` and its merge commit must be an ancestor of the frozen
-    release commit; an Issue must be `CLOSED`. This ancestor check proves
-    the scoped PR is actually contained in the tag, rather than merely
-    having been merged into some other branch. An item that is neither, a
-    PR that is not merged/in the release base, or an Issue that is not
-    closed fails fast with the concrete number and state. A real `gh` or
-    git failure (auth, rate limit, missing object) is re-raised, never
-    misread as "not a PR".
-    """
-    evidence: list[str] = []
-    for number in scope:
-        try:
-            raw = run_command([
-                "gh", "pr", "view", str(number), "--repo", repo,
-                "--json", "number,state,mergeCommit",
-            ])
-        except subprocess.CalledProcessError as exc:
-            if "Could not resolve to a PullRequest" not in (exc.stderr or ""):
-                raise
-            raw = None
-        if raw is not None:
-            pr = json.loads(raw)
-            state = pr.get("state")
-            if state != "MERGED":
-                raise RuntimeError(
-                    f"release scope PR #{number} is not merged "
-                    f"(state={state})"
-                )
-            merge_commit = (pr.get("mergeCommit") or {}).get("oid")
-            if not merge_commit:
-                raise RuntimeError(
-                    f"release scope PR #{number} is merged but has no "
-                    "merge commit evidence"
-                )
-            if not _is_ancestor(merge_commit, release_commit, cwd=repo_dir):
-                raise RuntimeError(
-                    f"release scope PR #{number} merge commit {merge_commit} "
-                    f"is not contained in release commit {release_commit}"
-                )
-            evidence.append(
-                f"PR #{number} merged (mergeCommit={merge_commit})"
-            )
-            continue
-        try:
-            raw = run_command([
-                "gh", "issue", "view", str(number), "--repo", repo,
-                "--json", "number,state",
-            ])
-        except subprocess.CalledProcessError as exc:
-            if "Could not resolve to an Issue" not in (exc.stderr or ""):
-                raise
-            raise RuntimeError(
-                f"release scope item #{number} is neither a PR nor an "
-                "Issue"
-            ) from exc
-        issue = json.loads(raw)
-        state = issue.get("state")
-        if state != "CLOSED":
-            raise RuntimeError(
-                f"release scope Issue #{number} is not closed "
-                f"(state={state})"
-            )
-        evidence.append(f"Issue #{number} closed")
-    return evidence
-
-
-def derive_release_scope_from_milestone(repo: str,
-                                        milestone_title: str) -> tuple[list[int], list[str]]:
-    """Derive the release scope from a Milestone (Issue #253).
-
-    The release scope is the Milestone's COMPLETED Issues under the
-    Milestone whose title is EXACTLY `milestone_title` (the same
-    exact-title rule as `close_release_milestone` — never guessed,
-    never fuzzy-matched, never a different Milestone). Pull requests are
-    obtained from each scoped Issue's closing references by
-    `build_release_changelog`; the REST `/pulls` list endpoint does not
-    support milestone filtering:
-
-    - no Milestone with that exact title -> fail fast;
-    - several Milestones with that exact title -> fail fast
-      (ambiguous — GitHub allows duplicate titles, so guessing one is
-      forbidden);
-    - open Issues are NEVER part of the scope (unfinished work is a
-      human decision point) but are returned as a separate evidence list
-      so the release run surfaces them instead of swallowing them.
-
-    Returns (scope numbers sorted ascending, open-item evidence
-    strings). A real `gh` failure (auth, rate limit, API error)
-    propagates unchanged — a scope that cannot be derived is a failed
-    release, never a guessed one.
-    """
-    raw = run_command([
-        "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
-        "--paginate", "--slurp",
-    ])
-    milestones = parse_paginated_issue_array(raw)
-    matches = [
-        m for m in milestones
-        if isinstance(m, dict) and m.get("title") == milestone_title
-    ]
-    if not matches:
-        raise RuntimeError(
-            f"release milestone derivation: no Milestone with the exact "
-            f"title {milestone_title!r} in {repo} — never guessed or "
-            "fuzzy-matched"
-        )
-    if len(matches) > 1:
-        raise RuntimeError(
-            f"release milestone derivation: {len(matches)} Milestones "
-            f"share the exact title {milestone_title!r} in {repo} — "
-            "ambiguous, refusing to guess which to derive from"
-        )
-    number = matches[0].get("number")
-
-    def issues(state: str) -> list[dict]:
-        raw = run_command([
-            "gh", "api",
-            f"repos/{repo}/issues?state={state}&milestone={number}&per_page=100",
-            "--paginate", "--slurp",
-        ])
-        return [item for item in parse_paginated_issue_array(raw)
-                if isinstance(item, dict)]
-
-    closed_issues = [item for item in issues("closed")
-                     if "pull_request" not in item]
-    open_issues = [item for item in issues("open")
-                   if "pull_request" not in item]
-
-    scope = sorted(
-        int(item["number"])
-        for item in closed_issues
-        if isinstance(item.get("number"), int)
-    )
-    open_evidence = [
-        f"open Issue #{item.get('number')} {item.get('title')}"
-        for item in open_issues
-    ]
-    return scope, open_evidence
-
-
-RELEASE_CHANGELOG_CATEGORIES = (
-    "Features", "Reliability and recovery", "Deployment and operations",
-    "Observability", "Documentation", "Bug fixes",
-)
-
-
-def release_changelog_category(item: dict) -> str:
-    """Classify one live scoped Issue into a stable reader-facing group."""
-    labels = item.get("labels")
-    label_names = {
-        label.get("name", "").lower() for label in labels
-        if isinstance(label, dict) and isinstance(label.get("name"), str)
-    } if isinstance(labels, list) else set()
-    title = item.get("title")
-    text = title.lower() if isinstance(title, str) else ""
-    if "documentation" in label_names or any(
-        term in text for term in ("documentation", "docs", "readme", "文档")
-    ):
-        return "Documentation"
-    if any(term in text for term in (
-        "deploy", "deployment", "systemd", "install", " cli", "ssh",
-        "service", "timer", "packaging", "setup",
-    )):
-        return "Deployment and operations"
-    if any(term in text for term in (
-        "recovery", "recover", "resume", "timeout", "concurren", "reliab",
-        "stale", "dead", "hang", "lock",
-    )):
-        return "Reliability and recovery"
-    if any(term in text for term in (
-        "observability", "prometheus", "grafana", "dashboard", "metrics",
-        "exporter", "journal", "progress",
-    )):
-        return "Observability"
-    if "bug" in label_names:
-        return "Bug fixes"
-    return "Features"
-
-
-def build_release_changelog(repo: str, scope: list[int]) -> str:
-    """Render deterministic readable notes from live scoped Issue evidence.
-
-    The official ``gh issue view --json`` contract supplies each Issue's
-    title, body, URL, labels, and closing PR references.  A title is the
-    concise change description; when it is absent, the first non-empty body
-    line is usable summary evidence.  Missing or malformed evidence is an
-    unsafe release input and fails before a tag or Release is created.
-    """
-    grouped: dict[str, list[tuple[int, str]]] = {
-        category: [] for category in RELEASE_CHANGELOG_CATEGORIES
-    }
-    for number in scope:
-        raw = run_command([
-            "gh", "issue", "view", str(number), "--repo", repo, "--json",
-            "number,title,body,url,labels,closedByPullRequestsReferences",
-        ])
-        item = json.loads(raw)
-        issue_url = item.get("url")
-        issue_path = f"https://github.com/{repo}/issues/{number}"
-        pull_path = f"https://github.com/{repo}/pull/{number}"
-        if item.get("number") != number or issue_url not in (issue_path, pull_path):
-            raise ValueError(
-                f"release changelog Issue #{number} has malformed Issue evidence"
-            )
-        title = item.get("title")
-        body = item.get("body")
-        summary = title.strip() if isinstance(title, str) else ""
-        if not summary and isinstance(body, str):
-            summary = next((line.strip() for line in body.splitlines()
-                            if line.strip()), "")
-        if not summary or re.fullmatch(r"Issue #\d+ closed", summary, re.I):
-            raise ValueError(
-                f"release changelog Issue #{number} has no usable title/summary evidence"
-            )
-        source_kind = "PR" if issue_url == pull_path else "Issue"
-        links = [f"[{source_kind} #{number}]({issue_url})"]
-        pull_requests = item.get("closedByPullRequestsReferences")
-        if not isinstance(pull_requests, list):
-            raise ValueError(
-                f"release changelog Issue #{number} has malformed PR evidence"
-            )
-        for pull_request in sorted(pull_requests, key=lambda pr: pr.get("number", 0)
-                                   if isinstance(pr, dict) else 0):
-            pr_number = pull_request.get("number") if isinstance(pull_request, dict) else None
-            pr_url = pull_request.get("url") if isinstance(pull_request, dict) else None
-            if (not isinstance(pr_number, int) or pr_number < 1 or
-                    pr_url != f"https://github.com/{repo}/pull/{pr_number}"):
-                raise ValueError(
-                    f"release changelog Issue #{number} has malformed PR evidence"
-                )
-            links.append(f"[PR #{pr_number}]({pr_url})")
-        grouped[release_changelog_category(item)].append(
-            (number, f"- {summary} ({'; '.join(links)})")
-        )
-    sections = ["## Changelog"]
-    for category in RELEASE_CHANGELOG_CATEGORIES:
-        entries = grouped[category]
-        if entries:
-            sections.extend(["", f"### {category}", "",
-                             *(entry for _, entry in sorted(entries))])
-    return "\n".join(sections)
-
-
-def check_release_gates(repo: str, base_branch: str, release_commit: str,
-                        release_number: int, *,
-                        ci_wait_seconds: float = RELEASE_CI_WAIT_SECONDS,
-                        delivery_wait_seconds: float = RELEASE_DELIVERIES_WAIT_SECONDS,
-                        delivery_waited_seconds: float = 0.0,
-                        on_wait: Callable[[str], None] | None = None,
-                        on_delivery_wait: Callable[[str], None] | None = None,
-                        ) -> list[str]:
-    """Enforce the pre-release gates (Issue #98) and return their evidence.
-
-    Two gates, each checked against GitHub (never against local
-    state), each failure raising with the concrete offender:
-
-    1. No open Issue still carries `ai-in-progress`, `ai-pr-opened`
-       or `ai-fix-needed` — the release Issue itself is excluded (it
-       carries `ai-in-progress` while the release runs).
-    2. CI on the release commit is green: every check run reported by
-       the GitHub API for the commit is `completed` with a
-       `success`/`neutral`/`skipped` conclusion (a failing, cancelled
-       or error check fails the gate; no check runs at all is recorded
-       as such, not invented). A PENDING check (queued/in_progress —
-       the release commit is born from the last delivery merge, so its
-       CI is almost always still running, Issue #268) is not a
-       conclusion: the gate polls until every check completes (one
-       `release_waiting_ci` journal line per poll, the wait reflected
-       through `on_wait`), then decides on the final conclusions.
-       Waiting past `ci_wait_seconds` fails with its own timeout
-       reason, explicitly distinct from a CI failure.
-
-    Open PRs are deliberately NOT a gate (Issue #608, maintainer ruling
-    2026-09-09, final): an open PR is queue state, never a release
-    premise. The release contract is the milestone's closed-Issue scope
-    check, green full tests and green CI on the release commit —
-    whether open PRs exist, how many, or who authored them says nothing
-    about the release. A stranded PR is the delivery loop's takeover /
-    reconciliation job, not the release gate's.
-
-    A real `gh` failure (auth, rate limit, API error) propagates
-    unchanged — a gate that cannot be checked is a failed gate. The one
-    exception is GitHub's HTTP 403 for the check-runs query: it is reported
-    as a missing Checks:read credential permission so the blocked release is
-    actionable.
-    """
-    evidence: list[str] = []
-    open_deliveries: set[int] = set()
-    for label in (IN_PROGRESS_LABEL, PR_OPENED_LABEL, FIX_NEEDED_LABEL):
-        raw = run_command([
-            "gh", "issue", "list", "--repo", repo, "--label", label,
-            "--state", "open", "--json", "number", "--limit", "50",
-        ])
-        for item in json.loads(raw):
-            number = int(item["number"])
-            if number != release_number:
-                open_deliveries.add(number)
-    if open_deliveries:
-        numbers = sorted(open_deliveries)
-        detail = ", ".join(f"Issue #{number}" for number in numbers)
-        LOGGER.info(
-            "issue=%s release_waiting_deliveries open=%s waited=%ds limit=%ds",
-            release_number, numbers, int(delivery_waited_seconds),
-            int(delivery_wait_seconds),
-        )
-        if on_delivery_wait is not None:
-            on_delivery_wait(
-                f"{detail}; waited {int(delivery_waited_seconds)}s / "
-                f"{int(delivery_wait_seconds)}s"
-            )
-        if delivery_waited_seconds >= delivery_wait_seconds:
-            raise RuntimeError(
-                f"release gate: waiting for open deliveries {numbers} "
-                f"timed out after {int(delivery_wait_seconds)}s "
-                "— delivery wait timeout, not a CI failure"
-            )
-        raise ReleaseDeliveriesWaiting(
-            numbers, delivery_waited_seconds, delivery_wait_seconds,
-        )
-    evidence.append(
-        "no open Issue carries "
-        f"{IN_PROGRESS_LABEL} / {PR_OPENED_LABEL} / {FIX_NEEDED_LABEL}"
-    )
-    def fetch_check_runs() -> list[dict]:
-        command = [
-            "gh", "api", f"repos/{repo}/commits/{release_commit}/check-runs",
-            "--jq", ".check_runs",
-        ]
-        try:
-            return json.loads(run_command(command))
-        except subprocess.CalledProcessError as error:
-            output = "\n".join(
-                str(value) for value in (error.stdout, error.stderr)
-                if value
-            )
-            if "403" in output:
-                raise RuntimeError(
-                    "CI gate could not be evaluated: the credential lacks "
-                    "Checks:read permission (GitHub returned HTTP 403 while "
-                    "listing check runs)"
-                ) from error
-            raise
-
-    check_runs = fetch_check_runs()
-    waited = 0.0
-    while True:
-        pending = [
-            f"check '{check.get('name')}' is "
-            f"{check.get('status')}/{check.get('conclusion')}"
-            for check in check_runs if check.get("status") != "completed"
-        ]
-        if not pending:
-            break
-        detail = ", ".join(pending)
-        LOGGER.info(
-            "issue=%s release_waiting_ci commit=%s pending=%s "
-            "waited=%ds limit=%ds",
-            release_number, release_commit, detail,
-            int(waited), int(ci_wait_seconds),
-        )
-        if on_wait is not None:
-            on_wait(
-                f"{detail}; waited {int(waited)}s / "
-                f"{int(ci_wait_seconds)}s"
-            )
-        if waited >= ci_wait_seconds:
-            raise RuntimeError(
-                f"release gate: waiting for CI on the release commit "
-                f"{release_commit} timed out after "
-                f"{int(ci_wait_seconds)}s (still pending: {detail}) "
-                "— wait timeout, not a CI failure"
-            )
-        step = min(RELEASE_CI_POLL_INTERVAL, ci_wait_seconds - waited)
-        time.sleep(step)
-        waited += step
-        check_runs = fetch_check_runs()
-    for check in check_runs:
-        name = check.get("name")
-        status = check.get("status")
-        conclusion = check.get("conclusion")
-        if status != "completed" or conclusion not in (
-            "success", "neutral", "skipped",
-        ):
-            raise RuntimeError(
-                f"release gate: CI check '{name}' is {status}/{conclusion} "
-                f"on the release commit {release_commit}"
-            )
-    if check_runs:
-        evidence.append(
-            f"CI on the release commit: {len(check_runs)} check(s) all "
-            "success/neutral/skipped"
-            + (f" (waited {int(waited)}s for pending checks)" if waited
-               else "")
-        )
-    else:
-        evidence.append(
-            f"CI on the release commit: no check runs on "
-            f"{release_commit} (nothing to gate)"
-        )
-    # Issue #608: no open-PR gate — an open PR is queue state, not a
-    # release premise (see the docstring for the maintainer ruling).
-    return evidence
-
-
-def prepare_release_version(worktree: Path, tag: str,
-                            base_branch: str,
-                            version_file: str = "pyproject.toml") -> str:
-    """Commit the tag's version into the declared metadata source.
-
-    The release tag is the public identity (for example ``v0.3.0``), while
-    metadata version fields omit the leading ``v``.  The selected source
-    must be structurally recognizable before it is changed; the commit is
-    pushed directly to the release base, matching the release docs-sync step.
-    """
-    match = re.fullmatch(r"v([0-9]+(?:\.[0-9]+)+)", tag)
-    if match is None:
-        raise ValueError(
-            f"release version {tag!r} must be a v-prefixed numeric tag"
-        )
-    version = match.group(1)
-    supported_files = {
-        "pyproject.toml", "package.json", "pom.xml", "build.gradle",
-        "build.gradle.kts", "gradle.properties", "Cargo.toml",
-        "composer.json", "pubspec.yaml", "none",
-    }
-    if version_file not in supported_files:
-        raise ValueError("release version_file is not supported")
-    if version_file == "none":
-        return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
-    if version_file in ("package.json", "composer.json"):
-        package_json = worktree / version_file
-        try:
-            package_data = json.loads(package_json.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError(
-                f"release version source {version_file} is not valid JSON"
-            ) from exc
-        if not isinstance(package_data, dict) or not isinstance(
-            package_data.get("version"), str
-        ) or not package_data["version"]:
-            raise RuntimeError(
-                f"release version source {version_file} must contain a non-empty "
-                "version field"
-            )
-        if package_data["version"] != version:
-            package_data["version"] = version
-            package_json.write_text(
-                json.dumps(package_data, indent=2) + "\n", encoding="utf-8",
-            )
-            run_command(["git", "add", version_file], cwd=worktree)
-            run_command([
-                "git", "commit", "-m", f"chore: prepare release {tag}",
-            ], cwd=worktree)
-            run_git_network_command(
-                ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
-                cwd=worktree,
-            )
-        return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
-    if version_file not in ("pyproject.toml", "package.json", "composer.json"):
-        source = worktree / version_file
-        try:
-            text = source.read_text(encoding="utf-8")
-            if version_file == "pom.xml":
-                ET.fromstring(text)
-                matches = list(re.finditer(
-                    r"<version>\s*([^<\s]+)\s*</version>", text,
-                ))
-                parents = [m.span() for m in re.finditer(
-                    r"<parent\b.*?</parent>", text, re.DOTALL,
-                )]
-                matches = [m for m in matches if not any(
-                    start <= m.start() < end for start, end in parents
-                )]
-                # Maven projects normally contain additional dependency
-                # versions.  The declaration contract selects the first
-                # version outside the parent block, not a uniquely occurring
-                # version in the whole document.
-                pattern = matches[0] if matches else None
-                replacement = rf"<version>{version}</version>"
-            elif version_file == "Cargo.toml":
-                data = tomllib.loads(text)
-                current = data.get("package", {}).get("version")
-                if not isinstance(current, str) or not current:
-                    raise ValueError("missing [package].version")
-                pattern = re.search(
-                    r"(?ms)^(\[package\][^\[]*?^version\s*=\s*)"
-                    r"([\"'])[^\n]+?\2\s*$",
-                    text,
-                )
-                replacement = None
-            elif version_file == "pubspec.yaml":
-                matches = list(re.finditer(
-                    r"(?m)^version\s*:\s*([^#\s]+)", text,
-                ))
-                pattern = matches[0] if len(matches) == 1 else None
-                replacement = f"version: {version}"
-            elif version_file == "gradle.properties":
-                matches = list(re.finditer(
-                    r"(?m)^version\s*=\s*([^#\s]+)", text,
-                ))
-                pattern = matches[0] if len(matches) == 1 else None
-                replacement = f"version={version}"
-            else:
-                matches = list(re.finditer(
-                    r"(?m)^([ \t]*version\s*=\s*)(['\"])([^'\"]+)\2[ \t]*$",
-                    text,
-                ))
-                pattern = matches[0] if len(matches) == 1 else None
-                # Groovy accepts either quote style, while Kotlin DSL only
-                # accepts double quotes. Preserve the source syntax.
-                replacement = (
-                    pattern.group(1) + pattern.group(2) + version
-                    + pattern.group(2)
-                    if pattern is not None else ""
-                )
-            if pattern is None:
-                raise ValueError("version declaration is not uniquely parseable")
-            if version_file == "Cargo.toml":
-                replacement = pattern.group(1) + f'"{version}"'
-            updated = text[:pattern.start()] + replacement + text[pattern.end():]
-        except (OSError, ET.ParseError, tomllib.TOMLDecodeError, ValueError) as exc:
-            raise RuntimeError(
-                f"release version source {version_file} has no parseable version"
-            ) from exc
-        if updated != text:
-            source.write_text(updated, encoding="utf-8")
-            run_command(["git", "add", version_file], cwd=worktree)
-            run_command([
-                "git", "commit", "-m", f"chore: prepare release {tag}",
-            ], cwd=worktree)
-            run_git_network_command(
-                ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
-                cwd=worktree,
-            )
-        return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
-    pyproject = worktree / version_file
-    init_file = worktree / "src" / "orbi" / "__init__.py"
-    pyproject_text = pyproject.read_text(encoding="utf-8")
-    init_text = init_file.read_text(encoding="utf-8")
-    py_matches = re.findall(
-        r'(?m)^version\s*=\s*"([^"]+)"\s*$', pyproject_text,
-    )
-    init_matches = re.findall(
-        r'(?m)^__version__\s*=\s*"([^"]+)"\s*$', init_text,
-    )
-    if len(py_matches) != 1 or len(init_matches) != 1:
-        raise RuntimeError(
-            "release version sources must contain exactly one version "
-            "declaration each"
-        )
-    if py_matches[0] != init_matches[0]:
-        raise RuntimeError(
-            "release version sources disagree before release preparation"
-        )
-    updated_pyproject = re.sub(
-        r'(?m)^(version\s*=\s*)"[^"]+"(\s*)$',
-        rf'\g<1>"{version}"\g<2>', pyproject_text, count=1,
-    )
-    updated_init = re.sub(
-        r'(?m)^(__version__\s*=\s*)"[^"]+"(\s*)$',
-        rf'\g<1>"{version}"\g<2>', init_text, count=1,
-    )
-    if updated_pyproject != pyproject_text:
-        pyproject.write_text(updated_pyproject, encoding="utf-8")
-        init_file.write_text(updated_init, encoding="utf-8")
-        run_command([
-            "git", "add", version_file, "src/orbi/__init__.py",
-        ], cwd=worktree)
-        run_command([
-            "git", "commit", "-m", f"chore: prepare release {tag}",
-        ], cwd=worktree)
-        run_git_network_command(
-            ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
-            cwd=worktree,
-        )
-    return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
-
-
-def release_tag_commit(repo_dir: Path, tag: str) -> str | None:
-    """Return the commit the tag points to on the remote, or None.
-
-    (Issue #98) `git ls-remote` keeps the existence probe read-only and
-    its exit semantics unambiguous: exit 0 with empty output means the
-    remote has no such tag (None); ANY non-zero exit is a real failure
-    (network/auth) and propagates. The previous `git fetch` probe read
-    exit 128 as "missing", but a network failure also exits 128 — a
-    transient outage would read as "no tag on the remote", the retry
-    would re-create the tag, and a local residue from the failed push
-    deadlocked the release ticket (Issue #585). Annotated tags are
-    peeled with the `^{}` line ls-remote reports alongside the tag
-    object.
-
-    The base-sync lock is kept: `ls-remote` does not write refs, but
-    the sibling steps around it do, and the lock orders them against
-    task worktrees sharing the checkout's common dir.
-    """
-    fd = acquire_base_sync_lock(repo_dir, 300.0)
-    try:
-        output = run_git_network_command(
-            ["git", "ls-remote", "origin",
-             f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"],
-            cwd=repo_dir,
-        )
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
-    refs: dict[str, str] = {}
-    for line in output.splitlines():
-        oid, _, ref = line.partition("\t")
-        refs[ref.strip()] = oid.strip()
-    peeled = refs.get(f"refs/tags/{tag}^{{}}")
-    if peeled:
-        return peeled
-    return refs.get(f"refs/tags/{tag}")
-
-
-def ensure_release_tag_pushed(repo_dir: Path, tag: str,
-                              release_commit: str) -> None:
-    """Create the annotated release tag and push it — idempotently.
-
-    本地残留收敛：上次 `git tag` 成功但 push 失败会留下本地 tag，重试
-    时远端仍无此 tag，不处理残留的话 `git tag -a` 永远 fatal: tag
-    already exists（发布票死锁，Issue #585）。残留指向本次发布提交 →
-    跳过重建直接重推；指向别的提交 → fail fast——已有的 tag 永不移动
-    或覆盖（与 `release_tag_commit` 的远端侧同一不变量）。
-    """
-    try:
-        local_tag_commit = run_command(
-            ["git", "rev-parse", "-q", "--verify",
-             f"refs/tags/{tag}^{{commit}}"],
-            cwd=repo_dir,
-        ).strip()
-    except subprocess.CalledProcessError:
-        local_tag_commit = None
-    if local_tag_commit is None:
-        run_command(
-            ["git", "tag", "-a", tag, "-m", f"Release {tag}",
-             release_commit],
-            cwd=repo_dir,
-        )
-    elif local_tag_commit != release_commit:
-        raise RuntimeError(
-            f"local tag {tag} already exists and points at "
-            f"{local_tag_commit}, not the release commit "
-            f"{release_commit} — an existing tag is never moved or "
-            "overwritten"
-        )
-    run_git_network_command(
-        ["git", "push", "origin", f"refs/tags/{tag}"],
-        cwd=repo_dir,
-    )
-
-
 def _is_ancestor(commit: str, base: str, *, cwd: Path) -> bool:
     """Return whether *commit* is reachable from *base*.
 
@@ -2783,80 +2030,6 @@ def _is_ancestor(commit: str, base: str, *, cwd: Path) -> bool:
             raise
         return False
     return True
-
-
-def tag_commit_is_ancestor_of_base(tag_commit: str, base_commit: str,
-                                   repo_dir: Path) -> bool:
-    """Compatibility wrapper for the release state machine."""
-    return _is_ancestor(tag_commit, base_commit, cwd=repo_dir)
-
-
-def publish_release(*, repo: str, tag: str, version: str,
-                    release_commit: str, changelog: str,
-                    scope_evidence: list[str], gate_evidence: list[str], test_evidence: str,
-                    run_id: str, issue_number: int) -> str:
-    """Create the GitHub Release for the tag — idempotently (Issue #98).
-
-    When a Release for the tag already exists (a restart after a
-    successful `gh release create`) its URL is reused, never a second
-    Release is created. A legacy existing Release without this changelog
-    is upgraded in place; a Release that already contains it is unchanged.
-    Otherwise the Release is created from the EXISTING tag (the tag was
-    created and pushed by the caller first — `gh release create` never
-    creates or moves the tag itself) with notes carrying the full
-    verification evidence: version, tag,
-    release commit, the per-item scope evidence, the gate evidence, the
-    test evidence and the run marker (the same stable machine-readable
-    marker every run comment carries).
-    """
-    notes = "\n".join([
-        f"# {version}",
-        "",
-        changelog,
-        "",
-        f"- tag: `{tag}`",
-        f"- release commit: `{release_commit}`",
-        f"- release task: Issue #{issue_number}",
-        "",
-        "## Scope (verified item by item)",
-        "",
-        *(f"- {item}" for item in scope_evidence),
-        "",
-        "## Pre-release gates",
-        "",
-        *(f"- {item}" for item in gate_evidence),
-        "",
-        "## Tests",
-        "",
-        f"- {test_evidence}",
-        "",
-        run_marker(run_id),
-        f"run_id={run_id}",
-    ])
-    try:
-        raw = run_command([
-            "gh", "release", "view", tag, "--repo", repo,
-            "--json", "tagName,url,body",
-        ])
-        release = json.loads(raw)
-        if changelog not in release.get("body", ""):
-            run_command([
-                "gh", "release", "edit", tag, "--repo", repo,
-                "--notes", notes,
-            ])
-        return release["url"]
-    except subprocess.CalledProcessError as exc:
-        if "not found" not in (exc.stderr or ""):
-            raise
-    run_command([
-        "gh", "release", "create", tag, "--repo", repo,
-        "--verify-tag", "--title", version, "--notes", notes,
-    ])
-    raw = run_command([
-        "gh", "release", "view", tag, "--repo", repo,
-        "--json", "tagName,url",
-    ])
-    return json.loads(raw)["url"]
 
 
 def _epic_child_evidence(repo: str, kind: str, number: int) -> str:
@@ -2970,10 +2143,10 @@ def reconcile_release_epics(repo: str, milestone_number: int, version: str,
 
 def reconcile_open_epics(repo: str, run_id: str) -> list[str]:
     """Sweep open Epics once per tick; ordinary pickup must not depend on it."""
-    raw = run_command(["gh", "issue", "list", "--repo", repo, "--state", "open",
-                       "--search", f"label:{EPIC_LABEL}",
-                       "--json", "number,body,labels", "--limit", "200"])
-    epics = parse_issue_array(raw)
+    epics = list_issues(
+        repo, state="open", search=f"label:{EPIC_LABEL}",
+        json_fields="number,body,labels", limit=200,
+    )
     evidence: list[str] = []
     for listed_epic in epics:
         number = listed_epic.get("number")
@@ -3052,956 +2225,9 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
     return evidence
 
 
-def close_release_milestone(repo: str, version: str, *, run_id: str | None = None) -> str:
-    """Close the Milestone whose title is exactly `version` (Issue #214).
-
-    Runs on the release success path (after the tag is pushed, the
-    GitHub Release is published and the release Issue is closed with
-    `ai-merged`). The Milestone is matched by EXACT title — never
-    guessed, never fuzzy-matched, never a different Milestone:
-
-    - no Milestone with that exact title -> fail fast (the release
-      must not be reported as fully successful);
-    - several Milestones with that exact title -> fail fast
-      (ambiguous — GitHub allows duplicate titles, so guessing one is
-      forbidden);
-    - already `closed` -> idempotent success (no mutation, no reopen);
-    - `open` with open issues -> fail fast with the version, the
-      Milestone number/url and the open issue list;
-    - `open` with 0 open issues -> closed via the official REST
-      contract `PATCH /repos/{owner}/{repo}/milestones/{number}`
-      with `state=closed` (OpenAPI `issues/update-milestone`).
-
-    The list query asks for `state=all`: the default `state=open`
-    would hide already-closed Milestones and break the idempotent
-    case. Returns a short evidence string for the success path. A
-    real `gh` failure (auth, rate limit, API error) propagates
-    unchanged — like the release gates, a check that cannot be made
-    is a failed check.
-    """
-    raw = run_command([
-        "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
-        "--paginate", "--slurp",
-    ])
-    milestones = parse_paginated_issue_array(raw)
-    matches = [
-        m for m in milestones
-        if isinstance(m, dict) and m.get("title") == version
-    ]
-    if not matches:
-        raise RuntimeError(
-            f"release {version}: no Milestone with the exact title "
-            f"{version!r} in {repo} — the Milestone is missing, never "
-            "guessed or fuzzy-matched"
-        )
-    if len(matches) > 1:
-        numbers = ", ".join(
-            f"#{m.get('number')} ({m.get('html_url') or m.get('url')})"
-            for m in matches
-        )
-        raise RuntimeError(
-            f"release {version}: {len(matches)} Milestones share the "
-            f"exact title {version!r} in {repo} — ambiguous, refusing "
-            f"to guess which to close: {numbers}"
-        )
-    milestone = matches[0]
-    number = milestone.get("number")
-    html_url = milestone.get("html_url") or milestone.get("url")
-    if milestone.get("state") == "closed":
-        return (
-            f"Milestone #{number} ({html_url}) already closed — "
-            "idempotent success, nothing to do"
-        )
-    open_issues = milestone_open_issues(repo, int(number))
-    epic_evidence: list[str] = []
-    if run_id is not None and open_issues:
-        # Every listed Epic is verified from its children and blockers before
-        # the authoritative exact-Milestone list is checked again.
-        epic_evidence = reconcile_release_epics(repo, int(number), version, run_id)
-        open_issues = milestone_open_issues(repo, int(number))
-    if open_issues:
-        listing = ", ".join(
-            f"#{i.get('number')} {i.get('title')}" for i in open_issues
-        )
-        raise RuntimeError(
-            f"release {version}: Milestone #{number} ({html_url}) still "
-            f"has {len(open_issues)} open issue(s) — closing it would hide "
-            f"unfinished work; open issues: {listing}"
-        )
-    run_command([
-        "gh", "api", f"repos/{repo}/milestones/{number}",
-        "--method", "PATCH", "-f", "state=closed",
-    ])
-    epic_suffix = f"; {'; '.join(epic_evidence)}" if epic_evidence else ""
-    return (
-        f"Milestone #{number} ({html_url}) closed after release "
-        f"{version} (0 open issues){epic_suffix}"
-    )
-
-
-RELEASE_DOCS_LATEST_MARKER_EN = " (latest)"
-RELEASE_DOCS_LATEST_MARKER_ZH = "（最新）"
-
-
-def release_docs_page(*, version: str, tag_object: str,
-                      release_commit: str, published_at: str,
-                      release_url: str, issue_number: int,
-                      body: str, language: str) -> str:
-    """Build one docs-site Release notes page for a published release.
-
-    (Issue #275) The page content is the published GitHub Release body
-    (no changelog re-implementation — #204 owns that) plus the meta the
-    existing release pages share: the tag/release-commit mapping, the
-    publish time and the release task Issue number. Two mechanical
-    adaptations only: the body's own leading `# <version>` heading is
-    dropped because the page carries its own title with the `(latest)`
-    marker, and HTML comment lines (`<!-- ... -->`, the run markers) are
-    dropped because the Mintlify MDX parser rejects them — the visible
-    `run_id=` line stays, so the correlation is kept.
-    """
-    notes = body.strip()
-    lines = notes.splitlines()
-    if lines and lines[0].strip() == f"# {version}":
-        lines = lines[1:]
-    lines = [
-        line for line in lines
-        if not line.strip().startswith("<!--")
-    ]
-    notes = "\n".join(lines).strip()
-    if language == "en":
-        title = f"# {version} release (latest)"
-        intro = (
-            f"`{version}` was published {published_at} as the GitHub "
-            f"Release [{version}]({release_url}) (release task: "
-            f"Issue #{issue_number})."
-        )
-        heading = "## Tag state (verified against origin)"
-        table = (
-            "| Ref | Object | Points at |\n"
-            "|---|---|---|\n"
-            f"| `{version}` | annotated tag `{tag_object}` "
-            f"| commit `{release_commit}` |"
-        )
-    elif language == "zh":
-        title = f"# {version} 发布（最新）"
-        intro = (
-            f"`{version}` 于 {published_at} 发布为 GitHub Release "
-            f"[{version}]({release_url})（release task："
-            f"Issue #{issue_number}）。"
-        )
-        heading = "## Tag 状态（对 origin 验证）"
-        table = (
-            "| Ref | 对象 | 指向 |\n"
-            "|---|---|---|\n"
-            f"| `{version}` | 注解 tag `{tag_object}` "
-            f"| 提交 `{release_commit}` |"
-        )
-    else:
-        raise ValueError(
-            f"release docs page language {language!r} is not supported "
-            "(use 'en' or 'zh')"
-        )
-    return "\n".join([
-        title, "",
-        intro, "",
-        heading, "",
-        table, "",
-        "## Release notes", "",
-        notes, "",
-    ])
-
-
-def current_latest_release_slug(config_text: str) -> str:
-    """The first page of the English `Releases` group — the current
-    latest release (the groups are latest-first, Issue #154)."""
-    config = json.loads(config_text)
-    for lang in config["navigation"]["languages"]:
-        if lang.get("language") != "en":
-            continue
-        for group in lang["groups"]:
-            if group.get("group") == "Releases":
-                pages = group["pages"]
-                if not pages:
-                    raise RuntimeError(
-                        "release docs sync: the Releases group has no "
-                        "pages — cannot determine the current latest "
-                        "release"
-                    )
-                return str(pages[0])
-    raise RuntimeError(
-        "release docs sync: docs.json has no English Releases group — "
-        "cannot determine the current latest release"
-    )
-
-
-def update_release_navigation(config_text: str, slug: str) -> tuple[str, bool]:
-    """Insert `slug` at the head of both release navigation groups.
-
-    (Issue #275) The `Releases` (en) and `发布` (zh) groups list the
-    releases latest-first; a new release goes FIRST in both (the zh
-    entries carry the `zh/` prefix). A slug already listed in both
-    groups leaves the config untouched (idempotent). Exactly one group
-    updated means a broken config — fail fast, never guess.
-    """
-    config = json.loads(config_text)
-    updated = 0
-    for lang in config["navigation"]["languages"]:
-        for group in lang["groups"]:
-            if group.get("group") not in ("Releases", "发布"):
-                continue
-            pages = group["pages"]
-            entry = f"zh/{slug}" if group["group"] == "发布" else slug
-            if entry in pages:
-                continue
-            pages.insert(0, entry)
-            updated += 1
-    if updated == 0:
-        return config_text, False
-    if updated != 2:
-        raise RuntimeError(
-            f"release docs sync: expected exactly two release groups "
-            f"(Releases + 发布) but updated {updated} — the docs.json "
-            "navigation is not the expected Mintlify i18n layout"
-        )
-    return json.dumps(config, indent=2, ensure_ascii=False) + "\n", True
-
-
-def move_latest_marker(worktree: Path, old_slug: str,
-                       new_slug: str, *, resume: bool) -> list[str]:
-    """Move the `(latest)` title marker off the previous latest page.
-
-    (Issue #275) Only the newest release page may carry the marker:
-    ` (latest)` (en) / `（最新）` (zh) is stripped from the previous
-    latest page's H1. When the old page already lacks the marker the
-    move is only accepted on a resume (`resume=True`: the new page
-    already carries the marker — a partial step of an earlier attempt
-    already moved it); otherwise the invariant is broken and the step
-    fails fast — a broken state is never silently repaired. Returns the
-    changed relative paths.
-    """
-    changed: list[str] = []
-    for directory, marker in (("docs", RELEASE_DOCS_LATEST_MARKER_EN),
-                              ("docs/zh", RELEASE_DOCS_LATEST_MARKER_ZH)):
-        path = worktree / directory / f"{old_slug}.mdx"
-        if not path.is_file():
-            raise RuntimeError(
-                f"release docs sync: previous latest page {path} is "
-                "missing — cannot move the (latest) marker"
-            )
-        text = path.read_text(encoding="utf-8")
-        first_line, _, rest = text.partition("\n")
-        if marker in first_line:
-            path.write_text(
-                first_line.replace(marker, "", 1) + "\n" + rest,
-                encoding="utf-8",
-            )
-            changed.append(f"{directory}/{old_slug}.mdx")
-            continue
-        if resume:
-            new_path = worktree / directory / f"{new_slug}.mdx"
-            new_first = (
-                new_path.read_text(encoding="utf-8").splitlines()[0]
-                if new_path.is_file() else ""
-            )
-            if marker in new_first:
-                continue
-        raise RuntimeError(
-            f"release docs sync: {path} does not carry the (latest) "
-            "marker in its title and the move did not happen yet — "
-            "the latest-marker invariant is broken, refusing to guess"
-        )
-    return changed
-
-
-def sync_release_docs(*, source_repo: str, repo_dir: Path,
-                      worktree: Path, base_branch: str, tag: str,
-                      release_commit: str, issue_number: int) -> str:
-    """Sync the docs-site Release notes for one published release.
-
-    (Issue #275) Release state machine step 8 — runs AFTER the GitHub
-    Release exists (step 7) and BEFORE the Milestone is closed (step 9):
-
-    - fetches the published Release (`gh release view`, the same call
-      `publish_release` uses) — the page content is that body, no
-      changelog re-implementation;
-    - generates `docs/release-<tag>.mdx` and
-      `docs/zh/release-<tag>.mdx` in the release worktree with the meta
-      the existing release pages share (tag/release-commit mapping,
-      publish time, release task Issue number);
-    - moves the `(latest)` title marker from the previous latest page;
-    - inserts the new version at the head of the `Releases`/`发布`
-      navigation groups in `docs/docs.json` (both languages), or skips
-      this Mintlify-only step when that file is absent;
-    - commits exactly those docs paths in the release worktree and
-      pushes `HEAD:refs/heads/<base_branch>` under the base-sync lock
-      (the release path has no PR — a direct commit to the base branch,
-      never a force push).
-
-    Idempotent: an existing page with identical content is neither
-    regenerated nor overwritten, and a run with nothing to change
-    commits nothing. An existing page with DIFFERENT content fails fast
-    (never overwritten). Any failure propagates so the release fails
-    fast and enters `ai-blocked` like every other step.
-    """
-    docs_config = worktree / "docs" / "docs.json"
-    if not docs_config.is_file():
-        return "docs sync skipped (no Mintlify docs in repo)"
-
-    raw = run_command([
-        "gh", "release", "view", tag, "--repo", source_repo,
-        "--json", "tagName,publishedAt,url,body",
-    ])
-    release = json.loads(raw)
-    body = release.get("body")
-    if not isinstance(body, str) or not body.strip():
-        raise RuntimeError(
-            f"release {tag}: the GitHub Release body is empty — the "
-            "docs page would be fabricated, refusing"
-        )
-    published_at = release["publishedAt"]
-    release_url = release["url"]
-    tag_object = run_command(
-        ["git", "rev-parse", f"refs/tags/{tag}"], cwd=repo_dir,
-    )
-    new_slug = f"release-{tag}"
-    en_path = worktree / "docs" / f"{new_slug}.mdx"
-    zh_path = worktree / "docs" / "zh" / f"{new_slug}.mdx"
-    en_content = release_docs_page(
-        version=tag, tag_object=tag_object, release_commit=release_commit,
-        published_at=published_at, release_url=release_url,
-        issue_number=issue_number, body=body, language="en",
-    )
-    zh_content = release_docs_page(
-        version=tag, tag_object=tag_object, release_commit=release_commit,
-        published_at=published_at, release_url=release_url,
-        issue_number=issue_number, body=body, language="zh",
-    )
-    # A pre-existing identical page means this is a resume after a
-    # partial step — the marker move may then be lenient (it already
-    # happened). A page created by THIS run demands the strict move.
-    new_page_preexisting = (
-        en_path.is_file()
-        and en_path.read_text(encoding="utf-8") == en_content
-    )
-    for path, content in ((en_path, en_content), (zh_path, zh_content)):
-        if path.is_file():
-            existing = path.read_text(encoding="utf-8")
-            if existing == content:
-                continue
-            raise RuntimeError(
-                f"release {tag}: {path} already exists with different "
-                "content — an existing release page is never overwritten"
-            )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-    config_text = docs_config.read_text(encoding="utf-8")
-    old_slug = current_latest_release_slug(config_text)
-    if old_slug != new_slug:
-        move_latest_marker(
-            worktree, old_slug, new_slug, resume=new_page_preexisting,
-        )
-    new_config_text, nav_changed = update_release_navigation(
-        config_text, new_slug,
-    )
-    if nav_changed:
-        docs_config.write_text(new_config_text, encoding="utf-8")
-    expected_paths = [
-        f"docs/{new_slug}.mdx",
-        f"docs/zh/{new_slug}.mdx",
-        "docs/docs.json",
-    ]
-    if old_slug != new_slug:
-        expected_paths += [
-            f"docs/{old_slug}.mdx",
-            f"docs/zh/{old_slug}.mdx",
-        ]
-    fd = acquire_base_sync_lock(repo_dir, 300.0)
-    try:
-        run_command(["git", "add", *expected_paths], cwd=worktree)
-        try:
-            run_command(["git", "diff", "--cached", "--quiet"],
-                        cwd=worktree)
-        except subprocess.CalledProcessError as exc:
-            if exc.returncode != 1:
-                raise
-        else:
-            # Nothing staged can only mean the docs commit of a previous
-            # run is already part of this tick's frozen base: the release
-            # state machine hard-resets the worktree to release_commit in
-            # create_release_worktree BEFORE this function runs, so a
-            # local docs commit whose push failed cannot survive to this
-            # point — the resume regenerates the pages below and takes
-            # the normal commit+push path (#623; the #587 world is
-            # unreachable, and a stale origin/<base> tracking ref must
-            # not be answered with a false "recovered" no-op push).
-            return (
-                f"docs release notes for {tag} already in sync — "
-                "idempotent no-op, nothing committed"
-            )
-        run_command([
-            "git", "commit", "-m",
-            f"docs: release notes for {tag} (Issue #{issue_number})",
-        ], cwd=worktree)
-        run_git_network_command(
-            ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
-            cwd=worktree,
-        )
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
-    return (
-        f"docs release notes for {tag} committed and pushed to "
-        f"{base_branch}"
-    )
-
-
-def release_success_comment_body(run_id: str, run_info: str,
-                                 release_url: str, tag: str,
-                                 release_commit: str,
-                                 scope_evidence: list[str],
-                                 gate_evidence: list[str],
-                                 test_evidence: str,
-                                 docs_evidence: str,
-                                 milestone_evidence: str) -> str:
-    """The terminal success comment: the full verification evidence.
-
-    (Issue #98) The comment is the auditable record of the release:
-    run marker, release URL, version/tag/release commit, the
-    per-item scope evidence, the gate evidence, the test evidence, the
-    docs-site Release notes evidence (Issue #275) and the Milestone
-    evidence (Issue #214: the Milestone whose title is the released
-    version is closed on the success path).
-    """
-    info = _run_info_fields(run_info)
-    return "\n".join([
-        field_block(run_id, f"Orbi released: {release_url}", {
-            **info, "tag": tag, "release_commit": release_commit,
-        }),
-        "",
-        "## Scope (verified item by item)",
-        "",
-        *(f"- {item}" for item in scope_evidence),
-        "",
-        "## Pre-release gates",
-        "",
-        *(f"- {item}" for item in gate_evidence),
-        "",
-        "## Tests",
-        "",
-        f"- {test_evidence}",
-        "",
-        "## Release notes (docs site)",
-        "",
-        f"- {docs_evidence}",
-        "",
-        "## Milestone",
-        "",
-        f"- {milestone_evidence}",
-        "",
-        f"run_id={run_id}",
-    ])
-
-
-def release_failure_comment_body(run_id: str, run_info: str,
-                                 error: str) -> str:
-    """The terminal failure comment: the blocked scene (Issue #98).
-
-    A release failure is terminal (`ai-blocked` ALONE, no automatic
-    retry): the comment carries the run marker and the concrete
-    reason, so the recoverable scene is on GitHub, not only in the
-    journal.
-    """
-    return field_block(
-        run_id, "Orbi release failed (ai-blocked)", {
-            **_run_info_fields(run_info), "failure": error,
-        },
-    )
-
-
-def process_release(issue: dict, config: dict, source_repo: str) -> str:
-    """Run the deterministic release state machine for one release Issue.
-
-    (Issue #98) A release task NEVER enters the normal `run_pi`
-    development path: the Runner executes the state machine itself,
-    step by step, each step idempotent so a restart resumes the same
-    run (same run id, same worktree) from the top:
-
-    1. Strictly parse the `## Release` declaration from the Issue
-       body (version, base_branch, scope or
-       scope_from_milestone — exactly one of the two, Issue #253; a
-       legacy `test_command` field is ignored with one evidence
-       line — the declaration carries no local test contract,
-       Issue #569).
-    2. Freeze the base — the release commit is exactly
-       `origin/<base_branch>` (fetched under the base-sync lock).
-    3. Enforce the pre-release gates (`check_release_gates`).
-    4. When `scope_from_milestone` is declared, derive the scope from
-       the Milestone (`derive_release_scope_from_milestone`): closed
-       Issues + merged PRs; open items are surfaced as evidence, never
-       released. Then verify the scope item by item
-       (`verify_release_scope`).
-    Before step 5, prepare the release version in the clean worktree using
-       the declared `version_file` (`pyproject.toml` by default,
-       `package.json`, or `none`), commit and push when metadata changes.
-       The subsequent steps run against that commit.
-    5. Test acceptance is the #268 CI-wait gate on the release commit:
-       after the version bump the gates re-run against that exact
-       commit, and a red or timed-out CI takes the existing recoverable
-       failure path. No local test execution (Issue #569).
-    6. Tag: the remote tag must not exist or must point EXACTLY at
-       the release commit (a mismatch fails — an existing tag is
-       never moved); otherwise create an annotated tag at the release
-       commit and push it with a plain push (never `--force`).
-    7. Publish the GitHub Release (idempotent) with the full
-       verification evidence.
-    8. Sync the docs-site Release notes (Issue #275): generate
-       `docs/release-<version>.mdx` + `docs/zh/release-<version>.mdx`
-       from the published Release body, update both navigation groups,
-       move the `(latest)` marker, and commit + push those docs changes
-       to the base branch directly. Idempotent: identical pages are not
-       overwritten; anything else fails fast.
-    9. Apply `ai-merged` and close the release Issue (terminal delivery
-       transition).
-    10. Close the Milestone whose title is EXACTLY the released
-        version (Issue #214), then write the success comment (release
-        URL, tag, commit, evidence, docs-site Release notes evidence,
-        Milestone evidence). Exact title match only; close it only when
-        it has 0 open Issues; already-closed is idempotent. A missing
-        Milestone or remaining open Issues fails fast. Any failure is
-        `ai-blocked` ALONE, with a concrete failure comment, and the
-        handled failure returns cleanly so the tick does not crash.
-    """
-    number = int(issue["number"])
-    title = issue["title"]
-    run_id = new_run_id()
-    set_run_id(run_id)
-    if has_in_progress_label(number, source_repo):
-        existing_run_id = latest_run_id(
-            config["repo_dir"], source_repo, number,
-        )
-        if existing_run_id is not None:
-            run_id = existing_run_id
-            set_run_id(run_id)
-            LOGGER.info(
-                "issue=%s release_resuming_run run_id=%s", number, run_id,
-            )
-    priority = issue_priority(issue)
-    started = time.monotonic()
-    # Bound before the try: the failure comment needs it even when the
-    # declaration parse fails on the very first step.
-    run_info = f"run_id={run_id} priority={priority}"
-    publisher = ProgressPublisher(
-        number, source_repo, run_id, run_command=run_command,
-    )
-    branch = task_branch(source_repo, number, run_id)
-    worktree = worktree_path(
-        config["repo_dir"], source_repo, number, run_id,
-    )
-
-    def progress() -> dict:
-        return _progress_state(
-            issue=number, title=title, run_id=run_id, role=ROLE_RELEASE,
-            branch=branch, worktree=worktree, started=started,
-            pr_url=None, review_round=0, priority=priority,
-            activity={},
-        )
-
-    def on_delivery_wait(detail: str) -> None:
-        state = progress()
-        state["phase"] = f"waiting deliveries: {detail}"
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
-            action=lambda: publisher.patch(_progress_body(state)),
-        )
-
-    def on_ci_wait(detail: str) -> None:
-        # Issue #268: the CI wait is reflected in the live progress
-        # comment (pure bypass, Issue #79); the gate itself emits the
-        # `release_waiting_ci` journal line.
-        state = progress()
-        state["phase"] = f"waiting CI: {detail}"
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
-            action=lambda: publisher.patch(_progress_body(state)),
-        )
-
-    release_commit: str | None = None
-    declaration: dict | None = None
-    open_milestone_evidence: list[str] = []
-    try:
-        declaration = parse_release_declaration(issue["body"])
-        if declaration["test_command"] is not None:
-            # Issue #569: a legacy `test_command` line is accepted and
-            # ignored with this single evidence line — it is never
-            # executed; test acceptance is the CI-wait gate.
-            LOGGER.info(
-                "issue=%s release_test_command_ignored value=%r "
-                "(release tests are gated by GitHub Actions CI on the "
-                "release commit)", number, declaration["test_command"],
-            )
-        base_branch = declaration["base_branch"]
-        run_info = (
-            f"base_branch={base_branch} run_id={run_id} "
-            f"priority={priority}"
-        )
-        LOGGER.info(
-            "issue=%s release_task %s", number, run_info,
-        )
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_CLAIM,
-            current_labels={label.get("name") for label in issue.get(
-                "labels", []) if isinstance(label, dict)
-                and isinstance(label.get("name"), str)},
-        )
-        set_active_run(
-            number, title, branch, str(worktree),
-        )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
-            action=lambda: publisher.ensure(progress_body(progress())),
-        )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
-            action=lambda: publisher.milestone(
-                f"**Orbi release started**: {run_info}",
-            ),
-        )
-        release_commit = freeze_base(config["repo_dir"], base_branch)
-        wait_started: float | None = None
-        # Waiting is persisted in the auditable Issue comment, so a later
-        # tick can enforce one bounded waiting window without local state.
-        for comment in issue_comments(number, repo=source_repo):
-            # Only the runner's trusted, structured waiting comments may
-            # carry the persisted timer.  A public comment must not be able
-            # to inject an old timestamp and turn a recoverable wait into an
-            # immediate terminal block (the same trust boundary as resume
-            # scenes, Issue #45).
-            if not _comment_is_trusted(comment):
-                continue
-            body = comment.get("body", "")
-            if "Orbi release waiting for deliveries" not in body:
-                continue
-            match = re.search(r"wait_started: ([0-9]+(?:\.[0-9]+)?)", body)
-            if match:
-                started_at = float(match.group(1))
-                wait_started = (
-                    started_at if wait_started is None
-                    else min(wait_started, started_at)
-                )
-        release_waited_seconds = (
-            max(0.0, time.time() - wait_started)
-            if wait_started is not None else 0.0
-        )
-        run_info = (
-            f"base_branch={base_branch} base_sha={release_commit} "
-            f"run_id={run_id} priority={priority}"
-        )
-        gate_evidence = check_release_gates(
-            source_repo, base_branch, release_commit, number,
-            # Issue #268: the gate waits out pending CI checks on the
-            # release commit; the real load_config always provides the
-            # key, the module constant stays the fallback for hand-built
-            # configs.
-            ci_wait_seconds=config.get(
-                "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
-            ),
-            delivery_wait_seconds=config.get(
-                "release_deliveries_wait_seconds",
-                RELEASE_DELIVERIES_WAIT_SECONDS,
-            ),
-            delivery_waited_seconds=release_waited_seconds,
-            on_wait=on_ci_wait,
-            on_delivery_wait=on_delivery_wait,
-        )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
-            action=lambda: publisher.milestone(
-                f"**Orbi release gates passed**: "
-                f"{'; '.join(gate_evidence)}",
-            ),
-        )
-        if declaration.get("scope_from_milestone") is not None:
-            # Issue #253: the scope is derived from the Milestone, then
-            # verified item by item exactly like a hand-listed scope.
-            derived_scope, open_milestone_evidence = (
-                derive_release_scope_from_milestone(
-                    source_repo, declaration["scope_from_milestone"],
-                )
-            )
-            if not derived_scope:
-                raise RuntimeError(
-                    f"release {declaration['version']}: Milestone "
-                    f"{declaration['scope_from_milestone']!r} has no "
-                    "closed Issue or merged PR — the derived scope is "
-                    "empty and a release needs at least one delivery"
-                )
-            declaration["scope"] = derived_scope
-            if open_milestone_evidence:
-                LOGGER.warning(
-                    "issue=%s release_milestone_open_items "
-                    "milestone=%s open_items=%s",
-                    number, declaration["scope_from_milestone"],
-                    "; ".join(open_milestone_evidence),
-                )
-        scope_evidence = verify_release_scope(
-            source_repo, declaration["scope"], config["repo_dir"],
-            release_commit,
-        )
-        if open_milestone_evidence:
-            # Open items are NOT released; they are surfaced in the
-            # auditable evidence instead of being silently swallowed.
-            scope_evidence = scope_evidence + [
-                f"NOT released (still open in milestone "
-                f"{declaration['scope_from_milestone']}): {item}"
-                for item in open_milestone_evidence
-            ]
-        changelog = build_release_changelog(source_repo, declaration["scope"])
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
-            action=lambda: publisher.milestone(
-                f"**Orbi release scope verified**: "
-                f"{'; '.join(scope_evidence)}",
-            ),
-        )
-        worktree = create_release_worktree(
-            config["repo_dir"], source_repo, number, run_id, release_commit,
-        )
-        # Version metadata is part of the release commit, not a post-release
-        # fix: tests and the tag must identify the exact same commit.
-        if declaration["version_file"] == "pyproject.toml":
-            # Keep the default invocation compatible with existing callers;
-            # the omitted field is the unchanged Python release path.
-            release_commit = prepare_release_version(
-                worktree, declaration["version"], base_branch,
-            )
-        else:
-            release_commit = prepare_release_version(
-                worktree, declaration["version"], base_branch,
-                declaration["version_file"],
-            )
-        # Version preparation creates the commit that will be tagged. Re-run
-        # the commit-specific gates so the recorded CI result and final
-        # no-open-PR check cover that exact release commit, not the frozen
-        # pre-version source commit.
-        gate_evidence = check_release_gates(
-            source_repo, base_branch, release_commit, number,
-            ci_wait_seconds=config.get(
-                "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
-            ),
-            delivery_wait_seconds=config.get(
-                "release_deliveries_wait_seconds",
-                RELEASE_DELIVERIES_WAIT_SECONDS,
-            ),
-            delivery_waited_seconds=release_waited_seconds,
-            on_wait=on_ci_wait,
-            on_delivery_wait=on_delivery_wait,
-        )
-        # The release version changed the packaging inputs after the tick's
-        # preflight refresh. Refresh Orbi from its deployment checkout, not
-        # the published source worktree: a foreign release (for example a
-        # Node-only repo) is not required to carry Orbi's pyproject.toml.
-        # The fallback keeps direct callers with legacy hand-built configs
-        # compatible; load_config always supplies deploy_home.
-        deployment_home = config.get("deploy_home", config["repo_dir"])
-        refresh_cli_install(
-            deployment_home, lock_repo_dir=deployment_home,
-            run_command=run_command,
-        )
-        # Issue #569: there is NO local test execution — the CI-wait gate
-        # re-run above already decided the test acceptance on this exact
-        # release commit; a red or timed-out CI took the recoverable
-        # failure path there.
-        test_evidence = (
-            f"release tests gated by GitHub Actions CI on the release "
-            f"commit {release_commit} (the #268 CI-wait gate; no local "
-            "test execution)"
-        )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
-            action=lambda: publisher.milestone(
-                f"**Orbi release tests passed**: {test_evidence}",
-            ),
-        )
-        tag = declaration["version"]
-        existing_tag_commit = release_tag_commit(config["repo_dir"], tag)
-        if existing_tag_commit is not None:
-            if existing_tag_commit == release_commit:
-                LOGGER.info(
-                    "issue=%s release_tag_exists tag=%s commit=%s",
-                    number, tag, existing_tag_commit,
-                )
-            elif tag_commit_is_ancestor_of_base(
-                    existing_tag_commit, release_commit,
-                    config["repo_dir"]):
-                # Issue #275: the docs-sync step (step 8) pushed the release
-                # notes to the base branch, advancing origin/<base> past the
-                # tag commit. On a resume the frozen base is the docs commit;
-                # the tag commit is the canonical release commit — recover it
-                # so the release resumes instead of deadlocking on the tag
-                # check.
-                LOGGER.info(
-                    "issue=%s release_base_advanced_past_tag tag=%s "
-                    "tag_commit=%s base_commit=%s",
-                    number, tag, existing_tag_commit, release_commit,
-                )
-                release_commit = existing_tag_commit
-            else:
-                raise RuntimeError(
-                    f"release tag {tag} already exists on the remote "
-                    f"and points at {existing_tag_commit}, not the "
-                    f"release commit {release_commit} — an existing "
-                    "tag is never moved or overwritten"
-                )
-        else:
-            ensure_release_tag_pushed(
-                config["repo_dir"], tag, release_commit,
-            )
-            LOGGER.info(
-                "issue=%s release_tag_pushed tag=%s commit=%s",
-                number, tag, release_commit,
-            )
-        release_url = publish_release(
-            repo=source_repo, tag=tag, version=tag,
-            release_commit=release_commit, changelog=changelog,
-            scope_evidence=scope_evidence, gate_evidence=gate_evidence,
-            test_evidence=test_evidence, run_id=run_id, issue_number=number,
-        )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
-            action=lambda: publisher.milestone(
-                f"**Orbi released**: {release_url}",
-            ),
-        )
-        docs_evidence = sync_release_docs(
-            source_repo=source_repo, repo_dir=config["repo_dir"],
-            worktree=worktree, base_branch=base_branch, tag=tag,
-            release_commit=release_commit, issue_number=number,
-        )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
-            action=lambda: publisher.milestone(
-                f"**Orbi release docs synced**: {docs_evidence}",
-            ),
-        )
-        try:
-            apply_label_patch(
-                number, repo=source_repo, event=EVENT_MERGED,
-                current_labels={IN_PROGRESS_LABEL},
-            )
-            run_command(
-                ["gh", "issue", "close", str(number), "--repo", source_repo],
-            )
-        except Exception:
-            # The tag and GitHub Release are already published at this
-            # point. The ai-merged transition and the Issue close are
-            # bookkeeping of that irreversible fact — a transient failure
-            # here must not fall through to the generic handler and
-            # rewrite the published result as ai-blocked (Issue #79:
-            # bypass, never a terminal rewrite; same rule as the
-            # milestone evidence below).
-            LOGGER.exception(
-                "issue=%s release_publish_closeout_failed", number,
-            )
-        try:
-            milestone_evidence = close_release_milestone(
-                source_repo, tag, run_id=run_id,
-            )
-        except Exception as exc:
-            # The tag and GitHub Release are already published at this point.
-            # Milestone closure is evidence only and must not rewrite that
-            # irreversible release result as ai-blocked.
-            LOGGER.exception(
-                "issue=%s release_milestone_evidence_failed", number,
-            )
-            milestone_evidence = (
-                "milestone evidence unavailable: " + str(exc)
-            )
-        try:
-            comment_issue(
-                number, repo=source_repo,
-                body=release_success_comment_body(
-                    run_id, run_info, release_url, tag, release_commit,
-                    scope_evidence, gate_evidence, test_evidence,
-                    docs_evidence, milestone_evidence,
-                ),
-            )
-        except Exception:
-            # Same bypass rule: the success comment is evidence of the
-            # already-published release — its failure is logged and must
-            # not rewrite the published result as ai-blocked.
-            LOGGER.exception(
-                "issue=%s release_success_comment_failed", number,
-            )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
-            action=lambda: publisher.finish(progress_body(progress())),
-        )
-        LOGGER.info(
-            "issue=%s run_end release_success tag=%s url=%s "
-            "elapsed=%.1fs", number, tag, release_url,
-            time.monotonic() - started,
-        )
-        return release_url
-    except ReleaseDeliveriesWaiting as waiting:
-        # Issue #381: this is a clean, recoverable tick. Return the release
-        # ticket to the ready queue before releasing the caller's slot.
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_RELEASE_WAITING,
-            current_labels={IN_PROGRESS_LABEL},
-        )
-        detail = ", ".join(f"#{item}" for item in waiting.issue_numbers)
-        comment_issue(
-            number, repo=source_repo,
-            body=(
-                run_marker(run_id) + "\n"
-                "Orbi release waiting for deliveries\n"
-                f"open_deliveries: {detail}\n"
-                f"waited: {int(waiting.waited)}s / "
-                f"{int(waiting.limit)}s\n"
-                f"wait_started: {time.time()}\n"
-                f"run_id={run_id}"
-            ),
-        )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
-            action=lambda: publisher.finish(progress_body(progress())),
-        )
-        LOGGER.info(
-            "issue=%s release_waiting_deliveries_returned open=%s",
-            number, waiting.issue_numbers,
-        )
-        return ""
-    except Exception as exc:
-        LOGGER.exception("issue=%s release_failed", number)
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_BLOCKED,
-            current_labels={IN_PROGRESS_LABEL},
-        )
-        comment_issue(
-            number, repo=source_repo,
-            body=release_failure_comment_body(run_id, run_info, str(exc)),
-        )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_RELEASE,
-            action=lambda: publisher.finish(progress_body(progress())),
-        )
-        return ""
-
-
 def _pick_from_scan(
     issues: list[dict], repo: str, allow_release: bool = False,
+    active_milestone: str | None = None,
 ) -> dict | None:
     """Return the first claimable Issue of one scan result, else None.
 
@@ -4019,6 +2245,15 @@ def _pick_from_scan(
     ordinary scans skip an `ai-release` Issue (`release_not_claimed`) so
     a release never competes with an ordinary delivery for the slot; the
     release fallback scan passes `allow_release=True` and claims it.
+
+    A release candidate additionally passes the Milestone completeness
+    gate (Issue #663): while the Milestone still counts any other open
+    Issue (`open_issues > 1`), the release is skipped with the
+    structured `release_milestone_incomplete` line and the Issue stays
+    `ai-ready` for the next tick — a recoverable wait, never
+    `ai-blocked`. A Milestone query that cannot be evaluated skips the
+    release too (`release_milestone_check_failed`): a bad release is
+    irreversible, so the check fails safe and the next tick retries.
     """
     for issue in issues:
         if is_epic(issue):
@@ -4033,6 +2268,30 @@ def _pick_from_scan(
                 issue.get("number"), repo,
             )
             continue
+        if allow_release and is_release(issue):
+            target_milestone = release_target_milestone(
+                issue, active_milestone,
+            )
+            if target_milestone is not None:
+                try:
+                    open_issues = milestone_open_issue_count(
+                        repo, target_milestone,
+                    )
+                except Exception as exc:
+                    LOGGER.error(
+                        "release_milestone_check_failed issue=%s repo=%s "
+                        "milestone=%s error=%s",
+                        issue.get("number"), repo, target_milestone, exc,
+                    )
+                    return None
+                if open_issues > 1:
+                    LOGGER.info(
+                        "release_milestone_incomplete issue=%s repo=%s "
+                        "milestone=%s open_issues=%d",
+                        issue.get("number"), repo, target_milestone,
+                        open_issues,
+                    )
+                    continue
         blockers = open_blocker_numbers(issue)
         if blockers:
             LOGGER.info(
@@ -4049,7 +2308,8 @@ def _pick_from_scan(
     return None
 
 
-def pick_issue(repo: str, active_milestone: str | None = None) -> dict | None:
+def pick_issue(repo: str, active_milestone: str | None = None,
+               dispatch_label: str = READY_LABEL) -> dict | None:
     # A merged delivery keeps `ai-ready` + `ai-merged` on the (still
     # open) Issue; `ai-merged` is the success terminal state, so it is
     # excluded from the ready scan like every other delivery state.
@@ -4074,15 +2334,12 @@ def pick_issue(repo: str, active_milestone: str | None = None) -> dict | None:
     # fallback scan that runs AFTER all three found nothing claimable —
     # a release is a closing action and must never take the slot ahead
     # of an ordinary delivery.
-    for search in ready_searches(active_milestone):
+    for search in ready_searches(active_milestone, dispatch_label):
         try:
-            raw = run_command([
-                "gh", "issue", "list", "--repo", repo, "--state", "open",
-                "--search", search,
-                "--json", "number,title,body,labels,blockedBy",
-                "--limit", "200",
-            ])
-            issues = parse_issue_array(raw)
+            issues = list_issues(
+                repo, state="open", search=search,
+                json_fields="number,title,body,labels,blockedBy", limit=200,
+            )
         except Exception as exc:
             # Fail open (Issue #54): a failed blockedBy query must
             # never deadlock the queue. This tick claims nothing from
@@ -4099,29 +2356,40 @@ def pick_issue(repo: str, active_milestone: str | None = None) -> dict | None:
     # Release fallback (Issue #255): only when no ordinary delivery
     # (p0/bug/plain) is claimable. The query keeps `label:ai-ready` +
     # `label:ai-release` and the same delivery-state exclusions; the Epic
-    # and blockedBy guards still apply via `_pick_from_scan`. A failed
-    # fallback query fails open exactly like any other scan.
+    # and blockedBy guards still apply via `_pick_from_scan`. Issue
+    # #663: the release candidate also passes the Milestone completeness
+    # gate inside `_pick_from_scan`, so the query fetches `milestone`.
+    # A failed fallback query fails open exactly like any other scan.
     try:
-        raw = run_command([
-            "gh", "issue", "list", "--repo", repo, "--state", "open",
-            "--search", release_fallback_search(active_milestone),
-            "--json", "number,title,body,labels,blockedBy",
-            "--limit", "200",
-        ])
-        issues = parse_issue_array(raw)
+        issues = list_issues(
+            repo, state="open",
+            search=release_fallback_search(active_milestone, dispatch_label),
+            json_fields="number,title,body,labels,blockedBy,milestone",
+            limit=200,
+        )
     except Exception as exc:
         LOGGER.error(
             "blocked_by_check_failed repo=%s error=%s",
             repo, exc,
         )
         return None
-    return _pick_from_scan(issues, repo, allow_release=True)
+    return _pick_from_scan(
+        issues, repo, allow_release=True,
+        active_milestone=active_milestone,
+    )
 
 
 def pick_in_progress_issue(
     repo: str, slot_dir: Path, max_concurrency: int,
+    dispatch_label: str = READY_LABEL,
 ) -> dict | None:
     """Return one in-flight Issue a killed runner left behind.
+
+    `dispatch_label` is the repository's claim label (Issue #527): a
+    repository policy may replace `ai-ready` with its own label, and the
+    in-flight scan must find the SAME queue entry the ready scan used —
+    otherwise a killed (or model-wait-recovered) run would be stranded
+    forever in a repository with a custom dispatch label.
 
     A SIGKILLed runner leaves the task worktree and the `ai-in-progress`
     claim label behind (the failure path never ran); the Issue keeps
@@ -4150,18 +2418,25 @@ def pick_in_progress_issue(
     for _, holder in slot_occupancy(slot_dir, max_concurrency):
         if holder is not None and holder != mine:
             return None
-    raw = run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", "open",
-        "--search",
-        "label:ai-ready label:ai-in-progress "
-        f"-label:{PR_OPENED_LABEL} -label:{FIX_NEEDED_LABEL} "
-        f"-label:{MERGED_LABEL} -label:{BLOCKED_LABEL} "
-        f"-label:{EPIC_LABEL}",
-        # `labels` (Issue #101): a P0 a killed runner left behind
-        # keeps its priority in the progress comment on resume.
-        "--json", "number,title,body,labels", "--limit", "1",
-    ])
-    return parse_issue_list(raw)
+    label = dispatch_label or READY_LABEL
+    # `labels` (Issue #101): a P0 a killed runner left behind
+    # keeps its priority in the progress comment on resume.
+    # `milestone` (Issue #671): a release run killed mid-release is
+    # resumed with THIS dict, and `process_release` scopes its
+    # leftover-delivery gate to the release's own Milestone — the
+    # Issue is the authority (never `active_milestone`: a resume is
+    # not gated by a Milestone change, Issue #139).
+    issues = list_issues(
+        repo, state="open",
+        search=(
+            f"label:{label} label:{IN_PROGRESS_LABEL} "
+            f"-label:{PR_OPENED_LABEL} -label:{FIX_NEEDED_LABEL} "
+            f"-label:{MERGED_LABEL} -label:{BLOCKED_LABEL} "
+            f"-label:{EPIC_LABEL}"
+        ),
+        json_fields="number,title,body,labels,milestone", limit=1,
+    )
+    return issues[0] if issues else None
 
 
 def pick_next_issue(
@@ -4281,14 +2556,15 @@ def task_branch(source_repo: str, number: int, run_id: str | None = None) -> str
 
 
 def claim_route(labels: set[str], *, branch_exists: bool,
-                open_pr: bool) -> str:
+                open_pr: bool, ready_label: str = READY_LABEL) -> str:
     """Choose the fresh-claim action from the physical GitHub scene.
 
     This is deliberately pure: labels are the event and branch/PR existence
     is the observed physical state.  The existing review loop handles the
-    returned ``review`` route.
+    returned ``review`` route. `ready_label` is the repository's dispatch
+    label (Issue #527; default `ai-ready`).
     """
-    if open_pr and READY_LABEL in labels:
+    if open_pr and ready_label in labels:
         return "review"
     if open_pr and (PR_OPENED_LABEL in labels or FIX_NEEDED_LABEL in labels):
         return "review"
@@ -4391,11 +2667,19 @@ def _run_info_fields(run_info: str) -> dict[str, str]:
 
 
 def started_pi_comment_body(run_id: str, run_info: str, branch: str,
-                            worktree: Path) -> str:
-    """The start comment doubles as the recoverable run scene (Issue #45)."""
+                            worktree: Path,
+                            extra_fields: dict | None = None) -> str:
+    """The start comment doubles as the recoverable run scene (Issue #45).
+
+    `extra_fields` carries the repo-config audit fields (Issue #527, D4);
+    their values may contain spaces, so they are rendered by the field
+    block and never spliced into the space-separated `run_info`.
+    """
     fields = _run_info_fields(run_info)
     fields["branch"] = str(branch)
     fields["worktree"] = str(worktree)
+    if extra_fields:
+        fields.update(extra_fields)
     info = _run_info_fields(run_info)
     headline = "Orbi started Pi: " + " ".join(
         f"{key}={info[key]}" for key in ("run_id", "priority")
@@ -4517,6 +2801,17 @@ def _authenticated_github_login() -> str:
     return active_account
 
 
+def _strip_bot_suffix(login: str) -> str:
+    """Drop the optional ``[bot]`` suffix from an App login.
+
+    ``gh issue view --json comments`` reads comments through GraphQL and
+    reports ``author.login`` without the ``[bot]`` suffix, while REST's
+    ``user.login`` keeps it (Issue #655). Both shapes name the same App
+    credential, so the suffix is normalized away before comparison.
+    """
+    return login[:-5] if login.endswith("[bot]") else login
+
+
 def _comment_is_trusted(comment: object) -> bool:
     """True when the comment is from a maintainer or this runner's App bot."""
     if not isinstance(comment, dict):
@@ -4525,11 +2820,15 @@ def _comment_is_trusted(comment: object) -> bool:
         return True
     author = comment.get("author")
     login = author.get("login") if isinstance(author, dict) else None
-    if not isinstance(login, str) or not login.endswith("[bot]"):
+    if not isinstance(login, str):
         return False
     # A copied run marker is not sufficient: the author must be the account
-    # represented by the currently authenticated installation token.
-    return login == _authenticated_github_login()
+    # represented by the currently authenticated installation token. The
+    # optional `[bot]` suffix is normalized on both sides because GraphQL
+    # drops it and REST keeps it (Issue #655).
+    return _strip_bot_suffix(login) == _strip_bot_suffix(
+        _authenticated_github_login()
+    )
 
 
 def resume_scene(comments: list[dict]) -> dict:
@@ -4578,11 +2877,12 @@ def pick_resumable_delivery(
     positive `label:ai-fix-needed,ai-pr-opened` qualifier already
     restricts the scan to opened-PR Issues (an implement-phase Issue
     has `ai-ready`+`ai-in-progress` but neither opened-PR label, so it
-    never matches). A scene that cannot
-    be recovered is an unresolvable state: the Issue is marked
-    `ai-blocked` with the concrete reason and the error re-raised, so
-    the tick stops instead of silently skipping the delivery while a
-    fresh task starts ahead of it.
+    never matches). A scene that cannot be recovered is a SINGLE-Issue
+    failure (Issue #672): the Issue is marked `ai-blocked` with the
+    concrete reason (`block_scene_failure`) and the scan reports no
+    resumable delivery, so the tick continues with the in-flight and
+    ready scans and exits 0 — one corrupted Issue must never make every
+    tick crash while the whole queue waits.
 
     The scan runs only when no OTHER runner is live (the same guard as
     `pick_in_progress_issue`, Issue #39 slot semantics): a slot held by
@@ -4598,22 +2898,22 @@ def pick_resumable_delivery(
     for _, holder in slot_occupancy(slot_dir, max_concurrency):
         if holder is not None and holder != mine:
             return None
-    raw = run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", "open",
-        "--search",
-        # `label:a,b` is GitHub's OR within one label qualifier
-        # (verified live: repeating the qualifier matches only the
-        # first label). `ai-in-progress` is intentionally NOT excluded
-        # (Issue #178): a killed review runner leaves the backfilled
-        # in-flight label behind, and the positive qualifier above
-        # already keeps implement-phase Issues out.
-        f"label:{FIX_NEEDED_LABEL},{PR_OPENED_LABEL} "
-        f"-label:{BLOCKED_LABEL} -label:{MERGED_LABEL}",
-        # `labels` (Issue #101): a resumed P0 delivery keeps its
-        # priority in the progress comment through review/merge.
-        "--json", "number,title,state,url,labels", "--limit", "1",
-    ])
-    issues = parse_issue_array(raw)
+    # `label:a,b` is GitHub's OR within one label qualifier
+    # (verified live: repeating the qualifier matches only the
+    # first label). `ai-in-progress` is intentionally NOT excluded
+    # (Issue #178): a killed review runner leaves the backfilled
+    # in-flight label behind, and the positive qualifier above
+    # already keeps implement-phase Issues out.
+    # `labels` (Issue #101): a resumed P0 delivery keeps its
+    # priority in the progress comment through review/merge.
+    issues = list_issues(
+        repo, state="open",
+        search=(
+            f"label:{FIX_NEEDED_LABEL},{PR_OPENED_LABEL} "
+            f"-label:{BLOCKED_LABEL} -label:{MERGED_LABEL}"
+        ),
+        json_fields="number,title,state,url,labels", limit=1,
+    )
     if not issues:
         return None
     issue = issues[0]
@@ -4623,18 +2923,30 @@ def pick_resumable_delivery(
     try:
         scene = resume_scene(comments)
     except ValueError as exc:
+        # Issue #672: a malformed scene is scoped to this one Issue. The
+        # Issue is marked `ai-blocked` with the concrete reason, then the
+        # scan reports "no resumable delivery" so `pick_next_delivery`
+        # keeps scanning the in-flight restart and ready queues in the
+        # SAME tick (and exits 0) instead of letting the `ValueError`
+        # bubble out of `main` and kill the whole tick — the incident
+        # where one corrupted Issue stalled the entire queue every round.
         block_scene_failure(issue, exc, repo, comments)
+        return None
     return issue, scene
 
 
 def block_scene_failure(issue: dict, error: ValueError, repo: str,
                         comments: list[dict]) -> None:
-    """Mark an `ai-fix-needed` Issue `ai-blocked` when its scene is
-    malformed, then re-raise so the tick stops (Issue #45).
+    """Mark an opened-PR Issue `ai-blocked` when its scene is malformed.
 
-    The failure comment carries the run marker recovered from a trusted
-    comment when it is present — the same run id, never a new or
-    guessed one. The PR, branch and worktree stay intact.
+    The blocked transition is scoped to this one Issue (Issue #672): the
+    caller continues the tick, so a malformed scene never crashes the
+    whole runner. The failure comment carries the run marker recovered
+    from a trusted comment when it is present — the same run id, never a
+    new or guessed one. The PR, branch and worktree stay intact. A
+    failure of the reporting itself is logged, never raised: the Issue
+    then stays in its opened-PR state and the next tick retries the
+    block.
     """
     number = int(issue["number"])
     LOGGER.error(
@@ -4678,7 +2990,40 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
         )
     except Exception:
         LOGGER.exception("issue=%s failure reporting failed", number)
-    raise error
+
+
+def block_repo_config_failure(number: int, source_repo: str,
+                              error: ValueError, run_id: str,
+                              current_labels=()) -> None:
+    """Mark an Issue `ai-blocked` when its repo config is invalid (#527).
+
+    The strict repository schema is a fail-fast precondition: a file that
+    exists on the default branch but carries an unknown/host-only key, a
+    wrong type or invalid TOML blocks the claim with the concrete reason
+    and the offending key names. The failure is scoped to this repository
+    only (a sibling pool's valid config is unaffected). A failure of the
+    reporting itself is logged, never raised, so the tick still ends
+    cleanly (`main` releases the slot in its `finally`).
+    """
+    try:
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_BLOCKED,
+            current_labels=set(current_labels),
+        )
+        comment_issue(
+            number, repo=source_repo,
+            body=(
+                f"{run_marker(run_id)}\n"
+                f"Orbi failed: repository config is invalid: {error}; "
+                "this is a fail-fast repository precondition the AI does "
+                "not fix "
+                "itself — correct the file on the default branch "
+                "(remove the host-only/unknown key or fix the value) and "
+                "relabel the Issue ai-ready for a new run"
+            ),
+        )
+    except Exception:
+        LOGGER.exception("issue=%s repo_config_failure_report_failed", number)
 
 
 def _parse_version_title(title: object) -> tuple[int, int, int] | None:
@@ -4715,11 +3060,10 @@ def arm_release_ticket(repo: str, active_milestone: str) -> None:
         f"label:{RELEASE_LABEL} -label:{READY_LABEL} "
         f'milestone:"{active_milestone}"'
     )
-    raw = run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", "open",
-        "--search", search, "--json", "number", "--limit", "200",
-    ], timeout=30)
-    issues = parse_issue_array(raw)
+    issues = list_issues(
+        repo, state="open", search=search,
+        json_fields="number", limit=200, timeout=30,
+    )
     if not issues:
         return
     number = issues[0].get("number")
@@ -4740,11 +3084,10 @@ def _pending_milestone_issue(
     """Create one idempotent human-confirmation issue for a milestone advance."""
     titles = [str(candidate["title"]) for candidate in candidates]
     fingerprint = f"orbi-milestone-advance old={old} candidates={','.join(titles)}"
-    existing = parse_issue_array(run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", "all",
-        "--search", f'in:body "{fingerprint}"',
-        "--json", "number", "--limit", "1",
-    ], timeout=30))
+    existing = list_issues(
+        repo, state="all", search=f'in:body "{fingerprint}"',
+        json_fields="number", limit=1, timeout=30,
+    )
     if existing:
         return
     lines = [
@@ -4772,11 +3115,10 @@ def _pending_milestone_issue(
 
 def _close_stale_milestone_issues(repo: str, active_milestone: str) -> None:
     """Close manual advance notices that no longer match the config."""
-    issues = parse_issue_array(run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", "open",
-        "--search", 'in:body "orbi-milestone-advance"',
-        "--json", "number,body", "--limit", "200",
-    ], timeout=30))
+    issues = list_issues(
+        repo, state="open", search='in:body "orbi-milestone-advance"',
+        json_fields="number,body", limit=200, timeout=30,
+    )
     pattern = re.compile(r"orbi-milestone-advance old=([^ ]+)")
     for issue in issues:
         if not isinstance(issue, dict) or not isinstance(issue.get("number"), int):
@@ -4890,7 +3232,7 @@ def advance_active_milestone_on_idle(
 
 def pick_next_delivery(
     repos: list[str], slot_dir: Path, max_concurrency: int,
-    active_milestone: str | None = None,
+    active_milestone: str | None = None, config: dict | None = None,
 ) -> tuple[str, dict, dict | None] | None:
     """Scan sources in order: resumable PRs, in-flight restarts, ready.
 
@@ -4936,16 +3278,62 @@ def pick_next_delivery(
             issue, scene = selected
             return repo, issue, scene
     for repo in repos:
+        _, dispatch_label = _repo_scan_keys(config, repo, active_milestone)
         issue = pick_in_progress_issue(
             repo, slot_dir, max_concurrency,
+            dispatch_label=dispatch_label,
         )
         if issue is not None:
             return repo, issue, None
     for repo in repos:
-        issue = pick_issue(repo, active_milestone)
+        issue = _pick_issue_with_repo_policy(repo, active_milestone, config)
         if issue is not None:
             return repo, issue, None
     return None
+
+
+def _repo_scan_keys(
+    config: dict | None, repo: str, active_milestone: str | None,
+) -> tuple[str | None, str]:
+    """Resolve one source repo's scan keys from its policy (Issue #527).
+
+    Returns `(active_milestone, dispatch_label)`. The read is fail-open and
+    a malformed repository file is ignored here (host keys keep the scan
+    alive): `process_issue` re-reads the file at claim and blocks the
+    Issue with the readable reason instead of silently claiming nothing.
+    """
+    if config is None:
+        return active_milestone, READY_LABEL
+    try:
+        record = load_repo_policy(config, repo)
+    except RepoConfigError as exc:
+        LOGGER.error(
+            "repo_config_invalid repo=%s reason=%s", repo, exc,
+        )
+        record = None
+    if record is None:
+        return active_milestone, READY_LABEL
+    policy = record["policy"]
+    return (
+        policy.get("active_milestone", active_milestone),
+        policy.get("dispatch_label", READY_LABEL),
+    )
+
+
+def _pick_issue_with_repo_policy(
+    repo: str, active_milestone: str | None, config: dict | None,
+) -> dict | None:
+    """Fresh ready scan with the repo's scan keys (Issue #527).
+
+    `dispatch_label` and `active_milestone` are resolved from the
+    repository policy before the scan (see `_repo_scan_keys`).
+    """
+    milestone, dispatch_label = _repo_scan_keys(
+        config, repo, active_milestone,
+    )
+    if dispatch_label == READY_LABEL:
+        return pick_issue(repo, milestone)
+    return pick_issue(repo, milestone, dispatch_label=dispatch_label)
 
 
 def worktree_path(repo_dir: Path, source_repo: str, number: int,
@@ -4978,6 +3366,12 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
     the named branch is fetched and reused (a local branch is reused
     with `--force`, never a second `-b` — the exit-255 claim failure of
     Issue #608); without it the branch is created from the frozen base.
+
+    A local branch that already exists (the orphan a SIGKILLed run
+    leaves with no worktree and no remote counterpart, Issue #662) is
+    reused as-is rather than re-created with `-b`: git exits 255 on an
+    existing branch, which used to burn the re-claimed Issue into
+    terminal `ai-blocked`.
     """
     if existing is not None and existing.is_dir():
         return existing
@@ -5004,9 +3398,24 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
                 f"origin/{branch}",
             ], cwd=repo_dir)
     else:
-        run_command([
-            "git", "worktree", "add", "-b", branch, str(path), base_sha,
-        ], cwd=repo_dir)
+        # Issue #662 (the #655 incident): a SIGKILLed run can leave the
+        # stable branch behind with no worktree and no remote counterpart
+        # (a pure orphan).  `worktree add -b` cannot re-create it — git
+        # exits 255 (`fatal: a branch named ... already exists`) and the
+        # claim used to be burned into terminal `ai-blocked`.  The branch
+        # is the delivery identity, so a local one is reused as-is; only
+        # a missing branch is created from the frozen base SHA.
+        local = run_command(
+            ["git", "branch", "--list", branch], cwd=repo_dir,
+        )
+        if local.strip():
+            run_command([
+                "git", "worktree", "add", str(path), branch,
+            ], cwd=repo_dir)
+        else:
+            run_command([
+                "git", "worktree", "add", "-b", branch, str(path), base_sha,
+            ], cwd=repo_dir)
     return path
 
 
@@ -5263,1014 +3672,55 @@ def has_in_progress_label(number: int, repo: str) -> bool:
     failure path, so it is the marker of a run that is (or was, when
     the runner died) in flight — as opposed to the preserved worktrees
     of completed runs (Issue #18).
+
+    Read via `gh issue view` — a direct, strongly consistent read. The
+    pre-#658 implementation used `gh issue list --search`, the same
+    eventually-consistent index the pickup scan reads, so it could not
+    see a label another instance added seconds ago — exactly the moment
+    this check exists to catch (the pre-claim race guard).
     """
     raw = run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", "all",
-        "--search", f"label:{IN_PROGRESS_LABEL}",
-        "--json", "number", "--limit", "50",
+        "gh", "issue", "view", str(number), "--repo", repo,
+        "--json", "labels",
     ])
-    issues = parse_issue_array(raw)
-    return any(int(issue.get("number", -1)) == number for issue in issues)
+    details = json.loads(raw)
+    if not isinstance(details, dict):
+        raise ValueError("issue view must return a JSON object")
+    labels = details.get("labels")
+    if not isinstance(labels, list):
+        raise ValueError("issue view labels must be a JSON array")
+    return any(
+        isinstance(label, dict) and label.get("name") == IN_PROGRESS_LABEL
+        for label in labels
+    )
 
 
-def _drain_stream(stream, chunks: list[bytes]) -> None:
-    """Read a pipe to EOF, appending chunks (process must be finished)."""
-    while True:
-        data = os.read(stream.fileno(), 65536)
-        if not data:
-            return
-        chunks.append(data)
+def is_content_only(issue: dict) -> bool:
+    """Return True only for the explicit content-only task marker.
 
-
-def _decode_chunks(chunks: list[bytes]) -> str:
-    return b"".join(chunks).decode("utf-8", "replace")
-
-
-def _log_activity(activity: dict, *, issue_ref: str,
-                  role: str, state: str | None = None) -> None:
-    """Log one short activity line with the changed fields only.
-
-    No `run=` field (Issue #57): the `[run_id]` prefix added by
-    `RunIdFilter` (Issue #41) is the single run-id carrier on the
-    high-frequency lines, so the id appears exactly once per line.
+    Issue #209 introduced the content agent; #530 renamed its label and
+    #537 gave that name to the full-execution ops path — the content
+    path dispatches on `ai-content-only` now.
     """
-    LOGGER.info(
-        "activity issue=%s role=%s phase=%s action=%s result=%s "
-        "state=%s idle=%s",
-        issue_ref, role, activity["phase"],
-        quote_value(activity["action"] or "-"),
-        activity["result"] or "-",
-        state or "-",
-        format_duration(activity["stale_seconds"]),
-    )
-
-
-def _log_heartbeat(activity: dict, *, issue_ref: str,
-                   role: str, elapsed: float,
-                   state: str | None = None) -> None:
-    """Log one heartbeat line when nothing changed since the last poll.
-
-    `state` carries the model_wait flag while the model is expected to
-    reply next, so a slow active model is not reported as idle (Issue
-    #40). No `run=` field (Issue #57): the `[run_id]` prefix is the
-    single run-id carrier on the high-frequency lines.
-    """
-    LOGGER.info(
-        "heartbeat issue=%s role=%s phase=%s state=%s elapsed=%s "
-        "idle=%s",
-        issue_ref, role, activity["phase"], state or "-",
-        format_duration(elapsed), format_duration(activity["stale_seconds"]),
-    )
-
-
-def _log_startup(event: str, *, issue_ref: str, role: str, activity: dict,
-                 elapsed: float, extra: str = "") -> None:
-    """Log one startup phase line (Issue #176).
-
-    Every startup phase (`process_spawned`, `session_created`,
-    `first_request_started`, `first_response_received`,
-    `startup_failed`) is one stable `key=value` line carrying the issue,
-    role, the provider/model Pi selected (`-` until the session's
-    `model_change` record says otherwise), the elapsed time since the
-    Pi process was spawned, and any extra fields of the phase (`pid=`,
-    `reason=`, `session_created=`, `first_request=`). No `run=` field
-    (Issue #57): the `[run_id]` prefix is the single run-id carrier.
-    Identifiers only — never a key, the prompt or model output.
-    """
-    LOGGER.info(
-        "%s issue=%s role=%s provider=%s model=%s elapsed=%s%s",
-        event, issue_ref, role, activity.get("provider") or "-",
-        activity.get("model") or "-", format_duration(elapsed),
-        f" {extra}" if extra else "",
-    )
-
-
-def _classify_startup_exit(stderr: str, returncode: int) -> str:
-    """The distinguishable `startup_failed` reason for an early Pi exit
-    (Issue #176).
-
-    The classification is evidence-based on Pi's own stderr (the
-    minimal correlation the Issue asks for): a provider authentication
-    failure (`401`/`403`, `unauthorized`, `forbidden`, `api key`) is
-    `auth_failure`; a network timeout (`timed out`, `timeout`,
-    `etimedout`, `econnrefused`, `econnreset`, `enotfound`) is
-    `network_timeout`; anything else is the raw exit code
-    (`pi_exit_<N>`). The stderr text itself is NOT echoed into the
-    reason — only the class — so no sensitive response content can
-    leak into the journal.
-    """
-    lowered = stderr.lower()
-    if ("401" in lowered or "403" in lowered or "unauthorized" in lowered
-            or "forbidden" in lowered or "api key" in lowered):
-        return "auth_failure"
-    if ("timed out" in lowered or "timeout" in lowered
-            or "etimedout" in lowered or "econnrefused" in lowered
-            or "econnreset" in lowered or "enotfound" in lowered):
-        return "network_timeout"
-    return f"pi_exit_{returncode}"
-
-
-def _log_provider_config_loaded(*, issue_ref: str, role: str, config: dict,
-                                elapsed: float) -> None:
-    """Log the `provider_config_loaded` startup line (Issue #176).
-
-    The provider file has been loaded and validated (at config load)
-    and materialized for this run — or resolved to Pi's own agent dir
-    when unconfigured. The provider/model fields are the configured
-    identifiers (the same non-sensitive values already on the redacted
-    command line, Issue #119) or `-` when Pi keeps its own defaults.
-    """
-    _log_startup(
-        "provider_config_loaded", issue_ref=issue_ref, role=role,
-        activity={"provider": config.get("pi_provider"),
-                  "model": config.get("pi_model")},
-        elapsed=elapsed,
-    )
-
-
-def _log_startup_failed(*, issue_ref: str, role: str, activity: dict,
-                        elapsed: float, returncode: int, stderr: str,
-                        timed_out: bool, model_wait_dead: bool,
-                        model_wait_swallowed: bool,
-                        idle_recovery_failed: bool) -> None:
-    """Log one `startup_failed` line (Issue #176): the run failed
-    BEFORE the first response, so the line says WHERE the startup was
-    stuck (`session_created=`, `first_request=`) plus the
-    distinguishable `reason=`. The existing `run_failed` scene line and
-    the raised exception are unchanged (fail-fast semantics preserved).
-    """
-    reason = _startup_failed_reason(
-        activity, returncode=returncode, stderr=stderr,
-        timed_out=timed_out, model_wait_dead=model_wait_dead,
-        model_wait_swallowed=model_wait_swallowed,
-        idle_recovery_failed=idle_recovery_failed,
-    )
-    _log_startup(
-        "startup_failed", issue_ref=issue_ref, role=role,
-        activity=activity, elapsed=elapsed,
-        extra=(
-            f"session_created="
-            f"{'true' if activity['session_file'] else 'false'} "
-            f"first_request="
-            f"{'true' if activity['first_request'] else 'false'} "
-            f"reason={reason}"
-        ),
-    )
-
-
-def _startup_failed_reason(activity: dict, *, returncode: int,
-                           stderr: str, timed_out: bool,
-                           model_wait_dead: bool,
-                           model_wait_swallowed: bool,
-                           idle_recovery_failed: bool) -> str:
-    """The `startup_failed` reason for a failure before the first
-    response (Issue #176): the kill-path class first, then the
-    root-cause evidence from Pi's stderr (`auth_failure` /
-    `network_timeout` — the missing session file is usually the
-    CONSEQUENCE of the auth/network failure, never the cause), then
-    WHERE the startup was stuck (`session_not_created` /
-    `no_first_request` / the raw early exit). `first_response_timeout`
-    is the frozen `model_wait` killed before any response (the hung
-    first request)."""
-    if idle_recovery_failed:
-        return "idle_recovery_stale"
-    if model_wait_swallowed:
-        return "model_wait_swallowed"
-    if model_wait_dead:
-        return "first_response_timeout"
-    if timed_out:
-        return "timeout"
-    classified = _classify_startup_exit(stderr, returncode)
-    if classified != f"pi_exit_{returncode}":
-        return classified
-    if not activity["session_file"]:
-        return "session_not_created"
-    if not activity["first_request"]:
-        return "no_first_request"
-    return classified
-
-
-def _pending_timeout_targets(targets: list[dict]) -> list[tuple[dict, float]]:
-    """The pre-idle descendants still INSIDE an explicit `timeout`
-    deadline (Issue #169): `[(target, deadline_epoch), ...]`.
-
-    A descendant whose command line carries a coreutils
-    `timeout <seconds>` wrapper and whose deadline is still in the
-    future is a legitimately running tool — the runner waits for the
-    deadline instead of signaling it. The age is measured CLOCK
-    CONSISTENTLY (Issue #169): the process's boot-time start offset
-    (stat field 22) against CLOCK_BOOTTIME, never the
-    realtime-flavoured `process_start_epoch` — a realtime step after
-    boot (NTP) must not make a tool look older than it is. A
-    descendant without a clear timeout, whose start time is unreadable,
-    or whose deadline already passed is not pending: the existing
-    escalation applies to it.
-    """
-    if not targets:
-        return []
-    hz = clk_tck()
-    boot_clock = getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC)
-    now_mono = time.clock_gettime(boot_clock)
-    now = time.time()
-    starts = {
-        target["pid"]: process_start_monotonic(target["pid"], hz=hz)
-        for target in targets
-    }
-    durations = {
-        target["pid"]: timeout_duration(target["cmdline"] or "")
-        for target in targets
-    }
-    # coreutils timeout forks the actual tool. The child has no `timeout`
-    # token in its command line, but it is still governed by the wrapper's
-    # deadline and must not be mistaken for a hung tool.
-    wrapper_deadlines = {
-        pid: (start, durations[pid])
-        for pid, start in starts.items()
-        if start is not None and durations[pid] is not None
-    }
-    pending: list[tuple[dict, float]] = []
-    for target in targets:
-        pid = target["pid"]
-        start_mono = starts[pid]
-        duration = durations[pid]
-        if duration is None:
-            parent = process_ppid(pid)
-            if parent not in wrapper_deadlines:
-                continue
-            # The wrapper itself is the single wait record. Keeping the
-            # delegated child out of the result avoids duplicate evidence;
-            # the non-empty wrapper result also protects the child from
-            # escalation while its wrapper is inside the deadline.
-            continue
-        if start_mono is None:
-            continue
-        remaining = duration - (now_mono - start_mono)
-        if remaining > 0:
-            pending.append((target, now + remaining))
-    return pending
-
-
-def stream_pi(
-    command: list[str],
-    *,
-    cwd: Path,
-    timeout: int | None = None,
-    poll_interval: float = PI_POLL_INTERVAL,
-    idle_warn_seconds: float = PI_IDLE_WARN_SECONDS,
-    model_wait_dead_seconds: float = PI_MODEL_WAIT_DEAD_SECONDS,
-    model_wait_probe_url: str | None = None,
-    model_wait_probe_seconds: float = PI_MODEL_WAIT_PROBE_SECONDS,
-    run_id: str,
-    issue: int,
-    source_repo: str,
-    branch: str,
-    role: str = ROLE_IMPLEMENT,
-    log_command: list[str] | None = None,
-    progress: Callable[[dict], None] | None = None,
-    pi_env: dict[str, str] | None = None,
-) -> str:
-    """Run Pi and stream concise live activity into the journal (Issue #40).
-
-    The full invariant scene (branch, worktree, session file) is logged
-    once as `run_start`. While Pi runs, only short changed fields are
-    logged: `activity` when phase/action/result change, `heartbeat` at
-    the poll interval otherwise (the idle time rides on the line). A slow
-    active model is not reported as idle: when the newest session event
-    is a tool result the state is `model_wait` (one transition line on
-    entry, one `resumed` line when the next session event arrives, and
-    only configured-interval heartbeats while waiting — no warning
-    spam). On a non-zero exit or timeout a `run_failed` line carries the
-    full scene again as the debug entry. The caller logs `run_end` once
-    the PR and commit are known. The session JSONL stays in the worktree
-    as the complete local record; the full prompt and Issue body are
-    never logged.
-
-    Startup phases (Issue #176): `process_spawned` is logged right
-    after the spawn (with the pid); `session_created`,
-    `first_request_started` and `first_response_received` are logged
-    once each as the session JSONL crosses the milestones (the session
-    record, the first user message, the first assistant message) — each
-    line carries the provider/model Pi selected by that point and the
-    elapsed time since the spawn. The live lines' `phase` is the
-    startup sub-phase while the first response is outstanding
-    (`session_pending` / `request_pending`), so a run stuck at
-    `starting` is locatable to its startup phase from the journal and
-    the progress comment alone. A failure before the first response
-    additionally logs `startup_failed` with the distinguishable reason
-    (`session_not_created`, `no_first_request`, `auth_failure`,
-    `network_timeout`, `pi_exit_<N>`, `timeout`,
-    `first_response_timeout`, `model_wait_swallowed`,
-    `idle_recovery_stale`); the existing `run_failed` line and the
-    raised failure are unchanged (fail-fast semantics preserved).
-
-    `progress` (Issue #18) is invoked on EVERY poll — an activity change
-    or a heartbeat — with the current activity state, while the Pi
-    process is still running: the caller renders the live GitHub
-    progress comment and PATCHes the same run-marker comment in place,
-    so mobile users never see a static starting comment for the whole
-    run. A callback error is logged and never interrupts the task
-    (observability is best-effort, the delivery is not).
-
-    Idle warning (Issue #18): when no model/session event arrives for
-    `idle_warn_seconds` (default 5 minutes) and the state is NOT
-    model_wait, ONE `pi_idle` WARNING carries `stale_seconds`; the
-    first new session event after it logs `pi_resumed`. A slow active
-    model (model_wait) is never reported idle (Issue #40).
-
-    Idle-stall recovery (Issue #94): the warning is no longer the end
-    of the story. While the session stays stalled (no new activity,
-    not model_wait) the runner recovers it, one step per idle window
-    of `idle_warn_seconds` since the stall was first seen:
-    window 1 SIGTERMs the Pi descendants that already existed before
-    the window (the hung tools — found by the ppid chain in
-    `/proc/<pid>/stat` plus their start time, never a name guess) so
-    the tool gets a non-zero exit and the failure signal reaches the
-    model; window 2 SIGKILLs a target that survived; after
-    `PI_IDLE_RECOVERY_CYCLES` (default 3) consecutive idle windows the
-    Pi session itself is killed and the run fails fast through the
-    normal failure path (`ai-blocked`, the slot released) — the slot
-    is never held forever. Every step logs a `pi_idle_term` /
-    `pi_idle_kill` line (run id, pid, cmdline, result) and the live
-    progress comment shows the recovery state via the `recovery`
-    activity field. The first new session event resets the whole
-    recovery state (`pi_resumed`).
-    """
-    # The raw pi command embeds the full prompt and Issue body; only the
-    # redacted form may ever reach the journal or an exception message.
-    safe_command = log_command or ["<redacted>"]
-    LOGGER.info("command=%s cwd=%s", " ".join(safe_command), cwd)
-    issue_ref = issue_context(source_repo, issue)
-    session_dir = cwd / ".pi-session"
-    # Session files that already exist before this Pi process starts are
-    # never followed: a resumed run (same worktree) creates a NEW JSONL,
-    # and the journal must report the session of the current invocation,
-    # not the previous run's (Issue #45 round-5 review, Major 3).
-    known_files = (
-        {path for path in session_dir.glob("*.jsonl") if path.is_file()}
-        if session_dir.is_dir() else set()
-    )
-    watcher = SessionWatcher(session_dir, known_files=known_files)
-    start = time.monotonic()
-    # The initial state is what run_start already reported; activity lines
-    # are only emitted when the visible fields actually change.
-    initial = watcher.poll()
-    last_visible = (initial["phase"], initial["action"], initial["result"])
-    # Issue #157: `pi_env` carries the per-run Pi agent dir
-    # (`PI_CODING_AGENT_DIR`, verified against real Pi 0.84.3) so the
-    # configured provider file is visible to Pi. Absent -> the process
-    # inherits the Runner's environment unchanged (pre-#157 shape).
-    process = subprocess.Popen(
-        command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        env=None if pi_env is None else {**os.environ, **pi_env},
-    )
-    # Track the live Pi child for the stop handler (Issue #48): a
-    # SIGTERM during this window must shut the child down, never
-    # orphan it. Cleared again once the child is reaped (finally).
-    set_active_pi(process)
-    # Startup phase (Issue #176): the process is spawned — the first
-    # sub-phase of `starting` is now observable (pid, elapsed since
-    # spawn). The run_start scene line below carries the same
-    # pre-session state (phase=session_pending); from here the live
-    # lines and the milestone lines carry the startup sub-phases.
-    _log_startup(
-        "process_spawned", issue_ref=issue_ref, role=role,
-        activity=initial, elapsed=0.0, extra=f"pid={process.pid}",
-    )
-    LOGGER.info(
-        "run_start %s",
-        format_run_scene(
-            initial, run_id=run_id, issue=issue_ref,
-            role=role, branch=branch, worktree=str(cwd),
-        ),
-    )
-    stdout_chunks: list[bytes] = []
-    stderr_chunks: list[bytes] = []
-    deadline = None if timeout is None else time.monotonic() + timeout
-    activity = watcher.poll()
-    timed_out = False
-    model_wait_dead = False
-    # Startup milestones already reported (Issue #176): each flips once
-    # per session file (a resumed run creates a NEW file, and its
-    # first request/response are the new session's — the watcher
-    # resets the flags on the switch, so the lines fire again for the
-    # new session, exactly once each).
-    startup_seen = (False, False, False)
-    # Swallowed-model-request probe state (Issue #233): the monotonic
-    # moment the /slots probe first reported every slot idle while Pi was
-    # in model_wait (None until then). Reset whenever a slot is processing,
-    # the probe is inconclusive, or model_wait is left. When the idle
-    # state has been sustained for `model_wait_probe_seconds` the request
-    # is declared swallowed and Pi is killed fast (well before the
-    # model_wait_dead_seconds bound).
-    probe_first_idle: float | None = None
-    model_wait_swallowed = False
-    # model_wait transitions (Issue #40): one line when the state is
-    # entered and one when it is left; unchanged polls are heartbeats
-    # that carry the state, so a slow model never looks idle and no
-    # warning is ever escalated from a slow response.
-    last_model_wait = activity["model_wait"]
-    # Idle warning state (Issue #18): at most one `pi_idle` warning per
-    # stall; the first new session event after it logs `pi_resumed`.
-    idle_warned = False
-    # Idle-stall recovery state (Issue #94): `idle_start_epoch` marks
-    # the start of the current idle window (only descendants that
-    # started no later than it are targets — a process spawned after
-    # the window began is a new tool call, never a target); `recovery`
-    # is the live state shown in the GitHub progress comment (None /
-    # `term` / `kill`); `recovery_targets` are the TERMed descendants
-    # tracked for the KILL escalation; `recovery_step` is the highest
-    # escalation step already executed (0 none, 1 TERM, 2 KILL).
-    idle_start_epoch: float | None = None
-    # The monotonic moment the idle window opened: escalation is
-    # measured in idle windows of NEW silence since the runner first
-    # saw the stall (never in absolute stale seconds — a session that
-    # is already stale when the window opens, e.g. old record
-    # timestamps, starts at step one, not at the session kill).
-    idle_start_monotonic: float | None = None
-    recovery: str | None = None
-    recovery_targets: list[dict] = []
-    recovery_step = 0
-    # Past-deadline `timeout` targets first observed alive, mapped to
-    # the idle cycle they were first observed (Issue #181): the
-    # wrapper's own deadline handling (alarm -> signal delivery ->
-    # exit) is best-effort and can be delayed by scheduling, so ONE
-    # "past deadline and still alive" observation is not evidence the
-    # wrapper failed. The target is recorded in the cycle its nominal
-    # deadline passes (the grace cycle — nothing is signaled) and
-    # signaled only if it is STILL alive one full idle window later
-    # (cycle > recorded cycle); a pid that exits in the meantime is
-    # dropped (it simply stops being a target).
-    deadline_passed: dict[int, int] = {}
-    # The `pi_idle_wait` decision is logged once per stall (Issue #169):
-    # the escalation re-evaluates every window while the tool is inside
-    # its `timeout` deadline, but the journal carries one decision line.
-    idle_wait_logged = False
-    idle_recovery_failed = False
-    try:
-        while True:
-            if deadline is not None and time.monotonic() >= deadline:
-                process.kill()
-                timed_out = True
-                break
-            ready, _, _ = select.select(
-                [process.stdout, process.stderr], [], [], poll_interval,
-            )
-            for stream in ready:
-                data = os.read(stream.fileno(), 65536)
-                if data:
-                    if stream is process.stdout:
-                        stdout_chunks.append(data)
-                    else:
-                        stderr_chunks.append(data)
-            activity = watcher.poll()
-            # Startup milestones (Issue #176): one line per flip — the
-            # session file appeared, the first request went out, the
-            # first response arrived. Each carries the provider/model
-            # selected by that point and the elapsed time since spawn.
-            # A session switch resets the watcher flags, so a resumed
-            # invocation reports its NEW session's milestones once each.
-            seen = (
-                activity["session_file"] is not None,
-                activity["first_request"],
-                activity["first_response"],
-            )
-            if seen != startup_seen:
-                if seen[0] and not startup_seen[0]:
-                    _log_startup(
-                        "session_created", issue_ref=issue_ref,
-                        role=role, activity=activity,
-                        elapsed=time.monotonic() - start,
-                    )
-                if seen[1] and not startup_seen[1]:
-                    _log_startup(
-                        "first_request_started", issue_ref=issue_ref,
-                        role=role, activity=activity,
-                        elapsed=time.monotonic() - start,
-                    )
-                if seen[2] and not startup_seen[2]:
-                    _log_startup(
-                        "first_response_received", issue_ref=issue_ref,
-                        role=role, activity=activity,
-                        elapsed=time.monotonic() - start,
-                    )
-                startup_seen = seen
-            visible = (
-                activity["phase"], activity["action"], activity["result"],
-            )
-            # The wait state rides on the activity/heartbeat lines
-            # (Issue #40). Once the model_wait silence crosses the dead
-            # threshold the wait is DEAD, not slow (Issue #218): the
-            # state is `model_wait_slow` on the last heartbeat before
-            # the kill below — visible, and the kill fires on this same
-            # poll regardless of the connection state.
-            if activity["model_wait"]:
-                wait_state = (
-                    "model_wait_slow"
-                    if activity["stale_seconds"] >= model_wait_dead_seconds
-                    else "model_wait"
-                )
-            else:
-                wait_state = None
-            if visible != last_visible:
-                # Only changed fields are repeated; an unchanged poll is a
-                # heartbeat (Issue #40).
-                _log_activity(
-                    activity, issue_ref=issue_ref,
-                    role=role,
-                    state=wait_state,
-                )
-                last_visible = visible
-            else:
-                _log_heartbeat(
-                    activity, issue_ref=issue_ref,
-                    role=role, elapsed=time.monotonic() - start,
-                    state=wait_state,
-                )
-            if activity["model_wait"] != last_model_wait:
-                # One transition line per state change: entering model_wait
-                # (the model is expected to reply next) or leaving it
-                # (the next session event arrived: resumed). No `run=`
-                # field: the `[run_id]` prefix carries the run id
-                # (Issue #57).
-                LOGGER.info(
-                    "%s issue=%s role=%s phase=%s state=%s",
-                    "model_wait" if activity["model_wait"] else "resumed",
-                    issue_ref, role,
-                    activity["phase"],
-                    "model_wait" if activity["model_wait"] else "resumed",
-                )
-                last_model_wait = activity["model_wait"]
-                # Leaving model_wait (the next session event arrived):
-                # the swallow-probe window is over — reset it so a later
-                # model_wait starts a fresh window (Issue #233).
-                if not activity["model_wait"]:
-                    probe_first_idle = None
-            # Idle warning (Issue #18): a stalled session (no model/
-            # session event for `idle_warn_seconds`, and the model is
-            # not expected to reply next) logs ONE `pi_idle` warning
-            # with the stale time; the first new session event after it
-            # logs `pi_resumed`. A slow active model (model_wait) never
-            # warns (Issue #40).
-            if idle_warned and activity["changed"]:
-                # No `run=` field: the `[run_id]` prefix carries the run
-                # id (Issue #57).
-                LOGGER.info(
-                    "pi_resumed issue=%s role=%s phase=%s",
-                    issue_ref, role, activity["phase"],
-                )
-                idle_warned = False
-                # The stall is over: the whole recovery state resets
-                # (Issue #94) — a later stall starts a fresh window.
-                idle_start_epoch = None
-                idle_start_monotonic = None
-                recovery = None
-                recovery_targets = []
-                recovery_step = 0
-                idle_wait_logged = False
-                deadline_passed.clear()
-            elif (
-                not activity["model_wait"]
-                and not idle_warned
-                and activity["stale_seconds"] >= idle_warn_seconds
-            ):
-                # No `run=` field: the `[run_id]` prefix carries the run
-                # id (Issue #57).
-                LOGGER.warning(
-                    "pi_idle issue=%s role=%s phase=%s "
-                    "stale_seconds=%s",
-                    issue_ref, role, activity["phase"],
-                    format_duration(activity["stale_seconds"]),
-                )
-                idle_warned = True
-                # The idle window starts now (Issue #94): only
-                # descendants that already existed before this moment
-                # are recovery targets.
-                idle_start_epoch = time.time()
-                idle_start_monotonic = time.monotonic()
-            # Idle-stall recovery (Issue #94): a stalled session (no
-            # model/session activity for idle windows, and the model is
-            # NOT expected to reply next) is recovered instead of only
-            # warning. Escalation, one step per idle window:
-            #   window 1: SIGTERM the pre-idle descendants (the hung
-            #             tools) — the tool gets a non-zero exit, the
-            #             failure signal reaches the model, the session
-            #             continues on its own;
-            #   window 2: SIGKILL a TERMed target that is still alive;
-            #   window N (PI_IDLE_RECOVERY_CYCLES, default 3): kill the
-            #             Pi session itself and fail fast through the
-            #             normal `ai-blocked` path (the slot is never
-            #             held forever). Only pi descendants (ppid
-            #             chain) that started no later than the idle
-            #             start are ever signaled — never other system
-            #             processes, never a process spawned after the
-            #             window began. The progress comment is synced
-            #             via the `recovery` activity field.
-            if (
-                idle_warned
-                and not activity["model_wait"]
-                and activity["stale_seconds"] >= idle_warn_seconds
-                and idle_start_epoch is not None
-            ):
-                # Escalation is measured in idle windows of NEW silence
-                # since the window opened (never in absolute stale
-                # seconds): a session that is already stale when the
-                # window opens (e.g. old record timestamps) starts at
-                # step one, not at the session kill.
-                silence = time.monotonic() - idle_start_monotonic
-                cycle = int(silence // idle_warn_seconds) + 1
-                if cycle >= 1 and recovery_step == 0:
-                    targets = find_idle_descendants(
-                        process.pid, idle_start_epoch,
-                    )
-                    # Evidence-based wait (Issue #169, the #105
-                    # regression): a pre-idle descendant that runs a
-                    # coreutils `timeout <seconds> ...` wrapper INSIDE
-                    # its deadline is a legitimately running tool, not a
-                    # hung one — the runner waits for the deadline
-                    # instead of TERMed it. The wait decision is logged
-                    # once and the escalation pauses (recovery_step stays
-                    # 0): every later window re-evaluates, and when the
-                    # deadline passes with the descendant still alive the
-                    # evidence flips and the TERM → KILL → session-kill
-                    # escalation runs unchanged (the slot is never held
-                    # forever).
-                    pending = _pending_timeout_targets(targets)
-                    if pending:
-                        if not idle_wait_logged:
-                            for target, deadline in pending:
-                                LOGGER.warning(
-                                    "pi_idle_wait run=%s issue=%s role=%s "
-                                    "pid=%s cmdline=%s deadline=%s",
-                                    run_id, issue_ref, role, target["pid"],
-                                    quote_value(target["cmdline"] or "-"),
-                                    time.strftime(
-                                        "%Y-%m-%dT%H:%M:%SZ",
-                                        time.gmtime(deadline),
-                                    ),
-                                )
-                            idle_wait_logged = True
-                        recovery = "wait"
-                    else:
-                        # Past-deadline grace (Issue #181): a target
-                        # whose nominal `timeout` deadline passed is
-                        # NOT escalated in the window it is first
-                        # observed alive — the wrapper's own deadline
-                        # handling (alarm -> signal delivery -> exit)
-                        # is best-effort and can be delayed by
-                        # scheduling, so one "past deadline and still
-                        # alive" observation is not evidence the
-                        # wrapper failed. The pid is recorded (the
-                        # grace window, nothing is signaled) and
-                        # signaled only if it is STILL alive in a
-                        # later escalation window; a pid that exits in
-                        # the meantime is dropped. The `recovery=wait`
-                        # state stays visible while the grace runs
-                        # (the tool is still inside its own deadline
-                        # handling, not hung).
-                        # Issue #181: the grace is measured in idle
-                        # windows, not polls — a target first observed
-                        # past its deadline in cycle N is signaled only
-                        # if it is still alive in a LATER cycle (one
-                        # full idle window of grace for the wrapper's
-                        # own deadline handling).
-                        flipped = [
-                            target for target in targets
-                            if target["pid"] in deadline_passed
-                            and deadline_passed[target["pid"]] < cycle
-                        ]
-                        newly_passed = [
-                            target for target in targets
-                            if target["pid"] not in deadline_passed
-                        ]
-                        if flipped:
-                            # Still alive one full idle window after
-                            # the nominal deadline: the wrapper failed
-                            # to end the command — the evidence is
-                            # confirmed, the TERM -> KILL ->
-                            # session-kill escalation runs unchanged
-                            # (the slot is never held forever). A
-                            # target first observed past its deadline
-                            # in this same cycle is NOT recorded here:
-                            # it starts its own grace cycle next cycle
-                            # (one extra window of grace in this rare
-                            # concurrent case is harmless).
-                            for target in flipped:
-                                deadline_passed.pop(target["pid"], None)
-                            recovery_targets = flipped
-                            for target in flipped:
-                                result = signal_pid(
-                                    target["pid"], signal.SIGTERM,
-                                    expected_start_epoch=target["start_epoch"],
-                                )
-                                LOGGER.warning(
-                                    "pi_idle_term run=%s issue=%s "
-                                    "role=%s pid=%s cmdline=%s "
-                                    "result=%s",
-                                    run_id, issue_ref, role,
-                                    target["pid"],
-                                    quote_value(target["cmdline"] or "-"),
-                                    result,
-                                )
-                            recovery = "term"
-                            # The TERM step ran (the grace window does
-                            # NOT advance the step: nothing was
-                            # signaled there, so the KILL escalation
-                            # still lands one full window after the
-                            # TERM, as before).
-                            recovery_step = 1
-                        elif newly_passed:
-                            # First observation past the deadline: the
-                            # grace window (no signal, the wait state
-                            # stays visible, the step does NOT advance
-                            # — nothing was signaled).
-                            for target in newly_passed:
-                                deadline_passed[target["pid"]] = cycle
-                            recovery = "wait"
-                        elif [t for t in targets
-                              if t["pid"] in deadline_passed]:
-                            # The target is inside its grace cycle
-                            # (recorded, still alive, one full idle
-                            # window not yet up): no signal, the wait
-                            # state stays visible, the step does NOT
-                            # advance.
-                            recovery = "wait"
-                        else:
-                            # No hung tool found (Pi itself is stuck):
-                            # the escalation continues, nothing is
-                            # signaled.
-                            LOGGER.warning(
-                                "pi_idle_term run=%s issue=%s role=%s "
-                                "result=no_target",
-                                run_id, issue_ref, role,
-                            )
-                            # The pre-idle descendants are gone (a
-                            # waited tool reached its own deadline):
-                            # the wait state is stale — clear it so the
-                            # progress comment does not keep showing
-                            # `recovery: wait` while the escalation
-                            # runs (Issue #169).
-                            recovery = None
-                            deadline_passed.clear()
-                            recovery_step = 1
-                elif cycle >= 2 and recovery_step == 1:
-                    for target in recovery_targets:
-                        if not pid_alive(target["pid"]):
-                            # The TERM worked between polls: record it,
-                            # signal nothing.
-                            LOGGER.warning(
-                                "pi_idle_kill run=%s issue=%s role=%s "
-                                "pid=%s cmdline=%s result=already_dead",
-                                run_id, issue_ref, role, target["pid"],
-                                quote_value(target["cmdline"] or "-"),
-                            )
-                            continue
-                        result = signal_pid(
-                            target["pid"], signal.SIGKILL,
-                            expected_start_epoch=target["start_epoch"],
-                        )
-                        LOGGER.warning(
-                            "pi_idle_kill run=%s issue=%s role=%s "
-                            "pid=%s cmdline=%s result=%s",
-                            run_id, issue_ref, role, target["pid"],
-                            quote_value(target["cmdline"] or "-"),
-                            result,
-                        )
-                    recovery = "kill"
-                    recovery_step = 2
-                if cycle >= PI_IDLE_RECOVERY_CYCLES:
-                    process.kill()
-                    idle_recovery_failed = True
-                    break
-            # The live progress comment shows the recovery state while
-            # it is active (Issue #94); the watcher state is a fresh
-            # dict per poll, so the field never leaks into other polls.
-            activity["recovery"] = recovery
-            if progress is not None:
-                try:
-                    progress(activity)
-                except Exception:
-                    LOGGER.exception(
-                        "progress_publish_failed run=%s issue=%s role=%s",
-                        run_id, issue_ref, role,
-                    )
-            # Swallowed-model-request detection (Issue #233): the model
-            # is expected to reply next (model_wait) and the /slots probe
-            # (when configured) reports that EVERY slot is idle for the
-            # sustained grace — the request was accepted by the upstream
-            # but never scheduled into the slot (the #231 scene: process
-            # alive, connection ESTABLISHED, slot idle, nothing
-            # generating). This is a real hang that the
-            # model_wait_dead_seconds bound would only catch minutes
-            # later, so the runner kills Pi FAST and fails fast through
-            # the normal failure path. The probe is a pure bypass
-            # (Issue #79): an inconclusive probe (None) is simply "no
-            # evidence" and the model_wait_dead_seconds bound still
-            # applies; a slot that is processing (False) resets the idle
-            # window (a slow model is not a swallow). Never fires while
-            # events keep arriving (a slow generation is not a swallow).
-            if (
-                model_wait_probe_url is not None
-                and activity["model_wait"]
-            ):
-                if activity["changed"]:
-                    # Events arrived since the last poll — a turn may
-                    # have completed entirely inside the poll gap. The
-                    # sustained-idle window must RESTART: a window
-                    # carried across a completed turn killed healthy
-                    # sessions (the journal showed idle_seconds far
-                    # below the probe grace). This is the "never fires
-                    # while events keep arriving" contract enforced
-                    # across poll gaps, not just within one poll.
-                    probe_first_idle = None
-                idle = slots_idle(model_wait_probe_url)
-                if idle is True:
-                    if probe_first_idle is None:
-                        probe_first_idle = time.monotonic()
-                    elif (
-                        time.monotonic() - probe_first_idle
-                        >= model_wait_probe_seconds
-                    ):
-                        alive = upstream_alive(process.pid)
-                        LOGGER.warning(
-                            "model_wait_swallowed issue=%s role=%s "
-                            "idle_seconds=%s probe_seconds=%s "
-                            "action=kill_pi session=%s run_id=%s "
-                            "upstream_alive=%s reason=swallowed_model_request",
-                            issue_ref, role,
-                            int(activity["stale_seconds"]),
-                            int(model_wait_probe_seconds),
-                            activity["session_id"] or "-",
-                            run_id,
-                            "true" if alive else "false",
-                        )
-                        process.kill()
-                        model_wait_swallowed = True
-                        break
-                else:
-                    # A slot is processing (False) or the probe is
-                    # inconclusive (None): no swallow evidence — reset
-                    # the idle window so it must be sustained again.
-                    probe_first_idle = None
-            # Hung-model-request detection (Issue #75, safe recovery
-            # since Issue #218): the model is expected to reply next
-            # (model_wait) and the session file has been frozen for the
-            # dead threshold: the model request is HUNG. A live
-            # connection to the upstream (a TCP socket in the live
-            # states ESTABLISHED/SYN_SENT/SYN_RECV) is evidence for the
-            # journal, never a veto (Issue #218: process alive ≠
-            # responding — the #183 scene: llama-server alive, the
-            # request hung, the slot held for hours). The runner kills
-            # the Pi session and fails fast through the normal failure
-            # path (the slot is released by the kernel when the tick
-            # exits, the next tick resumes the same run or claims the
-            # next Issue). Never fires while events keep arriving (a
-            # slow generation is not a hung request).
-            if (
-                activity["model_wait"]
-                and activity["stale_seconds"] >= model_wait_dead_seconds
-            ):
-                alive = upstream_alive(process.pid)
-                LOGGER.warning(
-                    "model_wait_dead issue=%s role=%s idle_seconds=%s "
-                    "threshold=%s action=kill_pi session=%s run_id=%s "
-                    "upstream_alive=%s reason=hung_model_request",
-                    issue_ref, role,
-                    int(activity["stale_seconds"]),
-                    int(model_wait_dead_seconds),
-                    activity["session_id"] or "-",
-                    run_id,
-                    "true" if alive else "false",
-                )
-                process.kill()
-                model_wait_dead = True
-                break
-            if process.poll() is not None:
-                break
-    finally:
-        # The child is reaped (or dead): the stop handler must never
-        # signal an already-exited process (Issue #48).
-        set_active_pi(None)
-        _drain_stream(process.stdout, stdout_chunks)
-        _drain_stream(process.stderr, stderr_chunks)
-    stdout = _decode_chunks(stdout_chunks)
-    stderr = _decode_chunks(stderr_chunks)
-    # Startup failure (Issue #176): a failure before the first response
-    # is a STARTUP failure — the line says where the startup was stuck
-    # with a distinguishable reason. After the first response the
-    # existing `run_failed` scene line alone describes the mid-run
-    # failure (no `startup_failed` line).
-    if not activity["first_response"]:
-        _log_startup_failed(
-            issue_ref=issue_ref, role=role, activity=activity,
-            elapsed=time.monotonic() - start,
-            returncode=process.returncode or 0, stderr=stderr,
-            timed_out=timed_out, model_wait_dead=model_wait_dead,
-            model_wait_swallowed=model_wait_swallowed,
-            idle_recovery_failed=idle_recovery_failed,
-        )
-    if idle_recovery_failed:
-        stale = format_duration(activity["stale_seconds"])
-        LOGGER.error(
-            "run_failed %s reason=idle_recovery_stale_%s",
-            format_run_scene(
-                activity, run_id=run_id, issue=issue_ref,
-                role=role, branch=branch, worktree=str(cwd),
-            ),
-            stale,
-        )
-        raise RecoverablePiFailure(
-            f"Pi session stayed idle for {stale} after idle recovery "
-            f"(TERM/KILL of pre-idle descendants); Pi was killed "
-            "(Issue #94)"
-        )
-    if model_wait_swallowed:
-        idle = format_duration(activity["stale_seconds"])
-        LOGGER.error(
-            "run_failed %s reason=model_wait_swallowed_idle_%s",
-            format_run_scene(
-                activity, run_id=run_id, issue=issue_ref,
-                role=role, branch=branch, worktree=str(cwd),
-            ),
-            idle,
-        )
-        raise RecoverablePiFailure(
-            f"Pi is stuck in model_wait and the model /slots probe "
-            f"reported every slot idle for the sustained grace "
-            f"(session frozen {idle}): the model request was swallowed "
-            "(the model service process is alive and the connection is "
-            "established, but nothing is generating); Pi was killed "
-            "(Issue #233)"
-        )
-    if model_wait_dead:
-        stale = format_duration(activity["stale_seconds"])
-        LOGGER.error(
-            "run_failed %s reason=model_wait_dead_stale_%s",
-            format_run_scene(
-                activity, run_id=run_id, issue=issue_ref,
-                role=role, branch=branch, worktree=str(cwd),
-            ),
-            stale,
-        )
-        # Issue #227: the classified hung-model-request failure —
-        # `process_issue` keeps the Issue `ai-in-progress` (the next tick
-        # resumes the same run) instead of the terminal `ai-blocked`.
-        raise ModelWaitDeadError(
-            f"Pi is stuck in model_wait with a frozen session for {stale}: "
-            "the model request is hung (the model service process is "
-            "alive but the request never completes); Pi was killed "
-            "(Issue #218)"
-        )
-    if timed_out:
-        reason = f"timeout_{format_duration(timeout)}"
-        LOGGER.error(
-            "run_failed %s reason=%s",
-            format_run_scene(
-                activity, run_id=run_id, issue=issue_ref,
-                role=role, branch=branch, worktree=str(cwd),
-            ),
-            reason,
-        )
-        raise RecoverablePiTimeoutError(
-            safe_command, timeout, output=stdout, stderr=stderr,
-        )
-    if process.returncode != 0:
-        reason = f"pi_exit_{process.returncode}"
-        LOGGER.error(
-            "run_failed %s reason=%s",
-            format_run_scene(
-                activity, run_id=run_id, issue=issue_ref,
-                role=role, branch=branch, worktree=str(cwd),
-            ),
-            reason,
-        )
-        # A Pi exit after it created a session is an interrupted run: its
-        # work is resumable, including exits after idle recovery.  A
-        # pre-session startup failure remains terminal unless it reaches
-        # one of the explicit recovery classifications above.
-        error_type = (
-            # A session file alone only proves that Pi initialized its
-            # journal; an exit before the first request is still a startup
-            # failure (for example provider initialization) and must keep
-            # the existing terminal failure behavior.  Only an interrupted
-            # session after a request has actually started is resumable.
-            RecoverablePiProcessError
-            if activity["first_request"]
-            else subprocess.CalledProcessError
-        )
-        raise error_type(
-            process.returncode, safe_command, output=stdout, stderr=stderr,
-        )
-    if stderr:
-        LOGGER.info("stderr=%s", stderr.rstrip())
-    LOGGER.info("stdout=%s", stdout.rstrip())
-    return stdout.strip()
-
-
-def is_ticket_only(issue: dict) -> bool:
-    """Return True only for the explicit ticket-only task marker (#209)."""
     labels = issue.get("labels", [])
     return isinstance(labels, list) and any(
-        isinstance(label, dict) and label.get("name") == TICKET_ONLY_LABEL
+        isinstance(label, dict) and label.get("name") == CONTENT_ONLY_LABEL
+        for label in labels
+    )
+
+
+def is_ops(issue: dict) -> bool:
+    """Return True only for the explicit ops task marker (Issue #537).
+
+    An ops ticket runs the SAME full-execution session as a dev ticket
+    (worktree, shell, network — no command whitelist exists); the ops
+    playbook replaces the dev one and the deliverable is the evidence
+    posted on the Issue, unless the session commits code (then the
+    delivery takes the normal PR ceremony).
+    """
+    labels = issue.get("labels", [])
+    return isinstance(labels, list) and any(
+        isinstance(label, dict) and label.get("name") == OPS_LABEL
         for label in labels
     )
 
@@ -6330,6 +3780,10 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
     priority = issue_priority(issue)
     run_info = f"run_id={run_id} priority={priority} task_type=ticket-only"
     publisher = ProgressPublisher(number, source_repo, run_id, run_command=run_command)
+    publish = functools.partial(
+        _safe_publish, run_id=run_id, issue=number,
+        source_repo=source_repo, role=ROLE_TICKET,
+    )
     started = time.monotonic()
     apply_label_patch(
         number, repo=source_repo, event=EVENT_CLAIM,
@@ -6339,9 +3793,7 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
     )
     set_active_run(number, title, "-", "-")
     try:
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_TICKET,
+        publish(
             action=lambda: publisher.ensure(_progress_body(_progress_state(
                 issue=number, title=title, run_id=run_id, role=ROLE_TICKET,
                 branch="-", worktree=Path("-"), started=started, pr_url=None,
@@ -6369,14 +3821,10 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
         # clears the claim label directly (no `ai-merged` terminal state —
         # the Issue is closed, not merged).
         edit_issue(number, repo=source_repo, remove=IN_PROGRESS_LABEL)
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_TICKET,
+        publish(
             action=lambda: publisher.milestone(f"ticket-only delivered: {run_info}"),
         )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_TICKET,
+        publish(
             action=lambda: publisher.finish(_progress_body(_progress_state(
                 issue=number, title=title, run_id=run_id, role=ROLE_TICKET,
                 branch="-", worktree=Path("-"), started=started, pr_url=None,
@@ -6402,9 +3850,7 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
                       f"run_id={run_id}\n"
                       "No Git branch, commit, or PR was created."),
             )
-            _safe_publish(
-                run_id=run_id, issue=number, source_repo=source_repo,
-                role=ROLE_TICKET,
+            publish(
                 action=lambda: publisher.milestone(
                     f"ticket-only blocked: {sanitize(detail)} ({run_info})"
                 ),
@@ -6441,6 +3887,12 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
     # into a missing directory fails the command outright).
     (worktree / ".orbi").mkdir(exist_ok=True)
     started = time.monotonic()
+    # Issue #527: the repository policy's context files are
+    # repository-relative; resolve them against the delivery worktree and
+    # enforce existence + the size cap before injection (D2).
+    context_files = list(config["context_files"])
+    for relative in config.get("repo_context_files", []):
+        context_files.append(validate_context_file(worktree, relative))
     system_prompt = render_prompt(
         config["prompt"].read_text(encoding="utf-8"),
         {
@@ -6450,13 +3902,19 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
             "ISSUE_TITLE": issue["title"],
             "ISSUE_BODY": issue.get("body", ""),
             "WORKSPACE_ROOT": str(config["workspace_root"]),
-            "CONTEXT_FILES": "\n".join(str(path) for path in config["context_files"]),
+            "CONTEXT_FILES": "\n".join(str(path) for path in context_files),
             "SKILLS": "\n".join(
                 str(path)
                 for path in _skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)
             ),
             "BASE_BRANCH": config["base_branch"],
             "BASE_SHA": config["base_sha"],
+            # Issue #527: a repository-declared test command (absent ->
+            # the agent follows its own test contract, as before #527).
+            "TEST_COMMAND": (
+                (config.get("test_command") or "").strip()
+                or "(not declared)"
+            ),
             "RUN_ID": config["run_id"],
             # Issue #186: the implementer prompt no longer carries the
             # base-sync lock (the base fetch is the Runner's operation);
@@ -6530,6 +3988,70 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
     )
 
 
+def _query_open_prs(worktree: Path, branch: str) -> list:
+    """Return the task branch's open PRs as the raw `gh pr list` list.
+
+    The ONE PR-query contract shared by verify_pr and freeze_pr
+    (Issue #291): a single field set, a single ambiguity-guard limit and
+    a single parse. The limit is wide enough that the failure evidence
+    lists every ambiguous open PR (the resume audit record, Issue #495);
+    the "exactly one" decision needs no tighter bound. A non-array
+    payload is a broken `gh` response, never "zero PRs" — fail fast
+    instead of guessing.
+    """
+    raw = run_command([
+        "gh", "pr", "list", "--state", "open", "--head", branch,
+        "--json", (
+            "number,url,baseRefName,baseRefOid,"
+            "headRefName,headRefOid,headRepository,headRepositoryOwner,body"
+        ),
+        "--limit", "100",
+    ], cwd=worktree)
+    prs = json.loads(raw)
+    if not isinstance(prs, list):
+        raise RuntimeError(
+            "gh pr list --json returned a non-array payload "
+            "(expected exactly one open PR)"
+        )
+    return prs
+
+
+def _single_open_pr(worktree: Path, branch: str, base_branch: str,
+                    *, scene: str) -> dict:
+    """Return the one open delivery PR of the task branch, base validated.
+
+    The "exactly one open PR + configured base" decision shared by
+    verify_pr and freeze_pr (Issue #291); callers add their own extra
+    validations on the returned raw PR dict. `scene` names the calling
+    path: the same externally-closed-PR failure used to raise the
+    identical sentence from both paths and the log could not tell them
+    apart.
+    """
+    prs = _query_open_prs(worktree, branch)
+    if len(prs) == 0:
+        raise RuntimeError(
+            f"{scene}: no open PR for the task branch "
+            "(expected exactly one open PR)"
+        )
+    if len(prs) != 1:
+        raise RuntimeError(
+            f"{scene}: multiple open PRs for the task branch "
+            "(expected exactly one open PR)"
+        )
+    pr = prs[0]
+    base_ref = pr.get("baseRefName")
+    if base_ref != base_branch:
+        LOGGER.error(
+            "pr_base_mismatch scene=%s expected=%s actual=%s branch=%s",
+            scene, base_branch, base_ref, branch,
+        )
+        raise RuntimeError(
+            f"{scene}: PR base is {base_ref}, expected {base_branch}; "
+            "recreate the PR against the configured base branch"
+        )
+    return pr
+
+
 def verify_pr(worktree: Path, branch: str, base_branch: str,
               run_id: str, *, issue: int, repo_dir: Path,
               pr_repo: str | None = None,
@@ -6589,21 +4111,17 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
     local_head = run_command(
         ["git", "rev-parse", "HEAD"], cwd=worktree,
     )
-    raw = run_command([
-        "gh", "pr", "list", "--state", "open", "--head", branch,
-        "--json",
-        "url,baseRefName,headRefName,headRefOid,"
-        "headRepository,headRepositoryOwner,body",
-        "--limit", "100" if expected_url is not None else "2",
-    ], cwd=worktree)
-    prs = json.loads(raw)
-    if not isinstance(prs, list):
-        raise RuntimeError("expected exactly one open PR for the task branch")
-    if len(prs) != 1:
-        # A resume cannot safely select a replacement PR. Query the scene PR
-        # separately so zero open PRs (a closed/merged or missing scene PR)
-        # have a different outcome from an ambiguous branch (Issue #494).
-        if expected_url is not None:
+    if expected_url is not None:
+        # A resume cannot safely select a replacement PR, so it keeps its
+        # own exactly-one policy (Issue #291): the FULL open list is the
+        # failure audit record (Issue #495) and zero open PRs is
+        # classified against the scene PR's state (Issue #494).
+        prs = _query_open_prs(worktree, branch)
+        if len(prs) != 1:
+            # A resume cannot safely select a replacement PR. Query the scene
+            # PR separately so zero open PRs (a closed/merged or missing
+            # scene PR) have a different outcome from an ambiguous branch
+            # (Issue #494).
             scene_state = "unknown"
             try:
                 scene_pr = run_command([
@@ -6650,16 +4168,14 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
                 f"resume has multiple open PRs for the task branch: {evidence}; "
                 "the runner will not choose one"
             )
-        if len(prs) == 0:
-            raise RuntimeError(
-                "no open PR for the task branch (expected exactly one open PR)"
-            )
-        raise RuntimeError("multiple open PRs for the task branch")
-    url = prs[0].get("url")
+        pr = prs[0]
+    else:
+        pr = _single_open_pr(worktree, branch, base_branch, scene="verify_pr")
+    url = pr.get("url")
     if not url:
         raise RuntimeError("open PR has no URL")
     if pr_repo is not None:
-        head_repo = _pr_head_repo(prs[0])
+        head_repo = _pr_head_repo(pr)
         if head_repo != pr_repo:
             LOGGER.error(
                 "pr_repo_mismatch expected=%s actual=%s branch=%s",
@@ -6673,21 +4189,23 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
                 f"PR head repo is {head_repo}, expected {pr_repo}; the "
                 "resume must keep the PR of the configured source repo"
             )
-    base_ref = prs[0].get("baseRefName")
-    if base_ref != base_branch:
+    # The non-resume base validation lives in _single_open_pr (Issue #291);
+    # the resume keeps its typed failure with the full run evidence.
+    base_ref = pr.get("baseRefName")
+    if expected_url is not None and base_ref != base_branch:
         LOGGER.error(
-            "pr_base_mismatch expected=%s actual=%s branch=%s",
+            "pr_base_mismatch scene=verify_pr_resume expected=%s "
+            "actual=%s branch=%s",
             base_branch, base_ref, branch,
         )
-        error_type = ResumeVerificationError if expected_url is not None else RuntimeError
-        raise error_type(
+        raise ResumeVerificationError(
             f"resume PR validation: run_id={run_id} branch={branch} "
             f"open_pr_count=1 open_prs={[url]} "
-            f"scene_pr={expected_url or '-'} scene_pr_state=OPEN; "
+            f"scene_pr={expected_url} scene_pr_state=OPEN; "
             f"PR base is {base_ref}, expected {base_branch}; recreate the "
             "PR against the configured base branch"
         )
-    head_oid = prs[0].get("headRefOid")
+    head_oid = pr.get("headRefOid")
     if head_oid != local_head:
         # Issue #50 (the #158 `d13b0c56` scene): the local HEAD may be
         # AHEAD of the remote PR head — a commit made by a killed
@@ -6723,7 +4241,7 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
             head_oid, local_head, branch,
         )
     marker = run_marker(run_id)
-    body = prs[0].get("body")
+    body = pr.get("body")
     if not external_pr and (
         not isinstance(body, str) or marker not in body
     ):
@@ -6904,6 +4422,31 @@ def cleanup_task_worktree(worktree: Path, repo_dir: Path, *, run_id: str,
         )
 
 
+def _agent_delivery_boundary(worktree: Path) -> tuple[str, str]:
+    """Return the agent's commit boundary as (HEAD, dirty status).
+
+    The Runner-owned runtime paths are pinned in the worktree's LOCAL
+    exclude BEFORE the check (Issue #256), so a task that renamed the
+    tracked .gitignore (the #246 scene) cannot make the Runner's own
+    state look like agent leftovers. Only Runner-owned runtime paths
+    that remain (the exclude write raced or the path appeared after it)
+    are repaired by re-writing the exclude — deterministic, no git add,
+    no deletion, no arbitrary whitelisting. Shared by the dev closeout
+    (`deliver_pr`) and the ops closeout (Issue #537).
+    """
+    apply_runner_runtime_excludes(worktree)
+    dirty = run_command(["git", "status", "--porcelain"], cwd=worktree)
+    if dirty and _is_runner_runtime_only(dirty):
+        apply_runner_runtime_excludes(worktree)
+        LOGGER.info(
+            "runner_runtime_exclude_repaired status=%s",
+            " ".join(dirty.splitlines()),
+        )
+        dirty = run_command(["git", "status", "--porcelain"], cwd=worktree)
+    head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
+    return head, dirty
+
+
 def deliver_pr(worktree: Path, branch: str, base_branch: str,
                base_sha: str, run_id: str, *, issue: int,
                issue_title: str, repo_dir: Path) -> str:
@@ -6938,23 +4481,8 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
             f"Pi changed branch: expected={branch} actual={current_branch}"
         )
     # Commit boundary (Issue #186 + #256): the Agent's delivery is the
-    # committed worktree state. The Runner-owned runtime paths are
-    # pinned in the worktree's LOCAL exclude BEFORE the check, so a task
-    # that renamed the tracked .gitignore (the #246 scene) cannot make
-    # the Runner's own state look like agent leftovers.
-    apply_runner_runtime_excludes(worktree)
-    dirty = run_command(["git", "status", "--porcelain"], cwd=worktree)
-    if dirty and _is_runner_runtime_only(dirty):
-        # Only Runner-owned runtime paths remain (the exclude write raced
-        # or the path appeared after it): re-write the exclude and
-        # re-check. The repair is deterministic — no git add, no
-        # deletion, no arbitrary whitelisting.
-        apply_runner_runtime_excludes(worktree)
-        LOGGER.info(
-            "runner_runtime_exclude_repaired branch=%s status=%s",
-            branch, " ".join(dirty.splitlines()),
-        )
-        dirty = run_command(["git", "status", "--porcelain"], cwd=worktree)
+    # committed worktree state.
+    local_head, dirty = _agent_delivery_boundary(worktree)
     if dirty:
         LOGGER.error(
             "delivery_uncommitted_changes branch=%s status=%s",
@@ -6965,7 +4493,6 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
             f"({dirty.strip()}); the runner never commits uncommitted "
             "changes or expands the agent's commit boundary"
         )
-    local_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
     if local_head == base_sha:
         LOGGER.error(
             "delivery_no_commit branch=%s head=%s",
@@ -7166,173 +4693,69 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
             "issue=%s resume_pr_verification_failed pr=%s branch=%s",
             number, scene["pr_url"], branch,
         )
-        detail = _failure_detail(exc)
         try:
-            if is_unrecoverable_failure(exc):
-                # Issue #50: an external precondition the AI cannot
-                # safely judge or fix is terminal: `ai-blocked` ALONE
-                # (the opened-PR state label is removed, and a leftover
-                # `ai-fix-needed` too) with the explicit reason why
-                # automatic recovery is impossible.
-                # The current labels are read ONCE before the
-                # transition: the blocked patch clears every
-                # delivery-state label that is present (`ai-pr-opened`,
-                # and a leftover `ai-fix-needed` too), so the terminal
-                # state is `ai-blocked` alone.
-                labels = issue_labels(number, source_repo)
-                apply_label_patch(
-                    number, repo=source_repo, event=EVENT_BLOCKED,
-                    current_labels=labels,
-                )
-                body = (
-                    f"Orbi failed: the resume verification of "
-                    f"PR {scene['pr_url']} failed: {detail}; this is an "
-                    "external precondition the AI cannot safely judge "
-                    "or fix, so it cannot be recovered automatically "
-                    "(the Issue stays ai-blocked until a human "
-                    "decides); the PR, branch "
-                    f"{branch} and worktree {worktree} are preserved"
-                )
-            else:
-                # Issue #50: a RECOVERABLE failure (the #158 `d13b0c56`
-                # scene: the reviewer committed a fix locally but was
-                # killed before `git push`, so the remote PR head is
-                # still the old one) keeps the Issue in the automatic
-                # fix loop: `ai-fix-needed` (the next timer pushes the
-                # local commit and continues on the same PR), never
-                # `ai-blocked`. The failure comment carries the full
-                # scene and is written to the Issue AND the PR.
-                apply_label_patch(
-                    number, repo=source_repo, event=EVENT_FIX_NEEDED,
-                    current_labels=issue_labels(number, source_repo),
-                )
-                body = (
-                    f"Orbi needs a fix: the resume verification "
-                    f"of PR {scene['pr_url']} failed: {detail}; the "
-                    "Issue stays ai-fix-needed and the next tick "
-                    "resumes the same run, branch, worktree and PR"
-                )
-                # The session fields are '-' when no session file
-                # exists yet (the Pi never started or the dir is
-                # gone); a snapshot read failure is logged and
-                # reported as "no session yet" (best-effort
-                # observability, never a second failure).
-                snapshot = None
-                try:
-                    snapshot = activity_snapshot(worktree / ".pi-session")
-                except Exception:
-                    LOGGER.exception(
-                        "issue=%s activity scene failed", number,
-                    )
-                if snapshot is None:
-                    snapshot = {
-                        "session_id": None, "session_file": None,
-                        "phase": "starting",
-                        "last_activity": None, "action": None,
-                        "result": None,
-                    }
-                body += "\n" + format_run_scene(
-                    snapshot,
-                    run_id=run_id, issue=issue_context(
-                        source_repo, number,
-                    ),
-                    role=ROLE_REVIEW, branch=branch,
-                    worktree=str(worktree),
-                )
-            if current_run_id():
-                body = f"{run_marker(current_run_id())}\n{body}"
-            comment_issue(number, repo=source_repo, body=body)
-            comment_pr(
-                _pr_number(scene["pr_url"]), repo=source_repo, body=body,
+            # The shared classified reporter (Issue #288): recoverable
+            # -> `ai-fix-needed` with the full scene on Issue AND PR,
+            # unrecoverable -> `ai-blocked` ALONE — the PR, branch and
+            # worktree stay intact either way. `run_id` is the id the
+            # tick BOUND (Issue #41): without it the comment carries no
+            # marker and the progress publishing is skipped, whatever
+            # the recovered scene says.
+            report_delivery_failure(
+                exc, issue=issue, source_repo=source_repo,
+                run_id=current_run_id(), pr_url=scene["pr_url"],
+                worktree=worktree, branch=branch, role=ROLE_REVIEW,
+                cause=(
+                    f"the resume verification of PR {scene['pr_url']} "
+                    f"failed: {_failure_detail(exc)}"
+                ),
+                blocked_suffix=(
+                    f"; the PR, branch {branch} and worktree {worktree} "
+                    "are preserved"
+                ),
             )
-            bound_run_id = current_run_id()
-            if bound_run_id:
-                # Issue #79: the fix-needed/blocked-scene progress
-                # publishing is bypass — a 404 here must not abort the
-                # failure reporting (the label transition and the
-                # failure comment above already completed, and the
-                # original error is re-raised below either way).
-                if is_unrecoverable_failure(exc):
-                    _safe_publish(
-                        run_id=bound_run_id, issue=number,
-                        source_repo=source_repo, role=ROLE_REVIEW,
-                        action=lambda: ProgressPublisher(
-                            number, source_repo, bound_run_id,
-                            run_command=run_command,
-                        ).milestone(
-                            f"blocked: the resume verification of "
-                            f"PR {scene['pr_url']} failed: {sanitize(detail)}"
-                        ),
-                    )
-                    _safe_publish(
-                        run_id=bound_run_id, issue=number,
-                        source_repo=source_repo, role=ROLE_REVIEW,
-                        action=lambda: _finish_blocked_progress(
-                            number, bound_run_id, source_repo, worktree,
-                            branch, scene["pr_url"],
-                            f"the resume verification of PR "
-                            f"{scene['pr_url']} failed: {detail}; this "
-                            "is an external precondition the AI cannot "
-                            "safely judge or fix, so it cannot be "
-                            "recovered automatically (the Issue stays "
-                            "ai-blocked until a human decides)",
-                            "fix the precondition above (see the "
-                            "reason) and relabel the Issue "
-                            "ai-fix-needed to resume this same PR",
-                            title=issue["title"],
-                            role=ROLE_REVIEW,
-                            review_round=review_rounds_so_far(
-                                issue_comments(number, repo=source_repo),
-                            ),
-                            priority=issue_priority(issue),
-                        ),
-                    )
-                else:
-                    _safe_publish(
-                        run_id=bound_run_id, issue=number,
-                        source_repo=source_repo, role=ROLE_REVIEW,
-                        action=lambda: ProgressPublisher(
-                            number, source_repo, bound_run_id,
-                            run_command=run_command,
-                        ).milestone(
-                            f"fix needed: the resume verification of "
-                            f"PR {scene['pr_url']} failed: {sanitize(detail)}"
-                        ),
-                    )
-                    _safe_publish(
-                        run_id=bound_run_id, issue=number,
-                        source_repo=source_repo, role=ROLE_REVIEW,
-                        action=lambda: _finish_fix_needed_progress(
-                            number, bound_run_id, source_repo, worktree,
-                            branch, scene["pr_url"],
-                            f"the resume verification of PR "
-                            f"{scene['pr_url']} failed: {detail}",
-                            title=issue["title"],
-                            review_round=review_rounds_so_far(
-                                issue_comments(number, repo=source_repo),
-                            ),
-                            priority=issue_priority(issue),
-                        ),
-                    )
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
         raise
 
 
+def _is_code_fence_line(line: str) -> bool:
+    """True when a stripped line is only a Markdown code fence.
+
+    Reviewers commonly wrap the machine-readable verdict in a fence
+    (```` ``` ````, ```` ```json ```` or `~~~`); a fence line carries no
+    review content, so the tail scan skips it without relaxing Issue #591.
+    """
+    stripped = line.strip()
+    for fence_char in ("`", "~"):
+        if stripped.startswith(fence_char * 3):
+            remainder = stripped.lstrip(fence_char)
+            if fence_char == "`":
+                # A backtick fence's info string must not contain backticks.
+                return "`" not in remainder
+            return True
+    return False
+
+
 def parse_review_verdict(text: str) -> dict:
     """Extract the REVIEW_VERDICT JSON from a review session's last line.
 
-    Only the output's LAST non-empty line is the verdict (Issue #591):
-    the reviewer reads untrusted text (Issue bodies, diffs, comments)
-    that may carry forged `REVIEW_VERDICT` lines, so no earlier line may
-    decide the gate — the prompt requires the machine-readable verdict
-    as the very last line, and this parser enforces exactly that. The
+    Only the output's LAST substantive (non-fence) line is the verdict
+    (Issue #591): the reviewer reads untrusted text (Issue bodies, diffs,
+    comments) that may carry forged `REVIEW_VERDICT` lines, so no earlier
+    line may decide the gate — the prompt requires the machine-readable
+    verdict as the very last line, and this parser enforces exactly that.
+    A trailing Markdown code fence (Issue #679) is skipped because it
+    carries no review content; the verdict must still be the last
+    substantive line, so a marker quoted mid-body is never adopted. The
     verdict must also name the head it covers (`head`); the merge gate
     checks it against the PR head. Missing or malformed verdicts fail
     fast; a review that cannot be read as a pass is never treated as a
     pass.
     """
     lines = [line for line in text.splitlines() if line.strip()]
+    while lines and _is_code_fence_line(lines[-1]):
+        lines.pop()
     if not lines or not lines[-1].strip().startswith(VERDICT_MARKER):
         raise ValueError("no REVIEW_VERDICT line in review output")
     payload = lines[-1].strip()[len(VERDICT_MARKER):].strip()
@@ -7369,29 +4792,11 @@ def review_has_findings(verdict: dict) -> bool:
 
 def freeze_pr(worktree: Path, branch: str, base_branch: str) -> dict:
     """Freeze the exact base/head SHA of the one open PR for a task branch."""
-    raw = run_command([
-        "gh", "pr", "list", "--state", "open", "--head", branch,
-        "--json", "number,url,baseRefName,baseRefOid,headRefName,headRefOid",
-        "--limit", "2",
-    ], cwd=worktree)
-    prs = json.loads(raw)
-    if not isinstance(prs, list) or len(prs) != 1:
-        raise RuntimeError("expected exactly one open PR for the task branch")
-    pr = prs[0]
-    base_ref = pr.get("baseRefName")
-    if base_ref != base_branch:
-        LOGGER.error(
-            "pr_base_mismatch expected=%s actual=%s branch=%s",
-            base_branch, base_ref, branch,
-        )
-        raise RuntimeError(
-            f"PR base is {base_ref}, expected {base_branch}; the merge gate "
-            "only accepts the configured protected branch"
-        )
+    pr = _single_open_pr(worktree, branch, base_branch, scene="freeze_pr")
     return {
         "number": pr["number"],
         "url": pr["url"],
-        "base_ref": base_ref,
+        "base_ref": pr.get("baseRefName"),
         "base_oid": pr["baseRefOid"],
         "head_ref": pr["headRefName"],
         "head_oid": pr["headRefOid"],
@@ -7548,16 +4953,14 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
 def _main_ci_triage_url(repo: str, check_name: str) -> str | None:
     """Find the existing auto-created main CI issue, when present."""
     try:
-        issues = json.loads(run_command([
-            "gh", "issue", "list", "--repo", repo, "--state", "all",
-            "--search", f"CI failure: {check_name} on branch main",
-            "--json", "number,url,title", "--limit", "20",
-        ]))
+        issues = list_issues(
+            repo, state="all",
+            search=f"CI failure: {check_name} on branch main",
+            json_fields="number,url,title", limit=20,
+        )
     except Exception:
         LOGGER.exception("delivery_ci_triage_lookup_failed repo=%s check=%s",
                          repo, check_name)
-        return None
-    if not isinstance(issues, list):
         return None
     prefix = f"CI failure: {check_name} on branch main"
     for issue in issues:
@@ -8573,13 +5976,15 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     publisher = ProgressPublisher(
         number, source_repo, config["run_id"], run_command=run_command,
     )
+    publish = functools.partial(
+        _safe_publish, run_id=config["run_id"], issue=number,
+        source_repo=source_repo, role=ROLE_REVIEW,
+    )
     started = time.monotonic()
     # Issue #79: ensure is a bypass — a 404 here must not stop the
     # review (the delivery is already open and awaiting review; the
     # journal is the record, the progress comment is observability).
-    _safe_publish(
-        run_id=config["run_id"], issue=number,
-        source_repo=source_repo, role=ROLE_REVIEW,
+    publish(
         action=lambda: publisher.ensure(_progress_body(_progress_state(
             issue=number, title=title, run_id=config["run_id"],
             role=ROLE_REVIEW, branch=branch, worktree=worktree,
@@ -8626,18 +6031,14 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         # Issue #79: the findings publishing is bypass — a 404 here
         # must not stop the `ai-fix-needed` transition below (the next
         # review session retries the same PR either way).
-        _safe_publish(
-            run_id=config["run_id"], issue=number,
-            source_repo=source_repo, role=ROLE_REVIEW,
+        publish(
             action=lambda: publisher.milestone(
                 f"review findings: round {round}, "
                 f"{verdict['blockers']} blocker(s), "
                 f"{verdict['majors']} major(s) for PR #{pr['number']}"
             ),
         )
-        _safe_publish(
-            run_id=config["run_id"], issue=number,
-            source_repo=source_repo, role=ROLE_REVIEW,
+        publish(
             action=lambda: publisher.finish(_progress_body(
                 _progress_state(
                     issue=number, title=title, run_id=config["run_id"],
@@ -8756,18 +6157,14 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     # Issue #79: the merged publishing is bypass — the GitHub merge
     # already landed; a 404 here must not stop the `ai-merged`
     # transition and the merged PR scene comment below.
-    _safe_publish(
-        run_id=config["run_id"], issue=number,
-        source_repo=source_repo, role=ROLE_REVIEW,
+    publish(
         action=lambda: publisher.milestone(
             f"merged: {merged['url']} "
             f"(merge_commit={confirmed['merge_commit']} "
             f"review_rounds={round})"
         ),
     )
-    _safe_publish(
-        run_id=config["run_id"], issue=number,
-        source_repo=source_repo, role=ROLE_REVIEW,
+    publish(
         action=lambda: publisher.finish(_progress_body(
             _progress_state(
                 issue=number, title=title, run_id=config["run_id"],
@@ -9213,7 +6610,15 @@ class IssueResult(NamedTuple):
     url: str | None
 
 
-def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
+# Sentinel for `process_issue`'s repository-policy argument (Issue #527):
+# `main` resolves the policy once for the whole delivery (resume verify,
+# claim, review/merge) and passes the record in; a direct caller that omits
+# it gets the claim-time read (and the fail-fast block) here.
+_REPO_CONFIG_UNSET = object()
+
+
+def process_issue(issue: dict, config: dict, source_repo: str,
+                  repo_config_record: object = _REPO_CONFIG_UNSET) -> IssueResult:
     number = int(issue["number"])
     # Issue #100: the progress comment's issue line shows the number
     # AND the title in every scene. The scanned issue dict always
@@ -9226,17 +6631,75 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
     # its own deterministic release state machine instead (scope
     # verification, gates, tests, tag, GitHub Release).
     if is_release(issue):
-        return IssueResult("release", process_release(issue, config, source_repo))
-    if is_ticket_only(issue):
+        # `orbi.release` imports the runner primitives back, so the
+        # dispatch imports it lazily here — a module-level import would
+        # be circular (Issue #286).
+        from orbi import release
+
+        return IssueResult("release", release.process_release(issue, config, source_repo))
+    if is_content_only(issue):
         process_ticket_only(issue, config, source_repo)
         return IssueResult("ticket-only", None)
-    base_branch = config["base_branch"]
+    # Ops task (Issue #537): a full-execution session — the SAME claim,
+    # worktree and run machinery as the dev path below (no command
+    # whitelist exists anywhere), with the ops playbook instead of the
+    # dev one and an evidence-on-the-Issue closeout when the session
+    # delivers no commit.
+    ops = is_ops(issue)
     # The run id is generated once per attempt and bound BEFORE any
     # other step is logged, so every journal line of the attempt
     # carries it — including the claim-time lines of the restart resume
-    # scan below (Issue #41; review round 3, PR #42).
+    # scan below (Issue #41; review round 3, PR #42). It is bound before
+    # the repository-policy read (Issue #527) so a forbidden/malformed
+    # repository file blocks the claim with a run-marked comment.
     run_id = new_run_id()
     set_run_id(run_id)
+    # Repository-level config-as-code (Issue #527): read `.github/orbi.toml`
+    # (or the entry's `config_path`) from the source repo's default branch
+    # tip and apply its whitelisted delivery-policy keys per key over the
+    # host config (D3). A missing file is a no-op (byte-identical
+    # pre-#527 behavior); a file that exists but violates the schema blocks
+    # this claim fast with the offending keys.
+    repo_config_fields: dict = {}
+    if repo_config_record is _REPO_CONFIG_UNSET:
+        try:
+            repo_config_record = load_repo_policy(config, source_repo)
+        except RepoConfigError as exc:
+            LOGGER.error(
+                "issue=%s repo_config_invalid source_repo=%s reason=%s",
+                number, source_repo, exc,
+            )
+            block_repo_config_failure(
+                number, source_repo, exc, run_id,
+                current_labels={
+                    label.get("name") for label in issue.get("labels", [])
+                    if isinstance(label, dict)
+                    and isinstance(label.get("name"), str)
+                },
+            )
+            return IssueResult("failed", None)
+    if repo_config_record is not None:
+        config = apply_repo_policy(config, source_repo, repo_config_record)
+        # D4 change visibility: the previous run's sha is read from the
+        # trusted Orbi comments (best-effort audit), and the previous
+        # policy is re-read from its blob for the effective diff summary.
+        previous_sha = previous_repo_config_sha(number, source_repo)
+        previous_policy = (
+            read_repo_config_at(
+                source_repo, previous_sha,
+                path=repository_config_path(config, source_repo),
+                run_command=run_command,
+            ) if previous_sha else None
+        )
+        repo_config_fields = repo_config_audit(
+            repo_config_record["sha"], repo_config_record["policy"],
+            previous_sha=previous_sha,
+            previous_policy=previous_policy,
+        )
+    base_branch = config["base_branch"]
+    # The claim label is a delivery-policy key (Issue #527); the lifecycle
+    # labels stay host constants.
+    dispatch_label = config.get("dispatch_label", READY_LABEL)
     # Restart resume (Issue #18): a killed runner leaves the task
     # worktree and the `ai-in-progress` label behind. Only in that state
     # the newest worktree's run id is reused, so the same hidden-marker
@@ -9252,7 +6715,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
         if isinstance(label, dict) and isinstance(label.get("name"), str)
     }
     in_progress = has_in_progress_label(number, source_repo)
-    if not in_progress and READY_LABEL in claim_labels:
+    if not in_progress and dispatch_label in claim_labels:
         stable_branch = task_branch(source_repo, number)
         takeover_pr = open_pr_for_branch(config["repo_dir"], stable_branch)
         stable_branch_present = stable_branch_exists(
@@ -9272,6 +6735,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
             claim_labels,
             branch_exists=stable_branch_present,
             open_pr=takeover_pr is not None,
+            ready_label=dispatch_label,
         )
         LOGGER.info(
             "fresh_claim_route issue=%s branch=%s route=%s open_pr=%s",
@@ -9341,9 +6805,38 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
         f"base_branch={base_branch} base_sha={base_sha} run_id={run_id} "
         f"priority={priority}"
     )
+    if ops:
+        run_info += " task_type=ops"
+    if repo_config_record is not None:
+        # Issue #527 D4: the run comment carries the repository config sha
+        # (the file blob at the default branch tip) so a policy change is
+        # always visible on the run.
+        run_info += f" repo_config={repo_config_record['sha']}"
     LOGGER.info(
         "issue=%s %s", number, run_info,
     )
+    if not in_progress and READY_LABEL in claim_labels \
+            and takeover_pr is None:
+        # Issue #658: the pickup scan and the in-progress recheck above
+        # both predate freeze_base (a seconds-long network round trip).
+        # A label — or the stable branch — appearing inside that window
+        # means another instance claimed this Issue while we were
+        # preparing: yield. No label writes, no comments, nothing that
+        # could interrupt the winner's in-flight delivery; the next
+        # tick's scan picks work up again on its own.
+        if has_in_progress_label(number, source_repo):
+            LOGGER.info(
+                "issue=%s claim_yield reason=in_progress_label", number,
+            )
+            return IssueResult("claim-yielded", None)
+        if not stable_branch_present and stable_branch_exists(
+                config["repo_dir"], stable_branch,
+        ):
+            LOGGER.info(
+                "issue=%s claim_yield reason=stable_branch_appeared",
+                number,
+            )
+            return IssueResult("claim-yielded", None)
     apply_label_patch(
         number, repo=source_repo, event=EVENT_CLAIM,
         current_labels={label.get("name") for label in issue.get(
@@ -9373,6 +6866,10 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
     )
     publisher = ProgressPublisher(
         number, source_repo, run_id, run_command=run_command,
+    )
+    publish = functools.partial(
+        _safe_publish, run_id=run_id, issue=number,
+        source_repo=source_repo, role=ROLE_IMPLEMENT,
     )
     worktree: Path | None = None
     started = time.monotonic()
@@ -9429,16 +6926,27 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
                 (snapshot.get("session_id") if snapshot else None) or "-",
             )
         config = {**config, "base_sha": base_sha, "run_id": run_id}
+        if ops:
+            config = {
+                **config,
+                # Issue #537: the ops session runs the ops playbook — the
+                # sibling of the configured dev prompt (a custom prompt
+                # deployment carries prompt_ops.md next to it). A missing
+                # file fails the run fast through the delivery failure
+                # path with the exact path in the comment.
+                "prompt": config["prompt"].with_name("prompt_ops.md"),
+            }
         comment_issue(
             number, repo=source_repo,
-            body=started_pi_comment_body(run_id, run_info, branch, worktree),
+            body=started_pi_comment_body(
+                run_id, run_info, branch, worktree,
+                extra_fields=repo_config_fields,
+            ),
         )
         # Issue #79: the whole ProgressPublisher path is a bypass — a
         # failure here (404, rate limit) is logged and never skips
         # `run_pi` or fails the delivery.
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_IMPLEMENT,
+        publish(
             action=lambda: publisher.ensure(_progress_body(
                 _progress_state(
                     issue=number, title=title, run_id=run_id,
@@ -9459,16 +6967,74 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
                     priority=priority,
                 ),
             )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_IMPLEMENT,
+        publish(
             action=lambda: _publish_plan_milestone(publisher, worktree),
         )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_IMPLEMENT,
+        publish(
             action=lambda: _publish_test_milestone(publisher, worktree),
         )
+        if ops:
+            # Issue #537: an ops delivery without a commit is COMPLETE —
+            # the evidence the session posted on the Issue (per-step real
+            # command output / API responses, the #526 fact culture) is
+            # the deliverable. Pure ops actions take no PR ceremony; the
+            # terminal transition mirrors the content path (the claim
+            # label is removed, the Issue is closed; the worktree stays
+            # as the run's evidence). Committed code (or uncommitted
+            # leftovers) falls through to the deterministic closeout
+            # below: committed ops code takes the normal PR ceremony,
+            # leftovers fail fast there (the runner never commits
+            # uncommitted changes).
+            head, dirty = _agent_delivery_boundary(worktree)
+            if head == base_sha and not dirty:
+                run_command([
+                    "gh", "issue", "close", str(number),
+                    "--repo", source_repo,
+                ])
+                edit_issue(
+                    number, repo=source_repo, remove=IN_PROGRESS_LABEL,
+                )
+                publish(
+                    action=lambda: publisher.milestone(
+                        f"ops delivered: {run_info}",
+                    ),
+                )
+                publish(
+                    action=lambda: publisher.finish(_progress_body(
+                        _progress_state(
+                            issue=number, title=title, run_id=run_id,
+                            role=ROLE_IMPLEMENT, branch=branch,
+                            worktree=worktree, started=started,
+                            pr_url=None, review_round=0, priority=priority,
+                        ),
+                        outcome="**Orbi ops delivered**",
+                    )),
+                )
+                LOGGER.info(
+                    "run_end %s",
+                    format_end_scene(
+                        run_id=run_id,
+                        issue=issue_context(source_repo, number),
+                        role=ROLE_IMPLEMENT, result="ops_delivered",
+                        elapsed=time.monotonic() - started,
+                        pr="-", commit=head,
+                    ),
+                )
+                # Issue #266: the delivered outcome breaks any failure
+                # streak of this Issue in the health history. Pure
+                # bypass: a state-write failure never changes the
+                # delivery outcome.
+                try:
+                    runner_health.record_run_attempt(
+                        runner_health.health_state_path(config["repo_dir"]),
+                        repo=source_repo, issue=number, run_id=run_id,
+                        outcome="ops_delivered", fingerprint="",
+                    )
+                except Exception:
+                    LOGGER.exception(
+                        "issue=%s health_success_record_failed", number,
+                    )
+                return IssueResult("ops", None)
         # Issue #186: the deterministic closeout (commit boundary, base
         # freshness + absorb, plain push, PR creation, PR verification)
         # is the Runner's job — the agent stopped at the committed
@@ -9508,9 +7074,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
                 run_id, run_info, pr_url, external=external_takeover,
             ),
         )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_IMPLEMENT,
+        publish(
             action=lambda: publisher.finish(_progress_body(_progress_state(
                 issue=number, title=title, run_id=run_id,
                 role=ROLE_IMPLEMENT, branch=branch,
@@ -9588,9 +7152,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
             LOGGER.exception(
                 "issue=%s model_wait_recovered_comment_failed", number,
             )
-        _safe_publish(
-            run_id=run_id, issue=number, source_repo=source_repo,
-            role=ROLE_IMPLEMENT,
+        publish(
             action=lambda: publisher.finish(_progress_body(_progress_state(
                 issue=number, title=title, run_id=run_id,
                 role=ROLE_IMPLEMENT, branch=branch,
@@ -9635,92 +7197,33 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
             )
         except Exception:
             LOGGER.exception("issue=%s health_failure_record_failed", number)
-        scene = ""
-        if worktree is not None:
-            try:
-                snapshot = activity_snapshot(worktree / ".pi-session")
-                if snapshot is None:
-                    # No session file yet: the scene still carries the full
-                    # debug entry (worktree, branch) with '-' session fields.
-                    snapshot = {
-                        "session_id": None, "session_file": None,
-                        "phase": "starting", "last_activity": None,
-                        "action": None, "result": None,
-                    }
-                scene = format_run_scene(
-                    snapshot,
-                    run_id=run_id, issue=issue_context(source_repo, number),
-                    role=ROLE_IMPLEMENT, branch=branch, worktree=str(worktree),
-                )
-            except Exception:
-                LOGGER.exception("issue=%s activity scene failed", number)
-        # Issue #256: the terminal worktree cleanup is gated on the
-        # `ai-blocked` transition ACTUALLY reaching GitHub — a simulated
-        # kill (the failure path's label edit never lands) leaves the
-        # Issue recoverable (ai-in-progress), so the scene must be kept
-        # for the same-run resume.
-        blocked_transition_done = False
         try:
-            # The claim label is removed on every failure; when the
-            # delivery already made the opened-PR transition (the
-            # scene-comment failure of Issue #79), the opened-PR label
-            # is removed too, so the terminal state is `ai-blocked`
-            # ALONE — never `ai-pr-opened` + `ai-blocked` (docs/workflow.mdx
-            # label lifecycle: `ai-pr-opened` is removed on terminal failure).
-            # The current delivery-state label is derived from the
-            # `pr_opened` flag (the only label present at this point):
-            # `ai-pr-opened` when the PR transition landed, otherwise
-            # `ai-in-progress` (the claim label).
-            apply_label_patch(
-                number, repo=source_repo, event=EVENT_BLOCKED,
+            # The shared terminal reporter (Issue #288): every failure
+            # reaching this handler is terminal by design (the
+            # recoverable Pi failures have their own handler above), so
+            # it never classifies — `ai-blocked` with the plain
+            # `Orbi failed` template. The current delivery-state label
+            # is derived from the `pr_opened` flag (the only label
+            # present at this point): `ai-pr-opened` when the PR
+            # transition landed, otherwise `ai-in-progress` (the claim
+            # label) — docs/workflow.mdx label lifecycle:
+            # `ai-pr-opened` is removed on terminal failure.
+            report_delivery_failure(
+                exc, issue=issue, source_repo=source_repo,
+                run_id=run_id, pr_url=None,
+                worktree=worktree, branch=branch, role=ROLE_IMPLEMENT,
+                cause=f"{_failure_detail(exc)} ({run_info})",
+                classify=False, evidence=True,
                 current_labels=(
                     {PR_OPENED_LABEL} if pr_opened else {IN_PROGRESS_LABEL}
                 ),
-            )
-            blocked_transition_done = True
-            detail = _failure_detail(exc)
-            evidence = _failure_evidence(worktree, exc)
-            body = (
-                f"{run_marker(run_id)}\n"
-                f"Orbi failed: {detail} ({run_info})"
-            )
-            if scene:
-                body += f" {scene}"
-            body += evidence
-            comment_issue(number, repo=source_repo, body=body)
-            # The blocked milestone is posted even when the worktree was
-            # never created or the progress comment was never ensured:
-            # the mobile notification of the terminal failure must not
-            # depend on local state. Both steps are bypass (Issue #79):
-            # a progress 404 here must not abort the `ai-blocked`
-            # transition above or the re-raise below.
-            _safe_publish(
-                run_id=run_id, issue=number, source_repo=source_repo,
-                role=ROLE_IMPLEMENT,
-                action=lambda: publisher.milestone(
-                    f"blocked: {sanitize(detail)} ({run_info})"
+                review_round=0,
+                finish=(
+                    worktree is not None
+                    and publisher.comment_id is not None
                 ),
+                publisher=publisher,
             )
-            if worktree is not None and publisher.comment_id is not None:
-                _safe_publish(
-                    run_id=run_id, issue=number,
-                    source_repo=source_repo, role=ROLE_IMPLEMENT,
-                    action=lambda: publisher.finish(_progress_body(
-                        _progress_state(
-                            issue=number, title=title, run_id=run_id,
-                            role=ROLE_IMPLEMENT, branch=branch,
-                            worktree=worktree, started=started,
-                            pr_url=None, review_round=0,
-                            priority=priority,
-                        ), outcome=(
-                            "**Orbi blocked**\n\n"
-                            f"failure: {detail}\n"
-                            "next step: fix the failure above and "
-                            "re-run this Issue (a new run id is "
-                            "created automatically)"
-                        ),
-                    )),
-                )
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
         else:
@@ -9732,7 +7235,7 @@ def process_issue(issue: dict, config: dict, source_repo: str) -> IssueResult:
             # the simulated-kill scene (blocked transition never landed)
             # never reach this branch — the worktree is kept for the
             # same-run resume.
-            if worktree is not None and blocked_transition_done:
+            if worktree is not None:
                 cleanup_task_worktree(
                     worktree, config["repo_dir"], run_id=run_id,
                     issue=number,
@@ -9811,88 +7314,516 @@ def issue_labels(number: int, repo: str) -> list[str]:
     return names
 
 
-def _finish_blocked_progress(
-    number: int, run_id: str | None, source_repo: str,
-    worktree: Path | None, branch: str | None, pr_url: str,
-    detail: str, next_step: str, title: str,
-    role: str = ROLE_REVIEW, review_round: int = 0,
-    priority: str = "normal",
-) -> None:
-    """Finish the tracked progress comment with the blocked scene.
-
-    `title` is the issue's GitHub title (Issue #100): the blocked scene
-    shows `#<number> <title>` like every other progress scene; it is
-    required, never fabricated.
-
-    The contract (Issue #18): on failure the progress comment becomes
-    the blocked scene with the next-step reason — the same terminal
-    body the `process_issue` failure path writes. `ensure` finds the
-    run's existing progress comment by its hidden marker (PATCHing it
-    in place) or creates it when the run never reached one; either way
-    the blocked scene is the final state. `role` and `review_round`
-    are the actual role and completed review rounds of the blocked run
-    (review round 2, PR #42): the caller derives them from the
-    Issue's trusted review-round comments, so the terminal comment
-    never shows a stale hardcoded role/round. Issue #82: the only
-    post-PR role is `review` (the review session fixes findings in the
-    same session), so the default is `ROLE_REVIEW`.
-    """
-    if run_id is None:
-        return
-    publisher = ProgressPublisher(
-        number, source_repo, run_id, run_command=run_command,
-    )
-    publisher.ensure(_progress_body(_progress_state(
+def _finish_progress_body(*, number: int, title: str, run_id: str,
+                          role: str, branch: str | None,
+                          worktree: Path | None, pr_url: str | None,
+                          review_round: int, priority: str, detail: str,
+                          next_step: str, outcome: str) -> str:
+    """Render the terminal progress scene shared by every finish path."""
+    return _progress_body(_progress_state(
         issue=number, title=title, run_id=run_id, role=role,
         branch=branch or "-", worktree=worktree or Path("-"),
         started=time.monotonic(), pr_url=pr_url,
         review_round=review_round, priority=priority,
     ), outcome=(
-        "**Orbi blocked**\n\n"
+        f"**Orbi {outcome}**\n\n"
         f"failure: {detail}\n"
         f"next step: {next_step}"
-    )))
+    ))
 
 
-def _finish_fix_needed_progress(
+def _finish_progress(
     number: int, run_id: str | None, source_repo: str,
     worktree: Path | None, branch: str | None, pr_url: str,
-    detail: str, title: str,
-    review_round: int = 0, priority: str = "normal",
+    detail: str, next_step: str, title: str, outcome: str,
+    role: str = ROLE_REVIEW, review_round: int = 0,
+    priority: str = "normal",
 ) -> None:
-    """Finish the tracked progress comment with the fix-needed scene
-    (Issue #50).
+    """Finish the tracked progress comment with the terminal scene.
 
-    The contract (Issue #18): on a RECOVERABLE failure the progress
-    comment becomes the fix-needed scene with the next-step reason —
-    the Issue stays in the automatic fix loop (`ai-fix-needed`) and the
-    next timer resumes the same run, branch, worktree and PR. `ensure`
-    finds the run's existing progress comment by its hidden marker
-    (PATCHing it in place) or creates it when the run never reached
-    one; either way the fix-needed scene is the final state of this
-    tick. `title` is required — the GitHub issue data contract
-    guarantees a non-empty string title (every runner scan fetches it),
-    never fabricated. `review_round` and `priority` are the actual
-    completed review rounds and pickup priority of the run (the caller
-    derives them from the Issue's trusted review-round comments and
-    labels), so the scene never shows a stale hardcoded value.
+    One function for both terminal scenes (Issue #293): `outcome` is
+    the scene headline — `blocked` (Issue #18: the terminal failure,
+    the same body the `process_issue` failure path writes) or
+    `fix needed` (Issue #50: the recoverable failure that keeps the
+    Issue in the automatic fix loop, the next timer resuming the same
+    run, branch, worktree and PR). `title` is the issue's GitHub title
+    (Issue #100): the scene shows `#<number> <title>` like every other
+    progress scene; it is required, never fabricated.
+
+    `ensure` finds the run's existing progress comment by its hidden
+    marker (PATCHing it in place) or creates it when the run never
+    reached one; either way the scene is the final state. `role`,
+    `review_round` and `priority` are the actual role, completed
+    review rounds and pickup priority of the run: the caller derives
+    them from the Issue's trusted review-round comments and labels,
+    so the terminal comment never shows a stale hardcoded role/round
+    (review round 2, PR #42). Issue #82: the only post-PR role is
+    `review` (the review session fixes findings in the same session),
+    so the default is `ROLE_REVIEW`.
     """
     if run_id is None:
         return
     publisher = ProgressPublisher(
         number, source_repo, run_id, run_command=run_command,
     )
-    publisher.ensure(_progress_body(_progress_state(
-        issue=number, title=title, run_id=run_id, role=ROLE_REVIEW,
-        branch=branch or "-", worktree=worktree or Path("-"),
-        started=time.monotonic(), pr_url=pr_url,
-        review_round=review_round, priority=priority,
-    ), outcome=(
-        "**Orbi fix needed**\n\n"
-        f"failure: {detail}\n"
-        "next step: the next tick resumes the same run, branch, "
-        "worktree and PR automatically (the Issue stays ai-fix-needed)"
-    )))
+    publisher.ensure(_finish_progress_body(
+        number=number, title=title, run_id=run_id, role=role,
+        branch=branch, worktree=worktree, pr_url=pr_url,
+        review_round=review_round, priority=priority, detail=detail,
+        next_step=next_step, outcome=outcome,
+    ))
+
+
+# Issue #288: the failure-scene snapshot placeholder — the fields a
+# failure comment shows when no session file exists yet (the Pi never
+# started or the session dir is gone). One constant for every reporter.
+_SNAPSHOT_PLACEHOLDER: dict = {
+    "session_id": None, "session_file": None,
+    "phase": "starting",
+    "last_activity": None, "action": None,
+    "result": None,
+}
+
+
+def _snapshot_or_placeholder(session_dir: Path, *, number: int) -> dict:
+    """Best-effort activity snapshot for a failure scene (Issue #288).
+
+    The watcher state when a session file exists, the placeholder scene
+    when none does yet, and the placeholder again — with the read
+    failure logged — when the snapshot itself fails: best-effort
+    observability, never a second failure.
+    """
+    try:
+        snapshot = activity_snapshot(session_dir)
+    except Exception:
+        LOGGER.exception("issue=%s activity scene failed", number)
+        return dict(_SNAPSHOT_PLACEHOLDER)
+    return snapshot if snapshot is not None else dict(_SNAPSHOT_PLACEHOLDER)
+
+
+# The fixed phrases of the two failure templates (Issue #50): the
+# classified blocked branch names WHY automatic recovery is impossible,
+# the recoverable branch names the automatic next step.
+_BLOCKED_PRECONDITION_PHRASE = (
+    "; this is an external precondition the AI cannot safely judge or "
+    "fix, so it cannot be recovered automatically (the Issue stays "
+    "ai-blocked until a human decides)"
+)
+_FIX_NEEDED_PHRASE = (
+    "; the Issue stays ai-fix-needed and the next tick resumes the "
+    "same run, branch, worktree and PR"
+)
+
+
+def report_delivery_failure(
+    exc: BaseException, *, issue: dict, source_repo: str,
+    run_id: str | None, pr_url: str | None, worktree: Path | None,
+    branch: str | None, role: str, cause: str, evidence: bool = False,
+    classify: bool = True, current_labels: set[str] | None = None,
+    blocked_suffix: str = "", review_round: int | None = None,
+    finish: bool = True, publisher: ProgressPublisher | None = None,
+) -> str:
+    """Report one delivery failure through the Issue #50 flow (Issue #288).
+
+    The single implementation of the flow previously hand-copied in
+    `verify_resumed_pr`, `_run_review_round` and `process_issue`:
+    classify the exception, transition the label (`ai-blocked` ALONE
+    for an explicit `UnrecoverableDeliveryError`, `ai-fix-needed` for
+    every recoverable failure), assemble the failure body (fixed
+    phrase + `cause` + run scene + evidence), prefix the run marker,
+    comment the Issue (the PR too on the recoverable branch — the
+    terminal blocked state is Issue-only), then publish the milestone
+    and the terminal progress scene as a pure bypass (Issue #79). The
+    milestone text is `blocked|fix needed: {cause}` — untruncated, so
+    the concrete reason (a missing worktree path, a round-exhaustion
+    reason) stays visible in the mobile notification. Returns the
+    outcome, `"blocked"` or `"fix needed"`.
+
+    `classify=False` forces the terminal branch (the implement-phase
+    handler: every failure reaching it is terminal by design — the
+    recoverable Pi failures have their own handler); the body is then
+    the plain `Orbi failed:` template and the run scene is
+    space-joined to the FIRST body line, where `format_status_comment`
+    lifts its fields into the structured-alert field block.
+    `current_labels` pins the label-patch source (the implement-phase
+    handler derives the current delivery label locally); None reads
+    the labels from GitHub. `blocked_suffix` extends the classified
+    blocked body (the resume verification's preserved-PR note).
+    `review_round` pins the terminal scene's round (the implement
+    phase has none); None computes `review_rounds_so_far` lazily
+    inside the finish publish (a history-read failure there is bypass,
+    never a second failure). `finish=False` skips the progress scene
+    (the tracked progress comment does not exist and the milestone
+    alone carries the notification). `publisher` is the run's LIVE
+    progress publisher when the caller holds one: its `finish` then
+    PATCHes the tracked comment directly instead of relocating it by
+    the run marker. `evidence` appends the bounded
+    `_failure_evidence` block after the scene.
+
+    The function raises on its own failures (label patch, comment):
+    the callers keep their reporting-error semantics (the review loop
+    fails fast; the other two log `failure reporting failed` and
+    continue to their terminal return / re-raise).
+    """
+    number = int(issue["number"])
+    title = issue["title"]
+    priority = issue_priority(issue)
+    blocked = not classify or is_unrecoverable_failure(exc)
+
+    def scene_line() -> str | None:
+        """The run scene for the body, or None when omitted.
+
+        The classified reporters degrade a failed snapshot read to the
+        '-' placeholder (the debug entry still carries worktree and
+        branch, Issue #50); the implement-phase first-line scene is
+        omitted entirely on a failed read — the structured-alert field
+        block then shows only the failure's own fields (the pinned
+        #256 isolation).
+        """
+        if classify:
+            snapshot = _snapshot_or_placeholder(
+                worktree / ".pi-session", number=number,
+            )
+        else:
+            try:
+                snapshot = activity_snapshot(worktree / ".pi-session")
+            except Exception:
+                LOGGER.exception("issue=%s activity scene failed", number)
+                return None
+            if snapshot is None:
+                snapshot = dict(_SNAPSHOT_PLACEHOLDER)
+        return format_run_scene(
+            snapshot,
+            run_id=run_id or "-",
+            issue=issue_context(source_repo, number),
+            role=role, branch=branch or "-", worktree=str(worktree),
+        )
+
+    labels = (
+        current_labels if current_labels is not None
+        else issue_labels(number, source_repo)
+    )
+    if blocked:
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_BLOCKED,
+            current_labels=labels,
+        )
+        body = f"Orbi failed: {cause}"
+        if classify:
+            body += _BLOCKED_PRECONDITION_PHRASE + blocked_suffix
+        elif worktree is not None:
+            scene = scene_line()
+            if scene is not None:
+                # The scene fields join the FIRST body line, where
+                # `format_status_comment` lifts them into the
+                # structured-alert field block.
+                body += f" {scene}"
+        outcome = "blocked"
+    else:
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_FIX_NEEDED,
+            current_labels=labels,
+        )
+        body = f"Orbi needs a fix: {cause}{_FIX_NEEDED_PHRASE}"
+        # The full scene is always appended: a recoverable failure
+        # happens after the worktree was derived (a failure before the
+        # derivation is unrecoverable and never reaches this branch).
+        body += f"\n{scene_line()}"
+        outcome = "fix needed"
+    if evidence:
+        body += _failure_evidence(worktree, exc)
+    if run_id:
+        body = f"{run_marker(run_id)}\n{body}"
+    comment_issue(number, repo=source_repo, body=body)
+    if pr_url and not blocked:
+        # The recoverable scene is written to the PR too (Issue #50):
+        # the next review session and any human watcher see it where
+        # the delivery lives. A blocked Issue is terminal — Issue only.
+        comment_pr(_pr_number(pr_url), repo=source_repo, body=body)
+    if run_id:
+        # One publisher for the milestone and the terminal scene: the
+        # run's LIVE publisher when the caller holds one (its `finish`
+        # PATCHes the tracked comment directly, comment id already
+        # known), a fresh one otherwise (`finish` then locates-or-
+        # creates the tracked comment by the run marker).
+        target = (
+            publisher if publisher is not None
+            else ProgressPublisher(
+                number, source_repo, run_id, run_command=run_command,
+            )
+        )
+        publish = functools.partial(
+            _safe_publish, run_id=run_id, issue=number,
+            source_repo=source_repo, role=role,
+        )
+        if outcome == "blocked":
+            publish(action=lambda: target.milestone(
+                f"blocked: {cause}",
+            ))
+            if classify:
+                finish_failure = f"{cause}{_BLOCKED_PRECONDITION_PHRASE}"
+                next_step = (
+                    "fix the precondition above (see the reason) and "
+                    "relabel the Issue ai-fix-needed to resume this "
+                    "same PR"
+                )
+            else:
+                finish_failure = cause
+                next_step = (
+                    "fix the failure above and re-run this Issue (a "
+                    "new run id is created automatically)"
+                )
+            finish_outcome = "blocked"
+        else:
+            publish(action=lambda: target.milestone(
+                f"fix needed: {cause}",
+            ))
+            finish_failure = cause
+            next_step = (
+                "the next tick resumes the same run, branch, worktree "
+                "and PR automatically (the Issue stays ai-fix-needed)"
+            )
+            finish_outcome = "fix needed"
+        if finish:
+            publish(action=lambda: target.finish(_finish_progress_body(
+                number=number, title=title, run_id=run_id, role=role,
+                branch=branch, worktree=worktree, pr_url=pr_url,
+                review_round=(
+                    review_round if review_round is not None
+                    else review_rounds_so_far(
+                        issue_comments(number, repo=source_repo),
+                    )
+                ),
+                priority=priority, detail=finish_failure,
+                next_step=next_step, outcome=finish_outcome,
+            )))
+    return outcome
+
+
+def _run_review_round(
+    pr_url: str, issue: dict, config: dict, source_repo: str,
+) -> bool | None:
+    """Run ONE review round of an open-PR delivery (Issue #289).
+
+    Extracted from `wait_for_delivery`'s loop body so the wait stays a
+    plain polling skeleton and one round is readable on its own: read
+    the delivery labels ONCE per round, repair a lost `ai-in-progress`
+    transition, gate on the resumable opened-PR states, then recover
+    the trusted scene, validate the frozen base, derive the
+    worktree/branch, run the independent review and classify any
+    failure (Issue #50).
+
+    Returns True when this round merged the PR (terminal success);
+    False when findings remain (`ai-fix-needed`, the label transition
+    happens inside the review itself) and the caller may poll into the
+    next round; and None when a terminal state was already handled and
+    the caller must release the slot and return: an unrecoverable
+    precondition (`ai-blocked`), a recoverable failure's full
+    `ai-fix-needed` scene (the next tick resumes the same run, branch,
+    worktree and PR), a failed `ai-in-progress` label repair, or an
+    open PR without a resumable delivery label (both `ai-blocked`).
+    """
+    number = int(issue["number"])
+    title = issue["title"]
+    run_id = current_run_id()
+    marker = run_marker(run_id) if run_id else ""
+    priority = issue_priority(issue)
+
+    def block_label_inconsistency(labels: list[str], reason: str) -> None:
+        LOGGER.error(
+            "issue=%s delivery_label_inconsistent pr=%s reason=%s; "
+            "marking ai-blocked", number, pr_url, reason,
+        )
+        apply_label_patch(
+            number, repo=source_repo, event=EVENT_BLOCKED,
+            current_labels=labels,
+        )
+        body = (
+            f"Orbi failed: PR {pr_url} is open but the delivery labels "
+            f"could not be repaired ({reason}); the Issue is ai-blocked"
+        )
+        if marker:
+            body = f"{marker}\n{body}"
+        comment_issue(number, repo=source_repo, body=body)
+
+    labels = issue_labels(number, source_repo)
+    if IN_PROGRESS_LABEL in labels:
+        try:
+            apply_label_patch(
+                number, repo=source_repo, event=EVENT_PR_OPENED,
+                current_labels=labels,
+            )
+        except Exception as exc:
+            LOGGER.exception(
+                "issue=%s delivery_label_repair_failed pr=%s",
+                number, pr_url,
+            )
+            block_label_inconsistency(labels, str(exc))
+            return None
+        labels = [label for label in labels if label != IN_PROGRESS_LABEL]
+        labels.append(PR_OPENED_LABEL)
+        LOGGER.info(
+            "issue=%s delivery_label_repaired pr=%s from=%s to=%s",
+            number, pr_url, IN_PROGRESS_LABEL, PR_OPENED_LABEL,
+        )
+    if not (is_resumable(labels)
+            and not needs_human_intervention(labels)
+            and MERGED_LABEL not in labels):
+        block_label_inconsistency(
+            labels,
+            "open PR has no resumable delivery label",
+        )
+        return None
+    # The PR is in an opened-PR review state: run the
+    # independent review of the frozen PR on the same run
+    # (Issue #34). `ai-pr-opened` awaits review; `ai-fix-needed`
+    # awaits the next review session after a finding or a base
+    # conflict (Issue #82: the review session fixes findings in
+    # the same session, so both states run the same review). A
+    # clean verdict re-freezes the head, merges and returns
+    # True (terminal); unfixed findings or a behind/conflict
+    # gate label the Issue `ai-fix-needed` and the next
+    # iteration re-runs the same independent review. A review
+    # that cannot run is classified (Issue #50): a RECOVERABLE
+    # failure (Pi execution failure, model wait, runner
+    # exception, missing/malformed verdict, missing worktree,
+    # unpushed local commit) keeps the Issue in the automatic
+    # fix loop — `ai-fix-needed` with the full scene (run_id,
+    # PR, branch, worktree, session, phase, last activity,
+    # concrete error) on Issue AND PR, and the next timer
+    # resumes the same run, branch, worktree and PR. Only an
+    # explicit `UnrecoverableDeliveryError` (an external
+    # precondition the AI cannot safely judge or fix: an
+    # unrecoverable scene, a base-branch config change,
+    # exhausted rounds) is terminal: the Issue is marked
+    # `ai-blocked` ALONE (the opened-PR state label,
+    # `ai-pr-opened` or `ai-fix-needed`, is removed) with the
+    # explicit reason why automatic recovery is impossible.
+    worktree = None
+    branch = None
+    try:
+        try:
+            scene = resume_scene(
+                issue_comments(number, repo=source_repo),
+            )
+        except ValueError as scene_exc:
+            # Issue #50: without the trusted scene the runner
+            # cannot derive run_id, branch, worktree or PR and
+            # cannot start a review session — an external
+            # precondition the AI cannot fix by itself (the
+            # same terminal state as the scan-time
+            # `block_scene_failure`), so the handler below
+            # marks the Issue ai-blocked with the explicit
+            # reason.
+            raise UnrecoverableDeliveryError(
+                f"the resume scene is unrecoverable "
+                f"({scene_exc}); the runner cannot derive "
+                "run_id, branch, worktree or PR without the "
+                "trusted 'Orbi opened PR' comment, so "
+                "it cannot start a review session; a human "
+                "must restore the scene comment or relabel "
+                "the Issue"
+            ) from scene_exc
+        # Issue #91 + #50: the scene freezes the base the PR
+        # was opened against. The config may have moved on (or
+        # the comment is stale): reviewing or merging a PR
+        # frozen on another base against the configured one
+        # would run the freeze/merge gate on the wrong base,
+        # so fail fast before any git/Pi mutation instead of
+        # silently switching bases. A base-branch change is a
+        # human decision (Issue #50): the runner must not
+        # auto-retry a PR frozen on another base, so the
+        # handler below marks the Issue ai-blocked with the
+        # explicit reason and both base values named.
+        if scene["base_branch"] != config["base_branch"]:
+            raise UnrecoverableDeliveryError(
+                f"resume scene base_branch={scene['base_branch']} "
+                f"differs from configured base_branch="
+                f"{config['base_branch']}; the PR is frozen on a "
+                "different base and must not be reviewed or "
+                "merged against the configured one — a base "
+                "change is a human decision, so auto-retrying "
+                "would keep failing on the same mismatch"
+            )
+        worktree = worktree_path(
+            config["repo_dir"], source_repo, number,
+            scene["run_id"],
+        )
+        # Issue #90 + #50: the worktree is derived from the
+        # configured repo_dir, source repo, Issue number and run id
+        # (never read from a comment). A missing directory is a
+        # RECOVERABLE failure: the branch still exists on the
+        # remote and the worktree can be recreated (git worktree
+        # add) on the next resume, so the handler below keeps the
+        # Issue in the automatic fix loop (ai-fix-needed) with the
+        # PR and branch preserved.
+        if not worktree.is_dir():
+            # The failure comment must carry the full scene
+            # including the branch (Issue #50): the stable
+            # derivation is the best available guess when the
+            # worktree is gone.
+            branch = task_branch(
+                source_repo, number, scene["run_id"],
+            )
+            raise RuntimeError(f"worktree missing: {worktree}")
+        # The delivery branch is a local git fact of the derived
+        # worktree — the stable naming for the Runner's own
+        # deliveries, the contributor's head branch for an
+        # external takeover (Issue #608). Deriving it from the
+        # worktree keeps the whole review/merge loop
+        # branch-identity agnostic while the worktree path itself
+        # stays comment-independent.
+        branch = run_command(
+            ["git", "branch", "--show-current"], cwd=worktree,
+        ) or task_branch(source_repo, number, scene["run_id"])
+        review_config = {
+            **config,
+            "base_sha": scene["base_sha"],
+            "run_id": scene["run_id"],
+        }
+        merged = review_and_merge_if_clean(
+            worktree, branch, config["base_branch"],
+            review_config, source_repo, number,
+            title=title, priority=priority,
+        )
+    except Exception as exc:
+        detail = _failure_detail(exc)
+        if isinstance(exc, ReviewRoundsExhausted):
+            # The bounded budget is an intentional human decision
+            # point, not a Runner bug. Keep the structured event and
+            # terminal handling below, but do not emit a traceback.
+            LOGGER.error(
+                "review_rounds_exhausted_expected_terminal issue=%s "
+                "pr=%s reason=%s",
+                number, pr_url, detail,
+            )
+        else:
+            # Real delivery failures retain traceback evidence for
+            # health monitoring and diagnosis.
+            LOGGER.exception(
+                "issue=%s delivery_review_failed pr=%s", number, pr_url,
+            )
+        # The shared classified reporter (Issue #288): recoverable ->
+        # `ai-fix-needed` with the full scene on Issue AND PR,
+        # unrecoverable -> `ai-blocked` ALONE. No wrapper: a reporting
+        # failure here fails the tick fast (the slot is released by
+        # `main`'s `finally`), exactly like any other Runner bug.
+        report_delivery_failure(
+            exc, issue=issue, source_repo=source_repo,
+            run_id=run_id, pr_url=pr_url,
+            worktree=worktree, branch=branch, role=ROLE_REVIEW,
+            cause=f"the independent review of PR {pr_url} failed: {detail}",
+            evidence=True,
+        )
+        return None
+    if merged:
+        LOGGER.info(
+            "issue=%s delivery_auto_merged pr=%s; releasing the "
+            "slot",
+            number, pr_url,
+        )
+        return True
+    return False
 
 
 def wait_for_delivery(pr_url: str, issue: dict, config: dict,
@@ -9962,22 +7893,10 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
         "slot until the PR is merged or terminally failed",
         number, pr_url, priority,
     )
-    def block_label_inconsistency(labels: list[str], reason: str) -> None:
-        LOGGER.error(
-            "issue=%s delivery_label_inconsistent pr=%s reason=%s; "
-            "marking ai-blocked", number, pr_url, reason,
-        )
-        apply_label_patch(
-            number, repo=source_repo, event=EVENT_BLOCKED,
-            current_labels=labels,
-        )
-        body = (
-            f"Orbi failed: PR {pr_url} is open but the delivery labels "
-            f"could not be repaired ({reason}); the Issue is ai-blocked"
-        )
-        if marker:
-            body = f"{marker}\n{body}"
-        comment_issue(number, repo=source_repo, body=body)
+    publish = functools.partial(
+        _safe_publish, run_id=run_id, issue=number,
+        source_repo=source_repo, role=ROLE_REVIEW,
+    )
 
     while True:
         state, ci_checks = pr_delivery_status(pr_url, source_repo)
@@ -10072,9 +7991,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 # bypass — a 404 here must not escape the wait loop
                 # (the terminal bookkeeping above already completed and
                 # the slot must be released).
-                _safe_publish(
-                    run_id=run_id, issue=number,
-                    source_repo=source_repo, role=ROLE_REVIEW,
+                publish(
                     action=lambda: ProgressPublisher(
                         number, source_repo, run_id,
                         run_command=run_command,
@@ -10096,10 +8013,8 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                 # The tracked progress comment becomes the blocked scene
                 # (Issue #18): the same terminal body the other failure
                 # paths write, with the next-step reason.
-                _safe_publish(
-                    run_id=run_id, issue=number,
-                    source_repo=source_repo, role=ROLE_REVIEW,
-                    action=lambda: _finish_blocked_progress(
+                publish(
+                    action=lambda: _finish_progress(
                         number, run_id, source_repo, None, None,
                         pr_url,
                         f"PR {pr_url} was closed without a merge; the "
@@ -10108,384 +8023,40 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                         "the delivery or start a fresh run on the "
                         "Issue",
                         title=title,
+                        outcome="blocked",
                         role=ROLE_REVIEW, review_round=blocked_round,
                         priority=priority,
                     ),
                 )
             return
-        labels = issue_labels(number, source_repo)
-        if IN_PROGRESS_LABEL in labels:
-            try:
-                apply_label_patch(
-                    number, repo=source_repo, event=EVENT_PR_OPENED,
-                    current_labels=labels,
-                )
-            except Exception as exc:
-                LOGGER.exception(
-                    "issue=%s delivery_label_repair_failed pr=%s",
-                    number, pr_url,
-                )
-                block_label_inconsistency(labels, str(exc))
-                return
-            labels = [label for label in labels if label != IN_PROGRESS_LABEL]
-            labels.append(PR_OPENED_LABEL)
-            LOGGER.info(
-                "issue=%s delivery_label_repaired pr=%s from=%s to=%s",
-                number, pr_url, IN_PROGRESS_LABEL, PR_OPENED_LABEL,
-            )
-        if (is_resumable(labels)
-                and not needs_human_intervention(labels)
-                and MERGED_LABEL not in labels):
-            # The PR is in an opened-PR review state: run the
-            # independent review of the frozen PR on the same run
-            # (Issue #34). `ai-pr-opened` awaits review; `ai-fix-needed`
-            # awaits the next review session after a finding or a base
-            # conflict (Issue #82: the review session fixes findings in
-            # the same session, so both states run the same review). A
-            # clean verdict re-freezes the head, merges and returns
-            # True (terminal); unfixed findings or a behind/conflict
-            # gate label the Issue `ai-fix-needed` and the next
-            # iteration re-runs the same independent review. A review
-            # that cannot run is classified (Issue #50): a RECOVERABLE
-            # failure (Pi execution failure, model wait, runner
-            # exception, missing/malformed verdict, missing worktree,
-            # unpushed local commit) keeps the Issue in the automatic
-            # fix loop — `ai-fix-needed` with the full scene (run_id,
-            # PR, branch, worktree, session, phase, last activity,
-            # concrete error) on Issue AND PR, and the next timer
-            # resumes the same run, branch, worktree and PR. Only an
-            # explicit `UnrecoverableDeliveryError` (an external
-            # precondition the AI cannot safely judge or fix: an
-            # unrecoverable scene, a base-branch config change,
-            # exhausted rounds) is terminal: the Issue is marked
-            # `ai-blocked` ALONE (the opened-PR state label,
-            # `ai-pr-opened` or `ai-fix-needed`, is removed) with the
-            # explicit reason why automatic recovery is impossible.
-            worktree = None
-            branch = None
-            try:
-                try:
-                    scene = resume_scene(
-                        issue_comments(number, repo=source_repo),
-                    )
-                except ValueError as scene_exc:
-                    # Issue #50: without the trusted scene the runner
-                    # cannot derive run_id, branch, worktree or PR and
-                    # cannot start a review session — an external
-                    # precondition the AI cannot fix by itself (the
-                    # same terminal state as the scan-time
-                    # `block_scene_failure`), so the handler below
-                    # marks the Issue ai-blocked with the explicit
-                    # reason.
-                    raise UnrecoverableDeliveryError(
-                        f"the resume scene is unrecoverable "
-                        f"({scene_exc}); the runner cannot derive "
-                        "run_id, branch, worktree or PR without the "
-                        "trusted 'Orbi opened PR' comment, so "
-                        "it cannot start a review session; a human "
-                        "must restore the scene comment or relabel "
-                        "the Issue"
-                    ) from scene_exc
-                # Issue #91 + #50: the scene freezes the base the PR
-                # was opened against. The config may have moved on (or
-                # the comment is stale): reviewing or merging a PR
-                # frozen on another base against the configured one
-                # would run the freeze/merge gate on the wrong base,
-                # so fail fast before any git/Pi mutation instead of
-                # silently switching bases. A base-branch change is a
-                # human decision (Issue #50): the runner must not
-                # auto-retry a PR frozen on another base, so the
-                # handler below marks the Issue ai-blocked with the
-                # explicit reason and both base values named.
-                if scene["base_branch"] != config["base_branch"]:
-                    raise UnrecoverableDeliveryError(
-                        f"resume scene base_branch={scene['base_branch']} "
-                        f"differs from configured base_branch="
-                        f"{config['base_branch']}; the PR is frozen on a "
-                        "different base and must not be reviewed or "
-                        "merged against the configured one — a base "
-                        "change is a human decision, so auto-retrying "
-                        "would keep failing on the same mismatch"
-                    )
-                worktree = worktree_path(
-                    config["repo_dir"], source_repo, number,
-                    scene["run_id"],
-                )
-                # Issue #90 + #50: the worktree is derived from the
-                # configured repo_dir, source repo, Issue number and run id
-                # (never read from a comment). A missing directory is a
-                # RECOVERABLE failure: the branch still exists on the
-                # remote and the worktree can be recreated (git worktree
-                # add) on the next resume, so the handler below keeps the
-                # Issue in the automatic fix loop (ai-fix-needed) with the
-                # PR and branch preserved.
-                if not worktree.is_dir():
-                    # The failure comment must carry the full scene
-                    # including the branch (Issue #50): the stable
-                    # derivation is the best available guess when the
-                    # worktree is gone.
-                    branch = task_branch(
-                        source_repo, number, scene["run_id"],
-                    )
-                    raise RuntimeError(f"worktree missing: {worktree}")
-                # The delivery branch is a local git fact of the derived
-                # worktree — the stable naming for the Runner's own
-                # deliveries, the contributor's head branch for an
-                # external takeover (Issue #608). Deriving it from the
-                # worktree keeps the whole review/merge loop
-                # branch-identity agnostic while the worktree path itself
-                # stays comment-independent.
-                branch = run_command(
-                    ["git", "branch", "--show-current"], cwd=worktree,
-                ) or task_branch(source_repo, number, scene["run_id"])
-                review_config = {
-                    **config,
-                    "base_sha": scene["base_sha"],
-                    "run_id": scene["run_id"],
-                }
-                merged = review_and_merge_if_clean(
-                    worktree, branch, config["base_branch"],
-                    review_config, source_repo, number,
-                    title=title, priority=priority,
-                )
-            except Exception as exc:
-                detail = _failure_detail(exc)
-                if isinstance(exc, ReviewRoundsExhausted):
-                    # The bounded budget is an intentional human decision
-                    # point, not a Runner bug. Keep the structured event and
-                    # terminal handling below, but do not emit a traceback.
-                    LOGGER.error(
-                        "review_rounds_exhausted_expected_terminal issue=%s "
-                        "pr=%s reason=%s",
-                        number, pr_url, detail,
-                    )
-                else:
-                    # Real delivery failures retain traceback evidence for
-                    # health monitoring and diagnosis.
-                    LOGGER.exception(
-                        "issue=%s delivery_review_failed pr=%s", number, pr_url,
-                    )
-
-                evidence = _failure_evidence(worktree, exc)
-                if is_unrecoverable_failure(exc):
-                    # Issue #50: the ONLY opened-PR failure that leaves
-                    # the automatic loop is an external precondition
-                    # the AI cannot safely judge or fix: the Issue is
-                    # marked ai-blocked ALONE (the opened-PR state
-                    # label, `ai-pr-opened` or `ai-fix-needed`, is
-                    # removed) and the failure comment states the
-                    # explicit reason why automatic recovery is
-                    # impossible.
-                    # The current labels are read ONCE before the
-                    # transition: the blocked patch clears every
-                    # delivery-state label that is present (`ai-pr-opened`,
-                    # and `ai-fix-needed` when the failure happened while
-                    # awaiting the next review session — Issue #82 routes
-                    # both opened-PR states into the same review), so the
-                    # terminal state is `ai-blocked` alone.
-                    labels = issue_labels(number, source_repo)
-                    apply_label_patch(
-                        number, repo=source_repo, event=EVENT_BLOCKED,
-                        current_labels=labels,
-                    )
-                    body = (
-                        f"Orbi failed: the independent review of "
-                        f"PR {pr_url} failed: {detail}; this is an "
-                        "external precondition the AI cannot safely "
-                        "judge or fix, so it cannot be recovered "
-                        "automatically (the Issue stays ai-blocked "
-                        "until a human decides)"
-                    )
-                    body += evidence
-                    if marker:
-                        body = f"{marker}\n{body}"
-                    comment_issue(number, repo=source_repo, body=body)
-                    if run_id:
-                        # Issue #79: the blocked-scene progress
-                        # publishing is bypass — a 404 here must not
-                        # escape the wait loop (the terminal
-                        # bookkeeping above already completed and the
-                        # slot must be released).
-                        _safe_publish(
-                            run_id=run_id, issue=number,
-                            source_repo=source_repo, role=ROLE_REVIEW,
-                            action=lambda: ProgressPublisher(
-                                number, source_repo, run_id,
-                                run_command=run_command,
-                            ).milestone(
-                                f"blocked: the independent review of "
-                                f"PR {pr_url} failed: {detail}"
-                            ),
-                        )
-                        # The blocked scene carries the actual role and
-                        # the completed review rounds (review round 2,
-                        # PR #42): the failure happened during the
-                        # independent review, and the trusted
-                        # review-round comments bound the round count
-                        # (GitHub is the only state store).
-                        _safe_publish(
-                            run_id=run_id, issue=number,
-                            source_repo=source_repo, role=ROLE_REVIEW,
-                            action=lambda: _finish_blocked_progress(
-                                number, run_id, source_repo, worktree,
-                                branch, pr_url,
-                                f"the independent review of PR {pr_url} "
-                                f"failed: {detail}; this is an external "
-                                "precondition the AI cannot safely "
-                                "judge or fix, so it cannot be "
-                                "recovered automatically (the Issue "
-                                "stays ai-blocked until a human "
-                                "decides)",
-                                "fix the precondition above (see the "
-                                "reason) and relabel the Issue "
-                                "ai-fix-needed to resume this same PR",
-                                title=title,
-                                role=ROLE_REVIEW,
-                                review_round=review_rounds_so_far(
-                                    issue_comments(number, repo=source_repo),
-                                ),
-                                priority=priority,
-                            ),
-                        )
-                    return
-                # Issue #50: a RECOVERABLE failure (Pi execution
-                # failure, model wait, runner exception,
-                # missing/malformed verdict, missing worktree,
-                # unpushed local commit) keeps the Issue in the
-                # automatic fix loop: `ai-fix-needed` (the next timer
-                # resumes the same run, branch, worktree and PR — never
-                # ai-blocked, never a replacement PR). The failure
-                # comment carries the full scene and is written to the
-                # Issue AND the PR.
-                apply_label_patch(
-                    number, repo=source_repo, event=EVENT_FIX_NEEDED,
-                    current_labels=issue_labels(number, source_repo),
-                )
-                body = (
-                    f"Orbi needs a fix: the independent review of "
-                    f"PR {pr_url} failed: {detail}; the Issue stays "
-                    "ai-fix-needed and the next tick resumes the same "
-                    "run, branch, worktree and PR"
-                )
-                body += evidence
-                # The full scene (run_id, branch, worktree, session,
-                # phase, last activity) is always appended: a
-                # recoverable failure always happens after the scene
-                # was recovered and the worktree derived (a failure
-                # before the derivation is unrecoverable and never
-                # reaches this branch), so worktree, branch and run_id
-                # are set here. The session fields are '-' when no
-                # session file exists yet (the Pi never started or the
-                # dir is gone); a snapshot read failure is logged and
-                # reported as "no session yet" (best-effort
-                # observability, never a second failure).
-                snapshot = None
-                try:
-                    snapshot = activity_snapshot(
-                        worktree / ".pi-session",
-                    )
-                except Exception:
-                    LOGGER.exception(
-                        "issue=%s activity scene failed", number,
-                    )
-                if snapshot is None:
-                    snapshot = {
-                        "session_id": None, "session_file": None,
-                        "phase": "starting",
-                        "last_activity": None, "action": None,
-                        "result": None,
-                    }
-                body += "\n" + format_run_scene(
-                    snapshot,
-                    run_id=run_id or "-",
-                    issue=issue_context(source_repo, number),
-                    role=ROLE_REVIEW, branch=branch,
-                    worktree=str(worktree),
-                )
-                if marker:
-                    body = f"{marker}\n{body}"
-                comment_issue(number, repo=source_repo, body=body)
-                comment_pr(
-                    _pr_number(pr_url), repo=source_repo, body=body,
-                )
-                if run_id:
-                    # Issue #79: the fix-needed-scene progress
-                    # publishing is bypass — a 404 here must not escape
-                    # the wait loop (the label transition above already
-                    # completed and the slot must be released).
-                    _safe_publish(
-                        run_id=run_id, issue=number,
-                        source_repo=source_repo, role=ROLE_REVIEW,
-                        action=lambda: ProgressPublisher(
-                            number, source_repo, run_id,
-                            run_command=run_command,
-                        ).milestone(
-                            f"fix needed: the independent review of "
-                            f"PR {pr_url} failed: {sanitize(detail)}"
-                        ),
-                    )
-                    _safe_publish(
-                        run_id=run_id, issue=number,
-                        source_repo=source_repo, role=ROLE_REVIEW,
-                        action=lambda: _finish_fix_needed_progress(
-                            number, run_id, source_repo, worktree,
-                            branch, pr_url,
-                            f"the independent review of PR {pr_url} "
-                            f"failed: {detail}",
-                            title=title,
-                            review_round=review_rounds_so_far(
-                                issue_comments(number, repo=source_repo),
-                            ),
-                            priority=priority,
-                        ),
-                    )
-                return
-            if merged:
-                LOGGER.info(
-                    "issue=%s delivery_auto_merged pr=%s; releasing the "
-                    "slot",
-                    number, pr_url,
-                )
-                return
-            # Back to the next review round: yield the cadence first
-            # (Issue #588). This tail previously had NO sleep — a red CI
-            # or unfixed findings re-ran the full reviewer session
-            # back-to-back in a hot loop while holding the slot, and
-            # poll_interval was a dead parameter.
-            time.sleep(poll_interval)
-            continue  # findings: the next iteration re-runs the review
-        block_label_inconsistency(
-            labels,
-            "open PR has no resumable delivery label",
-        )
-        return
+        # Issue #289: one OPEN round — the label read/repair, the
+        # resumable gate, one independent review of the frozen PR and
+        # the whole failure classification — lives in
+        # `_run_review_round`. True (merged this round) and None (a
+        # terminal state was already handled: ai-blocked, or the
+        # recoverable ai-fix-needed scene the next tick resumes) both
+        # end the delivery here; only False (findings) keeps polling.
+        if _run_review_round(pr_url, issue, config, source_repo) is not False:
+            return
+        # Back to the next review round: yield the cadence first
+        # (Issue #588). This tail previously had NO sleep — a red CI
+        # or unfixed findings re-ran the full reviewer session
+        # back-to-back in a hot loop while holding the slot, and
+        # poll_interval was a dead parameter.
+        time.sleep(poll_interval)
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--config", type=Path,
-        default=Path(os.environ.get("ORBI_CONFIG", "orbi.toml")),
-    )
-    args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format=log_format())
-    # Stop scene (Issue #48): install the SIGTERM handler BEFORE any
-    # other step so every phase of the tick (pre-claim, claim,
-    # implement, delivery wait) stops with the active Issue context
-    # logged and the live Pi child shut down — never an orphan Pi and
-    # never only systemd's generic "Stopped" line. Python only allows
-    # signal handlers in the main thread (the CLI entry point always
-    # is; in-thread `main()` test calls skip the install).
-    if threading.current_thread() is threading.main_thread():
-        signal.signal(signal.SIGTERM, _handle_stop)
+def _preflight(config: dict) -> None:
+    """Run the Runner tick's pre-slot startup checks (fail fast).
 
-    try:
-        config = load_config(args.config)
-        validate_config(config)
-        validate_execution_source_repos(config["source_repos"])
-    except ValueError as exc:
-        LOGGER.error("config_invalid reason=%s", exc)
-        return 1
+    Every pre-claim check lives here as one reusable unit, so the tick
+    entry (`main`) stays a thin `argparse -> preflight -> slot ->
+    dispatch -> finally` spine and the same checks can be exercised
+    independently (doctor and other callers) without re-inlining them.
+    Order is significant: the editable CLI refresh and the
+    source-freshness gate precede the unit-drift and transport checks,
+    and all of them precede any slot or claim.
+    """
     # Issue #399: publish the configured active milestone for the CI
     # triage workflow. This is a bypass; delivery must continue when the
     # variable API is unavailable.
@@ -10589,6 +8160,34 @@ def main(argv: list[str] | None = None) -> int:
         runner_health.run_health_check(config, run_command=run_command)
     except Exception:
         LOGGER.exception("health_check_failed")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--config", type=Path,
+        default=Path(os.environ.get("ORBI_CONFIG", "orbi.toml")),
+    )
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format=log_format())
+    # Stop scene (Issue #48): install the SIGTERM handler BEFORE any
+    # other step so every phase of the tick (pre-claim, claim,
+    # implement, delivery wait) stops with the active Issue context
+    # logged and the live Pi child shut down — never an orphan Pi and
+    # never only systemd's generic "Stopped" line. Python only allows
+    # signal handlers in the main thread (the CLI entry point always
+    # is; in-thread `main()` test calls skip the install).
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, _handle_stop)
+
+    try:
+        config = load_config(args.config)
+        validate_config(config)
+        validate_execution_source_repos(config["source_repos"])
+    except ValueError as exc:
+        LOGGER.error("config_invalid reason=%s", exc)
+        return 1
+    _preflight(config)
     # Concurrency cap (Issue #39): take one slot BEFORE claiming anything.
     # The slot is held for the whole delivery lifecycle (implement ->
     # review -> fix -> merge) and released only after the delivery is
@@ -10608,6 +8207,7 @@ def main(argv: list[str] | None = None) -> int:
             config["source_repos"], config["slot_dir"],
             config["max_concurrency"],
             config["active_milestone"],
+            config=config,
         )
         if selected is None:
             LOGGER.info(
@@ -10647,6 +8247,33 @@ def main(argv: list[str] | None = None) -> int:
                     )
             return 0
         source_repo, issue, scene = selected
+        # Issue #527: resolve the repository-level policy ONCE for the whole
+        # delivery. The effective base branch/milestone must drive the
+        # resume verification, the claim and the review/merge loop, and a
+        # malformed repository file blocks the claim fast with the offending
+        # keys (one repository's bad file never affects another pool).
+        try:
+            repo_config_record = load_repo_policy(config, source_repo)
+        except RepoConfigError as exc:
+            run_id = (
+                scene["run_id"] if scene is not None
+                else (current_run_id() or new_run_id())
+            )
+            LOGGER.error(
+                "repo_config_invalid source_repo=%s reason=%s",
+                source_repo, exc,
+            )
+            block_repo_config_failure(
+                int(issue["number"]), source_repo, exc, run_id,
+                current_labels={
+                    label.get("name") for label in issue.get("labels", [])
+                    if isinstance(label, dict)
+                    and isinstance(label.get("name"), str)
+                },
+            )
+            return 0
+        if repo_config_record is not None:
+            config = apply_repo_policy(config, source_repo, repo_config_record)
         result = None
         if scene is not None:
             # An open PR is a recoverable review state: resume the
@@ -10696,7 +8323,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 0
         else:
-            result = process_issue(issue, config, source_repo)
+            result = process_issue(
+                issue, config, source_repo, repo_config_record,
+            )
             # `process_issue` owns task dispatch and reports its outcome;
             # do not repeat task-type predicates here (Issue #281).
             if result.kind not in ("pr", "external-pr"):

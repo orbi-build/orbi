@@ -26,14 +26,20 @@ LIFECYCLE_STATES = frozenset({
 # --- Scheduling metadata (NOT delivery lifecycle states) ---
 # `p0` and `bug` only order the ready pickup; `ai-epic` marks a
 # coordination Issue the claim scan never touches; `ai-release` routes
-# to the deterministic release state machine; `ai-ticket-only` is a
-# content marker. None of them is a delivery state, and `blockedBy`
-# (a GitHub relation, not a label) is handled by the dependency scan.
+# to the deterministic release state machine; `ai-ops-only` routes to
+# the full-execution ops session (Issue #537: shell/gh/network like a
+# dev ticket, the ops playbook instead of the dev one, the deliverable
+# is evidence posted to the Issue); `ai-content-only` marks a pure
+# content task (the content agent, no execution, the deliverable is
+# posted to the Issue). None of them is a delivery state, and
+# `blockedBy` (a GitHub relation, not a label) is handled by the
+# dependency scan.
 P0_LABEL = "p0"
 BUG_LABEL = "bug"
 EPIC_LABEL = "ai-epic"
 RELEASE_LABEL = "ai-release"
-TICKET_ONLY_LABEL = "ai-ticket-only"
+CONTENT_ONLY_LABEL = "ai-content-only"
+OPS_LABEL = "ai-ops-only"
 
 # --- Events that drive label transitions ---
 EVENT_CLAIM = "claim"

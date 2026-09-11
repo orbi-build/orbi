@@ -6,15 +6,18 @@ any Pi session runs and at most every 30 seconds, post short milestone
 comments for the key events, and end with either the final delivery
 summary or the blocked scene — in the same comment.
 """
+import ast
 import json
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import Mock, call as mock_call
 
 import pytest
 
 import orbi.runner as runner
-from orbi import progress
+import orbi.release as release
+from orbi import pi_process, progress
 
 
 def make_fake_gh(monkeypatch, comments=None, in_progress=False):
@@ -42,11 +45,23 @@ def make_fake_gh(monkeypatch, comments=None, in_progress=False):
                 return json.dumps({"id": 77, "body": body[len("body="):],
                                    "url": "https://x/77"})
             return ""
+        if command[:3] == ["gh", "issue", "view"]:
+            # The pre-claim in-progress recheck reads the Issue
+            # directly (Issue #658) — the same `in_progress` truth the
+            # search-based resume scan encodes.
+            return json.dumps({"labels": [
+                {"name": "ai-in-progress"}] if in_progress
+                else [{"name": "ai-ready"}],
+            })
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps([{"number": 18}] if in_progress else [])
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
+    # Issue #286: the release subsystem (orbi.release) resolves the gh
+    # primitive in its own module globals — moved-path callers of this
+    # helper must see the same fake there.
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     return calls, posted
 
 
@@ -736,6 +751,94 @@ def test_process_issue_repeated_recoverable_failure_updates_one_comment(
     )
 
 
+def test_process_issue_keeps_the_claim_when_the_journal_proves_the_request(
+    monkeypatch, tmp_path,
+):
+    """Issue #656: the REAL `stream_pi` classification of the #655
+    scene — a Pi that exits fast while its journal (flushed by the
+    dying process) holds the request and the provider error — must
+    reach `process_issue`'s recoverable branch: the Issue keeps
+    `ai-in-progress`, never gets `ai-blocked`, and the run state stays
+    for the next tick's same-run resume."""
+    calls, posted = make_fake_gh(monkeypatch)
+    patch_process_deps(monkeypatch, tmp_path)
+    records = [
+        {"type": "session", "id": "sess-1",
+         "timestamp": "2026-09-09T18:25:39.607Z", "cwd": "/w"},
+        {"type": "message", "id": "u1",
+         "timestamp": "2026-09-09T18:25:40.382Z",
+         "message": {"role": "user", "content": [
+             {"type": "text", "text": "hi"}]}},
+        {"type": "message", "id": "a1",
+         "timestamp": "2026-09-09T18:25:41.499Z",
+         "message": {
+             "role": "assistant", "content": [],
+             "stopReason": "error",
+             "errorMessage": "Codex error: The usage limit has been "
+                             "reached"}},
+    ]
+
+    def fake_run_pi(issue, worktree, config, source_repo, **kwargs):
+        session_dir = worktree / ".pi-session"
+        script = (
+            "import json, pathlib, sys\n"
+            f"d = pathlib.Path({str(session_dir)!r})\n"
+            "d.mkdir(exist_ok=True)\n"
+            f"recs = {records!r}\n"
+            "(d / 'sess.jsonl').write_text("
+            "''.join(json.dumps(r) + '\\n' for r in recs))\n"
+            "sys.stderr.write('Codex error: The usage limit has been "
+            "reached\\n')\n"
+            "sys.exit(1)\n"
+        )
+        return runner.stream_pi(
+            [sys.executable, "-c", script], cwd=worktree,
+            poll_interval=0.1, run_id=config["run_id"],
+            issue=int(issue["number"]), source_repo=source_repo,
+            branch="-",
+        )
+
+    class StaleWatcher(pi_process.SessionWatcher):
+        """The live watcher of the #655 scene: its last poll predates
+        the journal the dying Pi flushed."""
+
+        def _next_session_file(self):
+            return None
+
+    monkeypatch.setattr(runner, "run_pi", fake_run_pi)
+    monkeypatch.setattr(pi_process, "SessionWatcher", StaleWatcher)
+    # The worktree carries the stable derived name so the next tick's
+    # in-flight scan can derive the same scene from it (Issue #219).
+    worktree = tmp_path / ".worktrees" / "orbi-orbi-issue-18-a1b2c3d4"
+
+    def fake_create_worktree(*args, **kwargs):
+        worktree.mkdir(parents=True, exist_ok=True)
+        (worktree / ".orbi").mkdir(exist_ok=True)
+        return worktree
+
+    monkeypatch.setattr(runner, "create_worktree", fake_create_worktree)
+    result = runner.process_issue(
+        make_issue(), make_config(tmp_path), "xqliu/orbi",
+    )
+    assert result.kind == "failed"
+    edit = runner.edit_issue
+    # The only label transition is the claim: the Issue stays
+    # ai-in-progress (no `ai-blocked`).
+    assert edit.call_count == 1
+    assert edit.call_args.kwargs == {
+        "repo": "xqliu/orbi", "add": "ai-in-progress",
+    }
+    state = json.loads(
+        (worktree / ".orbi" / "run-state.json").read_text(),
+    )
+    assert state["run_id"] == "a1b2c3d4"
+    assert any("Pi failure recovered" in str(call) for call in calls)
+    # The next tick's in-flight restart scan resumes the SAME run.
+    assert runner.worktree_resume_scene(tmp_path, "xqliu/orbi", 18) == (
+        "a1b2c3d4", worktree,
+    )
+
+
 def test_process_issue_failure_updates_progress_comment_with_blocked_scene(
     monkeypatch, tmp_path,
 ):
@@ -925,11 +1028,17 @@ def make_failing_gh(monkeypatch, is_failing, comments=None):
                 return json.dumps({"id": 77, "body": body[len("body="):],
                                    "url": "https://x/77"})
             return ""
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
+    # Issue #286: the release subsystem (orbi.release) resolves the gh
+    # primitive in its own module globals — moved-path callers of this
+    # helper must see the same fake there.
+    monkeypatch.setattr(release, "run_command", fake_run_command)
     return calls, posted
 
 
@@ -2037,6 +2146,8 @@ def _make_takeover_gh(monkeypatch, monkeypatched, tmp_path, *, pr_state="OPEN",
 
     def fake_run_command(command, **kwargs):
         calls.append(command)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         if command[:3] == ["gh", "pr", "list"]:
@@ -2242,3 +2353,94 @@ def test_wait_for_delivery_external_closed_requeues_for_internal_redo(
     assert "closed without" in pr_body and "internal" in pr_body
     assert "Issue #608" in pr_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in pr_body
+
+
+def _safe_publish_pin(source: str) -> tuple[int, list[str]]:
+    """Scan one Python source; return (publish call count, violations).
+
+    The Issue #294 pin: every bare `publish(...)` call forwards exactly
+    one keyword `action` (the four constant `_safe_publish` params stay
+    in the per-function `functools.partial` binding); a direct
+    `_safe_publish(...)` call anywhere is a violation.
+    """
+    repeats: list[str] = []
+    publish_calls = 0
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)):
+            continue
+        if node.func.id == "_safe_publish":
+            repeats.append(f"line {node.lineno}: direct _safe_publish call")
+        elif node.func.id == "publish":
+            publish_calls += 1
+            bad = (["<positional>"] if node.args else []) + [
+                keyword.arg for keyword in node.keywords
+                if keyword.arg != "action"
+            ]
+            if bad:
+                repeats.append(
+                    f"line {node.lineno}: publish passes {', '.join(bad)}"
+                )
+    return publish_calls, repeats
+
+
+def test_safe_publish_pin_detects_the_boilerplate_debt():
+    """The detector really detects: a direct `_safe_publish` call, a
+    repeated context param and a positional publish arg all violate."""
+    calls, repeats = _safe_publish_pin(
+        "_safe_publish(action=f)\n"
+        "publish(action=f, run_id='r')\n"
+        "publish(f)\n"
+    )
+    assert calls == 2
+    assert len(repeats) == 3
+    assert "direct _safe_publish call" in repeats[0]
+    assert "publish passes run_id" in repeats[1]
+    assert "publish passes <positional>" in repeats[2]
+
+
+def test_safe_publish_call_sites_pass_only_action():
+    """Issue #294: the four constant `_safe_publish` params (`run_id`,
+    `issue`, `source_repo`, `role`) are bound once per function with a
+    local `publish = functools.partial(...)`. Every call site forwards
+    only `action`; a direct `_safe_publish(...)` call anywhere is the
+    boilerplate debt this pin rejects."""
+    calls, repeats = _safe_publish_pin(
+        Path(runner.__file__).read_text(encoding="utf-8")
+    )
+    assert calls, "no publish call sites found - the pin is blind"
+    assert repeats == [], (
+        "publish call sites must forward only action= (bind the "
+        f"constant context once per function, Issue #294): {repeats}"
+    )
+
+
+def test_process_ticket_only_publishes_the_bound_context(monkeypatch):
+    """Issue #294: every publish of the ticket-only path carries the
+    exact bound context (run_id, issue, source_repo, role) and only
+    the action varies per call site — the AST pin above cannot see the
+    bound values, this behavioral path can."""
+    issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
+             "labels": [{"name": "ai-content-only"}]}
+    seen = []
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
+    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        runner, "run_ticket_agent", lambda *args, **kwargs: "content")
+    monkeypatch.setattr(runner, "ProgressPublisher", Mock())
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "")
+    monkeypatch.setattr(
+        runner, "_safe_publish", lambda **kwargs: seen.append(kwargs))
+
+    runner.process_ticket_only(issue, {"repo_dir": Path("/repo")}, "o/r")
+
+    # ensure (claim) -> delivered milestone -> finish.
+    assert len(seen) == 3
+    for kwargs in seen:
+        assert kwargs["run_id"] == "a1b2c3d4"
+        assert kwargs["issue"] == 99
+        assert kwargs["source_repo"] == "o/r"
+        assert kwargs["role"] == runner.ROLE_TICKET
+        assert callable(kwargs["action"])

@@ -115,6 +115,44 @@ commits — initialize them per repository (see
 | `ai-merged` | Success terminal state; the Runner merged the PR and confirmed the merge commit on the protected branch |
 | `ai-blocked` | Only an external precondition the AI cannot safely judge or fix (Issue #50); the blocked comment states why automatic recovery is impossible; a human must decide the next step |
 
+## Ticket dispatch: content, dev and ops
+
+`ai-ready` is the execution switch for every task type; a second label
+selects the type (Issue #537). Three types exist — pick one per Issue at
+dispatch time:
+
+| Ticket type | Labels | What the Runner does |
+|---|---|---|
+| dev (the default) | `ai-ready` | The full delivery chain: worktree, dev playbook, one PR, independent review, merge |
+| ops | `ai-ready` + `ai-ops-only` | The SAME full execution session (worktree, shell, network — no command whitelist exists anywhere in the implementation), but the ops playbook replaces the dev one. The deliverable is the evidence posted on the Issue; when the session commits code, the delivery takes the normal PR ceremony |
+| content | `ai-ready` + `ai-content-only` | The content agent: text in, text out, delivered as an Issue comment — no execution, no git; the Issue is closed after the delivery |
+
+Ops semantics (Issue #537):
+
+- **The trust boundary is (credentials, ticket) — never a command
+  whitelist.** The session receives the runner's whole environment
+  unfiltered (gh auth, `CLOUDFLARE_API_TOKEN`, AWS keys, ... plus the
+  deploy-home `.orbi/env` file); how wide the credentials are is the
+  user's decision — the runner never trims them.
+- **The ticket body is the authorization.** The session executes only
+  the ops actions the ticket states (which PR to merge, which
+  environment to deploy); an action beyond the ticket is reported in a
+  comment and the session stops. Human approval gates (environment
+  approval, Release approval) are never performed by the session — a
+  prompt convention, not enforced code.
+- **Delivery = evidence** (the fact culture of Issue #526): every step
+  posts the real command and its real output / API response verbatim on
+  the ticket; a step not executed is labeled as not executed. A
+  pure-ops run (no commit) ends with the Runner closing the Issue and
+  removing `ai-in-progress` — no PR. Committed code takes the normal PR
+  path with review and merge.
+
+Before Issue #537 the label `ai-ops-only` dispatched the content agent
+(the #530 rename never changed the behavior — the name promised ops,
+the mode was content-only); the content path dispatches on
+`ai-content-only` now, and `ai-ops-only` is the full-execution ops
+path.
+
 ## Run marker and run_id
 
 Every task attempt generates one `run_id` (8 hex chars, e.g.
@@ -195,8 +233,10 @@ DAG, no priority numbers, no separate queues:
   2. Freeze the base — the release commit is exactly
      `origin/<base_branch>` (fetched under the base-sync lock).
   3. Enforce the pre-release gates: no leftover open `ai-in-progress` /
-     `ai-pr-opened` / `ai-fix-needed` Issues (the release Issue itself
-     excluded), and CI green on the release commit (no check runs passes
+     `ai-pr-opened` / `ai-fix-needed` Issues **in the release's
+     Milestone** (Issue #671; the release Issue itself excluded; without
+     a Milestone the repository-wide scan is unchanged), and CI green on
+     the release commit (no check runs passes
      with explicit evidence; a pending check is an intermediate state —
      the gate waits for the final conclusion, one `release_waiting_ci`
      journal line and one progress-comment update per poll, up to
@@ -209,7 +249,11 @@ DAG, no priority numbers, no separate queues:
      gate that cannot be checked because of a real `gh` failure is a
      failed gate.
   4. Verify the scope item by item: `gh pr view` must report `MERGED`,
-     otherwise `gh issue view` must report `CLOSED`. Checkbox parsing
+     otherwise `gh issue view` must report `CLOSED` with `stateReason`
+     `COMPLETED` — a `NOT_PLANNED` closure (duplicate / won't fix) is
+     annotated in the Scope evidence as excluded and never enters the
+     Changelog, and a Changelog PR link is written only when its PR is
+     merged (Issue #707). Checkbox parsing
      is forbidden — every scope item is checked against the live API.
   5. Test acceptance is the CI-wait gate on the release commit: after
      the version bump the gates re-run against that exact commit
@@ -282,3 +326,50 @@ Task dependencies between Issues use GitHub's native `blockedBy`
 relation (`gh issue edit N --add-blocked-by M`); the Runner reads the
 field and skips Issues with open blockers. `Depends on #N` lines in an
 Issue body are not parsed.
+
+## Repository-level delivery policy (`.github/orbi.toml`)
+
+A repository can version its **delivery policy** as code. At claim the
+Runner reads `.github/orbi.toml` from the repository's **default branch
+tip** through the GitHub contents API — never the task branch, never the
+local worktree — and applies its whitelisted keys **per key** over the
+host `orbi.toml`. A repository without that file behaves exactly as
+before (zero change). The location is fixed; only the file NAME may be
+overridden per source repo with the optional `[[repositories]]` entry
+field `config_path` (default `.github/orbi.toml`).
+
+Only delivery-policy keys are allowed:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `base_branch` | string | Delivery base branch for this repository; absent falls back to the matching `[[repositories]].base_branch`, else the host `base_branch`. |
+| `active_milestone` | string | The fresh-claim Milestone scope for this repository. |
+| `test_command` | string | The repository's test command, injected into the implementer prompt. |
+| `context_files` | string[] | Repository-relative context files; existence and a size cap are checked before injection. |
+| `dispatch_label` | string | The claim label for this repository (default `ai-ready`); the delivery lifecycle labels stay host constants. |
+
+```toml
+# .github/orbi.toml
+base_branch = "beta"
+active_milestone = "v0.5.0"
+test_command = "pytest -q"
+context_files = ["AGENTS.md"]
+```
+
+Every other key is rejected: an unknown key, a host-only
+identity/security key (see [Security](/security)), invalid TOML or a
+wrong type fails the claim fast with the offending key names and the
+Issue becomes `ai-blocked` — one repository's bad file never affects
+another pool. `dispatch_label` must not be a delivery lifecycle label
+(`ai-in-progress`, `ai-merged`, …): those stay host constants. The block
+lands on the Issue the claim selected; a repository whose
+`dispatch_label` is not `ai-ready` has no `ai-ready` candidate to block
+when the file itself is malformed, so the fail-fast reason is the
+journal's `repo_config_invalid` line (no label change, no comment). The
+run comment records `repo_config: <sha>`; when the sha differs from the
+previous run it also carries the `repo_config_changed` annotation and,
+when the previous content is readable, the effective policy diff as
+`repo_config_diff`, so a change is always visible on the run. A read
+that fails for a transport reason (rate limit, network) is logged as
+`repo_config_read_failed` and the host config applies — the degradation
+is visible as the missing `repo_config` field on the run comment.

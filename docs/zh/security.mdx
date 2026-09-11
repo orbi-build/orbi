@@ -68,3 +68,33 @@ Orbi 保留从不出机的本地状态：
 
 如果你在共享机器上运行 Orbi，给 Runner 用户独立的 home 目录，让
 配置、worktree 和 KV 文件只属于该用户。
+
+## 仓库级配置：信任模型
+
+仓库可以在 `.github/orbi.toml` 放交付策略文件（见
+[工作流](/zh/workflow)）。claim 时从**默认分支 tip** 读取。允许它的
+信任论证与 CI workflow 已经适用的论证相同：
+
+- **无合并权的贡献者**无法把文件落到默认分支，不在范围内。
+- **有合并权的维护者**本就控制默认分支上的 CI workflow——任意代码
+  执行加仓库 secrets。策略键的边际风险因此 ≈ 0。
+- 与 Dependabot/Renovate 不同，**Orbi 能合并自己经评审的产出**。即使
+  prompt injection 穿透评审，白名单策略键的最坏结果也只是**可见、可
+  逆的策略变更**——run 评论始终记录 `repo_config: <sha>`，并在变更时
+  附有效键值 diff。
+
+红线是**凭据外送**。决定 `ORBI_GITHUB_TOKEN` 与模型 API key 发往何
+处的键——`pi_provider`、`pi_model`、`pi_thinking`、`pi_providers`、
+`pi_extensions`、`model_wait_probe_url` endpoint 以及一切 endpoint/key
+字段——永久 host-only。一个部署宿主服务多个池
+（zcode-website / zcode-e2e / 生产），一个仓库配置失守不能把宿主全部
+凭据引向别处或在池之间横移。同理
+`source_repos`/`repo_dir`/`deploy_home`/`workspace_root`（跨池横移）与
+`prompt`/`prompt_review`/`skills`（系统上下文的持久化注入通道）都是
+host-only。仓库文件出现任何 host-only 或未知键都会让 claim fail-fast，
+Issue 进入 `ai-blocked` 并列出违规键。
+
+只有五个交付策略键可被仓库写入：`base_branch`、`active_milestone`、
+`test_command`、`context_files`、`dispatch_label`。策略变更是默认分支
+变更，因此用 GitHub 原生评审机制保护该文件——把
+`.github/orbi.toml` 加入 `CODEOWNERS`，改它必须 owner 过目。

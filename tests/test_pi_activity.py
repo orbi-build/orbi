@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from orbi import pi_activity
+from orbi import progress
 
 
 def write_records(path: Path, records: list[dict]) -> None:
@@ -884,6 +885,34 @@ def test_activity_snapshot_scans_newest_session_file(tmp_path):
     assert snapshot["changed"] is False
 
 
+def test_session_state_reads_the_journal_with_a_known_files_baseline(
+    tmp_path,
+):
+    """Issue #656: `session_state` re-reads the journal on disk with the
+    same baseline as the live watcher — a file that existed before the
+    tracked Pi started (a resumed run's previous session) is never
+    counted, while the new session is."""
+    previous = tmp_path / "previous.jsonl"
+    write_records(previous, [SESSION_RECORD, ASSISTANT_TOOL_CALL])
+    old = os.stat(previous).st_mtime - 100
+    os.utime(previous, (old, old))
+    assert pi_activity.session_state(
+        tmp_path, {previous},
+    ) is None
+    current = tmp_path / "current.jsonl"
+    write_records(current, [SESSION_RECORD, USER_RECORD])
+    state = pi_activity.session_state(tmp_path, {previous})
+    assert state["session_file"] == str(current)
+    assert state["first_request"] is True
+    # The full-scan form (known_files=None) is the pre-#656 behavior.
+    assert pi_activity.session_state(tmp_path)["session_file"] == \
+        str(current)
+
+
+def test_session_state_returns_none_without_a_session_file(tmp_path):
+    assert pi_activity.session_state(tmp_path, set()) is None
+
+
 def test_format_duration_uses_seconds_minutes_and_hours():
     assert pi_activity.format_duration(0) == "0s"
     assert pi_activity.format_duration(0.5) == "0.5s"
@@ -892,20 +921,6 @@ def test_format_duration_uses_seconds_minutes_and_hours():
     assert pi_activity.format_duration(840) == "14m"
     assert pi_activity.format_duration(3600) == "1h0m"
     assert pi_activity.format_duration(15300) == "4h15m"
-
-
-def test_quote_value_quotes_only_values_with_spaces():
-    assert pi_activity.quote_value("test") == "test"
-    assert pi_activity.quote_value("bash pytest tests/") == (
-        '"bash pytest tests/"'
-    )
-
-
-def test_quote_value_escapes_embedded_quotes():
-    assert pi_activity.quote_value('git commit -m "feat: x"') == (
-        '"git commit -m \\"feat: x\\""'
-    )
-    assert pi_activity.quote_value('a"b') == '"a\\"b"'
 
 
 def test_format_run_scene_is_the_full_scene_logged_once():
@@ -1021,7 +1036,7 @@ def test_parse_scene_unescapes_embedded_quotes():
 
 def test_parse_scene_round_trips_escaped_quotes():
     value = 'git commit -m "feat: a=b" && push'
-    field = f"action={pi_activity.quote_value(value)}"
+    field = f"action={progress.quote_value(value)}"
     assert pi_activity.parse_scene(field)["action"] == value
 
 
