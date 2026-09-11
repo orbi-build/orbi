@@ -3695,6 +3695,24 @@ def has_in_progress_label(number: int, repo: str) -> bool:
     )
 
 
+def _another_live_runner(slot_dir: Path, max_concurrency: int) -> bool:
+    """True when a slot is held by another pid — a live co-runner.
+
+    The #39 liveness rule `pick_in_progress_issue` applies to the orphan
+    scan: a slot held by another process proves a live runner is working,
+    so state it owns is in flight, not orphaned. Issue #724 reuses the
+    same rule for the claim-window yield guard.
+
+    Note: the same helper ships in #725's release-dispatch guard — when
+    both land, keep one.
+    """
+    mine = os.getpid()
+    for _, holder in slot_occupancy(slot_dir, max_concurrency):
+        if holder is not None and holder != mine:
+            return True
+    return False
+
+
 def is_content_only(issue: dict) -> bool:
     """Return True only for the explicit content-only task marker.
 
@@ -6745,6 +6763,28 @@ def process_issue(issue: dict, config: dict, source_repo: str,
             LOGGER.info("delivery_takeover issue=%s branch=%s pr=%s",
                         number, stable_branch, takeover_pr.get("url"))
     if in_progress:
+        # Issue #724: the claim-race window has two halves. The scan
+        # snapshot lacking the label while THIS direct read sees it
+        # means the claim landed between the scan and the read. Whether
+        # that claimant is still ALIVE decides the semantics: with a
+        # live co-runner holding a slot, resuming here would reuse the
+        # live run's worktree/run_id under a second Pi (or fork a
+        # duplicate delivery) — yield. With nobody else on the slots
+        # (the #18 single-instance restart, the #668 second tick) the
+        # run is an orphan and resumes below exactly as before. A
+        # wrongly-yielded orphan is picked up next tick by the
+        # slot-guarded in-flight scan — one cadence late, never
+        # stranded.
+        slot_dir = config.get("slot_dir")
+        max_concurrency = config.get("max_concurrency")
+        if (IN_PROGRESS_LABEL not in claim_labels
+                and slot_dir is not None and max_concurrency is not None
+                and _another_live_runner(slot_dir, max_concurrency)):
+            LOGGER.info(
+                "issue=%s claim_yield reason=label_landed_in_scan_window",
+                number,
+            )
+            return IssueResult("claim-yielded", None)
         # Issue #608: an in-flight external takeover (the run died between
         # the worktree creation and the opened-PR transition) must NOT
         # resume into `run_pi` on the contributor's branch — the external
@@ -6815,7 +6855,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
     LOGGER.info(
         "issue=%s %s", number, run_info,
     )
-    if not in_progress and READY_LABEL in claim_labels \
+    if not in_progress and dispatch_label in claim_labels \
             and takeover_pr is None:
         # Issue #658: the pickup scan and the in-progress recheck above
         # both predate freeze_base (a seconds-long network round trip).
@@ -6823,7 +6863,10 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         # means another instance claimed this Issue while we were
         # preparing: yield. No label writes, no comments, nothing that
         # could interrupt the winner's in-flight delivery; the next
-        # tick's scan picks work up again on its own.
+        # tick's scan picks work up again on its own. Issue #724: the
+        # predicate keys on the repository's dispatch label (#527), not
+        # the default constant — a custom-label repository's tickets
+        # never carry `ai-ready`, and the guard must guard them too.
         if has_in_progress_label(number, source_repo):
             LOGGER.info(
                 "issue=%s claim_yield reason=in_progress_label", number,
