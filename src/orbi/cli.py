@@ -49,6 +49,7 @@ from orbi.runner import (
     log_format,
     run_command,
     validate_config,
+    validate_execution_source_repos,
 )
 from orbi import pilot_setup
 from orbi.pilot_slots import slot_occupancy
@@ -668,6 +669,10 @@ def main(argv: list[str] | None = None) -> int:
             allow_missing_pi_providers=args.command in ("setup", "doctor"),
         )
         validate_config(config)
+        # Issue #697: every command path (doctor included) enforces the
+        # same single-source-repo contract as runner.main, so a config
+        # the Runner will reject is reported instead of all-green.
+        validate_execution_source_repos(config["source_repos"])
     except (ValueError, pilot_setup.SetupError) as exc:
         if args.command == "setup":
             print(f"setup_failed reason={exc}", file=sys.stderr)

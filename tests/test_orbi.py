@@ -296,7 +296,7 @@ def test_status_report_marks_empty_lookups(monkeypatch):
 def test_main_add_dispatches_to_selected_source_repo(monkeypatch, tmp_path, capsys):
     config = tmp_path / "orbi.toml"
     config.write_text(
-        "source_repos = [\"xqliu/orbi\", \"xqliu/orbi-backlog\"]\n",
+        "source_repos = [\"xqliu/orbi\"]\n",
         encoding="utf-8",
     )
     _write_prompts(tmp_path)
@@ -318,7 +318,7 @@ def test_main_add_dispatches_to_selected_source_repo(monkeypatch, tmp_path, caps
 def test_main_add_uses_explicit_repo_override(monkeypatch, tmp_path, capsys):
     config = tmp_path / "orbi.toml"
     config.write_text(
-        "source_repos = [\"xqliu/orbi\", \"xqliu/orbi-backlog\"]\n",
+        "source_repos = [\"xqliu/orbi\"]\n",
         encoding="utf-8",
     )
     _write_prompts(tmp_path)
@@ -328,9 +328,9 @@ def test_main_add_uses_explicit_repo_override(monkeypatch, tmp_path, capsys):
         lambda repo, title, body: calls.append(repo) or "https://github.com/x/y/issues/1",
     )
     assert orbi.main([
-        "add", "T", "--repo", "xqliu/orbi-backlog", "--config", str(config),
+        "add", "T", "--repo", "xqliu/orbi", "--config", str(config),
     ]) == 0
-    assert calls == ["xqliu/orbi-backlog"]
+    assert calls == ["xqliu/orbi"]
 
 
 def test_main_add_rejects_repo_not_in_config(monkeypatch, tmp_path):
@@ -355,6 +355,27 @@ def test_main_status_prints_report(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "source: xqliu/orbi" in out
     assert "current: -" in out
+
+
+def test_main_doctor_fails_fast_on_multiple_source_repos(tmp_path, caplog):
+    """Issue #697: the CLI command paths enforce the Runner's
+    single-source-repo contract, so `orbi doctor` reports a config the
+    Runner will reject instead of staying green while every tick fails."""
+    config = tmp_path / "orbi.toml"
+    config.write_text(
+        "source_repos = [\"xqliu/orbi\", \"xqliu/orbi-backlog\"]\n",
+        encoding="utf-8",
+    )
+    _write_prompts(tmp_path)
+    with caplog.at_level("ERROR"):
+        assert orbi.main(["doctor", "--config", str(config)]) == 1
+    # endswith: the RunIdFilter may prefix the line when a run id is
+    # bound (the same pattern as the structured-reason test below).
+    assert caplog.records[-1].message.endswith(
+        "config_invalid reason=multiple source_repos are not supported "
+        "with one checkout; configure exactly one source repository "
+        "until multi-repo workspaces are available"
+    )
 
 
 def test_main_rejects_unknown_command(tmp_path):
