@@ -20645,3 +20645,80 @@ def test_run_failed_scene_logged_in_one_place():
         "the run_failed scene must be logged in exactly one place (the "
         f"_fail_run helper, Issue #292); sites at lines: {sites}"
     )
+
+
+def test_drain_stream_returns_true_at_eof_and_captures_content():
+    """Issue #709 contract, happy arm: EOF ends the drain with True and
+    every written chunk is captured."""
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b"chunk-one")
+    os.write(write_fd, b" chunk-two")
+    os.close(write_fd)
+    chunks: list[bytes] = []
+    try:
+        with os.fdopen(read_fd, "rb") as stream:
+            drained = pi_process._drain_stream(stream, chunks, silence_s=5.0)
+    finally:
+        pass
+    assert drained is True
+    assert b"".join(chunks) == b"chunk-one chunk-two"
+
+
+def test_drain_stream_abandons_when_grandchild_holds_write_end():
+    """Issue #709 contract, abandonment arm: Pi's tool grandchild
+    inherits the pipe write end and outlives Pi — the drain must give up
+    after the silence bound (capturing what arrived) instead of blocking
+    until the grandchild happens to exit. On the pre-#709 code this test
+    blocks for the holder's entire lifetime."""
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b"partial-verdict")
+    holder = subprocess.Popen(
+        [sys.executable, "-c",
+         "import time; time.sleep(40)  # orbi709-holder-one"],
+        pass_fds=(write_fd,),
+    )
+    os.close(write_fd)  # the writer (Pi) is dead; only the holder remains
+    chunks: list[bytes] = []
+    try:
+        with os.fdopen(read_fd, "rb") as stream:
+            started = time.monotonic()
+            drained = pi_process._drain_stream(stream, chunks, silence_s=1.0)
+            elapsed = time.monotonic() - started
+    finally:
+        holder.kill()
+        holder.wait()
+    assert b"partial-verdict" in b"".join(chunks)
+    assert drained is False
+    assert elapsed < 15, elapsed
+
+
+def test_stream_pi_journals_drain_abandonment_when_grandchild_holds_pipe(
+    tmp_path, caplog, monkeypatch,
+):
+    """Issue #709 end to end: the fake Pi spawns a tool grandchild that
+    inherits stdout and outlives it — the run still completes with the
+    captured verdict and the abandonment is journaled instead of the
+    tick wedging inside the finally block."""
+    monkeypatch.setattr(pi_process, "_DRAIN_SILENCE_S", 1.0)
+    command = make_fake_pi(
+        tmp_path, session_records=fake_session_records(),
+        stdout="final answer",
+    )
+    wrapper = (
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, '-c',\n"
+        "    'import time; time.sleep(40)  # orbi709-holder-two'])\n"
+        f"exec({command[2]!r})\n"
+    )
+    try:
+        with caplog.at_level("WARNING"):
+            result = runner.stream_pi(
+                [sys.executable, "-c", wrapper], cwd=tmp_path,
+                poll_interval=0.1, run_id="deadbeef", issue=24,
+                source_repo="xqliu/orbi",
+                branch="orbi/xqliu-orbi-issue-24",
+            )
+    finally:
+        subprocess.run(["pkill", "-f", "orbi709-holder-two"], check=False)
+    assert result == "final answer"
+    assert "pi_drain_abandoned" in caplog.text
