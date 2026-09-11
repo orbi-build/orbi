@@ -1076,6 +1076,9 @@ def test_process_issue_pickup_record_failure_is_bypass(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            # Fresh claim: no ai-in-progress (Issue #658 direct read).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return "0123456789abcdef0123456789abcdef01234567"
@@ -1125,6 +1128,9 @@ def test_process_issue_failure_record_failure_is_bypass(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            # Fresh claim: no ai-in-progress (Issue #658 direct read).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return ""

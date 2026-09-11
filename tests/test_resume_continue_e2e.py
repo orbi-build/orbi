@@ -214,6 +214,14 @@ def install_fake_gh(monkeypatch, comments: list[str],
                             if "ai-in-progress" in labels[number]
                         ])
                     return "[]"
+                if command[2] == "view":
+                    # The pre-claim in-progress recheck reads the Issue
+                    # directly (Issue #658): answer from the live label
+                    # truth, not from any index.
+                    return json.dumps({"labels": [
+                        {"name": label}
+                        for label in labels.get(int(command[3]), [])
+                    ]})
             if command[1] == "api":
                 if "--method" in command:
                     method = command[command.index("--method") + 1]
@@ -627,9 +635,10 @@ def test_fake_gh_handler_answers_the_unreached_transitions(
     with pytest.raises(AssertionError, match="unexpected gh command"):
         fake(["gh", "release", "list"])
     # A `gh issue` subcommand the flow never issues falls through the
-    # comment/edit/list handlers and fails fast.
+    # comment/edit/list/view handlers and fails fast (`issue view` is
+    # now an expected call — the #658 direct-read recheck).
     with pytest.raises(AssertionError, match="unexpected gh command"):
-        fake(["gh", "issue", "view", str(ISSUE_NUMBER)])
+        fake(["gh", "issue", "lock", str(ISSUE_NUMBER)])
     # A `gh api` method that is neither POST nor PATCH falls through
     # to the plain GET answer.
     get = fake(["gh", "api", "repos/owner/repo/issues/219/comments",

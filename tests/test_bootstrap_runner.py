@@ -3594,29 +3594,205 @@ def test_has_in_progress_label_checks_the_issue_label(monkeypatch, tmp_path):
 
     def fake_run(command, **kwargs):
         calls.append(command)
-        return json.dumps([{"number": 4}])
+        return json.dumps({"labels": [{"name": "ai-in-progress"}]})
 
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.has_in_progress_label(4, "owner/repo") is True
     assert calls == [[
-        "gh", "issue", "list", "--repo", "owner/repo", "--state", "all",
-        "--search", "label:ai-in-progress",
-        "--json", "number", "--limit", "50",
+        "gh", "issue", "view", "4", "--repo", "owner/repo",
+        "--json", "labels",
     ]]
 
 
 def test_has_in_progress_label_is_false_without_the_label(monkeypatch):
     monkeypatch.setattr(
         runner, "run_command",
-        lambda command, **kwargs: json.dumps([{"number": 5}]),
+        lambda command, **kwargs: json.dumps(
+            {"labels": [{"name": "ai-fix-needed"}]},
+        ),
     )
     assert runner.has_in_progress_label(4, "owner/repo") is False
 
 
 def test_has_in_progress_label_fails_fast_on_malformed_output(monkeypatch):
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "{}")
-    with pytest.raises(ValueError, match="issue list must be a JSON array"):
+    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "[]")
+    with pytest.raises(ValueError, match="issue view must return a JSON object"):
         runner.has_in_progress_label(4, "owner/repo")
+
+
+def test_has_in_progress_label_fails_fast_on_malformed_labels(monkeypatch):
+    """view 返回 JSON 对象但 labels 字段不是数组（Issue #658）：解析
+    失败必须 fail-fast，绝不落入默认 False（那会让竞态守卫失明）。"""
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps({"labels": "ai-in-progress"}),
+    )
+    with pytest.raises(ValueError, match="labels must be a JSON array"):
+        runner.has_in_progress_label(4, "owner/repo")
+
+
+def test_has_in_progress_label_reads_directly_not_via_the_search_index(
+    monkeypatch,
+):
+    """Issue #658：认领前复查必须直读（gh issue view，强一致）——不能走
+    与扫描同一套最终一致的搜索索引：另一实例几秒前刚打上的
+    ai-in-progress，索引可能尚未收录，复查必须看到它才能让路。"""
+    calls = []
+
+    def fake_run_command(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    assert runner.has_in_progress_label(4, "owner/repo") is True
+    # The fixed path reads the Issue directly — the search index (which
+    # has not ingested the other instance's claim yet) is never queried.
+    assert calls == [[
+        "gh", "issue", "view", "4", "--repo", "owner/repo",
+        "--json", "labels",
+    ]]
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run_command(["gh", "issue", "list", "--search",
+                          "label:ai-in-progress"])
+
+
+def _claim_race_deps(monkeypatch, tmp_path, *, freeze_side_effect=None,
+                     stable_branch_seq=None):
+    """Minimal process_issue deps for the #658 claim-race tests.
+
+    Everything after the claim decision is irrelevant (the guard must
+    fire before any of it); run_pi returning normally keeps the
+    unguarded path moving so its downstream label writes become
+    observable — that is exactly what the red assertions catch.
+    """
+    if stable_branch_seq is not None:
+        seq = list(stable_branch_seq)
+        # Exactly two probes consume the sequence: the scan-time probe
+        # and the pre-claim guard (Issue #658).
+        monkeypatch.setattr(
+            runner, "stable_branch_exists",
+            lambda repo_dir, branch: seq.pop(0),
+        )
+    if freeze_side_effect is not None:
+        def fake_freeze_base(repo_dir, base_branch):
+            freeze_side_effect()
+            return "0123456789abcdef0123456789abcdef01234567"
+        monkeypatch.setattr(runner, "freeze_base", fake_freeze_base)
+    else:
+        monkeypatch.setattr(
+            runner, "freeze_base",
+            lambda repo_dir, base_branch:
+                "0123456789abcdef0123456789abcdef01234567",
+        )
+    monkeypatch.setattr(
+        runner, "new_run_id", lambda: "feedface",
+    )
+    # create_worktree/run_pi stay REAL: on the fixed path the guard
+    # yields before either is reached, and a regression that skips the
+    # guard then fails loudly on the real calls (tmp_path is no git
+    # repo) — no dead fake arms.
+
+
+def make_claim_race_gh(monkeypatch, state):
+    """The gh fake for the #658 claim-race world.
+
+    The direct read (`gh issue view`) answers the LIVE label truth from
+    `state["in_progress"]`; the search index (`gh issue list`) answers
+    from the same state — a lagging index is modeled by flipping the
+    state only AFTER the pickup scan, exactly when the other instance's
+    claim lands. One shared guard line, driven by its own test below.
+    """
+    def fake_run_command(command, **kwargs):
+        if command[:3] == ["gh", "issue", "view"]:
+            labels = ([{"name": "ai-in-progress"}]
+                      if state["in_progress"] else [])
+            return json.dumps({"labels": labels})
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps(
+                [{"number": 18}] if state["in_progress"] else [],
+            )
+        if command[:3] == ["gh", "pr", "list"]:
+            return json.dumps([])
+        if command[:2] == ["git", "ls-remote"]:
+            # The scan-time stable-branch probe (before the race lands).
+            return ""
+        if command[:2] == ["gh", "api"]:
+            if "--method" not in command:
+                return json.dumps([])
+            return ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    return fake_run_command
+
+
+def test_claim_race_gh_answers_every_expected_command(monkeypatch):
+    """The shared #658 fake is a contract, not a sink: every branch it
+    answers is one the claim flow issues — driven here (in_progress=True
+    arm; the False arm is driven by the two yield tests) so no arm is
+    dead in the fixed world, and anything else fails loud."""
+    fake = make_claim_race_gh(monkeypatch, {"in_progress": True})
+    assert json.loads(fake([
+        "gh", "issue", "view", "18", "--repo", "o/r", "--json", "labels",
+    ])) == {"labels": [{"name": "ai-in-progress"}]}
+    assert json.loads(fake([
+        "gh", "issue", "list", "--search", "label:ai-in-progress",
+    ])) == [{"number": 18}]
+    assert json.loads(fake(["gh", "pr", "list", "--state", "open"])) == []
+    assert fake([
+        "git", "ls-remote", "--heads", "origin", "refs/heads/x",
+    ]) == ""
+    assert json.loads(fake([
+        "gh", "api", "repos/o/r/issues/18/comments",
+    ])) == []
+    assert fake([
+        "gh", "api", "repos/o/r/issues/18/comments",
+        "--method", "POST", "--field", "body=x",
+    ]) == ""
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake(["gh", "release", "view"])
+
+
+def test_process_issue_yields_when_the_label_lands_mid_preparation(
+    monkeypatch, tmp_path,
+):
+    """Issue #658：扫描与认领写之间隔着 freeze_base 的秒级网络往返；
+    另一实例在该窗口内认领（ai-in-progress 出现）时，本实例必须让路
+    ——不打任何标签、不发失败评论、绝不能把胜者打成 ai-blocked。"""
+    state = {"in_progress": False}
+    make_claim_race_gh(monkeypatch, state)
+    _claim_race_deps(
+        monkeypatch, tmp_path,
+        freeze_side_effect=lambda: state.__setitem__("in_progress", True),
+    )
+    issue = {"number": 18, "title": "t", "body": "b",
+             "labels": [{"name": "ai-ready"}]}
+    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+              "base_branch": "main"}
+    result = runner.process_issue(issue, config, "owner/repo")
+    assert result == runner.IssueResult("claim-yielded", None)
+
+
+def test_process_issue_yields_when_the_stable_branch_lands_mid_preparation(
+    monkeypatch, tmp_path,
+):
+    """Issue #658 的撞分支面：扫描时 stable branch 尚不存在，freeze_base
+    的窗口内被另一实例创建（它先认领）——认领写之前必须复查到并让路，
+    而不是径直 create_worktree 撞分支后走 ai-blocked 失败路径。"""
+    make_claim_race_gh(monkeypatch, {"in_progress": False})
+    # First probe (scan-time): absent. Second probe (the pre-claim
+    # guard): the other instance created it while we were preparing.
+    _claim_race_deps(
+        monkeypatch, tmp_path, stable_branch_seq=[False, True],
+    )
+    issue = {"number": 18, "title": "t", "body": "b",
+             "labels": [{"name": "ai-ready"}]}
+    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+              "base_branch": "main"}
+    result = runner.process_issue(issue, config, "owner/repo")
+    assert result == runner.IssueResult("claim-yielded", None)
 
 
 def test_process_issue_resumes_existing_run_and_same_progress_comment(
@@ -3647,6 +3823,8 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
                 # The existing progress comment of the dead run.
                 return json.dumps([existing_comment])
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # The Issue still carries `ai-in-progress` (the runner died).
             return json.dumps([{"number": 4}])
@@ -3728,6 +3906,110 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     assert "- branch: orbi/xqliu-orbi-backlog-issue-4" in last_body
 
 
+def test_process_issue_second_tick_behind_the_index_resumes_not_reclaims(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #658 单实例面（xqliu 09-11 生产现场，orbi#702 并入 #658）：
+    同一 timer 的两次 tick 竞争同一张票——第一次 tick 早已完成认领
+    （`ai-in-progress` 落位在本 tick 之前，worktree 的 run 在飞），而搜索
+    索引滞后，把这张票连同陈旧的 `ai-ready` labels 快照一起递给本 tick。
+    认领复查的 `gh issue view` 直读必须看到标签：本 tick 走 resume 复用
+    在飞 run 的 id，绝不 fresh claim（不消费新 run_id、不建第二个分支
+    把在途交付撞成 push rejected → ai-blocked）——修复不依赖
+    `max_concurrency` 的取值，单实例双 tick 与双实例同根因。"""
+    existing_comment = {
+        "id": 77,
+        "body": (
+            "<!-- orbi:run=a1b2c3d4 -->\n\n"
+            "**Orbi progress**\n\nfirst tick's run is in flight"
+        ),
+    }
+    gh_calls, posted = make_fake_gh(
+        monkeypatch, comments=[existing_comment], in_progress=True,
+    )
+    branch = "orbi/xqliu-orbi-backlog-issue-4"
+    head = "0123456789abcdef0123456789abcdef01234567"
+
+    def fake_run(command, **kwargs):
+        gh_calls.append(command)
+        if command[:2] == ["gh", "api"]:
+            if "--method" not in command:
+                # The in-flight run's progress comment.
+                return json.dumps([existing_comment])
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            # The strongly-consistent direct read: the label the first
+            # tick wrote IS live truth, no matter how stale the index
+            # that delivered the Issue was.
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
+        if command[:2] == ["gh", "issue"]:
+            return ""
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps([{
+                "url": "https://github.com/orbi-build/orbi/pull/4",
+                "baseRefName": "main",
+                "headRefName": branch,
+                "headRefOid": head,
+                "headRepository": {"name": "orbi"},
+                "headRepositoryOwner": {"login": "orbi-build"},
+                "body": "<!-- orbi:run=a1b2c3d4 -->\n\nFixes #4\n\nPlan",
+            }])
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return branch
+        if command[:2] == ["git", "rev-parse"]:
+            return head
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(
+        runner, "freeze_base",
+        lambda repo_dir, base_branch: "abc123def456",
+    )
+    # If a regression makes this tick a FRESH claim, the fresh id leaks
+    # into the scene comments and the assertions below catch it.
+    monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
+    monkeypatch.setattr(
+        runner, "worktree_resume_scene", lambda repo_dir, source_repo, number:
+        ("a1b2c3d4", tmp_path / "wt"),
+    )
+    monkeypatch.setattr(
+        runner, "create_worktree",
+        lambda *args, **kwargs: tmp_path / "wt",
+    )
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    # The stale scan snapshot: still showing ai-ready even though the
+    # first tick already claimed the Issue.
+    issue = {"number": 4, "title": "Fix", "body": "Body",
+             "labels": [{"name": "ai-ready"}]}
+    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+              "base_branch": "main"}
+    with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
+        result = runner.process_issue(
+            issue, config, "xqliu/orbi-backlog",
+        )
+    assert result == runner.IssueResult(
+        "pr", "https://github.com/orbi-build/orbi/pull/4",
+    )
+    # The direct read routed this tick into the resume: the in-flight
+    # run's id owns every scene comment — a fresh claim never starts.
+    assert "fresh_claim_route" not in caplog.text
+    assert "resuming_run" in caplog.text
+    # And the claim recheck never asked the lagging index for the label
+    # (the pre-#658 list search): the direct read is the only source.
+    assert not any(
+        command[:3] == ["gh", "issue", "list"] for command in gh_calls
+    )
+    scene_bodies = [
+        call[-1] for call in gh_calls
+        if call[:2] == ["gh", "issue"] and "comment" in call
+    ]
+    assert scene_bodies, "no scene comment was published"
+    for body in scene_bodies:
+        assert "ffffeeee" not in body
+    # And the claim-time label write stayed the shared idempotent patch
+    # (run=a1b2c3d4 marker), never a second run's footprint.
+
+
 def test_process_issue_binds_run_id_before_the_resume_scan(
     monkeypatch, tmp_path, caplog,
 ):
@@ -3743,6 +4025,8 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
         gh_calls.append(command)
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps([{"number": 4}])
         if command[:2] == ["gh", "issue"]:
@@ -3813,6 +4097,8 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
         gh_calls.append(command)
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # No `ai-in-progress` label: the previous run finished.
             return "[]"
@@ -3881,6 +4167,8 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
         gh_calls.append(command)
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps([{"number": 4}])
         if command[:2] == ["gh", "issue"]:
@@ -3955,6 +4243,11 @@ def _resume_wiring_setup(monkeypatch, tmp_path, *, in_progress: bool,
         gh_calls.append(command)
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [
+                {"name": "ai-in-progress"}] if in_progress
+                else [{"name": "ai-ready"}],
+            })
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps(
                 [{"number": 4}] if in_progress else [],
@@ -5264,6 +5557,8 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
         gh_calls.append(command)
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5365,6 +5660,8 @@ def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, c
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5403,6 +5700,8 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5476,6 +5775,8 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5559,6 +5860,8 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5646,6 +5949,8 @@ def test_process_issue_model_wait_failure_records_health_attempt(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5702,6 +6007,8 @@ def test_process_issue_three_recoverable_failures_raise_health_finding(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return ""
@@ -5752,6 +6059,8 @@ def test_process_issue_success_records_health_streak_break(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return "0123456789abcdef0123456789abcdef01234567"
@@ -5812,6 +6121,8 @@ def test_process_issue_recoverable_health_record_failure_is_bypassed(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return ""
@@ -5861,6 +6172,8 @@ def test_process_issue_success_health_record_failure_is_bypassed(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
         return "0123456789abcdef0123456789abcdef01234567"
@@ -5923,6 +6236,8 @@ def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -6000,6 +6315,8 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -6073,6 +6390,8 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
             # test_process_issue_failure_path_progress_failure_keeps_
             # blocked_transition.)
             raise RuntimeError("github report failed")
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -6923,6 +7242,8 @@ def test_process_issue_failure_without_session_still_carries_scene(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -7005,6 +7326,8 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -7057,6 +7380,8 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
