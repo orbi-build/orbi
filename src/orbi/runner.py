@@ -2852,6 +2852,81 @@ def resume_scene(comments: list[dict]) -> dict:
     )
 
 
+def _route_external_pr_ticket(issue: dict, repo: str) -> bool:
+    """Route a marker-bearing opened-PR ticket through external
+    integration instead of `ai-blocked`. Returns True when handled.
+
+    Issue #726: the triage workflow (#621) labels the linked Issue
+    `ai-pr-opened` — the resumable scan then picks it, finds no trusted
+    runner scene comment, and the old code burned the ticket to
+    `ai-blocked` while the takeover entry (#608) stayed unreachable for
+    exactly these tickets. The body marker decides the route:
+
+    - PR OPEN -> requeue to the ready queue (`EVENT_REQUEUE`); the next
+      fresh claim's takeover probe finds the marker plus the open PR and
+      reviews the contribution first — the #608 main path;
+    - PR MERGED -> the contribution already delivered the fix: close the
+      triage Issue with the same bookkeeping as the takeover merge path;
+    - PR CLOSED without merge -> requeue for the documented internal
+      redo fallback (#608).
+
+    Only a probe failure falls through to the caller's block path (the
+    pre-#726 behavior) — never a guess.
+    """
+    number = int(issue["number"])
+    body = issue.get("body")
+    match = EXTERNAL_PR_RE.search(body) if isinstance(body, str) else None
+    if match is None:
+        return False
+    pr_number = int(match.group(1))
+    try:
+        raw = run_command(
+            ["gh", "pr", "view", str(pr_number), "--repo", repo,
+             "--json", "state"],
+        )
+        state = (json.loads(raw) or {}).get("state")
+    except Exception:
+        LOGGER.exception(
+            "issue=%s external_pr_state_probe_failed pr=#%s",
+            number, pr_number,
+        )
+        return False
+    if state == "MERGED":
+        _close_external_triage_issue(
+            number, repo, f"https://github.com/{repo}/pull/{pr_number}",
+            f"<!-- orbi:external-pr:{pr_number} -->", "external-merge",
+        )
+        LOGGER.info(
+            "issue=%s external_pr_already_merged pr=#%s; closing",
+            number, pr_number,
+        )
+        return True
+    if state in ("OPEN", "CLOSED"):
+        labels = issue_labels(number, repo=repo)
+        apply_label_patch(
+            number, repo=repo, event=EVENT_REQUEUE,
+            current_labels=labels,
+        )
+        comment_issue(
+            number, repo=repo,
+            body=(
+                f"<!-- orbi:external-pr:{pr_number} -->\n"
+                f"Orbi: the `ai-pr-opened` state of this triage Issue "
+                f"comes from external contribution PR #{pr_number} "
+                "(state: "
+                f"{state}), not from a runner scene; routing it through "
+                "the external takeover review on the next claim instead "
+                "of blocking it."
+            ),
+        )
+        LOGGER.info(
+            "issue=%s external_pr_routed_takeover pr=#%s state=%s",
+            number, pr_number, state,
+        )
+        return True
+    return False
+
+
 def pick_resumable_delivery(
     repo: str, slot_dir: Path, max_concurrency: int,
 ) -> tuple[dict, dict] | None:
@@ -2923,6 +2998,12 @@ def pick_resumable_delivery(
     try:
         scene = resume_scene(comments)
     except ValueError as exc:
+        # Issue #726: a ticket whose body carries the external-PR marker
+        # belongs to the #608 integration flow, not the scene-recovery
+        # flow — route it (requeue / close-as-delivered) instead of
+        # burning it to ai-blocked.
+        if _route_external_pr_ticket(issue, repo):
+            return None
         # Issue #672: a malformed scene is scoped to this one Issue. The
         # Issue is marked `ai-blocked` with the concrete reason, then the
         # scan reports "no resumable delivery" so `pick_next_delivery`
@@ -7823,6 +7904,35 @@ def _run_review_round(
     return False
 
 
+def _close_external_triage_issue(
+    number: int, source_repo: str, pr_url: str, marker: str, run_id: str,
+) -> None:
+    """Close the triage Issue of a merged external takeover (#608/#726).
+
+    The external PR's body carries no `Fixes #N` for the triage Issue,
+    so GitHub never closes it natively. The merge already landed; a
+    failed close is bookkeeping that is logged (bypass) — it can never
+    rewrite the merged fact.
+    """
+    try:
+        body = (
+            f"{marker}\n"
+            f"Orbi merged the external PR {pr_url}; closing "
+            "this triage Issue as delivered by the external "
+            f"contribution (run_id={run_id})"
+        )
+        comment_issue(number, repo=source_repo, body=body)
+        run_command(
+            ["gh", "issue", "close", str(number),
+             "--repo", source_repo],
+        )
+    except Exception:
+        LOGGER.exception(
+            "issue=%s external_takeover_close_failed pr=%s",
+            number, pr_url,
+        )
+
+
 def wait_for_delivery(pr_url: str, issue: dict, config: dict,
                       source_repo: str,
                       poll_interval: float = PI_POLL_INTERVAL,
@@ -7909,26 +8019,10 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
             )
             if external_takeover:
                 # Issue #608: merging the external PR closes the triage
-                # Issue (the PR body has no `Fixes #N` for it). The merge
-                # already landed; a failed close is bookkeeping that is
-                # logged (bypass) — it can never rewrite the merged fact.
-                try:
-                    body = (
-                        f"{marker}\n"
-                        f"Orbi merged the external PR {pr_url}; closing "
-                        "this triage Issue as delivered by the external "
-                        f"contribution (run_id={run_id})"
-                    )
-                    comment_issue(number, repo=source_repo, body=body)
-                    run_command(
-                        ["gh", "issue", "close", str(number),
-                         "--repo", source_repo],
-                    )
-                except Exception:
-                    LOGGER.exception(
-                        "issue=%s external_takeover_close_failed pr=%s",
-                        number, pr_url,
-                    )
+                # Issue (the PR body has no `Fixes #N` for it).
+                _close_external_triage_issue(
+                    number, source_repo, pr_url, marker, run_id,
+                )
             return
         if state == "CLOSED":
             # The current labels are read ONCE before the transition:
@@ -8033,7 +8127,19 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
         # terminal state was already handled: ai-blocked, or the
         # recoverable ai-fix-needed scene the next tick resumes) both
         # end the delivery here; only False (findings) keeps polling.
-        if _run_review_round(pr_url, issue, config, source_repo) is not False:
+        merged_this_round = _run_review_round(
+            pr_url, issue, config, source_repo,
+        )
+        if merged_this_round is not False:
+            if merged_this_round is True and external_takeover:
+                # Issue #726: the SUCCESSFUL auto-merge path must close
+                # the triage Issue exactly like the MERGED polling branch
+                # above — previously only the "someone else merged" poll
+                # reached it, so every auto-merged external contribution
+                # leaked a zombie triage ticket.
+                _close_external_triage_issue(
+                    number, source_repo, pr_url, marker, run_id,
+                )
             return
         # Back to the next review round: yield the cadence first
         # (Issue #588). This tail previously had NO sleep — a red CI
