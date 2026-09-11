@@ -127,9 +127,11 @@ exact fix command). That in-Runner refresh is unreachable when the
 console script cannot even `import orbi` (the #248 scene: the
 src-layout migration of #168 left the installed editable finder stale,
 so the Runner died at the import stage before the refresh could run) —
-for that class of breakage the service's SECOND `ExecStartPre` step
+for that class of breakage the service's FIRST `ExecStartPre` step
 self-heals OUTSIDE Python: it probes `orbi --version` and, on
-probe failure, runs the same editable force-reinstall (see
+probe failure, runs the same editable force-reinstall — before the
+second step (`orbi sync-engine-source`, Issue #535), which needs that
+working CLI (see
 [Operations](/operations) for the full mechanics). `orbi doctor` reports the
 consistency (`cli_source: clean` or `cli_source: DRIFT` with the
 structured `cli_source_drift` line), and `orbi setup` verifies or

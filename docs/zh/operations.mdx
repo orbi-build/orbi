@@ -59,9 +59,9 @@ service 实例（`orbi@1.timer` → `orbi@1.service`，
      `engine_source_unresolved reason=...`、
      `engine_source_not_fast_forwardable ...`）；成功时同步写一条结构化
      `engine_source_synced engine_source_track=... resolved=... head=...`
-     行。通道处于锁定态（`release`/`tag:`/`sha:`）时，Runner 也会跳过
-     merge 之后对部署 checkout 的 fast-forward：锁定拥有该 checkout，
-     下一个 tick 的步骤 2 会重新施加通道。
+     行。通道不是缺省的 `main`（`branch:`/`release`/`tag:`/`sha:`）时，
+     Runner 也会跳过 merge 之后对部署 checkout 的 fast-forward：通道
+     拥有该 checkout，下一个 tick 的步骤 2 会重新施加它。
 
    正在运行的长任务从不被热更新或杀掉——一个 service 实例 active 时
    systemd 忽略对**该实例**的后续 start 请求，下一次真正启动取到通道

@@ -67,10 +67,10 @@ Runner instances can run concurrently. Each tick's service instance:
      reason=...`, `engine_source_not_fast_forwardable ...`); on success
      the sync logs one structured
      `engine_source_synced engine_source_track=... resolved=... head=...`
-     line. When the channel is locked (`release`/`tag:`/`sha:`), the
-     Runner also skips its post-merge fast-forward of the deployment
-     checkout: the lock owns that checkout, and the next tick's step 2
-     re-applies the channel.
+     line. When the channel is anything but the plain `main` track
+     (`branch:`/`release`/`tag:`/`sha:`), the Runner also skips its
+     post-merge fast-forward of the deployment checkout: the channel
+     owns that checkout, and the next tick's step 2 re-applies it.
 2. **Runs one tick**: resume an opened PR (review/fix/merge) or claim one
    `ai-ready` Issue, then exit. Before any slot or claim the tick also
    runs the pre-start **git transport check** (Issue #114, #580): the
