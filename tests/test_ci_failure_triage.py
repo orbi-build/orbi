@@ -14,7 +14,9 @@ layer, asserting the real GitHub REST contract:
 - the same fingerprint again → a re-occurrence comment on the existing Issue,
   never a second Issue (no storm);
 - `success` → the matching Issue gets the recovery run evidence and is closed
-  (`state_reason: completed`);
+  (`state_reason: completed`) ONLY with ticket-relevant fix evidence
+  (Issue #718): a closing reference (`Fixes #N`) on the run's PR, or a diff
+  since the latest recorded failure that touches the failing test's file;
 - every other conclusion/event/target is a logged no-op (exit 0);
 - every environment/API failure is a structured error + exit 1 (fail fast,
   never a fake success).
@@ -76,6 +78,16 @@ class FakeGh:
             raise AssertionError(f"unexpected gh api {method} {endpoint}")
         return self.routes[endpoint]
 
+    def text(self, endpoint):
+        """The raw (non-JSON) `gh_api_text` route: same route table, plain
+        string answers (the job-log endpoint)."""
+        self.calls.append({"endpoint": endpoint, "method": "GET", "payload": None})
+        if self.error is not None and endpoint.startswith(self.error[0]):
+            raise mod.GhApiError(endpoint, self.error[1])
+        if endpoint not in self.routes:
+            raise AssertionError(f"unexpected gh api GET {endpoint}")
+        return self.routes[endpoint]
+
     def calls_to(self, endpoint, method):
         return [
             call for call in self.calls
@@ -87,6 +99,12 @@ def test_fake_gh_rejects_unrouted_get_calls():
     fake = FakeGh()
     with pytest.raises(AssertionError, match="unexpected gh api GET repos/x"):
         fake("repos/x")
+
+
+def test_fake_gh_text_rejects_unrouted_log_calls():
+    fake = FakeGh()
+    with pytest.raises(AssertionError, match="unexpected gh api GET repos/x"):
+        fake.text("repos/x")
 
 
 def ep_jobs(run_id=42):
@@ -126,7 +144,18 @@ def ep_comment(number):
 
 
 def ep_issue_comments(number):
-    return f"repos/{OWNER_REPO}/issues/{number}/comments?per_page=100"
+    return (
+        f"repos/{OWNER_REPO}/issues/{number}/comments"
+        "?per_page=100&sort=created&direction=asc"
+    )
+
+
+def ep_log(job_id=9):
+    return f"repos/{OWNER_REPO}/actions/jobs/{job_id}/logs"
+
+
+def ep_compare(base, head):
+    return f"repos/{OWNER_REPO}/compare/{base}...{head}"
 
 
 def ep_patch(number):
@@ -200,9 +229,11 @@ def write_event(monkeypatch, tmp_path, payload):
 
 @pytest.fixture
 def gh(monkeypatch):
-    """Default environment; the returned FakeGh is installed as mod.gh_api."""
+    """Default environment; the returned FakeGh is installed as mod.gh_api
+    (JSON calls) AND mod.gh_api_text (the raw job-log call)."""
     fake = FakeGh()
     monkeypatch.setattr(mod, "gh_api", fake)
+    monkeypatch.setattr(mod, "gh_api_text", fake.text)
     monkeypatch.setenv("GITHUB_REPOSITORY", OWNER_REPO)
     return fake
 
@@ -822,15 +853,16 @@ def test_malformed_source_issue_response_is_not_an_active_source(gh):
 def test_recovery_closes_the_matching_issue_with_run_evidence(
     gh, monkeypatch, tmp_path, capsys
 ):
-    """Acceptance: after CI recovers, the matching bug Issue is associated
-    with the successful run and closed."""
-    write_event(monkeypatch, tmp_path, run_event(conclusion="success", id=43))
-    fp = mod.fingerprint("push", "main", "tests")
-    gh.routes[ep_jobs(43)] = {
-        "total_count": 1, "jobs": [job(conclusion="success")],
-    }
-    gh.routes[ep_issues_list()] = [triage_issue(7, [fp])]
-    gh.routes[ep_issue_comments(7)] = []
+    """Acceptance (Issue #718): after CI recovers, the matching bug Issue is
+    associated with the successful run and closed — but only because the
+    diff since the recorded failure TOUCHES the failing test's file."""
+    recovery_setup(gh, monkeypatch, tmp_path, head_sha=FIX_SHA)
+    gh.routes[ep_log()] = FAILED_TEST_LOG
+    gh.routes[ep_compare(FAILURE_SHA, FIX_SHA)] = {"files": [
+        {"filename": "docs/intro.mdx"},
+        {"filename": FAILED_TEST_FILE},
+        {"filename": "src/orbi/cli.py"},
+    ]}
     mod.main()
     comments = gh.calls_to(ep_comment(7), "POST")
     assert len(comments) == 1
@@ -838,7 +870,8 @@ def test_recovery_closes_the_matching_issue_with_run_evidence(
     assert "CI recovered" in body
     assert f"- run id: `43` (attempt 1), conclusion: `success`" in body
     assert f"- run URL: {RUN_URL}" in body
-    assert f"- commit: `{HEAD_SHA}`" in body
+    assert f"- commit: `{FIX_SHA}`" in body
+    assert "Closing as completed" in body
     patches = gh.calls_to(ep_patch(7), "PATCH")
     assert len(patches) == 1
     assert patches[0]["payload"] == {"state": "closed", "state_reason": "completed"}
@@ -873,8 +906,50 @@ def test_recovery_only_considers_succeeded_jobs(gh, monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Recovery guard (Issue #715): a close needs real fix evidence
+# Recovery guard (Issue #715 + #718): a close needs ticket-relevant fix
+# evidence
 # ---------------------------------------------------------------------------
+
+# Issue #718 evidence captured from the live repo: the failing test file of
+# the real #714 flaky failure (job log of run 34576656221, job 103190539333;
+# Actions timestamps prefix every line) and the REAL probed file list of the
+# unrelated `a2d5db7...8b4dfaf` diff (release notes + the triage guard
+# itself) that wrongly closed #714 the 9th time.
+FAILED_TEST_FILE = "tests/test_concurrency_e2e.py"
+FAILED_TEST_LOG = "\n".join([
+    "2026-09-11T08:01:10.1183155Z =================================== FAILURES"
+    " ===================================",
+    "2026-09-11T08:01:10.1229038Z =========================== short test summary info"
+    " ============================",
+    "2026-09-11T08:01:10.1230016Z FAILED tests/test_concurrency_e2e.py::"
+    "test_capacity_two_allows_two_runners_and_rejects_third"
+    " - AssertionError: timed out waiting for both runners to auto-merge"
+    " their PRs",
+    "2026-09-11T08:01:10.1230873Z 1 failed, 2379 passed in 330.14s (0:05:30)",
+])
+UNRELATED_DIFF_FILES = [
+    ".github/workflows/ci-failure-issue.yml",
+    "pyproject.toml",
+    "src/orbi/__init__.py",
+    "tests/test_ci_failure_triage.py",
+    "tools/ci_failure_triage.py",
+]
+
+
+def recovery_setup(gh, monkeypatch, tmp_path, *, head_sha):
+    """A recorded #715-style Issue (failure at FAILURE_SHA, job 9) plus the
+    routes for a successful recovery run at `head_sha`: no associated PR."""
+    fp = mod.fingerprint("push", "main", "tests")
+    write_event(monkeypatch, tmp_path, recovery_event(head_sha))
+    gh.routes[ep_jobs(43)] = {
+        "total_count": 1, "jobs": [job(conclusion="success")],
+    }
+    gh.routes[ep_issues_list()] = [
+        recorded_issue(7, fp, run_event(head_sha=FAILURE_SHA)["workflow_run"])
+    ]
+    gh.routes[ep_issue_comments(7)] = []
+    gh.routes[ep_pulls(head_sha)] = []
+    return gh
 
 
 def test_recovery_same_head_sha_keeps_the_issue_open(
@@ -939,27 +1014,31 @@ def test_recovery_after_n_recurrences_same_sha_keeps_the_issue_open(
     assert len(gh.calls_to(ep_comment(7), "POST")) == 1
 
 
-def test_recovery_new_head_sha_still_closes(gh, monkeypatch, tmp_path, capsys):
-    """A recovery run on a different head commit carries the fix evidence:
-    the Issue is closed exactly as before (Issue #715 leaves this path
-    unchanged), and no PR resolution is spent once the SHA check verified."""
-    fp = mod.fingerprint("push", "main", "tests")
-    write_event(monkeypatch, tmp_path, recovery_event(FIX_SHA))
-    gh.routes[ep_jobs(43)] = {
-        "total_count": 1, "jobs": [job(conclusion="success")],
-    }
-    gh.routes[ep_issues_list()] = [
-        recorded_issue(7, fp, run_event(head_sha=FAILURE_SHA)["workflow_run"])
-    ]
-    gh.routes[ep_issue_comments(7)] = []
+def test_recovery_unrelated_new_head_sha_keeps_the_issue_open(
+    gh, monkeypatch, tmp_path, capsys
+):
+    """Acceptance (Issue #718): a recovery run on a NEW head commit whose
+    diff does NOT touch the failing test's file is NOT fix evidence — the
+    recovery evidence is appended and the Issue stays open. The diff and
+    log fixtures are the REAL probed #714 scene: the `a2d5db7...8b4dfaf`
+    diff (release bump + the triage guard itself) wrongly closed #714 the
+    9th time; the recorded failure's job log names
+    `tests/test_concurrency_e2e.py`."""
+    recovery_setup(gh, monkeypatch, tmp_path, head_sha=FIX_SHA)
+    gh.routes[ep_log()] = FAILED_TEST_LOG
+    gh.routes[ep_compare(FAILURE_SHA, FIX_SHA)] = {"files": [
+        *[{"filename": name} for name in UNRELATED_DIFF_FILES],
+        "junk",           # malformed file entries are skipped, never crash
+        {"filename": 42},
+    ]}
     mod.main()
-    body = gh.calls_to(ep_comment(7), "POST")[0]["payload"]["body"]
-    assert "Closing as completed" in body
-    patches = gh.calls_to(ep_patch(7), "PATCH")
-    assert len(patches) == 1
-    assert patches[0]["payload"] == {"state": "closed", "state_reason": "completed"}
-    assert "ci_triage recovered issue=7" in capsys.readouterr().err
-    assert gh.calls_to(ep_pulls(FIX_SHA), "GET") == []
+    comments = gh.calls_to(ep_comment(7), "POST")
+    assert len(comments) == 1
+    assert "Not closing" in comments[0]["payload"]["body"]
+    assert gh.calls_to(ep_patch(7), "PATCH") == []
+    err = capsys.readouterr().err
+    assert "recovery_unverified issue=7" in err
+    assert "reason=no_relevant_fix" in err
 
 
 def test_recovery_same_head_sha_with_closing_reference_closes(
@@ -1042,6 +1121,151 @@ def test_recovery_same_head_sha_pr_without_body_keeps_open(
     assert gh.calls_to(ep_patch(7), "PATCH") == []
 
 
+def test_recovery_new_head_sha_with_closing_reference_closes(
+    gh, monkeypatch, tmp_path, capsys
+):
+    """Acceptance (Issue #718, #715 non-regression): `Fixes #N` closes the
+    Issue on a new head too — and the cheap reference check passes before
+    any log fetch or compare call is spent."""
+    recovery_setup(gh, monkeypatch, tmp_path, head_sha=FIX_SHA)
+    gh.routes[ep_pulls(FIX_SHA)] = [{"number": 328}]
+    gh.routes[ep_pr()] = {"number": 328, "body": "Fixes #7"}
+    mod.main()
+    patches = gh.calls_to(ep_patch(7), "PATCH")
+    assert len(patches) == 1
+    assert patches[0]["payload"] == {"state": "closed", "state_reason": "completed"}
+    assert "ci_triage recovered issue=7" in capsys.readouterr().err
+    assert not any(
+        call["endpoint"].startswith(f"repos/{OWNER_REPO}/actions/jobs/")
+        for call in gh.calls
+    )
+    assert not any(
+        call["endpoint"].startswith(f"repos/{OWNER_REPO}/compare/")
+        for call in gh.calls
+    )
+
+
+def test_recovery_after_n_recurrences_unrelated_head_keeps_open(
+    gh, monkeypatch, tmp_path
+):
+    """Acceptance (Issue #718, Nth recurrence): failure at FAILURE_SHA (body),
+    re-occurrences at FAILURE_SHA and RECURRENCE_SHA (comments), then a green
+    run at FIX_SHA. The relevance diff runs from the LATEST recorded failure
+    (RECURRENCE_SHA, the last re-occurrence comment) and its job log is the
+    evidence source; an unrelated diff keeps the Issue open. Only comments
+    carrying the re-occurrence prefix are failure evidence."""
+    fp = mod.fingerprint("push", "main", "tests")
+    write_event(monkeypatch, tmp_path, recovery_event(FIX_SHA))
+    gh.routes[ep_jobs(43)] = {
+        "total_count": 1, "jobs": [job(conclusion="success")],
+    }
+    gh.routes[ep_issues_list()] = [
+        recorded_issue(7, fp, run_event(head_sha=FAILURE_SHA)["workflow_run"])
+    ]
+    gh.routes[ep_issue_comments(7)] = [
+        {"body": mod.build_reoccurrence_comment(
+            run_event(head_sha=FAILURE_SHA, run_attempt=2)["workflow_run"], job(),
+        )},
+        {"body": mod.build_reoccurrence_comment(
+            run_event(head_sha=RECURRENCE_SHA, run_attempt=3)["workflow_run"], job(),
+        )},
+        {"body": mod.build_recovery_comment(
+            recovery_event(RECURRENCE_SHA)["workflow_run"], job(), closing=False,
+        )},
+        {"body": "a human comment linking "
+                 "https://github.com/orbi-run/test-repo/actions/runs/42/job/99"},
+    ]
+    gh.routes[ep_pulls(FIX_SHA)] = []
+    gh.routes[ep_log()] = FAILED_TEST_LOG
+    gh.routes[ep_compare(RECURRENCE_SHA, FIX_SHA)] = {
+        "files": [{"filename": "docs/intro.mdx"}]
+    }
+    mod.main()
+    assert gh.calls_to(ep_patch(7), "PATCH") == []
+    compares = [
+        call["endpoint"] for call in gh.calls
+        if call["endpoint"].startswith(f"repos/{OWNER_REPO}/compare/")
+    ]
+    assert compares == [ep_compare(RECURRENCE_SHA, FIX_SHA)]
+
+
+def test_recovery_log_unavailable_keeps_issue_open_and_posts_evidence(
+    gh, monkeypatch, tmp_path, capsys
+):
+    """Failure path (Issue #718): the recorded failure job's log is gone
+    (expired retention) — relevance is unverifiable, so the guard degrades
+    to no-close with a structured line while the recovery evidence comment
+    is still posted; the triage job itself stays green."""
+    recovery_setup(gh, monkeypatch, tmp_path, head_sha=FIX_SHA)
+    gh.error = (ep_log(), "HTTP 404 (Not Found)")
+    mod.main()
+    assert gh.calls_to(ep_patch(7), "PATCH") == []
+    assert len(gh.calls_to(ep_comment(7), "POST")) == 1
+    err = capsys.readouterr().err
+    assert "recovery_log_unavailable" in err
+    assert "reason=no_relevant_fix" in err
+
+
+def test_recovery_log_without_failed_test_paths_keeps_open(
+    gh, monkeypatch, tmp_path, capsys
+):
+    """A log with no `FAILED <path>.py` / `ERROR <path>.py` evidence (a
+    non-pytest failure) names no failing test file: relevance is
+    undecidable — no close, and the compare call is not spent."""
+    recovery_setup(gh, monkeypatch, tmp_path, head_sha=FIX_SHA)
+    gh.routes[ep_log()] = (
+        "2026-09-11T08:01:10.1230016Z ##[error]The docs build failed\n"
+        "2026-09-11T08:01:10.1230873Z ##[error]Process completed with exit code 1.\n"
+    )
+    mod.main()
+    assert gh.calls_to(ep_patch(7), "PATCH") == []
+    assert not any(
+        call["endpoint"].startswith(f"repos/{OWNER_REPO}/compare/")
+        for call in gh.calls
+    )
+    err = capsys.readouterr().err
+    assert "reason=no_relevant_fix" in err
+    assert "no_failed_test_files" in err
+
+
+def test_recovery_new_head_without_recorded_failure_evidence_keeps_open(
+    gh, monkeypatch, tmp_path, capsys
+):
+    """An Issue body without recorded failure evidence (e.g. created before
+    the `- commit:` line existed) gives the relevance check no base: no
+    close, and no log/compare calls are spent."""
+    fp = mod.fingerprint("push", "main", "tests")
+    write_event(monkeypatch, tmp_path, recovery_event(FIX_SHA))
+    gh.routes[ep_jobs(43)] = {
+        "total_count": 1, "jobs": [job(conclusion="success")],
+    }
+    gh.routes[ep_issues_list()] = [triage_issue(7, [fp])]
+    gh.routes[ep_issue_comments(7)] = []
+    gh.routes[ep_pulls(FIX_SHA)] = []
+    mod.main()
+    assert gh.calls_to(ep_patch(7), "PATCH") == []
+    assert not any(
+        call["endpoint"].startswith(f"repos/{OWNER_REPO}/actions/jobs/")
+        for call in gh.calls
+    )
+    err = capsys.readouterr().err
+    assert "reason=no_relevant_fix" in err
+    assert "no_failure_evidence" in err
+
+
+def test_recovery_malformed_compare_response_keeps_open(
+    gh, monkeypatch, tmp_path
+):
+    """A compare response without a usable files list is no evidence: the
+    Issue stays open (never a wrong close)."""
+    recovery_setup(gh, monkeypatch, tmp_path, head_sha=FIX_SHA)
+    gh.routes[ep_log()] = FAILED_TEST_LOG
+    gh.routes[ep_compare(FAILURE_SHA, FIX_SHA)] = ["not-an-object"]
+    mod.main()
+    assert gh.calls_to(ep_patch(7), "PATCH") == []
+    assert len(gh.calls_to(ep_comment(7), "POST")) == 1
+
+
 def test_recovery_run_without_head_sha_keeps_the_issue_open(
     gh, monkeypatch, tmp_path, capsys
 ):
@@ -1067,21 +1291,66 @@ def test_recovery_run_without_head_sha_keeps_the_issue_open(
     assert "reason=no_head_sha" in err
 
 
-def test_recorded_failure_shas_uses_body_and_reoccurrence_comments_only():
-    """The failure evidence set: the body's `- commit:` line plus the
-    `- commit:` line of every RE-OCCURRENCE comment. Recovery comments and
-    unprefixed comments never count as failure evidence (Issue #715)."""
-    body = f"evidence\n- commit: `{FAILURE_SHA}`\n"
+def test_recorded_failures_uses_body_and_reoccurrence_comments_only():
+    """The failure evidence list (Issue #718): the body first, then every
+    RE-OCCURRENCE comment in order. Recovery comments and unprefixed
+    comments never count as failure evidence (Issue #715 rule)."""
+    body = mod.build_failure_body(
+        run_event(head_sha=FAILURE_SHA)["workflow_run"], job(), None,
+        mod.fingerprint("push", "main", "tests"),
+    )
     comments = [
         mod.build_reoccurrence_comment(
-            run_event(head_sha=RECURRENCE_SHA)["workflow_run"], job(),
+            run_event(head_sha=FAILURE_SHA, run_attempt=2)["workflow_run"], job(),
+        ),
+        mod.build_reoccurrence_comment(
+            run_event(head_sha=RECURRENCE_SHA, run_attempt=3)["workflow_run"], job(),
         ),
         mod.build_recovery_comment(
             recovery_event(FAILURE_SHA)["workflow_run"], job(), closing=False,
         ),
-        f"a plain comment quoting - commit: `{FIX_SHA}` offline",
+        f"a plain comment quoting - commit: `{FIX_SHA}` and "
+        f"{JOB_URL} offline",
     ]
-    assert mod.recorded_failure_shas(body, comments) == {FAILURE_SHA, RECURRENCE_SHA}
+    assert mod.recorded_failures(body, comments) == [
+        {"sha": FAILURE_SHA, "job_id": "9"},
+        {"sha": FAILURE_SHA, "job_id": "9"},
+        {"sha": RECURRENCE_SHA, "job_id": "9"},
+    ]
+
+
+def test_recorded_failures_tolerates_missing_evidence_lines():
+    """A body/comment without a `- commit:` line or a job-logs URL yields
+    None fields (the guard treats the entry as no evidence, never crashes)."""
+    runs = mod.recorded_failures(
+        "CI failure body\n<!-- ci-failure-fingerprint:x -->\n",
+        ["CI failure re-occurred (job `tests`, same fingerprint):\n- run URL: x"],
+    )
+    assert runs == [{"sha": None, "job_id": None}, {"sha": None, "job_id": None}]
+
+
+def test_failed_test_files_parses_the_real_pytest_summary_lines():
+    """The parser reads the REAL #714 log shape: Actions timestamps prefix
+    every line (no `^` anchor), `FAILED <path>::<test> - <exc>` and
+    `ERROR <path>` carry the failing module; the lowercase count line does
+    not match."""
+    assert mod.failed_test_files(FAILED_TEST_LOG) == {FAILED_TEST_FILE}
+    assert mod.failed_test_files(
+        "2026-09-11T08:01:10.1230016Z ERROR tests/test_collection.py"
+        " - ImportError: no module named x\n"
+    ) == {"tests/test_collection.py"}
+
+
+def test_failed_test_files_ignores_prose_and_lowercase_counts():
+    """Prose `FAILED` mentions without a `.py` path and the lowercase
+    summary count never produce a file (verified shapes from the real
+    job log)."""
+    assert mod.failed_test_files("\n".join([
+        "make sure FAILED tests do not hide failures",
+        "2026-09-11T08:01:10.1230016Z FAILED (unittest.loader._FailedTest) did not run",
+        "2026-09-11T08:01:10.1230873Z 1 failed, 2379 passed in 330.14s (0:05:30)",
+        "2026-09-11T08:01:10.7263769Z ##[error]Process completed with exit code 1.",
+    ])) == set()
 
 
 def test_recovery_comment_tail_reflects_the_closing_decision():
@@ -1188,6 +1457,41 @@ def test_gh_api_empty_success_body_is_an_empty_dict(monkeypatch):
         mod.subprocess, "run", lambda command, **kwargs: FakeProc(stdout="")
     )
     assert mod.gh_api("repos/o/r/x") == {}
+
+
+def test_gh_api_text_requests_the_log_with_escape_sequences_allowed(monkeypatch):
+    """The raw job-log call pins the verified command shape (gh 2.100, live
+    probe of job 103190539333): `gh api --allow-escape-sequences` — gh ≥2.63
+    refuses terminal-escape output without the flag, and Actions logs carry
+    them."""
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        return FakeProc(stdout="2026-09-11T08:01:10.1230016Z FAILED tests/t.py::x\n")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    assert "tests/t.py" in mod.gh_api_text("repos/o/r/actions/jobs/9/logs")
+    assert captured["command"] == [
+        "gh", "api", "--allow-escape-sequences", "repos/o/r/actions/jobs/9/logs",
+    ]
+
+
+@pytest.mark.parametrize("stdout,stderr,expected", [
+    ("", "HTTP 404: gone\n", "HTTP 404: gone"),
+    ("", "", "exit code 1"),
+])
+def test_gh_api_text_nonzero_exit_raises_a_structured_error(
+    monkeypatch, stdout, stderr, expected
+):
+    monkeypatch.setattr(
+        mod.subprocess, "run",
+        lambda command, **kwargs: FakeProc(returncode=1, stdout=stdout, stderr=stderr),
+    )
+    with pytest.raises(mod.GhApiError) as exc:
+        mod.gh_api_text("repos/o/r/actions/jobs/9/logs")
+    assert exc.value.endpoint == "repos/o/r/actions/jobs/9/logs"
+    assert exc.value.detail == expected
 
 
 def test_gh_api_non_json_success_body_is_a_structured_error(monkeypatch):

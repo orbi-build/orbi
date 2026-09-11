@@ -20,11 +20,12 @@ gh 2.97):
 - A monitored run concluded `success`: every SUCCEEDED job's fingerprint is
   matched against the open triage Issues; a match gets the recovery run
   evidence as a comment. It is closed (`state_reason: completed`) only with
-  fix evidence — the recovery run's head SHA differs from every failure SHA
-  recorded on the Issue (body + re-occurrence comments), or the run's
-  associated PR body carries a closing reference to it. A green re-run of
-  the SAME commit that failed is a flaky pass, not a fix (Issue #715): the
-  comment is appended and the Issue stays open.
+  fix evidence RELEVANT to the Issue (Issue #718): the recovery run's
+  associated PR body carries a closing reference to it (Issue #715), or the
+  diff from the latest recorded failure run to the recovery head touches the
+  failing test's file (the `FAILED <path>.py` lines of that failure job's
+  log). A green re-run of the SAME commit — or of any unrelated commit — is
+  not a fix: the comment is appended and the Issue stays open.
 - Anything else (another workflow, another event, a push off `main`, any
   other conclusion) is a logged no-op with exit 0.
 
@@ -93,13 +94,27 @@ EXTERNAL_PR_MARKER = "orbi:external-pr:"
 EXTERNAL_PR_RE = re.compile(
     r"<!--\s*" + re.escape(EXTERNAL_PR_MARKER) + r"(\d+)\s*-->"
 )
-# Issue #715: the recovery guard's failure-evidence markers. The `- commit:`
+# Issue #715/#718: the recovery guard's failure-evidence markers. The `- commit:`
 # line is written by `build_failure_body` (the Issue body) and by
 # `build_reoccurrence_comment` (one comment per re-occurrence); only comments
 # starting with REOCCURRENCE_PREFIX are failure evidence — a recovery comment
 # records the recovery run's SHA, which must never count as a failure.
+# JOB_LOG_URL_RE parses the job id from the same evidence (`- job logs:` in a
+# re-occurrence comment, the `[job logs](...)` link in the body) so the
+# relevance check can read the failure job's raw log.
 REOCCURRENCE_PREFIX = "CI failure re-occurred"
 COMMIT_LINE_RE = re.compile(r"- commit: `([0-9a-f]{40})`")
+JOB_LOG_URL_RE = re.compile(
+    r"https://github\.com/[^/\s)\]]+/[^/\s)\]]+/actions/runs/\d+/job/(\d+)"
+)
+# Issue #718: the failing test's file, from the pytest summary of the
+# recorded failure job's log — `FAILED tests/test_x.py::test - ...` and
+# `ERROR tests/test_x.py - ...`. Actions log lines carry an ISO timestamp
+# prefix, so the match is deliberately NOT line-anchored; the `.py` suffix
+# keeps prose mentions of FAILED/ERROR and the lowercase count line
+# (`1 failed, 2379 passed`) from matching (verified against the real job
+# log of run 34576656221).
+FAILED_TEST_RE = re.compile(r"\b(?:FAILED|ERROR)\s+([^\s:]+\.py)(?:::|\s|$)", re.MULTILINE)
 
 
 class GhApiError(Exception):
@@ -146,6 +161,24 @@ def gh_api(endpoint: str, *, method: str = "GET", payload: dict | None = None):
         raise GhApiError(endpoint, f"non-JSON response: {exc}") from exc
 
 
+def gh_api_text(endpoint: str) -> str:
+    """Call `gh api` and return the RAW response body.
+
+    Used for the job-log endpoint (`repos/{owner}/{repo}/actions/jobs/
+    {job_id}/logs`), which answers with a plain-text log, not JSON. The flag
+    is required: gh >= 2.63 refuses to print a response carrying terminal
+    escape sequences, and Actions job logs carry them — verified against
+    gh 2.100 with the live job log of run 34576656221 (the unflagged call
+    exits 1 with `the response contains terminal escape sequences`).
+    """
+    command = ["gh", "api", "--allow-escape-sequences", endpoint]
+    proc = subprocess.run(command, capture_output=True, text=True)
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip()
+        raise GhApiError(endpoint, detail or f"exit code {proc.returncode}")
+    return proc.stdout
+
+
 def load_event() -> dict:
     """Read the workflow_run event payload from GITHUB_EVENT_PATH."""
     path = os.environ.get("GITHUB_EVENT_PATH")
@@ -188,17 +221,33 @@ def issue_fingerprints(body: str) -> list[str]:
     return seen
 
 
-def recorded_failure_shas(body: str, comments: list[str]) -> set[str]:
-    """Every failure head SHA recorded on an Issue (Issue #715).
+def recorded_failures(body: str, comments: list[str]) -> list[dict]:
+    """Every failure run recorded on an Issue, oldest first (Issue #718).
 
-    The body's `- commit:` line plus the `- commit:` line of each
-    re-occurrence comment; other comments never carry failure evidence.
+    The body's evidence first, then each re-occurrence comment in comment
+    order; every other comment never carries failure evidence (Issue #715
+    rule). Each entry carries the `- commit:` SHA and the job id parsed
+    from the job-logs URL — the relevance check's diff base and log source.
     """
-    shas = set(COMMIT_LINE_RE.findall(body))
-    for comment in comments:
-        if comment.startswith(REOCCURRENCE_PREFIX):
-            shas.update(COMMIT_LINE_RE.findall(comment))
-    return shas
+    runs: list[dict] = []
+    texts = [body, *comments]
+    for position, text in enumerate(texts):
+        if position > 0 and not text.startswith(REOCCURRENCE_PREFIX):
+            continue
+        shas = COMMIT_LINE_RE.findall(text)
+        job_ids = JOB_LOG_URL_RE.findall(text)
+        runs.append({
+            "sha": shas[0] if shas else None,
+            "job_id": job_ids[0] if job_ids else None,
+        })
+    return runs
+
+
+def failed_test_files(job_log: str) -> set[str]:
+    """The failing test modules named by the pytest summary of a job log
+    (the FAILED_TEST_RE shapes; see the constant's comment for the format
+    evidence)."""
+    return set(FAILED_TEST_RE.findall(job_log))
 
 
 def triage_scope(run: dict) -> tuple[str, str]:
@@ -352,10 +401,12 @@ def build_failure_body(
         "### Dedup and recovery",
         "A re-run of the same failure (same workflow/job/branch fingerprint)",
         "updates this Issue instead of creating a new one. A later successful",
-        "run of the same workflow/job/branch closes this Issue only with fix",
-        "evidence: a different head commit, or a closing reference to this",
-        "Issue on its PR (Issue #715) — a green re-run of the same commit is",
-        "recorded as recovery evidence while this Issue stays open.",
+        "run closes this Issue only with fix evidence relevant to it",
+        "(Issue #718): a closing reference to this Issue on the run's PR",
+        "(`Fixes #N`), or a diff since the latest recorded failure that",
+        "touches the failing test's file. Anything else — a green re-run of",
+        "the same commit, or any unrelated commit — is recorded as recovery",
+        "evidence while this Issue stays open.",
         "",
     ]
     if external_pr is not None:
@@ -409,11 +460,11 @@ def build_recovery_comment(run: dict, job: dict, *, closing: bool) -> str:
         )
     else:
         lines.append(
-            "Not closing: this recovery run used a head commit that previously"
-            " failed with this fingerprint and no closing reference"
-            " (`Fixes #N`) is associated with it — nothing was fixed; this"
-            " looks like a flaky pass. The Issue stays open for a real fix"
-            " (Issue #715)."
+            "Not closing: no fix evidence for this Issue — the recovery run's"
+            " PR carries no closing reference (`Fixes #N`) and the diff since"
+            " the latest recorded failure does not touch the failing test's"
+            " file; this may be a flaky pass or an unrelated commit (Issue"
+            " #718). The Issue stays open for a real fix."
         )
     return "\n".join(lines)
 
@@ -665,9 +716,12 @@ def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
 
 
 def fetch_issue_comments(owner: str, repo: str, number: int) -> list[str]:
-    """The Issue's comments, their bodies only (verified shape: a list)."""
+    """The Issue's comments, their bodies only, oldest first (the explicit
+    `sort=created&direction=asc` pins the order `recorded_failures` relies
+    on; verified against the live endpoint)."""
     data = gh_api(
-        f"repos/{owner}/{repo}/issues/{number}/comments?per_page=100"
+        f"repos/{owner}/{repo}/issues/{number}/comments"
+        "?per_page=100&sort=created&direction=asc"
     )
     if not isinstance(data, list):
         fail("fetch_issue_comments", f"comments API did not return a list: {data!r}")
@@ -697,14 +751,56 @@ def recovery_closing_reference(
     return issue_number in closing_issue_numbers(body, owner, repo)
 
 
-def triage_recovery(run: dict, owner: str, repo: str, jobs: list) -> None:
-    """Close the Issue of every succeeded job with the recovery evidence.
+def recovery_touches_failed_tests(
+    owner: str, repo: str, recovery_sha: str, failure_runs: list[dict],
+) -> tuple[bool, str]:
+    """Issue #718 relevance check: True only when the diff from the LATEST
+    recorded failure run to the recovery head touches the failing test's
+    file (the `FAILED <path>.py` lines of that failure job's log). The
+    second value is the no-evidence detail for the structured log line.
 
-    Issue #715: a close needs fix evidence — the recovery run's head SHA
-    differs from every failure SHA recorded on the Issue (body + re-occurrence
-    comments), or the run's associated PR body carries a closing reference to
-    it. A green re-run of the same commit that failed is a flaky pass: the
-    recovery evidence is appended and the Issue stays open.
+    The failure log is the evidence source; when it is unavailable (e.g.
+    expired log retention) the check degrades to no-close with a structured
+    line — an unverifiable close is never performed. Every other API error
+    keeps failing fast (the module contract).
+    """
+    # `recorded_failures` always yields at least the body's entry, possibly
+    # with None fields — an entry lacking the SHA or the job id carries no
+    # usable evidence for this check.
+    latest = failure_runs[-1]
+    base_sha, job_id = latest["sha"], latest["job_id"]
+    if not base_sha or not job_id:
+        return False, "no_failure_evidence"
+    try:
+        failure_log = gh_api_text(
+            f"repos/{owner}/{repo}/actions/jobs/{job_id}/logs"
+        )
+    except GhApiError as exc:
+        log(f"recovery_log_unavailable detail={exc.detail}")
+        return False, "log_fetch_failed"
+    test_files = failed_test_files(failure_log)
+    if not test_files:
+        return False, "no_failed_test_files"
+    comparison = gh_api(f"repos/{owner}/{repo}/compare/{base_sha}...{recovery_sha}")
+    files = comparison.get("files", []) if isinstance(comparison, dict) else []
+    changed = {
+        item.get("filename")
+        for item in files
+        if isinstance(item, dict) and isinstance(item.get("filename"), str)
+    }
+    if test_files & changed:
+        return True, ""
+    return False, "diff_does_not_touch_failed_tests"
+
+
+def triage_recovery(run: dict, owner: str, repo: str, jobs: list) -> None:
+    """Close the Issue of every succeeded job ONLY with ticket-relevant fix
+    evidence (Issue #718): the recovery run's PR carries a closing reference
+    to the Issue (`Fixes #N`, Issue #715), or the diff from the latest
+    recorded failure run to the recovery head touches the failing test's
+    file. A green run without either — the same commit again, or any
+    unrelated commit — is recorded as recovery evidence while the Issue
+    stays open.
     """
     succeeded = jobs_with_conclusion(jobs, (SUCCESS_CONCLUSION,))
     if not succeeded:
@@ -722,19 +818,32 @@ def triage_recovery(run: dict, owner: str, repo: str, jobs: list) -> None:
             log(f"recovery_no_match job={item['name']} run_id={run.get('id')}")
             continue
         number = match["number"]
-        failure_shas = recorded_failure_shas(
+        failure_runs = recorded_failures(
             match["body"],
             fetch_issue_comments(owner, repo, number),
         )
+        failure_shas = {entry["sha"] for entry in failure_runs}
         if not isinstance(recovery_sha, str) or not recovery_sha:
             verified = False
             reason = "reason=no_head_sha"
-        elif recovery_sha not in failure_shas:
-            verified = True
-            reason = ""
-        else:
+        elif recovery_sha in failure_shas:
+            # Same head SHA as a recorded failure: the diff is definitionally
+            # empty, so only the closing reference can verify (Issue #715).
             verified = recovery_closing_reference(run, owner, repo, number)
             reason = "" if verified else "reason=same_head_sha"
+        else:
+            verified = recovery_closing_reference(run, owner, repo, number)
+            if verified:
+                reason = ""
+            else:
+                touched, detail = recovery_touches_failed_tests(
+                    owner, repo, recovery_sha, failure_runs,
+                )
+                verified = touched
+                reason = (
+                    "" if touched
+                    else f"reason=no_relevant_fix detail={detail}"
+                )
         comment_issue(
             owner, repo, number,
             build_recovery_comment(run, item, closing=verified),
