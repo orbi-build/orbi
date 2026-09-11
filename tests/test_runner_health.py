@@ -16,7 +16,10 @@ journal. These tests pin the active detection contract:
 - normal multi-round review/fix cycles (different fingerprints, a successful
   run breaking the streak) never produce a finding.
 """
+import fcntl
 import json
+import os
+import threading
 import time
 from pathlib import Path
 from unittest.mock import Mock
@@ -1230,3 +1233,73 @@ def test_count_crashes_counts_unparseable_clock_lines_conservatively():
         "journalctl --user -u orbi@2.service": "",
     })
     assert runner_health.count_crashes(fake) == 2
+
+
+def test_save_health_state_tmp_is_pid_scoped(tmp_path, monkeypatch):
+    """Issue #710 (R5): the atomic-write tmp name must be pid-scoped.
+    The old shared `health.tmp` let two instances save concurrently onto
+    the same tmp inode — interleaved truncate/write tore the JSON and
+    the read side then silently reset every alert/counter."""
+    captured = {}
+
+    def fake_replace(self, target):
+        captured["tmp"] = self
+        raise RuntimeError("stop before the rename")
+
+    monkeypatch.setattr("pathlib.Path.replace", fake_replace)
+    with pytest.raises(RuntimeError):
+        runner_health.save_health_state(tmp_path / "health.json", {"a": 1})
+    assert captured["tmp"].name.startswith("health.json.")
+    assert captured["tmp"].name.endswith(".tmp")
+    # NOT the shared suffix name two instances would collide on.
+    assert captured["tmp"] != tmp_path / "health.tmp"
+
+
+def test_record_pickup_blocks_behind_a_busy_health_lock(tmp_path):
+    """Issue #710 (R6): record_pickup's read-modify-write takes the leaf
+    lock — while another instance holds it, the record WAITS instead of
+    racing (the unlocked RMW is exactly the mechanism behind the false
+    stale_pickup alarm)."""
+    (tmp_path / ".orbi").mkdir(exist_ok=True)
+    path = runner_health.health_state_path(tmp_path)
+    lock_fd = os.open(str(runner_health._health_lock_path(path)),
+                      os.O_CREAT | os.O_RDWR, 0o644)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX)  # a foreign instance holds it
+    done: list[bool] = []
+    thread = threading.Thread(
+        target=lambda: (runner_health.record_pickup(tmp_path), done.append(True)),
+    )
+    thread.start()
+    try:
+        time.sleep(0.4)
+        assert done == [], "record_pickup must wait for the lock"
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    finally:
+        thread.join(timeout=5)
+        os.close(lock_fd)
+    assert done == [True]
+    state = runner_health.load_health_state(path)
+    assert state["last_pickup_ts"] is not None
+
+
+def test_run_health_check_skips_when_the_lock_stays_busy(
+    tmp_path, monkeypatch,
+):
+    """Issue #710: a lock held by another instance skips this tick's
+    check (documented pure bypass, same semantics as a check failure) —
+    no journal/gh command may run, nothing may be recorded."""
+    (tmp_path / ".orbi").mkdir(exist_ok=True)
+    path = runner_health.health_state_path(tmp_path)
+    lock_fd = os.open(str(runner_health._health_lock_path(path)),
+                      os.O_CREAT | os.O_RDWR, 0o644)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    try:
+        monkeypatch.setattr(runner_health, "HEALTH_LOCK_TIMEOUT_S", 0.2)
+        probe = Mock(side_effect=AssertionError("must not run any command"))
+        alerts = runner_health.run_health_check(
+            make_config(tmp_path), run_command=probe,
+        )
+        assert alerts == []
+        probe.assert_not_called()
+    finally:
+        os.close(lock_fd)
