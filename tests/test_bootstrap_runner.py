@@ -3890,6 +3890,16 @@ def test_release_dispatch_fresh_ticket_unchanged_by_the_guard(
     assert len(calls) == 1
 
 
+def test_release_race_gh_rejects_unexpected_commands(monkeypatch):
+    """The #708 fake is a contract, not a sink: the strict-raise arm is
+    driven here so it cannot silently rot into a permissive fake that
+    answers commands the dispatch no longer issues (the #658 fake keeps
+    the same discipline via its own contract test)."""
+    fake = _release_race_deps(monkeypatch, in_progress=True, live_holders=[])
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake(["gh", "release", "view"])
+
+
 def test_another_live_runner_reads_slot_occupancy(monkeypatch, tmp_path):
     """_another_live_runner 是 #39 存活规则的独立助手：别的 pid 持槽
     =True，None/自己 =False（与 pick_in_progress_issue 同一语义，
@@ -15790,6 +15800,13 @@ def test_process_issue_routes_release_to_process_release(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0", "body": "",
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     calls = []
+    # Issue #708: the release dispatch now direct-reads the live label
+    # state before dispatching (`gh issue view`) — the fresh ticket here
+    # answers with no labels, and no slot config means no yield path.
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps({"labels": []}),
+    )
     monkeypatch.setattr(release, "process_release",
                         lambda i, c, r: calls.append("release") or "rel-url")
     monkeypatch.setattr(runner, "run_pi", Mock(

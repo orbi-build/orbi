@@ -3695,6 +3695,23 @@ def has_in_progress_label(number: int, repo: str) -> bool:
     )
 
 
+def _another_live_runner(slot_dir: Path, max_concurrency: int) -> bool:
+    """True when a slot is held by another pid — a live co-runner.
+
+    The #39 liveness rule `pick_in_progress_issue` applies to the orphan
+    scan (runner.py:2412): a slot held by another process proves a live
+    runner is working, so state it owns is in flight, not orphaned.
+    Issue #708 reuses the same rule for the release dispatch — an
+    in-progress release found while another runner is live is being
+    released right now; only a runner that is alone may resume it.
+    """
+    mine = os.getpid()
+    for _, holder in slot_occupancy(slot_dir, max_concurrency):
+        if holder is not None and holder != mine:
+            return True
+    return False
+
+
 def is_content_only(issue: dict) -> bool:
     """Return True only for the explicit content-only task marker.
 
@@ -6634,6 +6651,26 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         # `orbi.release` imports the runner primitives back, so the
         # dispatch imports it lazily here — a module-level import would
         # be circular (Issue #286).
+        #
+        # Issue #708: the ready scan's stale snapshot can hand an
+        # already-claimed release ticket to a second live runner. The
+        # dev path got the direct-read yield in #658; the release path
+        # needs the same semantics — an in-progress release owned by a
+        # LIVE co-runner is yielded this tick (never run the state
+        # machine concurrently); an orphaned one (this runner is alone)
+        # still resumes inside process_release (#98 restart resume).
+        # The millisecond truly-simultaneous window remains, exactly as
+        # documented for #658 — the label write is not a CAS.
+        if has_in_progress_label(number, source_repo):
+            slot_dir = config.get("slot_dir")
+            max_concurrency = config.get("max_concurrency")
+            if (slot_dir is not None and max_concurrency is not None
+                    and _another_live_runner(slot_dir, max_concurrency)):
+                LOGGER.info(
+                    "issue=%s claim_yield "
+                    "reason=release_in_progress_live_runner", number,
+                )
+                return IssueResult("claim-yielded", None)
         from orbi import release
 
         return IssueResult("release", release.process_release(issue, config, source_repo))
