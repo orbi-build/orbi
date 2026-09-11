@@ -1,11 +1,13 @@
 # CI Failure Issue (Issue #106): when the CI workflow (`.github/workflows/
 # ci.yml`) fails on a pull_request or a push to main, file ONE deduplicated
 # `bug` + `p0` + `ai-ready` Issue per failed job — the Orbi ready queue picks
-# it up and delivers the fix through its normal single-Issue / single-PR /
-# independent-review contract. When CI recovers, the matching Issue gets the
-# recovery run evidence and is closed only with fix evidence — a different
-# head commit, or a closing reference to the Issue on the run's PR; a green
-# re-run of the same commit keeps the Issue open (Issue #715).
+# it up and delivers the fix through its normal single-Issue /
+# single-PR / independent-review contract. When CI recovers, the matching
+# Issue gets the recovery run evidence and is closed only with fix evidence
+# relevant to it — a closing reference to the Issue on the run's PR
+# (`Fixes #N`, Issue #715), or a diff since the latest recorded failure that
+# touches the failing test's file (Issue #718); a green re-run of the same
+# commit, or of any unrelated commit, keeps the Issue open.
 #
 # Runtime contract (verified against the official docs and the live API):
 # `on: workflow_run` reacts ONLY to completed runs of the named validation
@@ -18,7 +20,8 @@
 # and the jobs API response; no secret or token ever reaches it.
 #
 # Minimal permission set, declared explicitly: `actions: read` (read the
-# completed CI run's jobs), `contents: read` (check out the triage script),
+# completed CI run's jobs and the recorded failure job's log), `contents:
+# read` (check out the triage script),
 # `issues: write` (create/update/close the bug Issue), `pull-requests: read`
 # (the triage resolves a pull_request run's PR number via
 # `GET commits/{sha}/pulls`, whose documented fine-grained permission is
