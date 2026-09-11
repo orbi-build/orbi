@@ -102,9 +102,13 @@ REQUIRED_LABELS = (
     # the deterministic release state machine (never `run_pi`), so the
     # label is platform state the setup entry must guarantee.
     "ai-release",
-    # Ops-only marker (Issue #209, renamed #530): a no-git-delivery ops
-    # task is delivered directly in the Issue, so setup must provision
-    # this explicit, auditable type.
+    # Content-only marker (Issue #209/#537): the pure content agent
+    # delivers text directly in the Issue (no execution, no git), so
+    # setup must provision this explicit, auditable type.
+    "ai-content-only",
+    # Ops marker (Issue #537): a full-execution session (shell/gh/
+    # network, the ops playbook) whose deliverable is evidence posted to
+    # the Issue, so setup must provision this explicit, auditable type.
     "ai-ops-only",
 )
 COLOR_PATTERN = re.compile(r"^[0-9a-fA-F]{6}$")

@@ -42,6 +42,8 @@ KNOWN_LABELS = frozenset({
     "ai-ready",
     "ai-epic",
     runner.RELEASE_LABEL,
+    runner.CONTENT_ONLY_LABEL,
+    runner.OPS_LABEL,
     runner.IN_PROGRESS_LABEL,
     runner.PR_OPENED_LABEL,
     runner.FIX_NEEDED_LABEL,

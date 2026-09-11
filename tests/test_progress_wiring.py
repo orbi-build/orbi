@@ -2314,7 +2314,7 @@ def test_process_ticket_only_publishes_the_bound_context(monkeypatch):
     the action varies per call site — the AST pin above cannot see the
     bound values, this behavioral path can."""
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
-             "labels": [{"name": "ai-ops-only"}]}
+             "labels": [{"name": "ai-content-only"}]}
     seen = []
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)

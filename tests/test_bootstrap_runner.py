@@ -6665,7 +6665,13 @@ def test_main_uses_process_result_kind_without_rechecking_task_type(
         lambda *args: runner.IssueResult("pr", "https://x/y/pull/281"),
     )
     monkeypatch.setattr(
-        runner, "is_ticket_only",
+        runner, "is_content_only",
+        lambda issue: (_ for _ in ()).throw(
+            AssertionError("main must not recheck task type")
+        ),
+    )
+    monkeypatch.setattr(
+        runner, "is_ops",
         lambda issue: (_ for _ in ()).throw(
             AssertionError("main must not recheck task type")
         ),
@@ -6721,7 +6727,7 @@ def test_main_ticket_only_finishes_without_entering_pr_delivery_wait(
     """Ticket-only work has no PR, so the normal review/merge wait is invalid."""
     issue = {
         "number": 12, "title": "Launch copy", "body": "Write copy",
-        "labels": [{"name": "ai-ready"}, {"name": "ai-ops-only"}],
+        "labels": [{"name": "ai-ready"}, {"name": "ai-content-only"}],
     }
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
@@ -15352,10 +15358,26 @@ def test_process_issue_routes_release_to_process_release(monkeypatch):
     assert calls == ["release"]
 
 
-def test_is_ticket_only_requires_the_explicit_label():
-    assert runner.is_ticket_only({"labels": [{"name": "ai-ops-only"}]}) is True
-    assert runner.is_ticket_only({"labels": [{"name": "marketing"}]}) is False
-    assert runner.is_ticket_only({"labels": "ai-ops-only"}) is False
+def test_is_content_only_requires_the_explicit_label():
+    """Issue #537: the content（纯内容）path dispatches on
+    `ai-content-only`; the old `ai-ops-only` name now means ops."""
+    assert runner.is_content_only(
+        {"labels": [{"name": "ai-content-only"}]},
+    ) is True
+    assert runner.is_content_only(
+        {"labels": [{"name": "ai-ops-only"}]},
+    ) is False
+    assert runner.is_content_only({"labels": [{"name": "marketing"}]}) is False
+    assert runner.is_content_only({"labels": "ai-content-only"}) is False
+
+
+def test_is_ops_requires_the_explicit_label():
+    """Issue #537: `ai-ops-only` is the full-execution ops marker — it
+    must NOT dispatch the content agent anymore."""
+    assert runner.is_ops({"labels": [{"name": "ai-ops-only"}]}) is True
+    assert runner.is_ops({"labels": [{"name": "ai-content-only"}]}) is False
+    assert runner.is_ops({"labels": [{"name": "marketing"}]}) is False
+    assert runner.is_ops({"labels": "ai-ops-only"}) is False
 
 
 def test_run_ticket_agent_uses_a_temporary_session_without_git(monkeypatch, tmp_path):
@@ -15435,7 +15457,7 @@ def test_progress_state_passes_startup_sub_phase_to_comment(tmp_path):
 def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch):
     """A labeled content task is delivered in its Issue, never through Git."""
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
-             "labels": [{"name": "ai-ready"}, {"name": "ai-ops-only"}]}
+             "labels": [{"name": "ai-ready"}, {"name": "ai-content-only"}]}
     edits = []
     comments = []
     commands = []
@@ -15467,7 +15489,7 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
 
 def test_process_ticket_only_rejects_empty_agent_content(monkeypatch):
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
-             "labels": [{"name": "ai-ops-only"}]}
+             "labels": [{"name": "ai-content-only"}]}
     edits = []
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
@@ -15484,7 +15506,7 @@ def test_process_ticket_only_rejects_empty_agent_content(monkeypatch):
 
 def test_process_ticket_only_failure_marks_blocked_without_git_delivery(monkeypatch):
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
-             "labels": [{"name": "ai-ops-only"}]}
+             "labels": [{"name": "ai-content-only"}]}
     edits = []
     comments = []
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
@@ -15507,7 +15529,7 @@ def test_process_ticket_only_failure_marks_blocked_without_git_delivery(monkeypa
 
 def test_process_ticket_only_keeps_original_error_when_failure_reporting_fails(monkeypatch):
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
-             "labels": [{"name": "ai-ops-only"}]}
+             "labels": [{"name": "ai-content-only"}]}
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
     monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
@@ -15556,6 +15578,192 @@ def test_process_issue_keeps_normal_flow_without_release_label(
     monkeypatch.setattr(runner, "_finish_progress", Mock())
     runner.process_issue(
         issue, {"base_branch": "main", "repo_dir": tmp_path}, "o/r",
+    )
+
+
+def _ops_issue_mocks(monkeypatch, tmp_path, *, head_sha: str, dirty: str):
+    """Shared mock set for the `process_issue` ops-dispatch tests.
+
+    `head_sha` answers `git rev-parse HEAD` (the frozen base means the
+    session delivered no commit); `dirty` answers `git status
+    --porcelain`. Every `gh`/`git`/pi collaborator is captured.
+    """
+    issue = {
+        "number": 99, "title": "Merge the beta PR and verify deploy",
+        "body": "Merge PR #7 into main, then verify the deployment.",
+        "labels": [{"name": "ai-ready"}, {"name": "ai-ops-only"}],
+    }
+    commands: list[list[str]] = []
+    configs: list[dict] = []
+    monkeypatch.setattr(runner, "is_release", lambda i: False)
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(runner, "set_run_id", lambda rid: None)
+    monkeypatch.setattr(runner, "has_in_progress_label", lambda n, r: False)
+    monkeypatch.setattr(runner, "freeze_base", lambda r, b: "abc123")
+    monkeypatch.setattr(runner, "edit_issue", Mock())
+    monkeypatch.setattr(runner, "set_active_run", Mock())
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    monkeypatch.setattr(runner, "create_worktree", lambda *a, **k: worktree)
+    monkeypatch.setattr(runner, "comment_issue", Mock())
+    monkeypatch.setattr(runner, "ProgressPublisher", Mock())
+    monkeypatch.setattr(runner, "activity_snapshot", lambda p: None)
+    monkeypatch.setattr(runner, "_safe_publish", lambda **k: None)
+    monkeypatch.setattr(
+        runner, "run_pi",
+        lambda issue_arg, wt, config, repo, **k: configs.append(config),
+    )
+    monkeypatch.setattr(runner.runner_health, "record_run_attempt", Mock())
+    monkeypatch.setattr(runner.runner_health, "record_pickup", Mock())
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        if command[:2] == ["git", "rev-parse"]:
+            return head_sha
+        if command[:2] == ["git", "status"]:
+            return dirty
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    return issue, commands, worktree, configs
+
+
+def test_process_issue_ops_without_commit_closes_with_evidence(
+    monkeypatch, tmp_path,
+):
+    """Issue #537: a pure-ops session (real shell/gh work, evidence
+    comments, no commit) is COMPLETE — the Runner closes the Issue,
+    removes the claim label, and never enters the PR ceremony."""
+    issue, commands, worktree, configs = _ops_issue_mocks(
+        monkeypatch, tmp_path, head_sha="abc123", dirty="",
+    )
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "prompt.md").write_text("dev", encoding="utf-8")
+    ops_prompt = prompts / "prompt_ops.md"
+    ops_prompt.write_text("ops playbook", encoding="utf-8")
+    monkeypatch.setattr(
+        runner, "deliver_pr",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("pure ops delivery must not open a PR")
+        ),
+    )
+    monkeypatch.setattr(runner, "format_end_scene", lambda **k: "end")
+
+    result = runner.process_issue(
+        issue, {"base_branch": "main", "repo_dir": tmp_path,
+                "prompt": prompts / "prompt.md"},
+        "o/r",
+    )
+
+    assert result == runner.IssueResult("ops", None)
+    # The full-execution session ran with the OPS playbook, not the dev
+    # one — and with the same worktree machinery (no --no-tools content
+    # agent).
+    assert len(configs) == 1
+    assert configs[0]["prompt"] == ops_prompt
+    # Terminal transition mirrors the content path: close + claim label
+    # removed. No PR, no push.
+    assert ["gh", "issue", "close", "99", "--repo", "o/r"] in commands
+    # The claim added the label at pickup; the delivery removes it.
+    runner.edit_issue.assert_any_call(
+        99, repo="o/r", remove=runner.IN_PROGRESS_LABEL,
+    )
+
+
+def test_process_issue_ops_health_record_failure_is_a_bypass(
+    monkeypatch, tmp_path,
+):
+    """Issue #537/#266: the health state write is pure bypass — a state
+    failure never turns a delivered pure-ops run into a failed one."""
+    issue, commands, worktree, configs = _ops_issue_mocks(
+        monkeypatch, tmp_path, head_sha="abc123", dirty="",
+    )
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "prompt.md").write_text("dev", encoding="utf-8")
+    (prompts / "prompt_ops.md").write_text("ops playbook", encoding="utf-8")
+    monkeypatch.setattr(
+        runner.runner_health, "record_run_attempt",
+        Mock(side_effect=OSError("state file unwritable")),
+    )
+    monkeypatch.setattr(runner, "deliver_pr", Mock())
+    monkeypatch.setattr(runner, "format_end_scene", lambda **k: "end")
+
+    result = runner.process_issue(
+        issue, {"base_branch": "main", "repo_dir": tmp_path,
+                "prompt": prompts / "prompt.md"},
+        "o/r",
+    )
+
+    assert result == runner.IssueResult("ops", None)
+
+
+def test_process_issue_ops_with_commit_takes_the_pr_ceremony(
+    monkeypatch, tmp_path,
+):
+    """Issue #537: an ops session that commits code (e.g. a
+    wrangler.toml change) is delivered through the SAME deterministic
+    closeout as a dev ticket — push + PR, `ai-pr-opened`."""
+    issue, commands, worktree, configs = _ops_issue_mocks(
+        monkeypatch, tmp_path, head_sha="def456", dirty="",
+    )
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "prompt.md").write_text("dev", encoding="utf-8")
+    (prompts / "prompt_ops.md").write_text("ops playbook", encoding="utf-8")
+    deliver_calls: list[tuple] = []
+    monkeypatch.setattr(
+        runner, "deliver_pr",
+        lambda *a, **k: deliver_calls.append(a) or (
+            "https://github.com/o/r/pull/7"
+        ),
+    )
+    monkeypatch.setattr(runner, "format_end_scene", lambda **k: "end")
+
+    result = runner.process_issue(
+        issue, {"base_branch": "main", "repo_dir": tmp_path,
+                "prompt": prompts / "prompt.md"},
+        "o/r",
+    )
+
+    assert result == runner.IssueResult("pr", "https://github.com/o/r/pull/7")
+    assert len(deliver_calls) == 1
+    assert any(c[:2] == ["git", "rev-parse"] for c in commands)
+
+
+def test_process_issue_ops_with_uncommitted_leftovers_fails_fast(
+    monkeypatch, tmp_path,
+):
+    """Issue #537: no commit but uncommitted leftovers is neither a pure
+    ops delivery nor a code delivery — the deterministic closeout's
+    fail-fast (never commit uncommitted changes) applies."""
+    issue, commands, worktree, configs = _ops_issue_mocks(
+        monkeypatch, tmp_path, head_sha="abc123", dirty=" M a.txt\n",
+    )
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "prompt.md").write_text("dev", encoding="utf-8")
+    (prompts / "prompt_ops.md").write_text("ops playbook", encoding="utf-8")
+
+    def failing_deliver_pr(*a, **k):
+        raise RuntimeError(
+            "the agent left uncommitted changes in the worktree"
+        )
+
+    monkeypatch.setattr(runner, "deliver_pr", failing_deliver_pr)
+
+    result = runner.process_issue(
+        issue, {"base_branch": "main", "repo_dir": tmp_path,
+                "prompt": prompts / "prompt.md"},
+        "o/r",
+    )
+
+    # The failure path reports the terminal state; the Issue is blocked.
+    assert result == runner.IssueResult("failed", None)
+    runner.edit_issue.assert_any_call(
+        99, repo="o/r", add=runner.BLOCKED_LABEL,
+        remove=runner.IN_PROGRESS_LABEL,
     )
 
 

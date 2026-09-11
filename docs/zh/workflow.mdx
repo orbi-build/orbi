@@ -96,6 +96,35 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 | `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支 |
 | `ai-blocked` | 只用于 AI 无法安全判断或修复的外部前置条件（Issue #50）；blocked comment 写明为什么不能自动恢复；人工必须决定下一步 |
 
+## 票派发：content、dev、ops
+
+`ai-ready` 是所有任务类型的执行开关；第二个标签选择类型（Issue
+#537）。共三类——派发时每个 Issue 选定其一：
+
+| 票类型 | 标签 | Runner 做什么 |
+|---|---|---|
+| dev（默认） | `ai-ready` | 完整交付链：worktree、开发剧本、一个 PR、独立审查、合并 |
+| ops | `ai-ready` + `ai-ops-only` | 同一个完整执行会话（worktree、shell、网络——实现里不存在任何命令白名单），但用 ops 剧本替代开发剧本。交付物 = 回到票上的证据；会话若附带代码 commit，则照常走 PR 流程 |
+| content | `ai-ready` + `ai-content-only` | 内容代理：文本进、文本出，以 Issue 评论交付——无执行、无 git；交付后关闭 Issue |
+
+ops 语义（Issue #537）：
+
+- **信任边界是（凭据，票面）——不是命令白名单。** 会话原样获得 runner
+  的全部环境（gh 凭据、`CLOUDFLARE_API_TOKEN`、AWS keys 等，外加
+  deploy home 的 `.orbi/env` 文件）；凭据给多宽是用户的决定，runner
+  不做二次裁剪。
+- **票面即授权。** 会话只执行票面写明的 ops 动作（合并哪个 PR、部署
+  哪个环境）；票面之外的动作回帖说明并停。人工审批门（environment
+  approval、Release 批准）不由会话代行——这是提示词约定，不是执法代码。
+- **交付 = 证据**（Issue #526 的事实文化）：每一步把真实命令与真实
+  输出 / API 返回原文贴到票上；未执行的步骤如实标注未执行。纯 ops 运行
+  （无 commit）以 Runner 关闭 Issue 并摘除 `ai-in-progress` 收尾——
+  无 PR。附带代码 commit 则照常走 PR 路径（审查 + 合并）。
+
+Issue #537 之前，`ai-ops-only` 标签派发的是内容代理（#530 只改了名，
+模式未变——名字承诺 ops，模式仍是纯内容）；现在 content 路径派发到
+`ai-content-only`，`ai-ops-only` 是完整执行的 ops 路径。
+
 ## Run marker 与 run_id
 
 每个任务 attempt 生成一个 `run_id`（8 位 hex，例如 `e07383c2`），该
