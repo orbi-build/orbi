@@ -304,9 +304,13 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
   重试提示（`retry in Ns` / `retryDelay: Ns`），没有就默认递增
   （30 秒翻倍），两者都封顶 5 分钟。行带 run id、issue、role、
   `attempt`、`next_retry_in`、重试上限 `limit`（5）和 session；
-  等待期间持有 slot（本 run 等待时不认领新 Issue）。5 次退避重试仍以
-  429 退出（连续 6 次 429 退出）之后走既有失败路径——与非重试退出抛同一类异常（session 前终态
-  `ai-blocked` / 可恢复的中断 session）——`run_failed` 现场标记
+  等待期间持有 slot（本 run 等待时不认领新 Issue）。`attempt` 计数是
+  RUN 的，不是进程的（Issue #698）：它持久化在工作树的 `.orbi/`
+  运行目录里，跨 runner 重启持续累加，上限才能真正触达终态。5 次退避
+  重试仍以 429 退出（连续 6 次 429 退出）之后，交付在每个阶段都是
+  终态——`ai-blocked`，绝不走可恢复续跑——失败评论带累计次数与修复
+  动作（配额窗口恢复后把 Issue 重新标为 `ai-ready`；终态会清掉持久化
+  计数，重排的尝试从全新预算开始），`run_failed` 现场标记
   `reason=provider_rate_limited`。长期额度耗尽不在这里处理
   （#313 的轮换语义接管）；
 - `run_failed` — 完整现场加原因（`pi_exit_N`、`timeout_...s`，或

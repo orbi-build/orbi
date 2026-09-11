@@ -375,13 +375,18 @@ Stable `key=value` lines you will see:
   escalation (30 s doubling), both capped at 5 minutes. The line
   carries run id, issue, role, `attempt`, `next_retry_in`, the retry
   `limit` (5) and the session; the slot is held for the whole wait (no
-  new Issue is claimed while this run waits). After 5 backoff retries
-  still end in a 429 exit (6 consecutive 429 exits) the EXISTING
-  failure path runs — the same error type a
-  non-retried exit raises (pre-session terminal `ai-blocked` /
-  recoverable interrupted session) — marked
-  `reason=provider_rate_limited`. Long-term quota exhaustion is NOT
-  handled here (the #313 rotation semantics own it);
+  new Issue is claimed while this run waits). The `attempt` count is
+  the RUN's, not the process's (Issue #698): it is persisted in the
+  worktree's `.orbi/` run dir and keeps rising across runner restarts,
+  so the limit actually reaches a terminal. After 5 backoff retries
+  still end in a 429 exit (6 consecutive 429 exits) the delivery is
+  TERMINAL in every phase — `ai-blocked`, never a recoverable resume —
+  with the failure comment carrying the cumulative count and the
+  repair (relabel the Issue `ai-ready` after the quota window resets;
+  the terminal clears the persisted counter, so the requeued attempt
+  starts with a full budget), marked `reason=provider_rate_limited`.
+  Long-term quota exhaustion is NOT handled here (the #313 rotation
+  semantics own it);
 - `run_failed` — the full scene plus the reason
   (`pi_exit_N`, `timeout_...s`, `model_wait_swallowed_idle_...s` when
   the `/slots` probe confirms every slot idle for the sustained grace
