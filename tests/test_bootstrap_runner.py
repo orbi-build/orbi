@@ -5167,8 +5167,10 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
         entry[2]["body"] for entry in calls
         if isinstance(entry, tuple) and entry[0] == "comment"
     ]
+    # Issue #645: the recovery scene comment is published through the
+    # `ProgressPublisher` (`gh api` POST), so it lands in `posted`.
     recovered = [
-        body for body in comment_bodies
+        body for body in posted
         if "Orbi model_wait recovered:" in body
     ]
     assert len(recovered) == 1
@@ -5502,15 +5504,18 @@ def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
+            # Issue #645: the recovery scene comment is published through
+            # the `ProgressPublisher` (`gh api` POST) — inject the
+            # failure there.
+            if ("--method" in command and "POST" in command
+                    and "model_wait recovered" in command[-1]):
+                raise RuntimeError(
+                    "gh api comment POST failed: API rate limit exceeded",
+                )
             return _gh_api(command, posted)
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
-        if (command[:3] == ["gh", "issue", "comment"]
-                and "model_wait recovered" in command[-1]):
-            raise RuntimeError(
-                "gh issue comment failed: API rate limit exceeded",
-            )
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 

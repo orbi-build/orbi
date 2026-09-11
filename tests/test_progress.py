@@ -767,3 +767,68 @@ def test_publisher_finish_fails_fast_without_tracked_comment():
     publisher, _ = make_publisher()
     with pytest.raises(RuntimeError, match="no progress comment"):
         publisher.finish("summary")
+
+
+def test_publisher_failure_scene_updates_identical_failure_comment():
+    """Issue #645: the same run's identical recoverable-failure scene
+    comment is updated in place (the progress patch path), never
+    appended a second time."""
+    body = (
+        "<!-- orbi:run=abc12345 -->\n"
+        "Orbi Pi failure recovered: 429 quota; the run is recoverable"
+    )
+    # The stored comment went through the same rendering as the new one
+    # (the hidden runner fingerprint is appended by every publish).
+    publisher, calls = make_publisher(comments=[
+        {"id": 5, "body": progress.format_status_comment(body)},
+    ])
+    publisher.failure_scene(body)
+    assert calls[-1] == [
+        "gh", "api", "repos/xqliu/orbi/issues/comments/5",
+        "--method", "PATCH", "--field",
+        f"body={progress.format_status_comment(body)}",
+    ]
+
+
+def test_publisher_failure_scene_posts_when_failure_content_differs():
+    """A DIFFERENT failure (or a comment without a body) never matches:
+    the new scene is posted as its own comment — no failure evidence is
+    lost or rewritten."""
+    existing = progress.format_status_comment(
+        "<!-- orbi:run=abc12345 -->\n"
+        "Orbi Pi failure recovered: old error; the run is recoverable",
+    )
+    publisher, calls = make_publisher(comments=[
+        {"id": 5, "body": existing},
+        {"id": 6},
+    ])
+    new_body = (
+        "<!-- orbi:run=abc12345 -->\n"
+        "Orbi Pi failure recovered: new error; the run is recoverable"
+    )
+    publisher.failure_scene(new_body)
+    assert calls[-1] == [
+        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+        "--method", "POST", "--field",
+        f"body={progress.format_status_comment(new_body)}",
+    ]
+
+
+def test_publisher_failure_scene_never_touches_another_run():
+    """The update is scoped to THIS run's comments: an identical-looking
+    scene comment of another run is never hijacked."""
+    other_run = progress.format_status_comment(
+        "<!-- orbi:run=deadbeef -->\n"
+        "Orbi Pi failure recovered: 429 quota; the run is recoverable",
+    )
+    publisher, calls = make_publisher(comments=[{"id": 5, "body": other_run}])
+    new_body = (
+        "<!-- orbi:run=abc12345 -->\n"
+        "Orbi Pi failure recovered: 429 quota; the run is recoverable"
+    )
+    publisher.failure_scene(new_body)
+    assert calls[-1] == [
+        "gh", "api", "repos/xqliu/orbi/issues/18/comments",
+        "--method", "POST", "--field",
+        f"body={progress.format_status_comment(new_body)}",
+    ]

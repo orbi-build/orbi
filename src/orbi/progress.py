@@ -78,6 +78,11 @@ def _with_runner_marker(body: str) -> str:
     return body + "\n\n" + marker
 
 
+def _without_runner_marker(body: str) -> str:
+    """Return the body with the hidden runner fingerprint marker removed."""
+    return _RUNNER_MARKER_PATTERN.sub("", body).rstrip()
+
+
 def field_block(run_id: str, headline: str, fields: dict[str, object]) -> str:
     """Render a marker-first status comment with one field per line."""
     lines = [run_marker(run_id), headline]
@@ -252,7 +257,9 @@ class ProgressPublisher:
     comments (scene comments, milestones) are never touched.
     `patch` and `finish` update the tracked comment in place and fail
     fast when no comment is tracked yet. `milestone` posts a short
-    standalone comment. Every call goes through `run_command` (gh api)
+    standalone comment. `failure_scene` updates the run's identical
+    recoverable-failure comment in place instead of appending a duplicate
+    (Issue #645). Every call goes through `run_command` (gh api)
     and raises on any error.
     """
 
@@ -358,6 +365,29 @@ class ProgressPublisher:
         self._post_comment(field_block(
             self.run_id, f"{MILESTONE_PREFIX} {headline}", fields,
         ))
+
+    def failure_scene(self, body: str) -> None:
+        """Update this run's identical recoverable-failure comment in place.
+
+        Issue #645: a recoverable failure retries every tick while the
+        provider quota window lasts (hours), so re-posting the identical
+        scene comment each tick buries the delivery progress. When this
+        run already has a comment carrying the exact same rendered body
+        (only the hidden runner fingerprint is ignored), that comment is
+        PATCHed; otherwise the scene is posted as a new comment. The
+        comparison is exact, so a genuinely different failure always
+        gets its own comment and the provider's original error string is
+        preserved verbatim.
+        """
+        rendered = format_status_comment(body)
+        key = _without_runner_marker(rendered)
+        for comment in self._list_comments():
+            existing = comment.get("body")
+            if (isinstance(existing, str)
+                    and _without_runner_marker(existing) == key):
+                self._patch_comment(int(comment["id"]), rendered)
+                return
+        self._post_comment(rendered)
 
     def finish(self, body: str) -> None:
         """Replace the tracked comment with the final outcome body."""
