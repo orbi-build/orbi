@@ -3906,6 +3906,110 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     assert "- branch: orbi/xqliu-orbi-backlog-issue-4" in last_body
 
 
+def test_process_issue_second_tick_behind_the_index_resumes_not_reclaims(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #658 单实例面（xqliu 09-11 生产现场，orbi#702 并入 #658）：
+    同一 timer 的两次 tick 竞争同一张票——第一次 tick 早已完成认领
+    （`ai-in-progress` 落位在本 tick 之前，worktree 的 run 在飞），而搜索
+    索引滞后，把这张票连同陈旧的 `ai-ready` labels 快照一起递给本 tick。
+    认领复查的 `gh issue view` 直读必须看到标签：本 tick 走 resume 复用
+    在飞 run 的 id，绝不 fresh claim（不消费新 run_id、不建第二个分支
+    把在途交付撞成 push rejected → ai-blocked）——修复不依赖
+    `max_concurrency` 的取值，单实例双 tick 与双实例同根因。"""
+    existing_comment = {
+        "id": 77,
+        "body": (
+            "<!-- orbi:run=a1b2c3d4 -->\n\n"
+            "**Orbi progress**\n\nfirst tick's run is in flight"
+        ),
+    }
+    gh_calls, posted = make_fake_gh(
+        monkeypatch, comments=[existing_comment], in_progress=True,
+    )
+    branch = "orbi/xqliu-orbi-backlog-issue-4"
+    head = "0123456789abcdef0123456789abcdef01234567"
+
+    def fake_run(command, **kwargs):
+        gh_calls.append(command)
+        if command[:2] == ["gh", "api"]:
+            if "--method" not in command:
+                # The in-flight run's progress comment.
+                return json.dumps([existing_comment])
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            # The strongly-consistent direct read: the label the first
+            # tick wrote IS live truth, no matter how stale the index
+            # that delivered the Issue was.
+            return json.dumps({"labels": [{"name": "ai-in-progress"}]})
+        if command[:2] == ["gh", "issue"]:
+            return ""
+        if command[:2] == ["gh", "pr"]:
+            return json.dumps([{
+                "url": "https://github.com/orbi-build/orbi/pull/4",
+                "baseRefName": "main",
+                "headRefName": branch,
+                "headRefOid": head,
+                "headRepository": {"name": "orbi"},
+                "headRepositoryOwner": {"login": "orbi-build"},
+                "body": "<!-- orbi:run=a1b2c3d4 -->\n\nFixes #4\n\nPlan",
+            }])
+        if command[:3] == ["git", "branch", "--show-current"]:
+            return branch
+        if command[:2] == ["git", "rev-parse"]:
+            return head
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(
+        runner, "freeze_base",
+        lambda repo_dir, base_branch: "abc123def456",
+    )
+    # If a regression makes this tick a FRESH claim, the fresh id leaks
+    # into the scene comments and the assertions below catch it.
+    monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
+    monkeypatch.setattr(
+        runner, "worktree_resume_scene", lambda repo_dir, source_repo, number:
+        ("a1b2c3d4", tmp_path / "wt"),
+    )
+    monkeypatch.setattr(
+        runner, "create_worktree",
+        lambda *args, **kwargs: tmp_path / "wt",
+    )
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    # The stale scan snapshot: still showing ai-ready even though the
+    # first tick already claimed the Issue.
+    issue = {"number": 4, "title": "Fix", "body": "Body",
+             "labels": [{"name": "ai-ready"}]}
+    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+              "base_branch": "main"}
+    with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
+        result = runner.process_issue(
+            issue, config, "xqliu/orbi-backlog",
+        )
+    assert result == runner.IssueResult(
+        "pr", "https://github.com/orbi-build/orbi/pull/4",
+    )
+    # The direct read routed this tick into the resume: the in-flight
+    # run's id owns every scene comment — a fresh claim never starts.
+    assert "fresh_claim_route" not in caplog.text
+    assert "resuming_run" in caplog.text
+    # And the claim recheck never asked the lagging index for the label
+    # (the pre-#658 list search): the direct read is the only source.
+    assert not any(
+        command[:3] == ["gh", "issue", "list"] for command in gh_calls
+    )
+    scene_bodies = [
+        call[-1] for call in gh_calls
+        if call[:2] == ["gh", "issue"] and "comment" in call
+    ]
+    assert scene_bodies, "no scene comment was published"
+    for body in scene_bodies:
+        assert "ffffeeee" not in body
+    # And the claim-time label write stayed the shared idempotent patch
+    # (run=a1b2c3d4 marker), never a second run's footprint.
+
+
 def test_process_issue_binds_run_id_before_the_resume_scan(
     monkeypatch, tmp_path, caplog,
 ):
