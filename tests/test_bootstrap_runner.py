@@ -8172,6 +8172,32 @@ def test_stream_pi_429_terminal_resets_counter_for_human_retry(
     assert sleeps == [2.0] * 5
 
 
+def test_stream_pi_429_terminal_survives_a_failed_counter_clear(
+    tmp_path, monkeypatch, caplog,
+):
+    """Issue #698: the terminal decision never depends on its own
+    artifact cleanup — a failing counter unlink is one warning line and
+    the RateLimitExhaustedError still raises."""
+    pi_process._record_429_attempts(tmp_path, "deadbeef", 5)
+    monkeypatch.setattr(pi_process.time, "sleep", [])
+
+    def broken_unlink(self, *args, **kwargs):
+        raise OSError("read-only fs")
+
+    monkeypatch.setattr(pi_process.Path, "unlink", broken_unlink)
+    command = make_rate_limit_pi(
+        tmp_path, fail_times=99, stderr="Error 429: rate limited, retry in 2s",
+    )
+    with caplog.at_level("INFO"):
+        with pytest.raises(pi_process.RateLimitExhaustedError):
+            runner.stream_pi(
+                command, cwd=tmp_path, poll_interval=0.05,
+                run_id="deadbeef", issue=698, source_repo="xqliu/orbi",
+                branch="b",
+            )
+    assert "pi_429_attempts_clear_failed" in caplog.text
+
+
 def test_429_attempt_counter_file_round_trip(tmp_path, monkeypatch, caplog):
     """The persisted counter is per-run and fails safe: absent, corrupt,
     foreign-run or invalid files all read as 0 (worst case = today's
