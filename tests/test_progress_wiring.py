@@ -47,6 +47,14 @@ def make_fake_gh(monkeypatch, comments=None, in_progress=False):
             return ""
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps([{"number": 18}] if in_progress else [])
+        if command[-1] == "labels" and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702): the labels
+            # match the `in_progress` scene this helper models.
+            return json.dumps({"labels": [
+                {"name": label}
+                for label in (["ai-ready", "ai-in-progress"]
+                              if in_progress else ["ai-ready"])
+            ]})
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
@@ -927,6 +935,9 @@ def make_failing_gh(monkeypatch, is_failing, comments=None):
             return ""
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
+        if command[-1] == "labels" and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run_command)
@@ -2043,6 +2054,10 @@ def _make_takeover_gh(monkeypatch, monkeypatched, tmp_path, *, pr_state="OPEN",
         calls.append(command)
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
+        if command[-1] == "labels" and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702): the scanned
+            # issue carries `ai-ready` (fresh claimable).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "pr", "list"]:
             return "[]"
         if command[:3] == ["gh", "pr", "view"]:

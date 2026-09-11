@@ -963,6 +963,9 @@ def test_process_issue_pickup_record_failure_is_bypass(
             return _gh_api(command, posted)
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
+        if command[-1] == "labels" and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         return "0123456789abcdef0123456789abcdef01234567"
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -1012,6 +1015,9 @@ def test_process_issue_failure_record_failure_is_bypass(
             return _gh_api(command, posted)
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
+        if command[-1] == "labels" and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run)

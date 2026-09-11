@@ -115,6 +115,36 @@ commits — initialize them per repository (see
 | `ai-merged` | Success terminal state; the Runner merged the PR and confirmed the merge commit on the protected branch |
 | `ai-blocked` | Only an external precondition the AI cannot safely judge or fix (Issue #50); the blocked comment states why automatic recovery is impossible; a human must decide the next step |
 
+## Claim mutual exclusion (Issue #702)
+
+Two Runner triggers can race for the same Issue (two checkouts or
+containers, a manual run beside the service, or simply GitHub's
+eventually-consistent search index, which can keep a just-claimed Issue
+visible to the ready scan for seconds). The local flock slot serializes
+only the runners that share one state dir, so the claim itself carries
+two guards:
+
+- **Live claim verification.** The ready scan (`gh issue list --search`)
+  reads the search index; immediately before the claim label patch the
+  Runner re-reads the Issue's labels with `gh issue view` (REST,
+  strongly consistent). Any delivery state present there
+  (`ai-in-progress`, `ai-pr-opened`, `ai-fix-needed`, `ai-merged`,
+  `ai-blocked`) means another run owns the Issue: the Runner logs
+  `claim_race_lost`, changes nothing and ends the tick — no label, no
+  worktree, no session.
+- **Superseded-delivery backstop.** If two claims landed anyway, both
+  runs deliver on the SAME stable branch (`orbi/<repo>-issue-<N>`), so
+  the loser's push is rejected `(fetch first)`. Before any failure is
+  reported, the Runner probes the branch's delivery PRs (a few seconds,
+  bounded): an OPEN PR — or a MERGED PR whose head is exactly the
+  branch's current remote head — proves the concurrent run delivered.
+  The losing run then logs `delivery_superseded`, posts a run-marked
+  explanation, cleans its own worktree and exits WITHOUT the terminal
+  `ai-blocked` transition: the labels stay exactly as the winning run
+  set them, and its flow completes `ai-pr-opened` → `ai-merged`
+  untouched. A rejected push with no matching delivery PR remains a
+  genuine failure (the normal terminal path, unchanged).
+
 ## Ticket dispatch: content, dev and ops
 
 `ai-ready` is the execution switch for every task type; a second label

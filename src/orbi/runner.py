@@ -73,6 +73,7 @@ from orbi.delivery_labels import (
     EPIC_LABEL,
     FIX_NEEDED_LABEL,
     IN_PROGRESS_LABEL,
+    LIFECYCLE_STATES,
     MERGED_LABEL,
     OPS_LABEL,
     P0_LABEL,
@@ -264,6 +265,24 @@ class ResumeVerificationError(UnrecoverableDeliveryError):
     evidence. Keeping a distinct type lets the tick boundary end normally
     without swallowing unrelated Runner bugs.
     """
+
+
+class DeliverySupersededError(RuntimeError):
+    """A concurrent run of the SAME Issue won the delivery (Issue #702).
+
+    This is not a failure of the Issue: the stable delivery branch was
+    already pushed by the winning run and its delivery PR exists (open,
+    or merged at exactly the branch's remote head). The losing run must
+    exit WITHOUT the terminal `ai-blocked` transition — the labels stay
+    exactly as the winning run set them (`ai-pr-opened` -> `ai-merged`).
+    `pr_url` is the winning run's delivery PR.
+    """
+
+    def __init__(self, pr_url: str):
+        self.pr_url = pr_url
+        super().__init__(
+            f"delivery superseded by the concurrent run's PR {pr_url}"
+        )
 
 
 class PreExistingCIFailure(UnrecoverableDeliveryError):
@@ -3665,6 +3684,30 @@ def latest_run_id(repo_dir: Path, source_repo: str, number: int) -> str | None:
     return newest.name.rsplit("-", 1)[-1]
 
 
+def live_labels(number: int, repo: str) -> list[str]:
+    """Return the Issue's label names from the LIVE REST read.
+
+    `gh issue view` answers from the REST API, which is strongly
+    consistent — unlike the search index `gh issue list --search` reads,
+    where a just-applied label can stay invisible for seconds (the #702
+    claim race). The claim path must verify against THIS read.
+    """
+    raw = run_command([
+        "gh", "issue", "view", str(number), "--repo", repo,
+        "--json", "labels",
+    ])
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("issue view must be a JSON object")
+    labels = data.get("labels")
+    if not isinstance(labels, list):
+        raise ValueError("issue labels must be a JSON array")
+    return [
+        label.get("name") for label in labels
+        if isinstance(label, dict) and isinstance(label.get("name"), str)
+    ]
+
+
 def has_in_progress_label(number: int, repo: str) -> bool:
     """True when the Issue still carries `ai-in-progress`.
 
@@ -4432,6 +4475,64 @@ def _agent_delivery_boundary(worktree: Path) -> tuple[str, str]:
     return head, dirty
 
 
+# Issue #702: how hard the superseded-delivery probe looks for the
+# winning run's PR. The winning run may still be inside its push →
+# PR-create gap when the losing run's push is rejected, so the probe
+# retries bounded before classifying the rejection a genuine failure.
+SUPERSEDED_PR_PROBES = 3
+SUPERSEDED_PR_PROBE_SECONDS = 2.0
+
+
+def _push_rejected_non_fast_forward(exc: subprocess.CalledProcessError
+                                    ) -> bool:
+    """True when a push failed because the remote branch moved on (the
+    `(fetch first)` rejection) — the signature of a concurrent writer on
+    the stable delivery branch."""
+    output = f"{getattr(exc, 'stderr', '') or ''}\n" \
+             f"{getattr(exc, 'stdout', '') or ''}"
+    return "! [rejected]" in output and "fetch first" in output
+
+
+def _superseding_delivery_pr(worktree: Path, branch: str) -> dict | None:
+    """Return the delivery PR a concurrent run already has on `branch`.
+
+    Issue #702 backstop: a non-fast-forward rejection on the stable
+    delivery branch means another writer pushed it; for a branch only
+    the Runner writes, that writer is a concurrent run of the SAME
+    Issue. A PR matches when it is OPEN, or MERGED with its head exactly
+    at the branch's current remote head — a MERGED PR of a PREVIOUS
+    delivery on the same branch has a stale head (a redo delivery reuses
+    the branch on top of the old head and pushes fast-forward), so it
+    never matches and a rejection there stays a genuine failure. The
+    probe is bounded (`SUPERSEDED_PR_PROBES`, `SUPERSEDED_PR_PROBE_SECONDS`):
+    the winning run's PR may not exist yet at the first attempt.
+    """
+    remote = run_command(
+        ["git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
+        cwd=worktree, timeout=GIT_NETWORK_TIMEOUT_SECONDS,
+    ).strip()
+    remote_head = remote.split("\t", 1)[0] if remote else ""
+    if not remote_head:
+        return None
+    for attempt in range(SUPERSEDED_PR_PROBES):
+        raw = run_command([
+            "gh", "pr", "list", "--state", "all", "--head", branch,
+            "--json", "number,url,state,headRefOid", "--limit", "20",
+        ], cwd=worktree, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
+        prs = json.loads(raw) if raw.strip() else []
+        if not isinstance(prs, list):
+            raise ValueError("pr list must return an array")
+        for pr in prs:
+            state = pr.get("state")
+            if state == "OPEN" or (
+                state == "MERGED" and pr.get("headRefOid") == remote_head
+            ):
+                return pr
+        if attempt + 1 < SUPERSEDED_PR_PROBES:
+            time.sleep(SUPERSEDED_PR_PROBE_SECONDS)
+    return None
+
+
 def deliver_pr(worktree: Path, branch: str, base_branch: str,
                base_sha: str, run_id: str, *, issue: int,
                issue_title: str, repo_dir: Path) -> str:
@@ -4523,9 +4624,24 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
     # The head is re-read after the absorb step: a successful base
     # merge advanced it to the merge commit.
     local_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
-    run_git_network_command(
-        ["git", "push", "origin", f"HEAD:{branch}"], cwd=worktree,
-    )
+    try:
+        run_git_network_command(
+            ["git", "push", "origin", f"HEAD:{branch}"], cwd=worktree,
+        )
+    except subprocess.CalledProcessError as exc:
+        # Issue #702: a `(fetch first)` rejection on the stable delivery
+        # branch means a concurrent run of the SAME Issue pushed its own
+        # delivery. When that run's delivery PR exists, this delivery is
+        # superseded — never a terminal failure of the Issue.
+        if _push_rejected_non_fast_forward(exc):
+            superseding = _superseding_delivery_pr(worktree, branch)
+            if superseding is not None:
+                LOGGER.info(
+                    "delivery_superseded issue=%s branch=%s pr=%s",
+                    issue, branch, superseding.get("url"),
+                )
+                raise DeliverySupersededError(superseding["url"]) from exc
+        raise
     remote_head = run_command(
         ["git", "rev-parse", f"origin/{branch}"], cwd=worktree,
     )
@@ -6800,6 +6916,28 @@ def process_issue(issue: dict, config: dict, source_repo: str,
     LOGGER.info(
         "issue=%s %s", number, run_info,
     )
+    if not in_progress:
+        # Claim-time race check (Issue #702): the ready scan reads
+        # GitHub's eventually-consistent search index, so a concurrent
+        # run's just-applied `ai-in-progress` can still be invisible
+        # there, and the flock slot only serializes runners sharing the
+        # state dir (a second checkout, container or manual run does
+        # not). Immediately before the claim patch the labels are
+        # re-read LIVE (`gh issue view`, strongly consistent REST): any
+        # delivery state present means another run owns the Issue — the
+        # claim is skipped without touching anything (no label, no
+        # worktree, no run). The resume path above is exempt: it
+        # REUSES the existing claim of the killed runner.
+        race_labels = sorted(
+            (set(live_labels(number, source_repo)) & LIFECYCLE_STATES)
+            - {dispatch_label},
+        )
+        if race_labels:
+            LOGGER.info(
+                "claim_race_lost issue=%s labels=%s",
+                number, ",".join(race_labels),
+            )
+            return IssueResult("claimed_elsewhere", None)
     apply_label_patch(
         number, repo=source_repo, event=EVENT_CLAIM,
         current_labels={label.get("name") for label in issue.get(
@@ -7073,6 +7211,37 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         return IssueResult(
             "external-pr" if external_takeover else "pr", pr_url,
         )
+    except DeliverySupersededError as exc:
+        # Issue #702: a concurrent run of THIS Issue already pushed the
+        # stable branch and opened its delivery PR — the delivery is won
+        # by that run. The losing run must never mark the Issue
+        # `ai-blocked`: the labels stay exactly as the winning run set
+        # them (its flow owns `ai-pr-opened` -> `ai-merged`). This run
+        # leaves a run-marked explanation, cleans its own worktree and
+        # run state (the resume machinery must never resurrect this dead
+        # delivery) and ends the tick cleanly.
+        LOGGER.info(
+            "issue=%s delivery_superseded pr=%s", number, exc.pr_url,
+        )
+        try:
+            comment_issue(
+                number, repo=source_repo,
+                body=(
+                    f"{run_marker(run_id)}\n"
+                    f"Orbi delivery superseded: the delivery branch was "
+                    f"already pushed and its PR ({exc.pr_url}) is owned "
+                    "by the concurrent run of this Issue; this run "
+                    f"exits without changing the Issue state ({run_info})"
+                ),
+            )
+        except Exception:
+            LOGGER.exception("issue=%s superseded_comment_failed", number)
+        # The superseded error can only be raised by `deliver_pr`, which
+        # runs after the worktree exists — the scene is always present.
+        cleanup_task_worktree(
+            worktree, config["repo_dir"], run_id=run_id, issue=number,
+        )
+        return IssueResult("superseded", exc.pr_url)
     except (ModelWaitDeadError, RecoverablePiFailure) as exc:
         # Issue #227/#325: classified Pi/model infrastructure failures are
         # recoverable. Keep the claim, worktree and run-state file so the

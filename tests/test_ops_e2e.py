@@ -104,6 +104,11 @@ elif args[:2] == ["issue", "comment"]:
     state.setdefault("comments", []).append(
         {"issue": args[2], "body": args[args.index("--body") + 1]})
     save()
+elif args[:2] == ["issue", "view"] and args[-1] == "labels":
+    # The claim-time live label read (Issue #702).
+    print(json.dumps({"labels": [
+        {"name": label} for label in state["issues"][args[2]]["labels"]
+    ]}))
 elif args[:1] == ["api"]:
     if "--method" in args:
         method = args[args.index("--method") + 1]

@@ -96,6 +96,29 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 | `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支 |
 | `ai-blocked` | 只用于 AI 无法安全判断或修复的外部前置条件（Issue #50）；blocked comment 写明为什么不能自动恢复；人工必须决定下一步 |
 
+## 认领互斥（Issue #702）
+
+两个 Runner 触发可能竞争同一张 Issue（两个 checkout 或容器、服务旁边
+的手动运行，或者仅仅是 GitHub 最终一致的搜索索引——刚打上的标签可能在
+几秒内仍让 ready 扫描认为这张票可认领）。本地 flock 槽位只能串行化共享
+同一状态目录的 Runner，所以认领本身带两道防线：
+
+- **认领时的活值校验。** ready 扫描（`gh issue list --search`）读的是
+  搜索索引；在打认领标签之前，Runner 用 `gh issue view`（REST，强一致）
+  重读一次 Issue 的标签。只要出现任何交付态（`ai-in-progress`、
+  `ai-pr-opened`、`ai-fix-needed`、`ai-merged`、`ai-blocked`），就说明
+  另一个 run 已拥有这张票：Runner 记录 `claim_race_lost`，什么也不改，
+  直接结束本 tick——不打标签、不建 worktree、不起会话。
+- **交付已被接管的兜底。** 如果两个认领都已落地，两个 run 会在同一条
+  稳定分支（`orbi/<repo>-issue-<N>`）上交付，输家的 push 会被
+  `(fetch first)` 拒绝。此时 Runner 先探测该分支的交付 PR（有界重试几
+  秒）：存在 OPEN 的 PR——或者 head 恰好等于分支当前远端 head 的 MERGED
+  PR——即证明并发的那次 run 已经交付。输家随后记录 `delivery_superseded`，
+  发一条带 run 标记的说明，清理自己的 worktree，直接结束——**绝不**进入
+  终态 `ai-blocked`：标签保持赢家设置的样式，其流程原样走完
+  `ai-pr-opened` → `ai-merged`。若被拒绝的 push 找不到匹配的交付 PR，
+  仍是真实失败（走原来的终态路径，行为不变）。
+
 ## 票派发：content、dev、ops
 
 `ai-ready` 是所有任务类型的执行开关；第二个标签选择类型（Issue

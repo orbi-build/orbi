@@ -3816,6 +3816,10 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
         if command[:3] == ["gh", "issue", "list"]:
             # No `ai-in-progress` label: the previous run finished.
             return "[]"
+        if command[-1] == "labels" and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702): a fresh
+            # claimable Issue carries only the ready label.
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:2] == ["gh", "issue"]:
             return ""
         if command[:2] == ["gh", "pr"]:
@@ -3959,6 +3963,14 @@ def _resume_wiring_setup(monkeypatch, tmp_path, *, in_progress: bool,
             return json.dumps(
                 [{"number": 4}] if in_progress else [],
             )
+        if command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702): the labels
+            # match the `in_progress` scene this wiring models.
+            return json.dumps({"labels": [
+                {"name": label}
+                for label in (["ai-ready", "ai-in-progress"]
+                              if in_progress else ["ai-ready"])
+            ]})
         if command[:3] == ["gh", "issue", "comment"]:
             comment_bodies.append(command[-1])
             return ""
@@ -4132,6 +4144,151 @@ def test_process_issue_fails_fast_when_the_run_state_is_missing(
     assert "cannot continue the interrupted run" in failed[0]
     assert "run state" in failed[0]
     assert "resume_continue_failed" in caplog.text
+
+
+def _claim_race_setup(monkeypatch, tmp_path, *, live_labels):
+    """Fake-gh wiring for the Issue #702 claim-race tests.
+
+    `live_labels` is a list of per-call answers for the LIVE REST label
+    read (`gh issue view <n> --json labels`) — the FIRST answer is the
+    claim-time race check itself (has_in_progress_label uses the search
+    API, answered as `[]` below: the rival run's just-applied label is
+    invisible to the search index, the #702 lag). Returns
+    `(edits, comment_bodies, worktree, fake_run)` with `edit_issue`
+    recorded; a lost claim posts no comment and changes nothing.
+    """
+    edits: list = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: edits.append(kwargs),
+    )
+    monkeypatch.setattr(
+        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    )
+    monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
+    worktree = tmp_path / "wt"
+    worktree.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        runner, "worktree_resume_scene",
+        lambda repo_dir, source_repo, number: None,
+    )
+    monkeypatch.setattr(
+        runner, "create_worktree", lambda *args, **kwargs: worktree,
+    )
+    comment_bodies: list = []
+    answers = list(live_labels)
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["gh", "issue", "list"]:
+            # The search index lags: the rival run's `ai-in-progress`
+            # is NOT visible here (the #702 race window).
+            return "[]"
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [
+                {"name": label} for label in answers.pop(0)
+            ]})
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    return edits, comment_bodies, worktree, fake_run
+
+
+def test_process_issue_claim_race_lost_skips_the_claim(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #702: the ready scan (eventually-consistent search index)
+    returned the Issue claimable, but a concurrent run applied
+    `ai-in-progress` before this run's claim. The claim-time LIVE label
+    re-read (`gh issue view`, strongly consistent REST) sees the rival
+    delivery state and the claim is skipped: no claim label patch, no
+    worktree, no Pi session, no started-Pi comment — the Issue belongs
+    to the other run."""
+    edits, comment_bodies, worktree, fake_run = _claim_race_setup(
+        monkeypatch, tmp_path,
+        live_labels=[
+            ["ai-ready", "ai-in-progress"],    # the claim-time live check
+        ],
+    )
+    run_pi_calls = []
+    monkeypatch.setattr(
+        runner, "run_pi",
+        lambda *args, **kwargs: run_pi_calls.append(1) or "done",
+    )
+    caplog.set_level("INFO")
+    result = runner.process_issue(
+        {"number": 4, "title": "Fix", "body": "Body"},
+        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+         "base_branch": "main"},
+        "xqliu/orbi-backlog",
+    )
+    assert result.kind == "claimed_elsewhere"
+    assert result.url is None
+    # Nothing was claimed, nothing was created, no session ran.
+    assert edits == []
+    assert run_pi_calls == []
+    assert comment_bodies == []
+    assert not (tmp_path / "wt" / ".orbi").exists()
+    # The structured race line names the rival's label.
+    race_lines = [
+        message for message in caplog.messages if "claim_race_lost" in message
+    ]
+    assert race_lines == [
+        "[ffffeeee] claim_race_lost issue=4 labels=ai-in-progress",
+    ]
+    # The lost claim never even tries: the fake rejects every other
+    # command (no git, no progress traffic, nothing).
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["git", "status", "--porcelain"])
+
+
+def test_process_issue_claim_race_lost_on_opened_pr_label(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #702: the rival run may already have moved past the claim
+    (`ai-pr-opened`) by the time this run verifies — any delivery state
+    in the live read means the Issue is owned, not claimable."""
+    edits, comment_bodies, _, _ = _claim_race_setup(
+        monkeypatch, tmp_path,
+        live_labels=[
+            ["ai-pr-opened"],
+        ],
+    )
+    caplog.set_level("INFO")
+    result = runner.process_issue(
+        {"number": 4, "title": "Fix", "body": "Body"},
+        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+         "base_branch": "main"},
+        "xqliu/orbi-backlog",
+    )
+    assert result.kind == "claimed_elsewhere"
+    assert edits == []
+    assert comment_bodies == []
+    assert "claim_race_lost issue=4 labels=ai-pr-opened" in caplog.text
+
+
+def test_process_issue_resume_is_never_blocked_by_the_live_check(
+    monkeypatch, tmp_path,
+):
+    """Issue #702: the live label check guards only the FRESH claim.
+    A resumed run (the killed runner's `ai-in-progress` is visible to
+    the search) re-reads the same label live and continues — the resume
+    reuses the existing claim instead of losing it."""
+    gh_calls, posted, worktree, comment_bodies = _resume_wiring_setup(
+        monkeypatch, tmp_path, in_progress=True,
+    )
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    monkeypatch.setattr(
+        runner, "deliver_pr",
+        lambda *args, **kwargs:
+        "https://github.com/orbi-build/orbi/pull/4",
+    )
+    result = runner.process_issue(
+        {"number": 4, "title": "Fix", "body": "Body"},
+        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+         "base_branch": "main"},
+        "xqliu/orbi-backlog",
+    )
+    assert result.kind == "pr"
 
 
 def test_worktree_path_lives_inside_repo_worktrees_and_includes_run_id():
@@ -5267,6 +5424,10 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
+        if command[-1] == "labels" \
+                and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:2] == ["gh", "issue"]:
             # Scene comments (started Pi / opened PR) go through
             # comment_issue -> run_command; record them like the others.
@@ -5368,6 +5529,10 @@ def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, c
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
+        if command[-1] == "labels" \
+                and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         return "0123456789abcdef0123456789abcdef01234567"
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -5403,6 +5568,10 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[-1] == "labels" \
+                and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5476,6 +5645,10 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[-1] == "labels" \
+                and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5513,6 +5686,412 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     assert blocked
     assert "delivered no commit" in blocked[0]
     assert "<!-- orbi:run=a1b2c3d4 -->" in blocked[0]
+
+
+BRANCH = "orbi/xqliu/orbi-issue-4"
+REMOTE_HEAD = "f" * 40
+
+
+def _deliver_pr_rejection_setup(
+    monkeypatch, tmp_path, *, pr_states, sleeps=None,
+):
+    """Wire the real `deliver_pr` up to the push and its #702 probe.
+
+    `pr_states` is a list of per-probe answers for the branch's delivery
+    PR list (`gh pr list --state all`): each entry is a list of PR dicts
+    or [] — a probe whose answer list is exhausted returns []. `sleeps`
+    records the bounded probe waits. Returns (pr_queries, pushes).
+    """
+    worktree = tmp_path / "wt"
+    worktree.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        runner, "fetch_base_ref", lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        runner, "_is_ancestor", lambda *args, **kwargs: True,
+    )
+    pushes = []
+
+    def fake_push(command, **kwargs):
+        pushes.append(command)
+        raise subprocess.CalledProcessError(
+            1, command,
+            output="To github.com:xqliu/orbi.git\n",
+            stderr=(
+                "! [rejected]        HEAD -> "
+                f"{BRANCH} (fetch first)\n"
+                "error: failed to push some refs to "
+                "'github.com:xqliu/orbi.git'\n"
+                "hint: Updates were rejected because the tip of your "
+                "current branch is behind\n"
+            ),
+        )
+
+    monkeypatch.setattr(runner, "run_git_network_command", fake_push)
+    pr_queries: list = []
+    answers = list(pr_states)
+    sleeps: list = sleeps if sleeps is not None else []
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["git", "ls-remote"]:
+            return f"{REMOTE_HEAD}\trefs/heads/{BRANCH}"
+        if command[:3] == ["gh", "pr", "list"]:
+            pr_queries.append(command)
+            return json.dumps(
+                answers.pop(0) if answers else [],
+            )
+        if command == ["git", "branch", "--show-current"]:
+            return BRANCH
+        if command == ["git", "status", "--porcelain"]:
+            return ""
+        if command == ["git", "rev-parse", "HEAD"]:
+            return "b" * 40
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    real_sleep = runner.time.sleep
+    monkeypatch.setattr(
+        runner.time, "sleep",
+        lambda seconds: sleeps.append(seconds) or real_sleep(0),
+    )
+    return pr_queries, pushes, fake_run
+
+
+def test_deliver_pr_rejected_push_with_open_delivery_pr_is_superseded(
+    monkeypatch, tmp_path,
+):
+    """Issue #702: the push of the stable delivery branch is rejected
+    `(fetch first)` because the CONCURRENT run of the same Issue already
+    pushed it and opened its PR. The delivery is owned by that run —
+    `deliver_pr` raises `DeliverySupersededError` with the PR URL
+    instead of the raw git error (the losing run must never arrive at
+    the terminal `ai-blocked` path)."""
+    pr_queries, pushes, _ = _deliver_pr_rejection_setup(
+        monkeypatch, tmp_path,
+        pr_states=[[
+            {"number": 32, "state": "OPEN",
+             "url": "https://github.com/xqliu/orbi/pull/32",
+             "headRefOid": REMOTE_HEAD},
+        ]],
+    )
+    with pytest.raises(runner.DeliverySupersededError) as excinfo:
+        runner.deliver_pr(
+            tmp_path / "wt", BRANCH, "main", "a" * 40, "ffffeeee",
+            issue=4, issue_title="Fix", repo_dir=tmp_path,
+        )
+    assert excinfo.value.pr_url == "https://github.com/xqliu/orbi/pull/32"
+    assert len(pushes) == 1
+    # The probe names the branch and reads open AND merged PRs.
+    assert pr_queries == [[
+        "gh", "pr", "list", "--state", "all", "--head", BRANCH,
+        "--json", "number,url,state,headRefOid", "--limit", "20",
+    ]]
+
+
+def test_deliver_pr_rejected_push_with_merged_delivery_pr_is_superseded(
+    monkeypatch, tmp_path,
+):
+    """Issue #702: the winning run may have finished the whole review and
+    merge before the losing run even reaches its push. A MERGED PR
+    matches when its head is exactly the branch's current remote head —
+    the delivered proof."""
+    _, _, _ = _deliver_pr_rejection_setup(
+        monkeypatch, tmp_path,
+        pr_states=[[
+            {"number": 32, "state": "MERGED",
+             "url": "https://github.com/xqliu/orbi/pull/32",
+             "headRefOid": REMOTE_HEAD},
+        ]],
+    )
+    with pytest.raises(runner.DeliverySupersededError) as excinfo:
+        runner.deliver_pr(
+            tmp_path / "wt", BRANCH, "main", "a" * 40, "ffffeeee",
+            issue=4, issue_title="Fix", repo_dir=tmp_path,
+        )
+    assert excinfo.value.pr_url == "https://github.com/xqliu/orbi/pull/32"
+
+
+def test_deliver_pr_rejected_push_old_merged_pr_is_not_superseding(
+    monkeypatch, tmp_path,
+):
+    """A MERGED PR of a PREVIOUS delivery on the same stable branch has
+    a stale head (the branch moved on) — it never supersedes: without a
+    matching delivery PR the rejection stays the genuine failure it is
+    and the original error propagates."""
+    _, _, _ = _deliver_pr_rejection_setup(
+        monkeypatch, tmp_path,
+        pr_states=[[
+            {"number": 12, "state": "MERGED",
+             "url": "https://github.com/xqliu/orbi/pull/12",
+             "headRefOid": "c" * 40},
+        ]],
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.deliver_pr(
+            tmp_path / "wt", BRANCH, "main", "a" * 40, "ffffeeee",
+            issue=4, issue_title="Fix", repo_dir=tmp_path,
+        )
+
+
+def test_deliver_pr_rejected_push_without_delivery_pr_reraises(
+    monkeypatch, tmp_path,
+):
+    """A rejection with NO delivery PR for the branch is a genuine
+    failure: the original CalledProcessError propagates into the normal
+    terminal failure path (unchanged #702-adjacent behavior)."""
+    pr_queries, _, _ = _deliver_pr_rejection_setup(
+        monkeypatch, tmp_path,
+        pr_states=[[], [], []],
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.deliver_pr(
+            tmp_path / "wt", BRANCH, "main", "a" * 40, "ffffeeee",
+            issue=4, issue_title="Fix", repo_dir=tmp_path,
+        )
+    # The probe is bounded: three attempts, then the failure stands.
+    assert len(pr_queries) == 3
+
+
+def test_deliver_pr_push_rejected_probe_rejects_unexpected_commands(
+    monkeypatch, tmp_path,
+):
+    """The #702 probe fake stays strict: anything beyond the ls-remote
+    and PR-list traffic it exists for fails the fake (the delivery
+    closeout must not silently grow other commands)."""
+    _, _, fake_run = _deliver_pr_rejection_setup(
+        monkeypatch, tmp_path, pr_states=[],
+    )
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "list"])
+
+
+def test_deliver_pr_non_rejection_push_failure_skips_the_probe(
+    monkeypatch, tmp_path,
+):
+    """A push failure that is NOT a `(fetch first)` rejection (e.g. an
+    authentication error) is not a concurrent-delivery signal: no probe
+    runs and the original error propagates unchanged."""
+    worktree = tmp_path / "wt"
+    worktree.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        runner, "fetch_base_ref", lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        runner, "_is_ancestor", lambda *args, **kwargs: True,
+    )
+
+    def fake_push(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            128, command,
+            output="",
+            stderr="ERROR: Permission to xqliu/orbi.git denied to "
+                   "deploy-key.",
+        )
+
+    monkeypatch.setattr(runner, "run_git_network_command", fake_push)
+    probes = []
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["git", "ls-remote"]:
+            raise AssertionError("no probe expected: non-rejection push "
+                                 "failure is not a concurrent delivery")
+        if command == ["git", "branch", "--show-current"]:
+            return BRANCH
+        if command == ["git", "status", "--porcelain"]:
+            return ""
+        if command == ["git", "rev-parse", "HEAD"]:
+            return "b" * 40
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.deliver_pr(
+            worktree, BRANCH, "main", "a" * 40, "ffffeeee",
+            issue=4, issue_title="Fix", repo_dir=tmp_path,
+        )
+    assert probes == []
+    # Direct drivers for the guards the delivery never reaches: a
+    # non-rejection failure must not probe, and nothing else runs.
+    with pytest.raises(AssertionError, match="no probe expected"):
+        fake_run(["git", "ls-remote", "--heads", "origin",
+                  f"refs/heads/{BRANCH}"])
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "list"])
+
+
+def test_superseding_delivery_pr_returns_none_without_a_remote_branch(
+    monkeypatch, tmp_path,
+):
+    """Issue #702: no remote branch, no superseding PR — the helper
+    answers None without querying the PR list."""
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: "" if command[:2] == ["git", "ls-remote"]
+        else (_ for _ in ()).throw(AssertionError("no probe expected")),
+    )
+    assert runner._superseding_delivery_pr(tmp_path, BRANCH) is None
+
+
+def test_superseding_delivery_pr_rejects_a_malformed_pr_payload(
+    monkeypatch, tmp_path,
+):
+    """A non-array PR answer is a contract violation: fail fast, never
+    guess (the probe's caller re-raises the original push error)."""
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: (
+            f"{REMOTE_HEAD}\trefs/heads/{BRANCH}"
+            if command[:2] == ["git", "ls-remote"] else json.dumps({"x": 1})
+        ),
+    )
+    with pytest.raises(ValueError, match="pr list must return an array"):
+        runner._superseding_delivery_pr(tmp_path, BRANCH)
+
+
+def test_live_labels_fails_fast_on_a_malformed_payload(
+    monkeypatch, tmp_path,
+):
+    """`gh issue view` answers that violate the JSON contract fail fast:
+    a non-object payload, and an object whose labels field is not an
+    array — the claim check never guesses."""
+    def fake_run(command, **kwargs):
+        return "[]"
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    with pytest.raises(ValueError, match="issue view must be a JSON object"):
+        runner.live_labels(4, "owner/repo")
+
+    def fake_run_labels(command, **kwargs):
+        return json.dumps({"labels": "ai-ready"})
+
+    monkeypatch.setattr(runner, "run_command", fake_run_labels)
+    with pytest.raises(ValueError, match="issue labels must be a JSON array"):
+        runner.live_labels(4, "owner/repo")
+
+
+def test_deliver_pr_superseded_probe_waits_inside_the_push_pr_window(
+    monkeypatch, tmp_path,
+):
+    """Issue #702: the winning run can still be inside its push →
+    PR-create gap when the loser's push is rejected. The probe retries
+    (bounded) before giving up: the second probe finds the PR and the
+    delivery is classified superseded, not failed."""
+    sleeps: list = []
+    pr_queries, _, _ = _deliver_pr_rejection_setup(
+        monkeypatch, tmp_path,
+        pr_states=[
+            [],
+            [{"number": 32, "state": "OPEN",
+              "url": "https://github.com/xqliu/orbi/pull/32",
+              "headRefOid": REMOTE_HEAD}],
+        ],
+        sleeps=sleeps,
+    )
+    with pytest.raises(runner.DeliverySupersededError) as excinfo:
+        runner.deliver_pr(
+            tmp_path / "wt", BRANCH, "main", "a" * 40, "ffffeeee",
+            issue=4, issue_title="Fix", repo_dir=tmp_path,
+        )
+    assert excinfo.value.pr_url == "https://github.com/xqliu/orbi/pull/32"
+    assert len(pr_queries) == 2
+    assert sleeps == [runner.SUPERSEDED_PR_PROBE_SECONDS]
+
+
+def test_process_issue_superseded_delivery_never_blocks(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #702 acceptance: even when the claim race let two runs
+    deliver, the run that LOSES the push race must not mark the Issue
+    `ai-blocked`. The handler leaves the delivery labels exactly as the
+    winning run set them, posts a run-marked explanation, cleans this
+    run's worktree (the resume machinery must never resurrect the dead
+    delivery) and ends the tick with the `superseded` outcome."""
+    gh_calls, posted, worktree, comment_bodies = _resume_wiring_setup(
+        monkeypatch, tmp_path, in_progress=False,
+    )
+    edits: list = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: edits.append(kwargs),
+    )
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+
+    def superseded_deliver_pr(*args, **kwargs):
+        raise runner.DeliverySupersededError(
+            "https://github.com/orbi-build/orbi/pull/32",
+        )
+
+    monkeypatch.setattr(runner, "deliver_pr", superseded_deliver_pr)
+    cleaned = []
+    monkeypatch.setattr(
+        runner, "cleanup_task_worktree",
+        lambda *args, **kwargs: cleaned.append(kwargs),
+    )
+    caplog.set_level("INFO")
+    result = runner.process_issue(
+        {"number": 4, "title": "Fix", "body": "Body"},
+        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+         "base_branch": "main"},
+        "xqliu/orbi-backlog",
+    )
+    assert result.kind == "superseded"
+    assert result.url == "https://github.com/orbi-build/orbi/pull/32"
+    # The delivery states were never touched: only the claim patch ran.
+    # (The winning run's flow owns `ai-pr-opened` -> `ai-merged`.)
+    assert edits == [{"repo": "xqliu/orbi-backlog", "add": "ai-in-progress"}]
+    superseded_comments = [
+        body for body in comment_bodies
+        if "Orbi delivery superseded" in body
+    ]
+    assert len(superseded_comments) == 1
+    assert "https://github.com/orbi-build/orbi/pull/32" \
+        in superseded_comments[0]
+    assert "<!-- orbi:run=ffffeeee -->" in superseded_comments[0]
+    # This run's scene is cleaned so no tick ever resumes it.
+    assert cleaned == [
+        {"run_id": "ffffeeee", "issue": 4},
+    ]
+    assert "delivery_superseded pr=" in caplog.text
+
+
+def test_process_issue_superseded_comment_failure_is_a_bypass(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #702: the superseded explanation comment is a bypass — its
+    failure is logged and the run still exits with the superseded
+    outcome, the worktree cleaned and the labels untouched."""
+    _resume_wiring_setup(monkeypatch, tmp_path, in_progress=False)
+    edits: list = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: edits.append(kwargs),
+    )
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+
+    def superseded_deliver_pr(*args, **kwargs):
+        raise runner.DeliverySupersededError(
+            "https://github.com/orbi-build/orbi/pull/32",
+        )
+
+    monkeypatch.setattr(runner, "deliver_pr", superseded_deliver_pr)
+    monkeypatch.setattr(runner, "cleanup_task_worktree", lambda *a, **k: None)
+
+    def dead_comment(number, repo, body):
+        if "Orbi delivery superseded" in body:
+            raise RuntimeError("github comment failed")
+
+    monkeypatch.setattr(runner, "comment_issue", dead_comment)
+    caplog.set_level("INFO")
+    result = runner.process_issue(
+        {"number": 4, "title": "Fix", "body": "Body"},
+        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+         "base_branch": "main"},
+        "xqliu/orbi-backlog",
+    )
+    assert result.kind == "superseded"
+    assert result.url == "https://github.com/orbi-build/orbi/pull/32"
+    assert "superseded_comment_failed" in caplog.text
+    assert edits == [{"repo": "xqliu/orbi-backlog", "add": "ai-in-progress"}]
 
 
 def test_process_issue_model_wait_dead_failure_stays_in_progress(
@@ -5559,6 +6138,10 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[-1] == "labels" \
+                and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -5649,6 +6232,10 @@ def test_process_issue_model_wait_failure_records_health_attempt(
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
+        if command[-1] == "labels" \
+                and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -5704,6 +6291,10 @@ def test_process_issue_three_recoverable_failures_raise_health_finding(
             return _gh_api(command, posted)
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
+        if command[-1] == "labels" \
+                and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -5754,6 +6345,10 @@ def test_process_issue_success_records_health_streak_break(
             return _gh_api(command, posted)
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
+        if command[-1] == "labels" \
+                and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         return "0123456789abcdef0123456789abcdef01234567"
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -5814,6 +6409,10 @@ def test_process_issue_recoverable_health_record_failure_is_bypassed(
             return _gh_api(command, posted)
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
+        if command[-1] == "labels" \
+                and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         return ""
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -5863,6 +6462,10 @@ def test_process_issue_success_health_record_failure_is_bypassed(
             return _gh_api(command, posted)
         if command[:3] == ["gh", "issue", "list"]:
             return "[]"
+        if command[-1] == "labels" \
+                and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         return "0123456789abcdef0123456789abcdef01234567"
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -5931,6 +6534,10 @@ def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
             raise RuntimeError(
                 "gh issue comment failed: API rate limit exceeded",
             )
+        if command[-1] == "labels" \
+                and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
@@ -6000,6 +6607,10 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
+        if command[-1] == "labels" \
+                and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
@@ -6076,6 +6687,10 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
             return "[]"
+        if command[-1] == "labels" \
+                and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(runner, "run_command", fake_run)
@@ -6929,6 +7544,10 @@ def test_process_issue_failure_without_session_still_carries_scene(
         if command[:3] == ["git", "worktree", "prune"]:
             # Issue #256 terminal cleanup — not a delivery comment.
             return ""
+        if command[-1] == "labels" \
+                and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
@@ -7011,6 +7630,10 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
         if command[:3] == ["git", "worktree", "prune"]:
             # Issue #256 terminal cleanup — not a delivery comment.
             return ""
+        if command[-1] == "labels" \
+                and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
@@ -7063,6 +7686,10 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
         if command[:3] == ["git", "worktree", "prune"]:
             # Issue #256 terminal cleanup — not a delivery comment.
             return ""
+        if command[-1] == "labels" \
+                and command[:3] == ["gh", "issue", "view"]:
+            # The claim-time live label read (Issue #702).
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
@@ -15552,6 +16179,9 @@ def test_process_issue_keeps_normal_flow_without_release_label(
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "set_run_id", lambda rid: None)
     monkeypatch.setattr(runner, "has_in_progress_label", lambda n, r: False)
+    monkeypatch.setattr(
+        runner, "live_labels", lambda number, repo: ["ai-ready"],
+    )
     monkeypatch.setattr(runner, "freeze_base", lambda r, b: "abc123")
     monkeypatch.setattr(runner, "edit_issue", Mock())
     monkeypatch.setattr(runner, "set_active_run", Mock())
@@ -15599,6 +16229,9 @@ def _ops_issue_mocks(monkeypatch, tmp_path, *, head_sha: str, dirty: str):
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "set_run_id", lambda rid: None)
     monkeypatch.setattr(runner, "has_in_progress_label", lambda n, r: False)
+    monkeypatch.setattr(
+        runner, "live_labels", lambda number, repo: ["ai-ready"],
+    )
     monkeypatch.setattr(runner, "freeze_base", lambda r, b: "abc123")
     monkeypatch.setattr(runner, "edit_issue", Mock())
     monkeypatch.setattr(runner, "set_active_run", Mock())
@@ -17204,6 +17837,9 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                         lambda rid: state["run_ids"].append(rid))
     monkeypatch.setattr(release, "has_in_progress_label",
                         lambda n, r: in_progress)
+    monkeypatch.setattr(
+        runner, "live_labels", lambda number, repo: ["ai-ready"],
+    )
     monkeypatch.setattr(release, "latest_run_id",
                         lambda r, s, n: existing_run_id)
     monkeypatch.setattr(release, "freeze_base", lambda r, b: "abc123")

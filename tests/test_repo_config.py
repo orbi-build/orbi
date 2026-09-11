@@ -586,6 +586,9 @@ def test_process_issue_applies_repo_base_branch_and_records_sha(
     monkeypatch.setattr(
         runner, "has_in_progress_label", lambda number, repo: False,
     )
+    monkeypatch.setattr(
+        runner, "live_labels", lambda number, repo: ["ai-ready"],
+    )
     monkeypatch.setattr(runner, "open_pr_for_branch", lambda *a: None)
     monkeypatch.setattr(runner, "external_takeover_pr", lambda *a: None)
     monkeypatch.setattr(runner, "stable_branch_exists", lambda *a: False)
@@ -842,6 +845,9 @@ def test_process_issue_accepts_a_pre_resolved_record(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         runner, "has_in_progress_label", lambda number, repo: False,
+    )
+    monkeypatch.setattr(
+        runner, "live_labels", lambda number, repo: ["ai-ready"],
     )
     monkeypatch.setattr(runner, "open_pr_for_branch", lambda *a: None)
     monkeypatch.setattr(runner, "external_takeover_pr", lambda *a: None)

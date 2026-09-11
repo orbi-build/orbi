@@ -214,6 +214,12 @@ def install_fake_gh(monkeypatch, comments: list[str],
                             if "ai-in-progress" in labels[number]
                         ])
                     return "[]"
+                if command[2] == "view" and command[-1] == "labels":
+                    # The claim-time live label read (Issue #702).
+                    number = int(command[3])
+                    return json.dumps({"labels": [
+                        {"name": label} for label in labels.get(number, [])
+                    ]})
             if command[1] == "api":
                 if "--method" in command:
                     method = command[command.index("--method") + 1]

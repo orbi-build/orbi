@@ -186,7 +186,10 @@ def install_fake_gh(monkeypatch, comments: list[str],
     if pr is None:
         pr = {"state": "OPEN", "merged": False}
     if labels is None:
-        labels = ["ai-pr-opened"]
+        # A fresh-claimable Issue (Issue #702: the claim-time live label
+        # read must not see a delivery state) — the delivery states land
+        # here through the runner's own label edits.
+        labels = []
     real_run = runner.run_command
 
     def fake_run(command, **kwargs):
@@ -846,7 +849,7 @@ def test_e2e_pr_closed_while_fix_needed_removes_leftover_label(
     removed too, so the terminal state is `ai-blocked` alone."""
     comments: list[str] = []
     edits: list[list[str]] = []
-    labels = ["ai-pr-opened"]
+    labels: list[str] = []
     pr = {"state": "OPEN", "merged": False}
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
     install_fake_gh(

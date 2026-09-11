@@ -113,6 +113,12 @@ system merely to make an end-to-end claim.
 - A failed P0 run enters `ai-blocked` ALONE — no tick re-claims it, so there is no infinite retry.
 - Explanation: `docs/workflow.mdx` (EN/ZH); the `active_milestone` field: `docs/getting-started.mdx`.
 
+## Claim mutual exclusion (Issue #702)
+
+- The ready scan reads GitHub's eventually-consistent search index and the flock slot only serializes runners sharing one state dir, so the claim is verified at claim time: immediately before the claim label patch the Issue's labels are re-read LIVE (`gh issue view`, REST); any delivery state present means another run owns the Issue — the claim is skipped (`claim_race_lost`), no label, no worktree, no run.
+- A push rejected as non-fast-forward on the stable delivery branch is checked against the branch's delivery PRs (bounded probe): an open PR, or a merged PR at the branch's current remote head, proves the concurrent run delivered — the losing run exits with the `superseded` outcome and NEVER marks the Issue `ai-blocked`; a rejected push without a matching delivery PR stays a genuine failure.
+- Explanation: `docs/workflow.mdx` (EN/ZH).
+
 ## Epic Issues (ai-epic)
 
 - An Epic is a coordination Issue that groups related tasks; it carries the plain `ai-epic` label and is NOT an executable task — the work is split into independent `ai-ready` sub-Issues, each with one PR, one independent review and one merge.

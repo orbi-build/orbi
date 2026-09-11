@@ -218,6 +218,16 @@ def install_fake_gh(monkeypatch, comments: list[str],
                             ])
                         return "[]"
                     return "[]"
+                if command[2] == "view" and command[-1] == "labels":
+                    # The claim-time live label read (Issue #702).
+                    number = int(command[3])
+                    return json.dumps({"labels": [
+                        {"name": label}
+                        for label in (
+                            labels.get(number, [])
+                            if labels is not None else []
+                        )
+                    ]})
             if command[1] == "api":
                 # The progress publisher (Issue #18) keeps the single
                 # per-run comment via gh api: list (GET), create (POST),

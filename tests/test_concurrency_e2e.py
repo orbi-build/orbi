@@ -129,6 +129,17 @@ elif args[:2] == ["issue", "view"]:
             {"body": state["issues"][num].get("body", "")}
         ))
     elif args[-1] == "labels":
+        # Issue #702 race injection: an armed hook models the rival
+        # runner's claim landing EXACTLY when this runner re-reads the
+        # labels live at claim time — the constructed concurrent
+        # trigger the acceptance criteria demand.
+        hook = state.get("claim_race_hook")
+        if (hook and hook.get("armed")
+                and str(hook.get("issue")) == num):
+            if hook["label"] not in state["issues"][num]["labels"]:
+                state["issues"][num]["labels"].append(hook["label"])
+            hook["armed"] = False
+            save()
         print(json.dumps({
             "labels": [
                 {"name": label}
@@ -1154,6 +1165,45 @@ def test_killed_runner_slot_is_released_by_the_kernel(clone, tmp_path):
     assert second.returncode == 0, err
     assert "capacity_full" not in err
     assert "no_ready_issue" in err
+    assert slots_held(clone) == [(1, None)], "slot must be released on exit"
+
+
+def test_concurrent_claim_rival_labels_are_seen_at_claim_time(
+    clone, tmp_path,
+):
+    """Issue #702 acceptance (constructed concurrent trigger): a second
+    trigger races the first run's claim — the ready scan's search index
+    still shows the Issue claimable (the fake gh's live state at scan
+    time), and the rival `ai-in-progress` lands EXACTLY at this runner's
+    claim-time live label re-read (the armed hook). The runner must lose
+    the race cleanly: no claim patch of its own (the labels stay the
+    rival's), no worktree, no Pi session, no progress comment, exit 0 —
+    never a second run on the claimed Issue."""
+    bin_dir = install_fakes(tmp_path)
+    state = tmp_path / "gh-state.json"
+    write_state(state, {"7": ["ai-ready"]})
+    armed = read_state(state)
+    armed["claim_race_hook"] = {
+        "issue": "7", "label": "ai-in-progress", "armed": True,
+    }
+    atomic_write_json(state, armed)
+    pi_log = tmp_path / "pi.log"
+    config = write_config(clone, tmp_path, 1)
+
+    loser = start_runner(config, bin_dir, state, pi_log)
+    out, err = loser.communicate(timeout=120)
+    assert loser.returncode == 0, err
+    assert "claim_race_lost issue=7" in err
+    # The rival claim is the only label state; this run added nothing.
+    final = read_state(state)
+    assert final["issues"]["7"]["labels"] == [
+        "ai-ready", "ai-in-progress",
+    ]
+    # No Pi session was ever started for the losing claim.
+    assert pi_invocations(pi_log) == []
+    # No worktree, no progress comment: the claim was lost, not run.
+    assert not (clone / ".worktrees").exists()
+    assert final["comments"] == []
     assert slots_held(clone) == [(1, None)], "slot must be released on exit"
 
 
