@@ -7143,8 +7143,11 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         # Falling through to the generic handler below would mark the
         # Issue `ai-blocked` — exactly the unrecoverable state Issue
         # #227 forbids for this recovery.
+        # Issue #645: an identical repeated failure of this run updates
+        # the existing scene comment in place (the progress patch path)
+        # instead of appending a duplicate on every retry tick.
         try:
-            comment_issue(number, repo=source_repo, body=body)
+            publisher.failure_scene(body)
         except Exception:
             LOGGER.exception(
                 "issue=%s model_wait_recovered_comment_failed", number,
