@@ -24,10 +24,12 @@ executable records every invocation. These prove the acceptance criteria:
   the flock lock), so an abnormal exit never deadlocks the machine.
 """
 import hashlib
+import io
 import json
 import os
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -285,6 +287,12 @@ log = os.environ.get("ORBI_FAKE_PI_LOG")
 if log:
     with open(log, "a", encoding="utf-8") as handle:
         handle.write(f"pi {os.getpid()}\\n")
+# Optional test gate: hold BEFORE any work until the file appears, so a
+# test can pin the "delivery still running" scene deterministically.
+gate = os.environ.get("ORBI_FAKE_PI_GATE")
+if gate:
+    while not os.path.exists(gate):
+        time.sleep(0.05)
 time.sleep(1.0)
 system_prompt = sys.argv[sys.argv.index("--system-prompt") + 1]
 if "INDEPENDENT REVIEW" in system_prompt:
@@ -595,11 +603,23 @@ def install_deployed_units(unit_dir: Path, repo_dir: Path) -> None:
         (unit_dir / name).write_bytes(rendered.encode("utf-8"))
 
 
+def _drain(pipe, sink) -> None:
+    """Drain one pipe into `sink` in the background: a 64 KB OS pipe
+    buffer fills after a few hundred log lines and then BLOCKS the
+    runner mid-write — a long-lived runner whose stderr nobody reads
+    freezes (the 2026-09-11 capacity-test stall). The sink keeps the
+    text available for the test's final assertions."""
+    for line in iter(pipe.readline, ""):
+        sink.write(line)
+
+
 def start_runner(
     config_path: Path, bin_dir: Path,
     state_path: Path, pi_log: Path,
     unit_dir: Path | None = None,
     review_gate: Path | None = None,
+    pi_gate: Path | None = None,
+    drain_stderr: bool = False,
 ) -> subprocess.Popen:
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
@@ -607,6 +627,8 @@ def start_runner(
     env["ORBI_FAKE_PI_LOG"] = str(pi_log)
     if review_gate is not None:
         env["ORBI_FAKE_PI_REVIEW_GATE"] = str(review_gate)
+    if pi_gate is not None:
+        env["ORBI_FAKE_PI_GATE"] = str(pi_gate)
     # The pre-start drift check (Issue #103) reads the installed units
     # from here: a clean deployment by default (the templates as
     # installed), or an explicit dir for the drift scenarios.
@@ -620,6 +642,12 @@ def start_runner(
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
         cwd=REPO_ROOT,
     )
+    if drain_stderr:
+        process.drained_stderr = io.StringIO()
+        threading.Thread(
+            target=_drain, args=(process.stderr, process.drained_stderr),
+            daemon=True,
+        ).start()
     _RUNNING.append(process)
     return process
 
@@ -871,14 +899,29 @@ def test_capacity_two_allows_two_runners_and_rejects_third(clone, tmp_path):
     write_state(state, {"7": ["ai-ready"], "8": ["ai-ready"]})
     pi_log = tmp_path / "pi.log"
     config = write_config(clone, tmp_path, 2)
+    # The pi gates hold each delivery before any fake-pi work until the
+    # capacity scene below is fully asserted: without them the deliveries
+    # race ahead (ai-pr-opened within ~1s) and the strict in-progress
+    # assertions below become a timing lottery (2026-09-11 flake). Two
+    # SEPARATE gates: the deliveries are then released IN ORDER, because
+    # the fake review fixes append to one shared file — two concurrent
+    # merges of that file conflict, while an ordered delivery lets the
+    # second review absorb the first merged base (the real review prompt
+    # does the same base absorb).
+    pi_gate_7 = tmp_path / "pi-gate-7"
+    pi_gate_8 = tmp_path / "pi-gate-8"
 
-    first = start_runner(config, bin_dir, state, pi_log)
+    first = start_runner(
+        config, bin_dir, state, pi_log, pi_gate=pi_gate_7, drain_stderr=True,
+    )
     wait_for(
         lambda: "ai-in-progress" in read_state(state)["issues"]["7"]["labels"],
         what="first runner to claim issue 7",
     )
 
-    second = start_runner(config, bin_dir, state, pi_log)
+    second = start_runner(
+        config, bin_dir, state, pi_log, pi_gate=pi_gate_8, drain_stderr=True,
+    )
     wait_for(
         lambda: "ai-in-progress" in read_state(state)["issues"]["8"]["labels"],
         what="second runner to claim issue 8",
@@ -898,12 +941,14 @@ def test_capacity_two_allows_two_runners_and_rejects_third(clone, tmp_path):
     snap = read_state(state)
     assert snap["issues"]["7"]["labels"] == ["ai-ready", "ai-in-progress"]
     assert snap["issues"]["8"]["labels"] == ["ai-ready", "ai-in-progress"]
-
-    # Both deliveries open their PRs and keep holding their slots.
+    # Scene pinned deterministically: release the deliveries IN ORDER —
+    # issue 7 fully opens its PR first, then issue 8 follows.
+    pi_gate_7.write_text("go", encoding="utf-8")
     wait_for(
         lambda: "ai-pr-opened" in read_state(state)["issues"]["7"]["labels"],
         what="issue 7 PR to open",
     )
+    pi_gate_8.write_text("go", encoding="utf-8")
     wait_for(
         lambda: "ai-pr-opened" in read_state(state)["issues"]["8"]["labels"],
         what="issue 8 PR to open",
@@ -926,8 +971,12 @@ def test_capacity_two_allows_two_runners_and_rejects_third(clone, tmp_path):
     )
     for runner in (first, second):
         out, err = runner.communicate(timeout=120)
-        assert runner.returncode == 0, err
-        assert "delivery_auto_merged" in err
+        text = err or ""
+        drained = getattr(runner, "drained_stderr", None)
+        if drained is not None:
+            text = drained.getvalue() + text
+        assert runner.returncode == 0, text
+        assert "delivery_auto_merged" in text
     assert slots_held(clone, 2) == [(1, None), (2, None)]
     # One Pi per phase of each run (implement, review — the review
     # fixes in-session, Issue #82): two invocations per Issue at a

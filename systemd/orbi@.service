@@ -22,38 +22,31 @@ Environment="ORBI_CONFIG={{ORBI_REPO_DIR}}/orbi.toml"
 EnvironmentFile=-{{ORBI_REPO_DIR}}/.orbi/env
 # Deployment adapter only: disable systemd's default startup kill limit.
 TimeoutStartSec=infinity
-# Issue #52: before the Runner starts, fast-forward the local main
-# checkout to the latest origin/main (outside the Python process). A
-# dirty checkout, a failed fetch or a non-fast-forwardable state fails
-# this command: the service does not start. For the dirty-checkout
-# scene, emit one actionable structured journal line before failing;
-# Python cannot provide this diagnostic because it has not started yet.
-# A currently running long task is never
-# hot-updated or killed: while the service is active, systemd ignores
-# the timer's start request, and the next real start picks up the
-# latest code.
-# Issue #149: both instances may start in the same tick, so the
-# fetch + fast-forward is wrapped in a short-lived flock on the shared
-# state-dir lock file (the Python-side sync in bootstrap_runner takes
-# the SAME lock): the main worktree is never written concurrently.
+# Issue #52/#535: before the Runner starts, the deployment checkout is
+# synced OUTSIDE the Python Runner process. Issue #535 replaced the
+# hardcoded `git fetch origin main && git merge --ff-only origin/main`
+# with the engine source update channel: the second preflight step runs
+# `orbi sync-engine-source`, which reads `engine_source_track` from the
+# deploy home's orbi.toml and brings the checkout to that channel
+# (origin/main by default — the exact pre-#535 behavior — or a branch,
+# the newest official release tag, one exact tag, or one exact commit;
+# detached HEAD is allowed for locks). A dirty checkout, a failed fetch,
+# a missing tag/SHA, a non-fast-forwardable branch or any state that
+# cannot be verified against the resolved commit fails this command with
+# a structured journal line (deploy_home_dirty / engine_source_*, each
+# with a fix): the service does not start. A currently running long task
+# is never hot-updated or killed: while the service is active, systemd
+# ignores the timer's start request, and the next real start picks up
+# the tracked source.
+# Issue #149: both instances may start in the same tick, so both
+# preflight steps run under a short-lived flock on the shared state-dir
+# lock file (the Python-side sync in bootstrap_runner takes the SAME
+# lock): the main worktree is never written concurrently.
 # Issue #191: disabling fetch's automatic maintenance prevents Git from
-# detaching a maintenance child beyond this preflight and flock lifetime.
-ExecStartPre=/usr/bin/timeout 90s /usr/bin/flock {{ORBI_REPO_DIR}}/.orbi/base-sync.lock -c 'git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main || { dirty_files="$(git status --short --untracked-files=no | cut -c4- | paste -sd, -)"; if [ -n "$dirty_files" ]; then fix="git -C {{ORBI_REPO_DIR}} stash && systemctl --user start orbi@%i.service"; echo "deploy_home_dirty files=\"$dirty_files\" fix=\"$fix\""; fi; exit 1; }'
-# Issue #248: self-heal the editable CLI install OUTSIDE Python. The #158
-# in-Runner refresh (runner.refresh_cli_install) is unreachable when the
-# console script cannot even `import orbi` (the #248 scene: the
-# src-layout migration of #168 left the installed editable finder stale,
-# so `from orbi import main` died before the Runner started). This
-# preflight probes the installed CLI (`orbi --version` succeeds iff
-# the package imports); a healthy CLI exits 0 and nothing else runs (no
-# per-tick reinstall). A broken CLI makes the probe fail, so `||` runs the
-# exact editable force-reinstall (cli_source.reinstall_command) that
-# regenerates the finder against the current src/ layout. The step takes
-# the SAME base-sync flock the git sync and the #158 refresh use (two
-# instances starting in the same tick never race the tool env), and the
-# timeout matches runner.UV_INSTALL_TIMEOUT_SECONDS: a failing reinstall
-# fails this preflight, the service does not start (fail fast), no fallback.
+# detaching a maintenance child beyond this preflight and flock lifetime
+# (engine_source.py passes --no-auto-maintenance to every fetch).
 ExecStartPre=/usr/bin/timeout 300s /usr/bin/flock {{ORBI_REPO_DIR}}/.orbi/base-sync.lock -c '%h/.local/bin/orbi --version >/dev/null 2>&1 || uv tool install --force --reinstall --editable --python python3 {{ORBI_REPO_DIR}}'
+ExecStartPre=/usr/bin/timeout 90s /usr/bin/flock {{ORBI_REPO_DIR}}/.orbi/base-sync.lock -c '%h/.local/bin/orbi sync-engine-source'
 # Issue #140: the Runner is the installed `orbi` CLI (the
 # uv-tool console script, `uv tool install` / `uv tool upgrade`; the
 # executable lands in the user bin dir `~/.local/bin`). The absolute

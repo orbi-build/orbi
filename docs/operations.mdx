@@ -17,46 +17,60 @@ queued) and starts its OWN service instance
 `orbi@2.timer` → `orbi@2.service`), so two independent
 Runner instances can run concurrently. Each tick's service instance:
 
-1. **Fast-forwards the code first** (`ExecStartPre`, outside the Python
-   process): `timeout 90s git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main`. The checkout that is fast-forwarded is the **deployment home** — the `{{ORBI_REPO_DIR}}` placeholder renders the `deploy_home` path at install time (defaulting to `repo_dir`), so in the external single-repo mode (Issue #330) the fast-forward, the `base-sync.lock` and the CLI self-heal below all act on the orbi source checkout, never on the delivery checkout (user repo X). The fetch disables automatic maintenance so it cannot detach a Git child beyond the preflight and shared-lock lifetime.
-   A dirty checkout, a failed fetch or a non-fast-forwardable state fails
-   the preflight: the service does not start and the reason lands in the
-   systemd journal (fail fast). When tracked local edits cause the merge
-   failure, the preflight additionally emits one structured,
-   actionable `deploy_home_dirty files=... fix=...` line. Preserve the
-   edit with `git -C <deploy_home> stash`, then retry with
-   `systemctl --user start orbi@1.service` (and `stash pop` later), or
-   discard it with `git -C <deploy_home> checkout -- .`. A currently
-   running long task is never
-   hot-updated or killed — while one service instance is active, systemd
-   ignores further starts of THAT instance, and the next real start picks
-   up the latest code. Because two instances may run `ExecStartPre` in
-   the same tick, the fetch + fast-forward is wrapped in a short-lived
-   `flock` on the shared state-dir lock file (`base-sync.lock`, the
-   Python-side sync takes the SAME lock): the main worktree is never
-   written concurrently. Since Issue #171 EVERY fetch that updates the
-   shared remote-tracking ref runs under that same lock: the Runner-side
-   `freeze_base` / `verify_pr` / `merge_gate` / `confirm_merged` fetches
-   go through `fetch_base_ref` (acquire lock → fetch → release, fail fast
-   on lock or fetch errors), and the implement/review prompts instruct Pi
-   to run the base-freshness fetch as
-   `flock <BASE_SYNC_LOCK> git fetch origin <base_branch>` (the lock path
-   is rendered into both prompts from the configured `repo_dir`). Two
-   concurrent Runners — or a Runner and a Pi session — therefore never
-   race the shared ref (no `cannot lock ref ... is at <X> but expected
-   <Y>` failures). A SECOND `ExecStartPre` step self-heals the editable
-   CLI install OUTSIDE Python (Issue #248): it probes the installed
-   console script (`orbi --version` succeeds iff the package
-   imports) and, on probe failure, runs the exact editable
-   force-reinstall (`uv tool install --force --reinstall --editable
-   --python /usr/bin/python3 <repo_dir>`) under the SAME `base-sync.lock`
-   flock. This is the only place that can act when the console script
-   cannot even `import orbi` — the #248 scene, where the
-   src-layout migration of #168 left the installed editable finder
-   stale and the #158 in-Runner refresh (which runs INSIDE the Runner)
-   was unreachable. A healthy CLI exits 0 and nothing else runs (no
-   per-tick reinstall); a failing reinstall fails the preflight, the
-   service does not start (fail fast, no fallback).
+1. **Syncs the engine source first** (`ExecStartPre`, outside the Runner
+   process). Two steps, both under a short-lived `flock` on the shared
+   state-dir lock file (`base-sync.lock`, the Python-side sync takes the
+   SAME lock; two instances may start in the same tick, and since Issue
+   #171 EVERY fetch that updates the shared remote-tracking ref runs
+   under that same lock — the Runner-side `freeze_base` / `verify_pr` /
+   `merge_gate` / `confirm_merged` fetches go through `fetch_base_ref`,
+   and the implement/review prompts instruct Pi to run the
+   base-freshness fetch as `flock <BASE_SYNC_LOCK> git fetch origin
+   <base_branch>`, so two concurrent Runners — or a Runner and a Pi
+   session — never race the shared ref). The checkout both steps act on
+   is the **deployment home** — the `{{ORBI_REPO_DIR}}` placeholder
+   renders the `deploy_home` path at install time (defaulting to
+   `repo_dir`), so in the external single-repo mode (Issue #330) the
+   sync, the lock and the CLI self-heal all act on the orbi source
+   checkout, never on the delivery checkout (user repo X).
+
+   - **Step 1 — CLI self-heal** (Issue #248): it probes the installed
+     console script (`orbi --version` succeeds iff the package imports)
+     and, on probe failure, runs the exact editable force-reinstall
+     (`uv tool install --force --reinstall --editable --python
+     /usr/bin/python3 <repo_dir>`). This is the only place that can act
+     when the console script cannot even `import orbi` — the #248
+     scene, where the src-layout migration of #168 left the installed
+     editable finder stale and the #158 in-Runner refresh (which runs
+     INSIDE the Runner) was unreachable. It runs BEFORE the sync
+     because the sync subcommand needs a working CLI. A healthy CLI
+     exits 0 and nothing else runs (no per-tick reinstall); a failing
+     reinstall fails the preflight, the service does not start (fail
+     fast, no fallback).
+   - **Step 2 — engine source sync** (Issue #535): `orbi
+     sync-engine-source` brings the deployment home to the configured
+     engine source update channel. The channel is the host/deploy-only
+     config key **`engine_source_track`** in the deploy home's
+     `orbi.toml` (a repository's `.github/orbi.toml` can never carry
+     it; see [Engine source update channel](#engine-source-update-channel)
+     below for the modes and failure lines). The default `main` channel
+     keeps the exact pre-#535 behavior: `git fetch --no-auto-maintenance
+     origin main && git merge --ff-only origin/main` — fast-forward
+     onto `origin/main`. Every fetch passes `--no-auto-maintenance` so
+     it cannot detach a Git child beyond the preflight and shared-lock
+     lifetime. A dirty checkout, a failed fetch, a missing tag/SHA or
+     branch, a non-fast-forwardable branch, or any state that cannot be
+     verified against the resolved commit fails the preflight: the
+     service does not start and the reason lands in the systemd journal
+     (fail closed). Each failure emits one structured, actionable line
+     (`deploy_home_dirty files=... fix=...`, `engine_source_unresolved
+     reason=...`, `engine_source_not_fast_forwardable ...`); on success
+     the sync logs one structured
+     `engine_source_synced engine_source_track=... resolved=... head=...`
+     line. When the channel is locked (`release`/`tag:`/`sha:`), the
+     Runner also skips its post-merge fast-forward of the deployment
+     checkout: the lock owns that checkout, and the next tick's step 2
+     re-applies the channel.
 2. **Runs one tick**: resume an opened PR (review/fix/merge) or claim one
    `ai-ready` Issue, then exit. Before any slot or claim the tick also
    runs the pre-start **git transport check** (Issue #114, #580): the
@@ -73,7 +87,9 @@ Runner instances can run concurrently. Each tick's service instance:
    always stay on the `gh` token).
    And before any slot or claim the tick runs the **runner source
    freshness gate** (Issue #525): it proves the code THIS process
-   executes matches the fetched `origin/<base_branch>` — see
+   executes matches the configured engine source channel (Issue #535:
+   `engine_source_track`, `origin/main` by default — never the delivery
+   target's `base_branch`) — see
    [Runner source freshness and the defense layers](#runner-source-freshness-and-the-defense-layers)
    below.
 
@@ -81,6 +97,60 @@ Runner instances can run concurrently. Each tick's service instance:
 systemctl --user list-timers 'orbi@*.timer'
 systemctl --user status 'orbi@*.service'
 ```
+
+## Engine source update channel
+
+Issue #535 replaces the hardcoded "always follow `origin/main`" engine
+update with one explicit channel. The host/deploy-only config key
+`engine_source_track` lives in the deploy home's `orbi.toml` — never in a
+repository's `.github/orbi.toml` (the runner rejects it there as a
+host-only key):
+
+| `engine_source_track` | What the deploy home follows at the next start |
+| --- | --- |
+| absent / `main` | `origin/main`, fast-forward — the exact pre-#535 dogfood behavior |
+| `branch:<name>` | `origin/<name>`, fast-forward (the branch is checked out) |
+| `release` | the newest OFFICIAL semver tag (`vX.Y.Z`; pre-releases like `vX.Y.Z-rc.1` and non-semver tags are excluded), checked out detached |
+| `tag:<name>` | exactly that tag (annotated tags resolve to their commit), checked out detached |
+| `sha:<40-hex>` | exactly that commit, checked out detached |
+
+- **Installed vs updated**: a fresh install via `install.sh` copies
+  `.orbi.example.toml`, which ships `engine_source_track = "release"` —
+  new deployments run the latest release, not the main intermediate
+  state. Orbi's own dogfood deployment pins the `main` channel
+  explicitly. Any value change takes effect at the next service start
+  (the ExecStartPre sync applies it); there is no daemon and no restart
+  of a running Runner.
+- **Rollback** is editing the track back to the previous `tag:`/`sha:`
+  value (or `release`/`main`) — git state is the only store, nothing
+  else to clean up.
+- **Fail closed** (the service does not start, each line carries a
+  `fix=`):
+  - `deploy_home_dirty files=... fix=...` — tracked local edits would
+    block the sync; preserve them with
+    `git -C <deploy_home> stash && systemctl --user start orbi@1.service`
+    (and `stash pop` later), or discard them with
+    `git -C <deploy_home> checkout -- .`.
+  - `engine_source_unresolved reason=tag_not_found|tag_conflict|sha_not_found|branch_ref_missing|no_official_release_tag` —
+    the channel cannot be resolved (fetch first, check the name, or
+    publish the release tag).
+  - `engine_source_not_fast_forwardable` — the branch diverged locally
+    (a deploy home never carries local commits).
+  - `engine_source_unverified` — the head could not be proven to match
+    the resolved commit.
+- **Success evidence**: one structured
+  `engine_source_synced engine_source_track=... resolved=... head=...`
+  journal line per start.
+- **doctor** reports the channel read-only:
+  `engine_source: track=... resolved=... head=...` (or a `FAILED` line
+  with the same reason when the channel cannot be resolved locally).
+- GitHub rejects fetching unadvertised SHAs (`not our ref`), so the
+  `sha:` channel fetches the advertised refs once and verifies the
+  commit locally; a SHA reachable only from an unmerged pull-request
+  branch therefore fails closed — lock tags/releases instead.
+- The delivery target is untouched: `base_branch` keeps governing task
+  worktrees and delivery PRs (the engine/delivery isolation is Issue
+  #543's subject).
 
 ## Runner source freshness and the defense layers
 
@@ -96,26 +166,32 @@ claim the tick proves the second one (Issue #525):
   import source of the RUNNING process (`orbi.__file__` → the
   `src/orbi` package directory, never the WorkingDirectory) to its
   checkout with `git rev-parse --show-toplevel`, and requires that
-  checkout's `HEAD` to equal the fetched `refs/remotes/origin/<base>`
-  ref. Worktrees share the deployment home's refs, so the incident
-  scene (an install bound to a stale worktree) is rejected here.
+  checkout's `HEAD` to equal the configured engine source channel's
+  expected commit: the fetched `refs/remotes/origin/<branch>` head for
+  the `main`/`branch:` tracks, the resolved release/tag commit for the
+  `release`/`tag:` tracks, or the exact `sha:` commit. Worktrees share
+  the deployment home's refs, so the incident scene (an install bound
+  to a stale worktree) is rejected here.
 - **Non-editable install** (uv tool / PyPI copy): the installed
   distribution version (`importlib.metadata`) must not be older than
-  the latest release tag reachable from the fetched base ref (resolved
-  in the deploy home). Equality or newer passes.
-- Everything is a LOCAL git read (`rev-parse` / `describe`): the
-  freshness of the remote-tracking ref is supplied by the
-  `ExecStartPre` fetch, so a fresh checkout costs zero network
+  the channel's release tag — the latest tag reachable from the tracked
+  branch ref, or the locked `release`/`tag:` version itself. A `sha:`
+  lock cannot be mapped to a version and fails closed as unverifiable.
+  Equality or newer passes.
+- Everything is a LOCAL git read (`rev-parse` / `describe` / `tag
+  --list`): the freshness of the fetched refs and tags is supplied by
+  the `ExecStartPre` sync, so a fresh checkout costs zero network
   requests. Whatever cannot be PROVEN fresh (missing origin ref, no
   release tag, unresolvable import source) fails the same way with a
   `reason=` field — never a silent pass.
 - A stale or unverifiable source logs the structured
-  `runner_source_stale install=... source=... head=... origin_main=...
-  allowed=false fix=...` line and fails the start: no slot, no claim,
-  no label change. The `fix` is the exact editable force-reinstall
-  against the deploy home. `allow_stale_runner: true` (getting-started)
-  downgrades the SAME line to a warning for offline/restricted-network
-  machines — it never skips the check.
+  `runner_source_stale install=... source=... engine_source_track=...
+  head=... origin_main=... allowed=false fix=...` line and fails the
+  start: no slot, no claim, no label change. The `fix` is the exact
+  editable force-reinstall against the deploy home.
+  `allow_stale_runner: true` (getting-started) downgrades the SAME line
+  to a warning for offline/restricted-network machines — it never skips
+  the check.
 
 **The bootstrap boundary (why there are layers).** A self-check inside
 the runner can only protect runner versions that CONTAIN the self-check:
@@ -123,12 +199,14 @@ a runner old enough to predate it cannot check itself, and the in-runner
 `unit_drift` comparison runs inside the very process that may be frozen.
 The layering is therefore strict, from the outside in:
 
-1. The **shell-layer `ExecStartPre` preflight** (fetch + `merge
-   --ff-only` + the CLI probe self-heal) is the OUTERMOST defense: it is
-   executed by systemd without importing any runner code, so it never
-   depends on the runner version. Keep the installed units current (the
-   `unit_drift` self-heal of `install-units` and the pre-start check)
-   so this preflight always exists.
+1. The **`ExecStartPre` preflight** (the CLI probe self-heal + the
+   engine-source sync, Issue #535) is the OUTERMOST defense: it is
+   executed by systemd before the Runner process exists — the probe
+   step is pure shell around the installed console script and reinstalls
+   it from the checkout, so a CLI that cannot even `import orbi` is
+   repaired here, before anything depends on it. Keep the installed
+   units current (the `unit_drift` self-heal of `install-units` and the
+   pre-start check) so this preflight always exists.
 2. The **runner source freshness gate** (this section, Issue #525) is
    the in-runner invariant: from its first release onward, a runner
    whose code is stale refuses to pick up work instead of failing
@@ -232,8 +310,8 @@ The unit templates (`systemd/orbi@.service` and
 live in the deployment home (`deploy_home`, defaulting to `repo_dir` —
 Issue #330), and the drift check compares the installed units against
 THOSE templates. The next timer
-trigger's `ExecStartPre` fast-forwards the deployment home checkout, and
-the pre-start
+trigger's `ExecStartPre` syncs the deployment home checkout to the
+configured engine source channel (Issue #535), and the pre-start
 `unit_drift` check self-heals: it runs the SAME idempotent install
 (copy both templates into the user unit directory, daemon-reload,
 enable or disable timer instances through `max_concurrency` — it never

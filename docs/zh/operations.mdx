@@ -14,37 +14,58 @@ service 实例（`orbi@1.timer` → `orbi@1.service`，
 `orbi@2.timer` → `orbi@2.service`），所以可以同时运行
 两个独立的 Runner 实例。每个 tick 的 service 实例：
 
-1. **先 fast-forward 代码**（`ExecStartPre`，在 Python 进程外）：
-   `timeout 90s git fetch --no-auto-maintenance origin main && git merge --ff-only origin/main`。被 fast-forward 的 checkout 是**部署 home**——`{{ORBI_REPO_DIR}}` 占位符在安装时渲染的是 `deploy_home` 路径（缺省 `repo_dir`），所以外部单仓库模式（Issue #330）下 fast-forward、`base-sync.lock` 和下面的 CLI 自愈全部作用于 orbi 源码 checkout，绝不作用于交付 checkout（用户仓库 X）。fetch 禁用自动维护，避免 Git 子进程脱离 preflight 和共享锁的生命周期。checkout
-   不干净、fetch 失败或无法 fast-forward 时 preflight 失败：service 不
-   启动，原因写入 systemd journal（fail fast）。tracked 本地编辑导致
-   merge 失败时，preflight 还会写一条结构化、可操作的
-   `deploy_home_dirty files=... fix=...`。用 `git -C <deploy_home> stash`
-   保存编辑后以 `systemctl --user start orbi@1.service` 重试（之后可
-   `stash pop`），或用 `git -C <deploy_home> checkout -- .` 丢弃。正在运行的长任务从不被
-   热更新或杀掉——一个 service 实例 active 时 systemd 忽略对**该实例**
-   的后续 start 请求，下一次真正启动取到最新代码。两个实例可能在同一
-   tick 运行 `ExecStartPre`，所以 fetch + fast-forward 包在一个短生命
-   周期的 `flock`（共享状态目录下的 `base-sync.lock`，Python 侧同步取
-   同一把锁）里：main worktree 不会被并发写入。自 Issue #171 起，所有更新
-   共享 remote-tracking ref 的 fetch 都走同一把锁：Runner 侧的
-   `freeze_base` / `verify_pr` / `merge_gate` / `confirm_merged` fetch 统一
-   经 `fetch_base_ref`（先取锁 → fetch → 释放，锁或 fetch 出错即 fail
-   fast），implement/review 两个 prompt 指示 Pi 用
+1. **先同步 engine source**（`ExecStartPre`，在 Runner 进程外）。两个
+   步骤，都包在一个短生命周期的 `flock`（共享状态目录下的
+   `base-sync.lock`，Python 侧同步取同一把锁）里；两个实例可能在同一
+   tick 运行 `ExecStartPre`，并且自 Issue #171 起，所有更新共享
+   remote-tracking ref 的 fetch 都走同一把锁：Runner 侧的
+   `freeze_base` / `verify_pr` / `merge_gate` / `confirm_merged` fetch
+   统一经 `fetch_base_ref`（先取锁 → fetch → 释放，锁或 fetch 出错即
+   fail fast），implement/review 两个 prompt 指示 Pi 用
    `flock <BASE_SYNC_LOCK> git fetch origin <base_branch>` 执行 base
-   新鲜度 fetch（锁路径从配置的 `repo_dir` 渲染进两个 prompt）。两个并发
-   Runner（或 Runner 与 Pi 会话）因此不再争抢共享 ref（不会出现
-   `cannot lock ref ... is at <X> but expected <Y>` 失败）。第二个
-   `ExecStartPre` 步骤在 Python 进程外自愈 editable CLI 安装（Issue
-   #248）：它探测已安装的 console script（`orbi --version` 当且仅当
-   包可导入时成功），探测失败时在同一把 `base-sync.lock` flock 下执行
-   精确的 editable 强制重装（`uv tool install --force --reinstall
-   --editable --python /usr/bin/python3 <repo_dir>`）。这是 console script
-   连 `import orbi` 都失败时唯一能动手的地方——#248 现场：#168 的
-   src 布局迁移让已安装的 editable finder 过期，而 #158 的 Runner 内刷新
-   （在 Runner **内部**运行）根本不可达。健康的 CLI 退出 0，其余什么都不做
-   （不逐 tick 重装）；重装失败则 preflight 失败、service 不启动（fail
-   fast，无回退）。
+   新鲜度 fetch（锁路径从配置的 `repo_dir` 渲染进两个 prompt）。两个
+   并发 Runner（或 Runner 与 Pi 会话）因此不再争抢共享 ref（不会出现
+   `cannot lock ref ... is at <X> but expected <Y>` 失败）。两个步骤
+   作用的 checkout 都是**部署 home**——`{{ORBI_REPO_DIR}}` 占位符在
+   安装时渲染的是 `deploy_home` 路径（缺省 `repo_dir`），所以外部单仓
+   库模式（Issue #330）下同步、锁和 CLI 自愈全部作用于 orbi 源码
+   checkout，绝不作用于交付 checkout（用户仓库 X）。
+
+   - **步骤 1 —— CLI 自愈**（Issue #248）：探测已安装的 console
+     script（`orbi --version` 当且仅当包可导入时成功），探测失败时在
+     同一把 `base-sync.lock` flock 下执行精确的 editable 强制重装
+     （`uv tool install --force --reinstall --editable --python
+     /usr/bin/python3 <repo_dir>`）。这是 console script 连
+     `import orbi` 都失败时唯一能动手的地方——#248 现场：#168 的
+     src 布局迁移让已安装的 editable finder 过期，而 #158 的 Runner
+     内刷新（在 Runner **内部**运行）根本不可达。它排在同步**之前**，
+     因为同步子命令需要可用的 CLI。健康的 CLI 退出 0，其余什么都不做
+     （不逐 tick 重装）；重装失败则 preflight 失败、service 不启动
+     （fail fast，无回退）。
+   - **步骤 2 —— engine source 同步**（Issue #535）：`orbi
+     sync-engine-source` 把部署 home 带到配置的 engine source 更新
+     通道。通道是 deploy home `orbi.toml` 里的 host/deploy-only 配置
+     键 **`engine_source_track`**（仓库的 `.github/orbi.toml` 永远
+     不允许携带它；模式与失败行见下文
+     [engine source 更新通道](#engine-source-更新通道)）。缺省 `main`
+     通道保持 #535 之前的精确行为：`git fetch --no-auto-maintenance
+     origin main && git merge --ff-only origin/main`——fast-forward 到
+     `origin/main`。每次 fetch 都带 `--no-auto-maintenance`，避免 Git
+     子进程脱离 preflight 和共享锁的生命周期。checkout 不干净、fetch
+     失败、tag/SHA/branch 缺失、无法 fast-forward、或任何无法对照解析
+     结果验证的状态都会让 preflight 失败：service 不启动，原因写入
+     systemd journal（fail closed）。每种失败各写一条结构化、可操作的
+     行（`deploy_home_dirty files=... fix=...`、
+     `engine_source_unresolved reason=...`、
+     `engine_source_not_fast_forwardable ...`）；成功时同步写一条结构化
+     `engine_source_synced engine_source_track=... resolved=... head=...`
+     行。通道处于锁定态（`release`/`tag:`/`sha:`）时，Runner 也会跳过
+     merge 之后对部署 checkout 的 fast-forward：锁定拥有该 checkout，
+     下一个 tick 的步骤 2 会重新施加通道。
+
+   正在运行的长任务从不被热更新或杀掉——一个 service 实例 active 时
+   systemd 忽略对**该实例**的后续 start 请求，下一次真正启动取到通道
+   跟踪的代码。
 2. **运行一个 tick**：恢复一个已打开的 PR（review/fix/merge），或领取
    一个 `ai-ready` Issue，然后退出。在任何 slot 或领取之前，tick 还
    运行启动前 **git transport 检查**（Issue #114、#580）：部署 checkout
@@ -57,13 +78,58 @@ service 实例（`orbi@1.timer` → `orbi@1.service`，
    启动失败——不取 slot、不领取、不改标签，**没有回退**（GitHub
    API 操作永远留在 `gh` token 上）。同样在任何 slot 或领取之前，tick
    运行 **runner 执行代码新鲜度门禁**（Issue #525）：证明本进程执行
-   的代码与已 fetch 的 `origin/<base_branch>` 一致——见下文
+   的代码与配置的 engine source 通道一致（Issue #535：
+   `engine_source_track`，缺省 `origin/main`——绝不是交付目标的
+   `base_branch`）——见下文
    [Runner 执行代码新鲜度与防线分层](#runner-执行代码新鲜度与防线分层)。
 
 ```bash
 systemctl --user list-timers 'orbi@*.timer'
 systemctl --user status 'orbi@*.service'
 ```
+
+## engine source 更新通道
+
+Issue #535 用一条显式通道取代了硬编码的"永远跟随 `origin/main`"。
+host/deploy-only 配置键 `engine_source_track` 位于 deploy home 的
+`orbi.toml`——仓库的 `.github/orbi.toml` 里绝不允许出现（runner 在那里
+按 host-only 键拒绝它）：
+
+| `engine_source_track` | 下一次启动时部署 home 跟随的源 |
+| --- | --- |
+| 缺省 / `main` | `origin/main`，fast-forward——#535 之前 dogfood 的精确行为 |
+| `branch:<name>` | `origin/<name>`，fast-forward（会 checkout 该分支） |
+| `release` | 最新的正式 semver tag（`vX.Y.Z`；`vX.Y.Z-rc.1` 之类的 pre-release 和非 semver tag 被排除），detached checkout |
+| `tag:<name>` | 精确锁定该 tag（annotated tag 解引用到其 commit），detached checkout |
+| `sha:<40-hex>` | 精确锁定该 commit，detached checkout |
+
+- **安装与更新**：`install.sh` 新安装复制 `.orbi.example.toml`，其中
+  携带 `engine_source_track = "release"`——新部署跟随最新 release，而
+  不是 main 的中间态。Orbi 自有 dogfood 部署显式固定 `main` 通道。
+  通道值在下一次 service 启动时生效（ExecStartPre 同步施加它）；没有
+  守护进程，也不会重启正在运行的 Runner。
+- **回滚**就是把 track 改回旧的 `tag:`/`sha:` 值（或
+  `release`/`main`）——git 状态是唯一的存储，没有别的状态要清理。
+- **fail closed**（service 不启动，每行都带 `fix=`）：
+  - `deploy_home_dirty files=... fix=...`——tracked 本地编辑会阻塞
+    同步；用 `git -C <deploy_home> stash && systemctl --user start
+    orbi@1.service` 保存后重试（之后 `stash pop`），或用
+    `git -C <deploy_home> checkout -- .` 丢弃。
+  - `engine_source_unresolved reason=tag_not_found|tag_conflict|sha_not_found|branch_ref_missing|no_official_release_tag`——
+    通道无法解析（先 fetch、核对名字，或发布 release tag）。
+  - `engine_source_not_fast_forwardable`——分支在本地已分叉（部署
+    home 永远不应携带本地 commit）。
+  - `engine_source_unverified`——HEAD 无法证明等于解析出的 commit。
+- **成功证据**：每次启动一条结构化
+  `engine_source_synced engine_source_track=... resolved=... head=...`
+  journal 行。
+- **doctor** 只读上报通道：`engine_source: track=... resolved=...
+  head=...`（通道本地无法解析时输出带同样 reason 的 `FAILED` 行）。
+- GitHub 拒绝按未广播的 SHA fetch（`not our ref`），所以 `sha:` 通道
+  一次性 fetch 全部已广播 ref，再在本地验证 commit；只能从未合并的
+  PR 分支可达的 SHA 因此 fail closed——请锁定 tag/release。
+- 交付目标不受影响：`base_branch` 继续管辖任务 worktree 与交付 PR
+  （engine/delivery 的语义隔离是 Issue #543 的主题）。
 
 ## Runner 执行代码新鲜度与防线分层
 
@@ -77,34 +143,38 @@ checkout"是两个不同的事实，所以 tick 在任何 slot 或领取之前�
 - **editable 安装**（官方部署形态）：门禁解析**运行中进程**的 import
   源（`orbi.__file__` → `src/orbi` 包目录，绝不是 WorkingDirectory），
   用 `git rev-parse --show-toplevel` 定位其所在 checkout，并要求该
-  checkout 的 `HEAD` 等于已 fetch 的 `refs/remotes/origin/<base>`
-  ref。worktree 与部署 home 共享 refs，所以事故场景（install 绑到旧
-  worktree）在这里被拒绝。
+  checkout 的 `HEAD` 等于配置的 engine source 通道的期望 commit：
+  `main`/`branch:` 通道取已 fetch 的 `refs/remotes/origin/<branch>`
+  头，`release`/`tag:` 通道取解析出的 release/tag commit，`sha:` 通道
+  取精确 SHA。worktree 与部署 home 共享 refs，所以事故场景（install
+  绑到旧 worktree）在这里被拒绝。
 - **非 editable 安装**（uv tool / PyPI 拷贝）：安装的发行版本
-  （`importlib.metadata`）不得旧于已 fetch base ref 上可达的最新
-  release tag（在 deploy home 解析）。相等或更新即通过。
-- 全部是**本地 git 读**（`rev-parse` / `describe`）：remote-tracking
-  ref 的新鲜度由 `ExecStartPre` fetch 供给，checkout 一致时零网络
-  请求。任何**无法证明新鲜**的状态（origin ref 缺失、无 release tag、
-  import 源无法定位）都以同样方式失败并带 `reason=` 字段——绝不静默
-  放行。
+  （`importlib.metadata`）不得旧于通道对应的 release tag——跟踪分支
+  ref 上可达的最新 tag，或锁定的 `release`/`tag:` 版本本身。`sha:`
+  锁无法映射到版本，按不可验证 fail closed。相等或更新即通过。
+- 全部是**本地 git 读**（`rev-parse` / `describe` / `tag --list`）：
+  已 fetch refs/tags 的新鲜度由 `ExecStartPre` 同步供给，checkout 一
+  致时零网络请求。任何**无法证明新鲜**的状态（origin ref 缺失、无
+  release tag、import 源无法定位）都以同样方式失败并带 `reason=`
+  字段——绝不静默放行。
 - 落后或无法证明时输出结构化
-  `runner_source_stale install=... source=... head=... origin_main=...
-  allowed=false fix=...` 行并 fail fast：不取 slot、不领取、不改标签。
-  `fix` 是对 deploy home 的精确 editable 强制重装命令。
-  `allow_stale_runner: true`（getting-started）把同一行降级为告警，
-  供离线/受限网络机器使用——绝不跳过检查。
+  `runner_source_stale install=... source=... engine_source_track=...
+  head=... origin_main=... allowed=false fix=...` 行并 fail fast：不取
+  slot、不领取、不改标签。`fix` 是对 deploy home 的精确 editable 强制
+  重装命令。`allow_stale_runner: true`（getting-started）把同一行降级
+  为告警，供离线/受限网络机器使用——绝不跳过检查。
 
 **自举边界（为什么需要分层）。** runner 内的自检只能保护**包含**自检
 的 runner 版本：旧到没有自检的 runner 无法自检，而 in-runner 的
 `unit_drift` 对比恰恰运行在可能被冻结的进程里。因此分层是严格的，
 从外到内：
 
-1. **shell 层 `ExecStartPre` preflight**（fetch + `merge --ff-only` +
-   CLI probe 自愈）是最外层防线：由 systemd 执行、不 import 任何
-   runner 代码，因此**不依赖 runner 版本**。保持已安装 unit 跟上模板
-   （`install-units` 与启动前检查的 `unit_drift` 自愈），这道 preflight
-   就永远存在。
+1. **`ExecStartPre` preflight**（CLI probe 自愈 + engine source 同步，
+   Issue #535）是最外层防线：由 systemd 在 Runner 进程存在**之前**
+   执行——probe 步骤是包裹已安装 console script 的纯 shell，探测失败
+   就从 checkout 重装它，因此连 `import orbi` 都失败的 CLI 也会先在
+   这里被修复。保持已安装 unit 跟上模板（`install-units` 与启动前检查
+   的 `unit_drift` 自愈），这道 preflight 就永远存在。
 2. **runner 执行代码新鲜度门禁**（本节，Issue #525）是 in-runner
    不变量：从它发布的版本起，代码陈旧的 runner 拒绝领取任务，而不是
    无声地失败。

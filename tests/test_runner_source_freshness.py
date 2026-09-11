@@ -302,7 +302,162 @@ def test_non_editable_unreadable_version_cannot_pass(
     assert "reason=unverifiable_version_state" in caplog.text
 
 
-# --- version parsing -----------------------------------------------------------
+# --- engine source tracks (Issue #535) -------------------------------------------
+
+
+def _tagged_at(repo: Path, commit: str, tag: str, *, annotated: bool = True):
+    if annotated:
+        git(repo, "tag", "-a", tag, "-m", tag, commit)
+    else:
+        git(repo, "tag", tag, commit)
+
+
+def test_fresh_editable_tag_lock_passes(monkeypatch, tmp_path, caplog):
+    """`engine_source_track = "tag:vX.Y.Z"`: the expected commit is the
+    dereferenced tag (annotated tags resolve to their commit), and a
+    checkout exactly at that commit is FRESH even though origin/main is
+    ahead — the lock is the channel, not the branch."""
+    repo, old, new = build_stale_repo(tmp_path)
+    git(repo, "reset", "--hard", new)
+    _tagged_at(repo, new, "v0.4.2")
+    point_module_file(monkeypatch, repo)
+    with caplog.at_level("INFO"):
+        info = runner.check_runner_source_freshness(
+            gate_config(repo, engine_source_track="tag:v0.4.2"),
+            run_command=recording_run_command([]),
+        )
+    assert info["engine_source_track"] == "tag:v0.4.2"
+    assert info["resolved"] == "refs/tags/v0.4.2"
+    assert info["expected"] == new
+    assert "engine_source_track=tag:v0.4.2" in caplog.text
+
+
+def test_stale_editable_tag_lock_fails_fast(monkeypatch, tmp_path, caplog):
+    """HEAD below the locked tag: the Runner refuses to run with the
+    structured stale line carrying the lock facts."""
+    repo, old, new = build_stale_repo(tmp_path)
+    _tagged_at(repo, new, "v0.4.2")
+    point_module_file(monkeypatch, repo)
+    with caplog.at_level("ERROR"):
+        with pytest.raises(runner.RunnerSourceStaleError):
+            runner.check_runner_source_freshness(
+                gate_config(repo, engine_source_track="tag:v0.4.2"),
+                run_command=recording_run_command([]),
+            )
+    assert "runner_source_stale" in caplog.text
+    assert "engine_source_track=tag:v0.4.2" in caplog.text
+    assert old in caplog.text and new in caplog.text
+
+
+def test_editable_tag_lock_without_the_tag_is_unverifiable(
+    monkeypatch, tmp_path, caplog,
+):
+    repo, old, new = build_stale_repo(tmp_path)
+    point_module_file(monkeypatch, repo)
+    with caplog.at_level("ERROR"):
+        with pytest.raises(runner.RunnerSourceStaleError):
+            runner.check_runner_source_freshness(
+                gate_config(repo, engine_source_track="tag:v9.9.9"),
+                run_command=recording_run_command([]),
+            )
+    assert "reason=unverifiable_engine_source" in caplog.text
+
+
+def test_fresh_editable_release_track_ignores_pre_releases(
+    monkeypatch, tmp_path,
+):
+    """`engine_source_track = "release"`: the expected commit is the
+    newest OFFICIAL semver tag's commit — a newer pre-release tag does
+    not make the checkout stale."""
+    repo, old, new = build_stale_repo(tmp_path)
+    git(repo, "reset", "--hard", new)
+    _tagged_at(repo, old, "v0.3.5")
+    _tagged_at(repo, new, "v0.4.0")
+    _tagged_at(repo, new, "v0.5.0-rc.1")
+    point_module_file(monkeypatch, repo)
+    info = runner.check_runner_source_freshness(
+        gate_config(repo, engine_source_track="release"),
+        run_command=recording_run_command([]),
+    )
+    assert info["resolved"] == "refs/tags/v0.4.0"
+    assert info["expected"] == new
+
+
+def test_fresh_editable_sha_lock_passes(monkeypatch, tmp_path):
+    repo, old, new = build_stale_repo(tmp_path)
+    git(repo, "reset", "--hard", new)
+    point_module_file(monkeypatch, repo)
+    info = runner.check_runner_source_freshness(
+        gate_config(repo, engine_source_track=f"sha:{new}"),
+        run_command=recording_run_command([]),
+    )
+    assert info["resolved"] == new
+    assert info["expected"] == new
+
+
+def test_fresh_editable_branch_track_uses_that_branch_ref(
+    monkeypatch, tmp_path,
+):
+    """`branch:<name>`: the expected commit is the fetched
+    origin/<name> head — the engine may follow a non-main branch."""
+    repo, old, new = build_stale_repo(tmp_path)
+    git(repo, "reset", "--hard", new)
+    git(repo, "update-ref", "refs/remotes/origin/beta", new)
+    point_module_file(monkeypatch, repo)
+    info = runner.check_runner_source_freshness(
+        gate_config(repo, engine_source_track="branch:beta"),
+        run_command=recording_run_command([]),
+    )
+    assert info["engine_source_branch"] == "beta"
+    assert info["expected_ref"] == "refs/remotes/origin/beta"
+    assert info["expected"] == new
+
+
+def test_non_editable_release_track_compares_against_the_resolved_tag(
+    monkeypatch, tmp_path, caplog,
+):
+    repo = _tagged_repo(tmp_path)
+    _non_editable_install(monkeypatch, tmp_path, "0.3.4")
+    with caplog.at_level("ERROR"):
+        with pytest.raises(runner.RunnerSourceStaleError):
+            runner.check_runner_source_freshness(
+                gate_config(repo, engine_source_track="release"),
+                run_command=recording_run_command([]),
+            )
+    assert "version=0.3.4" in caplog.text
+    assert "resolved=refs/tags/v0.3.5" in caplog.text
+
+
+def test_non_editable_tag_lock_at_the_locked_version_passes(
+    monkeypatch, tmp_path,
+):
+    repo = _tagged_repo(tmp_path)
+    _non_editable_install(monkeypatch, tmp_path, "0.3.4")
+    info = runner.check_runner_source_freshness(
+        gate_config(repo, engine_source_track="tag:v0.3.4"),
+        run_command=recording_run_command([]),
+    )
+    assert info["install"] == "non_editable"
+    assert info["resolved"] == "refs/tags/v0.3.4"
+
+
+def test_non_editable_sha_lock_is_unverifiable_and_fails_closed(
+    monkeypatch, tmp_path, caplog,
+):
+    """A sha lock cannot be mapped to an install version: fail closed
+    (Issue #535: an unverifiable source state never runs)."""
+    repo, old, new = build_stale_repo(tmp_path)
+    _non_editable_install(monkeypatch, tmp_path, "0.3.5")
+    with caplog.at_level("ERROR"):
+        with pytest.raises(runner.RunnerSourceStaleError):
+            runner.check_runner_source_freshness(
+                gate_config(repo, engine_source_track=f"sha:{new}"),
+                run_command=recording_run_command([]),
+            )
+    assert "reason=unverifiable_version_state" in caplog.text
+
+
+
 
 
 def test_parse_release_version_handles_tags_and_rejects_noise():

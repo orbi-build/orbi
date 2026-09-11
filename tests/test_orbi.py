@@ -1134,13 +1134,21 @@ def _deploy_world(tmp_path, drift: bool = False) -> tuple[dict, Path]:
 
 
 def _fake_doctor_commands(monkeypatch, ssh_down: bool = False,
-                          dirty: str = "") -> list:
+                          dirty: str = "",
+                          engine_expected: str | None = None) -> list:
     calls: list = []
 
     def fake_run(command, **kwargs):
         calls.append(command)
         if command[:3] == ["git", "rev-parse", "HEAD"]:
             return "0123456789abcdef0123456789abcdef01234567"
+        # Issue #535: the engine-source probes (read-only local git).
+        if command[:2] == ["git", "tag"]:
+            return "v0.4.2\nv0.4.8"
+        if command[:3] == ["git", "rev-parse", "--verify"]:
+            if "v9.9.9" in command[-1]:
+                raise subprocess.CalledProcessError(128, command)
+            return engine_expected or "0123456789abcdef0123456789abcdef01234567"
         if command[:2] == ["git", "config"]:
             return "git@github.com:xqliu/orbi.git"
         if command[:2] == ["git", "status"]:
@@ -1299,6 +1307,80 @@ def test_main_install_units_prints_report_and_returns_zero(
     assert seen["installed_dir"] == tmp_path / "u"
     out = capsys.readouterr().out
     assert "deployed commit=abc installed_dir=/x" in out
+
+
+def _git_checkout_with_release_tag(tmp_path):
+    """A bare origin plus a deploy-home clone carrying one annotated
+    official release tag (the ExecStartPre sync's real git world)."""
+    origin = tmp_path / "origin.git"
+    runner.run_command(["git", "init", "--bare", "-b", "main", str(origin)])
+    home = tmp_path / "deploy"
+    runner.run_command(["git", "clone", str(origin), str(home)])
+    runner.run_command(
+        ["git", "config", "user.email", "pilot@test.local"], cwd=home,
+    )
+    runner.run_command(
+        ["git", "config", "user.name", "Pilot"], cwd=home,
+    )
+    (home / "a.txt").write_text("a", encoding="utf-8")
+    runner.run_command(["git", "add", "."], cwd=home)
+    runner.run_command(["git", "commit", "-m", "c1"], cwd=home)
+    commit = runner.run_command(["git", "rev-parse", "HEAD"], cwd=home)
+    runner.run_command(
+        ["git", "tag", "-a", "v0.4.2", "-m", "v0.4.2", commit], cwd=home,
+    )
+    runner.run_command(["git", "push", "origin", "main", "--tags"], cwd=home)
+    return home, commit
+
+
+def test_main_sync_engine_source_locks_the_deploy_home(
+    tmp_path, monkeypatch,
+):
+    """Issue #535: `orbi sync-engine-source` is the ExecStartPre entry.
+    Against real git it brings the deploy home to the configured channel
+    (the annotated tag dereferences to its commit, detached HEAD) and
+    exits 0; a fail-closed sync exits 1 with the structured line."""
+    home, commit = _git_checkout_with_release_tag(tmp_path)
+    _write_prompts(home)
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["xqliu/orbi"]\n'
+        'deploy_home = "deploy"\n'
+        'engine_source_track = "tag:v0.4.2"\n',
+        encoding="utf-8",
+    )
+    assert orbi.main([
+        "sync-engine-source", "--config", str(config_path),
+    ]) == 0
+    assert runner.run_command(
+        ["git", "rev-parse", "HEAD"], cwd=home,
+    ) == commit
+    assert runner.run_command(
+        ["git", "rev-parse", "v0.4.2"], cwd=home,
+    ) != commit  # the annotated tag object is not what HEAD points at
+
+
+def test_main_sync_engine_source_fails_closed_on_a_dirty_checkout(
+    tmp_path, monkeypatch, caplog,
+):
+    home, commit = _git_checkout_with_release_tag(tmp_path)
+    (home / "a.txt").write_text("dirty", encoding="utf-8")
+    _write_prompts(home)
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["xqliu/orbi"]\n'
+        'deploy_home = "deploy"\n'
+        'engine_source_track = "tag:v0.4.2"\n',
+        encoding="utf-8",
+    )
+    with caplog.at_level("ERROR"):
+        assert orbi.main([
+            "sync-engine-source", "--config", str(config_path),
+        ]) == 1
+    assert "deploy_home_dirty" in caplog.text
+    assert "fix=" in caplog.text
+    # Fail closed: the head is untouched.
+    assert runner.run_command(["git", "rev-parse", "HEAD"], cwd=home) == commit
 
 
 # --- setup (Issue #117) -------------------------------------------------------
@@ -1546,6 +1628,80 @@ def test_doctor_report_clean(tmp_path, monkeypatch):
         "-u", "orbi@2.service",
         "-n", "20", "--no-pager",
     ] in calls
+
+
+def test_doctor_report_includes_the_engine_source_channel(
+    tmp_path, monkeypatch,
+):
+    """Issue #535: doctor reports the configured engine source track,
+    the resolved ref/tag and the deployment home's HEAD SHA."""
+    config, installed = _deploy_world(tmp_path, drift=False)
+    config["engine_source_track"] = "tag:v0.4.2"
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    report = orbi.doctor_report(config, installed)
+    assert (
+        "engine_source: track=tag:v0.4.2 resolved=refs/tags/v0.4.2 "
+        "head=0123456789abcdef0123456789abcdef01234567"
+    ) in report.splitlines()
+
+
+def test_doctor_report_defaults_the_engine_source_track_to_main(
+    tmp_path, monkeypatch,
+):
+    config, installed = _deploy_world(tmp_path, drift=False)
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    report = orbi.doctor_report(config, installed)
+    assert (
+        "engine_source: track=main resolved=refs/remotes/origin/main "
+        "head=0123456789abcdef0123456789abcdef01234567"
+    ) in report.splitlines()
+
+
+def test_doctor_report_reports_a_failed_engine_source_channel(
+    tmp_path, monkeypatch,
+):
+    """Issue #535: doctor is the diagnostic report — an unresolvable
+    channel is REPORTED with its structured reason while the rest of
+    the health report stays readable (the fail-closed gate is the
+    ExecStartPre sync / the freshness gate, not doctor)."""
+    config, installed = _deploy_world(tmp_path, drift=False)
+    config["engine_source_track"] = "tag:v9.9.9"
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    report = orbi.doctor_report(config, installed)
+    failed = [
+        line for line in report.splitlines()
+        if line.startswith("engine_source: FAILED")
+    ]
+    assert len(failed) == 1
+    assert "engine_source_unresolved" in failed[0]
+    assert "reason=tag_not_found" in failed[0]
+    assert "unit_drift: clean" in report.splitlines()
+
+
+def test_doctor_report_reports_a_drifted_engine_source_channel(
+    tmp_path, monkeypatch,
+):
+    """Issue #535: a checkout not yet at the channel's resolved commit
+    (e.g. the track was edited after the last start) is REPORTED as
+    DRIFT with both SHAs — the next service start syncs it."""
+    config, installed = _deploy_world(tmp_path, drift=False)
+    config["engine_source_track"] = "tag:v0.4.2"
+    _fake_doctor_commands(
+        monkeypatch,
+        engine_expected="9999999999999999999999999999999999999999",
+    )
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    report = orbi.doctor_report(config, installed)
+    drifted = [
+        line for line in report.splitlines()
+        if line.startswith("engine_source: DRIFT")
+    ]
+    assert len(drifted) == 1
+    assert "track=tag:v0.4.2" in drifted[0]
+    assert "expected=9999999999999999999999999999999999999999" in drifted[0]
 
 
 def test_doctor_report_reports_dirty_deploy_home(tmp_path, monkeypatch):
