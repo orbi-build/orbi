@@ -16092,7 +16092,8 @@ def test_process_issue_ops_with_uncommitted_leftovers_fails_fast(
     )
 
 
-def make_scope_gh(monkeypatch, *, pr_state_map=None, issue_state_map=None):
+def make_scope_gh(monkeypatch, *, pr_state_map=None, issue_state_map=None,
+                  issue_reason_map=None):
     """Answer `gh pr view` / `gh issue view` for scope verification.
 
     `pr_state_map`: number -> (state, merge_commit_oid) for PRs; a
@@ -16100,9 +16101,12 @@ def make_scope_gh(monkeypatch, *, pr_state_map=None, issue_state_map=None):
     "Could not resolve to a PullRequest" error).
     `issue_state_map`: number -> state for Issues; a number absent from
     BOTH maps is neither.
+    `issue_reason_map`: number -> stateReason for Issues (absent = the
+    null/legacy closure reason).
     """
     pr_state_map = pr_state_map or {}
     issue_state_map = issue_state_map or {}
+    issue_reason_map = issue_reason_map or {}
     calls = []
 
     def fake_run_command(command, **kwargs):
@@ -16133,7 +16137,10 @@ def make_scope_gh(monkeypatch, *, pr_state_map=None, issue_state_map=None):
                         f"the number of {number}."
                     ),
                 )
-            return json.dumps({"number": number, "state": issue_state_map[number]})
+            return json.dumps({
+                "number": number, "state": issue_state_map[number],
+                "stateReason": issue_reason_map.get(number),
+            })
         if command[:3] == ["git", "merge-base", "--is-ancestor"]:
             return ""
         raise AssertionError(f"unexpected command: {command}")
@@ -16153,6 +16160,26 @@ def test_verify_release_scope_evidence_for_pr_and_issue(monkeypatch):
     assert evidence == [
         "PR #123 merged (mergeCommit=aaa111)",
         "Issue #124 closed",
+    ]
+
+
+def test_verify_release_scope_annotates_not_planned_and_counts_completed(
+        monkeypatch):
+    """Issue #707: a CLOSED Issue counts as released only when its
+    stateReason is COMPLETED; a NOT_PLANNED closure (duplicate / won't
+    fix) is never a delivery — the Scope evidence annotates it as
+    excluded instead of silently counting it in."""
+    make_scope_gh(
+        monkeypatch,
+        issue_state_map={124: "CLOSED", 125: "CLOSED"},
+        issue_reason_map={124: "COMPLETED", 125: "NOT_PLANNED"},
+    )
+    evidence = release.verify_release_scope(
+        "o/r", [124, 125], Path("/repo"), "release123",
+    )
+    assert evidence == [
+        "Issue #124 closed",
+        "Issue #125 closed (not planned, excluded)",
     ]
 
 
@@ -17318,7 +17345,11 @@ def test_build_release_changelog_groups_descriptions_links_and_orders(monkeypatc
     }
 
     def fake_run_command(command, **kwargs):
-        assert command[:3] == ["gh", "issue", "view"]
+        # Issue #707: every closedBy PR link is merged-checked before it
+        # is written; this test's PRs are all merged.
+        if command[:3] == ["gh", "pr", "view"]:
+            return json.dumps({"number": int(command[3]), "state": "MERGED"})
+        assert command[:3] == ["gh", "issue", "view"], command
         return json.dumps(source[int(command[3])])
 
     monkeypatch.setattr(release, "run_command", fake_run_command)
@@ -17337,6 +17368,65 @@ def test_build_release_changelog_groups_descriptions_links_and_orders(monkeypatc
 ### Documentation
 
 - Explain the full setup workflow ([Issue #20](https://github.com/o/r/issues/20))"""
+
+
+def test_build_release_changelog_skips_not_planned_issues(monkeypatch):
+    """Issue #707 (the v0.4.6 scene): #702 was closed NOT_PLANNED as a
+    duplicate — it must not enter the Changelog, and its unmerged
+    closedBy PR (#705) must not leak in through any entry."""
+    item = {
+        "number": 702, "title": "Duplicate delivery ticket",
+        "body": "Duplicate of #658",
+        "url": "https://github.com/o/r/issues/702", "labels": [],
+        "stateReason": "NOT_PLANNED",
+        "closedByPullRequestsReferences": [{
+            "number": 705, "url": "https://github.com/o/r/pull/705",
+        }],
+    }
+
+    def fake_run_command(command, **kwargs):
+        # Any second command (e.g. a pr view) would fail this assert: a
+        # NOT_PLANNED issue is skipped before its closedBy PRs are read.
+        assert command[:3] == ["gh", "issue", "view"], command
+        return json.dumps(item)
+
+    monkeypatch.setattr(release, "run_command", fake_run_command)
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    changelog = release.build_release_changelog("o/r", [702])
+    assert "#702" not in changelog
+    assert "#705" not in changelog
+    assert "Duplicate delivery ticket" not in changelog
+
+
+def test_build_release_changelog_omits_unmerged_pr_links(monkeypatch):
+    """Issue #707: a closedBy PR link is written only when the PR is
+    actually MERGED — an OPEN PR never appears in the release notes."""
+    source = {
+        10: {
+            "number": 10, "title": "Ship the claim-race fix",
+            "body": "detail",
+            "url": "https://github.com/o/r/issues/10", "labels": [],
+            "stateReason": "COMPLETED",
+            "closedByPullRequestsReferences": [
+                {"number": 11, "url": "https://github.com/o/r/pull/11"},
+                {"number": 705, "url": "https://github.com/o/r/pull/705"},
+            ],
+        },
+    }
+    pr_states = {11: "MERGED", 705: "OPEN"}
+
+    def fake_run_command(command, **kwargs):
+        if command[:3] == ["gh", "pr", "view"]:
+            number = int(command[3])
+            return json.dumps({"number": number, "state": pr_states[number]})
+        assert command[:3] == ["gh", "issue", "view"], command
+        return json.dumps(source[int(command[3])])
+
+    monkeypatch.setattr(release, "run_command", fake_run_command)
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    changelog = release.build_release_changelog("o/r", [10])
+    assert "[PR #11](https://github.com/o/r/pull/11)" in changelog
+    assert "#705" not in changelog
 
 
 def test_release_changelog_category_covers_reliability_bug_and_features():
@@ -17511,8 +17601,11 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             if fields == "comments":
                 return json.dumps({"comments": []})
             number = int(command[3])
-            if fields == "number,state" and number == 124:
-                return json.dumps({"number": 124, "state": "CLOSED"})
+            if fields == "number,state,stateReason" and number == 124:
+                return json.dumps({
+                    "number": 124, "state": "CLOSED",
+                    "stateReason": "COMPLETED",
+                })
             if fields.startswith("number,title,") and number in (123, 124):
                 return json.dumps({
                     "number": number,
@@ -17520,6 +17613,7 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                     "body": "Concrete release behavior.",
                     "url": f"https://github.com/o/r/issues/{number}",
                     "labels": [],
+                    "stateReason": "COMPLETED",
                     "closedByPullRequestsReferences": [],
                 })
             raise subprocess.CalledProcessError(

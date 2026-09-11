@@ -249,7 +249,11 @@ DAG, no priority numbers, no separate queues:
      gate that cannot be checked because of a real `gh` failure is a
      failed gate.
   4. Verify the scope item by item: `gh pr view` must report `MERGED`,
-     otherwise `gh issue view` must report `CLOSED`. Checkbox parsing
+     otherwise `gh issue view` must report `CLOSED` with `stateReason`
+     `COMPLETED` — a `NOT_PLANNED` closure (duplicate / won't fix) is
+     annotated in the Scope evidence as excluded and never enters the
+     Changelog, and a Changelog PR link is written only when its PR is
+     merged (Issue #707). Checkbox parsing
      is forbidden — every scope item is checked against the live API.
   5. Test acceptance is the CI-wait gate on the release commit: after
      the version bump the gates re-run against that exact commit
