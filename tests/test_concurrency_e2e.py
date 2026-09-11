@@ -971,10 +971,10 @@ def test_capacity_two_allows_two_runners_and_rejects_third(clone, tmp_path):
     )
     for runner in (first, second):
         out, err = runner.communicate(timeout=120)
-        text = err or ""
-        drained = getattr(runner, "drained_stderr", None)
-        if drained is not None:
-            text = drained.getvalue() + text
+        # Both runners were started with drain_stderr=True: the drained
+        # buffer carries the journal that communicate() cannot (the
+        # drain thread consumed the pipe).
+        text = runner.drained_stderr.getvalue() + (err or "")
         assert runner.returncode == 0, text
         assert "delivery_auto_merged" in text
     assert slots_held(clone, 2) == [(1, None), (2, None)]

@@ -1646,6 +1646,22 @@ def test_doctor_report_includes_the_engine_source_channel(
     ) in report.splitlines()
 
 
+def test_doctor_report_resolves_the_release_track(
+    tmp_path, monkeypatch,
+):
+    """Issue #535: `release` resolves to the newest official semver tag
+    the doctor can see locally (pre-releases excluded)."""
+    config, installed = _deploy_world(tmp_path, drift=False)
+    config["engine_source_track"] = "release"
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    report = orbi.doctor_report(config, installed)
+    assert (
+        "engine_source: track=release resolved=refs/tags/v0.4.8 "
+        "head=0123456789abcdef0123456789abcdef01234567"
+    ) in report.splitlines()
+
+
 def test_doctor_report_defaults_the_engine_source_track_to_main(
     tmp_path, monkeypatch,
 ):

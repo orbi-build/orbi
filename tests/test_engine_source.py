@@ -427,6 +427,32 @@ def test_sync_branch_reraises_a_fetch_failure_when_the_ref_exists(
 
 
 
+def test_git_helper_fails_fast_on_nonzero_exit(engine_repo):
+    """The fixture git helper must fail loudly on a git error, never
+    pass a broken setup silently."""
+    with pytest.raises(AssertionError, match="rc="):
+        git(engine_repo.home, "rev-parse", "--verify", "refs/heads/none")
+
+
+def test_sync_branch_track_fails_closed_when_the_head_cannot_be_verified(
+    engine_repo,
+):
+    """The branch channel has the same last-resort fail-closed line as
+    the lock channels: a head that cannot be verified against the
+    fetched ref is engine_source_unverified."""
+
+    def lying_head_run(command, *, cwd=None, timeout=None, **kwargs):
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "0" * 40
+        return real_run_command(command, cwd=cwd, timeout=timeout, **kwargs)
+
+    with pytest.raises(engine_source.EngineSourceError) as excinfo:
+        engine_source.sync_engine_source(
+            engine_repo.home, "main", run_command=lying_head_run,
+        )
+    assert "engine_source_unverified" in str(excinfo.value)
+
+
 # --- read-only status (doctor / freshness inputs) -------------------------------------
 
 
@@ -462,3 +488,13 @@ def test_engine_source_status_reports_the_unresolved_reason(engine_repo):
     assert status["ok"] is False
     assert "engine_source_unresolved" in status["error"]
     assert status["resolved"] == "-"
+
+
+def test_engine_source_status_reports_a_missing_branch_ref(engine_repo):
+    """`branch:<name>` with no fetched origin/<name> ref is unresolved
+    (read-only status: the structured reason, no raise)."""
+    status = engine_source.engine_source_status(
+        engine_repo.home, "branch:ghost", run_command=real_run_command,
+    )
+    assert status["ok"] is False
+    assert "reason=branch_ref_missing" in status["error"]

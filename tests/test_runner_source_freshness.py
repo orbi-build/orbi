@@ -373,7 +373,9 @@ def test_fresh_editable_release_track_ignores_pre_releases(
     git(repo, "reset", "--hard", new)
     _tagged_at(repo, old, "v0.3.5")
     _tagged_at(repo, new, "v0.4.0")
-    _tagged_at(repo, new, "v0.5.0-rc.1")
+    # The pre-release can also be a LIGHTWEIGHT tag: the exclusion rule
+    # is about the version, not the tag object.
+    _tagged_at(repo, new, "v0.5.0-rc.1", annotated=False)
     point_module_file(monkeypatch, repo)
     info = runner.check_runner_source_freshness(
         gate_config(repo, engine_source_track="release"),
