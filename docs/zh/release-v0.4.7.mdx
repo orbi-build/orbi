@@ -1,0 +1,44 @@
+# v0.4.7 发布（最新）
+
+`v0.4.7` 于 2026-09-11T11:24:50Z 发布为 GitHub Release [v0.4.7](https://github.com/orbi-build/orbi/releases/tag/v0.4.7)（release task：Issue #717）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.4.7` | 注解 tag `d8ee6efc7e2e27aecb511103219e073929dd68c5` | 提交 `8b4dfaff013ad3af4ef7c1c2d813c8e4e3ffc636` |
+
+## Release notes
+
+## Changelog
+
+### Reliability and recovery
+
+- release notes 把 NOT_PLANNED 关闭的票与未合并的 PR 当成已发布内容写进 changelog ([Issue #707](https://github.com/orbi-build/orbi/issues/707); [PR #711](https://github.com/orbi-build/orbi/pull/711))
+
+### Bug fixes
+
+- 同一 run 的重复失败每次追加新评论：限额窗口内一个 Issue 会积累几十条相同内容，淹没交付进度 ([Issue #645](https://github.com/orbi-build/orbi/issues/645); [PR #713](https://github.com/orbi-build/orbi/pull/713))
+- CI triage 只要下次变绿就关票，不检查是否真被修过——同一指纹已循环 7 次 ([Issue #715](https://github.com/orbi-build/orbi/issues/715); [PR #716](https://github.com/orbi-build/orbi/pull/716))
+
+- tag: `v0.4.7`
+- release commit: `8b4dfaff013ad3af4ef7c1c2d813c8e4e3ffc636`
+- release task: Issue #717
+
+## Scope (verified item by item)
+
+- Issue #645 closed
+- Issue #707 closed
+- Issue #715 closed
+- NOT released (still open in milestone v0.4.7): open Issue #717 Release task：发布 v0.4.7（只收 blocker：CI triage 无条件关票守卫）
+
+## Pre-release gates
+
+- no open Issue in milestone 'v0.4.7' carries ai-in-progress / ai-pr-opened / ai-fix-needed
+- CI on the release commit: 4 check(s) all success/neutral/skipped (waited 210s for pending checks)
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit 8b4dfaff013ad3af4ef7c1c2d813c8e4e3ffc636 (the #268 CI-wait gate; no local test execution)
+
+run_id=ebb00fbd
