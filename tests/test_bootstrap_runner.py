@@ -3795,6 +3795,124 @@ def test_process_issue_yields_when_the_stable_branch_lands_mid_preparation(
     assert result == runner.IssueResult("claim-yielded", None)
 
 
+def _release_race_deps(monkeypatch, in_progress: bool, live_holders: list):
+    """Issue #708 fakes: the direct read (`gh issue view`) answers the
+    LIVE label truth; `slot_occupancy` answers the runner-liveness
+    truth (`None`/own pid = alone, another pid = a live co-runner)."""
+    def fake_run_command(command, **kwargs):
+        if command[:3] == ["gh", "issue", "view"]:
+            labels = ([{"name": "ai-in-progress"}]
+                      if in_progress else [])
+            return json.dumps({"labels": labels})
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(
+        runner, "slot_occupancy", lambda *a, **k: list(live_holders),
+    )
+    return fake_run_command
+
+
+def _release_issue() -> dict:
+    return {"number": 30, "title": "Release 1.2.3", "body": "## Release",
+            "labels": [{"name": "ai-release"}, {"name": "ai-ready"}]}
+
+
+def _release_dispatch_config(tmp_path) -> dict:
+    return {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+            "base_branch": "main", "slot_dir": tmp_path / "slots",
+            "max_concurrency": 2}
+
+
+def _spy_process_release(monkeypatch) -> list:
+    calls = []
+
+    def spy(*args, **kwargs):
+        calls.append(args)
+        return "done"
+
+    import orbi.release as release_module
+    monkeypatch.setattr(release_module, "process_release", spy)
+    return calls
+
+
+def test_release_dispatch_yields_when_in_progress_and_another_runner_live(
+    monkeypatch, tmp_path,
+):
+    """Issue #708：ready 扫描的滞后快照可把已被认领的发布票递给第二个
+    活实例。开发路径在 #658 拿到了直读让路；发布分发同样必须让路——
+    在途且另一活 runner 持槽 = 该发布正在被做，本 tick 退出，绝不与
+    状态机并发（成功发布不会被败者改写成 ai-blocked）。"""
+    _release_race_deps(
+        monkeypatch, in_progress=True,
+        live_holders=[(tmp_path / "slot-0", 424242)],
+    )
+    calls = _spy_process_release(monkeypatch)
+    result = runner.process_issue(
+        _release_issue(), _release_dispatch_config(tmp_path), "owner/repo",
+    )
+    assert result == runner.IssueResult("claim-yielded", None)
+    assert calls == [], "the release state machine must not start"
+
+
+def test_release_dispatch_resumes_orphan_when_no_other_runner_live(
+    monkeypatch, tmp_path,
+):
+    """Issue #708 的另一半：在途但无其他活 runner = 死 runner 留下的
+    孤儿发布——照旧进 process_release 复用 run_id 续跑（#98 的重启
+    resume 语义不因让路守卫而丢失）。"""
+    _release_race_deps(
+        monkeypatch, in_progress=True,
+        live_holders=[(tmp_path / "slot-0", None)],
+    )
+    calls = _spy_process_release(monkeypatch)
+    result = runner.process_issue(
+        _release_issue(), _release_dispatch_config(tmp_path), "owner/repo",
+    )
+    assert result == runner.IssueResult("release", "done")
+    assert len(calls) == 1
+
+
+def test_release_dispatch_fresh_ticket_unchanged_by_the_guard(
+    monkeypatch, tmp_path,
+):
+    """直读没有 ai-in-progress（新票）时，守卫零作用——照常分发；
+    活 runner 存在与否只对在途票有意义。"""
+    _release_race_deps(
+        monkeypatch, in_progress=False,
+        live_holders=[(tmp_path / "slot-0", 424242)],
+    )
+    calls = _spy_process_release(monkeypatch)
+    result = runner.process_issue(
+        _release_issue(), _release_dispatch_config(tmp_path), "owner/repo",
+    )
+    assert result == runner.IssueResult("release", "done")
+    assert len(calls) == 1
+
+
+def test_another_live_runner_reads_slot_occupancy(monkeypatch, tmp_path):
+    """_another_live_runner 是 #39 存活规则的独立助手：别的 pid 持槽
+    =True，None/自己 =False（与 pick_in_progress_issue 同一语义，
+    runner.py:2412 的循环抽出来共用）。"""
+    slot_dir = tmp_path / "slots"
+    slot_dir.mkdir()
+    seen = {}
+
+    def foreign(directory, limit):
+        seen["args"] = (directory, limit)
+        return [(slot_dir / "slot-0", 424242)]
+
+    monkeypatch.setattr(runner, "slot_occupancy", foreign)
+    assert runner._another_live_runner(slot_dir, 2) is True
+    assert seen["args"] == (slot_dir, 2)
+    monkeypatch.setattr(
+        runner, "slot_occupancy",
+        lambda d, m: [(slot_dir / "slot-0", None),
+                      (slot_dir / "slot-1", os.getpid())],
+    )
+    assert runner._another_live_runner(slot_dir, 2) is False
+
+
 def test_process_issue_resumes_existing_run_and_same_progress_comment(
     monkeypatch, tmp_path,
 ):
