@@ -137,6 +137,17 @@ def test_validate_execution_source_repos_rejects_multiple_checkouts():
         )
 
 
+def test_example_config_passes_execution_source_repos_validation():
+    """Issue #697: README tells a new user to copy the committed example
+    (`cp .orbi.example.toml orbi.toml`), so the example must be a config
+    the Runner accepts — exactly one source repository until multi-repo
+    workspaces are available (Issue #133)."""
+    example = Path(__file__).resolve().parent.parent / ".orbi.example.toml"
+    config = runner.load_config(example)
+    assert len(config["source_repos"]) == 1
+    runner.validate_execution_source_repos(config["source_repos"])
+
+
 def test_load_config_requires_source_repos(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text("prompt = \"prompt.md\"\n", encoding="utf-8")
