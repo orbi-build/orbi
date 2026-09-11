@@ -70,7 +70,14 @@ def git(*cmd):
                           check=True).stdout.strip()
 
 
-if args[:2] == ["issue", "list"]:
+if args[:2] == ["issue", "view"]:
+    # Issue #658: the pre-claim recheck reads the LIVE label truth
+    # directly (`gh issue view`) instead of the search index.
+    issue = state["issues"][args[2]]
+    print(json.dumps(
+        {"labels": [{"name": label} for label in issue["labels"]]},
+    ))
+elif args[:2] == ["issue", "list"]:
     search = args[args.index("--search") + 1]
     tokens = search.split()
     required = [t[6:].split(",") for t in tokens if t.startswith("label:")]
