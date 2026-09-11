@@ -12,6 +12,17 @@
 
 ## Changelog
 
+<Note>
+2026-09-10 勘误：以下条目确实随本版本发出，但生成 changelog 时缺失。生成器按发布那一刻的 Milestone 归属推导 scope，因此挂在其它 Milestone 下的票即便代码已包含在本 tag 中，也不会出现在这份 notes 里。下列每一条都用 `git merge-base --is-ancestor <merge commit> <tag>` 验证过。
+</Note>
+
+
+### Bug fixes
+
+- CI failure: tests on branch fix/release-publish-closeout-bypass (pull_request) ([Issue #601](https://github.com/orbi-build/orbi/issues/601); [PR #605](https://github.com/orbi-build/orbi/pull/605))
+- CI failure: tests on branch fix/review-ci-round-budget (pull_request) ([Issue #602](https://github.com/orbi-build/orbi/issues/602); [PR #603](https://github.com/orbi-build/orbi/pull/603))
+
+
 ### Features
 
 - `发布 scope 推导与 milestone 查询：gh api --paginate 多页输出按单页解析，Milestone 的 issue 超过一页时发布永久失败` ([Issue #584](https://github.com/orbi-build/orbi/issues/584))

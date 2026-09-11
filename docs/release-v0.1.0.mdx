@@ -89,3 +89,49 @@ delivered by their own PRs; that does not change the v0.1 scope.)
 
 No protected branch was modified, no second business PR was created, and
 the existing `v0.1.0` tag was neither moved nor force-pushed.
+
+## Changelog
+
+<Note>
+Corrected 2026-09-10: the entries below shipped in this release but were missing from the generated changelog. The generator derived its scope from Milestone membership at publish time, so a ticket filed under another Milestone never reached these notes even though its code is contained in this tag. Each entry below was verified with `git merge-base --is-ancestor <merge commit> <tag>`.
+</Note>
+
+
+### Features
+
+- Scan Pilot tasks before business tasks ([Issue #1](https://github.com/orbi-build/orbi/issues/1); [PR #5](https://github.com/orbi-build/orbi/pull/5))
+- Add task dispatch and status commands ([Issue #3](https://github.com/orbi-build/orbi/issues/3); [PR #9](https://github.com/orbi-build/orbi/pull/9); [PR #17](https://github.com/orbi-build/orbi/pull/17))
+- Add repository AGENTS.md development contract ([Issue #12](https://github.com/orbi-build/orbi/issues/12); [PR #29](https://github.com/orbi-build/orbi/pull/29))
+- Keep task worktrees inside the project workspace ([Issue #14](https://github.com/orbi-build/orbi/issues/14); [PR #28](https://github.com/orbi-build/orbi/pull/28))
+- Tune idle polling interval from 5 to 15 minutes ([Issue #21](https://github.com/orbi-build/orbi/issues/21); [PR #26](https://github.com/orbi-build/orbi/pull/26))
+- Stream live Pi activity during active runs ([Issue #24](https://github.com/orbi-build/orbi/issues/24); [PR #37](https://github.com/orbi-build/orbi/pull/37))
+- Create tasks from latest main and make retries conflict-safe ([Issue #31](https://github.com/orbi-build/orbi/issues/31); [PR #36](https://github.com/orbi-build/orbi/pull/36))
+- Run the Pilot scheduler 24 hours a day ([Issue #33](https://github.com/orbi-build/orbi/issues/33); [PR #35](https://github.com/orbi-build/orbi/pull/35))
+- Automatically review, fix, and merge delivered PRs ([Issue #34](https://github.com/orbi-build/orbi/issues/34); [PR #38](https://github.com/orbi-build/orbi/pull/38))
+- Make live activity logs concise and readable ([Issue #40](https://github.com/orbi-build/orbi/issues/40); [PR #44](https://github.com/orbi-build/orbi/pull/44))
+- Propagate run_id as the end-to-end correlation ID ([Issue #41](https://github.com/orbi-build/orbi/issues/41); [PR #43](https://github.com/orbi-build/orbi/pull/43))
+- 交付契约:PR body 使用 Fixes #N,GitHub 原生自动关闭 Issue ([Issue #53](https://github.com/orbi-build/orbi/issues/53); [PR #69](https://github.com/orbi-build/orbi/pull/69))
+- Add an SPDX LICENSE file for the public repo ([Issue #81](https://github.com/orbi-build/orbi/issues/81); [PR #88](https://github.com/orbi-build/orbi/pull/88))
+- Pass different --skill lists to implement vs review Pi ([Issue #83](https://github.com/orbi-build/orbi/issues/83); [PR #86](https://github.com/orbi-build/orbi/pull/86))
+
+
+### Reliability and recovery
+
+- Configure and enforce maximum concurrent Pilot tasks ([Issue #39](https://github.com/orbi-build/orbi/issues/39); [PR #46](https://github.com/orbi-build/orbi/pull/46))
+- Successful PR open then progress finish() 404 labels the Issue ai-blocked and skips review ([Issue #60](https://github.com/orbi-build/orbi/issues/60); [PR #62](https://github.com/orbi-build/orbi/pull/62))
+- Bug: progress PATCH 404 after opening a PR skips review and blocks the Issue ([Issue #70](https://github.com/orbi-build/orbi/issues/70); [PR #85](https://github.com/orbi-build/orbi/pull/85))
+
+
+### Deployment and operations
+
+- Add systemd timer for automatic two-source polling ([Issue #2](https://github.com/orbi-build/orbi/issues/2); [PR #6](https://github.com/orbi-build/orbi/pull/6))
+
+
+### Observability
+
+- Journal lines print run_id twice on activity/heartbeat ([Issue #57](https://github.com/orbi-build/orbi/issues/57); [PR #59](https://github.com/orbi-build/orbi/pull/59))
+
+
+### Bug fixes
+
+- Reviewer may fix in the same session; do not cold-start Fixer plus a third Review ([Issue #82](https://github.com/orbi-build/orbi/issues/82); [PR #87](https://github.com/orbi-build/orbi/pull/87))
