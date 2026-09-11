@@ -208,6 +208,38 @@ def test_load_config_rejects_a_non_string_git_transport(tmp_path):
         runner.load_config(config_path)
 
 
+def test_load_config_defaults_engine_source_track_to_main(tmp_path):
+    """Issue #535: absent engine_source_track keeps the exact pre-#535
+    dogfood behavior — the deploy home tracks origin/main."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    assert runner.load_config(config_path)["engine_source_track"] == "main"
+
+
+@pytest.mark.parametrize(
+    "track",
+    ["main", "release", "branch:release-candidate", "tag:v0.4.2",
+     "sha:" + "a" * 40],
+)
+def test_load_config_accepts_the_engine_source_track_forms(tmp_path, track):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        f'source_repos = ["owner/repo"]\nengine_source_track = "{track}"\n',
+        encoding="utf-8",
+    )
+    assert runner.load_config(config_path)["engine_source_track"] == track
+
+
+def test_load_config_rejects_an_invalid_engine_source_track(tmp_path):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nengine_source_track = "latest"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="engine_source_track"):
+        runner.load_config(config_path)
+
+
 def test_load_config_defaults_prompts_to_prompts_directory(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
@@ -9671,11 +9703,20 @@ def test_stream_pi_timeout_tool_inside_deadline_not_killed(
     `pi_idle_wait` (the evidence: pid, cmdline, deadline) instead of
     TERMed it, and the run SUCCEEDS when the tool reaches its deadline
     on its own."""
-    command = make_timeout_tool_pi(tmp_path, tool_seconds=0.6)
+    # The whole timeline is scaled up from the original sub-second
+    # margins (0.3 s window / 0.6 s tool): under a loaded runner
+    # (coverage tracing) the 0.1 s polls stretched past the deadline and
+    # missed the inside-deadline evidence entirely, or the wait outlived
+    # the 3 x 0.3 s escalation budget (2026-09-11 flake). With a 1.0 s
+    # idle window and a 2.5 s tool the detection window is 1.5 s wide
+    # and ends 0.5 s before the 3 x 1.0 s exhaustion budget.
+    # `pi_idle_wait` is logged once per stall, so the longer tool does
+    # not change the one-decision expectation.
+    command = make_timeout_tool_pi(tmp_path, tool_seconds=2.5)
     with caplog.at_level("INFO"):
         result = runner.stream_pi(
-            command, cwd=tmp_path, poll_interval=0.1,
-            idle_warn_seconds=0.3,
+            command, cwd=tmp_path, poll_interval=0.2,
+            idle_warn_seconds=1.0,
             run_id="deadbeef", issue=105, source_repo="xqliu/orbi",
             branch="b",
         )

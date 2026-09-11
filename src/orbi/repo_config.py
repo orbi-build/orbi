@@ -85,6 +85,9 @@ HOST_ONLY_KEYS = frozenset({
     "slot_dir",
     "unit_name",
     "git_transport",
+    # Engine source update channel (Issue #535): a deploy-home decision,
+    # never a repository policy.
+    "engine_source_track",
     "auto_next_milestone",
     "allow_stale_runner",
     "release_ci_wait_seconds",
