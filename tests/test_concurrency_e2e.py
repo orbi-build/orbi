@@ -317,17 +317,13 @@ if "INDEPENDENT REVIEW" in system_prompt:
     if first_review:
         with open(marker, "w", encoding="utf-8") as handle:
             handle.write("reviewed")
-        # Initial review: one major finding...
-        print('REVIEW_VERDICT ' + json.dumps({
-            "verdict": "findings", "head": reviewed_head(),
-            "blockers": 0, "majors": 1,
-            "minors": 0,
-            "findings": [
-                {"level": "Major", "location": "e2e",
-                 "note": "first review finding"}
-            ],
-        }))
-        # ...fixed in this same session: commit the fix (the PR head
+        # Initial review: one major finding, narrated as PROSE (Issue
+        # #774: the review reply carries exactly ONE machine-readable
+        # verdict line — an earlier `REVIEW_VERDICT` line would make the
+        # output two conflicting verdicts, which the parser refuses).
+        print("Major finding at e2e: first review finding — fixing in "
+              "this session.")
+        # Fixed in this same session: commit the fix (the PR head
         # advances; the runner must re-freeze and merge the fixed head,
         # not the frozen one). The fix content is unique per
         # invocation: a later delivery's base already carries an

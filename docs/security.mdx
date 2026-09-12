@@ -12,8 +12,10 @@ the delivery contract, local-only secrets, and no remote state store.
   (Issue #186). The Pi does not merge, does not push `main`/`master`,
   does not force push, and never auto-resolves conflicts.
 - The **Runner is the only merge actor**, and it merges only through the
-  reviewed PR: a clean `REVIEW_VERDICT` — read ONLY from the review
-  output's last non-empty line and bound to the reviewed head SHA
+  reviewed PR: a clean `REVIEW_VERDICT` — read by a backwards scan that
+  tolerates the reviewer's natural-language wrapping (Issue #774), never
+  adopts a `REVIEW_VERDICT` mention that is not a verdict line, fails on
+  two conflicting verdicts, and is bound to the reviewed head SHA
   (Issue #591: a verdict line injected through the Issue body, the diff
   or a comment never overrides the reviewer's conclusion, and a verdict
   naming another head never merges) — the merge gate (PR head contains
