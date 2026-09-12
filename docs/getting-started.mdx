@@ -353,10 +353,10 @@ it references an environment variable):
       "apiKey": "$GROQ_API_KEY",
       "models": [
         {
-          "id": "qwen/qwen3.8-27b",
-          "name": "Qwen 3.8 27B",
+          "id": "groq/compound",
+          "name": "Groq Compound",
           "contextWindow": 131072,
-          "maxTokens": 16384
+          "maxTokens": 8192
         }
       ]
     }
@@ -393,13 +393,39 @@ A local `llama.cpp` server (OpenAI-compatible routes at `/v1`, default
 ```
 
 Then select the provider and model in `orbi.toml` (the Runner
-passes them to Pi as `--provider groq --model qwen/qwen3.8-27b`, and
+passes them to Pi as `--provider groq --model groq/compound`, and
 `--thinking <level>` when `pi_thinking` is set):
 
 ```toml
 pi_providers = ".orbi/pi-providers.json"
 pi_provider = "groq"
-pi_model = "qwen/qwen3.8-27b"
+pi_model = "groq/compound"
+```
+
+#### Why `groq/compound` and not `qwen/qwen3.8-27b`
+
+Both models sit on Groq's Free Plan, and `qwen/qwen3.8-27b` even
+carries the higher request quota (1K RPD vs 250 RPD) — but the
+deciding quota for delivery-scale work is tokens, not requests. Per
+Groq account-page rate-limit data (provided by a user on 2026-09-12,
+not an Orbi measurement — re-check the official
+[rate-limit table](https://console.groq.com/docs/rate-limits) before
+relying on it), `groq/compound` is **70K TPM with no daily token
+cap**, while `qwen/qwen3.8-27b` is **8K TPM / 200K TPD**.
+
+At this repository's delivery scale the difference is one of kind, not
+degree: the median across this repo's own ~47 real deliveries is
+≈ 2.2M tokens per delivery, implement and review combined (a Python
+repository with CI and structured Issues — unverified on other
+repositories), so the 200K TPD cap cannot fund even one median
+delivery per day, and the 8K TPM alone means hours of rate-limit
+waiting. The token wall arrives long before the request wall, which
+is why the higher RPD never helps. The template, the
+[provider guide](/providers) and this guide therefore pin
+`groq/compound` — whose low TPM still makes short, bounded coding
+Issues a better fit than long-context repository analysis. These are
+account limits, not an Orbi guarantee; real Groq requests, usage
+metering, and 429 responses remain untested here.
 ```
 
 #### Keeping the API key out of the repo and the docs

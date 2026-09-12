@@ -419,6 +419,59 @@ def test_docs_document_groq_free_plan_configuration_and_limits():
         assert "GROQ_API_KEY" in text
 
 
+def test_docs_getting_started_groq_example_matches_the_provider_template():
+    """Issue #776: both getting-started pages must configure the same Groq
+    model the provider template, the provider guide, and the weekly CI
+    catalog check pin — `groq/compound` with the template's 8,192-token
+    maximum completion — never the 8K-TPM `qwen/qwen3.8-27b`, and must
+    explain the choice on token quota (TPM/TPD), not the higher request
+    quota, with sourced numbers and without any new "tested" claim."""
+    for slug in ("getting-started", "zh/getting-started"):
+        text = page_text(slug)
+        # No fenced example (JSON/TOML/bash) configures the weak model;
+        # the prose comparison names it, the configuration never does.
+        blocks = re.findall(r"```[a-z]*\n(.*?)```", text, re.DOTALL)
+        assert blocks, f"{slug} must carry fenced examples"
+        for block in blocks:
+            assert "qwen/qwen3.8-27b" not in block, (
+                f"{slug} must not configure qwen/qwen3.8-27b anywhere"
+            )
+        # The example is the template's model, with the template's limits.
+        assert '"id": "groq/compound"' in text, (
+            f"{slug} must define the groq provider on groq/compound"
+        )
+        assert '"name": "Groq Compound"' in text, (
+            f"{slug} must carry the template's model name"
+        )
+        assert '"maxTokens": 8192' in text, (
+            f"{slug} must align maxTokens with templates/pi-providers/groq.json"
+        )
+        assert "--model groq/compound" in text, (
+            f"{slug} must document the real Pi launch flag"
+        )
+        assert 'pi_model = "groq/compound"' in text, (
+            f"{slug} must select groq/compound in orbi.toml"
+        )
+        # The why: token quota decides, not the higher request quota —
+        # with the source date and the evidence scope kept honest.
+        for fact in (
+            "qwen/qwen3.8-27b", "70K", "8K", "TPD", "RPD",
+            "2026-09-12",
+        ):
+            assert fact in text, f"{slug} must explain the model choice ({fact})"
+        assert (
+            "未实测" in text
+            or "not tested" in text.lower()
+            or "untested" in text.lower()
+        ), f"{slug} must keep the untested boundary, no new availability claim"
+        assert (
+            "未验证" in text
+            or "未经验证" in text
+            or "not verified" in text.lower()
+            or "unverified" in text.lower()
+        ), f"{slug} must scope the delivery-token evidence to this repository"
+
+
 def test_docs_document_openrouter_free_models_with_honest_limits():
     """Issue #316: the OpenRouter guide must be runnable and distinguish
     catalog facts from measurements that were not performed."""
