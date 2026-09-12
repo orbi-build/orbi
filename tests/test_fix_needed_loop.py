@@ -282,7 +282,9 @@ def test_wait_for_delivery_recoverable_review_failure_stays_fix_needed(
     assert "session=" in body
     assert "phase=" in body
     assert "last_activity=" in body
-    assert "stderr=<empty>" in body
+    # Issue #775: raw evidence segments are fenced; the empty stderr is
+    # the placeholder inside its fence.
+    assert "stderr_tail:\n```\n<empty>\n```" in body
     if isinstance(exc, subprocess.CalledProcessError):
         assert "exit_code=1" in body
     # The SAME failure comment is written to the PR (Issue #50: the
