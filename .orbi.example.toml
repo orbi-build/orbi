@@ -140,6 +140,14 @@ max_concurrency = 1
 # unit files: units outside every deployment's managed set are listed
 # by `orbi doctor` under unmanaged_units.
 # unit_name = "core"
+# Task-worktree reclamation (Issue #760): at every tick start the Runner
+# removes the registered task worktrees whose Issue is CLOSED and has
+# been closed for at least this many hours (oldest first, at most 25 per
+# tick). Open Issues and in-flight runs are never touched, and a failed
+# removal is only a warning. Default: 72 — a closed Issue's scene stays
+# inspectable for three days before reclamation. Must be a finite
+# positive number of hours; anything else fails the start fast.
+# worktree_retain_hours = 72
 # Optional Pi model selection (Issue #119): passed to EVERY Pi session
 # (implement and review) as --provider/--model/--thinking. Omit a key to
 # keep Pi's own default for that setting; values are passed verbatim and
