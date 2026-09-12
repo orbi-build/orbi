@@ -122,18 +122,34 @@ Orbi 原生路径（Path B）：
 3. 在 `/orbi/orbi.toml` 里加 `pi_provider` / `pi_model` / `pi_providers
    = ".orbi/pi-providers.json"`，重启容器（`docker restart orbi`）。
 
-派活前先验证端点：`docker exec -it orbi pi --print "reply with the
-single word: ok"`。
+派活前先验证端点（provider/model 与 `pi-providers.json` 中一致，示例是
+scaffold 的 openai 端点；返回真实 API 回复即端点与 key 可用，401/超时
+就是 key 或网络问题）：
+
+```bash
+docker exec -u orbi orbi bash -c '. /orbi/.orbi/env && pi --provider openai \
+  --model gpt-4o-mini --api-key "$PROVIDER_API_KEY" \
+  --print "reply with the single word: ok"'
+```
 
 ## 日常操作
 
+容器内命令一律以 `-u orbi` 执行（runner 就是以该用户跑的）；
+`systemctl --user` / `journalctl --user` 依赖用户会话总线，`docker exec`
+不会自动带上，需要 `-e XDG_RUNTIME_DIR=/run/user/1000`。orbi CLI 装在
+`/home/orbi/.local/bin/`（不在 root 的 PATH 里）。
+
 ```bash
 docker logs -f orbi                                   # setup 输出 + systemd 控制台
-docker exec orbi journalctl --user -u orbi@1.service -n 50 --no-pager  # tick 日志
-docker exec -it orbi orbi status                      # 队列与当前任务
-docker exec -it orbi orbi doctor                      # 部署体检
-docker exec -it orbi systemctl --user list-timers     # 下次触发时间
-docker exec -it orbi systemctl --user start orbi@1.service  # 立即触发一个 tick
+docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi \
+  journalctl --user -u orbi@1.service -n 50 --no-pager  # tick 日志
+docker exec -u orbi -w /orbi orbi /home/orbi/.local/bin/orbi status  # 队列与当前任务
+docker exec -u orbi -w /orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi \
+  /home/orbi/.local/bin/orbi doctor                   # 部署体检
+docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi \
+  systemctl --user list-timers                        # 下次触发时间
+docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi \
+  systemctl --user start orbi@1.service               # 立即触发一个 tick
 docker stop -t 30 orbi && docker rm orbi              # 停止并删除（volume 保留）
 docker volume rm orbi-deploy orbi-work                # 彻底清除全部状态
 ```
@@ -152,7 +168,7 @@ docker volume rm orbi-deploy orbi-work                # 彻底清除全部状态
 | `orbi setup` 失败（`setup_failed reason=...`） | 按输出里的 reason 修复（多为 token 权限或 transport），`docker restart orbi` 重跑幂等 setup |
 | tick 日志 `transport_unreachable` | HTTPS 凭据失效：确认 `GH_TOKEN` 仍有效后重建容器（entrypoint 会重写 env 文件） |
 | tick 日志 `unit_drift` 后自动 `auto_synced` | 正常自愈：官方模板更新后下一个 tick 自动重装，无需操作 |
-| `docker exec orbi systemctl --user is-active` 失败 | 容器内 user manager 异常，`docker restart orbi`；反复出现请到仓库提 Issue（注明 docker 外挂、非官方） |
+| `docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi systemctl --user is-active` 失败 | 容器内 user manager 异常，`docker restart orbi`；反复出现请到仓库提 Issue（注明 docker 外挂、非官方） |
 
 ## 设计说明（为什么不重写调度）
 

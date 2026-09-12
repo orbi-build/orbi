@@ -31,6 +31,7 @@ fail() { printf 'docker-entrypoint: %s\n' "$*" >&2; exit 1; }
 case "${ORBI_BASE_BRANCH:-main}" in
   ''|*[!A-Za-z0-9._/-]*) fail "invalid ORBI_BASE_BRANCH '${ORBI_BASE_BRANCH:-}'" ;;
 esac
+[[ "$GH_TOKEN" != *$'\n'* ]] || fail "GH_TOKEN contains a newline (env-file values must be single-line)"
 for name in "${!ORBI_ENV_@}"; do
   [[ "${!name}" != *$'\n'* ]] || fail "$name contains a newline (env-file values must be single-line)"
 done
