@@ -304,10 +304,10 @@ provider）保持原样，解析出的值只存在于 gitignored 的 per-run 目
       "apiKey": "$GROQ_API_KEY",
       "models": [
         {
-          "id": "qwen/qwen3.8-27b",
-          "name": "Qwen 3.8 27B",
+          "id": "groq/compound",
+          "name": "Groq Compound",
           "contextWindow": 131072,
-          "maxTokens": 16384
+          "maxTokens": 8192
         }
       ]
     }
@@ -344,13 +344,35 @@ provider）保持原样，解析出的值只存在于 gitignored 的 per-run 目
 ```
 
 然后在 `orbi.toml` 里选择 provider 和 model（Runner 会以
-`--provider groq --model qwen/qwen3.8-27b` 传给 Pi；设置
+`--provider groq --model groq/compound` 传给 Pi；设置
 `pi_thinking` 时再传 `--thinking <level>`）：
 
 ```toml
 pi_providers = ".orbi/pi-providers.json"
 pi_provider = "groq"
-pi_model = "qwen/qwen3.8-27b"
+pi_model = "groq/compound"
+```
+
+#### 为什么选 `groq/compound` 而不是 `qwen/qwen3.8-27b`
+
+两个模型都在 Groq 免费档上，`qwen/qwen3.8-27b` 的请求数配额甚至更高
+（1K RPD 对 250 RPD）——但对交付量级的工作，起决定作用的是 token
+配额，不是请求数。按 Groq 账号页面的限流数据（用户于 2026-09-12
+提供，不是 Orbi 实测——依赖前请重新核对
+[官方限流表](https://console.groq.com/docs/rate-limits)），
+`groq/compound` 是 **70K TPM、无日 token 上限**，`qwen/qwen3.8-27b`
+是 **8K TPM / 200K TPD**。
+
+在本仓库的交付量级下，这是性质之别，不是程度之别：本仓库自身约 47
+次真实交付的中位数约为每次交付 220 万 token（implement 与 review
+合计；来源是一个带 CI、有 Issue 规范的 Python 仓库——对其他仓库
+未验证），所以 200K TPD 连一天一次的中位交付都覆盖不了，8K TPM
+本身就意味着数小时的限流等待。token 墙先于请求墙到来，这正是更高
+的 RPD 在这里不起作用的原因。因此模板、
+[provider 指南](/zh/providers)与本指南统一钉在 `groq/compound`
+上——它的 TPM 同样偏低，仍然只适合短小、边界清晰的 coding Issue，
+不适合长上下文仓库分析。这些是账号限额，不是 Orbi 承诺；真实的
+Groq 请求、usage 计量与 429 响应在本文中仍未实测。
 ```
 
 #### 让 API key 不进仓库、不进文档
