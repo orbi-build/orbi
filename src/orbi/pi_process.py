@@ -74,10 +74,12 @@ PI_IDLE_WARN_SECONDS = 300.0
 # COMPLETE session events (Pi does not stream token-level progress
 # into the JSONL), not token-level model progress. Configurable since
 # Issue #228: the TOML field `model_wait_dead_seconds` overrides this
-# default (1800 s, 30 minutes — a slow local model, e.g. Qwen 27B at
-# ~17 tokens/s behind a llama-server with a 1200 s request timeout,
-# must survive a 10-minute complete message; the pre-#228 default of
-# 600 s killed them at exactly 10 minutes, #176/#175/#173/#168).
+# default (1800 s, 30 minutes — a slow local model (e.g. a 27B Q4 GGUF
+# behind a llama-server with a 1200 s request timeout: ~57 tokens/s at
+# 12K context on an RX 7900 XTX with all layers on GPU, well under 20
+# tokens/s on partial GPU offload or CPU-only) must survive a
+# 10-minute complete message; the pre-#228 default of 600 s killed
+# them at exactly 10 minutes, #176/#175/#173/#168).
 PI_MODEL_WAIT_DEAD_SECONDS = 1800.0
 
 

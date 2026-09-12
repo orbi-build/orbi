@@ -435,9 +435,11 @@ Stable `key=value` lines you will see:
   `reason=hung_model_request`. The threshold measures silence between
   COMPLETE session events (Pi does not stream token-level progress into
   the JSONL), never token-level model progress — a slow generation that
-  keeps appending events never trips it (a slow local model, e.g. Qwen
-  27B at ~17 tokens/s behind a llama-server with a 1200 s request
-  timeout, survives a 10-minute complete message under the default);
+  keeps appending events never trips it (a slow local model, e.g. a
+  27B Q4 GGUF behind a llama-server with a 1200 s request timeout:
+  ~57 tokens/s at 12K context on an RX 7900 XTX with all layers on
+  GPU, well under 20 tokens/s on partial GPU offload or CPU-only,
+  survives a 10-minute complete message under the default);
 - `pi_idle_wait` — the grace line of the idle-stall recovery (Issue
   #181): a coreutils `timeout <seconds> ...` wrapper still inside its
   deadline is a legitimate long-running command, not a hang. The
