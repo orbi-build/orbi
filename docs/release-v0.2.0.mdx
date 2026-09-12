@@ -90,3 +90,31 @@ v0.2.0 established the operational foundation for running multiple, recoverable 
 - declared test command and 100% coverage gate passed in a clean worktree at f5dd821dc2cf022923629481bc04a619dfd43126 (timeout 1800s)
 
 run_id=79a24b0f
+
+## Changelog
+
+<Note>
+Corrected 2026-09-10: the entries below shipped in this release but were missing from the generated changelog. The generator derived its scope from Milestone membership at publish time, so a ticket filed under another Milestone never reached these notes even though its code is contained in this tag. Each entry below was verified with `git merge-base --is-ancestor <merge commit> <tag>`.
+</Note>
+
+
+### Features
+
+- Runner：pi_idle 超时后自动清理挂死的 Pi 子进程，让工具失败信号回到模型 ([Issue #94](https://github.com/orbi-build/orbi/issues/94); [PR #123](https://github.com/orbi-build/orbi/pull/123))
+- 多 Repo Registry：显式配置与兼容单 Repo ([Issue #134](https://github.com/orbi-build/orbi/issues/134); [PR #150](https://github.com/orbi-build/orbi/pull/150))
+
+
+### Reliability and recovery
+
+- Change Pilot polling interval from 15 minutes to 5 minutes ([Issue #51](https://github.com/orbi-build/orbi/issues/51); [PR #130](https://github.com/orbi-build/orbi/pull/130))
+
+
+### Documentation
+
+- 修复中文文档站发布版本导航与首页标题 ([Issue #128](https://github.com/orbi-build/orbi/issues/128); [PR #129](https://github.com/orbi-build/orbi/pull/129))
+
+
+### Bug fixes
+
+- 优化 Runner 进度 command 日志为单行输出 ([Issue #143](https://github.com/orbi-build/orbi/issues/143); [PR #148](https://github.com/orbi-build/orbi/pull/148))
+- P0: 修复并发 E2E 测试 delivery HEAD 落后导致 v0.2.0 发布阻塞 ([Issue #201](https://github.com/orbi-build/orbi/issues/201); [PR #203](https://github.com/orbi-build/orbi/pull/203))

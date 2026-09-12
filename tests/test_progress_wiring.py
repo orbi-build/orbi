@@ -656,6 +656,104 @@ def test_process_issue_pi_infrastructure_failure_keeps_run_for_resume(
     assert not any("ai-blocked" in str(call) for call in edit.call_args_list)
 
 
+def test_process_issue_repeated_recoverable_failure_updates_one_comment(
+    monkeypatch, tmp_path,
+):
+    """Issue #645 acceptance: the same recoverable failure retrying every
+    tick inside the provider quota window (same run id — the next tick
+    resumes the same run) keeps exactly ONE failure scene comment on the
+    Issue: the repeated identical failure updates the existing comment
+    in place (the progress.py patch path) instead of appending a
+    duplicate that buries the delivery progress. The provider's original
+    error string is preserved verbatim — never translated or wrapped.
+    The retry rhythm and the ai-in-progress state are unchanged."""
+    # A stateful fake GitHub comment store: the plain GET lists, the
+    # POST appends, the PATCH updates in place, `gh issue comment`
+    # always appends (the legacy transport) — exactly the traffic the
+    # runner makes.
+    comments: list[dict] = []
+    next_id = iter(range(101, 300))
+    patches: list[tuple[int, str]] = []
+
+    def fake_gh(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            endpoint = command[2]
+            if "--method" not in command:
+                return json.dumps([dict(c) for c in comments])
+            method = command[command.index("--method") + 1]
+            body = command[command.index("--field") + 1][len("body="):]
+            if method == "POST":
+                comment = {"id": next(next_id), "body": body}
+                comments.append(comment)
+                return json.dumps(comment)
+            # PATCH: update the tracked comment in place.
+            comment_id = int(endpoint.rsplit("/", 1)[-1])
+            patches.append((comment_id, body))
+            target = next(c for c in comments if c["id"] == comment_id)
+            target["body"] = body
+            return json.dumps(target)
+        if command[:2] == ["gh", "issue"] and "comment" in command:
+            comments.append({"id": next(next_id), "body": command[-1]})
+            return ""
+        if command[:3] == ["gh", "issue", "view"]:
+            # The pre-claim in-progress recheck reads the Issue
+            # directly (Issue #658): a fresh claim — `ai-ready`, never
+            # `ai-in-progress`, so the restart-resume scan is skipped
+            # and each tick re-claims; the run id stays pinned by
+            # patch_process_deps, so both ticks are the SAME run
+            # retrying.
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
+        return ""
+
+    monkeypatch.setattr(runner, "run_command", fake_gh)
+    quota_error = runner.RecoverablePiProcessError(
+        1, ["pi", "--provider", "z-ai", "--model", "glm-5.3-flash"],
+        stderr=(
+            '429: {"code":"1113","message":"Insufficient balance or no '
+            'resource package. Please recharge."}'
+        ),
+    )
+    patch_process_deps(
+        monkeypatch, tmp_path, run_pi_side_effect=quota_error,
+    )
+    # Two consecutive ticks fail with the SAME recoverable failure under
+    # the SAME run id.
+    for _ in range(2):
+        assert runner.process_issue(
+            make_issue(), make_config(tmp_path), "xqliu/orbi",
+        ).kind == "failed"
+
+    scenes = [
+        comment for comment in comments
+        if "Orbi Pi failure recovered:" in comment["body"]
+    ]
+    assert len(scenes) == 1, (
+        f"repeated identical failures must update ONE comment, "
+        f"got {len(scenes)}"
+    )
+    # The provider's original error string is preserved verbatim.
+    assert (
+        '429: {"code":"1113","message":"Insufficient balance or no '
+        'resource package. Please recharge."}' in scenes[0]["body"]
+    )
+    assert "<!-- orbi:run=a1b2c3d4 -->" in scenes[0]["body"]
+    # The repeated failure went through the patch path: the existing
+    # comment was updated in place, never posted a second time.
+    assert any(
+        comment_id == scenes[0]["id"]
+        and "Orbi Pi failure recovered:" in body
+        for comment_id, body in patches
+    ), "the repeated failure must update the existing comment in place"
+    # The retry scene is unchanged: every tick keeps `ai-in-progress`
+    # (claim label only, never a terminal state).
+    edit = runner.edit_issue
+    assert edit.call_count == 2
+    assert all(
+        call.kwargs == {"repo": "xqliu/orbi", "add": "ai-in-progress"}
+        for call in edit.call_args_list
+    )
+
+
 def test_process_issue_keeps_the_claim_when_the_journal_proves_the_request(
     monkeypatch, tmp_path,
 ):

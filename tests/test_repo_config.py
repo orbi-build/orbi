@@ -70,7 +70,9 @@ def test_parse_repo_config_rejects_unknown_key():
 
 
 @pytest.mark.parametrize(
-    "key", ["source_repos", "pi_provider", "repo_dir", "prompt", "skills"],
+    "key",
+    ["source_repos", "pi_provider", "repo_dir", "prompt", "skills",
+     "engine_source_track"],
 )
 def test_parse_repo_config_rejects_host_only_keys(key):
     with pytest.raises(

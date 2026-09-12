@@ -58,6 +58,8 @@ from typing import NamedTuple
 # `pyproject.toml`). The former thin re-export module
 # `orbi.cli_install` is deleted (Issue #295): the tests import these
 # symbols directly from this module.
+from orbi import engine_source
+from orbi.engine_source import EngineSourceError
 from orbi.git_transport import TransportError, check_transport
 from orbi.pilot_slots import acquire_slot, slot_dir_for, slot_occupancy
 from orbi.pi_activity import (
@@ -566,6 +568,15 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     allow_stale_runner = data.get("allow_stale_runner", False)
     if not isinstance(allow_stale_runner, bool):
         raise ValueError("allow_stale_runner must be a boolean")
+    # Engine source update channel (Issue #535): what the deploy home
+    # checkout follows at the next start — origin/main by default (the
+    # exact pre-#535 dogfood behavior), a branch, the newest official
+    # release tag, one exact tag or one exact commit. Host/deploy-only:
+    # a repository's .github/orbi.toml can never carry it. An invalid
+    # value fails the config load fast.
+    engine_source_track = engine_source.normalize_engine_source_track(
+        data.get("engine_source_track"),
+    )
     # Concurrency cap (Issue #39): the local machine can only serve a
     # limited number of concurrent tasks, so the default is 1. Any other
     # value must be a positive integer; fail fast on anything else.
@@ -701,6 +712,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         ],
         "base_branch": base_branch,
         "git_transport": git_transport,
+        "engine_source_track": engine_source_track,
         "active_milestone": active_milestone,
         "auto_next_milestone": auto_next_milestone,
         "max_concurrency": max_concurrency,
@@ -3699,12 +3711,12 @@ def _another_live_runner(slot_dir: Path, max_concurrency: int) -> bool:
     """True when a slot is held by another pid — a live co-runner.
 
     The #39 liveness rule `pick_in_progress_issue` applies to the orphan
-    scan: a slot held by another process proves a live runner is working,
-    so state it owns is in flight, not orphaned. Issue #724 reuses the
-    same rule for the claim-window yield guard.
-
-    Note: the same helper ships in #725's release-dispatch guard — when
-    both land, keep one.
+    scan (runner.py:2412): a slot held by another process proves a live
+    runner is working, so state it owns is in flight, not orphaned.
+    Issue #708 reuses the same rule for the release dispatch — an
+    in-progress release found while another runner is live is being
+    released right now; only a runner that is alone may resume it.
+    Issue #724 reuses it once more for the claim-window yield guard.
     """
     mine = os.getpid()
     for _, holder in slot_occupancy(slot_dir, max_concurrency):
@@ -5672,8 +5684,20 @@ RUNNER_SOURCE_TIMEOUT_SECONDS = 30
 
 
 class RunnerSourceStaleError(RuntimeError):
-    """The running CLI source is not proven to be the
-    ``origin/main`` head (fail fast, before any slot or claim)."""
+    """The running CLI source is not proven to be the configured engine
+    source channel's commit (fail fast, before any slot or claim)."""
+
+
+def _resolve_engine_source(track: str, cwd: Path, *,
+                           run_command) -> dict | None:
+    """Resolve one lock/release channel locally; None when unresolvable
+    (an expected probe result inside the freshness gate)."""
+    try:
+        return engine_source.resolve_expected_head(
+            track, cwd, run_command=run_command,
+        )
+    except engine_source.EngineSourceError:
+        return None
 
 
 def _parse_release_version(value: str) -> tuple[int, ...] | None:
@@ -5724,10 +5748,12 @@ def _runner_source_stale_line(facts: dict, *, allowed: bool, fix: str) -> str:
 
 def check_runner_source_freshness(config: dict, *, run_command) -> dict:
     """Startup invariant (Issue #525): prove that the code THIS process
-    executes is the fetched ``origin/main`` head BEFORE any slot
-    or claim. A stale (or unverifiable) source fails fast with the
-    structured ``runner_source_stale`` line (facts + the exact fix
-    command, the ``deploy_home_dirty`` style); the explicit
+    executes is the configured engine source channel's exact commit
+    BEFORE any slot or claim (Issue #535: the channel is the
+    ``engine_source_track`` — ``origin/main`` by default — never the
+    delivery target's ``base_branch``). A stale (or unverifiable) source
+    fails fast with the structured ``runner_source_stale`` line (facts +
+    the exact fix command, the ``deploy_home_dirty`` style); the explicit
     ``allow_stale_runner`` config downgrades the same line to a warning.
 
     Two install forms, both judged from git/install metadata facts:
@@ -5736,26 +5762,32 @@ def check_runner_source_freshness(config: dict, *, run_command) -> dict:
       resolves a checkout, and the checkout carries the src-layout
       package path (a $HOME dotfiles repo never matches ``src/orbi``,
       so it cannot fake an editable install) — then the checkout's
-      ``HEAD`` must equal its ``refs/remotes/origin/main`` ref. The
+      ``HEAD`` must equal the channel's expected commit: the fetched
+      ``refs/remotes/origin/<branch>`` head for the main/branch tracks,
+      or the resolved tag commit / exact SHA for the lock tracks. The
       09-07 scene (an editable install bound to an old issue worktree)
-      fails here: worktrees share the fetched remote-tracking ref.
+      fails here: worktrees share the fetched refs.
     - non-editable: the installed distribution version
-      (importlib.metadata) must not be older than the latest release tag
-      reachable from the fetched origin/main ref (resolved in the deployment
-      home). Version equality or newer passes (a dev install ahead of
-      the tags is not stale).
+      (importlib.metadata) must not be older than the channel's release
+      tag — the latest tag reachable from the tracked branch ref, or the
+      locked release/tag itself (resolved in the deployment home). A
+      ``sha:`` lock cannot be mapped to a version and fails closed as
+      unverifiable. Version equality or newer passes (a dev install
+      ahead of the tags is not stale).
 
     Whatever cannot be PROVEN fresh (missing origin ref, no release tag,
     unresolvable import source) fails the same way with a ``reason=``
     field — never a silent pass. Returns the fresh-facts dict; raises
     ``RunnerSourceStaleError`` unless ``allow_stale_runner`` is set.
     """
-    # The engine checkout is always the Orbi repository's main branch.
+    # The engine checkout follows the configured ENGINE source channel;
     # ``base_branch`` belongs to the delivery target and must not affect
     # this independent freshness check.
-    engine_source_branch = "main"
+    track = engine_source.normalize_engine_source_track(
+        config.get("engine_source_track"),
+    )
+    kind, argument = engine_source.split_track(track)
     delivery_base_branch = config["base_branch"]
-    base_ref = f"refs/remotes/origin/{engine_source_branch}"
     deploy_home = Path(config["deploy_home"])
     from orbi import cli_source  # lazy: the single cross-module dependency
     module_path = cli_source.module_file()
@@ -5771,50 +5803,122 @@ def check_runner_source_freshness(config: dict, *, run_command) -> dict:
         and toplevel / cli_source.PACKAGE_DIR == package_dir.resolve()
     )
 
+    # For the plain main track the facts keep the pre-#535 field names
+    # (engine_source_branch / origin_main); every other channel names
+    # what it resolved (expected ref, tag or SHA).
+    def _branch_facts(extra: dict) -> dict:
+        fields = {"engine_source_branch": argument}
+        if argument == "main":
+            fields["origin_main"] = extra["origin_main"]
+        else:
+            fields["expected_ref"] = extra["expected_ref"]
+            fields["expected"] = extra["expected"]
+        return fields
+
     if editable:
         head = _runner_source_git(
             ["rev-parse", "HEAD"], toplevel, run_command=run_command,
         )
-        base = _runner_source_git(
-            ["rev-parse", "--verify", base_ref], toplevel,
-            run_command=run_command,
-        )
-        if head and base:
-            facts = {
-                "install": "editable", "source": str(toplevel),
-                "engine_source_branch": engine_source_branch,
-                "delivery_base_branch": delivery_base_branch,
-                "head": head, "origin_main": base,
-            }
-            stale_reason = None if head == base else "head_is_not_engine_source"
+        if kind == "branch":
+            expected_ref = f"refs/remotes/origin/{argument}"
+            expected = _runner_source_git(
+                ["rev-parse", "--verify", expected_ref], toplevel,
+                run_command=run_command,
+            )
+            if head and expected:
+                facts = {
+                    "install": "editable", "source": str(toplevel),
+                    "engine_source_track": track,
+                    "delivery_base_branch": delivery_base_branch,
+                    "head": head,
+                    **_branch_facts({
+                        "origin_main": expected,
+                        "expected_ref": expected_ref,
+                        "expected": expected,
+                    }),
+                }
+                stale_reason = (
+                    None if head == expected else "head_is_not_engine_source"
+                )
+            else:
+                facts = {
+                    "install": "editable",
+                    "source": str(toplevel or package_dir),
+                    "engine_source_track": track,
+                    "delivery_base_branch": delivery_base_branch,
+                    "reason": "unverifiable_git_state",
+                }
+                stale_reason = "unverifiable_git_state"
         else:
-            facts = {
-                "install": "editable",
-                "source": str(toplevel or package_dir),
-                "engine_source_branch": engine_source_branch,
-                "delivery_base_branch": delivery_base_branch,
-                "reason": "unverifiable_git_state",
-            }
-            stale_reason = "unverifiable_git_state"
+            resolved = _resolve_engine_source(
+                track, toplevel, run_command=run_command,
+            )
+            if resolved is not None and head:
+                facts = {
+                    "install": "editable", "source": str(toplevel),
+                    "engine_source_track": track,
+                    "delivery_base_branch": delivery_base_branch,
+                    "head": head,
+                    "resolved": resolved["resolved"],
+                    "expected": resolved["expected"],
+                }
+                stale_reason = (
+                    None if head == resolved["expected"]
+                    else "head_is_not_engine_source"
+                )
+            else:
+                facts = {
+                    "install": "editable",
+                    "source": str(toplevel or package_dir),
+                    "engine_source_track": track,
+                    "delivery_base_branch": delivery_base_branch,
+                    "reason": "unverifiable_engine_source",
+                }
+                stale_reason = "unverifiable_engine_source"
     else:
         try:
             version = _orbi_distribution_version()
         except Exception:
             version = None
-        tag = _runner_source_git(
-            ["describe", "--tags", "--match", "v*", "--abbrev=0", base_ref],
-            deploy_home, run_command=run_command,
-        )
         parsed_version = (
             _parse_release_version(version) if version else None
         )
-        parsed_tag = _parse_release_version(tag) if tag else None
+        resolved = None
+        if kind == "branch":
+            expected_tag = _runner_source_git(
+                [
+                    "describe", "--tags", "--match", "v*", "--abbrev=0",
+                    f"refs/remotes/origin/{argument}",
+                ],
+                deploy_home, run_command=run_command,
+            )
+        elif kind in ("release", "tag"):
+            resolved = _resolve_engine_source(
+                track, deploy_home, run_command=run_command,
+            )
+            expected_tag = resolved["tag"] if resolved else None
+        else:
+            # A sha: lock has no version mapping: unverifiable -> fail
+            # closed (Issue #535: an unverifiable source never runs).
+            expected_tag = None
+        parsed_tag = (
+            _parse_release_version(expected_tag) if expected_tag else None
+        )
         if parsed_version and parsed_tag:
+            if kind == "branch" and argument == "main":
+                comparison = {"origin_main": expected_tag}
+            else:
+                comparison = {
+                    "resolved": (
+                        resolved["resolved"] if resolved else expected_tag
+                    ),
+                }
             facts = {
                 "install": "non_editable", "source": str(module_path),
-                "engine_source_branch": engine_source_branch,
+                "engine_source_track": track,
                 "delivery_base_branch": delivery_base_branch,
-                "version": version, "origin_main": tag,
+                "version": version,
+                **comparison,
             }
             stale_reason = (
                 None if parsed_version >= parsed_tag
@@ -5823,7 +5927,7 @@ def check_runner_source_freshness(config: dict, *, run_command) -> dict:
         else:
             facts = {
                 "install": "non_editable", "source": str(module_path),
-                "engine_source_branch": engine_source_branch,
+                "engine_source_track": track,
                 "delivery_base_branch": delivery_base_branch,
                 "reason": "unverifiable_version_state",
             }
@@ -6219,7 +6323,28 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         ),
     )
     try:
-        sync_base_checkout(config["repo_dir"], base_branch)
+        # A config built by load_config always carries both keys (the
+        # deploy home defaults to the repo dir); a hand-built legacy
+        # dict without them keeps the pre-#535 sync behavior.
+        if (
+            config.get("engine_source_track") is not None
+            and config.get("deploy_home") is not None
+            and config["repo_dir"] == config["deploy_home"]
+            and config["engine_source_track"] != "main"
+        ):
+            # Issue #535: the delivery checkout IS the engine source in
+            # the dogfood layout, and the engine channel is locked (or
+            # tracks a non-main branch) — fast-forwarding it to
+            # origin/<base_branch> would break the lock. The next tick's
+            # ExecStartPre engine sync owns this checkout instead.
+            LOGGER.info(
+                "base_checkout_sync_skipped repo_dir=%s "
+                "engine_source_track=%s base_branch=%s",
+                config["repo_dir"], config["engine_source_track"],
+                base_branch,
+            )
+        else:
+            sync_base_checkout(config["repo_dir"], base_branch)
     except RuntimeError:
         LOGGER.exception(
             "base_checkout_sync_failed after merge pr=%s repo_dir=%s; "
@@ -6652,6 +6777,26 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         # `orbi.release` imports the runner primitives back, so the
         # dispatch imports it lazily here — a module-level import would
         # be circular (Issue #286).
+        #
+        # Issue #708: the ready scan's stale snapshot can hand an
+        # already-claimed release ticket to a second live runner. The
+        # dev path got the direct-read yield in #658; the release path
+        # needs the same semantics — an in-progress release owned by a
+        # LIVE co-runner is yielded this tick (never run the state
+        # machine concurrently); an orphaned one (this runner is alone)
+        # still resumes inside process_release (#98 restart resume).
+        # The millisecond truly-simultaneous window remains, exactly as
+        # documented for #658 — the label write is not a CAS.
+        if has_in_progress_label(number, source_repo):
+            slot_dir = config.get("slot_dir")
+            max_concurrency = config.get("max_concurrency")
+            if (slot_dir is not None and max_concurrency is not None
+                    and _another_live_runner(slot_dir, max_concurrency)):
+                LOGGER.info(
+                    "issue=%s claim_yield "
+                    "reason=release_in_progress_live_runner", number,
+                )
+                return IssueResult("claim-yielded", None)
         from orbi import release
 
         return IssueResult("release", release.process_release(issue, config, source_repo))
@@ -7186,8 +7331,11 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         # Falling through to the generic handler below would mark the
         # Issue `ai-blocked` — exactly the unrecoverable state Issue
         # #227 forbids for this recovery.
+        # Issue #645: an identical repeated failure of this run updates
+        # the existing scene comment in place (the progress patch path)
+        # instead of appending a duplicate on every retry tick.
         try:
-            comment_issue(number, repo=source_repo, body=body)
+            publisher.failure_scene(body)
         except Exception:
             LOGGER.exception(
                 "issue=%s model_wait_recovered_comment_failed", number,

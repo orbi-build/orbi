@@ -12,6 +12,17 @@
 
 ## Changelog
 
+<Note>
+Corrected 2026-09-10: the entries below shipped in this release but were missing from the generated changelog. The generator derived its scope from Milestone membership at publish time, so a ticket filed under another Milestone never reached these notes even though its code is contained in this tag. Each entry below was verified with `git merge-base --is-ancestor <merge commit> <tag>`.
+</Note>
+
+
+### Bug fixes
+
+- CI failure: tests on branch fix/release-publish-closeout-bypass (pull_request) ([Issue #601](https://github.com/orbi-build/orbi/issues/601); [PR #605](https://github.com/orbi-build/orbi/pull/605))
+- CI failure: tests on branch fix/review-ci-round-budget (pull_request) ([Issue #602](https://github.com/orbi-build/orbi/issues/602); [PR #603](https://github.com/orbi-build/orbi/pull/603))
+
+
 ### Features
 
 - `发布 scope 推导与 milestone 查询：gh api --paginate 多页输出按单页解析，Milestone 的 issue 超过一页时发布永久失败` ([Issue #584](https://github.com/orbi-build/orbi/issues/584))

@@ -132,26 +132,40 @@ def test_service_loads_optional_provider_env_file():
     ]
 
 
-def test_service_fast_forwards_main_before_runner_starts():
-    """Issue #52: the service must fast-forward the local main checkout
-    to the latest origin/main BEFORE the Runner starts (ExecStartPre,
-    outside the Python process). A dirty checkout, a failed fetch or a
-    non-fast-forwardable state makes the preflight command fail: the
-    service does not start and the reason lands in the systemd journal
-    (fail fast). No new refresh service, worker or dispatcher: only the
-    existing Runner service and timer exist. The independent exporter
-    service is not a Runner unit."""
+def test_service_preflight_probes_and_reinstalls_the_cli():
+    """Issue #248: the FIRST preflight step self-heals the editable CLI
+    install outside Python (probe `orbi --version`; on failure the exact
+    editable force-reinstall). It runs before the engine-source sync so
+    the sync subcommand always has a working CLI."""
+    service = parse_unit(SERVICE_FILE)
+    pre = service["Service"]["ExecStartPre"]
+    assert len(pre) == 2
+    first = pre[0]
+    assert first.startswith("/usr/bin/timeout 300s /usr/bin/flock ")
+    assert "/.orbi/base-sync.lock" in first
+    assert "orbi --version" in first
+    assert "uv tool install --force --reinstall --editable" in first
+
+
+def test_service_syncs_the_engine_source_channel_before_the_runner_starts():
+    """Issue #52/#535: the SECOND preflight step syncs the deployment
+    checkout to the configured engine source channel BEFORE the Runner
+    starts (`orbi sync-engine-source`, outside the Runner process). The
+    channel comes from `engine_source_track` in the deploy home's
+    orbi.toml — absent/main keeps the pre-#535 origin/main fast-forward.
+    A dirty checkout, a failed fetch, a missing tag/SHA or an
+    unverifiable state fails this command with a structured journal
+    line: the service does not start (fail fast). No new refresh
+    service, worker or dispatcher: only the existing Runner service and
+    timer exist. The independent exporter service is not a Runner unit."""
     service = parse_unit(SERVICE_FILE)
     section = service["Service"]
     assert "ExecStartPre" in section
-    pre = section["ExecStartPre"][0]
-    assert pre.startswith("/usr/bin/timeout 90s /usr/bin/flock ")
-    assert "git fetch --no-auto-maintenance origin main" in pre
-    assert "git merge --ff-only origin/main" in pre
-    assert "deploy_home_dirty" in pre
-    assert "git status --short --untracked-files=no" in pre
-    assert "git -C" in pre
-    # The preflight runs in the main checkout (the unit's
+    second = section["ExecStartPre"][1]
+    assert second.startswith("/usr/bin/timeout 90s /usr/bin/flock ")
+    assert "/.orbi/base-sync.lock" in second
+    assert "orbi sync-engine-source" in second
+    # The preflight runs in the deployment checkout (the unit's
     # WorkingDirectory), before the Python Runner.
     assert "WorkingDirectory" in section
     runner_units = sorted(
@@ -161,27 +175,18 @@ def test_service_fast_forwards_main_before_runner_starts():
     assert runner_units == ["orbi@.service", "orbi@.timer"]
 
 
-def test_service_preflight_is_serialized_with_a_short_lived_flock():
+def test_service_preflight_steps_are_serialized_with_a_short_lived_flock():
     """Issue #149: two instances may run ExecStartPre in the same tick,
-    so the fetch + fast-forward must be wrapped in a short-lived
-    `flock` on the shared state-dir lock file (the Python-side sync in
-    bootstrap_runner takes the SAME lock): the main worktree is never
-    written concurrently. The flock must run the git commands (the
-    fail-fast semantics are unchanged: a failed fetch or merge is a
-    non-zero preflight)."""
+    so both preflight steps (the CLI self-heal and the engine-source
+    sync) run under the SAME short-lived flock on the shared state-dir
+    lock file (the Python-side sync in bootstrap_runner takes the SAME
+    lock): the main worktree is never written concurrently. The
+    deploy_home_dirty / engine_source_* fail-closed lines are the
+    sync subcommand's contract (tests/test_engine_source.py)."""
     service = parse_unit(SERVICE_FILE)
-    pre = service["Service"]["ExecStartPre"][0]
-    assert pre.startswith("/usr/bin/timeout 90s /usr/bin/flock ")
-    assert "/.orbi/base-sync.lock" in pre
-    assert (
-        " -c 'git fetch --no-auto-maintenance origin main && "
-        "git merge --ff-only origin/main"
-    ) in pre
-    assert "deploy_home_dirty" in pre
-    assert (
-        'fix="git -C {{ORBI_REPO_DIR}} stash && '
-        'systemctl --user start orbi@%i.service"'
-    ) in pre
+    for pre in service["Service"]["ExecStartPre"]:
+        assert pre.startswith("/usr/bin/timeout ")
+        assert "/.orbi/base-sync.lock" in pre
 
 
 def test_templates_and_instances_pass_systemd_analyze_verify(

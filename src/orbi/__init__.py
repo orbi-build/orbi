@@ -18,4 +18,4 @@ the package would shadow the installed package for every process with
 the checkout root on sys.path. The direct-execution compatibility entry
 is `python3 -m orbi.cli` (development path only).
 """
-__version__ = "0.4.6"
+__version__ = "0.4.9"

@@ -12,6 +12,26 @@
 
 ## Changelog
 
+<Note>
+2026-09-10 勘误：以下条目确实随本版本发出，但生成 changelog 时缺失。生成器按发布那一刻的 Milestone 归属推导 scope，因此挂在其它 Milestone 下的票即便代码已包含在本 tag 中，也不会出现在这份 notes 里。下列每一条都用 `git merge-base --is-ancestor <merge commit> <tag>` 验证过。
+</Note>
+
+
+### Features
+
+- 重构：抽离 delivery label 生命周期与调度策略 ([Issue #175](https://github.com/orbi-build/orbi/issues/175); [PR #265](https://github.com/orbi-build/orbi/pull/265))
+
+
+### Deployment and operations
+
+- 技术债收尾：运行契约全量剔除 Muyan Pilot 命名，CLI/配置/systemd/标识统一为 orbi ([Issue #246](https://github.com/orbi-build/orbi/issues/246); [PR #261](https://github.com/orbi-build/orbi/pull/261))
+
+
+### Bug fixes
+
+- Bug：隔离 Runner 自有运行状态，避免 .muyan-pilot/ 被误判为 agent 未提交变更 ([Issue #256](https://github.com/orbi-build/orbi/issues/256); [PR #260](https://github.com/orbi-build/orbi/pull/260))
+
+
 ### Features
 
 - Python 项目结构清理：从根目录 flat modules 迁移到清晰的 src layout ([Issue #161](https://github.com/orbi-build/orbi/issues/161))

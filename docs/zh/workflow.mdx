@@ -203,7 +203,10 @@ PR 验收时校验该关键词，缺失即 fail fast。
      PR、多少个、谁提的，与发版无关；滞留 PR 由交付循环自身的
      接管/对账机制处理。因真实 `gh` 失败而查不了的门禁算失败门禁。
   4. 逐项验证 scope：`gh pr view` 必须报告 `MERGED`，否则
-     `gh issue view` 必须报告 `CLOSED`。禁止解析复选框——每个 scope
+     `gh issue view` 必须报告 `CLOSED` 且 `stateReason` 为
+     `COMPLETED`——`NOT_PLANNED` 关闭（重复/不做）的票在 Scope 证据里
+     标注为排除、绝不进入 Changelog，Changelog 的 PR 链接只在 PR 已
+     合并时才写入（Issue #707）。禁止解析复选框——每个 scope
      项都对照 live API 检查。
   5. 测试验收就是 release commit 的 CI-wait 门：版本 bump 之后，门禁会对
      该 commit 重跑（步骤 3 的 `release_ci_wait_seconds` 等待），CI 红或
