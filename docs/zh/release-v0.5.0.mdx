@@ -1,0 +1,102 @@
+# v0.5.0 发布（最新）
+
+`v0.5.0` 于 2026-09-12T13:05:31Z 发布为 GitHub Release [v0.5.0](https://github.com/orbi-build/orbi/releases/tag/v0.5.0)（release task：Issue #779）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.5.0` | 注解 tag `d3a3ae20c0ccece262fc7ee7e14298757fceb2ac` | 提交 `d3f9ad1fec54e078b0bd432a8d1c12df198cb552` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- 待办：迁移到 config-as-code——三个源仓库补 .github/orbi.toml，优先补上三处全缺的 test_command ([Issue #731](https://github.com/orbi-build/orbi/issues/731); [PR #771](https://github.com/orbi-build/orbi/pull/771))
+- ai-human-review：人工验收门禁用 label 不用 checkbox，复用 release waiting 原语，门禁在起 Pi session 前短路 ([Issue #763](https://github.com/orbi-build/orbi/issues/763); [PR #773](https://github.com/orbi-build/orbi/pull/773))
+- release notes 列出本次发布的贡献者头像 ([Issue #772](https://github.com/orbi-build/orbi/issues/772); [PR #777](https://github.com/orbi-build/orbi/pull/777))
+
+### Reliability and recovery
+
+- 部署检出里有 344 行未提交的历史 changelog 补全（v0.1.0–v0.4.4，中英各 6 份），挡住 base checkout 的 ff-only 同步 ([Issue #721](https://github.com/orbi-build/orbi/issues/721); [PR #722](https://github.com/orbi-build/orbi/pull/722))
+- claim race: the pre-direct-read resume window has no liveness check; the yield guard assumes the default dispatch label ([Issue #724](https://github.com/orbi-build/orbi/issues/724); [PR #732](https://github.com/orbi-build/orbi/pull/732))
+- external PR integration: Fixes-linked ready tickets burn to ai-blocked; auto-merged takeovers never close the triage ticket ([Issue #726](https://github.com/orbi-build/orbi/issues/726); [PR #735](https://github.com/orbi-build/orbi/pull/735))
+- Release 票缺模板：机器可读的 ## Release 段全靠手写，漏字段即 ai-blocked（#717 已中招一次） ([Issue #734](https://github.com/orbi-build/orbi/issues/734); [PR #769](https://github.com/orbi-build/orbi/pull/769))
+- 调研型票撞交付判据：票面写「先调研不要写实现」，agent 照做却被判 no commit 烧成 ai-blocked ([Issue #739](https://github.com/orbi-build/orbi/issues/739); [PR #767](https://github.com/orbi-build/orbi/pull/767))
+
+### Deployment and operations
+
+- CI 脆弱性：npm install -g mint 不锁版本，Mintlify 上游发坏包就直接红整条流水线 ([Issue #744](https://github.com/orbi-build/orbi/issues/744); [PR #762](https://github.com/orbi-build/orbi/pull/762))
+
+### Observability
+
+- flaky：test_stream_pi_invokes_progress_callback_while_child_is_running 在高负载下断言首帧相位失败 ([Issue #741](https://github.com/orbi-build/orbi/issues/741); [PR #765](https://github.com/orbi-build/orbi/pull/765))
+
+### Documentation
+
+- 文档里的本地模型速度 ~17 tokens/s 已过时：实测 57–94 tok/s，6 处需更新 ([Issue #752](https://github.com/orbi-build/orbi/issues/752); [PR #757](https://github.com/orbi-build/orbi/pull/757))
+- 上手指南的 Groq 示例与模板/provider 指南不一致：仍是 qwen3.8-27b（8K TPM），应统一为 groq/compound（70K TPM） ([Issue #776](https://github.com/orbi-build/orbi/issues/776); [PR #778](https://github.com/orbi-build/orbi/pull/778))
+
+### Bug fixes
+
+- 假警报：缺少 .github/orbi.toml 时每 tick 刷 ERROR command_failed，而该 404 是设计内的 no-op ([Issue #730](https://github.com/orbi-build/orbi/issues/730); [PR #770](https://github.com/orbi-build/orbi/pull/770))
+- 健壮性：gh 的瞬时失败（401/429/5xx）直接崩掉整个 tick，没有重试 ([Issue #738](https://github.com/orbi-build/orbi/issues/738); [PR #768](https://github.com/orbi-build/orbi/pull/768))
+- release 声明的 version_file 默认 pyproject.toml，非 Python 仓不写就在打 tag 阶段才炸 ([Issue #740](https://github.com/orbi-build/orbi/issues/740); [PR #766](https://github.com/orbi-build/orbi/pull/766))
+- agent 收不到 Issue 评论：任务上下文只注入 ISSUE_BODY，写在评论里的决策/补充全部丢失 ([Issue #745](https://github.com/orbi-build/orbi/issues/745); [PR #759](https://github.com/orbi-build/orbi/pull/759))
+- 人工关票后 runner 开出的 PR 永久悬空：resumable 扫描只查 state=open，没人会再来合它 ([Issue #746](https://github.com/orbi-build/orbi/issues/746); [PR #761](https://github.com/orbi-build/orbi/pull/761))
+- 发版关闭里程碑存在竞态：gh issue close 后立刻查 open issues 读到陈旧索引，v0.4.10 因此抛 RuntimeError ([Issue #754](https://github.com/orbi-build/orbi/issues/754); [PR #755](https://github.com/orbi-build/orbi/pull/755))
+- .orbi.example.toml 缺少「如何锁死引擎版本」的指引：release 会自动跟进新 tag，想 pin 的用户得自己推断 ([Issue #756](https://github.com/orbi-build/orbi/issues/756); [PR #758](https://github.com/orbi-build/orbi/pull/758))
+- 任务 worktree 只增不减：三仓 275 个 / 18.7G，95% 对应已关闭的票，产品无任何回收机制 ([Issue #760](https://github.com/orbi-build/orbi/issues/760); [PR #764](https://github.com/orbi-build/orbi/pull/764))
+- 评审 verdict 被写成中文句子里的行内代码时解析失败，交付空转 ([Issue #774](https://github.com/orbi-build/orbi/issues/774); [PR #780](https://github.com/orbi-build/orbi/pull/780))
+- 失败评论把原始 JSONL 与覆盖率表倒进正文：GitHub 上无法阅读 ([Issue #775](https://github.com/orbi-build/orbi/issues/775); [PR #781](https://github.com/orbi-build/orbi/pull/781))
+
+## Contributors
+
+<a href="https://github.com/xqliu"><img src="https://avatars.githubusercontent.com/u/22554?v=4&s=48" width="32" height="32" alt="xqliu" /></a>
+<a href="https://github.com/zzuu080603"><img src="https://avatars.githubusercontent.com/u/225036550?u=e6906b0eff64377c19cd3a6831ae44fbd87afc77&v=4&s=48" width="32" height="32" alt="zzuu080603" /></a>
+
+- tag: `v0.5.0`
+- release commit: `d3f9ad1fec54e078b0bd432a8d1c12df198cb552`
+- release task: Issue #779
+
+## Scope (verified item by item)
+
+- Issue #708 closed (not planned, excluded)
+- Issue #709 closed (not planned, excluded)
+- Issue #710 closed (not planned, excluded)
+- Issue #721 closed
+- Issue #724 closed
+- Issue #726 closed
+- Issue #730 closed
+- Issue #731 closed
+- Issue #734 closed
+- Issue #738 closed
+- Issue #739 closed
+- Issue #740 closed
+- Issue #741 closed
+- Issue #744 closed
+- Issue #745 closed
+- Issue #746 closed
+- Issue #752 closed
+- Issue #754 closed
+- Issue #756 closed
+- Issue #760 closed
+- Issue #763 closed
+- Issue #772 closed
+- Issue #774 closed
+- Issue #775 closed
+- Issue #776 closed
+- NOT released (still open in milestone v0.5.0): open Issue #779 release v0.5.0
+
+## Pre-release gates
+
+- no open Issue in milestone 'v0.5.0' carries ai-in-progress / ai-pr-opened / ai-fix-needed
+- CI on the release commit: 4 check(s) all success/neutral/skipped (waited 240s for pending checks)
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit d3f9ad1fec54e078b0bd432a8d1c12df198cb552 (the #268 CI-wait gate; no local test execution)
+
+run_id=840f0709
