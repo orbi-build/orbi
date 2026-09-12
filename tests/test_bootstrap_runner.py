@@ -16174,6 +16174,62 @@ def test_parse_release_declaration_scope_from_milestone():
     }
 
 
+# Issue #740: the declared (or defaulted) `version_file` is proven to
+# exist in the frozen release tree at claim time — a mismatch used to
+# surface only at the version-write step, AFTER the gates and the scope
+# verification, burning the ticket ai-blocked with a bare
+# FileNotFoundError.
+
+def test_verify_release_version_file_passes_when_the_file_exists(monkeypatch):
+    commands = []
+    monkeypatch.setattr(
+        release, "run_command",
+        lambda command, **kwargs: commands.append((command, kwargs))
+        or "pyproject.toml\npackage.json\n",
+    )
+    release.verify_release_version_file(Path("/r"), "abc123", "pyproject.toml")
+    assert commands == [(["git", "ls-tree", "--name-only", "abc123"],
+                         {"cwd": Path("/r")})]
+
+
+def test_verify_release_version_file_skips_none_without_probing(monkeypatch):
+    monkeypatch.setattr(
+        release, "run_command",
+        lambda command, **kwargs: (_ for _ in ()).throw(
+            AssertionError(f"unexpected command: {command}")),
+    )
+    release.verify_release_version_file(Path("/r"), "abc123", "none")
+
+
+def test_verify_release_version_file_lists_existing_supported_files(monkeypatch):
+    monkeypatch.setattr(
+        release, "run_command",
+        lambda command, **kwargs: "package.json\nCargo.toml\nREADME.md\n",
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        release.verify_release_version_file(
+            Path("/r"), "abc123", "pyproject.toml",
+        )
+    message = str(excinfo.value)
+    assert "pyproject.toml" in message
+    assert "abc123" in message
+    assert "package.json" in message
+    assert "Cargo.toml" in message
+    assert "version_file: none" in message
+
+
+def test_verify_release_version_file_without_supported_file_points_at_none(monkeypatch):
+    monkeypatch.setattr(
+        release, "run_command", lambda command, **kwargs: "README.md\n",
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        release.verify_release_version_file(
+            Path("/r"), "abc123", "package.json",
+        )
+    assert "package.json" in str(excinfo.value)
+    assert "version_file: none" in str(excinfo.value)
+
+
 def test_parse_release_declaration_manual_scope_has_no_milestone():
     decl = release.parse_release_declaration(RELEASE_DECLARATION_BODY)
     assert decl["scope_from_milestone"] is None
@@ -18113,7 +18169,8 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                              tag_commit=None, release_url="https://github.com/o/r/releases/tag/v0.3.0",
                              in_progress=False, existing_run_id=None,
                              check_run_pages=None, milestone_items=None,
-                             leftover_labels=None, leftover_milestones=None):
+                             leftover_labels=None, leftover_milestones=None,
+                             release_tree_files=("pyproject.toml", "package.json")):
     """Full fake environment for `process_release`.
 
     Returns a dict of captured state: edit_issue / comment_issue calls,
@@ -18234,6 +18291,10 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             return "[]"
         if command[:2] == ["git", "fetch"]:
             return ""
+        if command[:3] == ["git", "ls-tree", "--name-only"]:
+            # Issue #740: the frozen release tree the version_file check
+            # probes — root entries, one per line.
+            return "".join(name + "\n" for name in release_tree_files)
         if command[:2] == ["git", "tag"]:
             return ""
         if command[:3] == ["git", "merge-base", "--is-ancestor"]:
@@ -18411,6 +18472,62 @@ def test_process_release_uses_declared_package_version_file(monkeypatch):
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     release.process_release(issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r")
     assert seen == [(Path("/wt"), "v0.3.0", "main", "package.json")]
+
+
+def test_process_release_blocks_at_claim_when_default_version_file_missing(monkeypatch):
+    """Issue #740 (the orbi-cloud#246 scene): a TypeScript repo declares no
+    `version_file`, the default `pyproject.toml` does not exist. The claim
+    fails fast BEFORE the gates and the scope verification, and the
+    failure comment names the missing file plus a supported file that
+    exists and the `none` option."""
+    state = make_release_process_env(
+        monkeypatch, release_tree_files=["package.json"],
+    )
+    seen = []
+    monkeypatch.setattr(
+        release, "prepare_release_version",
+        lambda *args: seen.append(args) or "abc123",
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    result = release.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert result == ""
+    assert seen == []
+    # Nothing ran between the frozen base and the check: no gate, no
+    # scope verification, no version write.
+    assert [c for c, _ in state["commands"]] == [
+        ["git", "ls-tree", "--name-only", "abc123"],
+    ]
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+                                       "remove": "ai-in-progress"})
+    failure = [k["body"] for n, k in state["comments"]
+               if n == 99 and "ai-blocked" in k["body"]]
+    assert failure and "pyproject.toml" in failure[0]
+    assert "package.json" in failure[0]
+    assert "version_file: none" in failure[0]
+
+
+def test_process_release_blocks_when_declared_version_file_missing(monkeypatch):
+    state = make_release_process_env(
+        monkeypatch, release_tree_files=["pyproject.toml"],
+    )
+    body = RELEASE_DECLARATION_BODY.replace(
+        "- version: v0.3.0\n", "- version: v0.3.0\n- version_file: package.json\n",
+    )
+    issue = {"number": 99, "title": "Release v0.3.0", "body": body,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    result = release.process_release(
+        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+    )
+    assert result == ""
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+                                       "remove": "ai-in-progress"})
+    failure = [k["body"] for n, k in state["comments"]
+               if n == 99 and "ai-blocked" in k["body"]]
+    assert failure and "package.json" in failure[0]
 
 
 def test_process_release_success_end_to_end(monkeypatch):
