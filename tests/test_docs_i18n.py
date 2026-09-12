@@ -49,6 +49,8 @@ KNOWN_LABELS = frozenset({
     runner.FIX_NEEDED_LABEL,
     runner.MERGED_LABEL,
     runner.BLOCKED_LABEL,
+    # Issue #763: the human acceptance gate (a human-only label).
+    runner.HUMAN_REVIEW_LABEL,
 })
 
 LABEL_PATTERN = re.compile(r"\bai-[a-z][a-z-]*\b")
@@ -81,6 +83,9 @@ KNOWN_CONFIG_FIELDS = frozenset({
     # Issue #525: the runner source freshness gate's offline escape
     # hatch (explicit boolean, default false).
     "allow_stale_runner",
+    # Issue #763: the human acceptance gate (explicit boolean,
+    # default false; a host/deploy-only key).
+    "human_review_gate",
     # Issue #228: the configurable model_wait dead-request threshold
     # (finite positive number, default 1800 s).
     "model_wait_dead_seconds",

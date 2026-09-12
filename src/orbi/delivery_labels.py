@@ -31,15 +31,18 @@ LIFECYCLE_STATES = frozenset({
 # dev ticket, the ops playbook instead of the dev one, the deliverable
 # is evidence posted to the Issue); `ai-content-only` marks a pure
 # content task (the content agent, no execution, the deliverable is
-# posted to the Issue). None of them is a delivery state, and
-# `blockedBy` (a GitHub relation, not a label) is handled by the
-# dependency scan.
+# posted to the Issue); `ai-human-review` is the human acceptance gate
+# (Issue #763) — the Runner never adds or removes it (the `ai-release`
+# shape: no event's patch names it in either direction). None of them
+# is a delivery state, and `blockedBy` (a GitHub relation, not a label)
+# is handled by the dependency scan.
 P0_LABEL = "p0"
 BUG_LABEL = "bug"
 EPIC_LABEL = "ai-epic"
 RELEASE_LABEL = "ai-release"
 CONTENT_ONLY_LABEL = "ai-content-only"
 OPS_LABEL = "ai-ops-only"
+HUMAN_REVIEW_LABEL = "ai-human-review"
 
 # --- Events that drive label transitions ---
 EVENT_CLAIM = "claim"
@@ -47,6 +50,7 @@ EVENT_PR_OPENED = "pr_opened"
 EVENT_FIX_NEEDED = "fix_needed"
 EVENT_MERGED = "merged"
 EVENT_RELEASE_WAITING = "release_waiting"
+EVENT_HUMAN_REVIEW_WAITING = "human_review_waiting"
 EVENT_REQUEUE = "requeue"
 EVENT_BLOCKED = "blocked"
 
@@ -95,6 +99,20 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
         return ([FIX_NEEDED_LABEL], to_remove)
     if event == EVENT_RELEASE_WAITING:
         return ([READY_LABEL], [IN_PROGRESS_LABEL])
+    if event == EVENT_HUMAN_REVIEW_WAITING:
+        # Issue #763: the human acceptance gate holds the delivery — the
+        # same clean, recoverable tick as the release waiting: the
+        # ticket returns to `ai-ready` and a stale in-flight label is
+        # cleared. The opened-PR state anchor (`ai-pr-opened` /
+        # `ai-fix-needed`) STAYS: the resume scan finds waiting
+        # deliveries through it, so each next tick costs one label read
+        # and no Pi session; removing the anchor would drop the Issue
+        # into the fresh-claim queue for a full re-implement. Never
+        # EVENT_FIX_NEEDED (that would burn the review-round budget).
+        to_remove = (
+            [IN_PROGRESS_LABEL] if IN_PROGRESS_LABEL in current else []
+        )
+        return ([READY_LABEL], to_remove)
     if event == EVENT_REQUEUE:
         # Issue #608: the external takeover delivery ended without a merge
         # (the contributor withdrew the PR, or a maintainer closed it) —

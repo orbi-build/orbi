@@ -50,6 +50,7 @@ from orbi import cli_source
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
     FIX_NEEDED_LABEL,
+    HUMAN_REVIEW_LABEL,
     IN_PROGRESS_LABEL,
     MERGED_LABEL,
     PR_OPENED_LABEL,
@@ -110,6 +111,11 @@ REQUIRED_LABELS = (
     # network, the ops playbook) whose deliverable is evidence posted to
     # the Issue, so setup must provision this explicit, auditable type.
     "ai-ops-only",
+    # Human acceptance gate (Issue #763): the label only a human applies
+    # to confirm a delivery's acceptance checklist — the Runner never
+    # adds or removes it, but setup provisions it so the gate is ready
+    # before the operator turns `human_review_gate` on.
+    HUMAN_REVIEW_LABEL,
 )
 COLOR_PATTERN = re.compile(r"^[0-9a-fA-F]{6}$")
 
