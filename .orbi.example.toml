@@ -40,11 +40,29 @@ base_branch = "main"
 # sandbox path with no SSH private key. Anything else fails the config
 # load fast.
 # git_transport = "ssh"
+# Engine source update channel (Issue #535): what THIS deploy home
+# checkout follows at every service start. Host/deploy-only — it never
+# goes into a repository's .github/orbi.toml. Forms:
+#   absent / "main"     -> fast-forward origin/main (the dogfood behavior)
+#   "branch:<name>"     -> fast-forward origin/<name>
+#   "release"           -> newest official semver tag (pre-releases
+#                          excluded), detached checkout
+#   "tag:<name>"        -> exact tag lock (annotated tags dereferenced),
+#                          detached checkout
+#   "sha:<40-hex>"      -> exact commit lock, detached checkout
+# New installs default to "release" (reproducible, safely rollback-able —
+# rollback is editing the value back to the previous tag/SHA). Pin
+# "main" to keep tracking the engine's main branch like Orbi's own
+# dogfood does. A dirty checkout, a missing tag/SHA or any unverifiable
+# state fails the service start with a structured line carrying the fix.
+engine_source_track = "release"
 # Offline escape hatch for the runner source freshness gate (Issue #525).
 # Before any slot or claim the Runner proves the code it executes matches
-# the fetched origin/<base_branch> (the import checkout's HEAD for an
-# editable install; the installed version vs the latest release tag for a
-# non-editable one — local git reads only). A stale or unverifiable source
+# the configured engine source channel — engine_source_track (Issue #535),
+# origin/main by default, never the delivery base_branch (the import
+# checkout's HEAD for an editable install; the installed version vs the
+# channel's release tag for a non-editable one — local git reads only).
+# A stale or unverifiable source
 # logs the structured `runner_source_stale` line (facts + fix) and fails
 # the start. true downgrades the SAME line to a warning for offline /
 # restricted-network machines — it never skips the check. Default: false.

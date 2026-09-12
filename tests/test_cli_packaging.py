@@ -224,8 +224,8 @@ def test_service_exec_start_uses_the_installed_cli():
 
 def test_service_keeps_working_directory_and_preflight():
     """The unit's WorkingDirectory (the deployment checkout, where
-    ExecStartPre syncs origin/main and the config lives) and the
-    Issue #52 preflight are unchanged by the CLI switch."""
+    ExecStartPre syncs the engine source channel and the config lives)
+    and the Issue #52 preflight are unchanged by the CLI switch."""
     service = parse_unit(SERVICE_FILE)
     section = service["Service"]
     # Issue #262: the deployment checkout path is NOT hardcoded; the
@@ -234,10 +234,13 @@ def test_service_keeps_working_directory_and_preflight():
     assert section["WorkingDirectory"] == [
         "{{ORBI_REPO_DIR}}",
     ]
-    pre = section["ExecStartPre"][0]
+    # Issue #535: the SECOND preflight step syncs the deploy home to the
+    # configured engine source channel (the first step heals the CLI
+    # the sync runs through).
+    pre = section["ExecStartPre"][1]
     assert pre.startswith("/usr/bin/timeout 90s /usr/bin/flock ")
-    assert "git fetch --no-auto-maintenance origin main" in pre
-    assert "git merge --ff-only origin/main" in pre
+    assert "{{ORBI_REPO_DIR}}/.orbi/base-sync.lock" in pre
+    assert "%h/.local/bin/orbi sync-engine-source" in pre
 
 
 def test_service_preflight_self_heals_the_editable_cli():
@@ -245,16 +248,17 @@ def test_service_preflight_self_heals_the_editable_cli():
     console script cannot even `import orbi` (the src-layout
     migration of #168 left the installed editable finder stale, so the
     Runner died at the import stage before the refresh could run). The
-    fix is a SECOND ExecStartPre line that self-heals OUTSIDE Python:
-    it probes the installed CLI (`orbi --version` succeeds iff
-    the package imports) and, on probe failure, runs the exact editable
+    fix is an ExecStartPre line that self-heals OUTSIDE the Runner: it
+    probes the installed CLI (`orbi --version` succeeds iff the package
+    imports) and, on probe failure, runs the exact editable
     force-reinstall (cli_source.reinstall_command) under the SAME
-    base-sync flock the git sync uses."""
+    base-sync flock the engine-source sync uses. Issue #535: this step
+    runs FIRST — the sync subcommand needs a working CLI."""
     service = parse_unit(SERVICE_FILE)
     pre = service["Service"]["ExecStartPre"]
-    # Two preflight steps: the git sync (unchanged) then the CLI self-heal.
+    # Two preflight steps: the CLI self-heal, then the engine-source sync.
     assert len(pre) == 2
-    heal = pre[1]
+    heal = pre[0]
     # The same timeout wrapper + shared lock as the git sync step.
     assert heal.startswith("/usr/bin/timeout 300s /usr/bin/flock ")
     assert (

@@ -31,7 +31,7 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
-from orbi import __version__, cli_source, git_transport, runner, systemd_deploy
+from orbi import __version__, cli_source, engine_source, git_transport, runner, systemd_deploy
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
     FIX_NEEDED_LABEL,
@@ -354,8 +354,12 @@ def deploy_home_dirty_files(repo_dir: Path, *, run_command) -> list[str]:
         ["git", "status", "--short", "--untracked-files=no"],
         cwd=repo_dir,
     )
+    # run_command strips the stdout, so the first porcelain line can lose
+    # its leading X field: slice the path from column 2 and strip, never
+    # from column 3 of the raw line (the engine_source sync shares this
+    # contract, Issue #535).
     return [
-        line[3:]
+        line[2:].strip()
         for line in status.splitlines()
         if len(line) >= 3 and line[:2] != "??"
     ]
@@ -408,6 +412,29 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
     lines.append(
         f"commit: {run_command(['git', 'rev-parse', 'HEAD'], cwd=repo_dir)}"
     )
+    # Engine source update channel (Issue #535): the configured track,
+    # the resolved ref/tag and the deployment home's HEAD SHA. Read-only
+    # local git reads; an unresolvable channel is REPORTED (FAILED) with
+    # its structured reason while the rest of the report stays readable.
+    status = engine_source.engine_source_status(
+        config["deploy_home"], config.get("engine_source_track"),
+        run_command=run_command,
+    )
+    head_text = status["head"] or "-"
+    if status["error"] is not None:
+        lines.append(f"engine_source: FAILED {status['error']}")
+    elif status["ok"]:
+        lines.append(
+            f"engine_source: track={status['track']} "
+            f"resolved={status['resolved']} head={head_text}"
+        )
+    else:
+        lines.append(
+            f"engine_source: DRIFT track={status['track']} "
+            f"resolved={status['resolved']} head={head_text} "
+            f"expected={status['expected']} "
+            "(the next service start syncs it)"
+        )
     dirty_files = deploy_home_dirty_files(
         config["deploy_home"], run_command=run_command,
     )
@@ -621,6 +648,12 @@ def main(argv: list[str] | None = None) -> int:
         "--installed-dir", type=Path, default=None,
         help="user unit directory (default: the standard user dir)",
     )
+    subparsers.add_parser(
+        "sync-engine-source", parents=[common],
+        help="sync the deploy home checkout to the configured "
+             "engine_source_track (the service ExecStartPre runs this "
+             "on every tick; Issue #535)",
+    )
     doctor_parser = subparsers.add_parser(
         "doctor", parents=[common],
         help="read-only report: repo commit, unit drift, timer/service, "
@@ -665,8 +698,16 @@ def main(argv: list[str] | None = None) -> int:
             pilot_setup.ensure_config(args.config)
         config = load_config(
             args.config,
-            check_provider_api_keys=args.command != "doctor",
-            allow_missing_pi_providers=args.command in ("setup", "doctor"),
+            # Issue #535: the engine-source sync is a git operation — a
+            # missing provider key must never block it (the Runner's own
+            # start enforces the key), so it loads the config with the
+            # doctor's lenient provider flags.
+            check_provider_api_keys=args.command not in (
+                "doctor", "sync-engine-source",
+            ),
+            allow_missing_pi_providers=args.command in (
+                "setup", "doctor", "sync-engine-source",
+            ),
         )
         validate_config(config)
         # Issue #697: every command path (doctor included) enforces the
@@ -727,6 +768,18 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.flush()
     elif args.command == "install-units":
         print(install_units_command(config, args.installed_dir))
+    elif args.command == "sync-engine-source":
+        try:
+            engine_source.sync_engine_source(
+                config["deploy_home"], config["engine_source_track"],
+                run_command=run_command,
+            )
+        except engine_source.EngineSourceError as exc:
+            # The structured line (reason + fix) is the message; the
+            # non-zero exit fails the ExecStartPre, so the service does
+            # not start (fail closed, Issue #535).
+            LOGGER.error("%s", exc)
+            return 1
     elif args.command == "doctor":
         print(doctor_report(config, args.installed_dir))
     elif args.command == "setup":

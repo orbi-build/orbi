@@ -127,9 +127,11 @@ exact fix command). That in-Runner refresh is unreachable when the
 console script cannot even `import orbi` (the #248 scene: the
 src-layout migration of #168 left the installed editable finder stale,
 so the Runner died at the import stage before the refresh could run) —
-for that class of breakage the service's SECOND `ExecStartPre` step
+for that class of breakage the service's FIRST `ExecStartPre` step
 self-heals OUTSIDE Python: it probes `orbi --version` and, on
-probe failure, runs the same editable force-reinstall (see
+probe failure, runs the same editable force-reinstall — before the
+second step (`orbi sync-engine-source`, Issue #535), which needs that
+working CLI (see
 [Operations](/operations) for the full mechanics). `orbi doctor` reports the
 consistency (`cli_source: clean` or `cli_source: DRIFT` with the
 structured `cli_source_drift` line), and `orbi setup` verifies or
@@ -163,10 +165,11 @@ directory):
 | `prompt_review` | no | `prompts/prompt_review.md` | Review prompt template for the independent post-PR review session |
 | `base_branch` | no | `main` | Delivery base branch; every task worktree is created from the frozen `origin/<base_branch>` SHA |
 | `git_transport` | no | `ssh` | Delivery checkout transport (Issue #580). `ssh` (default): git data operations go over `git@github.com:owner/repo.git` with the machine's SSH key; setup migrates an HTTPS origin. `https`: the origin stays on `https://github.com/<repo>.git` and the `git ls-remote`/fetch/push credentials come from the `gh` credential helper (`gh auth login --with-token`) — the token-only sandbox path with no SSH private key. Anything else fails the config load fast |
+| `engine_source_track` | no | `main` (fresh installs via `install.sh`: `release`) | Engine source update channel (Issue #535, host/deploy-only — never a repository's `.github/orbi.toml`): what the deploy home checkout follows at every service start. absent/`main`: fast-forward `origin/main` (the pre-#535 dogfood behavior). `branch:<name>`: fast-forward `origin/<name>`. `release`: the newest official semver tag (pre-releases excluded), detached. `tag:<name>`/`sha:<40-hex>`: exact lock, detached — rollback is editing the value back. A dirty checkout, a missing tag/SHA or any unverifiable state fails the start with a structured line (see [Operations](/operations)) |
 | `active_milestone` | no | unset | Claim scope for the fresh-claim scans (Issue #139): the active GitHub Milestone title (e.g. `v0.2.0`). Set it to restrict the p0/bug/plain ready scans to that Milestone (the `milestone:"<title>"` qualifier is part of the gh search query — an Issue of another or no Milestone never enters the queue); `ai-ready` stays the execution switch, the pickup order is unchanged, P0 does not cross milestones, and resume states (opened PRs, in-flight restarts) are never gated by it. Unset = every `ai-ready` Issue is claimable (pre-#139 behavior) |
 | `auto_next_milestone` | no | `true` | Controls idle advancement after the active milestone closes and its queue is empty. `false` leaves `active_milestone` unchanged, logs a pending warning, and creates one confirmation Issue without `ai-ready` or `p0` so it cannot be picked up; stale notices are closed after a manual move. Invalid values fail fast |
 | `max_concurrency` | no | `1` | Concurrent Orbi tasks and enabled Runner timers on this machine (`1` or `2`; the fixed template has two instances) |
-| `allow_stale_runner` | no | `false` | Offline escape hatch for the runner source freshness gate (Issue #525): before any slot or claim the Runner proves the code it executes matches the fetched `origin/<base_branch>` (the import checkout's `HEAD` for an editable install; the installed version vs the latest release tag for a non-editable one — local git reads only). A stale or unverifiable source logs the structured `runner_source_stale` line (facts + fix) and fails the start. `true` downgrades the SAME line to a warning so an offline/restricted-network machine keeps running — it never skips the check. Invalid values fail fast |
+| `allow_stale_runner` | no | `false` | Offline escape hatch for the runner source freshness gate (Issue #525): before any slot or claim the Runner proves the code it executes matches the configured engine source channel — `engine_source_track` (Issue #535), `origin/main` by default, never the delivery `base_branch` (the import checkout's `HEAD` for an editable install; the installed version vs the latest release tag for a non-editable one — local git reads only). A stale or unverifiable source logs the structured `runner_source_stale` line (facts + fix) and fails the start. `true` downgrades the SAME line to a warning so an offline/restricted-network machine keeps running — it never skips the check. Invalid values fail fast |
 | `model_wait_dead_seconds` | no | `1800` | Hung-model-request threshold (Issue #228): seconds of `model_wait` silence before the Runner kills the Pi session and fails fast. Field semantics (silence between complete events, the slow-generation boundary): the `model_wait_dead` journal line in [Operations](/operations). Must be a finite positive number; anything else fails the start fast |
 | `model_wait_probe_url` | no | unset | Swallowed-model-request probe (Issue #233): the model's `/slots` endpoint (e.g. `http://127.0.0.1:18082/slots`, the agent-facing port — the local-llm-kv-cache proxy passes it through from llama.cpp). While Pi is frozen in `model_wait` the Runner probes it and kills the Pi session fast when every slot stays idle for the `model_wait_probe_seconds` grace. Field semantics (the swallow scene, the bypass boundary): the `model_wait_swallowed` journal line in [Operations](/operations). Unset = the probe is disabled (the pre-#233 behavior). Must be a non-empty `http://`/`https://` URL; anything else fails the start fast |
 | `model_wait_probe_seconds` | no | `60` | The sustained-idle grace for the swallowed-model-request probe (Issue #233): how long the "every slot idle" state must hold (while in `model_wait`) before the request is declared swallowed and Pi is killed. Must be a finite positive number; anything else fails the start fast |
@@ -195,6 +198,7 @@ workspace_root = ".."
 prompt = "prompts/prompt.md"
 prompt_review = "prompts/prompt_review.md"
 base_branch = "main"
+engine_source_track = "release"  # Issue #535: engine source channel (see Operations)
 max_concurrency = 1
 skills = []
 context_files = []
@@ -241,6 +245,7 @@ repo_dir = "/path/to/user-repo-x"
 deploy_home = "/path/to/orbi"
 workspace_root = "/path/to"
 base_branch = "main"
+engine_source_track = "release"  # Issue #535: engine source channel (see Operations)
 max_concurrency = 1
 skills = []
 context_files = []

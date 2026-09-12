@@ -29,9 +29,11 @@ State lives in ONE lightweight JSON file in the existing state dir
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -179,10 +181,61 @@ def load_health_state(path: Path) -> dict:
     return state
 
 
+HEALTH_LOCK_TIMEOUT_S = 5.0
+
+
+def _health_lock_path(state_path: Path) -> Path:
+    return state_path.parent / (state_path.name + ".lock")
+
+
+def _acquire_health_lock(state_path: Path, *,
+                         blocking: bool) -> int | None:
+    """Take the cross-instance health-state lock; None when unavailable.
+
+    Issue #710: health.json is the one state file two runner instances
+    both read and write with no other synchronization — their
+    load..save spans interleave and the last writer rolls the other's
+    updates back. This is a LEAF lock: it is never taken while holding
+    another lock (the check runs before slot acquisition; the recorders
+    run inside a delivery), so no ordering hazard exists with the slot
+    or base-sync flocks. The returned fd owns the flock — closing it
+    releases.
+
+    `blocking=False` bounds the wait at HEALTH_LOCK_TIMEOUT_S and gives
+    up for the tick: the check is a documented pure bypass, so a busy
+    lock skips this tick's check with the same semantics as a check
+    failure.
+    """
+    lock_path = _health_lock_path(state_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    if blocking:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return fd
+    deadline = time.monotonic() + HEALTH_LOCK_TIMEOUT_S
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                return None
+            time.sleep(0.05)
+
+
 def save_health_state(path: Path, state: dict) -> None:
-    """Write the health state atomically (tmp file + rename)."""
+    """Write the health state atomically (tmp file + rename).
+
+    Issue #710: the tmp name is pid-scoped. The previous shared
+    `health.tmp` meant two instances saving concurrently wrote the same
+    tmp inode — interleaved truncate/write produced torn JSON that the
+    read side then treated as fresh state (a silent reset of every
+    alert/counter). Unique tmp names make each writer's rename
+    all-or-nothing regardless of interleaving.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
     tmp.replace(path)
 
@@ -208,33 +261,52 @@ def record_run_attempt(
     state_path: Path, *, repo: str, issue: int, run_id: str,
     outcome: str, fingerprint: str,
 ) -> None:
-    """Append one run attempt to the bounded health history."""
-    state = load_health_state(state_path)
-    if outcome != "failed":
-        # A non-failure outcome breaks the repeated-failure streak. The
-        # issue's alert history must turn a fresh page with it: a later
-        # NEW streak on the same issue alerts again instead of staying
-        # silent forever behind the key recorded for the old streak.
-        prefix = f"{repo}#{issue}:"
-        state["alerted"] = [
-            key for key in state["alerted"]
-            if not key.startswith(prefix)
-        ]
-    state["runs"].append({
-        "repo": repo, "issue": issue, "run_id": run_id,
-        "outcome": outcome, "fingerprint": fingerprint,
-        "ts": time.time(),
-    })
-    state["runs"] = state["runs"][-RECENT_RUNS_KEEP:]
-    save_health_state(state_path, state)
+    """Append one run attempt to the bounded health history.
+
+    Issue #710: the load..save span is a cross-instance RMW — the
+    blocking lock serializes it (the critical section is pure file
+    work, milliseconds).
+    """
+    lock_fd = _acquire_health_lock(state_path, blocking=True)
+    try:
+        state = load_health_state(state_path)
+        if outcome != "failed":
+            # A non-failure outcome breaks the repeated-failure streak. The
+            # issue's alert history must turn a fresh page with it: a later
+            # NEW streak on the same issue alerts again instead of staying
+            # silent forever behind the key recorded for the old streak.
+            prefix = f"{repo}#{issue}:"
+            state["alerted"] = [
+                key for key in state["alerted"]
+                if not key.startswith(prefix)
+            ]
+        state["runs"].append({
+            "repo": repo, "issue": issue, "run_id": run_id,
+            "outcome": outcome, "fingerprint": fingerprint,
+            "ts": time.time(),
+        })
+        state["runs"] = state["runs"][-RECENT_RUNS_KEEP:]
+        save_health_state(state_path, state)
+    finally:
+        os.close(lock_fd)
 
 
 def record_pickup(repo_dir: Path) -> None:
-    """Record a successful ticket pickup (resets the stale-pickup clock)."""
+    """Record a successful ticket pickup (resets the stale-pickup clock).
+
+    Issue #710: locked like :func:`record_run_attempt` — an unlocked RMW
+    here is exactly the mechanism behind the false `stale_pickup` alarm
+    (one instance's check saves back an old pickup timestamp over the
+    other instance's fresh one).
+    """
     path = health_state_path(repo_dir)
-    state = load_health_state(path)
-    state["last_pickup_ts"] = time.time()
-    save_health_state(path, state)
+    lock_fd = _acquire_health_lock(path, blocking=True)
+    try:
+        state = load_health_state(path)
+        state["last_pickup_ts"] = time.time()
+        save_health_state(path, state)
+    finally:
+        os.close(lock_fd)
 
 
 def crash_journal_lines(
@@ -503,10 +575,28 @@ def repeat_failure_comment(finding: dict) -> str:
 def run_health_check(config: dict, *, run_command) -> list[str]:
     """Run the tick-start self-health check. Returns the fired check names.
 
+    Issue #710: the state read-modify-write is serialized across
+    instances with the leaf health lock, acquired non-blocking with a
+    bounded wait — the check is a documented pure bypass, so a lock
+    that stays busy skips this tick's check with the same semantics as
+    a check failure (callers log it and never fail the delivery).
+
     Pure bypass: callers wrap this in try/except — a check failure logs and
     never fails the delivery. The state file is saved even when a check
     raises (the alerted-dedup set must survive partial runs).
     """
+    state_path = health_state_path(config["repo_dir"])
+    lock_fd = _acquire_health_lock(state_path, blocking=False)
+    if lock_fd is None:
+        LOGGER.info("health_check_skipped reason=health_lock_busy")
+        return []
+    try:
+        return _run_health_check_locked(config, run_command=run_command)
+    finally:
+        os.close(lock_fd)
+
+
+def _run_health_check_locked(config: dict, *, run_command) -> list[str]:
     alerts: list[str] = []
     state_path = health_state_path(config["repo_dir"])
     state = load_health_state(state_path)

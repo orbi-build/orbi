@@ -23,3 +23,50 @@
 
 已有 `v0.1.0` 与 `v0.1.1` tag 保持不可变；`v0.1.2` 是当前完整 main
 的最终 0.1 发布。
+
+## Changelog
+
+<Note>
+2026-09-10 勘误：以下条目确实随本版本发出，但生成 changelog 时缺失。生成器按发布那一刻的 Milestone 归属推导 scope，因此挂在其它 Milestone 下的票即便代码已包含在本 tag 中，也不会出现在这份 notes 里。下列每一条都用 `git merge-base --is-ancestor <merge commit> <tag>` 验证过。
+</Note>
+
+
+### Features
+
+- v0.1: first release checklist (close this when tagged) ([Issue #80](https://github.com/orbi-build/orbi/issues/80); [PR #92](https://github.com/orbi-build/orbi/pull/92))
+- Release：对账 v0.1.0 子 Issue、tag 与发布证据 ([Issue #97](https://github.com/orbi-build/orbi/issues/97); [PR #125](https://github.com/orbi-build/orbi/pull/125))
+- Runner：支持 P0 紧急任务优先 pickup，避免故障循环 ([Issue #101](https://github.com/orbi-build/orbi/issues/101); [PR #113](https://github.com/orbi-build/orbi/pull/113))
+
+
+### Reliability and recovery
+
+- Pi hangs in model_wait after llama proxy timeout and holds the slot forever ([Issue #75](https://github.com/orbi-build/orbi/issues/75); [PR #110](https://github.com/orbi-build/orbi/pull/110))
+- Bug: resume 使用评论里的 PR URL，不再 verify_pr ([Issue #89](https://github.com/orbi-build/orbi/issues/89); [PR #102](https://github.com/orbi-build/orbi/pull/102))
+- Bug: resume 时 worktree 缺失不再 mutation 前 fail-fast ([Issue #90](https://github.com/orbi-build/orbi/issues/90); [PR #99](https://github.com/orbi-build/orbi/pull/99))
+- Bug: resume 不校验 scene base_branch 与配置是否一致 ([Issue #91](https://github.com/orbi-build/orbi/issues/91); [PR #96](https://github.com/orbi-build/orbi/pull/96))
+- Prompt 契约：可能阻塞的命令必须加 timeout，无界循环测试必须带终止保护 ([Issue #95](https://github.com/orbi-build/orbi/issues/95); [PR #121](https://github.com/orbi-build/orbi/pull/121))
+
+
+### Deployment and operations
+
+- 部署一致性：自动安装 systemd units 并检测配置漂移 ([Issue #103](https://github.com/orbi-build/orbi/issues/103); [PR #112](https://github.com/orbi-build/orbi/pull/112))
+- Git transport：bootstrap 默认使用 SSH，支持 workflow 文件可靠推送 ([Issue #114](https://github.com/orbi-build/orbi/issues/114); [PR #122](https://github.com/orbi-build/orbi/pull/122))
+- Setup：提供一次性配置脚本初始化 GitHub、labels 和本地运行前提 ([Issue #117](https://github.com/orbi-build/orbi/issues/117); [PR #120](https://github.com/orbi-build/orbi/pull/120))
+
+
+### Observability
+
+- GitHub progress comments must not be on the main delivery path ([Issue #79](https://github.com/orbi-build/orbi/issues/79); [PR #107](https://github.com/orbi-build/orbi/pull/107))
+- Progress comment：Issue 行同时显示编号和标题 ([Issue #100](https://github.com/orbi-build/orbi/issues/100); [PR #115](https://github.com/orbi-build/orbi/pull/115))
+
+
+### Documentation
+
+- v0.1.0：补齐开源项目最小使用与贡献文档 ([Issue #104](https://github.com/orbi-build/orbi/issues/104); [PR #111](https://github.com/orbi-build/orbi/pull/111))
+- 文档：增加中文版本与系统架构 Mermaid 总览图 ([Issue #116](https://github.com/orbi-build/orbi/issues/116); [PR #124](https://github.com/orbi-build/orbi/pull/124))
+
+
+### Bug fixes
+
+- Implementer must not run the independent review-fix loop before opening the PR ([Issue #78](https://github.com/orbi-build/orbi/issues/78); [PR #109](https://github.com/orbi-build/orbi/pull/109))
+- CI checkout must fetch annotated tags for release verification ([Issue #126](https://github.com/orbi-build/orbi/issues/126); [PR #127](https://github.com/orbi-build/orbi/pull/127))

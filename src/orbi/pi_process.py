@@ -296,12 +296,30 @@ class RateLimitExhaustedError(RuntimeError):
     must see the provider quota, not the task, as the cause."""
 
 
-def _drain_stream(stream, chunks: list[bytes]) -> None:
-    """Read a pipe to EOF, appending chunks (process must be finished)."""
+_DRAIN_SILENCE_S = 30.0
+
+
+def _drain_stream(stream, chunks: list[bytes],
+                  silence_s: float = 30.0) -> bool:
+    """Read a pipe to EOF, appending chunks (process must be finished).
+
+    Issue #709: Pi's tool subprocesses inherit this pipe's write end and
+    can outlive Pi — after Pi is reaped, EOF then never arrives and an
+    unbounded blocking read would wedge the tick (and its slot) forever,
+    past every timeout mechanism. Each received chunk restarts the
+    `silence_s` window (silence, not total, time: a busy legitimate
+    writer must never be cut off mid-verdict); when the stream stays
+    silent for the whole window the tail is abandoned. Returns False
+    when the drain was abandoned, True on EOF.
+    """
+    fd = stream.fileno()
     while True:
-        data = os.read(stream.fileno(), 65536)
+        ready, _, _ = select.select([fd], [], [], silence_s)
+        if not ready:
+            return False
+        data = os.read(fd, 65536)
         if not data:
-            return
+            return True
         chunks.append(data)
 
 
@@ -1465,8 +1483,19 @@ def _stream_pi_once(
         # The child is reaped (or dead): the stop handler must never
         # signal an already-exited process (Issue #48).
         set_active_pi(None)
-        _drain_stream(process.stdout, stdout_chunks)
-        _drain_stream(process.stderr, stderr_chunks)
+        # Issue #709: a tool grandchild may hold the pipe write end past
+        # Pi's death — abandon the silent tail instead of wedging the
+        # tick inside this finally block.
+        drained = _drain_stream(process.stdout, stdout_chunks,
+                                silence_s=_DRAIN_SILENCE_S)
+        drained = _drain_stream(process.stderr, stderr_chunks,
+                                silence_s=_DRAIN_SILENCE_S) and drained
+        if not drained:
+            LOGGER.warning(
+                "pi_drain_abandoned issue=%s role=%s "
+                "reason=pipe_write_end_outlives_pi",
+                issue_ref, role,
+            )
     stdout = _decode_chunks(stdout_chunks)
     stderr = _decode_chunks(stderr_chunks)
     # Issue #656: the last live poll can predate the journal Pi flushed

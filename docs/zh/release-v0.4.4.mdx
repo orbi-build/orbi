@@ -12,6 +12,25 @@
 
 ## Changelog
 
+<Note>
+2026-09-10 勘误：以下条目确实随本版本发出，但生成 changelog 时缺失。生成器按发布那一刻的 Milestone 归属推导 scope，因此挂在其它 Milestone 下的票即便代码已包含在本 tag 中，也不会出现在这份 notes 里。下列每一条都用 `git merge-base --is-ancestor <merge commit> <tag>` 验证过。
+</Note>
+
+
+### Features
+
+- 技术债：main 启动前置检查全部内联，doctor 无法复用 ([Issue #297](https://github.com/orbi-build/orbi/issues/297); [PR #683](https://github.com/orbi-build/orbi/pull/683))
+- 技术债：gh issue list 重复调用 8 处，收敛成一个函数 ([Issue #299](https://github.com/orbi-build/orbi/issues/299); [PR #680](https://github.com/orbi-build/orbi/pull/680))
+- 技术债：把 Pi 进程执行子系统（11 个函数 / 940 行）从 runner.py 移入 pi_process.py ([Issue #300](https://github.com/orbi-build/orbi/issues/300); [PR #678](https://github.com/orbi-build/orbi/pull/678))
+- 仓库级 config-as-code：.github/orbi.toml 承载交付策略白名单，宿主 orbi.toml 保留身份与安全 ([Issue #527](https://github.com/orbi-build/orbi/issues/527); [PR #677](https://github.com/orbi-build/orbi/pull/677))
+- 重命名 ops 类交付标签：标签名应覆盖 ops 类无 git 交付任务（labels.toml + 代码常量 + 测试 + 各仓库实际标签同步） ([Issue #530](https://github.com/orbi-build/orbi/issues/530); [PR #676](https://github.com/orbi-build/orbi/pull/676))
+
+
+### Deployment and operations
+
+- 技术债：labels.toml 注释引用了不存在的入口 orbi.py setup ([Issue #298](https://github.com/orbi-build/orbi/issues/298); [PR #675](https://github.com/orbi-build/orbi/pull/675))
+
+
 ### Bug fixes
 
 - P0：REVIEW_VERDICT 被 markdown 代码围栏包裹时解析失败，合格交付被误判为 ai-fix-needed ([Issue #679](https://github.com/orbi-build/orbi/issues/679); [PR #681](https://github.com/orbi-build/orbi/pull/681))

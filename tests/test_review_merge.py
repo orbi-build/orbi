@@ -1556,6 +1556,54 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
                                  "remove": "ai-pr-opened"})) < calls.index("sync")
 
 
+def test_review_and_merge_skips_checkout_sync_for_a_locked_engine_source(
+        monkeypatch, tmp_path):
+    """Issue #535: when the delivery checkout IS the engine source (the
+    dogfood layout, repo_dir == deploy_home) and the engine channel is
+    locked (not the plain main track), the post-merge fast-forward to
+    origin/<base_branch> must not break the lock — the next tick's
+    ExecStartPre engine sync owns that checkout instead."""
+    calls = []
+    monkeypatch.setattr(
+        runner, "issue_labels", lambda *a, **k: [
+            "ai-ready", "ai-pr-opened",
+        ],
+    )
+    monkeypatch.setattr(
+        runner, "issue_comments", lambda *a, **k: [],
+    )
+    monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(
+        runner, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
+    )
+    monkeypatch.setattr(
+        runner, "confirm_merged",
+        lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
+    )
+    monkeypatch.setattr(runner, "sync_base_checkout",
+                        lambda *a, **k: calls.append("sync"))
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *a, **k: calls.append(("edit", k)),
+    )
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *a, **k: calls.append(("comment", k.get("body"))),
+    )
+    make_fake_gh(monkeypatch)
+    config = _review_merge_config(tmp_path)
+    config["deploy_home"] = config["repo_dir"]
+    config["engine_source_track"] = "tag:v0.4.2"
+    merged = runner.review_and_merge_if_clean(
+        tmp_path, "branch", "main", config,
+        "owner/repo", 4, title="Review task",
+        priority="normal",
+    )
+    assert merged is True
+    assert "sync" not in calls
+
+
 def test_review_and_merge_fix_round_clears_live_delivery_labels(
         monkeypatch, tmp_path):
     calls = []
