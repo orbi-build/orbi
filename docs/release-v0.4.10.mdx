@@ -1,0 +1,39 @@
+# v0.4.10 release (latest)
+
+`v0.4.10` was published 2026-09-12T04:36:33Z as the GitHub Release [v0.4.10](https://github.com/orbi-build/orbi/releases/tag/v0.4.10) (release task: Issue #748).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.4.10` | annotated tag `7104774bbdfd5f99348086dce0cc7fe537f57099` | commit `603e25a447b509c6c8d5caaedea36a7a518f0ff2` |
+
+## Release notes
+
+## Changelog
+
+### Bug fixes
+
+- 多部署场景下 unit_name 未被使用：手工建的单元绕过 check_unit_drift，模板更新永远不会自动生效 ([Issue #747](https://github.com/orbi-build/orbi/issues/747); [PR #751](https://github.com/orbi-build/orbi/pull/751))
+- release 票的 ## Release 契约在仓库里没有出处：每次开票只能抄历史 issue，#246 已因此卡过一次 ([Issue #749](https://github.com/orbi-build/orbi/issues/749); [PR #750](https://github.com/orbi-build/orbi/pull/750))
+
+- tag: `v0.4.10`
+- release commit: `603e25a447b509c6c8d5caaedea36a7a518f0ff2`
+- release task: Issue #748
+
+## Scope (verified item by item)
+
+- Issue #747 closed
+- Issue #749 closed
+- NOT released (still open in milestone v0.4.10): open Issue #748 Release v0.4.10：接上 engine_source_track 的电——让单元漂移自愈覆盖多部署
+
+## Pre-release gates
+
+- no open Issue in milestone 'v0.4.10' carries ai-in-progress / ai-pr-opened / ai-fix-needed
+- CI on the release commit: 3 check(s) all success/neutral/skipped (waited 210s for pending checks)
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit 603e25a447b509c6c8d5caaedea36a7a518f0ff2 (the #268 CI-wait gate; no local test execution)
+
+run_id=c2eed2d5
