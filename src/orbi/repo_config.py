@@ -86,6 +86,9 @@ HOST_ONLY_KEYS = frozenset({
     "slot_dir",
     "unit_name",
     "git_transport",
+    # Tick-start worktree reclamation (Issue #760): the host owns its
+    # disk hygiene, never a repository policy.
+    "worktree_retain_hours",
     # Engine source update channel (Issue #535): a deploy-home decision,
     # never a repository policy.
     "engine_source_track",

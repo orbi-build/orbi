@@ -607,6 +607,32 @@ and the PR opens on the agent's head — the existing review session
 absorbs the base in-session), then pushes the task branch and creates the
 PR.
 
+### Task-worktree reclamation (Issue #760)
+
+Worktrees used to only ever grow: every delivered run left its
+`repo_dir/.worktrees/orbi-{slug}-issue-{N}-{run_id}` directory behind and
+nothing removed it. At every tick start — beside the pre-start checks,
+before any slot or claim — the Runner runs one bounded, idempotent
+reclamation pass (`reclaim_released_worktrees`): it considers ONLY
+registered worktrees under `repo_dir/.worktrees` whose name matches the
+orbi pattern for a CONFIGURED source repo, and removes one with
+`git worktree remove --force` when ALL of the following hold: the Issue
+is closed (one batched `gh issue list --state closed` per involved repo),
+its `closedAt` is at least `worktree_retain_hours` (deploy home's
+`orbi.toml`, default 72) in the past, and it carries none of the
+in-flight labels (`ai-in-progress`, `ai-pr-opened`, `ai-fix-needed` — a
+human closing an in-flight Issue leaves the label, and the scene
+survives). A worktree of this process's bound run (by run id or by the
+stop-scene path) is never a candidate, and a closed Issue is never
+resumed, so a reclaimed scene is unreachable garbage, never recovery
+state. Removals are ordered oldest-closed first and capped at 25 per
+tick, so a backlog drains over ticks and no tick spends unbounded time.
+The pass is a pure bypass: a GitHub read failure logs
+`worktree_reclaim_failed reason=...` and removes nothing, a single
+removal failure logs `worktree_reclaim_failed path=... reason=...` and
+the pass continues, and a successful tick with removals logs the
+structured `worktree_reclaimed count=N freed=<bytes>` line.
+
 ## Failure recovery
 
 | State | What happened | What to do |

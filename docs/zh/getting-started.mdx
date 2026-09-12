@@ -136,6 +136,7 @@ checkout 根目录**没有** `orbi.py`（与 package 同名的 flat 文件
 | `source_repos` | 是 | — | 每个 tick 扫描的一个 `owner/repo` 任务池。多个条目会因当前执行层只有一个 checkout 而 fail fast；多仓库 workspace 尚未提供（Issue #133） |
 | `repo_dir` | 否 | `.` | 交付 checkout：Runner 交付 Issue 的仓库。任务 worktree 从它冻结的 `origin/<base_branch>` SHA 创建，PR 对它打开，slot 锁在 `<repo_dir>/.orbi/slots/`。自举模式下它就是 orbi checkout 自身；外部单仓库模式（Issue #330）下是外部用户仓库 X |
 | `deploy_home` | 否 | `repo_dir` | orbi **源码** checkout（Issue #330）：editable CLI 安装来源（自更新）、`systemd/` unit 模板、`labels.toml`、prompt 默认（`prompts/prompt.md`、`prompts/prompt_review.md` 未设置时）。缺省 = `repo_dir`（自举模式，行为不变）。`repo_dir` 是外部仓库 X 时把它设为 orbi checkout。必须是非空字符串；目录不存在会启动 fail fast |
+| `worktree_retain_hours` | 否 | `72` | tick 开头任务 worktree 回收的保留窗口（Issue #760，仅宿主/部署侧——仓库的 `.github/orbi.toml` 不可携带）：已关闭超过该小时数的任务 worktree 会被自动移除（OPEN 的票和有活跃 run 的现场绝不触碰）。机制与 `worktree_reclaimed` journal 行：[运维](/zh/operations)。必须是有限正数小时，否则启动 fail fast |
 | `workspace_root` | 否 | `..` | 包含任务 worktree 和 agent 可修改仓库的目录 |
 | `prompt` | 否 | `prompts/prompt.md` | 实现者 prompt 模板（`{{SOURCE_REPO}}` 等占位符由 Runner 渲染） |
 | `prompt_review` | 否 | `prompts/prompt_review.md` | PR 后独立审查 session 的 review prompt 模板 |

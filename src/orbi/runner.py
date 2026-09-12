@@ -43,6 +43,7 @@ import tomllib
 import xml.etree.ElementTree as ET
 import uuid
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
@@ -226,6 +227,26 @@ TRUSTED_COMMENT_ASSOCIATIONS = frozenset({
 # dropped-older-comments count is stated inside the injected block —
 # the truncation is never silent.
 ISSUE_COMMENTS_LIMIT = 20
+
+# Task-worktree reclamation (Issue #760): the tick-start pass removes at
+# most this many worktrees per tick (oldest-closed first), so a large
+# backlog drains over ticks and one tick never spends unbounded time on
+# `rm -rf`.
+WORKTREE_RECLAIM_MAX_PER_TICK = 25
+# The default retention window (hours): a closed Issue's scene stays
+# inspectable for three days before the reclamation removes it — the
+# Issue's conservative option (宁可不删，不可误删).
+WORKTREE_RETAIN_HOURS = 72
+# A closed Issue still wearing one of these was closed by a human while
+# a run was (or may still be) working in its scene — never reclaim such
+# a worktree.
+_WORKTREE_INFLIGHT_LABELS = frozenset({
+    IN_PROGRESS_LABEL, PR_OPENED_LABEL, FIX_NEEDED_LABEL,
+})
+# The task worktree name `worktree_path` derives: orbi-{slug}-issue-{N}-{run_id}.
+_WORKTREE_NAME_PATTERN = re.compile(
+    r"^orbi-(?P<slug>.+)-issue-(?P<number>\d+)-(?P<run_id>[0-9a-f]{8})$",
+)
 
 
 class ReleaseDeliveriesWaiting(RuntimeError):
@@ -613,6 +634,9 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     # Trusted-comment injection cap (Issue #745): how many of the
     # Issue's trusted comments enter the agent's task context.
     issue_comments_limit = _issue_comments_limit(data)
+    # Task-worktree reclamation (Issue #760): how long a closed Issue's
+    # worktree stays inspectable before the tick start removes it.
+    worktree_retain_hours = _worktree_retain_hours(data)
     # Swallowed-model-request probe (Issue #233): the /slots endpoint
     # (optional) and its sustained-idle grace (default 60 s). Absent URL
     # -> the probe is disabled (the exact pre-#233 behavior: the run is
@@ -735,6 +759,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         "pi_extensions": pi_extensions,
         "model_wait_dead_seconds": model_wait_dead_seconds,
         "issue_comments_limit": issue_comments_limit,
+        "worktree_retain_hours": worktree_retain_hours,
         "model_wait_probe_url": model_wait_probe_url,
         "model_wait_probe_seconds": model_wait_probe_seconds,
         "release_ci_wait_seconds": release_ci_wait_seconds,
@@ -1029,6 +1054,47 @@ def _model_wait_dead_seconds(data: dict) -> float:
     if number <= 0:
         raise ValueError(
             "model_wait_dead_seconds must be a positive number of seconds "
+            f"(got {value!r})"
+        )
+    return number
+
+
+def _worktree_retain_hours(data: dict) -> float:
+    """Load and validate the optional `worktree_retain_hours` (Issue
+    #760).
+
+    Omitted -> `WORKTREE_RETAIN_HOURS` (default 72 hours): a closed
+    Issue's scene stays inspectable for three days before the tick-start
+    reclamation removes it. Present -> must be a finite positive number
+    (int or float); booleans, zero, negative, NaN/infinity and
+    non-numeric values fail fast at config load with the field name and
+    the concrete reason.
+    """
+    value = data.get("worktree_retain_hours", WORKTREE_RETAIN_HOURS)
+    if isinstance(value, bool):
+        raise ValueError(
+            "worktree_retain_hours must be a number, not a boolean "
+            f"(got {value!r})"
+        )
+    if not isinstance(value, (int, float)):
+        raise ValueError(
+            "worktree_retain_hours must be a number "
+            f"(got {type(value).__name__} {value!r})"
+        )
+    number = float(value)
+    if math.isnan(number):
+        raise ValueError(
+            "worktree_retain_hours must be a finite number of hours "
+            f"(got {value!r})"
+        )
+    if math.isinf(number):
+        raise ValueError(
+            "worktree_retain_hours must be a finite number of hours "
+            f"(got {value!r})"
+        )
+    if number <= 0:
+        raise ValueError(
+            "worktree_retain_hours must be a positive number of hours "
             f"(got {value!r})"
         )
     return number
@@ -3835,6 +3901,143 @@ def latest_run_id(repo_dir: Path, source_repo: str, number: int) -> str | None:
         return None
     newest = max(candidates, key=lambda path: path.stat().st_mtime)
     return newest.name.rsplit("-", 1)[-1]
+
+
+def _tree_size(path: Path) -> int:
+    """The byte size of one worktree tree (informational `freed=` field).
+
+    Unreadable entries are skipped, never raised: the size is journal
+    metadata, not a gate.
+    """
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += (Path(root) / name).stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def reclaim_released_worktrees(config: dict, *,
+                               now: datetime | None = None) -> None:
+    """Remove the task worktrees of closed Issues past the retention
+    window (Issue #760).
+
+    Called at every tick start beside `check_unit_drift` — idempotent,
+    bounded (at most `WORKTREE_RECLAIM_MAX_PER_TICK` removals,
+    oldest-closed first) and never fatal: a GitHub read failure removes
+    nothing, a single removal failure is a `worktree_reclaim_failed`
+    warning and the pass continues. Safety, in order:
+
+    - only REGISTERED worktrees under `repo_dir/.worktrees` are
+      considered, and only names matching the `worktree_path` pattern
+      for the CONFIGURED source repos (a foreign worktree or an
+      old-slug scene left by a repo rename is never touched);
+    - the worktree of this process's bound run is never a candidate —
+      matched by run id and by the Issue #48 stop-scene path (an
+      external takeover checks out a head branch whose directory name
+      is not run-id-derived);
+    - the Issue must be closed (ONE batched `gh issue list` per involved
+      repo), past `worktree_retain_hours` since its `closedAt`, and free
+      of in-flight labels — a human closing an in-flight Issue leaves
+      the label, and the scene survives until the delivery path
+      resolves it.
+
+    A closed Issue is never resumed (`pick_resumable_delivery` scans
+    open Issues only) and nothing reads the task worktree after the
+    merge, so a reclaimed scene is unreachable garbage — never recovery
+    state. The structured `worktree_reclaimed count=N freed=<bytes>`
+    line lands in the journal only when something was removed.
+    """
+    repo_dir = Path(config["repo_dir"])
+    worktrees_root = repo_dir / ".worktrees"
+    if not worktrees_root.is_dir():
+        return
+    repo_of_slug = {
+        repo.replace("/", "-"): repo for repo in config["source_repos"]
+    }
+    # (slug, issue number, path) per orbi-named registered worktree.
+    candidates: list[tuple[str, int, Path]] = []
+    active = _ACTIVE_RUN or {}
+    listing = run_command(
+        ["git", "worktree", "list", "--porcelain"], cwd=repo_dir,
+    )
+    for line in listing.splitlines():
+        if not line.startswith("worktree "):
+            continue
+        path = Path(line.removeprefix("worktree "))
+        match = _WORKTREE_NAME_PATTERN.match(path.name)
+        if (
+            worktrees_root not in path.parents
+            or match is None
+            or match["slug"] not in repo_of_slug
+            or match["run_id"] == current_run_id()
+            or str(path) == active.get("worktree")
+        ):
+            continue
+        candidates.append((match["slug"], int(match["number"]), path))
+    if not candidates:
+        return
+    # ONE batched closed-Issue read per involved source repo. Any read
+    # or parse failure removes NOTHING (the safe direction: 宁可不删).
+    closed: dict[int, dict] = {}
+    try:
+        for repo in sorted({
+            repo_of_slug[slug] for slug, _number, _path in candidates
+        }):
+            for issue in list_issues(
+                repo, state="closed",
+                json_fields="number,closedAt,labels", limit=1000,
+            ):
+                closed[int(issue["number"])] = issue
+    except Exception as exc:
+        LOGGER.warning(
+            "worktree_reclaim_failed reason=%s (removing nothing)", exc,
+        )
+        return
+    now = now or datetime.now(timezone.utc)
+    retain = timedelta(hours=config["worktree_retain_hours"])
+    reclaimable: list[tuple[datetime, Path]] = []
+    for slug, number, path in candidates:
+        issue = closed.get(number)
+        if issue is None:
+            continue
+        try:
+            closed_at = datetime.fromisoformat(str(issue["closedAt"]))
+        except (TypeError, ValueError):
+            continue
+        if closed_at.tzinfo is None:
+            continue
+        if now - closed_at < retain:
+            continue
+        raw_labels = issue.get("labels")
+        labels = {
+            label.get("name") for label in raw_labels
+            if isinstance(label, dict)
+        } if isinstance(raw_labels, list) else set()
+        if labels & _WORKTREE_INFLIGHT_LABELS:
+            continue
+        reclaimable.append((closed_at, path))
+    reclaimable.sort(key=lambda item: item[0])
+    removed = 0
+    freed = 0
+    for _closed_at, path in reclaimable[:WORKTREE_RECLAIM_MAX_PER_TICK]:
+        try:
+            size = _tree_size(path)
+            run_command(
+                ["git", "worktree", "remove", "--force", str(path)],
+                cwd=repo_dir,
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "worktree_reclaim_failed path=%s reason=%s", path, exc,
+            )
+            continue
+        removed += 1
+        freed += size
+    if removed:
+        LOGGER.info("worktree_reclaimed count=%d freed=%d", removed, freed)
 
 
 def has_in_progress_label(number: int, repo: str) -> bool:
@@ -8508,6 +8711,15 @@ def _preflight(config: dict) -> None:
             max_concurrency=config["max_concurrency"],
             run_command=run_command,
         )
+    # Task-worktree reclamation (Issue #760): closed-Issue worktrees past
+    # the retention window are bounded garbage — reclaim them at the tick
+    # start beside the drift check, NOT through a manual command nobody
+    # remembers to run. Idempotent, bounded and never fatal: a reclaim
+    # failure is a `worktree_reclaim_failed` line, never a failed start.
+    try:
+        reclaim_released_worktrees(config)
+    except Exception:
+        LOGGER.exception("worktree_reclaim_failed")
     # Git transport preflight (Issue #114, #580): BEFORE any slot or
     # claim the deployment checkout's git transport must be the
     # CONFIGURED one (orbi.toml `git_transport`, default "ssh") and
