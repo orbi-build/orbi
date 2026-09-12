@@ -6,6 +6,7 @@ file -> no-op, malformed file -> fail fast, read error -> fail open), the D4
 change-visibility audit, and the runner wiring at the claim scan and claim.
 """
 import base64
+import dataclasses
 import json
 import logging
 import subprocess
@@ -43,19 +44,21 @@ def test_parse_repo_config_accepts_every_whitelisted_key():
         'context_files = ["AGENTS.md", "docs/testing.mdx"]\n'
         'dispatch_label = "ai-ready"\n'
     )
-    assert repo_config.parse_repo_config(text) == {
-        "base_branch": "beta",
-        "active_milestone": "v0.5.0",
-        "test_command": "pytest -q",
-        "context_files": ["AGENTS.md", "docs/testing.mdx"],
-        "dispatch_label": "ai-ready",
-    }
+    assert repo_config.parse_repo_config(text) == repo_config.RepoPolicy(
+        base_branch="beta",
+        active_milestone="v0.5.0",
+        test_command="pytest -q",
+        context_files=("AGENTS.md", "docs/testing.mdx"),
+        dispatch_label="ai-ready",
+    )
 
 
 def test_parse_repo_config_empty_document_is_a_no_op():
     """A file with no policy keys is valid and changes nothing (D3: no
     whole-file override)."""
-    assert repo_config.parse_repo_config("# nothing here\n") == {}
+    assert repo_config.parse_repo_config("# nothing here\n") == (
+        repo_config.RepoPolicy()
+    )
 
 
 def test_parse_repo_config_rejects_bad_toml():
@@ -126,9 +129,11 @@ def test_parse_repo_config_rejects_a_lifecycle_dispatch_label(label):
 
 
 def test_parse_repo_config_accepts_ai_ready_as_the_dispatch_label():
-    assert repo_config.parse_repo_config('dispatch_label = "ai-ready"\n') == {
-        "dispatch_label": "ai-ready",
-    }
+    assert repo_config.parse_repo_config(
+        'dispatch_label = "ai-ready"\n',
+    ) == repo_config.RepoPolicy(
+        dispatch_label="ai-ready",
+    )
 
 
 def test_context_files_rejects_absolute_posix_path():
@@ -139,24 +144,26 @@ def test_context_files_rejects_absolute_posix_path():
 # --- D3 per-key resolution --------------------------------------------------
 
 def test_resolve_policy_overrides_only_the_declared_keys():
-    host = {
-        "base_branch": "main",
-        "active_milestone": "v0.1.0",
-        "context_files": [Path("/host/ctx.md")],
-        "test_command": "host-cmd",
-        "dispatch_label": "ai-ready",
-    }
-    effective = repo_config.resolve_policy(
-        host, {"base_branch": "beta", "dispatch_label": "custom-ready"},
+    host = runner.RunnerConfig(
+        base_branch="main",
+        active_milestone="v0.1.0",
+        context_files=(Path("/host/ctx.md"),),
+        test_command="host-cmd",
+        dispatch_label="ai-ready",
     )
-    assert effective["base_branch"] == "beta"
-    assert effective["dispatch_label"] == "custom-ready"
+    effective = repo_config.resolve_policy(
+        host, repo_config.RepoPolicy(
+            base_branch="beta", dispatch_label="custom-ready",
+        ),
+    )
+    assert effective.base_branch == "beta"
+    assert effective.dispatch_label == "custom-ready"
     # Omitted keys keep the host fallback.
-    assert effective["active_milestone"] == "v0.1.0"
-    assert effective["context_files"] == [Path("/host/ctx.md")]
-    assert effective["test_command"] == "host-cmd"
+    assert effective.active_milestone == "v0.1.0"
+    assert effective.context_files == (Path("/host/ctx.md"),)
+    assert effective.test_command == "host-cmd"
     # Repository context files are additive under their own key.
-    assert "repo_context_files" not in effective
+    assert effective.repo_context_files == ()
 
 
 def test_resolve_policy_context_files_are_additive():
@@ -171,18 +178,22 @@ def test_resolve_policy_context_files_are_additive():
 # --- D4 audit ---------------------------------------------------------------
 
 def test_policy_diff_reports_changed_keys_only():
-    assert repo_config.policy_diff({"base_branch": "main"}, {"base_branch": "main"}) is None
+    assert repo_config.policy_diff(
+        repo_config.RepoPolicy(base_branch="main"),
+        repo_config.RepoPolicy(base_branch="main"),
+    ) is None
     diff = repo_config.policy_diff(
-        {"base_branch": "main"}, {"base_branch": "beta", "test_command": "pytest"},
+        repo_config.RepoPolicy(base_branch="main"),
+        repo_config.RepoPolicy(base_branch="beta", test_command="pytest"),
     )
     assert diff == "base_branch=main->beta test_command=(none)->pytest"
 
 
 def test_repo_config_audit_marks_a_changed_sha_with_the_diff():
     fields = repo_config.repo_config_audit(
-        "newsha", {"base_branch": "beta"},
+        "newsha", repo_config.RepoPolicy(base_branch="beta"),
         previous_sha="oldsha",
-        previous_policy={"base_branch": "main"},
+        previous_policy=repo_config.RepoPolicy(base_branch="main"),
     )
     assert fields["repo_config_changed"] == "oldsha..newsha"
     assert fields["repo_config_diff"] == "base_branch=main->beta"
@@ -190,16 +201,19 @@ def test_repo_config_audit_marks_a_changed_sha_with_the_diff():
 
 def test_repo_config_audit_is_empty_on_first_run_and_unchanged_sha():
     assert repo_config.repo_config_audit(
-        "sha", {}, previous_sha=None, previous_policy=None,
+        "sha", repo_config.RepoPolicy(),
+        previous_sha=None, previous_policy=None,
     ) == {}
     assert repo_config.repo_config_audit(
-        "sha", {}, previous_sha="sha", previous_policy={},
+        "sha", repo_config.RepoPolicy(),
+        previous_sha="sha", previous_policy=repo_config.RepoPolicy(),
     ) == {}
 
 
 def test_repo_config_audit_changed_without_previous_content():
     fields = repo_config.repo_config_audit(
-        "new", {}, previous_sha="old", previous_policy=None,
+        "new", repo_config.RepoPolicy(),
+        previous_sha="old", previous_policy=None,
     )
     assert fields["repo_config_changed"] == "old..new"
     assert "repo_config_diff" not in fields
@@ -208,14 +222,13 @@ def test_repo_config_audit_changed_without_previous_content():
 # --- read pipeline ----------------------------------------------------------
 
 def test_read_repo_config_returns_sha_and_policy():
-    record = repo_config.read_repo_config(
+    policy = repo_config.read_repo_config(
         "owner/repo",
         run_command=_record('base_branch = "beta"\n', sha="cafe" * 10),
     )
-    assert record == {
-        "sha": "cafe" * 10,
-        "policy": {"base_branch": "beta"},
-    }
+    assert policy == repo_config.RepoPolicy(
+        base_branch="beta", sha="cafe" * 10,
+    )
 
 
 def test_read_repo_config_missing_file_is_none():
@@ -349,7 +362,7 @@ def test_read_repo_config_at_reads_a_previous_blob():
     policy = repo_config.read_repo_config_at(
         "owner/repo", "abc123", run_command=lambda command, **kwargs: raw,
     )
-    assert policy == {"base_branch": "old"}
+    assert policy == repo_config.RepoPolicy(base_branch="old", sha="abc123")
 
 
 def test_read_repo_config_at_failure_is_none():
@@ -412,7 +425,7 @@ def test_pick_next_delivery_in_flight_scan_uses_the_repo_dispatch_label(
     monkeypatch.setattr(
         runner, "reconcile_release_milestones", lambda *a, **k: None,
     )
-    config = {"repositories": []}
+    config = runner.RunnerConfig()
     assert runner.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1, config=config,
     ) == ("owner/repo", in_flight, None)
@@ -444,7 +457,7 @@ def test_pick_next_delivery_in_flight_scan_falls_back_on_a_malformed_file(
     )
     assert runner.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1,
-        config={"repositories": []},
+        config=runner.RunnerConfig(),
     ) is None
     assert any(
         search.startswith("label:ai-ready label:ai-in-progress")
@@ -453,34 +466,34 @@ def test_pick_next_delivery_in_flight_scan_falls_back_on_a_malformed_file(
 
 
 def test_repository_config_path_defaults_and_honors_the_entry():
-    config = {
-        "repositories": [
-            {"github": "owner/pilot", "config_path": ".orbi/policy.toml"},
-        ],
-    }
+    config = runner.RunnerConfig(repositories=(
+        {"github": "owner/pilot", "config_path": ".orbi/policy.toml"},
+    ))
     assert runner.repository_config_path(config, "owner/pilot") == ".orbi/policy.toml"
     assert runner.repository_config_path(config, "owner/other") == ".github/orbi.toml"
-    assert runner.repository_config_path({}, "owner/other") == ".github/orbi.toml"
+    assert runner.repository_config_path(
+        runner.RunnerConfig(), "owner/other",
+    ) == ".github/orbi.toml"
 
 
 def test_repository_base_branch_falls_back_to_the_entry_then_host():
-    config = {
-        "base_branch": "main",
-        "repositories": [{"github": "owner/pilot", "base_branch": "develop"}],
-    }
+    config = runner.RunnerConfig(
+        base_branch="main",
+        repositories=({"github": "owner/pilot", "base_branch": "develop"},),
+    )
     assert runner.repository_base_branch(config, "owner/pilot") == "develop"
     assert runner.repository_base_branch(config, "owner/other") == "main"
 
 
 def test_apply_repo_policy_uses_the_entry_base_branch_as_fallback():
-    config = {
-        "base_branch": "main",
-        "repositories": [{"github": "owner/pilot", "base_branch": "develop"}],
-    }
-    effective = runner.apply_repo_policy(
-        config, "owner/pilot", {"sha": "s", "policy": {}},
+    config = runner.RunnerConfig(
+        base_branch="main",
+        repositories=({"github": "owner/pilot", "base_branch": "develop"},),
     )
-    assert effective["base_branch"] == "develop"
+    effective = runner.apply_repo_policy(
+        config, "owner/pilot", repo_config.RepoPolicy(sha="s"),
+    )
+    assert effective.base_branch == "develop"
 
 
 def test_previous_repo_config_sha_reads_the_newest_trusted_comment(monkeypatch):
@@ -537,7 +550,7 @@ def test_pick_issue_with_repo_policy_uses_repo_scan_keys(monkeypatch):
         return json.dumps([])
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    config = {"repositories": []}
+    config = runner.RunnerConfig()
     assert runner._pick_issue_with_repo_policy("owner/repo", "v1.0.0", config) is None
     searched = "\n".join(" ".join(command) for command in commands)
     assert "label:repo-ready" in searched
@@ -553,7 +566,7 @@ def test_pick_issue_with_repo_policy_ignores_a_malformed_file(monkeypatch):
     monkeypatch.setattr(runner, "run_command", fake_run)
     # The scan keeps the host keys and stays alive; process_issue blocks.
     assert runner._pick_issue_with_repo_policy(
-        "owner/repo", "v1.0.0", {"repositories": []},
+        "owner/repo", "v1.0.0", runner.RunnerConfig(),
     ) is None
 
 
@@ -589,38 +602,6 @@ def test_started_pi_comment_body_renders_repo_config_fields():
     assert "- repo_config_diff: base_branch=main->beta" in body
 
 
-def test_process_issue_invalid_repo_config_blocks_with_readable_reason(
-    monkeypatch, tmp_path,
-):
-    edits = []
-
-    def fake_run(command, **kwargs):
-        return json.dumps({"sha": "x", "content": _b64("source_repos = 1\n")})
-
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(
-        runner, "edit_issue",
-        lambda *args, **kwargs: edits.append((args, kwargs)),
-    )
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    posted = []
-    monkeypatch.setattr(
-        runner, "comment_issue",
-        lambda number, repo, body: posted.append(body),
-    )
-    result = runner.process_issue(
-        {"number": 8, "title": "T", "body": "", "labels": []},
-        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-         "base_branch": "main", "repositories": []},
-        "owner/repo",
-    )
-    assert result.kind == "failed"
-    assert edits and edits[0][1]["add"] == "ai-blocked"
-    assert "host-only" in posted[0]
-    assert "source_repos" in posted[0]
-    assert "a1b2c3d4" in posted[0]
-
-
 def test_process_issue_applies_repo_base_branch_and_records_sha(
     monkeypatch, tmp_path,
 ):
@@ -652,7 +633,7 @@ def test_process_issue_applies_repo_base_branch_and_records_sha(
     monkeypatch.setattr(
         runner, "run_pi",
         lambda issue, worktree, config, repo, **kwargs: seen.setdefault(
-            "test_command", config.get("test_command"),
+            "test_command", config.test_command,
         ),
     )
     monkeypatch.setattr(
@@ -691,9 +672,12 @@ def test_process_issue_applies_repo_base_branch_and_records_sha(
     )
     result = runner.process_issue(
         {"number": 4, "title": "T", "body": "", "labels": []},
-        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-         "base_branch": "main", "repositories": []},
+        runner.RunnerConfig(
+            repo_dir=tmp_path, prompt=tmp_path / "prompt.md",
+            base_branch="main",
+        ),
         "owner/repo",
+        repo_config.RepoPolicy(base_branch="beta", sha="b" * 40),
     )
     assert result.kind == "pr"
     assert seen["base"] == "beta"
@@ -731,13 +715,13 @@ def test_main_applies_repo_base_branch_before_resume_verification(
     seen = {}
 
     def fake_verify(scene_, issue_, config_, source_repo):
-        seen["verify_base"] = config_["base_branch"]
+        seen["verify_base"] = config_.base_branch
         return "https://github.com/owner/repo/pull/98"
 
     monkeypatch.setattr(runner, "verify_resumed_pr", fake_verify)
     monkeypatch.setattr(
         runner, "wait_for_delivery",
-        lambda *a, **k: seen.setdefault("wait_base", a[2]["base_branch"]),
+        lambda *a, **k: seen.setdefault("wait_base", a[2].base_branch),
     )
 
     def fake_run(command, **kwargs):
@@ -781,17 +765,19 @@ def test_main_blocks_a_claim_when_the_repo_config_is_invalid(
 
 def test_resolve_policy_overrides_milestone_and_test_command():
     effective = repo_config.resolve_policy(
-        {"active_milestone": "v1", "test_command": "host"},
-        {"active_milestone": "v2", "test_command": "repo"},
+        runner.RunnerConfig(active_milestone="v1", test_command="host"),
+        repo_config.RepoPolicy(active_milestone="v2", test_command="repo"),
     )
-    assert effective["active_milestone"] == "v2"
-    assert effective["test_command"] == "repo"
+    assert effective.active_milestone == "v2"
+    assert effective.test_command == "repo"
 
 
 def test_policy_diff_formats_lists_and_none():
     diff = repo_config.policy_diff(
-        {"context_files": ["a.md"]},
-        {"context_files": ["a.md", "b.md"], "test_command": "pytest"},
+        repo_config.RepoPolicy(context_files=("a.md",)),
+        repo_config.RepoPolicy(
+            context_files=("a.md", "b.md"), test_command="pytest",
+        ),
     )
     assert diff == (
         "context_files=a.md->a.md,b.md test_command=(none)->pytest"
@@ -800,10 +786,10 @@ def test_policy_diff_formats_lists_and_none():
 
 def test_read_repo_config_missing_size_field_is_ok():
     raw = json.dumps({"sha": "x", "content": _b64('base_branch = "b"\n')})
-    record = repo_config.read_repo_config(
+    policy = repo_config.read_repo_config(
         "owner/repo", run_command=lambda command, **kwargs: raw,
     )
-    assert record["policy"] == {"base_branch": "b"}
+    assert policy.base_branch == "b"
 
 
 def test_read_repo_config_directory_listing_is_none():
@@ -865,13 +851,13 @@ def test_run_pi_injects_repo_test_command_and_context_files(
         lambda command, **kwargs: calls.append(command) or "done",
     )
     monkeypatch.setattr(runner, "prepare_pi_agent_dir", lambda *a, **k: None)
-    config = {
-        "prompt": prompt, "repo_dir": tmp_path,
-        "source_repos": ["owner/repo"], "workspace_root": tmp_path,
-        "context_files": [], "skills": [], "base_branch": "main",
-        "base_sha": "sha", "run_id": "run1", "test_command": "pytest -q",
-        "repo_context_files": ["AGENTS.md"],
-    }
+    config = runner.RunnerConfig(
+        prompt=prompt, repo_dir=tmp_path,
+        source_repos=("owner/repo",), workspace_root=tmp_path,
+        context_files=(), skills=(), base_branch="main",
+        base_sha="sha", run_id="run1", test_command="pytest -q",
+        repo_context_files=("AGENTS.md",),
+    )
     assert runner.run_pi(
         {"number": 4, "title": "T", "body": "b"}, tmp_path, config, "owner/repo",
     ) == "done"
@@ -918,10 +904,12 @@ def test_process_issue_accepts_a_pre_resolved_record(monkeypatch, tmp_path):
     }))
     result = runner.process_issue(
         {"number": 4, "title": "T", "body": "", "labels": []},
-        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-         "base_branch": "main", "repositories": []},
+        runner.RunnerConfig(
+            repo_dir=tmp_path, prompt=tmp_path / "prompt.md",
+            base_branch="main",
+        ),
         "owner/repo",
-        {"sha": "s", "policy": {"base_branch": "beta"}},
+        repo_config.RepoPolicy(base_branch="beta", sha="s"),
     )
     assert result.kind == "failed"
     assert seen["base"] == "beta"
@@ -941,10 +929,10 @@ def test_repo_policies_are_isolated_per_repository(monkeypatch):
         })
 
     monkeypatch.setattr(runner, "run_command", fake_run)
-    good = runner.load_repo_policy({"repositories": []}, "owner/good")
-    assert good["policy"] == {"base_branch": "beta"}
+    good = runner.load_repo_policy(runner.RunnerConfig(), "owner/good")
+    assert good == repo_config.RepoPolicy(base_branch="beta", sha="g")
     with pytest.raises(repo_config.RepoConfigError):
-        runner.load_repo_policy({"repositories": []}, "owner/bad")
+        runner.load_repo_policy(runner.RunnerConfig(), "owner/bad")
 
 
 # --- this repository's own policy file (Issue #731) -------------------------
@@ -962,8 +950,7 @@ def test_this_repositorys_own_orbi_toml_is_valid_and_declares_test_command():
     policy = repo_config.parse_repo_config(
         path.read_text(encoding="utf-8"),
     )
-    test_command = policy.get("test_command")
-    assert isinstance(test_command, str) and test_command.strip()
+    assert isinstance(policy.test_command, str) and policy.test_command.strip()
 
 
 def test_this_repositorys_own_orbi_toml_is_not_gitignored():
@@ -983,3 +970,85 @@ def test_this_repositorys_own_orbi_toml_is_not_gitignored():
 
     assert not ignored(".github/orbi.toml")
     assert ignored("orbi.toml")
+
+
+# --- typed config contract (Issue #790) --------------------------------------
+
+def test_parse_repo_config_returns_frozen_repo_policy():
+    policy = repo_config.parse_repo_config(
+        'base_branch = "beta"\ncontext_files = ["AGENTS.md"]\n'
+    )
+    assert isinstance(policy, repo_config.RepoPolicy)
+    assert policy.base_branch == "beta"
+    assert policy.context_files == ("AGENTS.md",)
+    assert policy.active_milestone is None  # omitted keys stay None
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        policy.base_branch = "main"
+
+
+def test_parse_repo_config_empty_document_is_an_empty_policy():
+    assert repo_config.parse_repo_config("# nothing here\n") == (
+        repo_config.RepoPolicy()
+    )
+
+
+def test_read_repo_config_returns_the_policy_with_bound_sha():
+    policy = repo_config.read_repo_config(
+        "owner/repo",
+        run_command=_record('base_branch = "beta"\n', sha="cafe" * 10),
+    )
+    assert policy == repo_config.RepoPolicy(
+        base_branch="beta", sha="cafe" * 10,
+    )
+
+
+def test_resolve_policy_returns_a_runner_config_with_declared_overrides():
+    host = runner.RunnerConfig(
+        base_branch="main", active_milestone="v0.1.0",
+        context_files=(Path("/host/ctx.md"),),
+        test_command="host-cmd", dispatch_label="ai-ready",
+    )
+    effective = repo_config.resolve_policy(
+        host, repo_config.RepoPolicy(
+            base_branch="beta", dispatch_label="custom-ready",
+        ),
+    )
+    assert isinstance(effective, runner.RunnerConfig)
+    assert effective.base_branch == "beta"
+    assert effective.dispatch_label == "custom-ready"
+    # Omitted keys keep the host fallback.
+    assert effective.active_milestone == "v0.1.0"
+    assert effective.context_files == (Path("/host/ctx.md"),)
+    assert effective.test_command == "host-cmd"
+    assert effective.repo_context_files == ()
+
+
+def test_resolve_policy_context_files_are_additive():
+    effective = repo_config.resolve_policy(
+        runner.RunnerConfig(context_files=(Path("/host.md"),)),
+        repo_config.RepoPolicy(context_files=("AGENTS.md",)),
+    )
+    assert effective.context_files == (Path("/host.md"),)
+    assert effective.repo_context_files == ("AGENTS.md",)
+
+
+def test_policy_diff_compares_policy_fields_and_skips_the_sha():
+    assert repo_config.policy_diff(
+        repo_config.RepoPolicy(base_branch="main"),
+        repo_config.RepoPolicy(base_branch="main", sha="a" * 40),
+    ) is None
+    diff = repo_config.policy_diff(
+        repo_config.RepoPolicy(base_branch="main"),
+        repo_config.RepoPolicy(base_branch="beta", test_command="pytest"),
+    )
+    assert diff == "base_branch=main->beta test_command=(none)->pytest"
+
+
+def test_repo_config_audit_typed_marks_a_changed_sha_with_the_diff():
+    fields = repo_config.repo_config_audit(
+        "newsha", repo_config.RepoPolicy(base_branch="beta"),
+        previous_sha="oldsha",
+        previous_policy=repo_config.RepoPolicy(base_branch="main"),
+    )
+    assert fields["repo_config_changed"] == "oldsha..newsha"
+    assert fields["repo_config_diff"] == "base_branch=main->beta"

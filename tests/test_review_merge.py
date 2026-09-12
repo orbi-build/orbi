@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+import dataclasses
 
 import orbi.runner as runner
 from orbi import progress
@@ -483,17 +484,7 @@ def _review_config(tmp_path, prompt_name="prompt_review.md"):
     prompt = tmp_path / prompt_name
     prompt.write_text("REVIEW PROMPT {{PR_NUMBER}} {{BASE_SHA}} {{HEAD_SHA}}",
                       encoding="utf-8")
-    return {
-        "prompt_review": prompt,
-        "repo_dir": tmp_path,
-        "source_repos": ["owner/repo"],
-        "workspace_root": tmp_path,
-        "context_files": [],
-        "skills": [tmp_path / "code-review.md"],
-        "base_branch": "main",
-        "base_sha": "b1",
-        "run_id": "run1",
-    }
+    return runner.RunnerConfig(prompt_review=prompt, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(tmp_path / "code-review.md",), base_branch="main", base_sha="b1", run_id="run1")
 
 
 def test_run_review_launches_independent_readonly_pi_session(monkeypatch, tmp_path):
@@ -1572,12 +1563,7 @@ def _pr():
 
 
 def _review_merge_config(tmp_path):
-    return {
-        "repo_dir": tmp_path,
-        "base_branch": "main",
-        "base_sha": "b1",
-        "run_id": "a1b2c3d4",
-    }
+    return runner.RunnerConfig(repo_dir=tmp_path, base_branch="main", base_sha="b1", run_id="a1b2c3d4")
 
 
 def test_review_and_merge_clean_verdict_merges_and_labels_merged(
@@ -1668,8 +1654,8 @@ def test_review_and_merge_skips_checkout_sync_for_a_locked_engine_source(
     )
     make_fake_gh(monkeypatch)
     config = _review_merge_config(tmp_path)
-    config["deploy_home"] = config["repo_dir"]
-    config["engine_source_track"] = "tag:v0.4.2"
+    config = dataclasses.replace(config, deploy_home=config.repo_dir)
+    config = dataclasses.replace(config, engine_source_track="tag:v0.4.2")
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main", config,
         "owner/repo", 4, title="Review task",

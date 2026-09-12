@@ -359,22 +359,22 @@ def ops_issue() -> dict:
     }
 
 
-def config_for(clone: Path) -> dict:
+def config_for(clone: Path) -> runner.RunnerConfig:
     # The REAL repo prompts: the ops session must receive the real
     # rendered ops playbook (`prompt_ops.md`, the sibling of the
     # configured dev prompt), not a test stub.
-    return {
-        "repo_dir": clone,
+    return runner.RunnerConfig(
+        repo_dir=clone,
         # The REAL repo prompts: the ops session must receive the real
         # rendered ops playbook (`prompt_ops.md`, the sibling of the
         # configured dev prompt), not a test stub.
-        "prompt": REPO_ROOT / "prompts" / "prompt.md",
-        "base_branch": "main",
-        "source_repos": [REPO],
-        "workspace_root": clone.parent,
-        "context_files": [],
-        "skills": [],
-    }
+        prompt=REPO_ROOT / "prompts" / "prompt.md",
+        base_branch="main",
+        source_repos=(REPO,),
+        workspace_root=clone.parent,
+        context_files=(),
+        skills=(),
+    )
 
 
 def worktree_for(clone: Path, run_id: str) -> Path:

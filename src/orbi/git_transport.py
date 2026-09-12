@@ -40,6 +40,7 @@ silent skip.
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 GITHUB_HOST = "github.com"
@@ -140,7 +141,7 @@ def _remote_repo_path(url: str) -> str | None:
 
 def check_transport(
     repo_dir: Path,
-    source_repos: list[str],
+    source_repos: Sequence[str],
     *,
     run_command,
     migrate: bool = False,
