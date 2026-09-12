@@ -16,6 +16,13 @@ Runtime context supplied by the runner:
 - Repository test command (declared in `.github/orbi.toml`): `{{TEST_COMMAND}}`
 - Run id: `{{RUN_ID}}`
 
+Issue comments from trusted authors (oldest first). These carry the
+same weight as the Issue body — decisions, corrections and scope
+changes written in comments are part of the task. When a note says
+older comments were omitted, you are NOT seeing the full history.
+
+{{ISSUE_COMMENTS}}
+
 Run correlation (Issue #41):
 
 `{{RUN_ID}}` is the single end-to-end correlation id for this task attempt;
