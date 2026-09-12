@@ -119,6 +119,20 @@ def test_normalize_track_accepts_the_documented_forms(value):
     assert engine_source.normalize_engine_source_track(value) == value
 
 
+def test_normalize_track_stable_alias_resolves_to_release():
+    """Issue #756: `stable` is an alias of `release` — the identical
+    newest-official-release channel, normalized at the single parse
+    entry so no second resolve path exists."""
+    assert engine_source.normalize_engine_source_track("stable") == "release"
+
+
+def test_invalid_track_error_message_names_the_stable_alias():
+    """The accepted-forms error must surface the stable alias (a user
+    typing a wrong value discovers it); `latest` stays invalid."""
+    with pytest.raises(ValueError, match=r"alias: 'stable'"):
+        engine_source.normalize_engine_source_track("bogus")
+
+
 @pytest.mark.parametrize(
     "value",
     ["", 123, "latest", "MAIN", "branch:", "branch:bad name", "branch:-x",

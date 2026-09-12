@@ -8,7 +8,9 @@ exactly ONE update channel, configured by the host/deploy-only key
   pre-#535 dogfood behavior);
 - ``branch:<name>``  — track ``origin/<name>`` and fast-forward;
 - ``release``        — the newest official semver tag (``vX.Y.Z``;
-  pre-releases are excluded), checked out detached;
+  pre-releases are excluded), checked out detached; ``stable`` is an
+  alias normalized to ``release`` at the parse entry (identical
+  behavior, no second resolve path);
 - ``tag:<name>``     — one exact tag (annotated tags are dereferenced to
   their commit), checked out detached;
 - ``sha:<40-hex>``   — one exact commit, checked out detached.
@@ -44,7 +46,8 @@ FETCH_TIMEOUT_SECONDS = 60
 
 TRACK_KEY = "engine_source_track"
 TRACK_FORMS = (
-    "'main', 'branch:<name>', 'release', 'tag:<name>' or 'sha:<40-hex>'",
+    "'main', 'branch:<name>', 'release' (alias: 'stable'), "
+    "'tag:<name>' or 'sha:<40-hex>'",
 )
 _SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
 # A conservative subset of git-check-ref-format: one path-style ref name
@@ -86,8 +89,8 @@ def normalize_engine_source_track(value: object) -> str:
         raise ValueError(
             f"{TRACK_KEY} must be a non-empty string: {TRACK_FORMS[0]}"
         )
-    if value in ("main", "release"):
-        return value
+    if value in ("main", "release", "stable"):
+        return "release" if value == "stable" else value
     for prefix in ("branch:", "tag:"):
         if value.startswith(prefix):
             if not _valid_ref_name(value[len(prefix):]):

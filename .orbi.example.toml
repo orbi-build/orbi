@@ -46,16 +46,26 @@ base_branch = "main"
 #   absent / "main"     -> fast-forward origin/main (the dogfood behavior)
 #   "branch:<name>"     -> fast-forward origin/<name>
 #   "release"           -> newest official semver tag (pre-releases
-#                          excluded), detached checkout
+#                          excluded), detached checkout; "stable" is an
+#                          alias with the identical behavior
 #   "tag:<name>"        -> exact tag lock (annotated tags dereferenced),
 #                          detached checkout
 #   "sha:<40-hex>"      -> exact commit lock, detached checkout
 # New installs default to "release" (reproducible, safely rollback-able —
-# rollback is editing the value back to the previous tag/SHA). Pin
-# "main" to keep tracking the engine's main branch like Orbi's own
-# dogfood does. A dirty checkout, a missing tag/SHA or any unverifiable
-# state fails the service start with a structured line carrying the fix.
+# rollback is editing the value back to the previous tag/SHA). "release"
+# (or "stable") follows the newest PUBLISHED version — it changes only
+# when a release ships; "main" follows the development mainline and
+# changes with every commit. Pin "main" to keep tracking the engine's
+# main branch like Orbi's own dogfood does. A dirty checkout, a missing
+# tag/SHA or any unverifiable state fails the service start with a
+# structured line carrying the fix.
 engine_source_track = "release"
+# To PIN the engine to one exact version (a common production need: a
+# version change must be a deliberate operation, not an automatic
+# follow-the-new-release) — comment out the line above, uncomment the
+# line below and fill in the target tag. `tag:` never moves on its own;
+# rolling back is putting the previous tag back.
+# engine_source_track = "tag:v0.4.10"
 # Offline escape hatch for the runner source freshness gate (Issue #525).
 # Before any slot or claim the Runner proves the code it executes matches
 # the configured engine source channel — engine_source_track (Issue #535),
