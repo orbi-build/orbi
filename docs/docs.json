@@ -42,7 +42,8 @@
           {
             "group": "Optional Components",
             "pages": [
-              "optional-kv-cache"
+              "optional-kv-cache",
+              "docker"
             ]
           },
           {
@@ -107,7 +108,8 @@
           {
             "group": "可选组件",
             "pages": [
-              "zh/optional-kv-cache"
+              "zh/optional-kv-cache",
+              "zh/docker"
             ]
           },
           {

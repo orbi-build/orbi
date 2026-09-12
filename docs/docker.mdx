@@ -1,0 +1,63 @@
+# Docker (community-maintained)
+
+The Docker deployment under
+[`3rd/docker/` in the repository](https://github.com/orbi-build/orbi/blob/main/3rd/docker/README.md)
+is a **community-maintained, unofficial** wrapper: one Linux container
+that runs the **unmodified official deployment** — systemd as PID 1 with
+a real user manager, the official `systemd/orbi@.service` +
+`orbi@.timer` user units, the editable CLI install and the idempotent
+`orbi setup`. It is **not** a second deployment model: on a Linux host
+with a systemd user session, always prefer the official path
+(see [Getting started](/getting-started)) — pick one of the two, never
+both for the same task pool.
+
+## When to use it
+
+- The host has no user systemd session (a NAS, a container platform, a
+  restricted cloud box) but can run Docker.
+- You want the runner isolated from the host user session.
+
+## Quick start
+
+```bash
+git clone https://github.com/orbi-build/orbi.git
+cd orbi
+docker build -t orbi-docker 3rd/docker
+
+docker run -d --name orbi \
+  --stop-signal SIGRTMIN+3 \
+  --tmpfs /run --tmpfs /tmp \
+  --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+  -v orbi-deploy:/orbi \
+  -v orbi-work:/work \
+  -e GH_TOKEN="github_pat_xxx" \
+  -e ORBI_SOURCE_REPO="OWNER/REPO" \
+  orbi-docker
+```
+
+One `docker run`, no compose (the runner is a single service). `--cgroupns=host` plus the read-write `/sys/fs/cgroup` bind is what
+lets systemd run as PID 1 inside the container — without them
+`/init.scope` creation fails under the default private cgroup
+namespace (verified; no `--privileged` needed). The
+GitHub token is injected as an environment variable and persisted to the
+deploy-home env file at runtime — never baked into an image layer; git
+data goes over the HTTPS transport through the gh credential helper. All
+state (the orbi checkout, the config, the runtime state, the delivery
+checkout and its worktrees) lives in the two volumes, so a container
+rebuild keeps everything and the idempotent setup re-converges on the
+next start.
+
+The full contract — environment variables, the generated config, the
+model provider configuration, daily operations, and the failure/repair
+table — lives in
+[`3rd/docker/README.md`](https://github.com/orbi-build/orbi/blob/main/3rd/docker/README.md).
+
+## Boundaries
+
+- Thin wrapper only: `src/orbi/` core code is untouched, and a blocker
+  hit inside the container is filed as its own core Issue.
+- Linux only; no compose, no multi-container orchestration, no automatic
+  image updates; not part of the PyPI release or the getting-started
+  main path.
+- Community-maintained: official Issues prioritize the core systemd
+  path.

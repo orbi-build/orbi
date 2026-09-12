@@ -1,0 +1,22 @@
+[Unit]
+Description=Orbi container bootstrap: start the user manager, run the official `orbi setup`
+# The entrypoint prepared /orbi, /work and the CLI before exec'ing
+# systemd; this oneshot completes the official deployment inside the
+# user session. `orbi setup` is idempotent (Issue #117), so every
+# container start re-runs it — a rebuilt container re-converges.
+After=multi-user.target
+
+[Service]
+Type=oneshot
+# GH_TOKEN and the provider keys the entrypoint wrote — `orbi setup`
+# validates them exactly like the tick-time unit would.
+EnvironmentFile=/orbi/.orbi/env
+# The generated config is the deploy home's orbi.toml (`orbi setup`
+# resolves a relative default config against the working directory,
+# exactly like the official unit's WorkingDirectory).
+WorkingDirectory=/orbi
+ExecStart=/usr/local/bin/orbi-container-setup.sh
+TimeoutStartSec=600
+# journal + console: `docker logs` shows the setup result directly.
+StandardOutput=journal+console
+StandardError=journal+console

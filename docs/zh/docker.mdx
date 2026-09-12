@@ -1,0 +1,57 @@
+# Docker（社区维护）
+
+仓库里的 Docker 部署外挂
+[`3rd/docker/`](https://github.com/orbi-build/orbi/blob/main/3rd/docker/README.md)
+是**社区维护、非官方支持**的薄封装：一个 Linux 容器，跑的是**未改动的
+官方部署**——systemd 作为 PID 1 带真实 user manager、官方
+`systemd/orbi@.service` + `orbi@.timer` user unit、可编辑 CLI 安装和
+幂等的 `orbi setup`。它**不是**第二套部署模型：有 systemd user
+session 的 Linux 主机请始终优先走官方路径
+（见[快速开始](/zh/getting-started)）——两条路径二选一，不要对同一个
+任务池并存。
+
+## 什么时候用它
+
+- 宿主机没有 user systemd session（NAS、容器平台、受限的云主机）但
+  能跑 Docker。
+- 想把 runner 与宿主机用户会话隔离。
+
+## 快速开始
+
+```bash
+git clone https://github.com/orbi-build/orbi.git
+cd orbi
+docker build -t orbi-docker 3rd/docker
+
+docker run -d --name orbi \
+  --stop-signal SIGRTMIN+3 \
+  --tmpfs /run --tmpfs /tmp \
+  --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+  -v orbi-deploy:/orbi \
+  -v orbi-work:/work \
+  -e GH_TOKEN="github_pat_xxx" \
+  -e ORBI_SOURCE_REPO="OWNER/REPO" \
+  orbi-docker
+```
+
+一条 `docker run`，不需要 compose（runner 是单一服务）。
+`--cgroupns=host` 加 `/sys/fs/cgroup` 读写 bind 让 systemd 能以
+PID 1 身份在容器内运行——默认 private cgroupns 下创建 `/init.scope`
+会失败（已实证；无需 `--privileged`）。
+GitHub token
+经环境变量注入、运行时写入 deploy home 的 env 文件——绝不进镜像层；
+git 数据走 HTTPS transport，凭据由 gh credential helper 提供。全部
+状态（orbi checkout、配置、运行时状态、交付 checkout 与 worktree）
+都在两个 volume 里，容器重建不丢，幂等 setup 在下次启动时重新收敛。
+
+完整契约——环境变量、生成的配置、模型 provider 配置、日常操作、
+故障与修复表——见
+[`3rd/docker/README.md`](https://github.com/orbi-build/orbi/blob/main/3rd/docker/README.md)。
+
+## 边界
+
+- 只做薄封装：不碰 `src/orbi/` 核心代码，容器内撞到的阻塞性问题另开
+  核心 Issue。
+- 仅 Linux；不做 compose、多容器编排、镜像自动更新；不进 PyPI 发布
+  包、不进 getting-started 主路径。
+- 社区维护：官方 Issue 优先处理核心 systemd 路径。
