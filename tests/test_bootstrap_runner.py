@@ -18056,37 +18056,54 @@ def make_release_gh(monkeypatch, *, release_exists=False,
 def test_build_release_changelog_groups_descriptions_links_and_orders(monkeypatch):
     source = {
         30: {
-            "number": 30, "title": "Deploy the exporter as a persistent service",
+            "__typename": "Issue", "number": 30,
+            "title": "Deploy the exporter as a persistent service",
             "body": "The service keeps metrics available after restart.",
             "url": "https://github.com/o/r/issues/30",
-            "labels": [{"name": "bug"}],
-            "closedByPullRequestsReferences": [{
+            "stateReason": "COMPLETED",
+            "labels": {"nodes": [{"name": "bug"}]},
+            "closedByPullRequestsReferences": {"nodes": [{
                 "number": 301, "url": "https://github.com/o/r/pull/301",
-            }],
+                "author": None,
+            }]},
         },
         10: {
-            "number": 10, "title": "Add Prometheus metrics dashboard",
+            "__typename": "Issue", "number": 10,
+            "title": "Add Prometheus metrics dashboard",
             "body": "Users can inspect delivery metrics.",
             "url": "https://github.com/o/r/issues/10",
-            "labels": [{"name": "enhancement"}],
-            "closedByPullRequestsReferences": [],
+            "stateReason": "COMPLETED",
+            "labels": {"nodes": [{"name": "enhancement"}]},
+            "closedByPullRequestsReferences": {"nodes": []},
         },
         20: {
-            "number": 20, "title": "Explain the full setup workflow",
+            "__typename": "Issue", "number": 20,
+            "title": "Explain the full setup workflow",
             "body": "Documentation covers first use.",
             "url": "https://github.com/o/r/issues/20",
-            "labels": [{"name": "documentation"}],
-            "closedByPullRequestsReferences": [],
+            "stateReason": "COMPLETED",
+            "labels": {"nodes": [{"name": "documentation"}]},
+            "closedByPullRequestsReferences": {"nodes": []},
         },
     }
+    graphql_calls = []
 
     def fake_run_command(command, **kwargs):
         # Issue #707: every closedBy PR link is merged-checked before it
         # is written; this test's PRs are all merged.
         if command[:3] == ["gh", "pr", "view"]:
             return json.dumps({"number": int(command[3]), "state": "MERGED"})
-        assert command[:3] == ["gh", "issue", "view"], command
-        return json.dumps(source[int(command[3])])
+        assert command[:3] == ["gh", "api", "graphql"], command
+        # Issue #772: author data rides the SAME per-Issue round trip —
+        # no second query, and the variables travel as gh api graphql
+        # -f/-F fields.
+        assert next(a for a in command if a.startswith("owner=")) == "owner=o"
+        assert next(a for a in command if a.startswith("name=")) == "name=r"
+        graphql_calls.append(command)
+        number = int(next(
+            a for a in command if a.startswith("number=")
+        ).split("=", 1)[1])
+        return json.dumps({"data": {"repository": {"issue": source[number]}}})
 
     monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
@@ -18104,27 +18121,37 @@ def test_build_release_changelog_groups_descriptions_links_and_orders(monkeypatc
 ### Documentation
 
 - Explain the full setup workflow ([Issue #20](https://github.com/o/r/issues/20))"""
+    # Exactly one GraphQL call per scope Issue, in scope order — and a
+    # null author (PR #301) contributed no Contributors section.
+    assert [next(a for a in c if a.startswith("number="))
+            for c in graphql_calls] == ["number=30", "number=10", "number=20"]
+    assert "## Contributors" not in changelog
 
 
 def test_build_release_changelog_skips_not_planned_issues(monkeypatch):
     """Issue #707 (the v0.4.6 scene): #702 was closed NOT_PLANNED as a
     duplicate — it must not enter the Changelog, and its unmerged
-    closedBy PR (#705) must not leak in through any entry."""
+    closedBy PR (#705) must not leak in through any entry, its author
+    included (Issue #772)."""
     item = {
-        "number": 702, "title": "Duplicate delivery ticket",
+        "__typename": "Issue", "number": 702,
+        "title": "Duplicate delivery ticket",
         "body": "Duplicate of #658",
-        "url": "https://github.com/o/r/issues/702", "labels": [],
+        "url": "https://github.com/o/r/issues/702",
         "stateReason": "NOT_PLANNED",
-        "closedByPullRequestsReferences": [{
+        "labels": {"nodes": []},
+        "closedByPullRequestsReferences": {"nodes": [{
             "number": 705, "url": "https://github.com/o/r/pull/705",
-        }],
+            "author": {"login": "someone",
+                       "avatarUrl": "https://avatars.githubusercontent.com/u/7?v=4"},
+        }]},
     }
 
     def fake_run_command(command, **kwargs):
         # Any second command (e.g. a pr view) would fail this assert: a
         # NOT_PLANNED issue is skipped before its closedBy PRs are read.
-        assert command[:3] == ["gh", "issue", "view"], command
-        return json.dumps(item)
+        assert command[:3] == ["gh", "api", "graphql"], command
+        return json.dumps({"data": {"repository": {"issue": item}}})
 
     monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
@@ -18132,6 +18159,8 @@ def test_build_release_changelog_skips_not_planned_issues(monkeypatch):
     assert "#702" not in changelog
     assert "#705" not in changelog
     assert "Duplicate delivery ticket" not in changelog
+    assert "someone" not in changelog
+    assert "## Contributors" not in changelog
 
 
 def test_build_release_changelog_omits_unmerged_pr_links(monkeypatch):
@@ -18139,14 +18168,18 @@ def test_build_release_changelog_omits_unmerged_pr_links(monkeypatch):
     actually MERGED — an OPEN PR never appears in the release notes."""
     source = {
         10: {
-            "number": 10, "title": "Ship the claim-race fix",
+            "__typename": "Issue", "number": 10,
+            "title": "Ship the claim-race fix",
             "body": "detail",
-            "url": "https://github.com/o/r/issues/10", "labels": [],
+            "url": "https://github.com/o/r/issues/10",
             "stateReason": "COMPLETED",
-            "closedByPullRequestsReferences": [
-                {"number": 11, "url": "https://github.com/o/r/pull/11"},
-                {"number": 705, "url": "https://github.com/o/r/pull/705"},
-            ],
+            "labels": {"nodes": []},
+            "closedByPullRequestsReferences": {"nodes": [
+                {"number": 11, "url": "https://github.com/o/r/pull/11",
+                 "author": None},
+                {"number": 705, "url": "https://github.com/o/r/pull/705",
+                 "author": None},
+            ]},
         },
     }
     pr_states = {11: "MERGED", 705: "OPEN"}
@@ -18155,14 +18188,140 @@ def test_build_release_changelog_omits_unmerged_pr_links(monkeypatch):
         if command[:3] == ["gh", "pr", "view"]:
             number = int(command[3])
             return json.dumps({"number": number, "state": pr_states[number]})
-        assert command[:3] == ["gh", "issue", "view"], command
-        return json.dumps(source[int(command[3])])
+        assert command[:3] == ["gh", "api", "graphql"], command
+        return json.dumps({"data": {"repository": {"issue": source[10]}}})
 
     monkeypatch.setattr(release, "run_command", fake_run_command)
     monkeypatch.setattr(runner, "run_command", fake_run_command)
     changelog = release.build_release_changelog("o/r", [10])
     assert "[PR #11](https://github.com/o/r/pull/11)" in changelog
     assert "#705" not in changelog
+
+
+def test_build_release_changelog_lists_deduped_sorted_contributor_avatars(monkeypatch):
+    """Issue #772: the notes end with a Contributors section — one
+    32px avatar per merged closing-PR author, deduped across PRs,
+    sorted by login, each linking to the author's GitHub profile. The
+    avatar is fetched at s=48 (retina-sharp at the displayed size), and
+    a null author neither crashes nor blocks the release."""
+    source = {
+        10: {
+            "__typename": "Issue", "number": 10, "title": "Add A",
+            "body": "detail", "url": "https://github.com/o/r/issues/10",
+            "stateReason": "COMPLETED", "labels": {"nodes": []},
+            "closedByPullRequestsReferences": {"nodes": [
+                {"number": 11, "url": "https://github.com/o/r/pull/11",
+                 "author": {"login": "zzz",
+                            "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4"}},
+                {"number": 12, "url": "https://github.com/o/r/pull/12",
+                 "author": {"login": "alice",
+                            "avatarUrl": "https://avatars.githubusercontent.com/u/2?v=4"}},
+                {"number": 13, "url": "https://github.com/o/r/pull/13",
+                 "author": None},
+            ]},
+        },
+        20: {
+            "__typename": "Issue", "number": 20, "title": "Add B",
+            "body": "detail", "url": "https://github.com/o/r/issues/20",
+            "stateReason": "COMPLETED", "labels": {"nodes": []},
+            "closedByPullRequestsReferences": {"nodes": [
+                {"number": 21, "url": "https://github.com/o/r/pull/21",
+                 "author": {"login": "zzz",
+                            "avatarUrl": "https://avatars.githubusercontent.com/u/1?v=4"}},
+                {"number": 22, "url": "https://github.com/o/r/pull/22",
+                 "author": {"login": "bare",
+                            "avatarUrl": "https://avatars.githubusercontent.com/u/9"}},
+            ]},
+        },
+    }
+
+    def fake_run_command(command, **kwargs):
+        if command[:3] == ["gh", "pr", "view"]:
+            return json.dumps({"number": int(command[3]), "state": "MERGED"})
+        assert command[:3] == ["gh", "api", "graphql"], command
+        number = int(next(
+            a for a in command if a.startswith("number=")
+        ).split("=", 1)[1])
+        return json.dumps({"data": {"repository": {"issue": source[number]}}})
+
+    monkeypatch.setattr(release, "run_command", fake_run_command)
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    changelog = release.build_release_changelog("o/r", [10, 20])
+    assert changelog == """## Changelog
+
+### Features
+
+- Add A ([Issue #10](https://github.com/o/r/issues/10); [PR #11](https://github.com/o/r/pull/11); [PR #12](https://github.com/o/r/pull/12); [PR #13](https://github.com/o/r/pull/13))
+- Add B ([Issue #20](https://github.com/o/r/issues/20); [PR #21](https://github.com/o/r/pull/21); [PR #22](https://github.com/o/r/pull/22))
+
+## Contributors
+
+<a href="https://github.com/alice"><img src="https://avatars.githubusercontent.com/u/2?v=4&s=48" width="32" height="32" alt="alice" /></a>
+<a href="https://github.com/bare"><img src="https://avatars.githubusercontent.com/u/9?s=48" width="32" height="32" alt="bare" /></a>
+<a href="https://github.com/zzz"><img src="https://avatars.githubusercontent.com/u/1?v=4&s=48" width="32" height="32" alt="zzz" /></a>"""
+
+
+def test_build_release_changelog_without_contributors_has_no_section(monkeypatch):
+    """Issue #772: every merged PR's author is null (ghosted account) —
+    the release still succeeds and no empty `## Contributors` heading
+    is written."""
+    item = {
+        "__typename": "Issue", "number": 10, "title": "Ship it",
+        "body": "detail", "url": "https://github.com/o/r/issues/10",
+        "stateReason": "COMPLETED", "labels": {"nodes": []},
+        "closedByPullRequestsReferences": {"nodes": [{
+            "number": 11, "url": "https://github.com/o/r/pull/11",
+            "author": None,
+        }]},
+    }
+
+    def fake_run_command(command, **kwargs):
+        if command[:3] == ["gh", "pr", "view"]:
+            return json.dumps({"number": int(command[3]), "state": "MERGED"})
+        assert command[:3] == ["gh", "api", "graphql"], command
+        return json.dumps({"data": {"repository": {"issue": item}}})
+
+    monkeypatch.setattr(release, "run_command", fake_run_command)
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    changelog = release.build_release_changelog("o/r", [10])
+    assert changelog == """## Changelog
+
+### Features
+
+- Ship it ([Issue #10](https://github.com/o/r/issues/10); [PR #11](https://github.com/o/r/pull/11))"""
+
+
+def test_build_release_changelog_unmerged_pr_author_is_not_a_contributor(monkeypatch):
+    """Issue #772: contributors mirror the Changelog's PR links — a
+    closedBy PR that is not MERGED never ships, so its author is not a
+    contributor of this release."""
+    item = {
+        "__typename": "Issue", "number": 10, "title": "Ship it",
+        "body": "detail", "url": "https://github.com/o/r/issues/10",
+        "stateReason": "COMPLETED", "labels": {"nodes": []},
+        "closedByPullRequestsReferences": {"nodes": [
+            {"number": 11, "url": "https://github.com/o/r/pull/11",
+             "author": {"login": "alice",
+                        "avatarUrl": "https://avatars.githubusercontent.com/u/2?v=4"}},
+            {"number": 12, "url": "https://github.com/o/r/pull/12",
+             "author": {"login": "bob",
+                        "avatarUrl": "https://avatars.githubusercontent.com/u/3?v=4"}},
+        ]},
+    }
+    pr_states = {11: "MERGED", 12: "OPEN"}
+
+    def fake_run_command(command, **kwargs):
+        if command[:3] == ["gh", "pr", "view"]:
+            number = int(command[3])
+            return json.dumps({"number": number, "state": pr_states[number]})
+        assert command[:3] == ["gh", "api", "graphql"], command
+        return json.dumps({"data": {"repository": {"issue": item}}})
+
+    monkeypatch.setattr(release, "run_command", fake_run_command)
+    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    changelog = release.build_release_changelog("o/r", [10])
+    assert "alice" in changelog
+    assert "bob" not in changelog
 
 
 def test_release_changelog_category_covers_reliability_bug_and_features():
@@ -18178,37 +18337,62 @@ def test_release_changelog_category_covers_reliability_bug_and_features():
 
 
 def test_build_release_changelog_fails_on_empty_or_malformed_evidence(monkeypatch):
-    bad_items = [
-        {"number": 10, "title": "", "body": "", "url": "https://github.com/o/r/issues/10", "labels": [], "closedByPullRequestsReferences": []},
-        {"number": 10, "title": "Useful title", "body": "detail", "url": "not-a-url", "labels": [], "closedByPullRequestsReferences": []},
-        {"number": 10, "title": "Useful title", "body": "detail", "url": "https://github.com/o/r/issues/10", "labels": [], "closedByPullRequestsReferences": "malformed"},
-        {"number": 10, "title": "Useful title", "body": "detail", "url": "https://github.com/o/r/issues/10", "labels": [], "closedByPullRequestsReferences": [{"number": "bad", "url": "https://github.com/o/r/pull/20"}]},
+    bad_issues = [
+        {"__typename": "Issue", "number": 10, "title": "", "body": "", "url": "https://github.com/o/r/issues/10", "stateReason": "COMPLETED", "labels": {"nodes": []}, "closedByPullRequestsReferences": {"nodes": []}},
+        {"__typename": "Issue", "number": 10, "title": "Useful title", "body": "detail", "url": "not-a-url", "stateReason": "COMPLETED", "labels": {"nodes": []}, "closedByPullRequestsReferences": {"nodes": []}},
+        {"__typename": "Issue", "number": 10, "title": "Useful title", "body": "detail", "url": "https://github.com/o/r/issues/10", "stateReason": "COMPLETED", "labels": {"nodes": []}, "closedByPullRequestsReferences": {"nodes": "malformed"}},
+        {"__typename": "Issue", "number": 10, "title": "Useful title", "body": "detail", "url": "https://github.com/o/r/issues/10", "stateReason": "COMPLETED", "labels": {"nodes": []}, "closedByPullRequestsReferences": {"nodes": [{"number": "bad", "url": "https://github.com/o/r/pull/20", "author": None}]}},
     ]
-    for item in bad_items:
-        monkeypatch.setattr(release, "run_command", lambda *args, item=item, **kwargs: json.dumps(item))
-        monkeypatch.setattr(runner, "run_command", lambda *args, item=item, **kwargs: json.dumps(item))
+    for issue in bad_issues:
+        monkeypatch.setattr(
+            release, "run_command",
+            lambda *args, issue=issue, **kwargs: json.dumps(
+                {"data": {"repository": {"issue": issue}}}),
+        )
+        monkeypatch.setattr(
+            runner, "run_command",
+            lambda *args, issue=issue, **kwargs: json.dumps(
+                {"data": {"repository": {"issue": issue}}}),
+        )
         with pytest.raises(ValueError, match="release changelog"):
             release.build_release_changelog("o/r", [10])
     monkeypatch.setattr(release, "run_command", lambda *args, **kwargs: json.dumps({
-        "number": 10, "title": "", "body": "\nConcrete summary\n",
-        "url": "https://github.com/o/r/issues/10", "labels": [],
-        "closedByPullRequestsReferences": [],
+        "data": {"repository": {"issue": {
+            "__typename": "Issue", "number": 10, "title": "",
+            "body": "\nConcrete summary\n",
+            "url": "https://github.com/o/r/issues/10",
+            "stateReason": "COMPLETED", "labels": {"nodes": []},
+            "closedByPullRequestsReferences": {"nodes": []},
+        }}},
     }))
     monkeypatch.setattr(runner, "run_command", lambda *args, **kwargs: json.dumps({
-        "number": 10, "title": "", "body": "\nConcrete summary\n",
-        "url": "https://github.com/o/r/issues/10", "labels": [],
-        "closedByPullRequestsReferences": [],
+        "data": {"repository": {"issue": {
+            "__typename": "Issue", "number": 10, "title": "",
+            "body": "\nConcrete summary\n",
+            "url": "https://github.com/o/r/issues/10",
+            "stateReason": "COMPLETED", "labels": {"nodes": []},
+            "closedByPullRequestsReferences": {"nodes": []},
+        }}},
     }))
     assert "Concrete summary" in release.build_release_changelog("o/r", [10])
+    # A PR number in scope resolves through the PullRequest branch: no
+    # stateReason, no closedBy references (verified against the real
+    # GraphQL schema — the field only exists on Issue).
     monkeypatch.setattr(release, "run_command", lambda *args, **kwargs: json.dumps({
-        "number": 10, "title": "Merge direct release work", "body": "",
-        "url": "https://github.com/o/r/pull/10", "labels": [],
-        "closedByPullRequestsReferences": [],
+        "data": {"repository": {"issue": {
+            "__typename": "PullRequest", "number": 10,
+            "title": "Merge direct release work", "body": "",
+            "url": "https://github.com/o/r/pull/10",
+            "labels": {"nodes": []},
+        }}},
     }))
     monkeypatch.setattr(runner, "run_command", lambda *args, **kwargs: json.dumps({
-        "number": 10, "title": "Merge direct release work", "body": "",
-        "url": "https://github.com/o/r/pull/10", "labels": [],
-        "closedByPullRequestsReferences": [],
+        "data": {"repository": {"issue": {
+            "__typename": "PullRequest", "number": 10,
+            "title": "Merge direct release work", "body": "",
+            "url": "https://github.com/o/r/pull/10",
+            "labels": {"nodes": []},
+        }}},
     }))
     assert "[PR #10](https://github.com/o/r/pull/10)" in (
         release.build_release_changelog("o/r", [10])
@@ -18343,23 +18527,19 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
                     "number": 124, "state": "CLOSED",
                     "stateReason": "COMPLETED",
                 })
-            if fields.startswith("number,title,") and number in (123, 124):
-                return json.dumps({
-                    "number": number,
-                    "title": f"Deliver release scope item {number}",
-                    "body": "Concrete release behavior.",
-                    "url": f"https://github.com/o/r/issues/{number}",
-                    "labels": [],
-                    "stateReason": "COMPLETED",
-                    "closedByPullRequestsReferences": [],
-                })
-            raise subprocess.CalledProcessError(
-                1, command,
-                stderr=(
-                    "GraphQL: Could not resolve to an Issue with the "
-                    f"number of {number}."
-                ),
-            )
+        if command[:3] == ["gh", "api", "graphql"]:
+            number = int(next(
+                a for a in command if a.startswith("number=")
+            ).split("=", 1)[1])
+            return json.dumps({"data": {"repository": {"issue": {
+                "__typename": "Issue", "number": number,
+                "title": f"Deliver release scope item {number}",
+                "body": "Concrete release behavior.",
+                "url": f"https://github.com/o/r/issues/{number}",
+                "stateReason": "COMPLETED",
+                "labels": {"nodes": []},
+                "closedByPullRequestsReferences": {"nodes": []},
+            }}}})
         if command[:3] == ["gh", "issue", "list"]:
             label = command[command.index("--label") + 1]
             numbers = leftover_labels.get(label, [])
