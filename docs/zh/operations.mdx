@@ -503,6 +503,28 @@ base），然后推送 task branch 并创建 PR。创建 PR 之前 Runner 会直
 才被关」的相反时序由每 tick 的孤儿 PR 扫描兜底（见[工作流](/zh/workflow)），
 报告出来由人决定。
 
+### 任务 worktree 回收（Issue #760）
+
+worktree 过去只增不减：每次交付都会留下
+`repo_dir/.worktrees/orbi-{slug}-issue-{N}-{run_id}` 目录，没有任何
+机制删除它。现在每个 tick 开头——与启动前检查并列、在任何 slot 或
+领取之前——Runner 跑一次有界、幂等的回收（`reclaim_released_worktrees`）：
+只考虑 `repo_dir/.worktrees` 下、目录名匹配 orbi 命名且 slug 属于已
+配置 source repo 的**已注册** worktree，当以下条件全部成立时用
+`git worktree remove --force` 移除：Issue 已关闭（每个涉及的 repo
+一次批量 `gh issue list --state closed`）、其 `closedAt` 距今至少
+`worktree_retain_hours`（部署 home 的 `orbi.toml`，默认 72）小时，且
+不携带任何在途标签（`ai-in-progress`、`ai-pr-opened`、
+`ai-fix-needed`——人工关闭在途 Issue 时标签还在，现场因此保留）。
+本进程绑定 run 的 worktree（按 run id 或 stop-scene 路径）永远不是
+候选，而已关闭的 Issue 永远不会被恢复扫描选中，所以被回收的现场是
+不可达的垃圾，绝不是恢复状态。移除按关闭时间从旧到新排序、每 tick
+最多 25 个，积压在多个 tick 内消化，单个 tick 不会无限耗时。整个
+回收是纯旁路：GitHub 读取失败记录
+`worktree_reclaim_failed reason=...` 且一个都不删，单个移除失败记录
+`worktree_reclaim_failed path=... reason=...` 后继续，有移除的 tick
+记录结构化 `worktree_reclaimed count=N freed=<bytes>` 行。
+
 ## 故障恢复
 
 | 状态 | 发生了什么 | 怎么办 |
