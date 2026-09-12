@@ -22,7 +22,10 @@ dist/
 # boundary, so deliver_pr's dirty-worktree gate must never see it.
 .pi/
 .worktrees/
-orbi.toml
+# The local ROOT-level host-style engine config only (Issue #731): the
+# bare pattern also matched the tracked `.github/orbi.toml` policy file
+# and made it undeliverable — anchor this to the repository root.
+/orbi.toml
 # Per-run artifacts written into the task worktree (prompt.md steps 2
 # and 5): never version-controlled, so a new worktree created from the
 # frozen base never inherits the previous run's plan or test log.
