@@ -18732,15 +18732,86 @@ def test_close_release_milestone_fails_fast_when_open_issues_remain(monkeypatch)
 
     monkeypatch.setattr(release, "run_command", fake_run)
     monkeypatch.setattr(runner, "run_command", fake_run)
+    sleeps: list[float] = []
+    monkeypatch.setattr("time.sleep", sleeps.append)
     with pytest.raises(RuntimeError, match="Milestone #5") as excinfo:
         release.close_release_milestone("o/r", "v0.3.0")
     # The error carries the version, the Milestone number/url and the
-    # open issue list — never a silent skip.
+    # open issue list — never a silent skip. The list was re-read with
+    # the bounded backoff first (Issue #754) and stayed non-empty.
     assert "v0.3.0" in str(excinfo.value)
     assert "https://github.com/o/r/milestone/5" in str(excinfo.value)
     assert "#101" in str(excinfo.value)
     assert "#102" in str(excinfo.value)
+    assert sleeps == [1.0, 2.0, 4.0]
     # No close was attempted.
+    assert not [c for c in calls if "PATCH" in c]
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["unexpected"])
+
+
+def test_close_release_milestone_retries_the_stale_issue_index_after_close(monkeypatch):
+    """Issue #754: `gh issue close` 返回成功不代表
+    `issues?milestone=N&state=open` 索引已跟上（最终一致）——v0.4.10 在
+    关票后 0-1 秒读到陈旧的非空列表，里程碑没有被关闭，release 评论
+    留下 `milestone evidence unavailable`。读到非空时必须先按有界退避
+    重查，索引跟上后正常关闭。"""
+    calls = []
+    sleeps: list[float] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([[_milestone(5, "v0.3.0", "open", 1)]])
+        if command == MILESTONE_ISSUES_COMMAND:
+            # First read (the same second as the close): stale index still
+            # lists the just-closed issue; the re-read catches up.
+            stale = json.dumps([[{"number": 748, "title": "Release v0.3.0"}]])
+            return stale if calls.count(command) == 1 else json.dumps([[]])
+        if command == ["gh", "api", "repos/o/r/milestones/5",
+                       "--method", "PATCH", "-f", "state=closed"]:
+            return json.dumps(_milestone(5, "v0.3.0", "closed", 0))
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(release, "run_command", fake_run)
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    evidence = release.close_release_milestone("o/r", "v0.3.0")
+    assert "Milestone #5" in evidence
+    assert "closed after release v0.3.0" in evidence
+    # The stale read cost exactly one bounded backoff step, not a raise.
+    assert sleeps == [1.0]
+    assert calls[-1] == ["gh", "api", "repos/o/r/milestones/5",
+                         "--method", "PATCH", "-f", "state=closed"]
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["unexpected"])
+
+
+def test_close_release_milestone_fails_after_the_backoff_is_exhausted(monkeypatch):
+    """Issue #754: 重试耗尽仍读到非空 → 仍然抛 RuntimeError——退避只是
+    等索引，不是放松门禁；真有未完成的工作时照样 fail fast（带同样的
+    version / milestone url / open issue 列表），且绝不 PATCH 关闭。"""
+    calls = []
+    sleeps: list[float] = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == MILESTONE_LIST_COMMAND:
+            return json.dumps([[_milestone(5, "v0.3.0", "open", 1)]])
+        if command == MILESTONE_ISSUES_COMMAND:
+            return json.dumps([[{"number": 101, "title": "leftover one"}]])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(release, "run_command", fake_run)
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    with pytest.raises(RuntimeError, match="Milestone #5") as excinfo:
+        release.close_release_milestone("o/r", "v0.3.0")
+    assert "v0.3.0" in str(excinfo.value)
+    assert "https://github.com/o/r/milestone/5" in str(excinfo.value)
+    assert "#101" in str(excinfo.value)
+    # Bounded: the delays are exhausted, then the gate fires.
+    assert sleeps == [1.0, 2.0, 4.0]
     assert not [c for c in calls if "PATCH" in c]
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["unexpected"])
