@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 import orbi.runner as runner
+from seam import seam
 
 
 def git(repo: Path, *args: str) -> str:
@@ -71,7 +72,7 @@ def install_fake_gh(monkeypatch, pr_json: str) -> None:
             return pr_json
         return real_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
 
 
 def test_task_created_from_latest_origin_base_when_main_worktree_on_side_branch(clone):

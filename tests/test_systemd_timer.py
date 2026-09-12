@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from orbi import systemd_deploy
+import orbi.journal as journal
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TIMER_FILE = REPO_ROOT / "systemd" / "orbi@.timer"

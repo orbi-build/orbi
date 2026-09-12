@@ -10,6 +10,7 @@ import dataclasses
 
 import orbi.runner as runner
 import orbi.cli as orbi
+from seam import seam
 
 
 def _write_prompts(tmp_path):
@@ -82,8 +83,7 @@ def test_dispatch_issue_propagates_create_failure(monkeypatch):
 def test_list_labeled_issues_queries_github_with_label_and_state(monkeypatch):
     issue = {"number": 3, "title": "task", "url": "u"}
     calls = []
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append(command)
         or json.dumps([issue]),
     )
@@ -99,7 +99,7 @@ def test_list_labeled_issues_queries_github_with_label_and_state(monkeypatch):
 
 
 def test_list_labeled_issues_returns_empty_list_when_idle(monkeypatch):
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "[]")
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "[]")
     assert orbi.list_labeled_issues("xqliu/orbi", "ai-ready") == []
 
 

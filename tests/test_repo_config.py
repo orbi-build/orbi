@@ -16,6 +16,7 @@ import pytest
 
 import orbi.repo_config as repo_config
 import orbi.runner as runner
+from seam import seam
 
 
 def _b64(text: str) -> str:
@@ -420,7 +421,7 @@ def test_pick_next_delivery_in_flight_scan_uses_the_repo_dispatch_label(
         searches.append(command[command.index("--search") + 1])
         return json.dumps([in_flight] if "in-progress" in searches[-1] else [])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda *a, **k: None)
     monkeypatch.setattr(
         runner, "reconcile_release_milestones", lambda *a, **k: None,
@@ -450,7 +451,7 @@ def test_pick_next_delivery_in_flight_scan_falls_back_on_a_malformed_file(
         searches.append(command[command.index("--search") + 1])
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda *a, **k: None)
     monkeypatch.setattr(
         runner, "reconcile_release_milestones", lambda *a, **k: None,
@@ -507,9 +508,8 @@ def test_previous_repo_config_sha_reads_the_newest_trusted_comment(monkeypatch):
         {"authorAssociation": "NONE", "body": "- repo_config: " + "b" * 40},
         {"authorAssociation": "MEMBER", "body": None},
     ]
-    monkeypatch.setattr(runner, "_authenticated_github_login", lambda: "orbi")
-    monkeypatch.setattr(
-        runner, "issue_comments", lambda number, repo: comments,
+    monkeypatch.setattr(seam, "_authenticated_github_login", lambda: "orbi")
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments,
     )
     assert runner.previous_repo_config_sha(1, "owner/repo") == "c" * 40
 
@@ -518,7 +518,7 @@ def test_previous_repo_config_sha_is_best_effort(monkeypatch, caplog):
     def broken(number, repo):
         raise RuntimeError("api down")
 
-    monkeypatch.setattr(runner, "issue_comments", broken)
+    monkeypatch.setattr(seam, "issue_comments", broken)
     assert runner.previous_repo_config_sha(1, "owner/repo") is None
     assert "previous_lookup_failed" in caplog.text
 
@@ -530,7 +530,7 @@ def test_pick_issue_uses_a_custom_dispatch_label(monkeypatch):
         seen.append(command)
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.pick_issue("owner/repo", dispatch_label="custom-ready") is None
     searched = " ".join(" ".join(command) for command in seen)
     assert "label:custom-ready" in searched
@@ -549,7 +549,7 @@ def test_pick_issue_with_repo_policy_uses_repo_scan_keys(monkeypatch):
             )(command)
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     config = runner.RunnerConfig()
     assert runner._pick_issue_with_repo_policy("owner/repo", "v1.0.0", config) is None
     searched = "\n".join(" ".join(command) for command in commands)
@@ -563,7 +563,7 @@ def test_pick_issue_with_repo_policy_ignores_a_malformed_file(monkeypatch):
             return json.dumps({"sha": "x", "content": _b64("nope = 1\n")})
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # The scan keeps the host keys and stays alive; process_issue blocks.
     assert runner._pick_issue_with_repo_policy(
         "owner/repo", "v1.0.0", runner.RunnerConfig(),
@@ -577,7 +577,7 @@ def test_pick_issue_with_repo_policy_without_config_uses_host_keys(monkeypatch):
         commands.append(command)
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     runner._pick_issue_with_repo_policy("owner/repo", "v1.0.0", None)
     searched = "\n".join(" ".join(command) for command in commands)
     assert "label:ai-ready" in searched
@@ -612,20 +612,17 @@ def test_process_issue_applies_repo_base_branch_and_records_sha(
             return _record('base_branch = "beta"\n', sha="b" * 40)(command)
         return "[]"
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(
-        runner, "has_in_progress_label", lambda number, repo: False,
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "has_in_progress_label", lambda number, repo: False,
     )
-    monkeypatch.setattr(runner, "open_pr_for_branch", lambda *a: None)
+    monkeypatch.setattr(seam, "open_pr_for_branch", lambda *a: None)
     monkeypatch.setattr(runner, "external_takeover_pr", lambda *a: None)
-    monkeypatch.setattr(runner, "stable_branch_exists", lambda *a: False)
-    monkeypatch.setattr(
-        runner, "freeze_base",
+    monkeypatch.setattr(seam, "stable_branch_exists", lambda *a: False)
+    monkeypatch.setattr(seam, "freeze_base",
         lambda repo_dir, base_branch: seen.setdefault("base", base_branch) or "sha",
     )
-    monkeypatch.setattr(
-        runner, "create_worktree", lambda *a, **k: tmp_path / "wt",
+    monkeypatch.setattr(seam, "create_worktree", lambda *a, **k: tmp_path / "wt",
     )
     monkeypatch.setattr(runner, "write_run_state", lambda *a, **k: None)
     monkeypatch.setattr(runner, "resume_context", lambda worktree: None)
@@ -645,9 +642,9 @@ def test_process_issue_applies_repo_base_branch_and_records_sha(
     def fake_comment(number, repo, body):
         starts.append(body)
 
-    monkeypatch.setattr(runner, "comment_issue", fake_comment)
-    monkeypatch.setattr(runner, "apply_label_patch", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "set_active_run", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue", fake_comment)
+    monkeypatch.setattr(seam, "apply_label_patch", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "set_active_run", lambda *a, **k: None)
     monkeypatch.setattr(
         runner, "ProgressPublisher",
         lambda *a, **k: type("P", (), {
@@ -658,8 +655,7 @@ def test_process_issue_applies_repo_base_branch_and_records_sha(
             "comment_id": None,
         })(),
     )
-    monkeypatch.setattr(
-        runner, "_safe_publish", lambda **kwargs: kwargs["action"](),
+    monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: kwargs["action"](),
     )
     monkeypatch.setattr(runner, "runner_health", type("H", (), {
         "record_pickup": staticmethod(lambda *a: None),
@@ -667,8 +663,7 @@ def test_process_issue_applies_repo_base_branch_and_records_sha(
         "health_state_path": staticmethod(lambda *a: Path("/tmp/x")),
         "failure_fingerprint": staticmethod(lambda *a: ""),
     }))
-    monkeypatch.setattr(
-        runner, "issue_comments", lambda number, repo: [],
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [],
     )
     result = runner.process_issue(
         {"number": 4, "title": "T", "body": "", "labels": []},
@@ -729,7 +724,7 @@ def test_main_applies_repo_base_branch_before_resume_verification(
             return _record('base_branch = "beta"\n', sha="b" * 40)(command)
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.main(["--config", str(config)]) == 0
     assert seen == {"verify_base": "beta", "wait_base": "beta"}
 
@@ -757,7 +752,7 @@ def test_main_blocks_a_claim_when_the_repo_config_is_invalid(
             })
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.main(["--config", str(config)]) == 0
     assert len(blocked) == 1
     assert "pi_model" in str(blocked[0][0][2])
@@ -832,7 +827,7 @@ def test_block_repo_config_failure_is_best_effort(monkeypatch, caplog):
     def broken(*args, **kwargs):
         raise RuntimeError("github down")
 
-    monkeypatch.setattr(runner, "apply_label_patch", broken)
+    monkeypatch.setattr(seam, "apply_label_patch", broken)
     runner.block_repo_config_failure(
         1, "owner/repo", ValueError("bad"), "a1b2c3d4",
     )
@@ -869,33 +864,30 @@ def test_run_pi_injects_repo_test_command_and_context_files(
 def test_process_issue_accepts_a_pre_resolved_record(monkeypatch, tmp_path):
     """`main` resolves the policy once and passes the record in (Issue
     #527); `process_issue` must not re-read or re-block."""
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(
         runner, "load_repo_policy",
         lambda *a, **k: (_ for _ in ()).throw(
             AssertionError("process_issue must not re-read the policy"),
         ),
     )
-    monkeypatch.setattr(
-        runner, "has_in_progress_label", lambda number, repo: False,
+    monkeypatch.setattr(seam, "has_in_progress_label", lambda number, repo: False,
     )
-    monkeypatch.setattr(runner, "open_pr_for_branch", lambda *a: None)
+    monkeypatch.setattr(seam, "open_pr_for_branch", lambda *a: None)
     monkeypatch.setattr(runner, "external_takeover_pr", lambda *a: None)
-    monkeypatch.setattr(runner, "stable_branch_exists", lambda *a: False)
+    monkeypatch.setattr(seam, "stable_branch_exists", lambda *a: False)
     seen = {}
-    monkeypatch.setattr(
-        runner, "freeze_base",
+    monkeypatch.setattr(seam, "freeze_base",
         lambda repo_dir, base_branch: seen.setdefault("base", base_branch),
     )
-    monkeypatch.setattr(
-        runner, "create_worktree",
+    monkeypatch.setattr(seam, "create_worktree",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("git failed")),
     )
     monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: None)
-    monkeypatch.setattr(runner, "apply_label_patch", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "_safe_publish", lambda **k: None)
-    monkeypatch.setattr(runner, "issue_comments", lambda number, repo: [])
+    monkeypatch.setattr(seam, "apply_label_patch", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
     monkeypatch.setattr(runner, "runner_health", type("H", (), {
         "record_pickup": staticmethod(lambda *a: None),
         "record_run_attempt": staticmethod(lambda *a, **k: None),
@@ -928,7 +920,7 @@ def test_repo_policies_are_isolated_per_repository(monkeypatch):
             "sha": "b", "content": _b64("source_repos = 1\n"),
         })
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     good = runner.load_repo_policy(runner.RunnerConfig(), "owner/good")
     assert good == repo_config.RepoPolicy(base_branch="beta", sha="g")
     with pytest.raises(repo_config.RepoConfigError):

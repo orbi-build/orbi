@@ -48,18 +48,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
-# NOTE (Issue #158, root-caused by Issue #168): the editable CLI
-# install refresh below lives in THIS module: the bootstrap chain
-# (`orbi.cli` -> `orbi.runner`) must still LOAD in a
-# tool env whose installed editable finder predates a packaging
-# change. Since the src layout (Issue #168) the finder maps the WHOLE
-# package directory `src/orbi/`, so a newly added package
-# module is importable WITHOUT any reinstall — the #158 incident
-# class is fixed at the root. The refresh remains the safety net for
-# packaging-metadata changes (version, dependencies, entry points in
-# `pyproject.toml`). The former thin re-export module
-# `orbi.cli_install` is deleted (Issue #295): the tests import these
-# symbols directly from this module.
+# NOTE (Issue #158, root-caused by Issue #168): the editable finder maps
+# the WHOLE package directory `src/orbi/`, so a newly added package
+# module is importable WITHOUT any reinstall — the #158 incident class
+# is fixed at the root. `refresh_cli_install` lives in `orbi.cli_source`
+# since Issue #785; `runner` imports it like any caller and the
+# preflight stubs keep patching the module global below.
 from orbi import engine_source
 from orbi.engine_source import EngineSourceError
 from orbi.git_transport import TransportError, check_transport
@@ -110,11 +104,16 @@ from orbi.repo_config import (
 from orbi.progress import (
     RUN_MARKER_PATTERN,
     ProgressPublisher,
+    _progress_body,
+    _progress_state,
+    _run_info_fields,
+    _safe_publish,
     field_block,
     format_status_comment,
     format_elapsed,
     progress_body,
     quote_value,
+    read_test_result,
     run_marker,
     validate_run_id,
 )
@@ -144,7 +143,87 @@ from orbi.pi_process import (
     stream_pi,
 )
 
-LOGGER = logging.getLogger("orbi.bootstrap")
+# Issue #785: the shared primitives live in the leaf modules now — the
+# journal kernel (logger, run binding, subprocess seam), the GitHub
+# data-access layer, the git operations layer, and the CLI-install domain.
+# `runner` consumes them like any other caller; only `cli` and
+# `pilot_setup` import `runner` itself.
+from orbi import github, gitops, journal, release
+from orbi.cli_source import CliInstallError, refresh_cli_install
+from orbi.github import (
+    RESUME_PR_STATE_TIMEOUT_SECONDS,
+    run_gh_read_command,
+    _comment_is_trusted,
+    _pr_number,
+    _epic_audit,
+    _verify_epic_complete,
+    apply_label_patch,
+    close_issue,
+    close_milestone,
+    commit_check_runs,
+    comment_issue,
+    edit_issue,
+    epic_issue_with_blockers,
+    has_in_progress_label,
+    issue_comments,
+    issue_labels,
+    issue_priority,
+    issue_view,
+    list_issues,
+    list_milestones,
+    milestone_issues,
+    milestone_open_issue_count,
+    milestone_open_issues,
+    open_blocker_numbers,
+    open_pr_for_branch,
+    parse_issue_array,
+    parse_issue_list,
+    parse_paginated_issue_array,
+    pr_comments,
+    pr_delivery_status,
+    pr_state,
+    pr_view,
+    trusted_issue_comments_block,
+)
+from orbi.gitops import (
+    acquire_base_sync_lock,
+    base_sync_lock_path,
+    create_release_worktree,
+    create_worktree,
+    fetch_base_ref,
+    freeze_base,
+    latest_run_id,
+    stable_branch_exists,
+    task_branch,
+    worktree_path,
+    _is_ancestor,
+)
+from orbi.journal import (
+    LOGGER,
+    RunIdFilter,
+    clear_active_run,
+    current_run_id,
+    issue_context,
+    log_format,
+    new_run_id,
+    run_command,
+    run_git_network_command,
+    set_active_pi,
+    set_active_run,
+    set_run_id,
+    single_line,
+    validate_run_id,
+)
+from orbi.release import (
+    RELEASE_CI_POLL_INTERVAL,
+    RELEASE_CI_WAIT_SECONDS,
+    RELEASE_DELIVERIES_WAIT_SECONDS,
+    RELEASE_SECTION,
+    ROLE_RELEASE,
+    ReleaseDeliveriesWaiting,
+    release_target_milestone,
+)
+
 
 # Machine-readable verdict line the reviewer session must end with, and the
 # bounded size of the review/fix loop (see review-fix-loop skill: max 5 rounds).
@@ -169,61 +248,15 @@ STOP_CHILD_GRACE_SECONDS = 15.0
 # Non-implement Pi session roles (Issue #41/#82). `ROLE_IMPLEMENT` is the
 # default role of a delivery Pi session and lives in `orbi.pi_process`.
 ROLE_REVIEW = "review"
-ROLE_RELEASE = "release"
 ROLE_TICKET = "ticket"
 
-# Run correlation (Issue #41): one task attempt generates one run_id and
-# every journal line of the attempt starts with `[run_id]`, so a single
-# grep reconstructs the whole timeline. The filter rewrites the message in
-# place, so every handler (journal, caplog) sees the same prefixed text.
-# Run marker validation and rendering live in progress.py so every caller
-# enforces the same strict eight-hex-digit contract.
-_CURRENT_RUN_ID: str | None = None
 
-# GitHub labels are the only state store (Issue #45). The delivery
-# lifecycle states (`ai-in-progress`, `ai-pr-opened`, `ai-fix-needed`,
-# `ai-merged`, `ai-blocked`), the scheduling-metadata labels (`p0`,
-# `bug`, `ai-epic`, `ai-release`, `ai-ops-only`), the event → label
-# patch transition rules, and the pickup/resume/human-intervention
-# decisions all live in `orbi.delivery_labels` (Issue #175) — the single
-# source of truth. They are imported above; `p0`/`bug`/`ai-epic` are
-# scheduling metadata, never delivery lifecycle states.
-# The machine-readable section a release Issue body must carry (Issue
-# #98): `- version:`, `- base_branch:` and `- scope:` (or
-# `- scope_from_milestone:`). Parsed strictly — a missing or malformed
-# declaration fails fast, never guessed. The declaration carries NO
-# local test contract (Issue #569): test acceptance is the GitHub
-# Actions CI result on the release commit (the #268 CI-wait gate).
-RELEASE_SECTION = "## Release"
-# Release CI wait (Issue #268): the release commit is born from the last
-# delivery PR merge, so its CI is almost always still running when the
-# gate checks it — a pending check (queued/in_progress) is an
-# intermediate state, not a failure. The gate waits for completion up to
-# this limit and decides on the FINAL conclusions; a wait timeout is its
-# own failure reason, never reported as a CI failure. The TOML field
-# `release_ci_wait_seconds` overrides the default (the #228 pattern).
-RELEASE_CI_WAIT_SECONDS = 1800
-# Release delivery wait (Issue #381): an early release ticket yields the
-# slot while other deliveries finish. The limit applies to one gate attempt;
-# the next tick retries the same ready release ticket.
-RELEASE_DELIVERIES_WAIT_SECONDS = 1800
-# Poll cadence while waiting: one `release_waiting_ci` journal line plus
-# one progress-comment PATCH per poll — the same 30s GitHub cadence as
-# the live progress heartbeat (PI_HEARTBEAT_SECONDS).
-RELEASE_CI_POLL_INTERVAL = 30.0
 # Mergeability is recomputed asynchronously after a push. Poll the PR after
 # its checks settle instead of treating the transient UNKNOWN value as a
 # conflict.
 MERGEABLE_WAIT_SECONDS = 120.0
 MERGEABLE_POLL_INTERVAL = 5.0
 
-# Only comments posted by a repo maintainer are trusted to carry the
-# recovery scene: a public comment (authorAssociation=NONE) must never
-# steer the runner into an arbitrary local worktree, branch or PR
-# (Issue #45 review, BLOCKER). A missing association is never trusted.
-TRUSTED_COMMENT_ASSOCIATIONS = frozenset({
-    "OWNER", "MAINTAINER", "MEMBER", "COLLABORATOR",
-})
 
 # Issue #745: {{ISSUE_COMMENTS}} injects the Issue's trusted-comment
 # timeline into the implementer/review prompt. This cap bounds how many
@@ -252,19 +285,6 @@ _WORKTREE_INFLIGHT_LABELS = frozenset({
 _WORKTREE_NAME_PATTERN = re.compile(
     r"^orbi-(?P<slug>.+)-issue-(?P<number>\d+)-(?P<run_id>[0-9a-f]{8})$",
 )
-
-
-class ReleaseDeliveriesWaiting(RuntimeError):
-    """Gate 1 found deliveries still in flight; retry next tick."""
-
-    def __init__(self, issue_numbers: list[int], waited: float, limit: float):
-        self.issue_numbers = issue_numbers
-        self.waited = waited
-        self.limit = limit
-        super().__init__(
-            "release gate: waiting for open deliveries "
-            f"{issue_numbers} (waited {int(waited)}s / {int(limit)}s)"
-        )
 
 
 class RecoverableMergeGateError(RuntimeError):
@@ -341,73 +361,9 @@ def is_unrecoverable_failure(exc: BaseException) -> bool:
     )
 
 
-class RunIdFilter(logging.Filter):
-    """Prefix every log message with the current `[run_id]`, if bound."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        if _CURRENT_RUN_ID is not None:
-            record.msg = f"[{_CURRENT_RUN_ID}] {record.msg}"
-        return True
-
-
-LOGGER.addFilter(RunIdFilter())
 # Issue #266: the health check's journal lines carry the same `[run_id]`
 # prefix as every other Runner line (the RunIdFilter is attached per
 # logger; the health module must not import this one — circular).
-runner_health.LOGGER.addFilter(RunIdFilter())
-pi_process.LOGGER.addFilter(RunIdFilter())
-
-
-def set_run_id(run_id: str) -> None:
-    """Bind one task attempt: every later journal line carries `[run_id]`."""
-    global _CURRENT_RUN_ID
-    _CURRENT_RUN_ID = validate_run_id(run_id)
-
-
-def current_run_id() -> str | None:
-    """Return the run id bound to this tick, or None before the claim."""
-    return _CURRENT_RUN_ID
-
-
-# Stop scene (Issue #48): when systemd (or any caller) stops the Runner
-# with SIGTERM, the journal must show which Issue context was active
-# BEFORE systemd's generic "Stopped" line, and the live Pi child must be
-# shut down (no orphan Pi). The context is bound while a delivery is in
-# flight (after the claim, or after a resumed scene is bound) and cleared
-# when the delivery ends. It carries no new id: the run id is the
-# existing `_CURRENT_RUN_ID`, and the phase/session come from the
-# existing activity snapshot of the worktree's `.pi-session`.
-_ACTIVE_RUN: dict | None = None
-
-
-def set_active_run(issue: int, title: str, branch: str, worktree: str) -> None:
-    """Bind the in-flight delivery scene for the stop handler (Issue #48)."""
-    global _ACTIVE_RUN
-    _ACTIVE_RUN = {
-        "issue": int(issue),
-        "title": title,
-        "branch": branch,
-        "worktree": worktree,
-        "pi": None,
-    }
-
-
-def set_active_pi(process: subprocess.Popen | None) -> None:
-    """Track the live Pi child of the in-flight delivery (Issue #48).
-
-    `stream_pi` calls it after the child is spawned (and again with None
-    after the child is reaped), so the stop handler signals exactly the
-    child that is alive — never an already-exited process. Without a
-    bound run (unit tests call `stream_pi` directly) it is a no-op.
-    """
-    if _ACTIVE_RUN is not None:
-        _ACTIVE_RUN["pi"] = process
-
-
-def clear_active_run() -> None:
-    """No delivery in flight anymore (Issue #48)."""
-    global _ACTIVE_RUN
-    _ACTIVE_RUN = None
 
 
 def _stop_delivery(signum: int) -> None:
@@ -423,7 +379,7 @@ def _stop_delivery(signum: int) -> None:
     exits with 128+signum (143 for SIGTERM) — the same value systemd
     records for a signal-caused stop.
     """
-    run = _ACTIVE_RUN
+    run = journal.active_run()
     if run is None:
         LOGGER.info("run_stopped result=idle")
     else:
@@ -1794,360 +1750,6 @@ def sync_active_milestone_variable(
         LOGGER.exception("active_milestone_variable_sync_failed repo=%s", repo)
 
 
-def single_line(value: str) -> str:
-    """Flatten a log value to one journal line (Issue #143).
-
-    A command argument may carry line breaks (the multi-line progress
-    comment body behind `gh api ... --field body=...`); emitted verbatim,
-    they split one `command=` log into several systemd journal lines with
-    the same timestamp and PID. Escape each line break to the visible
-    two-character sequence `\\n` so the field content stays readable on
-    one line. This only changes the log display — the real command is
-    never modified.
-    """
-    return value.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n")
-
-
-def run_command(command: list[str], *, cwd: Path | None = None,
-                timeout: int | None = None,
-                log_command: list[str] | None = None,
-                log_stdout: bool = False,
-                failure_log_level: int = logging.ERROR) -> str:
-    """Run one external command; log context and fail fast on any error.
-
-    ``failure_log_level`` is INFO for probes whose failure is an expected
-    status result, such as an optional component health check. The command
-    still raises, so callers retain control over whether the failure blocks.
-    """
-    LOGGER.info(
-        "command=%s cwd=%s",
-        single_line(" ".join(log_command or command)), cwd or Path.cwd(),
-    )
-    try:
-        result = subprocess.run(
-            command,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=timeout,
-        )
-    except subprocess.CalledProcessError as exc:
-        LOGGER.log(
-            failure_log_level,
-            "command_failed returncode=%s stdout=%s stderr=%s",
-            exc.returncode, (exc.stdout or "").rstrip(),
-            (exc.stderr or "").rstrip(),
-        )
-        raise
-    except subprocess.TimeoutExpired as exc:
-        LOGGER.log(
-            failure_log_level,
-            "command_timeout timeout=%s stdout=%s stderr=%s",
-            timeout, (exc.stdout or "").rstrip(),
-            (exc.stderr or "").rstrip(),
-        )
-        raise
-    except OSError as exc:
-        LOGGER.log(failure_log_level, "command_spawn_failed error=%s", exc)
-        raise
-    if result.stderr:
-        LOGGER.info("stderr=%s", result.stderr.rstrip())
-    if log_stdout and result.stdout:
-        LOGGER.info("stdout=%s", result.stdout.rstrip())
-    return result.stdout.strip()
-
-
-GIT_NETWORK_MAX_ATTEMPTS = 3
-GIT_NETWORK_TIMEOUT_SECONDS = 30
-RESUME_PR_STATE_TIMEOUT_SECONDS = 30
-GIT_NETWORK_BACKOFF_SECONDS = 1
-GIT_TRANSIENT_ERROR_MARKERS = (
-    "connection timed out",
-    "operation timed out",
-    "connection reset",
-    "connection refused",
-    "temporary failure in name resolution",
-    "network is unreachable",
-    "network unreachable",
-)
-
-
-def _is_retryable_git_network_failure(
-    command: list[str], exc: subprocess.CalledProcessError,
-) -> bool:
-    """Return whether a Git fetch/push failed with a known transient error."""
-    if len(command) < 2 or command[:1] != ["git"]:
-        return False
-    if command[1] not in {"fetch", "push"}:
-        return False
-    stderr = (exc.stderr or "").lower()
-    return any(marker in stderr for marker in GIT_TRANSIENT_ERROR_MARKERS)
-
-
-def _is_git_network_command(command: list[str]) -> bool:
-    return (
-        len(command) >= 2
-        and command[:1] == ["git"]
-        and command[1] in {"fetch", "push"}
-    )
-
-
-def run_git_network_command(
-    command: list[str], *, cwd: Path | str | None = None,
-    command_runner: Callable[..., str] | None = None,
-) -> str:
-    """Run an Orbi-controlled Git fetch/push with bounded network retries.
-
-    Only explicitly recognized transient network messages are retried. The
-    last ``CalledProcessError`` is re-raised unchanged so its stderr remains
-    available to the existing failure handling.
-    """
-    execute = command_runner or run_command
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            return execute(
-                command, cwd=cwd, timeout=GIT_NETWORK_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired as exc:
-            retryable = _is_git_network_command(command)
-            detail = f"command timed out after {GIT_NETWORK_TIMEOUT_SECONDS}s"
-            if attempt >= GIT_NETWORK_MAX_ATTEMPTS or not retryable:
-                raise
-        except subprocess.CalledProcessError as exc:
-            retryable = _is_retryable_git_network_failure(command, exc)
-            detail = (exc.stderr or "").strip()
-            if attempt >= GIT_NETWORK_MAX_ATTEMPTS or not retryable:
-                raise
-        delay = GIT_NETWORK_BACKOFF_SECONDS * (2 ** (attempt - 1))
-        LOGGER.warning(
-            "git_network_retry command=%s attempt=%s max_attempts=%s "
-            "delay_seconds=%s stderr=%s",
-            single_line(" ".join(command)), attempt + 1,
-            GIT_NETWORK_MAX_ATTEMPTS, delay, single_line(detail),
-        )
-        time.sleep(delay)
-
-
-GH_READ_MAX_ATTEMPTS = 3
-GH_READ_BACKOFF_SECONDS = 1
-# gh prints its own HTTP failures as `HTTP <code>: <text> (<url>)` — the
-# transient classes of Issue #738 are the 401 keyring race, the rate
-# limits (429 / the API's "rate limit" messages) and GitHub-side 5xx.
-GH_TRANSIENT_ERROR_RE = re.compile(
-    r"http 401|http 429|http 5\d\d|bad credentials|rate limit",
-    re.IGNORECASE,
-)
-# The read-only gh subcommand surface (the maintainer comment's
-# enumerated read table). A verb missing from the set simply gets no
-# retry — today's behavior — while a write verb can never classify as
-# retryable, so a retried write can never duplicate a side effect.
-GH_READ_SUBCOMMANDS = {
-    ("issue", "list"), ("issue", "view"),
-    ("pr", "list"), ("pr", "view"),
-    ("release", "view"),
-    ("repo", "view"),
-    ("label", "list"),
-    ("auth", "status"), ("auth", "token"),
-}
-
-
-def _is_readonly_gh_command(command: list[str]) -> bool:
-    """Return whether a gh command is provably read-only.
-
-    `gh api` is a read only when it carries no non-GET `--method`/`-X`
-    override and no request parameter: per gh's own semantics the
-    default method is GET normally and POST if any `-f`/`-F` parameter
-    was added, so only an explicit `--method GET` keeps parameters on
-    the query string — the flags are gh's read/write semantics, not a
-    call-site list. Every other subcommand is a read only when its verb
-    is in the fixed read set.
-    """
-    if command[:1] != ["gh"] or len(command) < 3:
-        return False
-    if command[1] == "api":
-        args = command[2:]
-        method_get = False
-        has_parameter = False
-        for index, argument in enumerate(args):
-            if argument in {"-X", "--method"} and index + 1 < len(args):
-                if args[index + 1].upper() != "GET":
-                    return False
-                method_get = True
-            elif argument.startswith("--method="):
-                if argument.split("=", 1)[1].upper() != "GET":
-                    return False
-                method_get = True
-            elif (
-                argument in {"-f", "-F", "--raw-field", "--field"}
-                or argument.startswith(("--raw-field=", "--field="))
-                or (argument.startswith(("-f", "-F")) and len(argument) > 2)
-            ):
-                has_parameter = True
-        return method_get or not has_parameter
-    return (command[1], command[2]) in GH_READ_SUBCOMMANDS
-
-
-def run_gh_read_command(
-    command: list[str], *, cwd: Path | None = None,
-    timeout: int | None = None,
-    command_runner: Callable[..., str] | None = None,
-) -> str:
-    """Run one read-only gh command with bounded transient-failure retries.
-
-    Issue #738: a keyring race (HTTP 401), a rate limit (429) or a
-    GitHub-side 5xx used to crash a whole tick that was only reading.
-    Only provably read-only commands (`_is_readonly_gh_command`) that
-    failed with a transient error are retried, so no write path can ever
-    reach the retry loop; every retry logs a structured `gh_read_retry`
-    line, and the last error is re-raised unchanged so the existing
-    failure handling keeps its stderr.
-    """
-    execute = command_runner or run_command
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            # Forward only the set options: None is run_command's own
-            # default, and passing it explicitly would change the call
-            # observed by the run_command fakes and probes.
-            if timeout is None:
-                if cwd is None:
-                    return execute(command)
-                return execute(command, cwd=cwd)
-            if cwd is None:
-                return execute(command, timeout=timeout)
-            return execute(command, cwd=cwd, timeout=timeout)
-        except subprocess.CalledProcessError as exc:
-            detail = (exc.stderr or "").strip()
-            retryable = (
-                _is_readonly_gh_command(command)
-                and GH_TRANSIENT_ERROR_RE.search(detail) is not None
-            )
-            if attempt >= GH_READ_MAX_ATTEMPTS or not retryable:
-                raise
-        delay = GH_READ_BACKOFF_SECONDS * (2 ** (attempt - 1))
-        LOGGER.warning(
-            "gh_read_retry command=%s attempt=%s max_attempts=%s "
-            "delay_seconds=%s stderr=%s",
-            single_line(" ".join(command)), attempt + 1,
-            GH_READ_MAX_ATTEMPTS, delay, single_line(detail),
-        )
-        time.sleep(delay)
-
-
-def parse_issue_array(raw: str) -> list[dict]:
-    """Return the issue array from gh's JSON output."""
-    issues = json.loads(raw)
-    if not isinstance(issues, list):
-        raise ValueError("issue list must be a JSON array")
-    return issues
-
-
-def list_issues(repo: str, *, state: str | None = None,
-                label: str | None = None, milestone: str | None = None,
-                search: str | None = None, json_fields: str, limit: int,
-                timeout: int | None = None) -> list[dict]:
-    """Run one ``gh issue list`` query and return the parsed JSON array.
-
-    Issue #299: every ``gh issue list`` call site shares this single
-    command builder. The flag order mirrors the call sites it replaces
-    (``--label``/``--state``/``--search`` before ``--json``/``--limit``,
-    with ``--milestone`` appended last, exactly as the release gate did),
-    so the emitted ``gh`` command is byte-for-byte unchanged.
-    """
-    command = ["gh", "issue", "list", "--repo", repo]
-    if label is not None:
-        command += ["--label", label]
-    if state is not None:
-        command += ["--state", state]
-    if search is not None:
-        command += ["--search", search]
-    command += ["--json", json_fields, "--limit", str(limit)]
-    if milestone is not None:
-        command += ["--milestone", milestone]
-    return parse_issue_array(run_gh_read_command(command, timeout=timeout))
-
-
-def parse_issue_list(raw: str) -> dict | None:
-    """Return the first issue from gh's JSON array, or None when idle."""
-    issues = parse_issue_array(raw)
-    return issues[0] if issues else None
-
-
-def parse_paginated_issue_array(raw: str) -> list[dict]:
-    """Flatten the JSON array emitted by ``gh api --paginate --slurp``."""
-    pages = json.loads(raw)
-    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
-        raise ValueError("paginated issue list must be an array of arrays")
-    if any(not isinstance(item, dict) for page in pages for item in page):
-        raise ValueError("paginated issue list contains a non-object item")
-    return [item for page in pages for item in page]
-
-
-def milestone_open_issues(repo: str, milestone_number: int) -> list[dict]:
-    """List open Issues for one exact Milestone number, including all pages."""
-    raw = run_gh_read_command([
-        "gh", "api",
-        f"repos/{repo}/issues?milestone={milestone_number}&state=open&per_page=100",
-        "--paginate", "--slurp",
-    ])
-    return parse_paginated_issue_array(raw)
-
-
-def epic_issue_with_blockers(repo: str, issue: dict) -> dict:
-    """Add the native blocker field omitted by the REST issue listing."""
-    if isinstance(issue.get("blockedBy"), dict):
-        return issue
-    number = issue.get("number")
-    if not isinstance(number, int) or isinstance(number, bool):
-        raise ValueError("Epic number is missing or invalid")
-    raw = run_gh_read_command([
-        "gh", "issue", "view", str(number), "--repo", repo,
-        "--json", "number,body,labels,blockedBy",
-    ])
-    details = json.loads(raw)
-    if not isinstance(details, dict):
-        raise ValueError(f"Epic #{number} details are not an object")
-    return details
-
-
-def open_blocker_numbers(issue: dict) -> list[int]:
-    """Return the numbers of the issue's OPEN native GitHub blockers.
-
-    `gh issue list --json blockedBy` (gh 2.94+) carries the native
-    dependency relation as `{"nodes": [...], "totalCount": N}`. GitHub
-    keeps a relation listed after its blocker closes (the node then
-    carries `state: "CLOSED"` and is inert — verified against the live
-    API, Issue #54), so only OPEN blockers actually block: a closed
-    blocker clears the dependency without any runner-side bookkeeping,
-    and the next tick claims the Issue. A node without an explicit
-    `state` counts as open (claiming a possibly-blocked Issue costs a
-    full run; waiting one tick does not). A missing or malformed field
-    means "no known blockers" (fail open): an API shape change must
-    never deadlock the queue.
-    """
-    blocked_by = issue.get("blockedBy")
-    if not isinstance(blocked_by, dict):
-        return []
-    nodes = blocked_by.get("nodes")
-    if not isinstance(nodes, list):
-        return []
-    numbers: list[int] = []
-    for node in nodes:
-        if not isinstance(node, dict):
-            continue
-        number = node.get("number")
-        if not isinstance(number, int) or isinstance(number, bool):
-            continue
-        if node.get("state", "OPEN") != "OPEN":
-            continue
-        numbers.append(number)
-    return numbers
-
-
 # Ready scans (Issue #71/#101): P0 urgent Issues are claimed before
 # bugs, bugs before new features — if the delivery loop is broken,
 # claiming enhancements only piles up unreviewed PRs, and a production
@@ -2221,77 +1823,6 @@ def release_fallback_search(active_milestone: str | None = None,
     )
 
 
-def milestone_open_issue_count(repo: str, milestone_title: str) -> int:
-    """Return the Open-Issue count of one Milestone (Issue #663).
-
-    A single `gh api` call reads GitHub's own `open_issues` counter —
-    the authority on whether the Milestone still has unfinished work.
-    Unlike the search-based ready scans it does not depend on the search
-    index and it is not affected by a delivery-state label, so an Issue
-    temporarily outside the ready queue (`ai-blocked`, `ai-pr-opened`,
-    or not yet indexed) still counts. The title-filtered `--jq` is the
-    command documented in the Issue, verified against the live API. An
-    empty result means the Milestone could not be found: that is a
-    failed check, never a silent 0 (the caller must not release on it).
-    """
-    raw = run_gh_read_command(
-        [
-            "gh", "api", f"repos/{repo}/milestones",
-            "--jq",
-            f'.[] | select(.title=="{milestone_title}") | .open_issues',
-        ],
-        timeout=30,
-    )
-    if not raw:
-        raise RuntimeError(
-            f"Milestone {milestone_title!r} not found in {repo}"
-        )
-    return int(raw)
-
-
-def release_target_milestone(
-    issue: dict, active_milestone: str | None = None,
-) -> str | None:
-    """Return the Milestone a release Issue releases (Issue #663).
-
-    The completeness gate judges the Milestone the release belongs to:
-    the Issue's own GitHub Milestone is authoritative, and the configured
-    `active_milestone` is the fallback (the release fallback scan is
-    already scoped to it). Without any Milestone there is nothing to
-    check and the release keeps the pre-#663 behavior, so the function
-    returns None and the caller skips the gate.
-    """
-    milestone = issue.get("milestone")
-    if isinstance(milestone, dict):
-        title = milestone.get("title")
-        if isinstance(title, str) and title:
-            return title
-    if isinstance(active_milestone, str) and active_milestone:
-        return active_milestone
-    return None
-
-
-def issue_priority(issue: dict) -> str:
-    """Return the pickup priority of one issue (Issue #101).
-
-    `p0` when the issue carries the `p0` label, `normal` otherwise.
-    The ready/in-flight/resumable scans fetch `labels` (verified
-    against `gh issue list --help`: `labels` is a supported JSON
-    field, an array of `{name, ...}` nodes), so this is a pure
-    function of the scanned issue — no extra gh call. A missing or
-    malformed `labels` field fails to `normal` (like the blockedBy
-    field fails open): a P0 misread as normal only loses its ordering
-    for one run, never the delivery.
-    """
-    labels = issue.get("labels")
-    if not isinstance(labels, list):
-        return "normal"
-    for label in labels:
-        if isinstance(label, dict) and label.get("name") == P0_LABEL:
-            return "p0"
-    return "normal"
-
-
 def is_epic(issue: dict) -> bool:
     """Return True when one issue carries the `ai-epic` label (Issue #93).
 
@@ -2329,132 +1860,6 @@ def is_release(issue: dict) -> bool:
     return False
 
 
-def _is_ancestor(commit: str, base: str, *, cwd: Path) -> bool:
-    """Return whether *commit* is reachable from *base*.
-
-    Git uses exit code 1 for the normal negative answer. Any other failure
-    means the check itself could not be performed and must be surfaced.
-    """
-    try:
-        run_command(
-            ["git", "merge-base", "--is-ancestor", commit, base], cwd=cwd,
-        )
-    except subprocess.CalledProcessError as exc:
-        if exc.returncode != 1:
-            raise
-        return False
-    return True
-
-
-def _epic_child_evidence(repo: str, kind: str, number: int) -> str:
-    """Verify one child against GitHub's live Issue/PR state."""
-    raw = run_gh_read_command(["gh", "api", f"repos/{repo}/issues/{number}"])
-    item = json.loads(raw)
-    if not isinstance(item, dict):
-        raise ValueError(f"child #{number} response is not an object")
-    is_pr = "pull_request" in item
-    if kind == "issue" and is_pr:
-        raise ValueError(f"child #{number} declared as Issue but is a PR")
-    if kind == "pr" and not is_pr:
-        raise ValueError(f"child #{number} declared as PR but is an Issue")
-    if is_pr:
-        pr = json.loads(run_gh_read_command(["gh", "api", f"repos/{repo}/pulls/{number}"]))
-        if not isinstance(pr, dict) or pr.get("merged") is not True:
-            raise ValueError(f"child PR #{number} is not merged")
-        return f"PR #{number} merged"
-    if item.get("state") != "closed":
-        raise ValueError(f"child Issue #{number} is not closed")
-    return f"Issue #{number} closed"
-
-
-def _verify_epic_complete(repo: str, listed_epic: dict) -> list[str]:
-    """Verify native sub-issues and blockers; otherwise fail closed.
-
-    Live API shape (measured 2026-09-09 against #305):
-    ``GET /repos/{owner}/{repo}/issues/{number}/sub_issues`` returns a JSON
-    array (``[]`` for no children), paginates with the standard ``--paginate``
-    contract, and Issue items include ``repository.full_name`` and no
-    ``pull_request`` key.  The endpoint is paginated with ``per_page=100``;
-    a cross-repository item is identified by its ``repository.full_name`` and
-    is rejected.  A PR-shaped item is identified by a non-null
-    ``pull_request`` field and is checked through the PR endpoint.
-    """
-    epic = epic_issue_with_blockers(repo, listed_epic)
-    number = epic.get("number")
-    if not isinstance(number, int) or isinstance(number, bool):
-        raise ValueError("Epic number is missing or invalid")
-    blockers = epic.get("blockedBy")
-    # Live API check (Issue #552): `gh issue view --json blockedBy` returns
-    # {"blockedBy":{"nodes":[],"totalCount":0}} for zero dependencies.
-    # Missing/malformed blockedBy is not equivalent to that empty set.
-    if not isinstance(blockers, dict) or not isinstance(blockers.get("nodes"), list):
-        raise ValueError("native blocker/dependency state is unavailable")
-    for node in blockers["nodes"]:
-        if (not isinstance(node, dict)
-                or not isinstance(node.get("number"), int)
-                or isinstance(node.get("number"), bool)
-                or ("state" in node and node["state"] not in {"OPEN", "CLOSED"})):
-            raise ValueError("native blocker/dependency state is malformed")
-    open_blockers = open_blocker_numbers(epic)
-    if open_blockers:
-        raise ValueError("open blockers: " + ", ".join(f"#{n}" for n in open_blockers))
-    raw = run_gh_read_command([
-        "gh", "api", f"repos/{repo}/issues/{number}/sub_issues?per_page=100",
-        "--paginate", "--slurp",
-    ])
-    children = parse_paginated_issue_array(raw)
-    if not children:
-        raise ValueError("Epic child scope is missing or empty")
-    child_evidence: list[str] = []
-    for child in children:
-        child_number = child.get("number")
-        if not isinstance(child_number, int) or isinstance(child_number, bool):
-            raise ValueError("Epic child scope contains an invalid number")
-        child_repo = child.get("repository")
-        if not isinstance(child_repo, dict) or not isinstance(child_repo.get("full_name"), str):
-            raise ValueError(f"child #{child_number} repository state is malformed")
-        if child_repo["full_name"].lower() != repo.lower():
-            raise ValueError(f"cross-repository child #{child_number}")
-        if child.get("state") not in {"open", "closed"}:
-            raise ValueError(f"child #{child_number} state is malformed")
-        kind = "pr" if child.get("pull_request") is not None else "issue"
-        child_evidence.append(_epic_child_evidence(repo, kind, child_number))
-    return child_evidence
-
-
-def _epic_audit(child_evidence: list[str], version: str | None = None) -> str:
-    prefix = f" for {version}" if version else ""
-    return (f"Epic reconciliation{prefix}: complete; "
-            f"children: {', '.join(child_evidence)}; "
-            "no open native blockers/dependencies.")
-
-
-def reconcile_release_epics(repo: str, milestone_number: int, version: str,
-                            run_id: str) -> list[str]:
-    """Close only provably complete open Epics in this exact Milestone."""
-    issues = milestone_open_issues(repo, milestone_number)
-    evidence: list[str] = []
-    for listed_epic in issues:
-        labels = listed_epic.get("labels", [])
-        names = {label.get("name") for label in labels if isinstance(label, dict)}
-        if EPIC_LABEL not in names:
-            continue
-        number = listed_epic.get("number")
-        try:
-            child_evidence = _verify_epic_complete(repo, listed_epic)
-        except (ValueError, json.JSONDecodeError) as exc:
-            evidence.append(f"Epic #{number} kept open: {exc}")
-            continue
-        audit = _epic_audit(child_evidence, version)
-        comments = issue_comments(int(number), repo=repo)
-        if not any(audit in str(comment.get("body", "")) for comment in comments):
-            comment_issue(int(number), repo=repo,
-                         body=f"<!-- orbi:run={run_id} -->\n{audit}\nrun_id={run_id}")
-        run_command(["gh", "issue", "close", str(number), "--repo", repo])
-        evidence.append(f"Epic #{number} closed after verification ({'; '.join(child_evidence)})")
-    return evidence
-
-
 def reconcile_open_epics(repo: str, run_id: str) -> list[str]:
     """Sweep open Epics once per tick; ordinary pickup must not depend on it."""
     epics = list_issues(
@@ -2476,7 +1881,7 @@ def reconcile_open_epics(repo: str, run_id: str) -> list[str]:
         if not any(audit in str(comment.get("body", "")) for comment in comments):
             comment_issue(int(number), repo=repo,
                          body=f"<!-- orbi:run={run_id} -->\n{audit}\nrun_id={run_id}")
-        run_command(["gh", "issue", "close", str(number), "--repo", repo])
+        close_issue(int(number), repo=repo)
         LOGGER.info("epic_closed issue=%s repo=%s", number, repo)
         evidence.append(f"Epic #{number} closed after verification ({'; '.join(child_evidence)})")
     return evidence
@@ -2489,11 +1894,7 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
     Milestone title are independent GitHub facts, so a late-closing Issue is
     reconciled on a later tick without requiring a new release run.
     """
-    raw = run_gh_read_command([
-        "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
-        "--paginate", "--slurp",
-    ])
-    all_milestones = parse_paginated_issue_array(raw)
+    all_milestones = list_milestones(repo)
     milestones = [m for m in all_milestones if m.get("state") == "open"]
     for milestone in all_milestones:
         if not isinstance(milestone, dict) or milestone.get("state") not in {"open", "closed"}:
@@ -2530,10 +1931,7 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
         if open_issues:
             LOGGER.info("milestone_kept_open number=%s repo=%s reason=open issues", number, repo)
             continue
-        run_command([
-            "gh", "api", f"repos/{repo}/milestones/{number}",
-            "--method", "PATCH", "-f", "state=closed",
-        ])
+        close_milestone(repo, int(number))
         LOGGER.info("milestone_closed number=%s repo=%s", number, repo)
         evidence.append(f"Milestone #{number} ({title}) closed")
     return evidence
@@ -2586,11 +1984,7 @@ def reconcile_orphan_prs(repo: str, run_id: str) -> list[str]:
         issue_number = orphan_pr_branch_issue(pr.get("headRefName"))
         if not isinstance(pr_number, int) or issue_number is None:
             continue
-        raw = run_gh_read_command([
-            "gh", "issue", "view", str(issue_number), "--repo", repo,
-            "--json", "state",
-        ], timeout=30)
-        details = json.loads(raw)
+        details = issue_view(issue_number, "state", repo=repo, timeout=30)
         state = details.get("state") if isinstance(details, dict) else None
         if state == "OPEN":
             continue
@@ -2848,172 +2242,6 @@ def pick_next_issue(
     return None
 
 
-def edit_issue(number: int, *, repo: str, add: str | None = None,
-               remove: str | None = None) -> None:
-    command = ["gh", "issue", "edit", str(number), "--repo", repo]
-    if add:
-        command += ["--add-label", add]
-    if remove:
-        command += ["--remove-label", remove]
-    run_command(command)
-
-
-def apply_label_patch(number: int, *, repo: str, event: str,
-                      current_labels) -> None:
-    """Compute the deterministic label patch for `event` and apply it.
-
-    `current_labels` is the Issue's current label names (read once by the
-    caller). The patch comes from `delivery_labels.label_patch` — the
-    single source of truth for the transition rules (Issue #175) — so the
-    same current labels and event always produce the same idempotent
-    patch. The patch is applied through `edit_issue`: one call for the
-    add plus the first remove, then one call per extra remove (the exact
-    same `edit_issue` kwargs the pre-#175 code emitted). A no-op patch
-    (nothing to add or remove) applies nothing.
-    """
-    to_add, to_remove = label_patch(event, current_labels)
-    if not to_add and not to_remove:
-        return
-    first_remove = to_remove[0] if to_remove else None
-    kwargs: dict = {"repo": repo}
-    if to_add:
-        kwargs["add"] = to_add[0]
-    if first_remove is not None:
-        kwargs["remove"] = first_remove
-    edit_issue(number, **kwargs)
-    for label in to_remove[1:]:
-        edit_issue(number, repo=repo, remove=label)
-
-
-def comment_issue(number: int, *, repo: str, body: str) -> None:
-    run_command(["gh", "issue", "comment", str(number), "--repo", repo,
-                 "--body", format_status_comment(body)])
-
-
-def issue_comments(number: int, *, repo: str) -> list[dict]:
-    """Return the Issue's comment history (oldest first) from GitHub.
-
-    ``gh issue view --json comments`` returns a top-level object with a
-    ``comments`` array; each comment carries the author and the
-    ``authorAssociation`` of the viewer, which is how the runner tells
-    its own trusted comments apart from public ones (Issue #45).
-    """
-    raw = run_gh_read_command([
-        "gh", "issue", "view", str(number), "--repo", repo,
-        "--json", "comments",
-    ], timeout=30)
-    data = json.loads(raw)
-    if not isinstance(data, dict):
-        raise ValueError("issue view must be a JSON object")
-    comments = data.get("comments")
-    if not isinstance(comments, list):
-        raise ValueError("issue comments must be a JSON array")
-    return comments
-
-
-def pr_comments(number: int, *, repo: str) -> list[dict]:
-    """Return the PR's comment history (oldest first) from GitHub.
-
-    The PR-side twin of `issue_comments`: a PR's comments are read
-    through `gh pr view --json comments` (`gh issue view` rejects PR
-    numbers), the same top-level object with a `comments` array — and
-    the same 30 s bound (#745 bounded the issue-side read; an
-    unbounded comments read is the same hang on the PR side).
-    """
-    raw = run_gh_read_command([
-        "gh", "pr", "view", str(number), "--repo", repo,
-        "--json", "comments",
-    ], timeout=30)
-    data = json.loads(raw)
-    if not isinstance(data, dict):
-        raise ValueError("pr view must be a JSON object")
-    comments = data.get("comments")
-    if not isinstance(comments, list):
-        raise ValueError("pr comments must be a JSON array")
-    return comments
-
-
-def trusted_issue_comments_block(comments: list[dict], limit: int) -> str:
-    """Render the {{ISSUE_COMMENTS}} prompt block (Issue #745).
-
-    Only trusted authors enter the task context — the same
-    `authorAssociation` trust set as the recovery-scene parser (Issue
-    #45; a public repo lets anyone comment, and an unfiltered injection
-    would be a prompt-injection surface). The input order is preserved
-    (oldest first, the natural timeline read). Over `limit` the OLDEST
-    trusted comments are dropped — the newest carry the latest decision
-    — and the omission is stated inside the block: the agent must know
-    it did not see the full history, never a silent truncation. Zero
-    trusted comments produce an explicit marker, not an empty string.
-    """
-    trusted = [
-        comment for comment in comments if _comment_is_trusted(comment)
-    ]
-    kept = trusted[-limit:]
-    omitted = len(trusted) - len(kept)
-    if not kept:
-        return "(no trusted comments)"
-    lines = []
-    if omitted:
-        noun = "comment" if omitted == 1 else "comments"
-        lines.append(
-            f"({omitted} older trusted {noun} omitted; showing the "
-            f"{len(kept)} most recent)"
-        )
-    for comment in kept:
-        author = comment.get("author")
-        login = author.get("login") if isinstance(author, dict) else None
-        lines.append(
-            f"- {login or 'unknown'} "
-            f"({comment.get('authorAssociation') or '-'}) "
-            f"at {comment.get('createdAt') or '-'}:\n\n"
-            f"{str(comment.get('body') or '').rstrip()}"
-        )
-    return "\n\n".join(lines)
-
-
-def new_run_id() -> str:
-    """Return a unique short run identifier for one task attempt."""
-    return uuid.uuid4().hex[:8]
-
-
-def issue_context(source_repo: str, number: int) -> str:
-    """Issue reference used on every journal line: `owner/repo#number`."""
-    return f"{source_repo}#{number}"
-
-
-def log_format() -> str:
-    """Journal log format without a Python timestamp (Issue #40).
-
-    systemd journal already provides time, host and process on every
-    line; printing `%(asctime)s` again only duplicates information.
-    """
-    return "%(levelname)s %(message)s"
-
-
-def freeze_base(repo_dir: Path, base_branch: str) -> str:
-    """Fetch the remote and freeze the exact SHA of origin/<base_branch>.
-
-    The fetch runs under the base-sync lock (Issue #171): it updates
-    the shared remote-tracking ref, so it must not race the other
-    Runner/Pi fetches on that ref.
-    """
-    fetch_base_ref(repo_dir, base_branch)
-    return run_command(
-        ["git", "rev-parse", f"origin/{base_branch}"], cwd=repo_dir,
-    )
-
-
-def task_branch(source_repo: str, number: int, run_id: str | None = None) -> str:
-    """Return the stable remote delivery identity for one Issue.
-
-    ``run_id`` remains accepted for callers and compatibility, but is not
-    part of the branch identity: retries must converge on one GitHub branch
-    and therefore one open PR.
-    """
-    return f"orbi/{source_repo.replace('/', '-')}-issue-{number}"
-
-
 def claim_route(labels: set[str], *, branch_exists: bool,
                 open_pr: bool, ready_label: str = READY_LABEL) -> str:
     """Choose the fresh-claim action from the physical GitHub scene.
@@ -3030,32 +2258,6 @@ def claim_route(labels: set[str], *, branch_exists: bool,
     # An existing branch without an open PR is resumed by implementation;
     # a missing branch is the same implementation path.
     return "implement"
-
-
-def stable_branch_exists(repo_dir: Path, branch: str) -> bool:
-    """Return whether the stable delivery branch exists on origin."""
-    raw = run_command(
-        ["git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
-        cwd=repo_dir, timeout=GIT_NETWORK_TIMEOUT_SECONDS,
-    )
-    return bool(raw.strip())
-
-
-def open_pr_for_branch(repo_dir: Path, branch: str) -> dict | None:
-    """Return the sole open PR for a branch, or None when absent."""
-    raw = run_gh_read_command([
-        "gh", "pr", "list", "--state", "open", "--head", branch,
-        "--json", "number,url,baseRefName,headRefName,headRefOid",
-        "--limit", "2",
-    ], cwd=repo_dir, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
-    prs = json.loads(raw) if raw.strip() else []
-    if not isinstance(prs, list):
-        raise RuntimeError("open PR query must return an array")
-    if len(prs) > 1:
-        raise RuntimeError(
-            f"multiple open PRs for stable delivery branch {branch}"
-        )
-    return prs[0] if prs else None
 
 
 # Issue #608: the triage workflow embeds this hidden marker in the bug
@@ -3115,14 +2317,6 @@ def external_takeover_pr(repo_dir: Path, body: str | None,
         number, pr.get("headRefName"),
     )
     return pr
-
-
-def _run_info_fields(run_info: str) -> dict[str, str]:
-    """Extract the runner-owned key/value fields for comment rendering."""
-    return dict(
-        part.split("=", 1) for part in run_info.split()
-        if "=" in part
-    )
 
 
 def started_pi_comment_body(run_id: str, run_info: str, branch: str,
@@ -3217,77 +2411,6 @@ def parse_pr_comment(body: str) -> dict | None:
     # required-field check: its absence is normal, never an error.
     scene["external"] = fields.get("external", "")
     return scene
-
-
-def _authenticated_github_login() -> str:
-    """Return the login represented by the active ``gh`` credential.
-
-    ``gh api installation`` is unavailable with installation tokens, while
-    ``gh auth status`` reports the account selected in gh's credential store.
-    Read that local status instead of guessing a bot name or making an API
-    request that cannot identify this credential shape.
-    """
-    try:
-        # The comments being verified come from github.com.  Restrict the
-        # status query to that host so an active account on another configured
-        # GitHub Enterprise host cannot be mistaken for this credential.
-        status = run_gh_read_command([
-            "gh", "auth", "status", "--hostname", "github.com",
-        ])
-    except Exception as exc:
-        raise ValueError(
-            "GitHub identity resolution failed: `gh auth status` could not "
-            f"read the active account: {exc}; run `gh auth login` or fix "
-            "the GitHub credentials"
-        ) from exc
-
-    account: str | None = None
-    active_account: str | None = None
-    for line in status.splitlines():
-        match = re.search(r"\baccount\s+(\S+)", line)
-        if match:
-            account = match.group(1)
-        if re.search(r"Active account:\s*true\b", line, re.IGNORECASE):
-            if account:
-                active_account = account
-
-    if not active_account:
-        raise ValueError(
-            "GitHub identity resolution failed: `gh auth status` did not "
-            "report an active account; run `gh auth login` or select an "
-            "active github.com account with `gh auth switch`"
-        )
-    return active_account
-
-
-def _strip_bot_suffix(login: str) -> str:
-    """Drop the optional ``[bot]`` suffix from an App login.
-
-    ``gh issue view --json comments`` reads comments through GraphQL and
-    reports ``author.login`` without the ``[bot]`` suffix, while REST's
-    ``user.login`` keeps it (Issue #655). Both shapes name the same App
-    credential, so the suffix is normalized away before comparison.
-    """
-    return login[:-5] if login.endswith("[bot]") else login
-
-
-def _comment_is_trusted(comment: object) -> bool:
-    """True when the comment is from a maintainer or this runner's App bot."""
-    if not isinstance(comment, dict):
-        return False
-    if comment.get("authorAssociation") in TRUSTED_COMMENT_ASSOCIATIONS:
-        return True
-    author = comment.get("author")
-    login = author.get("login") if isinstance(author, dict) else None
-    if not isinstance(login, str):
-        return False
-    # A copied run marker is not sufficient: the author must be the account
-    # represented by the currently authenticated installation token. The
-    # optional `[bot]` suffix is normalized on both sides because GraphQL
-    # drops it and REST keeps it (Issue #655).
-    return _strip_bot_suffix(login) == _strip_bot_suffix(
-        _authenticated_github_login()
-    )
 
 
 def resume_scene(comments: list[dict]) -> dict:
@@ -3684,11 +2807,7 @@ def advance_active_milestone_on_idle(
     *, auto_next_milestone: bool = True,
 ) -> tuple[str, str | None]:
     """Check and advance a configured milestone after no_ready_issue."""
-    raw = run_gh_read_command([
-        "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
-        "--paginate", "--slurp",
-    ], timeout=30)
-    milestones = parse_paginated_issue_array(raw)
+    milestones = list_milestones(repo, timeout=30)
     matches = [
         milestone for milestone in milestones
         if isinstance(milestone, dict)
@@ -3884,131 +3003,6 @@ def _pick_issue_with_repo_policy(
     return pick_issue(repo, milestone, dispatch_label=dispatch_label)
 
 
-def worktree_path(repo_dir: Path, source_repo: str, number: int,
-                  run_id: str) -> Path:
-    """Task worktrees live in the configured repo's .worktrees/ directory."""
-    slug = source_repo.replace("/", "-")
-    return (
-        repo_dir / ".worktrees"
-        / f"orbi-{slug}-issue-{number}-{run_id}"
-    )
-
-
-def create_worktree(repo_dir: Path, source_repo: str, number: int,
-                    run_id: str, base_sha: str,
-                    existing: Path | None = None,
-                    existing_branch: bool = False,
-                    branch: str | None = None) -> Path:
-    """Create the task worktree from the frozen base SHA, never HEAD.
-
-    An existing path is reused: only a resumed run (same run id after a
-    process restart) reaches that state, and its worktree is the scene
-    the run continues in (Issue #18). `existing` is the VERIFIED resume
-    scene (Issue #219): after a repo rename the scene's path carries
-    the OLD slug, so the derived path would miss it and a second
-    worktree would be created — the verified scene is returned as-is.
-
-    `branch` overrides the stable delivery branch name: an EXTERNAL
-    takeover (Issue #608) checks out the contributor's own head branch,
-    the identity the takeover PR is frozen on. With `existing_branch`
-    the named branch is fetched and reused (a local branch is reused
-    with `--force`, never a second `-b` — the exit-255 claim failure of
-    Issue #608); without it the branch is created from the frozen base.
-
-    A local branch that already exists (the orphan a SIGKILLed run
-    leaves with no worktree and no remote counterpart, Issue #662) is
-    reused as-is rather than re-created with `-b`: git exits 255 on an
-    existing branch, which used to burn the re-claimed Issue into
-    terminal `ai-blocked`.
-    """
-    if existing is not None and existing.is_dir():
-        return existing
-    path = worktree_path(repo_dir, source_repo, number, run_id)
-    if path.exists():
-        return path
-    branch = branch or task_branch(source_repo, number, run_id)
-    if existing_branch:
-        # The branch is the delivery identity.  Fetch it, then create the
-        # run-isolated worktree from its remote HEAD rather than the base.
-        run_git_network_command(
-            ["git", "fetch", "origin", branch], cwd=repo_dir,
-        )
-        local = run_command(
-            ["git", "branch", "--list", branch], cwd=repo_dir,
-        )
-        if local.strip():
-            run_command([
-                "git", "worktree", "add", "--force", str(path), branch,
-            ], cwd=repo_dir)
-        else:
-            run_command([
-                "git", "worktree", "add", "-b", branch, str(path),
-                f"origin/{branch}",
-            ], cwd=repo_dir)
-    else:
-        # Issue #662 (the #655 incident): a SIGKILLed run can leave the
-        # stable branch behind with no worktree and no remote counterpart
-        # (a pure orphan).  `worktree add -b` cannot re-create it — git
-        # exits 255 (`fatal: a branch named ... already exists`) and the
-        # claim used to be burned into terminal `ai-blocked`.  The branch
-        # is the delivery identity, so a local one is reused as-is; only
-        # a missing branch is created from the frozen base SHA.
-        local = run_command(
-            ["git", "branch", "--list", branch], cwd=repo_dir,
-        )
-        if local.strip():
-            run_command([
-                "git", "worktree", "add", str(path), branch,
-            ], cwd=repo_dir)
-        else:
-            run_command([
-                "git", "worktree", "add", "-b", branch, str(path), base_sha,
-            ], cwd=repo_dir)
-    return path
-
-
-def create_release_worktree(repo_dir: Path, source_repo: str, number: int,
-                            run_id: str, release_commit: str) -> Path:
-    """Prepare the release worktree at this attempt's verified commit.
-
-    Release worktrees have no resumable session semantics.  A failed release
-    may leave the stable branch checked out in an older, run-specific
-    worktree, so reusing ``create_worktree(..., existing_branch=True)`` would
-    incorrectly preserve that old position.  Find that worktree when it is
-    registered, otherwise create one from the local stable branch (or the
-    release commit), then hard-reset it to the commit whose gates just passed.
-    """
-    branch = task_branch(source_repo, number, run_id)
-    listing = run_command(
-        ["git", "worktree", "list", "--porcelain"], cwd=repo_dir,
-    )
-    current_path: Path | None = None
-    current_branch = f"branch refs/heads/{branch}"
-    for block in listing.split("\n\n"):
-        lines = block.splitlines()
-        if current_branch in lines and lines:
-            current_path = Path(lines[0].removeprefix("worktree "))
-            break
-    if current_path is None:
-        local = run_command(
-            ["git", "branch", "--list", branch], cwd=repo_dir,
-        )
-        if local.strip():
-            current_path = worktree_path(
-                repo_dir, source_repo, number, run_id,
-            )
-            run_command([
-                "git", "worktree", "add", "--force", str(current_path),
-                branch,
-            ], cwd=repo_dir)
-        else:
-            current_path = create_worktree(
-                repo_dir, source_repo, number, run_id, release_commit,
-            )
-    run_command(["git", "reset", "--hard", release_commit], cwd=current_path)
-    return current_path
-
-
 def run_state_path(worktree: Path) -> Path:
     """The run state file of one task worktree (Issue #219).
 
@@ -4194,25 +3188,6 @@ def resume_run_id(repo_dir: Path, source_repo: str,
     return scene[0] if scene is not None else None
 
 
-def latest_run_id(repo_dir: Path, source_repo: str, number: int) -> str | None:
-    """Return the run id of the newest task worktree for the issue.
-
-    The worktree directory name carries the run id — the state the
-    release state machine (Issue #98) reuses to resume the same run
-    after a restart. Development runs use the stricter state-file
-    discovery (`worktree_resume_scene`, Issue #219) instead.
-    """
-    slug = source_repo.replace("/", "-")
-    pattern = f".worktrees/orbi-{slug}-issue-{number}-*"
-    candidates = [
-        path for path in repo_dir.glob(pattern) if path.is_dir()
-    ]
-    if not candidates:
-        return None
-    newest = max(candidates, key=lambda path: path.stat().st_mtime)
-    return newest.name.rsplit("-", 1)[-1]
-
-
 def _tree_size(path: Path) -> int:
     """The byte size of one worktree tree (informational `freed=` field).
 
@@ -4269,7 +3244,7 @@ def reclaim_released_worktrees(config: RunnerConfig, *,
     }
     # (slug, issue number, path) per orbi-named registered worktree.
     candidates: list[tuple[str, int, Path]] = []
-    active = _ACTIVE_RUN or {}
+    active = journal.active_run() or {}
     listing = run_command(
         ["git", "worktree", "list", "--porcelain"], cwd=repo_dir,
     )
@@ -4351,36 +3326,6 @@ def reclaim_released_worktrees(config: RunnerConfig, *,
         freed += size
     if removed:
         LOGGER.info("worktree_reclaimed count=%d freed=%d", removed, freed)
-
-
-def has_in_progress_label(number: int, repo: str) -> bool:
-    """True when the Issue still carries `ai-in-progress`.
-
-    The label is added at claim time and removed only by the success or
-    failure path, so it is the marker of a run that is (or was, when
-    the runner died) in flight — as opposed to the preserved worktrees
-    of completed runs (Issue #18).
-
-    Read via `gh issue view` — a direct, strongly consistent read. The
-    pre-#658 implementation used `gh issue list --search`, the same
-    eventually-consistent index the pickup scan reads, so it could not
-    see a label another instance added seconds ago — exactly the moment
-    this check exists to catch (the pre-claim race guard).
-    """
-    raw = run_gh_read_command([
-        "gh", "issue", "view", str(number), "--repo", repo,
-        "--json", "labels",
-    ])
-    details = json.loads(raw)
-    if not isinstance(details, dict):
-        raise ValueError("issue view must return a JSON object")
-    labels = details.get("labels")
-    if not isinstance(labels, list):
-        raise ValueError("issue view labels must be a JSON array")
-    return any(
-        isinstance(label, dict) and label.get("name") == IN_PROGRESS_LABEL
-        for label in labels
-    )
 
 
 def _another_live_runner(slot_dir: Path, max_concurrency: int) -> bool:
@@ -4522,7 +3467,7 @@ def process_ticket_only(issue: dict, config: RunnerConfig, source_repo: str) -> 
                   f"Orbi ticket-only delivery (run_id={run_id}):\n\n"
                   f"{output}"),
         )
-        run_command(["gh", "issue", "close", str(number), "--repo", source_repo])
+        close_issue(int(number), repo=source_repo)
         # The ticket-only delivery never enters the PR/review states: it
         # clears the claim label directly (no `ai-merged` terminal state —
         # the Issue is closed, not merged).
@@ -5277,11 +4222,8 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
     # stays on the branch for the human) and BEFORE the PR creation.
     # `gh issue view` is a direct, strongly consistent read — the same
     # property `has_in_progress_label` relies on.
-    raw = run_gh_read_command([
-        "gh", "issue", "view", str(issue), "--repo", source_repo,
-        "--json", "state",
-    ], cwd=worktree, timeout=30)
-    details = json.loads(raw)
+    details = issue_view(issue, "state", repo=source_repo,
+                         cwd=worktree, timeout=30)
     state = details.get("state") if isinstance(details, dict) else None
     if state not in ("OPEN", "CLOSED"):
         raise ValueError("issue view state must be OPEN or CLOSED")
@@ -5771,10 +4713,7 @@ def _raise_if_preexisting_ci_failure(
     """Raise a fast, explicit error when base has the same failed check."""
     if not base_commit:
         return
-    base_checks = json.loads(run_gh_read_command([
-        "gh", "api", f"repos/{repo}/commits/{base_commit}/check-runs",
-        "--jq", ".check_runs",
-    ]))
+    base_checks = commit_check_runs(repo, base_commit)
     base_failures = {
         check.get("name") for check in base_checks
         if check.get("status") == "completed"
@@ -5800,10 +4739,7 @@ def check_review_ci(repo: str, commit: str, *, wait_seconds: float) -> str:
     wait configuration and cadence.
     """
     def fetch() -> list[dict]:
-        return json.loads(run_gh_read_command([
-            "gh", "api", f"repos/{repo}/commits/{commit}/check-runs",
-            "--jq", ".check_runs",
-        ]))
+        return commit_check_runs(repo, commit)
 
     waited = 0.0
     check_runs = fetch()
@@ -5884,13 +4820,10 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             f"remote base origin/{base_branch}; absorb the latest base, rerun "
             "tests and review, then retry"
         )
-    view_command = [
-        "gh", "pr", "view", str(pr["number"]),
-        "--json", "state,mergeable,headRefOid,statusCheckRollup",
-    ]
-
     def fetch_state() -> dict:
-        return json.loads(run_gh_read_command(view_command, cwd=worktree))
+        return pr_view(pr["number"],
+                       "state,mergeable,headRefOid,statusCheckRollup",
+                       cwd=worktree)
 
     def check_rollup(state: dict) -> tuple[list[str], list[str]]:
         rollup = state.get("statusCheckRollup") or []
@@ -5996,11 +4929,7 @@ def confirm_merged(worktree: Path, pr: dict, base_branch: str,
     under the base-sync lock (Issue #171) with the deployment checkout
     as the lock location.
     """
-    raw = run_gh_read_command([
-        "gh", "pr", "view", str(pr["number"]),
-        "--json", "state,mergedAt,mergeCommit",
-    ], cwd=worktree)
-    state = json.loads(raw)
+    state = pr_view(pr["number"], "state,mergedAt,mergeCommit", cwd=worktree)
     if state.get("state") != "MERGED" or not state.get("mergedAt"):
         LOGGER.error("confirm_merged_not_merged pr=%s state=%s",
                      pr["number"], state.get("state"))
@@ -6105,12 +5034,7 @@ def log_recovery_ci_status(pr: dict, repo: str) -> None:
     whether the recovered review runs (Issue #79).
     """
     try:
-        checks = json.loads(run_gh_read_command([
-            "gh", "api", f"repos/{repo}/commits/{pr['head_oid']}/check-runs",
-            "--jq", ".check_runs",
-        ]))
-        if not isinstance(checks, list):
-            raise ValueError("PR check-runs response must be an array")
+        checks = commit_check_runs(repo, pr["head_oid"])
         summary = [
             f"{check.get('name', '?')}={check.get('status', '?')}/"
             f"{check.get('conclusion', '?')}"
@@ -6125,313 +5049,6 @@ def log_recovery_ci_status(pr: dict, repo: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Editable CLI install refresh (Issue #158)
-# ---------------------------------------------------------------------------
-#
-# The official local deployment is the EDITABLE uv tool install (Issue
-# #152): the tool env imports the runtime package directly from the
-# deployment checkout through a setuptools editable finder. Since the
-# src layout (Issue #168) the finder maps the WHOLE package directory
-# `src/orbi/` — a newly added package module needs NO reinstall
-# (the #158 stale-module-list incident class is gone at the root). The
-# remaining packaging inputs come from the checkout's `pyproject.toml`
-# (entry points, version, dependencies): when THEY change the installed
-# tool env is STALE and the next CLI process can die before the Runner
-# starts (the #158 incident shape: `cli_source` merged to main, the
-# installed finder still mapped the pre-#152 module set, the systemd
-# start failed).
-#
-# This section refreshes the editable install at the Runner start,
-# BEFORE any slot or claim:
-#
-# - the packaging fingerprint (sha256 of the checkout's
-#   `pyproject.toml` — the packaging input that decides the editable
-#   metadata) is compared against the fingerprint of the LAST
-#   successful install, stored in the shared state dir
-#   (`.orbi/cli-install.json` — the same gitignored dir as
-#   `base-sync.lock` and the slots, which survives the
-#   `git merge --ff-only` checkout sync). It is NOT a second release
-#   state: it only records which packaging input the installed tool
-#   env was built from;
-# - unchanged: NO uv call at all (no per-tick reinstall);
-# - changed, or no state yet (first install): ONE lock-protected
-#   `uv tool install --force --reinstall --editable --python
-#   /usr/bin/python3 <repo_dir>` (the exact verified argv from
-#   `cli_source.reinstall_args`);
-# - two instances starting in the same tick: the SAME base-sync flock
-#   (the lock file the service template's `ExecStartPre` also takes)
-#   serializes them; the second instance re-reads the state UNDER the
-#   lock and reuses the first's result — no concurrent uv install, no
-#   corrupted tool env;
-# - a failing install fails fast with the structured
-#   `cli_install_failed` line (reason + the exact fix command) and
-#   records NO state (the next start retries).
-#
-# The implementation lives in `runner` itself (see the NOTE at the top
-# of this file): the bootstrap chain must stay loadable in a tool env
-# whose installed finder predates the packaging change. `cli_source` is
-# imported lazily inside `refresh_cli_install`: the reinstall argv is
-# the single cross-module dependency (Issue #152's verified command).
-
-CLI_INSTALL_LOGGER = logging.getLogger("orbi.cli_install")
-
-# The uv install timeout (seconds): a local editable build of this
-# zero-dependency package takes seconds; a hang (a wedged uv or a
-# full disk) must fail the start, never block it forever (Issue #95:
-# blocking commands carry a timeout).
-UV_INSTALL_TIMEOUT_SECONDS = 300
-
-# The base-sync lock: one home for the concurrency primitive — the
-# checkout sync, the ExecStartPre preflight and the CLI install
-# refresh all serialize on the SAME lock file.
-BASE_SYNC_LOCK_NAME = "base-sync.lock"
-
-
-class CliInstallError(RuntimeError):
-    """The editable CLI install refresh failed (fail fast)."""
-
-
-def base_sync_lock_path(repo_dir: Path) -> Path:
-    """The lock file serializing ALL writers of the deployment base
-    checkout and its tool env.
-
-    Two timer instances may start in the same tick, so the service
-    template's `ExecStartPre` wraps the fetch + fast-forward in a
-    short-lived `flock` on this SAME file, and the Python-side
-    checkout sync and the CLI install refresh take the same lock: the
-    main worktree and the tool env are never written concurrently.
-    The lock lives in the shared state dir (next to the slot files),
-    never in a per-process temp dir.
-
-    Issue #171 extended the same lock to EVERY fetch that updates the
-    shared remote-tracking ref ``refs/remotes/origin/<base>``: task
-    worktrees share the deployment checkout's common dir, so an
-    unlocked concurrent fetch (Runner verify/gate/confirm, the Pi
-    prompt-side fetch) races on that one ref and fails with
-    ``cannot lock ref ... is at <X> but expected <Y>``.
-    """
-    return Path(repo_dir) / ".orbi" / BASE_SYNC_LOCK_NAME
-
-
-def acquire_base_sync_lock(
-    repo_dir: Path, lock_timeout_seconds: float,
-) -> int:
-    """Take the base-sync flock; fail fast when it is still held after
-    the timeout. The kernel releases an flock when its holder exits,
-    so a dead holder can never wedge the lock."""
-    lock_path = base_sync_lock_path(repo_dir)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
-    deadline = time.monotonic() + lock_timeout_seconds
-    while True:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return fd
-        except (BlockingIOError, InterruptedError, PermissionError):
-            if time.monotonic() >= deadline:
-                os.close(fd)
-                CLI_INSTALL_LOGGER.error(
-                    "base_sync_lock_timeout repo_dir=%s lock=%s "
-                    "timeout_seconds=%s",
-                    repo_dir, lock_path, lock_timeout_seconds,
-                )
-                raise CliInstallError(
-                    f"could not take the base-sync lock {lock_path} "
-                    f"within {lock_timeout_seconds}s (another Runner "
-                    "instance or the ExecStartPre preflight is syncing "
-                    "the deployment checkout)"
-                ) from None
-            time.sleep(0.1)
-
-
-def fetch_base_ref(repo_dir: Path, base_branch: str,
-                   *, cwd: Path | None = None,
-                   lock_timeout_seconds: float = 300.0,
-                   command_runner: Callable[[list[str]], str] | None = None,
-                   ) -> None:
-    """Fetch ``origin/<base>`` under the base-sync lock (Issue #171).
-
-    Every command that updates the shared remote-tracking ref
-    ``refs/remotes/origin/<base>`` must run under the SAME lock in the
-    deployment checkout's shared state dir (the one the ExecStartPre
-    flock and ``sync_base_checkout`` use): worktrees share the common
-    dir, so an unlocked concurrent fetch races on the ref and fails
-    the session. ``repo_dir`` is the deployment checkout (the lock
-    location); ``cwd`` is where the fetch runs (the task worktree for
-    the Runner verify/gate/confirm paths, the checkout itself by
-    default). ``command_runner`` overrides the command executor (the
-    setup entry injects its own); by default the module's
-    ``run_command`` is used. A lock timeout or a fetch error fails
-    fast — no retry, no lock bypass.
-    """
-    if command_runner is None:
-        command_runner = run_command
-    fd = acquire_base_sync_lock(repo_dir, lock_timeout_seconds)
-    try:
-        run_git_network_command(
-            ["git", "fetch", "origin", base_branch],
-            cwd=cwd if cwd is not None else repo_dir,
-            command_runner=command_runner,
-        )
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
-
-
-def packaging_fingerprint(repo_dir: Path) -> str:
-    """The sha256 of the checkout's `pyproject.toml`.
-
-    `pyproject.toml` is the packaging input that decides the editable
-    metadata (the entry points, the version, the dependencies) — so
-    its content hash is the refresh trigger. Ordinary Python source
-    content is NOT part of it: since the src layout (Issue #168) the
-    editable finder maps the WHOLE `src/orbi/` package
-    directory, so a newly added package module needs no reinstall
-    (the whole point of the editable install, Issue #152). A checkout
-    without `pyproject.toml` cannot be tool-installed: fail fast,
-    never guess a fingerprint.
-    """
-    pyproject = Path(repo_dir) / "pyproject.toml"
-    if not pyproject.is_file():
-        raise CliInstallError(
-            f"packaging file missing: {pyproject} (the deployment "
-            "checkout must carry the packaging input of the editable "
-            "install)"
-        )
-    return hashlib.sha256(pyproject.read_bytes()).hexdigest()
-
-
-def install_state_path(repo_dir: Path) -> Path:
-    """The last-install fingerprint record in the shared state dir.
-
-    `<repo_dir>/.orbi/cli-install.json` — the EXISTING shared
-    state dir (gitignored, next to `base-sync.lock` and the slots;
-    it survives the `git merge --ff-only` checkout sync). Not a second
-    release state and not a per-process temp file.
-    """
-    return Path(repo_dir) / ".orbi" / "cli-install.json"
-
-
-def read_install_state(repo_dir: Path) -> str | None:
-    """The stored last-install fingerprint, or None.
-
-    Missing file (first install / fresh checkout) -> None. A
-    malformed file (a torn write) is treated as "no state" and heals
-    in the SAFE direction: one extra idempotent `--force
-    --reinstall` runs — never a wedged start.
-    """
-    path = install_state_path(repo_dir)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    fingerprint = data.get("pyproject_sha256") if isinstance(data, dict) else None
-    if not isinstance(fingerprint, str) or not fingerprint:
-        return None
-    return fingerprint
-
-
-def write_install_state(repo_dir: Path, fingerprint: str) -> None:
-    """Record the last-install fingerprint (atomic: tmp + replace).
-
-    Only called AFTER a successful install, under the base-sync flock
-    (no concurrent writer; the atomic replace guards a torn write on
-    a crash mid-install).
-    """
-    path = install_state_path(repo_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(
-        json.dumps({"pyproject_sha256": fingerprint}), encoding="utf-8",
-    )
-    os.replace(str(tmp), str(path))
-
-
-def refresh_cli_install(
-    repo_dir: Path, *, run_command,
-    lock_timeout_seconds: float = 300.0,
-    lock_repo_dir: Path | None = None,
-) -> str:
-    """Refresh the editable CLI install when the packaging inputs
-    changed; return `"unchanged"` or `"installed"`. ``repo_dir`` is
-    the checkout to install; ``lock_repo_dir`` optionally names the
-    shared deployment checkout whose base-sync lock also protects the
-    tool environment.
-
-    The pre-start gate (called by the Runner tick before any slot or
-    claim):
-
-    - the current packaging fingerprint equals the stored last-install
-      fingerprint -> `"unchanged"` and NO uv call (no per-tick
-      reinstall);
-    - otherwise (changed, or no state yet — the first install): take
-      the base-sync flock (the SAME lock the service template's
-      `ExecStartPre` and the checkout sync use), re-check the state
-      UNDER the lock (a concurrent instance may have refreshed while
-      we waited — reuse its result, never run a second install), run
-      the exact verified editable force reinstall from
-      `cli_source.reinstall_args`, and record the fingerprint only
-      after success.
-
-    A failing install logs the structured `cli_install_failed` line
-    (reason + the exact fix command) and raises `CliInstallError`:
-    the service does not start (fail fast), no state is recorded (the
-    next start retries) and the lock is released (success or
-    failure).
-    """
-    repo_dir = Path(repo_dir)
-    lock_repo_dir = (
-        Path(lock_repo_dir) if lock_repo_dir is not None else repo_dir
-    )
-    fingerprint = packaging_fingerprint(repo_dir)
-    if read_install_state(repo_dir) == fingerprint:
-        CLI_INSTALL_LOGGER.info(
-            "cli_install_unchanged repo_dir=%s pyproject_sha256=%s",
-            repo_dir, fingerprint,
-        )
-        return "unchanged"
-    fd = acquire_base_sync_lock(lock_repo_dir, lock_timeout_seconds)
-    try:
-        # Re-check UNDER the lock: a concurrent instance may have
-        # refreshed the tool env while we waited for the flock —
-        # reuse its result, never run a second install.
-        if read_install_state(repo_dir) == fingerprint:
-            CLI_INSTALL_LOGGER.info(
-                "cli_install_reused repo_dir=%s pyproject_sha256=%s",
-                repo_dir, fingerprint,
-            )
-            return "unchanged"
-        reason = "first_install" if (
-            read_install_state(repo_dir) is None
-        ) else "packaging_changed"
-        from orbi import cli_source  # lazy: the single cross-module dependency
-        try:
-            run_command(
-                cli_source.reinstall_args(repo_dir),
-                timeout=UV_INSTALL_TIMEOUT_SECONDS,
-            )
-        except Exception as exc:
-            CLI_INSTALL_LOGGER.error(
-                "cli_install_failed repo_dir=%s reason=%s fix=%s",
-                repo_dir, quote_value(str(exc)),
-                quote_value(cli_source.reinstall_command(repo_dir)),
-            )
-            raise CliInstallError(
-                f"editable CLI install failed for {repo_dir}: {exc} "
-                f"(fix: {cli_source.reinstall_command(repo_dir)})"
-            ) from exc
-        write_install_state(repo_dir, fingerprint)
-        CLI_INSTALL_LOGGER.info(
-            "cli_install_refreshed repo_dir=%s reason=%s "
-            "pyproject_sha256=%s",
-            repo_dir, reason, fingerprint,
-        )
-        return "installed"
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
-
-
 # Startup source freshness (Issue #525): the 2026-09-07 incident — the
 # editable install resolved into an OLD issue worktree while the
 # ExecStartPre preflight kept the deployment checkout fresh — showed
@@ -7141,99 +5758,6 @@ def _pr_head_repo(pr: dict) -> str:
     return f"{login}/{name}"
 
 
-
-
-# pytest's final summary line: `1 failed, 155 passed in 4.43s` (the
-# counts and the `in <seconds>` part are optional; the line is NOT
-# wrapped in `=` section padding).
-_Pytest_SUMMARY_RE = re.compile(
-    r"^\d+ (?:failed|passed|error|errors|skipped|xfailed|xpassed"
-    r"|deselected)(?:, \d+ \w+)*(?: in [\d.]+s)?$")
-
-
-def _is_section_header(line: str) -> bool:
-    """True for pytest section headers like `=== FAILURES ===`.
-
-    A header is `=`-delimited at both ends (padding may be absent on
-    one side for short titles) and its title carries no digits; the
-    real summary line (`1 failed, 155 passed in 4.43s`, bare or
-    `=`-padded) and the `FAILED`/`ERROR` evidence lines never match.
-    """
-    if not line.startswith("="):
-        return False
-    core = line.strip("=").strip()
-    return core == "" or not any(ch.isdigit() for ch in core)
-
-
-# A pytest summary line reports an outcome only when its FIRST count
-# category is failed/passed/error(s): pytest orders the counts
-# failed, passed, skipped, errors, xfailed, xpassed, deselected, so a
-# run that collected tests always leads with failed or passed (or a
-# collection error). `no tests ran in 0.01s` matches no summary regex
-# at all; `3 deselected in 0.02s` / `2 skipped in 0.01s` match but
-# carry no outcome — reporting them as a pass is a false notification
-# (review round 3, PR #42).
-_OUTCOME_FIRST_RE = re.compile(
-    r"^\d+ (?:failed|passed|error|errors)\b",
-)
-_NO_TESTS_RE = re.compile(r"no tests (?:ran|collected)")
-
-
-def _is_no_result(line: str) -> bool:
-    """True for pytest lines that verified nothing (no tests ran)."""
-    if _NO_TESTS_RE.search(line):
-        return True
-    stripped = line.strip("=").strip()
-    return bool(_Pytest_SUMMARY_RE.match(stripped)) \
-        and not _OUTCOME_FIRST_RE.match(stripped)
-
-
-def read_test_result(worktree: Path) -> str | None:
-    """Summarize the worktree's `.orbi/test.log`, or None when it does
-    not exist (Issue #302: the contract test command writes the log
-    into the excluded run dir, never at the worktree root).
-
-    Prefers the pytest summary line (`1 failed, 155 passed in 4.43s`):
-    the LAST one with an outcome when the log holds several runs (TDD
-    red, then green), so the progress comment and the `tests
-    passed/failed` milestone report the most recent run that actually
-    collected tests. Section headers (`=== FAILURES ===`) are never
-    reported: the fallback takes the first `FAILED`/`ERROR` evidence
-    line or the last non-empty line instead, and a log holding nothing
-    but headers yields None (no result info to report). Lines that
-    verified nothing (`no tests ran`, `N deselected`, `N skipped`) are
-    never reported either: a run that collected no tests is no result,
-    and posting `tests passed` for it is a false notification (review
-    round 3, PR #42).
-    """
-    path = worktree / ".orbi" / "test.log"
-    if not path.is_file():
-        return None
-    text = path.read_text(encoding="utf-8", errors="replace")
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    for line in reversed(lines):
-        # The summary line is bare in pytest 9; some runners wrap it in
-        # `=` padding, so the stripped form is matched as well.
-        stripped = line.strip("=").strip()
-        if _Pytest_SUMMARY_RE.match(line) \
-                or _Pytest_SUMMARY_RE.match(stripped):
-            if _is_no_result(line):
-                # No tests collected in this run: keep looking for an
-                # earlier run that did (or report nothing at all).
-                continue
-            return sanitize(stripped)
-    for line in lines:
-        if _is_section_header(line) or _is_no_result(line):
-            continue
-        if line.startswith(("FAILED", "ERROR")) or "passed" in line:
-            return sanitize(line)
-    last = lines[-1] if lines else None
-    if last is not None and (_is_section_header(last)
-                             or _is_no_result(last)):
-        return None
-    return sanitize(last) if last is not None else None
-
-
 def delivery_head_advanced(worktree: Path, base_sha: str) -> bool:
     """True when the task branch has commits beyond the frozen base."""
     head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
@@ -7299,62 +5823,6 @@ def _human_review_column2(worktree: Path, config: RunnerConfig) -> list[str]:
         changed_files=delivered_changed_files(worktree, base),
         test_command=config.test_command,
     )["column2"]
-
-
-def _progress_state(*, issue: int, title: str, run_id: str, role: str,
-                    branch: str, worktree: Path, started: float,
-                    pr_url: str | None, review_round: int, priority: str,
-                    activity: dict | None = None) -> dict:
-    """Collect the current run state for the GitHub progress comment.
-
-    `title` is the issue's GitHub title (Issue #100): the progress
-    comment's issue line shows `#<number> <title>` in every scene. It
-    is required — the GitHub issue data contract guarantees a
-    non-empty string title (every runner scan fetches it), and a
-    missing title fails fast in `progress.issue_field` instead of
-    fabricating one.
-    `priority` is the pickup priority of the issue (`p0` or `normal`,
-    Issue #101), derived from the issue's labels at claim/resume time.
-    `activity` is the live state from the `stream_pi` watcher while a Pi
-    session runs (fresh and already read); without it the newest session
-    file is full-scanned. Activity snapshotting is best-effort
-    observability: a read failure is logged and reported as "no session
-    yet", it never blocks the task.
-    """
-    if activity is None:
-        try:
-            activity = activity_snapshot(worktree / ".pi-session")
-        except Exception:
-            LOGGER.exception("issue=%s activity snapshot failed", issue)
-            activity = None
-    return {
-        "run_id": run_id,
-        "issue": issue,
-        "issue_title": title,
-        "role": role,
-        "priority": priority,
-        "phase": (activity or {}).get("phase") or "starting",
-        "elapsed": format_elapsed(time.monotonic() - started),
-        "last_activity": (activity or {}).get("last_activity"),
-        "last_action": (activity or {}).get("action"),
-        "tests": read_test_result(worktree),
-        "review_round": review_round,
-        "branch": branch,
-        "pr": pr_url,
-        "session": (activity or {}).get("session_id"),
-        # Idle-stall recovery state (Issue #94): `term` / `kill` while
-        # the runner recovers a stalled session, absent/None otherwise
-        # (the body renders the line only while it is active).
-        "recovery": (activity or {}).get("recovery"),
-    }
-
-
-def _progress_body(state: dict, *, outcome: str | None = None) -> str:
-    """Render the progress body, optionally with a final outcome header."""
-    body = progress_body(state)
-    if outcome is None:
-        return body
-    return f"{outcome}\n\n{body}"
 
 
 def _publish_plan_milestone(publisher: ProgressPublisher, worktree: Path) -> None:
@@ -7553,29 +6021,6 @@ def _failure_evidence(worktree: Path | None, exc: BaseException) -> str:
         f"{session_file or '<unavailable>'}):\n{_fenced(session)}\n"
         f"\ntest_log_tail:\n{_fenced(test_log)}"
     )
-
-
-def _safe_publish(*, run_id: str, issue: int, source_repo: str,
-                  role: str, action: Callable[[], None]) -> None:
-    """Run one progress-publishing step as a pure bypass (Issue #79).
-
-    The main delivery path is claim -> worktree -> Pi -> verify PR ->
-    review -> fix -> merge; the GitHub progress comment is observability
-    on the side. A publishing failure (404, rate limit, API shape
-    change) is logged as `progress_publish_failed` and never fails the
-    delivery, never marks the Issue `ai-blocked`, and never skips
-    `run_pi` / `wait_for_delivery`. This is the same semantics as the
-    in-stream live-PATCH callback; Issue #60 already applied it to the
-    post-PR record, Issue #79 extends it to the whole
-    `ProgressPublisher` path (ensure / milestone / finish).
-    """
-    try:
-        action()
-    except Exception:
-        LOGGER.exception(
-            "progress_publish_failed run=%s issue=%s role=%s",
-            run_id, issue_context(source_repo, issue), role,
-        )
 
 
 def _live_progress(publisher: ProgressPublisher, *, issue: int,
@@ -8401,67 +6846,6 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
         # the next tick's restart-resume scan recovers it — no crash
         # needed for either outcome.
         return IssueResult("failed", None)
-
-
-def _pr_number(pr_url: str) -> int:
-    """Extract the PR number from its URL (the last path segment)."""
-    return int(pr_url.rstrip("/").rsplit("/", 1)[-1])
-
-
-def pr_delivery_status(pr_url: str, source_repo: str) -> tuple[str, list[str]]:
-    """Return PR state and CI summaries for delivery-wait evidence."""
-    number = _pr_number(pr_url)
-    raw = run_gh_read_command([
-        "gh", "pr", "view", str(number), "--repo", source_repo,
-        "--json", "state,statusCheckRollup",
-    ])
-    data = json.loads(raw)
-    if not isinstance(data, dict):
-        raise ValueError("pr view must be a JSON object")
-    state = data.get("state")
-    if state not in ("OPEN", "MERGED", "CLOSED"):
-        raise ValueError(f"unexpected PR state: {state!r}")
-    rollup = data.get("statusCheckRollup")
-    if rollup is None:
-        rollup = []
-    if not isinstance(rollup, list):
-        raise ValueError("pr statusCheckRollup must be a JSON array")
-    summaries = []
-    for check in rollup:
-        if not isinstance(check, dict):
-            continue
-        name = check.get("name", check.get("context", "check"))
-        status = check.get("status", check.get("state", "UNKNOWN"))
-        conclusion = check.get("conclusion")
-        detail = str(status)
-        if conclusion:
-            detail += f"/{conclusion}"
-        summaries.append(f"{name}={detail}")
-    return state, summaries
-
-
-def pr_state(pr_url: str, source_repo: str) -> str:
-    """Return a PR's state from the configured source repository."""
-    return pr_delivery_status(pr_url, source_repo)[0]
-
-
-def issue_labels(number: int, repo: str) -> list[str]:
-    """Return the current label names of one Issue."""
-    raw = run_gh_read_command([
-        "gh", "issue", "view", str(number), "--repo", repo,
-        "--json", "labels",
-    ])
-    data = json.loads(raw)
-    if not isinstance(data, dict):
-        raise ValueError("issue view must be a JSON object")
-    labels = data.get("labels")
-    if not isinstance(labels, list):
-        raise ValueError("issue labels must be a JSON array")
-    names: list[str] = []
-    for label in labels:
-        if isinstance(label, dict) and isinstance(label.get("name"), str):
-            names.append(label["name"])
-    return names
 
 
 def _finish_progress_body(*, number: int, title: str, run_id: str,

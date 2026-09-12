@@ -35,6 +35,8 @@ from pathlib import Path
 import pytest
 
 import orbi.runner as runner
+from seam import seam
+import orbi.journal as journal
 
 REPO = "owner/repo"
 RENAME_OLD = "xqliu/orbi"
@@ -160,7 +162,7 @@ def clone(tmp_path: Path) -> Path:
 @pytest.fixture(autouse=True)
 def _reset_run_id(monkeypatch):
     """Each test starts without a bound run id."""
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
 
 
 def install_fake_pi(monkeypatch, tmp_path: Path, script: str) -> None:
@@ -277,7 +279,7 @@ def install_fake_gh(monkeypatch, comments: list[str],
             raise AssertionError(f"unexpected gh command: {command}")
         return real_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     return fake_run
 
 
@@ -324,7 +326,7 @@ def run_first_attempt(monkeypatch, tmp_path: Path, clone: Path,
     """
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI_INTERRUPTED)
     install_fake_gh(monkeypatch, comments, labels)
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     real_edit_issue = runner.edit_issue
 
     def claiming_edit(number, **kwargs):
@@ -339,7 +341,7 @@ def run_first_attempt(monkeypatch, tmp_path: Path, clone: Path,
             return
         raise AssertionError("kill simulation: label edit must not land")
 
-    monkeypatch.setattr(runner, "edit_issue", claiming_edit)
+    monkeypatch.setattr(seam, "edit_issue", claiming_edit)
     # Issue #239: the failure path runs (the `claiming_edit` above
     # suppresses its label transition, simulating the kill) and
     # `process_issue` returns `None` instead of re-raising.
@@ -347,7 +349,7 @@ def run_first_attempt(monkeypatch, tmp_path: Path, clone: Path,
                                                     source_repo),
                                 source_repo).kind == "failed"
     # The runner is back: label transitions work again.
-    monkeypatch.setattr(runner, "edit_issue", real_edit_issue)
+    monkeypatch.setattr(seam, "edit_issue", real_edit_issue)
     worktree = worktree_for(clone, source_repo, "a1b2c3d4")
     assert worktree.is_dir()
     assert "ai-in-progress" in labels[ISSUE_NUMBER]
@@ -375,7 +377,7 @@ def test_e2e_restart_continues_on_the_uncommitted_work(
     caplog.set_level("INFO")
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI_CONTINUE)
     install_fake_gh(monkeypatch, comments, labels)
-    monkeypatch.setattr(runner, "new_run_id", lambda: "b2c3d4e5")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "b2c3d4e5")
     result = runner.process_issue(
         issue(), config_for(clone, tmp_path, REPO), REPO,
     )
@@ -434,7 +436,7 @@ def test_e2e_repo_rename_finds_the_old_worktree_by_issue_and_name(
     caplog.set_level("INFO")
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI_CONTINUE)
     install_fake_gh(monkeypatch, comments, labels)
-    monkeypatch.setattr(runner, "new_run_id", lambda: "b2c3d4e5")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "b2c3d4e5")
     result = runner.process_issue(
         issue(), config_for(clone, tmp_path, RENAME_NEW), RENAME_NEW,
     )
@@ -479,7 +481,7 @@ def test_e2e_missing_run_state_fails_fast_without_a_fresh_run(
     caplog.set_level("INFO")
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI_FRESH)
     install_fake_gh(monkeypatch, comments, labels)
-    monkeypatch.setattr(runner, "new_run_id", lambda: "b2c3d4e5")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "b2c3d4e5")
     with pytest.raises(RuntimeError, match="run state"):
         runner.process_issue(
             issue(), config_for(clone, tmp_path, REPO), REPO,
@@ -518,7 +520,7 @@ def test_e2e_corrupt_run_state_fails_fast_without_a_fresh_run(
     caplog.set_level("INFO")
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI_FRESH)
     install_fake_gh(monkeypatch, comments, labels)
-    monkeypatch.setattr(runner, "new_run_id", lambda: "b2c3d4e5")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "b2c3d4e5")
     with pytest.raises(RuntimeError, match="run state"):
         runner.process_issue(
             issue(), config_for(clone, tmp_path, REPO), REPO,
@@ -557,7 +559,7 @@ def test_e2e_claim_reuses_orphan_local_branch(
     caplog.set_level("INFO")
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI_DELIVERS)
     install_fake_gh(monkeypatch, comments, labels)
-    monkeypatch.setattr(runner, "new_run_id", lambda: "c3d4e5f6")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "c3d4e5f6")
 
     result = runner.process_issue(
         issue(), config_for(clone, tmp_path, REPO), REPO,

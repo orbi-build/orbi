@@ -28,6 +28,8 @@ import pytest
 
 from orbi import runner
 from orbi import runner_health
+from seam import seam
+import orbi.journal as journal
 
 # Captured at import time (before any monkeypatch): the conftest default
 # stubs `run_health_check` for the dispatch tests, and this module
@@ -1053,21 +1055,18 @@ def test_process_issue_pickup_record_failure_is_bypass(
     from tests.test_bootstrap_runner import _gh_api
     from tests.test_progress_wiring import make_fake_gh
 
-    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(
-        runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
     )
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     monkeypatch.setattr(
         runner, "deliver_pr",
         lambda *args, **kwargs: "https://github.com/orbi-build/orbi/pull/4",
     )
-    monkeypatch.setattr(
-        runner, "comment_issue", lambda *args, **kwargs: None,
+    monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None,
     )
     gh_calls, posted = make_fake_gh(monkeypatch)
 
@@ -1081,7 +1080,7 @@ def test_process_issue_pickup_record_failure_is_bypass(
             return "[]"
         return "0123456789abcdef0123456789abcdef01234567"
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(
         runner_health, "record_pickup",
         lambda repo_dir: (_ for _ in ()).throw(
@@ -1108,13 +1107,11 @@ def test_process_issue_failure_record_failure_is_bypass(
     from tests.test_bootstrap_runner import _gh_api
     from tests.test_progress_wiring import make_fake_gh
 
-    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(
-        runner, "create_worktree",
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree",
         Mock(side_effect=RuntimeError("git failed")),
     )
     monkeypatch.setattr(
@@ -1132,7 +1129,7 @@ def test_process_issue_failure_record_failure_is_bypass(
             return "[]"
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(
         runner_health, "record_run_attempt",
         lambda *args, **kwargs: (_ for _ in ()).throw(
@@ -1171,7 +1168,7 @@ def test_main_runs_the_health_check_every_tick(monkeypatch, tmp_path):
     monkeypatch.setattr(
         runner_health, "run_health_check", recording_health_check,
     )
-    monkeypatch.setattr(runner, "run_command", idle_tick_fake_run())
+    monkeypatch.setattr(seam, "run_command", idle_tick_fake_run())
     assert runner.main(["--config", str(tmp_path / "orbi.toml")]) == 0
     assert len(calls) == 1
     assert calls[0].repo_dir == tmp_path / "orbi"
@@ -1190,7 +1187,7 @@ def test_main_health_check_failure_never_fails_the_tick(
     monkeypatch.setattr(
         runner_health, "run_health_check", exploding_health_check,
     )
-    monkeypatch.setattr(runner, "run_command", idle_tick_fake_run())
+    monkeypatch.setattr(seam, "run_command", idle_tick_fake_run())
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(tmp_path / "orbi.toml")]) == 0
     assert "health_check_failed" in caplog.text

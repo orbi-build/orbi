@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from orbi.progress import quote_value
+from orbi.journal import quote_value
 
 MAX_SUMMARY_LENGTH = 200
 

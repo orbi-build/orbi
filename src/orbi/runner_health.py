@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orbi.delivery_labels import READY_LABEL
+from orbi.journal import RunIdFilter
 from orbi.progress import format_status_comment, run_marker
 from orbi.systemd_deploy import service_instances
 
@@ -49,6 +50,8 @@ if TYPE_CHECKING:
     from orbi.runner import RunnerConfig
 
 LOGGER = logging.getLogger("orbi.health")
+
+LOGGER.addFilter(RunIdFilter())
 
 STATE_FILENAME = "health.json"
 CRASH_WINDOW_MINUTES = 60

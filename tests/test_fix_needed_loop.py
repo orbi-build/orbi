@@ -16,6 +16,8 @@ import subprocess
 import pytest
 
 import orbi.runner as runner
+from seam import seam
+import orbi.journal as journal
 
 PR_URL = "https://github.com/owner/repo/pull/46"
 RUN_ID = "a1b2c3d4"
@@ -26,7 +28,7 @@ BRANCH = "orbi/owner-repo-issue-39"
 
 @pytest.fixture(autouse=True)
 def _reset_run_id(monkeypatch):
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
 
 
 def _scene_comments():
@@ -83,7 +85,7 @@ def make_wait_failure_fake(monkeypatch, *, labels=("ai-pr-opened",),
             return json.dumps({"comments": scene})
         return json.dumps({"labels": [{"name": name} for name in labels]})
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     return api_calls
 
 
@@ -231,12 +233,10 @@ def test_wait_for_delivery_recoverable_review_failure_stays_fix_needed(
     edits = []
     issue_comments = []
     pr_comments = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
     )
     monkeypatch.setattr(
@@ -250,7 +250,7 @@ def test_wait_for_delivery_recoverable_review_failure_stays_fix_needed(
         raise exc
 
     monkeypatch.setattr(runner, "review_and_merge_if_clean", failing_review)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", RUN_ID)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
     caplog.set_level("INFO")
     # The wait returns (the slot is released by the caller); the next
     # timer picks the ai-fix-needed Issue up on the same run/PR.
@@ -328,18 +328,17 @@ def test_wait_for_delivery_recoverable_failure_while_fix_needed_keeps_label(
         monkeypatch, labels=("ai-fix-needed",), progress_comments=[],
     )
     edits = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
-    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
 
     def failing_review(*args, **kwargs):
         raise RuntimeError("pi_exit_1: the review Pi failed")
 
     monkeypatch.setattr(runner, "review_and_merge_if_clean", failing_review)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", RUN_ID)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
     runner.wait_for_delivery(PR_URL, _issue(), _config(tmp_path), "owner/repo")
     # The current label set contains only ai-fix-needed, so the
     # idempotent transition adds it without inventing a remove for the
@@ -373,9 +372,8 @@ def test_wait_for_delivery_recoverable_failure_with_session_file_includes_sessio
     _write_session(worktree)
     make_wait_failure_fake(monkeypatch)
     issue_comments = []
-    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
     )
     monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
@@ -384,7 +382,7 @@ def test_wait_for_delivery_recoverable_failure_with_session_file_includes_sessio
         raise RuntimeError("pi_exit_3: the review Pi failed")
 
     monkeypatch.setattr(runner, "review_and_merge_if_clean", failing_review)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", RUN_ID)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
     runner.wait_for_delivery(PR_URL, _issue(), _config(tmp_path), "owner/repo")
     body = issue_comments[0][1]["body"]
     assert "session=sess-1" in body
@@ -406,12 +404,10 @@ def test_wait_for_delivery_recoverable_failure_scene_snapshot_failure_is_logged(
     make_wait_failure_fake(monkeypatch)
     issue_comments = []
     edits = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
     )
     monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
@@ -424,7 +420,7 @@ def test_wait_for_delivery_recoverable_failure_scene_snapshot_failure_is_logged(
 
     monkeypatch.setattr(runner, "review_and_merge_if_clean", failing_review)
     monkeypatch.setattr(runner, "activity_snapshot", failing_snapshot)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", RUN_ID)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
     caplog.set_level("INFO")
     runner.wait_for_delivery(PR_URL, _issue(), _config(tmp_path), "owner/repo")
     assert "activity scene failed" in caplog.text
@@ -454,12 +450,10 @@ def test_wait_for_delivery_recoverable_failure_without_bound_run_id(
     api_calls = make_wait_failure_fake(monkeypatch)
     issue_comments = []
     edits = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
     )
     monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
@@ -496,12 +490,10 @@ def test_wait_for_delivery_unrecoverable_failure_marks_blocked_with_reason(
     api_calls = make_wait_failure_fake(monkeypatch)
     edits = []
     issue_comments = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
     )
     monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
@@ -515,7 +507,7 @@ def test_wait_for_delivery_unrecoverable_failure_marks_blocked_with_reason(
         raise runner.ReviewRoundsExhausted(reason)
 
     monkeypatch.setattr(runner, "review_and_merge_if_clean", failing_review)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", RUN_ID)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
     caplog.set_level("INFO")
     runner.wait_for_delivery(PR_URL, _issue(), _config(tmp_path), "owner/repo")
 
@@ -563,15 +555,15 @@ def test_wait_for_delivery_real_unrecoverable_failure_keeps_traceback(
     (tmp_path / ".worktrees"
      / f"orbi-owner-repo-issue-39-{RUN_ID}").mkdir(parents=True)
     make_wait_failure_fake(monkeypatch)
-    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
 
     def failing_review(*args, **kwargs):
         raise runner.UnrecoverableDeliveryError("credential revoked")
 
     monkeypatch.setattr(runner, "review_and_merge_if_clean", failing_review)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", RUN_ID)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
     caplog.set_level("ERROR")
     runner.wait_for_delivery(PR_URL, _issue(), _config(tmp_path), "owner/repo")
 
@@ -603,12 +595,10 @@ def test_wait_for_delivery_base_branch_mismatch_marks_blocked_with_reason(
     )
     edits = []
     issue_comments = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: issue_comments.append((args, kwargs)),
     )
     monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: None)
@@ -617,7 +607,7 @@ def test_wait_for_delivery_base_branch_mismatch_marks_blocked_with_reason(
         runner, "review_and_merge_if_clean",
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", RUN_ID)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
     caplog.set_level("INFO")
     runner.wait_for_delivery(
         PR_URL, _issue(),
@@ -670,7 +660,7 @@ def test_verify_resumed_pr_diverged_pr_head_stays_fix_needed(
 
     monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
     caplog.set_level("INFO")
     with pytest.raises(
         RuntimeError, match="the branch diverged",
@@ -763,8 +753,8 @@ def test_verify_resumed_pr_local_ahead_of_pr_head_continues_to_review(
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "list"])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
     caplog.set_level("INFO")
     issue = make_resume_issue()
     issue["labels"] = [{"name": "ai-fix-needed"}]
@@ -808,7 +798,7 @@ def test_verify_resumed_pr_unrecoverable_failure_marks_blocked_with_reason(
 
     monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
     with pytest.raises(
         runner.UnrecoverableDeliveryError, match="not authorized",
     ):
@@ -853,7 +843,7 @@ def test_verify_resumed_pr_recoverable_failure_with_session_file_includes_sessio
         raise RuntimeError("the verified commit was not pushed")
 
     monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
     with pytest.raises(RuntimeError, match="not pushed"):
         runner.verify_resumed_pr(
             make_resume_scene(), make_resume_issue(),
@@ -887,7 +877,7 @@ def test_verify_resumed_pr_recoverable_failure_scene_snapshot_failure_is_logged(
 
     monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
     monkeypatch.setattr(runner, "activity_snapshot", failing_snapshot)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
     caplog.set_level("INFO")
     with pytest.raises(RuntimeError, match="not pushed"):
         runner.verify_resumed_pr(
@@ -921,7 +911,7 @@ def test_verify_resumed_pr_unrecoverable_failure_removes_leftover_fix_needed_lab
 
     monkeypatch.setattr(runner, "verify_pr", fake_verify_pr)
     expected_resume_worktree(tmp_path).mkdir(parents=True)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", FAKE_RUN_ID)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", FAKE_RUN_ID)
     with pytest.raises(
         runner.UnrecoverableDeliveryError, match="human decision",
     ):
@@ -942,8 +932,7 @@ def test_finish_progress_fix_needed_without_run_id_is_noop(monkeypatch):
     """Issue #50: the fix-needed progress scene is bound to the run id
     (the hidden marker); without one it is a no-op (no gh traffic)."""
     api_calls = []
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda *args, **kwargs: api_calls.append(args) or "",
     )
     assert runner._finish_progress(
@@ -973,12 +962,10 @@ def test_block_scene_failure_states_why_not_auto_recoverable(
     ]
     edits = []
     posted = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: posted.append(kwargs["body"]),
     )
     runner.block_scene_failure(
@@ -1018,8 +1005,7 @@ def test_review_rounds_after_human_recovery_ignores_old_run():
 
 
 def test_human_recovery_requires_blocked_removal_then_fix_needed(monkeypatch):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([
             {"event": "labeled", "label": {"name": "ai-blocked"},
              "created_at": "2026-01-01T00:00:00Z"},
@@ -1034,15 +1020,13 @@ def test_human_recovery_requires_blocked_removal_then_fix_needed(monkeypatch):
 
 
 def test_human_review_recovery_ignores_unrelated_label_history(monkeypatch):
-    monkeypatch.setattr(
-        runner, "run_command", lambda *a, **k: '{"event":"labeled"}\n',
+    monkeypatch.setattr(seam, "run_command", lambda *a, **k: '{"event":"labeled"}\n',
     )
     assert runner.human_review_recovery_at(39, "owner/repo") is None
 
 
 def test_human_review_recovery_requires_latest_blocked_removal(monkeypatch):
-    monkeypatch.setattr(
-        runner, "run_command", lambda *a, **k: json.dumps([
+    monkeypatch.setattr(seam, "run_command", lambda *a, **k: json.dumps([
             {"event": "unlabeled", "label": {"name": "ai-blocked"},
              "created_at": "2026-01-01T00:00:00Z"},
             {"event": "labeled", "label": {"name": "ai-blocked"},
@@ -1055,8 +1039,7 @@ def test_human_review_recovery_requires_latest_blocked_removal(monkeypatch):
 
 
 def test_human_review_recovery_skips_non_object_events(monkeypatch):
-    monkeypatch.setattr(
-        runner, "run_command", lambda *a, **k: "1\n",
+    monkeypatch.setattr(seam, "run_command", lambda *a, **k: "1\n",
     )
     assert runner.human_review_recovery_at(39, "owner/repo") is None
 
@@ -1064,8 +1047,7 @@ def test_human_review_recovery_skips_non_object_events(monkeypatch):
 def test_log_recovery_ci_status_logs_malformed_response_and_continues(
         monkeypatch, caplog,
 ):
-    monkeypatch.setattr(
-        runner, "run_command", lambda *a, **k: json.dumps({}),
+    monkeypatch.setattr(seam, "run_command", lambda *a, **k: json.dumps({}),
     )
     caplog.set_level("WARNING")
     runner.log_recovery_ci_status(
@@ -1075,8 +1057,7 @@ def test_log_recovery_ci_status_logs_malformed_response_and_continues(
 
 
 def test_log_recovery_ci_status_logs_only_check_summary(monkeypatch, caplog):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda *a, **k: json.dumps([]),
     )
     caplog.set_level("INFO")
@@ -1090,7 +1071,7 @@ def test_exhausted_review_enters_new_budget_after_human_recovery(
     monkeypatch, tmp_path,
 ):
     from tests.test_resume_pr import FAKE_RUN_ID
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [
         {"body": f"<!-- orbi:run=a1b2c3d4 -->\n"
                  f"Orbi review round {i} for PR #46: findings",
          "authorAssociation": "OWNER",
@@ -1105,7 +1086,7 @@ def test_exhausted_review_enters_new_budget_after_human_recovery(
     monkeypatch.setattr(runner, "freeze_pr",
                         lambda *a, **k: freezes.append(1) or frozen)
     monkeypatch.setattr(runner, "log_recovery_ci_status", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "_safe_publish", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "_safe_publish", lambda *a, **k: None)
     monkeypatch.setattr(
         runner, "run_review",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("review started")),
@@ -1128,8 +1109,7 @@ def test_review_rounds_exhausted_raises_unrecoverable(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "human_review_recovery_at", lambda *a: None)
     from tests.test_resume_pr import FAKE_RUN_ID
 
-    monkeypatch.setattr(
-        runner, "issue_comments",
+    monkeypatch.setattr(seam, "issue_comments",
         lambda number, repo: [
             {
                 "body": (

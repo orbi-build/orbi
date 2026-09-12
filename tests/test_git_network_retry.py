@@ -3,6 +3,7 @@ import subprocess
 import pytest
 
 import orbi.runner as runner
+import orbi.journal as journal
 
 
 def test_git_network_command_retries_transient_failure_then_succeeds(
@@ -50,7 +51,7 @@ def test_git_network_command_retries_bounded_timeouts_then_succeeds(
     ) == "ok"
     assert len(calls) == 3
     assert all(
-        call["timeout"] == runner.GIT_NETWORK_TIMEOUT_SECONDS
+        call["timeout"] == journal.GIT_NETWORK_TIMEOUT_SECONDS
         for call in calls
     )
     assert sleeps == [1, 2]
@@ -101,7 +102,7 @@ def test_git_network_command_does_not_retry_other_git_commands():
     error = subprocess.CalledProcessError(
         1, command, stderr="Connection timed out",
     )
-    assert not runner._is_retryable_git_network_failure(command, error)
+    assert not journal._is_retryable_git_network_failure(command, error)
 
 
 def test_git_network_command_does_not_retry_non_git_timeout(monkeypatch):

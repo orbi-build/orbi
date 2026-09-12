@@ -19,8 +19,11 @@ import pytest
 
 import orbi.runner as runner
 import orbi.release as release
+import orbi.github as github
 from orbi import pi_activity, pi_process, progress
 from tests.test_progress_wiring import make_fake_gh
+import orbi.journal as journal
+from seam import seam
 
 
 def test_runner_main_config_failure_is_one_structured_log_line(
@@ -63,7 +66,7 @@ def test_list_issues_builds_each_parameter_combination(monkeypatch):
         calls.append((command, kwargs))
         return json.dumps([{"number": 1}])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
 
     # state + search: the common ready/in-flight scan shape.
     assert runner.list_issues(
@@ -1385,7 +1388,7 @@ def test_run_command_logs_multiline_body_as_one_journal_line(
         "gh", "api", "repos/xqliu/orbi/issues/143/comments",
         "--method", "POST", "--field", f"body={body}",
     ]
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
     completed = Mock(stdout='{"id": 1}', stderr="")
     monkeypatch.setattr(runner.subprocess, "run", Mock(return_value=completed))
     with caplog.at_level("INFO"):
@@ -1426,7 +1429,7 @@ def test_pick_issue_uses_github_queue(monkeypatch):
             return json.dumps([])
         return json.dumps([issue])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.pick_issue("xqliu/orbi-backlog") == issue
     # Issue #101: the P0 scan runs first, then the bug scan (Issue
     # #71); with nothing in either queue the plain ready scan decides.
@@ -1511,8 +1514,7 @@ def test_pick_issue_skips_blocked_issue_and_claims_next(monkeypatch, caplog):
         "number": 55, "title": "free task", "body": "",
         "blockedBy": {"nodes": [], "totalCount": 0},
     }
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([blocked, ready]),
     )
     with caplog.at_level("INFO"):
@@ -1534,8 +1536,7 @@ def test_pick_issue_returns_none_when_all_ready_issues_blocked(
         "number": 2, "title": "b", "body": "",
         "blockedBy": {"nodes": [{"number": 8}], "totalCount": 1},
     }
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([blocked_a, blocked_b]),
     )
     with caplog.at_level("INFO"):
@@ -1554,8 +1555,7 @@ def test_pick_issue_claims_issue_whose_blocker_is_closed(monkeypatch):
             {"number": 31, "state": "CLOSED", "title": "done"},
         ], "totalCount": 1},
     }
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([issue]),
     )
     assert runner.pick_issue("xqliu/orbi") == issue
@@ -1566,8 +1566,7 @@ def test_pick_issue_claims_issue_with_empty_blocked_by(monkeypatch):
         "number": 54, "title": "free task", "body": "",
         "blockedBy": {"nodes": [], "totalCount": 0},
     }
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([issue]),
     )
     assert runner.pick_issue("xqliu/orbi") == issue
@@ -1581,8 +1580,7 @@ def test_pick_issue_stays_blocked_while_any_blocker_is_open(monkeypatch):
             {"number": 32, "state": "OPEN", "title": "pending"},
         ], "totalCount": 2},
     }
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([blocked]),
     )
     assert runner.pick_issue("xqliu/orbi") is None
@@ -1592,8 +1590,7 @@ def test_pick_issue_fails_open_when_blocked_by_field_missing(monkeypatch):
     # Older gh versions or a changed API shape omit the field: the
     # Issue must still be claimable (fail open, Issue #54).
     issue = {"number": 9, "title": "task", "body": "body"}
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([issue]),
     )
     assert runner.pick_issue("xqliu/orbi") == issue
@@ -1608,8 +1605,7 @@ def test_pick_issue_fails_open_when_blocked_by_query_fails(
     error = subprocess.CalledProcessError(
         1, ["gh"], output="boom", stderr="rate limited",
     )
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: (_ for _ in ()).throw(error),
     )
     # Issue #738: the read now retries the transient stderr; skip the
@@ -1645,7 +1641,7 @@ def test_pick_issue_scopes_all_three_ready_scans_to_active_milestone(
             return json.dumps([])
         return json.dumps([issue])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.pick_issue(
         "xqliu/orbi-backlog", active_milestone="v0.2.0",
     ) == issue
@@ -1739,8 +1735,7 @@ def test_pick_issue_keeps_epic_and_blocked_by_guards_with_milestone(
         "labels": [{"name": "ai-ready"}],
         "blockedBy": {"nodes": [], "totalCount": 0},
     }
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([epic, blocked, ready]),
     )
     with caplog.at_level("INFO"):
@@ -1761,8 +1756,7 @@ def test_pick_issue_fails_open_when_milestone_query_fails(
     error = subprocess.CalledProcessError(
         1, ["gh"], output="boom", stderr="rate limited",
     )
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: (_ for _ in ()).throw(error),
     )
     # Issue #738: the read now retries the transient stderr; skip the
@@ -1796,7 +1790,7 @@ def test_pick_issue_prefers_bug_labeled_issues(monkeypatch):
             return json.dumps([bug])
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.pick_issue("xqliu/orbi") == bug
     # The P0 scan ran first and found nothing; the bug scan found the
     # bug: the plain ready scan never ran.
@@ -1823,7 +1817,7 @@ def test_pick_issue_bug_scan_keeps_existing_exclusions(monkeypatch):
             return json.dumps([bug])
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.pick_issue("xqliu/orbi") == bug
     assert searches[0] == (
         "label:ai-ready label:p0 -label:ai-in-progress "
@@ -1853,7 +1847,7 @@ def test_pick_issue_falls_back_to_ready_scan_when_no_bug(monkeypatch):
             return json.dumps([])
         return json.dumps([feature])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.pick_issue("xqliu/orbi") == feature
     assert len(searches) == 3
     assert "label:p0" in searches[0]
@@ -1886,7 +1880,7 @@ def test_pick_issue_bug_blocked_by_open_blocker_falls_back(monkeypatch):
             return json.dumps([blocked_bug])
         return json.dumps([feature])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.pick_issue("xqliu/orbi") == feature
     assert len(searches) == 3
 
@@ -1896,8 +1890,7 @@ def test_pick_issue_bug_scan_failure_fails_open(monkeypatch, caplog):
     (Issue #54) — the tick claims nothing from this repo, the error is
     logged, never raised."""
     error = subprocess.CalledProcessError(1, ["gh"], output="boom")
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: (_ for _ in ()).throw(error),
     )
     with caplog.at_level("INFO"):
@@ -1937,7 +1930,7 @@ def test_pick_issue_prefers_p0_over_bug_and_plain(monkeypatch, caplog):
         # scan that runs) sees them all and must pick the P0.
         return json.dumps([p0, bug, feature])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert runner.pick_issue("xqliu/orbi") == p0
     # The P0 scan ran first and found the P0: the bug and plain ready
@@ -1968,7 +1961,7 @@ def test_pick_issue_p0_scan_keeps_existing_exclusions(monkeypatch):
         # exact exclusions.
         return json.dumps([p0])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.pick_issue("xqliu/orbi") == p0
     assert searches[0] == (
         "label:ai-ready label:p0 -label:ai-in-progress "
@@ -2029,7 +2022,7 @@ def test_release_issue_not_claimed_when_ordinary_delivery_exists(
         # fallback scan never runs (only three searches).
         return json.dumps([release, feature])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert runner.pick_issue("xqliu/orbi") == feature
     assert len(searches) == 3
@@ -2056,7 +2049,7 @@ def test_release_issue_claimed_when_no_ordinary_delivery(
             return json.dumps([release])
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert runner.pick_issue("xqliu/orbi") == release
     # Three ordinary scans + one release fallback scan.
@@ -2088,7 +2081,7 @@ def test_release_fallback_scoped_to_active_milestone(monkeypatch):
             return json.dumps([release])
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.pick_issue(
         "xqliu/orbi", active_milestone="v0.3.0",
     ) == release
@@ -2123,7 +2116,7 @@ def test_release_fallback_excludes_epic_and_blocked(
             return json.dumps([epic_release, blocked_release])
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert runner.pick_issue("xqliu/orbi") is None
     assert "epic_not_claimed" in caplog.text
@@ -2142,7 +2135,7 @@ def test_release_fallback_scan_failure_fails_open(monkeypatch, caplog):
             raise error
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert runner.pick_issue("xqliu/orbi") is None
     assert "blocked_by_check_failed" in caplog.text
@@ -2161,7 +2154,7 @@ def test_milestone_open_issue_count_reads_github_counter(monkeypatch):
         commands.append(command)
         return "3"
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.milestone_open_issue_count("xqliu/orbi", "v0.4.2") == 3
     assert commands == [[
         "gh", "api", "repos/xqliu/orbi/milestones",
@@ -2172,7 +2165,7 @@ def test_milestone_open_issue_count_reads_github_counter(monkeypatch):
 def test_milestone_open_issue_count_missing_milestone_raises(monkeypatch):
     """Issue #663: an empty result (the Milestone is gone) is a failed
     check, not a silent zero — the caller must never claim on it."""
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "")
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "")
     with pytest.raises(RuntimeError, match="v0.4.2"):
         runner.milestone_open_issue_count("xqliu/orbi", "v0.4.2")
 
@@ -2227,7 +2220,7 @@ def test_release_not_claimed_when_milestone_incomplete(monkeypatch, caplog):
     sees. The gate reads GitHub's own `open_issues` counter, so a
     temporarily un-claimable Issue (ai-blocked / ai-pr-opened / not yet
     indexed) can no longer let the release run ahead."""
-    monkeypatch.setattr(runner, "run_command", _release_scan_fake("3"))
+    monkeypatch.setattr(seam, "run_command", _release_scan_fake("3"))
     with caplog.at_level("INFO"):
         assert runner.pick_issue("xqliu/orbi") is None
     assert "release_milestone_incomplete" in caplog.text
@@ -2242,7 +2235,7 @@ def test_release_claimed_when_milestone_only_has_the_release(
 ):
     """Issue #663: with only the release ticket itself left
     (`open_issues=1`) the release is claimed exactly as before."""
-    monkeypatch.setattr(runner, "run_command", _release_scan_fake("1"))
+    monkeypatch.setattr(seam, "run_command", _release_scan_fake("1"))
     with caplog.at_level("INFO"):
         assert runner.pick_issue("xqliu/orbi") == RELEASE_663
     assert "picked issue=254" in caplog.text
@@ -2253,7 +2246,7 @@ def test_release_not_claimed_when_milestone_check_fails(monkeypatch, caplog):
     claims — a bad release is irreversible, so the check fails safe and
     the next tick retries (recoverable, never `ai-blocked`)."""
     error = subprocess.CalledProcessError(1, ["gh"], output="boom")
-    monkeypatch.setattr(runner, "run_command", _release_scan_fake(error))
+    monkeypatch.setattr(seam, "run_command", _release_scan_fake(error))
     with caplog.at_level("INFO"):
         assert runner.pick_issue("xqliu/orbi") is None
     assert "release_milestone_check_failed" in caplog.text
@@ -2279,7 +2272,7 @@ def test_release_without_milestone_claimed_without_api_call(
             return json.dumps([release])
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert runner.pick_issue("xqliu/orbi") == release
     assert not [c for c in commands_seen if c[1] == "api"]
@@ -2308,7 +2301,7 @@ def test_release_milestone_falls_back_to_active_milestone(
             return json.dumps([release])
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert runner.pick_issue(
             "xqliu/orbi", active_milestone="v0.3.0",
@@ -2336,7 +2329,7 @@ def test_release_fallback_scan_fetches_milestone(monkeypatch):
             return json.dumps([release])
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.pick_issue("xqliu/orbi") == release
     fields = scans[-1][scans[-1].index("--json") + 1]
     assert "milestone" in fields.split(",")
@@ -2368,7 +2361,7 @@ def test_pick_issue_p0_blocked_by_open_blocker_falls_back_to_bug(
             return json.dumps([blocked_p0])
         return json.dumps([bug])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert runner.pick_issue("xqliu/orbi") == bug
     # The blocked P0 was skipped with the structured blocked_by line;
@@ -2385,8 +2378,7 @@ def test_pick_issue_p0_scan_failure_fails_open(monkeypatch, caplog):
     (Issue #54) — the tick claims nothing from this repo, the error is
     logged, never raised."""
     error = subprocess.CalledProcessError(1, ["gh"], output="boom")
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: (_ for _ in ()).throw(error),
     )
     with caplog.at_level("INFO"):
@@ -2412,7 +2404,7 @@ def test_pick_issue_logs_priority_normal_for_plain_pickup(
             return json.dumps([])
         return json.dumps([feature])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert runner.pick_issue("xqliu/orbi") == feature
     assert "priority=normal" in caplog.text
@@ -2483,8 +2475,7 @@ def test_pick_issue_skips_epic_and_claims_next(monkeypatch, caplog):
         "labels": [{"name": "ai-ready"}],
         "blockedBy": {"nodes": [], "totalCount": 0},
     }
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([epic, ready]),
     )
     with caplog.at_level("INFO"):
@@ -2526,7 +2517,7 @@ def test_pick_issue_returns_none_when_only_epics_are_ready(
             return json.dumps([])
         return json.dumps([epic_a, epic_b])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert runner.pick_issue("xqliu/orbi") is None
     assert caplog.text.count("epic_not_claimed") == 2
@@ -2546,8 +2537,7 @@ def test_pick_issue_epic_check_precedes_blocker_check(monkeypatch, caplog):
             "nodes": [{"number": 9}, {"number": 10}], "totalCount": 2,
         },
     }
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([epic]),
     )
     with caplog.at_level("INFO"):
@@ -2590,7 +2580,7 @@ def test_pick_issue_skips_epic_in_p0_and_bug_scans(monkeypatch, caplog):
             return json.dumps([epic_bug])
         return json.dumps([feature])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert runner.pick_issue("xqliu/orbi") == feature
     assert caplog.text.count("epic_not_claimed") == 2
@@ -2609,7 +2599,7 @@ def test_pick_in_progress_issue_scan_excludes_epics(monkeypatch, tmp_path):
         calls.append(command)
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.pick_in_progress_issue(
         "xqliu/orbi", tmp_path / "slots", 1,
     ) is None
@@ -2651,7 +2641,7 @@ def test_main_epic_only_queue_ends_idle_without_process_issue(
             return json.dumps([epic])
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # The fake rejects anything that is not issue-list traffic.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "list"])
@@ -2684,7 +2674,7 @@ def test_pick_in_progress_issue_scan_fetches_labels(monkeypatch, tmp_path):
         calls.append(command)
         return json.dumps([issue])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # No slot dir yet: every slot is free, so the scan runs.
     assert runner.pick_in_progress_issue(
         "xqliu/orbi", tmp_path / "slots", 1,
@@ -2716,7 +2706,7 @@ def test_pick_in_progress_issue_scan_fetches_milestone(monkeypatch, tmp_path):
         calls.append(command)
         return json.dumps([issue])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     resumed = runner.pick_in_progress_issue(
         "xqliu/orbi", tmp_path / "slots", 1,
     )
@@ -2749,7 +2739,7 @@ def test_pick_in_progress_issue_scans_in_flight_issues(monkeypatch, tmp_path):
         calls.append(command)
         return json.dumps([issue])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # No slot dir yet: every slot is free, so the scan runs.
     assert runner.pick_in_progress_issue(
         "xqliu/orbi", tmp_path / "slots", 1,
@@ -2777,7 +2767,7 @@ def test_pick_in_progress_issue_uses_the_repo_dispatch_label(
         calls.append(command)
         return json.dumps([])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.pick_in_progress_issue(
         "xqliu/orbi", tmp_path / "slots", 1,
         dispatch_label="repo-ready",
@@ -2795,8 +2785,7 @@ def test_pick_in_progress_issue_uses_the_repo_dispatch_label(
 def test_pick_in_progress_issue_returns_none_when_idle(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(
-        runner, "run_command", lambda command, **kwargs: "[]",
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "[]",
     )
     assert runner.pick_in_progress_issue(
         "xqliu/orbi", tmp_path / "slots", 1,
@@ -2811,8 +2800,7 @@ def test_pick_in_progress_issue_skips_when_another_runner_is_live(
     flight, not orphaned, so no second Pi may be started for it. This
     runner's own slot (its own PID) does not block the scan."""
     gh_calls = []
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: gh_calls.append(command) or "[]",
     )
     monkeypatch.setattr(runner, "slot_occupancy",
@@ -2950,7 +2938,7 @@ def test_pick_next_issue_returns_none_when_all_sources_empty(monkeypatch):
 
 def test_edit_issue_builds_add_and_remove_command(monkeypatch):
     calls = []
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append(command))
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append(command))
     runner.edit_issue(3, repo="xqliu/orbi-backlog", add="ai-in-progress", remove="ai-ready")
     assert calls == [[
         "gh", "issue", "edit", "3", "--repo", "xqliu/orbi-backlog",
@@ -2960,7 +2948,7 @@ def test_edit_issue_builds_add_and_remove_command(monkeypatch):
 
 def test_edit_issue_allows_no_label_change(monkeypatch):
     calls = []
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append(command))
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append(command))
     runner.edit_issue(3, repo="xqliu/orbi-backlog")
     assert calls == [["gh", "issue", "edit", "3", "--repo", "xqliu/orbi-backlog"]]
 
@@ -2996,14 +2984,14 @@ def test_run_marker_is_shared_with_progress_formatter():
 
 
 def test_set_run_id_binds_the_attempt_and_current_run_id_reads_it(monkeypatch):
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
     assert runner.current_run_id() is None
     runner.set_run_id("e07383c2")
     assert runner.current_run_id() == "e07383c2"
 
 
 def test_set_run_id_fails_fast_on_invalid_run_id(monkeypatch):
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
     with pytest.raises(ValueError, match="invalid run id"):
         runner.set_run_id("run1")
     assert runner.current_run_id() is None
@@ -3016,13 +3004,13 @@ def test_run_id_filter_prefixes_messages_when_run_is_bound(caplog):
             runner.LOGGER.info("hello %s", "world")
         assert caplog.messages[-1] == "[e07383c2] hello world"
     finally:
-        runner._CURRENT_RUN_ID = None
+        journal._CURRENT_RUN_ID = None
 
 
 def test_run_id_filter_leaves_messages_untouched_without_bound_run(
     monkeypatch, caplog,
 ):
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
     with caplog.at_level("INFO"):
         runner.LOGGER.info("hello")
     assert caplog.messages[-1] == "hello"
@@ -3035,12 +3023,12 @@ def test_freeze_base_fetches_remote_and_returns_exact_sha(monkeypatch, tmp_path)
         calls.append((command, kwargs))
         return "abc123def456"
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.freeze_base(tmp_path, "main") == "abc123def456"
     assert calls == [(
         ["git", "fetch", "origin", "main"], {
             "cwd": tmp_path,
-            "timeout": runner.GIT_NETWORK_TIMEOUT_SECONDS,
+            "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS,
         },
     ), (
         ["git", "rev-parse", "origin/main"], {"cwd": tmp_path},
@@ -3076,7 +3064,7 @@ def test_freeze_base_fetches_under_the_base_sync_lock(
             held.append(not _probe_lock_free(tmp_path))
         return "abc123def456"
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.freeze_base(tmp_path, "main") == "abc123def456"
     assert held == [True]
     assert _probe_lock_free(tmp_path) is True
@@ -3087,8 +3075,7 @@ def test_freeze_base_fails_fast_when_remote_base_is_missing(monkeypatch, tmp_pat
         128, ["git", "rev-parse", "origin/main"],
         stderr="fatal: ambiguous argument",
     )
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: (_ for _ in ()).throw(error),
     )
     with pytest.raises(subprocess.CalledProcessError):
@@ -3104,8 +3091,7 @@ def test_create_worktree_reuses_existing_path_for_a_resumed_run(
     existing = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-run1"
     existing.mkdir(parents=True)
     calls = []
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append(command),
     )
     assert runner.create_worktree(
@@ -3117,8 +3103,7 @@ def test_create_worktree_reuses_existing_path_for_a_resumed_run(
 def test_create_worktree_adds_branch_from_frozen_base_sha(monkeypatch, tmp_path):
     path = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-run1"
     calls = []
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "",
     )
     assert runner.create_worktree(tmp_path, "owner/repo", 3, "run1", "abc123def456") == path
@@ -3145,7 +3130,7 @@ def test_create_worktree_reuses_orphan_local_branch_never_exits_255(
             return "orbi/owner-repo-issue-3"
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.create_worktree(
         tmp_path, "owner/repo", 3, "run1", "base",
     ) == path
@@ -3211,12 +3196,12 @@ def test_create_worktree_reuses_existing_remote_branch(monkeypatch, tmp_path):
             return ""
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.create_worktree(
         tmp_path, "owner/repo", 3, "run1", "base", existing_branch=True,
     ) == path
     assert calls == [
-        (["git", "fetch", "origin", "orbi/owner-repo-issue-3"], {"cwd": tmp_path, "timeout": runner.GIT_NETWORK_TIMEOUT_SECONDS}),
+        (["git", "fetch", "origin", "orbi/owner-repo-issue-3"], {"cwd": tmp_path, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS}),
         (["git", "branch", "--list", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
         (["git", "worktree", "add", "-b", "orbi/owner-repo-issue-3", str(path), "origin/orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
     ]
@@ -3238,12 +3223,12 @@ def test_create_worktree_existing_local_branch_is_reused_never_re_created(
             return "orbi/owner-repo-issue-3"
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.create_worktree(
         tmp_path, "owner/repo", 3, "run1", "base", existing_branch=True,
     ) == path
     assert calls == [
-        (["git", "fetch", "origin", "orbi/owner-repo-issue-3"], {"cwd": tmp_path, "timeout": runner.GIT_NETWORK_TIMEOUT_SECONDS}),
+        (["git", "fetch", "origin", "orbi/owner-repo-issue-3"], {"cwd": tmp_path, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS}),
         (["git", "branch", "--list", "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
         (["git", "worktree", "add", "--force", str(path), "orbi/owner-repo-issue-3"], {"cwd": tmp_path}),
     ]
@@ -3263,13 +3248,13 @@ def test_create_worktree_branch_override_checks_out_the_external_head(
             return ""
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.create_worktree(
         tmp_path, "owner/repo", 3, "run1", "base",
         existing_branch=True, branch="fix/outer",
     ) == path
     assert calls == [
-        (["git", "fetch", "origin", "fix/outer"], {"cwd": tmp_path, "timeout": runner.GIT_NETWORK_TIMEOUT_SECONDS}),
+        (["git", "fetch", "origin", "fix/outer"], {"cwd": tmp_path, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS}),
         (["git", "branch", "--list", "fix/outer"], {"cwd": tmp_path}),
         (["git", "worktree", "add", "-b", "fix/outer", str(path), "origin/fix/outer"], {"cwd": tmp_path}),
     ]
@@ -3341,7 +3326,7 @@ def test_create_release_worktree_resets_leftover_worktree_to_current_commit(
             return f"worktree {old_worktree}\nHEAD old\nbranch refs/heads/{branch}\n"
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.create_release_worktree(
         tmp_path, "owner/repo", 3, "newrun", "new-release-commit",
     ) == old_worktree
@@ -3367,7 +3352,7 @@ def test_create_release_worktree_handles_leftover_local_branch(
             return "  orbi/owner-repo-issue-3"
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.create_release_worktree(
         tmp_path, "owner/repo", 3, "newrun", "new-release-commit",
     ) == path
@@ -3393,8 +3378,8 @@ def test_create_release_worktree_creates_from_release_commit_when_branch_is_new(
             return ""
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "create_worktree",
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "create_worktree",
                         lambda *args: expected)
     assert runner.create_release_worktree(
         tmp_path, "owner/repo", 3, "newrun", "new-release-commit",
@@ -3546,7 +3531,7 @@ def test_changed_files_lists_uncommitted_changes(tmp_path, monkeypatch):
         # The third line has a blank XY column: it is not a change.
         return " M src/a.py\n?? src/b.py\n   src/c.py\n"
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.changed_files(tmp_path) == ["src/a.py", "src/b.py"]
     assert calls == [(
         ["git", "status", "--porcelain"], {"cwd": tmp_path},
@@ -3556,7 +3541,7 @@ def test_changed_files_lists_uncommitted_changes(tmp_path, monkeypatch):
 def test_resume_context_is_none_for_a_fresh_worktree(tmp_path, monkeypatch):
     """No uncommitted changes and no previous session: the agent starts
     from the Issue alone (the exact pre-#219 prompt)."""
-    monkeypatch.setattr(runner, "run_command", lambda *a, **k: "")
+    monkeypatch.setattr(seam, "run_command", lambda *a, **k: "")
     monkeypatch.setattr(runner, "activity_snapshot", lambda *a, **k: None)
     assert runner.resume_context(tmp_path) is None
 
@@ -3567,8 +3552,7 @@ def test_resume_context_carries_changes_and_session_progress(
     """The new session starts from the existing work: the instruction to
     continue, the previous session's progress and the changed files —
     never a fresh redo (Issue #219)."""
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda *a, **k: " M src/a.py\n?? src/b.py\n",
     )
     monkeypatch.setattr(
@@ -3597,7 +3581,7 @@ def test_resume_context_without_changes_carries_the_session_progress(
 ):
     """A clean worktree with a previous session (the agent committed
     mid-run before the interruption) still continues the same run."""
-    monkeypatch.setattr(runner, "run_command", lambda *a, **k: "")
+    monkeypatch.setattr(seam, "run_command", lambda *a, **k: "")
     monkeypatch.setattr(
         runner, "activity_snapshot",
         lambda *a, **k: {
@@ -3725,7 +3709,7 @@ def test_has_in_progress_label_checks_the_issue_label(monkeypatch, tmp_path):
         calls.append(command)
         return json.dumps({"labels": [{"name": "ai-in-progress"}]})
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.has_in_progress_label(4, "owner/repo") is True
     assert calls == [[
         "gh", "issue", "view", "4", "--repo", "owner/repo",
@@ -3734,8 +3718,7 @@ def test_has_in_progress_label_checks_the_issue_label(monkeypatch, tmp_path):
 
 
 def test_has_in_progress_label_is_false_without_the_label(monkeypatch):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps(
             {"labels": [{"name": "ai-fix-needed"}]},
         ),
@@ -3744,16 +3727,17 @@ def test_has_in_progress_label_is_false_without_the_label(monkeypatch):
 
 
 def test_has_in_progress_label_fails_fast_on_malformed_output(monkeypatch):
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "[]")
-    with pytest.raises(ValueError, match="issue view must return a JSON object"):
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "[]")
+    # Issue #785: the shared `issue_view` validates the object shape, so
+    # the message wording is the view's ("must be"), not the caller's.
+    with pytest.raises(ValueError, match="issue view must be a JSON object"):
         runner.has_in_progress_label(4, "owner/repo")
 
 
 def test_has_in_progress_label_fails_fast_on_malformed_labels(monkeypatch):
     """view 返回 JSON 对象但 labels 字段不是数组（Issue #658）：解析
     失败必须 fail-fast，绝不落入默认 False（那会让竞态守卫失明）。"""
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps({"labels": "ai-in-progress"}),
     )
     with pytest.raises(ValueError, match="labels must be a JSON array"):
@@ -3774,7 +3758,7 @@ def test_has_in_progress_label_reads_directly_not_via_the_search_index(
             return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     assert runner.has_in_progress_label(4, "owner/repo") is True
     # The fixed path reads the Issue directly — the search index (which
     # has not ingested the other instance's claim yet) is never queried.
@@ -3800,23 +3784,20 @@ def _claim_race_deps(monkeypatch, tmp_path, *, freeze_side_effect=None,
         seq = list(stable_branch_seq)
         # Exactly two probes consume the sequence: the scan-time probe
         # and the pre-claim guard (Issue #658).
-        monkeypatch.setattr(
-            runner, "stable_branch_exists",
+        monkeypatch.setattr(seam, "stable_branch_exists",
             lambda repo_dir, branch: seq.pop(0),
         )
     if freeze_side_effect is not None:
         def fake_freeze_base(repo_dir, base_branch):
             freeze_side_effect()
             return "0123456789abcdef0123456789abcdef01234567"
-        monkeypatch.setattr(runner, "freeze_base", fake_freeze_base)
+        monkeypatch.setattr(seam, "freeze_base", fake_freeze_base)
     else:
-        monkeypatch.setattr(
-            runner, "freeze_base",
+        monkeypatch.setattr(seam, "freeze_base",
             lambda repo_dir, base_branch:
                 "0123456789abcdef0123456789abcdef01234567",
         )
-    monkeypatch.setattr(
-        runner, "new_run_id", lambda: "feedface",
+    monkeypatch.setattr(seam, "new_run_id", lambda: "feedface",
     )
     # create_worktree/run_pi stay REAL: on the fixed path the guard
     # yields before either is reached, and a regression that skips the
@@ -3853,7 +3834,7 @@ def make_claim_race_gh(monkeypatch, state):
             return ""
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     return fake_run_command
 
 
@@ -3933,7 +3914,7 @@ def _release_race_deps(monkeypatch, in_progress: bool, live_holders: list):
             return json.dumps({"labels": labels})
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     monkeypatch.setattr(
         runner, "slot_occupancy", lambda *a, **k: list(live_holders),
     )
@@ -4106,24 +4087,21 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
             return head
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: calls.append(("edit", args, kwargs)),
     )
-    monkeypatch.setattr(
-        runner, "freeze_base",
+    monkeypatch.setattr(seam, "freeze_base",
         lambda repo_dir, base_branch: "abc123def456",
     )
     # The fresh id would be different: the resume must override it with
     # the newest worktree's run id.
-    monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "ffffeeee")
     monkeypatch.setattr(
         runner, "worktree_resume_scene", lambda repo_dir, source_repo, number:
         ("a1b2c3d4", tmp_path / "wt"),
     )
-    monkeypatch.setattr(
-        runner, "create_worktree",
+    monkeypatch.setattr(seam, "create_worktree",
         lambda *args, **kwargs: tmp_path / "wt",
     )
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
@@ -4219,20 +4197,18 @@ def test_process_issue_second_tick_behind_the_index_resumes_not_reclaims(
             return head
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(
-        runner, "freeze_base",
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "freeze_base",
         lambda repo_dir, base_branch: "abc123def456",
     )
     # If a regression makes this tick a FRESH claim, the fresh id leaks
     # into the scene comments and the assertions below catch it.
-    monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "ffffeeee")
     monkeypatch.setattr(
         runner, "worktree_resume_scene", lambda repo_dir, source_repo, number:
         ("a1b2c3d4", tmp_path / "wt"),
     )
-    monkeypatch.setattr(
-        runner, "create_worktree",
+    monkeypatch.setattr(seam, "create_worktree",
         lambda *args, **kwargs: tmp_path / "wt",
     )
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
@@ -4308,20 +4284,18 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
             return head
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
-    monkeypatch.setattr(
-        runner, "freeze_base", lambda repo_dir, base_branch: "abc123",
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123",
     )
     # The fresh id differs from the reused one: both are valid run ids
     # of this attempt (generated, then replaced by the resumed run).
-    monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "ffffeeee")
     monkeypatch.setattr(
         runner, "worktree_resume_scene", lambda repo_dir, source_repo, number:
         ("a1b2c3d4", tmp_path / "wt"),
     )
-    monkeypatch.setattr(
-        runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
+    monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
     )
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     with caplog.at_level("INFO"):
@@ -4380,19 +4354,17 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
             return head
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
-    monkeypatch.setattr(
-        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "ffffeeee")
     scene_calls = []
     monkeypatch.setattr(
         runner, "worktree_resume_scene",
         lambda repo_dir, source_repo, number: scene_calls.append(1) or None,
     )
-    monkeypatch.setattr(
-        runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
+    monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
     )
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     runner.process_issue(
@@ -4448,16 +4420,14 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
             return head
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
-    monkeypatch.setattr(
-        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "ffffeeee")
     # The label is on, but no task worktree survived the kill.
     monkeypatch.setattr(runner, "worktree_resume_scene", lambda *a: None)
-    monkeypatch.setattr(
-        runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
+    monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
     )
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     with caplog.at_level("INFO"):
@@ -4516,12 +4486,11 @@ def _resume_wiring_setup(monkeypatch, tmp_path, *, in_progress: bool,
             return branch
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
-    monkeypatch.setattr(
-        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(runner, "new_run_id", lambda: "ffffeeee")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "ffffeeee")
     worktree = tmp_path / "wt"
     worktree.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(
@@ -4531,8 +4500,7 @@ def _resume_wiring_setup(monkeypatch, tmp_path, *, in_progress: bool,
             if latest_run_id_result else None
         ),
     )
-    monkeypatch.setattr(
-        runner, "create_worktree", lambda *args, **kwargs: worktree,
+    monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: worktree,
     )
     return gh_calls, posted, worktree, comment_bodies
 
@@ -4649,8 +4617,7 @@ def test_process_issue_fails_fast_when_the_run_state_is_missing(
         lambda *args, **kwargs: run_pi_calls.append(1) or "done",
     )
     edits = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
     caplog.set_level("INFO")
@@ -4720,12 +4687,11 @@ def test_claim_route_decision_table():
 def test_open_pr_for_branch_rejects_malformed_and_ambiguous_results(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(runner, "run_command", lambda *args, **kwargs: "{}")
+    monkeypatch.setattr(seam, "run_command", lambda *args, **kwargs: "{}")
     with pytest.raises(RuntimeError, match="must return an array"):
         runner.open_pr_for_branch(tmp_path, "orbi/owner-repo-issue-3")
 
-    monkeypatch.setattr(
-        runner, "run_command", lambda *args, **kwargs: "[{}, {}]",
+    monkeypatch.setattr(seam, "run_command", lambda *args, **kwargs: "[{}, {}]",
     )
     with pytest.raises(RuntimeError, match="multiple open PRs"):
         runner.open_pr_for_branch(tmp_path, "orbi/owner-repo-issue-3")
@@ -4733,7 +4699,7 @@ def test_open_pr_for_branch_rejects_malformed_and_ambiguous_results(
 
 def test_comment_issue_runs_gh_comment(monkeypatch):
     calls = []
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append(command))
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append(command))
     runner.comment_issue(3, repo="xqliu/orbi-backlog", body="done")
     assert calls == [[
         "gh", "issue", "comment", "3", "--repo", "xqliu/orbi-backlog",
@@ -4881,7 +4847,7 @@ def test_trusted_issue_comments_block_filters_untrusted_and_keeps_order(
     # authenticated-login fallback; pin it so the test never depends on
     # the host's real gh login state (CI runs unauthenticated).
     monkeypatch.setattr(
-        runner, "_authenticated_github_login", lambda: "ci-runner[bot]"
+        seam, "_authenticated_github_login", lambda: "ci-runner[bot]"
     )
     comments = [
         {"author": {"login": "alice"}, "authorAssociation": "OWNER",
@@ -4932,7 +4898,7 @@ def test_trusted_issue_comments_block_states_when_nothing_is_trusted(
     an empty string — the agent can tell an empty timeline apart from a
     missing section."""
     monkeypatch.setattr(
-        runner, "_authenticated_github_login", lambda: "ci-runner[bot]"
+        seam, "_authenticated_github_login", lambda: "ci-runner[bot]"
     )
     block = runner.trusted_issue_comments_block([
         {"author": {"login": "mallory"}, "authorAssociation": "NONE",
@@ -4968,12 +4934,12 @@ def test_run_pi_injects_trusted_issue_comments_into_the_prompt(
         fetches.append((number, repo))
         return comments
 
-    monkeypatch.setattr(runner, "issue_comments", fake_issue_comments)
+    monkeypatch.setattr(seam, "issue_comments", fake_issue_comments)
     # mallory's NONE-association comment reaches the authenticated-login
     # fallback; pin it so the test never depends on the host's real gh
     # login state (CI runs unauthenticated).
     monkeypatch.setattr(
-        runner, "_authenticated_github_login", lambda: "ci-runner[bot]"
+        seam, "_authenticated_github_login", lambda: "ci-runner[bot]"
     )
     calls = []
     monkeypatch.setattr(
@@ -5015,8 +4981,7 @@ def test_run_pi_skips_the_comment_fetch_without_the_placeholder(
     prompt_path = tmp_path / "prompt.md"
     prompt_path.write_text("SYSTEM {{ISSUE_BODY}}", encoding="utf-8")
     fetches = []
-    monkeypatch.setattr(
-        runner, "issue_comments",
+    monkeypatch.setattr(seam, "issue_comments",
         lambda *args, **kwargs: fetches.append((args, kwargs)),
     )
     calls = []
@@ -5054,12 +5019,12 @@ def test_run_review_injects_trusted_issue_comments_into_the_prompt(
         fetches.append((number, repo))
         return comments
 
-    monkeypatch.setattr(runner, "issue_comments", fake_issue_comments)
+    monkeypatch.setattr(seam, "issue_comments", fake_issue_comments)
     # mallory's NONE-association comment reaches the authenticated-login
     # fallback; pin it so the test never depends on the host's real gh
     # login state (CI runs unauthenticated).
     monkeypatch.setattr(
-        runner, "_authenticated_github_login", lambda: "ci-runner[bot]"
+        seam, "_authenticated_github_login", lambda: "ci-runner[bot]"
     )
     calls = []
     monkeypatch.setattr(
@@ -5088,8 +5053,7 @@ def test_run_review_skips_the_comment_fetch_without_the_placeholder(
     prompt_path = tmp_path / "prompt_review.md"
     prompt_path.write_text("REVIEW {{BASE_SYNC_LOCK}}", encoding="utf-8")
     fetches = []
-    monkeypatch.setattr(
-        runner, "issue_comments",
+    monkeypatch.setattr(seam, "issue_comments",
         lambda *args, **kwargs: fetches.append((args, kwargs)),
     )
     calls = []
@@ -5246,7 +5210,7 @@ def test_run_pi_appends_the_resume_context_to_the_context_argument(
 
 
 def test_verify_pr_rejects_wrong_branch(monkeypatch, tmp_path):
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "other-branch")
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "other-branch")
     with pytest.raises(RuntimeError, match="Pi changed branch"):
         runner.verify_pr(
             tmp_path, "orbi/issue-4", "main", "e07383c2", issue=4, repo_dir=tmp_path,
@@ -5300,7 +5264,7 @@ def test_verify_pr_rejects_delivery_behind_latest_remote_base(monkeypatch, tmp_p
             raise subprocess.CalledProcessError(1, command, stderr="not an ancestor")
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="behind latest remote base",
     ):
@@ -5320,7 +5284,7 @@ def test_verify_pr_rejects_missing_pr(monkeypatch, tmp_path):
     outputs = iter([
         f"orbi/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA, "[]",
     ])
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="exactly one open PR"):
         runner.verify_pr(
             tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
@@ -5332,7 +5296,7 @@ def test_verify_pr_rejects_non_array(monkeypatch, tmp_path):
     outputs = iter([
         f"orbi/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA, "{}",
     ])
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="exactly one open PR"):
         runner.verify_pr(
             tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
@@ -5347,7 +5311,7 @@ def test_verify_pr_returns_url_when_delivery_contains_latest_base(monkeypatch, t
         calls.append(command)
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.verify_pr(
         tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path,
@@ -5362,7 +5326,7 @@ def test_verify_pr_requires_the_repo_dir_lock_location(
     # Issue #171: the verify fetch updates the shared remote-tracking
     # ref, so the lock location (the deployment checkout's shared state
     # dir) must be explicit — there is no bypass path.
-    monkeypatch.setattr(runner, "run_command", fake_verify_run)
+    monkeypatch.setattr(seam, "run_command", fake_verify_run)
     with pytest.raises(TypeError):
         runner.verify_pr(
             tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
@@ -5383,7 +5347,7 @@ def test_verify_pr_fetches_under_the_base_sync_lock(
             held.append(not _probe_lock_free(tmp_path))
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     runner.verify_pr(
         tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
         FAKE_RUN_ID, issue=4, repo_dir=tmp_path,
@@ -5399,7 +5363,7 @@ def test_verify_pr_rejects_pr_without_url(monkeypatch, tmp_path):
         f"orbi/issue-4-{FAKE_RUN_ID}", "", "", FAKE_HEAD_SHA,
         json.dumps([{"baseRefName": "main"}]),
     ])
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: next(outputs))
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: next(outputs))
     with pytest.raises(RuntimeError, match="open PR has no URL"):
         runner.verify_pr(
             tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
@@ -5413,7 +5377,7 @@ def test_verify_pr_rejects_pr_based_on_wrong_branch(monkeypatch, tmp_path):
             return fake_verify_pr_payload(baseRefName="develop")
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(
         RuntimeError, match="PR base is develop, expected main",
     ):
@@ -5442,7 +5406,7 @@ def test_verify_pr_rejects_diverged_remote_pr_head(monkeypatch, tmp_path,
             )
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError,
         match="PR head deadbeef.* is not local HEAD 01234567.*diverged",
@@ -5474,7 +5438,7 @@ def test_verify_pr_passes_through_when_local_head_ahead_of_pr_head(
             )
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         url = runner.verify_pr(
             tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
@@ -5492,7 +5456,7 @@ def test_verify_pr_rejects_pr_body_without_run_marker(monkeypatch, tmp_path, cap
             return fake_verify_pr_payload(body="no run marker here")
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="missing the stable run marker",
     ):
@@ -5509,7 +5473,7 @@ def test_verify_pr_rejects_pr_body_missing_field(monkeypatch, tmp_path):
             return fake_verify_pr_payload(body=None)
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(
         RuntimeError, match="missing the stable run marker",
     ):
@@ -5532,7 +5496,7 @@ def test_verify_pr_accepts_pr_body_with_fixes_keyword(monkeypatch, tmp_path):
             )
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.verify_pr(
         tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path,
@@ -5550,7 +5514,7 @@ def test_verify_pr_accepts_hash_and_hashless_fixes_reference(
             )
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.verify_pr(
         tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path,
@@ -5569,7 +5533,7 @@ def test_verify_pr_rejects_pr_body_without_fixes_keyword(
             )
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match=r"missing `Fixes #4`",
     ):
@@ -5596,7 +5560,7 @@ def test_verify_pr_rejects_pr_body_with_wrong_issue_number(
             )
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match=r"missing `Fixes #4`",
     ):
@@ -5622,7 +5586,7 @@ def test_verify_pr_rejects_pr_body_with_longer_issue_number(
             )
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match=r"missing `Fixes #4`",
     ):
@@ -5650,7 +5614,7 @@ def test_verify_pr_external_mode_skips_marker_and_fixes_checks(
             )
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.verify_pr(
         tmp_path, "fix/outer", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path, external_pr=True,
@@ -5667,7 +5631,7 @@ def test_verify_pr_normal_mode_still_requires_marker_and_fixes(
             return fake_verify_pr_payload(body="please review my fix")
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="run marker"):
         runner.verify_pr(
             tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main",
@@ -5677,8 +5641,7 @@ def test_verify_pr_normal_mode_still_requires_marker_and_fixes(
 
 def _fake_takeover_view(monkeypatch, payload):
     """Fake the `gh pr view` of `external_takeover_pr` with `payload`."""
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps(payload),
     )
 
@@ -5750,8 +5713,7 @@ def test_external_takeover_pr_ignores_a_pr_against_another_base(
 def test_external_takeover_pr_returns_none_without_a_marker(monkeypatch,
                                                             tmp_path):
     """A body without the triage marker never reaches `gh pr view`."""
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda *a, **k: (_ for _ in ()).throw(
             AssertionError("no marker: gh must not be called"),
         ),
@@ -5796,7 +5758,7 @@ def test_verify_pr_queries_base_head_and_accepts_matching_pr(
         calls.append(command)
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.verify_pr(
         tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path,
@@ -5818,7 +5780,7 @@ def test_verify_pr_queries_base_head_and_accepts_matching_pr(
 
 
 def test_verify_pr_accepts_pr_in_expected_repo_and_url(monkeypatch, tmp_path):
-    monkeypatch.setattr(runner, "run_command", fake_verify_run)
+    monkeypatch.setattr(seam, "run_command", fake_verify_run)
     assert runner.verify_pr(
         tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path, pr_repo=FAKE_PR_REPO, expected_url=FAKE_PR_URL,
@@ -5834,7 +5796,7 @@ def test_verify_pr_rejects_pr_head_in_another_repo(monkeypatch, tmp_path, caplog
             )
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="PR head repo is attacker/other, expected "
                             "orbi-build/orbi",
@@ -5854,7 +5816,7 @@ def test_verify_pr_rejects_pr_head_repo_missing_fields(monkeypatch, tmp_path):
             )
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(
         RuntimeError, match="PR head repo is <missing>, expected "
                             "orbi-build/orbi",
@@ -5873,7 +5835,7 @@ def test_verify_pr_rejects_pr_head_repo_empty_fields(monkeypatch, tmp_path):
             )
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(
         RuntimeError, match="PR head repo is <missing>, expected "
                             "orbi-build/orbi",
@@ -5901,7 +5863,7 @@ def test_verify_pr_skips_repo_check_when_pr_repo_not_given(monkeypatch,
             }])
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.verify_pr(
         tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path,
@@ -5916,7 +5878,7 @@ def test_verify_pr_rejects_url_different_from_expected(monkeypatch, tmp_path, ca
             )
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match=(
             "PR URL https://github.com/orbi-build/orbi/pull/99 is "
@@ -5934,7 +5896,7 @@ def test_verify_pr_rejects_url_different_from_expected(monkeypatch, tmp_path, ca
 def test_verify_pr_skips_url_check_when_expected_url_not_given(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(runner, "run_command", fake_verify_run)
+    monkeypatch.setattr(seam, "run_command", fake_verify_run)
     assert runner.verify_pr(
         tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path,
@@ -5953,7 +5915,7 @@ def test_verify_pr_skips_latest_base_check_when_not_required(
         calls.append(command)
         return fake_verify_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.verify_pr(
         tmp_path, f"orbi/issue-4-{FAKE_RUN_ID}", "main", FAKE_RUN_ID,
         issue=4, repo_dir=tmp_path, require_latest_base=False,
@@ -6007,11 +5969,11 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
         # git fetch / git merge-base: no output needed.
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
-    monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     issue = {"number": 4, "title": "Fix", "body": "Body"}
     config = runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main")
@@ -6069,13 +6031,13 @@ def _gh_api(command, posted):
 
 
 def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, caplog):
-    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
+    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     monkeypatch.setattr(runner, "deliver_pr", lambda *args, **kwargs: "https://github.com/orbi-build/orbi/pull/4")
-    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None)
     gh_calls, posted = make_fake_gh(monkeypatch)
 
     def fake_run(command, **kwargs):
@@ -6088,7 +6050,7 @@ def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, c
             return "[]"
         return "0123456789abcdef0123456789abcdef01234567"
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
@@ -6111,10 +6073,10 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     an already-handled failure; the tick ends cleanly and `main` skips
     the delivery wait."""
     calls = []
-    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
-    monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
+    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
     monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: None)
     gh_calls, posted = make_fake_gh(monkeypatch)
 
@@ -6129,7 +6091,7 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # The failure is terminal: `process_issue` returns `None` (no PR) and
     # does NOT re-raise — the service must not crash on it (Issue #239).
     assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
@@ -6165,18 +6127,15 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     not crash on the unhandled `RuntimeError` (the #239 scene). The
     Runner never auto-commits or expands the agent's commit boundary."""
     calls = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: calls.append(kwargs),
     )
-    monkeypatch.setattr(
-        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     worktree = tmp_path / "wt"
     worktree.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(
-        runner, "create_worktree", lambda *args, **kwargs: worktree,
+    monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: worktree,
     )
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     no_commit = RuntimeError(
@@ -6204,7 +6163,7 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # The failure is terminal: `process_issue` returns `None` (no PR) and
     # does NOT re-raise — the service must not crash on it.
     assert runner.process_issue(
@@ -6251,16 +6210,13 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
     the SAME run (same run id, branch, worktree, progress comment). No
     terminal label, no fallback."""
     calls = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: calls.append(kwargs),
     )
-    monkeypatch.setattr(
-        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(
-        runner, "create_worktree", Mock(return_value=tmp_path),
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree", Mock(return_value=tmp_path),
     )
     model_wait_dead = runner.ModelWaitDeadError(
         "Pi is stuck in model_wait with a frozen session for 10m: "
@@ -6288,7 +6244,7 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # The failure is recoverable: `process_issue` returns `None` (no PR)
     # and does NOT re-raise — the service must not crash on it (Issue
     # #239), and the Issue must NOT be marked `ai-blocked` (Issue #227).
@@ -6344,15 +6300,12 @@ def test_process_issue_model_wait_failure_records_health_attempt(
     same dead end) must reach health.json exactly like the terminal
     failure branch, or the repeated-failure health check is blind to
     the most common repeat-failure scene."""
-    monkeypatch.setattr(
-        runner, "edit_issue", lambda *args, **kwargs: None,
+    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: None,
     )
-    monkeypatch.setattr(
-        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(
-        runner, "create_worktree", Mock(return_value=tmp_path),
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree", Mock(return_value=tmp_path),
     )
     model_wait_dead = runner.ModelWaitDeadError(
         "Pi is stuck in model_wait with a frozen session for 10m"
@@ -6377,7 +6330,7 @@ def test_process_issue_model_wait_failure_records_health_attempt(
             return "[]"
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.process_issue(
         {"number": 218, "title": "Model wait dead", "body": ""},
         runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
@@ -6401,15 +6354,12 @@ def test_process_issue_three_recoverable_failures_raise_health_finding(
     repeated-failure health check must see the streak (before the fix
     none of these runs ever reached health.json)."""
     from orbi import runner_health
-    monkeypatch.setattr(
-        runner, "edit_issue", lambda *args, **kwargs: None,
+    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: None,
     )
-    monkeypatch.setattr(
-        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(
-        runner, "create_worktree", Mock(return_value=tmp_path),
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree", Mock(return_value=tmp_path),
     )
     model_wait_dead = runner.ModelWaitDeadError(
         "Pi is stuck in model_wait with a frozen session for 10m"
@@ -6433,7 +6383,7 @@ def test_process_issue_three_recoverable_failures_raise_health_finding(
             return "[]"
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     for _ in range(3):
         assert runner.process_issue(
             {"number": 218, "title": "Model wait dead", "body": ""},
@@ -6457,21 +6407,18 @@ def test_process_issue_success_records_health_streak_break(
     outcome="pr_opened") has always expected from production: a
     failure -> success -> failure sequence must NOT read as a streak."""
     from orbi import runner_health
-    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(
-        runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
     )
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     monkeypatch.setattr(
         runner, "deliver_pr",
         lambda *args, **kwargs: "https://github.com/orbi-build/orbi/pull/4",
     )
-    monkeypatch.setattr(
-        runner, "comment_issue", lambda *args, **kwargs: None,
+    monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None,
     )
     gh_calls, posted = make_fake_gh(monkeypatch)
 
@@ -6484,7 +6431,7 @@ def test_process_issue_success_records_health_streak_break(
             return "[]"
         return "0123456789abcdef0123456789abcdef01234567"
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     result = runner.process_issue(
         {"number": 4, "title": "Fix", "body": "Body"},
         runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
@@ -6513,15 +6460,12 @@ def test_process_issue_recoverable_health_record_failure_is_bypassed(
     state-write failure logs and never changes the recoverable outcome
     (the Issue stays `failed`-recoverable, never `ai-blocked`)."""
     from orbi import runner_health
-    monkeypatch.setattr(
-        runner, "edit_issue", lambda *args, **kwargs: None,
+    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: None,
     )
-    monkeypatch.setattr(
-        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(
-        runner, "create_worktree", Mock(return_value=tmp_path),
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree", Mock(return_value=tmp_path),
     )
     model_wait_dead = runner.ModelWaitDeadError(
         "Pi is stuck in model_wait with a frozen session for 10m"
@@ -6545,7 +6489,7 @@ def test_process_issue_recoverable_health_record_failure_is_bypassed(
             return "[]"
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(
         runner_health, "record_run_attempt",
         lambda *args, **kwargs: (_ for _ in ()).throw(
@@ -6568,21 +6512,18 @@ def test_process_issue_success_health_record_failure_is_bypassed(
     """The delivery path's health record is a pure bypass: a
     state-write failure logs and the PR result is returned unchanged."""
     from orbi import runner_health
-    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(
-        runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: tmp_path / "wt",
     )
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     monkeypatch.setattr(
         runner, "deliver_pr",
         lambda *args, **kwargs: "https://github.com/orbi-build/orbi/pull/4",
     )
-    monkeypatch.setattr(
-        runner, "comment_issue", lambda *args, **kwargs: None,
+    monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None,
     )
     gh_calls, posted = make_fake_gh(monkeypatch)
 
@@ -6595,7 +6536,7 @@ def test_process_issue_success_health_record_failure_is_bypassed(
             return "[]"
         return "0123456789abcdef0123456789abcdef01234567"
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(
         runner_health, "record_run_attempt",
         lambda *args, **kwargs: (_ for _ in ()).throw(
@@ -6623,16 +6564,13 @@ def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
     Issue `ai-blocked` — exactly the unrecoverable state Issue #227
     forbids for the model_wait recovery."""
     calls = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: calls.append(kwargs),
     )
-    monkeypatch.setattr(
-        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(
-        runner, "create_worktree", Mock(return_value=tmp_path),
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree", Mock(return_value=tmp_path),
     )
     model_wait_dead = runner.ModelWaitDeadError(
         "Pi is stuck in model_wait with a frozen session for 10m: "
@@ -6668,7 +6606,7 @@ def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.process_issue(
         {"number": 218, "title": "Model wait dead", "body": ""},
         runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
@@ -6705,16 +6643,13 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
     's `finally` (Issue #239: the handled failure never re-raises to
     crash the service). No special handling, no fallback."""
     calls = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: calls.append(kwargs),
     )
-    monkeypatch.setattr(
-        runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456",
     )
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(
-        runner, "create_worktree", Mock(return_value=tmp_path),
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree", Mock(return_value=tmp_path),
     )
     idle_recovery = RuntimeError(
         "Pi session stayed idle for 15m after idle recovery (TERM/KILL "
@@ -6741,7 +6676,7 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # The failure is terminal: `process_issue` returns `None` (no PR) and
     # does NOT re-raise — the service must not crash on it (Issue #239).
     assert runner.process_issue(
@@ -6785,13 +6720,12 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
     degraded, not fatal."""
     edit_calls = []
 
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edit_calls.append(kwargs),
     )
-    monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree", Mock(side_effect=RuntimeError("git failed")))
     gh_calls, posted = make_fake_gh(monkeypatch)
 
     def fake_run(command, **kwargs):
@@ -6814,7 +6748,7 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
             return "[]"
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # The fake rejects anything that is not issue-comment/list traffic.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "list"])
@@ -6882,7 +6816,7 @@ def test_advance_active_milestone_pending_creates_one_p0_ready_issue(
             return "[]"
         return json.dumps([milestones])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert runner.advance_active_milestone_on_idle(
             "owner/repo", "v0.3.0", config, auto_next_milestone=False,
@@ -6902,8 +6836,7 @@ def test_advance_active_milestone_manual_notification_is_not_pickupable(
     config = tmp_path / "orbi.toml"
     config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
     calls = []
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append(command) or (
             "[]" if command[:3] == ["gh", "issue", "list"] else json.dumps([[
                 {"title": "v0.3.0", "state": "closed"},
@@ -6940,7 +6873,7 @@ def test_advance_active_milestone_closes_old_manual_notification_after_manual_mo
             ])
         return json.dumps([[{"title": "v0.4.0", "state": "open"}]])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.advance_active_milestone_on_idle(
         "owner/repo", "v0.4.0", config, auto_next_milestone=False,
     ) == ("open", None)
@@ -6962,7 +6895,7 @@ def test_advance_active_milestone_close_failure_is_bypassed(
             return json.dumps([[{"title": "v0.4.0", "state": "open"}]])
         raise RuntimeError("GitHub unavailable")
 
-    monkeypatch.setattr(runner, "run_command", fail_close)
+    monkeypatch.setattr(seam, "run_command", fail_close)
     with caplog.at_level("ERROR"):
         assert runner.advance_active_milestone_on_idle(
             "owner/repo", "v0.4.0", config,
@@ -6976,8 +6909,7 @@ def test_advance_active_milestone_closure_is_idempotent_on_repeated_tick(
     config = tmp_path / "orbi.toml"
     config.write_text('active_milestone = "v0.4.0"\n', encoding="utf-8")
     calls = []
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append(command) or (
             "[]" if command[:3] == ["gh", "issue", "list"] else json.dumps([[
                 {"title": "v0.4.0", "state": "open"},
@@ -7007,7 +6939,7 @@ def test_advance_active_milestone_pending_issue_failure_is_bypassed(
             {"title": "v0.3.1", "state": "open", "open_issues": 2},
         ]])
 
-    monkeypatch.setattr(runner, "run_command", fail_pending)
+    monkeypatch.setattr(seam, "run_command", fail_pending)
     with caplog.at_level("ERROR"):
         assert runner.advance_active_milestone_on_idle(
             "owner/repo", "v0.3.0", config, auto_next_milestone=False,
@@ -7029,8 +6961,7 @@ def test_advance_active_milestone_pending_is_idempotent(
         ]]),
         '[{"number": 436}]',
     ]
-    monkeypatch.setattr(
-        runner, "run_command", lambda command, **kwargs: calls.append(command) or responses.pop(0),
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append(command) or responses.pop(0),
     )
     runner.advance_active_milestone_on_idle(
         "owner/repo", "v0.3.0", config, auto_next_milestone=False,
@@ -7043,8 +6974,7 @@ def test_advance_active_milestone_sorts_double_digit_versions_numerically(
 ):
     config = tmp_path / "orbi.toml"
     config.write_text('active_milestone = "v0.9.0"\n', encoding="utf-8")
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([[
             {"title": "v0.9.0", "state": "closed"},
             {"title": "v0.10.0", "state": "open"},
@@ -7068,8 +6998,7 @@ def test_advance_active_milestone_selects_smallest_higher_open(
         {"title": "v0.3.1", "state": "open", "open_issues": 8},
         {"title": "not-a-version", "state": "open", "open_issues": 1},
     ]
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([milestones]),
     )
     with caplog.at_level("INFO"):
@@ -7086,8 +7015,7 @@ def test_advance_active_milestone_open_reconciles_notifications_without_write(
     config = tmp_path / "orbi.toml"
     config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
     calls = []
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append(command) or json.dumps([[
             {"title": "v0.3.0", "state": "open"},
         ]]),
@@ -7103,8 +7031,7 @@ def test_advance_active_milestone_closed_without_candidate_logs_and_keeps_value(
 ):
     config = tmp_path / "orbi.toml"
     config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([[
             {"title": "v0.3.0", "state": "closed"},
             {"title": "v0.2.0", "state": "open", "open_issues": 1},
@@ -7122,8 +7049,7 @@ def test_advance_active_milestone_closed_without_candidate_logs_and_keeps_value(
 def test_advance_active_milestone_missing_lists_open_milestones(monkeypatch, tmp_path):
     config = tmp_path / "orbi.toml"
     config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([[
             {"title": "v0.3.1", "state": "open", "open_issues": 8},
         ]]),
@@ -7135,8 +7061,7 @@ def test_advance_active_milestone_missing_lists_open_milestones(monkeypatch, tmp
 def test_advance_active_milestone_rejects_duplicate_title(monkeypatch, tmp_path):
     config = tmp_path / "orbi.toml"
     config.write_text('active_milestone = "v0.3.0"\n', encoding="utf-8")
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([[
             {"title": "v0.3.0", "state": "closed", "number": 1},
             {"title": "v0.3.0", "state": "closed", "number": 2},
@@ -7157,7 +7082,7 @@ def test_arm_release_ticket_adds_ready_to_matching_open_issue(
             return json.dumps([{"number": 385}])
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         runner.arm_release_ticket("owner/repo", "v0.4.0")
 
@@ -7178,8 +7103,7 @@ def test_arm_release_ticket_adds_ready_to_matching_open_issue(
 
 def test_arm_release_ticket_does_nothing_when_no_ticket_matches(monkeypatch):
     calls = []
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append(command) or "[]",
     )
 
@@ -7189,8 +7113,7 @@ def test_arm_release_ticket_does_nothing_when_no_ticket_matches(monkeypatch):
 
 
 def test_arm_release_ticket_rejects_malformed_issue_number(monkeypatch):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: '[{"number": "385"}]',
     )
 
@@ -7535,7 +7458,7 @@ def test_main_routes_fix_needed_resume_to_delivery_wait(
     lines and comments carry it (Issue #41). Issue #89: the wait
     receives the URL the resume verification returned, never the raw
     comment string."""
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
@@ -7581,7 +7504,7 @@ def test_main_routes_awaiting_review_resume_to_delivery_wait(
     lines and comments carry it (Issue #41). Issue #89: the wait
     receives the URL the resume verification returned, never the raw
     comment string."""
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text("source_repos = [\"owner/repo\"]\n", encoding="utf-8")
@@ -7645,10 +7568,10 @@ def test_process_issue_failure_without_session_still_carries_scene(
     monkeypatch, tmp_path,
 ):
     calls = []
-    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
-    monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
+    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
     monkeypatch.setattr(
         runner, "run_pi",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("pi died")),
@@ -7670,7 +7593,7 @@ def test_process_issue_failure_without_session_still_carries_scene(
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # Issue #239: the failure is terminal — `process_issue` returns `None`
     # instead of re-raising; the scene assertions below are unchanged.
     assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
@@ -7857,10 +7780,9 @@ def test_report_delivery_failure_caps_comment_and_names_session_log(
     """Issue #775: an oversized body is cut at the cap, the cut names
     the full session log path, and the failure reason stays first."""
     posted = []
-    monkeypatch.setattr(runner, "apply_label_patch", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "issue_labels", lambda *args, **kwargs: set())
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "apply_label_patch", lambda *args, **kwargs: None)
+    monkeypatch.setattr(seam, "issue_labels", lambda *args, **kwargs: set())
+    monkeypatch.setattr(seam, "comment_issue",
         lambda number, *, repo, body: posted.append(body),
     )
     error = subprocess.CalledProcessError(1, ["pi"])
@@ -7902,10 +7824,10 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     (tmp_path / "wt" / ".orbi" / "test.log").write_text(
         "coverage output\n1 failed\n", encoding="utf-8",
     )
-    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
-    monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
+    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
     monkeypatch.setattr(
         runner, "run_pi",
         lambda *args, **kwargs: (_ for _ in ()).throw(
@@ -7928,7 +7850,7 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(runner, "activity_snapshot", lambda session_dir: {
         "session_id": "sess-9",
         "session_file": str(tmp_path / "wt" / ".pi-session" / "s.jsonl"),
@@ -7962,10 +7884,10 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
 
 def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, caplog):
     calls = []
-    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
-    monkeypatch.setattr(runner, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
+    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: calls.append(("edit", args, kwargs)))
+    monkeypatch.setattr(seam, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
     monkeypatch.setattr(
         runner, "run_pi",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("git failed")),
@@ -7986,7 +7908,7 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
         calls.append(("comment", (), {"body": command[-1]}))
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # The main-path resume-context read (Issue #219) succeeds; the
     # failure-scene lookup is the one that dies on the disk error.
     snapshot_calls = []
@@ -8225,7 +8147,7 @@ def test_stream_pi_high_frequency_lines_carry_run_id_exactly_once(
     single grep still reconstructs the whole timeline. The run is
     bound like in the real journal (`process_issue` binds it before
     starting Pi)."""
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     records = fake_session_records() + [
         (0.5, {"type": "message", "id": "r1",
                "timestamp": fresh_timestamp(2),
@@ -8271,7 +8193,7 @@ def test_stream_pi_idle_lines_carry_run_id_exactly_once(
 ):
     """Issue #57: `pi_idle` / `pi_resumed` repeat the same rule as the
     other high-frequency lines: prefix only, no `run=` field."""
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     # a1 is 4s stale when it is polled, so the idle warning fires;
     # a2 arrives later with a fresh timestamp, so the resume does not
     # re-trigger the warning.
@@ -8314,7 +8236,7 @@ def test_stream_pi_scene_lines_keep_run_field_for_parse_scene(
     keep `run=` so `pi_activity.parse_scene` still returns the run id
     from the lines that need to be parsed. The run is bound like in
     the real journal."""
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     command = make_fake_pi(
         tmp_path, session_records=fake_session_records(),
         stderr="pi exploded", exit_code=3,
@@ -11953,7 +11875,7 @@ def _fake_preflight_run(monkeypatch, installed: Path) -> list:
             return "0123456789abcdef0123456789abcdef01234567"
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     return calls
 
 
@@ -12100,7 +12022,7 @@ def test_main_unit_drift_auto_sync_failure_blocks_claim(
             raise subprocess.CalledProcessError(1, command, stderr="nope")
         return ""
 
-    monkeypatch.setattr(runner, "run_command", failing_run)
+    monkeypatch.setattr(seam, "run_command", failing_run)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -12344,7 +12266,7 @@ def test_main_cli_install_refresh_runs_before_slot_and_claim(
         ).exists()
         return "unchanged"
 
-    monkeypatch.setattr(runner, "refresh_cli_install", fake_refresh)
+    monkeypatch.setattr(seam, "refresh_cli_install", fake_refresh)
     _write_prompts(tmp_path)
     config = tmp_path / "orbi.toml"
     config.write_text(
@@ -12377,7 +12299,7 @@ def test_main_cli_refresh_uses_deploy_home_not_repo_dir(
         seen["repo_dir"] = Path(repo_dir)
         return "unchanged"
 
-    monkeypatch.setattr(runner, "refresh_cli_install", fake_refresh)
+    monkeypatch.setattr(seam, "refresh_cli_install", fake_refresh)
     monkeypatch.setattr(runner, "check_unit_drift", lambda *a, **k: None)
     monkeypatch.setattr(
         runner, "check_transport",
@@ -12418,8 +12340,7 @@ def test_main_unit_drift_check_uses_deploy_home(
         seen.append(Path(repo_dir))
 
     monkeypatch.setattr(runner, "check_unit_drift", fake_check)
-    monkeypatch.setattr(
-        runner, "refresh_cli_install", lambda *a, **k: "unchanged",
+    monkeypatch.setattr(seam, "refresh_cli_install", lambda *a, **k: "unchanged",
     )
     monkeypatch.setattr(
         runner, "check_transport",
@@ -12472,8 +12393,7 @@ def test_main_cli_install_failure_fails_fast_before_slot_and_claim(
         AssertionError, match="must not run on cli install failure",
     ):
         fail_if_called()
-    monkeypatch.setattr(
-        runner, "refresh_cli_install",
+    monkeypatch.setattr(seam, "refresh_cli_install",
         lambda *a, **k: (_ for _ in ()).throw(
             runner.CliInstallError(
                 "editable CLI install failed for /repo: uv exploded "
@@ -12516,7 +12436,7 @@ def fake_pr_view(monkeypatch, state: str) -> tuple[list, object]:
             return json.dumps({"state": state, "statusCheckRollup": []})
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     return seen, fake_run
 
 
@@ -12548,14 +12468,13 @@ def test_pr_state_fails_fast_on_non_object_json(monkeypatch):
     def fake_run(command, **kwargs):
         return json.dumps(["OPEN"])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(ValueError, match="pr view must be a JSON object"):
         runner.pr_state(PR_URL, "owner/repo")
 
 
 def test_pr_delivery_status_rejects_non_array_check_rollup(monkeypatch):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda *a, **k: json.dumps({"state": "OPEN", "statusCheckRollup": {}}),
     )
     with pytest.raises(ValueError, match="statusCheckRollup must be a JSON array"):
@@ -12563,8 +12482,7 @@ def test_pr_delivery_status_rejects_non_array_check_rollup(monkeypatch):
 
 
 def test_pr_delivery_status_ignores_malformed_check_entry(monkeypatch):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda *a, **k: json.dumps({
             "state": "OPEN", "statusCheckRollup": [None],
         }),
@@ -12576,8 +12494,7 @@ def test_finish_progress_blocked_is_a_noop_without_run_id(monkeypatch):
     """Without a bound run id there is no tracked comment to update
     (the failure comment simply carries no marker)."""
     calls = []
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append(command) or "[]",
     )
     runner._finish_progress(
@@ -12605,7 +12522,7 @@ def test_finish_progress_blocked_creates_the_comment_when_missing(
         return json.dumps({"id": 78, "body": body[len("body="):],
                            "url": "https://x/78"})
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     runner._finish_progress(
         39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
         "the failure", "the next step", title="Blocked task",
@@ -12642,7 +12559,7 @@ def test_finish_progress_carries_the_actual_role_and_round(
         return json.dumps({"id": 78, "body": body[len("body="):],
                            "url": "https://x/78"})
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     runner._finish_progress(
         39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
         "the failure", "the next step", title="Blocked task",
@@ -12672,7 +12589,7 @@ def test_finish_progress_defaults_to_review_round_zero(monkeypatch):
         return json.dumps({"id": 78, "body": body[len("body="):],
                            "url": "https://x/78"})
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     runner._finish_progress(
         39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
         "the failure", "the next step", title="Blocked task",
@@ -12702,7 +12619,7 @@ def test_finish_progress_renders_the_fix_needed_scene(monkeypatch):
         return json.dumps({"id": 78, "body": body[len("body="):],
                            "url": "https://x/78"})
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     runner._finish_progress(
         39, "a1b2c3d4", "owner/repo", None, None, "https://x/pull/46",
         "the failure",
@@ -12730,7 +12647,7 @@ def test_finish_progress_renders_the_fix_needed_scene(monkeypatch):
 def test_wait_for_delivery_returns_when_pr_merged(monkeypatch, caplog):
     seen, _ = fake_pr_view(monkeypatch, "MERGED")
     issue = {"number": 39, "title": "task", "body": ""}
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
     runner.wait_for_delivery(PR_URL, issue, {}, "owner/repo")
     assert len(seen) == 1
@@ -12767,7 +12684,7 @@ def test_wait_for_delivery_keeps_waiting_while_pr_open(
             return "orbi/owner-repo-issue-39"
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(runner.time, "sleep", lambda s: None)
     config = runner.RunnerConfig(repo_dir=tmp_path, base_branch="main")
     # The derived worktree exists: a normal resume reaches the review
@@ -12835,7 +12752,7 @@ def test_wait_for_delivery_sleeps_poll_interval_between_review_rounds(
             return "orbi/owner-repo-issue-39"
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # The fake rejects anything that is not a pr/issue view.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "pr", "list"])
@@ -12890,7 +12807,7 @@ def test_wait_for_delivery_auto_merges_on_clean_review(
             return "orbi/owner-repo-issue-39"
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # The fake rejects anything that is not a pr/issue view.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "list"])
@@ -12903,7 +12820,7 @@ def test_wait_for_delivery_auto_merges_on_clean_review(
     (tmp_path / ".worktrees"
      / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
     issue = {"number": 39, "title": "task", "body": ""}
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
     runner.wait_for_delivery(
         PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
@@ -12951,7 +12868,7 @@ def test_wait_for_delivery_passes_p0_priority_to_the_review(
     # The fake rejects anything that is not a pr/issue view.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "list"])
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
 
     def fake_review(*args, **kwargs):
         review_calls.append(kwargs)
@@ -12964,7 +12881,7 @@ def test_wait_for_delivery_passes_p0_priority_to_the_review(
         "number": 39, "title": "p0 task", "body": "",
         "labels": [{"name": "ai-pr-opened"}, {"name": "p0"}],
     }
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
     runner.wait_for_delivery(
         PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
@@ -13031,19 +12948,17 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
             ]})
         return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     edits: list = []
     comments: list = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
     )
     issue = {"number": 39, "title": "task", "body": ""}
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
     runner.wait_for_delivery(
         PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
@@ -13134,19 +13049,17 @@ def test_wait_for_delivery_marks_blocked_when_review_fails_while_fix_needed(
         # next review session).
         return json.dumps({"labels": [{"name": "ai-fix-needed"}]})
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     edits: list = []
     comments: list = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
     )
     issue = {"number": 39, "title": "task", "body": ""}
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
     runner.wait_for_delivery(
         PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
@@ -13243,16 +13156,14 @@ def test_wait_for_delivery_blocks_when_scene_base_differs_from_config(
             ]})
         return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(runner.time, "sleep", lambda s: None)
     edits: list = []
     comments: list = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
     )
     # The independent review must never run: the base mismatch is
@@ -13263,7 +13174,7 @@ def test_wait_for_delivery_blocks_when_scene_base_differs_from_config(
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     issue = {"number": 39, "title": "task", "body": ""}
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
     # The configured base is main; the scene froze develop.
     runner.wait_for_delivery(
@@ -13374,7 +13285,7 @@ def test_wait_for_delivery_worktree_missing_stays_fix_needed(
             return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(progress, "runner_fingerprint", lambda: "8a12fb1c")
     # The fake rejects anything that is not a pr/issue view or the
     # progress API.
@@ -13382,12 +13293,10 @@ def test_wait_for_delivery_worktree_missing_stays_fix_needed(
         fake_run(["git", "fetch"])
     edits: list = []
     comments: list = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
     )
     # The independent review must never run: the missing worktree is
@@ -13398,7 +13307,7 @@ def test_wait_for_delivery_worktree_missing_stays_fix_needed(
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     issue = {"number": 39, "title": "task", "body": ""}
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
     runner.wait_for_delivery(
         PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
@@ -13510,15 +13419,13 @@ def test_wait_for_delivery_worktree_missing_while_fix_needed_keeps_label(
         # next review session).
         return json.dumps({"labels": [{"name": "ai-fix-needed"}]})
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     edits: list = []
     comments: list = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
     )
     reviews: list = []
@@ -13527,7 +13434,7 @@ def test_wait_for_delivery_worktree_missing_while_fix_needed_keeps_label(
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     issue = {"number": 39, "title": "task", "body": ""}
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     runner.wait_for_delivery(
         PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
@@ -13584,7 +13491,7 @@ def test_wait_for_delivery_runs_review_when_fix_needed(
             return "orbi/owner-repo-issue-39"
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(runner.time, "sleep", lambda s: None)
     # The fake rejects anything that is not a pr/issue view.
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -13602,7 +13509,7 @@ def test_wait_for_delivery_runs_review_when_fix_needed(
         lambda *args, **kwargs: reviews.append((args, kwargs)) or False,
     )
     issue = {"number": 39, "title": "task", "body": "stale body"}
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
     config = runner.RunnerConfig(repo_dir=tmp_path, base_branch="main")
     runner.wait_for_delivery(PR_URL, issue, config, "owner/repo")
@@ -13630,7 +13537,7 @@ def test_issue_labels_returns_names_and_fails_fast(monkeypatch):
             {"name": "ai-fix-needed"}, {"other": 1},
         ]})
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.issue_labels(39, "owner/repo") == [
         "ai-ready", "ai-fix-needed",
     ]
@@ -13638,14 +13545,14 @@ def test_issue_labels_returns_names_and_fails_fast(monkeypatch):
     def bad_run(command, **kwargs):
         return json.dumps({"labels": "nope"})
 
-    monkeypatch.setattr(runner, "run_command", bad_run)
+    monkeypatch.setattr(seam, "run_command", bad_run)
     with pytest.raises(ValueError, match="issue labels must be a JSON array"):
         runner.issue_labels(39, "owner/repo")
 
     def bad_run2(command, **kwargs):
         return json.dumps(["ai-ready"])
 
-    monkeypatch.setattr(runner, "run_command", bad_run2)
+    monkeypatch.setattr(seam, "run_command", bad_run2)
     with pytest.raises(ValueError, match="issue view must be a JSON object"):
         runner.issue_labels(39, "owner/repo")
 
@@ -13698,19 +13605,17 @@ def test_wait_for_delivery_marks_blocked_when_pr_closed_unmerged(
                                "url": "https://x/78"})
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     edits: list = []
     comments: list = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
     )
     issue = {"number": 39, "title": "task", "body": ""}
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
     runner.wait_for_delivery(PR_URL, issue, {}, "owner/repo")
     # The Issue is marked ai-blocked; the blocked patch clears every
@@ -13770,7 +13675,7 @@ def test_wait_for_delivery_review_failure_without_bound_run_id(
 ):
     """When no run id is bound the review-failure comment simply carries
     no marker (the Issue is still marked ai-blocked)."""
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"] and command[2] == "view":
@@ -13781,18 +13686,16 @@ def test_wait_for_delivery_review_failure_without_bound_run_id(
             return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # The fake rejects anything that is not a pr/issue view.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "list"])
     edits: list = []
     comments: list = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
     )
     issue = {"number": 39, "title": "task", "body": ""}
@@ -13843,8 +13746,8 @@ def test_wait_for_delivery_repairs_in_progress_label_and_logs_ci(
             return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     monkeypatch.setattr(runner, "review_and_merge_if_clean", lambda *a, **k: True)
     (tmp_path / ".worktrees" /
      "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
@@ -13868,15 +13771,15 @@ def test_wait_for_delivery_blocks_when_in_progress_label_repair_fails(
             return json.dumps({"state": "OPEN", "statusCheckRollup": []})
         return json.dumps({"labels": [{"name": "ai-in-progress"}]})
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     patches = []
     def fake_patch(number, **kwargs):
         patches.append(kwargs)
         if kwargs["event"] == runner.EVENT_PR_OPENED:
             raise RuntimeError("label API unavailable")
-    monkeypatch.setattr(runner, "apply_label_patch", fake_patch)
-    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "apply_label_patch", fake_patch)
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     runner.wait_for_delivery(
         PR_URL, {"number": 39, "title": "task", "body": ""},
         {}, "owner/repo",
@@ -13906,12 +13809,12 @@ def test_wait_for_delivery_keeps_holding_when_no_delivery_label(
             return ""
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # The fake rejects anything that is not a pr/issue view.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "list"])
     monkeypatch.setattr(runner.time, "sleep", lambda s: None)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
     issue = {"number": 39, "title": "task", "body": ""}
     caplog.set_level("INFO")
     runner.wait_for_delivery(PR_URL, issue, {}, "owner/repo")
@@ -13924,7 +13827,7 @@ def test_wait_for_delivery_keeps_holding_when_no_delivery_label(
 def test_wait_for_delivery_logs_awaiting_without_bound_run_id(monkeypatch, caplog):
     """When no run id is bound the wait still works: the failure comment
     simply carries no marker."""
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
 
     def fake_run(command, **kwargs):
         if command[:2] == ["gh", "pr"] and command[2] == "view":
@@ -13934,14 +13837,13 @@ def test_wait_for_delivery_logs_awaiting_without_bound_run_id(monkeypatch, caplo
             return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # The fake rejects anything that is not a pr/issue view.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "list"])
     comments: list = []
-    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
     )
     caplog.set_level("INFO")
@@ -13990,18 +13892,16 @@ def _review_round_env(
     # The fake rejects anything it does not implement.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "pr", "list"])
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     if with_worktree:
         (tmp_path / ".worktrees"
          / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
     edits: list = []
     comments: list = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *args, **kwargs: comments.append((args, kwargs)),
     )
     monkeypatch.setattr(
@@ -14015,11 +13915,10 @@ def _review_round_env(
         or review_result,
     )
     publishes: list = []
-    monkeypatch.setattr(
-        runner, "_safe_publish",
+    monkeypatch.setattr(seam, "_safe_publish",
         lambda **kwargs: publishes.append(kwargs),
     )
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     return edits, comments, reviews, publishes
 
 
@@ -15657,8 +15556,8 @@ def test_stop_handler_idle_logs_run_stopped_idle_and_exits(
 ):
     # No run in flight (before the claim): the stop logs result=idle
     # WITHOUT any invented issue fields and exits 143.
-    monkeypatch.setattr(runner, "_ACTIVE_RUN", None)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(journal, "_ACTIVE_RUN", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
     died = {}
     monkeypatch.setattr(
         runner, "_die_from_signal",
@@ -15684,8 +15583,8 @@ def test_stop_handler_active_run_logs_stopping_then_stopped_and_exits(
     # run_stopped result=interrupted, then the process exits 143.
     worktree = tmp_path / "wt"
     worktree.mkdir()
-    monkeypatch.setattr(runner, "_ACTIVE_RUN", None)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_ACTIVE_RUN", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     runner.set_active_run(
         48, "Log the stop scene", "orbi/owner-repo-issue-48",
         str(worktree),
@@ -15733,8 +15632,8 @@ def test_stop_handler_active_run_uses_activity_snapshot_for_scene(
     worktree = tmp_path / "wt"
     worktree.mkdir()
     _write_session_file(worktree, session_id="sess-48")
-    monkeypatch.setattr(runner, "_ACTIVE_RUN", None)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_ACTIVE_RUN", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     runner.set_active_run(48, "t", "b", str(worktree))
     died = {}
     monkeypatch.setattr(
@@ -15757,8 +15656,8 @@ def test_stop_handler_active_run_without_live_child_still_stops(
     # are still logged and the process exits 143.
     worktree = tmp_path / "wt"
     worktree.mkdir()
-    monkeypatch.setattr(runner, "_ACTIVE_RUN", None)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_ACTIVE_RUN", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     runner.set_active_run(48, "t", "b", str(worktree))
     died = {}
     monkeypatch.setattr(
@@ -15781,12 +15680,11 @@ def test_stop_handler_snapshot_failure_still_logs_and_exits(
 ):
     # A failing activity snapshot never swallows the stop: the scene
     # falls back to `-` for phase/session and the stop still exits.
-    monkeypatch.setattr(
-        runner, "_ACTIVE_RUN",
+    monkeypatch.setattr(journal, "_ACTIVE_RUN",
         {"issue": 48, "title": "t", "branch": "b", "worktree": "/w",
          "pi": None},
     )
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     died = {}
     monkeypatch.setattr(
         runner, "_die_from_signal",
@@ -15815,8 +15713,8 @@ def test_stop_handler_reinstalls_default_disposition_and_raises_signal(
     # disposition and re-raises the signal at itself: the process dies
     # from the ORIGINAL signal (systemd sees a signal-caused stop, exit
     # 143) and a handler crash can never swallow the stop.
-    monkeypatch.setattr(runner, "_ACTIVE_RUN", None)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(journal, "_ACTIVE_RUN", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
     monkeypatch.setattr(runner.os, "_exit", lambda code: None)
     raised = {}
     monkeypatch.setattr(
@@ -15829,22 +15727,22 @@ def test_stop_handler_reinstalls_default_disposition_and_raises_signal(
 
 
 def test_set_active_run_binds_scene_and_pi_tracking(monkeypatch):
-    monkeypatch.setattr(runner, "_ACTIVE_RUN", None)
+    monkeypatch.setattr(journal, "_ACTIVE_RUN", None)
     runner.set_active_run(7, "t", "b", "/w")
-    assert runner._ACTIVE_RUN == {
+    assert journal._ACTIVE_RUN == {
         "issue": 7, "title": "t", "branch": "b", "worktree": "/w",
         "pi": None,
     }
     child = object()
     runner.set_active_pi(child)
-    assert runner._ACTIVE_RUN["pi"] is child
+    assert journal._ACTIVE_RUN["pi"] is child
     runner.set_active_pi(None)
-    assert runner._ACTIVE_RUN["pi"] is None
+    assert journal._ACTIVE_RUN["pi"] is None
     runner.clear_active_run()
-    assert runner._ACTIVE_RUN is None
+    assert journal._ACTIVE_RUN is None
     # set_active_pi without a bound run is a no-op (never crashes).
     runner.set_active_pi(child)
-    assert runner._ACTIVE_RUN is None
+    assert journal._ACTIVE_RUN is None
 
 
 def test_main_installs_the_stop_handler(monkeypatch, tmp_path):
@@ -15872,7 +15770,7 @@ def test_main_installs_the_stop_handler(monkeypatch, tmp_path):
         runner, "pick_next_delivery", lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(runner, "acquire_slot", lambda *args: Mock(release=lambda: None))
-    monkeypatch.setattr(runner, "refresh_cli_install", lambda *a, **k: "unchanged")
+    monkeypatch.setattr(seam, "refresh_cli_install", lambda *a, **k: "unchanged")
     monkeypatch.setattr(runner, "check_unit_drift", lambda *a, **k: None)
     monkeypatch.setattr(runner, "check_transport", lambda *a, **k: {})
     assert runner.main(["--config", str(config_path)]) == 0
@@ -16289,8 +16187,7 @@ def test_parse_release_declaration_scope_from_milestone():
 
 def test_verify_release_version_file_passes_when_the_file_exists(monkeypatch):
     commands = []
-    monkeypatch.setattr(
-        release, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: commands.append((command, kwargs))
         or "pyproject.toml\npackage.json\n",
     )
@@ -16300,8 +16197,7 @@ def test_verify_release_version_file_passes_when_the_file_exists(monkeypatch):
 
 
 def test_verify_release_version_file_skips_none_without_probing(monkeypatch):
-    monkeypatch.setattr(
-        release, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: (_ for _ in ()).throw(
             AssertionError(f"unexpected command: {command}")),
     )
@@ -16309,8 +16205,7 @@ def test_verify_release_version_file_skips_none_without_probing(monkeypatch):
 
 
 def test_verify_release_version_file_lists_existing_supported_files(monkeypatch):
-    monkeypatch.setattr(
-        release, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: "package.json\nCargo.toml\nREADME.md\n",
     )
     with pytest.raises(RuntimeError) as excinfo:
@@ -16326,8 +16221,7 @@ def test_verify_release_version_file_lists_existing_supported_files(monkeypatch)
 
 
 def test_verify_release_version_file_without_supported_file_points_at_none(monkeypatch):
-    monkeypatch.setattr(
-        release, "run_command", lambda command, **kwargs: "README.md\n",
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "README.md\n",
     )
     with pytest.raises(RuntimeError) as excinfo:
         release.verify_release_version_file(
@@ -16386,16 +16280,15 @@ def test_process_issue_routes_release_to_process_release(monkeypatch):
     # Issue #708: the release dispatch now direct-reads the live label
     # state before dispatching (`gh issue view`) — the fresh ticket here
     # answers with no labels, and no slot config means no yield path.
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps({"labels": []}),
     )
     monkeypatch.setattr(release, "process_release",
                         lambda i, c, r: calls.append("release") or "rel-url")
     monkeypatch.setattr(runner, "run_pi", Mock(
         side_effect=AssertionError("run_pi must not run for a release task")))
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "freeze_base", lambda r, b: "abc")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "freeze_base", lambda r, b: "abc")
     result = runner.process_issue(issue, runner.RunnerConfig(base_branch="main"), "o/r")
     assert result == runner.IssueResult("release", "rel-url")
     assert calls == ["release"]
@@ -16501,17 +16394,17 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
     edits = []
     comments = []
     commands = []
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
-    monkeypatch.setattr(runner, "edit_issue",
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "set_run_id", lambda run_id: None)
+    monkeypatch.setattr(seam, "edit_issue",
                         lambda number, **kwargs: edits.append((number, kwargs)))
-    monkeypatch.setattr(runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
                         lambda number, **kwargs: comments.append((number, kwargs)))
     monkeypatch.setattr(runner, "run_ticket_agent",
                         lambda *args, **kwargs: "\u53ef\u4ee5\u76f4\u63a5\u53d1\u5e03\u7684\u5e16\u5b50")
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
-    monkeypatch.setattr(runner, "_safe_publish", lambda **kwargs: None)
-    monkeypatch.setattr(runner, "run_command",
+    monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
+    monkeypatch.setattr(seam, "run_command",
                         lambda command, **kwargs: commands.append(command) or "")
 
     result = runner.process_issue(issue, runner.RunnerConfig(repo_dir=Path("/repo")), "o/r")
@@ -16531,14 +16424,14 @@ def test_process_ticket_only_rejects_empty_agent_content(monkeypatch):
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
              "labels": [{"name": "ai-content-only"}]}
     edits = []
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
-    monkeypatch.setattr(runner, "edit_issue",
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "set_run_id", lambda run_id: None)
+    monkeypatch.setattr(seam, "edit_issue",
                         lambda number, **kwargs: edits.append((number, kwargs)))
-    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "run_ticket_agent", lambda *args, **kwargs: "")
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
-    monkeypatch.setattr(runner, "_safe_publish", lambda **kwargs: None)
+    monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
     with pytest.raises(RuntimeError, match="returned no content"):
         runner.process_ticket_only(issue, runner.RunnerConfig(repo_dir=Path("/repo")), "o/r")
     assert edits[-1][1]["add"] == "ai-blocked"
@@ -16549,16 +16442,16 @@ def test_process_ticket_only_failure_marks_blocked_without_git_delivery(monkeypa
              "labels": [{"name": "ai-content-only"}]}
     edits = []
     comments = []
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
-    monkeypatch.setattr(runner, "edit_issue",
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "set_run_id", lambda run_id: None)
+    monkeypatch.setattr(seam, "edit_issue",
                         lambda number, **kwargs: edits.append((number, kwargs)))
-    monkeypatch.setattr(runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
                         lambda number, **kwargs: comments.append((number, kwargs)))
     monkeypatch.setattr(runner, "run_ticket_agent",
                         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Pi failed")))
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
-    monkeypatch.setattr(runner, "_safe_publish", lambda **kwargs: None)
+    monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
     with pytest.raises(RuntimeError, match="Pi failed"):
         runner.process_ticket_only(issue, runner.RunnerConfig(repo_dir=Path("/repo")), "o/r")
     assert edits[-1] == (99, {"repo": "o/r", "add": "ai-blocked",
@@ -16570,15 +16463,15 @@ def test_process_ticket_only_failure_marks_blocked_without_git_delivery(monkeypa
 def test_process_ticket_only_keeps_original_error_when_failure_reporting_fails(monkeypatch):
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
              "labels": [{"name": "ai-content-only"}]}
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
-    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "comment_issue",
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "set_run_id", lambda run_id: None)
+    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(seam, "comment_issue",
                         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("comment failed")))
     monkeypatch.setattr(runner, "run_ticket_agent",
                         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Pi failed")))
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
-    monkeypatch.setattr(runner, "_safe_publish", lambda **kwargs: None)
+    monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
     with pytest.raises(RuntimeError, match="Pi failed"):
         runner.process_ticket_only(issue, runner.RunnerConfig(repo_dir=Path("/repo")), "o/r")
 
@@ -16589,31 +16482,31 @@ def test_process_issue_keeps_normal_flow_without_release_label(
     issue = {"number": 99, "title": "Normal", "body": "",
              "labels": [{"name": "ai-ready"}]}
     monkeypatch.setattr(runner, "is_release", lambda i: False)
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "set_run_id", lambda rid: None)
-    monkeypatch.setattr(runner, "has_in_progress_label", lambda n, r: False)
-    monkeypatch.setattr(runner, "freeze_base", lambda r, b: "abc123")
-    monkeypatch.setattr(runner, "edit_issue", Mock())
-    monkeypatch.setattr(runner, "set_active_run", Mock())
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "set_run_id", lambda rid: None)
+    monkeypatch.setattr(seam, "has_in_progress_label", lambda n, r: False)
+    monkeypatch.setattr(seam, "freeze_base", lambda r, b: "abc123")
+    monkeypatch.setattr(seam, "edit_issue", Mock())
+    monkeypatch.setattr(seam, "set_active_run", Mock())
     # The worktree exists: `create_worktree` always returns a real
     # directory (the run state file is written into it, Issue #219).
     worktree = tmp_path / "wt"
     worktree.mkdir()
-    monkeypatch.setattr(runner, "create_worktree", lambda *a, **kwargs: worktree)
-    monkeypatch.setattr(runner, "comment_issue", Mock())
+    monkeypatch.setattr(seam, "create_worktree", lambda *a, **kwargs: worktree)
+    monkeypatch.setattr(seam, "comment_issue", Mock())
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
     monkeypatch.setattr(runner, "run_pi",
                         lambda *a, **k: "https://github.com/o/r/pull/1")
     monkeypatch.setattr(runner, "deliver_pr",
                         lambda *a, **k: "https://github.com/o/r/pull/1")
-    monkeypatch.setattr(runner, "run_command", lambda c, **k: "")
+    monkeypatch.setattr(seam, "run_command", lambda c, **k: "")
     monkeypatch.setattr(runner, "wait_for_delivery", Mock())
-    monkeypatch.setattr(runner, "edit_issue", Mock())
+    monkeypatch.setattr(seam, "edit_issue", Mock())
     monkeypatch.setattr(runner, "LOGGER", Mock())
     monkeypatch.setattr(runner, "activity_snapshot", lambda p: None)
-    monkeypatch.setattr(runner, "_safe_publish", lambda **k: None)
+    monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
     monkeypatch.setattr(runner, "format_end_scene", lambda **k: "end")
-    monkeypatch.setattr(runner, "issue_context", lambda r, n: "#n")
+    monkeypatch.setattr(seam, "issue_context", lambda r, n: "#n")
     monkeypatch.setattr(runner, "format_run_scene", lambda *a, **k: "scene")
     monkeypatch.setattr(runner, "_finish_progress", Mock())
     runner.process_issue(
@@ -16636,19 +16529,19 @@ def _ops_issue_mocks(monkeypatch, tmp_path, *, head_sha: str, dirty: str):
     commands: list[list[str]] = []
     configs: list[dict] = []
     monkeypatch.setattr(runner, "is_release", lambda i: False)
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "set_run_id", lambda rid: None)
-    monkeypatch.setattr(runner, "has_in_progress_label", lambda n, r: False)
-    monkeypatch.setattr(runner, "freeze_base", lambda r, b: "abc123")
-    monkeypatch.setattr(runner, "edit_issue", Mock())
-    monkeypatch.setattr(runner, "set_active_run", Mock())
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "set_run_id", lambda rid: None)
+    monkeypatch.setattr(seam, "has_in_progress_label", lambda n, r: False)
+    monkeypatch.setattr(seam, "freeze_base", lambda r, b: "abc123")
+    monkeypatch.setattr(seam, "edit_issue", Mock())
+    monkeypatch.setattr(seam, "set_active_run", Mock())
     worktree = tmp_path / "wt"
     worktree.mkdir()
-    monkeypatch.setattr(runner, "create_worktree", lambda *a, **k: worktree)
-    monkeypatch.setattr(runner, "comment_issue", Mock())
+    monkeypatch.setattr(seam, "create_worktree", lambda *a, **k: worktree)
+    monkeypatch.setattr(seam, "comment_issue", Mock())
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
     monkeypatch.setattr(runner, "activity_snapshot", lambda p: None)
-    monkeypatch.setattr(runner, "_safe_publish", lambda **k: None)
+    monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
     monkeypatch.setattr(
         runner, "run_pi",
         lambda issue_arg, wt, config, repo, **k: configs.append(config),
@@ -16664,7 +16557,7 @@ def _ops_issue_mocks(monkeypatch, tmp_path, *, head_sha: str, dirty: str):
             return dirty
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     return issue, commands, worktree, configs
 
 
@@ -16856,8 +16749,8 @@ def make_scope_gh(monkeypatch, *, pr_state_map=None, issue_state_map=None,
             return ""
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
-    monkeypatch.setattr(release, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     return calls
 
 
@@ -16911,8 +16804,8 @@ def test_verify_release_scope_rejects_merged_pr_outside_release_base(
             raise subprocess.CalledProcessError(1, command)
         return original(command, **kwargs)
 
-    monkeypatch.setattr(release, "run_command", not_an_ancestor)
-    monkeypatch.setattr(runner, "run_command", not_an_ancestor)
+    monkeypatch.setattr(seam, "run_command", not_an_ancestor)
+    monkeypatch.setattr(seam, "run_command", not_an_ancestor)
     with pytest.raises(RuntimeError, match="not contained in release commit"):
         release.verify_release_scope("o/r", [123], Path("/repo"), "release123")
 
@@ -16927,8 +16820,8 @@ def test_verify_release_scope_reraises_git_ancestry_check_failure(
             raise subprocess.CalledProcessError(128, command, stderr="bad object")
         return original(command, **kwargs)
 
-    monkeypatch.setattr(release, "run_command", git_failure)
-    monkeypatch.setattr(runner, "run_command", git_failure)
+    monkeypatch.setattr(seam, "run_command", git_failure)
+    monkeypatch.setattr(seam, "run_command", git_failure)
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
         release.verify_release_scope("o/r", [123], Path("/repo"), "release123")
     assert excinfo.value.stderr == "bad object"
@@ -16962,8 +16855,8 @@ def test_verify_release_scope_reraises_real_gh_failure(monkeypatch):
         raise subprocess.CalledProcessError(
             1, command, stderr="HTTP 403: rate limited",
         )
-    monkeypatch.setattr(release, "run_command", fake_run_command)
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     with pytest.raises(subprocess.CalledProcessError):
         release.verify_release_scope("o/r", [123], Path("/repo"), "release123")
 
@@ -16994,8 +16887,8 @@ def test_derive_release_scope_flattens_multi_page_results(monkeypatch):
             return json.dumps([[]])
         return json.dumps([page_one, page_two])
 
-    monkeypatch.setattr(release, "run_command", fake_run)
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     scope, open_evidence = release.derive_release_scope_from_milestone(
         "o/r", "v0.9.0",
     )
@@ -17034,8 +16927,8 @@ def make_milestone_gh(monkeypatch, *, milestones=None, items_by_milestone=None):
             return json.dumps([bucket.get(f"issues_{state}", [])])
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
-    monkeypatch.setattr(release, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     return calls
 
 
@@ -17174,10 +17067,10 @@ def make_gate_gh(monkeypatch, *, leftover_labels=None, check_runs=None,
             ])
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(release, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     # the staying helpers the moved gates call (`list_issues`) resolve
     # the primitive in the runner globals.
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     return calls
 
 
@@ -17221,8 +17114,8 @@ def make_registration_lag_gh(monkeypatch, api_responses):
             ])
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(release, "run_command", fake_run_command)
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     return fake_run_command
 
 
@@ -17348,8 +17241,8 @@ def test_check_release_gates_waits_for_pending_ci_then_passes(
             ])
         return "[]"  # the label scans and the open-PR scan
 
-    monkeypatch.setattr(release, "run_command", fake_run_command)
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
     waits = []
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
@@ -17389,8 +17282,8 @@ def test_check_release_gates_waits_then_fails_on_final_ci_failure(
             ])
         return "[]"
 
-    monkeypatch.setattr(release, "run_command", fake_run_command)
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
     with pytest.raises(RuntimeError, match="check 'tests' is completed/failure"):
         release.check_release_gates("o/r", "main", "abc123", 99)
@@ -17407,8 +17300,8 @@ def test_check_release_gates_ci_wait_times_out(monkeypatch, caplog):
             ])
         return "[]"
 
-    monkeypatch.setattr(release, "run_command", fake_run_command)
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     monkeypatch.setattr(runner.time, "sleep", lambda _s: None)
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"), pytest.raises(
         RuntimeError,
@@ -17433,8 +17326,8 @@ def test_check_release_gates_reports_missing_checks_permission(monkeypatch):
             )
         return "[]"
 
-    monkeypatch.setattr(release, "run_command", fake_run_command)
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     with pytest.raises(RuntimeError, match=r"lacks Checks:read"):
         release.check_release_gates("o/r", "main", "abc123", 99)
 
@@ -17542,7 +17435,7 @@ def test_process_release_parse_failure_publishes_final_comment(
     release routing and the failure path are the production ones.
     """
     gh_calls, posted = make_fake_gh(monkeypatch)
-    monkeypatch.setattr(release, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     issue = {
         "number": 467,
         "title": "Release v0.4.2",
@@ -17631,11 +17524,10 @@ def test_prepare_release_version_updates_sources_and_commits(tmp_path, monkeypat
         '__version__ = "0.2.0"\n', encoding="utf-8",
     )
     calls = []
-    monkeypatch.setattr(
-        release, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "newsha",
     )
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "newsha")
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "newsha")
 
     assert release.prepare_release_version(
         work, "v0.3.0", "main",
@@ -17649,7 +17541,7 @@ def test_prepare_release_version_updates_sources_and_commits(tmp_path, monkeypat
          {"cwd": work}),
         (["git", "push", "origin", "HEAD:refs/heads/main"], {
             "cwd": work,
-            "timeout": runner.GIT_NETWORK_TIMEOUT_SECONDS,
+            "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS,
         }),
         (["git", "rev-parse", "HEAD"], {"cwd": work}),
     ]
@@ -17662,11 +17554,10 @@ def test_prepare_release_version_updates_package_json(tmp_path, monkeypatch):
         '{\n  "name": "cloud",\n  "version": "0.2.0"\n}\n', encoding="utf-8",
     )
     calls = []
-    monkeypatch.setattr(
-        release, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "newsha",
     )
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "newsha")
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "newsha")
 
     assert release.prepare_release_version(
         work, "v0.3.0", "main", "package.json",
@@ -17678,7 +17569,7 @@ def test_prepare_release_version_updates_package_json(tmp_path, monkeypatch):
          {"cwd": work}),
         (["git", "push", "origin", "HEAD:refs/heads/main"], {
             "cwd": work,
-            "timeout": runner.GIT_NETWORK_TIMEOUT_SECONDS,
+            "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS,
         }),
         (["git", "rev-parse", "HEAD"], {"cwd": work}),
     ]
@@ -17715,11 +17606,10 @@ def test_prepare_release_version_updates_ecosystem_file(
     work.mkdir()
     (work / version_file).write_text(source, encoding="utf-8")
     calls = []
-    monkeypatch.setattr(
-        release, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "newsha",
     )
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "newsha")
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "newsha")
 
     assert release.prepare_release_version(
         work, "v0.3.0", "main", version_file,
@@ -17737,11 +17627,10 @@ def test_prepare_release_version_ecosystem_file_is_idempotent(tmp_path, monkeypa
     work.mkdir()
     (work / "gradle.properties").write_text("version=0.3.0\n", encoding="utf-8")
     calls = []
-    monkeypatch.setattr(
-        release, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "head",
     )
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
     assert release.prepare_release_version(
         work, "v0.3.0", "main", "gradle.properties",
     ) == "head"
@@ -17766,11 +17655,10 @@ def test_prepare_release_version_rejects_cargo_without_package_version(tmp_path)
 
 def test_prepare_release_version_none_does_not_require_a_file(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(
-        release, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "head",
     )
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
     assert release.prepare_release_version(tmp_path, "v0.3.0", "main", "none") == "head"
     assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": tmp_path})]
 
@@ -17787,11 +17675,10 @@ def test_prepare_release_version_package_json_is_idempotent(tmp_path, monkeypatc
         '{"name": "cloud", "version": "0.3.0"}\n', encoding="utf-8",
     )
     calls = []
-    monkeypatch.setattr(
-        release, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "head",
     )
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
 
     assert release.prepare_release_version(
         work, "v0.3.0", "main", "package.json",
@@ -17826,11 +17713,10 @@ def test_prepare_release_version_none_does_not_change_files(tmp_path, monkeypatc
     marker = work / "README.md"
     marker.write_text("unchanged\n", encoding="utf-8")
     calls = []
-    monkeypatch.setattr(
-        release, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "head",
     )
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
 
     assert release.prepare_release_version(work, "v0.3.0", "main", "none") == "head"
     assert marker.read_text() == "unchanged\n"
@@ -17879,11 +17765,10 @@ def test_prepare_release_version_is_idempotent(tmp_path, monkeypatch):
         '__version__ = "0.3.0"\n', encoding="utf-8",
     )
     calls = []
-    monkeypatch.setattr(
-        release, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append((command, kwargs)) or "head",
     )
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: calls.append((command, kwargs)) or "head")
     assert release.prepare_release_version(work, "v0.3.0", "main") == "head"
     assert calls == [(["git", "rev-parse", "HEAD"], {"cwd": work})]
 
@@ -17910,8 +17795,8 @@ def test_release_tag_commit_reraises_real_fetch_failure(tmp_path, monkeypatch):
     work, _ = make_local_remote_pair(tmp_path)
     def fail(command, **kwargs):
         raise subprocess.CalledProcessError(1, command, stderr="boom")
-    monkeypatch.setattr(release, "run_command", fail)
-    monkeypatch.setattr(runner, "run_command", fail)
+    monkeypatch.setattr(seam, "run_command", fail)
+    monkeypatch.setattr(seam, "run_command", fail)
     with pytest.raises(subprocess.CalledProcessError):
         release.release_tag_commit(work, "v0.1.0")
 
@@ -17929,8 +17814,8 @@ def test_release_tag_commit_never_reads_a_network_failure_as_missing_tag(
         assert command[1] == "ls-remote"
         raise subprocess.CalledProcessError(128, command, stderr="boom")
 
-    monkeypatch.setattr(release, "run_git_network_command", fail_ls_remote)
-    monkeypatch.setattr(runner, "run_git_network_command", fail_ls_remote)
+    monkeypatch.setattr(seam, "run_git_network_command", fail_ls_remote)
+    monkeypatch.setattr(seam, "run_git_network_command", fail_ls_remote)
     with pytest.raises(subprocess.CalledProcessError):
         release.release_tag_commit(work, "v0.1.0")
 
@@ -17944,8 +17829,8 @@ def test_ensure_release_tag_pushed_creates_and_pushes_when_no_local_tag(
     def fake_push(command, **kwargs):
         pushed.append(command)
 
-    monkeypatch.setattr(release, "run_git_network_command", fake_push)
-    monkeypatch.setattr(runner, "run_git_network_command", fake_push)
+    monkeypatch.setattr(seam, "run_git_network_command", fake_push)
+    monkeypatch.setattr(seam, "run_git_network_command", fake_push)
     release.ensure_release_tag_pushed(work, "v0.1.0", head)
     tag_type = subprocess.run(
         ["git", "-C", str(work), "cat-file", "-t", "v0.1.0"],
@@ -17970,8 +17855,8 @@ def test_ensure_release_tag_pushed_repushes_local_residue(tmp_path, monkeypatch)
     def fake_push(command, **kwargs):
         pushed.append(command)
 
-    monkeypatch.setattr(release, "run_git_network_command", fake_push)
-    monkeypatch.setattr(runner, "run_git_network_command", fake_push)
+    monkeypatch.setattr(seam, "run_git_network_command", fake_push)
+    monkeypatch.setattr(seam, "run_git_network_command", fake_push)
     release.ensure_release_tag_pushed(work, "v0.1.0", head)
     assert pushed == [["git", "push", "origin", "refs/tags/v0.1.0"]]
 
@@ -18023,8 +17908,8 @@ def make_release_gh(monkeypatch, *, release_exists=False,
             return ""
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
-    monkeypatch.setattr(release, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     return calls
 
 
@@ -18080,8 +17965,8 @@ def test_build_release_changelog_groups_descriptions_links_and_orders(monkeypatc
         ).split("=", 1)[1])
         return json.dumps({"data": {"repository": {"issue": source[number]}}})
 
-    monkeypatch.setattr(release, "run_command", fake_run_command)
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     changelog = release.build_release_changelog("o/r", [30, 10, 20])
     assert changelog == """## Changelog
 
@@ -18128,8 +18013,8 @@ def test_build_release_changelog_skips_not_planned_issues(monkeypatch):
         assert command[:3] == ["gh", "api", "graphql"], command
         return json.dumps({"data": {"repository": {"issue": item}}})
 
-    monkeypatch.setattr(release, "run_command", fake_run_command)
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     changelog = release.build_release_changelog("o/r", [702])
     assert "#702" not in changelog
     assert "#705" not in changelog
@@ -18166,8 +18051,8 @@ def test_build_release_changelog_omits_unmerged_pr_links(monkeypatch):
         assert command[:3] == ["gh", "api", "graphql"], command
         return json.dumps({"data": {"repository": {"issue": source[10]}}})
 
-    monkeypatch.setattr(release, "run_command", fake_run_command)
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     changelog = release.build_release_changelog("o/r", [10])
     assert "[PR #11](https://github.com/o/r/pull/11)" in changelog
     assert "#705" not in changelog
@@ -18219,8 +18104,8 @@ def test_build_release_changelog_lists_deduped_sorted_contributor_avatars(monkey
         ).split("=", 1)[1])
         return json.dumps({"data": {"repository": {"issue": source[number]}}})
 
-    monkeypatch.setattr(release, "run_command", fake_run_command)
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     changelog = release.build_release_changelog("o/r", [10, 20])
     assert changelog == """## Changelog
 
@@ -18256,8 +18141,8 @@ def test_build_release_changelog_without_contributors_has_no_section(monkeypatch
         assert command[:3] == ["gh", "api", "graphql"], command
         return json.dumps({"data": {"repository": {"issue": item}}})
 
-    monkeypatch.setattr(release, "run_command", fake_run_command)
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     changelog = release.build_release_changelog("o/r", [10])
     assert changelog == """## Changelog
 
@@ -18292,8 +18177,8 @@ def test_build_release_changelog_unmerged_pr_author_is_not_a_contributor(monkeyp
         assert command[:3] == ["gh", "api", "graphql"], command
         return json.dumps({"data": {"repository": {"issue": item}}})
 
-    monkeypatch.setattr(release, "run_command", fake_run_command)
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     changelog = release.build_release_changelog("o/r", [10])
     assert "alice" in changelog
     assert "bob" not in changelog
@@ -18319,19 +18204,17 @@ def test_build_release_changelog_fails_on_empty_or_malformed_evidence(monkeypatc
         {"__typename": "Issue", "number": 10, "title": "Useful title", "body": "detail", "url": "https://github.com/o/r/issues/10", "stateReason": "COMPLETED", "labels": {"nodes": []}, "closedByPullRequestsReferences": {"nodes": [{"number": "bad", "url": "https://github.com/o/r/pull/20", "author": None}]}},
     ]
     for issue in bad_issues:
-        monkeypatch.setattr(
-            release, "run_command",
+        monkeypatch.setattr(seam, "run_command",
             lambda *args, issue=issue, **kwargs: json.dumps(
                 {"data": {"repository": {"issue": issue}}}),
         )
-        monkeypatch.setattr(
-            runner, "run_command",
+        monkeypatch.setattr(seam, "run_command",
             lambda *args, issue=issue, **kwargs: json.dumps(
                 {"data": {"repository": {"issue": issue}}}),
         )
         with pytest.raises(ValueError, match="release changelog"):
             release.build_release_changelog("o/r", [10])
-    monkeypatch.setattr(release, "run_command", lambda *args, **kwargs: json.dumps({
+    monkeypatch.setattr(seam, "run_command", lambda *args, **kwargs: json.dumps({
         "data": {"repository": {"issue": {
             "__typename": "Issue", "number": 10, "title": "",
             "body": "\nConcrete summary\n",
@@ -18340,7 +18223,7 @@ def test_build_release_changelog_fails_on_empty_or_malformed_evidence(monkeypatc
             "closedByPullRequestsReferences": {"nodes": []},
         }}},
     }))
-    monkeypatch.setattr(runner, "run_command", lambda *args, **kwargs: json.dumps({
+    monkeypatch.setattr(seam, "run_command", lambda *args, **kwargs: json.dumps({
         "data": {"repository": {"issue": {
             "__typename": "Issue", "number": 10, "title": "",
             "body": "\nConcrete summary\n",
@@ -18353,7 +18236,7 @@ def test_build_release_changelog_fails_on_empty_or_malformed_evidence(monkeypatc
     # A PR number in scope resolves through the PullRequest branch: no
     # stateReason, no closedBy references (verified against the real
     # GraphQL schema — the field only exists on Issue).
-    monkeypatch.setattr(release, "run_command", lambda *args, **kwargs: json.dumps({
+    monkeypatch.setattr(seam, "run_command", lambda *args, **kwargs: json.dumps({
         "data": {"repository": {"issue": {
             "__typename": "PullRequest", "number": 10,
             "title": "Merge direct release work", "body": "",
@@ -18361,7 +18244,7 @@ def test_build_release_changelog_fails_on_empty_or_malformed_evidence(monkeypatc
             "labels": {"nodes": []},
         }}},
     }))
-    monkeypatch.setattr(runner, "run_command", lambda *args, **kwargs: json.dumps({
+    monkeypatch.setattr(seam, "run_command", lambda *args, **kwargs: json.dumps({
         "data": {"repository": {"issue": {
             "__typename": "PullRequest", "number": 10,
             "title": "Merge direct release work", "body": "",
@@ -18438,8 +18321,8 @@ def test_publish_release_reraises_real_gh_failure(monkeypatch):
         raise subprocess.CalledProcessError(
             1, command, stderr="HTTP 403: rate limited",
         )
-    monkeypatch.setattr(release, "run_command", fail)
-    monkeypatch.setattr(runner, "run_command", fail)
+    monkeypatch.setattr(seam, "run_command", fail)
+    monkeypatch.setattr(seam, "run_command", fail)
     with pytest.raises(subprocess.CalledProcessError):
         release.publish_release(
             repo="o/r", tag="v0.3.0", version="v0.3.0",
@@ -18591,35 +18474,34 @@ def make_release_process_env(monkeypatch, *, body=RELEASE_DECLARATION_BODY,
             return ""
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(release, "run_command", fake_run_command)
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
-    monkeypatch.setattr(release, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(release, "set_run_id",
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "set_run_id",
                         lambda rid: state["run_ids"].append(rid))
-    monkeypatch.setattr(release, "has_in_progress_label",
+    monkeypatch.setattr(seam, "has_in_progress_label",
                         lambda n, r: in_progress)
-    monkeypatch.setattr(release, "latest_run_id",
+    monkeypatch.setattr(seam, "latest_run_id",
                         lambda r, s, n: existing_run_id)
-    monkeypatch.setattr(release, "freeze_base", lambda r, b: "abc123")
-    monkeypatch.setattr(runner, "edit_issue",
+    monkeypatch.setattr(seam, "freeze_base", lambda r, b: "abc123")
+    monkeypatch.setattr(seam, "edit_issue",
                         lambda n, **k: state["edits"].append((n, k)))
-    monkeypatch.setattr(release, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
                         lambda n, **k: state["comments"].append((n, k)))
-    monkeypatch.setattr(runner, "create_worktree",
+    monkeypatch.setattr(seam, "create_worktree",
                         lambda *a: Path("/wt"))
-    monkeypatch.setattr(release, "create_release_worktree",
+    monkeypatch.setattr(seam, "create_release_worktree",
                         lambda *a: Path("/wt"))
     monkeypatch.setattr(release, "ProgressPublisher", Mock())
-    monkeypatch.setattr(release, "_safe_publish", lambda **k: None)
-    monkeypatch.setattr(release, "set_active_run",
+    monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
+    monkeypatch.setattr(seam, "set_active_run",
                         lambda *a: state["active_runs"].append(a))
     monkeypatch.setattr(release, "LOGGER", Mock())
     monkeypatch.setattr(release, "release_tag_commit",
                         lambda r, t: tag_commit)
     monkeypatch.setattr(release, "prepare_release_version",
                         lambda worktree, tag, base_branch: "abc123")
-    monkeypatch.setattr(
-        release, "refresh_cli_install",
+    monkeypatch.setattr(seam, "refresh_cli_install",
         lambda worktree, **kwargs: "installed",
     )
     monkeypatch.setattr(release, "publish_release", lambda **k: release_url)
@@ -18705,7 +18587,7 @@ def test_process_release_wait_timeout_uses_persisted_wait_start(monkeypatch):
     state = make_release_process_env(
         monkeypatch, leftover_labels={"ai-in-progress": [7]},
     )
-    monkeypatch.setattr(release, "issue_comments", lambda *a, **k: [
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [
         {
             "authorAssociation": "MEMBER",
             "body": "<!-- orbi:run=aaaaaaaa -->\n"
@@ -18829,7 +18711,7 @@ def test_process_release_success_end_to_end(monkeypatch):
              "abc123"], {"cwd": Path("/r")}) in state["commands"]
     assert (["git", "push", "origin", "refs/tags/v0.3.0"], {
         "cwd": Path("/r"),
-        "timeout": runner.GIT_NETWORK_TIMEOUT_SECONDS,
+        "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS,
     }) in state["commands"]
     assert not any("--force" in c or "-f" == c for c in commands)
     # The release Issue is closed.
@@ -18900,7 +18782,7 @@ def test_process_release_refreshes_deployment_cli_after_version_bump(
         assert kwargs["run_command"] is runner.run_command
         return "installed"
 
-    monkeypatch.setattr(release, "refresh_cli_install", refresh)
+    monkeypatch.setattr(seam, "refresh_cli_install", refresh)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -19022,7 +18904,7 @@ def test_process_release_waits_for_pending_ci_and_succeeds(monkeypatch):
         # progress-comment wait reflection is actually recorded.
         kwargs["action"]()
 
-    monkeypatch.setattr(release, "_safe_publish", run_publish_actions)
+    monkeypatch.setattr(seam, "_safe_publish", run_publish_actions)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -19107,7 +18989,7 @@ def test_process_release_publish_closeout_failure_keeps_release_result(
             raise RuntimeError("GitHub unavailable")
         return real_edit(number, **kwargs)
 
-    monkeypatch.setattr(runner, "edit_issue", failing_edit)
+    monkeypatch.setattr(seam, "edit_issue", failing_edit)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -19138,7 +19020,7 @@ def test_process_release_success_comment_failure_keeps_release_result(
         # failing unconditionally fails exactly that comment.
         raise RuntimeError("GitHub unavailable")
 
-    monkeypatch.setattr(release, "comment_issue", failing_comment)
+    monkeypatch.setattr(seam, "comment_issue", failing_comment)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -19177,8 +19059,8 @@ def test_process_release_milestone_failure_keeps_release_successful(monkeypatch)
             return json.dumps([[{"number": 101, "title": "leftover"}]])
         return real(command, **kwargs)
 
-    monkeypatch.setattr(release, "run_command", milestone_failing)
-    monkeypatch.setattr(runner, "run_command", milestone_failing)
+    monkeypatch.setattr(seam, "run_command", milestone_failing)
+    monkeypatch.setattr(seam, "run_command", milestone_failing)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -19316,8 +19198,8 @@ def test_process_release_fails_on_tag_mismatch_without_moving_it(monkeypatch):
             )
         return real_run(command, **kwargs)
 
-    monkeypatch.setattr(release, "run_command", merge_base_failing)
-    monkeypatch.setattr(runner, "run_command", merge_base_failing)
+    monkeypatch.setattr(seam, "run_command", merge_base_failing)
+    monkeypatch.setattr(seam, "run_command", merge_base_failing)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -19373,8 +19255,8 @@ def test_process_release_fails_on_scope_violation(monkeypatch):
                 "number": 123, "state": "OPEN", "mergeCommit": None,
             })
         return real(command, **kwargs)
-    monkeypatch.setattr(release, "run_command", scope_failing)
-    monkeypatch.setattr(runner, "run_command", scope_failing)
+    monkeypatch.setattr(seam, "run_command", scope_failing)
+    monkeypatch.setattr(seam, "run_command", scope_failing)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -19423,8 +19305,8 @@ def test_close_release_milestone_closes_an_open_empty_milestone(monkeypatch):
             return json.dumps(_milestone(5, "v0.3.0", "closed", 0))
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(release, "run_command", fake_run)
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     evidence = release.close_release_milestone("o/r", "v0.3.0")
     # The close uses the official REST contract
     # (PATCH /repos/{owner}/{repo}/milestones/{number}, state=closed)
@@ -19451,8 +19333,8 @@ def test_close_release_milestone_is_idempotent_when_already_closed(monkeypatch):
             ]])
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(release, "run_command", fake_run)
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     evidence = release.close_release_milestone("o/r", "v0.3.0")
     # Already closed: no mutation at all (no PATCH, no reopen).
     assert calls == [MILESTONE_LIST_COMMAND]
@@ -19473,8 +19355,8 @@ def test_close_release_milestone_fails_fast_without_a_matching_title(monkeypatch
             ]])
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(release, "run_command", fake_run)
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="no Milestone with the exact title"):
         release.close_release_milestone("o/r", "v0.3.0")
     # No mutation, no fuzzy match against a different Milestone.
@@ -19497,8 +19379,8 @@ def test_close_release_milestone_fails_fast_when_open_issues_remain(monkeypatch)
                                 {"number": 102, "title": "leftover two"}]])
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(release, "run_command", fake_run)
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     sleeps: list[float] = []
     monkeypatch.setattr("time.sleep", sleeps.append)
     with pytest.raises(RuntimeError, match="Milestone #5") as excinfo:
@@ -19540,8 +19422,8 @@ def test_close_release_milestone_retries_the_stale_issue_index_after_close(monke
             return json.dumps(_milestone(5, "v0.3.0", "closed", 0))
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(release, "run_command", fake_run)
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr("time.sleep", sleeps.append)
     evidence = release.close_release_milestone("o/r", "v0.3.0")
     assert "Milestone #5" in evidence
@@ -19569,8 +19451,8 @@ def test_close_release_milestone_fails_after_the_backoff_is_exhausted(monkeypatc
             return json.dumps([[{"number": 101, "title": "leftover one"}]])
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(release, "run_command", fake_run)
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr("time.sleep", sleeps.append)
     with pytest.raises(RuntimeError, match="Milestone #5") as excinfo:
         release.close_release_milestone("o/r", "v0.3.0")
@@ -19596,8 +19478,8 @@ def test_close_release_milestone_fails_fast_on_duplicate_titles(monkeypatch):
             ]])
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(release, "run_command", fake_run)
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="ambiguous") as excinfo:
         release.close_release_milestone("o/r", "v0.3.0")
     # Both candidates are named; neither is closed.
@@ -19618,7 +19500,7 @@ def test_parse_paginated_issue_array_rejects_malformed_items():
 def test_epic_issue_with_blockers_rejects_invalid_details(monkeypatch):
     with pytest.raises(ValueError, match="number is missing"):
         runner.epic_issue_with_blockers("o/r", {"number": "20"})
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "[]")
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "[]")
     with pytest.raises(ValueError, match="details are not an object"):
         runner.epic_issue_with_blockers("o/r", {"number": 20})
 
@@ -19649,9 +19531,9 @@ def test_reconcile_release_epics_closes_verified_epic_with_audit(monkeypatch):
         assert number == 20 and repo == "o/r"
         assert "Issue #21 closed" in body
         assert "run_id=abc12345" in body
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "comment_issue", fake_comment)
-    result = runner.reconcile_release_epics("o/r", 4, "v0.4.0", "abc12345")
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "comment_issue", fake_comment)
+    result = release.reconcile_release_epics("o/r", 4, "v0.4.0", "abc12345")
     assert result == ["Epic #20 closed after verification (Issue #21 closed)"]
     assert ["gh", "issue", "close", "20", "--repo", "o/r"] in commands
     with pytest.raises(AssertionError):
@@ -19677,9 +19559,9 @@ def test_reconcile_release_epics_keeps_open_child_and_bad_scope_open(monkeypatch
         if command == ["gh", "api", "repos/o/r/issues/22/sub_issues?per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[]])
         raise AssertionError(command)
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "comment_issue", lambda **kwargs: calls.append(["comment"]))
-    result = runner.reconcile_release_epics("o/r", 4, "v0.4.0", "abc12345")
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "comment_issue", lambda **kwargs: calls.append(["comment"]))
+    result = release.reconcile_release_epics("o/r", 4, "v0.4.0", "abc12345")
     assert "Epic #20 kept open: child Issue #21 is not closed" in result
     assert "Epic #22 kept open: Epic child scope is missing or empty" in result
     assert not any(command[:3] == ["gh", "issue", "close"] for command in calls if isinstance(command, list))
@@ -19694,11 +19576,11 @@ def test_reconcile_open_epics_closes_and_deduplicates_audit(monkeypatch, caplog)
     def fake_run(command, **kwargs):
         commands.append(command)
         return json.dumps([epic]) if command[:3] == ["gh", "issue", "list"] else ""
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "_verify_epic_complete", lambda repo, item: ["Issue #21 closed"])
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "_verify_epic_complete", lambda repo, item: ["Issue #21 closed"])
     comments = []
-    monkeypatch.setattr(runner, "issue_comments", lambda number, repo: comments)
-    monkeypatch.setattr(runner, "comment_issue", lambda number, *, repo, body: comments.append({"body": body}))
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments)
+    monkeypatch.setattr(seam, "comment_issue", lambda number, *, repo, body: comments.append({"body": body}))
     result = runner.reconcile_open_epics("o/r", "abc12345")
     assert result == ["Epic #20 closed after verification (Issue #21 closed)"]
     assert len(comments) == 1 and "run_id=abc12345" in comments[0]["body"]
@@ -19713,10 +19595,10 @@ def test_reconcile_open_epics_closes_and_deduplicates_audit(monkeypatch, caplog)
 def test_reconcile_open_epics_keeps_incomplete_without_comment(monkeypatch, caplog):
     caplog.set_level("INFO")
     epic = {"number": 20}
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: json.dumps([epic]))
-    monkeypatch.setattr(runner, "_verify_epic_complete", lambda repo, item: (_ for _ in ()).throw(ValueError("open blockers: #3")))
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: json.dumps([epic]))
+    monkeypatch.setattr(seam, "_verify_epic_complete", lambda repo, item: (_ for _ in ()).throw(ValueError("open blockers: #3")))
     comments = []
-    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: comments.append(True))
+    monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: comments.append(True))
     runner.reconcile_open_epics("o/r", "abc12345")
     assert not comments
     assert "epic_kept_open issue=20 repo=o/r reason=open blockers: #3" in caplog.text
@@ -19737,7 +19619,7 @@ def test_reconcile_release_milestones_closes_only_published_empty_milestones(mon
         if command == ["gh", "api", "repos/o/r/milestones/5", "--method", "PATCH", "-f", "state=closed"]:
             return ""
         raise AssertionError(command)
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.reconcile_release_milestones("o/r", "abc12345") == ["Milestone #5 (v0.4.0) closed"]
     assert "milestone_closed number=5 repo=o/r" in caplog.text
     assert calls.index(["gh", "api", "repos/o/r/milestones/5", "--method", "PATCH", "-f", "state=closed"]) > calls.index(["gh", "api", "repos/o/r/issues?milestone=5&state=open&per_page=100", "--paginate", "--slurp"])
@@ -19754,7 +19636,7 @@ def test_reconcile_release_milestones_keeps_open_without_published_release_or_em
         if command == ["gh", "api", "repos/o/r/releases?per_page=100", "--paginate", "--slurp"]:
             return json.dumps([[{"tag_name": "v0.4.0", "draft": True}]])
         raise AssertionError(command)
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.reconcile_release_milestones("o/r", "abc12345") == []
     assert "reason=ambiguous title" in caplog.text
     with pytest.raises(AssertionError):
@@ -19763,9 +19645,9 @@ def test_reconcile_release_milestones_keeps_open_without_published_release_or_em
 
 def test_verify_epic_complete_uses_native_sub_issue_shapes(monkeypatch):
     base = {"number": 20, "blockedBy": {"nodes": []}}
-    monkeypatch.setattr(runner, "epic_issue_with_blockers", lambda repo, issue: {"number": "bad", "blockedBy": {"nodes": []}})
+    monkeypatch.setattr(seam, "epic_issue_with_blockers", lambda repo, issue: {"number": "bad", "blockedBy": {"nodes": []}})
     with pytest.raises(ValueError, match="Epic number is missing"):
-        runner._verify_epic_complete("o/r", base)
+        github._verify_epic_complete("o/r", base)
     cases = [
         ({"number": "bad"}, "invalid number"),
         ({"number": 21, "repository": {}, "state": "closed"}, "repository state is malformed"),
@@ -19773,10 +19655,10 @@ def test_verify_epic_complete_uses_native_sub_issue_shapes(monkeypatch):
         ({"number": 21, "repository": {"full_name": "o/r"}}, "state is malformed"),
     ]
     for child, message in cases:
-        monkeypatch.setattr(runner, "epic_issue_with_blockers", lambda repo, issue: base)
-        monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: json.dumps([[child]]))
+        monkeypatch.setattr(seam, "epic_issue_with_blockers", lambda repo, issue: base)
+        monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: json.dumps([[child]]))
         with pytest.raises(ValueError, match=message):
-            runner._verify_epic_complete("o/r", base)
+            github._verify_epic_complete("o/r", base)
     pr = {"number": 21, "repository": {"full_name": "o/r"},
           "state": "closed", "pull_request": {}}
     def pr_run(command, **kwargs):
@@ -19787,9 +19669,9 @@ def test_verify_epic_complete_uses_native_sub_issue_shapes(monkeypatch):
         if command[-1] == "repos/o/r/pulls/21":
             return json.dumps({"merged": False})
         raise AssertionError(command)
-    monkeypatch.setattr(runner, "run_command", pr_run)
+    monkeypatch.setattr(seam, "run_command", pr_run)
     with pytest.raises(ValueError, match="not merged"):
-        runner._verify_epic_complete("o/r", base)
+        github._verify_epic_complete("o/r", base)
     with pytest.raises(AssertionError):
         pr_run(["x", "y", "z"])
 
@@ -19805,7 +19687,7 @@ def test_reconcile_release_milestones_keeps_malformed_or_incomplete_open(monkeyp
         if "issues?milestone=5" in command[2]:
             return json.dumps([[{"number": 9}]])
         raise AssertionError(command)
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.reconcile_release_milestones("o/r", "abc12345") == []
     assert "reason=malformed" in caplog.text
     assert "reason=open issues" in caplog.text
@@ -19832,8 +19714,8 @@ def test_reconcile_orphan_prs_reports_an_open_pr_of_a_closed_issue(monkeypatch, 
             return json.dumps({"state": "CLOSED"})
         raise AssertionError(command)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "pr_comments", lambda number, *, repo: pr_comments)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "pr_comments", lambda number, *, repo: pr_comments)
     monkeypatch.setattr(
         runner, "comment_pr",
         lambda number, *, repo, body: posted.append((number, repo, body)),
@@ -19864,7 +19746,7 @@ def test_reconcile_orphan_prs_rejects_malformed_pr_list_and_state(monkeypatch):
             return json.dumps({"comments": []})
         raise AssertionError(command)
 
-    monkeypatch.setattr(runner, "run_command", pr_list_run)
+    monkeypatch.setattr(seam, "run_command", pr_list_run)
     with pytest.raises(ValueError, match="pr list must return a JSON array"):
         runner.reconcile_orphan_prs("o/r", "abc12345")
     with pytest.raises(AssertionError):
@@ -19877,7 +19759,7 @@ def test_reconcile_orphan_prs_rejects_malformed_pr_list_and_state(monkeypatch):
             return json.dumps({"state": "WEIRD"})
         raise AssertionError(command)
 
-    monkeypatch.setattr(runner, "run_command", weird_state_run)
+    monkeypatch.setattr(seam, "run_command", weird_state_run)
     with pytest.raises(ValueError, match="state must be OPEN or CLOSED"):
         runner.reconcile_orphan_prs("o/r", "abc12345")
     with pytest.raises(AssertionError):
@@ -19887,18 +19769,15 @@ def test_reconcile_orphan_prs_rejects_malformed_pr_list_and_state(monkeypatch):
 def test_pr_comments_reads_and_validates(monkeypatch):
     """`pr_comments` is the PR-side twin of `issue_comments`: same JSON
     shape contract, same fail-fast on a malformed answer."""
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps({"comments": [{"body": "x"}]}),
     )
     assert runner.pr_comments(9, repo="o/r") == [{"body": "x"}]
-    monkeypatch.setattr(
-        runner, "run_command", lambda *a, **k: json.dumps([{"comments": []}]),
+    monkeypatch.setattr(seam, "run_command", lambda *a, **k: json.dumps([{"comments": []}]),
     )
     with pytest.raises(ValueError, match="pr view must be a JSON object"):
         runner.pr_comments(9, repo="o/r")
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda *a, **k: json.dumps({"comments": "bad"}),
     )
     with pytest.raises(ValueError, match="pr comments must be a JSON array"):
@@ -19924,7 +19803,7 @@ def test_reconcile_orphan_prs_skips_open_issues_and_non_delivery_branches(monkey
             return json.dumps({"state": "OPEN"})
         raise AssertionError(command)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no comment")))
     assert runner.reconcile_orphan_prs("o/r", "abc12345") == []
     assert read_issues == [4]
@@ -19939,7 +19818,7 @@ def test_reconcile_orphan_prs_failure_is_fail_open(monkeypatch, caplog):
     monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_issue", lambda *args: {"number": 1})
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "abc12345")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "abc12345")
     result = runner.pick_next_delivery(["o/r"], Path("/tmp/slots"), 1)
     assert result == ("o/r", {"number": 1}, None)
     assert "orphan_pr_reconcile_failed repo=o/r" in caplog.text
@@ -19952,7 +19831,7 @@ def test_reconcile_open_epics_failure_is_fail_open(monkeypatch, caplog):
     monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_issue", lambda *args: {"number": 1})
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "abc12345")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "abc12345")
     result = runner.pick_next_delivery(["o/r"], Path("/tmp/slots"), 1)
     assert result == ("o/r", {"number": 1}, None)
     assert "epic_reconcile_failed repo=o/r" in caplog.text
@@ -19960,8 +19839,8 @@ def test_reconcile_open_epics_failure_is_fail_open(monkeypatch, caplog):
 
 def test_reconcile_open_epics_runs_on_a_fresh_tick(monkeypatch):
     calls = []
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda repo, run_id: calls.append((repo, run_id)))
     monkeypatch.setattr(runner, "reconcile_release_milestones", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "reconcile_orphan_prs", lambda *args, **kwargs: None)
@@ -19973,16 +19852,16 @@ def test_reconcile_open_epics_runs_on_a_fresh_tick(monkeypatch):
 
 
 def test_verify_epic_complete_rejects_malformed_native_blockers(monkeypatch):
-    monkeypatch.setattr(runner, "run_command", lambda *args, **kwargs: json.dumps({
+    monkeypatch.setattr(seam, "run_command", lambda *args, **kwargs: json.dumps({
         "number": 20, "body": "## Children\n- #21",
     }))
     with pytest.raises(ValueError, match="native blocker/dependency state is unavailable"):
-        runner._verify_epic_complete("o/r", {"number": 20})
+        github._verify_epic_complete("o/r", {"number": 20})
 
 
 def test_verify_epic_complete_rejects_malformed_native_blocker_node():
     with pytest.raises(ValueError, match="native blocker/dependency state is malformed"):
-        runner._verify_epic_complete("o/r", {
+        github._verify_epic_complete("o/r", {
             "number": 20, "body": "## Children\n- #21",
             "blockedBy": {"nodes": [{"state": "OPEN"}]},
         })
@@ -19994,21 +19873,21 @@ def test_epic_child_evidence_validates_issue_and_pr_shapes(monkeypatch):
         "repos/o/r/issues/2": json.dumps({"pull_request": {}, "state": "open"}),
         "repos/o/r/pulls/2": json.dumps({"merged": True}),
     }
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: responses[command[-1]])
-    assert runner._epic_child_evidence("o/r", "issue", 1) == "Issue #1 closed"
-    assert runner._epic_child_evidence("o/r", "pr", 2) == "PR #2 merged"
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "[]")
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: responses[command[-1]])
+    assert github._epic_child_evidence("o/r", "issue", 1) == "Issue #1 closed"
+    assert github._epic_child_evidence("o/r", "pr", 2) == "PR #2 merged"
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "[]")
     with pytest.raises(ValueError, match="not an object"):
-        runner._epic_child_evidence("o/r", "issue", 3)
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: json.dumps({"pull_request": {}}))
+        github._epic_child_evidence("o/r", "issue", 3)
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: json.dumps({"pull_request": {}}))
     with pytest.raises(ValueError, match="declared as Issue"):
-        runner._epic_child_evidence("o/r", "issue", 2)
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: json.dumps({"state": "closed"}))
+        github._epic_child_evidence("o/r", "issue", 2)
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: json.dumps({"state": "closed"}))
     with pytest.raises(ValueError, match="declared as PR"):
-        runner._epic_child_evidence("o/r", "pr", 2)
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: json.dumps({"pull_request": {}}) if "issues" in command[-1] else json.dumps({"merged": False}))
+        github._epic_child_evidence("o/r", "pr", 2)
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: json.dumps({"pull_request": {}}) if "issues" in command[-1] else json.dumps({"merged": False}))
     with pytest.raises(ValueError, match="not merged"):
-        runner._epic_child_evidence("o/r", "pr", 2)
+        github._epic_child_evidence("o/r", "pr", 2)
 
 
 def test_close_release_milestone_reconciles_epics_when_summary_lags(monkeypatch):
@@ -20022,8 +19901,8 @@ def test_close_release_milestone_reconciles_epics_when_summary_lags(monkeypatch)
         if command[-1:] == ["state=closed"]:
             return ""
         raise AssertionError(command)
-    monkeypatch.setattr(release, "run_command", fake_run)
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(release, "reconcile_release_epics", lambda *args: ["Epic #20 closed"])
     result = release.close_release_milestone("o/r", "v0.4.0", run_id="abc12345")
     assert "Epic #20 closed" in result
@@ -20071,9 +19950,9 @@ def test_reconcile_release_epics_keeps_blocked_and_avoids_duplicate_audit(monkey
         }:
             return ""
         raise AssertionError(command)
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: calls.append(["comment"]))
-    result = runner.reconcile_release_epics("o/r", 4, "v0.4.0", "abc12345")
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: calls.append(["comment"]))
+    result = release.reconcile_release_epics("o/r", 4, "v0.4.0", "abc12345")
     assert any("Epic #30 closed after verification" in item for item in result)
     assert any("open blockers: #9" in item for item in result)
     assert ["gh", "issue", "close", "34", "--repo", "o/r"] in calls
@@ -20204,8 +20083,8 @@ def fake_gh_release_view(monkeypatch, *, body: str, tag: str = "v0.4.0",
             })
         return real(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", mixed)
-    monkeypatch.setattr(release, "run_command", mixed)
+    monkeypatch.setattr(seam, "run_command", mixed)
+    monkeypatch.setattr(seam, "run_command", mixed)
     return real
 
 
@@ -20447,8 +20326,8 @@ def test_sync_release_docs_resume_after_failed_push_recommits_normally(
     def failing_push(command, **kwargs):
         raise subprocess.CalledProcessError(1, command, stderr="boom")
 
-    monkeypatch.setattr(release, "run_git_network_command", failing_push)
-    monkeypatch.setattr(runner, "run_git_network_command", failing_push)
+    monkeypatch.setattr(seam, "run_git_network_command", failing_push)
+    monkeypatch.setattr(seam, "run_git_network_command", failing_push)
     with pytest.raises(subprocess.CalledProcessError):
         release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
@@ -20463,8 +20342,8 @@ def test_sync_release_docs_resume_after_failed_push_recommits_normally(
     # 重放（对 release_commit 的一条 `git reset --hard`）。
     subprocess.run(["git", "-C", str(work), "reset", "--hard", head],
                    check=True, capture_output=True)
-    monkeypatch.setattr(release, "run_git_network_command", original)
-    monkeypatch.setattr(runner, "run_git_network_command", original)
+    monkeypatch.setattr(seam, "run_git_network_command", original)
+    monkeypatch.setattr(seam, "run_git_network_command", original)
     evidence = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
@@ -20505,8 +20384,8 @@ def test_sync_release_docs_stale_tracking_ref_is_not_a_false_recovery(
     # the fixed world where the push never happens — the assertion below
     # is what fails if it ever does.
     no_push = Mock()
-    monkeypatch.setattr(release, "run_git_network_command", no_push)
-    monkeypatch.setattr(runner, "run_git_network_command", no_push)
+    monkeypatch.setattr(seam, "run_git_network_command", no_push)
+    monkeypatch.setattr(seam, "run_git_network_command", no_push)
     evidence = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
@@ -20547,8 +20426,8 @@ def test_sync_release_docs_resumes_after_a_partial_step(tmp_path, monkeypatch):
             )
         return gh_view(command, **kwargs)
 
-    monkeypatch.setattr(release, "run_command", crash_before_commit)
-    monkeypatch.setattr(runner, "run_command", crash_before_commit)
+    monkeypatch.setattr(seam, "run_command", crash_before_commit)
+    monkeypatch.setattr(seam, "run_command", crash_before_commit)
     with pytest.raises(subprocess.CalledProcessError):
         release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
@@ -20564,8 +20443,8 @@ def test_sync_release_docs_resumes_after_a_partial_step(tmp_path, monkeypatch):
         git_out(work, "rev-parse", "HEAD")
     # The re-run finishes: marker move is a lenient no-op, the nav is
     # updated, one commit lands on main.
-    monkeypatch.setattr(release, "run_command", gh_view)
-    monkeypatch.setattr(runner, "run_command", gh_view)
+    monkeypatch.setattr(seam, "run_command", gh_view)
+    monkeypatch.setattr(seam, "run_command", gh_view)
     evidence = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,
@@ -20686,8 +20565,8 @@ def test_sync_release_docs_fails_fast_when_the_base_advanced(
             })
         return real_run(command, **kwargs)
 
-    monkeypatch.setattr(release, "run_command", view_v041)
-    monkeypatch.setattr(runner, "run_command", view_v041)
+    monkeypatch.setattr(seam, "run_command", view_v041)
+    monkeypatch.setattr(seam, "run_command", view_v041)
     with pytest.raises(subprocess.CalledProcessError):
         release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=stale,
@@ -20846,8 +20725,8 @@ def test_sync_release_docs_fails_fast_when_the_body_is_not_a_string(
             })
         return real(command, **kwargs)
 
-    monkeypatch.setattr(release, "run_command", bad_body)
-    monkeypatch.setattr(runner, "run_command", bad_body)
+    monkeypatch.setattr(seam, "run_command", bad_body)
+    monkeypatch.setattr(seam, "run_command", bad_body)
     with pytest.raises(RuntimeError, match="body is empty"):
         release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
@@ -20889,8 +20768,8 @@ def test_sync_release_docs_fails_fast_on_a_real_git_diff_error(
             )
         return real(command, **kwargs)
 
-    monkeypatch.setattr(release, "run_command", diff_failing)
-    monkeypatch.setattr(runner, "run_command", diff_failing)
+    monkeypatch.setattr(seam, "run_command", diff_failing)
+    monkeypatch.setattr(seam, "run_command", diff_failing)
     with pytest.raises(subprocess.CalledProcessError):
         release.sync_release_docs(
             source_repo="o/r", repo_dir=work, worktree=work,
@@ -20947,7 +20826,7 @@ def test_process_release_resumes_after_docs_sync_advanced_the_base(
     # The frozen base is the docs commit (a descendant of the tag commit);
     # the env's fake_run_command answers "ancestor" for the merge-base
     # check.
-    monkeypatch.setattr(release, "freeze_base", lambda r, b: "docs456")
+    monkeypatch.setattr(seam, "freeze_base", lambda r, b: "docs456")
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -20967,8 +20846,8 @@ def test_close_release_milestone_rejects_a_non_array_milestone_list(monkeypatch)
             return json.dumps({"number": 5, "title": "v0.3.0"})
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(release, "run_command", fake_run)
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(ValueError, match="must be an array of arrays"):
         release.close_release_milestone("o/r", "v0.3.0")
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -20983,8 +20862,8 @@ def test_close_release_milestone_reraises_a_real_gh_failure(monkeypatch):
             )
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(release, "run_command", fake_run)
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(subprocess.CalledProcessError):
         release.close_release_milestone("o/r", "v0.3.0")
     with pytest.raises(AssertionError, match="unexpected command"):
@@ -21049,8 +20928,8 @@ def test_verify_release_scope_reraises_real_issue_gh_failure(monkeypatch):
             )
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(release, "run_command", fail)
-    monkeypatch.setattr(runner, "run_command", fail)
+    monkeypatch.setattr(seam, "run_command", fail)
+    monkeypatch.setattr(seam, "run_command", fail)
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
         release.verify_release_scope("o/r", [7], Path("/repo"), "release123")
     assert "HTTP 403: rate limited" in str(excinfo.value.stderr)
@@ -21088,7 +20967,7 @@ def test_process_release_publishes_the_release_role_progress_body(
         publishes.append(kwargs)
         kwargs["action"]()
 
-    monkeypatch.setattr(release, "_safe_publish", publish)
+    monkeypatch.setattr(seam, "_safe_publish", publish)
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
@@ -21162,8 +21041,8 @@ def test_release_process_env_fake_answers_the_real_tag_probe(tmp_path,
                     "abc123\trefs/tags/v0.3.0^{}\n")
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(release, "run_command", fake)
-    monkeypatch.setattr(runner, "run_command", fake)
+    monkeypatch.setattr(seam, "run_command", fake)
+    monkeypatch.setattr(seam, "run_command", fake)
     with pytest.raises(AssertionError, match="unexpected command"):
         fake(["git", "fetch", "origin"])
     assert release.release_tag_commit(tmp_path, "v0.3.0") == "abc123"
@@ -21214,7 +21093,7 @@ def test_deliver_pr_rejects_wrong_branch(monkeypatch, tmp_path):
         assert command[:3] == ["git", "branch", "--show-current"], command
         return "other-branch"
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="Pi changed branch"):
         runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", FAKE_HEAD_SHA, FAKE_RUN_ID,
@@ -21228,7 +21107,7 @@ def test_deliver_pr_rejects_uncommitted_changes(monkeypatch, tmp_path):
             return " M leaked.py\n?? junk.txt"
         return fake_deliver_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="uncommitted changes"):
         runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
@@ -21245,7 +21124,7 @@ def test_deliver_pr_rejects_delivery_without_a_commit(monkeypatch, tmp_path):
             return base_sha
         return fake_deliver_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="no commit"):
         runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", base_sha, FAKE_RUN_ID,
@@ -21262,7 +21141,7 @@ def test_deliver_pr_completes_the_closeout(monkeypatch, tmp_path):
         calls.append(command)
         return fake_deliver_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.deliver_pr(
         tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
         issue=4, issue_title="t", repo_dir=tmp_path, source_repo="o/r",
@@ -21310,7 +21189,7 @@ def test_deliver_pr_rolls_back_a_conflicting_base_absorb(
             )
         return fake_deliver_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
@@ -21339,7 +21218,7 @@ def test_deliver_pr_absorbs_an_advanced_base(monkeypatch, tmp_path, caplog):
             raise subprocess.CalledProcessError(1, command)
         return fake_deliver_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("INFO"):
         assert runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
@@ -21378,7 +21257,7 @@ def test_deliver_pr_creates_the_pr_when_absent(monkeypatch, tmp_path):
             return FAKE_PR_URL
         return fake_deliver_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.deliver_pr(
         tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
         issue=4, issue_title="Closeout title", repo_dir=tmp_path, source_repo="o/r",
@@ -21407,7 +21286,7 @@ def test_deliver_pr_fails_fast_when_pr_create_fails(monkeypatch, tmp_path):
             )
         return fake_deliver_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(subprocess.CalledProcessError):
         runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
@@ -21423,7 +21302,7 @@ def test_deliver_pr_rejects_remote_head_mismatch_after_push(
             return "f" * 40
         return fake_deliver_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="remote head"):
         runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
@@ -21449,7 +21328,7 @@ def test_deliver_pr_verifies_the_pr_with_the_latest_base_check_skipped(
             raise subprocess.CalledProcessError(1, command)
         return fake_deliver_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     runner.deliver_pr(
         tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
         issue=4, issue_title="t", repo_dir=tmp_path, source_repo="o/r",
@@ -21480,10 +21359,9 @@ def test_deliver_pr_reports_a_closed_issue_and_skips_the_pr(
             return json.dumps({"state": "CLOSED"})
         return fake_deliver_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     comments = []
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda number, *, repo, body: comments.append((number, repo, body)),
     )
     monkeypatch.setattr(
@@ -21515,21 +21393,19 @@ def test_process_issue_closed_issue_ends_without_pr_ceremony(
     delivery — no `ai-pr-opened` label patch, no `Orbi opened PR:` scene
     comment; the run ends `issue_closed` and the result kind ends the
     tick before the delivery wait."""
-    monkeypatch.setattr(runner, "freeze_base",
+    monkeypatch.setattr(seam, "freeze_base",
                         lambda repo_dir, base_branch: "abc123def456")
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "create_worktree",
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "create_worktree",
                         lambda *args, **kwargs: tmp_path / "wt")
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     monkeypatch.setattr(runner, "deliver_pr", lambda *args, **kwargs: None)
     edits: list[tuple] = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: edits.append((args, kwargs)),
     )
     comments = []
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda number, *, repo, body: comments.append(body),
     )
     gh_calls, posted = make_fake_gh(monkeypatch)
@@ -21541,7 +21417,7 @@ def test_process_issue_closed_issue_ends_without_pr_ceremony(
             return json.dumps({"labels": [{"name": "ai-ready"}]})
         return "0123456789abcdef0123456789abcdef01234567"
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # Issue #266: the health record is a pure bypass — a failed record
     # never changes the issue-closed outcome (the except branch runs).
     def dead_health(*args, **kwargs):
@@ -21711,7 +21587,7 @@ def test_deliver_pr_repairs_runner_runtime_leftovers(monkeypatch, tmp_path,
             return "?? .orbi/\n" if status_calls["n"] == 1 else ""
         return fake_deliver_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
         url = runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
@@ -21735,7 +21611,7 @@ def test_deliver_pr_repairs_the_renamed_state_dir_too(monkeypatch, tmp_path,
             return "?? .orbi/\n" if status_calls["n"] == 1 else ""
         return fake_deliver_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
         url = runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
@@ -21756,7 +21632,7 @@ def test_deliver_pr_still_fails_on_agent_leftovers_alongside_runner_state(
             return " M src/app.py\n?? .orbi/\n?? foo.py\n"
         return fake_deliver_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="uncommitted changes"):
         runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
@@ -22001,16 +21877,14 @@ def test_pick_resumable_routes_marker_ticket_instead_of_blocking(
     且 PR 仍 OPEN 的票必须转投：EVENT_REQUEUE 回 ready 队列，下一个
     fresh claim 的接管探针接手评审。"""
     monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
-    monkeypatch.setattr(runner, "issue_comments", lambda number, repo: [])
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
     patches = []
-    monkeypatch.setattr(
-        runner, "apply_label_patch",
+    monkeypatch.setattr(seam, "apply_label_patch",
         lambda number, *, repo, event, current_labels:
             patches.append(event),
     )
     comments_posted = []
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda number, *, repo, body: comments_posted.append(body),
     )
 
@@ -22027,7 +21901,7 @@ def test_pick_resumable_routes_marker_ticket_instead_of_blocking(
             return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     result = runner.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 2,
     )
@@ -22046,7 +21920,7 @@ def test_pick_resumable_closes_marker_ticket_when_pr_already_merged(
     修复已交付，triage 票按接管合并的同款簿记关票，而不是 block、
     也不是重做。"""
     monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
-    monkeypatch.setattr(runner, "issue_comments", lambda number, repo: [])
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
     closes = []
     issue = {"number": 100, "title": "triage", "state": "OPEN",
              "body": "<!-- orbi:external-pr:55 -->\nfix the thing",
@@ -22061,8 +21935,8 @@ def test_pick_resumable_closes_marker_ticket_when_pr_already_merged(
             return closes.append(command) or ""
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "comment_issue", Mock())
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "comment_issue", Mock())
     result = runner.pick_resumable_delivery(
         "owner/repo", tmp_path / "slots", 2,
     )
@@ -22109,7 +21983,7 @@ def test_wait_for_delivery_closes_triage_issue_after_auto_merge(
         raise AssertionError(f"unexpected command: {command}")
 
     closes: list = []
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(runner.time, "sleep", lambda s: None)
     monkeypatch.setattr(
         runner, "review_and_merge_if_clean",
@@ -22142,9 +22016,8 @@ def test_route_external_pr_probe_failure_falls_through_to_block(
     """Issue #726：接管探针自身失败（gh 异常）时绝不瞎猜路由——落回
     旧的 block 路径，让失败被看见。"""
     monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
-    monkeypatch.setattr(runner, "issue_comments", lambda number, repo: [])
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([issue])
         if command[:3] == ["gh", "issue", "list"]
         else (_ for _ in ()).throw(RuntimeError("gh down")),
@@ -22170,9 +22043,8 @@ def test_route_external_pr_unknown_state_falls_through_to_block(
     """Issue #726：PR 状态是意外值（非 OPEN/MERGED/CLOSED）时同样落回
     block 路径——路由器只承诺三种已知世界。"""
     monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
-    monkeypatch.setattr(runner, "issue_comments", lambda number, repo: [])
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([issue])
         if command[:3] == ["gh", "issue", "list"] else (
         json.dumps({"state": "DRAFT"})
@@ -22200,14 +22072,14 @@ def test_route_external_pr_ignores_tickets_without_marker(
     """Issue #726 的边界：body 没有外部标记的普通场景损坏票照走 block
     路径——路由器零介入。"""
     monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
-    monkeypatch.setattr(runner, "issue_comments", lambda number, repo: [])
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
 
     def fake_run(command, **kwargs):
         if command[:3] == ["gh", "issue", "list"]:
             return json.dumps([issue])
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     blocked = []
     monkeypatch.setattr(
         runner, "block_scene_failure",
@@ -22243,7 +22115,7 @@ def test_wait_for_delivery_closes_triage_issue_on_merged_poll(
         raise AssertionError(f"unexpected command: {command}")
 
     closes: list = []
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     issue = {"number": 39, "title": "task", "body": ""}
     runner.wait_for_delivery(
         PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
@@ -22259,8 +22131,7 @@ def test_close_external_triage_issue_swallows_close_failure(
 ):
     """关票是已合并事实的簿记旁路：失败只记日志，永不改写合并事实、
     永不炸 tick（#608 语义，#726 抽取后必须保持）。"""
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("gh down")),
     )
     with caplog.at_level("ERROR"):
@@ -22300,8 +22171,8 @@ def test_process_issue_scan_window_orphan_resumes_when_no_runner_live(
     _claim_race_deps(monkeypatch, tmp_path)
     monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [
         (tmp_path / "slot-0", None), (tmp_path / "slot-1", os.getpid())])
-    monkeypatch.setattr(runner, "apply_label_patch", Mock())
-    monkeypatch.setattr(runner, "create_worktree", Mock(
+    monkeypatch.setattr(seam, "apply_label_patch", Mock())
+    monkeypatch.setattr(seam, "create_worktree", Mock(
         side_effect=AssertionError("orphan must resume")))
     issue = {"number": 18, "title": "t", "body": "b",
              "labels": [{"name": "ai-ready"}]}

@@ -26,6 +26,7 @@ import pytest
 
 import orbi.cli_source as cli_source
 import orbi.runner as runner
+from seam import seam
 
 # The conftest autouse fixture stubs the gate for the in-process
 # dispatch tests; the gate's OWN tests restore the real implementation

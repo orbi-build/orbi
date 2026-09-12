@@ -29,6 +29,7 @@ from orbi.pi_activity import (
     session_state,
 )
 from orbi.progress import quote_value
+from orbi.journal import RunIdFilter, issue_context, set_active_pi
 from orbi.pi_recovery import (
     clk_tck,
     find_idle_descendants,
@@ -49,6 +50,8 @@ if TYPE_CHECKING:
 
 
 LOGGER = logging.getLogger("orbi.pi_process")
+
+LOGGER.addFilter(RunIdFilter())
 
 # Live activity polling while Pi runs (Issue #24): every poll the journal
 # gets either an `activity` line (something changed) or a `heartbeat` line
@@ -1006,11 +1009,6 @@ def stream_pi(
     activity field. The first new session event resets the whole
     recovery state (`pi_resumed`).
     """
-    # Issue #300: the issue-ref formatting lives in `runner`; import it
-    # lazily so this module never imports `runner` at module load (the
-    # runner imports this module — Issue #266 circular-import rule).
-    from orbi.runner import issue_context
-
     # The raw pi command embeds the full prompt and Issue body; only the
     # redacted form may ever reach the journal or an exception message.
     safe_command = log_command or ["<redacted>"]
@@ -1146,11 +1144,6 @@ def _stream_pi_once(
     raises `ProviderRateLimitedError` so the `stream_pi` retry loop can
     back off and re-spawn; every other failure raises exactly as
     before. The full streamer contract lives on `stream_pi`."""
-    # Issue #300: the stop-handler state `_ACTIVE_RUN` lives in `runner`;
-    # import it lazily so this module never imports `runner` at module
-    # load (the runner imports this module — Issue #266 rule).
-    from orbi.runner import set_active_pi
-
     watcher = SessionWatcher(session_dir, known_files=known_files)
     start = time.monotonic()
     # The initial state is what run_start already reported; activity lines

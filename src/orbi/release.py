@@ -3,11 +3,11 @@
 The deterministic release state machine the Runner executes for an
 `ai-release` Issue: declaration parsing, scope verification, gates,
 version preparation, tag, GitHub Release publish, docs sync, Milestone
-close, and the `process_release` orchestration. It imports the generic
-runner primitives; the ONLY runner-side entry is the dispatch in
-`orbi.runner.process_issue`, which imports this module lazily (this
-module imports `orbi.runner` back, so a module-level reverse import
-would be circular).
+close, and the `process_release` orchestration. Its GitHub and git data
+access goes through the `orbi.github` / `orbi.gitops` leaves and the
+`orbi.journal` seam (Issue #785); the runner-side entry is the dispatch
+in `orbi.runner.process_issue`, and `runner` imports this module at
+module level for the release constants.
 """
 from __future__ import annotations
 
@@ -22,8 +22,10 @@ import tomllib
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from orbi.delivery_labels import (
+    EPIC_LABEL,
     EVENT_BLOCKED,
     EVENT_CLAIM,
     EVENT_MERGED,
@@ -38,44 +40,94 @@ from orbi.progress import (
     progress_body,
     run_marker,
 )
-from orbi.runner import (
-    LOGGER,
-    RELEASE_CI_POLL_INTERVAL,
-    RunnerConfig,
-    RELEASE_CI_WAIT_SECONDS,
-    RELEASE_DELIVERIES_WAIT_SECONDS,
-    RELEASE_SECTION,
-    ROLE_RELEASE,
-    ReleaseDeliveriesWaiting,
+from orbi.cli_source import refresh_cli_install
+from orbi.github import (
     _comment_is_trusted,
-    _is_ancestor,
-    _progress_body,
-    _progress_state,
-    _run_info_fields,
-    _safe_publish,
-    acquire_base_sync_lock,
+    _verify_epic_complete,
+    _epic_audit,
     apply_label_patch,
+    close_issue,
+    close_milestone,
+    commit_check_runs,
     comment_issue,
-    create_release_worktree,
-    freeze_base,
     has_in_progress_label,
     issue_comments,
     issue_priority,
-    latest_run_id,
+    issue_view,
     list_issues,
+    list_milestones,
+    milestone_issues,
     milestone_open_issues,
+    pr_view,
+    release_create,
+    release_edit_notes,
+    release_view,
+)
+from orbi.gitops import (
+    _is_ancestor,
+    acquire_base_sync_lock,
+    create_release_worktree,
+    freeze_base,
+    latest_run_id,
+    task_branch,
+    worktree_path,
+)
+from orbi.journal import (
+    LOGGER,
     new_run_id,
-    parse_paginated_issue_array,
-    reconcile_release_epics,
-    refresh_cli_install,
-    release_target_milestone,
     run_command,
     run_git_network_command,
     set_active_run,
     set_run_id,
-    task_branch,
-    worktree_path,
 )
+from orbi.progress import (
+    ProgressPublisher,
+    _progress_body,
+    _progress_state,
+    _run_info_fields,
+    _safe_publish,
+    field_block,
+    progress_body,
+    run_marker,
+)
+
+if TYPE_CHECKING:
+    # Annotation-only: this module imports `orbi.runner` never — the
+    # runner imports this module at runtime (Issue #785) — while
+    # `process_release` annotates the frozen host config of #790.
+    from orbi.runner import RunnerConfig
+
+
+# --- release-domain constants, scene and gates (moved from
+# --- `orbi.runner`, Issue #785: the release contract lives here) --------
+
+# The machine-readable section a release Issue body must carry (Issue
+# #98): `- version:`, `- base_branch:` and `- scope:` (or
+# `- scope_from_milestone:`). Parsed strictly — a missing or malformed
+# declaration fails fast, never guessed. The declaration carries NO
+# local test contract (Issue #569): test acceptance is the GitHub
+# Actions CI result on the release commit (the #268 CI-wait gate).
+# The Pi role of a release run (Issue #41/#82): the delivery state
+# machine executes it, never a Pi session.
+ROLE_RELEASE = "release"
+
+RELEASE_SECTION = "## Release"
+# Release CI wait (Issue #268): the release commit is born from the last
+# delivery PR merge, so its CI is almost always still running when the
+# gate checks it — a pending check (queued/in_progress) is an
+# intermediate state, not a failure. The gate waits for completion up to
+# this limit and decides on the FINAL conclusions; a wait timeout is its
+# own failure reason, never reported as a CI failure. The TOML field
+# `release_ci_wait_seconds` overrides the default (the #228 pattern).
+RELEASE_CI_WAIT_SECONDS = 1800
+# Release delivery wait (Issue #381): an early release ticket yields the
+# slot while other deliveries finish. The limit applies to one gate attempt;
+# the next tick retries the same ready release ticket.
+RELEASE_DELIVERIES_WAIT_SECONDS = 1800
+# Poll cadence while waiting: one `release_waiting_ci` journal line plus
+# one progress-comment PATCH per poll — the same 30s GitHub cadence as
+# the live progress heartbeat (PI_HEARTBEAT_SECONDS).
+RELEASE_CI_POLL_INTERVAL = 30.0
 
 
 # Supported `version_file` declaration values: the ecosystem metadata
@@ -340,16 +392,12 @@ def verify_release_scope(repo: str, scope: list[int], repo_dir: Path,
     evidence: list[str] = []
     for number in scope:
         try:
-            raw = run_command([
-                "gh", "pr", "view", str(number), "--repo", repo,
-                "--json", "number,state,mergeCommit",
-            ])
+            pr = pr_view(number, "number,state,mergeCommit", repo=repo)
         except subprocess.CalledProcessError as exc:
             if "Could not resolve to a PullRequest" not in (exc.stderr or ""):
                 raise
-            raw = None
-        if raw is not None:
-            pr = json.loads(raw)
+            pr = None
+        if pr is not None:
             state = pr.get("state")
             if state != "MERGED":
                 raise RuntimeError(
@@ -372,10 +420,7 @@ def verify_release_scope(repo: str, scope: list[int], repo_dir: Path,
             )
             continue
         try:
-            raw = run_command([
-                "gh", "issue", "view", str(number), "--repo", repo,
-                "--json", "number,state,stateReason",
-            ])
+            issue = issue_view(number, "number,state,stateReason", repo=repo)
         except subprocess.CalledProcessError as exc:
             if "Could not resolve to an Issue" not in (exc.stderr or ""):
                 raise
@@ -383,7 +428,6 @@ def verify_release_scope(repo: str, scope: list[int], repo_dir: Path,
                 f"release scope item #{number} is neither a PR nor an "
                 "Issue"
             ) from exc
-        issue = json.loads(raw)
         state = issue.get("state")
         if state != "CLOSED":
             raise RuntimeError(
@@ -427,11 +471,7 @@ def derive_release_scope_from_milestone(repo: str,
     propagates unchanged — a scope that cannot be derived is a failed
     release, never a guessed one.
     """
-    raw = run_command([
-        "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
-        "--paginate", "--slurp",
-    ])
-    milestones = parse_paginated_issue_array(raw)
+    milestones = list_milestones(repo)
     matches = [
         m for m in milestones
         if isinstance(m, dict) and m.get("title") == milestone_title
@@ -451,13 +491,7 @@ def derive_release_scope_from_milestone(repo: str,
     number = matches[0].get("number")
 
     def issues(state: str) -> list[dict]:
-        raw = run_command([
-            "gh", "api",
-            f"repos/{repo}/issues?state={state}&milestone={number}&per_page=100",
-            "--paginate", "--slurp",
-        ])
-        return [item for item in parse_paginated_issue_array(raw)
-                if isinstance(item, dict)]
+        return milestone_issues(repo, int(number), state)
 
     closed_issues = [item for item in issues("closed")
                      if "pull_request" not in item]
@@ -634,10 +668,7 @@ def build_release_changelog(repo: str, scope: list[int]) -> str:
                 )
             # Issue #707: an unmerged PR is not released content — its
             # link never enters the release notes.
-            pr_state = json.loads(run_command([
-                "gh", "pr", "view", str(pr_number), "--repo", repo,
-                "--json", "state",
-            ])).get("state")
+            pr_state = pr_view(pr_number, "state", repo=repo).get("state")
             if pr_state != "MERGED":
                 LOGGER.info(
                     "release_changelog_pr_link_dropped issue=%d pr=%d "
@@ -788,12 +819,8 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
         f"{IN_PROGRESS_LABEL} / {PR_OPENED_LABEL} / {FIX_NEEDED_LABEL}"
     )
     def fetch_check_runs() -> list[dict]:
-        command = [
-            "gh", "api", f"repos/{repo}/commits/{release_commit}/check-runs",
-            "--jq", ".check_runs",
-        ]
         try:
-            return json.loads(run_command(command))
+            return commit_check_runs(repo, release_commit)
         except subprocess.CalledProcessError as error:
             output = "\n".join(
                 str(value) for value in (error.stdout, error.stderr)
@@ -1171,29 +1198,15 @@ def publish_release(*, repo: str, tag: str, version: str,
         f"run_id={run_id}",
     ])
     try:
-        raw = run_command([
-            "gh", "release", "view", tag, "--repo", repo,
-            "--json", "tagName,url,body",
-        ])
-        release = json.loads(raw)
+        release = release_view(repo, tag, fields="tagName,url,body")
         if changelog not in release.get("body", ""):
-            run_command([
-                "gh", "release", "edit", tag, "--repo", repo,
-                "--notes", notes,
-            ])
+            release_edit_notes(repo, tag, notes=notes)
         return release["url"]
     except subprocess.CalledProcessError as exc:
         if "not found" not in (exc.stderr or ""):
             raise
-    run_command([
-        "gh", "release", "create", tag, "--repo", repo,
-        "--verify-tag", "--title", version, "--notes", notes,
-    ])
-    raw = run_command([
-        "gh", "release", "view", tag, "--repo", repo,
-        "--json", "tagName,url",
-    ])
-    return json.loads(raw)["url"]
+    release_create(repo, tag=tag, version=version, notes=notes)
+    return release_view(repo, tag, fields="tagName,url")["url"]
 
 
 # Issue #754: the GitHub issue index is eventually consistent —
@@ -1237,11 +1250,7 @@ def close_release_milestone(repo: str, version: str, *, run_id: str | None = Non
     unchanged — like the release gates, a check that cannot be made
     is a failed check.
     """
-    raw = run_command([
-        "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
-        "--paginate", "--slurp",
-    ])
-    milestones = parse_paginated_issue_array(raw)
+    milestones = list_milestones(repo)
     matches = [
         m for m in milestones
         if isinstance(m, dict) and m.get("title") == version
@@ -1295,10 +1304,7 @@ def close_release_milestone(repo: str, version: str, *, run_id: str | None = Non
             f"has {len(open_issues)} open issue(s) — closing it would hide "
             f"unfinished work; open issues: {listing}"
         )
-    run_command([
-        "gh", "api", f"repos/{repo}/milestones/{number}",
-        "--method", "PATCH", "-f", "state=closed",
-    ])
+    close_milestone(repo, int(number))
     epic_suffix = f"; {'; '.join(epic_evidence)}" if epic_evidence else ""
     return (
         f"Milestone #{number} ({html_url}) closed after release "
@@ -1514,11 +1520,8 @@ def sync_release_docs(*, source_repo: str, repo_dir: Path,
     if not docs_config.is_file():
         return "docs sync skipped (no Mintlify docs in repo)"
 
-    raw = run_command([
-        "gh", "release", "view", tag, "--repo", source_repo,
-        "--json", "tagName,publishedAt,url,body",
-    ])
-    release = json.loads(raw)
+    release = release_view(source_repo, tag,
+                           fields="tagName,publishedAt,url,body")
     body = release.get("body")
     if not isinstance(body, str) or not body.strip():
         raise RuntimeError(
@@ -2071,9 +2074,7 @@ def process_release(issue: dict, config: RunnerConfig,
                 number, repo=source_repo, event=EVENT_MERGED,
                 current_labels={IN_PROGRESS_LABEL},
             )
-            run_command(
-                ["gh", "issue", "close", str(number), "--repo", source_repo],
-            )
+            close_issue(int(number), repo=source_repo)
         except Exception:
             # The tag and GitHub Release are already published at this
             # point. The ai-merged transition and the Issue close are
@@ -2166,3 +2167,64 @@ def process_release(issue: dict, config: RunnerConfig,
             action=lambda: publisher.finish(progress_body(progress())),
         )
         return ""
+
+
+class ReleaseDeliveriesWaiting(RuntimeError):
+    """Gate 1 found deliveries still in flight; retry next tick."""
+
+    def __init__(self, issue_numbers: list[int], waited: float, limit: float):
+        self.issue_numbers = issue_numbers
+        self.waited = waited
+        self.limit = limit
+        super().__init__(
+            "release gate: waiting for open deliveries "
+            f"{issue_numbers} (waited {int(waited)}s / {int(limit)}s)"
+        )
+
+
+def release_target_milestone(
+    issue: dict, active_milestone: str | None = None,
+) -> str | None:
+    """Return the Milestone a release Issue releases (Issue #663).
+
+    The completeness gate judges the Milestone the release belongs to:
+    the Issue's own GitHub Milestone is authoritative, and the configured
+    `active_milestone` is the fallback (the release fallback scan is
+    already scoped to it). Without any Milestone there is nothing to
+    check and the release keeps the pre-#663 behavior, so the function
+    returns None and the caller skips the gate.
+    """
+    milestone = issue.get("milestone")
+    if isinstance(milestone, dict):
+        title = milestone.get("title")
+        if isinstance(title, str) and title:
+            return title
+    if isinstance(active_milestone, str) and active_milestone:
+        return active_milestone
+    return None
+
+
+def reconcile_release_epics(repo: str, milestone_number: int, version: str,
+                            run_id: str) -> list[str]:
+    """Close only provably complete open Epics in this exact Milestone."""
+    issues = milestone_open_issues(repo, milestone_number)
+    evidence: list[str] = []
+    for listed_epic in issues:
+        labels = listed_epic.get("labels", [])
+        names = {label.get("name") for label in labels if isinstance(label, dict)}
+        if EPIC_LABEL not in names:
+            continue
+        number = listed_epic.get("number")
+        try:
+            child_evidence = _verify_epic_complete(repo, listed_epic)
+        except (ValueError, json.JSONDecodeError) as exc:
+            evidence.append(f"Epic #{number} kept open: {exc}")
+            continue
+        audit = _epic_audit(child_evidence, version)
+        comments = issue_comments(int(number), repo=repo)
+        if not any(audit in str(comment.get("body", "")) for comment in comments):
+            comment_issue(int(number), repo=repo,
+                         body=f"<!-- orbi:run={run_id} -->\n{audit}\nrun_id={run_id}")
+        close_issue(int(number), repo=repo)
+        evidence.append(f"Epic #{number} closed after verification ({'; '.join(child_evidence)})")
+    return evidence

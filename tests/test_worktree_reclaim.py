@@ -23,11 +23,13 @@ import pytest
 import dataclasses
 
 from orbi import runner
+import orbi.journal as journal
 from orbi.delivery_labels import (
     FIX_NEEDED_LABEL,
     IN_PROGRESS_LABEL,
     PR_OPENED_LABEL,
 )
+from seam import seam
 
 LOGGER_NAME = "orbi.bootstrap"
 NOW = datetime(2026, 9, 12, 12, 0, 0, tzinfo=timezone.utc)
@@ -105,7 +107,7 @@ def _stub_closed(monkeypatch, *issues: dict) -> None:
         assert "closedAt" in json_fields and "labels" in json_fields
         return list(issues)
 
-    monkeypatch.setattr(runner, "list_issues", fake_list_issues)
+    monkeypatch.setattr(seam, "list_issues", fake_list_issues)
 
 
 def test_reclaims_closed_issue_worktree_past_window(tmp_path, monkeypatch, caplog):
@@ -171,7 +173,7 @@ def test_keeps_worktree_of_this_process_active_run(tmp_path, monkeypatch):
     repo = _git_repo(tmp_path / "repo")
     worktree = _register(repo, "orbi-owner-repo-issue-12-abcd1234")
     _stub_closed(monkeypatch, _closed(12, hours_ago=100))
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "abcd1234")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "abcd1234")
     runner.reclaim_released_worktrees(_config(repo), now=NOW)
     assert str(worktree) in _registered(repo)
 
@@ -184,8 +186,7 @@ def test_keeps_worktree_bound_as_active_scene(tmp_path, monkeypatch):
     repo = _git_repo(tmp_path / "repo")
     worktree = _register(repo, "orbi-owner-repo-issue-12-abcd1234")
     _stub_closed(monkeypatch, _closed(12, hours_ago=100))
-    monkeypatch.setattr(
-        runner, "_ACTIVE_RUN", {"worktree": str(worktree)},
+    monkeypatch.setattr(journal, "_ACTIVE_RUN", {"worktree": str(worktree)},
     )
     runner.reclaim_released_worktrees(_config(repo), now=NOW)
     assert str(worktree) in _registered(repo)
@@ -241,7 +242,7 @@ def test_same_issue_number_in_two_source_repos_is_not_crossed(
         assert repo == "owner/two"
         return []
 
-    monkeypatch.setattr(runner, "list_issues", fake_list_issues)
+    monkeypatch.setattr(seam, "list_issues", fake_list_issues)
     config = _config(repo)
     config = dataclasses.replace(config, source_repos=["owner/one", "owner/two"])
     runner.reclaim_released_worktrees(config, now=NOW)
@@ -258,7 +259,7 @@ def test_read_failure_removes_nothing_and_warns(tmp_path, monkeypatch, caplog):
     def failing_list_issues(repo, **kwargs):
         raise RuntimeError("gh is down")
 
-    monkeypatch.setattr(runner, "list_issues", failing_list_issues)
+    monkeypatch.setattr(seam, "list_issues", failing_list_issues)
     with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
         runner.reclaim_released_worktrees(_config(repo), now=NOW)
     assert str(worktree) in _registered(repo)
@@ -288,7 +289,7 @@ def test_single_removal_failure_warns_and_continues(
             raise RuntimeError("boom")
         return real_run_command(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", run_command)
+    monkeypatch.setattr(seam, "run_command", run_command)
     with caplog.at_level(logging.INFO, logger=LOGGER_NAME):
         runner.reclaim_released_worktrees(_config(repo), now=NOW)
     assert str(stuck) in _registered(repo)
@@ -355,8 +356,7 @@ def test_noop_without_worktrees_directory(tmp_path, monkeypatch):
     """A deployment without any worktrees makes no GitHub read at all."""
     repo = _git_repo(tmp_path / "repo")
     called = []
-    monkeypatch.setattr(
-        runner, "list_issues",
+    monkeypatch.setattr(seam, "list_issues",
         lambda *a, **k: called.append(a) or [],
     )
     runner.reclaim_released_worktrees(_config(repo), now=NOW)

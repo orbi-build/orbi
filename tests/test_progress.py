@@ -883,3 +883,22 @@ def test_publisher_failure_scene_never_touches_another_run():
         "--method", "POST", "--field",
         f"body={progress.format_status_comment(new_body)}",
     ]
+
+
+def test_progress_state_survives_an_activity_snapshot_failure(monkeypatch, tmp_path):
+    """The snapshot is best-effort: a read failure is logged and reported
+    as "no session yet", it never blocks the task (Issue #18)."""
+    import orbi.progress as progress
+
+    def boom(_path):
+        raise RuntimeError("unreadable session")
+
+    monkeypatch.setattr(progress, "activity_snapshot", boom)
+    state = progress._progress_state(
+        issue=4, title="t", run_id="a1b2c3d4", role="review",
+        branch="b", worktree=tmp_path, started=0.0,
+        pr_url=None, review_round=0, priority="normal",
+    )
+    assert state["phase"] == "starting"
+    assert state["last_activity"] is None
+    assert state["session"] is None
