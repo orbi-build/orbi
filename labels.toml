@@ -66,4 +66,4 @@ description = "Content-only task: the content agent delivers text to the Issue �
 [[label]]
 name = "ai-ops-only"
 color = "0e8a16"
-description = "Ops task: full execution session (ops playbook) — evidence on the Issue, code changes via PR"
+description = "Ops/research task: full execution session (ops playbook) — evidence on the Issue, code via PR"
