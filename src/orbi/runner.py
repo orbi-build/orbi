@@ -1840,6 +1840,113 @@ def run_git_network_command(
         time.sleep(delay)
 
 
+GH_READ_MAX_ATTEMPTS = 3
+GH_READ_BACKOFF_SECONDS = 1
+# gh prints its own HTTP failures as `HTTP <code>: <text> (<url>)` — the
+# transient classes of Issue #738 are the 401 keyring race, the rate
+# limits (429 / the API's "rate limit" messages) and GitHub-side 5xx.
+GH_TRANSIENT_ERROR_RE = re.compile(
+    r"http 401|http 429|http 5\d\d|bad credentials|rate limit",
+    re.IGNORECASE,
+)
+# The read-only gh subcommand surface (the maintainer comment's
+# enumerated read table). A verb missing from the set simply gets no
+# retry — today's behavior — while a write verb can never classify as
+# retryable, so a retried write can never duplicate a side effect.
+GH_READ_SUBCOMMANDS = {
+    ("issue", "list"), ("issue", "view"),
+    ("pr", "list"), ("pr", "view"),
+    ("release", "view"),
+    ("repo", "view"),
+    ("label", "list"),
+    ("auth", "status"), ("auth", "token"),
+}
+
+
+def _is_readonly_gh_command(command: list[str]) -> bool:
+    """Return whether a gh command is provably read-only.
+
+    `gh api` is a read only when it carries no non-GET `--method`/`-X`
+    override and no request parameter: per gh's own semantics the
+    default method is GET normally and POST if any `-f`/`-F` parameter
+    was added, so only an explicit `--method GET` keeps parameters on
+    the query string — the flags are gh's read/write semantics, not a
+    call-site list. Every other subcommand is a read only when its verb
+    is in the fixed read set.
+    """
+    if command[:1] != ["gh"] or len(command) < 3:
+        return False
+    if command[1] == "api":
+        args = command[2:]
+        method_get = False
+        has_parameter = False
+        for index, argument in enumerate(args):
+            if argument in {"-X", "--method"} and index + 1 < len(args):
+                if args[index + 1].upper() != "GET":
+                    return False
+                method_get = True
+            elif argument.startswith("--method="):
+                if argument.split("=", 1)[1].upper() != "GET":
+                    return False
+                method_get = True
+            elif (
+                argument in {"-f", "-F", "--raw-field", "--field"}
+                or argument.startswith(("--raw-field=", "--field="))
+                or (argument.startswith(("-f", "-F")) and len(argument) > 2)
+            ):
+                has_parameter = True
+        return method_get or not has_parameter
+    return (command[1], command[2]) in GH_READ_SUBCOMMANDS
+
+
+def run_gh_read_command(
+    command: list[str], *, cwd: Path | None = None,
+    timeout: int | None = None,
+    command_runner: Callable[..., str] | None = None,
+) -> str:
+    """Run one read-only gh command with bounded transient-failure retries.
+
+    Issue #738: a keyring race (HTTP 401), a rate limit (429) or a
+    GitHub-side 5xx used to crash a whole tick that was only reading.
+    Only provably read-only commands (`_is_readonly_gh_command`) that
+    failed with a transient error are retried, so no write path can ever
+    reach the retry loop; every retry logs a structured `gh_read_retry`
+    line, and the last error is re-raised unchanged so the existing
+    failure handling keeps its stderr.
+    """
+    execute = command_runner or run_command
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            # Forward only the set options: None is run_command's own
+            # default, and passing it explicitly would change the call
+            # observed by the run_command fakes and probes.
+            if timeout is None:
+                if cwd is None:
+                    return execute(command)
+                return execute(command, cwd=cwd)
+            if cwd is None:
+                return execute(command, timeout=timeout)
+            return execute(command, cwd=cwd, timeout=timeout)
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or "").strip()
+            retryable = (
+                _is_readonly_gh_command(command)
+                and GH_TRANSIENT_ERROR_RE.search(detail) is not None
+            )
+            if attempt >= GH_READ_MAX_ATTEMPTS or not retryable:
+                raise
+        delay = GH_READ_BACKOFF_SECONDS * (2 ** (attempt - 1))
+        LOGGER.warning(
+            "gh_read_retry command=%s attempt=%s max_attempts=%s "
+            "delay_seconds=%s stderr=%s",
+            single_line(" ".join(command)), attempt + 1,
+            GH_READ_MAX_ATTEMPTS, delay, single_line(detail),
+        )
+        time.sleep(delay)
+
+
 def parse_issue_array(raw: str) -> list[dict]:
     """Return the issue array from gh's JSON output."""
     issues = json.loads(raw)
@@ -1870,9 +1977,7 @@ def list_issues(repo: str, *, state: str | None = None,
     command += ["--json", json_fields, "--limit", str(limit)]
     if milestone is not None:
         command += ["--milestone", milestone]
-    if timeout is None:
-        return parse_issue_array(run_command(command))
-    return parse_issue_array(run_command(command, timeout=timeout))
+    return parse_issue_array(run_gh_read_command(command, timeout=timeout))
 
 
 def parse_issue_list(raw: str) -> dict | None:
@@ -1893,7 +1998,7 @@ def parse_paginated_issue_array(raw: str) -> list[dict]:
 
 def milestone_open_issues(repo: str, milestone_number: int) -> list[dict]:
     """List open Issues for one exact Milestone number, including all pages."""
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "api",
         f"repos/{repo}/issues?milestone={milestone_number}&state=open&per_page=100",
         "--paginate", "--slurp",
@@ -1908,7 +2013,7 @@ def epic_issue_with_blockers(repo: str, issue: dict) -> dict:
     number = issue.get("number")
     if not isinstance(number, int) or isinstance(number, bool):
         raise ValueError("Epic number is missing or invalid")
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "issue", "view", str(number), "--repo", repo,
         "--json", "number,body,labels,blockedBy",
     ])
@@ -2038,7 +2143,7 @@ def milestone_open_issue_count(repo: str, milestone_title: str) -> int:
     empty result means the Milestone could not be found: that is a
     failed check, never a silent 0 (the caller must not release on it).
     """
-    raw = run_command(
+    raw = run_gh_read_command(
         [
             "gh", "api", f"repos/{repo}/milestones",
             "--jq",
@@ -2152,7 +2257,7 @@ def _is_ancestor(commit: str, base: str, *, cwd: Path) -> bool:
 
 def _epic_child_evidence(repo: str, kind: str, number: int) -> str:
     """Verify one child against GitHub's live Issue/PR state."""
-    raw = run_command(["gh", "api", f"repos/{repo}/issues/{number}"])
+    raw = run_gh_read_command(["gh", "api", f"repos/{repo}/issues/{number}"])
     item = json.loads(raw)
     if not isinstance(item, dict):
         raise ValueError(f"child #{number} response is not an object")
@@ -2162,7 +2267,7 @@ def _epic_child_evidence(repo: str, kind: str, number: int) -> str:
     if kind == "pr" and not is_pr:
         raise ValueError(f"child #{number} declared as PR but is an Issue")
     if is_pr:
-        pr = json.loads(run_command(["gh", "api", f"repos/{repo}/pulls/{number}"]))
+        pr = json.loads(run_gh_read_command(["gh", "api", f"repos/{repo}/pulls/{number}"]))
         if not isinstance(pr, dict) or pr.get("merged") is not True:
             raise ValueError(f"child PR #{number} is not merged")
         return f"PR #{number} merged"
@@ -2202,7 +2307,7 @@ def _verify_epic_complete(repo: str, listed_epic: dict) -> list[str]:
     open_blockers = open_blocker_numbers(epic)
     if open_blockers:
         raise ValueError("open blockers: " + ", ".join(f"#{n}" for n in open_blockers))
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "api", f"repos/{repo}/issues/{number}/sub_issues?per_page=100",
         "--paginate", "--slurp",
     ])
@@ -2293,7 +2398,7 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
     Milestone title are independent GitHub facts, so a late-closing Issue is
     reconciled on a later tick without requiring a new release run.
     """
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
         "--paginate", "--slurp",
     ])
@@ -2303,7 +2408,7 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
         if not isinstance(milestone, dict) or milestone.get("state") not in {"open", "closed"}:
             LOGGER.info("milestone_kept_open number=%s repo=%s reason=malformed",
                         milestone.get("number") if isinstance(milestone, dict) else None, repo)
-    releases_raw = run_command([
+    releases_raw = run_gh_read_command([
         "gh", "api", f"repos/{repo}/releases?per_page=100",
         "--paginate", "--slurp",
     ])
@@ -2375,7 +2480,7 @@ def reconcile_orphan_prs(repo: str, run_id: str) -> list[str]:
     merge/close decision stays with the human — the Runner never
     auto-merges and never auto-closes across a human's close decision.
     """
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "pr", "list", "--repo", repo, "--state", "open",
         "--json", "number,headRefName", "--limit", "200",
     ], timeout=30)
@@ -2390,7 +2495,7 @@ def reconcile_orphan_prs(repo: str, run_id: str) -> list[str]:
         issue_number = orphan_pr_branch_issue(pr.get("headRefName"))
         if not isinstance(pr_number, int) or issue_number is None:
             continue
-        raw = run_command([
+        raw = run_gh_read_command([
             "gh", "issue", "view", str(issue_number), "--repo", repo,
             "--json", "state",
         ], timeout=30)
@@ -2702,7 +2807,7 @@ def issue_comments(number: int, *, repo: str) -> list[dict]:
     ``authorAssociation`` of the viewer, which is how the runner tells
     its own trusted comments apart from public ones (Issue #45).
     """
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "issue", "view", str(number), "--repo", repo,
         "--json", "comments",
     ], timeout=30)
@@ -2724,7 +2829,7 @@ def pr_comments(number: int, *, repo: str) -> list[dict]:
     the same 30 s bound (#745 bounded the issue-side read; an
     unbounded comments read is the same hang on the PR side).
     """
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "pr", "view", str(number), "--repo", repo,
         "--json", "comments",
     ], timeout=30)
@@ -2847,7 +2952,7 @@ def stable_branch_exists(repo_dir: Path, branch: str) -> bool:
 
 def open_pr_for_branch(repo_dir: Path, branch: str) -> dict | None:
     """Return the sole open PR for a branch, or None when absent."""
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "pr", "list", "--state", "open", "--head", branch,
         "--json", "number,url,baseRefName,headRefName,headRefOid",
         "--limit", "2",
@@ -2890,7 +2995,7 @@ def external_takeover_pr(repo_dir: Path, body: str | None,
     if not numbers:
         return None
     number = numbers[0]
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "pr", "view", number, "--repo", source_repo,
         "--json", "state,url,baseRefName,headRefName,headRefOid",
     ], cwd=repo_dir, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
@@ -3035,7 +3140,7 @@ def _authenticated_github_login() -> str:
         # The comments being verified come from github.com.  Restrict the
         # status query to that host so an active account on another configured
         # GitHub Enterprise host cannot be mistaken for this credential.
-        status = run_command([
+        status = run_gh_read_command([
             "gh", "auth", "status", "--hostname", "github.com",
         ])
     except Exception as exc:
@@ -3143,7 +3248,7 @@ def _route_external_pr_ticket(issue: dict, repo: str) -> bool:
         return False
     pr_number = int(match.group(1))
     try:
-        raw = run_command(
+        raw = run_gh_read_command(
             ["gh", "pr", "view", str(pr_number), "--repo", repo,
              "--json", "state"],
         )
@@ -3488,7 +3593,7 @@ def advance_active_milestone_on_idle(
     *, auto_next_milestone: bool = True,
 ) -> tuple[str, str | None]:
     """Check and advance a configured milestone after no_ready_issue."""
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
         "--paginate", "--slurp",
     ], timeout=30)
@@ -4170,7 +4275,7 @@ def has_in_progress_label(number: int, repo: str) -> bool:
     see a label another instance added seconds ago — exactly the moment
     this check exists to catch (the pre-claim race guard).
     """
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "issue", "view", str(number), "--repo", repo,
         "--json", "labels",
     ])
@@ -4516,7 +4621,7 @@ def _query_open_prs(worktree: Path, branch: str) -> list:
     payload is a broken `gh` response, never "zero PRs" — fail fast
     instead of guessing.
     """
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "pr", "list", "--state", "open", "--head", branch,
         "--json", (
             "number,url,baseRefName,baseRefOid,"
@@ -4641,7 +4746,7 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
             # (Issue #494).
             scene_state = "unknown"
             try:
-                scene_pr = run_command([
+                scene_pr = run_gh_read_command([
                     "gh", "pr", "view", str(_pr_number(expected_url)),
                     "--repo", pr_repo or "", "--json", "state,mergedAt",
                 ], cwd=worktree, timeout=RESUME_PR_STATE_TIMEOUT_SECONDS)
@@ -5084,7 +5189,7 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
     # stays on the branch for the human) and BEFORE the PR creation.
     # `gh issue view` is a direct, strongly consistent read — the same
     # property `has_in_progress_label` relies on.
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "issue", "view", str(issue), "--repo", source_repo,
         "--json", "state",
     ], cwd=worktree, timeout=30)
@@ -5113,7 +5218,7 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
     # verify it with the full PR contract (exactly one open PR, base,
     # head, run marker, `Fixes #<issue>`, URL). The verify step skips
     # its own base re-fetch: this function just fetched and merged it.
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "pr", "list", "--state", "open", "--head", branch,
         "--json", "url",
     ], cwd=worktree)
@@ -5538,7 +5643,7 @@ def _raise_if_preexisting_ci_failure(
     """Raise a fast, explicit error when base has the same failed check."""
     if not base_commit:
         return
-    base_checks = json.loads(run_command([
+    base_checks = json.loads(run_gh_read_command([
         "gh", "api", f"repos/{repo}/commits/{base_commit}/check-runs",
         "--jq", ".check_runs",
     ]))
@@ -5567,7 +5672,7 @@ def check_review_ci(repo: str, commit: str, *, wait_seconds: float) -> str:
     wait configuration and cadence.
     """
     def fetch() -> list[dict]:
-        return json.loads(run_command([
+        return json.loads(run_gh_read_command([
             "gh", "api", f"repos/{repo}/commits/{commit}/check-runs",
             "--jq", ".check_runs",
         ]))
@@ -5657,7 +5762,7 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
     ]
 
     def fetch_state() -> dict:
-        return json.loads(run_command(view_command, cwd=worktree))
+        return json.loads(run_gh_read_command(view_command, cwd=worktree))
 
     def check_rollup(state: dict) -> tuple[list[str], list[str]]:
         rollup = state.get("statusCheckRollup") or []
@@ -5763,7 +5868,7 @@ def confirm_merged(worktree: Path, pr: dict, base_branch: str,
     under the base-sync lock (Issue #171) with the deployment checkout
     as the lock location.
     """
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "pr", "view", str(pr["number"]),
         "--json", "state,mergedAt,mergeCommit",
     ], cwd=worktree)
@@ -5838,7 +5943,7 @@ def human_review_recovery_at(number: int, repo: str) -> str | None:
     ``ai-fix-needed`` label alone cannot distinguish a normal retry from a
     human decision after terminal blocking.
     """
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "api", f"repos/{repo}/issues/{number}/timeline",
         "--paginate", "--jq", ".[]",
     ])
@@ -5872,7 +5977,7 @@ def log_recovery_ci_status(pr: dict, repo: str) -> None:
     whether the recovered review runs (Issue #79).
     """
     try:
-        checks = json.loads(run_command([
+        checks = json.loads(run_gh_read_command([
             "gh", "api", f"repos/{repo}/commits/{pr['head_oid']}/check-runs",
             "--jq", ".check_runs",
         ]))
@@ -8021,7 +8126,7 @@ def _pr_number(pr_url: str) -> int:
 def pr_delivery_status(pr_url: str, source_repo: str) -> tuple[str, list[str]]:
     """Return PR state and CI summaries for delivery-wait evidence."""
     number = _pr_number(pr_url)
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "pr", "view", str(number), "--repo", source_repo,
         "--json", "state,statusCheckRollup",
     ])
@@ -8057,7 +8162,7 @@ def pr_state(pr_url: str, source_repo: str) -> str:
 
 def issue_labels(number: int, repo: str) -> list[str]:
     """Return the current label names of one Issue."""
-    raw = run_command([
+    raw = run_gh_read_command([
         "gh", "issue", "view", str(number), "--repo", repo,
         "--json", "labels",
     ])
