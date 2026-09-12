@@ -10196,6 +10196,68 @@ def make_timeout_tool_pi(tmp_path, *, tool_seconds: float = 0.6,
     return [sys.executable, "-c", script]
 
 
+def make_timeout_tool_pi_release_gated(tmp_path, *, release: Path,
+                                       guard_seconds: float = 60.0) -> list[str]:
+    """A `timeout 300 sleep 300` tool whose death the TEST gates
+    (Issue #741). The wrapper is the REAL coreutils `timeout` (exec'd by
+    `bash -c`, so the /proc cmdline is `timeout 300 sleep 300` — exactly
+    what `timeout_duration` parses) with a 300 s nominal deadline: the
+    tool is INSIDE its deadline at every poll, whatever the scheduling.
+    The fake Pi kills the tool's process group only once the `release`
+    file appears, then reports the tool result. A test that creates
+    `release` exactly when the runner logs its wait decision (the
+    progress callback's `recovery=wait`) makes the runner-observes-tool
+    ordering deterministic BY CONSTRUCTION — the tool cannot die before
+    the inside-deadline observation — instead of by wall-clock luck (the
+    #741 flake: under load one poll-loop stall skipped the whole
+    real-time detection window, the wait decision never fired and the
+    test failed on healthy code). The fake Pi self-terminates after
+    `guard_seconds`: a broken release path fails the assertions fast,
+    it never hangs."""
+    session_dir = tmp_path / ".pi-session"
+    session_dir.mkdir(exist_ok=True)
+    script = (
+        "import json, os, signal, subprocess, sys, time\n"
+        "from datetime import datetime, timezone\n"
+        f"session = {str(session_dir / 'sess.jsonl')!r}\n"
+        f"release = {str(release)!r}\n"
+        f"guard = {guard_seconds!r}\n"
+        "def ts():\n"
+        "    return datetime.now(timezone.utc).isoformat()\n"
+        "def write(record):\n"
+        "    with open(session, 'a') as handle:\n"
+        "        handle.write(json.dumps(record) + '\\n')\n"
+        "write({'type': 'session', 'id': 'sess-timeout', 'timestamp': ts(),\n"
+        "       'cwd': '/w'})\n"
+        "write({'type': 'message', 'id': 'a1', 'timestamp': ts(),\n"
+        "       'message': {'role': 'assistant', 'content': [\n"
+        "           {'type': 'toolCall', 'id': 't1', 'name': 'bash',\n"
+        "            'arguments': {'command': 'timeout 300 sleep 300'}}]}})\n"
+        "child = subprocess.Popen(\n"
+        "    ['bash', '-c', 'timeout 300 sleep 300'],\n"
+        "    start_new_session=True,\n"
+        ")\n"
+        "start = time.monotonic()\n"
+        "while child.poll() is None:\n"
+        "    if os.path.exists(release):\n"
+        "        try:\n"
+        "            os.killpg(os.getpgid(child.pid), signal.SIGTERM)\n"
+        "        except ProcessLookupError:\n"
+        "            pass\n"
+        "    elif time.monotonic() - start > guard:\n"
+        "        os.killpg(os.getpgid(child.pid), signal.SIGKILL)\n"
+        "        sys.exit(3)\n"
+        "    time.sleep(0.02)\n"
+        "write({'type': 'message', 'id': 'r1', 'timestamp': ts(),\n"
+        "       'message': {'role': 'toolResult', 'toolCallId': 't1',\n"
+        "                   'toolName': 'bash', 'isError': True,\n"
+        "                   'content': [{'type': 'text',\n"
+        "                                  'text': 'tool finished'}]}})\n"
+        "sys.exit(0)\n"
+    )
+    return [sys.executable, "-c", script]
+
+
 def test_stream_pi_timeout_tool_inside_deadline_not_killed(
     tmp_path, caplog,
 ):
@@ -10205,24 +10267,33 @@ def test_stream_pi_timeout_tool_inside_deadline_not_killed(
     `pi_idle_wait` (the evidence: pid, cmdline, deadline) instead of
     TERMed it, and the run SUCCEEDS when the tool reaches its deadline
     on its own."""
-    # The whole timeline is scaled up from the original sub-second
-    # margins (0.3 s window / 0.6 s tool): under a loaded runner
-    # (coverage tracing) the 0.1 s polls stretched past the deadline and
-    # missed the inside-deadline evidence entirely, or the wait outlived
-    # the 3 x 0.3 s escalation budget (2026-09-11 flake). With a 1.0 s
-    # idle window and a 2.5 s tool the detection window is 1.5 s wide
-    # and ends 0.5 s before the 3 x 1.0 s exhaustion budget.
-    # `pi_idle_wait` is logged once per stall, so the longer tool does
-    # not change the one-decision expectation.
-    command = make_timeout_tool_pi(tmp_path, tool_seconds=2.5)
+    # Issue #741: the earlier real-clock version ran a 2.5 s tool
+    # against a 1.0 s idle window and needed a poll to land inside the
+    # [1.0, 2.5] real-time detection window; under load one poll-loop
+    # stall skipped the whole window, `pi_idle_wait` never fired (the
+    # escalation correctly logged `no_target` instead) and the test
+    # failed on healthy code. The release-gated tool makes the
+    # ordering deterministic: the tool cannot die before the runner's
+    # wait decision, because the test releases it exactly when the
+    # progress callback first sees `recovery=wait`.
+    release = tmp_path / "release-tool"
+    command = make_timeout_tool_pi_release_gated(tmp_path, release=release)
+    released = []
+
+    def progress(activity):
+        if activity.get("recovery") == "wait" and not released:
+            released.append(True)
+            release.write_text("go", encoding="utf-8")
+
     with caplog.at_level("INFO"):
         result = runner.stream_pi(
             command, cwd=tmp_path, poll_interval=0.2,
             idle_warn_seconds=1.0,
             run_id="deadbeef", issue=105, source_repo="xqliu/orbi",
-            branch="b",
+            branch="b", progress=progress,
         )
     assert result == ""
+    assert released, "the wait decision reached the progress callback"
     lines = caplog.text.splitlines()
     waits = [line for line in lines if " pi_idle_wait " in line]
     assert len(waits) == 1, f"exactly one wait decision: {lines}"
@@ -10232,9 +10303,10 @@ def test_stream_pi_timeout_tool_inside_deadline_not_killed(
     assert "pid=" in wait
     assert "cmdline=" in wait
     assert "deadline=" in wait
-    # No signal was ever DELIVERED: the tool finished on its own
-    # deadline (a later `no_target` record is fine — the descendants
-    # were already gone when the next window re-evaluated).
+    # No signal was ever DELIVERED: the tool stayed inside its nominal
+    # deadline until the release, and the escalation only ever observed
+    # the pending target (a `no_target` record is fine — it means the
+    # tool was already gone when a window re-evaluated).
     terms = [line for line in lines if " pi_idle_term " in line]
     assert not any("result=sent" in line for line in terms), lines
     assert " pi_idle_kill " not in caplog.text
@@ -11147,18 +11219,66 @@ def test_stream_pi_invokes_progress_callback_while_child_is_running(
     # ...and it saw the activity change (starting -> test) live, before
     # the child exited: the tool call is visible in an early snapshot,
     # not only in a final state.
-    # Issue #176: the first live snapshot shows the startup sub-phase
+    # Issue #176: the live snapshots show the startup sub-phases
     # (request_pending: the session exists, the first response has not
     # arrived yet), not the generic `starting`.
+    # Issue #741: the FIRST frame is load-dependent — on a busy machine
+    # the first poll can predate the session file, so that frame is
+    # `session_pending` (equally legal, pinned by the dedicated
+    # regression test). This test pins the ORDER: request_pending must
+    # appear, and before the tool phase.
     phases = [entry["phase"] for entry in seen]
-    assert phases[0] == "request_pending"
+    assert "request_pending" in phases
     assert "test" in phases
+    assert phases.index("request_pending") < phases.index("test")
     assert phases.index("test") < len(phases) - 1
     test_entries = [entry for entry in seen if entry["phase"] == "test"]
     assert any(
         entry["action"] == "bash pytest tests/"
         for entry in test_entries
     )
+
+
+def test_stream_pi_progress_first_frame_may_be_session_pending(tmp_path):
+    """Issue #741 regression: on a busy machine the first progress frame
+    fires BEFORE Pi creates its session file, so the startup sub-phase
+    of that frame is `session_pending` — as legal as `request_pending`
+    (Issue #176). The session record below is delayed by 1.0 s, so the
+    forced scene is the exact #741 flake: the first frames predate the
+    session file."""
+    (_, session), (_, user), (_, assistant) = fake_session_records()
+    command = make_fake_pi(
+        tmp_path,
+        session_records=[(1.0, session), (0.1, user), (0.1, assistant)],
+        stdout="final answer",
+        sleep=0.6,
+    )
+    seen = []
+
+    def progress(activity):
+        seen.append({
+            "phase": activity["phase"],
+            "action": activity["action"],
+            "result": activity["result"],
+        })
+
+    result = runner.stream_pi(
+        command, cwd=tmp_path, poll_interval=0.05,
+        run_id="deadbeef", issue=24, source_repo="xqliu/orbi",
+        branch="b", progress=progress,
+    )
+    assert result == "final answer"
+    # The forced #741 scene: the first frame predates the session file,
+    # so it is the `session_pending` startup sub-phase — never a reason
+    # to fail (Issue #741).
+    phases = [entry["phase"] for entry in seen]
+    assert phases[0] == "session_pending"
+    # The order contract (Issue #176): the startup sub-phases stay
+    # visible and ordered — request_pending appears, before the tool
+    # phase — regardless of which frame the sampling started in.
+    assert "request_pending" in phases
+    assert "test" in phases
+    assert phases.index("request_pending") < phases.index("test")
 
 
 def test_stream_pi_live_progress_patches_github_before_child_exits(
