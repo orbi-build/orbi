@@ -270,6 +270,42 @@ reads the labels, the CLI install and the unit templates from
 `deploy_home` and checks the delivery checkout `repo_dir` (see
 [One-time setup](/setup)).
 
+### One machine, multiple deployments (Issue #747)
+
+One machine can host several independent Orbi deployments — each its
+own checkout, its own `orbi.toml`, its own timer set. Every deployment
+config MUST declare a distinct `unit_name`:
+
+```toml
+# <checkout>/orbi.toml — the "core" deployment
+unit_name = "core"
+```
+
+`orbi setup` / `orbi install-units` then manage exactly this
+deployment's units (`orbi-core@1/2.service` and `orbi-core@1/2.timer`);
+a second deployment with `unit_name = "website"` manages
+`orbi-website@1/2.*` on the same machine. Only ONE deployment per
+machine may leave `unit_name` unset — it owns the shared `orbi@1/2`
+names.
+
+Never hand-write systemd unit files. The per-tick drift self-heal
+compares only the installed template units of the configured
+`unit_name`, so a hand-written `orbi-core.service` is invisible to
+EVERY deployment: template updates never reach it and nothing reports
+the gap. `orbi doctor` makes the bypass visible — it lists such files
+under `unmanaged_units` with the `ORBI_CONFIG` each one points at:
+
+```text
+unmanaged_units: 2
+  orbi-core.service (ORBI_CONFIG=/path/to/deployments/core/orbi.toml)
+  orbi-core.timer (ORBI_CONFIG=-)
+  fix: set unit_name in each deployment config and run `orbi install-units`
+```
+
+The repair is the fix line: set the deployment's `unit_name`, run
+`orbi install-units` so the managed `@` units take over, then retire
+the hand-written files.
+
 ## 4. Configure the model provider
 
 The Runner never starts or manages the model process — it launches Pi,

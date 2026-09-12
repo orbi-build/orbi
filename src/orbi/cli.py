@@ -503,6 +503,19 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
             lines.append(
                 f"  {entry['unit']}: sha256={entry['installed_sha256']}"
             )
+    # Issue #747: hand-written orbi units without the @ template form
+    # are invisible to every deployment's check_unit_drift — the drift
+    # self-heal never reaches them. Doctor surfaces them read-only so
+    # the bypass becomes visible instead of silently failing.
+    unmanaged = systemd_deploy.unmanaged_units(installed_dir)
+    lines.append(f"unmanaged_units: {len(unmanaged)}")
+    for entry in unmanaged:
+        lines.append(
+            f"  {entry['unit']} (ORBI_CONFIG="
+            f"{entry['config'] if entry['config'] else '-'})"
+        )
+    if unmanaged:
+        lines.append(f"  fix: {systemd_deploy.UNMANAGED_FIX}")
     finding = config.get("pi_provider_key_finding")
     if finding and finding.get("variable") != "-":
         lines.append(

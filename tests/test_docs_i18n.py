@@ -74,6 +74,10 @@ KNOWN_CONFIG_FIELDS = frozenset({
     # Issue #139: the active Milestone claim scope (optional string).
     "active_milestone",
     "max_concurrency",
+    # Issue #747: the per-deployment systemd unit name (multi-
+    # deployment runbook; documented in the getting-started field
+    # table and the committed example, commented out).
+    "unit_name",
     # Issue #525: the runner source freshness gate's offline escape
     # hatch (explicit boolean, default false).
     "allow_stale_runner",
