@@ -434,7 +434,10 @@ Every other key is rejected: an unknown key, a host-only
 identity/security key (see [Security](/security)), invalid TOML or a
 wrong type fails the claim fast with the offending key names and the
 Issue becomes `ai-blocked` — one repository's bad file never affects
-another pool. `dispatch_label` must not be a delivery lifecycle label
+another pool. The host-only set also owns host scheduling:
+`max_concurrency` can never be delegated to a repository file — the
+concurrency slot pool belongs to the deployment host.
+`dispatch_label` must not be a delivery lifecycle label
 (`ai-in-progress`, `ai-merged`, …): those stay host constants. The block
 lands on the Issue the claim selected; a repository whose
 `dispatch_label` is not `ai-ready` has no `ai-ready` candidate to block
