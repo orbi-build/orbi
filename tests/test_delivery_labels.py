@@ -41,6 +41,50 @@ def test_label_patch_release_waiting_returns_release_to_ready_queue():
     assert to_remove == ["ai-in-progress"]
 
 
+def test_label_patch_human_review_waiting_keeps_the_opened_pr_anchor():
+    """Issue #763: the human-review waiting patch follows the release
+    waiting shape — the ticket returns to `ai-ready` and a stale
+    in-flight label is cleared — while the opened-PR state anchor
+    STAYS: the resume scan finds waiting deliveries through
+    `ai-pr-opened`/`ai-fix-needed`, so removing the anchor would drop
+    the delivery into the fresh-claim queue for a full re-implement."""
+    to_add, to_remove = dl.label_patch(
+        dl.EVENT_HUMAN_REVIEW_WAITING, {"ai-pr-opened"},
+    )
+    assert to_add == ["ai-ready"]
+    assert to_remove == []
+    # A stale in-flight residue is still cleared (the release-waiting
+    # shape), and a fix-round ticket keeps its own anchor.
+    assert dl.label_patch(
+        dl.EVENT_HUMAN_REVIEW_WAITING,
+        {"ai-pr-opened", "ai-in-progress"},
+    ) == (["ai-ready"], ["ai-in-progress"])
+    assert dl.label_patch(
+        dl.EVENT_HUMAN_REVIEW_WAITING, {"ai-fix-needed"},
+    ) == (["ai-ready"], [])
+
+
+def test_label_patch_never_adds_or_removes_the_human_review_label():
+    """Issue #763 hard constraint: `ai-human-review` is a human-only
+    label (the `ai-release` shape) — the Runner never applies or
+    removes it, so no event's patch may name it in either direction."""
+    events = (
+        dl.EVENT_CLAIM, dl.EVENT_PR_OPENED, dl.EVENT_FIX_NEEDED,
+        dl.EVENT_MERGED, dl.EVENT_RELEASE_WAITING, dl.EVENT_REQUEUE,
+        dl.EVENT_BLOCKED, dl.EVENT_HUMAN_REVIEW_WAITING,
+    )
+    current_sets = (
+        set(), {"ai-ready"}, {"ai-in-progress"}, {"ai-pr-opened"},
+        {"ai-fix-needed"}, {"ai-ready", "ai-pr-opened"},
+        {"ai-human-review"},
+    )
+    for event in events:
+        for current in current_sets:
+            to_add, to_remove = dl.label_patch(event, current)
+            assert dl.HUMAN_REVIEW_LABEL not in to_add, (event, current)
+            assert dl.HUMAN_REVIEW_LABEL not in to_remove, (event, current)
+
+
 def test_label_patch_requeue_returns_external_takeover_to_ready_queue():
     """Issue #608: the external takeover delivery ended without a merge
     (contributor withdrew / maintainer rejected) — the Issue returns to
@@ -200,8 +244,16 @@ def test_lifecycle_states_are_exactly_the_six_delivery_labels():
 
 def test_scheduling_metadata_labels_are_not_lifecycle_states():
     for label in (dl.P0_LABEL, dl.BUG_LABEL, dl.EPIC_LABEL,
-                  dl.RELEASE_LABEL, dl.CONTENT_ONLY_LABEL, dl.OPS_LABEL):
+                  dl.RELEASE_LABEL, dl.CONTENT_ONLY_LABEL, dl.OPS_LABEL,
+                  dl.HUMAN_REVIEW_LABEL):
         assert label not in dl.LIFECYCLE_STATES
+
+
+def test_human_review_label_is_exactly_the_issue_fixed_name():
+    """Issue #763 section 0: the label name is fixed — the carrier of
+    the human acceptance gate is this one label, matching the `ai-*`
+    family and the cloud control-plane display ticket."""
+    assert dl.HUMAN_REVIEW_LABEL == "ai-human-review"
 
 
 # --- pickup / resume / human-intervention decisions ------------------

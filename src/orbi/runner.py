@@ -75,6 +75,7 @@ from orbi.delivery_labels import (
     CONTENT_ONLY_LABEL,
     EPIC_LABEL,
     FIX_NEEDED_LABEL,
+    HUMAN_REVIEW_LABEL,
     IN_PROGRESS_LABEL,
     MERGED_LABEL,
     OPS_LABEL,
@@ -85,6 +86,7 @@ from orbi.delivery_labels import (
     EVENT_BLOCKED,
     EVENT_CLAIM,
     EVENT_FIX_NEEDED,
+    EVENT_HUMAN_REVIEW_WAITING,
     EVENT_REQUEUE,
     EVENT_RELEASE_WAITING,
     EVENT_MERGED,
@@ -93,6 +95,7 @@ from orbi.delivery_labels import (
     label_patch,
     needs_human_intervention,
 )
+from orbi import human_review
 from orbi.repo_config import (
     REPO_CONFIG_PATH,
     RepoConfigError,
@@ -597,6 +600,17 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     allow_stale_runner = data.get("allow_stale_runner", False)
     if not isinstance(allow_stale_runner, bool):
         raise ValueError("allow_stale_runner must be a boolean")
+    # Human acceptance gate (Issue #763): when true, every delivery's
+    # PR carries an acceptance checklist on the Issue and the review
+    # round waits for the human-only `ai-human-review` label while the
+    # checklist's column 2 (the machine-unverifiable minimum) is
+    # non-empty. HOST-only like `allow_stale_runner`: the gate is the
+    # deployment operator's trust decision (who pays for the pipeline
+    # decides when a person must look), never a repository-writable
+    # policy. Default False = the exact pre-#763 behavior.
+    human_review_gate = data.get("human_review_gate", False)
+    if not isinstance(human_review_gate, bool):
+        raise ValueError("human_review_gate must be a boolean")
     # Engine source update channel (Issue #535): what the deploy home
     # checkout follows at the next start — origin/main by default (the
     # exact pre-#535 dogfood behavior), a branch, the newest official
@@ -752,6 +766,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         "auto_next_milestone": auto_next_milestone,
         "max_concurrency": max_concurrency,
         "allow_stale_runner": allow_stale_runner,
+        "human_review_gate": human_review_gate,
         "slot_dir": slot_dir_for(repo_dir),
         "pi_provider": pi_provider,
         "pi_model": pi_model,
@@ -7117,6 +7132,67 @@ def delivery_head_advanced(worktree: Path, base_sha: str) -> bool:
     return head != base_sha
 
 
+def delivered_changed_files(worktree: Path, base: str) -> list[str] | None:
+    """The paths the delivered commits changed against the frozen base.
+
+    The checklist's classification input (Issue #763). A git failure
+    returns None — unknown evidence is MISSING evidence, and the
+    checklist treats missing evidence as a column-2 item so the gate
+    holds (the safe direction: only real evidence can pass it).
+    """
+    try:
+        raw = run_command(
+            ["git", "diff", "--name-only", f"{base}...HEAD"],
+            cwd=worktree,
+        )
+    except Exception:
+        LOGGER.exception(
+            "human_review_diff_read_failed worktree=%s base=%s",
+            worktree, base,
+        )
+        return None
+    return [line.strip() for line in raw.splitlines() if line.strip()]
+
+
+def human_review_checklist(
+    worktree: Path, config: dict, *, run_id: str, pr_url: str,
+) -> str:
+    """Build the human acceptance checklist comment for one delivery.
+
+    Evidence is read from the delivery worktree only (the test log plus
+    the committed diff against the frozen base) — no session, no extra
+    GitHub read. `base_sha` is always present on the same run that
+    posts the checklist; a resumed re-derivation falls back to the
+    configured base branch.
+    """
+    base = config.get("base_sha") or config["base_branch"]
+    return human_review.render_checklist_comment(
+        run_id=run_id,
+        pr_url=pr_url,
+        test_command=config.get("test_command"),
+        checklist=human_review.build_checklist(
+            test_result=read_test_result(worktree),
+            changed_files=delivered_changed_files(worktree, base),
+            test_command=config.get("test_command"),
+        ),
+    )
+
+
+def _human_review_column2(worktree: Path, config: dict) -> list[str]:
+    """Recompute the checklist's column 2 from local delivery evidence.
+
+    The review-round gate's per-tick cost: local file reads only — no
+    session, no GitHub write. Missing evidence lands IN column 2 (the
+    gate holds), so only real evidence can pass it.
+    """
+    base = config.get("base_sha") or config["base_branch"]
+    return human_review.build_checklist(
+        test_result=read_test_result(worktree),
+        changed_files=delivered_changed_files(worktree, base),
+        test_command=config.get("test_command"),
+    )["column2"]
+
+
 def _progress_state(*, issue: int, title: str, run_id: str, role: str,
                     branch: str, worktree: Path, started: float,
                     pr_url: str | None, review_round: int, priority: str,
@@ -7939,6 +8015,26 @@ def process_issue(issue: dict, config: dict, source_repo: str,
                 run_id, run_info, pr_url, external=external_takeover,
             ),
         )
+        if config.get("human_review_gate"):
+            # Issue #763: the human acceptance checklist — the readable
+            # face of the gate — posts ONCE per delivery, at the moment
+            # the delivery completes (the PR opens). Bypass (Issue #79):
+            # a failed checklist never fails the delivery; the gate
+            # itself is the label check in the review rounds, and a
+            # checklist-less delivery still holds there when column 2
+            # is non-empty.
+            try:
+                comment_issue(
+                    number, repo=source_repo,
+                    body=human_review_checklist(
+                        worktree, config,
+                        run_id=run_id, pr_url=pr_url,
+                    ),
+                )
+            except Exception:
+                LOGGER.exception(
+                    "issue=%s human_review_checklist_failed", number,
+                )
         publish(
             action=lambda: publisher.finish(_progress_body(_progress_state(
                 issue=number, title=title, run_id=run_id,
@@ -8539,6 +8635,37 @@ def _run_review_round(
             "open PR has no resumable delivery label",
         )
         return None
+    # Issue #763: the human acceptance gate — checked BEFORE the scene,
+    # the worktree or any review session. One label read decides; the
+    # column-2 re-derivation is local evidence reads only. With the
+    # gate on and no `ai-human-review` label, a non-empty column 2
+    # holds the delivery: the waiting primitive returns the ticket to
+    # `ai-ready` (the opened-PR anchor stays, so the resume scan keeps
+    # finding it), the round ends here, the caller releases the slot
+    # and every next tick costs one label read — never a review
+    # session, never an `ai-fix-needed` round (the review-round budget
+    # is not consumed by waiting). An empty column 2 needs no human and
+    # falls through to the normal review; a missing worktree falls
+    # through too so the existing recovery semantics stay intact.
+    if config.get("human_review_gate") and HUMAN_REVIEW_LABEL not in labels:
+        gate_worktree = worktree_path(
+            config["repo_dir"], source_repo, number, run_id,
+        )
+        if gate_worktree.is_dir() and _human_review_column2(
+            gate_worktree, config,
+        ):
+            if READY_LABEL not in labels:
+                apply_label_patch(
+                    number, repo=source_repo,
+                    event=EVENT_HUMAN_REVIEW_WAITING,
+                    current_labels=labels,
+                )
+            LOGGER.info(
+                "issue=%s human_review_waiting pr=%s; releasing the "
+                "slot (one label read per tick, no review session)",
+                number, pr_url,
+            )
+            return None
     # The PR is in an opened-PR review state: run the
     # independent review of the frozen PR on the same run
     # (Issue #34). `ai-pr-opened` awaits review; `ai-fix-needed`
@@ -8762,6 +8889,13 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
       independent review;
     - an open PR with `ai-in-progress` -> repair the lost transition to
       `ai-pr-opened`, then review immediately;
+    - the human acceptance gate (Issue #763, `human_review_gate: true`):
+      while the checklist's column 2 is non-empty and no human has
+      applied `ai-human-review`, the round ends BEFORE any review
+      session — the waiting primitive returns the ticket to `ai-ready`
+      (the opened-PR anchor stays), the wait returns and the slot is
+      released; the next tick re-checks with one label read. The wait
+      never consumes the review-round budget;
     - any other unrecoverable label inconsistency -> mark the Issue
       `ai-blocked` and release the slot. It must never hold the slot by
       polling forever.

@@ -101,6 +101,35 @@ GitHub 标签是外部状态机。它们不是 commit 创建的——每个仓�
 | `ai-fix-needed` | PR head 尚不可合并，或已有 run/PR 的可恢复失败（Issue #50）；下一 tick 在同一 run、branch、worktree、PR 上继续 |
 | `ai-merged` | 成功终态；Runner 已合并 PR 并确认 merge commit 落在保护分支 |
 | `ai-blocked` | 只用于 AI 无法安全判断或修复的外部前置条件（Issue #50）；blocked comment 写明为什么不能自动恢复；人工必须决定下一步 |
+| `ai-human-review` | 人工验收门禁（Issue #763）：人已确认该交付的验收清单。只有人能打或摘——Runner 永不增删 |
+
+## 人工验收门禁（ai-human-review）
+
+产品主线是无人值守：默认流水线人在环外运行，且本门禁默认关闭——开关
+关闭时交付、评审、merge、release 的行为与 Issue #763 之前逐字节一致。
+
+host 配置打开门禁（`orbi.toml` 里 `human_review_gate = true`——这是部署
+方的信任决策，不是仓库可写策略）。打开后每个交付在 PR 打开时向 Issue
+发一条验收清单评论，分两栏：
+
+- **栏一 · 本次 run 已验证的**（证据，不是待办）：`.orbi/test.log` 的真实
+  测试结果、覆盖层（仓库测试套件）、改动文件数。
+- **栏二 · 机器验不了的最小集合**，按每个交付的改动路径与可用证据生成
+  （不是硬编码的"人类专属"模板）：业务意图（测试只证明实现与测试一致，
+  不证明测试与意图一致）、UI 视觉与文案、外部环境验证，以及测试日志或
+  diff 不可读时的证据缺失条目。
+
+栏二非空时它就是门禁：评审轮次在任何 Pi session 之前短路——票回
+`ai-ready`（opened-PR 标签保留作 resume 锚），槽位释放，此后每个 tick
+只花一次 label 读。等待**不消耗**评审轮次预算，也**不碰** `ai-fix-needed`。
+人确认清单后打 `ai-human-review`，下一 tick 照常评审与合并（verdict 绑定
+与 `--match-head-commit` 零改动）。
+
+栏二为空是目标状态：清单明确写「无需人工介入」，交付不要求该标签直接
+通过。模型能力提升时，栏二条目迁进栏一——清单评论带机器可解析的
+`<!-- orbi:human-review {...} -->` 块（schema 1），迁移可以做工具化，
+工件形态不变。清单不声称任何正确性保证：栏一是已验证内容的证据，栏二是
+人仍需确认的最小集合。
 
 ## 票派发：content、dev、ops
 

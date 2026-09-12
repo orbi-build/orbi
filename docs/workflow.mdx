@@ -121,6 +121,49 @@ commits — initialize them per repository (see
 | `ai-fix-needed` | The PR head is not mergeable yet, or an AI-recoverable failure of the run/PR (Issue #50); the next tick resumes the same run, branch, worktree and PR |
 | `ai-merged` | Success terminal state; the Runner merged the PR and confirmed the merge commit on the protected branch |
 | `ai-blocked` | Only an external precondition the AI cannot safely judge or fix (Issue #50); the blocked comment states why automatic recovery is impossible; a human must decide the next step |
+| `ai-human-review` | The human acceptance gate (Issue #763): a person confirmed the delivery's acceptance checklist. Only a human applies or removes it — the Runner never touches it |
+
+## Human acceptance gate (ai-human-review)
+
+The main line of the product is unattended: the default pipeline runs
+with humans OUT of the loop, and the gate is off by default — with the
+switch off the delivery, review, merge and release behavior is exactly
+what it was before (Issue #763).
+
+The host config turns the gate on (`human_review_gate = true` in
+`orbi.toml` — an operator trust decision, not a repository policy).
+Every delivery then posts ONE acceptance checklist comment to the Issue
+when its PR opens, split in two columns:
+
+- **Column 1 — what the run already verified** (evidence, not todos):
+  the real test result from `.orbi/test.log`, the covered layer (the
+  repository test suite), the delivered file count.
+- **Column 2 — the machine-unverifiable minimum**, derived per
+  delivery from the changed paths and the available evidence (never a
+  hardcoded human-items template): business intent (tests prove the
+  implementation matches the tests, not that the tests match the
+  intent), UI visuals and copy, external-environment verification, and
+  missing-evidence items when the test log or the diff cannot be read.
+
+While column 2 is non-empty, it is a GATE: the review round
+short-circuits before any Pi session — the ticket returns to
+`ai-ready` (the opened-PR label stays as the resume anchor), the slot
+is released, and every later tick costs one label read. The wait does
+NOT consume the review-round budget and never touches
+`ai-fix-needed`. A person who confirms the checklist applies
+`ai-human-review`, and the next tick reviews and merges the delivery
+exactly as it does today (the verdict binding and
+`--match-head-commit` are untouched).
+
+An EMPTY column 2 is the target state: the checklist says
+无需人工介入 ("no human intervention needed") explicitly and the
+delivery passes without the label. As model capability grows,
+column-2 items migrate into column 1 — the checklist comment carries a
+machine-parsable `<!-- orbi:human-review {...} -->` block (schema 1)
+so the migration is toolable without changing the artifact shape. The
+checklist makes no correctness guarantee of any kind: column 1 is
+evidence of what was verified, column 2 is what a person still
+confirms.
 
 ## Ticket dispatch: content, dev and ops
 
