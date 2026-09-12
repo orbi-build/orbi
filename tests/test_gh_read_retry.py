@@ -141,8 +141,10 @@ def test_gh_read_command_does_not_retry_write_subcommands(monkeypatch):
 
 
 def test_gh_read_command_does_not_retry_gh_api_writes(monkeypatch):
-    """`gh api` is a read only without a non-GET --method/-X override —
-    the flag is gh's own read/write semantics, not a call-site list."""
+    """`gh api` is a read only without a write marker — a non-GET
+    --method/-X override, or any `-f`/`-F` parameter, which per gh's
+    own semantics switches the request to POST. The flags are gh's
+    read/write semantics, not a call-site list."""
     calls = []
 
     def fake_run(command, **kwargs):
@@ -160,10 +162,11 @@ def test_gh_read_command_does_not_retry_gh_api_writes(monkeypatch):
          "--method", "PATCH", "-f", "state=closed"],
         ["gh", "api", "repos/o/r/labels", "--method=POST", "-f", "name=p0"],
         ["gh", "api", "-X", "DELETE", "repos/o/r/actions/variables/V"],
+        ["gh", "api", "repos/o/r/labels", "-f", "name=p0"],
     ):
         with pytest.raises(subprocess.CalledProcessError):
             runner.run_gh_read_command(command, command_runner=fake_run)
-    assert len(calls) == 4
+    assert len(calls) == 5
 
 
 def test_is_readonly_gh_command_classifies_gh_api_reads():
@@ -182,6 +185,30 @@ def test_is_readonly_gh_command_classifies_gh_api_reads():
     assert not runner._is_readonly_gh_command(["git", "push", "origin", "main"])
     assert not runner._is_readonly_gh_command(
         ["timeout", "30", "gh", "issue", "list"])
+
+
+def test_is_readonly_gh_command_field_parameters_imply_post():
+    """gh's documented semantics (gh api --help): the default method is
+    GET normally and POST if any parameters were added — a `-f`/`-F`
+    parameter without an explicit `--method GET` is a write and must
+    never classify as a read."""
+    for command in (
+        ["gh", "api", "repos/o/r/labels", "-f", "name=p0"],
+        ["gh", "api", "repos/o/r/issues/9/comments", "-F", "body=hi"],
+        ["gh", "api", "repos/o/r/labels", "--raw-field", "name=p0"],
+        ["gh", "api", "repos/o/r/labels", "--field=name=p0"],
+        ["gh", "api", "graphql", "-fquery=query { viewer { login } }"],
+    ):
+        assert not runner._is_readonly_gh_command(command), command
+    # An explicit `--method GET` keeps the parameters on the query
+    # string (gh's documented escape hatch) — a read again.
+    for command in (
+        ["gh", "api", "repos/o/r/issues", "--method", "GET",
+         "-f", "state=open"],
+        ["gh", "api", "repos/o/r/issues", "-X", "GET", "-f", "state=open"],
+        ["gh", "api", "repos/o/r/issues", "--method=GET", "-fstate=open"],
+    ):
+        assert runner._is_readonly_gh_command(command), command
 
 
 def test_is_readonly_gh_command_classifies_subcommands():

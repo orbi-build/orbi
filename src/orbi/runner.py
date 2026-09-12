@@ -1867,22 +1867,35 @@ def _is_readonly_gh_command(command: list[str]) -> bool:
     """Return whether a gh command is provably read-only.
 
     `gh api` is a read only when it carries no non-GET `--method`/`-X`
-    override (the flag is gh's own read/write semantics, not a
-    call-site list); every other subcommand is a read only when its verb
+    override and no request parameter: per gh's own semantics the
+    default method is GET normally and POST if any `-f`/`-F` parameter
+    was added, so only an explicit `--method GET` keeps parameters on
+    the query string — the flags are gh's read/write semantics, not a
+    call-site list. Every other subcommand is a read only when its verb
     is in the fixed read set.
     """
     if command[:1] != ["gh"] or len(command) < 3:
         return False
     if command[1] == "api":
         args = command[2:]
+        method_get = False
+        has_parameter = False
         for index, argument in enumerate(args):
             if argument in {"-X", "--method"} and index + 1 < len(args):
                 if args[index + 1].upper() != "GET":
                     return False
+                method_get = True
             elif argument.startswith("--method="):
                 if argument.split("=", 1)[1].upper() != "GET":
                     return False
-        return True
+                method_get = True
+            elif (
+                argument in {"-f", "-F", "--raw-field", "--field"}
+                or argument.startswith(("--raw-field=", "--field="))
+                or (argument.startswith(("-f", "-F")) and len(argument) > 2)
+            ):
+                has_parameter = True
+        return method_get or not has_parameter
     return (command[1], command[2]) in GH_READ_SUBCOMMANDS
 
 
