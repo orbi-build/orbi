@@ -514,30 +514,84 @@ def release_changelog_category(item: dict) -> str:
     return "Features"
 
 
+RELEASE_ISSUE_EVIDENCE_QUERY = """query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue: issueOrPullRequest(number: $number) {
+      __typename
+      ... on Issue {
+        number title body url stateReason
+        labels(first: 100) { nodes { name } }
+        closedByPullRequestsReferences(first: 100) {
+          nodes { number url author { login avatarUrl } }
+        }
+      }
+      ... on PullRequest { number title body url labels(first: 100) { nodes { name } } }
+    }
+  }
+}"""
+
+
 def build_release_changelog(repo: str, scope: list[int]) -> str:
     """Render deterministic readable notes from live scoped Issue evidence.
 
-    The official ``gh issue view --json`` contract supplies each Issue's
-    title, body, URL, labels, stateReason, and closing PR references.  A
-    title is the concise change description; when it is absent, the first
-    non-empty body line is usable summary evidence.  A NOT_PLANNED-closed
-    Issue is not released work (Issue #707) — it is excluded from the
-    Changelog (the Scope evidence annotates the exclusion).  A closing
-    PR's link is written only when `gh pr view` reports the PR MERGED:
-    an unmerged PR never appears in the release notes.  Missing or
-    malformed evidence is an unsafe release input and fails before a tag
-    or Release is created.
+    Each scope number is resolved with one `gh api graphql` round trip
+    (`issueOrPullRequest`, the same access path `gh issue view` used
+    before Issue #772): the Issue fields, labels and closing-PR
+    references — now including each PR's author login and avatar so the
+    Contributors section costs zero extra API calls.  A title is the
+    concise change description; when it is absent, the first non-empty
+    body line is usable summary evidence.  A NOT_PLANNED-closed Issue is
+    not released work (Issue #707) — it is excluded from the Changelog
+    (the Scope evidence annotates the exclusion).  A closing PR's link
+    is written only when `gh pr view` reports the PR MERGED: an unmerged
+    PR never appears in the release notes, and its author is not a
+    contributor.  The `## Contributors` section lists every merged
+    closing-PR author exactly once (deduped by login, sorted by login)
+    as a linked avatar; a null or malformed author is display evidence,
+    not a release judge — it is skipped with a log line and never fails
+    the release, and with no contributors at all no section is written.
+    Missing or malformed evidence is an unsafe release input and fails
+    before a tag or Release is created.
     """
+    owner, _, name = repo.partition("/")
     grouped: dict[str, list[tuple[int, str]]] = {
         category: [] for category in RELEASE_CHANGELOG_CATEGORIES
     }
+    contributors: dict[str, str] = {}
     for number in scope:
         raw = run_command([
-            "gh", "issue", "view", str(number), "--repo", repo, "--json",
-            "number,title,body,url,labels,stateReason,"
-            "closedByPullRequestsReferences",
-        ])
-        item = json.loads(raw)
+            "gh", "api", "graphql",
+            "-f", f"query={RELEASE_ISSUE_EVIDENCE_QUERY}",
+            "-f", f"owner={owner}", "-f", f"name={name}",
+            "-F", f"number={number}",
+        ], log_command=["gh", "api", "graphql", f"issue={number}"])
+        issue = (json.loads(raw).get("data") or {}).get(
+            "repository", {},
+        ).get("issue") or {}
+        # Reshape the GraphQL payload into the field keys the strict
+        # evidence validation below has always asserted; the closedBy
+        # nodes (number/url/author) pass through raw.  The PullRequest
+        # branch carries no closedBy field (schema: Issue-only) and no
+        # stateReason — the same shape `gh issue view` produced for a
+        # PR number.
+        references = issue.get("closedByPullRequestsReferences") or {}
+        item = {
+            "number": issue.get("number"),
+            "title": issue.get("title"),
+            "body": issue.get("body"),
+            "url": issue.get("url"),
+            "labels": [
+                {"name": label.get("name")}
+                for label in (issue.get("labels") or {}).get("nodes") or []
+                if isinstance(label, dict)
+            ],
+            "closedByPullRequestsReferences": (
+                references.get("nodes") or []
+                if isinstance(references, dict) else None
+            ),
+        }
+        if issue.get("__typename") == "Issue":
+            item["stateReason"] = issue.get("stateReason")
         if item.get("stateReason") == "NOT_PLANNED":
             LOGGER.info(
                 "release_changelog_issue_excluded number=%d "
@@ -590,6 +644,21 @@ def build_release_changelog(repo: str, scope: list[int]) -> str:
                 )
                 continue
             links.append(f"[PR #{pr_number}]({pr_url})")
+            author = (pull_request.get("author")
+                      if isinstance(pull_request, dict) else None)
+            login = author.get("login") if isinstance(author, dict) else None
+            avatar = (author.get("avatarUrl")
+                      if isinstance(author, dict) else None)
+            if isinstance(login, str) and login and \
+                    isinstance(avatar, str) and avatar:
+                contributors.setdefault(login, avatar)
+            else:
+                # A ghosted/malformed author is display evidence, never a
+                # release judge: skip the contributor, keep the release.
+                LOGGER.info(
+                    "release_changelog_contributor_skipped issue=%d pr=%d",
+                    number, pr_number,
+                )
         grouped[release_changelog_category(item)].append(
             (number, f"- {summary} ({'; '.join(links)})")
         )
@@ -599,6 +668,16 @@ def build_release_changelog(repo: str, scope: list[int]) -> str:
         if entries:
             sections.extend(["", f"### {category}", "",
                              *(entry for _, entry in sorted(entries))])
+    if contributors:
+        avatar_rows = []
+        for login in sorted(contributors):
+            avatar = contributors[login]
+            sized = avatar + ("&s=48" if "?" in avatar else "?s=48")
+            avatar_rows.append(
+                f'<a href="https://github.com/{login}">'
+                f'<img src="{sized}" width="32" height="32" alt="{login}" /></a>'
+            )
+        sections.extend(["", "## Contributors", "", *avatar_rows])
     return "\n".join(sections)
 
 
