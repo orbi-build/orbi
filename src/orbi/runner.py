@@ -2555,7 +2555,7 @@ def issue_comments(number: int, *, repo: str) -> list[dict]:
     raw = run_command([
         "gh", "issue", "view", str(number), "--repo", repo,
         "--json", "comments",
-    ])
+    ], timeout=30)
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError("issue view must be a JSON object")
