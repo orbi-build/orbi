@@ -568,6 +568,58 @@ def test_load_config_rejects_invalid_model_wait_dead_seconds(
     assert reason in str(excinfo.value)
 
 
+# --- Issue #745: the trusted-comment injection cap is configurable -----------
+
+def test_load_config_defaults_issue_comments_limit_to_twenty(tmp_path):
+    """Issue #745: omitted -> 20 — the newest 20 trusted comments cover
+    the recent decision history without letting a long-discussed Issue
+    dominate the context window."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
+    config = runner.load_config(config_path)
+    assert config["issue_comments_limit"] == 20
+
+
+def test_load_config_reads_explicit_issue_comments_limit(tmp_path):
+    """Issue #745: an explicit integer override is accepted as-is."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nissue_comments_limit = 5\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert config["issue_comments_limit"] == 5
+
+
+@pytest.mark.parametrize(
+    ("value", "reason"),
+    [
+        ("true", "boolean"),
+        ("false", "boolean"),
+        ("0", "positive"),
+        ("-3", "positive"),
+        ("2.5", "integer"),
+        ('"20"', "integer"),
+    ],
+)
+def test_load_config_rejects_invalid_issue_comments_limit(
+    tmp_path, value, reason,
+):
+    """Issue #745: booleans, zero, negative, fractional and non-numeric
+    values are rejected at config load with the field name and the
+    concrete reason."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\n'
+        f"issue_comments_limit = {value}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError) as excinfo:
+        runner.load_config(config_path)
+    assert "issue_comments_limit" in str(excinfo.value)
+    assert reason in str(excinfo.value)
+
+
 # --- Issue #233: the /slots swallow probe is configurable --------------------
 
 def test_load_config_defaults_swallow_probe_disabled(tmp_path):
@@ -989,6 +1041,10 @@ def test_prompt_template_requires_fixes_keyword_for_the_source_issue():
         "ISSUE_NUMBER": "53",
         "ISSUE_TITLE": "t",
         "ISSUE_BODY": "b",
+        # Issue #745: the shipped template injects the trusted-comment
+        # timeline; the render must fill it to prove no placeholder is
+        # left unresolved.
+        "ISSUE_COMMENTS": "(no trusted comments)",
         "WORKSPACE_ROOT": "/tmp",
         "CONTEXT_FILES": "",
         "SKILLS": "",
@@ -1004,6 +1060,20 @@ def test_prompt_template_requires_fixes_keyword_for_the_source_issue():
     # lock path — the base fetch is the Runner's operation.
     assert "/checkout/.orbi/base-sync.lock" not in rendered
     assert "{{" not in rendered
+
+
+def test_prompt_templates_carry_the_issue_comments_placeholder():
+    """Issue #745: the shipped implementer and review templates inject
+    the trusted-comment timeline by default — decisions written in
+    Issue comments reach the agent without a human copying them into
+    the body."""
+    prompts = Path(__file__).resolve().parent.parent / "prompts"
+    assert "{{ISSUE_COMMENTS}}" in (
+        prompts / "prompt.md"
+    ).read_text(encoding="utf-8")
+    assert "{{ISSUE_COMMENTS}}" in (
+        prompts / "prompt_review.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_validate_config_accepts_existing_files(tmp_path):
@@ -4838,6 +4908,284 @@ def test_run_review_renders_base_sync_lock_into_prompt(monkeypatch, tmp_path):
         },
         "owner/repo", 4, "branch", 1,
     )
+    command = calls[0]
+    assert command[command.index("--system-prompt") + 1] == "REVIEW " + str(
+        tmp_path / "checkout" / ".orbi" / "base-sync.lock",
+    )
+
+
+# --- Issue #745: {{ISSUE_COMMENTS}} — the trusted-comment timeline -----------
+
+def test_trusted_issue_comments_block_filters_untrusted_and_keeps_order(
+    monkeypatch,
+):
+    """Issue #745: only trusted authors (the #45 authorAssociation set
+    or the runner's own App) enter the task context — a public repo
+    lets anyone comment, and an unfiltered injection would be a prompt
+    injection surface. The timeline order is preserved (oldest first)."""
+    # A NONE-association comment carrying a login reaches the
+    # authenticated-login fallback; pin it so the test never depends on
+    # the host's real gh login state (CI runs unauthenticated).
+    monkeypatch.setattr(
+        runner, "_authenticated_github_login", lambda: "ci-runner[bot]"
+    )
+    comments = [
+        {"author": {"login": "alice"}, "authorAssociation": "OWNER",
+         "createdAt": "2026-09-12T01:00:00Z", "body": "first decision"},
+        {"author": {"login": "mallory"}, "authorAssociation": "NONE",
+         "createdAt": "2026-09-12T02:00:00Z", "body": "public drive-by"},
+        {"author": {"login": "carol"}, "authorAssociation": "MEMBER",
+         "createdAt": "2026-09-12T03:00:00Z", "body": "second decision"},
+    ]
+    block = runner.trusted_issue_comments_block(comments, limit=20)
+    assert "public drive-by" not in block
+    assert "mallory" not in block
+    first = block.index("- alice (OWNER) at 2026-09-12T01:00:00Z:")
+    second = block.index("- carol (MEMBER) at 2026-09-12T03:00:00Z:")
+    assert block.index("first decision") < second < block.index(
+        "second decision",
+    )
+    # Below the limit: no omission note, the timeline speaks for itself.
+    assert "omitted" not in block
+
+
+def test_trusted_issue_comments_block_truncates_to_the_newest_with_a_visible_note():
+    """Issue #745: over the limit the OLDEST trusted comments are
+    dropped (the newest carry the latest decision) and the omission is
+    stated in the block — the agent must know it did not see the full
+    history, never a silent truncation."""
+    comments = [
+        {"author": {"login": "alice"}, "authorAssociation": "OWNER",
+         "createdAt": "2026-09-12T01:00:00Z", "body": "oldest decision"},
+        {"author": {"login": "bob"}, "authorAssociation": "MAINTAINER",
+         "createdAt": "2026-09-12T02:00:00Z", "body": "middle decision"},
+        {"author": {"login": "carol"}, "authorAssociation": "MEMBER",
+         "createdAt": "2026-09-12T03:00:00Z", "body": "newest decision"},
+    ]
+    block = runner.trusted_issue_comments_block(comments, limit=2)
+    assert block.startswith(
+        "(1 older trusted comment omitted; showing the 2 most recent)",
+    )
+    assert "newest decision" in block
+    assert "middle decision" in block
+    assert "oldest decision" not in block
+
+
+def test_trusted_issue_comments_block_states_when_nothing_is_trusted(
+    monkeypatch,
+):
+    """Issue #745: zero trusted comments produce an explicit marker, not
+    an empty string — the agent can tell an empty timeline apart from a
+    missing section."""
+    monkeypatch.setattr(
+        runner, "_authenticated_github_login", lambda: "ci-runner[bot]"
+    )
+    block = runner.trusted_issue_comments_block([
+        {"author": {"login": "mallory"}, "authorAssociation": "NONE",
+         "createdAt": "2026-09-12T02:00:00Z", "body": "public drive-by"},
+    ], limit=20)
+    assert block == "(no trusted comments)"
+    block = runner.trusted_issue_comments_block([], limit=20)
+    assert block == "(no trusted comments)"
+
+
+def test_run_pi_injects_trusted_issue_comments_into_the_prompt(
+    monkeypatch, tmp_path,
+):
+    """Issue #745: a template carrying {{ISSUE_COMMENTS}} receives the
+    Issue's trusted-comment timeline — fetched from GitHub, maintainer
+    comments only, capped by the configured `issue_comments_limit`
+    with a visible omission note."""
+    prompt_path = tmp_path / "prompt.md"
+    prompt_path.write_text("SYSTEM {{ISSUE_COMMENTS}}", encoding="utf-8")
+    comments = [
+        {"author": {"login": "alice"}, "authorAssociation": "OWNER",
+         "createdAt": "2026-09-12T01:00:00Z", "body": "oldest decision"},
+        {"author": {"login": "mallory"}, "authorAssociation": "NONE",
+         "createdAt": "2026-09-12T02:00:00Z", "body": "public drive-by"},
+        {"author": {"login": "carol"}, "authorAssociation": "MEMBER",
+         "createdAt": "2026-09-12T03:00:00Z", "body": "middle decision"},
+        {"author": {"login": "dave"}, "authorAssociation": "MAINTAINER",
+         "createdAt": "2026-09-12T04:00:00Z", "body": "newest decision"},
+    ]
+    fetches = []
+
+    def fake_issue_comments(number, *, repo):
+        fetches.append((number, repo))
+        return comments
+
+    monkeypatch.setattr(runner, "issue_comments", fake_issue_comments)
+    # mallory's NONE-association comment reaches the authenticated-login
+    # fallback; pin it so the test never depends on the host's real gh
+    # login state (CI runs unauthenticated).
+    monkeypatch.setattr(
+        runner, "_authenticated_github_login", lambda: "ci-runner[bot]"
+    )
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(command) or "done",
+    )
+    issue = {"number": 4, "title": "Fix title", "body": "Fix body"}
+    config = {
+        "prompt": prompt_path,
+        "repo_dir": tmp_path / "checkout",
+        "source_repos": ["owner/repo"],
+        "workspace_root": tmp_path,
+        "context_files": [],
+        "skills": [],
+        "base_branch": "main",
+        "base_sha": "abc123def456",
+        "run_id": "run1",
+        "issue_comments_limit": 2,
+    }
+    assert runner.run_pi(
+        issue, tmp_path, config, "owner/repo",
+        branch="orbi/owner-repo-issue-4",
+    ) == "done"
+    assert fetches == [(4, "owner/repo")]
+    command = calls[0]
+    system_prompt = command[command.index("--system-prompt") + 1]
+    assert (
+        "(1 older trusted comment omitted; showing the 2 most recent)"
+        in system_prompt
+    )
+    assert "newest decision" in system_prompt
+    assert "middle decision" in system_prompt
+    assert "oldest decision" not in system_prompt
+    assert "public drive-by" not in system_prompt
+    # The context argument keeps its exact pre-#745 shape — the comments
+    # reach the agent through the template placeholder, nowhere else.
+    assert command[-1] == (
+        "Issue #4: Fix title\n\nIssue body:\nFix body\n\nWorktree: "
+        + str(tmp_path) + "\n"
+        "Complete the delivery process in the system prompt."
+    )
+
+
+def test_run_pi_skips_the_comment_fetch_without_the_placeholder(
+    monkeypatch, tmp_path,
+):
+    """Issue #745: a template without {{ISSUE_COMMENTS}} keeps the exact
+    pre-#745 behavior — no comments GitHub read, no new failure mode
+    (backward compatibility for custom templates)."""
+    prompt_path = tmp_path / "prompt.md"
+    prompt_path.write_text("SYSTEM {{ISSUE_BODY}}", encoding="utf-8")
+    fetches = []
+    monkeypatch.setattr(
+        runner, "issue_comments",
+        lambda *args, **kwargs: fetches.append((args, kwargs)),
+    )
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(command) or "done",
+    )
+    config = {
+        "prompt": prompt_path,
+        "repo_dir": tmp_path,
+        "source_repos": ["owner/repo"],
+        "workspace_root": tmp_path,
+        "context_files": [],
+        "skills": [],
+        "base_branch": "main",
+        "base_sha": "abc123def456",
+        "run_id": "run1",
+    }
+    runner.run_pi(
+        {"number": 5, "title": "t", "body": "b"}, tmp_path, config,
+        "owner/repo", branch="orbi/owner-repo-issue-5",
+    )
+    assert fetches == []
+    command = calls[0]
+    assert command[command.index("--system-prompt") + 1] == "SYSTEM b"
+
+
+def test_run_review_injects_trusted_issue_comments_into_the_prompt(
+    monkeypatch, tmp_path,
+):
+    """Issue #745: the review path sees the decision evolution too —
+    its template's {{ISSUE_COMMENTS}} placeholder receives the same
+    trusted timeline of the linked Issue."""
+    prompt_path = tmp_path / "prompt_review.md"
+    prompt_path.write_text("REVIEW {{ISSUE_COMMENTS}}", encoding="utf-8")
+    comments = [
+        {"author": {"login": "mallory"}, "authorAssociation": "NONE",
+         "createdAt": "2026-09-12T01:00:00Z", "body": "public drive-by"},
+        {"author": {"login": "alice"}, "authorAssociation": "MEMBER",
+         "createdAt": "2026-09-12T02:00:00Z", "body": "decided plan B"},
+    ]
+    fetches = []
+
+    def fake_issue_comments(number, *, repo):
+        fetches.append((number, repo))
+        return comments
+
+    monkeypatch.setattr(runner, "issue_comments", fake_issue_comments)
+    # mallory's NONE-association comment reaches the authenticated-login
+    # fallback; pin it so the test never depends on the host's real gh
+    # login state (CI runs unauthenticated).
+    monkeypatch.setattr(
+        runner, "_authenticated_github_login", lambda: "ci-runner[bot]"
+    )
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(command) or "ok",
+    )
+    runner.run_review(
+        tmp_path,
+        {"number": 9, "url": "https://x/pull/9", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"},
+        {
+            "prompt_review": prompt_path,
+            "repo_dir": tmp_path / "checkout",
+            "source_repos": ["owner/repo"],
+            "base_branch": "main",
+            "run_id": "a1b2c3d4",
+            "skills": [],
+        },
+        "owner/repo", 4, "branch", 1,
+    )
+    assert fetches == [(4, "owner/repo")]
+    command = calls[0]
+    system_prompt = command[command.index("--system-prompt") + 1]
+    assert "decided plan B" in system_prompt
+    assert "public drive-by" not in system_prompt
+
+
+def test_run_review_skips_the_comment_fetch_without_the_placeholder(
+    monkeypatch, tmp_path,
+):
+    """Issue #745: a review template without {{ISSUE_COMMENTS}} keeps
+    the exact pre-#745 behavior (no comments GitHub read)."""
+    prompt_path = tmp_path / "prompt_review.md"
+    prompt_path.write_text("REVIEW {{BASE_SYNC_LOCK}}", encoding="utf-8")
+    fetches = []
+    monkeypatch.setattr(
+        runner, "issue_comments",
+        lambda *args, **kwargs: fetches.append((args, kwargs)),
+    )
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append(command) or "ok",
+    )
+    runner.run_review(
+        tmp_path,
+        {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"},
+        {
+            "prompt_review": prompt_path,
+            "repo_dir": tmp_path / "checkout",
+            "source_repos": ["owner/repo"],
+            "base_branch": "main",
+            "run_id": "a1b2c3d4",
+            "skills": [],
+        },
+        "owner/repo", 4, "branch", 1,
+    )
+    assert fetches == []
     command = calls[0]
     assert command[command.index("--system-prompt") + 1] == "REVIEW " + str(
         tmp_path / "checkout" / ".orbi" / "base-sync.lock",

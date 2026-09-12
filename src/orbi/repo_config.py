@@ -71,6 +71,7 @@ HOST_ONLY_KEYS = frozenset({
     "prompt",
     "prompt_review",
     "skills",
+    "issue_comments_limit",
     # credential routing (the red line): provider/model/endpoint/keys.
     "pi_provider",
     "pi_model",

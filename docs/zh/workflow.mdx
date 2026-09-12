@@ -31,13 +31,19 @@ flowchart LR
 ```text
 ai-ready                任务被派发（orbi add，或人工加标签）
   -> ai-in-progress     Runner 领取：加标签，从冻结的 origin/<base> SHA
-                        创建 worktree，启动 Pi session
+                        创建 worktree，启动 Pi session（prompt 携带
+                        Issue body 加受信任评论时间线 {{ISSUE_COMMENTS}}，
+                        Issue #745：只收 OWNER/MAINTAINER/MEMBER/
+                        COLLABORATOR 评论，按 issue_comments_limit 截断
+                        并显式标明省略条数）
   -> ai-pr-opened       PR 验收通过（base 新鲜度、run marker、Fixes #N）；
                         交付现在等待 review
   -> review             独立 Pi session 审查精确的 base/head SHA，并
                         在会话内修复 findings（代码、完整测试、分层
                         覆盖率门禁（Issue #234）、只 push task
-                        branch），然后输出 REVIEW_VERDICT
+                        branch），然后输出 REVIEW_VERDICT（其 prompt
+                        同样携带关联 Issue 的受信任评论时间线——决策
+                        演变历史，Issue #745）
   -> ai-fix-needed      会话内未能修复 finding，PR 落后最新 base / 有
                         merge conflict，或已有 run/PR 的**可恢复失败**
                         （Issue #50：Pi 执行失败、验证失败、未推送本地
