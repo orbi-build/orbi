@@ -35,6 +35,7 @@ from pathlib import Path
 import pytest
 
 import orbi.runner as runner
+from orbi import human_review
 
 REPO = "owner/repo"
 ISSUE_NUMBER = 45
@@ -893,3 +894,80 @@ def test_e2e_pr_closed_while_fix_needed_removes_leftover_label(
     assert failure
     assert f"<!-- orbi:run={run_id} -->" in failure[0]
     assert "closed without a merge" in failure[0]
+
+
+def test_e2e_human_review_gate_posts_the_checklist_once_and_holds(
+    clone, tmp_path, monkeypatch, caplog,
+):
+    """Issue #763: with the gate on and a non-empty column 2, the
+    delivery posts its acceptance checklist ONCE at PR-open; the review
+    round then holds BEFORE any session — the ticket returns to
+    `ai-ready`, the PR stays open and unmerged, and the reviewer Pi
+    never runs. The next tick costs one label read."""
+    comments: list[str] = []
+    edits: list[list[str]] = []
+    labels = ["ai-pr-opened"]
+    pr = {"state": "OPEN", "merged": False}
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
+    install_fake_gh(
+        monkeypatch, comments, edits, pr=pr, labels=labels,
+    )
+    caplog.set_level("INFO")
+    config = {**config_for(clone, tmp_path), "human_review_gate": True}
+
+    result = runner.process_issue(issue(), config, REPO)
+    assert result.url == PR_URL
+    run_id = runner.current_run_id()
+    checklists = [
+        body for body in comments
+        if human_review.CHECKLIST_MARKER in body
+    ]
+    assert len(checklists) == 1
+    # The fake delivery changes impl.py (non-test source): the intent
+    # item fires, and the checklist carries the run correlation.
+    assert "业务意图" in checklists[0]
+    assert f"run_id={run_id}" in checklists[0]
+
+    # The delivery wait holds at the gate: one label read, the waiting
+    # patch, no review session, the slot released.
+    runner.wait_for_delivery(result.url, issue(), config, REPO)
+    assert set(labels) == {"ai-pr-opened", "ai-ready"}
+    assert "ai-fix-needed" not in labels
+    assert pr["merged"] is False
+    worktree = worktree_for(clone, run_id)
+    # The reviewer session never ran: the delivered file is untouched.
+    assert "merged main" not in (worktree / "impl.py").read_text(
+        encoding="utf-8",
+    )
+    # The checklist was posted exactly once (no re-post while waiting).
+    checklists = [
+        body for body in comments
+        if human_review.CHECKLIST_MARKER in body
+    ]
+    assert len(checklists) == 1
+    assert "human_review_waiting" in caplog.text
+
+
+def test_e2e_human_review_checklist_failure_is_a_bypass(
+    clone, tmp_path, monkeypatch, caplog,
+):
+    """Issue #763 + #79: a failed checklist never fails the delivery —
+    the PR still opens (the gate itself is the label check in the
+    review rounds) and the failure is logged."""
+    comments: list[str] = []
+    install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
+    install_fake_gh(monkeypatch, comments)
+    caplog.set_level("INFO")
+    config = {**config_for(clone, tmp_path), "human_review_gate": True}
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("github down")
+
+    monkeypatch.setattr(runner, "human_review_checklist", boom)
+    result = runner.process_issue(issue(), config, REPO)
+    assert result.url == PR_URL
+    assert not [
+        body for body in comments
+        if human_review.CHECKLIST_MARKER in body
+    ]
+    assert "human_review_checklist_failed" in caplog.text

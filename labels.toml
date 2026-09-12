@@ -67,3 +67,8 @@ description = "Content-only task: the content agent delivers text to the Issue â
 name = "ai-ops-only"
 color = "0e8a16"
 description = "Ops/research task: full execution session (ops playbook) â€” evidence on the Issue, code via PR"
+
+[[label]]
+name = "ai-human-review"
+color = "d93f0b"
+description = "Human acceptance gate: a person confirmed the delivery checklist; Orbi never adds or removes it"

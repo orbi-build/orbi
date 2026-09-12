@@ -39,6 +39,7 @@ KNOWN_LABELS = frozenset({
     runner.RELEASE_LABEL,
     runner.CONTENT_ONLY_LABEL,
     runner.OPS_LABEL,
+    runner.HUMAN_REVIEW_LABEL,
 })
 
 LABEL_PATTERN = re.compile(r"\bai-[a-z][a-z-]*\b")

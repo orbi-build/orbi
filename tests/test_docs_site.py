@@ -56,6 +56,8 @@ KNOWN_LABELS = frozenset({
     runner.FIX_NEEDED_LABEL,
     runner.MERGED_LABEL,
     runner.BLOCKED_LABEL,
+    # Issue #763: the human acceptance gate (a human-only label).
+    runner.HUMAN_REVIEW_LABEL,
 })
 
 LABEL_PATTERN = re.compile(r"\bai-[a-z][a-z-]*\b")

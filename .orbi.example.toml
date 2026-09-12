@@ -77,6 +77,21 @@ engine_source_track = "release"
 # the start. true downgrades the SAME line to a warning for offline /
 # restricted-network machines — it never skips the check. Default: false.
 # allow_stale_runner = false
+# Human acceptance gate (Issue #763, host/deploy-only). When true, every
+# delivery posts ONE acceptance checklist to the Issue when its PR opens:
+# column 1 = what the run already verified (the real test result and the
+# covered layer); column 2 = the machine-unverifiable minimum derived
+# from the changed paths (business intent, UI visuals and copy, external
+# environment, missing-evidence items). While column 2 is non-empty the
+# review round short-circuits BEFORE any Pi session: the ticket returns
+# to `ai-ready`, the slot is released and each later tick costs one label
+# read — the wait never burns the review-round budget. A person confirms
+# the checklist with the human-only `ai-human-review` label and the next
+# tick reviews/merges exactly as before. An empty column 2 is the target
+# state: the checklist says no human intervention is needed and the
+# delivery passes without the label. Default: false (the pipeline runs
+# with humans out of the loop, exactly as before).
+# human_review_gate = false
 # Claim scope (Issue #139): the active GitHub Milestone title (e.g.
 # "v0.2.0") that the fresh-claim scans (p0, bug, plain) are restricted
 # to. The milestone:"<title>" qualifier is part of the gh search query,
