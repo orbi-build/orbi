@@ -2803,7 +2803,7 @@ def advance_active_milestone_on_idle(
     *, auto_next_milestone: bool = True,
 ) -> tuple[str, str | None]:
     """Check and advance a configured milestone after no_ready_issue."""
-    milestones = list_milestones(repo)
+    milestones = list_milestones(repo, timeout=30)
     matches = [
         milestone for milestone in milestones
         if isinstance(milestone, dict)

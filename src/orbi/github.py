@@ -214,12 +214,17 @@ def milestone_issues(repo: str, milestone_number: int,
             if isinstance(item, dict)]
 
 
-def list_milestones(repo: str) -> list[dict]:
-    """List ALL Milestones of the repo (open and closed), all pages."""
+def list_milestones(repo: str, *, timeout: int | None = None) -> list[dict]:
+    """List ALL Milestones of the repo (open and closed), all pages.
+
+    ``timeout`` keeps the caller's bound (Issue #95: a network wait is
+    a blocking command): the idle milestone-advance sweep bounded this
+    read at 30 s before the move into this module.
+    """
     raw = run_gh_read_command([
         "gh", "api", f"repos/{repo}/milestones?state=all&per_page=100",
         "--paginate", "--slurp",
-    ])
+    ], timeout=timeout)
     return parse_paginated_issue_array(raw)
 
 

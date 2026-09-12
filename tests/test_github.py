@@ -141,6 +141,20 @@ def test_list_milestones_reads_the_exact_api_page(monkeypatch):
     ]]
 
 
+def test_list_milestones_forwards_the_callers_timeout(monkeypatch):
+    # Issue #95: the idle milestone-advance sweep bounds this network
+    # read at 30 s — the bound must survive the seam (run_gh_read_command
+    # forwards only the set options; None is run_command's default).
+    captured = []
+    monkeypatch.setattr(seam, "run_command", lambda c, **k: (
+        captured.append(k), "[]")[1])
+
+    github.list_milestones("o/r", timeout=30)
+    assert captured == [{"timeout": 30}]
+    github.list_milestones("o/r")
+    assert captured[1] == {}
+
+
 def test_milestone_open_issue_count_reads_githubs_own_counter(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda c, **k: "2")
     assert github.milestone_open_issue_count("o/r", "v1") == 2
