@@ -20,12 +20,25 @@ Both collisions were verified with a real failing run before this file
 existed. `gh issue create --body-file
 .github/release-ticket-template.md` consumes the body template directly
 (the `--body-file` flag verified against `gh issue create --help`).
+
+Issue #734 (filed 2026-09-11, before #749 existed) suggested the UI
+path `.github/ISSUE_TEMPLATE/release-task.md`; #749 — the same author's
+later, deliberate decision, merged first — named it `release.md`, so
+the name stays (a second file would put two release templates into the
+GitHub issue-creation UI). What #734 adds on top of the merged #749
+delivery is locked by the last two tests below: the frontmatter-stripped
+UI body with the `vX.Y.Z` placeholders replaced by a REAL version must
+parse to exactly the right declaration (the user journey a ticket
+actually takes), and the live `## Release` section must never carry the
+legacy `test_command` (the memo section's #569 do-not-write warning is
+documentation of the contract, not a declaration field).
 """
 import re
 from pathlib import Path
 
 from orbi.delivery_labels import READY_LABEL, RELEASE_LABEL
 from orbi.release import parse_release_declaration
+from orbi.runner import RELEASE_SECTION
 
 ROOT = Path(__file__).resolve().parent.parent
 UI_TEMPLATE = ROOT / ".github" / "ISSUE_TEMPLATE" / "release.md"
@@ -105,4 +118,40 @@ def test_every_declaration_field_shown_in_the_templates_is_known():
         unknown = fields - KNOWN_KEYS
         assert not unknown, (
             f"{path} shows fields the parser does not know: {sorted(unknown)}"
+        )
+
+
+def test_ui_template_body_with_a_real_substituted_version_parses():
+    # Issue #734's user journey: GitHub strips the front matter when the
+    # ticket is created, the maintainer replaces the `vX.Y.Z` placeholders
+    # with the real version, and `parse_release_declaration` must accept
+    # that body as-is — the exact failure that burned #717.
+    _front, separator, rest = (
+        UI_TEMPLATE.read_text(encoding="utf-8").partition("\n---\n")
+    )
+    assert separator, "the UI template must open with YAML front matter"
+    body = rest.lstrip("\n").replace("vX.Y.Z", "v0.4.9")
+    declaration = parse_release_declaration(body)
+    assert declaration["version"] == "v0.4.9"
+    assert declaration["base_branch"] == "main"
+    assert declaration["scope_from_milestone"] == "v0.4.9"
+    assert declaration["version_file"] == "pyproject.toml"
+    assert declaration["test_command"] is None
+
+
+def test_live_declaration_section_carries_no_legacy_test_command():
+    # The skeleton a ticket KEEPS — the first exact `## Release` section,
+    # the same slice the parser reads, before the memo section — must
+    # never suggest the legacy accepted-and-ignored `test_command`
+    # (Issue #734); the memo's #569 do-not-write warning is the only
+    # place the name may appear. `partition` finds the live section even
+    # though the memo's ```markdown fences repeat the heading.
+    for path in (UI_TEMPLATE, BODY_TEMPLATE):
+        text = path.read_text(encoding="utf-8")
+        _before, marker, rest = text.partition(f"\n{RELEASE_SECTION}\n")
+        assert marker, f"{path} has no live `{RELEASE_SECTION}` section"
+        live = rest.split("\n## ", 1)[0]
+        assert "test_command" not in live, (
+            f"{path} suggests the legacy test_command in its live "
+            f"`{RELEASE_SECTION}` section"
         )
