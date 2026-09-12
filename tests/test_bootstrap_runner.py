@@ -4909,11 +4909,19 @@ def test_run_review_renders_base_sync_lock_into_prompt(monkeypatch, tmp_path):
 
 # --- Issue #745: {{ISSUE_COMMENTS}} — the trusted-comment timeline -----------
 
-def test_trusted_issue_comments_block_filters_untrusted_and_keeps_order():
+def test_trusted_issue_comments_block_filters_untrusted_and_keeps_order(
+    monkeypatch,
+):
     """Issue #745: only trusted authors (the #45 authorAssociation set
     or the runner's own App) enter the task context — a public repo
     lets anyone comment, and an unfiltered injection would be a prompt
     injection surface. The timeline order is preserved (oldest first)."""
+    # A NONE-association comment carrying a login reaches the
+    # authenticated-login fallback; pin it so the test never depends on
+    # the host's real gh login state (CI runs unauthenticated).
+    monkeypatch.setattr(
+        runner, "_authenticated_github_login", lambda: "ci-runner[bot]"
+    )
     comments = [
         {"author": {"login": "alice"}, "authorAssociation": "OWNER",
          "createdAt": "2026-09-12T01:00:00Z", "body": "first decision"},
@@ -4956,10 +4964,15 @@ def test_trusted_issue_comments_block_truncates_to_the_newest_with_a_visible_not
     assert "oldest decision" not in block
 
 
-def test_trusted_issue_comments_block_states_when_nothing_is_trusted():
+def test_trusted_issue_comments_block_states_when_nothing_is_trusted(
+    monkeypatch,
+):
     """Issue #745: zero trusted comments produce an explicit marker, not
     an empty string — the agent can tell an empty timeline apart from a
     missing section."""
+    monkeypatch.setattr(
+        runner, "_authenticated_github_login", lambda: "ci-runner[bot]"
+    )
     block = runner.trusted_issue_comments_block([
         {"author": {"login": "mallory"}, "authorAssociation": "NONE",
          "createdAt": "2026-09-12T02:00:00Z", "body": "public drive-by"},
@@ -4995,6 +5008,12 @@ def test_run_pi_injects_trusted_issue_comments_into_the_prompt(
         return comments
 
     monkeypatch.setattr(runner, "issue_comments", fake_issue_comments)
+    # mallory's NONE-association comment reaches the authenticated-login
+    # fallback; pin it so the test never depends on the host's real gh
+    # login state (CI runs unauthenticated).
+    monkeypatch.setattr(
+        runner, "_authenticated_github_login", lambda: "ci-runner[bot]"
+    )
     calls = []
     monkeypatch.setattr(
         runner, "stream_pi",
@@ -5096,6 +5115,12 @@ def test_run_review_injects_trusted_issue_comments_into_the_prompt(
         return comments
 
     monkeypatch.setattr(runner, "issue_comments", fake_issue_comments)
+    # mallory's NONE-association comment reaches the authenticated-login
+    # fallback; pin it so the test never depends on the host's real gh
+    # login state (CI runs unauthenticated).
+    monkeypatch.setattr(
+        runner, "_authenticated_github_login", lambda: "ci-runner[bot]"
+    )
     calls = []
     monkeypatch.setattr(
         runner, "stream_pi",
