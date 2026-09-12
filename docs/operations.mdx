@@ -605,7 +605,13 @@ the Runner re-fetches `origin/<base_branch>` under the base-sync lock,
 absorbs an advanced base with a plain `git merge` (a conflict is aborted
 and the PR opens on the agent's head — the existing review session
 absorbs the base in-session), then pushes the task branch and creates the
-PR.
+PR. Before creating the PR the Runner reads the source Issue's state
+directly: an Issue a human closed while the delivery was in flight stops
+the closeout — the pushed branch keeps the work, the closed Issue gets
+one explanatory comment, and no PR is opened (Issue #746). The per-tick
+orphan-PR sweep in [Workflow](/workflow) covers the reverse order (the
+Issue closed after the PR was opened) and reports the PR for a human
+decision.
 
 ## Failure recovery
 

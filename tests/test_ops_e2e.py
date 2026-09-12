@@ -74,9 +74,14 @@ if args[:2] == ["issue", "view"]:
     # Issue #658: the pre-claim recheck reads the LIVE label truth
     # directly (`gh issue view`) instead of the search index.
     issue = state["issues"][args[2]]
-    print(json.dumps(
-        {"labels": [{"name": label} for label in issue["labels"]]},
-    ))
+    if args[-1] == "state":
+        # The pre-PR closeout reads the source Issue state (Issue
+        # #746): open in these scenes.
+        print(json.dumps({"state": issue.get("state", "OPEN")}))
+    else:
+        print(json.dumps(
+            {"labels": [{"name": label} for label in issue["labels"]]},
+        ))
 elif args[:2] == ["issue", "list"]:
     search = args[args.index("--search") + 1]
     tokens = search.split()

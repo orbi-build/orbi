@@ -209,7 +209,11 @@ def install_fake_gh(monkeypatch, comments: list[str],
                 if command[2] == "view":
                     # The pre-claim in-progress recheck reads the Issue
                     # directly (Issue #658): answer from the tracked
-                    # labels, like the real GitHub state.
+                    # labels, like the real GitHub state. The pre-PR
+                    # closeout reads the state (Issue #746): the Issue
+                    # is open in these scenes.
+                    if command[-1] == "state":
+                        return json.dumps({"state": "OPEN"})
                     tracked = (labels or {}).get(int(command[3]), [])
                     return json.dumps({"labels": [
                         {"name": label} for label in tracked

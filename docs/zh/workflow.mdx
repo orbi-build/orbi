@@ -179,7 +179,12 @@ PR 验收时校验该关键词，缺失即 fail fast。
   `Children`/`Child Issues` 段落）不构成声明。没有 sub-issues 或子票、依赖
   状态畸形时 fail-closed；Runner 每个 tick 重试并留下幂等审计评论。随后
   同一个 tick reconcile open Milestone：title 精确匹配的已发布 Release
-  （draft 不算）且当前没有 open Issue 才关闭，其余情况保持 open。
+  （draft 不算）且当前没有 open Issue 才关闭，其余情况保持 open。最后
+  同一个 tick 还会扫一遍 open PR（Issue #746）：head 为稳定交付命名
+  （`orbi/<repo>-issue-<N>`）且源票已被人工关闭的 PR，会在 PR 上收到
+  一条幂等的报告评论——所有 resumable 扫描都只查 `state=open` 的票，没有
+  这个扫描该 PR 会永久悬空。合并/关闭由人决定：Runner 绝不自动合，
+  也绝不越过人的关闭决定去自动关。
 - **Release task**：带 `ai-release` 标签的 `ai-ready` Issue（Issue
   #98）。它**不是**开发任务：Runner 通过普通 ready 扫描领取，但
   `process_issue` 把它路由到确定性的 release 状态机而不是 `run_pi`——

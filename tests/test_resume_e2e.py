@@ -209,6 +209,10 @@ def install_fake_gh(monkeypatch, comments: list[str],
                             labels.remove(label)
                     return ""
                 if command[2] == "view":
+                    if command[-1] == "state":
+                        # The pre-PR closeout reads the source Issue
+                        # state (Issue #746): open in these scenes.
+                        return json.dumps({"state": "OPEN"})
                     if command[-1] == "labels":
                         return json.dumps({
                             "labels": [{"name": name} for name in labels],
