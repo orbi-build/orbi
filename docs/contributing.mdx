@@ -51,7 +51,11 @@ gh issue edit <number> --repo OWNER/PILOT-REPO --add-label ai-ready
 ```
 
 A good body states the background, the expected behavior, the acceptance
-criteria, and (for bugs) the reproduction. Before changing anything Orbi
+criteria, and (for bugs) the reproduction. A research-only ticket
+("research/design first, do NOT implement yet") is dispatched as an ops
+ticket instead — `ai-ready` + `ai-ops-only`: a dev ticket whose agent
+correctly delivers no commit fails the delivery criterion and is burned
+`ai-blocked` (see the workflow page). Before changing anything Orbi
 reads the Issue, the repository's `AGENTS.md`, the files it will change
 plus their callers, and the related tests — the README and the rest of
 the repository only when the task is actually about them (Issue #180).

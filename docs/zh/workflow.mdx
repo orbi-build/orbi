@@ -127,6 +127,14 @@ ops 语义（Issue #537）：
   （无 commit）以 Runner 关闭 Issue 并摘除 `ai-in-progress` 收尾——
   无 PR。附带代码 commit 则照常走 PR 路径（审查 + 合并）。
 
+调研型票（Issue #739）：票面要求只调研/设计——「先调研，不要直接写
+实现」——的票，派发时就是 ops 票：打 `ai-ready` + `ai-ops-only`。
+dev 票带不动这个指令：dev 的交付判据是 task branch 上有新提交，
+照办不提交的 agent 会以 `the agent delivered no commit` 失败，票被
+烧成 `ai-blocked`。ops 剧本的证据纪律（真实命令、原文输出、未验证项
+如实标注）就是调研交付物本身；无 commit 的 ops 运行正常收尾（关票、
+摘除 `ai-in-progress`），调研后继续落地的代码仍走正常 PR 流程。
+
 Issue #537 之前，`ai-ops-only` 标签派发的是内容代理（#530 只改了名，
 模式未变——名字承诺 ops，模式仍是纯内容）；现在 content 路径派发到
 `ai-content-only`，`ai-ops-only` 是完整执行的 ops 路径。
