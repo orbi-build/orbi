@@ -1,0 +1,6 @@
+# Repository delivery policy (config-as-code, orbi-build/orbi#527).
+# Whitelisted policy keys only — everything else (identity, credentials,
+# scheduling such as max_concurrency) is host-only and blocks the claim.
+# This is the first migrated key (orbi-build/orbi#731): the coverage-gated
+# test contract from AGENTS.md, as one command.
+test_command = "COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage run --branch -m pytest tests/ -q && COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 -m coverage report --show-missing && COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/coverage_gate.py .orbi/.coverage && COVERAGE_FILE=.orbi/.coverage /usr/bin/python3 tools/diff_coverage_gate.py origin/main"

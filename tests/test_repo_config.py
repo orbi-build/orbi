@@ -945,3 +945,41 @@ def test_repo_policies_are_isolated_per_repository(monkeypatch):
     assert good["policy"] == {"base_branch": "beta"}
     with pytest.raises(repo_config.RepoConfigError):
         runner.load_repo_policy({"repositories": []}, "owner/bad")
+
+
+# --- this repository's own policy file (Issue #731) -------------------------
+
+def test_this_repositorys_own_orbi_toml_is_valid_and_declares_test_command():
+    """Orbi dogfoods its own config-as-code (Issue #731): the file this
+    repository carries at `.github/orbi.toml` must pass the strict claim
+    schema and declare the test command the implementer prompt injects —
+    a broken file here would block every claim of this repository with
+    `repo_config_invalid`."""
+    path = Path(__file__).resolve().parents[1] / ".github" / "orbi.toml"
+    assert path.is_file(), (
+        "the repository must carry .github/orbi.toml (Issue #731)"
+    )
+    policy = repo_config.parse_repo_config(
+        path.read_text(encoding="utf-8"),
+    )
+    test_command = policy.get("test_command")
+    assert isinstance(test_command, str) and test_command.strip()
+
+
+def test_this_repositorys_own_orbi_toml_is_not_gitignored():
+    """The policy file must be deliverable (Issue #731): the tracked
+    .gitignore ignores the local ROOT-level `orbi.toml` (host-style
+    engine config), and the bare pattern must not reach into `.github/`
+    — an ignored `.github/orbi.toml` could never reach the default
+    branch, so every claim would keep falling back to the host config."""
+    root = Path(__file__).resolve().parents[1]
+
+    def ignored(relative: str) -> bool:
+        proc = subprocess.run(
+            ["git", "check-ignore", "-q", relative],
+            cwd=root, capture_output=True,
+        )
+        return proc.returncode == 0
+
+    assert not ignored(".github/orbi.toml")
+    assert ignored("orbi.toml")
