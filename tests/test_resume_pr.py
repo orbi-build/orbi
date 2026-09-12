@@ -21,6 +21,7 @@ from orbi import progress
 from tests.test_progress_wiring import make_fake_gh
 from seam import seam
 import orbi.journal as journal
+import orbi.github as github
 
 
 FAKE_RUN_ID = "a1b2c3d4"
@@ -219,7 +220,7 @@ def test_authenticated_github_login_uses_active_gh_account(monkeypatch):
             "  - Active account: true\n"
         ),
     )
-    assert runner._authenticated_github_login() == "orbi-dev-test[bot]"
+    assert github._authenticated_github_login() == "orbi-dev-test[bot]"
     assert calls == [["gh", "auth", "status", "--hostname", "github.com"]]
 
 
@@ -233,7 +234,7 @@ def test_authenticated_github_login_selects_active_account(monkeypatch):
             "  - Active account: true\n"
         ),
     )
-    assert runner._authenticated_github_login() == "orbi-dev-test[bot]"
+    assert github._authenticated_github_login() == "orbi-dev-test[bot]"
 
 
 def test_authenticated_github_login_reports_identity_resolution_failure(monkeypatch):
@@ -242,14 +243,14 @@ def test_authenticated_github_login_reports_identity_resolution_failure(monkeypa
 
     monkeypatch.setattr(seam, "run_command", fail)
     with pytest.raises(ValueError, match="identity resolution.*gh auth status"):
-        runner._authenticated_github_login()
+        github._authenticated_github_login()
 
 
 def test_authenticated_github_login_rejects_missing_active_account(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda command: "Active account: true\n",
     )
     with pytest.raises(ValueError, match="identity resolution"):
-        runner._authenticated_github_login()
+        github._authenticated_github_login()
 
 
 def test_resume_scene_accepts_the_authenticated_runner_app_bot(monkeypatch):
@@ -281,7 +282,7 @@ def test_resume_scene_rejects_another_app_bot_even_with_the_marker(monkeypatch):
         "author": {"login": "unrelated-app[bot]"},
     }]
     monkeypatch.setattr(
-        runner, "_authenticated_github_login",
+        seam, "_authenticated_github_login",
         lambda: "orbi-dev-test[bot]",
     )
     with pytest.raises(ValueError, match="no 'Orbi opened PR' comment"):
@@ -309,7 +310,7 @@ def test_comment_is_trusted_normalizes_optional_bot_suffix(
     monkeypatch, login, expected,
 ):
     monkeypatch.setattr(
-        runner, "_authenticated_github_login",
+        seam, "_authenticated_github_login",
         lambda: "orbi-dev-test[bot]",
     )
     comment = {
@@ -328,7 +329,7 @@ def test_resume_scene_accepts_graphql_shaped_runner_app_bot(monkeypatch):
         "author": {"login": "orbi-dev-test"},
     }]
     monkeypatch.setattr(
-        runner, "_authenticated_github_login",
+        seam, "_authenticated_github_login",
         lambda: "orbi-dev-test[bot]",
     )
     scene = runner.resume_scene(comments)
@@ -345,7 +346,7 @@ def test_comment_is_trusted_rejects_missing_or_non_string_login(
     monkeypatch, author,
 ):
     monkeypatch.setattr(
-        runner, "_authenticated_github_login",
+        seam, "_authenticated_github_login",
         lambda: "orbi-dev-test[bot]",
     )
     comment = {

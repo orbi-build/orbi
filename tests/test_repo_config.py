@@ -508,7 +508,7 @@ def test_previous_repo_config_sha_reads_the_newest_trusted_comment(monkeypatch):
         {"authorAssociation": "NONE", "body": "- repo_config: " + "b" * 40},
         {"authorAssociation": "MEMBER", "body": None},
     ]
-    monkeypatch.setattr(runner, "_authenticated_github_login", lambda: "orbi")
+    monkeypatch.setattr(seam, "_authenticated_github_login", lambda: "orbi")
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: comments,
     )
     assert runner.previous_repo_config_sha(1, "owner/repo") == "c" * 40

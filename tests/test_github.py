@@ -346,7 +346,12 @@ def test_pr_comments_reads_through_pr_view(monkeypatch):
     assert github.pr_comments(4, repo="o/r") == []
 
 
-def test_trusted_issue_comments_block_keeps_newest_and_states_omissions():
+def test_trusted_issue_comments_block_keeps_newest_and_states_omissions(
+        monkeypatch):
+    # Pin the credential read: the NONE-association comment reaches the
+    # authenticated-login fallback and CI runs unauthenticated.
+    monkeypatch.setattr(seam, "_authenticated_github_login",
+                        lambda: "ci-runner[bot]")
     comments = [
         {"author": {"login": "a"}, "authorAssociation": "OWNER",
          "createdAt": "t1", "body": "one"},

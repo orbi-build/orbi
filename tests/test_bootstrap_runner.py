@@ -4847,7 +4847,7 @@ def test_trusted_issue_comments_block_filters_untrusted_and_keeps_order(
     # authenticated-login fallback; pin it so the test never depends on
     # the host's real gh login state (CI runs unauthenticated).
     monkeypatch.setattr(
-        runner, "_authenticated_github_login", lambda: "ci-runner[bot]"
+        seam, "_authenticated_github_login", lambda: "ci-runner[bot]"
     )
     comments = [
         {"author": {"login": "alice"}, "authorAssociation": "OWNER",
@@ -4898,7 +4898,7 @@ def test_trusted_issue_comments_block_states_when_nothing_is_trusted(
     an empty string — the agent can tell an empty timeline apart from a
     missing section."""
     monkeypatch.setattr(
-        runner, "_authenticated_github_login", lambda: "ci-runner[bot]"
+        seam, "_authenticated_github_login", lambda: "ci-runner[bot]"
     )
     block = runner.trusted_issue_comments_block([
         {"author": {"login": "mallory"}, "authorAssociation": "NONE",
@@ -4939,7 +4939,7 @@ def test_run_pi_injects_trusted_issue_comments_into_the_prompt(
     # fallback; pin it so the test never depends on the host's real gh
     # login state (CI runs unauthenticated).
     monkeypatch.setattr(
-        runner, "_authenticated_github_login", lambda: "ci-runner[bot]"
+        seam, "_authenticated_github_login", lambda: "ci-runner[bot]"
     )
     calls = []
     monkeypatch.setattr(
@@ -5024,7 +5024,7 @@ def test_run_review_injects_trusted_issue_comments_into_the_prompt(
     # fallback; pin it so the test never depends on the host's real gh
     # login state (CI runs unauthenticated).
     monkeypatch.setattr(
-        runner, "_authenticated_github_login", lambda: "ci-runner[bot]"
+        seam, "_authenticated_github_login", lambda: "ci-runner[bot]"
     )
     calls = []
     monkeypatch.setattr(

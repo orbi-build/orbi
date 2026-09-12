@@ -152,7 +152,6 @@ from orbi import github, gitops, journal, release
 from orbi.cli_source import CliInstallError, refresh_cli_install
 from orbi.github import (
     RESUME_PR_STATE_TIMEOUT_SECONDS,
-    TRUSTED_COMMENT_ASSOCIATIONS,
     run_gh_read_command,
     _comment_is_trusted,
     _pr_number,
@@ -2412,77 +2411,6 @@ def parse_pr_comment(body: str) -> dict | None:
     # required-field check: its absence is normal, never an error.
     scene["external"] = fields.get("external", "")
     return scene
-
-
-def _authenticated_github_login() -> str:
-    """Return the login represented by the active ``gh`` credential.
-
-    ``gh api installation`` is unavailable with installation tokens, while
-    ``gh auth status`` reports the account selected in gh's credential store.
-    Read that local status instead of guessing a bot name or making an API
-    request that cannot identify this credential shape.
-    """
-    try:
-        # The comments being verified come from github.com.  Restrict the
-        # status query to that host so an active account on another configured
-        # GitHub Enterprise host cannot be mistaken for this credential.
-        status = run_gh_read_command([
-            "gh", "auth", "status", "--hostname", "github.com",
-        ])
-    except Exception as exc:
-        raise ValueError(
-            "GitHub identity resolution failed: `gh auth status` could not "
-            f"read the active account: {exc}; run `gh auth login` or fix "
-            "the GitHub credentials"
-        ) from exc
-
-    account: str | None = None
-    active_account: str | None = None
-    for line in status.splitlines():
-        match = re.search(r"\baccount\s+(\S+)", line)
-        if match:
-            account = match.group(1)
-        if re.search(r"Active account:\s*true\b", line, re.IGNORECASE):
-            if account:
-                active_account = account
-
-    if not active_account:
-        raise ValueError(
-            "GitHub identity resolution failed: `gh auth status` did not "
-            "report an active account; run `gh auth login` or select an "
-            "active github.com account with `gh auth switch`"
-        )
-    return active_account
-
-
-def _strip_bot_suffix(login: str) -> str:
-    """Drop the optional ``[bot]`` suffix from an App login.
-
-    ``gh issue view --json comments`` reads comments through GraphQL and
-    reports ``author.login`` without the ``[bot]`` suffix, while REST's
-    ``user.login`` keeps it (Issue #655). Both shapes name the same App
-    credential, so the suffix is normalized away before comparison.
-    """
-    return login[:-5] if login.endswith("[bot]") else login
-
-
-def _comment_is_trusted(comment: object) -> bool:
-    """True when the comment is from a maintainer or this runner's App bot."""
-    if not isinstance(comment, dict):
-        return False
-    if comment.get("authorAssociation") in TRUSTED_COMMENT_ASSOCIATIONS:
-        return True
-    author = comment.get("author")
-    login = author.get("login") if isinstance(author, dict) else None
-    if not isinstance(login, str):
-        return False
-    # A copied run marker is not sufficient: the author must be the account
-    # represented by the currently authenticated installation token. The
-    # optional `[bot]` suffix is normalized on both sides because GraphQL
-    # drops it and REST keeps it (Issue #655).
-    return _strip_bot_suffix(login) == _strip_bot_suffix(
-        _authenticated_github_login()
-    )
 
 
 def resume_scene(comments: list[dict]) -> dict:
