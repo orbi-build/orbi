@@ -19,6 +19,8 @@ from orbi import delivery_labels as dl
 from orbi import human_review
 
 import orbi.runner as runner
+from seam import seam
+import orbi.journal as journal
 
 REPO = "owner/repo"
 PR_URL = f"https://github.com/{REPO}/pull/46"
@@ -258,20 +260,18 @@ def gate_env(tmp_path, monkeypatch):
         reviews.append((worktree, branch, config))
         return False
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
-    monkeypatch.setattr(runner, "issue_labels",
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    monkeypatch.setattr(seam, "issue_labels",
                         lambda *a, **k: ["ai-pr-opened"])
-    monkeypatch.setattr(
-        runner, "issue_comments",
+    monkeypatch.setattr(seam, "issue_comments",
         lambda *a, **k: (calls.__setitem__("comments", calls["comments"] + 1)
                          or _scene_comments()),
     )
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda number, **kwargs: calls["edit"].append(kwargs),
     )
     monkeypatch.setattr(runner, "review_and_merge_if_clean", fake_review)
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", RUN_ID)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", RUN_ID)
     return {"worktree": worktree, "calls": calls, "reviews": reviews}
 
 
@@ -307,8 +307,7 @@ def test_gate_on_with_column2_holds_without_any_session(gate_env, tmp_path):
 def test_gate_on_second_tick_does_not_rewrite_the_waiting_patch(
     gate_env, tmp_path, monkeypatch,
 ):
-    monkeypatch.setattr(
-        runner, "issue_labels",
+    monkeypatch.setattr(seam, "issue_labels",
         lambda *a, **k: ["ai-ready", "ai-pr-opened"],
     )
     outcome = _round(_gate_config(tmp_path))
@@ -319,8 +318,7 @@ def test_gate_on_second_tick_does_not_rewrite_the_waiting_patch(
 
 def test_gate_on_with_the_human_label_runs_the_review(gate_env, tmp_path,
                                                       monkeypatch):
-    monkeypatch.setattr(
-        runner, "issue_labels",
+    monkeypatch.setattr(seam, "issue_labels",
         lambda *a, **k: ["ai-pr-opened", dl.HUMAN_REVIEW_LABEL],
     )
     outcome = _round(_gate_config(tmp_path))
@@ -332,12 +330,10 @@ def test_gate_on_with_the_human_label_runs_the_review(gate_env, tmp_path,
 def test_gate_on_with_empty_column2_passes_without_the_label(
     gate_env, tmp_path, monkeypatch,
 ):
-    monkeypatch.setattr(
-        runner, "issue_labels",
+    monkeypatch.setattr(seam, "issue_labels",
         lambda *a, **k: ["ai-pr-opened"],
     )
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: "tests/test_new.py\n",
     )
     outcome = _round(_gate_config(tmp_path))
@@ -386,7 +382,7 @@ def test_delivered_changed_files_failure_is_missing_evidence(
     def boom(command, **kwargs):
         raise RuntimeError("git down")
 
-    monkeypatch.setattr(runner, "run_command", boom)
+    monkeypatch.setattr(seam, "run_command", boom)
     assert runner.delivered_changed_files(worktree, "main") is None
     # Missing evidence lands in column 2 (the gate holds).
     checklist = human_review.build_checklist(

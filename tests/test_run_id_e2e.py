@@ -25,6 +25,8 @@ from pathlib import Path
 import pytest
 
 import orbi.runner as runner
+from seam import seam
+import orbi.journal as journal
 
 REPO = "owner/repo"
 ISSUE_NUMBER = 41
@@ -153,7 +155,7 @@ def clone(tmp_path: Path) -> Path:
 @pytest.fixture(autouse=True)
 def _reset_run_id(monkeypatch):
     """Each test starts without a bound run id."""
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
 
 
 def install_fake_pi(monkeypatch, tmp_path: Path, script: str) -> None:
@@ -290,7 +292,7 @@ def install_fake_gh(monkeypatch, comments: list[str],
             raise AssertionError(f"unexpected gh command: {command}")
         return real_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
 
 
 def write_prompt(tmp_path: Path) -> Path:
@@ -406,7 +408,7 @@ def test_e2e_retry_of_same_issue_gets_new_run_id_and_keeps_old_scene(
     clone, tmp_path, monkeypatch, caplog,
 ):
     run_ids = iter(["a1b2c3d4", "b2c3d4e5"])
-    monkeypatch.setattr(runner, "new_run_id", lambda: next(run_ids))
+    monkeypatch.setattr(seam, "new_run_id", lambda: next(run_ids))
     comments: list[str] = []
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
     install_fake_gh(monkeypatch, comments)
@@ -461,7 +463,7 @@ def test_e2e_retry_of_same_issue_gets_new_run_id_and_keeps_old_scene(
 def test_e2e_failed_attempt_marks_blocked_with_same_run_id(
     clone, tmp_path, monkeypatch, caplog,
 ):
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     comments: list[str] = []
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI_FAILING)
     install_fake_gh(monkeypatch, comments)
@@ -530,8 +532,8 @@ def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
             return
         raise AssertionError("kill simulation: label edit must not land")
 
-    monkeypatch.setattr(runner, "edit_issue", claiming_edit)
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "edit_issue", claiming_edit)
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     # Issue #239: the failure path runs (the `claiming_edit` above
     # suppresses its label transition, simulating the kill) and
     # `process_issue` returns `None` instead of re-raising.
@@ -549,8 +551,8 @@ def test_e2e_restart_reuses_run_id_worktree_and_progress_comment(
     # implementer (now healthy) delivers.
     caplog.clear()
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
-    monkeypatch.setattr(runner, "edit_issue", real_edit_issue)
-    monkeypatch.setattr(runner, "new_run_id", lambda: "b2c3d4e5")
+    monkeypatch.setattr(seam, "edit_issue", real_edit_issue)
+    monkeypatch.setattr(seam, "new_run_id", lambda: "b2c3d4e5")
     result = runner.process_issue(issue(), config, REPO)
 
     # The reused run id drives the branch and the worktree: no second

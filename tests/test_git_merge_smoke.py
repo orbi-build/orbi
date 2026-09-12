@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 import orbi.runner as runner
+from seam import seam
 
 
 def git(repo: Path, *args: str) -> str:
@@ -96,7 +97,7 @@ def install_fake_gh(monkeypatch, clone: Path, pr_json: str) -> list:
             return ""
         return real_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     return commands
 
 
@@ -120,8 +121,7 @@ def test_merge_gate_merges_head_containing_latest_base(clone, monkeypatch):
     merge_commit = git(clone, "rev-parse", "origin/main")
     git(clone, "merge-base", "--is-ancestor", head_oid, "origin/main")
     # confirm_merged verifies the merge commit is now on origin/main.
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: (
             make_pr(head_oid, state="MERGED", merged_at="now",
                     merge_commit=merge_commit)
@@ -154,7 +154,7 @@ def test_merge_gate_rejects_head_behind_latest_base(clone, monkeypatch, caplog):
         commands.append(command)
         return real_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     pr = {"number": 4, "url": "u", "base_ref": "main",
           "base_oid": git(clone, "rev-parse", "origin/main~1"),
           "head_ref": "orbi/owner-repo-issue-4",
@@ -215,7 +215,7 @@ def test_deployment_checkout_fast_forwards_after_independent_merge(
                            merge_commit=merge_commit)
         return real_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     confirmed = runner.confirm_merged(clone, merged, "main", repo_dir=clone)
     assert confirmed["merge_commit"] == merge_commit
 

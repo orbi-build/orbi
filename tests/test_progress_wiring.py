@@ -17,6 +17,8 @@ import pytest
 
 import orbi.runner as runner
 import orbi.release as release
+from seam import seam
+import orbi.journal as journal
 from orbi import pi_process, progress
 
 
@@ -57,11 +59,11 @@ def make_fake_gh(monkeypatch, comments=None, in_progress=False):
             return json.dumps([{"number": 18}] if in_progress else [])
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     # Issue #286: the release subsystem (orbi.release) resolves the gh
     # primitive in its own module globals — moved-path callers of this
     # helper must see the same fake there.
-    monkeypatch.setattr(release, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     return calls, posted
 
 
@@ -78,10 +80,10 @@ def make_issue():
 
 
 def patch_process_deps(monkeypatch, tmp_path, *, run_pi_side_effect=None):
-    monkeypatch.setattr(runner, "edit_issue", Mock())
-    monkeypatch.setattr(runner, "freeze_base",
+    monkeypatch.setattr(seam, "edit_issue", Mock())
+    monkeypatch.setattr(seam, "freeze_base",
                         lambda repo_dir, base_branch: "abc123def456")
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
 
     def fake_create_worktree(*args, **kwargs):
         path = tmp_path / "wt"
@@ -91,7 +93,7 @@ def patch_process_deps(monkeypatch, tmp_path, *, run_pi_side_effect=None):
         (path / ".orbi").mkdir(exist_ok=True)
         return path
 
-    monkeypatch.setattr(runner, "create_worktree", fake_create_worktree)
+    monkeypatch.setattr(seam, "create_worktree", fake_create_worktree)
     monkeypatch.setattr(
         runner, "activity_snapshot",
         lambda session_dir: {
@@ -295,8 +297,7 @@ def test_read_test_result_reports_error_summary(tmp_path):
 
 
 def test_delivery_head_advanced_detects_new_commits(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: "1111111111111111111111111111111111111111",
     )
     assert runner.delivery_head_advanced(
@@ -307,8 +308,7 @@ def test_delivery_head_advanced_detects_new_commits(monkeypatch, tmp_path):
 def test_delivery_head_advanced_is_false_when_head_equals_base(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: "2222222222222222222222222222222222222222",
     )
     assert runner.delivery_head_advanced(
@@ -317,8 +317,7 @@ def test_delivery_head_advanced_is_false_when_head_equals_base(
 
 
 def test_delivery_head_advanced_fails_fast_when_git_fails(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: (_ for _ in ()).throw(
             subprocess.CalledProcessError(128, command, stderr="not a repo"),
         ),
@@ -457,7 +456,7 @@ def test_process_issue_p0_progress_comment_and_milestones_carry_priority(
     patch_process_deps(monkeypatch, tmp_path)
     edit = Mock()
     # AFTER patch_process_deps: it installs its own edit_issue mock.
-    monkeypatch.setattr(runner, "edit_issue", edit)
+    monkeypatch.setattr(seam, "edit_issue", edit)
     issue = make_issue()
     issue["labels"] = [{"name": "p0"}, {"name": "ai-ready"}]
     runner.process_issue(issue, make_config(tmp_path), "xqliu/orbi")
@@ -491,7 +490,7 @@ def test_process_issue_p0_failure_enters_ai_blocked_terminal_state(
     )
     edit = Mock()
     # AFTER patch_process_deps: it installs its own edit_issue mock.
-    monkeypatch.setattr(runner, "edit_issue", edit)
+    monkeypatch.setattr(seam, "edit_issue", edit)
     issue = make_issue()
     issue["labels"] = [{"name": "p0"}, {"name": "ai-ready"}]
     # Issue #239: the failure is terminal — `process_issue` returns `None`
@@ -705,7 +704,7 @@ def test_process_issue_repeated_recoverable_failure_updates_one_comment(
             return json.dumps({"labels": [{"name": "ai-ready"}]})
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_gh)
+    monkeypatch.setattr(seam, "run_command", fake_gh)
     quota_error = runner.RecoverablePiProcessError(
         1, ["pi", "--provider", "z-ai", "--model", "glm-5.3-flash"],
         stderr=(
@@ -819,7 +818,7 @@ def test_process_issue_keeps_the_claim_when_the_journal_proves_the_request(
         (worktree / ".orbi").mkdir(exist_ok=True)
         return worktree
 
-    monkeypatch.setattr(runner, "create_worktree", fake_create_worktree)
+    monkeypatch.setattr(seam, "create_worktree", fake_create_worktree)
     result = runner.process_issue(
         make_issue(), make_config(tmp_path), "xqliu/orbi",
     )
@@ -1037,11 +1036,11 @@ def make_failing_gh(monkeypatch, is_failing, comments=None):
             return "[]"
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     # Issue #286: the release subsystem (orbi.release) resolves the gh
     # primitive in its own module globals — moved-path callers of this
     # helper must see the same fake there.
-    monkeypatch.setattr(release, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
     return calls, posted
 
 
@@ -1080,7 +1079,7 @@ def test_process_issue_delivered_patch_failure_does_not_fail_delivery(
     calls, posted = make_failing_gh(monkeypatch, _progress_patch_of)
     patch_process_deps(monkeypatch, tmp_path)
     edits = []
-    monkeypatch.setattr(runner, "edit_issue", lambda number, **kwargs:
+    monkeypatch.setattr(seam, "edit_issue", lambda number, **kwargs:
                         edits.append(kwargs))
     caplog.set_level("ERROR")
 
@@ -1129,7 +1128,7 @@ def test_process_issue_pr_opened_scene_has_no_duplicate_milestone(
     )
     patch_process_deps(monkeypatch, tmp_path)
     edits = []
-    monkeypatch.setattr(runner, "edit_issue", lambda number, **kwargs:
+    monkeypatch.setattr(seam, "edit_issue", lambda number, **kwargs:
                         edits.append(kwargs))
     caplog.set_level("ERROR")
 
@@ -1180,7 +1179,7 @@ def test_process_issue_scene_comment_failure_fails_delivery(
     )
     patch_process_deps(monkeypatch, tmp_path)
     edits = []
-    monkeypatch.setattr(runner, "edit_issue", lambda number, **kwargs:
+    monkeypatch.setattr(seam, "edit_issue", lambda number, **kwargs:
                         edits.append(kwargs))
     caplog.set_level("ERROR")
 
@@ -1298,7 +1297,7 @@ def test_process_issue_ensure_failure_does_not_fail_delivery(
     )
     patch_process_deps(monkeypatch, tmp_path)
     edits = []
-    monkeypatch.setattr(runner, "edit_issue", lambda number, **kwargs:
+    monkeypatch.setattr(seam, "edit_issue", lambda number, **kwargs:
                         edits.append(kwargs))
     caplog.set_level("ERROR")
 
@@ -1343,7 +1342,7 @@ def test_process_issue_started_scene_has_no_duplicate_milestone(
     )
     patch_process_deps(monkeypatch, tmp_path)
     edits = []
-    monkeypatch.setattr(runner, "edit_issue", lambda number, **kwargs:
+    monkeypatch.setattr(seam, "edit_issue", lambda number, **kwargs:
                         edits.append(kwargs))
     caplog.set_level("ERROR")
 
@@ -1378,7 +1377,7 @@ def test_process_issue_plan_test_milestone_failures_do_not_fail_delivery(
     )
     patch_process_deps(monkeypatch, tmp_path)
     edits = []
-    monkeypatch.setattr(runner, "edit_issue", lambda number, **kwargs:
+    monkeypatch.setattr(seam, "edit_issue", lambda number, **kwargs:
                         edits.append(kwargs))
     caplog.set_level("ERROR")
 
@@ -1438,7 +1437,7 @@ def test_process_issue_failure_path_progress_failure_keeps_blocked_transition(
         ),
     )
     edits = []
-    monkeypatch.setattr(runner, "edit_issue", lambda number, **kwargs:
+    monkeypatch.setattr(seam, "edit_issue", lambda number, **kwargs:
                         edits.append(kwargs))
     caplog.set_level("ERROR")
 
@@ -1594,8 +1593,8 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
     # The fake rejects anything that is not progress API traffic.
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run_command(["gh", "release", "list"])
-    monkeypatch.setattr(runner, "run_command", fake_run_command)
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: {
         "number": 4, "url": "https://github.com/xqliu/orbi/pull/40",
         "base_ref": "main", "base_oid": "b1",
@@ -1606,11 +1605,10 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
     # on ProgressPublisher's bypass behavior.
     monkeypatch.setattr(runner, "check_review_ci", lambda *a, **k: "ci ok")
     edits = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda number, **kwargs: edits.append(kwargs),
     )
-    monkeypatch.setattr(runner, "comment_issue", Mock())
+    monkeypatch.setattr(seam, "comment_issue", Mock())
     monkeypatch.setattr(runner, "comment_pr", Mock())
     if "pass" in verdict:
         monkeypatch.setattr(runner, "merge_gate", lambda *a, **k: {
@@ -1795,9 +1793,9 @@ def test_wait_for_delivery_closed_unmerged_posts_blocked_milestone(
         fail_progress=lambda command: False,
         api_calls=api_calls, posted=posted,
     )
-    monkeypatch.setattr(runner, "edit_issue", Mock())
-    monkeypatch.setattr(runner, "comment_issue", Mock())
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(seam, "edit_issue", Mock())
+    monkeypatch.setattr(seam, "comment_issue", Mock())
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     runner.wait_for_delivery(
         pr_url, {"number": 39, "title": "t", "body": ""}, {}, "owner/repo",
     )
@@ -1860,9 +1858,9 @@ def test_wait_for_delivery_review_failure_finishes_progress_comment_with_blocked
         fail_progress=lambda command: False,
         api_calls=api_calls, posted=posted,
     )
-    monkeypatch.setattr(runner, "edit_issue", Mock())
-    monkeypatch.setattr(runner, "comment_issue", Mock())
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(seam, "edit_issue", Mock())
+    monkeypatch.setattr(seam, "comment_issue", Mock())
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     runner.wait_for_delivery(
         pr_url, {"number": 39, "title": "t", "body": ""},
         {"repo_dir": Path("/srv/repo")}, "owner/repo",
@@ -1941,7 +1939,7 @@ def _wait_delivery_fake_gh(monkeypatch, *, pr_state, labels, comments,
                                "url": "https://x/78"})
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
 
 
 def _review_round_comments():
@@ -1996,16 +1994,14 @@ def test_wait_for_delivery_closed_unmerged_progress_failure_still_releases(
         posted=posted,
     )
     edits = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda number, **kwargs: edits.append(kwargs),
     )
     comments = []
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda number, **kwargs: comments.append(kwargs),
     )
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("ERROR")
 
     # No exception: the loop completed the terminal failure and the
@@ -2076,16 +2072,14 @@ def test_wait_for_delivery_review_failure_progress_failure_still_releases(
         posted=posted,
     )
     edits = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda number, **kwargs: edits.append(kwargs),
     )
     comments = []
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda number, **kwargs: comments.append(kwargs),
     )
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("ERROR")
 
     # No exception: the loop completed the terminal failure and the
@@ -2174,8 +2168,7 @@ def _make_takeover_gh(monkeypatch, monkeypatched, tmp_path, *, pr_state="OPEN",
             return ""
         return ""
 
-    monkeypatched.append(monkeypatch.setattr(
-        runner, "run_command", fake_run_command))
+    monkeypatched.append(monkeypatch.setattr(seam, "run_command", fake_run_command))
     return calls, posted
 
 
@@ -2197,7 +2190,7 @@ def test_process_issue_claims_external_pr_and_skips_run_pi(
         (path / ".orbi").mkdir(exist_ok=True)
         return path
 
-    monkeypatch.setattr(runner, "create_worktree", fake_create_worktree)
+    monkeypatch.setattr(seam, "create_worktree", fake_create_worktree)
     issue = {
         "number": 608, "title": "external PR CI failure",
         "body": EXTERNAL_PR_BODY,
@@ -2258,7 +2251,7 @@ def _external_wait_fake(monkeypatch, *, pr_state, fail_progress=None):
             return ""
         return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     return close_calls, comments
 
 
@@ -2266,8 +2259,8 @@ def test_wait_for_delivery_external_merge_closes_the_triage_issue(monkeypatch):
     """Issue #608: merging the external PR closes the triage Issue (the
     PR body carries no `Fixes #N` for it) — 合并外部 PR 即关票."""
     close_calls, _ = _external_wait_fake(monkeypatch, pr_state="MERGED")
-    monkeypatch.setattr(runner, "comment_issue", Mock())
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(seam, "comment_issue", Mock())
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     runner.wait_for_delivery(
         "https://github.com/xqliu/orbi/pull/592",
         {"number": 608, "title": "t", "body": ""},
@@ -2293,9 +2286,9 @@ def test_wait_for_delivery_external_close_failure_never_rewrites(monkeypatch,
             raise subprocess.CalledProcessError(1, command, stderr="boom")
         return json.dumps({"state": "MERGED"})
 
-    monkeypatch.setattr(runner, "run_command", failing_close)
-    monkeypatch.setattr(runner, "comment_issue", Mock())
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(seam, "run_command", failing_close)
+    monkeypatch.setattr(seam, "comment_issue", Mock())
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("ERROR")
     runner.wait_for_delivery(
         "https://github.com/xqliu/orbi/pull/592",
@@ -2317,13 +2310,11 @@ def test_wait_for_delivery_external_closed_requeues_for_internal_redo(
     Issue (docs/contributing.mdx)."""
     _external_wait_fake(monkeypatch, pr_state="CLOSED")
     edits = []
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda number, **kwargs: edits.append(kwargs),
     )
     commented = []
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda number, **kwargs: commented.append(kwargs),
     )
     pr_commented = []
@@ -2333,7 +2324,7 @@ def test_wait_for_delivery_external_closed_requeues_for_internal_redo(
             (number, kwargs["body"]),
         ),
     )
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "a1b2c3d4")
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     runner.wait_for_delivery(
         "https://github.com/xqliu/orbi/pull/592",
         {"number": 608, "title": "t", "body": ""},
@@ -2426,16 +2417,15 @@ def test_process_ticket_only_publishes_the_bound_context(monkeypatch):
     issue = {"number": 99, "title": "Launch thread", "body": "Write copy",
              "labels": [{"name": "ai-content-only"}]}
     seen = []
-    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
-    monkeypatch.setattr(runner, "set_run_id", lambda run_id: None)
-    monkeypatch.setattr(runner, "edit_issue", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "comment_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "set_run_id", lambda run_id: None)
+    monkeypatch.setattr(seam, "edit_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         runner, "run_ticket_agent", lambda *args, **kwargs: "content")
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "")
-    monkeypatch.setattr(
-        runner, "_safe_publish", lambda **kwargs: seen.append(kwargs))
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "")
+    monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: seen.append(kwargs))
 
     runner.process_ticket_only(issue, {"repo_dir": Path("/repo")}, "o/r")
 

@@ -20,13 +20,14 @@ import pytest
 import orbi.runner as runner
 from orbi import progress
 from tests.test_progress_wiring import make_fake_gh
+from seam import seam
+import orbi.journal as journal
 
 
 @pytest.fixture(autouse=True)
 def _current_delivery_labels(monkeypatch):
     """Provide the live label read used by review transitions."""
-    monkeypatch.setattr(
-        runner, "issue_labels", lambda *a, **k: ["ai-pr-opened"],
+    monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: ["ai-pr-opened"],
     )
 
 
@@ -341,21 +342,20 @@ def test_query_open_prs_owns_the_shared_query_contract(monkeypatch, tmp_path):
         calls.append(command)
         return json.dumps([{"number": 4, "url": "u4"}])
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     prs = runner._query_open_prs(tmp_path, "orbi/owner-repo-issue-4")
     assert prs == [{"number": 4, "url": "u4"}]
     assert calls == [UNIFIED_PR_LIST_COMMAND]
 
 
 def test_query_open_prs_rejects_non_array_payload(monkeypatch, tmp_path):
-    monkeypatch.setattr(runner, "run_command", lambda *a, **k: "{}")
+    monkeypatch.setattr(seam, "run_command", lambda *a, **k: "{}")
     with pytest.raises(RuntimeError, match="non-array payload"):
         runner._query_open_prs(tmp_path, "orbi/owner-repo-issue-4")
 
 
 def test_single_open_pr_returns_the_raw_pr_dict(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        runner, "run_command", lambda *a, **k: _pr_json(),
+    monkeypatch.setattr(seam, "run_command", lambda *a, **k: _pr_json(),
     )
     pr = runner._single_open_pr(
         tmp_path, "orbi/owner-repo-issue-4", "main", scene="freeze_pr",
@@ -367,7 +367,7 @@ def test_single_open_pr_returns_the_raw_pr_dict(monkeypatch, tmp_path):
 def test_single_open_pr_names_the_scene_when_no_pr_is_open(
     monkeypatch, tmp_path,
 ):
-    monkeypatch.setattr(runner, "run_command", lambda *a, **k: "[]")
+    monkeypatch.setattr(seam, "run_command", lambda *a, **k: "[]")
     with pytest.raises(
         RuntimeError, match="freeze_pr: no open PR for the task branch",
     ):
@@ -385,7 +385,7 @@ def test_single_open_pr_names_the_scene_when_multiple_are_open(
         {"number": 5, "url": "u5", "baseRefName": "main",
          "baseRefOid": "b1", "headRefName": "h", "headRefOid": "h2"},
     ])
-    monkeypatch.setattr(runner, "run_command", lambda *a, **k: two)
+    monkeypatch.setattr(seam, "run_command", lambda *a, **k: two)
     with pytest.raises(
         RuntimeError,
         match="verify_pr: multiple open PRs for the task branch",
@@ -398,8 +398,7 @@ def test_single_open_pr_names_the_scene_when_multiple_are_open(
 def test_single_open_pr_rejects_wrong_base_and_names_the_scene_in_the_log(
     monkeypatch, tmp_path, caplog,
 ):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda *a, **k: _pr_json(base="develop"),
     )
     with caplog.at_level("ERROR"), pytest.raises(
@@ -436,7 +435,7 @@ def test_freeze_pr_returns_frozen_base_and_head(monkeypatch, tmp_path):
         calls.append(command)
         return _pr_json()
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     pr = runner.freeze_pr(
         tmp_path, "orbi/owner-repo-issue-4", "main",
     )
@@ -450,15 +449,14 @@ def test_freeze_pr_returns_frozen_base_and_head(monkeypatch, tmp_path):
 
 
 def test_freeze_pr_rejects_wrong_base(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        runner, "run_command", lambda command, **kwargs: _pr_json(base="develop"),
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: _pr_json(base="develop"),
     )
     with pytest.raises(RuntimeError, match="PR base is develop, expected main"):
         runner.freeze_pr(tmp_path, "orbi/owner-repo-issue-4", "main")
 
 
 def test_freeze_pr_rejects_no_open_pr(monkeypatch, tmp_path):
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: "[]")
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "[]")
     with pytest.raises(RuntimeError, match="exactly one open PR"):
         runner.freeze_pr(tmp_path, "orbi/owner-repo-issue-4", "main")
 
@@ -470,7 +468,7 @@ def test_freeze_pr_rejects_multiple_open_prs(monkeypatch, tmp_path):
         {"number": 5, "url": "u5", "baseRefName": "main",
          "baseRefOid": "b1", "headRefName": "h", "headRefOid": "h2"},
     ])
-    monkeypatch.setattr(runner, "run_command", lambda command, **kwargs: two)
+    monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: two)
     with pytest.raises(RuntimeError, match="exactly one open PR"):
         runner.freeze_pr(tmp_path, "orbi/owner-repo-issue-4", "main")
 
@@ -557,8 +555,7 @@ def _merge_gate_fake(pr_state="MERGEABLE", head_oid="h1",
 
 
 def test_merge_gate_rejects_failed_github_ci(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         _merge_gate_fake(check_runs=[{
             "name": "tests", "status": "COMPLETED", "conclusion": "FAILURE",
         }]),
@@ -591,7 +588,7 @@ def test_merge_gate_rejects_preexisting_failed_ci_as_unrecoverable(
                                 "url": "https://github.com/o/r/issues/402"}])
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(runner.PreExistingCIFailure, match="main is already red"):
         runner.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
@@ -601,8 +598,7 @@ def test_merge_gate_rejects_preexisting_failed_ci_as_unrecoverable(
 
 
 def test_merge_gate_rejects_failed_status_context(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         _merge_gate_fake(check_runs=[{
             "context": "status", "state": "FAILURE",
         }]),
@@ -617,8 +613,7 @@ def test_merge_gate_rejects_failed_status_context(monkeypatch, tmp_path):
 
 def test_review_ci_gate_passes_success_neutral_and_skipped(monkeypatch):
     calls = []
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append(command) or json.dumps([
             {"name": "tests", "status": "completed", "conclusion": "success"},
             {"name": "docs", "status": "completed", "conclusion": "neutral"},
@@ -632,8 +627,7 @@ def test_review_ci_gate_passes_success_neutral_and_skipped(monkeypatch):
 
 
 def test_review_ci_gate_fails_with_run_reference(monkeypatch):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([{
             "name": "tests", "status": "completed", "conclusion": "failure",
             "html_url": "https://github.com/owner/repo/actions/runs/42",
@@ -648,8 +642,7 @@ def test_review_ci_gate_fails_with_run_reference(monkeypatch):
     {},
 ])
 def test_review_ci_gate_reports_any_failure_reference(monkeypatch, reference):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([{
             "name": "tests", "status": "completed", "conclusion": "failure",
             **reference,
@@ -661,8 +654,7 @@ def test_review_ci_gate_reports_any_failure_reference(monkeypatch, reference):
 
 
 def test_review_ci_gate_times_out_pending_checks(monkeypatch):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps([{
             "name": "tests", "status": "in_progress", "conclusion": None,
         }]),
@@ -673,7 +665,7 @@ def test_review_ci_gate_times_out_pending_checks(monkeypatch):
 
 
 def test_review_ci_gate_allows_no_checks_with_evidence(monkeypatch):
-    monkeypatch.setattr(runner, "run_command", lambda *a, **k: "[]")
+    monkeypatch.setattr(seam, "run_command", lambda *a, **k: "[]")
     assert runner.check_review_ci("owner/repo", "head-none", wait_seconds=10) == (
         "CI on review head head-none: no check runs (nothing to gate)"
     )
@@ -685,8 +677,7 @@ def test_review_ci_gate_polls_the_current_head(monkeypatch):
         [{"name": "tests", "status": "completed", "conclusion": "success"}],
     ])
     seen = []
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: seen.append(command) or json.dumps(next(heads)),
     )
     monkeypatch.setattr(runner.time, "sleep", lambda seconds: None)
@@ -695,20 +686,18 @@ def test_review_ci_gate_polls_the_current_head(monkeypatch):
 
 
 def test_preexisting_ci_triage_lookup_is_best_effort(monkeypatch):
-    monkeypatch.setattr(runner, "run_command", lambda *_args, **_kwargs: "{}")
+    monkeypatch.setattr(seam, "run_command", lambda *_args, **_kwargs: "{}")
     assert runner._main_ci_triage_url("owner/repo", "tests") is None
 
-    monkeypatch.setattr(runner, "run_command", lambda *_args, **_kwargs: "not json")
+    monkeypatch.setattr(seam, "run_command", lambda *_args, **_kwargs: "not json")
     assert runner._main_ci_triage_url("owner/repo", "tests") is None
 
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda *_args, **_kwargs: json.dumps([{"title": "other", "url": ""}]),
     )
     assert runner._main_ci_triage_url("owner/repo", "tests") is None
 
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda *_args, **_kwargs: json.dumps([{
             "title": "CI failure: tests on branch main (push)", "url": 42,
         }]),
@@ -717,7 +706,7 @@ def test_preexisting_ci_triage_lookup_is_best_effort(monkeypatch):
 
 
 def test_preexisting_ci_check_skips_base_lookup_without_base(monkeypatch):
-    monkeypatch.setattr(runner, "run_command", lambda *_args, **_kwargs: "unused")
+    monkeypatch.setattr(seam, "run_command", lambda *_args, **_kwargs: "unused")
     runner._raise_if_preexisting_ci_failure("owner/repo", ["tests"], None)
 
 
@@ -736,7 +725,7 @@ def test_merge_gate_waits_for_pending_github_ci_then_merges(
             })
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
     result = runner.merge_gate(tmp_path, {"number": 4, "url": "u",
                                           "base_ref": "main", "base_oid": "b1",
@@ -747,8 +736,7 @@ def test_merge_gate_waits_for_pending_github_ci_then_merges(
 
 
 def test_merge_gate_without_ci_proceeds_to_mergeable_gate(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         _merge_gate_fake(check_runs=[]),
     )
     result = runner.merge_gate(tmp_path, {"number": 4, "url": "u",
@@ -759,8 +747,7 @@ def test_merge_gate_without_ci_proceeds_to_mergeable_gate(monkeypatch, tmp_path)
 
 
 def test_merge_gate_times_out_pending_github_ci(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         _merge_gate_fake(check_runs=[{
             "name": "tests", "status": "QUEUED", "conclusion": None,
         }]),
@@ -779,7 +766,7 @@ def test_merge_gate_merges_reviewed_head_with_match_head_commit(monkeypatch, tmp
         calls.append(command)
         return _merge_gate_fake()(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     pr = runner.merge_gate(tmp_path, {"number": 4, "url": "u",
                                       "base_ref": "main", "base_oid": "b1",
                                       "head_ref": "h", "head_oid": "h1"},
@@ -798,7 +785,7 @@ def test_merge_gate_requires_the_repo_dir_lock_location(
     # Issue #171: the gate fetch updates the shared remote-tracking
     # ref, so the lock location (the deployment checkout's shared state
     # dir) must be explicit — there is no bypass path.
-    monkeypatch.setattr(runner, "run_command", _merge_gate_fake())
+    monkeypatch.setattr(seam, "run_command", _merge_gate_fake())
     with pytest.raises(TypeError):
         runner.merge_gate(tmp_path, {"number": 4, "url": "u",
                                      "base_ref": "main", "base_oid": "b1",
@@ -821,7 +808,7 @@ def test_merge_gate_fetches_under_the_base_sync_lock(
             return spy(command, **kwargs)
         return _merge_gate_fake()(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     runner.merge_gate(tmp_path, {"number": 4, "url": "u",
                                  "base_ref": "main", "base_oid": "b1",
                                  "head_ref": "h", "head_oid": "h1"},
@@ -836,7 +823,7 @@ def test_merge_gate_reraises_merge_base_errors(monkeypatch, tmp_path):
             raise subprocess.CalledProcessError(128, command, stderr="bad ref")
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
         runner.merge_gate(
             tmp_path, {"number": 4, "head_oid": "h1"}, "main",
@@ -850,7 +837,7 @@ def test_merge_gate_rejects_head_behind_latest_base(monkeypatch, tmp_path, caplo
         if command[:3] == ["git", "merge-base", "--is-ancestor"]:
             raise subprocess.CalledProcessError(1, command, stderr="not ancestor")
         return ""
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
         runner.RecoverableMergeGateError, match="behind latest remote base",
     ):
@@ -871,7 +858,7 @@ def test_merge_gate_polls_unknown_until_mergeable(monkeypatch, tmp_path):
                                "headRefOid": "h1", "statusCheckRollup": []})
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(runner.time, "sleep", sleeps.append)
     result = runner.merge_gate(
         tmp_path, {"number": 4, "url": "u", "base_ref": "main",
@@ -883,7 +870,7 @@ def test_merge_gate_polls_unknown_until_mergeable(monkeypatch, tmp_path):
 
 
 def test_merge_gate_mergeable_timeout_fails_fast(monkeypatch, tmp_path):
-    monkeypatch.setattr(runner, "run_command", _merge_gate_fake(pr_state="UNKNOWN"))
+    monkeypatch.setattr(seam, "run_command", _merge_gate_fake(pr_state="UNKNOWN"))
     with pytest.raises(runner.RecoverableMergeGateError, match="mergeable.*timed out"):
         runner.merge_gate(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
@@ -894,8 +881,7 @@ def test_merge_gate_mergeable_timeout_fails_fast(monkeypatch, tmp_path):
 
 def test_merge_gate_continuous_unknown_times_out_after_polling(monkeypatch, tmp_path):
     sleeps = []
-    monkeypatch.setattr(
-        runner, "run_command", _merge_gate_fake(pr_state="UNKNOWN"),
+    monkeypatch.setattr(seam, "run_command", _merge_gate_fake(pr_state="UNKNOWN"),
     )
     monkeypatch.setattr(runner.time, "sleep", sleeps.append)
     with pytest.raises(runner.RecoverableMergeGateError, match="mergeable.*timed out"):
@@ -908,7 +894,7 @@ def test_merge_gate_continuous_unknown_times_out_after_polling(monkeypatch, tmp_
 
 
 def test_merge_gate_rejects_non_mergeable_pr(monkeypatch, tmp_path):
-    monkeypatch.setattr(runner, "run_command", _merge_gate_fake(pr_state="DIRTY"))
+    monkeypatch.setattr(seam, "run_command", _merge_gate_fake(pr_state="DIRTY"))
     with pytest.raises(runner.RecoverableMergeGateError, match="not mergeable"):
         runner.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                                      "base_oid": "b1", "head_ref": "h",
@@ -917,8 +903,7 @@ def test_merge_gate_rejects_non_mergeable_pr(monkeypatch, tmp_path):
 
 
 def test_merge_gate_rejects_head_that_moved_since_review(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        runner, "run_command", _merge_gate_fake(head_oid="moved"),
+    monkeypatch.setattr(seam, "run_command", _merge_gate_fake(head_oid="moved"),
     )
     with pytest.raises(RuntimeError, match="head moved since review"):
         runner.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
@@ -940,7 +925,7 @@ def test_confirm_merged_accepts_merged_pr_on_origin_main(monkeypatch, tmp_path):
                 "mergeCommit": {"oid": "m1"},
             })
         return ""
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     result = runner.confirm_merged(
         tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                    "base_oid": "b1", "head_ref": "h", "head_oid": "h1"}, "main",
@@ -955,7 +940,7 @@ def test_confirm_merged_requires_the_repo_dir_lock_location(
 ):
     # Issue #171: the confirm fetch updates the shared remote-tracking
     # ref, so the lock location must be explicit — no bypass path.
-    monkeypatch.setattr(runner, "run_command", _merge_gate_fake())
+    monkeypatch.setattr(seam, "run_command", _merge_gate_fake())
     with pytest.raises(TypeError):
         runner.confirm_merged(
             tmp_path, {"number": 4, "url": "u", "base_ref": "main",
@@ -985,7 +970,7 @@ def test_confirm_merged_fetches_under_the_base_sync_lock(
             })
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     runner.confirm_merged(
         tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                    "base_oid": "b1", "head_ref": "h", "head_oid": "h1"},
@@ -996,8 +981,7 @@ def test_confirm_merged_fetches_under_the_base_sync_lock(
 
 
 def test_confirm_merged_rejects_unmerged_pr(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps({
             "number": 4, "url": "u", "state": "OPEN",
             "mergedAt": None, "mergeCommit": None,
@@ -1023,7 +1007,7 @@ def test_confirm_merged_rejects_merge_commit_missing_from_origin_main(
                 "mergeCommit": {"oid": "m1"},
             })
         return ""
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError, match="not on origin/main",
     ):
@@ -1036,8 +1020,7 @@ def test_confirm_merged_rejects_merge_commit_missing_from_origin_main(
 
 
 def test_confirm_merged_rejects_merged_pr_without_commit_oid(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: json.dumps({
             "number": 4, "url": "u", "state": "MERGED",
             "mergedAt": "2026-08-25T00:00:00Z", "mergeCommit": None,
@@ -1061,8 +1044,7 @@ def test_comment_pr_runs_gh_pr_comment_from_unrelated_cwd(
     calls = []
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(progress, "runner_fingerprint", lambda: "8a12fb1c")
-    monkeypatch.setattr(
-        runner, "run_command",
+    monkeypatch.setattr(seam, "run_command",
         lambda command, **kwargs: calls.append(command),
     )
     runner.comment_pr(
@@ -1212,7 +1194,7 @@ def test_sync_base_checkout_is_a_noop_when_already_at_remote(
         calls.append(command)
         return real(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", spy)
+    monkeypatch.setattr(seam, "run_command", spy)
     runner.sync_base_checkout(checkout, "main")
     # Only fetch + rev-parse; no merge is issued when already current.
     assert not any(c[:2] == ["git", "merge"] for c in calls)
@@ -1252,7 +1234,7 @@ def test_sync_base_checkout_fails_fast_when_synced_head_mismatches(
             return "c" * 40
         return ""
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(RuntimeError, match="after the sync"):
         runner.sync_base_checkout(tmp_path, "main")
 
@@ -1443,7 +1425,7 @@ def test_fetch_base_ref_holds_the_base_sync_lock_while_fetching(
     checkout = _clone_origin(origin, "checkout")
 
     spy, held = _lock_held_during_fetch(checkout)
-    monkeypatch.setattr(runner, "run_command", spy)
+    monkeypatch.setattr(seam, "run_command", spy)
     runner.fetch_base_ref(checkout, "main")
 
     assert held == [True]
@@ -1480,7 +1462,7 @@ def test_fetch_base_ref_fetches_in_the_given_worktree(
     )
 
     spy, held = _lock_held_during_fetch(checkout)
-    monkeypatch.setattr(runner, "run_command", spy)
+    monkeypatch.setattr(seam, "run_command", spy)
     runner.fetch_base_ref(checkout, "main", cwd=worktree)
 
     assert held == [True]
@@ -1524,7 +1506,7 @@ def test_fetch_base_ref_propagates_fetch_errors_unchanged(
     def fake_run(command, **kwargs):
         raise error
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(subprocess.CalledProcessError):
         runner.fetch_base_ref(tmp_path, "main")
 
@@ -1540,7 +1522,7 @@ def test_fetch_base_ref_releases_the_lock_on_fetch_failure(
             128, command, stderr="fatal: unable to access",
         )
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     with pytest.raises(subprocess.CalledProcessError):
         runner.fetch_base_ref(tmp_path, "main")
 
@@ -1583,13 +1565,11 @@ def _review_merge_config(tmp_path):
 def test_review_and_merge_clean_verdict_merges_and_labels_merged(
         monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(
-        runner, "issue_labels", lambda *a, **k: [
+    monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: [
             "ai-ready", "ai-pr-opened",
         ],
     )
-    monkeypatch.setattr(
-        runner, "issue_comments", lambda *a, **k: [],
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [],
     )
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
@@ -1602,12 +1582,10 @@ def test_review_and_merge_clean_verdict_merges_and_labels_merged(
     )
     monkeypatch.setattr(runner, "sync_base_checkout",
                         lambda *a, **k: calls.append("sync"))
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: calls.append(("comment", k.get("body"))),
     )
     make_fake_gh(monkeypatch)
@@ -1639,13 +1617,11 @@ def test_review_and_merge_skips_checkout_sync_for_a_locked_engine_source(
     origin/<base_branch> must not break the lock — the next tick's
     ExecStartPre engine sync owns that checkout instead."""
     calls = []
-    monkeypatch.setattr(
-        runner, "issue_labels", lambda *a, **k: [
+    monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: [
             "ai-ready", "ai-pr-opened",
         ],
     )
-    monkeypatch.setattr(
-        runner, "issue_comments", lambda *a, **k: [],
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [],
     )
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
@@ -1658,12 +1634,10 @@ def test_review_and_merge_skips_checkout_sync_for_a_locked_engine_source(
     )
     monkeypatch.setattr(runner, "sync_base_checkout",
                         lambda *a, **k: calls.append("sync"))
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: calls.append(("comment", k.get("body"))),
     )
     make_fake_gh(monkeypatch)
@@ -1682,8 +1656,8 @@ def test_review_and_merge_skips_checkout_sync_for_a_locked_engine_source(
 def test_review_and_merge_fix_round_clears_live_delivery_labels(
         monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
-    monkeypatch.setattr(runner, "issue_labels", lambda *a, **k: [
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "issue_labels", lambda *a, **k: [
         "ai-ready", "ai-in-progress", "ai-fix-needed",
     ])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
@@ -1696,10 +1670,9 @@ def test_review_and_merge_fix_round_clears_live_delivery_labels(
         lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
     )
     monkeypatch.setattr(runner, "sync_base_checkout", lambda *a, **k: None)
-    monkeypatch.setattr(
-        runner, "edit_issue", lambda *a, **k: calls.append(k),
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: calls.append(k),
     )
-    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     make_fake_gh(monkeypatch)
 
     assert runner.review_and_merge_if_clean(
@@ -1729,8 +1702,7 @@ def test_review_and_merge_refreezes_head_after_in_session_fix(
         return next(heads)
 
     monkeypatch.setattr(runner, "freeze_pr", fake_freeze)
-    monkeypatch.setattr(
-        runner, "issue_comments", lambda *a, **k: [],
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [],
     )
     # The verdict carries the FIXED head (the reviewer re-emits it for
     # the pushed fix, Issue #591): the gate binds it to the re-frozen
@@ -1750,8 +1722,8 @@ def test_review_and_merge_refreezes_head_after_in_session_fix(
         lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
     )
     monkeypatch.setattr(runner, "sync_base_checkout", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     caplog.set_level("INFO")
     make_fake_gh(monkeypatch)
     merged = runner.review_and_merge_if_clean(
@@ -1778,7 +1750,7 @@ def test_review_and_merge_verdict_head_mismatch_fails_before_merge(
     merge unreviewed code). The mismatch is a malformed verdict — the
     recoverable fix loop re-reviews the same PR."""
     gate = Mock()
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(
         runner, "run_review",
@@ -1802,8 +1774,7 @@ def test_review_and_merge_clean_verdict_without_head_advance_keeps_frozen_head(
     gate runs against it unchanged (no head-advance log)."""
     calls = []
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
-    monkeypatch.setattr(
-        runner, "issue_comments", lambda *a, **k: [],
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [],
     )
     monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
 
@@ -1817,8 +1788,8 @@ def test_review_and_merge_clean_verdict_without_head_advance_keeps_frozen_head(
         lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
     )
     monkeypatch.setattr(runner, "sync_base_checkout", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "edit_issue", lambda *a, **k: None)
-    monkeypatch.setattr(runner, "comment_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
     caplog.set_level("INFO")
     make_fake_gh(monkeypatch)
     merged = runner.review_and_merge_if_clean(
@@ -1835,7 +1806,7 @@ def test_review_and_merge_clean_verdict_without_head_advance_keeps_frozen_head(
 def test_review_and_merge_keeps_merged_when_checkout_sync_fails(
         monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
     monkeypatch.setattr(
@@ -1850,12 +1821,10 @@ def test_review_and_merge_keeps_merged_when_checkout_sync_fails(
         raise RuntimeError("deployment checkout cannot fast-forward")
 
     monkeypatch.setattr(runner, "sync_base_checkout", boom)
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: calls.append(("comment", k.get("body"))),
     )
     make_fake_gh(monkeypatch)
@@ -1880,22 +1849,20 @@ def test_review_and_merge_keeps_merged_when_checkout_sync_fails(
 def test_review_and_merge_findings_labels_fix_needed_and_comments(
         monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(
         runner, "run_review", lambda *a, **k: _findings_verdict_text(),
     )
     monkeypatch.setattr(runner, "merge_gate", lambda *a, **k:
                         (_ for _ in ()).throw(AssertionError("no merge")))
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
         runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
     )
     make_fake_gh(monkeypatch)
@@ -1920,7 +1887,7 @@ def test_review_and_merge_findings_labels_fix_needed_and_comments(
 
 def test_review_and_merge_behind_base_labels_fix_needed(monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
     monkeypatch.setattr(
@@ -1931,15 +1898,13 @@ def test_review_and_merge_behind_base_labels_fix_needed(monkeypatch, tmp_path):
             ),
         ),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
         runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
     )
     make_fake_gh(monkeypatch)
@@ -1957,7 +1922,7 @@ def test_review_and_merge_behind_base_labels_fix_needed(monkeypatch, tmp_path):
 
 def test_review_and_merge_ci_failure_labels_fix_needed(monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
     monkeypatch.setattr(
@@ -1969,15 +1934,13 @@ def test_review_and_merge_ci_failure_labels_fix_needed(monkeypatch, tmp_path):
             ),
         ),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
         runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
-    monkeypatch.setattr(
-        runner, "edit_issue", lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: calls.append(("edit", k)),
     )
     make_fake_gh(monkeypatch)
     assert runner.review_and_merge_if_clean(
@@ -2002,7 +1965,7 @@ def test_review_and_merge_ci_failure_comment_counts_toward_round_budget(
     review sessions forever while holding the slot.
     """
     calls = []
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
     monkeypatch.setattr(
@@ -2014,15 +1977,13 @@ def test_review_and_merge_ci_failure_comment_counts_toward_round_budget(
             ),
         ),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
         runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
-    monkeypatch.setattr(
-        runner, "edit_issue", lambda *a, **k: calls.append(("edit", k)),
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: calls.append(("edit", k)),
     )
     make_fake_gh(monkeypatch)
     assert runner.review_and_merge_if_clean(
@@ -2050,7 +2011,7 @@ def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
     re-review. ai-blocked is only for unrecoverable failures.
     """
     calls = []
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
     monkeypatch.setattr(
@@ -2059,15 +2020,13 @@ def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
             runner.RecoverableMergeGateError("wording changed: conflict requires retry"),
         ),
     )
-    monkeypatch.setattr(
-        runner, "comment_issue",
+    monkeypatch.setattr(seam, "comment_issue",
         lambda *a, **k: calls.append(("issue", k.get("body"))),
     )
     monkeypatch.setattr(
         runner, "comment_pr", lambda *a, **k: calls.append(("pr", k.get("body"))),
     )
-    monkeypatch.setattr(
-        runner, "edit_issue",
+    monkeypatch.setattr(seam, "edit_issue",
         lambda *a, **k: calls.append(("edit", k)),
     )
     make_fake_gh(monkeypatch)
@@ -2083,7 +2042,7 @@ def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
 
 
 def test_review_and_merge_reraises_non_fixable_gate_error(monkeypatch, tmp_path):
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(runner, "run_review", lambda *a, **k: _pass_verdict_text())
     monkeypatch.setattr(
@@ -2105,7 +2064,7 @@ def test_review_and_merge_reraises_non_fixable_gate_error(monkeypatch, tmp_path)
 
 
 def test_review_and_merge_missing_verdict_raises(monkeypatch, tmp_path):
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(
         runner, "run_review", lambda *a, **k: "review without a verdict",
@@ -2127,7 +2086,7 @@ def test_review_and_merge_exhausted_rounds_raises(monkeypatch, tmp_path, caplog)
          "authorAssociation": "OWNER"}
         for i in range(1, runner.MAX_REVIEW_ROUNDS + 1)
     ]
-    monkeypatch.setattr(runner, "issue_comments", lambda *a, **k: comments)
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: comments)
     with caplog.at_level("ERROR"), pytest.raises(
         RuntimeError,
         match=f"exhausted after {runner.MAX_REVIEW_ROUNDS} rounds",

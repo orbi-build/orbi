@@ -10,21 +10,32 @@ ready, tests passed/failed, review findings, merged, blocked) are
 published as short standalone comments so GitHub Mobile pushes a
 notification for each one.
 
-All GitHub traffic goes through the reused `runner.run_command`
-(`gh api`), which logs the command and fails fast on any error. There is
-no fallback or retry.
+All GitHub traffic goes through the single subprocess seam
+(`orbi.journal.run_command`, `gh api`), which logs the command and fails
+fast on any error. There is no fallback or retry.
 """
 from __future__ import annotations
 
 import json
 import re
 import subprocess
+import time
 from importlib import metadata
 from pathlib import Path
 from typing import Callable
 
+from orbi.journal import (
+    LOGGER,
+    RUN_ID_PATTERN,
+    issue_context,
+    quote_value,
+    validate_run_id,
+)
+from orbi.pi_activity import activity_snapshot, sanitize
+
 # One marker per run: hidden in the rendered comment, exact for lookup.
-RUN_ID_PATTERN = re.compile(r"[0-9a-f]{8}")
+# The run-id pattern and its validator live in `orbi.journal` (the run
+# binding owns the contract); they are re-exported here for callers.
 RUN_MARKER_PATTERN = re.compile(r"<!-- orbi:run=([0-9a-f]{8}) -->")
 RUN_MARKER_TEMPLATE = "<!-- orbi:run={run_id} -->"
 RUNNER_MARKER_TEMPLATE = "<!-- runner={fingerprint} -->"
@@ -83,18 +94,6 @@ def _without_runner_marker(body: str) -> str:
     return _RUNNER_MARKER_PATTERN.sub("", body).rstrip()
 
 
-def quote_value(value: str) -> str:
-    """Double-quote a key=value field value when it needs quoting.
-
-    Values containing spaces or double quotes are quoted; embedded double
-    quotes are escaped as ``\\"`` so the field stays parseable as a single
-    ``key=value`` token.
-    """
-    if " " in value or '"' in value:
-        return '"' + value.replace('"', '\\"') + '"'
-    return value
-
-
 def field_block(run_id: str, headline: str, fields: dict[str, object]) -> str:
     """Render a marker-first status comment with one field per line."""
     lines = [run_marker(run_id), headline]
@@ -137,13 +136,6 @@ def format_status_comment(body: str) -> str:
             if marker else rendered
         )
     return _with_runner_marker((marker + "\n" + body) if marker else body)
-
-
-def validate_run_id(run_id: object) -> str:
-    """Fail fast unless ``run_id`` identifies exactly one task attempt."""
-    if not isinstance(run_id, str) or not RUN_ID_PATTERN.fullmatch(run_id):
-        raise ValueError(f"invalid run id: {run_id!r}")
-    return run_id
 
 
 def run_marker(run_id: object) -> str:
@@ -417,3 +409,185 @@ class ProgressPublisher:
             self.ensure(body)
             return
         self.patch(body)
+
+
+# --- test evidence and run-scene helpers (moved from `orbi.runner`,
+# --- Issue #785: the progress state belongs to the progress module) ----
+
+
+# pytest's final summary line: `1 failed, 155 passed in 4.43s` (the
+# counts and the `in <seconds>` part are optional; the line is NOT
+# wrapped in `=` section padding).
+_Pytest_SUMMARY_RE = re.compile(
+    r"^\d+ (?:failed|passed|error|errors|skipped|xfailed|xpassed"
+    r"|deselected)(?:, \d+ \w+)*(?: in [\d.]+s)?$")
+
+
+def _is_section_header(line: str) -> bool:
+    """True for pytest section headers like `=== FAILURES ===`.
+
+    A header is `=`-delimited at both ends (padding may be absent on
+    one side for short titles) and its title carries no digits; the
+    real summary line (`1 failed, 155 passed in 4.43s`, bare or
+    `=`-padded) and the `FAILED`/`ERROR` evidence lines never match.
+    """
+    if not line.startswith("="):
+        return False
+    core = line.strip("=").strip()
+    return core == "" or not any(ch.isdigit() for ch in core)
+
+
+# A pytest summary line reports an outcome only when its FIRST count
+# category is failed/passed/error(s): pytest orders the counts
+# failed, passed, skipped, errors, xfailed, xpassed, deselected, so a
+# run that collected tests always leads with failed or passed (or a
+# collection error). `no tests ran in 0.01s` matches no summary regex
+# at all; `3 deselected in 0.02s` / `2 skipped in 0.01s` match but
+# carry no outcome — reporting them as a pass is a false notification
+# (review round 3, PR #42).
+_OUTCOME_FIRST_RE = re.compile(
+    r"^\d+ (?:failed|passed|error|errors)\b",
+)
+_NO_TESTS_RE = re.compile(r"no tests (?:ran|collected)")
+
+
+def _is_no_result(line: str) -> bool:
+    """True for pytest lines that verified nothing (no tests ran)."""
+    if _NO_TESTS_RE.search(line):
+        return True
+    stripped = line.strip("=").strip()
+    return bool(_Pytest_SUMMARY_RE.match(stripped)) \
+        and not _OUTCOME_FIRST_RE.match(stripped)
+
+
+def read_test_result(worktree: Path) -> str | None:
+    """Summarize the worktree's `.orbi/test.log`, or None when it does
+    not exist (Issue #302: the contract test command writes the log
+    into the excluded run dir, never at the worktree root).
+
+    Prefers the pytest summary line (`1 failed, 155 passed in 4.43s`):
+    the LAST one with an outcome when the log holds several runs (TDD
+    red, then green), so the progress comment and the `tests
+    passed/failed` milestone report the most recent run that actually
+    collected tests. Section headers (`=== FAILURES ===`) are never
+    reported: the fallback takes the first `FAILED`/`ERROR` evidence
+    line or the last non-empty line instead, and a log holding nothing
+    but headers yields None (no result info to report). Lines that
+    verified nothing (`no tests ran`, `N deselected`, `N skipped`) are
+    never reported either: a run that collected no tests is no result,
+    and posting `tests passed` for it is a false notification (review
+    round 3, PR #42).
+    """
+    path = worktree / ".orbi" / "test.log"
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in reversed(lines):
+        # The summary line is bare in pytest 9; some runners wrap it in
+        # `=` padding, so the stripped form is matched as well.
+        stripped = line.strip("=").strip()
+        if _Pytest_SUMMARY_RE.match(line) \
+                or _Pytest_SUMMARY_RE.match(stripped):
+            if _is_no_result(line):
+                # No tests collected in this run: keep looking for an
+                # earlier run that did (or report nothing at all).
+                continue
+            return sanitize(stripped)
+    for line in lines:
+        if _is_section_header(line) or _is_no_result(line):
+            continue
+        if line.startswith(("FAILED", "ERROR")) or "passed" in line:
+            return sanitize(line)
+    last = lines[-1] if lines else None
+    if last is not None and (_is_section_header(last)
+                             or _is_no_result(last)):
+        return None
+    return sanitize(last) if last is not None else None
+
+
+def _run_info_fields(run_info: str) -> dict[str, str]:
+    """Extract the runner-owned key/value fields for comment rendering."""
+    return dict(
+        part.split("=", 1) for part in run_info.split()
+        if "=" in part
+    )
+
+
+def _progress_state(*, issue: int, title: str, run_id: str, role: str,
+                    branch: str, worktree: Path, started: float,
+                    pr_url: str | None, review_round: int, priority: str,
+                    activity: dict | None = None) -> dict:
+    """Collect the current run state for the GitHub progress comment.
+
+    `title` is the issue's GitHub title (Issue #100): the progress
+    comment's issue line shows `#<number> <title>` in every scene. It
+    is required — the GitHub issue data contract guarantees a
+    non-empty string title (every runner scan fetches it), and a
+    missing title fails fast in `progress.issue_field` instead of
+    fabricating one.
+    `priority` is the pickup priority of the issue (`p0` or `normal`,
+    Issue #101), derived from the issue's labels at claim/resume time.
+    `activity` is the live state from the `stream_pi` watcher while a Pi
+    session runs (fresh and already read); without it the newest session
+    file is full-scanned. Activity snapshotting is best-effort
+    observability: a read failure is logged and reported as "no session
+    yet", it never blocks the task.
+    """
+    if activity is None:
+        try:
+            activity = activity_snapshot(worktree / ".pi-session")
+        except Exception:
+            LOGGER.exception("issue=%s activity snapshot failed", issue)
+            activity = None
+    return {
+        "run_id": run_id,
+        "issue": issue,
+        "issue_title": title,
+        "role": role,
+        "priority": priority,
+        "phase": (activity or {}).get("phase") or "starting",
+        "elapsed": format_elapsed(time.monotonic() - started),
+        "last_activity": (activity or {}).get("last_activity"),
+        "last_action": (activity or {}).get("action"),
+        "tests": read_test_result(worktree),
+        "review_round": review_round,
+        "branch": branch,
+        "pr": pr_url,
+        "session": (activity or {}).get("session_id"),
+        # Idle-stall recovery state (Issue #94): `term` / `kill` while
+        # the runner recovers a stalled session, absent/None otherwise
+        # (the body renders the line only while it is active).
+        "recovery": (activity or {}).get("recovery"),
+    }
+
+
+def _progress_body(state: dict, *, outcome: str | None = None) -> str:
+    """Render the progress body, optionally with a final outcome header."""
+    body = progress_body(state)
+    if outcome is None:
+        return body
+    return f"{outcome}\n\n{body}"
+
+
+def _safe_publish(*, run_id: str, issue: int, source_repo: str,
+                  role: str, action: Callable[[], None]) -> None:
+    """Run one progress-publishing step as a pure bypass (Issue #79).
+
+    The main delivery path is claim -> worktree -> Pi -> verify PR ->
+    review -> fix -> merge; the GitHub progress comment is observability
+    on the side. A publishing failure (404, rate limit, API shape
+    change) is logged as `progress_publish_failed` and never fails the
+    delivery, never marks the Issue `ai-blocked`, and never skips
+    `run_pi` / `wait_for_delivery`. This is the same semantics as the
+    in-stream live-PATCH callback; Issue #60 already applied it to the
+    post-PR record, Issue #79 extends it to the whole
+    `ProgressPublisher` path (ensure / milestone / finish).
+    """
+    try:
+        action()
+    except Exception:
+        LOGGER.exception(
+            "progress_publish_failed run=%s issue=%s role=%s",
+            run_id, issue_context(source_repo, issue), role,
+        )

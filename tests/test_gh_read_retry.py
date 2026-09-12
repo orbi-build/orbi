@@ -14,6 +14,8 @@ import subprocess
 import pytest
 
 import orbi.runner as runner
+import orbi.github as github
+from seam import seam
 
 TRANSIENT_STDERRS = [
     "HTTP 401: Bad credentials (https://api.github.com/graphql)",
@@ -170,20 +172,20 @@ def test_gh_read_command_does_not_retry_gh_api_writes(monkeypatch):
 
 
 def test_is_readonly_gh_command_classifies_gh_api_reads():
-    assert runner._is_readonly_gh_command(["gh", "api", "repos/o/r"])
-    assert runner._is_readonly_gh_command(
+    assert github._is_readonly_gh_command(["gh", "api", "repos/o/r"])
+    assert github._is_readonly_gh_command(
         ["gh", "api", "repos/o/r", "--paginate", "--slurp"])
-    assert runner._is_readonly_gh_command(
+    assert github._is_readonly_gh_command(
         ["gh", "api", "repos/o/r", "--method", "GET"])
-    assert runner._is_readonly_gh_command(
+    assert github._is_readonly_gh_command(
         ["gh", "api", "repos/o/r", "--method=GET", "--jq", ".name"])
-    assert runner._is_readonly_gh_command(["gh", "api", "-X", "GET", "repos/o/r"])
+    assert github._is_readonly_gh_command(["gh", "api", "-X", "GET", "repos/o/r"])
     # A trailing -X with no value is malformed; no method override was
     # parsed, so the command is still classified as a read (gh rejects it).
-    assert runner._is_readonly_gh_command(["gh", "api", "repos/o/r", "-X"])
-    assert not runner._is_readonly_gh_command(["gh", "api"])
-    assert not runner._is_readonly_gh_command(["git", "push", "origin", "main"])
-    assert not runner._is_readonly_gh_command(
+    assert github._is_readonly_gh_command(["gh", "api", "repos/o/r", "-X"])
+    assert not github._is_readonly_gh_command(["gh", "api"])
+    assert not github._is_readonly_gh_command(["git", "push", "origin", "main"])
+    assert not github._is_readonly_gh_command(
         ["timeout", "30", "gh", "issue", "list"])
 
 
@@ -199,7 +201,7 @@ def test_is_readonly_gh_command_field_parameters_imply_post():
         ["gh", "api", "repos/o/r/labels", "--field=name=p0"],
         ["gh", "api", "graphql", "-fquery=query { viewer { login } }"],
     ):
-        assert not runner._is_readonly_gh_command(command), command
+        assert not github._is_readonly_gh_command(command), command
     # An explicit `--method GET` keeps the parameters on the query
     # string (gh's documented escape hatch) — a read again.
     for command in (
@@ -208,7 +210,7 @@ def test_is_readonly_gh_command_field_parameters_imply_post():
         ["gh", "api", "repos/o/r/issues", "-X", "GET", "-f", "state=open"],
         ["gh", "api", "repos/o/r/issues", "--method=GET", "-fstate=open"],
     ):
-        assert runner._is_readonly_gh_command(command), command
+        assert github._is_readonly_gh_command(command), command
 
 
 def test_is_readonly_gh_command_classifies_subcommands():
@@ -223,12 +225,12 @@ def test_is_readonly_gh_command_classifies_subcommands():
         ["gh", "auth", "status"],
         ["gh", "auth", "token"],
     ):
-        assert runner._is_readonly_gh_command(command), command
+        assert github._is_readonly_gh_command(command), command
     for command in (
         ["gh", "issue", "close", "9"],
         ["gh", "issue"],
     ):
-        assert not runner._is_readonly_gh_command(command), command
+        assert not github._is_readonly_gh_command(command), command
 
 
 def test_list_issues_survives_transient_401_from_keyring_race(monkeypatch):
@@ -247,7 +249,7 @@ def test_list_issues_survives_transient_401_from_keyring_race(monkeypatch):
             )
         return "[]"
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.list_issues(
         "orbi-build/orbi-cloud", state="open",
         search="label:ai-fix-needed,ai-pr-opened -label:ai-blocked",

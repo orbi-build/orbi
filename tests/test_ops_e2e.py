@@ -33,6 +33,7 @@ from pathlib import Path
 import pytest
 
 import orbi.runner as runner
+import orbi.journal as journal
 
 REPO = "owner/repo"
 ISSUE_NUMBER = 99
@@ -342,7 +343,7 @@ def install_fake_pi(monkeypatch, tmp_path: Path, script: str) -> None:
 
 @pytest.fixture(autouse=True)
 def _reset_run_id(monkeypatch):
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
 
 
 def ops_issue() -> dict:

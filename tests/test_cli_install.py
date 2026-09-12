@@ -41,14 +41,12 @@ from pathlib import Path
 
 import pytest
 
-from orbi import runner
-from orbi import cli_source
+from orbi import cli_source, gitops, runner
+from seam import seam
 
-# The refresh implementation lives in `orbi.runner` (see the NOTE
-# there); the former thin re-export module `orbi.cli_install` is
-# deleted (Issue #295) and these tests import the real symbols
-# directly from it. The suite's default no-op stub (conftest) patches
-# `runner.refresh_cli_install` — the call `main()` makes — so this
+# The refresh implementation lives in `orbi.cli_source` (Issue #785);
+# `runner` imports it and `main()` calls the runner binding. The
+# suite's default no-op stub (conftest) patches that binding, so this
 # module re-binds the real implementation (conftest autouse fixtures
 # run before module ones, so the re-bind wins for these tests only).
 _real_refresh_cli_install = runner.refresh_cli_install
@@ -56,8 +54,7 @@ _real_refresh_cli_install = runner.refresh_cli_install
 
 @pytest.fixture(autouse=True)
 def _real_cli_install_refresh(monkeypatch):
-    monkeypatch.setattr(
-        runner, "refresh_cli_install", _real_refresh_cli_install,
+    monkeypatch.setattr(seam, "refresh_cli_install", _real_refresh_cli_install,
     )
 
 
@@ -93,7 +90,7 @@ def test_packaging_fingerprint_is_the_sha256_of_pyproject(tmp_path):
     repo = tmp_path / "checkout"
     content = b'[project]\nname = "orbi"\nversion = "0.2.0"\n'
     _write_pyproject(repo, content.decode("utf-8"))
-    assert runner.packaging_fingerprint(repo) == (
+    assert cli_source.packaging_fingerprint(repo) == (
         hashlib.sha256(content).hexdigest()
     )
 
@@ -104,11 +101,11 @@ def test_packaging_fingerprint_changes_with_pyproject_content(tmp_path):
     trigger."""
     repo = tmp_path / "checkout"
     _write_pyproject(repo, '[project]\nname = "a"\n')
-    first = runner.packaging_fingerprint(repo)
+    first = cli_source.packaging_fingerprint(repo)
     _write_pyproject(
         repo, '[project]\nname = "a"\nversion = "0.3.0"\n',
     )
-    assert runner.packaging_fingerprint(repo) != first
+    assert cli_source.packaging_fingerprint(repo) != first
 
 
 def test_packaging_fingerprint_ignores_python_source_content(tmp_path):
@@ -120,9 +117,9 @@ def test_packaging_fingerprint_ignores_python_source_content(tmp_path):
     package_dir = repo / "src" / "orbi"
     package_dir.mkdir(parents=True)
     (package_dir / "runner.py").write_text("old\n", encoding="utf-8")
-    first = runner.packaging_fingerprint(repo)
+    first = cli_source.packaging_fingerprint(repo)
     (package_dir / "runner.py").write_text("new content\n", encoding="utf-8")
-    assert runner.packaging_fingerprint(repo) == first
+    assert cli_source.packaging_fingerprint(repo) == first
 
 
 def test_packaging_fingerprint_fails_fast_without_pyproject(tmp_path):
@@ -133,7 +130,7 @@ def test_packaging_fingerprint_fails_fast_without_pyproject(tmp_path):
     with pytest.raises(
         runner.CliInstallError, match="pyproject.toml",
     ):
-        runner.packaging_fingerprint(repo)
+        cli_source.packaging_fingerprint(repo)
 
 
 # --- the install state (the last-install fingerprint) -----------------------
@@ -144,7 +141,7 @@ def test_install_state_path_is_in_the_shared_state_dir(tmp_path):
     shared state dir (gitignored, next to ``base-sync.lock`` and the
     slots; it survives the ``git merge --ff-only`` checkout sync).
     Not a second release state, not a per-process temp file."""
-    assert runner.install_state_path(tmp_path) == (
+    assert cli_source.install_state_path(tmp_path) == (
         tmp_path / ".orbi" / "cli-install.json"
     )
 
@@ -152,49 +149,49 @@ def test_install_state_path_is_in_the_shared_state_dir(tmp_path):
 def test_read_install_state_missing_file_is_none(tmp_path):
     """No state yet (first install / fresh checkout) -> None (the
     refresh runs)."""
-    assert runner.read_install_state(tmp_path) is None
+    assert cli_source.read_install_state(tmp_path) is None
 
 
 def test_read_install_state_returns_the_stored_fingerprint(tmp_path):
-    path = runner.install_state_path(tmp_path)
+    path = cli_source.install_state_path(tmp_path)
     path.parent.mkdir(parents=True)
     path.write_text(
         json.dumps({"pyproject_sha256": "abc123"}), encoding="utf-8",
     )
-    assert runner.read_install_state(tmp_path) == "abc123"
+    assert cli_source.read_install_state(tmp_path) == "abc123"
 
 
 def test_read_install_state_malformed_file_is_none(tmp_path):
     """A corrupted state file (a torn write) heals in the SAFE
     direction: it is treated as "no state" and one extra idempotent
     ``--force --reinstall`` runs — never a wedged start."""
-    path = runner.install_state_path(tmp_path)
+    path = cli_source.install_state_path(tmp_path)
     path.parent.mkdir(parents=True)
     path.write_text("{not json", encoding="utf-8")
-    assert runner.read_install_state(tmp_path) is None
+    assert cli_source.read_install_state(tmp_path) is None
     path.write_text(json.dumps({"wrong": "shape"}), encoding="utf-8")
-    assert runner.read_install_state(tmp_path) is None
+    assert cli_source.read_install_state(tmp_path) is None
 
 
 def test_write_install_state_is_atomic_and_readable(tmp_path):
-    runner.write_install_state(tmp_path, "deadbeef")
+    cli_source.write_install_state(tmp_path, "deadbeef")
     data = json.loads(
-        runner.install_state_path(tmp_path).read_text(encoding="utf-8"),
+        cli_source.install_state_path(tmp_path).read_text(encoding="utf-8"),
     )
     assert data == {"pyproject_sha256": "deadbeef"}
-    assert runner.read_install_state(tmp_path) == "deadbeef"
+    assert cli_source.read_install_state(tmp_path) == "deadbeef"
     # No temp file is left behind (the atomic replace cleaned up).
     leftovers = [
-        p.name for p in runner.install_state_path(tmp_path).parent.iterdir()
+        p.name for p in cli_source.install_state_path(tmp_path).parent.iterdir()
         if p.name != "cli-install.json"
     ]
     assert leftovers == []
 
 
 def test_write_install_state_overwrites_the_previous_fingerprint(tmp_path):
-    runner.write_install_state(tmp_path, "first")
-    runner.write_install_state(tmp_path, "second")
-    assert runner.read_install_state(tmp_path) == "second"
+    cli_source.write_install_state(tmp_path, "first")
+    cli_source.write_install_state(tmp_path, "second")
+    assert cli_source.read_install_state(tmp_path) == "second"
 
 
 # --- the refresh decision ----------------------------------------------------
@@ -204,8 +201,8 @@ def test_refresh_is_a_noop_without_any_uv_call_when_unchanged(tmp_path):
     """Acceptance: unchanged packaging input -> NO uv call (no
     per-tick unconditional install)."""
     _write_pyproject(tmp_path, '[project]\nname = "a"\n')
-    runner.write_install_state(
-        tmp_path, runner.packaging_fingerprint(tmp_path),
+    cli_source.write_install_state(
+        tmp_path, cli_source.packaging_fingerprint(tmp_path),
     )
     calls = []
     result = runner.refresh_cli_install(
@@ -228,9 +225,9 @@ def test_refresh_installs_on_the_first_install(tmp_path, caplog):
     assert len(calls) == 1
     command, kwargs = calls[0]
     assert command == cli_source.reinstall_args(tmp_path)
-    assert kwargs["timeout"] == runner.UV_INSTALL_TIMEOUT_SECONDS
-    assert runner.read_install_state(tmp_path) == (
-        runner.packaging_fingerprint(tmp_path)
+    assert kwargs["timeout"] == cli_source.UV_INSTALL_TIMEOUT_SECONDS
+    assert cli_source.read_install_state(tmp_path) == (
+        cli_source.packaging_fingerprint(tmp_path)
     )
     assert "cli_install_refreshed" in caplog.text
     assert "reason=first_install" in caplog.text
@@ -242,7 +239,7 @@ def test_refresh_installs_when_the_packaging_input_changed(tmp_path, caplog):
     the editable metadata is refreshed and the next CLI process
     imports the new module."""
     _write_pyproject(tmp_path, '[project]\nname = "a"\n')
-    runner.write_install_state(
+    cli_source.write_install_state(
         tmp_path, "stale-fingerprint-from-the-last-install",
     )
     calls = []
@@ -254,12 +251,12 @@ def test_refresh_installs_when_the_packaging_input_changed(tmp_path, caplog):
     assert len(calls) == 1
     command, kwargs = calls[0]
     assert command == cli_source.reinstall_args(tmp_path)
-    assert kwargs["timeout"] == runner.UV_INSTALL_TIMEOUT_SECONDS
+    assert kwargs["timeout"] == cli_source.UV_INSTALL_TIMEOUT_SECONDS
     assert "reason=packaging_changed" in caplog.text
     # The state now records the CURRENT fingerprint: the very next
     # start is a no-op again.
-    assert runner.read_install_state(tmp_path) == (
-        runner.packaging_fingerprint(tmp_path)
+    assert cli_source.read_install_state(tmp_path) == (
+        cli_source.packaging_fingerprint(tmp_path)
     )
 
 
@@ -280,8 +277,8 @@ def test_refresh_reuses_a_concurrent_instances_result_under_the_lock(
     import time
 
     _write_pyproject(tmp_path, '[project]\nname = "a"\n')
-    fingerprint = runner.packaging_fingerprint(tmp_path)
-    lock_path = runner.base_sync_lock_path(tmp_path)
+    fingerprint = cli_source.packaging_fingerprint(tmp_path)
+    lock_path = gitops.base_sync_lock_path(tmp_path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     # Hold the flock BEFORE the refresh starts: the refresh's pre-lock
     # state read (absent state — nothing was written) provably
@@ -314,7 +311,7 @@ def test_refresh_reuses_a_concurrent_instances_result_under_the_lock(
     # (what a real concurrent refresh leaves behind after its
     # install), then release the flock. The refresh's under-lock
     # re-read must see it and skip the install.
-    runner.write_install_state(tmp_path, fingerprint)
+    cli_source.write_install_state(tmp_path, fingerprint)
     # Release the flock so the parked refresh can proceed (its
     # under-lock re-read must now see the recorded state), then wait
     # for the result.
@@ -339,7 +336,7 @@ def test_refresh_writes_the_state_only_after_a_successful_install(
 
     with pytest.raises(runner.CliInstallError, match="uv exploded"):
         runner.refresh_cli_install(tmp_path, run_command=boom)
-    assert runner.read_install_state(tmp_path) is None
+    assert cli_source.read_install_state(tmp_path) is None
 
 
 # --- failure propagation ------------------------------------------------------
@@ -380,7 +377,7 @@ def test_refresh_failure_releases_the_lock(tmp_path):
 
     with pytest.raises(runner.CliInstallError):
         runner.refresh_cli_install(tmp_path, run_command=boom)
-    lock_path = runner.base_sync_lock_path(tmp_path)
+    lock_path = gitops.base_sync_lock_path(tmp_path)
     probe = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
     try:
         fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -395,13 +392,13 @@ def test_refresh_fails_fast_when_the_lock_is_held(tmp_path):
     instance is syncing the checkout), the refresh waits and then
     fails fast with the useful error — never a concurrent write."""
     _write_pyproject(tmp_path, '[project]\nname = "a"\n')
-    lock_path = runner.base_sync_lock_path(tmp_path)
+    lock_path = gitops.base_sync_lock_path(tmp_path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
     fcntl.flock(fd, fcntl.LOCK_EX)
     try:
         with pytest.raises(
-            runner.CliInstallError, match="base-sync.lock",
+            gitops.BaseSyncLockError, match="base-sync.lock",
         ):
             runner.refresh_cli_install(
                 tmp_path, run_command=lambda *a, **k: "",
@@ -434,8 +431,8 @@ def test_two_concurrent_starts_run_exactly_one_install(tmp_path):
         # Simulate the install body; the flock must keep `active` at 1.
         assert active == 1, "concurrent uv tool installs raced"
         # The state lands only after a successful install.
-        runner.write_install_state(
-            tmp_path, runner.packaging_fingerprint(tmp_path),
+        cli_source.write_install_state(
+            tmp_path, cli_source.packaging_fingerprint(tmp_path),
         )
         return ""
 
@@ -458,8 +455,8 @@ def test_two_concurrent_starts_run_exactly_one_install(tmp_path):
     # install).
     assert sorted(results) == ["installed", "unchanged"]
     assert len(installs) == 1
-    assert runner.read_install_state(tmp_path) == (
-        runner.packaging_fingerprint(tmp_path)
+    assert cli_source.read_install_state(tmp_path) == (
+        cli_source.packaging_fingerprint(tmp_path)
     )
 
 
@@ -467,7 +464,7 @@ def test_base_sync_lock_path_is_the_shared_state_dir_file(tmp_path):
     """The refresh serializes on the SAME lock file the ExecStartPre
     flock in the service template uses (the shared state dir, next to
     the slots — never a per-process temp file)."""
-    assert runner.base_sync_lock_path(tmp_path) == (
+    assert gitops.base_sync_lock_path(tmp_path) == (
         tmp_path / ".orbi" / "base-sync.lock"
     )
 
@@ -486,8 +483,8 @@ def test_refresh_can_install_one_checkout_while_locking_shared_checkout(
         run_command=_recorder(calls),
     )
 
-    assert runner.base_sync_lock_path(deployment_checkout).is_file()
-    assert not runner.base_sync_lock_path(release_worktree).exists()
+    assert gitops.base_sync_lock_path(deployment_checkout).is_file()
+    assert not gitops.base_sync_lock_path(release_worktree).exists()
     assert calls[0][0] == cli_source.reinstall_args(release_worktree)
 
 
@@ -505,4 +502,4 @@ def test_reinstall_argv_is_the_verified_editable_force_reinstall(tmp_path):
         "uv", "tool", "install", "--force", "--reinstall", "--editable",
         "--python", cli_source.PYTHON_INTERPRETER, str(tmp_path),
     ]
-    assert kwargs["timeout"] == runner.UV_INSTALL_TIMEOUT_SECONDS
+    assert kwargs["timeout"] == cli_source.UV_INSTALL_TIMEOUT_SECONDS

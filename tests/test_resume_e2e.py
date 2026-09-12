@@ -36,6 +36,8 @@ import pytest
 
 import orbi.runner as runner
 from orbi import human_review
+from seam import seam
+import orbi.journal as journal
 
 REPO = "owner/repo"
 ISSUE_NUMBER = 45
@@ -149,7 +151,7 @@ def clone(tmp_path: Path) -> Path:
 @pytest.fixture(autouse=True)
 def _reset_run_id(monkeypatch):
     """Each test starts without a bound run id."""
-    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
+    monkeypatch.setattr(journal, "_CURRENT_RUN_ID", None)
 
 
 def install_fake_pi(monkeypatch, tmp_path: Path, script: str) -> None:
@@ -359,7 +361,7 @@ def install_fake_gh(monkeypatch, comments: list[str],
             raise AssertionError(f"unexpected gh command: {command}")
         return real_run(command, **kwargs)
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
 
 
 def write_prompt(tmp_path: Path) -> Path:
@@ -685,7 +687,7 @@ def test_e2e_pr_opened_without_fix_needed_never_starts_a_fixer(
             }])
         raise AssertionError(f"unexpected command: {command}")
 
-    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(seam, "run_command", fake_run)
     # The delivery wait (slot held until merge, Issue #39) is out of
     # scope here: this test proves the awaiting-review tick resumes the
     # review of the SAME PR without starting a fixer, so the wait is

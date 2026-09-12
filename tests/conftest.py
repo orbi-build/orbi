@@ -13,6 +13,7 @@ over this default).
 import pytest
 
 import orbi.runner as runner
+from seam import seam
 
 
 @pytest.fixture(autouse=True)
@@ -27,14 +28,12 @@ def _default_cli_install_preflight(monkeypatch):
     patches ITS module global — the call `main()` makes."""
     import orbi.release as release
 
-    monkeypatch.setattr(
-        runner, "refresh_cli_install", lambda *a, **k: "unchanged",
+    monkeypatch.setattr(seam, "refresh_cli_install", lambda *a, **k: "unchanged",
     )
     # Issue #286: `process_release` now lives in `orbi.release` and reads
     # the refresh through the release module global — stub that binding
     # with the same default no-op.
-    monkeypatch.setattr(
-        release, "refresh_cli_install", lambda *a, **k: "unchanged",
+    monkeypatch.setattr(seam, "refresh_cli_install", lambda *a, **k: "unchanged",
     )
 
 
