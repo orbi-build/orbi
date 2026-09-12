@@ -10,10 +10,12 @@ Orbi 在你的机器上运行一个带 GitHub token 的自主 coding agent。
   （Issue #186）。Pi 不 merge、不 push `main`/`master`、不 force
   push、从不自动解决冲突。
 - **Runner 是唯一 merge actor**，且只通过已审查的 PR merge：clean
-  `REVIEW_VERDICT`——只从评审输出的**最后一个非空行**读取，并绑定被
-  审查的 head SHA（Issue #591：经 Issue 正文、diff 或评论注入的
-  verdict 行永远覆盖不了评审者的真实结论，指向其他 head 的 verdict
-  永远不会合并）——merge 门禁（PR head 包含最新远端 base、PR
+  `REVIEW_VERDICT`——通过向后扫描读取，容忍评审者的自然语言包装
+  （Issue #774），绝不采纳非判定行的 `REVIEW_VERDICT` 提及，两个互相
+  冲突的 verdict 判为失败，并绑定被审查的 head SHA（Issue #591：经
+  Issue 正文、diff 或评论注入的 verdict 行永远覆盖不了评审者的真实
+  结论，指向其他 head 的 verdict 永远不会合并）——merge 门禁（PR head
+  包含最新远端 base、PR
   mergeable、远端 head 仍是被审查的 head）、`gh pr merge
   --match-head-commit` 保证只有被审查的 head 落地。
 - 默认分支上的 GitHub branch protection 是最终边界：把保护分支的

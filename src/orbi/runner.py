@@ -5412,52 +5412,96 @@ def _is_code_fence_line(line: str) -> bool:
     return False
 
 
-def parse_review_verdict(text: str) -> dict:
-    """Extract the REVIEW_VERDICT JSON from a review session's last line.
+def _json_dict_span(segment: str) -> dict | None:
+    """The `{...}` dict embedded in a text segment, or None.
 
-    Only the output's LAST substantive (non-fence) line is the verdict
-    (Issue #591): the reviewer reads untrusted text (Issue bodies, diffs,
-    comments) that may carry forged `REVIEW_VERDICT` lines, so no earlier
-    line may decide the gate — the prompt requires the machine-readable
-    verdict as the very last line, and this parser enforces exactly that.
-    A trailing Markdown code fence (Issue #679) is skipped because it
-    carries no review content; the verdict must still be the last
-    substantive line, so a marker quoted mid-body is never adopted. The
-    verdict must also name the head it covers (`head`); the merge gate
-    checks it against the PR head. Missing or malformed verdicts fail
-    fast; a review that cannot be read as a pass is never treated as a
-    pass.
+    Issue #774: wrapper noise around a verdict payload — a leading text
+    prefix, Markdown inline-code backticks, trailing CJK/Western
+    punctuation — all sit OUTSIDE the braces, so the first-`{`…last-`}`
+    span isolates the JSON. A segment whose braces are reversed or whose
+    span does not parse (code snippets, prose examples) returns None.
+    """
+    start = segment.find("{")
+    end = segment.rfind("}")
+    if start == -1 or end < start:
+        return None
+    try:
+        parsed = json.loads(segment[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _validated_verdict(parsed: dict) -> dict:
+    """The Issue #591 semantic checks every verdict payload must pass."""
+    if parsed.get("verdict") not in ("pass", "findings"):
+        raise ValueError("verdict must be 'pass' or 'findings'")
+    head = parsed.get("head")
+    if not isinstance(head, str) or not head:
+        raise ValueError("head must be the reviewed commit SHA")
+    for key in ("blockers", "majors", "minors"):
+        value = parsed.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"{key} must be a non-negative integer")
+    if not isinstance(parsed.get("findings", []), list):
+        raise ValueError("findings must be a list")
+    blockers = parsed["blockers"]
+    majors = parsed["majors"]
+    if parsed["verdict"] == "pass" and (blockers > 0 or majors > 0):
+        raise ValueError("pass verdict cannot have blockers or majors")
+    if parsed["verdict"] == "findings" and blockers == 0 and majors == 0:
+        raise ValueError("findings verdict requires blockers or majors")
+    return parsed
+
+
+def parse_review_verdict(text: str) -> dict:
+    """Extract the REVIEW_VERDICT JSON from a review session's output.
+
+    The output is scanned BACKWARDS (Issue #774): the verdict may be the
+    last line, wrapped in the reviewer's natural-language phrasing
+    (leading CJK prefix, inline-code backticks, trailing punctuation —
+    the orbi-cloud#287 scene), or followed by trailing prose. The
+    semantics do not relax with the shape (Issue #591): a line that only
+    MENTIONS `REVIEW_VERDICT` without starting it (a quote from the
+    Issue body, a diff hunk, an echo) is never adopted, a verdict-shaped
+    but invalid JSON blob in prose is never adopted, every payload must
+    pass the full semantic validation, and the verdict must still name
+    the head it covers (`head`); the merge gate checks it against the PR
+    head. A `REVIEW_VERDICT`-marked line is the explicit verdict channel:
+    a malformed or semantically invalid payload there fails fast instead
+    of being skipped. Two DIFFERENT verdicts in one output are ambiguous
+    and fail without picking one; identical duplicates agree and are
+    accepted. Missing or malformed verdicts fail fast; a review that
+    cannot be read as a pass is never treated as a pass.
     """
     lines = [line for line in text.splitlines() if line.strip()]
     while lines and _is_code_fence_line(lines[-1]):
         lines.pop()
-    if not lines or not lines[-1].strip().startswith(VERDICT_MARKER):
+    candidates = []
+    for line in reversed(lines):
+        stripped = line.strip()
+        marked = stripped.startswith(VERDICT_MARKER)
+        if not marked and VERDICT_MARKER in stripped:
+            continue  # a marker mention, never a verdict (Issue #591)
+        parsed = _json_dict_span(
+            stripped[len(VERDICT_MARKER):] if marked else stripped)
+        if marked:
+            # The explicit verdict channel: a malformed payload fails
+            # fast, it is never silently skipped.
+            if parsed is None:
+                raise ValueError("malformed REVIEW_VERDICT JSON")
+            candidates.append(_validated_verdict(parsed))
+        elif parsed is not None:
+            try:
+                candidates.append(_validated_verdict(parsed))
+            except ValueError:
+                continue  # verdict-shaped prose, not the channel
+    if not candidates:
         raise ValueError("no REVIEW_VERDICT line in review output")
-    payload = lines[-1].strip()[len(VERDICT_MARKER):].strip()
-    try:
-        verdict = json.loads(payload)
-    except json.JSONDecodeError:
-        raise ValueError("malformed REVIEW_VERDICT JSON") from None
-    if not isinstance(verdict, dict):
-        raise ValueError("malformed REVIEW_VERDICT JSON")
-    if verdict.get("verdict") not in ("pass", "findings"):
-        raise ValueError("verdict must be 'pass' or 'findings'")
-    head = verdict.get("head")
-    if not isinstance(head, str) or not head:
-        raise ValueError("head must be the reviewed commit SHA")
-    for key in ("blockers", "majors", "minors"):
-        value = verdict.get(key)
-        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-            raise ValueError(f"{key} must be a non-negative integer")
-    if not isinstance(verdict.get("findings", []), list):
-        raise ValueError("findings must be a list")
-    blockers = verdict["blockers"]
-    majors = verdict["majors"]
-    if verdict["verdict"] == "pass" and (blockers > 0 or majors > 0):
-        raise ValueError("pass verdict cannot have blockers or majors")
-    if verdict["verdict"] == "findings" and blockers == 0 and majors == 0:
-        raise ValueError("findings verdict requires blockers or majors")
-    return verdict
+    if len({json.dumps(v, sort_keys=True) for v in candidates}) > 1:
+        raise ValueError("conflicting REVIEW_VERDICT verdicts in review "
+                         "output")
+    return candidates[0]
 
 
 def review_has_findings(verdict: dict) -> bool:

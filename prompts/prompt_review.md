@@ -179,10 +179,11 @@ Major (reasonable-scenario functional error or key-contract violation), Minor
 
 End your reply with **exactly one** machine-readable line, and nothing after
 it: that line must be the LAST non-empty line of your whole reply. The
-Runner reads the verdict from the final line ONLY (Issue #591) — a
-`REVIEW_VERDICT` line anywhere earlier (a quote from the Issue, a diff
-hunk, an echo) is ignored, and any non-empty content after the verdict
-line makes the verdict malformed. The verdict describes the state of the
+Runner scans the output backwards for the verdict line (Issue #774) — a
+line that only MENTIONS `REVIEW_VERDICT` without starting it (a quote
+from the Issue, a diff hunk, an echo) is never adopted (Issue #591), and
+two different verdicts in one reply fail the parse instead of picking
+one. The verdict describes the state of the
 PR **after** your in-session fixes: `pass` only when the PR is mergeable
 with 0 Blocker and 0 Major.
 
