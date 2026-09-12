@@ -7,6 +7,7 @@ change-visibility audit, and the runner wiring at the claim scan and claim.
 """
 import base64
 import json
+import logging
 import subprocess
 from pathlib import Path
 
@@ -238,6 +239,53 @@ def test_read_repo_config_read_failure_fails_open(caplog):
         "owner/repo", run_command=broken,
     ) is None
     assert "repo_config_read_failed" in caplog.text
+
+
+def test_read_repo_config_missing_file_logs_no_journal_error(
+    caplog, monkeypatch,
+):
+    """Issue #730: the designed 404 no-op is a `None` return, not a failure —
+    the real `run_command` (as wired by `load_repo_policy`) must not emit a
+    journal-visible (>= INFO) `command_failed` line for it."""
+    def not_found(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            1, command,
+            output='{"message":"Not Found","status":"404"}',
+            stderr="gh: Not Found (HTTP 404)",
+        )
+
+    monkeypatch.setattr(runner.subprocess, "run", not_found)
+    with caplog.at_level(logging.DEBUG, logger="orbi.bootstrap"):
+        assert repo_config.read_repo_config(
+            "owner/repo", run_command=runner.run_command,
+        ) is None
+    journal_visible = [
+        record for record in caplog.records
+        if record.levelno >= logging.INFO
+        and "command_failed" in record.getMessage()
+    ]
+    assert journal_visible == []
+
+
+def test_read_repo_config_read_failure_logs_error_with_detail(caplog):
+    """Issue #730: a real read failure (network/permission/rate limit) keeps
+    an ERROR line carrying the command output, not just the bare exit code."""
+    def denied(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            1, command,
+            stderr="gh: API rate limit exceeded for installation 1234",
+        )
+
+    with caplog.at_level(logging.DEBUG, logger="orbi.bootstrap"):
+        assert repo_config.read_repo_config(
+            "owner/repo", run_command=denied,
+        ) is None
+    error_lines = [
+        record.getMessage() for record in caplog.records
+        if record.levelno >= logging.ERROR
+        and "repo_config_read_failed" in record.getMessage()
+    ]
+    assert any("rate limit exceeded" in line for line in error_lines)
 
 
 def test_read_repo_config_non_file_response_is_none():

@@ -254,6 +254,16 @@ def _is_not_found(exc: Exception) -> bool:
     return '"status":"404"' in stdout.replace(" ", "") or "HTTP 404" in stderr
 
 
+def _command_output_detail(exc: Exception) -> str:
+    """One-line stdout/stderr detail of a failed read (empty when absent)."""
+    parts = []
+    for name in ("stdout", "stderr"):
+        text = (getattr(exc, name, "") or "").strip().replace("\n", "\\n")
+        if text:
+            parts.append(f"{name}={text}")
+    return (" " + " ".join(parts)) if parts else ""
+
+
 def read_repo_config(repo: str, *, path: str = REPO_CONFIG_PATH,
                      run_command: Callable[..., str]) -> dict | None:
     """Read `<repo>@<default-branch>` `path` through the contents API.
@@ -262,16 +272,25 @@ def read_repo_config(repo: str, *, path: str = REPO_CONFIG_PATH,
     repository has no such file (the 404) or the read failed for any other
     transport reason. A file that exists but violates the schema raises
     :class:`RepoConfigError` — the caller blocks the claim.
+
+    The 404 is the designed no-op (a `None` return, not a failure): the
+    read passes `failure_log_level=logging.DEBUG` so `run_command`'s
+    generic `command_failed` line never reaches the INFO journal, and this
+    handler owns the real outcome — silent for the 404, an ERROR carrying
+    the command output for any other failure (Issue #730).
     """
     endpoint = f"repos/{repo}/contents/{path}"
     try:
-        raw = run_command(["gh", "api", endpoint], timeout=30)
+        raw = run_command(
+            ["gh", "api", endpoint], timeout=30,
+            failure_log_level=logging.DEBUG,
+        )
     except Exception as exc:
         if not _is_not_found(exc):
-            LOGGER.warning(
-                "repo_config_read_failed repo=%s path=%s error=%s "
+            LOGGER.error(
+                "repo_config_read_failed repo=%s path=%s error=%s%s "
                 "(falling back to the host config)",
-                repo, path, exc,
+                repo, path, exc, _command_output_detail(exc),
             )
         return None
     try:
