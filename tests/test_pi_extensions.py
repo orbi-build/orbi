@@ -15,11 +15,11 @@ def test_load_config_pi_extensions_normalizes_enabled_and_local_source(tmp_path)
         encoding="utf-8",
     )
     loaded = runner.load_config(config)
-    assert loaded["pi_extensions"] == [
+    assert loaded.pi_extensions == (
         {"source": "npm:fixture@1.2.3", "enabled": True,
          "env": {"FIXTURE_TOKEN": "secret"}},
         {"source": str(extension), "enabled": False, "env": {}},
-    ]
+    )
 
 
 def test_load_config_pi_extensions_rejects_unlocked_or_duplicate_and_conflicting_env(tmp_path):
@@ -58,16 +58,14 @@ def test_load_config_pi_extensions_rejects_bad_shapes_and_accepts_git_ref(tmp_pa
         'source="git:github.com/example/fixture@v1.2.3"\n',
         encoding="utf-8",
     )
-    assert runner.load_config(path)["pi_extensions"][0]["source"].endswith("@v1.2.3")
+    assert runner.load_config(path).pi_extensions[0]["source"].endswith("@v1.2.3")
 
 
 def test_pi_extension_args_and_env_isolate_disabled_and_secrets():
-    config = {"pi_extensions": [
-        {"source": "npm:fixture@1.2.3", "enabled": True,
+    config = runner.RunnerConfig(pi_extensions=({"source": "npm:fixture@1.2.3", "enabled": True,
          "env": {"FIXTURE_TOKEN": "secret"}},
         {"source": "/tmp/disabled.mjs", "enabled": False,
-         "env": {"DISABLED": "no"}},
-    ]}
+         "env": {"DISABLED": "no"}},))
     args = runner._pi_extension_args(config)
     assert args == ["--no-extensions", "--extension", "npm:fixture@1.2.3"]
     assert runner._pi_extension_env(config) == {"FIXTURE_TOKEN": "secret"}
@@ -79,12 +77,7 @@ def test_run_pi_and_review_share_extension_contract(monkeypatch, tmp_path):
     (tmp_path / "prompt_review.md").write_text("review", encoding="utf-8")
     calls = []
     monkeypatch.setattr(runner, "stream_pi", lambda command, **kw: calls.append((command, kw)) or "ok")
-    config = {
-        "prompt": tmp_path / "prompt.md", "prompt_review": tmp_path / "prompt_review.md",
-        "repo_dir": tmp_path, "source_repos": ["owner/repo"], "workspace_root": tmp_path,
-        "context_files": [], "skills": [], "base_branch": "main", "base_sha": "abc",
-        "run_id": "deadbeef", "pi_extensions": [{"source": "npm:fixture@1.2.3", "enabled": True, "env": {"FIXTURE_TOKEN": "secret"}}],
-    }
+    config = runner.RunnerConfig(prompt=tmp_path / "prompt.md", prompt_review=tmp_path / "prompt_review.md", repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc", run_id="deadbeef", pi_extensions=({"source": "npm:fixture@1.2.3", "enabled": True, "env": {"FIXTURE_TOKEN": "secret"}},))
     runner.run_pi({"number": 1, "title": "t", "body": ""}, tmp_path, config, "owner/repo", branch="b")
     runner.run_review(tmp_path, {"number": 1, "url": "u", "base_oid": "b", "head_oid": "h", "head_ref": "r"}, config, "owner/repo", 1, "b", 1)
     for command, kwargs in calls:

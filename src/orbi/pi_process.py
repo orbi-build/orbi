@@ -20,7 +20,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
 from orbi.pi_activity import (
     SessionWatcher,
@@ -40,6 +40,13 @@ from orbi.pi_recovery import (
     timeout_duration,
     upstream_alive,
 )
+
+
+if TYPE_CHECKING:
+    # Annotation-only: `orbi.runner` imports this module's constants at
+    # runtime (Issue #790).
+    from orbi.runner import RunnerConfig
+
 
 LOGGER = logging.getLogger("orbi.pi_process")
 
@@ -458,7 +465,7 @@ def _backoff_seconds(attempt: int, stderr: str) -> float:
     )
 
 
-def _log_provider_config_loaded(*, issue_ref: str, role: str, config: dict,
+def _log_provider_config_loaded(*, issue_ref: str, role: str, config: RunnerConfig,
                                 elapsed: float) -> None:
     """Log the `provider_config_loaded` startup line (Issue #176).
 
@@ -470,8 +477,8 @@ def _log_provider_config_loaded(*, issue_ref: str, role: str, config: dict,
     """
     _log_startup(
         "provider_config_loaded", issue_ref=issue_ref, role=role,
-        activity={"provider": config.get("pi_provider"),
-                  "model": config.get("pi_model")},
+        activity={"provider": config.pi_provider,
+                  "model": config.pi_model},
         elapsed=elapsed,
     )
 

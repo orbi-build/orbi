@@ -294,15 +294,7 @@ def write_prompt(tmp_path: Path) -> Path:
 
 
 def config_for(clone: Path, tmp_path: Path, source_repo: str) -> dict:
-    return {
-        "repo_dir": clone,
-        "prompt": write_prompt(tmp_path),
-        "base_branch": "main",
-        "source_repos": [source_repo],
-        "workspace_root": tmp_path,
-        "context_files": [],
-        "skills": [],
-    }
+    return runner.RunnerConfig(repo_dir=clone, prompt=write_prompt(tmp_path), base_branch="main", source_repos=(source_repo,), workspace_root=tmp_path, context_files=(), skills=())
 
 
 def issue() -> dict:
