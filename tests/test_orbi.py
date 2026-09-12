@@ -1628,6 +1628,48 @@ def test_doctor_report_clean(tmp_path, monkeypatch):
         "-u", "orbi@2.service",
         "-n", "20", "--no-pager",
     ] in calls
+    # Issue #747: no hand-written units in this world — the scan runs
+    # and reports zero.
+    assert "unmanaged_units: 0" in lines
+
+
+def test_doctor_report_lists_unmanaged_units(tmp_path, monkeypatch):
+    """Issue #747: hand-written orbi units without the @ template form
+    bypass every deployment's check_unit_drift, so doctor must surface
+    them with their ORBI_CONFIG and the repair path."""
+    from orbi import systemd_deploy
+
+    config, installed = _deploy_world(tmp_path, drift=False)
+    _fake_doctor_commands(monkeypatch)
+    monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
+    core_cfg = tmp_path / "zcode-core" / "orbi-zai.toml"
+    core_cfg.parent.mkdir()
+    (installed / "orbi-core.service").write_text(
+        f"[Service]\nEnvironment=ORBI_CONFIG={core_cfg}\n", encoding="utf-8",
+    )
+    (installed / "orbi-core-2.service").write_text(
+        f"[Service]\nEnvironment=ORBI_CONFIG=\"{core_cfg}\"\n",
+        encoding="utf-8",
+    )
+    (installed / "orbi-core.timer").write_text(
+        "[Timer]\nOnCalendar=*-*-* *:00/5\n", encoding="utf-8",
+    )
+    report = orbi.doctor_report(config, installed)
+    lines = report.splitlines()
+    assert "unmanaged_units: 3" in lines
+    assert (
+        f"  orbi-core.service (ORBI_CONFIG={core_cfg.resolve()})"
+    ) in lines
+    assert (
+        f"  orbi-core-2.service (ORBI_CONFIG={core_cfg.resolve()})"
+    ) in lines
+    # A timer carries no ORBI_CONFIG — rendered as '-'.
+    assert "  orbi-core.timer (ORBI_CONFIG=-)" in lines
+    assert (
+        f"  fix: {systemd_deploy.UNMANAGED_FIX}"
+    ) in lines
+    # The managed template units are NOT listed as unmanaged.
+    assert "  orbi@.service (ORBI_CONFIG=" not in report
 
 
 def test_doctor_report_includes_the_engine_source_channel(

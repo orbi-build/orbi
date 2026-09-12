@@ -64,6 +64,13 @@ REPO_DIR_PLACEHOLDER = "{{ORBI_REPO_DIR}}"
 # script), not a hand-written Python file entry.
 FIX_COMMAND = "orbi install-units"
 
+# Issue #747: the repair path for a hand-written orbi unit — every
+# deployment declares its own unit_name and installs its own managed
+# set; a hand-written unit file is never migrated automatically.
+UNMANAGED_FIX = (
+    "set unit_name in each deployment config and run `orbi install-units`"
+)
+
 
 class UnitDriftError(RuntimeError):
     """The installed units have drifted from the repo templates."""
@@ -104,6 +111,39 @@ def installed_config(unit_path: Path) -> Path | None:
     # otherwise a reinstall of the same deployment is mistaken for a conflict.
     value = value.replace("%h", str(Path.home()))
     return Path(value).expanduser().resolve()
+
+
+def unmanaged_units(installed_dir: Path) -> list[dict]:
+    """List the orbi unit files no deployment's drift check can see.
+
+    Every managed orbi unit is an installed template (``orbi@.service``,
+    ``orbi-<unit_name>@.service``, and their ``@`` instances):
+    ``check_unit_drift`` compares exactly those names. A hand-written
+    orbi unit WITHOUT the ``@`` template form (``orbi-core.service``,
+    the pre-#149 ``orbi.timer``, ...) is invisible to every
+    ``unit_names()`` set — it never drift-checks and never self-heals
+    (Issue #747). One entry per such file, sorted by name: the unit
+    name and the ``ORBI_CONFIG`` the unit points at (``None`` when the
+    file carries none — timers never do). A missing unit dir has
+    nothing to scan (the missing managed units are ``unit_drift``'s
+    report, not this one).
+    """
+    installed_dir = Path(installed_dir)
+    if not installed_dir.is_dir():
+        return []
+    entries: list[dict] = []
+    for path in sorted(installed_dir.iterdir(), key=lambda p: p.name):
+        name = path.name
+        if not (
+            path.is_file()
+            and name.startswith("orbi")
+            and (name.endswith(".service") or name.endswith(".timer"))
+        ):
+            continue
+        if "@" in name:
+            continue
+        entries.append({"unit": name, "config": installed_config(path)})
+    return entries
 
 
 def reject_different_deployment(repo_dir: Path, installed_dir: Path,

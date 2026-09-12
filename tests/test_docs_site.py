@@ -79,6 +79,10 @@ KNOWN_CONFIG_FIELDS = frozenset({
     # Issue #139: the active Milestone claim scope (optional string).
     "active_milestone",
     "max_concurrency",
+    # Issue #747: the per-deployment systemd unit name (multi-
+    # deployment runbook; documented in the getting-started field
+    # table and the committed example, commented out).
+    "unit_name",
     "skills",
     "context_files",
     # Issue #119/#157: the optional Pi model selection keys (load_config
