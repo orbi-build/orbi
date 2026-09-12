@@ -20922,6 +20922,283 @@ def test_run_failed_scene_logged_in_one_place():
     )
 
 
+def test_pick_resumable_routes_marker_ticket_instead_of_blocking(
+    monkeypatch, tmp_path,
+):
+    """Issue #726 gap 1：triage workflow 给被外部 PR 关联的票贴了
+    ai-pr-opened，resumable 扫描捡到它却找不到 runner 场景评论——旧码
+    直接烧成 ai-blocked，而接管入口对这些票永不可达。带 external 标记
+    且 PR 仍 OPEN 的票必须转投：EVENT_REQUEUE 回 ready 队列，下一个
+    fresh claim 的接管探针接手评审。"""
+    monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
+    monkeypatch.setattr(runner, "issue_comments", lambda number, repo: [])
+    patches = []
+    monkeypatch.setattr(
+        runner, "apply_label_patch",
+        lambda number, *, repo, event, current_labels:
+            patches.append(event),
+    )
+    comments_posted = []
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda number, *, repo, body: comments_posted.append(body),
+    )
+
+    issue = {"number": 100, "title": "triage", "state": "OPEN",
+             "body": "<!-- orbi:external-pr:55 -->\nfix the thing",
+             "labels": [{"name": "ai-pr-opened"}]}
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([issue])
+        if command[:3] == ["gh", "pr", "view"]:
+            return json.dumps({"state": "OPEN"})
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    result = runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 2,
+    )
+    assert result is None
+    assert patches == [runner.EVENT_REQUEUE]
+    assert any("external contribution PR #55" in body
+               for body in comments_posted)
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "view"])
+
+
+def test_pick_resumable_closes_marker_ticket_when_pr_already_merged(
+    monkeypatch, tmp_path,
+):
+    """Issue #726 gap 1 的合并分支：标记票的外部 PR 已被人工合并——
+    修复已交付，triage 票按接管合并的同款簿记关票，而不是 block、
+    也不是重做。"""
+    monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
+    monkeypatch.setattr(runner, "issue_comments", lambda number, repo: [])
+    closes = []
+    issue = {"number": 100, "title": "triage", "state": "OPEN",
+             "body": "<!-- orbi:external-pr:55 -->\nfix the thing",
+             "labels": [{"name": "ai-pr-opened"}]}
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([issue])
+        if command[:3] == ["gh", "pr", "view"]:
+            return closes.append(command) or json.dumps({"state": "MERGED"})
+        if command[:3] == ["gh", "issue", "close"]:
+            return closes.append(command) or ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "comment_issue", Mock())
+    result = runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 2,
+    )
+    assert result is None
+    assert any(c[:3] == ["gh", "issue", "close"] for c in closes)
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "view"])
+
+
+def test_wait_for_delivery_closes_triage_issue_after_auto_merge(
+    monkeypatch, tmp_path,
+):
+    """Issue #726 gap 2：外部接管走自动评审合并成功（merged=True 返回）
+    时，必须像 MERGED 轮询分支一样关掉 triage 票——旧码在这一路径直接
+    return，每个成功合并的外部贡献泄漏一张僵尸票。"""
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"] and command[2] == "view":
+            return json.dumps({"state": "OPEN"})
+        if command[:2] == ["gh", "issue"] and command[2] == "view":
+            if command[-1] == "comments":
+                return json.dumps({"comments": [
+                    {
+                        "body": (
+                            "<!-- orbi:run=a1b2c3d4 -->\n"
+                            "Orbi opened PR: "
+                            f"{PR_URL} (base_branch=main "
+                            "base_sha=abc123def456 run_id=a1b2c3d4)"
+                        ),
+                        "authorAssociation": "OWNER",
+                    },
+                ]})
+            return json.dumps({"labels": [{"name": "ai-pr-opened"}]})
+        if command[:3] == ["gh", "issue", "close"]:
+            closes.append(command)
+            return ""
+        if command[:3] == ["gh", "issue", "edit"]:
+            return ""
+        if command[:3] == ["gh", "issue", "comment"]:
+            return ""
+        if command[:2] == ["gh", "api"]:
+            return ""
+        if command == ["git", "branch", "--show-current"]:
+            return "orbi/owner-repo-issue-39"
+        raise AssertionError(f"unexpected command: {command}")
+
+    closes: list = []
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner.time, "sleep", lambda s: None)
+    monkeypatch.setattr(
+        runner, "review_and_merge_if_clean",
+        lambda *args, **kwargs: True,
+    )
+    (tmp_path / ".worktrees"
+     / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
+    issue = {"number": 39, "title": "task", "body": ""}
+    runner.wait_for_delivery(
+        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        "owner/repo", external_takeover=True,
+    )
+    assert len(closes) == 1, "the triage Issue must be closed exactly once"
+    # The answered arms return their canned values; anything unmodeled
+    # fails loud.
+    assert fake_run(["gh", "issue", "edit", "1", "--repo", "o/r"]) == ""
+    assert fake_run(["gh", "api", "x"]) == ""
+    assert fake_run(
+        ["git", "branch", "--show-current"],
+    ) == "orbi/owner-repo-issue-39"
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "view"])
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "view"])
+
+
+def test_route_external_pr_probe_failure_falls_through_to_block(
+    monkeypatch, tmp_path,
+):
+    """Issue #726：接管探针自身失败（gh 异常）时绝不瞎猜路由——落回
+    旧的 block 路径，让失败被看见。"""
+    monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
+    monkeypatch.setattr(runner, "issue_comments", lambda number, repo: [])
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([issue])
+        if command[:3] == ["gh", "issue", "list"]
+        else (_ for _ in ()).throw(RuntimeError("gh down")),
+    )
+    blocked = []
+    monkeypatch.setattr(
+        runner, "block_scene_failure",
+        lambda issue, error, repo, comments: blocked.append(issue["number"]),
+    )
+    issue = {"number": 100, "title": "triage", "state": "OPEN",
+             "body": "<!-- orbi:external-pr:55 -->\nfix",
+             "labels": [{"name": "ai-pr-opened"}]}
+    result = runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 2,
+    )
+    assert result is None
+    assert blocked == [100]
+
+
+def test_route_external_pr_unknown_state_falls_through_to_block(
+    monkeypatch, tmp_path,
+):
+    """Issue #726：PR 状态是意外值（非 OPEN/MERGED/CLOSED）时同样落回
+    block 路径——路由器只承诺三种已知世界。"""
+    monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
+    monkeypatch.setattr(runner, "issue_comments", lambda number, repo: [])
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps([issue])
+        if command[:3] == ["gh", "issue", "list"] else (
+        json.dumps({"state": "DRAFT"})
+        if command[:3] == ["gh", "pr", "view"] else (_ for _ in ()).throw(
+            AssertionError(f"unexpected command: {command}"))),
+    )
+    blocked = []
+    monkeypatch.setattr(
+        runner, "block_scene_failure",
+        lambda issue, error, repo, comments: blocked.append(issue["number"]),
+    )
+    issue = {"number": 100, "title": "triage", "state": "OPEN",
+             "body": "<!-- orbi:external-pr:55 -->\nfix",
+             "labels": [{"name": "ai-pr-opened"}]}
+    result = runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 2,
+    )
+    assert result is None
+    assert blocked == [100]
+
+
+def test_route_external_pr_ignores_tickets_without_marker(
+    monkeypatch, tmp_path,
+):
+    """Issue #726 的边界：body 没有外部标记的普通场景损坏票照走 block
+    路径——路由器零介入。"""
+    monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
+    monkeypatch.setattr(runner, "issue_comments", lambda number, repo: [])
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["gh", "issue", "list"]:
+            return json.dumps([issue])
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    blocked = []
+    monkeypatch.setattr(
+        runner, "block_scene_failure",
+        lambda issue, error, repo, comments: blocked.append(issue["number"]),
+    )
+    issue = {"number": 41, "title": "dev", "state": "OPEN",
+             "body": "plain ticket", "labels": [{"name": "ai-pr-opened"}]}
+    result = runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 2,
+    )
+    assert result is None
+    assert blocked == [41]
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "view"])
+
+
+def test_wait_for_delivery_closes_triage_issue_on_merged_poll(
+    monkeypatch, tmp_path,
+):
+    """Issue #726 的既有行为钉子：轮询直接发现 PR 已 MERGED（重启后的
+    首询）且是外部接管时，triage 票被关闭——:8023 的旁路调用在旧码里
+    从未有测试覆盖。"""
+    states = ["MERGED"]
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "pr"] and command[2] == "view":
+            return json.dumps({"state": states[0]})
+        if command[:3] == ["gh", "issue", "comment"]:
+            return ""
+        if command[:3] == ["gh", "issue", "close"]:
+            closes.append(command)
+            return ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    closes: list = []
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    issue = {"number": 39, "title": "task", "body": ""}
+    runner.wait_for_delivery(
+        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        "owner/repo", external_takeover=True,
+    )
+    assert len(closes) == 1
+    with pytest.raises(AssertionError, match="unexpected command"):
+        fake_run(["gh", "release", "view"])
+
+
+def test_close_external_triage_issue_swallows_close_failure(
+    monkeypatch, caplog, tmp_path,
+):
+    """关票是已合并事实的簿记旁路：失败只记日志，永不改写合并事实、
+    永不炸 tick（#608 语义，#726 抽取后必须保持）。"""
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("gh down")),
+    )
+    with caplog.at_level("ERROR"):
+        runner._close_external_triage_issue(
+            39, "owner/repo", PR_URL, "<!-- orbi:external-pr:55 -->",
+            "a1b2c3d4",
+        )
+    assert "external_takeover_close_failed" in caplog.text
 def test_process_issue_yields_when_the_label_lands_in_the_scan_window(
     monkeypatch, tmp_path,
 ):
