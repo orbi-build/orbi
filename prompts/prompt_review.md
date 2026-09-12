@@ -20,6 +20,12 @@ Runtime context supplied by the runner:
 - Base sync lock: `{{BASE_SYNC_LOCK}}`
 - Review round: `{{ROUND}}`
 
+Issue comments from trusted authors of the linked Issue (oldest first):
+the decision history the delivery must match. When a note says older
+comments were omitted, you are NOT seeing the full history.
+
+{{ISSUE_COMMENTS}}
+
 ## Scope
 
 Review the exact diff from base `{{BASE_SHA}}` to head `{{HEAD_SHA}}` (run

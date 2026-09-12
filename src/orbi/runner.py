@@ -219,6 +219,14 @@ TRUSTED_COMMENT_ASSOCIATIONS = frozenset({
     "OWNER", "MAINTAINER", "MEMBER", "COLLABORATOR",
 })
 
+# Issue #745: {{ISSUE_COMMENTS}} injects the Issue's trusted-comment
+# timeline into the implementer/review prompt. This cap bounds how many
+# trusted comments a long-discussed Issue may contribute to the task
+# context; the NEWEST are kept (the latest decision lives there) and a
+# dropped-older-comments count is stated inside the injected block —
+# the truncation is never silent.
+ISSUE_COMMENTS_LIMIT = 20
+
 
 class ReleaseDeliveriesWaiting(RuntimeError):
     """Gate 1 found deliveries still in flight; retry next tick."""
@@ -602,6 +610,9 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     # (default 1800 s, 30 minutes). It measures silence between
     # complete session events, never token-level model progress.
     model_wait_dead_seconds = _model_wait_dead_seconds(data)
+    # Trusted-comment injection cap (Issue #745): how many of the
+    # Issue's trusted comments enter the agent's task context.
+    issue_comments_limit = _issue_comments_limit(data)
     # Swallowed-model-request probe (Issue #233): the /slots endpoint
     # (optional) and its sustained-idle grace (default 60 s). Absent URL
     # -> the probe is disabled (the exact pre-#233 behavior: the run is
@@ -723,6 +734,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         "pi_thinking": pi_thinking,
         "pi_extensions": pi_extensions,
         "model_wait_dead_seconds": model_wait_dead_seconds,
+        "issue_comments_limit": issue_comments_limit,
         "model_wait_probe_url": model_wait_probe_url,
         "model_wait_probe_seconds": model_wait_probe_seconds,
         "release_ci_wait_seconds": release_ci_wait_seconds,
@@ -1020,6 +1032,34 @@ def _model_wait_dead_seconds(data: dict) -> float:
             f"(got {value!r})"
         )
     return number
+
+
+def _issue_comments_limit(data: dict) -> int:
+    """Load and validate the optional `issue_comments_limit` (Issue
+    #745).
+
+    Omitted -> `ISSUE_COMMENTS_LIMIT` (default 20). Present -> must be
+    a positive integer; booleans, fractional and non-numeric values
+    fail fast at config load with the field name and the concrete
+    reason.
+    """
+    value = data.get("issue_comments_limit", ISSUE_COMMENTS_LIMIT)
+    if isinstance(value, bool):
+        raise ValueError(
+            "issue_comments_limit must be a positive integer, not a "
+            f"boolean (got {value!r})"
+        )
+    if not isinstance(value, int):
+        raise ValueError(
+            "issue_comments_limit must be a positive integer "
+            f"(got {type(value).__name__} {value!r})"
+        )
+    if value <= 0:
+        raise ValueError(
+            "issue_comments_limit must be a positive integer "
+            f"(got {value!r})"
+        )
+    return value
 
 
 def _load_pi_providers(path: Path, pi_provider: str | None,
@@ -2525,6 +2565,45 @@ def issue_comments(number: int, *, repo: str) -> list[dict]:
     return comments
 
 
+def trusted_issue_comments_block(comments: list[dict], limit: int) -> str:
+    """Render the {{ISSUE_COMMENTS}} prompt block (Issue #745).
+
+    Only trusted authors enter the task context — the same
+    `authorAssociation` trust set as the recovery-scene parser (Issue
+    #45; a public repo lets anyone comment, and an unfiltered injection
+    would be a prompt-injection surface). The input order is preserved
+    (oldest first, the natural timeline read). Over `limit` the OLDEST
+    trusted comments are dropped — the newest carry the latest decision
+    — and the omission is stated inside the block: the agent must know
+    it did not see the full history, never a silent truncation. Zero
+    trusted comments produce an explicit marker, not an empty string.
+    """
+    trusted = [
+        comment for comment in comments if _comment_is_trusted(comment)
+    ]
+    kept = trusted[-limit:]
+    omitted = len(trusted) - len(kept)
+    if not kept:
+        return "(no trusted comments)"
+    lines = []
+    if omitted:
+        noun = "comment" if omitted == 1 else "comments"
+        lines.append(
+            f"({omitted} older trusted {noun} omitted; showing the "
+            f"{len(kept)} most recent)"
+        )
+    for comment in kept:
+        author = comment.get("author")
+        login = author.get("login") if isinstance(author, dict) else None
+        lines.append(
+            f"- {login or 'unknown'} "
+            f"({comment.get('authorAssociation') or '-'}) "
+            f"at {comment.get('createdAt') or '-'}:\n\n"
+            f"{str(comment.get('body') or '').rstrip()}"
+        )
+    return "\n\n".join(lines)
+
+
 def new_run_id() -> str:
     """Return a unique short run identifier for one task attempt."""
     return uuid.uuid4().hex[:8]
@@ -4004,35 +4083,43 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
     context_files = list(config["context_files"])
     for relative in config.get("repo_context_files", []):
         context_files.append(validate_context_file(worktree, relative))
-    system_prompt = render_prompt(
-        config["prompt"].read_text(encoding="utf-8"),
-        {
-            "SOURCE_REPO": source_repo,
-            "SOURCE_REPOS": ", ".join(config["source_repos"]),
-            "ISSUE_NUMBER": str(issue["number"]),
-            "ISSUE_TITLE": issue["title"],
-            "ISSUE_BODY": issue.get("body", ""),
-            "WORKSPACE_ROOT": str(config["workspace_root"]),
-            "CONTEXT_FILES": "\n".join(str(path) for path in context_files),
-            "SKILLS": "\n".join(
-                str(path)
-                for path in _skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)
-            ),
-            "BASE_BRANCH": config["base_branch"],
-            "BASE_SHA": config["base_sha"],
-            # Issue #527: a repository-declared test command (absent ->
-            # the agent follows its own test contract, as before #527).
-            "TEST_COMMAND": (
-                (config.get("test_command") or "").strip()
-                or "(not declared)"
-            ),
-            "RUN_ID": config["run_id"],
-            # Issue #186: the implementer prompt no longer carries the
-            # base-sync lock (the base fetch is the Runner's operation);
-            # the value stays available for custom prompt templates.
-            "BASE_SYNC_LOCK": str(base_sync_lock_path(config["repo_dir"])),
-        },
-    )
+    template = config["prompt"].read_text(encoding="utf-8")
+    prompt_values = {
+        "SOURCE_REPO": source_repo,
+        "SOURCE_REPOS": ", ".join(config["source_repos"]),
+        "ISSUE_NUMBER": str(issue["number"]),
+        "ISSUE_TITLE": issue["title"],
+        "ISSUE_BODY": issue.get("body", ""),
+        "WORKSPACE_ROOT": str(config["workspace_root"]),
+        "CONTEXT_FILES": "\n".join(str(path) for path in context_files),
+        "SKILLS": "\n".join(
+            str(path)
+            for path in _skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)
+        ),
+        "BASE_BRANCH": config["base_branch"],
+        "BASE_SHA": config["base_sha"],
+        # Issue #527: a repository-declared test command (absent ->
+        # the agent follows its own test contract, as before #527).
+        "TEST_COMMAND": (
+            (config.get("test_command") or "").strip()
+            or "(not declared)"
+        ),
+        "RUN_ID": config["run_id"],
+        # Issue #186: the implementer prompt no longer carries the
+        # base-sync lock (the base fetch is the Runner's operation);
+        # the value stays available for custom prompt templates.
+        "BASE_SYNC_LOCK": str(base_sync_lock_path(config["repo_dir"])),
+    }
+    # Issue #745: the trusted-comment timeline enters the task context
+    # only when the template carries the placeholder — a template
+    # without it keeps the exact pre-#745 behavior (no extra GitHub
+    # read, no new failure mode).
+    if "{{ISSUE_COMMENTS}}" in template:
+        prompt_values["ISSUE_COMMENTS"] = trusted_issue_comments_block(
+            issue_comments(int(issue["number"]), repo=source_repo),
+            config.get("issue_comments_limit", ISSUE_COMMENTS_LIMIT),
+        )
+    system_prompt = render_prompt(template, prompt_values)
     context = (
         f"Issue #{issue['number']}: {issue['title']}\n\n"
         f"Issue body:\n{issue.get('body', '')}\n\n"
@@ -4980,23 +5067,30 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
     # review session reads/writes the same `.orbi/` artifacts.
     (worktree / ".orbi").mkdir(exist_ok=True)
     started = time.monotonic()
-    system_prompt = render_prompt(
-        config["prompt_review"].read_text(encoding="utf-8"),
-        {
-            "SOURCE_REPO": source_repo,
-            "PR_NUMBER": str(pr["number"]),
-            "PR_URL": pr["url"],
-            "BASE_BRANCH": config["base_branch"],
-            "BASE_SHA": pr["base_oid"],
-            "HEAD_SHA": pr["head_oid"],
-            "HEAD_REF": pr["head_ref"],
-            "ROUND": str(round),
-            # Issue #171: the SAME shared base-sync lock as the
-            # implementer — the review session's base-absorb fetch must
-            # run under it (flock <lock> git fetch origin <base>).
-            "BASE_SYNC_LOCK": str(base_sync_lock_path(config["repo_dir"])),
-        },
-    )
+    review_template = config["prompt_review"].read_text(encoding="utf-8")
+    review_values = {
+        "SOURCE_REPO": source_repo,
+        "PR_NUMBER": str(pr["number"]),
+        "PR_URL": pr["url"],
+        "BASE_BRANCH": config["base_branch"],
+        "BASE_SHA": pr["base_oid"],
+        "HEAD_SHA": pr["head_oid"],
+        "HEAD_REF": pr["head_ref"],
+        "ROUND": str(round),
+        # Issue #171: the SAME shared base-sync lock as the
+        # implementer — the review session's base-absorb fetch must
+        # run under it (flock <lock> git fetch origin <base>).
+        "BASE_SYNC_LOCK": str(base_sync_lock_path(config["repo_dir"])),
+    }
+    # Issue #745: the review path sees the Issue's decision evolution
+    # too — same trusted timeline, same placeholder gate (a template
+    # without it keeps the exact pre-#745 behavior).
+    if "{{ISSUE_COMMENTS}}" in review_template:
+        review_values["ISSUE_COMMENTS"] = trusted_issue_comments_block(
+            issue_comments(issue, repo=source_repo),
+            config.get("issue_comments_limit", ISSUE_COMMENTS_LIMIT),
+        )
+    system_prompt = render_prompt(review_template, review_values)
     context = (
         f"Independently review PR #{pr['number']} ({pr['url']}) of "
         f"{source_repo} against base {config['base_branch']}@{pr['base_oid']} "

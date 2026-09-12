@@ -33,13 +33,20 @@ ai-ready                a task is dispatched (orbi add, or a human
                         adds the label)
   -> ai-in-progress     the Runner claims it: label added, worktree created
                         from the frozen origin/<base> SHA, Pi session starts
+                        (the prompt carries the Issue body plus the
+                        trusted-comment timeline {{ISSUE_COMMENTS}},
+                        Issue #745: OWNER/MAINTAINER/MEMBER/COLLABORATOR
+                        comments only, capped by issue_comments_limit with
+                        a visible omission note)
   -> ai-pr-opened       the PR passes verification (base freshness, run
                         marker, Fixes #N); the delivery now awaits review
   -> review             an independent Pi session reviews the exact
                         base/head SHAs and FIXES findings in-session
                         (code, full test suite, tiered coverage gate
                         (Issue #234), push only the task branch), then
-                        emits a REVIEW_VERDICT
+                        emits a REVIEW_VERDICT (its prompt carries the
+                        same trusted-comment timeline of the linked
+                        Issue — the decision history, Issue #745)
   -> ai-fix-needed      a finding could not be fixed in-session, the PR is
                         behind the latest base / has a merge conflict, or
                         an AI-recoverable failure of the existing run/PR
