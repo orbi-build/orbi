@@ -77,6 +77,16 @@ from orbi.runner import (
 )
 
 
+# Supported `version_file` declaration values: the ecosystem metadata
+# files (written by `prepare_release_version`) plus `none` — skip version
+# metadata changes and tag the frozen base HEAD directly.
+RELEASE_VERSION_FILE_OPTIONS = (
+    "pyproject.toml", "package.json", "pom.xml", "build.gradle",
+    "build.gradle.kts", "gradle.properties", "Cargo.toml",
+    "composer.json", "pubspec.yaml", "none",
+)
+
+
 def parse_release_declaration(body: str) -> dict:
     """Strictly parse the `## Release` section of a release Issue body.
 
@@ -110,7 +120,9 @@ def parse_release_declaration(body: str) -> dict:
     `release_test_command_ignored` evidence line at run time) and never
     executed. `scope` lists the Issue/PR numbers verified one by one.
     Optional `version_file` selects a supported ecosystem metadata file
-    (the default is `pyproject.toml`) or `none` to skip version metadata changes.
+    (the default is `pyproject.toml`) or `none` to skip version metadata
+    changes; its existence in the frozen release tree is verified at
+    claim time by `verify_release_version_file` (Issue #740).
     Exactly one of `scope` / `scope_from_milestone` must be present:
     both (conflict) or neither fails fast. `scope_from_milestone` is
     the Milestone TITLE (no spaces); its scope is derived later by
@@ -248,11 +260,7 @@ def parse_release_declaration(body: str) -> dict:
                 "not contain spaces"
             )
     version_file = fields.get("version_file", "pyproject.toml")
-    if version_file not in (
-        "pyproject.toml", "package.json", "pom.xml", "build.gradle",
-        "build.gradle.kts", "gradle.properties", "Cargo.toml",
-        "composer.json", "pubspec.yaml", "none",
-    ):
+    if version_file not in RELEASE_VERSION_FILE_OPTIONS:
         raise ValueError(
             "release declaration field `version_file` is not supported"
         )
@@ -265,6 +273,45 @@ def parse_release_declaration(body: str) -> dict:
         "scope_from_milestone": fields.get("scope_from_milestone"),
         "version_file": version_file,
     }
+
+
+def verify_release_version_file(repo_dir: Path, release_commit: str,
+                                version_file: str) -> None:
+    """Prove the declared `version_file` exists in the frozen base (Issue #740).
+
+    `version_file` is an optional declaration field that silently defaults
+    to the Python ecosystem's `pyproject.toml`; a repository without that
+    file used to discover the mismatch only at the version-write step —
+    after the gates and the scope verification had already run — and
+    burned the ticket `ai-blocked` with a bare FileNotFoundError
+    (orbi-cloud#246). The check probes the ROOT of the frozen release
+    commit's tree (`git ls-tree --name-only` — the exact content the
+    version write will see) and runs at claim time, before any gate wait.
+    A mismatch fails fast with an actionable message: the supported
+    ecosystem files that DO exist at the repository root (the value to
+    declare), and `none` for a repository with no version metadata file
+    at all.
+    """
+    if version_file == "none":
+        return
+    root_entries = set(run_command(
+        ["git", "ls-tree", "--name-only", release_commit],
+        cwd=repo_dir,
+    ).splitlines())
+    if version_file in root_entries:
+        return
+    existing = [
+        name for name in RELEASE_VERSION_FILE_OPTIONS
+        if name != "none" and name in root_entries
+    ]
+    raise RuntimeError(
+        f"release version_file {version_file!r} does not exist at the "
+        f"root of the release tree {release_commit} — supported files "
+        f"present at the repository root: "
+        f"{', '.join(existing) if existing else '(none)'}; declare one "
+        "of those as `- version_file: <file>`, or `- version_file: "
+        "none` to skip version metadata changes"
+    )
 
 
 def verify_release_scope(repo: str, scope: list[int], repo_dir: Path,
@@ -767,12 +814,7 @@ def prepare_release_version(worktree: Path, tag: str,
             f"release version {tag!r} must be a v-prefixed numeric tag"
         )
     version = match.group(1)
-    supported_files = {
-        "pyproject.toml", "package.json", "pom.xml", "build.gradle",
-        "build.gradle.kts", "gradle.properties", "Cargo.toml",
-        "composer.json", "pubspec.yaml", "none",
-    }
-    if version_file not in supported_files:
+    if version_file not in RELEASE_VERSION_FILE_OPTIONS:
         raise ValueError("release version_file is not supported")
     if version_file == "none":
         return run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
@@ -1579,6 +1621,11 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
        Issue #569).
     2. Freeze the base — the release commit is exactly
        `origin/<base_branch>` (fetched under the base-sync lock).
+    2b. Prove the declared (or defaulted) `version_file` exists at the
+       root of the frozen release tree (`verify_release_version_file`,
+       Issue #740) — before any gate wait, so a declaration/repo
+       mismatch fails fast at claim time with the supported files that
+       do exist, never as a late FileNotFoundError after the gates.
     3. Enforce the pre-release gates (`check_release_gates`).
     4. When `scope_from_milestone` is declared, derive the scope from
        the Milestone (`derive_release_scope_from_milestone`): closed
@@ -1712,6 +1759,15 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             ),
         )
         release_commit = freeze_base(config["repo_dir"], base_branch)
+        # Issue #740: the declared (or defaulted) version_file is proven
+        # to exist in the frozen release tree BEFORE any gate wait — a
+        # mismatch used to surface only at the version-write step, after
+        # the gates and the scope verification, and burned the ticket
+        # ai-blocked with a bare FileNotFoundError.
+        verify_release_version_file(
+            config["repo_dir"], release_commit,
+            declaration["version_file"],
+        )
         wait_started: float | None = None
         # Waiting is persisted in the auditable Issue comment, so a later
         # tick can enforce one bounded waiting window without local state.

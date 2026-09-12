@@ -244,7 +244,12 @@ DAG, no priority numbers, no separate queues:
      line) — it is never executed. Missing, duplicated or unknown
      fields fail fast.
   2. Freeze the base — the release commit is exactly
-     `origin/<base_branch>` (fetched under the base-sync lock).
+     `origin/<base_branch>` (fetched under the base-sync lock). Before
+     any gate wait, the declared (or defaulted) `version_file` is
+     proven to exist at the root of that frozen tree (Issue #740): a
+     mismatch fails fast at claim time, naming the supported ecosystem
+     files that DO exist there and the `none` option, never as a late
+     FileNotFoundError after the gates and the scope verification.
   3. Enforce the pre-release gates: no leftover open `ai-in-progress` /
      `ai-pr-opened` / `ai-fix-needed` Issues **in the release's
      Milestone** (Issue #671; the release Issue itself excluded; without
