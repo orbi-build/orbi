@@ -42,7 +42,7 @@ update in the same PR; a silent change is a defect even when all tests pass.
 
 | Surface | Definition |
 |---|---|
-| CLI | `orbi` (one Runner tick), `orbi add`, `orbi status`, `orbi session`, `orbi install-units`, `orbi doctor`, `orbi setup` |
+| CLI | `orbi` (one Runner tick), `orbi add`, `orbi status`, `orbi session`, `orbi install-units`, `orbi sync-engine-source`, `orbi doctor`, `orbi check`, `orbi setup` |
 | Config | `orbi.toml` fields documented in `docs/getting-started.mdx`; `.orbi/env` loaded as systemd `EnvironmentFile`; the `pi_providers` JSON file |
 | Deployment | `systemd/orbi@.service` and `systemd/orbi@.timer` templates; `.orbi/` as the run-artifact and lock directory |
 | Label state machine | `labels.toml` (names, colors, descriptions) and `src/orbi/delivery_labels.py` (transitions) |
