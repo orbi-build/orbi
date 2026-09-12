@@ -182,12 +182,12 @@ def test_load_config_human_review_gate_defaults_off_and_validates(tmp_path):
     config_path.write_text('source_repos = ["owner/repo"]\n',
                            encoding="utf-8")
     config = runner.load_config(config_path)
-    assert config["human_review_gate"] is False
+    assert config.human_review_gate is False
     config_path.write_text(
         'source_repos = ["owner/repo"]\nhuman_review_gate = true\n',
         encoding="utf-8",
     )
-    assert runner.load_config(config_path)["human_review_gate"] is True
+    assert runner.load_config(config_path).human_review_gate is True
     config_path.write_text(
         'source_repos = ["owner/repo"]\nhuman_review_gate = "yes"\n',
         encoding="utf-8",
@@ -214,13 +214,7 @@ def _scene_comments():
 
 
 def _gate_config(tmp_path, *, gate=True):
-    return {
-        "repo_dir": tmp_path,
-        "base_branch": "main",
-        "base_sha": BASE_SHA,
-        "test_command": "pytest tests/ -q",
-        "human_review_gate": gate,
-    }
+    return runner.RunnerConfig(repo_dir=tmp_path, base_branch="main", base_sha=BASE_SHA, test_command="pytest tests/ -q", human_review_gate=gate)
 
 
 @pytest.fixture()

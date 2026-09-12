@@ -26,6 +26,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from orbi import runner
 from orbi import runner_health
 from seam import seam
 import orbi.journal as journal
@@ -73,13 +74,7 @@ ORBI_REPO = "orbi-build/orbi"
 
 def make_config(tmp_path: Path, *, health_alert_repo=None,
                 unit_name: str | None = None) -> dict:
-    return {
-        "repo_dir": tmp_path,
-        "source_repos": [REPO],
-        "deploy_home": tmp_path,
-        "health_alert_repo": health_alert_repo,
-        "unit_name": unit_name,
-    }
+    return runner.RunnerConfig(repo_dir=tmp_path, source_repos=(REPO,), deploy_home=tmp_path, health_alert_repo=health_alert_repo, unit_name=unit_name)
 
 
 def origin_route(url: str = f"git@github.com:{ORBI_REPO}.git") -> dict:
@@ -1095,8 +1090,7 @@ def test_process_issue_pickup_record_failure_is_bypass(
     with caplog.at_level("INFO"):
         result = runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
-            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-             "base_branch": "main"},
+            runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
             "xqliu/orbi-backlog",
         )
     assert result.url == "https://github.com/orbi-build/orbi/pull/4"
@@ -1145,8 +1139,7 @@ def test_process_issue_failure_record_failure_is_bypass(
     with caplog.at_level("INFO"):
         result = runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
-            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-             "base_branch": "main"},
+            runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
             "xqliu/orbi-backlog",
         )
     assert result.kind == "failed"
@@ -1178,7 +1171,7 @@ def test_main_runs_the_health_check_every_tick(monkeypatch, tmp_path):
     monkeypatch.setattr(seam, "run_command", idle_tick_fake_run())
     assert runner.main(["--config", str(tmp_path / "orbi.toml")]) == 0
     assert len(calls) == 1
-    assert calls[0]["repo_dir"] == tmp_path / "orbi"
+    assert calls[0].repo_dir == tmp_path / "orbi"
 
 
 def test_main_health_check_failure_never_fails_the_tick(

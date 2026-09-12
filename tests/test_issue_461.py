@@ -50,7 +50,7 @@ def test_named_setup_unit_step_passes_instance_name(tmp_path):
 def test_unit_name_is_optional_and_validated(tmp_path):
     config = tmp_path / "orbi.toml"
     config.write_text('source_repos=["owner/repo"]\n')
-    assert runner.load_config(config)["unit_name"] is None
+    assert runner.load_config(config).unit_name is None
     config.write_text('source_repos=["owner/repo"]\nunit_name="web site"\n')
     with pytest.raises(ValueError, match="unit_name"):
         runner.load_config(config)

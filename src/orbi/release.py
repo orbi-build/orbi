@@ -22,6 +22,7 @@ import tomllib
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from orbi.delivery_labels import (
     EPIC_LABEL,
@@ -89,6 +90,12 @@ from orbi.progress import (
     progress_body,
     run_marker,
 )
+
+if TYPE_CHECKING:
+    # Annotation-only: this module imports `orbi.runner` never — the
+    # runner imports this module at runtime (Issue #785) — while
+    # `process_release` annotates the frozen host config of #790.
+    from orbi.runner import RunnerConfig
 
 
 # --- release-domain constants, scene and gates (moved from
@@ -1681,7 +1688,8 @@ def release_failure_comment_body(run_id: str, run_info: str,
     )
 
 
-def process_release(issue: dict, config: dict, source_repo: str) -> str:
+def process_release(issue: dict, config: RunnerConfig,
+                   source_repo: str) -> str:
     """Run the deterministic release state machine for one release Issue.
 
     (Issue #98) A release task NEVER enters the normal `run_pi`
@@ -1745,7 +1753,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
     set_run_id(run_id)
     if has_in_progress_label(number, source_repo):
         existing_run_id = latest_run_id(
-            config["repo_dir"], source_repo, number,
+            config.repo_dir, source_repo, number,
         )
         if existing_run_id is not None:
             run_id = existing_run_id
@@ -1763,7 +1771,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
     )
     branch = task_branch(source_repo, number, run_id)
     worktree = worktree_path(
-        config["repo_dir"], source_repo, number, run_id,
+        config.repo_dir, source_repo, number, run_id,
     )
     publish = functools.partial(
         _safe_publish, run_id=run_id, issue=number,
@@ -1834,14 +1842,14 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
                 f"**Orbi release started**: {run_info}",
             ),
         )
-        release_commit = freeze_base(config["repo_dir"], base_branch)
+        release_commit = freeze_base(config.repo_dir, base_branch)
         # Issue #740: the declared (or defaulted) version_file is proven
         # to exist in the frozen release tree BEFORE any gate wait — a
         # mismatch used to surface only at the version-write step, after
         # the gates and the scope verification, and burned the ticket
         # ai-blocked with a bare FileNotFoundError.
         verify_release_version_file(
-            config["repo_dir"], release_commit,
+            config.repo_dir, release_commit,
             declaration["version_file"],
         )
         wait_started: float | None = None
@@ -1877,7 +1885,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         # Milestone as the #663 completeness gate — the release Issue's own
         # GitHub Milestone, `active_milestone` fallback.
         target_milestone = release_target_milestone(
-            issue, config.get("active_milestone"),
+            issue, config.active_milestone,
         )
         gate_evidence, repo_has_ci = check_release_gates(
             source_repo, base_branch, release_commit, number,
@@ -1886,13 +1894,8 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             # release commit; the real load_config always provides the
             # key, the module constant stays the fallback for hand-built
             # configs.
-            ci_wait_seconds=config.get(
-                "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
-            ),
-            delivery_wait_seconds=config.get(
-                "release_deliveries_wait_seconds",
-                RELEASE_DELIVERIES_WAIT_SECONDS,
-            ),
+            ci_wait_seconds=config.release_ci_wait_seconds,
+            delivery_wait_seconds=config.release_deliveries_wait_seconds,
             delivery_waited_seconds=release_waited_seconds,
             on_wait=on_ci_wait,
             on_delivery_wait=on_delivery_wait,
@@ -1927,7 +1930,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
                     "; ".join(open_milestone_evidence),
                 )
         scope_evidence = verify_release_scope(
-            source_repo, declaration["scope"], config["repo_dir"],
+            source_repo, declaration["scope"], config.repo_dir,
             release_commit,
         )
         if open_milestone_evidence:
@@ -1946,7 +1949,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             ),
         )
         worktree = create_release_worktree(
-            config["repo_dir"], source_repo, number, run_id, release_commit,
+            config.repo_dir, source_repo, number, run_id, release_commit,
         )
         # Version metadata is part of the release commit, not a post-release
         # fix: tests and the tag must identify the exact same commit.
@@ -1972,13 +1975,8 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             source_repo, base_branch, release_commit, number,
             milestone=target_milestone,
             repo_has_ci=repo_has_ci,
-            ci_wait_seconds=config.get(
-                "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
-            ),
-            delivery_wait_seconds=config.get(
-                "release_deliveries_wait_seconds",
-                RELEASE_DELIVERIES_WAIT_SECONDS,
-            ),
+            ci_wait_seconds=config.release_ci_wait_seconds,
+            delivery_wait_seconds=config.release_deliveries_wait_seconds,
             delivery_waited_seconds=release_waited_seconds,
             on_wait=on_ci_wait,
             on_delivery_wait=on_delivery_wait,
@@ -1989,7 +1987,11 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
         # Node-only repo) is not required to carry Orbi's pyproject.toml.
         # The fallback keeps direct callers with legacy hand-built configs
         # compatible; load_config always supplies deploy_home.
-        deployment_home = config.get("deploy_home", config["repo_dir"])
+        deployment_home = (
+            config.deploy_home
+            if config.deploy_home is not None
+            else config.repo_dir
+        )
         refresh_cli_install(
             deployment_home, lock_repo_dir=deployment_home,
             run_command=run_command,
@@ -2009,7 +2011,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             ),
         )
         tag = declaration["version"]
-        existing_tag_commit = release_tag_commit(config["repo_dir"], tag)
+        existing_tag_commit = release_tag_commit(config.repo_dir, tag)
         if existing_tag_commit is not None:
             if existing_tag_commit == release_commit:
                 LOGGER.info(
@@ -2018,7 +2020,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
                 )
             elif tag_commit_is_ancestor_of_base(
                     existing_tag_commit, release_commit,
-                    config["repo_dir"]):
+                    config.repo_dir):
                 # Issue #275: the docs-sync step (step 8) pushed the release
                 # notes to the base branch, advancing origin/<base> past the
                 # tag commit. On a resume the frozen base is the docs commit;
@@ -2040,7 +2042,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
                 )
         else:
             ensure_release_tag_pushed(
-                config["repo_dir"], tag, release_commit,
+                config.repo_dir, tag, release_commit,
             )
             LOGGER.info(
                 "issue=%s release_tag_pushed tag=%s commit=%s",
@@ -2058,7 +2060,7 @@ def process_release(issue: dict, config: dict, source_repo: str) -> str:
             ),
         )
         docs_evidence = sync_release_docs(
-            source_repo=source_repo, repo_dir=config["repo_dir"],
+            source_repo=source_repo, repo_dir=config.repo_dir,
             worktree=worktree, base_branch=base_branch, tag=tag,
             release_commit=release_commit, issue_number=number,
         )

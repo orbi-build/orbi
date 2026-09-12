@@ -37,11 +37,17 @@ import os
 import re
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from orbi.delivery_labels import READY_LABEL
 from orbi.journal import RunIdFilter
 from orbi.progress import format_status_comment, run_marker
 from orbi.systemd_deploy import service_instances
+
+if TYPE_CHECKING:
+    # Annotation-only: `orbi.runner` imports this module at runtime
+    # (Issue #790).
+    from orbi.runner import RunnerConfig
 
 LOGGER = logging.getLogger("orbi.health")
 
@@ -575,7 +581,7 @@ def repeat_failure_comment(finding: dict) -> str:
     ])
 
 
-def run_health_check(config: dict, *, run_command) -> list[str]:
+def run_health_check(config: RunnerConfig, *, run_command) -> list[str]:
     """Run the tick-start self-health check. Returns the fired check names.
 
     Issue #710: the state read-modify-write is serialized across
@@ -588,7 +594,7 @@ def run_health_check(config: dict, *, run_command) -> list[str]:
     never fails the delivery. The state file is saved even when a check
     raises (the alerted-dedup set must survive partial runs).
     """
-    state_path = health_state_path(config["repo_dir"])
+    state_path = health_state_path(config.repo_dir)
     lock_fd = _acquire_health_lock(state_path, blocking=False)
     if lock_fd is None:
         LOGGER.info("health_check_skipped reason=health_lock_busy")
@@ -599,9 +605,9 @@ def run_health_check(config: dict, *, run_command) -> list[str]:
         os.close(lock_fd)
 
 
-def _run_health_check_locked(config: dict, *, run_command) -> list[str]:
+def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
     alerts: list[str] = []
-    state_path = health_state_path(config["repo_dir"])
+    state_path = health_state_path(config.repo_dir)
     state = load_health_state(state_path)
     try:
         # Routing (Issue #345): Runner-self health alerts belong in the orbi
@@ -610,15 +616,15 @@ def _run_health_check_locked(config: dict, *, run_command) -> list[str]:
         # otherwise the orbi repo is derived from the deploy home's git
         # origin. Undeterminable -> log and skip (bypass: never guess a
         # repo, never file the alert in the delivery repo).
-        alert_repo = config.get("health_alert_repo")
+        alert_repo = config.health_alert_repo
         if not alert_repo:
             alert_repo = orbi_repo_from_deploy_home(
-                config["deploy_home"], run_command,
+                config.deploy_home, run_command,
             )
         # 1. Crash loop (#262 scene: repeated service exits, including the
         #    unit self-heal death loop — each iteration exits non-zero).
         #    Issue #616: watch THIS deployment's units (unit_name-aware).
-        unit_name = config.get("unit_name")
+        unit_name = config.unit_name
         crashes = count_crashes(run_command, unit_name=unit_name)
         if crashes >= CRASH_THRESHOLD:
             journal_lines = crash_journal_lines(
@@ -680,7 +686,7 @@ def _run_health_check_locked(config: dict, *, run_command) -> list[str]:
         if stale_pickup_finding(state):
             ready_raw = run_command([
                 "timeout", str(GH_TIMEOUT_SECONDS), "gh", "issue", "list",
-                "--repo", config["source_repos"][0], "--state", "open",
+                "--repo", config.source_repos[0], "--state", "open",
                 "--label", READY_LABEL, "--json", "number", "--limit", "1",
             ])
             try:

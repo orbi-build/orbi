@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import pytest
+import dataclasses
 
 import orbi.runner as runner
 import orbi.cli as orbi
@@ -242,13 +243,7 @@ def test_status_report_lists_sources_current_ready_and_result(monkeypatch):
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: fake_lookup(repo, "ready"))
     monkeypatch.setattr(orbi, "recent_result", lambda repo: fake_lookup(repo, "result"))
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    report = orbi.status_report({
-        "source_repos": ["xqliu/orbi"],
-        "repo_dir": Path("/srv/orbi/orbi"),
-        "base_branch": "main",
-        "max_concurrency": 1,
-        "slot_dir": Path("/srv/orbi/orbi/.orbi/slots"),
-    })
+    report = orbi.status_report(runner.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="main", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots")))
     assert "source: xqliu/orbi" in report
     assert "base: main abc123def456" in report
     assert "current: #3 now u3" in report
@@ -265,13 +260,7 @@ def test_status_report_freezes_base_from_configured_repo_dir(monkeypatch):
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
-    orbi.status_report({
-        "source_repos": ["xqliu/orbi"],
-        "repo_dir": Path("/srv/orbi/orbi"),
-        "base_branch": "develop",
-        "max_concurrency": 1,
-        "slot_dir": Path("/srv/orbi/orbi/.orbi/slots"),
-    })
+    orbi.status_report(runner.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="develop", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots")))
     assert calls == [(Path("/srv/orbi/orbi"), "develop")]
 
 
@@ -280,13 +269,7 @@ def test_status_report_marks_empty_lookups(monkeypatch):
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    report = orbi.status_report({
-        "source_repos": ["xqliu/orbi"],
-        "repo_dir": Path("/srv/orbi/orbi"),
-        "base_branch": "main",
-        "max_concurrency": 1,
-        "slot_dir": Path("/srv/orbi/orbi/.orbi/slots"),
-    })
+    report = orbi.status_report(runner.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=Path("/srv/orbi/orbi"), base_branch="main", max_concurrency=1, slot_dir=Path("/srv/orbi/orbi/.orbi/slots")))
     assert "base: main abc123def456" in report
     assert "current: -" in report
     assert "ready: -" in report
@@ -985,13 +968,7 @@ def test_status_report_includes_live_lines_for_current_issue(monkeypatch, tmp_pa
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    report = orbi.status_report({
-        "source_repos": ["xqliu/orbi"],
-        "repo_dir": tmp_path,
-        "base_branch": "main",
-        "max_concurrency": 1,
-        "slot_dir": tmp_path / ".orbi" / "slots",
-    })
+    report = orbi.status_report(runner.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots"))
     assert "current: #3 now u3" in report
     # Issue #176: the session file exists but no first response has
     # arrived, so the live line shows the request_pending sub-phase.
@@ -1007,13 +984,7 @@ def test_status_report_has_no_live_lines_without_current_issue(monkeypatch, tmp_
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
     monkeypatch.setattr(orbi, "freeze_base", lambda repo_dir, base_branch: "abc123def456")
-    report = orbi.status_report({
-        "source_repos": ["xqliu/orbi"],
-        "repo_dir": tmp_path,
-        "base_branch": "main",
-        "max_concurrency": 1,
-        "slot_dir": tmp_path / ".orbi" / "slots",
-    })
+    report = orbi.status_report(runner.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=tmp_path / ".orbi" / "slots"))
     assert "live:" not in report
     assert "current: -" in report
 
@@ -1029,13 +1000,7 @@ def test_status_report_shows_capacity_and_free_slots(monkeypatch, tmp_path):
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
-    config = {
-        "source_repos": ["xqliu/orbi"],
-        "repo_dir": tmp_path,
-        "base_branch": "main",
-        "max_concurrency": 2,
-        "slot_dir": tmp_path / ".orbi" / "slots",
-    }
+    config = runner.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=2, slot_dir=tmp_path / ".orbi" / "slots")
     report = orbi.status_report(config)
     assert "capacity: 2" in report
     assert "slots: 0/2" in report
@@ -1057,13 +1022,7 @@ def test_status_report_shows_occupied_slots_with_pids(monkeypatch, tmp_path):
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
-    config = {
-        "source_repos": ["xqliu/orbi"],
-        "repo_dir": tmp_path,
-        "base_branch": "main",
-        "max_concurrency": 2,
-        "slot_dir": slot_dir,
-    }
+    config = runner.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=2, slot_dir=slot_dir)
     report = orbi.status_report(config)
     assert "capacity: 2" in report
     assert "slots: 1/2" in report
@@ -1087,13 +1046,7 @@ def test_status_report_shows_free_slot_when_file_exists_without_lock(
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "ready_issue", lambda repo: None)
     monkeypatch.setattr(orbi, "recent_result", lambda repo: None)
-    config = {
-        "source_repos": ["xqliu/orbi"],
-        "repo_dir": tmp_path,
-        "base_branch": "main",
-        "max_concurrency": 1,
-        "slot_dir": slot_dir,
-    }
+    config = runner.RunnerConfig(source_repos=("xqliu/orbi",), repo_dir=tmp_path, base_branch="main", max_concurrency=1, slot_dir=slot_dir)
     report = orbi.status_report(config)
     assert "slots: 0/1" in report
 
@@ -1109,7 +1062,9 @@ def test_slot_lines_ignores_corrupted_slot_file(tmp_path):
 # --- deployment consistency (Issue #103) ------------------------------------
 
 
-def _deploy_world(tmp_path, drift: bool = False) -> tuple[dict, Path]:
+def _deploy_world(
+        tmp_path, drift: bool = False,
+) -> tuple[runner.RunnerConfig, Path]:
     """A deployment checkout with templates plus an installed unit dir."""
     import shutil
 
@@ -1128,17 +1083,17 @@ def _deploy_world(tmp_path, drift: bool = False) -> tuple[dict, Path]:
         (installed / "orbi@.service").write_text(
             "[Service]\n# drift\n", encoding="utf-8",
         )
-    config = {
-        "source_repos": ["xqliu/orbi"],
-        "repo_dir": repo,
+    config = runner.RunnerConfig(
+        source_repos=("xqliu/orbi",),
+        repo_dir=repo,
         # Issue #330: the bootstrap deployment — home == delivery checkout.
-        "deploy_home": repo,
-        "base_branch": "main",
+        deploy_home=repo,
+        base_branch="main",
         # Issue #580: the configured delivery transport (default ssh).
-        "git_transport": "ssh",
-        "max_concurrency": 1,
-        "slot_dir": repo / ".orbi" / "slots",
-    }
+        git_transport="ssh",
+        max_concurrency=1,
+        slot_dir=repo / ".orbi" / "slots",
+    )
     return config, installed
 
 
@@ -1188,7 +1143,8 @@ def test_install_units_command_reports_commit_and_hashes(monkeypatch,
     installed = tmp_path / "elsewhere"
     captured = {}
 
-    def fake_install(repo_dir, installed_dir, *, max_concurrency, run_command):
+    def fake_install(repo_dir, installed_dir, *, max_concurrency,
+                     run_command, unit_name=None):
         captured["repo_dir"] = repo_dir
         captured["installed_dir"] = installed_dir
         captured["max_concurrency"] = max_concurrency
@@ -1205,7 +1161,7 @@ def test_install_units_command_reports_commit_and_hashes(monkeypatch,
 
     monkeypatch.setattr(systemd_deploy, "install_units", fake_install)
     report = orbi.install_units_command(config, installed)
-    assert captured["repo_dir"] == config["repo_dir"]
+    assert captured["repo_dir"] == config.repo_dir
     assert captured["installed_dir"] == installed
     assert captured["max_concurrency"] == 1
     assert captured["run_command"] is orbi.run_command
@@ -1229,8 +1185,8 @@ def test_install_units_command_uses_deploy_home(monkeypatch, tmp_path):
     config, _ = _deploy_world(tmp_path)
     home = tmp_path / "home"
     home.mkdir()
-    config["deploy_home"] = home
-    config["unit_name"] = "website"
+    config = dataclasses.replace(config, deploy_home=home)
+    config = dataclasses.replace(config, unit_name="website")
     installed = tmp_path / "elsewhere"
     captured = {}
 
@@ -1252,7 +1208,7 @@ def test_install_units_command_uses_deploy_home(monkeypatch, tmp_path):
     orbi.install_units_command(config, installed)
     assert captured["repo_dir"] == home
     assert captured["unit_name"] == "website"
-    assert captured["repo_dir"] != config["repo_dir"]
+    assert captured["repo_dir"] != config.repo_dir
 
 
 def test_doctor_report_routes_home_checks_to_deploy_home(
@@ -1266,8 +1222,8 @@ def test_doctor_report_routes_home_checks_to_deploy_home(
     config, installed = _deploy_world(tmp_path, drift=False)
     home = tmp_path / "home"
     home.mkdir()
-    config["deploy_home"] = home
-    config["unit_name"] = "website"
+    config = dataclasses.replace(config, deploy_home=home)
+    config = dataclasses.replace(config, unit_name="website")
     _fake_doctor_commands(monkeypatch)
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
     seen = {}
@@ -1290,7 +1246,7 @@ def test_doctor_report_routes_home_checks_to_deploy_home(
     assert seen["units"] == home
     assert seen["unit_name"] == "website"
     assert seen["cli"] == home
-    assert home != config["repo_dir"]
+    assert home != config.repo_dir
     assert "unit_drift: clean" in report.splitlines()
     assert f"cli_source: clean source={home}" in report.splitlines()
 
@@ -1475,7 +1431,7 @@ def test_main_setup_prints_key_value_lines_and_returns_zero(
     ]) == 0
     assert seen["installed_dir"] == tmp_path / "u"
     assert seen["repos"] is None
-    assert seen["config"]["source_repos"] == ["xqliu/orbi"]
+    assert seen["config"].source_repos == ("xqliu/orbi",)
     out = capsys.readouterr().out
     assert "setup=ok" in out
 
@@ -1570,10 +1526,10 @@ def test_doctor_report_reports_provider_key_finding(tmp_path, monkeypatch):
     config, installed = _deploy_world(tmp_path, drift=False)
     _fake_doctor_commands(monkeypatch)
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    config["pi_provider_key_finding"] = {
+    config = dataclasses.replace(config, pi_provider_key_finding={
         "provider": "ollama", "variable": "OLLAMA_API_KEY",
         "state": "is set but empty", "path": tmp_path / ".orbi/pi-providers.json",
-    }
+    })
     report = orbi.doctor_report(config, installed)
     assert (
         "model_endpoint: provider=ollama key=OLLAMA_API_KEY "
@@ -1587,13 +1543,13 @@ def test_doctor_report_clean(tmp_path, monkeypatch):
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
     report = orbi.doctor_report(config, installed)
     lines = report.splitlines()
-    assert lines[0] == f"repo: {config['repo_dir']}"
+    assert lines[0] == f"repo: {config.repo_dir}"
     assert lines[1] == "commit: 0123456789abcdef0123456789abcdef01234567"
     assert "unit_drift: clean" in lines
     assert "deploy_home: clean" in lines
     # Both units are reported with their installed hash.
     from orbi import systemd_deploy
-    status = systemd_deploy.unit_status(config["repo_dir"], installed)
+    status = systemd_deploy.unit_status(config.repo_dir, installed)
     for entry in status:
         assert (
             f"  {entry['unit']}: sha256={entry['installed_sha256']}"
@@ -1687,7 +1643,7 @@ def test_doctor_report_includes_the_engine_source_channel(
     """Issue #535: doctor reports the configured engine source track,
     the resolved ref/tag and the deployment home's HEAD SHA."""
     config, installed = _deploy_world(tmp_path, drift=False)
-    config["engine_source_track"] = "tag:v0.4.2"
+    config = dataclasses.replace(config, engine_source_track="tag:v0.4.2")
     _fake_doctor_commands(monkeypatch)
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
     report = orbi.doctor_report(config, installed)
@@ -1703,7 +1659,7 @@ def test_doctor_report_resolves_the_release_track(
     """Issue #535: `release` resolves to the newest official semver tag
     the doctor can see locally (pre-releases excluded)."""
     config, installed = _deploy_world(tmp_path, drift=False)
-    config["engine_source_track"] = "release"
+    config = dataclasses.replace(config, engine_source_track="release")
     _fake_doctor_commands(monkeypatch)
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
     report = orbi.doctor_report(config, installed)
@@ -1734,7 +1690,7 @@ def test_doctor_report_reports_a_failed_engine_source_channel(
     the health report stays readable (the fail-closed gate is the
     ExecStartPre sync / the freshness gate, not doctor)."""
     config, installed = _deploy_world(tmp_path, drift=False)
-    config["engine_source_track"] = "tag:v9.9.9"
+    config = dataclasses.replace(config, engine_source_track="tag:v9.9.9")
     _fake_doctor_commands(monkeypatch)
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
     report = orbi.doctor_report(config, installed)
@@ -1755,7 +1711,7 @@ def test_doctor_report_reports_a_drifted_engine_source_channel(
     (e.g. the track was edited after the last start) is REPORTED as
     DRIFT with both SHAs — the next service start syncs it."""
     config, installed = _deploy_world(tmp_path, drift=False)
-    config["engine_source_track"] = "tag:v0.4.2"
+    config = dataclasses.replace(config, engine_source_track="tag:v0.4.2")
     _fake_doctor_commands(
         monkeypatch,
         engine_expected="9999999999999999999999999999999999999999",
@@ -1789,7 +1745,7 @@ def test_doctor_report_reports_dirty_deploy_home(tmp_path, monkeypatch):
     assert "  files: src/orbi/pilot_setup.py, deleted.py, old.py -> new.py" in lines
     assert "ignored.txt" not in report
     assert (
-        "  fix: git -C " + str(config["deploy_home"])
+        "  fix: git -C " + str(config.deploy_home)
         + " stash && systemctl --user start orbi@1.service"
     ) in lines
 
@@ -1825,7 +1781,7 @@ def test_doctor_report_drift_carries_paths_hashes_and_fix(
     assert "unit_drift: DRIFT" in lines
     drifted = [
         e for e in systemd_deploy.unit_status(
-            config["repo_dir"], installed,
+            config.repo_dir, installed,
         ) if e["drifted"]
     ]
     assert len(drifted) == 1
@@ -1904,7 +1860,7 @@ def test_doctor_report_cli_source_clean(tmp_path, monkeypatch):
     ), report
     assert (
         "cli_source: clean source="
-        f"{config['repo_dir'] / 'src' / 'orbi' / '__init__.py'}"
+        f"{config.repo_dir / 'src' / 'orbi' / '__init__.py'}"
     ) in lines
     assert "cli_source_drift" not in report
 
@@ -1929,11 +1885,11 @@ def test_doctor_report_cli_source_drift_carries_source_expected_fix(
         line.startswith("  cli_source_drift ")
         and "source=/home/u/.local/share/uv/tools/orbi/"
         in line
-        and f"expected={config['repo_dir'].resolve()}" in line
+        and f"expected={config.repo_dir.resolve()}" in line
         and (
             'fix="uv tool install --force --reinstall --editable '
             '--python /usr/bin/python3 '
-            f"{config['repo_dir']}\""
+            f"{config.repo_dir}\""
         ) in line
         for line in lines
     ), f"drift line missing or malformed in:\n{report}"
@@ -1974,7 +1930,7 @@ def test_doctor_report_shows_current_issue_and_session(tmp_path, monkeypatch):
     monkeypatch.setattr(
         orbi, "current_issue", lambda repo: issue,
     )
-    session = (config["repo_dir"] / ".worktrees" / "w" / ".pi-session"
+    session = (config.repo_dir / ".worktrees" / "w" / ".pi-session"
                / "s.jsonl")
     session.parent.mkdir(parents=True)
     session.write_text("{}", encoding="utf-8")
@@ -2035,12 +1991,12 @@ def test_doctor_report_reports_configured_model_provider(tmp_path, monkeypatch):
     config, installed = _deploy_world(tmp_path, drift=False)
     _fake_doctor_commands(monkeypatch)
     monkeypatch.setattr(orbi, "current_issue", lambda repo: None)
-    config.update({
-        "pi_providers": tmp_path / "providers.json",
-        "pi_provider": "openai", "pi_model": "gpt",
-        "pi_providers_data": {"providers": {
+    config = dataclasses.replace(
+        config,
+        pi_providers=tmp_path / "providers.json", pi_provider="openai",
+        pi_model="gpt", pi_providers_data={"providers": {
             "openai": {"apiKey": "$OPENAI_API_KEY"},
         }},
-    })
+    )
     report = orbi.doctor_report(config, installed)
     assert "model_provider: ok provider=openai model=gpt key=OPENAI_API_KEY=set" in report

@@ -99,12 +99,10 @@ def point_module_file(monkeypatch, checkout: Path) -> None:
     monkeypatch.setattr(cli_source, "module_file", lambda: pkg / "__init__.py")
 
 
-def gate_config(deploy_home: Path, **extra) -> dict:
-    return {
-        "base_branch": "main",
-        "deploy_home": deploy_home,
-        **extra,
-    }
+def gate_config(deploy_home: Path, **extra) -> runner.RunnerConfig:
+    return runner.RunnerConfig(
+        **{"base_branch": "main", "deploy_home": deploy_home, **extra},
+    )
 
 
 # --- editable install form ----------------------------------------------------
@@ -477,7 +475,7 @@ def test_load_config_allow_stale_runner_defaults_false(tmp_path):
     config = tmp_path / "orbi.toml"
     config.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     loaded = runner.load_config(config, check_provider_api_keys=False)
-    assert loaded["allow_stale_runner"] is False
+    assert loaded.allow_stale_runner is False
 
 
 def test_load_config_allow_stale_runner_rejects_non_boolean(tmp_path):

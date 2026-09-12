@@ -43,6 +43,7 @@ from orbi.delivery_labels import (
 
 from orbi.runner import (
     RunIdFilter,
+    RunnerConfig,
     freeze_base,
     list_issues,
     load_config,
@@ -365,7 +366,7 @@ def deploy_home_dirty_files(repo_dir: Path, *, run_command) -> list[str]:
     ]
 
 
-def install_units_command(config: dict, installed_dir: Path | None) -> str:
+def install_units_command(config: RunnerConfig, installed_dir: Path | None) -> str:
     """Run the idempotent unit install and return the deployment report.
 
     The report carries the deployed commit (the deployment checkout's
@@ -375,14 +376,10 @@ def install_units_command(config: dict, installed_dir: Path | None) -> str:
     # Issue #330: the unit templates live in the deployment home (they
     # render the home path into {{ORBI_REPO_DIR}}), never in the delivery
     # checkout.
-    kwargs = {
-        "max_concurrency": config["max_concurrency"],
-        "run_command": run_command,
-    }
-    if config.get("unit_name") is not None:
-        kwargs["unit_name"] = config["unit_name"]
     result = systemd_deploy.install_units(
-        config["deploy_home"], installed_dir, **kwargs,
+        config.deploy_home, installed_dir,
+        max_concurrency=config.max_concurrency,
+        unit_name=config.unit_name, run_command=run_command,
     )
     lines = [
         (
@@ -390,13 +387,13 @@ def install_units_command(config: dict, installed_dir: Path | None) -> str:
             f"installed_dir={result['installed_dir']}"
         ),
     ]
-    for name in systemd_deploy.unit_names(config.get("unit_name")):
+    for name in systemd_deploy.unit_names(config.unit_name):
         entry = result["units"][name]
         lines.append(f"unit={name} sha256={entry['sha256']}")
     return "\n".join(lines)
 
 
-def doctor_report(config: dict, installed_dir: Path | None) -> str:
+def doctor_report(config: RunnerConfig, installed_dir: Path | None) -> str:
     """Read-only deployment and health report (Issue #103).
 
     Checks: repo commit, unit drift (both units; the same comparison
@@ -405,7 +402,7 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
     the recent journal activity. Read-only: no labels, no units, no
     git mutation. A failed command fails fast (run_command).
     """
-    repo_dir = config["repo_dir"]
+    repo_dir = config.repo_dir
     if installed_dir is None:
         installed_dir = systemd_deploy.installed_unit_dir()
     lines = [f"repo: {repo_dir}"]
@@ -417,7 +414,7 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
     # local git reads; an unresolvable channel is REPORTED (FAILED) with
     # its structured reason while the rest of the report stays readable.
     status = engine_source.engine_source_status(
-        config["deploy_home"], config.get("engine_source_track"),
+        config.deploy_home, config.engine_source_track,
         run_command=run_command,
     )
     head_text = status["head"] or "-"
@@ -436,14 +433,14 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
             "(the next service start syncs it)"
         )
     dirty_files = deploy_home_dirty_files(
-        config["deploy_home"], run_command=run_command,
+        config.deploy_home, run_command=run_command,
     )
     if dirty_files:
         lines.append("deploy_home: DRIFT")
         lines.append(f"  files: {', '.join(dirty_files)}")
         lines.append(
             "  fix: git -C "
-            f"{config['deploy_home']} stash && "
+            f"{config.deploy_home} stash && "
             "systemctl --user start orbi@1.service"
         )
     else:
@@ -457,9 +454,9 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
     # check.
     try:
         transport = git_transport.check_transport(
-            repo_dir, config["source_repos"],
+            repo_dir, config.source_repos,
             run_command=run_command, migrate=False,
-            mode=config["git_transport"],
+            mode=config.git_transport,
         )
         reachable = transport["transport_reachable"]
         reachable_text = "-" if reachable is None else (
@@ -480,11 +477,11 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
         lines.append(f"transport: FAILED {exc}")
     # Issue #330: unit drift is compared against the deployment home's
     # templates (the same comparison the pre-start check uses).
-    if config.get("unit_name") is None:
-        status = systemd_deploy.unit_status(config["deploy_home"], installed_dir)
+    if config.unit_name is None:
+        status = systemd_deploy.unit_status(config.deploy_home, installed_dir)
     else:
         status = systemd_deploy.unit_status(
-            config["deploy_home"], installed_dir, config["unit_name"],
+            config.deploy_home, installed_dir, config.unit_name,
         )
     drifted = [entry for entry in status if entry["drifted"]]
     if drifted:
@@ -516,7 +513,7 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
         )
     if unmanaged:
         lines.append(f"  fix: {systemd_deploy.UNMANAGED_FIX}")
-    finding = config.get("pi_provider_key_finding")
+    finding = config.pi_provider_key_finding
     if finding and finding.get("variable") != "-":
         lines.append(
             "model_endpoint: provider="
@@ -549,7 +546,7 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
     # readable and the rest of the health report is still produced.
     # Issue #330: the editable CLI source is expected in the deployment
     # home, not the delivery checkout.
-    source = cli_source.cli_source(config["deploy_home"])
+    source = cli_source.cli_source(config.deploy_home)
     line = cli_source.drift_line(source)
     if line is None:
         lines.append(f"cli_source: clean source={source['actual']}")
@@ -560,22 +557,22 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
     # `systemctl show` rejects the bare template name, and `journalctl
     # -u` with a template-name glob fails when no instance exists —
     # instance names always work).
-    for unit in (*systemd_deploy.timer_instances(config.get("unit_name")),
-                 *systemd_deploy.service_instances(config.get("unit_name"))):
+    for unit in (*systemd_deploy.timer_instances(config.unit_name),
+                 *systemd_deploy.service_instances(config.unit_name)):
         state = run_command([
             "systemctl", "--user", "show", "-p", "ActiveState",
             "--value", unit,
         ])
         lines.append(f"{unit}: {state}")
-    lines.extend(slot_lines(config["slot_dir"], config["max_concurrency"]))
+    lines.extend(slot_lines(config.slot_dir, config.max_concurrency))
     session = find_session_file(repo_dir)
     lines.append(f"pi: {session if session else 'none'}")
-    for repo in config["source_repos"]:
+    for repo in config.source_repos:
         lines.append(f"source: {repo}")
         current = current_issue(repo)
         lines.append(f"  current: {format_issue(current) if current else '-'}")
     journal_args: list[str] = ["journalctl", "--user"]
-    for unit in systemd_deploy.service_instances(config.get("unit_name")):
+    for unit in systemd_deploy.service_instances(config.unit_name):
         journal_args.extend(["-u", unit])
     journal = run_command(journal_args + [
         "-n", str(JOURNAL_LINES), "--no-pager",
@@ -586,20 +583,20 @@ def doctor_report(config: dict, installed_dir: Path | None) -> str:
     return "\n".join(lines)
 
 
-def status_report(config: dict) -> str:
+def status_report(config: RunnerConfig) -> str:
     lines = [
-        f"capacity: {config['max_concurrency']}",
-        *slot_lines(config["slot_dir"], config["max_concurrency"]),
+        f"capacity: {config.max_concurrency}",
+        *slot_lines(config.slot_dir, config.max_concurrency),
     ]
-    for repo in config["source_repos"]:
+    for repo in config.source_repos:
         lines.append(f"source: {repo}")
-        base_sha = freeze_base(config["repo_dir"], config["base_branch"])
-        lines.append(f"  base: {config['base_branch']} {base_sha}")
+        base_sha = freeze_base(config.repo_dir, config.base_branch)
+        lines.append(f"  base: {config.base_branch} {base_sha}")
         current = current_issue(repo)
         lines.append(f"  current: {format_issue(current) if current else '-'}")
         if current is not None:
             lines.extend(
-                live_activity_lines(config["repo_dir"], repo, current),
+                live_activity_lines(config.repo_dir, repo, current),
             )
         for name, lookup in (
             ("ready", ready_issue),
@@ -748,7 +745,7 @@ def main(argv: list[str] | None = None) -> int:
         # Issue #697: every command path (doctor included) enforces the
         # same single-source-repo contract as runner.main, so a config
         # the Runner will reject is reported instead of all-green.
-        validate_execution_source_repos(config["source_repos"])
+        validate_execution_source_repos(config.source_repos)
     except (ValueError, pilot_setup.SetupError) as exc:
         if args.command == "setup":
             print(f"setup_failed reason={exc}", file=sys.stderr)
@@ -769,20 +766,20 @@ def main(argv: list[str] | None = None) -> int:
             LOGGER.error("config_invalid reason=required path missing: %s", exc)
         return 1
     if args.command == "add":
-        repo = args.repo or config["source_repos"][0]
-        if repo not in config["source_repos"]:
+        repo = args.repo or config.source_repos[0]
+        if repo not in config.source_repos:
             parser.error(
-                f"--repo must be one of: {', '.join(config['source_repos'])}"
+                f"--repo must be one of: {', '.join(config.source_repos)}"
             )
         LOGGER.info("dispatch repo=%s title=%s", repo, args.title)
         url = dispatch_issue(repo, args.title, args.body)
         print(f"created: {url}")
         print(f"label: {READY_LABEL}")
     elif args.command == "session":
-        path = find_session_file(config["repo_dir"])
+        path = find_session_file(config.repo_dir)
         if path is None:
             print(
-                f"no pi session under {config['repo_dir'] / '.worktrees'}: "
+                f"no pi session under {config.repo_dir / '.worktrees'}: "
                 "no Pi is running",
                 file=sys.stderr,
             )
@@ -819,7 +816,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "sync-engine-source":
         try:
             engine_source.sync_engine_source(
-                config["deploy_home"], config["engine_source_track"],
+                config.deploy_home, config.engine_source_track,
                 run_command=run_command,
             )
         except engine_source.EngineSourceError as exc:

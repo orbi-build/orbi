@@ -94,7 +94,7 @@ def _issue():
 
 
 def _config(tmp_path):
-    return {"repo_dir": tmp_path, "base_branch": "main"}
+    return runner.RunnerConfig(repo_dir=tmp_path, base_branch="main")
 
 
 # ---------------------------------------------------------------- classification
@@ -611,7 +611,7 @@ def test_wait_for_delivery_base_branch_mismatch_marks_blocked_with_reason(
     caplog.set_level("INFO")
     runner.wait_for_delivery(
         PR_URL, _issue(),
-        {"repo_dir": tmp_path, "base_branch": "main"}, "owner/repo",
+        runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
     )
     # No review was started (the mismatch is terminal before it).
     assert reviews == []
@@ -1091,7 +1091,7 @@ def test_exhausted_review_enters_new_budget_after_human_recovery(
         runner, "run_review",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("review started")),
     )
-    config = {"run_id": FAKE_RUN_ID, "base_branch": "main", "repo_dir": tmp_path}
+    config = runner.RunnerConfig(run_id=FAKE_RUN_ID, base_branch="main", repo_dir=tmp_path)
     with pytest.raises(RuntimeError, match="review started"):
         runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", config, "owner/repo", 39,
@@ -1125,10 +1125,7 @@ def test_review_rounds_exhausted_raises_unrecoverable(monkeypatch, tmp_path):
         "number": 46, "url": PR_URL, "base_ref": "main",
         "base_oid": "abc", "head_ref": "b", "head_oid": "def",
     })
-    config = {
-        "run_id": FAKE_RUN_ID, "base_branch": "main",
-        "repo_dir": tmp_path,
-    }
+    config = runner.RunnerConfig(run_id=FAKE_RUN_ID, base_branch="main", repo_dir=tmp_path)
     with pytest.raises(
         runner.UnrecoverableDeliveryError, match="exhausted",
     ):

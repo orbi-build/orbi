@@ -42,7 +42,8 @@ import time
 import tomllib
 import xml.etree.ElementTree as ET
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
@@ -93,6 +94,7 @@ from orbi import human_review
 from orbi.repo_config import (
     REPO_CONFIG_PATH,
     RepoConfigError,
+    RepoPolicy,
     read_repo_config,
     read_repo_config_at,
     repo_config_audit,
@@ -505,8 +507,78 @@ def _load_deploy_env_file(deploy_home: Path) -> None:
         os.environ.setdefault(name, value)
 
 
+@dataclass(frozen=True)
+class RunnerConfig:
+    """The typed host configuration (Issue #790).
+
+    :func:`load_config` is the ONLY constructor from raw TOML; derived
+    instances (the per-run values and the repository-policy overlay) are
+    produced with :func:`dataclasses.replace`, never by re-assembly.
+    Every module consumes it through attribute access. Fields the host
+    config does not carry carry the same defaults the former bare dict's
+    ``config.get(key, default)`` fallbacks used, so a hand-built (test)
+    config keeps the exact pre-#790 behavior.
+    """
+
+    # Per-run delivery values, bound by the tick/process_issue with
+    # `replace` right before the implementer/review session runs; ""
+    # is the unbound placeholder (never read before the binding).
+    run_id: str = ""
+    base_sha: str = ""
+    # Repository-policy overlay (Issue #527): written only by
+    # `repo_config.resolve_policy` — `test_command` and `dispatch_label`
+    # are repository-declared keys with no host equivalent.
+    test_command: str | None = None
+    repo_context_files: tuple[str, ...] = ()
+    dispatch_label: str | None = None
+    # Host config (load_config output). The Path fields and the two
+    # string identity fields below carry placeholder defaults ("." /
+    # "main" / "ssh") ONLY so a hand-built partial config stays
+    # constructible: load_config — the sole real constructor — sets every
+    # one of them explicitly, and a path that reads a field a hand-built
+    # config never set failed with a KeyError before #790.
+    config_path: Path = Path(".")
+    source_repos: tuple[str, ...] = ()
+    repo_dir: Path = Path(".")
+    deploy_home: Path = Path(".")
+    unit_name: str | None = None
+    health_alert_repo: str | None = None
+    workspace_root: Path = Path(".")
+    prompt: Path = Path(".")
+    prompt_review: Path = Path(".")
+    skills: tuple[Path, ...] = ()
+    context_files: tuple[Path, ...] = ()
+    base_branch: str = "main"
+    git_transport: str = "ssh"
+    engine_source_track: str | None = None
+    active_milestone: str | None = None
+    auto_next_milestone: bool = True
+    max_concurrency: int = 1
+    allow_stale_runner: bool = False
+    human_review_gate: bool = False
+    slot_dir: Path | None = None
+    pi_provider: str | None = None
+    pi_model: str | None = None
+    pi_thinking: str | None = None
+    pi_extensions: tuple[dict, ...] = ()
+    model_wait_dead_seconds: float = PI_MODEL_WAIT_DEAD_SECONDS
+    issue_comments_limit: int = ISSUE_COMMENTS_LIMIT
+    worktree_retain_hours: float = WORKTREE_RETAIN_HOURS
+    model_wait_probe_url: str | None = None
+    model_wait_probe_seconds: float = PI_MODEL_WAIT_PROBE_SECONDS
+    release_ci_wait_seconds: float = RELEASE_CI_WAIT_SECONDS
+    mergeable_wait_seconds: float = MERGEABLE_WAIT_SECONDS
+    release_deliveries_wait_seconds: float = RELEASE_DELIVERIES_WAIT_SECONDS
+    pi_providers: Path | None = None
+    pi_providers_data: dict | None = None
+    pi_provider_key_finding: dict | None = None
+    # Multi-repo registry (Issue #134): the explicit per-repo entries
+    # (name, path, github, base_branch). Empty -> the single-repo config.
+    repositories: tuple[dict, ...] = ()
+
+
 def load_config(path: Path, *, check_provider_api_keys: bool = True,
-                allow_missing_pi_providers: bool = False) -> dict:
+                allow_missing_pi_providers: bool = False) -> RunnerConfig:
     """Load the human-maintained TOML config and resolve its paths.
 
     ``doctor`` disables the selected provider-key gate so it can report the
@@ -687,66 +759,68 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
                 "env_file": deploy_home / ".orbi" / "env",
                 "state": "file missing",
             }
-    return {
-        "config_path": path.resolve(),
-        "source_repos": source_repos,
-        "repo_dir": repo_dir,
-        "deploy_home": deploy_home,
-        "unit_name": unit_name,
-        "health_alert_repo": health_alert_repo,
-        "workspace_root": _config_path(data.get("workspace_root", ".."), base),
+    return RunnerConfig(
+        config_path=path.resolve(),
+        source_repos=tuple(source_repos),
+        repo_dir=repo_dir,
+        deploy_home=deploy_home,
+        unit_name=unit_name,
+        health_alert_repo=health_alert_repo,
+        workspace_root=_config_path(data.get("workspace_root", ".."), base),
         # Issue #330: when deploy_home is EXPLICIT the prompt defaults
         # live in the deployment home (the delivery checkout may be a
         # foreign repo without them); an explicit prompt path still
         # resolves against the config file dir. deploy_home absent ->
         # the original config-file-dir resolution (bootstrap unchanged).
-        "prompt": _prompt_config_path(
+        prompt=_prompt_config_path(
             data.get("prompt", "prompts/prompt.md"),
             base if "prompt" in data
             else (deploy_home if deploy_home_raw is not None else base),
             "prompt.md",
         ),
-        "prompt_review": _prompt_config_path(
+        prompt_review=_prompt_config_path(
             data.get("prompt_review", "prompts/prompt_review.md"),
             base if "prompt_review" in data
             else (deploy_home if deploy_home_raw is not None else base),
             "prompt_review.md",
         ),
-        "skills": [_config_path(item, base) for item in data.get("skills", [])],
-        "context_files": [
+        skills=tuple(_config_path(item, base) for item in data.get("skills", [])),
+        context_files=tuple(
             _config_path(item, base) for item in data.get("context_files", [])
-        ],
-        "base_branch": base_branch,
-        "git_transport": git_transport,
-        "engine_source_track": engine_source_track,
-        "active_milestone": active_milestone,
-        "auto_next_milestone": auto_next_milestone,
-        "max_concurrency": max_concurrency,
-        "allow_stale_runner": allow_stale_runner,
-        "human_review_gate": human_review_gate,
-        "slot_dir": slot_dir_for(repo_dir),
-        "pi_provider": pi_provider,
-        "pi_model": pi_model,
-        "pi_thinking": pi_thinking,
-        "pi_extensions": pi_extensions,
-        "model_wait_dead_seconds": model_wait_dead_seconds,
-        "issue_comments_limit": issue_comments_limit,
-        "worktree_retain_hours": worktree_retain_hours,
-        "model_wait_probe_url": model_wait_probe_url,
-        "model_wait_probe_seconds": model_wait_probe_seconds,
-        "release_ci_wait_seconds": release_ci_wait_seconds,
-        "mergeable_wait_seconds": mergeable_wait_seconds,
-        "release_deliveries_wait_seconds": release_deliveries_wait_seconds,
-        "pi_providers": pi_providers_path,
-        "pi_providers_data": pi_providers_data,
-        "pi_provider_key_finding": getattr(
+        ),
+        base_branch=base_branch,
+        git_transport=git_transport,
+        engine_source_track=engine_source_track,
+        active_milestone=active_milestone,
+        auto_next_milestone=auto_next_milestone,
+        max_concurrency=max_concurrency,
+        allow_stale_runner=allow_stale_runner,
+        human_review_gate=human_review_gate,
+        slot_dir=slot_dir_for(repo_dir),
+        pi_provider=pi_provider,
+        pi_model=pi_model,
+        pi_thinking=pi_thinking,
+        pi_extensions=tuple(pi_extensions),
+        model_wait_dead_seconds=model_wait_dead_seconds,
+        issue_comments_limit=issue_comments_limit,
+        worktree_retain_hours=worktree_retain_hours,
+        model_wait_probe_url=model_wait_probe_url,
+        model_wait_probe_seconds=model_wait_probe_seconds,
+        release_ci_wait_seconds=release_ci_wait_seconds,
+        mergeable_wait_seconds=mergeable_wait_seconds,
+        release_deliveries_wait_seconds=release_deliveries_wait_seconds,
+        pi_providers=pi_providers_path,
+        pi_providers_data=pi_providers_data,
+        pi_provider_key_finding=getattr(
             _load_pi_providers, "last_key_finding", None,
         ),
         # Multi-repo registry (Issue #134): the explicit per-repo entries
-        # (name, path, github, base_branch). Absent section -> [] so the
+        # (name, path, github, base_branch). Absent section -> () so the
         # single-repo config keeps its exact shape and flow.
-        "repositories": parse_repositories(data.get("repositories", []), base),
-    }
+        repositories=tuple(
+            parse_repositories(data.get("repositories", []), base)
+        ),
+    )
 
 
 def _optional_pi_string(data: dict, key: str) -> str | None:
@@ -831,19 +905,19 @@ def _load_pi_extensions(value: object, base: Path) -> list[dict]:
     return result
 
 
-def _pi_extension_args(config: dict) -> list[str]:
+def _pi_extension_args(config: RunnerConfig) -> list[str]:
     """Return the isolated extension flags for every Pi role."""
     args = ["--no-extensions"]
-    for extension in config.get("pi_extensions", []):
+    for extension in config.pi_extensions:
         if extension["enabled"]:
             args.extend(("--extension", extension["source"]))
     return args
 
 
-def _pi_extension_env(config: dict) -> dict[str, str]:
+def _pi_extension_env(config: RunnerConfig) -> dict[str, str]:
     """Return extension variables for the Pi child only; never log them."""
     values: dict[str, str] = {}
-    for extension in config.get("pi_extensions", []):
+    for extension in config.pi_extensions:
         if extension["enabled"]:
             values.update(extension["env"])
     return values
@@ -1247,7 +1321,7 @@ def _expand_pi_api_key_refs(api_key: str) -> str:
     )
 
 
-def prepare_pi_agent_dir(worktree: Path, config: dict) -> Path | None:
+def prepare_pi_agent_dir(worktree: Path, config: RunnerConfig) -> Path | None:
     """Materialize the per-run Pi agent dir (Issue #157).
 
     Returns None when no provider file is configured — the Pi command
@@ -1302,7 +1376,7 @@ def prepare_pi_agent_dir(worktree: Path, config: dict) -> Path | None:
     resolved key never reaches the journal, a comment, or a commit:
     the per-run dir is the gitignored `<worktree>/.orbi/pi-agent/`.
     """
-    providers_data = config.get("pi_providers_data")
+    providers_data = config.pi_providers_data
     if providers_data is None:
         return None
     agent_dir = worktree / ".orbi" / "pi-agent"
@@ -1361,8 +1435,8 @@ def prepare_pi_agent_dir(worktree: Path, config: dict) -> Path | None:
             )
         base_settings = loaded
     settings = dict(base_settings)
-    pi_provider = config.get("pi_provider")
-    pi_model = config.get("pi_model")
+    pi_provider = config.pi_provider
+    pi_model = config.pi_model
     if pi_provider is not None and pi_model is not None:
         settings["defaultProvider"] = pi_provider
         settings["defaultModel"] = pi_model
@@ -1431,7 +1505,7 @@ def _resolve_enabled_models(patterns: list, providers: dict) -> list:
     return resolved
 
 
-def _pi_model_args(config: dict) -> list[str]:
+def _pi_model_args(config: RunnerConfig) -> list[str]:
     """Return the configured Pi model flags (Issue #119).
 
     One `--flag value` pair per configured key, in the fixed order
@@ -1447,7 +1521,7 @@ def _pi_model_args(config: dict) -> list[str]:
         ("--model", "pi_model"),
         ("--thinking", "pi_thinking"),
     ):
-        value = config.get(key)
+        value = getattr(config, key)
         if value is not None:
             args.extend((flag, value))
     return args
@@ -1501,38 +1575,40 @@ def parse_repositories(entries: object, base: Path) -> list[dict]:
     return repos
 
 
-def repository_config_path(config: dict, source_repo: str) -> str:
+def repository_config_path(config: RunnerConfig, source_repo: str) -> str:
     """The repository config path of one source repo (Issue #527).
 
     The optional `[[repositories]].config_path` wins when its `github`
     entry matches the source repo; otherwise the single default location
     `.github/orbi.toml` applies.
     """
-    for repo in config.get("repositories", []):
+    for repo in config.repositories:
         if repo.get("github") == source_repo:
             return repo.get("config_path", REPO_CONFIG_PATH)
     return REPO_CONFIG_PATH
 
 
-def repository_base_branch(config: dict, source_repo: str) -> str:
+def repository_base_branch(config: RunnerConfig, source_repo: str) -> str:
     """The fallback base branch of one source repo (Issue #527, D3).
 
     A repository config that omits `base_branch` falls back to its
     `[[repositories]]` entry's `base_branch` when one matches the source
     repo, else the host `base_branch`.
     """
-    for repo in config.get("repositories", []):
+    for repo in config.repositories:
         if repo.get("github") == source_repo:
             return repo["base_branch"]
-    return config["base_branch"]
+    return config.base_branch
 
 
-def load_repo_policy(config: dict, source_repo: str) -> dict | None:
+def load_repo_policy(config: RunnerConfig,
+                     source_repo: str) -> RepoPolicy | None:
     """Read and validate one source repo's policy file (Issue #527).
 
-    Returns the `{"sha", "policy"}` record, or `None` when the repository
-    has no policy file. A malformed/forbidden file raises
-    :class:`RepoConfigError` — the caller fails the claim fast.
+    Returns the validated :class:`RepoPolicy` with the file's blob sha
+    bound, or `None` when the repository has no policy file. A
+    malformed/forbidden file raises :class:`RepoConfigError` — the caller
+    fails the claim fast.
     """
     return read_repo_config(
         source_repo,
@@ -1541,14 +1617,14 @@ def load_repo_policy(config: dict, source_repo: str) -> dict | None:
     )
 
 
-def apply_repo_policy(config: dict, source_repo: str,
-                     record: dict) -> dict:
+def apply_repo_policy(config: RunnerConfig, source_repo: str,
+                      policy: RepoPolicy) -> RunnerConfig:
     """Resolve one repo's policy over the host fallback (Issue #527, D3)."""
-    fallback = {
-        **config,
-        "base_branch": repository_base_branch(config, source_repo),
-    }
-    return resolve_policy(fallback, record["policy"])
+    fallback = replace(
+        config,
+        base_branch=repository_base_branch(config, source_repo),
+    )
+    return resolve_policy(fallback, policy)
 
 
 def previous_repo_config_sha(number: int, source_repo: str) -> str | None:
@@ -1585,7 +1661,7 @@ def render_prompt(template: str, values: dict[str, str]) -> str:
     return rendered
 
 
-def validate_execution_source_repos(source_repos: list[str]) -> None:
+def validate_execution_source_repos(source_repos: Sequence[str]) -> None:
     """Reject task-pool fan-out until execution has per-repo checkouts."""
     if len(source_repos) > 1:
         raise ValueError(
@@ -1595,17 +1671,17 @@ def validate_execution_source_repos(source_repos: list[str]) -> None:
         )
 
 
-def validate_config(config: dict) -> None:
-    if not config["repo_dir"].is_dir():
-        raise FileNotFoundError(config["repo_dir"])
+def validate_config(config: RunnerConfig) -> None:
+    if not config.repo_dir.is_dir():
+        raise FileNotFoundError(config.repo_dir)
     # Issue #330: the deployment home (CLI install source, unit templates,
     # labels.toml, prompt defaults) must exist too — a missing home fails
     # the start fast, like a missing delivery checkout.
-    if not config["deploy_home"].is_dir():
-        raise FileNotFoundError(config["deploy_home"])
+    if not config.deploy_home.is_dir():
+        raise FileNotFoundError(config.deploy_home)
     for path in [
-        config["prompt"], config["prompt_review"],
-        *config["skills"], *config["context_files"],
+        config.prompt, config.prompt_review,
+        *config.skills, *config.context_files,
     ]:
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -1613,7 +1689,7 @@ def validate_config(config: dict) -> None:
     # and be a Git checkout — a `.git` directory (a plain checkout) or a
     # `.git` file (a linked worktree). Absent key -> no registry, so a
     # single-repo config keeps its exact flow.
-    for repo in config.get("repositories", []):
+    for repo in config.repositories:
         path = repo["path"]
         if not path.is_dir():
             raise FileNotFoundError(path)
@@ -2886,8 +2962,8 @@ def advance_active_milestone_on_idle(
 
 
 def pick_next_delivery(
-    repos: list[str], slot_dir: Path, max_concurrency: int,
-    active_milestone: str | None = None, config: dict | None = None,
+    repos: Sequence[str], slot_dir: Path, max_concurrency: int,
+    active_milestone: str | None = None, config: RunnerConfig | None = None,
 ) -> tuple[str, dict, dict | None] | None:
     """Scan sources in order: resumable PRs, in-flight restarts, ready.
 
@@ -2955,35 +3031,36 @@ def pick_next_delivery(
 
 
 def _repo_scan_keys(
-    config: dict | None, repo: str, active_milestone: str | None,
+    config: RunnerConfig | None, repo: str, active_milestone: str | None,
 ) -> tuple[str | None, str]:
     """Resolve one source repo's scan keys from its policy (Issue #527).
 
     Returns `(active_milestone, dispatch_label)`. The read is fail-open and
     a malformed repository file is ignored here (host keys keep the scan
-    alive): `process_issue` re-reads the file at claim and blocks the
-    Issue with the readable reason instead of silently claiming nothing.
+    alive): the claim blocks the Issue with the readable reason instead of
+    silently claiming nothing.
     """
     if config is None:
         return active_milestone, READY_LABEL
     try:
-        record = load_repo_policy(config, repo)
+        policy = load_repo_policy(config, repo)
     except RepoConfigError as exc:
         LOGGER.error(
             "repo_config_invalid repo=%s reason=%s", repo, exc,
         )
-        record = None
-    if record is None:
+        policy = None
+    if policy is None:
         return active_milestone, READY_LABEL
-    policy = record["policy"]
     return (
-        policy.get("active_milestone", active_milestone),
-        policy.get("dispatch_label", READY_LABEL),
+        policy.active_milestone
+        if policy.active_milestone is not None
+        else active_milestone,
+        policy.dispatch_label or READY_LABEL,
     )
 
 
 def _pick_issue_with_repo_policy(
-    repo: str, active_milestone: str | None, config: dict | None,
+    repo: str, active_milestone: str | None, config: RunnerConfig | None,
 ) -> dict | None:
     """Fresh ready scan with the repo's scan keys (Issue #527).
 
@@ -3199,7 +3276,7 @@ def _tree_size(path: Path) -> int:
     return total
 
 
-def reclaim_released_worktrees(config: dict, *,
+def reclaim_released_worktrees(config: RunnerConfig, *,
                                now: datetime | None = None) -> None:
     """Remove the task worktrees of closed Issues past the retention
     window (Issue #760).
@@ -3230,12 +3307,12 @@ def reclaim_released_worktrees(config: dict, *,
     state. The structured `worktree_reclaimed count=N freed=<bytes>`
     line lands in the journal only when something was removed.
     """
-    repo_dir = Path(config["repo_dir"])
+    repo_dir = Path(config.repo_dir)
     worktrees_root = repo_dir / ".worktrees"
     if not worktrees_root.is_dir():
         return
     repo_of_slug = {
-        repo.replace("/", "-"): repo for repo in config["source_repos"]
+        repo.replace("/", "-"): repo for repo in config.source_repos
     }
     # (slug, issue number, path) per orbi-named registered worktree.
     candidates: list[tuple[str, int, Path]] = []
@@ -3280,7 +3357,7 @@ def reclaim_released_worktrees(config: dict, *,
         )
         return
     now = now or datetime.now(timezone.utc)
-    retain = timedelta(hours=config["worktree_retain_hours"])
+    retain = timedelta(hours=config.worktree_retain_hours)
     reclaimable: list[tuple[datetime, Path]] = []
     for slug, number, path in candidates:
         issue = closed.get((repo_of_slug[slug], number))
@@ -3371,7 +3448,7 @@ def is_ops(issue: dict) -> bool:
     )
 
 
-def run_ticket_agent(issue: dict, config: dict, source_repo: str,
+def run_ticket_agent(issue: dict, config: RunnerConfig, source_repo: str,
                      *, progress: Callable[[dict], None] | None = None) -> str:
     """Generate one ticket-only deliverable without using Git state (#209)."""
     started = time.monotonic()
@@ -3411,13 +3488,13 @@ def run_ticket_agent(issue: dict, config: dict, source_repo: str,
                 str(session_dir), "--system-prompt", "<redacted>",
                 "<issue-context-redacted>",
             ],
-            run_id=config["run_id"], issue=int(issue["number"]),
+            run_id=config.run_id, issue=int(issue["number"]),
             source_repo=source_repo, branch="-", role=ROLE_TICKET,
             progress=progress,
         )
 
 
-def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
+def process_ticket_only(issue: dict, config: RunnerConfig, source_repo: str) -> str:
     """Deliver explicit ticket-only Agent output to the source Issue (#209)."""
     number = int(issue["number"])
     title = issue["title"]
@@ -3447,7 +3524,7 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
             ))),
         )
         output = run_ticket_agent(
-            issue, {**config, "run_id": run_id}, source_repo,
+            issue, replace(config, run_id=run_id), source_repo,
             progress=LiveProgressThrottle(
                 publisher, issue=number, title=title, run_id=run_id,
                 role=ROLE_TICKET, branch="-", worktree=Path("-"),
@@ -3506,7 +3583,7 @@ def process_ticket_only(issue: dict, config: dict, source_repo: str) -> str:
         raise
 
 
-def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
+def run_pi(issue: dict, worktree: Path, config: RunnerConfig, source_repo: str,
            *, timeout: int | None = None, branch: str | None = None,
            progress: Callable[[dict], None] | None = None,
            resume_context: str | None = None) -> str:
@@ -3536,35 +3613,35 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
     # Issue #527: the repository policy's context files are
     # repository-relative; resolve them against the delivery worktree and
     # enforce existence + the size cap before injection (D2).
-    context_files = list(config["context_files"])
-    for relative in config.get("repo_context_files", []):
+    context_files = list(config.context_files)
+    for relative in config.repo_context_files:
         context_files.append(validate_context_file(worktree, relative))
-    template = config["prompt"].read_text(encoding="utf-8")
+    template = config.prompt.read_text(encoding="utf-8")
     prompt_values = {
         "SOURCE_REPO": source_repo,
-        "SOURCE_REPOS": ", ".join(config["source_repos"]),
+        "SOURCE_REPOS": ", ".join(config.source_repos),
         "ISSUE_NUMBER": str(issue["number"]),
         "ISSUE_TITLE": issue["title"],
         "ISSUE_BODY": issue.get("body", ""),
-        "WORKSPACE_ROOT": str(config["workspace_root"]),
+        "WORKSPACE_ROOT": str(config.workspace_root),
         "CONTEXT_FILES": "\n".join(str(path) for path in context_files),
         "SKILLS": "\n".join(
             str(path)
             for path in _skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)
         ),
-        "BASE_BRANCH": config["base_branch"],
-        "BASE_SHA": config["base_sha"],
+        "BASE_BRANCH": config.base_branch,
+        "BASE_SHA": config.base_sha,
         # Issue #527: a repository-declared test command (absent ->
         # the agent follows its own test contract, as before #527).
         "TEST_COMMAND": (
-            (config.get("test_command") or "").strip()
+            (config.test_command or "").strip()
             or "(not declared)"
         ),
-        "RUN_ID": config["run_id"],
+        "RUN_ID": config.run_id,
         # Issue #186: the implementer prompt no longer carries the
         # base-sync lock (the base fetch is the Runner's operation);
         # the value stays available for custom prompt templates.
-        "BASE_SYNC_LOCK": str(base_sync_lock_path(config["repo_dir"])),
+        "BASE_SYNC_LOCK": str(base_sync_lock_path(config.repo_dir)),
     }
     # Issue #745: the trusted-comment timeline enters the task context
     # only when the template carries the placeholder — a template
@@ -3573,7 +3650,7 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
     if "{{ISSUE_COMMENTS}}" in template:
         prompt_values["ISSUE_COMMENTS"] = trusted_issue_comments_block(
             issue_comments(int(issue["number"]), repo=source_repo),
-            config.get("issue_comments_limit", ISSUE_COMMENTS_LIMIT),
+            config.issue_comments_limit,
         )
     system_prompt = render_prompt(template, prompt_values)
     context = (
@@ -3621,7 +3698,7 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
             "--print", "--session-dir", str(worktree / ".pi-session"),
             "--system-prompt", "<redacted>", "<issue-context-redacted>",
         ],
-        run_id=config["run_id"],
+        run_id=config.run_id,
         issue=int(issue["number"]),
         source_repo=source_repo,
         branch=branch,
@@ -3629,15 +3706,11 @@ def run_pi(issue: dict, worktree: Path, config: dict, source_repo: str,
         # Issue #228: the configured model_wait dead threshold (the
         # real load_config always provides the key; the module
         # constant stays the fallback for hand-built configs).
-        model_wait_dead_seconds=config.get(
-            "model_wait_dead_seconds", PI_MODEL_WAIT_DEAD_SECONDS,
-        ),
+        model_wait_dead_seconds=config.model_wait_dead_seconds,
         # Issue #233: the /slots swallow probe (absent URL -> disabled,
         # the exact pre-#233 behavior).
-        model_wait_probe_url=config.get("model_wait_probe_url"),
-        model_wait_probe_seconds=config.get(
-            "model_wait_probe_seconds", PI_MODEL_WAIT_PROBE_SECONDS,
-        ),
+        model_wait_probe_url=config.model_wait_probe_url,
+        model_wait_probe_seconds=config.model_wait_probe_seconds,
         **extra,
     )
 
@@ -4271,7 +4344,7 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
     )
 
 
-def verify_resumed_pr(scene: dict, issue: dict, config: dict,
+def verify_resumed_pr(scene: dict, issue: dict, config: RunnerConfig,
                       source_repo: str) -> str:
     """Verify the PR of a resumed delivery BEFORE any git/Pi mutation.
 
@@ -4319,10 +4392,10 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
     external = bool(scene.get("external"))
     branch = task_branch(source_repo, number, run_id)
     worktree = worktree_path(
-        config["repo_dir"], source_repo, number, run_id,
+        config.repo_dir, source_repo, number, run_id,
     )
     try:
-        if scene["base_branch"] != config["base_branch"]:
+        if scene["base_branch"] != config.base_branch:
             # Issue #91 + #50: a base-branch change is a human
             # decision: the runner must not auto-retry a PR frozen on
             # another base, so the handler below marks the Issue
@@ -4331,7 +4404,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
             raise UnrecoverableDeliveryError(
                 f"resume scene base_branch={scene['base_branch']} "
                 f"differs from configured base_branch="
-                f"{config['base_branch']}; the PR is frozen on a "
+                f"{config.base_branch}; the PR is frozen on a "
                 "different base and must not be resumed against the "
                 "configured one — a base change is a human decision, "
                 "so auto-retrying would keep failing on the same "
@@ -4348,8 +4421,8 @@ def verify_resumed_pr(scene: dict, issue: dict, config: dict,
                 ["git", "branch", "--show-current"], cwd=worktree,
             )
         verified_url = verify_pr(
-            worktree, branch, config["base_branch"], run_id,
-            issue=number, repo_dir=config["repo_dir"],
+            worktree, branch, config.base_branch, run_id,
+            issue=number, repo_dir=config.repo_dir,
             pr_repo=source_repo,
             expected_url=scene["pr_url"], require_latest_base=False,
             external_pr=external,
@@ -4563,10 +4636,10 @@ def _skill_name(entry: str | Path) -> str:
     return path.stem
 
 
-def _skills_for(config: dict, excluded: frozenset[str]) -> list[str | Path]:
+def _skills_for(config: RunnerConfig, excluded: frozenset[str]) -> list[str | Path]:
     """Return one role's configured skills, dropping excluded names."""
     return [
-        skill for skill in config["skills"]
+        skill for skill in config.skills
         if _skill_name(skill) not in excluded
     ]
 
@@ -4579,7 +4652,7 @@ def _skill_args(skills: list[str | Path]) -> list[str]:
     ]
 
 
-def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
+def run_review(worktree: Path, pr: dict, config: RunnerConfig, source_repo: str,
                issue: int, branch: str, round: int,
                timeout: int | None = None,
                progress: Callable[[dict], None] | None = None) -> str:
@@ -4602,12 +4675,12 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
     # review session reads/writes the same `.orbi/` artifacts.
     (worktree / ".orbi").mkdir(exist_ok=True)
     started = time.monotonic()
-    review_template = config["prompt_review"].read_text(encoding="utf-8")
+    review_template = config.prompt_review.read_text(encoding="utf-8")
     review_values = {
         "SOURCE_REPO": source_repo,
         "PR_NUMBER": str(pr["number"]),
         "PR_URL": pr["url"],
-        "BASE_BRANCH": config["base_branch"],
+        "BASE_BRANCH": config.base_branch,
         "BASE_SHA": pr["base_oid"],
         "HEAD_SHA": pr["head_oid"],
         "HEAD_REF": pr["head_ref"],
@@ -4615,7 +4688,7 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
         # Issue #171: the SAME shared base-sync lock as the
         # implementer — the review session's base-absorb fetch must
         # run under it (flock <lock> git fetch origin <base>).
-        "BASE_SYNC_LOCK": str(base_sync_lock_path(config["repo_dir"])),
+        "BASE_SYNC_LOCK": str(base_sync_lock_path(config.repo_dir)),
     }
     # Issue #745: the review path sees the Issue's decision evolution
     # too — same trusted timeline, same placeholder gate (a template
@@ -4623,12 +4696,12 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
     if "{{ISSUE_COMMENTS}}" in review_template:
         review_values["ISSUE_COMMENTS"] = trusted_issue_comments_block(
             issue_comments(issue, repo=source_repo),
-            config.get("issue_comments_limit", ISSUE_COMMENTS_LIMIT),
+            config.issue_comments_limit,
         )
     system_prompt = render_prompt(review_template, review_values)
     context = (
         f"Independently review PR #{pr['number']} ({pr['url']}) of "
-        f"{source_repo} against base {config['base_branch']}@{pr['base_oid']} "
+        f"{source_repo} against base {config.base_branch}@{pr['base_oid']} "
         f"and head {pr['head_oid']} (round {round}). Follow code-review R1-R9; "
         "fix Blocker/Major findings in this same session (push only the "
         "task branch) and end with a single REVIEW_VERDICT line carrying "
@@ -4667,7 +4740,7 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
             "--print", "--session-dir", str(worktree / ".pi-session"),
             "--system-prompt", "<redacted>", "<review-context-redacted>",
         ],
-        run_id=config["run_id"],
+        run_id=config.run_id,
         issue=issue,
         source_repo=source_repo,
         branch=branch,
@@ -4677,15 +4750,11 @@ def run_review(worktree: Path, pr: dict, config: dict, source_repo: str,
         # model_wait dead threshold as the implementer (the real
         # load_config always provides the key; the module constant
         # stays the fallback for hand-built configs).
-        model_wait_dead_seconds=config.get(
-            "model_wait_dead_seconds", PI_MODEL_WAIT_DEAD_SECONDS,
-        ),
+        model_wait_dead_seconds=config.model_wait_dead_seconds,
         # Issue #233: the review session uses the SAME /slots swallow
         # probe as the implementer (absent URL -> disabled).
-        model_wait_probe_url=config.get("model_wait_probe_url"),
-        model_wait_probe_seconds=config.get(
-            "model_wait_probe_seconds", PI_MODEL_WAIT_PROBE_SECONDS,
-        ),
+        model_wait_probe_url=config.model_wait_probe_url,
+        model_wait_probe_seconds=config.model_wait_probe_seconds,
         **extra,
     )
 
@@ -5131,7 +5200,7 @@ def _runner_source_stale_line(facts: dict, *, allowed: bool, fix: str) -> str:
     )
 
 
-def check_runner_source_freshness(config: dict, *, run_command) -> dict:
+def check_runner_source_freshness(config: RunnerConfig, *, run_command) -> dict:
     """Startup invariant (Issue #525): prove that the code THIS process
     executes is the configured engine source channel's exact commit
     BEFORE any slot or claim (Issue #535: the channel is the
@@ -5169,11 +5238,11 @@ def check_runner_source_freshness(config: dict, *, run_command) -> dict:
     # ``base_branch`` belongs to the delivery target and must not affect
     # this independent freshness check.
     track = engine_source.normalize_engine_source_track(
-        config.get("engine_source_track"),
+        config.engine_source_track,
     )
     kind, argument = engine_source.split_track(track)
-    delivery_base_branch = config["base_branch"]
-    deploy_home = Path(config["deploy_home"])
+    delivery_base_branch = config.base_branch
+    deploy_home = Path(config.deploy_home)
     from orbi import cli_source  # lazy: the single cross-module dependency
     module_path = cli_source.module_file()
     package_dir = module_path.parent
@@ -5327,7 +5396,7 @@ def check_runner_source_freshness(config: dict, *, run_command) -> dict:
             ),
         )
         return facts
-    allowed = bool(config.get("allow_stale_runner"))
+    allowed = bool(config.allow_stale_runner)
     line = _runner_source_stale_line(facts, allowed=allowed, fix=fix)
     if allowed:
         LOGGER.warning("%s", line)
@@ -5402,7 +5471,7 @@ def _sync_base_checkout_locked(repo_dir: Path, base_branch: str) -> None:
 
 
 def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
-                              config: dict, source_repo: str,
+                              config: RunnerConfig, source_repo: str,
                               number: int, title: str, priority: str) -> bool:
     """Run one independent review round; merge when the verdict is clean.
 
@@ -5440,11 +5509,11 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
       recoverable failure); the caller marks the Issue `ai-blocked`
       with the explicit reason.
     """
-    marker = run_marker(config["run_id"])
+    marker = run_marker(config.run_id)
     comments = issue_comments(number, repo=source_repo)
     # The run marker is the delivery-attempt boundary. Do not count review
     # comments from a previous PR/run on the same Issue (Issue #508).
-    rounds = review_rounds_so_far(comments, run_id=config["run_id"])
+    rounds = review_rounds_so_far(comments, run_id=config.run_id)
     recovery_at = None
     if rounds >= MAX_REVIEW_ROUNDS:
         # Issue #483: a maintainer may repair an external prerequisite and
@@ -5454,7 +5523,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         recovery_at = human_review_recovery_at(number, source_repo)
         if recovery_at is not None:
             rounds = review_rounds_so_far(
-                comments, after=recovery_at, run_id=config["run_id"],
+                comments, after=recovery_at, run_id=config.run_id,
             )
             LOGGER.info(
                 "review_budget_recovered issue=%s recovery_at=%s rounds=%s",
@@ -5481,10 +5550,10 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         # latest PR CI before spending the newly granted review budget.
         log_recovery_ci_status(pr, source_repo)
     publisher = ProgressPublisher(
-        number, source_repo, config["run_id"], run_command=run_command,
+        number, source_repo, config.run_id, run_command=run_command,
     )
     publish = functools.partial(
-        _safe_publish, run_id=config["run_id"], issue=number,
+        _safe_publish, run_id=config.run_id, issue=number,
         source_repo=source_repo, role=ROLE_REVIEW,
     )
     started = time.monotonic()
@@ -5493,7 +5562,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     # journal is the record, the progress comment is observability).
     publish(
         action=lambda: publisher.ensure(_progress_body(_progress_state(
-            issue=number, title=title, run_id=config["run_id"],
+            issue=number, title=title, run_id=config.run_id,
             role=ROLE_REVIEW, branch=branch, worktree=worktree,
             started=started, pr_url=pr["url"], review_round=round,
             priority=priority,
@@ -5503,7 +5572,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         worktree, pr, config, source_repo, number, branch, round,
         progress=LiveProgressThrottle(
             publisher, issue=number, title=title,
-            run_id=config["run_id"], role=ROLE_REVIEW, branch=branch,
+            run_id=config.run_id, role=ROLE_REVIEW, branch=branch,
             worktree=worktree, started=started, pr_url=pr["url"],
             review_round=round, priority=priority,
         ),
@@ -5548,7 +5617,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         publish(
             action=lambda: publisher.finish(_progress_body(
                 _progress_state(
-                    issue=number, title=title, run_id=config["run_id"],
+                    issue=number, title=title, run_id=config.run_id,
                     role=ROLE_REVIEW, branch=branch,
                     worktree=worktree, started=started,
                     pr_url=pr["url"], review_round=round,
@@ -5600,7 +5669,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             # human decision instead of looping forever.
             + (f"Orbi review round {round} for PR #{pr['number']}: "
                "CI merge gate blocked: "
-               f"{message} (run_id={config['run_id']})" if ci_failure else
+               f"{message} (run_id={config.run_id})" if ci_failure else
                f"Orbi review round {round} for PR #{pr['number']}: "
             "the PR is behind the latest base or has a merge conflict; "
             f"the next review session merges the latest "
@@ -5615,7 +5684,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         except Exception:
             LOGGER.exception(
                 "delivery_ci_evidence_publish_failed pr=%s run_id=%s",
-                pr["number"], config["run_id"],
+                pr["number"], config.run_id,
             )
         apply_label_patch(
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
@@ -5624,9 +5693,8 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
 
     try:
         ci_evidence = check_review_ci(
-            source_repo, refrozen["head_oid"], wait_seconds=config.get(
-                "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
-            ),
+            source_repo, refrozen["head_oid"],
+            wait_seconds=config.release_ci_wait_seconds,
         )
         LOGGER.info(
             "review_ci_gate_passed pr=%s head=%s evidence=%s",
@@ -5639,13 +5707,9 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         merged = merge_gate(
             worktree,
             {**refrozen, "_source_repo": source_repo,
-             "_ci_wait_seconds": config.get(
-                 "release_ci_wait_seconds", RELEASE_CI_WAIT_SECONDS,
-             ),
-             "_mergeable_wait_seconds": config.get(
-                 "mergeable_wait_seconds", MERGEABLE_WAIT_SECONDS,
-             )},
-            base_branch, repo_dir=config["repo_dir"],
+             "_ci_wait_seconds": config.release_ci_wait_seconds,
+             "_mergeable_wait_seconds": config.mergeable_wait_seconds},
+            base_branch, repo_dir=config.repo_dir,
         )
     except RecoverableMergeGateError as exc:
         handle_gate_failure(str(exc), ci_failure=False)
@@ -5659,7 +5723,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         handle_gate_failure(message, ci_failure=True)
         return False
     confirmed = confirm_merged(
-        worktree, merged, base_branch, repo_dir=config["repo_dir"],
+        worktree, merged, base_branch, repo_dir=config.repo_dir,
     )
     # Issue #79: the merged publishing is bypass — the GitHub merge
     # already landed; a 404 here must not stop the `ai-merged`
@@ -5674,7 +5738,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     publish(
         action=lambda: publisher.finish(_progress_body(
             _progress_state(
-                issue=number, title=title, run_id=config["run_id"],
+                issue=number, title=title, run_id=config.run_id,
                 role=ROLE_REVIEW, branch=branch,
                 worktree=worktree, started=started,
                 pr_url=merged["url"], review_round=round,
@@ -5704,7 +5768,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             f"Orbi merged PR: {merged['url']} "
             f"(merge_commit={confirmed['merge_commit']} "
             f"review_rounds={round} "
-            f"base_branch={base_branch} run_id={config['run_id']})"
+            f"base_branch={base_branch} run_id={config.run_id})"
         ),
     )
     try:
@@ -5712,10 +5776,10 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         # deploy home defaults to the repo dir); a hand-built legacy
         # dict without them keeps the pre-#535 sync behavior.
         if (
-            config.get("engine_source_track") is not None
-            and config.get("deploy_home") is not None
-            and config["repo_dir"] == config["deploy_home"]
-            and config["engine_source_track"] != "main"
+            config.engine_source_track is not None
+            and config.deploy_home is not None
+            and config.repo_dir == config.deploy_home
+            and config.engine_source_track != "main"
         ):
             # Issue #535: the delivery checkout IS the engine source in
             # the dogfood layout, and the engine channel is locked (or
@@ -5725,16 +5789,16 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             LOGGER.info(
                 "base_checkout_sync_skipped repo_dir=%s "
                 "engine_source_track=%s base_branch=%s",
-                config["repo_dir"], config["engine_source_track"],
+                config.repo_dir, config.engine_source_track,
                 base_branch,
             )
         else:
-            sync_base_checkout(config["repo_dir"], base_branch)
+            sync_base_checkout(config.repo_dir, base_branch)
     except RuntimeError:
         LOGGER.exception(
             "base_checkout_sync_failed after merge pr=%s repo_dir=%s; "
             "the delivery already landed on origin/%s",
-            merged["url"], config["repo_dir"], base_branch,
+            merged["url"], config.repo_dir, base_branch,
         )
     return True
 
@@ -5795,7 +5859,7 @@ def delivered_changed_files(worktree: Path, base: str) -> list[str] | None:
 
 
 def human_review_checklist(
-    worktree: Path, config: dict, *, run_id: str, pr_url: str,
+    worktree: Path, config: RunnerConfig, *, run_id: str, pr_url: str,
 ) -> str:
     """Build the human acceptance checklist comment for one delivery.
 
@@ -5805,31 +5869,31 @@ def human_review_checklist(
     posts the checklist; a resumed re-derivation falls back to the
     configured base branch.
     """
-    base = config.get("base_sha") or config["base_branch"]
+    base = config.base_sha or config.base_branch
     return human_review.render_checklist_comment(
         run_id=run_id,
         pr_url=pr_url,
-        test_command=config.get("test_command"),
+        test_command=config.test_command,
         checklist=human_review.build_checklist(
             test_result=read_test_result(worktree),
             changed_files=delivered_changed_files(worktree, base),
-            test_command=config.get("test_command"),
+            test_command=config.test_command,
         ),
     )
 
 
-def _human_review_column2(worktree: Path, config: dict) -> list[str]:
+def _human_review_column2(worktree: Path, config: RunnerConfig) -> list[str]:
     """Recompute the checklist's column 2 from local delivery evidence.
 
     The review-round gate's per-tick cost: local file reads only — no
     session, no GitHub write. Missing evidence lands IN column 2 (the
     gate holds), so only real evidence can pass it.
     """
-    base = config.get("base_sha") or config["base_branch"]
+    base = config.base_sha or config.base_branch
     return human_review.build_checklist(
         test_result=read_test_result(worktree),
         changed_files=delivered_changed_files(worktree, base),
-        test_command=config.get("test_command"),
+        test_command=config.test_command,
     )["column2"]
 
 
@@ -6132,15 +6196,8 @@ class IssueResult(NamedTuple):
     url: str | None
 
 
-# Sentinel for `process_issue`'s repository-policy argument (Issue #527):
-# `main` resolves the policy once for the whole delivery (resume verify,
-# claim, review/merge) and passes the record in; a direct caller that omits
-# it gets the claim-time read (and the fail-fast block) here.
-_REPO_CONFIG_UNSET = object()
-
-
-def process_issue(issue: dict, config: dict, source_repo: str,
-                  repo_config_record: object = _REPO_CONFIG_UNSET) -> IssueResult:
+def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
+                  repo_policy: RepoPolicy | None = None) -> IssueResult:
     number = int(issue["number"])
     # Issue #100: the progress comment's issue line shows the number
     # AND the title in every scene. The scanned issue dict always
@@ -6167,8 +6224,8 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         # The millisecond truly-simultaneous window remains, exactly as
         # documented for #658 — the label write is not a CAS.
         if has_in_progress_label(number, source_repo):
-            slot_dir = config.get("slot_dir")
-            max_concurrency = config.get("max_concurrency")
+            slot_dir = config.slot_dir
+            max_concurrency = config.max_concurrency
             if (slot_dir is not None and max_concurrency is not None
                     and _another_live_runner(slot_dir, max_concurrency)):
                 LOGGER.info(
@@ -6196,32 +6253,16 @@ def process_issue(issue: dict, config: dict, source_repo: str,
     # repository file blocks the claim with a run-marked comment.
     run_id = new_run_id()
     set_run_id(run_id)
-    # Repository-level config-as-code (Issue #527): read `.github/orbi.toml`
-    # (or the entry's `config_path`) from the source repo's default branch
-    # tip and apply its whitelisted delivery-policy keys per key over the
-    # host config (D3). A missing file is a no-op (byte-identical
-    # pre-#527 behavior); a file that exists but violates the schema blocks
-    # this claim fast with the offending keys.
+    # Repository-level config-as-code (Issue #527): the caller resolved
+    # `.github/orbi.toml` (or the entry's `config_path`) from the source
+    # repo's default branch tip ONCE for the whole delivery (a missing
+    # file is the None no-op) and it is applied here per key over the host
+    # config (D3, idempotent — the tick already applied it). A file that
+    # exists but violates the schema never reaches this point: the caller
+    # blocked the claim fast with the offending keys.
     repo_config_fields: dict = {}
-    if repo_config_record is _REPO_CONFIG_UNSET:
-        try:
-            repo_config_record = load_repo_policy(config, source_repo)
-        except RepoConfigError as exc:
-            LOGGER.error(
-                "issue=%s repo_config_invalid source_repo=%s reason=%s",
-                number, source_repo, exc,
-            )
-            block_repo_config_failure(
-                number, source_repo, exc, run_id,
-                current_labels={
-                    label.get("name") for label in issue.get("labels", [])
-                    if isinstance(label, dict)
-                    and isinstance(label.get("name"), str)
-                },
-            )
-            return IssueResult("failed", None)
-    if repo_config_record is not None:
-        config = apply_repo_policy(config, source_repo, repo_config_record)
+    if repo_policy is not None:
+        config = apply_repo_policy(config, source_repo, repo_policy)
         # D4 change visibility: the previous run's sha is read from the
         # trusted Orbi comments (best-effort audit), and the previous
         # policy is re-read from its blob for the effective diff summary.
@@ -6234,14 +6275,14 @@ def process_issue(issue: dict, config: dict, source_repo: str,
             ) if previous_sha else None
         )
         repo_config_fields = repo_config_audit(
-            repo_config_record["sha"], repo_config_record["policy"],
+            repo_policy.sha, repo_policy,
             previous_sha=previous_sha,
             previous_policy=previous_policy,
         )
-    base_branch = config["base_branch"]
+    base_branch = config.base_branch
     # The claim label is a delivery-policy key (Issue #527); the lifecycle
     # labels stay host constants.
-    dispatch_label = config.get("dispatch_label", READY_LABEL)
+    dispatch_label = (config.dispatch_label or READY_LABEL)
     # Restart resume (Issue #18): a killed runner leaves the task
     # worktree and the `ai-in-progress` label behind. Only in that state
     # the newest worktree's run id is reused, so the same hidden-marker
@@ -6259,9 +6300,9 @@ def process_issue(issue: dict, config: dict, source_repo: str,
     in_progress = has_in_progress_label(number, source_repo)
     if not in_progress and dispatch_label in claim_labels:
         stable_branch = task_branch(source_repo, number)
-        takeover_pr = open_pr_for_branch(config["repo_dir"], stable_branch)
+        takeover_pr = open_pr_for_branch(config.repo_dir, stable_branch)
         stable_branch_present = stable_branch_exists(
-            config["repo_dir"], stable_branch,
+            config.repo_dir, stable_branch,
         )
         if takeover_pr is None:
             # Issue #608: a triage Issue whose body routes to an EXTERNAL
@@ -6269,7 +6310,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
             # same takeover primitive as a stable-branch PR (run_pi is
             # skipped, the PR goes straight to the delivery wait loop).
             takeover_pr = external_takeover_pr(
-                config["repo_dir"], issue.get("body"), source_repo,
+                config.repo_dir, issue.get("body"), source_repo,
                 base_branch,
             )
             external_takeover = takeover_pr is not None
@@ -6299,8 +6340,8 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         # wrongly-yielded orphan is picked up next tick by the
         # slot-guarded in-flight scan — one cadence late, never
         # stranded.
-        slot_dir = config.get("slot_dir")
-        max_concurrency = config.get("max_concurrency")
+        slot_dir = config.slot_dir
+        max_concurrency = config.max_concurrency
         if (IN_PROGRESS_LABEL not in claim_labels
                 and slot_dir is not None and max_concurrency is not None
                 and _another_live_runner(slot_dir, max_concurrency)):
@@ -6314,12 +6355,12 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         # resume into `run_pi` on the contributor's branch — the external
         # PR, when still open, is the takeover delivery.
         takeover_pr = external_takeover_pr(
-            config["repo_dir"], issue.get("body"), source_repo, base_branch,
+            config.repo_dir, issue.get("body"), source_repo, base_branch,
         )
         external_takeover = takeover_pr is not None
         try:
             scene = worktree_resume_scene(
-                config["repo_dir"], source_repo, number,
+                config.repo_dir, source_repo, number,
             )
         except Exception as exc:
             # Issue #219: the worktree of this issue exists but its run
@@ -6345,7 +6386,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
                 "issue=%s resuming_run run_id=%s",
                 number, run_id,
             )
-    base_sha = freeze_base(config["repo_dir"], base_branch)
+    base_sha = freeze_base(config.repo_dir, base_branch)
     branch = task_branch(source_repo, number, run_id)
     if existing_worktree is not None:
         # Issue #219: the resumed run keeps its ORIGINAL branch —
@@ -6371,11 +6412,11 @@ def process_issue(issue: dict, config: dict, source_repo: str,
     )
     if ops:
         run_info += " task_type=ops"
-    if repo_config_record is not None:
+    if repo_policy is not None and repo_policy.sha is not None:
         # Issue #527 D4: the run comment carries the repository config sha
         # (the file blob at the default branch tip) so a policy change is
         # always visible on the run.
-        run_info += f" repo_config={repo_config_record['sha']}"
+        run_info += f" repo_config={repo_policy.sha}"
     LOGGER.info(
         "issue=%s %s", number, run_info,
     )
@@ -6397,7 +6438,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
             )
             return IssueResult("claim-yielded", None)
         if not stable_branch_present and stable_branch_exists(
-                config["repo_dir"], stable_branch,
+                config.repo_dir, stable_branch,
         ):
             LOGGER.info(
                 "issue=%s claim_yield reason=stable_branch_appeared",
@@ -6414,7 +6455,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
     # the health state file (bypass — a state-write failure never fails
     # the claim).
     try:
-        runner_health.record_pickup(config["repo_dir"])
+        runner_health.record_pickup(config.repo_dir)
     except Exception:
         LOGGER.exception("issue=%s health_pickup_record_failed", number)
     # The Issue is in flight from the claim label on: bind the stop
@@ -6428,7 +6469,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         # rename it carries the OLD slug — Issue #219); otherwise the
         # derived path (the same value the worktree creation uses).
         str(existing_worktree or worktree_path(
-            config["repo_dir"], source_repo, number, run_id,
+            config.repo_dir, source_repo, number, run_id,
         )),
     )
     publisher = ProgressPublisher(
@@ -6450,7 +6491,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
     pr_opened = False
     try:
         worktree = create_worktree(
-            config["repo_dir"], source_repo, number, run_id, base_sha,
+            config.repo_dir, source_repo, number, run_id, base_sha,
             existing=existing_worktree,
             # A stable branch without an open PR is the interrupted push/
             # create gap: continue from that branch rather than trying to
@@ -6492,17 +6533,16 @@ def process_issue(issue: dict, config: dict, source_repo: str,
                 previous_sessions,
                 (snapshot.get("session_id") if snapshot else None) or "-",
             )
-        config = {**config, "base_sha": base_sha, "run_id": run_id}
+        config = replace(config, base_sha=base_sha, run_id=run_id)
         if ops:
-            config = {
-                **config,
-                # Issue #537: the ops session runs the ops playbook — the
-                # sibling of the configured dev prompt (a custom prompt
-                # deployment carries prompt_ops.md next to it). A missing
-                # file fails the run fast through the delivery failure
-                # path with the exact path in the comment.
-                "prompt": config["prompt"].with_name("prompt_ops.md"),
-            }
+            # Issue #537: the ops session runs the ops playbook — the
+            # sibling of the configured dev prompt (a custom prompt
+            # deployment carries prompt_ops.md next to it). A missing
+            # file fails the run fast through the delivery failure
+            # path with the exact path in the comment.
+            config = replace(
+                config, prompt=config.prompt.with_name("prompt_ops.md"),
+            )
         comment_issue(
             number, repo=source_repo,
             body=started_pi_comment_body(
@@ -6593,7 +6633,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
                 # delivery outcome.
                 try:
                     runner_health.record_run_attempt(
-                        runner_health.health_state_path(config["repo_dir"]),
+                        runner_health.health_state_path(config.repo_dir),
                         repo=source_repo, issue=number, run_id=run_id,
                         outcome="ops_delivered", fingerprint="",
                     )
@@ -6610,7 +6650,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
             takeover_pr["url"] if takeover_pr is not None else deliver_pr(
                 worktree, branch, base_branch, base_sha, run_id,
                 issue=number, issue_title=title,
-                repo_dir=config["repo_dir"], source_repo=source_repo,
+                repo_dir=config.repo_dir, source_repo=source_repo,
             )
         )
         commit = run_command(
@@ -6647,7 +6687,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
             # streak of this Issue in the health history. Pure bypass.
             try:
                 runner_health.record_run_attempt(
-                    runner_health.health_state_path(config["repo_dir"]),
+                    runner_health.health_state_path(config.repo_dir),
                     repo=source_repo, issue=number, run_id=run_id,
                     outcome="issue_closed", fingerprint="",
                 )
@@ -6681,7 +6721,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
                 run_id, run_info, pr_url, external=external_takeover,
             ),
         )
-        if config.get("human_review_gate"):
+        if config.human_review_gate:
             # Issue #763: the human acceptance checklist — the readable
             # face of the gate — posts ONCE per delivery, at the moment
             # the delivery completes (the PR opens). Bypass (Issue #79):
@@ -6724,7 +6764,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         # failure never changes the delivery outcome.
         try:
             runner_health.record_run_attempt(
-                runner_health.health_state_path(config["repo_dir"]),
+                runner_health.health_state_path(config.repo_dir),
                 repo=source_repo, issue=number, run_id=run_id,
                 outcome="pr_opened", fingerprint="",
             )
@@ -6801,7 +6841,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         # state-write failure never changes the delivery outcome.
         try:
             runner_health.record_run_attempt(
-                runner_health.health_state_path(config["repo_dir"]),
+                runner_health.health_state_path(config.repo_dir),
                 repo=source_repo, issue=number, run_id=run_id,
                 outcome="failed",
                 fingerprint=runner_health.failure_fingerprint(exc),
@@ -6817,7 +6857,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
         # failure never changes the delivery outcome.
         try:
             runner_health.record_run_attempt(
-                runner_health.health_state_path(config["repo_dir"]),
+                runner_health.health_state_path(config.repo_dir),
                 repo=source_repo, issue=number, run_id=run_id,
                 outcome="failed",
                 fingerprint=runner_health.failure_fingerprint(exc),
@@ -6864,7 +6904,7 @@ def process_issue(issue: dict, config: dict, source_repo: str,
             # same-run resume.
             if worktree is not None:
                 cleanup_task_worktree(
-                    worktree, config["repo_dir"], run_id=run_id,
+                    worktree, config.repo_dir, run_id=run_id,
                     issue=number,
                 )
         # Issue #239: the failure is terminal — the Issue is `ai-blocked`
@@ -7181,7 +7221,7 @@ def report_delivery_failure(
 
 
 def _run_review_round(
-    pr_url: str, issue: dict, config: dict, source_repo: str,
+    pr_url: str, issue: dict, config: RunnerConfig, source_repo: str,
 ) -> bool | None:
     """Run ONE review round of an open-PR delivery (Issue #289).
 
@@ -7266,9 +7306,9 @@ def _run_review_round(
     # is not consumed by waiting). An empty column 2 needs no human and
     # falls through to the normal review; a missing worktree falls
     # through too so the existing recovery semantics stay intact.
-    if config.get("human_review_gate") and HUMAN_REVIEW_LABEL not in labels:
+    if config.human_review_gate and HUMAN_REVIEW_LABEL not in labels:
         gate_worktree = worktree_path(
-            config["repo_dir"], source_repo, number, run_id,
+            config.repo_dir, source_repo, number, run_id,
         )
         if gate_worktree.is_dir() and _human_review_column2(
             gate_worktree, config,
@@ -7346,18 +7386,18 @@ def _run_review_round(
         # auto-retry a PR frozen on another base, so the
         # handler below marks the Issue ai-blocked with the
         # explicit reason and both base values named.
-        if scene["base_branch"] != config["base_branch"]:
+        if scene["base_branch"] != config.base_branch:
             raise UnrecoverableDeliveryError(
                 f"resume scene base_branch={scene['base_branch']} "
                 f"differs from configured base_branch="
-                f"{config['base_branch']}; the PR is frozen on a "
+                f"{config.base_branch}; the PR is frozen on a "
                 "different base and must not be reviewed or "
                 "merged against the configured one — a base "
                 "change is a human decision, so auto-retrying "
                 "would keep failing on the same mismatch"
             )
         worktree = worktree_path(
-            config["repo_dir"], source_repo, number,
+            config.repo_dir, source_repo, number,
             scene["run_id"],
         )
         # Issue #90 + #50: the worktree is derived from the
@@ -7387,13 +7427,13 @@ def _run_review_round(
         branch = run_command(
             ["git", "branch", "--show-current"], cwd=worktree,
         ) or task_branch(source_repo, number, scene["run_id"])
-        review_config = {
-            **config,
-            "base_sha": scene["base_sha"],
-            "run_id": scene["run_id"],
-        }
+        review_config = replace(
+            config,
+            base_sha=scene["base_sha"],
+            run_id=scene["run_id"],
+        )
         merged = review_and_merge_if_clean(
-            worktree, branch, config["base_branch"],
+            worktree, branch, config.base_branch,
             review_config, source_repo, number,
             title=title, priority=priority,
         )
@@ -7466,7 +7506,7 @@ def _close_external_triage_issue(
         )
 
 
-def wait_for_delivery(pr_url: str, issue: dict, config: dict,
+def wait_for_delivery(pr_url: str, issue: dict, config: RunnerConfig,
                       source_repo: str,
                       poll_interval: float = PI_POLL_INTERVAL,
                       external_takeover: bool = False) -> None:
@@ -7689,7 +7729,7 @@ def wait_for_delivery(pr_url: str, issue: dict, config: dict,
         time.sleep(poll_interval)
 
 
-def _preflight(config: dict) -> None:
+def _preflight(config: RunnerConfig) -> None:
     """Run the Runner tick's pre-slot startup checks (fail fast).
 
     Every pre-claim check lives here as one reusable unit, so the tick
@@ -7704,7 +7744,7 @@ def _preflight(config: dict) -> None:
     # triage workflow. This is a bypass; delivery must continue when the
     # variable API is unavailable.
     sync_active_milestone_variable(
-        config["source_repos"][0], config["active_milestone"],
+        config.source_repos[0], config.active_milestone,
         run_command=run_command,
     )
     # Editable CLI install refresh (Issue #158): BEFORE any slot or
@@ -7729,7 +7769,7 @@ def _preflight(config: dict) -> None:
     # on the delivery checkout (repo_dir may be a foreign repo X without
     # any orbi packaging input).
     refresh_cli_install(
-        config["deploy_home"], run_command=run_command,
+        config.deploy_home, run_command=run_command,
     )
     # Startup source freshness (Issue #525): BEFORE any slot or claim,
     # prove that the code THIS process executes is the fetched
@@ -7755,12 +7795,12 @@ def _preflight(config: dict) -> None:
     # structured `unit_drift` line per unit and fails fast: this
     # start takes no slot, claims no Issue and changes no label.
     try:
-        check_unit_drift(config["deploy_home"], unit_name=config.get("unit_name"))
+        check_unit_drift(config.deploy_home, unit_name=config.unit_name)
     except UnitDriftError:
         sync_drifted_units(
-            config["deploy_home"],
-            unit_name=config.get("unit_name"),
-            max_concurrency=config["max_concurrency"],
+            config.deploy_home,
+            unit_name=config.unit_name,
+            max_concurrency=config.max_concurrency,
             run_command=run_command,
         )
     # Task-worktree reclamation (Issue #760): closed-Issue worktrees past
@@ -7783,15 +7823,15 @@ def _preflight(config: dict) -> None:
     # untouched.
     try:
         transport = check_transport(
-            config["repo_dir"], config["source_repos"],
+            config.repo_dir, config.source_repos,
             run_command=run_command, migrate=False,
-            mode=config["git_transport"],
+            mode=config.git_transport,
         )
     except TransportError as exc:
         LOGGER.error(
             "transport_check_failed repo_dir=%s source_repos=%s "
             "reason=%s",
-            config["repo_dir"], config["source_repos"], exc,
+            config.repo_dir, config.source_repos, exc,
         )
         raise
     LOGGER.info(
@@ -7835,7 +7875,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config(args.config)
         validate_config(config)
-        validate_execution_source_repos(config["source_repos"])
+        validate_execution_source_repos(config.source_repos)
     except ValueError as exc:
         LOGGER.error("config_invalid reason=%s", exc)
         return 1
@@ -7846,39 +7886,39 @@ def main(argv: list[str] | None = None) -> int:
     # merged or terminally failed — or when this process exits for any
     # reason, which the kernel handles (flock on an open descriptor).
     slot = acquire_slot(
-        config["slot_dir"], config["max_concurrency"], os.getpid(),
+        config.slot_dir, config.max_concurrency, os.getpid(),
     )
     if slot is None:
         LOGGER.info(
             "capacity_full max_concurrency=%s slot_dir=%s",
-            config["max_concurrency"], config["slot_dir"],
+            config.max_concurrency, config.slot_dir,
         )
         return 0
     try:
         selected = pick_next_delivery(
-            config["source_repos"], config["slot_dir"],
-            config["max_concurrency"],
-            config["active_milestone"],
+            config.source_repos, config.slot_dir,
+            config.max_concurrency,
+            config.active_milestone,
             config=config,
         )
         if selected is None:
             LOGGER.info(
                 "source_repos=%s outcome=no_ready_issue",
-                config["source_repos"],
+                config.source_repos,
             )
             # Issue #385: arm a release ticket as a pure bypass. A failed
             # label operation must not change the idle outcome.
-            if config["active_milestone"] is not None:
+            if config.active_milestone is not None:
                 try:
                     arm_release_ticket(
-                        config["source_repos"][0],
-                        config["active_milestone"],
+                        config.source_repos[0],
+                        config.active_milestone,
                     )
                 except Exception:
                     LOGGER.exception(
                         "release_ticket_arm_failed repo=%s milestone=%s",
-                        config["source_repos"][0],
-                        config["active_milestone"],
+                        config.source_repos[0],
+                        config.active_milestone,
                     )
                 # Issue #274: validate and advance only after the arm attempt.
                 # Issue #614: like the arm above, the advance is an idle-path
@@ -7886,16 +7926,16 @@ def main(argv: list[str] | None = None) -> int:
                 # call must not turn an idle tick into a non-zero exit.
                 try:
                     advance_active_milestone_on_idle(
-                        config["source_repos"][0],
-                        config["active_milestone"],
-                        config["config_path"],
-                        auto_next_milestone=config["auto_next_milestone"],
+                        config.source_repos[0],
+                        config.active_milestone,
+                        config.config_path,
+                        auto_next_milestone=config.auto_next_milestone,
                     )
                 except Exception:
                     LOGGER.exception(
                         "active_milestone_advance_failed repo=%s milestone=%s",
-                        config["source_repos"][0],
-                        config["active_milestone"],
+                        config.source_repos[0],
+                        config.active_milestone,
                     )
             return 0
         source_repo, issue, scene = selected
@@ -7905,7 +7945,7 @@ def main(argv: list[str] | None = None) -> int:
         # malformed repository file blocks the claim fast with the offending
         # keys (one repository's bad file never affects another pool).
         try:
-            repo_config_record = load_repo_policy(config, source_repo)
+            repo_policy = load_repo_policy(config, source_repo)
         except RepoConfigError as exc:
             run_id = (
                 scene["run_id"] if scene is not None
@@ -7924,8 +7964,8 @@ def main(argv: list[str] | None = None) -> int:
                 },
             )
             return 0
-        if repo_config_record is not None:
-            config = apply_repo_policy(config, source_repo, repo_config_record)
+        if repo_policy is not None:
+            config = apply_repo_policy(config, source_repo, repo_policy)
         result = None
         if scene is not None:
             # An open PR is a recoverable review state: resume the
@@ -7950,7 +7990,7 @@ def main(argv: list[str] | None = None) -> int:
                     source_repo, int(issue["number"]), scene["run_id"],
                 ),
                 str(worktree_path(
-                    config["repo_dir"], source_repo,
+                    config.repo_dir, source_repo,
                     int(issue["number"]), scene["run_id"],
                 )),
             )
@@ -7976,7 +8016,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
         else:
             result = process_issue(
-                issue, config, source_repo, repo_config_record,
+                issue, config, source_repo, repo_policy,
             )
             # `process_issue` owns task dispatch and reports its outcome;
             # do not repeat task-type predicates here (Issue #281).

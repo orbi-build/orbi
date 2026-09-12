@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+import dataclasses
 
 from orbi import runner
 import orbi.journal as journal
@@ -82,11 +83,7 @@ def _registered(repo: Path) -> list[str]:
 
 def _config(repo: Path) -> dict:
     """The minimal config `reclaim_released_worktrees` reads."""
-    return {
-        "repo_dir": repo,
-        "source_repos": ["owner/repo"],
-        "worktree_retain_hours": 72,
-    }
+    return runner.RunnerConfig(repo_dir=repo, source_repos=("owner/repo",), worktree_retain_hours=72)
 
 
 def _closed(number: int, hours_ago: float, labels=()) -> dict:
@@ -247,7 +244,7 @@ def test_same_issue_number_in_two_source_repos_is_not_crossed(
 
     monkeypatch.setattr(seam, "list_issues", fake_list_issues)
     config = _config(repo)
-    config["source_repos"] = ["owner/one", "owner/two"]
+    config = dataclasses.replace(config, source_repos=["owner/one", "owner/two"])
     runner.reclaim_released_worktrees(config, now=NOW)
     assert str(closed_one) not in _registered(repo)
     assert str(open_two) in _registered(repo)
@@ -373,7 +370,7 @@ def test_load_config_defaults_worktree_retain_hours_to_72(tmp_path):
     Issue's scene stays inspectable for three days before reclamation."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    assert runner.load_config(config_path)["worktree_retain_hours"] == 72.0
+    assert runner.load_config(config_path).worktree_retain_hours == 72.0
 
 
 def test_load_config_reads_explicit_worktree_retain_hours(tmp_path):
@@ -382,7 +379,7 @@ def test_load_config_reads_explicit_worktree_retain_hours(tmp_path):
         'source_repos = ["owner/repo"]\nworktree_retain_hours = 24\n',
         encoding="utf-8",
     )
-    assert runner.load_config(config_path)["worktree_retain_hours"] == 24.0
+    assert runner.load_config(config_path).worktree_retain_hours == 24.0
 
 
 @pytest.mark.parametrize(
@@ -416,14 +413,7 @@ def test_load_config_rejects_invalid_worktree_retain_hours(
 def _preflight_config(tmp_path) -> dict:
     """The keys `_preflight` itself reads (every gate it calls is stubbed
     by conftest or by the test)."""
-    return {
-        "source_repos": ["owner/repo"],
-        "active_milestone": None,
-        "repo_dir": tmp_path,
-        "deploy_home": tmp_path,
-        "git_transport": "ssh",
-        "max_concurrency": 1,
-    }
+    return runner.RunnerConfig(source_repos=("owner/repo",), active_milestone=None, repo_dir=tmp_path, deploy_home=tmp_path, git_transport="ssh", max_concurrency=1)
 
 
 def test_preflight_runs_the_reclamation(tmp_path, monkeypatch):

@@ -949,7 +949,7 @@ def test_pick_next_delivery_prefers_resumable_delivery_over_ready(
         runner, "pick_resumable_delivery",
         lambda repo, slot_dir, max_concurrency: (
             calls.append(("resume", repo))
-            or (resumable, {"run_id": FAKE_RUN_ID})
+            or (resumable, runner.RunnerConfig(run_id=FAKE_RUN_ID))
         ),
     )
     monkeypatch.setattr(
@@ -959,7 +959,7 @@ def test_pick_next_delivery_prefers_resumable_delivery_over_ready(
     result = runner.pick_next_delivery(
         ["owner/repo"], tmp_path / "slots", 1,
     )
-    assert result == ("owner/repo", resumable, {"run_id": FAKE_RUN_ID})
+    assert result == ("owner/repo", resumable, runner.RunnerConfig(run_id=FAKE_RUN_ID))
     assert calls == [("resume", "owner/repo")]
 
 
@@ -997,7 +997,7 @@ def test_pick_next_delivery_falls_back_to_ready_when_no_resumable(
 
 def test_pick_next_delivery_scans_sources_in_order(monkeypatch, tmp_path):
     resumable = {"number": 9, "title": "ship"}
-    scene = {"run_id": FAKE_RUN_ID}
+    scene = runner.RunnerConfig(run_id=FAKE_RUN_ID)
     ready = {"number": 10, "title": "new"}
     calls = []
     monkeypatch.setattr(
@@ -1052,17 +1052,7 @@ def test_run_pi_fresh_context_has_no_existing_pr(monkeypatch, tmp_path):
         runner, "stream_pi",
         lambda command, **kwargs: calls.append((command, kwargs)) or "done",
     )
-    config = {
-        "prompt": prompt_path,
-        "repo_dir": tmp_path,
-        "source_repos": ["owner/repo"],
-        "workspace_root": tmp_path,
-        "context_files": [],
-        "skills": [],
-        "base_branch": "main",
-        "base_sha": "abc123def456",
-        "run_id": FAKE_RUN_ID,
-    }
+    config = runner.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id=FAKE_RUN_ID)
     runner.run_pi(
         {"number": 9, "title": "t", "body": "b"}, tmp_path, config,
         "owner/repo", branch=FAKE_BRANCH,
@@ -1270,10 +1260,7 @@ def test_main_ends_cleanly_after_handled_resume_scene_failure(
 
 
 def make_resume_config(tmp_path) -> dict:
-    return {
-        "repo_dir": tmp_path,
-        "base_branch": "main",
-    }
+    return runner.RunnerConfig(repo_dir=tmp_path, base_branch="main")
 
 
 def make_resume_scene(pr_url: str = FAKE_PR_URL) -> dict:

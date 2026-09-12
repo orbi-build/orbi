@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import dataclasses
 
 import orbi.runner as runner
 from orbi import pilot_setup
@@ -1363,7 +1364,7 @@ def test_run_setup_capacity_two_enables_both_timers(tmp_path):
     repo, installed, state = make_run_state(tmp_path)
     fake_run, calls = fake_run_factory(state)
     config = runner.load_config(make_config(tmp_path, repo, max_concurrency=2))
-    config["unit_name"] = "website"
+    config = dataclasses.replace(config, unit_name="website")
     result = pilot_setup.run_setup(config, installed, run_command=fake_run)
     for instance in systemd_deploy.timer_instances("website"):
         assert result["timer"]["instances"][instance]["enabled"] is True
@@ -1846,7 +1847,7 @@ def test_run_setup_routes_home_files_to_deploy_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     config = runner.load_config(make_config(tmp_path, repo))
-    config["deploy_home"] = home
+    config = dataclasses.replace(config, deploy_home=home)
 
     seen: dict = {}
 
@@ -1942,7 +1943,7 @@ def test_ensure_config_reports_write_failure(tmp_path, monkeypatch):
 
 
 def test_scaffold_model_config_is_idempotent_and_private(tmp_path):
-    config = {"deploy_home": tmp_path, "pi_providers": None}
+    config = runner.RunnerConfig(deploy_home=tmp_path, pi_providers=None)
     first = pilot_setup.scaffold_model_config(config)
     provider = Path(first["provider_file"])
     env = Path(first["env_file"])
@@ -1979,7 +1980,7 @@ def test_scaffold_model_config_preserves_existing_content_without_newline(tmp_pa
     env = tmp_path / ".orbi" / "env"
     env.parent.mkdir()
     env.write_text("EXISTING=value", encoding="utf-8")
-    result = pilot_setup.scaffold_model_config({"deploy_home": tmp_path})
+    result = pilot_setup.scaffold_model_config(runner.RunnerConfig(deploy_home=tmp_path))
     assert env.read_text() == "EXISTING=value\n# API key for the starter provider\nPROVIDER_API_KEY=\n"
     assert result["env_created"] is True
 
@@ -1987,25 +1988,15 @@ def test_scaffold_model_config_preserves_existing_content_without_newline(tmp_pa
 def test_model_provider_status_reports_missing_key_without_secret(tmp_path):
     path = tmp_path / "providers.json"
     finding = {"variable": "GROQ_API_KEY", "state": "is not set"}
-    result = pilot_setup.model_provider_status({
-        "deploy_home": tmp_path, "pi_providers": path,
-        "pi_provider": "groq", "pi_model": "model",
-        "pi_providers_data": {"providers": {"groq": {}}},
-        "pi_provider_key_finding": finding,
-    })
+    result = pilot_setup.model_provider_status(runner.RunnerConfig(deploy_home=tmp_path, pi_providers=path, pi_provider="groq", pi_model="model", pi_providers_data={"providers": {"groq": {}}}, pi_provider_key_finding=finding))
     assert result["state"] == "NOT CONFIGURED"
     assert result["key"] == "GROQ_API_KEY=is not set"
 
 
 def test_model_provider_status_reports_configured_provider_and_model(tmp_path):
-    result = pilot_setup.model_provider_status({
-        "deploy_home": tmp_path,
-        "pi_providers": tmp_path / "providers.json",
-        "pi_provider": "openai", "pi_model": "gpt",
-        "pi_providers_data": {"providers": {
+    result = pilot_setup.model_provider_status(runner.RunnerConfig(deploy_home=tmp_path, pi_providers=tmp_path / "providers.json", pi_provider="openai", pi_model="gpt", pi_providers_data={"providers": {
             "openai": {"apiKey": "${OPENAI_API_KEY}"},
-        }},
-    })
+        }}))
     assert result["state"] == "ok"
     assert result["provider"] == "openai"
     assert result["model"] == "gpt"
@@ -2013,11 +2004,7 @@ def test_model_provider_status_reports_configured_provider_and_model(tmp_path):
 
 
 def test_model_provider_status_reports_literal_key_as_set(tmp_path):
-    result = pilot_setup.model_provider_status({
-        "deploy_home": tmp_path, "pi_providers": tmp_path / "providers.json",
-        "pi_provider": "local", "pi_model": "model",
-        "pi_providers_data": {"providers": {"local": {"apiKey": "local"}}},
-    })
+    result = pilot_setup.model_provider_status(runner.RunnerConfig(deploy_home=tmp_path, pi_providers=tmp_path / "providers.json", pi_provider="local", pi_model="model", pi_providers_data={"providers": {"local": {"apiKey": "local"}}}))
     assert result["key"] == "literal=set"
 
 
@@ -2025,7 +2012,7 @@ def test_scaffold_model_config_does_not_append_existing_key(tmp_path):
     env = tmp_path / ".orbi" / "env"
     env.parent.mkdir()
     env.write_text("PROVIDER_API_KEY=already-set\n", encoding="utf-8")
-    result = pilot_setup.scaffold_model_config({"deploy_home": tmp_path})
+    result = pilot_setup.scaffold_model_config(runner.RunnerConfig(deploy_home=tmp_path))
     assert result["env_created"] is False
     assert env.read_text() == "PROVIDER_API_KEY=already-set\n"
 

@@ -1,4 +1,5 @@
 import ast
+import dataclasses
 import fcntl
 import json
 import logging
@@ -122,12 +123,12 @@ def test_load_config_resolves_relative_paths_and_values(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["source_repos"] == ["owner/repo"]
-    assert config["repo_dir"] == (tmp_path / "repo").resolve()
-    assert config["workspace_root"] == tmp_path.parent.resolve()
-    assert config["prompt"] == (tmp_path / "prompt.md").resolve()
-    assert config["skills"] == [(tmp_path / "skill.md").resolve()]
-    assert config["context_files"] == [(tmp_path / "context.md").resolve()]
+    assert config.source_repos == ("owner/repo",)
+    assert config.repo_dir == (tmp_path / "repo").resolve()
+    assert config.workspace_root == tmp_path.parent.resolve()
+    assert config.prompt == (tmp_path / "prompt.md").resolve()
+    assert config.skills == ((tmp_path / "skill.md").resolve(),)
+    assert config.context_files == ((tmp_path / "context.md").resolve(),)
 
 
 def test_validate_execution_source_repos_rejects_multiple_checkouts():
@@ -151,8 +152,8 @@ def test_example_config_passes_execution_source_repos_validation():
         / "src" / "orbi" / "example_config.toml"
     )
     config = runner.load_config(example)
-    assert len(config["source_repos"]) == 1
-    runner.validate_execution_source_repos(config["source_repos"])
+    assert len(config.source_repos) == 1
+    runner.validate_execution_source_repos(config.source_repos)
 
 
 def test_load_config_requires_source_repos(tmp_path):
@@ -169,11 +170,40 @@ def test_load_config_rejects_empty_source_repo_name(tmp_path):
         runner.load_config(config_path)
 
 
+def test_load_config_returns_the_frozen_runner_config(tmp_path):
+    """Issue #790: `load_config` is the single constructor of the frozen
+    `RunnerConfig` — every module consumes typed attribute access, and a
+    frozen instance refuses field assignment."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "repo"\n',
+        encoding="utf-8",
+    )
+    config = runner.load_config(config_path)
+    assert isinstance(config, runner.RunnerConfig)
+    assert config.source_repos == ("owner/repo",)
+    assert config.repo_dir == (tmp_path / "repo").resolve()
+    assert config.base_branch == "main"
+    assert config.git_transport == "ssh"
+    assert config.max_concurrency == 1
+    assert config.auto_next_milestone is True
+    assert config.allow_stale_runner is False
+    assert config.human_review_gate is False
+    assert config.model_wait_dead_seconds == 1800.0
+    assert config.issue_comments_limit == 20
+    assert config.repositories == ()
+    assert config.repo_context_files == ()
+    assert config.run_id == ""
+    assert config.base_sha == ""
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        config.base_branch = "beta"
+
+
 def test_load_config_defaults_base_branch_to_main(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
-    assert config["base_branch"] == "main"
+    assert config.base_branch == "main"
 
 
 def test_load_config_defaults_git_transport_to_ssh(tmp_path):
@@ -181,7 +211,7 @@ def test_load_config_defaults_git_transport_to_ssh(tmp_path):
     the exact pre-#580 SSH contract."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    assert runner.load_config(config_path)["git_transport"] == "ssh"
+    assert runner.load_config(config_path).git_transport == "ssh"
 
 
 def test_load_config_accepts_the_https_git_transport(tmp_path):
@@ -192,7 +222,7 @@ def test_load_config_accepts_the_https_git_transport(tmp_path):
         'source_repos = ["owner/repo"]\ngit_transport = "https"\n',
         encoding="utf-8",
     )
-    assert runner.load_config(config_path)["git_transport"] == "https"
+    assert runner.load_config(config_path).git_transport == "https"
 
 
 def test_load_config_rejects_an_unknown_git_transport(tmp_path):
@@ -220,7 +250,7 @@ def test_load_config_defaults_engine_source_track_to_main(tmp_path):
     dogfood behavior — the deploy home tracks origin/main."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    assert runner.load_config(config_path)["engine_source_track"] == "main"
+    assert runner.load_config(config_path).engine_source_track == "main"
 
 
 @pytest.mark.parametrize(
@@ -234,7 +264,7 @@ def test_load_config_accepts_the_engine_source_track_forms(tmp_path, track):
         f'source_repos = ["owner/repo"]\nengine_source_track = "{track}"\n',
         encoding="utf-8",
     )
-    assert runner.load_config(config_path)["engine_source_track"] == track
+    assert runner.load_config(config_path).engine_source_track == track
 
 
 def test_load_config_normalizes_stable_to_release(tmp_path):
@@ -245,7 +275,7 @@ def test_load_config_normalizes_stable_to_release(tmp_path):
         'source_repos = ["owner/repo"]\nengine_source_track = "stable"\n',
         encoding="utf-8",
     )
-    assert runner.load_config(config_path)["engine_source_track"] == "release"
+    assert runner.load_config(config_path).engine_source_track == "release"
 
 
 def test_load_config_rejects_an_invalid_engine_source_track(tmp_path):
@@ -262,8 +292,8 @@ def test_load_config_defaults_prompts_to_prompts_directory(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
-    assert config["prompt"] == (tmp_path / "prompts" / "prompt.md").resolve()
-    assert config["prompt_review"] == (
+    assert config.prompt == (tmp_path / "prompts" / "prompt.md").resolve()
+    assert config.prompt_review == (
         tmp_path / "prompts" / "prompt_review.md"
     ).resolve()
 
@@ -280,8 +310,8 @@ def test_load_config_maps_missing_explicit_legacy_prompt_to_new_asset(tmp_path):
     (prompts / "prompt.md").write_text("prompt", encoding="utf-8")
     (prompts / "prompt_review.md").write_text("review", encoding="utf-8")
     config = runner.load_config(config_path)
-    assert config["prompt"] == (prompts / "prompt.md").resolve()
-    assert config["prompt_review"] == (prompts / "prompt_review.md").resolve()
+    assert config.prompt == (prompts / "prompt.md").resolve()
+    assert config.prompt_review == (prompts / "prompt_review.md").resolve()
 
 
 def test_load_config_health_alert_repo_default_and_override(tmp_path):
@@ -289,13 +319,13 @@ def test_load_config_health_alert_repo_default_and_override(tmp_path):
     # present -> the verbatim `owner/repo` override.
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    assert runner.load_config(config_path)["health_alert_repo"] is None
+    assert runner.load_config(config_path).health_alert_repo is None
     config_path.write_text(
         'source_repos = ["owner/repo"]\n'
         'health_alert_repo = "fork-owner/orbi-fork"\n',
         encoding="utf-8",
     )
-    assert runner.load_config(config_path)["health_alert_repo"] == \
+    assert runner.load_config(config_path).health_alert_repo == \
         "fork-owner/orbi-fork"
 
 
@@ -320,7 +350,7 @@ def test_load_config_defaults_deploy_home_to_repo_dir(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["deploy_home"] == (tmp_path / "repo").resolve()
+    assert config.deploy_home == (tmp_path / "repo").resolve()
 
 
 def test_load_config_reads_explicit_deploy_home(tmp_path):
@@ -333,8 +363,8 @@ def test_load_config_reads_explicit_deploy_home(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["repo_dir"] == (tmp_path / "repo").resolve()
-    assert config["deploy_home"] == (tmp_path / "home").resolve()
+    assert config.repo_dir == (tmp_path / "repo").resolve()
+    assert config.deploy_home == (tmp_path / "home").resolve()
 
 
 def test_load_config_rejects_an_empty_deploy_home(tmp_path):
@@ -371,10 +401,10 @@ def test_load_config_prompt_defaults_resolve_from_deploy_home(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["prompt"] == (
+    assert config.prompt == (
         tmp_path / "home" / "prompts" / "prompt.md"
     ).resolve()
-    assert config["prompt_review"] == (
+    assert config.prompt_review == (
         tmp_path / "home" / "prompts" / "prompt_review.md"
     ).resolve()
 
@@ -389,7 +419,7 @@ def test_load_config_explicit_prompt_resolves_from_config_dir(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["prompt"] == (tmp_path / "my-prompt.md").resolve()
+    assert config.prompt == (tmp_path / "my-prompt.md").resolve()
 
 
 def test_validate_config_requires_the_deploy_home_dir(tmp_path):
@@ -413,7 +443,8 @@ def test_load_config_has_no_auto_repair_issues_field(tmp_path):
     the field and its consumer are gone."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    assert "auto_repair_issues" not in runner.load_config(config_path)
+    assert getattr(runner.load_config(config_path), "auto_repair_issues",
+                   "absent") == "absent"
 
 
 def test_load_config_reads_explicit_base_branch(tmp_path):
@@ -423,7 +454,7 @@ def test_load_config_reads_explicit_base_branch(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["base_branch"] == "develop"
+    assert config.base_branch == "develop"
 
 
 def test_load_config_rejects_empty_base_branch(tmp_path):
@@ -438,7 +469,7 @@ def test_load_config_rejects_empty_base_branch(tmp_path):
 def test_load_config_defaults_auto_next_milestone_to_true(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    assert runner.load_config(config_path)["auto_next_milestone"] is True
+    assert runner.load_config(config_path).auto_next_milestone is True
 
 
 def test_load_config_reads_and_validates_auto_next_milestone(tmp_path):
@@ -447,7 +478,7 @@ def test_load_config_reads_and_validates_auto_next_milestone(tmp_path):
         'source_repos = ["owner/repo"]\nauto_next_milestone = false\n',
         encoding="utf-8",
     )
-    assert runner.load_config(config_path)["auto_next_milestone"] is False
+    assert runner.load_config(config_path).auto_next_milestone is False
     config_path.write_text(
         'source_repos = ["owner/repo"]\nauto_next_milestone = "no"\n',
         encoding="utf-8",
@@ -462,7 +493,7 @@ def test_load_config_defaults_active_milestone_to_none(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
-    assert config["active_milestone"] is None
+    assert config.active_milestone is None
 
 
 def test_load_config_reads_explicit_active_milestone(tmp_path):
@@ -474,7 +505,7 @@ def test_load_config_reads_explicit_active_milestone(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["active_milestone"] == "v0.2.0"
+    assert config.active_milestone == "v0.2.0"
 
 
 def test_load_config_rejects_empty_active_milestone(tmp_path):
@@ -519,7 +550,7 @@ def test_load_config_defaults_model_wait_dead_seconds_to_thirty_minutes(
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
-    assert config["model_wait_dead_seconds"] == 1800.0
+    assert config.model_wait_dead_seconds == 1800.0
 
 
 def test_load_config_reads_explicit_model_wait_dead_seconds_int(tmp_path):
@@ -530,7 +561,7 @@ def test_load_config_reads_explicit_model_wait_dead_seconds_int(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["model_wait_dead_seconds"] == 900.0
+    assert config.model_wait_dead_seconds == 900.0
 
 
 def test_load_config_reads_explicit_model_wait_dead_seconds_float(tmp_path):
@@ -541,7 +572,7 @@ def test_load_config_reads_explicit_model_wait_dead_seconds_float(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["model_wait_dead_seconds"] == 1234.5
+    assert config.model_wait_dead_seconds == 1234.5
 
 
 @pytest.mark.parametrize(
@@ -584,7 +615,7 @@ def test_load_config_defaults_issue_comments_limit_to_twenty(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
-    assert config["issue_comments_limit"] == 20
+    assert config.issue_comments_limit == 20
 
 
 def test_load_config_reads_explicit_issue_comments_limit(tmp_path):
@@ -595,7 +626,7 @@ def test_load_config_reads_explicit_issue_comments_limit(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["issue_comments_limit"] == 5
+    assert config.issue_comments_limit == 5
 
 
 @pytest.mark.parametrize(
@@ -636,8 +667,8 @@ def test_load_config_defaults_swallow_probe_disabled(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
-    assert config["model_wait_probe_url"] is None
-    assert config["model_wait_probe_seconds"] == 60.0
+    assert config.model_wait_probe_url is None
+    assert config.model_wait_probe_seconds == 60.0
 
 
 def test_load_config_reads_explicit_swallow_probe(tmp_path):
@@ -650,8 +681,8 @@ def test_load_config_reads_explicit_swallow_probe(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["model_wait_probe_url"] == "http://127.0.0.1:18082/slots"
-    assert config["model_wait_probe_seconds"] == 90.0
+    assert config.model_wait_probe_url == "http://127.0.0.1:18082/slots"
+    assert config.model_wait_probe_seconds == 90.0
 
 
 @pytest.mark.parametrize(
@@ -720,7 +751,7 @@ def test_load_config_defaults_release_deliveries_wait_seconds(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
-    assert config["release_deliveries_wait_seconds"] == 1800.0
+    assert config.release_deliveries_wait_seconds == 1800.0
 
 
 def test_load_config_reads_explicit_release_deliveries_wait_seconds(tmp_path):
@@ -729,7 +760,7 @@ def test_load_config_reads_explicit_release_deliveries_wait_seconds(tmp_path):
         'source_repos = ["owner/repo"]\nrelease_deliveries_wait_seconds = 42\n',
         encoding="utf-8",
     )
-    assert runner.load_config(config_path)["release_deliveries_wait_seconds"] == 42.0
+    assert runner.load_config(config_path).release_deliveries_wait_seconds == 42.0
 
 
 @pytest.mark.parametrize("value", ["true", "0", "-1", '"42"'])
@@ -753,7 +784,7 @@ def test_load_config_defaults_release_ci_wait_seconds(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
-    assert config["release_ci_wait_seconds"] == 1800.0
+    assert config.release_ci_wait_seconds == 1800.0
 
 
 def test_load_config_reads_explicit_release_ci_wait_seconds(tmp_path):
@@ -764,7 +795,7 @@ def test_load_config_reads_explicit_release_ci_wait_seconds(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["release_ci_wait_seconds"] == 900.0
+    assert config.release_ci_wait_seconds == 900.0
 
 
 @pytest.mark.parametrize(
@@ -801,7 +832,7 @@ def test_load_config_rejects_invalid_release_ci_wait_seconds(
 def test_load_config_defaults_mergeable_wait_seconds(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
-    assert runner.load_config(config_path)["mergeable_wait_seconds"] == 120.0
+    assert runner.load_config(config_path).mergeable_wait_seconds == 120.0
 
 
 def test_load_config_reads_mergeable_wait_seconds(tmp_path):
@@ -810,7 +841,7 @@ def test_load_config_reads_mergeable_wait_seconds(tmp_path):
         'source_repos = ["owner/repo"]\nmergeable_wait_seconds = 15\n',
         encoding="utf-8",
     )
-    assert runner.load_config(config_path)["mergeable_wait_seconds"] == 15.0
+    assert runner.load_config(config_path).mergeable_wait_seconds == 15.0
 
 
 @pytest.mark.parametrize("value", ["true", "0", "-1", "nan", '"15"'])
@@ -846,7 +877,7 @@ def test_load_config_parses_repositories_registry(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["repositories"] == [
+    assert config.repositories == (
         {
             "name": "pilot",
             "path": (tmp_path / "checkouts" / "pilot").resolve(),
@@ -863,7 +894,7 @@ def test_load_config_parses_repositories_registry(tmp_path):
             "base_branch": "develop",
             "config_path": ".github/orbi.toml",
         },
-    ]
+    )
 
 
 def test_load_config_defaults_repositories_to_empty_list(tmp_path):
@@ -875,10 +906,10 @@ def test_load_config_defaults_repositories_to_empty_list(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["repositories"] == []
-    assert config["source_repos"] == ["owner/pilot"]
-    assert config["repo_dir"] == (tmp_path / "repo").resolve()
-    assert config["base_branch"] == "main"
+    assert config.repositories == ()
+    assert config.source_repos == ("owner/pilot",)
+    assert config.repo_dir == (tmp_path / "repo").resolve()
+    assert config.base_branch == "main"
 
 
 @pytest.mark.parametrize("field", ["name", "path", "github", "base_branch"])
@@ -1090,51 +1121,24 @@ def test_validate_config_accepts_existing_files(tmp_path):
     context = tmp_path / "context.md"
     for path in (prompt, prompt_review, skill, context):
         path.write_text("ok", encoding="utf-8")
-    runner.validate_config({
-        "repo_dir": tmp_path,
-        "deploy_home": tmp_path,
-        "prompt": prompt,
-        "prompt_review": prompt_review,
-        "skills": [skill],
-        "context_files": [context],
-    })
+    runner.validate_config(runner.RunnerConfig(repo_dir=tmp_path, deploy_home=tmp_path, prompt=prompt, prompt_review=prompt_review, skills=(skill,), context_files=(context,)))
 
 
 def test_validate_config_requires_review_prompt(tmp_path):
     prompt = tmp_path / "prompt.md"
     prompt.write_text("ok", encoding="utf-8")
     with pytest.raises(FileNotFoundError, match="prompt_review.md"):
-        runner.validate_config({
-            "repo_dir": tmp_path,
-            "deploy_home": tmp_path,
-            "prompt": prompt,
-            "prompt_review": tmp_path / "prompt_review.md",
-            "skills": [],
-            "context_files": [],
-        })
+        runner.validate_config(runner.RunnerConfig(repo_dir=tmp_path, deploy_home=tmp_path, prompt=prompt, prompt_review=tmp_path / "prompt_review.md", skills=(), context_files=()))
 
 
 def test_validate_config_fails_before_issue_claim_when_path_missing(tmp_path):
     with pytest.raises(FileNotFoundError, match="missing.md"):
-        runner.validate_config({
-            "repo_dir": tmp_path,
-            "deploy_home": tmp_path,
-            "prompt": tmp_path / "missing.md",
-            "prompt_review": tmp_path / "prompt_review.md",
-            "skills": [],
-            "context_files": [],
-        })
+        runner.validate_config(runner.RunnerConfig(repo_dir=tmp_path, deploy_home=tmp_path, prompt=tmp_path / "missing.md", prompt_review=tmp_path / "prompt_review.md", skills=(), context_files=()))
 
 
 def test_validate_config_rejects_missing_repo_dir(tmp_path):
     with pytest.raises(FileNotFoundError, match="missing-repo"):
-        runner.validate_config({
-            "repo_dir": tmp_path / "missing-repo",
-            "deploy_home": tmp_path,
-            "prompt": tmp_path / "prompt.md",
-            "skills": [],
-            "context_files": [],
-        })
+        runner.validate_config(runner.RunnerConfig(repo_dir=tmp_path / "missing-repo", deploy_home=tmp_path, prompt=tmp_path / "prompt.md", skills=(), context_files=()))
 
 
 def _git_checkout(path: Path) -> Path:
@@ -1159,33 +1163,33 @@ def _git_checkout(path: Path) -> Path:
     return path
 
 
-def _base_config(tmp_path: Path) -> dict:
+def _base_config(tmp_path: Path) -> runner.RunnerConfig:
     """The minimal valid single-repo config (no repositories key)."""
     prompt = tmp_path / "prompt.md"
     prompt_review = tmp_path / "prompt_review.md"
     for path in (prompt, prompt_review):
         path.write_text("ok", encoding="utf-8")
-    return {
-        "repo_dir": tmp_path,
+    return runner.RunnerConfig(
+        repo_dir=tmp_path,
         # Issue #330: the bootstrap deployment — home == delivery checkout.
-        "deploy_home": tmp_path,
-        "prompt": prompt,
-        "prompt_review": prompt_review,
-        "skills": [],
-        "context_files": [],
-    }
+        deploy_home=tmp_path,
+        prompt=prompt,
+        prompt_review=prompt_review,
+        skills=(),
+        context_files=(),
+    )
 
 
 def test_validate_config_accepts_repository_git_checkout(tmp_path):
     """Issue #134: a registered path that is a real Git checkout passes."""
     checkout = _git_checkout(tmp_path / "pilot")
     config = _base_config(tmp_path)
-    config["repositories"] = [{
+    config = dataclasses.replace(config, repositories=[{
         "name": "pilot",
         "path": checkout,
         "github": "owner/pilot",
         "base_branch": "main",
-    }]
+    }])
     runner.validate_config(config)
 
 
@@ -1202,24 +1206,24 @@ def test_validate_config_accepts_repository_linked_worktree(tmp_path):
     )
     assert (worktree / ".git").is_file()
     config = _base_config(tmp_path)
-    config["repositories"] = [{
+    config = dataclasses.replace(config, repositories=[{
         "name": "wt",
         "path": worktree,
         "github": "owner/pilot",
         "base_branch": "main",
-    }]
+    }])
     runner.validate_config(config)
 
 
 def test_validate_config_rejects_missing_repository_path(tmp_path):
     """Issue #134: a registered path that does not exist is rejected."""
     config = _base_config(tmp_path)
-    config["repositories"] = [{
+    config = dataclasses.replace(config, repositories=[{
         "name": "pilot",
         "path": tmp_path / "no-such-checkout",
         "github": "owner/pilot",
         "base_branch": "main",
-    }]
+    }])
     with pytest.raises(FileNotFoundError, match="no-such-checkout"):
         runner.validate_config(config)
 
@@ -1232,12 +1236,12 @@ def test_validate_config_rejects_repository_path_not_a_git_checkout(
     plain = tmp_path / "plain"
     plain.mkdir()
     config = _base_config(tmp_path)
-    config["repositories"] = [{
+    config = dataclasses.replace(config, repositories=[{
         "name": "plain",
         "path": plain,
         "github": "owner/plain",
         "base_branch": "main",
-    }]
+    }])
     with pytest.raises(ValueError, match="not a git checkout"):
         runner.validate_config(config)
 
@@ -2845,7 +2849,7 @@ def test_pick_next_delivery_keeps_resumable_delivery_first(
     the PR already exists and must not be re-implemented."""
     in_flight = {"number": 2, "title": "in flight", "body": ""}
     resumable = {"number": 5, "title": "fix needed", "body": ""}
-    scene = {"run_id": "a1b2c3d4"}
+    scene = runner.RunnerConfig(run_id="a1b2c3d4")
     monkeypatch.setattr(
         runner, "pick_resumable_delivery",
         lambda repo, slot_dir, max_concurrency: (
@@ -3875,8 +3879,7 @@ def test_process_issue_yields_when_the_label_lands_mid_preparation(
     )
     issue = {"number": 18, "title": "t", "body": "b",
              "labels": [{"name": "ai-ready"}]}
-    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-              "base_branch": "main"}
+    config = runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main")
     result = runner.process_issue(issue, config, "owner/repo")
     assert result == runner.IssueResult("claim-yielded", None)
 
@@ -3895,8 +3898,7 @@ def test_process_issue_yields_when_the_stable_branch_lands_mid_preparation(
     )
     issue = {"number": 18, "title": "t", "body": "b",
              "labels": [{"name": "ai-ready"}]}
-    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-              "base_branch": "main"}
+    config = runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main")
     result = runner.process_issue(issue, config, "owner/repo")
     assert result == runner.IssueResult("claim-yielded", None)
 
@@ -3925,9 +3927,7 @@ def _release_issue() -> dict:
 
 
 def _release_dispatch_config(tmp_path) -> dict:
-    return {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-            "base_branch": "main", "slot_dir": tmp_path / "slots",
-            "max_concurrency": 2}
+    return runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main", slot_dir=tmp_path / "slots", max_concurrency=2)
 
 
 def _spy_process_release(monkeypatch) -> list:
@@ -4106,8 +4106,7 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
     )
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     issue = {"number": 4, "title": "Fix", "body": "Body"}
-    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-              "base_branch": "main"}
+    config = runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main")
     assert runner.process_issue(
         issue, config, "xqliu/orbi-backlog",
     ) == runner.IssueResult("pr", "https://github.com/orbi-build/orbi/pull/4")
@@ -4217,8 +4216,7 @@ def test_process_issue_second_tick_behind_the_index_resumes_not_reclaims(
     # first tick already claimed the Issue.
     issue = {"number": 4, "title": "Fix", "body": "Body",
              "labels": [{"name": "ai-ready"}]}
-    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-              "base_branch": "main"}
+    config = runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main")
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
         result = runner.process_issue(
             issue, config, "xqliu/orbi-backlog",
@@ -4303,8 +4301,7 @@ def test_process_issue_binds_run_id_before_the_resume_scan(
     with caplog.at_level("INFO"):
         runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
-            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-             "base_branch": "main"},
+            runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
             "xqliu/orbi-backlog",
         )
     # No unprefixed line: the claim-time gh scan and resuming_run are
@@ -4372,8 +4369,7 @@ def test_process_issue_starts_fresh_run_when_the_label_is_gone(
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     runner.process_issue(
         {"number": 4, "title": "Fix", "body": "Body"},
-        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-         "base_branch": "main"},
+        runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
         "xqliu/orbi-backlog",
     )
     # The fresh run id is used and the old worktree's run id is never
@@ -4437,8 +4433,7 @@ def test_process_issue_keeps_fresh_run_when_no_worktree_survived(
     with caplog.at_level("INFO"):
         runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
-            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-             "base_branch": "main"},
+            runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
             "xqliu/orbi-backlog",
         )
     # No resume happened: the fresh run id drives the delivery.
@@ -4540,8 +4535,7 @@ def test_process_issue_writes_run_state_and_resume_context(
     caplog.set_level("INFO")
     runner.process_issue(
         {"number": 4, "title": "Fix", "body": "Body"},
-        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-         "base_branch": "main"},
+        runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
         "xqliu/orbi-backlog",
     )
     # The run state file marks the worktree as the same run.
@@ -4589,8 +4583,7 @@ def test_process_issue_fresh_run_has_no_resume_context(
     caplog.set_level("INFO")
     runner.process_issue(
         {"number": 4, "title": "Fix", "body": "Body"},
-        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-         "base_branch": "main"},
+        runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
         "xqliu/orbi-backlog",
     )
     state = runner.read_run_state(worktree)
@@ -4631,8 +4624,7 @@ def test_process_issue_fails_fast_when_the_run_state_is_missing(
     with pytest.raises(RuntimeError, match="run state"):
         runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
-            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-             "base_branch": "main"},
+            runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
             "xqliu/orbi-backlog",
         )
     # No fresh run was started.
@@ -4734,17 +4726,7 @@ def test_run_pi_renders_base_sync_lock_into_prompt(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: calls.append(command) or "done")
     issue = {"number": 4, "title": "t", "body": "b"}
-    config = {
-        "prompt": prompt_path,
-        "repo_dir": tmp_path / "checkout",
-        "source_repos": ["owner/repo"],
-        "workspace_root": tmp_path,
-        "context_files": [],
-        "skills": [],
-        "base_branch": "main",
-        "base_sha": "abc123def456",
-        "run_id": "run1",
-    }
+    config = runner.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1")
     runner.run_pi(
         issue, tmp_path, config, "owner/repo",
         branch="orbi/owner-repo-issue-4",
@@ -4765,19 +4747,7 @@ def test_run_pi_logs_provider_config_loaded_with_selection(
     prompt_path.write_text("SYSTEM", encoding="utf-8")
     monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: "done")
     issue = {"number": 4, "title": "t", "body": "b"}
-    config = {
-        "prompt": prompt_path,
-        "repo_dir": tmp_path / "checkout",
-        "source_repos": ["owner/repo"],
-        "workspace_root": tmp_path,
-        "context_files": [],
-        "skills": [],
-        "base_branch": "main",
-        "base_sha": "abc123def456",
-        "run_id": "run1",
-        "pi_provider": "local-qwen",
-        "pi_model": "qwen3.8:27b",
-    }
+    config = runner.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1", pi_provider="local-qwen", pi_model="qwen3.8:27b")
     with caplog.at_level("INFO"):
         runner.run_pi(
             issue, tmp_path, config, "owner/repo",
@@ -4803,17 +4773,7 @@ def test_run_pi_logs_provider_config_loaded_unconfigured(
     prompt_path.write_text("SYSTEM", encoding="utf-8")
     monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: "done")
     issue = {"number": 4, "title": "t", "body": "b"}
-    config = {
-        "prompt": prompt_path,
-        "repo_dir": tmp_path / "checkout",
-        "source_repos": ["owner/repo"],
-        "workspace_root": tmp_path,
-        "context_files": [],
-        "skills": [],
-        "base_branch": "main",
-        "base_sha": "abc123def456",
-        "run_id": "run1",
-    }
+    config = runner.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1")
     with caplog.at_level("INFO"):
         runner.run_pi(
             issue, tmp_path, config, "owner/repo", branch="b",
@@ -4839,16 +4799,7 @@ def test_run_review_logs_provider_config_loaded_with_review_role(
             tmp_path,
             {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
              "head_oid": "h1", "head_ref": "h"},
-            {
-                "prompt_review": prompt_path,
-                "repo_dir": tmp_path / "checkout",
-                "source_repos": ["owner/repo"],
-                "base_branch": "main",
-                "run_id": "a1b2c3d4",
-                "skills": [],
-                "pi_provider": "local-qwen",
-                "pi_model": "qwen3.8:27b",
-            },
+            runner.RunnerConfig(prompt_review=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4", skills=(), pi_provider="local-qwen", pi_model="qwen3.8:27b"),
             "owner/repo", 4, "branch", 1,
         )
     lines = [line for line in caplog.text.splitlines()
@@ -4874,14 +4825,7 @@ def test_run_review_renders_base_sync_lock_into_prompt(monkeypatch, tmp_path):
         tmp_path,
         {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
          "head_oid": "h1", "head_ref": "h"},
-        {
-            "prompt_review": prompt_path,
-            "repo_dir": tmp_path / "checkout",
-            "source_repos": ["owner/repo"],
-            "base_branch": "main",
-            "run_id": "a1b2c3d4",
-            "skills": [],
-        },
+        runner.RunnerConfig(prompt_review=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4", skills=()),
         "owner/repo", 4, "branch", 1,
     )
     command = calls[0]
@@ -5003,18 +4947,7 @@ def test_run_pi_injects_trusted_issue_comments_into_the_prompt(
         lambda command, **kwargs: calls.append(command) or "done",
     )
     issue = {"number": 4, "title": "Fix title", "body": "Fix body"}
-    config = {
-        "prompt": prompt_path,
-        "repo_dir": tmp_path / "checkout",
-        "source_repos": ["owner/repo"],
-        "workspace_root": tmp_path,
-        "context_files": [],
-        "skills": [],
-        "base_branch": "main",
-        "base_sha": "abc123def456",
-        "run_id": "run1",
-        "issue_comments_limit": 2,
-    }
+    config = runner.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1", issue_comments_limit=2)
     assert runner.run_pi(
         issue, tmp_path, config, "owner/repo",
         branch="orbi/owner-repo-issue-4",
@@ -5056,17 +4989,7 @@ def test_run_pi_skips_the_comment_fetch_without_the_placeholder(
         runner, "stream_pi",
         lambda command, **kwargs: calls.append(command) or "done",
     )
-    config = {
-        "prompt": prompt_path,
-        "repo_dir": tmp_path,
-        "source_repos": ["owner/repo"],
-        "workspace_root": tmp_path,
-        "context_files": [],
-        "skills": [],
-        "base_branch": "main",
-        "base_sha": "abc123def456",
-        "run_id": "run1",
-    }
+    config = runner.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1")
     runner.run_pi(
         {"number": 5, "title": "t", "body": "b"}, tmp_path, config,
         "owner/repo", branch="orbi/owner-repo-issue-5",
@@ -5112,14 +5035,7 @@ def test_run_review_injects_trusted_issue_comments_into_the_prompt(
         tmp_path,
         {"number": 9, "url": "https://x/pull/9", "base_oid": "b1",
          "head_oid": "h1", "head_ref": "h"},
-        {
-            "prompt_review": prompt_path,
-            "repo_dir": tmp_path / "checkout",
-            "source_repos": ["owner/repo"],
-            "base_branch": "main",
-            "run_id": "a1b2c3d4",
-            "skills": [],
-        },
+        runner.RunnerConfig(prompt_review=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4", skills=()),
         "owner/repo", 4, "branch", 1,
     )
     assert fetches == [(4, "owner/repo")]
@@ -5149,14 +5065,7 @@ def test_run_review_skips_the_comment_fetch_without_the_placeholder(
         tmp_path,
         {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
          "head_oid": "h1", "head_ref": "h"},
-        {
-            "prompt_review": prompt_path,
-            "repo_dir": tmp_path / "checkout",
-            "source_repos": ["owner/repo"],
-            "base_branch": "main",
-            "run_id": "a1b2c3d4",
-            "skills": [],
-        },
+        runner.RunnerConfig(prompt_review=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4", skills=()),
         "owner/repo", 4, "branch", 1,
     )
     assert fetches == []
@@ -5177,17 +5086,7 @@ def test_run_pi_injects_base_branch_sha_and_run_id_into_prompt(monkeypatch, tmp_
     calls = []
     monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: calls.append((command, kwargs)) or "done")
     issue = {"number": 4, "title": "Fix title", "body": "Fix body"}
-    config = {
-        "prompt": prompt_path,
-        "repo_dir": tmp_path / "checkout",
-        "source_repos": ["owner/repo"],
-        "workspace_root": tmp_path,
-        "context_files": ["context.md"],
-        "skills": ["skill.md"],
-        "base_branch": "main",
-        "base_sha": "abc123def456",
-        "run_id": "run1",
-    }
+    config = runner.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), workspace_root=tmp_path, context_files=("context.md",), skills=("skill.md",), base_branch="main", base_sha="abc123def456", run_id="run1")
     assert runner.run_pi(
         issue, tmp_path, config, "owner/repo",
         branch="orbi/owner-repo-issue-4",
@@ -5220,17 +5119,7 @@ def test_run_pi_passes_task_branch_to_stream_pi(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: calls.append(kwargs) or "done")
     issue = {"number": 5, "title": "t", "body": "b"}
-    config = {
-        "prompt": prompt_path,
-        "repo_dir": tmp_path,
-        "source_repos": ["owner/repo"],
-        "workspace_root": tmp_path,
-        "context_files": [],
-        "skills": [],
-        "base_branch": "main",
-        "base_sha": "abc123def456",
-        "run_id": "run1",
-    }
+    config = runner.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1")
     runner.run_pi(
         issue, tmp_path, config, "owner/repo",
         timeout=7, branch="orbi/owner-repo-issue-5",
@@ -5246,7 +5135,7 @@ def test_run_pi_redacts_prompt_and_issue_from_command_log(monkeypatch, tmp_path)
     monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: calls.append((command, kwargs)) or "done")
     runner.run_pi(
         {"number": 5, "title": "secret", "body": "token"}, tmp_path,
-        {"prompt": prompt_path, "repo_dir": tmp_path, "source_repos": ["owner/repo"], "workspace_root": tmp_path, "context_files": [], "skills": [], "base_branch": "main", "base_sha": "abc123def456", "run_id": "run1"},
+        runner.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1"),
         "owner/repo", branch="orbi/owner-repo-issue-5",
     )
     command, kwargs = calls[0]
@@ -5271,12 +5160,7 @@ def test_run_pi_keeps_the_fresh_context_without_a_resume_context(
         runner, "stream_pi",
         lambda command, **kwargs: calls.append(command) or "done",
     )
-    config = {
-        "prompt": prompt_path, "repo_dir": tmp_path,
-        "source_repos": ["owner/repo"], "workspace_root": tmp_path,
-        "context_files": [], "skills": [], "base_branch": "main",
-        "base_sha": "abc123def456", "run_id": "run1",
-    }
+    config = runner.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1")
     runner.run_pi(
         {"number": 5, "title": "t", "body": "b"}, tmp_path, config,
         "owner/repo", branch="orbi/owner-repo-issue-5",
@@ -5302,12 +5186,7 @@ def test_run_pi_appends_the_resume_context_to_the_context_argument(
         runner, "stream_pi",
         lambda command, **kwargs: calls.append(command) or "done",
     )
-    config = {
-        "prompt": prompt_path, "repo_dir": tmp_path,
-        "source_repos": ["owner/repo"], "workspace_root": tmp_path,
-        "context_files": [], "skills": [], "base_branch": "main",
-        "base_sha": "abc123def456", "run_id": "run1",
-    }
+    config = runner.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1")
     resume = (
         "Resume context (Issue #219): this worktree already carries "
         "work from an earlier session of the SAME run. Continue that "
@@ -6097,7 +5976,7 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
     monkeypatch.setattr(seam, "create_worktree", lambda *args, **kwargs: tmp_path / "wt")
     monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
     issue = {"number": 4, "title": "Fix", "body": "Body"}
-    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}
+    config = runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main")
     assert runner.process_issue(issue, config, "xqliu/orbi-backlog") == runner.IssueResult("pr", "https://github.com/orbi-build/orbi/pull/4")
     assert calls[0] == ("edit", (4,), {"repo": "xqliu/orbi-backlog", "add": "ai-in-progress"})
     # The run state is published automatically: exactly one progress
@@ -6175,7 +6054,7 @@ def test_process_issue_success_logs_run_end_with_commit(monkeypatch, tmp_path, c
     with caplog.at_level("INFO"):
         runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
-            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"},
+            runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
             "xqliu/orbi-backlog",
         )
     ends = [line for line in caplog.text.splitlines() if " run_end " in line]
@@ -6215,7 +6094,7 @@ def test_process_issue_failure_marks_blocked_and_ends_cleanly(monkeypatch, tmp_p
     monkeypatch.setattr(seam, "run_command", fake_run)
     # The failure is terminal: `process_issue` returns `None` (no PR) and
     # does NOT re-raise — the service must not crash on it (Issue #239).
-    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/orbi-backlog").kind == "failed"
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
     assert calls[1][2] == {"repo": "xqliu/orbi-backlog", "add": "ai-blocked", "remove": "ai-in-progress"}
     assert calls[2][0] == "comment"
     failure_body = calls[2][2]["body"]
@@ -6289,8 +6168,7 @@ def test_process_issue_delivery_no_commit_marks_blocked_without_crashing(
     # does NOT re-raise — the service must not crash on it.
     assert runner.process_issue(
         {"number": 239, "title": "No commit", "body": ""},
-        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-         "base_branch": "main"},
+        runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
         "xqliu/orbi",
     ).kind == "failed"
     edits = [entry for entry in calls if isinstance(entry, dict)]
@@ -6372,8 +6250,7 @@ def test_process_issue_model_wait_dead_failure_stays_in_progress(
     # #239), and the Issue must NOT be marked `ai-blocked` (Issue #227).
     assert runner.process_issue(
         {"number": 218, "title": "Model wait dead", "body": ""},
-        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-         "base_branch": "main"},
+        runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
         "xqliu/orbi",
     ).kind == "failed"
     # The Issue keeps `ai-in-progress`: the ONLY label edit is the claim
@@ -6456,8 +6333,7 @@ def test_process_issue_model_wait_failure_records_health_attempt(
     monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.process_issue(
         {"number": 218, "title": "Model wait dead", "body": ""},
-        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-         "base_branch": "main"},
+        runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
         "xqliu/orbi",
     ).kind == "failed"
     runs = _health_runs(tmp_path)
@@ -6511,8 +6387,7 @@ def test_process_issue_three_recoverable_failures_raise_health_finding(
     for _ in range(3):
         assert runner.process_issue(
             {"number": 218, "title": "Model wait dead", "body": ""},
-            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-             "base_branch": "main"},
+            runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
             "xqliu/orbi",
         ).kind == "failed"
     state = runner_health.load_health_state(
@@ -6559,8 +6434,7 @@ def test_process_issue_success_records_health_streak_break(
     monkeypatch.setattr(seam, "run_command", fake_run)
     result = runner.process_issue(
         {"number": 4, "title": "Fix", "body": "Body"},
-        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-         "base_branch": "main"},
+        runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
         "xqliu/orbi-backlog",
     )
     assert result.kind == "pr"
@@ -6625,8 +6499,7 @@ def test_process_issue_recoverable_health_record_failure_is_bypassed(
     with caplog.at_level("INFO"):
         result = runner.process_issue(
             {"number": 218, "title": "Model wait dead", "body": ""},
-            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-             "base_branch": "main"},
+            runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
             "xqliu/orbi",
         )
     assert result.kind == "failed"
@@ -6673,8 +6546,7 @@ def test_process_issue_success_health_record_failure_is_bypassed(
     with caplog.at_level("INFO"):
         result = runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
-            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-             "base_branch": "main"},
+            runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
             "xqliu/orbi-backlog",
         )
     assert result.kind == "pr"
@@ -6737,8 +6609,7 @@ def test_process_issue_model_wait_dead_comment_failure_stays_in_progress(
     monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.process_issue(
         {"number": 218, "title": "Model wait dead", "body": ""},
-        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-         "base_branch": "main"},
+        runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
         "xqliu/orbi",
     ).kind == "failed"
     # The Issue keeps `ai-in-progress`: the ONLY label edit is the claim
@@ -6810,8 +6681,7 @@ def test_process_issue_idle_recovery_failure_marks_blocked(
     # does NOT re-raise — the service must not crash on it (Issue #239).
     assert runner.process_issue(
         {"number": 94, "title": "Idle recovery", "body": ""},
-        {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-         "base_branch": "main"},
+        runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
         "xqliu/orbi",
     ).kind == "failed"
     edits = [entry for entry in calls if isinstance(entry, dict)]
@@ -6886,7 +6756,7 @@ def test_process_issue_ends_cleanly_when_reporting_fails(monkeypatch, tmp_path, 
         # The failure is terminal: `process_issue` returns `None` (no PR)
         # and does NOT re-raise — the service must not crash on it
         # (Issue #239).
-        assert runner.process_issue({"number": 13, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/orbi-backlog").kind == "failed"
+        assert runner.process_issue({"number": 13, "title": "Fail", "body": ""}, runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
     assert "failure reporting failed" in caplog.text
     # No progress comment was posted (the failure report died on the
     # failure-comment POST before the bypass steps).
@@ -7726,7 +7596,7 @@ def test_process_issue_failure_without_session_still_carries_scene(
     monkeypatch.setattr(seam, "run_command", fake_run)
     # Issue #239: the failure is terminal — `process_issue` returns `None`
     # instead of re-raising; the scene assertions below are unchanged.
-    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/orbi-backlog").kind == "failed"
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
     failure_body = calls[-1][2]["body"]
     # No session file yet: the scene still carries the full debug entry
     # (worktree, branch) with '-' session fields.
@@ -7991,7 +7861,7 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     })
     # Issue #239: the failure is terminal — `process_issue` returns `None`
     # instead of re-raising; the scene assertions below are unchanged.
-    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/orbi-backlog").kind == "failed"
+    assert runner.process_issue({"number": 8, "title": "Fail", "body": ""}, runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
     failure_body = calls[-1][2]["body"]
     assert "Orbi failed:" in failure_body
     assert "session=sess-9" in failure_body
@@ -8054,7 +7924,7 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
         # Issue #239: the failure is terminal — `process_issue` returns
         # `None` instead of re-raising; the scene-isolation assertions
         # below are unchanged.
-        assert runner.process_issue({"number": 9, "title": "Fail", "body": ""}, {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md", "base_branch": "main"}, "xqliu/orbi-backlog").kind == "failed"
+        assert runner.process_issue({"number": 9, "title": "Fail", "body": ""}, runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"), "xqliu/orbi-backlog").kind == "failed"
     assert "activity scene failed" in caplog.text
     failure_body = calls[-1][2]["body"]
     assert "Orbi failed: git failed" in failure_body
@@ -11562,17 +11432,7 @@ def test_run_pi_passes_progress_callback_to_stream_pi(monkeypatch, tmp_path):
     callback = lambda activity: None  # noqa: E731
     runner.run_pi(
         {"number": 4, "title": "Fix", "body": "b"}, tmp_path,
-        {
-            "prompt": tmp_path / "prompt.md",
-            "repo_dir": tmp_path,
-            "source_repos": ["owner/repo"],
-            "workspace_root": tmp_path,
-            "base_branch": "main",
-            "base_sha": "abc123",
-            "run_id": "a1b2c3d4",
-            "skills": [],
-            "context_files": [],
-        },
+        runner.RunnerConfig(prompt=tmp_path / "prompt.md", repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, base_branch="main", base_sha="abc123", run_id="a1b2c3d4", skills=(), context_files=()),
         "owner/repo", branch="b",
         progress=callback,
     )
@@ -11598,14 +11458,7 @@ def test_run_review_passes_progress_callback_to_stream_pi(
         tmp_path,
         {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
          "head_oid": "h1", "head_ref": "h"},
-        {
-            "prompt_review": tmp_path / "prompt_review.md",
-            "repo_dir": tmp_path,
-            "source_repos": ["owner/repo"],
-            "base_branch": "main",
-            "run_id": "a1b2c3d4",
-            "skills": [],
-        },
+        runner.RunnerConfig(prompt_review=tmp_path / "prompt_review.md", repo_dir=tmp_path, source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4", skills=()),
         "owner/repo", 4, "branch", 1, progress=callback,
     )
     assert seen["progress"] is callback
@@ -11630,18 +11483,7 @@ def test_run_pi_passes_configured_model_wait_dead_seconds(
     (tmp_path / "prompt.md").write_text("p", encoding="utf-8")
     runner.run_pi(
         {"number": 4, "title": "Fix", "body": "b"}, tmp_path,
-        {
-            "prompt": tmp_path / "prompt.md",
-            "repo_dir": tmp_path,
-            "source_repos": ["owner/repo"],
-            "workspace_root": tmp_path,
-            "base_branch": "main",
-            "base_sha": "abc123",
-            "run_id": "a1b2c3d4",
-            "skills": [],
-            "context_files": [],
-            "model_wait_dead_seconds": 1234.5,
-        },
+        runner.RunnerConfig(prompt=tmp_path / "prompt.md", repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, base_branch="main", base_sha="abc123", run_id="a1b2c3d4", skills=(), context_files=(), model_wait_dead_seconds=1234.5),
         "owner/repo", branch="b",
     )
     assert seen["model_wait_dead_seconds"] == 1234.5
@@ -11666,15 +11508,7 @@ def test_run_review_passes_configured_model_wait_dead_seconds(
         tmp_path,
         {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
          "head_oid": "h1", "head_ref": "h"},
-        {
-            "prompt_review": tmp_path / "prompt_review.md",
-            "repo_dir": tmp_path,
-            "source_repos": ["owner/repo"],
-            "base_branch": "main",
-            "run_id": "a1b2c3d4",
-            "skills": [],
-            "model_wait_dead_seconds": 1234.5,
-        },
+        runner.RunnerConfig(prompt_review=tmp_path / "prompt_review.md", repo_dir=tmp_path, source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4", skills=(), model_wait_dead_seconds=1234.5),
         "owner/repo", 4, "branch", 1,
     )
     assert seen["model_wait_dead_seconds"] == 1234.5
@@ -11698,17 +11532,7 @@ def test_run_pi_keeps_module_default_without_config_key(
     (tmp_path / "prompt.md").write_text("p", encoding="utf-8")
     runner.run_pi(
         {"number": 4, "title": "Fix", "body": "b"}, tmp_path,
-        {
-            "prompt": tmp_path / "prompt.md",
-            "repo_dir": tmp_path,
-            "source_repos": ["owner/repo"],
-            "workspace_root": tmp_path,
-            "base_branch": "main",
-            "base_sha": "abc123",
-            "run_id": "a1b2c3d4",
-            "skills": [],
-            "context_files": [],
-        },
+        runner.RunnerConfig(prompt=tmp_path / "prompt.md", repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, base_branch="main", base_sha="abc123", run_id="a1b2c3d4", skills=(), context_files=()),
         "owner/repo", branch="b",
     )
     assert seen["model_wait_dead_seconds"] == runner.PI_MODEL_WAIT_DEAD_SECONDS
@@ -11725,18 +11549,7 @@ def _skill_config(tmp_path, *names):
         skill_dir.mkdir(parents=True, exist_ok=True)
         (skill_dir / "SKILL.md").write_text("skill", encoding="utf-8")
         skills.append(skill_dir / "SKILL.md")
-    return {
-        "prompt": tmp_path / "prompt.md",
-        "prompt_review": tmp_path / "prompt_review.md",
-        "repo_dir": tmp_path,
-        "source_repos": ["owner/repo"],
-        "workspace_root": tmp_path,
-        "context_files": [],
-        "skills": skills,
-        "base_branch": "main",
-        "base_sha": "abc123def456",
-        "run_id": "a1b2c3d4",
-    }
+    return runner.RunnerConfig(prompt=tmp_path / "prompt.md", prompt_review=tmp_path / "prompt_review.md", repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=skills, base_branch="main", base_sha="abc123def456", run_id="a1b2c3d4")
 
 
 def _command_skills(command):
@@ -11866,7 +11679,7 @@ def test_load_config_defaults_max_concurrency_to_one(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
-    assert config["max_concurrency"] == 1
+    assert config.max_concurrency == 1
 
 
 def test_load_config_reads_explicit_max_concurrency(tmp_path):
@@ -11876,7 +11689,7 @@ def test_load_config_reads_explicit_max_concurrency(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["max_concurrency"] == 2
+    assert config.max_concurrency == 2
 
 
 def test_load_config_derives_slot_dir_from_repo_dir(tmp_path):
@@ -11886,7 +11699,7 @@ def test_load_config_derives_slot_dir_from_repo_dir(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["slot_dir"] == (tmp_path / "repo").resolve() / ".orbi" / "slots"
+    assert config.slot_dir == (tmp_path / "repo").resolve() / ".orbi" / "slots"
 
 
 @pytest.mark.parametrize(
@@ -12011,7 +11824,7 @@ def test_main_delegates_all_preflight_to_one_helper(
         lambda repos, slot_dir, max_concurrency, active_milestone=None, **_kwargs: None,
     )
     assert runner.main(["--config", str(config)]) == 0
-    assert seen["config"]["source_repos"] == ["owner/repo"]
+    assert seen["config"].source_repos == ("owner/repo",)
     # The slot was taken only after the (stubbed) preflight ran.
     assert (tmp_path / ".orbi" / "slots" / "slot-1").exists()
 
@@ -12873,7 +12686,7 @@ def test_wait_for_delivery_keeps_waiting_while_pr_open(
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     monkeypatch.setattr(runner.time, "sleep", lambda s: None)
-    config = {"repo_dir": tmp_path, "base_branch": "main"}
+    config = runner.RunnerConfig(repo_dir=tmp_path, base_branch="main")
     # The derived worktree exists: a normal resume reaches the review
     # (Issue #90 fails fast only when the directory is missing).
     (tmp_path / ".worktrees"
@@ -12895,8 +12708,8 @@ def test_wait_for_delivery_keeps_waiting_while_pr_open(
     worktree, branch, base_branch, review_config, repo, number = reviews[0][0]
     assert branch == "orbi/owner-repo-issue-39"
     assert base_branch == "main"
-    assert review_config["run_id"] == "a1b2c3d4"
-    assert review_config["base_sha"] == "abc123def456"
+    assert review_config.run_id == "a1b2c3d4"
+    assert review_config.base_sha == "abc123def456"
     assert repo == "owner/repo"
     assert number == 39
     # The fake rejects anything that is not a pr/issue view.
@@ -12954,7 +12767,7 @@ def test_wait_for_delivery_sleeps_poll_interval_between_review_rounds(
      / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
     issue = {"number": 39, "title": "task", "body": ""}
     runner.wait_for_delivery(
-        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo", poll_interval=1.5,
     )
     # Two finding rounds -> exactly one sleep before each next poll; the
@@ -13010,7 +12823,7 @@ def test_wait_for_delivery_auto_merges_on_clean_review(
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
     runner.wait_for_delivery(
-        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
     )
     # One OPEN poll, one review, then the merge is terminal: no second
@@ -13071,7 +12884,7 @@ def test_wait_for_delivery_passes_p0_priority_to_the_review(
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
     runner.wait_for_delivery(
-        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
     )
     assert review_calls == [{"title": "p0 task", "priority": "p0"}]
@@ -13148,7 +12961,7 @@ def test_wait_for_delivery_marks_blocked_when_review_fails(
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
     runner.wait_for_delivery(
-        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
     )
     assert edits[0][1] == {
@@ -13249,7 +13062,7 @@ def test_wait_for_delivery_marks_blocked_when_review_fails_while_fix_needed(
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
     runner.wait_for_delivery(
-        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
     )
     # The Issue is marked ai-blocked; the blocked patch clears every
@@ -13365,7 +13178,7 @@ def test_wait_for_delivery_blocks_when_scene_base_differs_from_config(
     caplog.set_level("INFO")
     # The configured base is main; the scene froze develop.
     runner.wait_for_delivery(
-        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
     )
     # No review was started and nothing was merged.
@@ -13497,7 +13310,7 @@ def test_wait_for_delivery_worktree_missing_stays_fix_needed(
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
     runner.wait_for_delivery(
-        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
     )
     # No review was started and nothing was merged.
@@ -13623,7 +13436,7 @@ def test_wait_for_delivery_worktree_missing_while_fix_needed_keeps_label(
     issue = {"number": 39, "title": "task", "body": ""}
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     runner.wait_for_delivery(
-        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
     )
     # No review was started.
@@ -13698,7 +13511,7 @@ def test_wait_for_delivery_runs_review_when_fix_needed(
     issue = {"number": 39, "title": "task", "body": "stale body"}
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     caplog.set_level("INFO")
-    config = {"repo_dir": tmp_path, "base_branch": "main"}
+    config = runner.RunnerConfig(repo_dir=tmp_path, base_branch="main")
     runner.wait_for_delivery(PR_URL, issue, config, "owner/repo")
     # One review per OPEN+fix-needed poll (two polls before MERGED).
     assert len(reviews) == 2
@@ -13707,8 +13520,8 @@ def test_wait_for_delivery_runs_review_when_fix_needed(
     worktree, branch, base_branch, review_config, repo, number = reviews[0][0]
     assert branch == "orbi/owner-repo-issue-39"
     assert base_branch == "main"
-    assert review_config["run_id"] == "a1b2c3d4"
-    assert review_config["base_sha"] == "abc123def456"
+    assert review_config.run_id == "a1b2c3d4"
+    assert review_config.base_sha == "abc123def456"
     assert repo == "owner/repo"
     assert number == 39
 
@@ -13887,7 +13700,7 @@ def test_wait_for_delivery_review_failure_without_bound_run_id(
     )
     issue = {"number": 39, "title": "task", "body": ""}
     runner.wait_for_delivery(
-        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo",
     )
     assert edits[0][1] == {
@@ -13941,7 +13754,7 @@ def test_wait_for_delivery_repairs_in_progress_label_and_logs_ci(
     caplog.set_level("INFO")
     runner.wait_for_delivery(
         PR_URL, {"number": 39, "title": "task", "body": ""},
-        {"repo_dir": tmp_path, "base_branch": "main"}, "owner/repo",
+        runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
     )
     assert any("--add-label" in call and "ai-pr-opened" in call
                and "--remove-label" in call and "ai-in-progress" in call
@@ -14120,7 +13933,7 @@ def test_run_review_round_returns_true_when_review_merges(
     issue = {"number": 39, "title": "task", "body": ""}
     outcome = runner._run_review_round(
         PR_URL, issue,
-        {"repo_dir": tmp_path, "base_branch": "main"}, "owner/repo",
+        runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
     )
     assert outcome is True
     # One review on the frozen scene of the same run.
@@ -14129,8 +13942,8 @@ def test_run_review_round_returns_true_when_review_merges(
         reviews[0][0]
     assert branch == "orbi/owner-repo-issue-39"
     assert base_branch == "main"
-    assert review_config["run_id"] == "a1b2c3d4"
-    assert review_config["base_sha"] == "abc123def456"
+    assert review_config.run_id == "a1b2c3d4"
+    assert review_config.base_sha == "abc123def456"
     assert repo == "owner/repo"
     assert number == 39
     assert edits == []
@@ -14147,7 +13960,7 @@ def test_run_review_round_returns_false_on_findings(
     issue = {"number": 39, "title": "task", "body": ""}
     outcome = runner._run_review_round(
         PR_URL, issue,
-        {"repo_dir": tmp_path, "base_branch": "main"}, "owner/repo",
+        runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
     )
     assert outcome is False
     assert len(reviews) == 1
@@ -14168,7 +13981,7 @@ def test_run_review_round_returns_none_when_scene_base_differs(
     issue = {"number": 39, "title": "task", "body": ""}
     outcome = runner._run_review_round(
         PR_URL, issue,
-        {"repo_dir": tmp_path, "base_branch": "main"}, "owner/repo",
+        runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
     )
     assert outcome is None
     assert reviews == []
@@ -14195,7 +14008,7 @@ def test_run_review_round_returns_none_when_worktree_missing(
     issue = {"number": 39, "title": "task", "body": ""}
     outcome = runner._run_review_round(
         PR_URL, issue,
-        {"repo_dir": tmp_path, "base_branch": "main"}, "owner/repo",
+        runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
     )
     assert outcome is None
     assert reviews == []
@@ -14257,20 +14070,8 @@ def test_main_holds_slot_through_delivery_wait(monkeypatch, tmp_path):
 
 def _model_config(tmp_path, **extra):
     """Build a minimal config for run_pi/run_review with model keys."""
-    config = {
-        "prompt": tmp_path / "prompt.md",
-        "prompt_review": tmp_path / "prompt_review.md",
-        "repo_dir": tmp_path,
-        "source_repos": ["owner/repo"],
-        "workspace_root": tmp_path,
-        "context_files": [],
-        "skills": [],
-        "base_branch": "main",
-        "base_sha": "abc123def456",
-        "run_id": "a1b2c3d4",
-    }
-    config.update(extra)
-    return config
+    config = runner.RunnerConfig(prompt=tmp_path / "prompt.md", prompt_review=tmp_path / "prompt_review.md", repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="a1b2c3d4")
+    return dataclasses.replace(config, **extra)
 
 
 def _command_model_args(command):
@@ -14287,9 +14088,9 @@ def test_load_config_defaults_pi_model_keys_to_none(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
-    assert config["pi_provider"] is None
-    assert config["pi_model"] is None
-    assert config["pi_thinking"] is None
+    assert config.pi_provider is None
+    assert config.pi_model is None
+    assert config.pi_thinking is None
 
 
 def test_load_config_reads_pi_model_keys(tmp_path):
@@ -14302,9 +14103,9 @@ def test_load_config_reads_pi_model_keys(tmp_path):
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
-    assert config["pi_provider"] == "openai"
-    assert config["pi_model"] == "gpt-5.6-sol"
-    assert config["pi_thinking"] == "medium"
+    assert config.pi_provider == "openai"
+    assert config.pi_model == "gpt-5.6-sol"
+    assert config.pi_thinking == "medium"
 
 
 @pytest.mark.parametrize(
@@ -14492,8 +14293,7 @@ def _providers_config(tmp_path, providers, **toml_keys):
     providers_path.write_text(
         json.dumps(providers), encoding="utf-8",
     )
-    keys = {"pi_providers": '"pi-providers.json"'}
-    keys.update(toml_keys)
+    keys = {"pi_providers": '"pi-providers.json"', **toml_keys}
     toml = 'source_repos = ["owner/repo"]\n' + "\n".join(
         f"{key} = {value}" for key, value in keys.items()
     ) + "\n"
@@ -14506,8 +14306,8 @@ def test_load_config_pi_providers_absent_defaults_to_none(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
-    assert config["pi_providers"] is None
-    assert config["pi_providers_data"] is None
+    assert config.pi_providers is None
+    assert config.pi_providers_data is None
 
 
 @pytest.mark.parametrize("value", ['""', "123", "true"])
@@ -14600,7 +14400,7 @@ def test_load_config_pi_providers_accepts_model_level_api(tmp_path):
     }}}
     config_path = _providers_config(tmp_path, providers)
     config = runner.load_config(config_path)
-    assert config["pi_providers_data"] == providers
+    assert config.pi_providers_data == providers
 
 
 def test_load_config_pi_providers_rejects_unknown_provider(tmp_path, monkeypatch):
@@ -14677,7 +14477,7 @@ def test_load_config_doctor_mode_keeps_provider_key_finding(
     config = runner.load_config(
         config_path, check_provider_api_keys=False,
     )
-    finding = config["pi_provider_key_finding"]
+    finding = config.pi_provider_key_finding
     assert finding["variable"] == "GROQ_API_KEY"
     assert finding["state"] == expected
     assert "GROQ_API_KEY" in finding["error"]
@@ -14692,10 +14492,10 @@ def test_load_config_pi_providers_accepts_groq_example(tmp_path, monkeypatch):
         pi_thinking='"medium"',
     )
     config = runner.load_config(config_path)
-    assert config["pi_provider"] == "groq"
-    assert config["pi_model"] == "qwen/qwen3.8-27b"
-    assert config["pi_providers_data"] == GROQ_PROVIDERS
-    assert config["pi_providers"].name == "pi-providers.json"
+    assert config.pi_provider == "groq"
+    assert config.pi_model == "qwen/qwen3.8-27b"
+    assert config.pi_providers_data == GROQ_PROVIDERS
+    assert config.pi_providers.name == "pi-providers.json"
 
 
 def test_load_config_pi_providers_unselected_provider_missing_key_ok(
@@ -14721,7 +14521,7 @@ def test_load_config_pi_providers_unselected_provider_missing_key_ok(
         pi_provider='"local"', pi_model='"Qwen3.8-27B"',
     )
     config = runner.load_config(config_path)
-    assert config["pi_providers_data"] == providers
+    assert config.pi_providers_data == providers
 
 
 # --- provider dir materialization + Pi env (Issue #157) --------------------
@@ -14744,7 +14544,7 @@ def _user_agent_dir(home: Path, models=None, settings=True, auth=True) -> Path:
 
 def test_prepare_pi_agent_dir_none_when_not_configured(tmp_path):
     config = _model_config(tmp_path)
-    assert config.get("pi_providers_data") is None
+    assert config.pi_providers_data is None
     assert runner.prepare_pi_agent_dir(tmp_path, config) is None
     assert not (tmp_path / ".orbi" / "pi-agent").exists()
 
@@ -14841,7 +14641,7 @@ def test_prepare_pi_agent_dir_expands_api_key_env_reference(
     assert merged["providers"]["groq"]["apiKey"] == "sk-real-key-value"
     # The loaded provider data (and the user's file behind it) keeps
     # the env-var reference: only the per-run copy materializes it.
-    assert config["pi_providers_data"]["providers"]["groq"][
+    assert config.pi_providers_data["providers"]["groq"][
         "apiKey"
     ] == "$GROQ_API_KEY"
 
@@ -15436,7 +15236,7 @@ def test_load_config_pi_providers_accepts_entry_without_models(tmp_path):
     }}}
     config_path = _providers_config(tmp_path, providers)
     config = runner.load_config(config_path)
-    assert config["pi_providers_data"] == providers
+    assert config.pi_providers_data == providers
 
 
 def test_load_config_pi_providers_rejects_empty_models_list(tmp_path):
@@ -15475,7 +15275,7 @@ def test_load_config_pi_providers_provider_without_model_ok(
         tmp_path, GROQ_PROVIDERS, pi_provider='"groq"',
     )
     config = runner.load_config(config_path)
-    assert config["pi_model"] is None
+    assert config.pi_model is None
 
 
 def test_load_config_pi_providers_provider_without_api_key_ok(
@@ -15493,7 +15293,7 @@ def test_load_config_pi_providers_provider_without_api_key_ok(
         pi_model='"Qwen3.8-27B"',
     )
     config = runner.load_config(config_path)
-    assert config["pi_providers_data"] == providers
+    assert config.pi_providers_data == providers
 
 
 def test_load_config_pi_providers_braced_env_reference(tmp_path, monkeypatch):
@@ -15515,7 +15315,7 @@ def test_load_config_pi_providers_braced_env_reference(tmp_path, monkeypatch):
         runner.load_config(config_path)
     monkeypatch.setenv("GROQ_API_KEY", "test-key")
     config = runner.load_config(config_path)
-    assert config["pi_providers_data"] == providers
+    assert config.pi_providers_data == providers
 
 
 def test_load_config_api_key_from_deploy_env_file_ok(tmp_path, monkeypatch):
@@ -15531,7 +15331,7 @@ def test_load_config_api_key_from_deploy_env_file_ok(tmp_path, monkeypatch):
         pi_model='"qwen/qwen3.8-27b"',
     )
     config = runner.load_config(config_path)
-    assert config["pi_providers_data"] == GROQ_PROVIDERS
+    assert config.pi_providers_data == GROQ_PROVIDERS
     # The variable must be visible to the process so the per-run Pi agent
     # dir expansion (_expand_pi_api_key_refs) resolves it too.
     assert os.environ.get("GROQ_API_KEY") == "file-key"
@@ -16489,7 +16289,7 @@ def test_process_issue_routes_release_to_process_release(monkeypatch):
         side_effect=AssertionError("run_pi must not run for a release task")))
     monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(seam, "freeze_base", lambda r, b: "abc")
-    result = runner.process_issue(issue, {"base_branch": "main"}, "o/r")
+    result = runner.process_issue(issue, runner.RunnerConfig(base_branch="main"), "o/r")
     assert result == runner.IssueResult("release", "rel-url")
     assert calls == ["release"]
 
@@ -16524,8 +16324,7 @@ def test_run_ticket_agent_uses_a_temporary_session_without_git(monkeypatch, tmp_
     )
     result = runner.run_ticket_agent(
         {"number": 99, "title": "Launch thread", "body": "Write copy"},
-        {"repo_dir": tmp_path, "run_id": "a1b2c3d4", "skills": [],
-         "pi_provider": None, "pi_model": None, "pi_thinking": None},
+        runner.RunnerConfig(repo_dir=tmp_path, run_id="a1b2c3d4", skills=(), pi_provider=None, pi_model=None, pi_thinking=None),
         "o/r",
     )
     assert result == "copy"
@@ -16551,9 +16350,7 @@ def test_run_ticket_agent_logs_provider_config_loaded(monkeypatch, tmp_path, cap
     with caplog.at_level("INFO"):
         runner.run_ticket_agent(
             {"number": 99, "title": "Launch thread", "body": "Write copy"},
-            {"repo_dir": tmp_path, "run_id": "a1b2c3d4", "skills": [],
-             "pi_provider": "local-qwen", "pi_model": "qwen3.8:27b",
-             "pi_thinking": None},
+            runner.RunnerConfig(repo_dir=tmp_path, run_id="a1b2c3d4", skills=(), pi_provider="local-qwen", pi_model="qwen3.8:27b", pi_thinking=None),
             "o/r",
         )
     lines = [line for line in caplog.text.splitlines()
@@ -16610,7 +16407,7 @@ def test_process_ticket_only_posts_agent_output_without_git_delivery(monkeypatch
     monkeypatch.setattr(seam, "run_command",
                         lambda command, **kwargs: commands.append(command) or "")
 
-    result = runner.process_issue(issue, {"repo_dir": Path("/repo")}, "o/r")
+    result = runner.process_issue(issue, runner.RunnerConfig(repo_dir=Path("/repo")), "o/r")
 
     assert result == runner.IssueResult("ticket-only", None)
     assert edits == [
@@ -16636,7 +16433,7 @@ def test_process_ticket_only_rejects_empty_agent_content(monkeypatch):
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
     monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
     with pytest.raises(RuntimeError, match="returned no content"):
-        runner.process_ticket_only(issue, {"repo_dir": Path("/repo")}, "o/r")
+        runner.process_ticket_only(issue, runner.RunnerConfig(repo_dir=Path("/repo")), "o/r")
     assert edits[-1][1]["add"] == "ai-blocked"
 
 
@@ -16656,7 +16453,7 @@ def test_process_ticket_only_failure_marks_blocked_without_git_delivery(monkeypa
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
     monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
     with pytest.raises(RuntimeError, match="Pi failed"):
-        runner.process_ticket_only(issue, {"repo_dir": Path("/repo")}, "o/r")
+        runner.process_ticket_only(issue, runner.RunnerConfig(repo_dir=Path("/repo")), "o/r")
     assert edits[-1] == (99, {"repo": "o/r", "add": "ai-blocked",
                               "remove": "ai-in-progress"})
     assert "No Git branch, commit, or PR was created." in comments[-1][1]["body"]
@@ -16676,7 +16473,7 @@ def test_process_ticket_only_keeps_original_error_when_failure_reporting_fails(m
     monkeypatch.setattr(runner, "ProgressPublisher", Mock())
     monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
     with pytest.raises(RuntimeError, match="Pi failed"):
-        runner.process_ticket_only(issue, {"repo_dir": Path("/repo")}, "o/r")
+        runner.process_ticket_only(issue, runner.RunnerConfig(repo_dir=Path("/repo")), "o/r")
 
 
 def test_process_issue_keeps_normal_flow_without_release_label(
@@ -16713,7 +16510,7 @@ def test_process_issue_keeps_normal_flow_without_release_label(
     monkeypatch.setattr(runner, "format_run_scene", lambda *a, **k: "scene")
     monkeypatch.setattr(runner, "_finish_progress", Mock())
     runner.process_issue(
-        issue, {"base_branch": "main", "repo_dir": tmp_path}, "o/r",
+        issue, runner.RunnerConfig(base_branch="main", repo_dir=tmp_path), "o/r",
     )
 
 
@@ -16787,8 +16584,7 @@ def test_process_issue_ops_without_commit_closes_with_evidence(
     monkeypatch.setattr(runner, "format_end_scene", lambda **k: "end")
 
     result = runner.process_issue(
-        issue, {"base_branch": "main", "repo_dir": tmp_path,
-                "prompt": prompts / "prompt.md"},
+        issue, runner.RunnerConfig(base_branch="main", repo_dir=tmp_path, prompt=prompts / "prompt.md"),
         "o/r",
     )
 
@@ -16797,7 +16593,7 @@ def test_process_issue_ops_without_commit_closes_with_evidence(
     # one — and with the same worktree machinery (no --no-tools content
     # agent).
     assert len(configs) == 1
-    assert configs[0]["prompt"] == ops_prompt
+    assert configs[0].prompt == ops_prompt
     # Terminal transition mirrors the content path: close + claim label
     # removed. No PR, no push.
     assert ["gh", "issue", "close", "99", "--repo", "o/r"] in commands
@@ -16827,8 +16623,7 @@ def test_process_issue_ops_health_record_failure_is_a_bypass(
     monkeypatch.setattr(runner, "format_end_scene", lambda **k: "end")
 
     result = runner.process_issue(
-        issue, {"base_branch": "main", "repo_dir": tmp_path,
-                "prompt": prompts / "prompt.md"},
+        issue, runner.RunnerConfig(base_branch="main", repo_dir=tmp_path, prompt=prompts / "prompt.md"),
         "o/r",
     )
 
@@ -16858,8 +16653,7 @@ def test_process_issue_ops_with_commit_takes_the_pr_ceremony(
     monkeypatch.setattr(runner, "format_end_scene", lambda **k: "end")
 
     result = runner.process_issue(
-        issue, {"base_branch": "main", "repo_dir": tmp_path,
-                "prompt": prompts / "prompt.md"},
+        issue, runner.RunnerConfig(base_branch="main", repo_dir=tmp_path, prompt=prompts / "prompt.md"),
         "o/r",
     )
 
@@ -16890,8 +16684,7 @@ def test_process_issue_ops_with_uncommitted_leftovers_fails_fast(
     monkeypatch.setattr(runner, "deliver_pr", failing_deliver_pr)
 
     result = runner.process_issue(
-        issue, {"base_branch": "main", "repo_dir": tmp_path,
-                "prompt": prompts / "prompt.md"},
+        issue, runner.RunnerConfig(base_branch="main", repo_dir=tmp_path, prompt=prompts / "prompt.md"),
         "o/r",
     )
 
@@ -17649,7 +17442,7 @@ def test_process_release_parse_failure_publishes_final_comment(
         "body": "this body has no release section",
         "labels": [{"name": "ai-release"}],
     }
-    config = {"repo_dir": tmp_path, "base_branch": "main"}
+    config = runner.RunnerConfig(repo_dir=tmp_path, base_branch="main")
     with caplog.at_level("INFO"):
         result = runner.process_issue(issue, config, "orbi-build/orbi")
     assert result == runner.IssueResult("release", "")
@@ -18731,7 +18524,7 @@ def test_process_release_waiting_returns_ready_and_records_open_deliveries(monke
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     result = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == ""
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-ready",
@@ -18755,7 +18548,7 @@ def test_process_release_ignores_unrelated_milestone_deliveries(monkeypatch):
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
              "milestone": {"title": "v0.3.0"}}
     url = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     assert not [
@@ -18782,7 +18575,7 @@ def test_process_release_still_waits_for_same_milestone_deliveries(monkeypatch):
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}],
              "milestone": {"title": "v0.3.0"}}
     result = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == ""
     waiting = [k["body"] for n, k in state["comments"]
@@ -18820,8 +18613,7 @@ def test_process_release_wait_timeout_uses_persisted_wait_start(monkeypatch):
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     result = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main",
-                "release_deliveries_wait_seconds": 5}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main", release_deliveries_wait_seconds=5), "o/r",
     )
     assert result == ""
     assert state["edits"][-1][1]["add"] == "ai-blocked"
@@ -18839,7 +18631,7 @@ def test_process_release_uses_declared_package_version_file(monkeypatch):
     )
     issue = {"number": 99, "title": "Release v0.3.0", "body": body,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    release.process_release(issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r")
+    release.process_release(issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r")
     assert seen == [(Path("/wt"), "v0.3.0", "main", "package.json")]
 
 
@@ -18861,7 +18653,7 @@ def test_process_release_blocks_at_claim_when_default_version_file_missing(monke
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     result = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == ""
     assert seen == []
@@ -18889,7 +18681,7 @@ def test_process_release_blocks_when_declared_version_file_missing(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0", "body": body,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     result = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == ""
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
@@ -18905,7 +18697,7 @@ def test_process_release_success_end_to_end(monkeypatch):
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     url = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     # Claim first, terminal ai-merged at the end (ai-in-progress removed).
@@ -18997,9 +18789,7 @@ def test_process_release_refreshes_deployment_cli_after_version_bump(
 
     assert release.process_release(
         issue,
-        {"repo_dir": source,
-         "deploy_home": deployment,
-         "base_branch": "main"},
+        runner.RunnerConfig(repo_dir=source, deploy_home=deployment, base_branch="main"),
         "o/r",
     ) == "https://github.com/o/r/releases/tag/v0.3.0"
     assert order == ["version", "cli"]
@@ -19020,7 +18810,7 @@ def test_process_release_derives_scope_from_milestone(monkeypatch):
              "body": RELEASE_MILESTONE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     url = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     commands = [c for c, _ in state["commands"]]
@@ -19053,7 +18843,7 @@ def test_process_release_lists_open_milestone_items(monkeypatch):
              "body": RELEASE_MILESTONE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     url = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     # Open items are surfaced as a warning and in the auditable success
@@ -19085,7 +18875,7 @@ def test_process_release_fails_on_empty_derived_scope(monkeypatch):
              "body": RELEASE_MILESTONE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     result = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == ""
     # Terminal failure: ai-blocked ALONE, no tag, no close.
@@ -19119,7 +18909,7 @@ def test_process_release_waits_for_pending_ci_and_succeeds(monkeypatch):
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     url = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     assert not any(k.get("add") == "ai-blocked" for _, k in state["edits"])
@@ -19146,8 +18936,7 @@ def test_process_release_ci_wait_timeout_blocks_with_distinct_reason(
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     result = release.process_release(
         issue,
-        {"repo_dir": Path("/r"), "base_branch": "main",
-         "release_ci_wait_seconds": 0},
+        runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main", release_ci_wait_seconds=0),
         "o/r",
     )
     assert result == ""
@@ -19174,7 +18963,7 @@ def test_process_release_gate_failure_blocks_and_returns_cleanly(monkeypatch):
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
 
     result = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
 
     assert result == ""
@@ -19205,7 +18994,7 @@ def test_process_release_publish_closeout_failure_keeps_release_result(
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     url = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     # The published release result stands; the closeout failure never
     # rewrote it as blocked.
@@ -19236,7 +19025,7 @@ def test_process_release_success_comment_failure_keeps_release_result(
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     url = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     # The published release result stands; the failed evidence comment
     # never rewrote it as blocked.
@@ -19276,7 +19065,7 @@ def test_process_release_milestone_failure_keeps_release_successful(monkeypatch)
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     result = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == "https://github.com/o/r/releases/tag/v0.3.0"
     commands = [c for c, _ in state["commands"]]
@@ -19311,7 +19100,7 @@ def test_process_release_docs_sync_failure_fails_fast_and_blocks(monkeypatch):
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     result = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == ""
     # The GitHub Release was published (step 7 succeeded) but the docs
@@ -19338,7 +19127,7 @@ def test_process_release_reuses_the_run_id_on_resume(monkeypatch):
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"},
                         {"name": "ai-in-progress"}]}
     release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     # The fresh id is generated first (the normal-path rule), then the
     # resumed run id wins — the terminal comment carries the resumed id.
@@ -19352,7 +19141,7 @@ def test_process_release_fails_on_malformed_declaration(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0", "body": "no section",
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     result = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == ""
     # Terminal failure: ai-blocked ALONE, no ai-merged, no close.
@@ -19378,7 +19167,7 @@ def test_process_release_ignores_a_legacy_test_command_and_never_runs_it(monkeyp
              "body": LEGACY_TEST_COMMAND_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     result = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == "https://github.com/o/r/releases/tag/v0.3.0"
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged",
@@ -19415,7 +19204,7 @@ def test_process_release_fails_on_tag_mismatch_without_moving_it(monkeypatch):
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     result = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == ""
     commands = [c for c, _ in state["commands"]]
@@ -19434,7 +19223,7 @@ def test_process_release_reuses_a_matching_existing_tag(monkeypatch):
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     url = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     commands = [c for c, _ in state["commands"]]
@@ -19451,7 +19240,7 @@ def test_process_release_recovers_existing_ancestor_tag(monkeypatch):
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     assert release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     ) == "https://github.com/o/r/releases/tag/v0.3.0"
     assert state["sync_docs_calls"][0]["release_commit"] == "tag123"
 
@@ -19472,7 +19261,7 @@ def test_process_release_fails_on_scope_violation(monkeypatch):
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     result = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == ""
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
@@ -21042,7 +20831,7 @@ def test_process_release_resumes_after_docs_sync_advanced_the_base(
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     release_url = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert release_url == "https://github.com/o/r/releases/tag/v0.3.0"
     # The tag commit was recovered as the canonical release commit.
@@ -21160,7 +20949,7 @@ def test_process_release_keeps_the_fresh_id_when_no_run_id_is_recoverable(
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"},
                         {"name": "ai-in-progress"}]}
     release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert state["run_ids"] == ["a1b2c3d4"]
     (comment_number, comment_kwargs), = state["comments"]
@@ -21183,7 +20972,7 @@ def test_process_release_publishes_the_release_role_progress_body(
              "body": RELEASE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     url = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     assert publishes, "no progress publish happened"
@@ -21206,7 +20995,7 @@ def test_process_release_fails_on_scope_item_that_is_neither(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0", "body": body,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
     result = release.process_release(
-        issue, {"repo_dir": Path("/r"), "base_branch": "main"}, "o/r",
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
     )
     assert result == ""
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
@@ -21638,8 +21427,7 @@ def test_process_issue_closed_issue_ends_without_pr_ceremony(
     with caplog.at_level("INFO"):
         result = runner.process_issue(
             {"number": 4, "title": "Fix", "body": "Body"},
-            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-             "base_branch": "main"},
+            runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main"),
             "xqliu/orbi-backlog",
         )
     assert result == ("issue-closed", None)
@@ -21747,12 +21535,7 @@ def test_run_pi_applies_runner_runtime_excludes_before_pi(monkeypatch, tmp_path)
         lambda worktree: applied.append(worktree),
     )
     monkeypatch.setattr(runner, "stream_pi", lambda command, **kwargs: "done")
-    config = {
-        "prompt": prompt_path, "repo_dir": tmp_path,
-        "source_repos": ["owner/repo"], "workspace_root": tmp_path,
-        "context_files": [], "skills": [], "base_branch": "main",
-        "base_sha": "abc123def456", "run_id": "run1",
-    }
+    config = runner.RunnerConfig(prompt=prompt_path, repo_dir=tmp_path, source_repos=("owner/repo",), workspace_root=tmp_path, context_files=(), skills=(), base_branch="main", base_sha="abc123def456", run_id="run1")
     runner.run_pi(
         {"number": 5, "title": "t", "body": "b"}, tmp_path, config,
         "owner/repo",
@@ -21778,11 +21561,7 @@ def test_run_review_applies_runner_runtime_excludes_before_pi(
         tmp_path,
         {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
          "head_oid": "h1", "head_ref": "h"},
-        {
-            "prompt_review": prompt_path, "repo_dir": tmp_path / "checkout",
-            "source_repos": ["owner/repo"], "base_branch": "main",
-            "run_id": "a1b2c3d4", "skills": [],
-        },
+        runner.RunnerConfig(prompt_review=prompt_path, repo_dir=tmp_path / "checkout", source_repos=("owner/repo",), base_branch="main", run_id="a1b2c3d4", skills=()),
         "owner/repo", 4, "branch", 1,
     )
     assert applied == [tmp_path]
@@ -22031,8 +21810,8 @@ def test_load_config_allows_missing_provider_file_for_setup_diagnostics(tmp_path
         'pi_providers = "missing.json"\n', encoding="utf-8",
     )
     config = runner.load_config(config_path, allow_missing_pi_providers=True)
-    assert config["pi_providers_data"] is None
-    assert config["pi_provider_key_finding"]["state"] == "file missing"
+    assert config.pi_providers_data is None
+    assert config.pi_provider_key_finding["state"] == "file missing"
 
 
 def test_load_config_does_not_treat_provider_directory_as_missing(tmp_path):
@@ -22214,7 +21993,7 @@ def test_wait_for_delivery_closes_triage_issue_after_auto_merge(
      / "orbi-owner-repo-issue-39-a1b2c3d4").mkdir(parents=True)
     issue = {"number": 39, "title": "task", "body": ""}
     runner.wait_for_delivery(
-        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo", external_takeover=True,
     )
     assert len(closes) == 1, "the triage Issue must be closed exactly once"
@@ -22339,7 +22118,7 @@ def test_wait_for_delivery_closes_triage_issue_on_merged_poll(
     monkeypatch.setattr(seam, "run_command", fake_run)
     issue = {"number": 39, "title": "task", "body": ""}
     runner.wait_for_delivery(
-        PR_URL, issue, {"repo_dir": tmp_path, "base_branch": "main"},
+        PR_URL, issue, runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"),
         "owner/repo", external_takeover=True,
     )
     assert len(closes) == 1
@@ -22376,9 +22155,7 @@ def test_process_issue_yields_when_the_label_lands_in_the_scan_window(
         side_effect=AssertionError("must not start a second Pi over a live run")))
     issue = {"number": 18, "title": "t", "body": "b",
              "labels": [{"name": "ai-ready"}]}
-    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-              "base_branch": "main", "slot_dir": tmp_path / "slots",
-              "max_concurrency": 2}
+    config = runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main", slot_dir=tmp_path / "slots", max_concurrency=2)
     result = runner.process_issue(issue, config, "owner/repo")
     assert result == runner.IssueResult("claim-yielded", None)
 
@@ -22399,9 +22176,7 @@ def test_process_issue_scan_window_orphan_resumes_when_no_runner_live(
         side_effect=AssertionError("orphan must resume")))
     issue = {"number": 18, "title": "t", "body": "b",
              "labels": [{"name": "ai-ready"}]}
-    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-              "base_branch": "main", "slot_dir": tmp_path / "slots",
-              "max_concurrency": 2}
+    config = runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main", slot_dir=tmp_path / "slots", max_concurrency=2)
     result = runner.process_issue(issue, config, "owner/repo")
     # 交付失败的收尾细节由既有 resume 测试族钉住；这里只钉"没误让路"。
     assert result != runner.IssueResult("claim-yielded", None)
@@ -22423,8 +22198,7 @@ def test_process_issue_claim_yield_guard_honors_custom_dispatch_label(
         side_effect=AssertionError("must not claim behind a live claimant")))
     issue = {"number": 18, "title": "t", "body": "b",
              "labels": [{"name": "repo-ready"}]}
-    config = {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
-              "base_branch": "main", "dispatch_label": "repo-ready"}
+    config = runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main", dispatch_label="repo-ready")
     result = runner.process_issue(issue, config, "owner/repo")
     assert result == runner.IssueResult("claim-yielded", None)
 def test_drain_stream_returns_true_at_eof_and_captures_content():

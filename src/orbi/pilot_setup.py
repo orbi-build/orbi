@@ -43,12 +43,14 @@ import sys
 from uuid import uuid4
 import shutil
 import tomllib
+from collections.abc import Sequence
 from pathlib import Path
 
 LOGGER = logging.getLogger("orbi.pilot_setup")
 
 from orbi import runner
 from orbi import cli_source
+from orbi.runner import RunnerConfig
 from orbi.delivery_labels import (
     BLOCKED_LABEL,
     FIX_NEEDED_LABEL,
@@ -756,7 +758,7 @@ def ensure_worktrees_ignored(repo_dir: Path, *, run_command) -> bool:
 
 
 def check_checkout(repo_dir: Path, base_branch: str,
-                   source_repos: list[str], *,
+                   source_repos: Sequence[str], *,
                    run_command, mode: str = "ssh") -> dict:
     """Local checkout check including the git transport (Issue #114).
 
@@ -835,12 +837,12 @@ def check_checkout(repo_dir: Path, base_branch: str,
     }
 
 
-def scaffold_model_config(config: dict) -> dict:
+def scaffold_model_config(config: RunnerConfig) -> dict:
     """Create the non-secret provider starter and key slot idempotently."""
-    deploy_home = Path(config["deploy_home"])
+    deploy_home = Path(config.deploy_home)
     state_dir = deploy_home / ".orbi"
     state_dir.mkdir(parents=True, exist_ok=True)
-    provider_path = config.get("pi_providers") or state_dir / PROVIDER_FILE_NAME
+    provider_path = config.pi_providers or state_dir / PROVIDER_FILE_NAME
     provider_path = Path(provider_path)
     provider_created = False
     if not provider_path.exists():
@@ -870,16 +872,16 @@ def scaffold_model_config(config: dict) -> dict:
     }
 
 
-def model_provider_status(config: dict) -> dict:
+def model_provider_status(config: RunnerConfig) -> dict:
     """Return a safe, value-free provider status for setup and doctor."""
-    provider = config.get("pi_provider")
-    model = config.get("pi_model")
-    path = config.get("pi_providers")
+    provider = config.pi_provider
+    model = config.pi_model
+    path = config.pi_providers
     if path is None:
-        path = Path(config["deploy_home"]) / ".orbi" / PROVIDER_FILE_NAME
-    finding = config.get("pi_provider_key_finding")
-    env_file = Path(config["deploy_home"]) / ".orbi" / "env"
-    if not provider or not model or not config.get("pi_providers_data"):
+        path = Path(config.deploy_home) / ".orbi" / PROVIDER_FILE_NAME
+    finding = config.pi_provider_key_finding
+    env_file = Path(config.deploy_home) / ".orbi" / "env"
+    if not provider or not model or not config.pi_providers_data:
         return {
             "state": "NOT CONFIGURED", "provider_file": str(path),
             "env_file": str(env_file), "env_variable": PROVIDER_ENV_NAME,
@@ -891,7 +893,7 @@ def model_provider_status(config: dict) -> dict:
             "provider_file": str(path), "env_file": str(env_file),
             "env_variable": finding["variable"],
         }
-    entry = config["pi_providers_data"]["providers"][provider]
+    entry = config.pi_providers_data["providers"][provider]
     key = entry.get("apiKey") if isinstance(entry, dict) else None
     variable = (re.fullmatch(r"\$(?:\{)?([A-Za-z_][A-Za-z0-9_]*)\}?", key or ""))
     key_name = variable.group(1) if variable else "literal"
@@ -1035,7 +1037,7 @@ def run_checks(config_path: Path, *, run_command) -> list[str]:
             allow_missing_pi_providers=True,
         )
         runner.validate_config(config)
-        runner.validate_execution_source_repos(config["source_repos"])
+        runner.validate_execution_source_repos(config.source_repos)
     except FileNotFoundError as exc:
         raise CheckError(
             "config",
@@ -1052,7 +1054,7 @@ def run_checks(config_path: Path, *, run_command) -> list[str]:
         ) from exc
     lines.append(f"check=config ok path={quote_value(str(config_path))}")
 
-    for repo in config["source_repos"]:
+    for repo in config.source_repos:
         try:
             check_repo(repo, run_command)
         except SetupError as exc:
@@ -1065,9 +1067,9 @@ def run_checks(config_path: Path, *, run_command) -> list[str]:
         lines.append(f"check=repo ok repo={repo}")
     try:
         transport = git_transport.check_transport(
-            config["repo_dir"], config["source_repos"],
+            config.repo_dir, config.source_repos,
             run_command=run_command, migrate=False,
-            mode=config["git_transport"],
+            mode=config.git_transport,
         )
     except git_transport.TransportError as exc:
         raise CheckError(
@@ -1101,7 +1103,7 @@ def run_checks(config_path: Path, *, run_command) -> list[str]:
     return lines
 
 
-def run_setup(config: dict, installed_dir: Path | None, *,
+def run_setup(config: RunnerConfig, installed_dir: Path | None, *,
               repos: list[str] | None = None,
               run_command) -> dict:
     """Run the full one-time setup and return its result document.
@@ -1115,24 +1117,24 @@ def run_setup(config: dict, installed_dir: Path | None, *,
     configured ``source_repos``.
     """
     if repos is None:
-        targets = list(config["source_repos"])
+        targets = list(config.source_repos)
     else:
         if not repos:
             raise SetupError("--repo requires a non-empty repo list")
-        configured = list(config["source_repos"])
+        configured = list(config.source_repos)
         for repo in repos:
             if repo not in configured:
                 raise SetupError(
                     f"--repo must be one of: {', '.join(configured)}"
                 )
         targets = list(repos)
-    repo_dir = config["repo_dir"]
+    repo_dir = config.repo_dir
     # Issue #330: labels.toml, the CLI editable install and the unit
     # templates live in the deployment home; the delivery checkout
     # (repo_dir) may be a foreign repo without any of them.
-    deploy_home = config["deploy_home"]
+    deploy_home = config.deploy_home
     defs = load_label_defs(deploy_home / LABELS_FILE)
-    check_commands(run_command, config.get("unit_name"))
+    check_commands(run_command, config.unit_name)
     # Issue #152: the CLI source step precedes every other step — the
     # running CLI must import from the deployment checkout, otherwise
     # the unit migration below (and the pre-start self-heal it
@@ -1150,23 +1152,23 @@ def run_setup(config: dict, installed_dir: Path | None, *,
             "labels": {"aligned": labels["aligned"], "total": labels["total"]},
         })
     unit_kwargs = {
-        "max_concurrency": config["max_concurrency"],
+        "max_concurrency": config.max_concurrency,
         "run_command": run_command,
     }
-    if config.get("unit_name") is not None:
-        unit_kwargs["unit_name"] = config["unit_name"]
+    if config.unit_name is not None:
+        unit_kwargs["unit_name"] = config.unit_name
     units = install_units_step(deploy_home, installed_dir, **unit_kwargs)
     checkout = check_checkout(
-        repo_dir, config["base_branch"], config["source_repos"],
-        run_command=run_command, mode=config["git_transport"],
+        repo_dir, config.base_branch, config.source_repos,
+        run_command=run_command, mode=config.git_transport,
     )
     optional_proxy = check_optional_proxy(run_command)
     scaffold = scaffold_model_config(config)
     return {
         "setup": "ok",
         "version": SETUP_VERSION,
-        "base_branch": config["base_branch"],
-        "unit_name": config.get("unit_name"),
+        "base_branch": config.base_branch,
+        "unit_name": config.unit_name,
         "repos": repo_results,
         "cli": cli,
         "service": units["service"],

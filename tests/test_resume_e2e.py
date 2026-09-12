@@ -32,6 +32,7 @@ import re
 import subprocess
 from pathlib import Path
 
+import dataclasses
 import pytest
 
 import orbi.runner as runner
@@ -383,16 +384,7 @@ def write_prompt(tmp_path: Path) -> Path:
 
 
 def config_for(clone: Path, tmp_path: Path) -> dict:
-    return {
-        "repo_dir": clone,
-        "prompt": write_prompt(tmp_path),
-        "prompt_review": Path(tmp_path) / "prompt_review.md",
-        "base_branch": "main",
-        "source_repos": [REPO],
-        "workspace_root": tmp_path,
-        "context_files": [],
-        "skills": [],
-    }
+    return runner.RunnerConfig(repo_dir=clone, prompt=write_prompt(tmp_path), prompt_review=Path(tmp_path) / "prompt_review.md", base_branch="main", source_repos=(REPO,), workspace_root=tmp_path, context_files=(), skills=())
 
 
 def issue() -> dict:
@@ -509,17 +501,17 @@ def test_e2e_base_advances_and_review_fixes_the_same_pr_in_session(
     }
     assert runner.task_branch(REPO, ISSUE_NUMBER, run_id) == branch
     assert runner.worktree_path(
-        config["repo_dir"], REPO, ISSUE_NUMBER, run_id,
+        config.repo_dir, REPO, ISSUE_NUMBER, run_id,
     ) == worktree
 
     # The dispatch binds the scene's run id and enters the delivery
     # wait, which runs the independent review of the frozen PR.
     runner.set_run_id(run_id)
-    review_config = {
-        **config,
-        "base_sha": scene["base_sha"],
-        "run_id": scene["run_id"],
-    }
+    review_config = dataclasses.replace(
+        config,
+        base_sha=scene["base_sha"],
+        run_id=scene["run_id"],
+    )
     merged = runner.review_and_merge_if_clean(
         worktree, branch, "main", review_config, REPO, ISSUE_NUMBER,
         title=issue()["title"],
@@ -915,7 +907,9 @@ def test_e2e_human_review_gate_posts_the_checklist_once_and_holds(
         monkeypatch, comments, edits, pr=pr, labels=labels,
     )
     caplog.set_level("INFO")
-    config = {**config_for(clone, tmp_path), "human_review_gate": True}
+    config = dataclasses.replace(
+        config_for(clone, tmp_path), human_review_gate=True,
+    )
 
     result = runner.process_issue(issue(), config, REPO)
     assert result.url == PR_URL
@@ -960,7 +954,9 @@ def test_e2e_human_review_checklist_failure_is_a_bypass(
     install_fake_pi(monkeypatch, tmp_path, FAKE_PI)
     install_fake_gh(monkeypatch, comments)
     caplog.set_level("INFO")
-    config = {**config_for(clone, tmp_path), "human_review_gate": True}
+    config = dataclasses.replace(
+        config_for(clone, tmp_path), human_review_gate=True,
+    )
 
     def boom(*args, **kwargs):
         raise RuntimeError("github down")

@@ -68,11 +68,7 @@ def make_fake_gh(monkeypatch, comments=None, in_progress=False):
 
 
 def make_config(tmp_path):
-    return {
-        "repo_dir": tmp_path,
-        "prompt": tmp_path / "prompt.md",
-        "base_branch": "main",
-    }
+    return runner.RunnerConfig(repo_dir=tmp_path, prompt=tmp_path / "prompt.md", base_branch="main")
 
 
 def make_issue():
@@ -795,7 +791,7 @@ def test_process_issue_keeps_the_claim_when_the_journal_proves_the_request(
         )
         return runner.stream_pi(
             [sys.executable, "-c", script], cwd=worktree,
-            poll_interval=0.1, run_id=config["run_id"],
+            poll_interval=0.1, run_id=config.run_id,
             issue=int(issue["number"]), source_repo=source_repo,
             branch="-",
         )
@@ -1628,8 +1624,7 @@ def _run_review_and_merge(monkeypatch, tmp_path, *, verdict,
                                 AssertionError("no merge")))
     merged = runner.review_and_merge_if_clean(
         tmp_path, "branch", "main",
-        {"repo_dir": tmp_path, "base_branch": "main", "base_sha": "b1",
-         "run_id": "a1b2c3d4"},
+        runner.RunnerConfig(repo_dir=tmp_path, base_branch="main", base_sha="b1", run_id="a1b2c3d4"),
         "xqliu/orbi", 18, title="Publish progress",
         priority="normal",
     )
@@ -1863,7 +1858,7 @@ def test_wait_for_delivery_review_failure_finishes_progress_comment_with_blocked
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     runner.wait_for_delivery(
         pr_url, {"number": 39, "title": "t", "body": ""},
-        {"repo_dir": Path("/srv/repo")}, "owner/repo",
+        runner.RunnerConfig(repo_dir=Path("/srv/repo")), "owner/repo",
     )
     posted_bodies = [
         command[command.index("--field") + 1][len("body="):]
@@ -2087,7 +2082,7 @@ def test_wait_for_delivery_review_failure_progress_failure_still_releases(
     runner.wait_for_delivery(
         "https://github.com/owner/repo/pull/46",
         {"number": 39, "title": "t", "body": ""},
-        {"repo_dir": Path("/srv/repo")}, "owner/repo",
+        runner.RunnerConfig(repo_dir=Path("/srv/repo")), "owner/repo",
     )
 
     # The `ai-blocked` transition completed even though the progress
@@ -2264,7 +2259,7 @@ def test_wait_for_delivery_external_merge_closes_the_triage_issue(monkeypatch):
     runner.wait_for_delivery(
         "https://github.com/xqliu/orbi/pull/592",
         {"number": 608, "title": "t", "body": ""},
-        {"repo_dir": Path("/srv/repo"), "base_branch": "main"},
+        runner.RunnerConfig(repo_dir=Path("/srv/repo"), base_branch="main"),
         "xqliu/orbi", external_takeover=True,
     )
     assert close_calls == [
@@ -2293,7 +2288,7 @@ def test_wait_for_delivery_external_close_failure_never_rewrites(monkeypatch,
     runner.wait_for_delivery(
         "https://github.com/xqliu/orbi/pull/592",
         {"number": 608, "title": "t", "body": ""},
-        {"repo_dir": Path("/srv/repo"), "base_branch": "main"},
+        runner.RunnerConfig(repo_dir=Path("/srv/repo"), base_branch="main"),
         "xqliu/orbi", external_takeover=True,
     )
     assert "external_takeover_close_failed" in caplog.text
@@ -2328,7 +2323,7 @@ def test_wait_for_delivery_external_closed_requeues_for_internal_redo(
     runner.wait_for_delivery(
         "https://github.com/xqliu/orbi/pull/592",
         {"number": 608, "title": "t", "body": ""},
-        {"repo_dir": Path("/srv/repo"), "base_branch": "main"},
+        runner.RunnerConfig(repo_dir=Path("/srv/repo"), base_branch="main"),
         "xqliu/orbi", external_takeover=True,
     )
     assert edits == [{
@@ -2427,7 +2422,7 @@ def test_process_ticket_only_publishes_the_bound_context(monkeypatch):
     monkeypatch.setattr(seam, "run_command", lambda command, **kwargs: "")
     monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: seen.append(kwargs))
 
-    runner.process_ticket_only(issue, {"repo_dir": Path("/repo")}, "o/r")
+    runner.process_ticket_only(issue, runner.RunnerConfig(repo_dir=Path("/repo")), "o/r")
 
     # ensure (claim) -> delivered milestone -> finish.
     assert len(seen) == 3
