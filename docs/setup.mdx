@@ -13,7 +13,9 @@ orbi setup
 
 `--config` remains available for a non-default config path. When the default
 `orbi.toml` is absent, setup creates it from the adjacent
-`.orbi.example.toml` and never overwrites an existing file.
+`.orbi.example.toml` when one exists and otherwise from the example
+shipped inside the CLI package (Issue #163), and never overwrites an
+existing file.
 
 Run it once per machine (and once per new task-pool repository). It is
 **idempotent**: re-running it never creates duplicate labels, units or

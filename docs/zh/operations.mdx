@@ -108,7 +108,7 @@ host/deploy-only 配置键 `engine_source_track` 位于 deploy home 的
   提交都变）。`tag:<name>` 锁死一个精确版本，不改值就永不移动——版本
   变更永远是一次有意操作；要求部署保持可复现时用它锁定，回滚就是把
   上一个 tag 改回去。
-- **安装与更新**：`install.sh` 新安装复制 `.orbi.example.toml`，其中
+- **安装与更新**：`install.sh` 新安装复制 `src/orbi/example_config.toml`，其中
   携带 `engine_source_track = "release"`——新部署跟随最新 release，而
   不是 main 的中间态。Orbi 自有 dogfood 部署显式固定 `main` 通道。
   通道值在下一次 service 启动时生效（ExecStartPre 同步施加它）；没有
@@ -433,6 +433,15 @@ orbi status --config orbi.toml
 # `transport: FAILED ...`，不抛出）、timer/service 实例状态、slots、
 # Pi session、当前 Issue、最近 journal
 orbi doctor --config orbi.toml
+
+# 只读前置条件门禁（Issue #163）：Python 版本、必需命令
+# （git/gh/uv/orbi）、systemd user bus、gh auth、pi CLI、配置文件
+# （存在、解析、校验）、每个 source repo 的访问 + 写权限、git
+# transport（只读，从不迁移）、模型 provider（无密钥值的状态）。
+# 第一个缺失的前提即快速失败，输出一行结构化结果：
+# check_failed check=<步骤> reason=... fix=... docs=<官方链接>
+# （`orbi check` 从不创建配置，也从不做任何变更）
+orbi check --config orbi.toml
 
 # 一次性、幂等初始化（新机器/新仓库）：gh auth + 仓库权限、平台 labels、
 # systemd user units、checkout 检查（含 git transport：处于相反传输的

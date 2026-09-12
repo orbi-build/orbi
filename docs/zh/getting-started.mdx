@@ -23,15 +23,42 @@ bash install.sh
 ```
 
 安装器需要 `git`、`gh` 和 systemd user session；uv 会在需要时提供 Python 3.14。
-手动安装时，`orbi setup` 找不到 `orbi.toml` 会从相邻的
-`.orbi.example.toml` 生成，且不会覆盖已有配置。
+手动安装时，`orbi setup` 找不到 `orbi.toml` 会生成一个：相邻存在
+`.orbi.example.toml` 就用它，否则用 CLI 包内自带的示例——且不会覆盖已有配置。
+
+## 从 PyPI 安装 CLI
+
+已发布的 CLI 可以直接从 PyPI 安装（Issue #163）——不需要源码 checkout：
+
+```bash
+python3 -m pip install orbi
+orbi --version
+orbi --help
+```
+
+uv 用户以非 editable 方式安装同一个发布包：
+
+```bash
+uv tool install orbi
+```
+
+**PyPI 发布包 vs editable 部署**：PyPI 安装的是*版本化发布 CLI*——
+site-packages 里某一次发布的冻结副本，升级即重装
+（`python3 -m pip install --upgrade orbi` / `uv tool install --reinstall orbi`）。
+下面的 editable checkout 安装仍是官方**部署方式**：tool 环境直接从部署
+checkout 导入 `orbi` 包，`ExecStartPre` 同步把新引擎代码送到下一个 CLI
+进程，无需重装。真正跑 Runner 仍需要那套部署布局（配置、deploy home、
+systemd user units）；机器是否就绪用只读前置条件门禁 `orbi check` 验证
+（命令参考在 [Operations](/zh/operations)）。
 
 ## 前提
 
 这些前提由**你自己安装**——`orbi setup` 只**检查**它们（校验
 `git`、`gh`、`uv` 和 systemd user session）；它从不自动安装
 系统包、从不安装 `gh`、也不执行 `gh auth login`（你先登录，setup 只
-验证登录状态）。
+验证登录状态）。`orbi check` 是覆盖同一清单的只读前置条件门禁，另外校验
+Python 版本、`pi` CLI、配置文件、各仓库访问权限、git transport 和模型
+provider——失败即快速退出，并给出原因、修复动作和官方文档链接。
 
 | 要求 | 用途 | 检查 |
 |---|---|---|

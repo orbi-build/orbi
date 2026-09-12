@@ -327,6 +327,32 @@ def test_ci_workflow_runs_the_contract_test_command():
     )
 
 
+def test_ci_workflow_builds_the_package_and_smokes_the_wheel():
+    """Issue #163: the PyPI artifact shape is the WHEEL — CI builds the
+    sdist+wheel on every PR/push and smoke-installs the wheel into a
+    clean venv (never the source checkout): the entry works and the
+    import source is site-packages. The tag-triggered publish.yml owns
+    the full release pipeline on top of this."""
+    commands = step_commands(steps_of(load_workflow()))
+    assert any(
+        re.search(r"python3 -m build\b", command) for command in commands
+    ), f"CI must build the sdist and the wheel, steps run: {commands!r}"
+    assert any("dist/*.whl" in command for command in commands), (
+        f"CI must install the built WHEEL in a clean venv, steps run: {commands!r}"
+    )
+    assert any(
+        "python3 -m venv" in command for command in commands
+    ), "the wheel smoke runs in a clean venv, not the workflow environment"
+    wheel_source_checks = [
+        command for command in commands
+        if "site-packages" in command
+    ]
+    assert wheel_source_checks, (
+        "the wheel smoke must verify the import source is site-packages "
+        f"(a clean environment never imports the checkout), steps run: {commands!r}"
+    )
+
+
 def test_ci_workflow_enforces_the_tiered_coverage_gate():
     """Issue #234: the CI gate is tiered — the whole repository keeps
     line >= 95% and branch >= 95% (tools/coverage_gate.py checks the two tiers

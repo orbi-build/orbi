@@ -123,7 +123,8 @@ host-only key):
   deployment must stay reproducible; rollback is putting the previous
   tag back.
 - **Installed vs updated**: a fresh install via `install.sh` copies
-  `.orbi.example.toml`, which ships `engine_source_track = "release"` —
+  `src/orbi/example_config.toml`, which ships
+  `engine_source_track = "release"` —
   new deployments run the latest release, not the main intermediate
   state. Orbi's own dogfood deployment pins the `main` channel
   explicitly. Any value change takes effect at the next service start
@@ -533,6 +534,16 @@ orbi status --config orbi.toml
 # FAILED ...`, not raised), timer/service instance state, slots, Pi
 # session, current Issue, recent journal
 orbi doctor --config orbi.toml
+
+# Read-only prerequisite gate (Issue #163): the Python version, the
+# required commands (git/gh/uv/orbi), the systemd user bus, gh auth,
+# the pi CLI, the config file (existence, parse, validation), access +
+# write permission on every source repo, the git transport (read-only,
+# never migrated) and the model provider (value-free status). Fail
+# fast on the FIRST missing prerequisite with one structured line:
+# check_failed check=<step> reason=... fix=... docs=<official link>
+# (`orbi check` never creates the config and never mutates anything)
+orbi check --config orbi.toml
 
 # One-time, idempotent initialization (new machine / new repo): gh
 # auth + repo permissions, platform labels, systemd user units, and

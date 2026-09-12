@@ -138,11 +138,15 @@ def test_validate_execution_source_repos_rejects_multiple_checkouts():
 
 
 def test_example_config_passes_execution_source_repos_validation():
-    """Issue #697: README tells a new user to copy the committed example
-    (`cp .orbi.example.toml orbi.toml`), so the example must be a config
-    the Runner accepts — exactly one source repository until multi-repo
-    workspaces are available (Issue #133)."""
-    example = Path(__file__).resolve().parent.parent / ".orbi.example.toml"
+    """Issue #697: the committed example must be a config the Runner
+    accepts — exactly one source repository until multi-repo workspaces
+    are available (Issue #133). Issue #163: the example lives INSIDE
+    the package (`src/orbi/example_config.toml`) so a PyPI install can
+    create a config without a checkout-adjacent file."""
+    example = (
+        Path(__file__).resolve().parent.parent
+        / "src" / "orbi" / "example_config.toml"
+    )
     config = runner.load_config(example)
     assert len(config["source_repos"]) == 1
     runner.validate_execution_source_repos(config["source_repos"])

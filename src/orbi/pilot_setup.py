@@ -34,10 +34,12 @@ agents and scripts can parse it.
 """
 from __future__ import annotations
 
+import importlib.resources
 import json
 import logging
 import re
 import subprocess
+import sys
 from uuid import uuid4
 import shutil
 import tomllib
@@ -169,16 +171,110 @@ class SetupError(RuntimeError):
     """A core setup prerequisite or step failed (fail fast)."""
 
 
+class CheckError(RuntimeError):
+    """One failed `orbi check` prerequisite (read-only gate, Issue #163).
+
+    ``check`` names the failed step, ``reason`` the concrete finding,
+    ``fix`` the repair action and ``docs`` the official documentation
+    link (never a secret value — the provider status stays value-free).
+    """
+
+    def __init__(self, check: str, reason: str, fix: str, docs: str):
+        super().__init__(f"{check}: {reason}")
+        self.check = check
+        self.reason = reason
+        self.fix = fix
+        self.docs = docs
+
+
+def format_check_failure(exc: CheckError) -> str:
+    """The one parseable stderr line for a failed gate (Issue #163)."""
+    return (
+        f"check_failed check={exc.check} "
+        f"reason={quote_value(exc.reason)} "
+        f"fix={quote_value(exc.fix)} docs={exc.docs}"
+    )
+
+
+# The Python floor the `orbi check` gate enforces (Issue #163). Pinned
+# against the PEP 621 `requires-python` by tests/test_cli_packaging.py:
+# pip enforces the same floor at install time, the gate re-states it at
+# runtime so a hand-rolled interpreter cannot silently run the CLI.
+REQUIRED_PYTHON = (3, 14)
+
+# Official documentation links the check failures carry (Issue #163):
+# every failure names its repair action AND the official doc.
+DOCS_LINKS = {
+    "python": "https://www.python.org/downloads/",
+    "git": "https://git-scm.com/downloads",
+    "gh": "https://cli.github.com/",
+    "gh_auth": "https://docs.github.com/en/authentication",
+    "uv": "https://docs.astral.sh/uv/getting-started/installation/",
+    "systemd": (
+        "https://www.freedesktop.org/software/systemd/man/systemctl.html"
+    ),
+    "ssh": (
+        "https://docs.github.com/en/authentication/"
+        "connecting-to-github-with-ssh"
+    ),
+    "pi": "https://github.com/earendil-works/pi",
+    "config": "https://docs.orbi.build/getting-started",
+    "provider": (
+        "https://docs.orbi.build/getting-started"
+        "#configure-the-model-provider"
+    ),
+}
+
+# The per-command official link for the gate's command step (the SET and
+# the hints stay single-sourced in REQUIRED_COMMANDS /
+# COMMAND_INSTALL_HINTS — setup and check cannot disagree).
+CHECK_COMMAND_DOCS = {
+    "git": DOCS_LINKS["git"],
+    "gh": DOCS_LINKS["gh"],
+    "uv": DOCS_LINKS["uv"],
+    "orbi": DOCS_LINKS["config"],
+}
+
+
+def packaged_example_bytes() -> bytes:
+    """The example config SHIPPED IN THE PACKAGE (Issue #163).
+
+    A PyPI install carries no checkout, so the example travels inside
+    the wheel (`src/orbi/example_config.toml`, declared as package
+    data). Raises OSError when the install is broken (the file is
+    missing from the environment).
+    """
+    return (
+        importlib.resources.files("orbi")
+        .joinpath("example_config.toml")
+        .read_bytes()
+    )
+
+
 def ensure_config(path: Path) -> Path:
-    """Create a local config from the adjacent example when absent."""
+    """Create a local config when absent; never overwrite.
+
+    The ADJACENT `.orbi.example.toml` wins (a deployment home may keep
+    its own example); without one the example shipped in the package is
+    used (Issue #163: a PyPI install has no checkout-adjacent file).
+    Both unavailable is a broken install: fail fast, no partial config.
+    """
     path = Path(path)
     if path.exists():
         return path
     example = path.parent / ".orbi.example.toml"
-    if not example.is_file():
-        raise SetupError(f"example config missing: {example}")
+    if example.is_file():
+        payload = example.read_bytes()
+    else:
+        try:
+            payload = packaged_example_bytes()
+        except OSError as exc:
+            raise SetupError(
+                f"example config unavailable for {path}: no adjacent "
+                f"{example} and the packaged example failed: {exc}"
+            ) from exc
     try:
-        path.write_bytes(example.read_bytes())
+        path.write_bytes(payload)
     except OSError as exc:
         raise SetupError(f"config creation failed for {path}: {exc}") from exc
     return path
@@ -298,6 +394,21 @@ def install_cli_step(repo_dir: Path, module_file: Path, *,
     }
 
 
+def user_bus_probe(unit_name: str | None) -> list[str]:
+    """The `systemctl --user` probe command proving the user bus.
+
+    Probes an INSTANCE name (verified against the real CLI: `systemctl
+    show` rejects the bare template name `orbi@.timer` but accepts
+    instance names, exiting 0 with `not-found` before the units are
+    installed — the probe only needs the user bus). Shared by the setup
+    command check and the `orbi check` gate.
+    """
+    return [
+        "systemctl", "--user", "show", "-p", "LoadState", "--value",
+        systemd_deploy.timer_instances(unit_name)[0],
+    ]
+
+
 def check_commands(run_command, unit_name: str | None = None) -> dict:
     """Verify the required commands and the systemctl --user bus.
 
@@ -306,8 +417,8 @@ def check_commands(run_command, unit_name: str | None = None) -> dict:
     checked explicitly because the CLI editable step calls
     ``uv tool install``); a missing command fails fast with the
     actionable install guidance for that command (``COMMAND_INSTALL_
-    HINTS``). The systemd user bus must be reachable (a probe
-    ``systemctl --user show`` must succeed — a container or a headless
+    HINTS``). The systemd user bus must be reachable (the
+    :func:`user_bus_probe` must succeed — a container or a headless
     session without a user bus fails fast with the concrete reason).
     No mutation happens here.
     """
@@ -320,16 +431,8 @@ def check_commands(run_command, unit_name: str | None = None) -> dict:
                 f"{COMMAND_INSTALL_HINTS[name]}"
             )
         paths[name] = path
-    # Probe an INSTANCE name (verified against the real CLI: `systemctl
-    # show` rejects the bare template name `orbi@.timer` but
-    # accepts instance names, exiting 0 with `not-found` before the
-    # units are installed — the probe only needs the user bus).
-    probe = [
-        "systemctl", "--user", "show", "-p", "LoadState", "--value",
-        systemd_deploy.timer_instances(unit_name)[0],
-    ]
     try:
-        run_command(probe)
+        run_command(user_bus_probe(unit_name))
     except Exception as exc:
         detail = str(exc)
         raise SetupError(
@@ -826,6 +929,176 @@ def check_optional_proxy(run_command) -> dict:
         "proxy": status,
         "url": OPTIONAL_PROXY_URL,
     }
+
+
+def check_python_version() -> None:
+    """The running interpreter satisfies the packaging floor (Issue #163)."""
+    if sys.version_info[:2] < REQUIRED_PYTHON:
+        floor = ".".join(str(part) for part in REQUIRED_PYTHON)
+        raise CheckError(
+            "python",
+            f"python {sys.version_info[0]}.{sys.version_info[1]} is too "
+            f"old (orbi requires >= {floor})",
+            f"install Python {floor} and run orbi in that environment",
+            DOCS_LINKS["python"],
+        )
+
+
+def check_pi_command() -> None:
+    """The `pi` CLI (one Pi session per task) is on the PATH (Issue #163).
+
+    Deliberately NOT part of the setup ``REQUIRED_COMMANDS`` gate: setup
+    provisions GitHub/systemd state, while Pi is the model-facing
+    runtime the prerequisite gate verifies.
+    """
+    if shutil.which("pi") is None:
+        raise CheckError(
+            "pi",
+            "required command missing: pi (not on PATH) — the Runner "
+            "starts one Pi session per task",
+            "install the Pi CLI (see the linked repository) and put it "
+            "on the PATH",
+            DOCS_LINKS["pi"],
+        )
+
+
+def run_checks(config_path: Path, *, run_command) -> list[str]:
+    """The `orbi check` gate: every prerequisite, fail fast (Issue #163).
+
+    Read-only: no label, no unit, no git mutation, and NO config
+    creation (`orbi setup` owns that) — a missing or invalid orbi.toml
+    is a ``config`` finding with the repair action, not a traceback.
+    Order: the machine-level checks that need no config first (python,
+    required commands, systemd user bus, gh auth, pi), then the config
+    (existence, parse, validation), then the config-dependent probes
+    (per-source-repo access + permission, git transport, model
+    provider — the status is value-free, never a secret). The first
+    failure raises :class:`CheckError`; success returns one
+    ``check=<step> ok ...`` line per step plus the final
+    ``prerequisites=ok checks=<n>``.
+    """
+    lines: list[str] = []
+    check_python_version()
+    lines.append(
+        f"check=python ok version="
+        f"{sys.version_info.major}.{sys.version_info.minor}."
+        f"{sys.version_info.micro}"
+    )
+    for name in REQUIRED_COMMANDS:
+        if shutil.which(name) is None:
+            raise CheckError(
+                "commands",
+                f"required command missing: {name} (not on PATH)",
+                COMMAND_INSTALL_HINTS[name],
+                CHECK_COMMAND_DOCS[name],
+            )
+        lines.append(f"check=command ok name={name}")
+    try:
+        run_command(user_bus_probe(None))
+    except Exception as exc:
+        raise CheckError(
+            "systemd_user_bus",
+            "systemctl --user user bus unavailable (is a systemd user "
+            f"session running?): {exc}",
+            "run orbi inside a systemd user session (log in locally or "
+            "start the user session)",
+            DOCS_LINKS["systemd"],
+        ) from exc
+    lines.append("check=systemd_user_bus ok")
+    try:
+        check_auth(run_command)
+    except SetupError as exc:
+        raise CheckError(
+            "gh_auth", str(exc), "log in with `gh auth login`",
+            DOCS_LINKS["gh_auth"],
+        ) from exc
+    lines.append("check=gh_auth ok")
+    check_pi_command()
+    lines.append("check=pi ok")
+
+    config_path = Path(config_path)
+    if not config_path.is_file():
+        raise CheckError(
+            "config",
+            f"config file not found: {config_path}",
+            "run `orbi setup` (creates orbi.toml from the shipped "
+            "example when absent) or point --config at it",
+            DOCS_LINKS["config"],
+        )
+    try:
+        config = runner.load_config(
+            config_path,
+            # The provider key gate would stop the whole gate on a
+            # missing key; the provider step below reports the state
+            # value-free instead (the doctor's lenient flags).
+            check_provider_api_keys=False,
+            allow_missing_pi_providers=True,
+        )
+        runner.validate_config(config)
+        runner.validate_execution_source_repos(config["source_repos"])
+    except FileNotFoundError as exc:
+        raise CheckError(
+            "config",
+            f"invalid orbi.toml: required path missing: {exc}",
+            "create the missing path or fix orbi.toml",
+            DOCS_LINKS["config"],
+        ) from exc
+    except ValueError as exc:
+        raise CheckError(
+            "config",
+            f"invalid orbi.toml: {exc}",
+            "fix the reported problem in orbi.toml",
+            DOCS_LINKS["config"],
+        ) from exc
+    lines.append(f"check=config ok path={quote_value(str(config_path))}")
+
+    for repo in config["source_repos"]:
+        try:
+            check_repo(repo, run_command)
+        except SetupError as exc:
+            raise CheckError(
+                "repo_access", str(exc),
+                "verify the repository name and your write permission "
+                "on it (label management needs WRITE or more)",
+                DOCS_LINKS["gh"],
+            ) from exc
+        lines.append(f"check=repo ok repo={repo}")
+    try:
+        transport = git_transport.check_transport(
+            config["repo_dir"], config["source_repos"],
+            run_command=run_command, migrate=False,
+            mode=config["git_transport"],
+        )
+    except git_transport.TransportError as exc:
+        raise CheckError(
+            "transport", str(exc),
+            "repair the origin remote (the human-run migration entry "
+            "is `orbi setup`)",
+            DOCS_LINKS["ssh"],
+        ) from exc
+    lines.append(
+        f"check=transport ok protocol={transport['protocol']} "
+        f"url={quote_value(transport['url'])}"
+    )
+    provider = model_provider_status(config)
+    if provider["state"] != "ok":
+        variable = provider.get("env_variable", PROVIDER_ENV_NAME)
+        raise CheckError(
+            "model_provider",
+            f"model provider not configured: edit orbi.toml "
+            f"(pi_providers/pi_provider/pi_model), fill "
+            f"{provider.get('provider_file', '-')} and put the key in "
+            f"{provider['env_file']} ({variable})",
+            "configure the provider and the key (values are never "
+            "printed)",
+            DOCS_LINKS["provider"],
+        )
+    lines.append(
+        f"check=model_provider ok provider={provider['provider']} "
+        f"model={provider['model']} key={provider['key']}"
+    )
+    lines.append(f"prerequisites=ok checks={len(lines)}")
+    return lines
 
 
 def run_setup(config: dict, installed_dir: Path | None, *,

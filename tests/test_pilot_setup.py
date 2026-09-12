@@ -1906,9 +1906,31 @@ def test_ensure_config_creates_example_without_overwriting(tmp_path):
     assert "existing/repo" in config.read_text(encoding="utf-8")
 
 
-def test_ensure_config_fails_when_example_is_missing(tmp_path):
-    with pytest.raises(pilot_setup.SetupError, match="example config missing"):
+def test_ensure_config_falls_back_to_the_shipped_example(tmp_path):
+    """Issue #163: a PyPI install has no checkout-adjacent example —
+    the example SHIPPED IN THE PACKAGE is used, byte for byte."""
+    import importlib.resources
+
+    config = tmp_path / "orbi.toml"
+    assert pilot_setup.ensure_config(config) == config
+    packaged = (
+        importlib.resources.files("orbi")
+        .joinpath("example_config.toml")
+        .read_bytes()
+    )
+    assert config.read_bytes() == packaged
+
+
+def test_ensure_config_fails_when_no_example_is_available(tmp_path, monkeypatch):
+    """No adjacent example AND no usable packaged example is a broken
+    install: fail fast with a readable reason, never a partial config."""
+    def broken_packaged():
+        raise FileNotFoundError("no packaged example in this install")
+
+    monkeypatch.setattr(pilot_setup, "packaged_example_bytes", broken_packaged)
+    with pytest.raises(pilot_setup.SetupError, match="example config unavailable"):
         pilot_setup.ensure_config(tmp_path / "orbi.toml")
+    assert not (tmp_path / "orbi.toml").exists()
 
 
 def test_ensure_config_reports_write_failure(tmp_path, monkeypatch):

@@ -27,7 +27,36 @@ bash install.sh
 
 The installer requires `git`, `gh`, and a systemd user session; uv provisions
 Python 3.14 when needed. For manual installations, `orbi setup` creates `orbi.toml`
-from the adjacent `.orbi.example.toml` when absent, without overwriting it.
+when absent — from the adjacent `.orbi.example.toml` when one exists, otherwise
+from the example shipped inside the CLI package — without overwriting it.
+
+## Install the CLI from PyPI
+
+The released CLI installs from PyPI (Issue #163) — no source checkout
+required:
+
+```bash
+python3 -m pip install orbi
+orbi --version
+orbi --help
+```
+
+uv users install the same published package non-editable:
+
+```bash
+uv tool install orbi
+```
+
+**PyPI package vs editable deployment**: the PyPI install is the
+*versioned release CLI* — a frozen copy of one release in site-packages,
+upgraded by reinstalling (`python3 -m pip install --upgrade orbi` /
+`uv tool install --reinstall orbi`). The editable checkout install below
+stays the official DEPLOYMENT: it imports the `orbi` package from the
+deployment checkout, so the `ExecStartPre` sync delivers new engine code
+to the next CLI process with no reinstall. Running a Runner still needs
+that deployment layout (config, deploy home, systemd user units); verify
+a machine's readiness with the read-only prerequisite gate `orbi check`
+([Operations](/operations) carries the command reference).
 
 ## Prerequisites
 
@@ -36,7 +65,10 @@ You install these yourself — `orbi setup` only **checks** them
 machine; uv provisions the required Python interpreter). It never installs
 system packages, never installs
 `gh`, and never runs `gh auth login` (you log in first, setup only
-verifies the login).
+verifies the login). `orbi check` is the read-only prerequisite gate over
+the same list plus the Python version, the `pi` CLI, the config, per-repo
+access, the git transport and the model provider — it fails fast with the
+reason, the repair action and the official docs link.
 
 | Requirement | What it is used for | Check |
 |---|---|---|

@@ -10,7 +10,7 @@ orbi setup
 ```
 
 `--config` 仍可用于指定其他配置路径。默认的 `orbi.toml` 不存在时，setup
-会从相邻的 `.orbi.example.toml` 生成，且不会覆盖已有文件。
+会从相邻的 `.orbi.example.toml`（存在时）生成，否则用 CLI 包内自带的示例（Issue #163），且不会覆盖已有文件。
 
 每台机器运行一次（每个新任务池仓库再各运行一次）。它**幂等**：重复运行
 从不创建重复的标签、units 或 timer，也从不碰业务 Issue 或业务标签。
