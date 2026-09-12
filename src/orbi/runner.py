@@ -7319,11 +7319,11 @@ def _publish_test_milestone(publisher: ProgressPublisher,
 
 
 def _failure_detail(exc: BaseException) -> str:
-    """One-line failure description; keeps subprocess stderr visible."""
+    """One-line failure description; keeps bounded subprocess stderr visible."""
     detail = str(exc)
     stderr = getattr(exc, "stderr", None)
     if isinstance(stderr, str) and stderr.strip() and stderr.strip() not in detail:
-        detail = f"{detail} stderr={stderr.strip()}"
+        detail = f"{detail} stderr={stderr.strip()[:1000]}"
     return detail
 
 
@@ -7347,12 +7347,119 @@ def _tail_text(path: Path, *, lines: int = 20, chars: int = 4000) -> str:
     return tail[-chars:] if len(tail) > chars else tail
 
 
+def _latest_session_file(worktree: Path | None) -> Path | None:
+    """The most recent pi session log in the worktree, or None."""
+    if worktree is None:
+        return None
+    session_files = sorted(
+        (p for p in (worktree / ".pi-session").glob("*.jsonl")
+         if p.is_file()),
+        key=lambda p: p.stat().st_mtime,
+    )
+    return session_files[-1] if session_files else None
+
+
+def _fenced(content: str, *, cap: int = 4000) -> str:
+    """One raw-output segment inside a CommonMark code fence (Issue #775).
+
+    GitHub renders fenced content literally and monospaced, so coverage
+    tables and escaped JSONL survive a failure comment unread by the
+    markdown parser. The fence is one backtick longer than every run in
+    the content, so a payload containing markdown fences can never close
+    it; content past `cap` is cut and the cut is noted after the fence.
+    """
+    omitted = 0
+    if len(content) > cap:
+        omitted = len(content) - cap
+        content = content[:cap]
+    fence = "`" * max(
+        3,
+        1 + max((len(run) for run in re.findall(r"`+", content)), default=0),
+    )
+    block = f"{fence}\n{content}\n{fence}"
+    if omitted:
+        block += f"\n_[truncated, {omitted} chars omitted]_"
+    return block
+
+
+# The number of session records a failure comment summarizes (Issue #775).
+SESSION_SUMMARY_LIMIT = 20
+
+
+def _session_summary(session_file: Path,
+                     *, limit: int = SESSION_SUMMARY_LIMIT) -> str:
+    """Structured summary of the last session records (Issue #775).
+
+    One line per parsed record — timestamp, type, role, tool name and
+    content-block kinds; the record text itself never enters the comment
+    (the full log path is named next to the segment). A record whose
+    text blocks repeat the previous record's is skipped: pi logs the
+    final assistant text twice (once inside the full message, once
+    standalone), which used to duplicate whole paragraphs in the
+    comment. Unparsable tail lines are skipped; an unreadable file is
+    the `<unavailable>` placeholder.
+    """
+    try:
+        with session_file.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            window = min(size, 65536)
+            handle.seek(size - window)
+            content = handle.read(window).decode("utf-8", errors="replace")
+    except (OSError, UnicodeError):
+        return "<unavailable>"
+    summary: list[str] = []
+    previous_text: str | None = None
+    for line in reversed(content.splitlines()):
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        message = record.get("message")
+        message = message if isinstance(message, dict) else {}
+        blocks = message.get("content")
+        blocks = blocks if isinstance(blocks, list) else []
+        text = "".join(
+            block.get("text", "") for block in blocks
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+        if text and text == previous_text:
+            continue
+        previous_text = text or None
+        parts = [str(record.get("type", "?"))]
+        if message.get("role"):
+            parts.append(f"role={message['role']}")
+        if message.get("toolName"):
+            parts.append(f"tool={message['toolName']}")
+        kinds = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            kind = str(block.get("type", "?"))
+            if kind == "toolCall" and block.get("name"):
+                kind = f"toolCall:{block['name']}"
+            kinds.append(kind)
+        if kinds:
+            parts.append(f"content={','.join(kinds)}")
+        summary.append(f"{record.get('timestamp', '-')} {' '.join(parts)}")
+        if len(summary) >= limit:
+            break
+    if not summary:
+        return "<unparsable>"
+    return "\n".join(reversed(summary))
+
+
 def _failure_evidence(worktree: Path | None, exc: BaseException) -> str:
     """Render the bounded evidence that survives terminal worktree cleanup.
 
     Pi subprocess streams come from ``CalledProcessError``. The session and
-    test log are read before cleanup and only their tails are copied into the
-    failure comment, keeping the GitHub comment useful and bounded.
+    test log are read before cleanup and only bounded, fenced segments are
+    copied into the failure comment: raw output stays literal on GitHub,
+    the session tail is a structural summary whose duplicates are removed,
+    and the full session log is named for the deep-dive (Issue #775). The
+    failure reason itself stays the readable head of the comment.
     """
     stderr = getattr(exc, "stderr", None)
     stdout = getattr(exc, "output", None)
@@ -7363,26 +7470,24 @@ def _failure_evidence(worktree: Path | None, exc: BaseException) -> str:
     stderr = str(stderr) if stderr else "<empty>"
     stdout = str(stdout) if stdout else "<empty>"
     return_code = getattr(exc, "returncode", None)
-    session = "<unavailable>"
+    session_file = _latest_session_file(worktree)
+    session = (
+        _session_summary(session_file) if session_file else "<unavailable>"
+    )
     test_log = "<unavailable>"
     if worktree is not None:
-        session_files = sorted(
-            (p for p in (worktree / ".pi-session").glob("*.jsonl")
-             if p.is_file()),
-            key=lambda p: p.stat().st_mtime,
-        )
-        if session_files:
-            session = _tail_text(session_files[-1])
         test_path = worktree / ".orbi" / "test.log"
         if test_path.is_file():
             test_log = _tail_text(test_path)
     return (
         "\n\nFailure evidence (captured before cleanup):\n"
         f"exit_code={return_code if return_code is not None else '<unknown>'}\n"
-        f"stderr={stderr[-4000:]}\n"
-        f"stdout_tail={stdout[-4000:]}\n"
-        f"session_last_events={session[-4000:]}\n"
-        f"test_log_tail={test_log[-4000:]}"
+        f"\nstderr_tail:\n{_fenced(stderr)}\n"
+        f"\nstdout_tail:\n{_fenced(stdout)}\n"
+        "\nsession_last_events "
+        f"(last {SESSION_SUMMARY_LIMIT} records; full log: "
+        f"{session_file or '<unavailable>'}):\n{_fenced(session)}\n"
+        f"\ntest_log_tail:\n{_fenced(test_log)}"
     )
 
 
@@ -8418,6 +8523,9 @@ _FIX_NEEDED_PHRASE = (
     "; the Issue stays ai-fix-needed and the next tick resumes the "
     "same run, branch, worktree and PR"
 )
+# Issue #775: the whole failure-comment body is capped well below the
+# GitHub comment limit; the cut is noted with the full session log path.
+FAILURE_COMMENT_MAX_CHARS = 20000
 
 
 def report_delivery_failure(
@@ -8537,6 +8645,17 @@ def report_delivery_failure(
         outcome = "fix needed"
     if evidence:
         body += _failure_evidence(worktree, exc)
+    if len(body) > FAILURE_COMMENT_MAX_CHARS:
+        # Issue #775: the comment body is capped; the cut preserves the
+        # cause-first head and names the full session log for the part
+        # that was dropped.
+        session_file = _latest_session_file(worktree)
+        body = (
+            body[:FAILURE_COMMENT_MAX_CHARS]
+            + f"\n\n_[comment truncated at {FAILURE_COMMENT_MAX_CHARS} "
+            f"chars; full session log: "
+            f"{session_file or '<unavailable>'}]_"
+        )
     if run_id:
         body = f"{run_marker(run_id)}\n{body}"
     comment_issue(number, repo=source_repo, body=body)

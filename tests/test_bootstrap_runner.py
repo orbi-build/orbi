@@ -7817,9 +7817,15 @@ def test_failure_evidence_handles_binary_streams_and_unavailable_files(tmp_path)
     evidence = runner._failure_evidence(tmp_path / "missing", error)
 
     assert "exit_code=2" in evidence
-    assert "stderr=binary stderr" in evidence
-    assert "stdout_tail=binary stdout" in evidence
-    assert "session_last_events=<unavailable>" in evidence
+    assert "stderr_tail:\n```" in evidence
+    assert "stdout_tail:\n```" in evidence
+    assert "binary stderr" in evidence
+    assert "binary stdout" in evidence
+    # Issue #775: raw segments are fenced; a missing file stays a
+    # placeholder inside its fence instead of a raw dump.
+    assert "test_log_tail:\n```\n<unavailable>\n```" in evidence
+    assert "session_last_events (last 20 records; full log: <unavailable>):" \
+        in evidence
     assert runner._tail_text(tmp_path / "missing.log") == "<unavailable>"
 
 
@@ -7827,7 +7833,18 @@ def test_failure_evidence_includes_streams_session_and_test_tail(tmp_path):
     worktree = tmp_path / "wt"
     (worktree / ".pi-session").mkdir(parents=True)
     (worktree / ".pi-session" / "session.jsonl").write_text(
-        "old event\nlatest event\n", encoding="utf-8",
+        json.dumps({
+            "type": "message", "timestamp": "2026-09-12T10:00:00Z",
+            "message": {"role": "user", "content": [
+                {"type": "text", "text": "review the PR"},
+            ]},
+        }) + "\n"
+        + json.dumps({
+            "type": "message", "timestamp": "2026-09-12T10:01:00Z",
+            "message": {"role": "toolResult", "toolName": "Bash",
+                        "isError": False},
+        }) + "\n",
+        encoding="utf-8",
     )
     (worktree / ".orbi").mkdir()
     (worktree / ".orbi" / "test.log").write_text(
@@ -7838,17 +7855,174 @@ def test_failure_evidence_includes_streams_session_and_test_tail(tmp_path):
     evidence = runner._failure_evidence(worktree, error)
 
     assert "exit_code=1" in evidence
-    assert "stderr=<empty>" in evidence
     assert "stdout tail" in evidence
-    assert "latest event" in evidence
     assert "1 failed, 2 passed" in evidence
+    # Issue #775: the session tail is a structural summary, not raw JSONL.
+    assert "2026-09-12T10:00:00Z message role=user content=text" in evidence
+    assert "2026-09-12T10:01:00Z message role=toolResult tool=Bash" in evidence
+    assert f"full log: {worktree / '.pi-session' / 'session.jsonl'}" in evidence
+
+
+def test_failure_evidence_keeps_coverage_table_literal_inside_fence(tmp_path):
+    """Issue #775: the vitest coverage table must render as monospace
+    literal text on GitHub, never parsed as a markdown table."""
+    worktree = tmp_path / "wt"
+    (worktree / ".pi-session").mkdir(parents=True)
+    raw_record = json.dumps({
+        "type": "message", "timestamp": "t1",
+        "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "**bold** | not | a | table"},
+        ]},
+    })
+    (worktree / ".pi-session" / "s.jsonl").write_text(raw_record + "\n")
+    (worktree / ".orbi").mkdir()
+    (worktree / ".orbi" / "test.log").write_text(
+        " src      | stmts |\n"
+        "----------|-------\n"
+        " billing  | 96%   |\n",
+        encoding="utf-8",
+    )
+    error = subprocess.CalledProcessError(1, ["pi"])
+
+    evidence = runner._failure_evidence(worktree, error)
+
+    # Every raw segment opens its fence directly under the label.
+    for label in ("stderr_tail:", "stdout_tail:", "test_log_tail:"):
+        assert f"\n{label}\n```" in evidence
+    # The table separator line survives verbatim inside the test-log
+    # fence (label -> fence -> table row).
+    assert "test_log_tail:\n```\n src      | stmts |\n----------|-------\n" \
+        in evidence
+    # The session record text never enters the comment: the summary
+    # carries the shape, the fence carries the log path.
+    assert "bold" not in evidence
+    assert raw_record not in evidence
+
+
+def test_failure_evidence_dedupes_repeated_session_text_block(tmp_path):
+    """Issue #775: pi logs the final assistant text twice (once inside
+    the full message, once standalone); the summary keeps it once."""
+    worktree = tmp_path / "wt"
+    (worktree / ".pi-session").mkdir(parents=True)
+    final_text = "审查完成。结论：verdict pass"
+    duplicated = [
+        {"type": "message", "timestamp": "2026-09-12T10:44:12.000Z",
+         "message": {"role": "assistant", "content": [
+             {"type": "thinking"}, {"type": "text", "text": final_text},
+         ]}},
+        {"type": "message", "timestamp": "2026-09-12T10:44:12.000Z",
+         "message": {"role": "assistant", "content": [
+             {"type": "text", "text": final_text},
+         ]}},
+    ]
+    (worktree / ".pi-session" / "s.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in duplicated),
+        encoding="utf-8",
+    )
+
+    evidence = runner._failure_evidence(
+        worktree, subprocess.CalledProcessError(1, ["pi"]),
+    )
+
+    assert evidence.count("role=assistant") == 1
+    assert final_text not in evidence
+
+
+def test_session_summary_skips_malformed_records_and_respects_limit(tmp_path):
+    """Defensive edges: malformed lines, messages and blocks are skipped,
+    the toolCall kind carries its name, the limit keeps the LAST records,
+    and an all-unparsable log degrades to the placeholder."""
+    good = {"type": "message", "timestamp": "t", "message": {
+        "role": "assistant",
+        "content": [{"type": "toolCall", "name": "Bash"}, "junk", 3],
+    }}
+    path = tmp_path / "s.jsonl"
+    path.write_text(
+        "not json\n"
+        "[1, 2]\n"
+        + json.dumps({"type": "x", "message": "not-a-dict"}) + "\n"
+        + json.dumps(good) + "\n",
+        encoding="utf-8",
+    )
+
+    assert runner._session_summary(path, limit=1) == (
+        "t message role=assistant content=toolCall:Bash"
+    )
+
+    many = tmp_path / "many.jsonl"
+    many.write_text("".join(
+        json.dumps({"type": f"r{i}", "timestamp": f"t{i}"}) + "\n"
+        for i in range(5)
+    ), encoding="utf-8")
+    assert runner._session_summary(many, limit=2) == "t3 r3\nt4 r4"
+
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text("nope\n[1]\n", encoding="utf-8")
+    assert runner._session_summary(bad) == "<unparsable>"
+
+    # An unreadable/missing file is the placeholder (also the race path
+    # where the session vanishes between the glob and this read).
+    assert runner._session_summary(tmp_path / "missing.jsonl") == "<unavailable>"
+
+
+def test_failure_evidence_truncates_oversized_segment_with_note(tmp_path):
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+
+    evidence = runner._failure_evidence(
+        worktree,
+        subprocess.CalledProcessError(1, ["pi"], stderr="x" * 9000),
+    )
+
+    assert "[truncated, 5000 chars omitted]" in evidence
+
+
+def test_report_delivery_failure_caps_comment_and_names_session_log(
+    monkeypatch, tmp_path,
+):
+    """Issue #775: an oversized body is cut at the cap, the cut names
+    the full session log path, and the failure reason stays first."""
+    posted = []
+    monkeypatch.setattr(runner, "apply_label_patch", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "issue_labels", lambda *args, **kwargs: set())
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda number, *, repo, body: posted.append(body),
+    )
+    error = subprocess.CalledProcessError(1, ["pi"])
+    worktree = tmp_path / "wt"
+    session_file = worktree / ".pi-session" / "s.jsonl"
+    session_file.parent.mkdir(parents=True)
+    session_file.write_text("{}\n", encoding="utf-8")
+
+    outcome = runner.report_delivery_failure(
+        error, issue={"number": 775, "title": "t", "labels": []},
+        source_repo="orbi-build/orbi", run_id=None, pr_url=None,
+        worktree=worktree, branch="b", role=runner.ROLE_IMPLEMENT,
+        cause="x" * 25000,
+        classify=False, evidence=True,
+    )
+
+    assert outcome == "blocked"
+    body = posted[0]
+    # The cause-first head survives the cut; the oversize cause itself
+    # legitimately fills the whole window and pushes the evidence out.
+    assert body.startswith("Orbi failed:")
+    assert len(body) <= runner.FAILURE_COMMENT_MAX_CHARS + 300
+    assert f"full session log: {session_file}" in body
 
 
 def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_path):
     calls = []
     (tmp_path / "wt" / ".pi-session").mkdir(parents=True)
     (tmp_path / "wt" / ".pi-session" / "session.jsonl").write_text(
-        "assistant event\n", encoding="utf-8",
+        json.dumps({
+            "type": "message", "timestamp": "2026-08-25T02:30:00Z",
+            "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "assistant event"},
+            ]},
+        }) + "\n",
+        encoding="utf-8",
     )
     (tmp_path / "wt" / ".orbi").mkdir()
     (tmp_path / "wt" / ".orbi" / "test.log").write_text(
@@ -7901,7 +8075,11 @@ def test_process_issue_failure_comment_includes_session_scene(monkeypatch, tmp_p
     assert "result=ok" in failure_body
     assert "exit_code=1" in failure_body
     assert "stderr=boom" in failure_body
-    assert "assistant event" in failure_body
+    # Issue #775: the session tail appears as its structured summary
+    # line inside a fence, not as raw session text.
+    assert "2026-08-25T02:30:00Z message role=assistant content=text" \
+        in failure_body
+    assert "assistant event" not in failure_body
     assert "1 failed" in failure_body
     # The full scene on the failure comment carries the debug entry.
     assert f"worktree={tmp_path / 'wt'}" in failure_body
