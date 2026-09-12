@@ -226,6 +226,32 @@ def test_skips_unrecognized_names_and_unconfigured_slugs(
     assert str(old_slug) in _registered(repo)
 
 
+def test_same_issue_number_in_two_source_repos_is_not_crossed(
+    tmp_path, monkeypatch,
+):
+    """The closed-Issue read is matched per (source repo, number), never
+    by number alone: two configured repos can carry the same Issue
+    number, and one repo's closed #9 must never answer for the other
+    repo's still-open #9 (an open Issue's scene is never deleted)."""
+    repo = _git_repo(tmp_path / "repo")
+    closed_one = _register(repo, "orbi-owner-one-issue-9-aaaaaaaa")
+    open_two = _register(repo, "orbi-owner-two-issue-9-bbbbbbbb")
+
+    def fake_list_issues(repo, *, state, json_fields, limit, **kwargs):
+        assert state == "closed"
+        if repo == "owner/one":
+            return [_closed(9, hours_ago=100)]
+        assert repo == "owner/two"
+        return []
+
+    monkeypatch.setattr(runner, "list_issues", fake_list_issues)
+    config = _config(repo)
+    config["source_repos"] = ["owner/one", "owner/two"]
+    runner.reclaim_released_worktrees(config, now=NOW)
+    assert str(closed_one) not in _registered(repo)
+    assert str(open_two) in _registered(repo)
+
+
 def test_read_failure_removes_nothing_and_warns(tmp_path, monkeypatch, caplog):
     """The GitHub read is the safe direction: when it fails, NOTHING is
     removed and the tick continues (宁可不删，不可误删)."""

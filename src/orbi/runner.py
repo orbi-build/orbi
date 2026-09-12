@@ -4092,9 +4092,12 @@ def reclaim_released_worktrees(config: dict, *,
         candidates.append((match["slug"], int(match["number"]), path))
     if not candidates:
         return
-    # ONE batched closed-Issue read per involved source repo. Any read
-    # or parse failure removes NOTHING (the safe direction: 宁可不删).
-    closed: dict[int, dict] = {}
+    # ONE batched closed-Issue read per involved source repo, keyed by
+    # (repo, number): two source repos can carry the same Issue number,
+    # and one repo's closed Issue never answers for the other's. Any
+    # read or parse failure removes NOTHING (the safe direction: 宁可
+    # 不删).
+    closed: dict[tuple[str, int], dict] = {}
     try:
         for repo in sorted({
             repo_of_slug[slug] for slug, _number, _path in candidates
@@ -4103,7 +4106,7 @@ def reclaim_released_worktrees(config: dict, *,
                 repo, state="closed",
                 json_fields="number,closedAt,labels", limit=1000,
             ):
-                closed[int(issue["number"])] = issue
+                closed[(repo, int(issue["number"]))] = issue
     except Exception as exc:
         LOGGER.warning(
             "worktree_reclaim_failed reason=%s (removing nothing)", exc,
@@ -4113,7 +4116,7 @@ def reclaim_released_worktrees(config: dict, *,
     retain = timedelta(hours=config["worktree_retain_hours"])
     reclaimable: list[tuple[datetime, Path]] = []
     for slug, number, path in candidates:
-        issue = closed.get(number)
+        issue = closed.get((repo_of_slug[slug], number))
         if issue is None:
             continue
         try:
