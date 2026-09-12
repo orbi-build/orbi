@@ -74,6 +74,21 @@ def test_workflow_documents_all_labels_with_meaning():
     )
 
 
+def test_workflow_documents_research_only_dispatch():
+    """Issue #739: the dispatch section tells the ticket author that a
+    research-only ticket ("research/design first, do NOT implement
+    yet") is an ops ticket at dispatch time (`ai-ready` +
+    `ai-ops-only`): a dev ticket whose agent correctly follows the
+    instruction delivers no commit, fails with `the agent delivered no
+    commit` and burns `ai-blocked`, while a no-commit ops run
+    completes normally and committed code still takes the PR path."""
+    text = docs_page("workflow")
+    assert "Research-only tickets" in text
+    assert "`ai-ready` + `ai-ops-only`" in text
+    assert "the agent delivered no commit" in text
+    assert "ai-blocked" in text
+
+
 def test_setup_documents_label_initialization():
     """Issue #49/#241: GitHub labels are external state — a commit
     never creates them. docs/setup.mdx documents the initialization:

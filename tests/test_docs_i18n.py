@@ -367,6 +367,20 @@ def test_chinese_workflow_documents_the_full_issue_to_merge_chain():
     assert not unknown, f"Chinese workflow references unknown labels: {sorted(unknown)}"
 
 
+def test_chinese_workflow_documents_research_only_dispatch():
+    """Issue #739: the Chinese workflow page carries the same
+    research-only dispatch facts as the English page — a research-only
+    ticket is dispatched as ops (`ai-ready` + `ai-ops-only`); a dev
+    ticket whose agent correctly delivers no commit fails with `the
+    agent delivered no commit` and burns `ai-blocked`, while a
+    no-commit ops run completes normally."""
+    text = zh_page_text("workflow")
+    assert "调研型票" in text
+    assert "`ai-ready` + `ai-ops-only`" in text
+    assert "the agent delivered no commit" in text
+    assert "ai-blocked" in text
+
+
 def test_chinese_operations_documents_the_real_commands_and_recovery():
     """The Chinese operations page must carry the real operations facts:
     the 5-minute timer, the journal, the CLI commands, the worktree and

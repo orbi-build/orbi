@@ -154,6 +154,19 @@ Ops semantics (Issue #537):
   removing `ai-in-progress` — no PR. Committed code takes the normal PR
   path with review and merge.
 
+Research-only tickets (Issue #739): a ticket whose body demands
+investigation only — "research/design first, do NOT implement yet" —
+is an ops ticket at dispatch time: give it `ai-ready` +
+`ai-ops-only`. A dev ticket cannot carry that instruction: the dev
+delivery criterion is a commit on the task branch, so an agent that
+correctly follows it delivers no commit and the run fails with
+`the agent delivered no commit` — the Issue is burned `ai-blocked`.
+The ops playbook's evidence discipline (real commands, verbatim
+output, unverified items labeled as such) IS the research
+deliverable; a no-commit ops run completes normally (the Issue is
+closed, `ai-in-progress` removed), and research that continues into
+code still takes the normal PR ceremony.
+
 Before Issue #537 the label `ai-ops-only` dispatched the content agent
 (the #530 rename never changed the behavior — the name promised ops,
 the mode was content-only); the content path dispatches on
