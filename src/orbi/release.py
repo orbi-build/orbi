@@ -1074,6 +1074,17 @@ def publish_release(*, repo: str, tag: str, version: str,
     return json.loads(raw)["url"]
 
 
+# Issue #754: the GitHub issue index is eventually consistent —
+# `gh issue close` returning success does not mean the
+# `issues?milestone=N&state=open` list reflects it yet, and v0.4.10 read
+# a stale non-empty list in the same second as the close. A non-empty
+# gate read is re-checked with these backoff delays first; only a list
+# that stays non-empty across all of them fails fast (bounded ≈ 10 s
+# including the reads — a real unfinished issue must not drag the
+# release out).
+MILESTONE_OPEN_RETRY_DELAYS = (1.0, 2.0, 4.0)
+
+
 def close_release_milestone(repo: str, version: str, *, run_id: str | None = None) -> str:
     """Close the Milestone whose title is exactly `version` (Issue #214).
 
@@ -1089,7 +1100,10 @@ def close_release_milestone(repo: str, version: str, *, run_id: str | None = Non
       forbidden);
     - already `closed` -> idempotent success (no mutation, no reopen);
     - `open` with open issues -> fail fast with the version, the
-      Milestone number/url and the open issue list;
+      Milestone number/url and the open issue list — but only after
+      bounded backoff re-reads (Issue #754: the issue index is
+      eventually consistent, so a list read in the same second as the
+      release Issue's `gh issue close` can still show it as open);
     - `open` with 0 open issues -> closed via the official REST
       contract `PATCH /repos/{owner}/{repo}/milestones/{number}`
       with `state=closed` (OpenAPI `issues/update-milestone`).
@@ -1140,6 +1154,15 @@ def close_release_milestone(repo: str, version: str, *, run_id: str | None = Non
         # Every listed Epic is verified from its children and blockers before
         # the authoritative exact-Milestone list is checked again.
         epic_evidence = reconcile_release_epics(repo, int(number), version, run_id)
+        open_issues = milestone_open_issues(repo, int(number))
+    retries = 0
+    while open_issues and retries < len(MILESTONE_OPEN_RETRY_DELAYS):
+        # The release Issue close succeeded seconds ago; a non-empty read
+        # here is more likely the index lagging (Issue #754) than real
+        # unfinished work. Re-read with bounded backoff; the raise below
+        # fires only once the list stays non-empty across all retries.
+        time.sleep(MILESTONE_OPEN_RETRY_DELAYS[retries])
+        retries += 1
         open_issues = milestone_open_issues(repo, int(number))
     if open_issues:
         listing = ", ".join(
