@@ -360,8 +360,10 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
   阈值、`action=kill_pi`、session、run id 和 `reason=hung_model_request`。
   阈值度量的是**完整** session 事件之间的静默（Pi 不向 JSONL 写
   token 级进度），不是 token 级模型进度——持续追加事件的慢生成永不
-  触发（慢本地模型，如 ~17 tokens/s 的 Qwen 27B、llama-server 请求
-  超时 1200 秒，在默认配置下可以存活超过 10 分钟的完整消息）；
+  触发（慢本地模型，如 27B Q4 GGUF 配 llama-server、请求超时 1200
+  秒：RX 7900 XTX 全层上 GPU 时 12K 上下文约 57 tokens/s，部分上
+  GPU 或纯 CPU 时远低于 20 tokens/s；默认配置下慢端也能存活超过
+  10 分钟的完整消息）；
 - `pi_idle_wait` — idle-stall 恢复的宽限行（Issue #181）：仍在
   deadline 内的 coreutils `timeout <seconds> ...` 包裹是合法的长命令，
   不是 hang。Runner 每次 stall 记一条 `pi_idle_wait` 行（run id、

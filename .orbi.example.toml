@@ -90,8 +90,10 @@ engine_source_track = "release"
 # token-level progress into the session JSONL, so it is NOT a
 # token-level model timeout and a slow generation that keeps appending
 # events never trips it. Default: 1800 (30 minutes) — a slow local
-# model (e.g. Qwen 27B at ~17 tokens/s behind a llama-server with a
-# 1200 s request timeout) survives a 10-minute complete message. Must
+# model (e.g. a 27B Q4 GGUF behind a llama-server with a 1200 s request
+# timeout: ~57 tokens/s at 12K context on an RX 7900 XTX with all
+# layers on GPU, well under 20 tokens/s on partial GPU offload or
+# CPU-only) survives a 10-minute complete message. Must
 # be a finite positive number; anything else fails the start fast.
 # model_wait_dead_seconds = 1800
 # Swallowed-model-request probe (Issue #233): the model's /slots
