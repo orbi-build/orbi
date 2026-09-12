@@ -110,10 +110,18 @@ host-only key):
 | --- | --- |
 | absent / `main` | `origin/main`, fast-forward — the exact pre-#535 dogfood behavior |
 | `branch:<name>` | `origin/<name>`, fast-forward (the branch is checked out) |
-| `release` | the newest OFFICIAL semver tag (`vX.Y.Z`; pre-releases like `vX.Y.Z-rc.1` and non-semver tags are excluded), checked out detached |
+| `release` (alias: `stable`) | the newest OFFICIAL semver tag (`vX.Y.Z`; pre-releases like `vX.Y.Z-rc.1` and non-semver tags are excluded), checked out detached |
 | `tag:<name>` | exactly that tag (annotated tags resolve to their commit), checked out detached |
 | `sha:<40-hex>` | exactly that commit, checked out detached |
 
+- **`release` vs `tag:` — follow vs lock**: `release` (alias:
+  `stable`) follows the newest PUBLISHED version and advances to the
+  next tag automatically when one ships — it changes only at release
+  time (`main` changes with every commit). `tag:<name>` LOCKS one
+  exact version and never moves until you edit the value, so a
+  version change is always a deliberate operation — pin it when a
+  deployment must stay reproducible; rollback is putting the previous
+  tag back.
 - **Installed vs updated**: a fresh install via `install.sh` copies
   `.orbi.example.toml`, which ships `engine_source_track = "release"` —
   new deployments run the latest release, not the main intermediate
