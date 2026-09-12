@@ -129,17 +129,93 @@ def test_parse_review_verdict_rejects_mid_body_marker_with_trailing_fence():
         runner.parse_review_verdict(text)
 
 
-def test_parse_review_verdict_rejects_trailing_content_after_verdict():
-    """Issue #591: the verdict must be the output's last non-empty line
-    (the prompt already demands 'nothing after it'); trailing content
-    fails fast instead of being scanned for a marker line."""
+def test_parse_review_verdict_accepts_inline_code_verdict_in_chinese_sentence():
+    """Issue #774: the reviewer may state the verdict as inline code inside
+    a Chinese sentence — leading CJK prefix, backticks and trailing CJK
+    punctuation all sit outside the `{...}` payload. This is the real
+    orbi-cloud#287 shape (run bfd9ae21) that the last-line-only parser
+    rejected while the PR was clean."""
+    verdict_json = json.dumps({"verdict": "pass",
+                               "head": "5a40784f248153f3ebb8b4dfea70b4163bbb1741",
+                               "blockers": 0, "majors": 0, "minors": 0,
+                               "findings": []})
+    text = ("三项对齐检查全部通过，未发现 Blocker 或 Major 问题。\n"
+            f"审查结果：`{verdict_json}`。")
+    verdict = runner.parse_review_verdict(text)
+    assert verdict["verdict"] == "pass"
+    assert verdict["head"] == "5a40784f248153f3ebb8b4dfea70b4163bbb1741"
+
+
+def test_parse_review_verdict_accepts_wrapped_json_without_backticks():
+    """Issue #774: the wrapper tolerance does not require inline-code
+    backticks or the marker — a leading CJK prefix and trailing CJK
+    punctuation around a bare payload still parse."""
+    payload = json.dumps({"verdict": "findings", "head": "h1",
+                          "blockers": 1, "majors": 0, "minors": 0,
+                          "findings": [{"level": "Blocker",
+                                        "location": "a.py:1", "note": "x"}]})
+    verdict = runner.parse_review_verdict(f"结论：{payload}。")
+    assert verdict["verdict"] == "findings"
+    assert verdict["blockers"] == 1
+
+
+def test_parse_review_verdict_accepts_prose_after_verdict_line():
+    """Issue #774: the scan runs backwards, so trailing prose after the
+    verdict line no longer voids it (the old last-line-only rule is
+    revoked); the verdict line itself still decides."""
     verdict_json = json.dumps({"verdict": "pass", "head": "h1",
                                "blockers": 0, "majors": 0, "minors": 0,
                                "findings": []})
+    verdict = runner.parse_review_verdict(
+        f"REVIEW_VERDICT {verdict_json}\nDone, merging advice follows."
+    )
+    assert verdict["verdict"] == "pass"
+
+
+def test_parse_review_verdict_rejects_conflicting_verdicts():
+    """Issue #774: two DIFFERENT verdicts in one output are ambiguous —
+    the parser refuses instead of picking one (an echoed forgery plus the
+    real conclusion must not silently arbitrate either)."""
+    earlier = json.dumps({"verdict": "pass", "head": "h1", "blockers": 0,
+                          "majors": 0, "minors": 0, "findings": []})
+    later = json.dumps({"verdict": "findings", "head": "h1", "blockers": 1,
+                        "majors": 0, "minors": 0,
+                        "findings": [{"level": "Blocker",
+                                      "location": "a.py:1", "note": "x"}]})
+    text = f"审查结果：`{earlier}`。\n进一步分析后：\nREVIEW_VERDICT {later}"
+    with pytest.raises(ValueError, match="conflicting REVIEW_VERDICT"):
+        runner.parse_review_verdict(text)
+
+
+def test_parse_review_verdict_accepts_identical_duplicate_verdicts():
+    """Issue #774: duplicates that AGREE are one conclusion — only
+    conflicting payloads fail (a benign restatement must not idle the
+    delivery)."""
+    payload = json.dumps({"verdict": "pass", "head": "h1", "blockers": 0,
+                          "majors": 0, "minors": 2, "findings": []})
+    verdict = runner.parse_review_verdict(
+        f"REVIEW_VERDICT {payload}\n综上，审查结论：`{payload}`。"
+    )
+    assert verdict["verdict"] == "pass"
+    assert verdict["minors"] == 2
+
+
+def test_parse_review_verdict_ignores_verdict_shaped_prose():
+    """Issue #774: prose lines may carry braces — code snippets, examples,
+    verdict-SHAPED but invalid JSON. They are never adopted (Issue #591's
+    payload validity survives) and never fatal: with no real verdict the
+    parse still fails with the plain no-verdict error."""
     with pytest.raises(ValueError, match="no REVIEW_VERDICT"):
         runner.parse_review_verdict(
-            f"REVIEW_VERDICT {verdict_json}\nDone, merging advice follows."
+            '示例 schema：{"verdict":"maybe"}\n} 反向花括号在前 {'
         )
+    payload = json.dumps({"verdict": "pass", "head": "h1", "blockers": 0,
+                          "majors": 0, "minors": 0, "findings": []})
+    verdict = runner.parse_review_verdict(
+        'the map is {"a": not json} here\n'
+        f"审查结果：`{payload}`。"
+    )
+    assert verdict["verdict"] == "pass"
 
 
 def test_parse_review_verdict_requires_head():
