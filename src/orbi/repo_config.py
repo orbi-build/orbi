@@ -32,13 +32,12 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Callable, cast
 
 from orbi.delivery_labels import LIFECYCLE_STATES, READY_LABEL
+from orbi.journal import event
 
 if TYPE_CHECKING:
     # Annotation-only: `orbi.runner` imports this module at runtime, so a
     # real import here would be circular (Issue #790).
     from orbi.runner import RunnerConfig
-
-LOGGER = logging.getLogger("orbi.bootstrap")
 
 # Decision D1: one location, `.github/` (the GitHub automation-config
 # convention shared by CODEOWNERS / dependabot.yml / labeler).
@@ -352,19 +351,20 @@ def read_repo_config(repo: str, *, path: str = REPO_CONFIG_PATH,
         )
     except Exception as exc:
         if not _is_not_found(exc):
-            LOGGER.error(
-                "repo_config_read_failed repo=%s path=%s error=%s%s "
-                "(falling back to the host config)",
-                repo, path, exc, _command_output_detail(exc),
+            event(
+                "repo_config_read_failed", level=logging.ERROR,
+                repo=repo, path=path, error=exc,
+                detail=_command_output_detail(exc),
+                reason="falling back to the host config",
             )
         return None
     try:
         data = json.loads(raw)
     except ValueError as exc:
-        LOGGER.warning(
-            "repo_config_read_failed repo=%s path=%s error=%s "
-            "(falling back to the host config)",
-            repo, path, exc,
+        event(
+            "repo_config_read_failed", level=logging.WARNING,
+            repo=repo, path=path, error=exc,
+            reason="falling back to the host config",
         )
         return None
     if not isinstance(data, dict) or "sha" not in data or "content" not in data:
@@ -410,9 +410,9 @@ def read_repo_config_at(repo: str, sha: str, *, path: str = REPO_CONFIG_PATH,
         )
         data = json.loads(raw)
     except Exception:
-        LOGGER.warning(
-            "repo_config_previous_read_failed repo=%s path=%s sha=%s",
-            repo, path, sha,
+        event(
+            "repo_config_previous_read_failed", level=logging.WARNING,
+            repo=repo, path=path, sha=sha,
         )
         return None
     if not isinstance(data, dict) or not isinstance(data.get("content"), str):

@@ -38,7 +38,8 @@ def test_runner_main_config_failure_is_one_structured_log_line(
     with caplog.at_level("ERROR"):
         assert runner.main(["--config", "orbi.toml"]) == 1
     assert [record.message for record in caplog.records] == [
-        "config_invalid reason=API key for provider 'ollama' references environment variable OLLAMA_API_KEY is not set"
+        'config_invalid reason="API key for provider \'ollama\' '
+        'references environment variable OLLAMA_API_KEY is not set"'
     ]
 
 
@@ -11997,7 +11998,7 @@ def test_main_unit_drift_auto_syncs_and_proceeds_to_claim(
     # The repo template won: the installed unit matches it again.
     status = systemd_deploy.unit_status(repo, installed)
     assert all(entry["drifted"] is False for entry in status)
-    assert "unit_drift auto_synced unit=orbi@.timer" in caplog.text
+    assert "unit_drift result=auto_synced unit=orbi@.timer" in caplog.text
     assert "commit=0123456789abcdef0123456789abcdef01234567" in caplog.text
     # The tick proceeded: the slot was taken AFTER the preflight passed.
     assert (repo / ".orbi" / "slots" / "slot-1").exists()
@@ -12046,7 +12047,7 @@ def test_main_unit_drift_auto_sync_failure_blocks_claim(
 
 def test_main_unit_drift_clean_proceeds_to_claim(monkeypatch, tmp_path,
                                                  caplog):
-    """Issue #103: matching units log `unit_drift clean` and the tick
+    """Issue #103: matching units log `unit_drift result=clean` and the tick
     proceeds to the normal claim flow (slot taken, queue scanned)."""
     from orbi import systemd_deploy
 
@@ -12067,7 +12068,7 @@ def test_main_unit_drift_clean_proceeds_to_claim(monkeypatch, tmp_path,
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
-    assert "unit_drift clean" in caplog.text
+    assert "unit_drift result=clean" in caplog.text
     # The slot was taken AFTER the preflight passed.
     assert (repo / ".orbi" / "slots" / "slot-1").exists()
 
@@ -12148,7 +12149,7 @@ def test_main_transport_check_blocks_claim_before_slot(
 def test_main_transport_check_clean_proceeds_to_claim(
     monkeypatch, tmp_path, caplog,
 ):
-    """Issue #114: a passing transport check logs `transport clean` and
+    """Issue #114: a passing transport check logs `transport result=clean` and
     the tick proceeds to the normal claim flow (slot taken, queue
     scanned)."""
     _write_prompts(tmp_path)
@@ -12171,7 +12172,7 @@ def test_main_transport_check_clean_proceeds_to_claim(
     )
     with caplog.at_level("INFO"):
         assert runner.main(["--config", str(config)]) == 0
-    assert "transport clean" in caplog.text
+    assert "transport result=clean" in caplog.text
     # The slot was taken AFTER the preflight passed.
     assert (tmp_path / ".orbi" / "slots" / "slot-1").exists()
 
@@ -18825,7 +18826,7 @@ def test_process_release_derives_scope_from_milestone(monkeypatch):
     assert "Issue #124 closed" in comment_kwargs["body"]
 
 
-def test_process_release_lists_open_milestone_items(monkeypatch):
+def test_process_release_lists_open_milestone_items(monkeypatch, caplog):
     state = make_release_process_env(
         monkeypatch,
         body=RELEASE_MILESTONE_DECLARATION_BODY,
@@ -18842,18 +18843,19 @@ def test_process_release_lists_open_milestone_items(monkeypatch):
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": RELEASE_MILESTONE_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    url = release.process_release(
-        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
-    )
+    with caplog.at_level("INFO"):
+        url = release.process_release(
+            issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
+        )
     assert url == "https://github.com/o/r/releases/tag/v0.3.0"
     # Open items are surfaced as a warning and in the auditable success
     # comment — never silently swallowed, never part of the scope.
-    warn_calls = [
-        c.args for c in release.LOGGER.warning.call_args_list
-        if c.args and "release_milestone_open_items" in str(c.args)
+    warn_records = [
+        record.message for record in caplog.records
+        if "release_milestone_open_items" in record.message
     ]
-    assert len(warn_calls) == 1
-    assert "#255" in str(warn_calls[0])
+    assert len(warn_records) == 1
+    assert 'open_items="open Issue #255 Still open work"' in warn_records[0]
     (comment_number, comment_kwargs), = state["comments"]
     assert ("NOT released (still open in milestone v0.3.0): "
             "open Issue #255 Still open work") in comment_kwargs["body"]
@@ -19155,7 +19157,7 @@ def test_process_release_fails_on_malformed_declaration(monkeypatch):
     assert "## Release" in comment_kwargs["body"]
 
 
-def test_process_release_ignores_a_legacy_test_command_and_never_runs_it(monkeypatch):
+def test_process_release_ignores_a_legacy_test_command_and_never_runs_it(monkeypatch, caplog):
     """Issue #569: a legacy body still declaring `test_command` is
     accepted: the field is ignored with ONE journal evidence line and
     the release delivers through the normal CI-gated path — nothing is
@@ -19166,16 +19168,17 @@ def test_process_release_ignores_a_legacy_test_command_and_never_runs_it(monkeyp
     issue = {"number": 99, "title": "Release v0.3.0",
              "body": LEGACY_TEST_COMMAND_DECLARATION_BODY,
              "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
-    result = release.process_release(
-        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
-    )
+    with caplog.at_level("INFO"):
+        result = release.process_release(
+            issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
+        )
     assert result == "https://github.com/o/r/releases/tag/v0.3.0"
     assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-merged",
                                        "remove": "ai-in-progress"})
     assert not [c for c, _ in state["commands"] if c[:1] == ["timeout"]]
     ignored = [
-        call for call in release.LOGGER.info.call_args_list
-        if "release_test_command_ignored" in str(call)
+        record for record in caplog.records
+        if "release_test_command_ignored" in record.message
     ]
     assert len(ignored) == 1
 
@@ -19601,7 +19604,7 @@ def test_reconcile_open_epics_keeps_incomplete_without_comment(monkeypatch, capl
     monkeypatch.setattr(seam, "comment_issue", lambda *args, **kwargs: comments.append(True))
     runner.reconcile_open_epics("o/r", "abc12345")
     assert not comments
-    assert "epic_kept_open issue=20 repo=o/r reason=open blockers: #3" in caplog.text
+    assert "epic_kept_open issue=20 repo=o/r reason=\"open blockers: #3\"" in caplog.text
 
 
 def test_reconcile_release_milestones_closes_only_published_empty_milestones(monkeypatch, caplog):
@@ -19638,7 +19641,7 @@ def test_reconcile_release_milestones_keeps_open_without_published_release_or_em
         raise AssertionError(command)
     monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.reconcile_release_milestones("o/r", "abc12345") == []
-    assert "reason=ambiguous title" in caplog.text
+    assert 'reason="ambiguous title"' in caplog.text
     with pytest.raises(AssertionError):
         fake_run(["unexpected"])
 
@@ -19690,8 +19693,8 @@ def test_reconcile_release_milestones_keeps_malformed_or_incomplete_open(monkeyp
     monkeypatch.setattr(seam, "run_command", fake_run)
     assert runner.reconcile_release_milestones("o/r", "abc12345") == []
     assert "reason=malformed" in caplog.text
-    assert "reason=open issues" in caplog.text
-    assert "reason=no published release" in caplog.text
+    assert 'reason="open issues"' in caplog.text
+    assert 'reason="no published release"' in caplog.text
     with pytest.raises(AssertionError):
         fake_run(["x", "y", "z"])
 
@@ -21827,16 +21830,23 @@ def test_load_config_does_not_treat_provider_directory_as_missing(tmp_path):
 
 def _run_failed_log_sites(source: str) -> list[int]:
     """Scan one Python source; return the line numbers of the
-    `LOGGER.error("run_failed ...")` call sites."""
+    `run_failed` emission sites — the Issue #791 single-emission form
+    `event("run_failed ...")` and the legacy `LOGGER.error("run_failed
+    ...")` form alike."""
     sites: list[int] = []
     for node in ast.walk(ast.parse(source)):
-        if (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "error"
-                and node.args
-                and isinstance(node.args[0], ast.Constant)
-                and isinstance(node.args[0].value, str)
-                and node.args[0].value.startswith("run_failed ")):
+        if not (isinstance(node, ast.Call) and node.args):
+            continue
+        first = node.args[0]
+        if not (isinstance(first, ast.Constant)
+                and isinstance(first.value, str)
+                and (first.value == "run_failed"
+                     or first.value.startswith("run_failed "))):
+            continue
+        func = node.func
+        is_event = isinstance(func, ast.Name) and func.id == "event"
+        is_error = isinstance(func, ast.Attribute) and func.attr == "error"
+        if is_event or is_error:
             sites.append(node.lineno)
     return sites
 
@@ -21845,11 +21855,15 @@ def test_run_failed_pin_detects_every_error_site():
     """The detector really detects: two `run_failed` ERROR sites produce
     two line numbers and a non-ERROR sibling is ignored."""
     source = (
-        "LOGGER.error('run_failed %s reason=a', s)\n"
+        "event(\n"
+        "    'run_failed',\n"
+        "    format_run_scene(activity),\n"
+        "    level=logging.ERROR, reason='a',\n"
+        ")\n"
         "LOGGER.info('run_failed (historic)', s)\n"
         "LOGGER.error('run_failed %s reason=b', s)\n"
     )
-    assert _run_failed_log_sites(source) == [1, 3]
+    assert _run_failed_log_sites(source) == [1, 7]
 
 
 def test_run_failed_scene_logged_in_one_place():

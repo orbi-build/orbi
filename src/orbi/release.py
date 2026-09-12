@@ -14,6 +14,7 @@ from __future__ import annotations
 import fcntl
 import functools
 import json
+import logging
 import os
 import re
 import subprocess
@@ -74,6 +75,7 @@ from orbi.gitops import (
 )
 from orbi.journal import (
     LOGGER,
+    event,
     new_run_id,
     run_command,
     run_git_network_command,
@@ -628,9 +630,9 @@ def build_release_changelog(repo: str, scope: list[int]) -> str:
         if issue.get("__typename") == "Issue":
             item["stateReason"] = issue.get("stateReason")
         if item.get("stateReason") == "NOT_PLANNED":
-            LOGGER.info(
-                "release_changelog_issue_excluded number=%d "
-                "reason=NOT_PLANNED", number,
+            event(
+                "release_changelog_issue_excluded", number=number,
+                reason="NOT_PLANNED",
             )
             continue
         issue_url = item.get("url")
@@ -670,9 +672,9 @@ def build_release_changelog(repo: str, scope: list[int]) -> str:
             # link never enters the release notes.
             pr_state = pr_view(pr_number, "state", repo=repo).get("state")
             if pr_state != "MERGED":
-                LOGGER.info(
-                    "release_changelog_pr_link_dropped issue=%d pr=%d "
-                    "state=%s", number, pr_number, pr_state,
+                event(
+                    "release_changelog_pr_link_dropped", issue=number,
+                    pr=pr_number, state=pr_state,
                 )
                 continue
             links.append(f"[PR #{pr_number}]({pr_url})")
@@ -687,9 +689,9 @@ def build_release_changelog(repo: str, scope: list[int]) -> str:
             else:
                 # A ghosted/malformed author is display evidence, never a
                 # release judge: skip the contributor, keep the release.
-                LOGGER.info(
-                    "release_changelog_contributor_skipped issue=%d pr=%d",
-                    number, pr_number,
+                event(
+                    "release_changelog_contributor_skipped", issue=number,
+                    pr=pr_number,
                 )
         grouped[release_changelog_category(item)].append(
             (number, f"- {summary} ({'; '.join(links)})")
@@ -794,10 +796,10 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
     if open_deliveries:
         numbers = sorted(open_deliveries)
         detail = ", ".join(f"Issue #{number}" for number in numbers)
-        LOGGER.info(
-            "issue=%s release_waiting_deliveries open=%s waited=%ds limit=%ds",
-            release_number, numbers, int(delivery_waited_seconds),
-            int(delivery_wait_seconds),
+        event(
+            "release_waiting_deliveries", issue=release_number,
+            open=numbers, waited=f"{int(delivery_waited_seconds)}s",
+            limit=f"{int(delivery_wait_seconds)}s",
         )
         if on_delivery_wait is not None:
             on_delivery_wait(
@@ -855,11 +857,10 @@ def check_release_gates(repo: str, base_branch: str, release_commit: str,
         if not pending:
             break
         detail = ", ".join(pending)
-        LOGGER.info(
-            "issue=%s release_waiting_ci commit=%s pending=%s "
-            "waited=%ds limit=%ds",
-            release_number, release_commit, detail,
-            int(waited), int(ci_wait_seconds),
+        event(
+            "release_waiting_ci", issue=release_number, commit=release_commit,
+            pending=detail, waited=f"{int(waited)}s",
+            limit=f"{int(ci_wait_seconds)}s",
         )
         if on_wait is not None:
             on_wait(
@@ -1758,8 +1759,8 @@ def process_release(issue: dict, config: RunnerConfig,
         if existing_run_id is not None:
             run_id = existing_run_id
             set_run_id(run_id)
-            LOGGER.info(
-                "issue=%s release_resuming_run run_id=%s", number, run_id,
+            event(
+                "release_resuming_run", issue=number, run_id=run_id,
             )
     priority = issue_priority(issue)
     started = time.monotonic()
@@ -1812,18 +1813,16 @@ def process_release(issue: dict, config: RunnerConfig,
             # Issue #569: a legacy `test_command` line is accepted and
             # ignored with this single evidence line — it is never
             # executed; test acceptance is the CI-wait gate.
-            LOGGER.info(
-                "issue=%s release_test_command_ignored value=%r "
-                "(release tests are gated by GitHub Actions CI on the "
-                "release commit)", number, declaration["test_command"],
+            event(
+                "release_test_command_ignored",
+                value=declaration["test_command"],
             )
         base_branch = declaration["base_branch"]
-        run_info = (
+        event(
+            "release_task",
             f"base_branch={base_branch} run_id={run_id} "
-            f"priority={priority}"
-        )
-        LOGGER.info(
-            "issue=%s release_task %s", number, run_info,
+            f"priority={priority}",
+            issue=number,
         )
         apply_label_patch(
             number, repo=source_repo, event=EVENT_CLAIM,
@@ -1923,11 +1922,10 @@ def process_release(issue: dict, config: RunnerConfig,
                 )
             declaration["scope"] = derived_scope
             if open_milestone_evidence:
-                LOGGER.warning(
-                    "issue=%s release_milestone_open_items "
-                    "milestone=%s open_items=%s",
-                    number, declaration["scope_from_milestone"],
-                    "; ".join(open_milestone_evidence),
+                event(
+                    "release_milestone_open_items", level=logging.WARNING,
+                    issue=number, milestone=declaration["scope_from_milestone"],
+                    open_items="; ".join(open_milestone_evidence),
                 )
         scope_evidence = verify_release_scope(
             source_repo, declaration["scope"], config.repo_dir,
@@ -2014,9 +2012,9 @@ def process_release(issue: dict, config: RunnerConfig,
         existing_tag_commit = release_tag_commit(config.repo_dir, tag)
         if existing_tag_commit is not None:
             if existing_tag_commit == release_commit:
-                LOGGER.info(
-                    "issue=%s release_tag_exists tag=%s commit=%s",
-                    number, tag, existing_tag_commit,
+                event(
+                    "release_tag_exists", issue=number, tag=tag,
+                    commit=existing_tag_commit,
                 )
             elif tag_commit_is_ancestor_of_base(
                     existing_tag_commit, release_commit,
@@ -2027,10 +2025,9 @@ def process_release(issue: dict, config: RunnerConfig,
                 # the tag commit is the canonical release commit — recover it
                 # so the release resumes instead of deadlocking on the tag
                 # check.
-                LOGGER.info(
-                    "issue=%s release_base_advanced_past_tag tag=%s "
-                    "tag_commit=%s base_commit=%s",
-                    number, tag, existing_tag_commit, release_commit,
+                event(
+                    "release_base_advanced_past_tag", issue=number, tag=tag,
+                    tag_commit=existing_tag_commit, base_commit=release_commit,
                 )
                 release_commit = existing_tag_commit
             else:
@@ -2044,9 +2041,9 @@ def process_release(issue: dict, config: RunnerConfig,
             ensure_release_tag_pushed(
                 config.repo_dir, tag, release_commit,
             )
-            LOGGER.info(
-                "issue=%s release_tag_pushed tag=%s commit=%s",
-                number, tag, release_commit,
+            event(
+                "release_tag_pushed", issue=number, tag=tag,
+                commit=release_commit,
             )
         release_url = publish_release(
             repo=source_repo, tag=tag, version=tag,
@@ -2119,10 +2116,10 @@ def process_release(issue: dict, config: RunnerConfig,
         publish(
             action=lambda: publisher.finish(progress_body(progress())),
         )
-        LOGGER.info(
-            "issue=%s run_end release_success tag=%s url=%s "
-            "elapsed=%.1fs", number, tag, release_url,
-            time.monotonic() - started,
+        event(
+            "run_end", issue=number, result="release_success", tag=tag,
+            url=release_url,
+            elapsed=f"{time.monotonic() - started:.1f}s",
         )
         return release_url
     except ReleaseDeliveriesWaiting as waiting:
@@ -2148,9 +2145,9 @@ def process_release(issue: dict, config: RunnerConfig,
         publish(
             action=lambda: publisher.finish(progress_body(progress())),
         )
-        LOGGER.info(
-            "issue=%s release_waiting_deliveries_returned open=%s",
-            number, waiting.issue_numbers,
+        event(
+            "release_waiting_deliveries_returned", issue=number,
+            open=waiting.issue_numbers,
         )
         return ""
     except Exception as exc:

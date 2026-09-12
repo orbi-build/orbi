@@ -34,6 +34,8 @@ from orbi.progress import quote_value
 
 LOGGER = logging.getLogger("orbi.systemd_deploy")
 
+from orbi.journal import event
+
 SERVICE_UNIT = "orbi@.service"
 TIMER_UNIT = "orbi@.timer"
 UNIT_NAMES = (SERVICE_UNIT, TIMER_UNIT)
@@ -161,10 +163,10 @@ def reject_different_deployment(repo_dir: Path, installed_dir: Path,
         f"{existing} (this checkout uses {expected}); uninstall the existing "
         "deployment before installing this checkout"
     )
-    LOGGER.error(
-        "unit_conflict unit=%s installed_config=%s expected_config=%s "
-        "action=uninstall_existing_deployment",
-        service_unit, existing, expected,
+    event(
+        "unit_conflict", level=logging.ERROR, unit=service_unit,
+        installed_config=existing, expected_config=expected,
+        action="uninstall_existing_deployment",
     )
     raise UnitConflictError(message)
 
@@ -297,7 +299,7 @@ def check_unit_drift(repo_dir: Path,
     status = unit_status(repo_dir, installed_dir, unit_name)
     lines = drift_lines(status)
     if not lines:
-        LOGGER.info("unit_drift clean installed_dir=%s", installed_dir)
+        event("unit_drift", result="clean", installed_dir=installed_dir)
         return
     for line in lines:
         LOGGER.error(line)
@@ -349,13 +351,11 @@ def sync_drifted_units(repo_dir: Path,
         )
     report: list[dict] = []
     for entry_before, entry_after in zip(before, after):
-        LOGGER.info(
-            "unit_drift auto_synced unit=%s "
-            "before_sha256=%s after_sha256=%s commit=%s",
-            entry_after["unit"],
-            entry_before["installed_sha256"] or "-",
-            entry_after["installed_sha256"],
-            result["commit"],
+        event(
+            "unit_drift", result="auto_synced", unit=entry_after["unit"],
+            before_sha256=entry_before["installed_sha256"] or "-",
+            after_sha256=entry_after["installed_sha256"],
+            commit=result["commit"],
         )
         report.append({
             "unit": entry_after["unit"],
@@ -390,9 +390,9 @@ def migrate_legacy_units(installed_dir: Path, *, run_command) -> bool:
         legacy = installed_dir / name
         if legacy.is_file():
             legacy.unlink()
-    LOGGER.info(
-        "legacy_units_migrated installed_dir=%s removed=%s",
-        installed_dir, ",".join(LEGACY_UNIT_NAMES),
+    event(
+        "legacy_units_migrated", installed_dir=installed_dir,
+        removed=",".join(LEGACY_UNIT_NAMES),
     )
     return True
 
@@ -460,11 +460,10 @@ def install_units(repo_dir: Path, installed_dir: Path | None = None,
         }
         for name in names
     }
-    LOGGER.info(
-        "units_installed commit=%s installed_dir=%s units=%s "
-        "instances=%s",
-        commit, installed_dir, ",".join(names),
-        ",".join(instances[:max_concurrency]),
+    event(
+        "units_installed", commit=commit, installed_dir=installed_dir,
+        units=",".join(names),
+        instances=",".join(instances[:max_concurrency]),
     )
     return {
         "commit": commit,

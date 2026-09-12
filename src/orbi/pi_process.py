@@ -28,8 +28,12 @@ from orbi.pi_activity import (
     format_run_scene,
     session_state,
 )
-from orbi.progress import quote_value
-from orbi.journal import RunIdFilter, issue_context, set_active_pi
+from orbi.journal import (
+    RunIdFilter,
+    event,
+    issue_context,
+    set_active_pi,
+)
 from orbi.pi_recovery import (
     clk_tck,
     find_idle_descendants,
@@ -178,8 +182,9 @@ def _load_429_attempts(cwd: Path, run_id: str) -> int:
     except FileNotFoundError:
         return 0
     except (OSError, ValueError):
-        LOGGER.warning(
-            "pi_429_attempts_reset path=%s reason=unreadable", path,
+        event(
+            "pi_429_attempts_reset", level=logging.WARNING,
+            path=path, reason="unreadable",
         )
         return 0
     valid = (
@@ -190,9 +195,9 @@ def _load_429_attempts(cwd: Path, run_id: str) -> int:
         and state["attempts"] >= 0
     )
     if not valid:
-        LOGGER.warning(
-            "pi_429_attempts_reset path=%s reason=foreign_or_invalid",
-            path,
+        event(
+            "pi_429_attempts_reset", level=logging.WARNING,
+            path=path, reason="foreign_or_invalid",
         )
         return 0
     return state["attempts"]
@@ -211,8 +216,9 @@ def _record_429_attempts(cwd: Path, run_id: str, attempts: int) -> None:
             encoding="utf-8",
         )
     except OSError:
-        LOGGER.warning(
-            "pi_429_attempts_write_failed path=%s", path,
+        event(
+            "pi_429_attempts_write_failed", level=logging.WARNING,
+            path=path,
         )
 
 
@@ -347,14 +353,12 @@ def _log_activity(activity: dict, *, issue_ref: str,
     `RunIdFilter` (Issue #41) is the single run-id carrier on the
     high-frequency lines, so the id appears exactly once per line.
     """
-    LOGGER.info(
-        "activity issue=%s role=%s phase=%s action=%s result=%s "
-        "state=%s idle=%s",
-        issue_ref, role, activity["phase"],
-        quote_value(activity["action"] or "-"),
-        activity["result"] or "-",
-        state or "-",
-        format_duration(activity["stale_seconds"]),
+    event(
+        "activity", issue=issue_ref, role=role, phase=activity["phase"],
+        action=activity["action"] or "-",
+        result=activity["result"] or "-",
+        state=state or "-",
+        idle=format_duration(activity["stale_seconds"]),
     )
 
 
@@ -368,15 +372,14 @@ def _log_heartbeat(activity: dict, *, issue_ref: str,
     #40). No `run=` field (Issue #57): the `[run_id]` prefix is the
     single run-id carrier on the high-frequency lines.
     """
-    LOGGER.info(
-        "heartbeat issue=%s role=%s phase=%s state=%s elapsed=%s "
-        "idle=%s",
-        issue_ref, role, activity["phase"], state or "-",
-        format_duration(elapsed), format_duration(activity["stale_seconds"]),
+    event(
+        "heartbeat", issue=issue_ref, role=role, phase=activity["phase"],
+        state=state or "-", elapsed=format_duration(elapsed),
+        idle=format_duration(activity["stale_seconds"]),
     )
 
 
-def _log_startup(event: str, *, issue_ref: str, role: str, activity: dict,
+def _log_startup(kind: str, *, issue_ref: str, role: str, activity: dict,
                  elapsed: float, extra: str = "") -> None:
     """Log one startup phase line (Issue #176).
 
@@ -390,11 +393,11 @@ def _log_startup(event: str, *, issue_ref: str, role: str, activity: dict,
     (Issue #57): the `[run_id]` prefix is the single run-id carrier.
     Identifiers only — never a key, the prompt or model output.
     """
-    LOGGER.info(
-        "%s issue=%s role=%s provider=%s model=%s elapsed=%s%s",
-        event, issue_ref, role, activity.get("provider") or "-",
-        activity.get("model") or "-", format_duration(elapsed),
-        f" {extra}" if extra else "",
+    event(
+        kind, extra or None, issue=issue_ref, role=role,
+        provider=activity.get("provider") or "-",
+        model=activity.get("model") or "-",
+        elapsed=format_duration(elapsed),
     )
 
 
@@ -769,13 +772,12 @@ class IdleRecoveryTracker:
             if pending:
                 if not self._wait_logged:
                     for target, deadline in pending:
-                        LOGGER.warning(
-                            "pi_idle_wait run=%s issue=%s role=%s "
-                            "pid=%s cmdline=%s deadline=%s",
-                            self._run_id, self._issue_ref, self._role,
-                            target["pid"],
-                            quote_value(target["cmdline"] or "-"),
-                            time.strftime(
+                        event(
+                            "pi_idle_wait", level=logging.WARNING,
+                            run=self._run_id, issue=self._issue_ref,
+                            role=self._role, pid=target["pid"],
+                            cmdline=target["cmdline"] or "-",
+                            deadline=time.strftime(
                                 "%Y-%m-%dT%H:%M:%SZ",
                                 time.gmtime(deadline),
                             ),
@@ -828,14 +830,11 @@ class IdleRecoveryTracker:
                             target["pid"], signal.SIGTERM,
                             expected_start_epoch=target["start_epoch"],
                         )
-                        LOGGER.warning(
-                            "pi_idle_term run=%s issue=%s "
-                            "role=%s pid=%s cmdline=%s "
-                            "result=%s",
-                            self._run_id, self._issue_ref, self._role,
-                            target["pid"],
-                            quote_value(target["cmdline"] or "-"),
-                            result,
+                        event(
+                            "pi_idle_term", level=logging.WARNING,
+                            run=self._run_id, issue=self._issue_ref,
+                            role=self._role, pid=target["pid"],
+                            cmdline=target["cmdline"] or "-", result=result,
                         )
                     self._state = "term"
                     # The TERM step ran (the grace window does NOT
@@ -861,10 +860,10 @@ class IdleRecoveryTracker:
                 else:
                     # No hung tool found (Pi itself is stuck): the
                     # escalation continues, nothing is signaled.
-                    LOGGER.warning(
-                        "pi_idle_term run=%s issue=%s role=%s "
-                        "result=no_target",
-                        self._run_id, self._issue_ref, self._role,
+                    event(
+                        "pi_idle_term", level=logging.WARNING,
+                        run=self._run_id, issue=self._issue_ref,
+                        role=self._role, result="no_target",
                     )
                     # The pre-idle descendants are gone (a waited tool
                     # reached its own deadline): the wait state is
@@ -879,25 +878,23 @@ class IdleRecoveryTracker:
                 if not pid_alive(target["pid"]):
                     # The TERM worked between polls: record it,
                     # signal nothing.
-                    LOGGER.warning(
-                        "pi_idle_kill run=%s issue=%s role=%s "
-                        "pid=%s cmdline=%s result=already_dead",
-                        self._run_id, self._issue_ref, self._role,
-                        target["pid"],
-                        quote_value(target["cmdline"] or "-"),
+                    event(
+                        "pi_idle_kill", level=logging.WARNING,
+                        run=self._run_id, issue=self._issue_ref,
+                        role=self._role, pid=target["pid"],
+                        cmdline=target["cmdline"] or "-",
+                        result="already_dead",
                     )
                     continue
                 result = signal_pid(
                     target["pid"], signal.SIGKILL,
                     expected_start_epoch=target["start_epoch"],
                 )
-                LOGGER.warning(
-                    "pi_idle_kill run=%s issue=%s role=%s "
-                    "pid=%s cmdline=%s result=%s",
-                    self._run_id, self._issue_ref, self._role,
-                    target["pid"],
-                    quote_value(target["cmdline"] or "-"),
-                    result,
+                event(
+                    "pi_idle_kill", level=logging.WARNING,
+                    run=self._run_id, issue=self._issue_ref,
+                    role=self._role, pid=target["pid"],
+                    cmdline=target["cmdline"] or "-", result=result,
                 )
             self._state = "kill"
             self._step = 2
@@ -1053,12 +1050,12 @@ def stream_pi(
             # Persisted BEFORE the sleep: a kill during the wait keeps
             # every retry already spent (Issue #698).
             _record_429_attempts(cwd, run_id, attempt)
-            LOGGER.warning(
-                "pi_retry_429 run_id=%s issue=%s role=%s attempt=%d "
-                "next_retry_in=%ds limit=%d session=%s",
-                run_id, issue_ref, role, attempt, int(delay),
-                PI_RATE_LIMIT_RETRIES,
-                exc.activity.get("session_id") or "-",
+            event(
+                "pi_retry_429", level=logging.WARNING,
+                run_id=run_id, issue=issue_ref, role=role,
+                attempt=attempt, next_retry_in=f"{int(delay)}s",
+                limit=PI_RATE_LIMIT_RETRIES,
+                session=exc.activity.get("session_id") or "-",
             )
             time.sleep(delay)
 
@@ -1070,13 +1067,13 @@ def _log_run_failed(activity: dict, *, run_id: str, issue_ref: str,
     closure of `_stream_pi_once` and the exhausted-retries terminal
     failure (`_fail_rate_limited`, Issue #321) share it, so a new log
     field is still added in exactly one place."""
-    LOGGER.error(
-        "run_failed %s reason=%s",
+    event(
+        "run_failed",
         format_run_scene(
             activity, run_id=run_id, issue=issue_ref,
             role=role, branch=branch, worktree=str(cwd),
         ),
-        reason,
+        level=logging.ERROR, reason=reason,
     )
 
 
@@ -1105,9 +1102,9 @@ def _fail_rate_limited(
     try:
         pi_429_attempts_path(cwd).unlink(missing_ok=True)
     except OSError:
-        LOGGER.warning(
-            "pi_429_attempts_clear_failed path=%s",
-            pi_429_attempts_path(cwd),
+        event(
+            "pi_429_attempts_clear_failed", level=logging.WARNING,
+            path=pi_429_attempts_path(cwd),
         )
     raise RateLimitExhaustedError(
         f"provider rate limit retries exhausted: {attempts + 1} "
@@ -1171,8 +1168,8 @@ def _stream_pi_once(
         "process_spawned", issue_ref=issue_ref, role=role,
         activity=initial, elapsed=0.0, extra=f"pid={process.pid}",
     )
-    LOGGER.info(
-        "run_start %s",
+    event(
+        "run_start",
         format_run_scene(
             initial, run_id=run_id, issue=issue_ref,
             role=role, branch=branch, worktree=str(cwd),
@@ -1303,15 +1300,14 @@ def _stream_pi_once(
                 # (the next session event arrived: resumed). No `run=`
                 # field: the `[run_id]` prefix carries the run id
                 # (Issue #57).
-                LOGGER.info(
-                    "%s issue=%s role=%s phase=%s state=%s",
+                event(
                     "model_wait" if activity["model_wait"] else "resumed",
-                    issue_ref, role,
-                    activity["phase"],
-                    "model_wait" if activity["model_wait"] else "resumed",
+                    issue=issue_ref, role=role,
+                    phase=activity["phase"],
+                    state="model_wait" if activity["model_wait"]
+                    else "resumed",
                 )
-                last_model_wait = activity["model_wait"]
-                # Leaving model_wait (the next session event arrived):
+                last_model_wait = activity["model_wait"]                # Leaving model_wait (the next session event arrived):
                 # the swallow-probe window is over — reset it so a later
                 # model_wait starts a fresh window (Issue #233).
                 if not activity["model_wait"]:
@@ -1325,9 +1321,9 @@ def _stream_pi_once(
             if idle_warned and activity["changed"]:
                 # No `run=` field: the `[run_id]` prefix carries the run
                 # id (Issue #57).
-                LOGGER.info(
-                    "pi_resumed issue=%s role=%s phase=%s",
-                    issue_ref, role, activity["phase"],
+                event(
+                    "pi_resumed", issue=issue_ref, role=role,
+                    phase=activity["phase"],
                 )
                 idle_warned = False
                 # The stall is over: the whole recovery state resets
@@ -1340,11 +1336,10 @@ def _stream_pi_once(
             ):
                 # No `run=` field: the `[run_id]` prefix carries the run
                 # id (Issue #57).
-                LOGGER.warning(
-                    "pi_idle issue=%s role=%s phase=%s "
-                    "stale_seconds=%s",
-                    issue_ref, role, activity["phase"],
-                    format_duration(activity["stale_seconds"]),
+                event(
+                    "pi_idle", level=logging.WARNING,
+                    issue=issue_ref, role=role, phase=activity["phase"],
+                    stale_seconds=format_duration(activity["stale_seconds"]),
                 )
                 idle_warned = True
                 # The idle window starts now (Issue #94): only
@@ -1426,17 +1421,16 @@ def _stream_pi_once(
                         >= model_wait_probe_seconds
                     ):
                         alive = upstream_alive(process.pid)
-                        LOGGER.warning(
-                            "model_wait_swallowed issue=%s role=%s "
-                            "idle_seconds=%s probe_seconds=%s "
-                            "action=kill_pi session=%s run_id=%s "
-                            "upstream_alive=%s reason=swallowed_model_request",
-                            issue_ref, role,
-                            int(activity["stale_seconds"]),
-                            int(model_wait_probe_seconds),
-                            activity["session_id"] or "-",
-                            run_id,
-                            "true" if alive else "false",
+                        event(
+                            "model_wait_swallowed", level=logging.WARNING,
+                            issue=issue_ref, role=role,
+                            idle_seconds=int(activity["stale_seconds"]),
+                            probe_seconds=int(model_wait_probe_seconds),
+                            action="kill_pi",
+                            session=activity["session_id"] or "-",
+                            run_id=run_id,
+                            upstream_alive="true" if alive else "false",
+                            reason="swallowed_model_request",
                         )
                         process.kill()
                         model_wait_swallowed = True
@@ -1465,16 +1459,16 @@ def _stream_pi_once(
                 and activity["stale_seconds"] >= model_wait_dead_seconds
             ):
                 alive = upstream_alive(process.pid)
-                LOGGER.warning(
-                    "model_wait_dead issue=%s role=%s idle_seconds=%s "
-                    "threshold=%s action=kill_pi session=%s run_id=%s "
-                    "upstream_alive=%s reason=hung_model_request",
-                    issue_ref, role,
-                    int(activity["stale_seconds"]),
-                    int(model_wait_dead_seconds),
-                    activity["session_id"] or "-",
-                    run_id,
-                    "true" if alive else "false",
+                event(
+                    "model_wait_dead", level=logging.WARNING,
+                    issue=issue_ref, role=role,
+                    idle_seconds=int(activity["stale_seconds"]),
+                    threshold=int(model_wait_dead_seconds),
+                    action="kill_pi",
+                    session=activity["session_id"] or "-",
+                    run_id=run_id,
+                    upstream_alive="true" if alive else "false",
+                    reason="hung_model_request",
                 )
                 process.kill()
                 model_wait_dead = True
@@ -1493,10 +1487,10 @@ def _stream_pi_once(
         drained = _drain_stream(process.stderr, stderr_chunks,
                                 silence_s=_DRAIN_SILENCE_S) and drained
         if not drained:
-            LOGGER.warning(
-                "pi_drain_abandoned issue=%s role=%s "
-                "reason=pipe_write_end_outlives_pi",
-                issue_ref, role,
+            event(
+                "pi_drain_abandoned", level=logging.WARNING,
+                issue=issue_ref, role=role,
+                reason="pipe_write_end_outlives_pi",
             )
     stdout = _decode_chunks(stdout_chunks)
     stderr = _decode_chunks(stderr_chunks)

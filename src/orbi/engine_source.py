@@ -31,14 +31,12 @@ the only inputs.
 """
 from __future__ import annotations
 
-import logging
 import re
 from pathlib import Path
 from typing import Callable
 
+from orbi.journal import event
 from orbi.progress import quote_value
-
-LOGGER = logging.getLogger("orbi.engine_source")
 
 # One git fetch inside one sync; the unit's ExecStartPre timeout (90 s)
 # stays the outer bound and a timeout here is a fail-fast, never a retry.
@@ -353,9 +351,9 @@ def _sync_branch(deploy_home: Path, track: str, branch: str, *,
             f"fix=git -C {deploy_home} reset --hard "
             f"{resolved['resolved']}"
         )
-    LOGGER.info(
-        "engine_source_synced engine_source_track=%s ref=%s head=%s",
-        track, resolved["resolved"], head,
+    event(
+        "engine_source_synced", engine_source_track=track,
+        resolved=resolved["resolved"], head=head,
     )
     return {
         "track": track, "resolved": resolved["resolved"], "head": head,
@@ -425,11 +423,10 @@ def sync_engine_source(deploy_home: Path, track: str, *,
     head = _checkout_locked_head(
         deploy_home, track, resolved["expected"], run_command=run_command,
     )
-    fields = (
-        f"engine_source_synced engine_source_track={track} "
-        f"resolved={resolved['resolved']} head={head}"
+    event(
+        "engine_source_synced", engine_source_track=track,
+        resolved=resolved["resolved"], head=head,
     )
-    LOGGER.info("%s", fields)
     return {
         "track": track, "resolved": resolved["resolved"], "head": head,
     }
