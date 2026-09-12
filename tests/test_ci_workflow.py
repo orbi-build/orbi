@@ -389,6 +389,31 @@ def test_ci_workflow_runs_the_mintlify_docs_build_smoke():
     )
 
 
+def test_ci_workflow_pins_the_mintlify_cli_version():
+    """Issue #744: the Mintlify CLI install pins an exact version. An
+    unpinned `npm install -g mint` resolves the freshest manifest on
+    every run; when Mintlify publishes, the manifest's sub-package
+    versions race the registry replicas (2026-09-12: ETARGET on
+    `@mintlify/link-rot@3.0.1345`, step 9 red after the full test step,
+    every open PR red). A pin resolves a tree that propagated long ago
+    and also blocks a genuinely broken release; upgrading is a
+    deliberate one-line ci.yml change."""
+    commands = step_commands(steps_of(load_workflow()))
+    installs = [
+        command for command in commands
+        if re.search(r"npm (i|install)( -g)? mint\b", command)
+    ]
+    assert installs, (
+        "CI must install the official Mintlify CLI (mint), "
+        f"steps run: {commands!r}"
+    )
+    for command in installs:
+        assert re.search(r"\bmint@[0-9]+\.[0-9]+\.[0-9]+\b", command), (
+            "the Mintlify CLI install must pin an exact version "
+            f"(npm install -g mint@<semver>, Issue #744), got: {command!r}"
+        )
+
+
 def test_testing_documents_remote_ci():
     """Issue #241: the remote CI contract lives in docs/testing.mdx
     (the README homepage keeps only the summary plus the docs link):

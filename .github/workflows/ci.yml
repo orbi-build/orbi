@@ -122,8 +122,17 @@ jobs:
       # validates the docs/ build (docs.json config, pages, links) in
       # strict mode — non-zero exit on any warning or error. Same single
       # job: no second job, no cache, no matrix.
+      #
+      # Issue #744: the version is PINNED. An unpinned install resolves
+      # the freshest mint manifest on every run, and a fresh publish
+      # races the registry replicas (2026-09-12: ETARGET on
+      # @mintlify/link-rot@3.0.1345 — step 9 red after the full test
+      # step, every open PR red, unrelated to the code). The pin
+      # resolves a dependency tree that propagated long ago and blocks
+      # a genuinely broken release too. Upgrading is a deliberate
+      # one-line change: bump the version here.
       - name: Install the Mintlify CLI (docs build smoke)
-        run: npm install -g mint
+        run: npm install -g mint@4.2.890
 
       - name: Validate the Mintlify docs build (Issue #116)
         run: cd docs && mint validate
