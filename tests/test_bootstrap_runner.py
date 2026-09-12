@@ -493,9 +493,11 @@ def test_load_config_defaults_model_wait_dead_seconds_to_thirty_minutes(
     tmp_path,
 ):
     """Issue #228: omitted -> 1800 seconds (30 minutes): a slow local
-    model (Qwen 27B, ~17 tokens/s, llama-server request timeout 1200 s)
-    must not be killed merely because one complete assistant message
-    takes more than 10 minutes."""
+    model (27B Q4 GGUF, llama-server request timeout 1200 s — ~57
+    tokens/s at 12K context on an RX 7900 XTX with all layers on GPU,
+    well under 20 tokens/s on partial GPU offload or CPU-only) must
+    not be killed merely because one complete assistant message takes
+    more than 10 minutes."""
     config_path = tmp_path / "orbi.toml"
     config_path.write_text('source_repos = ["owner/repo"]\n', encoding="utf-8")
     config = runner.load_config(config_path)
@@ -9156,10 +9158,12 @@ def test_stream_pi_hung_model_request_killed_when_upstream_gone(
 
 def test_stream_pi_model_wait_dead_default_is_thirty_minutes():
     # Issue #228: the default dead-request threshold is 30 minutes
-    # (1800 s) — a slow local model (Qwen 27B, ~17 tokens/s,
-    # llama-server request timeout 1200 s) must survive a 10-minute
-    # complete-message silence under the default; a genuinely frozen
-    # request is still bounded and releases the slot.
+    # (1800 s) — a slow local model (27B Q4 GGUF, llama-server request
+    # timeout 1200 s: ~57 tokens/s at 12K context on an RX 7900 XTX
+    # with all layers on GPU, well under 20 tokens/s on partial GPU
+    # offload or CPU-only) must survive a 10-minute complete-message
+    # silence under the default; a genuinely frozen request is still
+    # bounded and releases the slot.
     assert runner.PI_MODEL_WAIT_DEAD_SECONDS == 1800.0
 
 
