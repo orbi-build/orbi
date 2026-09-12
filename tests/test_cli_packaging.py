@@ -175,6 +175,34 @@ def test_pyproject_discovers_the_src_package():
     )
 
 
+def test_example_config_ships_inside_the_package():
+    """Issue #163: the example config is packaged data (`package-data`
+    declares exactly the one shipped file) so a PyPI install can create
+    an orbi.toml without any checkout-adjacent file. Single source: the
+    checkout-root copy is gone with the move into `src/orbi/`."""
+    data = load_pyproject()
+    package_data = data["tool"]["setuptools"].get("package-data")
+    assert package_data is not None, "no package-data declared"
+    assert package_data.get("orbi") == ["example_config.toml"]
+    packaged = REPO_ROOT / "src" / "orbi" / "example_config.toml"
+    assert packaged.is_file(), f"missing packaged example: {packaged}"
+    assert not (REPO_ROOT / ".orbi.example.toml").exists(), (
+        "the checkout-root example copy must stay removed (single source)"
+    )
+
+
+def test_required_python_matches_the_check_gate():
+    """Issue #163: the runtime check gate (`orbi check`) and the PEP 621
+    `requires-python` floor are the same requirement — pip enforces it at
+    install time, the gate re-states it at runtime; the test pins the
+    two together so they cannot drift."""
+    from orbi import pilot_setup
+
+    assert load_pyproject()["project"]["requires-python"] == (
+        ">=" + ".".join(str(part) for part in pilot_setup.REQUIRED_PYTHON)
+    )
+
+
 def test_every_runtime_module_lives_in_the_package():
     """The installed console script imports the runtime package; every
     runtime module must exist under `src/orbi/` so the `uv
@@ -391,13 +419,13 @@ def test_readme_uses_the_cli_and_the_editable_uv_tool_install():
 
 def test_docs_document_the_full_cli_command_set():
     """Issue #241: the full CLI command set (add, status, session,
-    install-units, doctor) is documented in the docs pages — the
-    README homepage keeps the quickstart plus a one-sentence summary.
-    """
+    install-units, doctor, check, setup) is documented in the docs
+    pages — the README homepage keeps the quickstart plus a one-sentence
+    summary. `orbi check` is the Issue #163 prerequisite gate."""
     operations = (REPO_ROOT / "docs" / "operations.mdx").read_text(encoding="utf-8")
     for command in ("orbi add", "orbi status",
                     "orbi session", "orbi install-units",
-                    "orbi doctor", "orbi setup"):
+                    "orbi doctor", "orbi check", "orbi setup"):
         assert command in operations, (
             f"docs/operations.mdx must document the {command} command"
         )

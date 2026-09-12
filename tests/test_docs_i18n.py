@@ -21,7 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
 ZH_DIR = DOCS_DIR / "zh"
 README = REPO_ROOT / "README.md"
-EXAMPLE_CONFIG = REPO_ROOT / ".orbi.example.toml"
+EXAMPLE_CONFIG = REPO_ROOT / "src" / "orbi" / "example_config.toml"
 
 # One page per English topic page (same structure, same slugs).
 REQUIRED_ZH_PAGES = (

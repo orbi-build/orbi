@@ -54,6 +54,12 @@ orbi = "orbi.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# Issue #163: the example config ships INSIDE the wheel/sdist so a PyPI
+# install can create an orbi.toml without any checkout-adjacent file
+# (pilot_setup.ensure_config falls back to it).
+[tool.setuptools.package-data]
+orbi = ["example_config.toml"]
+
 # The contract test command (`python3 -m coverage run --branch -m pytest
 # tests/ -q`) runs WITHOUT installing the package: pytest puts `src/` on
 # sys.path so the suite imports `orbi.*` straight from the

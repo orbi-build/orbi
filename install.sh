@@ -45,7 +45,7 @@ fi
 cd "$ORBI_SRC"
 timeout 300 uv tool install --force --reinstall --editable .
 if [ ! -e orbi.toml ]; then
-  cp .orbi.example.toml orbi.toml
+  cp src/orbi/example_config.toml orbi.toml
 fi
 
 # The example intentionally uses placeholders. Collect the first task-pool

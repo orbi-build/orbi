@@ -879,9 +879,18 @@ def test_session_pretty_prints_summaries_instead_of_raw_jsonl(
     assert "sess.jsonl" not in out
 
 
-def test_main_requires_config_file(tmp_path):
-    with pytest.raises(FileNotFoundError):
-        orbi.main(["status", "--config", str(tmp_path / "missing.toml")])
+def test_main_requires_config_file(tmp_path, caplog):
+    """Issue #163: a missing config is the most common missing
+    prerequisite — every named subcommand reports it as the structured
+    `config_invalid reason=required path missing: ...` failure (exit 1),
+    never a bare FileNotFoundError traceback at the user."""
+    import logging
+
+    with caplog.at_level(logging.ERROR, logger="orbi.cli"):
+        assert orbi.main(
+            ["status", "--config", str(tmp_path / "missing.toml")],
+        ) == 1
+    assert "required path missing" in caplog.text
 
 
 def test_latest_task_worktree_returns_none_when_missing(tmp_path):
