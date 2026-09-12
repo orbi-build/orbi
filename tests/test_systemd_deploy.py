@@ -812,3 +812,75 @@ def test_unit_status_drifts_when_installed_differs_from_the_rendered_template(
     service = [e for e in status if e["unit"] == "orbi@.service"][0]
     assert service["drifted"] is True
     assert service["repo_sha256"] != service["installed_sha256"]
+
+
+# --- unmanaged units (Issue #747) ----------------------------------------------
+
+
+def test_unmanaged_units_is_empty_without_the_unit_dir(tmp_path):
+    # A missing user unit dir has nothing to scan; the missing managed
+    # units are already reported by unit_drift.
+    assert systemd_deploy.unmanaged_units(tmp_path / "absent") == []
+
+
+def test_unmanaged_units_is_empty_with_only_template_units(tmp_path):
+    repo = make_repo(tmp_path)
+    installed = make_installed(tmp_path, repo)
+    assert systemd_deploy.unmanaged_units(installed) == []
+
+
+def test_unmanaged_units_lists_the_hand_written_units(tmp_path):
+    """The #747 scene: hand-written units without the @ template form are
+    invisible to EVERY deployment's check_unit_drift (unit_names() only
+    ever produces orbi[<name>]@.service/.timer) — doctor must list them
+    with the ORBI_CONFIG each one points at."""
+    installed = tmp_path / "user"
+    installed.mkdir()
+    core_cfg = tmp_path / "zcode-core" / "orbi-zai.toml"
+    core_cfg.parent.mkdir()
+    (installed / "orbi-core.service").write_text(
+        f"[Service]\nEnvironment=ORBI_CONFIG={core_cfg}\n", encoding="utf-8",
+    )
+    (installed / "orbi-core-2.service").write_text(
+        f"[Service]\nEnvironment=ORBI_CONFIG=\"{core_cfg}\"\n",
+        encoding="utf-8",
+    )
+    # A timer carries no ORBI_CONFIG.
+    (installed / "orbi-core.timer").write_text(
+        "[Timer]\nOnCalendar=*-*-* *:00/5\n", encoding="utf-8",
+    )
+    # The pre-#149 legacy units are unmanaged too (their presence means
+    # the migration never ran on this machine).
+    (installed / "orbi.service").write_text("[Service]\n", encoding="utf-8")
+    (installed / "orbi.timer").write_text("[Timer]\n", encoding="utf-8")
+    entries = systemd_deploy.unmanaged_units(installed)
+    assert [entry["unit"] for entry in entries] == [
+        "orbi-core-2.service",
+        "orbi-core.service",
+        "orbi-core.timer",
+        "orbi.service",
+        "orbi.timer",
+    ]
+    assert entries[1]["config"] == core_cfg.resolve()
+    # The quoted ORBI_CONFIG form resolves the same way.
+    assert entries[0]["config"] == core_cfg.resolve()
+    # A timer/legacy service without ORBI_CONFIG carries None (doctor
+    # renders it as '-').
+    assert entries[2]["config"] is None
+    assert entries[4]["config"] is None
+
+
+def test_unmanaged_units_skips_template_form_non_orbi_and_dirs(tmp_path):
+    installed = tmp_path / "user"
+    installed.mkdir()
+    # Template and instance form files belong to a prefix deployment's
+    # managed set — never unmanaged.
+    for name in ("orbi@.service", "orbi@.timer",
+                 "orbi-core@.service", "orbi-core@1.timer"):
+        (installed / name).write_text("[Unit]\n", encoding="utf-8")
+    # Foreign units and non-unit files are not orbi units.
+    (installed / "nginx.service").write_text("[Service]\n", encoding="utf-8")
+    (installed / "orbi-notes.txt").write_text("notes", encoding="utf-8")
+    # A directory named like a unit is not a unit file.
+    (installed / "orbi-dir.service").mkdir()
+    assert systemd_deploy.unmanaged_units(installed) == []

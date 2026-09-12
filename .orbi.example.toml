@@ -121,6 +121,13 @@ engine_source_track = "release"
 # Runner exits, however it exits. A Runner that cannot take a slot logs
 # capacity_full and exits without claiming an Issue.
 max_concurrency = 1
+# Per-deployment systemd unit name (Issue #747): the multi-deployment
+# runbook field. "core" installs orbi-core@1/2.timer + matching
+# services for THIS config; unset keeps the shared orbi@1/2 names —
+# only ONE deployment per machine may leave it unset. NEVER hand-write
+# unit files: units outside every deployment's managed set are listed
+# by `orbi doctor` under unmanaged_units.
+# unit_name = "core"
 # Optional Pi model selection (Issue #119): passed to EVERY Pi session
 # (implement and review) as --provider/--model/--thinking. Omit a key to
 # keep Pi's own default for that setting; values are passed verbatim and

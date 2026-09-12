@@ -229,6 +229,39 @@ walkthrough、timers）——不变：`orbi setup` 从 `deploy_home` 读标签�
 CLI 安装和 unit 模板，检查交付 checkout `repo_dir`（见[一次性
 setup](/zh/setup)）。
 
+### 一台机器跑多个部署（Issue #747）
+
+一台机器可以承载多个相互独立的 Orbi 部署——各自的 checkout、各自的
+`orbi.toml`、各自的 timer 组。每个部署的 config 必须声明一个互不相同的
+`unit_name`：
+
+```toml
+# <checkout>/orbi.toml —— 名为 "core" 的部署
+unit_name = "core"
+```
+
+此后 `orbi setup` / `orbi install-units` 管理的正是这个部署的单元
+（`orbi-core@1/2.service` 和 `orbi-core@1/2.timer`）；第二个部署配
+`unit_name = "website"`，在同一台机器上管理 `orbi-website@1/2.*`。
+一台机器上只允许一个部署不设 `unit_name`——它独占共享的 `orbi@1/2`
+命名。
+
+不要手工编写 systemd unit 文件。每个 tick 的漂移自愈只比对当前
+`unit_name` 对应的已装模板单元，手工写的 `orbi-core.service` 对
+所有部署都不可见：模板更新永远到不了它，也没有任何地方报这个缺口。
+`orbi doctor` 让这种绕过可见——它把这些文件列在 `unmanaged_units`
+下，并带出各自指向的 `ORBI_CONFIG`：
+
+```text
+unmanaged_units: 2
+  orbi-core.service (ORBI_CONFIG=/path/to/deployments/core/orbi.toml)
+  orbi-core.timer (ORBI_CONFIG=-)
+  fix: set unit_name in each deployment config and run `orbi install-units`
+```
+
+修复就是 fix 行：给部署配好 `unit_name`，运行 `orbi install-units`
+让受管理的 `@` 单元接管，然后移除手写的单元文件。
+
 ## 4. 配置模型 provider
 
 Runner 从不启动或管理模型进程——它启动 Pi，而 Pi 需要一个能真正
