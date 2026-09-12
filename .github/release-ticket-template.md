@@ -43,7 +43,7 @@ vX.Y.Z 收哪些票、为什么这样切版。
   - #124
 ```
 
-- 非 Python 项目必须显式 `version_file`（缺省按 `pyproject.toml` 改；#246 因漏写卡住）：
+- 非 Python 项目必须显式 `version_file`（缺省按 `pyproject.toml` 改；orbi-build/orbi-cloud#246 因漏写卡住）：
 
 ```markdown
 ## Release

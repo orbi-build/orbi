@@ -3,8 +3,8 @@
 `parse_release_declaration` (src/orbi/release.py) is a strict, fail-fast
 machine-readable contract, but before #749 it lived only in the parser
 docstring and in past release tickets — every new release ticket was
-copied from a historical one, and #246 stalled on a missing
-`version_file`. The two template files below are the contract's
+copied from a historical one, and orbi-build/orbi-cloud#246 stalled on
+a missing `version_file`. The two template files below are the contract's
 canonical home, and these tests feed the real template FILES through
 the real parser (never a re-typed copy) so the templates and the parser
 cannot drift.
@@ -79,7 +79,7 @@ def test_templates_parse_the_three_declared_scope_forms():
         assert declaration["version_file"] == "pyproject.toml"
         # Forms 2 and 3 — the alternates the template demonstrates in
         # ```markdown fences (hand-listed scope; version_file for
-        # non-Python projects, the #246 stall), extracted from the file
+        # non-Python projects, the orbi-cloud #246 stall), extracted from the file
         # itself and fed through the same strict parser.
         alternates = re.findall(
             r"```markdown\n(## Release\n.*?)```", text, re.DOTALL,
