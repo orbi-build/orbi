@@ -29,7 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
 DOCS_CONFIG = DOCS_DIR / "docs.json"
 README = REPO_ROOT / "README.md"
-EXAMPLE_CONFIG = REPO_ROOT / ".orbi.example.toml"
+EXAMPLE_CONFIG = REPO_ROOT / "src" / "orbi" / "example_config.toml"
 
 # The pages the v0.1.0 docs must ship (one page per topic).
 REQUIRED_PAGES = (
@@ -344,7 +344,7 @@ def test_docs_getting_started_documents_the_external_single_repo_mode():
     )
     example = EXAMPLE_CONFIG.read_text(encoding="utf-8")
     assert "deploy_home" in example, (
-        ".orbi.example.toml must carry the deploy_home field"
+        "the packaged example_config.toml must carry the deploy_home field"
     )
     assert "<repo_dir>/.worktrees/" in text, (
         "task worktrees must be documented as landing in the delivery "

@@ -102,6 +102,31 @@ jobs:
               ;;
           esac
 
+      # Issue #163: the PyPI artifact shape is the WHEEL — every
+      # PR/push also builds the sdist+wheel and smoke-installs the
+      # wheel into a clean venv, from a neutral cwd (never the source
+      # checkout): the entry works (--version/--help) and the import
+      # source is site-packages. The tag-triggered publish.yml owns the
+      # full release pipeline on top of this.
+      - name: Build the package and smoke the wheel in a clean venv (Issue #163)
+        run: |
+          python3 -m pip install --quiet build
+          python3 -m build
+          python3 -m venv /tmp/orbi-wheel-ci
+          /tmp/orbi-wheel-ci/bin/pip install --quiet dist/*.whl
+          /tmp/orbi-wheel-ci/bin/orbi --version
+          /tmp/orbi-wheel-ci/bin/orbi --help > /dev/null
+          source_path=$(cd / && /tmp/orbi-wheel-ci/bin/python -c "import orbi; print(orbi.__file__)")
+          case "$source_path" in
+            /tmp/orbi-wheel-ci/lib/python*/site-packages/orbi/*)
+              echo "wheel import ok: $source_path"
+              ;;
+            *)
+              echo "clean venv imports outside site-packages: $source_path" >&2
+              exit 1
+              ;;
+          esac
+
       - name: Run the full test suite with branch coverage (contract)
         run: python3 -m coverage run --branch -m pytest tests/ -q
 

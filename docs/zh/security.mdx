@@ -56,8 +56,8 @@ Orbi 在你的机器上运行一个带 GitHub token 的自主 coding agent。
 
 Orbi 保留从不出机的本地状态：
 
-- **配置**（`orbi.toml`）：本地、gitignored。仓库只提交
-  example（`.orbi.example.toml`）。
+- **配置**（`orbi.toml`）：本地、gitignored。仓库只提交打包进 CLI
+  的 example（`src/orbi/example_config.toml`）。
 - **Run 产物**：plan、test log、session JSONL 和 review 证据在任务
   worktree（`.worktrees/...`，gitignored）。
 - **Slots**：`<repo_dir>/.orbi/slots/slot-N` 锁文件（通过

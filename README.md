@@ -22,6 +22,8 @@ git clone https://github.com/orbi-build/orbi.git && cd orbi
 uv tool install --force --reinstall --editable --python /usr/bin/python3 .
 ```
 
+Only want the released CLI, no checkout? `python3 -m pip install orbi` (the editable install stays the official deployment — [Getting started](docs/getting-started.mdx)).
+
 ### Ready check (before setup)
 
 - `uv`: `uv --version`; Pi and its provider: `pi --version`, then `pi --print "reply with the single word: ok"`
@@ -31,7 +33,7 @@ uv tool install --force --reinstall --editable --python /usr/bin/python3 .
 Choose the mode in [Getting started](docs/getting-started.mdx): bootstrap uses this checkout as `repo_dir`; [External single-repo mode](docs/getting-started.mdx#external-single-repo-mode-deploy_home) uses it as `deploy_home` and a foreign repository as `repo_dir`.
 
 ```bash
-cp .orbi.example.toml orbi.toml
+cp src/orbi/example_config.toml orbi.toml
 # 4. run one-time setup (checks prior gh auth, labels, systemd units, and checkout; idempotent)
 orbi setup --config orbi.toml
 # 5. manually run one tick (for initial verification; the timer schedules normal runs)

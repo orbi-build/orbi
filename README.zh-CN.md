@@ -32,6 +32,10 @@ git clone https://github.com/orbi-build/orbi.git && cd orbi
 uv tool install --force --reinstall --editable --python /usr/bin/python3 .
 ```
 
+只想要已发布的 CLI、不 clone 源码？`python3 -m pip install orbi`
+（PyPI 版本化发布包；上面的 editable 安装仍是官方部署方式——两者区别见
+[快速开始](docs/zh/getting-started.mdx)）。
+
 ### 就绪检查（setup 之前）
 
 - `uv`：`uv --version`；Pi 和其 provider：`pi --version`，然后运行 `pi --print "reply with the single word: ok"`
@@ -41,7 +45,7 @@ uv tool install --force --reinstall --editable --python /usr/bin/python3 .
 按 [Getting started](docs/zh/getting-started.mdx) 选择模式：自举模式使用本 checkout 作为 `repo_dir`；[External single-repo mode](docs/zh/getting-started.mdx#external-single-repo-mode-deploy_home) 使用本 checkout 作为 `deploy_home`，外部仓库作为 `repo_dir`。
 
 ```bash
-cp .orbi.example.toml orbi.toml
+cp src/orbi/example_config.toml orbi.toml
 # 4. 一次性 setup（检查既有 gh auth、labels、systemd units、checkout；幂等）
 orbi setup --config orbi.toml
 # 5. 手动跑一个 tick（首次验证；日常由 timer 调度）

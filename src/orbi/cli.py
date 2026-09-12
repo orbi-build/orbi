@@ -676,6 +676,13 @@ def main(argv: list[str] | None = None) -> int:
         "--installed-dir", type=Path, default=None,
         help="user unit directory to check (default: the standard dir)",
     )
+    subparsers.add_parser(
+        "check", parents=[common],
+        help="read-only prerequisite gate: python, commands, systemd "
+             "user bus, gh auth, pi, config, repo access, transport, "
+             "model provider — fails fast with reason, fix and "
+             "official docs link (Issue #163)",
+    )
     setup_parser = subparsers.add_parser(
         "setup", parents=[common],
         help="one-time, idempotent initialization: gh auth + repo "
@@ -706,6 +713,21 @@ def main(argv: list[str] | None = None) -> int:
         # `python3 -m orbi.runner` entry has.
         return runner.main(["--config", str(args.config)])
 
+    if args.command == "check":
+        # Issue #163: the prerequisite gate owns its config handling — a
+        # missing or invalid orbi.toml is a `config` finding with the
+        # repair action, never a traceback. Read-only: no config is
+        # created here (`orbi setup` owns that).
+        try:
+            lines = pilot_setup.run_checks(
+                args.config, run_command=run_command,
+            )
+        except pilot_setup.CheckError as exc:
+            print(pilot_setup.format_check_failure(exc), file=sys.stderr)
+            return 1
+        print("\n".join(lines))
+        return 0
+
     try:
         if args.command == "setup":
             pilot_setup.ensure_config(args.config)
@@ -732,6 +754,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"setup_failed reason={exc}", file=sys.stderr)
         else:
             LOGGER.error("config_invalid reason=%s", exc)
+        return 1
+    except FileNotFoundError as exc:
+        # Issue #163: a PyPI first run (`orbi setup` in a fresh dir with
+        # the just-created example config) fails validation on a missing
+        # deployment path (prompts/, deploy_home, ...); the user gets the
+        # structured failure line, never a traceback.
+        if args.command == "setup":
+            print(
+                f"setup_failed reason=required path missing: {exc}",
+                file=sys.stderr,
+            )
+        else:
+            LOGGER.error("config_invalid reason=required path missing: %s", exc)
         return 1
     if args.command == "add":
         repo = args.repo or config["source_repos"][0]

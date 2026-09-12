@@ -1,0 +1,232 @@
+# PyPI publish pipeline (Issue #163).
+#
+# The release contract stays exactly the ai-release state machine: the
+# release Issue merges, the release machine bumps pyproject `version`,
+# tags `vX.Y.Z` and pushes the tag — THIS workflow reacts to the tag and
+# owns the packaging side of the release:
+#
+#   build      tag==pyproject version -> build sdist+wheel -> verify the
+#              wheel carries every runtime module + the shipped example
+#              config and NO machine artifacts/secrets -> install the
+#              WHEEL in a clean venv (never the source checkout) and
+#              smoke --version/--help/import-source -> smoke the
+#              prerequisite gate and `orbi setup` failure paths from the
+#              wheel
+#   publish    upload dist/ to PyPI via Trusted Publishing
+#              (short-lived OIDC token — no API token secret lives in
+#              this repository). ONE-TIME HUMAN SETUP: configure the
+#              "orbi" project's Trusted Publisher on PyPI for
+#              orbi-build/orbi + publish.yml (pending-publisher on the
+#              first release). PyPI files are immutable: a re-run after
+#              a successful upload fails on the duplicate file — the
+#              fix is a new version and a new tag, never a re-upload.
+#   verify-pypi  install `orbi==X.Y.Z` FROM PYPI in a clean venv
+#              (bounded retry while the upload propagates) and verify
+#              `orbi --version` matches the tag: version == tag ==
+#              wheel == PyPI file.
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the tagged release commit
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.14 (production minor version)
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install the build tool
+        run: python3 -m pip install --upgrade pip build
+
+      # The consistency chain starts here: the pushed tag and the PEP
+      # 621 version must be the same release, or nothing publishes.
+      - name: Verify the tag matches the packaging version
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "$version" ]; then
+            echo "version mismatch: tag ${GITHUB_REF_NAME} vs pyproject ${version}" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_ENV"
+
+      - name: Build the sdist and the wheel
+        run: python3 -m build
+
+      # The release package must be complete (every runtime module, the
+      # shipped example config, in BOTH artifacts) and machine-clean
+      # (no build junk, no run artifacts, no real config, no secrets,
+      # no user directories).
+      - name: Verify the artifact contents (complete, no secrets or artifacts)
+        run: |
+          python3 - <<'PY'
+          import glob
+          import re
+          import tarfile
+          import zipfile
+          from pathlib import Path
+
+          wheels = glob.glob("dist/*.whl")
+          sdists = glob.glob("dist/*.tar.gz")
+          assert len(wheels) == 1 and len(sdists) == 1, f"dist/: {glob.glob('dist/*')}"
+          wheel, sdist = wheels[0], sdists[0]
+          version = Path("pyproject.toml").read_text(encoding="utf-8")
+          import tomllib
+          version = tomllib.loads(version)["project"]["version"]
+          assert f"orbi-{version}-py3-none-any.whl" == Path(wheel).name, wheel
+          assert f"orbi-{version}.tar.gz" == Path(sdist).name, sdist
+
+          names = zipfile.ZipFile(wheel).namelist()
+          for path in sorted(Path("src/orbi").rglob("*.py")):
+              member = path.relative_to("src").as_posix()
+              assert member in names, f"runtime module missing from the wheel: {member}"
+          assert "orbi/example_config.toml" in names, (
+              "the shipped example config is missing from the wheel"
+          )
+          forbidden_members = (
+              ".pi-session/", ".worktrees/", "orbi.toml", ".coverage",
+              "dist/", ".orbi/",
+          )
+          for name in names:
+              assert not name.endswith(".pyc"), f"bytecode in the wheel: {name}"
+              for needle in forbidden_members:
+                  assert needle not in name, f"artifact in the wheel: {name}"
+          # Real-secret shapes only: the bare `ghp_` prefix is a
+          # legitimate string in pi_activity.py (the session-log
+          # redaction pattern), so the scan matches full token shapes.
+          secret_patterns = (
+              re.compile(r"gh[pousr]_[A-Za-z0-9]{16,}"),
+              re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
+              re.compile(r"(?m)^/home/[a-z]"),
+          )
+          zf = zipfile.ZipFile(wheel)
+          for name in names:
+              data = zf.read(name)
+              for pattern in secret_patterns:
+                  assert not pattern.search(data.decode("utf-8", "replace")), (
+                      f"{name} matches secret pattern {pattern.pattern!r}"
+                  )
+          with tarfile.open(sdist) as tf:
+              snames = tf.getnames()
+          for member in ("pyproject.toml", "src/orbi/example_config.toml"):
+              assert f"orbi-{version}/{member}" in snames, (
+                  f"{member} missing from the sdist (a wheel built from "
+                  "this sdist would lose it)"
+              )
+          print(f"artifacts ok: {wheel} ({len(names)} files), {sdist}")
+          PY
+
+      # The PyPI artifact shape is the WHEEL: install it into a clean
+      # venv and prove the CLI runs WITHOUT the source checkout (the
+      # probe runs from a neutral cwd).
+      - name: Smoke the wheel in a clean venv (install, --version, --help, import source)
+        run: |
+          python3 -m venv /tmp/orbi-wheel-smoke
+          /tmp/orbi-wheel-smoke/bin/pip install --quiet dist/*.whl
+          test "$(/tmp/orbi-wheel-smoke/bin/orbi --version)" = "orbi $version"
+          /tmp/orbi-wheel-smoke/bin/orbi --help > /dev/null
+          source_path=$(cd / && /tmp/orbi-wheel-smoke/bin/python -c "import orbi; print(orbi.__file__)")
+          case "$source_path" in
+            /tmp/orbi-wheel-smoke/lib/python*/site-packages/orbi/*)
+              echo "wheel import ok: $source_path"
+              ;;
+            *)
+              echo "clean venv imports outside site-packages: $source_path" >&2
+              exit 1
+              ;;
+          esac
+
+      # The missing-prerequisite path the Issue pins: from the WHEEL, in
+      # an empty directory, `orbi check` fails with the one structured
+      # line (never a traceback) and `orbi setup` creates orbi.toml FROM
+      # THE SHIPPED EXAMPLE and then fails fast on the missing
+      # deployment layout. Which gate fails first depends on the runner
+      # (commands / user bus / gh auth): every allowed first failure is
+      # a structured line.
+      - name: Smoke the prerequisite gate and setup failure paths
+        run: |
+          mkdir -p /tmp/orbi-fail-smoke
+          cd /tmp/orbi-fail-smoke
+          export PATH="/tmp/orbi-wheel-smoke/bin:$PATH"
+          set +e
+          timeout 60 orbi check --config ./orbi.toml > check.out 2>&1
+          check_rc=$?
+          timeout 60 orbi setup --config ./setup-orbi.toml > setup.out 2> setup.err
+          setup_rc=$?
+          set -e
+          cat check.out setup.err
+          test "$check_rc" -ne 0 || { echo "orbi check must fail without a config" >&2; exit 1; }
+          grep -qE "^check_failed check=(commands|systemd_user_bus|gh_auth|pi|config) " check.out || {
+            echo "no structured check_failed line" >&2; exit 1; }
+          if grep -q "Traceback" check.out; then echo "check leaked a traceback" >&2; exit 1; fi
+          test -f setup-orbi.toml || { echo "orbi setup did not create the config from the shipped example" >&2; exit 1; }
+          test "$setup_rc" -ne 0 || { echo "orbi setup must fail on the empty deployment layout" >&2; exit 1; }
+          grep -q "^setup_failed reason=" setup.err || { echo "no structured setup_failed line" >&2; exit 1; }
+          if grep -q "Traceback" setup.err; then echo "setup leaked a traceback" >&2; exit 1; fi
+          echo "failure paths ok"
+
+      - name: Upload the release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      # Trusted Publishing: the OIDC token replaces a PyPI API token.
+      id-token: write
+    steps:
+      - name: Download the release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      # Exact pin (the ci.yml mint pin rationale applies: a moving tag
+      # races the registry). Upgrading is a deliberate one-line change.
+      - name: Publish to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@v1.14.2
+
+  verify-pypi:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python 3.14 (production minor version)
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      # The last consistency link: the published PyPI file installs and
+      # its CLI reports the tagged version. The bounded retry rides out
+      # the upload propagation, then fails fast for real.
+      - name: Install the published release from PyPI and verify the version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python3 -m venv /tmp/orbi-pypi-smoke
+          timeout 300 bash -c '
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              if "$1" install --quiet "orbi==$2"; then
+                echo "installed orbi==$2 from PyPI"
+                exit 0
+              fi
+              echo "attempt $attempt: orbi==$2 not on PyPI yet"
+              sleep 20
+            done
+            echo "orbi==$2 did not appear on PyPI within the retry budget" >&2
+            exit 1
+          ' _ /tmp/orbi-pypi-smoke/bin/pip "$version"
+          test "$(/tmp/orbi-pypi-smoke/bin/orbi --version)" = "orbi $version"
+          echo "PyPI verification ok: orbi $version"
