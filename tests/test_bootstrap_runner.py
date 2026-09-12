@@ -1604,6 +1604,9 @@ def test_pick_issue_fails_open_when_blocked_by_query_fails(
         runner, "run_command",
         lambda command, **kwargs: (_ for _ in ()).throw(error),
     )
+    # Issue #738: the read now retries the transient stderr; skip the
+    # real backoff sleeps like the git/gh retry tests do.
+    monkeypatch.setattr(runner.time, "sleep", lambda _: None)
     with caplog.at_level("INFO"):
         assert runner.pick_issue("xqliu/orbi") is None
     assert "blocked_by_check_failed" in caplog.text
@@ -1754,6 +1757,9 @@ def test_pick_issue_fails_open_when_milestone_query_fails(
         runner, "run_command",
         lambda command, **kwargs: (_ for _ in ()).throw(error),
     )
+    # Issue #738: the read now retries the transient stderr; skip the
+    # real backoff sleeps like the git/gh retry tests do.
+    monkeypatch.setattr(runner.time, "sleep", lambda _: None)
     with caplog.at_level("INFO"):
         assert runner.pick_issue(
             "xqliu/orbi", active_milestone="v0.2.0",
