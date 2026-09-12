@@ -217,7 +217,11 @@ def install_fake_gh(monkeypatch, comments: list[str],
                 if command[2] == "view":
                     # The pre-claim in-progress recheck reads the Issue
                     # directly (Issue #658): answer from the live label
-                    # truth, not from any index.
+                    # truth, not from any index. The pre-PR closeout
+                    # reads the state (Issue #746): open in these
+                    # scenes.
+                    if command[-1] == "state":
+                        return json.dumps({"state": "OPEN"})
                     return json.dumps({"labels": [
                         {"name": label}
                         for label in labels.get(int(command[3]), [])

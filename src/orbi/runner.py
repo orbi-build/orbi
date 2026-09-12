@@ -2237,6 +2237,90 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
     return evidence
 
 
+# Issue #746: the hidden marker of the orphan-PR report — the sweep's
+# idempotency key (one report per PR, never one per tick).
+ORPHAN_PR_MARK = "<!-- orbi:orphan-pr -->"
+
+_ORPHAN_PR_BRANCH_RE = re.compile(r"orbi/.+-issue-(\d+)\Z")
+
+
+def orphan_pr_branch_issue(head_ref: object) -> int | None:
+    """The source Issue number of a stable delivery branch, or None.
+
+    `task_branch` names every Runner delivery branch
+    `orbi/<source_repo slug>-issue-<N>`; any other head (a human's or an
+    external contributor's branch) is never the Runner's business.
+    """
+    if not isinstance(head_ref, str):
+        return None
+    match = _ORPHAN_PR_BRANCH_RE.fullmatch(head_ref)
+    return int(match.group(1)) if match else None
+
+
+def reconcile_orphan_prs(repo: str, run_id: str) -> list[str]:
+    """Report open delivery PRs whose source Issue is closed (Issue #746).
+
+    A human may close an Issue while its delivery is in flight, and the
+    close can land before OR after the PR is opened — every resumable
+    scan reads `state=open` Issues only, so without this sweep nothing
+    would ever look at the resulting PR again. Tick-level and fail-open
+    like the Epic/Milestone reconciliations: each orphan PR gets ONE
+    idempotent report comment (the `ORPHAN_PR_MARK` marker); the
+    merge/close decision stays with the human — the Runner never
+    auto-merges and never auto-closes across a human's close decision.
+    """
+    raw = run_command([
+        "gh", "pr", "list", "--repo", repo, "--state", "open",
+        "--json", "number,headRefName", "--limit", "200",
+    ])
+    prs = json.loads(raw)
+    if not isinstance(prs, list):
+        raise ValueError("pr list must return a JSON array")
+    evidence: list[str] = []
+    for pr in prs:
+        if not isinstance(pr, dict):
+            continue
+        pr_number = pr.get("number")
+        issue_number = orphan_pr_branch_issue(pr.get("headRefName"))
+        if not isinstance(pr_number, int) or issue_number is None:
+            continue
+        raw = run_command([
+            "gh", "issue", "view", str(issue_number), "--repo", repo,
+            "--json", "state",
+        ])
+        details = json.loads(raw)
+        state = details.get("state") if isinstance(details, dict) else None
+        if state == "OPEN":
+            continue
+        if state != "CLOSED":
+            raise ValueError("issue view state must be OPEN or CLOSED")
+        if any(
+            isinstance(comment, dict)
+            and ORPHAN_PR_MARK in str(comment.get("body", ""))
+            for comment in pr_comments(pr_number, repo=repo)
+        ):
+            continue
+        comment_pr(
+            pr_number, repo=repo,
+            body=(
+                f"{ORPHAN_PR_MARK}\n{run_marker(run_id)}\n"
+                f"Orbi orphan PR: the source Issue #{issue_number} is "
+                f"closed while this PR is still open, so it will never "
+                f"be merged automatically. Human decision: merge this "
+                f"PR to keep the work, or close it.\n"
+                f"run_id={run_id}"
+            ),
+        )
+        LOGGER.info(
+            "orphan_pr_reported pr=%s issue=%s repo=%s",
+            pr_number, issue_number, repo,
+        )
+        evidence.append(
+            f"PR #{pr_number} reported: source Issue #{issue_number} is closed"
+        )
+    return evidence
+
+
 def _pick_from_scan(
     issues: list[dict], repo: str, allow_release: bool = False,
     active_milestone: str | None = None,
@@ -2522,6 +2606,26 @@ def issue_comments(number: int, *, repo: str) -> list[dict]:
     comments = data.get("comments")
     if not isinstance(comments, list):
         raise ValueError("issue comments must be a JSON array")
+    return comments
+
+
+def pr_comments(number: int, *, repo: str) -> list[dict]:
+    """Return the PR's comment history (oldest first) from GitHub.
+
+    The PR-side twin of `issue_comments`: a PR's comments are read
+    through `gh pr view --json comments` (`gh issue view` rejects PR
+    numbers), the same top-level object with a `comments` array.
+    """
+    raw = run_command([
+        "gh", "pr", "view", str(number), "--repo", repo,
+        "--json", "comments",
+    ])
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("pr view must be a JSON object")
+    comments = data.get("comments")
+    if not isinstance(comments, list):
+        raise ValueError("pr comments must be a JSON array")
     return comments
 
 
@@ -3364,6 +3468,13 @@ def pick_next_delivery(
             reconcile_release_milestones(repo, tick_run_id)
         except Exception:
             LOGGER.exception("milestone_reconcile_failed repo=%s", repo)
+        # Orphan-PR reconciliation (Issue #746) follows the same bypass
+        # pattern: a broken GitHub query must never prevent the ordinary
+        # delivery scans.
+        try:
+            reconcile_orphan_prs(repo, tick_run_id)
+        except Exception:
+            LOGGER.exception("orphan_pr_reconcile_failed repo=%s", repo)
         selected = pick_resumable_delivery(
             repo, slot_dir, max_concurrency,
         )
@@ -4560,7 +4671,8 @@ def _agent_delivery_boundary(worktree: Path) -> tuple[str, str]:
 
 def deliver_pr(worktree: Path, branch: str, base_branch: str,
                base_sha: str, run_id: str, *, issue: int,
-               issue_title: str, repo_dir: Path) -> str:
+               issue_title: str, repo_dir: Path,
+               source_repo: str) -> str | None:
     """The Runner completes the deterministic delivery closeout.
 
     Issue #186: the Agent stops at the committed delivery (code, tests,
@@ -4583,6 +4695,15 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
        with the run marker and `Fixes #<issue>` in the body when absent,
        verified by `verify_pr` with `require_latest_base=False` (this
        function just fetched and merged the base itself).
+
+    Issue #746: a human may close the Issue while the delivery is in
+    flight (labels/state only affect the next scan, so the in-flight
+    session correctly keeps running). The Issue state is read directly
+    right before the PR creation; a CLOSED Issue returns None — the
+    pushed branch keeps the work, the closed Issue gets one explanatory
+    comment, and no PR is opened (nothing dangles behind a closed
+    Issue). Returns the PR URL, or None when the delivery stopped
+    because the Issue was closed.
     """
     current_branch = run_command(
         ["git", "branch", "--show-current"], cwd=worktree,
@@ -4664,6 +4785,34 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
             f"remote head {remote_head} does not match the local head "
             f"{local_head} after push origin {branch}"
         )
+    # Issue #746: the closed-Issue guard runs AFTER the push (the work
+    # stays on the branch for the human) and BEFORE the PR creation.
+    # `gh issue view` is a direct, strongly consistent read — the same
+    # property `has_in_progress_label` relies on.
+    raw = run_command([
+        "gh", "issue", "view", str(issue), "--repo", source_repo,
+        "--json", "state",
+    ], cwd=worktree)
+    details = json.loads(raw)
+    state = details.get("state") if isinstance(details, dict) else None
+    if state not in ("OPEN", "CLOSED"):
+        raise ValueError("issue view state must be OPEN or CLOSED")
+    if state == "CLOSED":
+        comment_issue(
+            issue, repo=source_repo,
+            body=(
+                f"{run_marker(run_id)}\n"
+                f"Orbi delivery stopped: the Issue was closed while the "
+                f"delivery was in flight; the completed work stays on "
+                f"branch `{branch}` and no PR was opened.\n"
+                f"run_id={run_id}"
+            ),
+        )
+        LOGGER.info(
+            "delivery_issue_closed branch=%s issue=%s repo=%s",
+            branch, issue, source_repo,
+        )
+        return None
     # Exactly one open PR of the branch: create it when absent (the PR
     # body contract is the Runner's obligation now, Issue #186) and
     # verify it with the full PR contract (exactly one open PR, base,
@@ -7312,12 +7461,52 @@ def process_issue(issue: dict, config: dict, source_repo: str,
             takeover_pr["url"] if takeover_pr is not None else deliver_pr(
                 worktree, branch, base_branch, base_sha, run_id,
                 issue=number, issue_title=title,
-                repo_dir=config["repo_dir"],
+                repo_dir=config["repo_dir"], source_repo=source_repo,
             )
         )
         commit = run_command(
             ["git", "rev-parse", "HEAD"], cwd=worktree,
         )
+        if pr_url is None:
+            # Issue #746: the Issue was closed during delivery — the
+            # delivery is complete with no PR (deliver_pr already left
+            # the explanatory comment). No label patch (labels are moot
+            # on a closed Issue, and a later reopen resumes the run
+            # naturally), no scene comment, nothing to wait for: the
+            # tick ends cleanly.
+            publish(
+                action=lambda: publisher.finish(_progress_body(
+                    _progress_state(
+                        issue=number, title=title, run_id=run_id,
+                        role=ROLE_IMPLEMENT, branch=branch,
+                        worktree=worktree, started=started,
+                        pr_url=None, review_round=0, priority=priority,
+                    ),
+                    outcome="**Orbi stopped: Issue closed during delivery**",
+                )),
+            )
+            LOGGER.info(
+                "run_end %s",
+                format_end_scene(
+                    run_id=run_id, issue=issue_context(source_repo, number),
+                    role=ROLE_IMPLEMENT, result="issue_closed",
+                    elapsed=time.monotonic() - started,
+                    pr="-", commit=commit,
+                ),
+            )
+            # Issue #266: the delivered outcome breaks any failure
+            # streak of this Issue in the health history. Pure bypass.
+            try:
+                runner_health.record_run_attempt(
+                    runner_health.health_state_path(config["repo_dir"]),
+                    repo=source_repo, issue=number, run_id=run_id,
+                    outcome="issue_closed", fingerprint="",
+                )
+            except Exception:
+                LOGGER.exception(
+                    "issue=%s health_success_record_failed", number,
+                )
+            return IssueResult("issue-closed", None)
         # The implementer always commits the delivery on top of the
         # frozen base, so the head always advanced. (Issue #82 removed
         # the fixer's `fix pushed` milestone: findings are fixed by the

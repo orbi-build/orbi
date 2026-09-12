@@ -492,7 +492,11 @@ agent 在提交的交付处停止；PR 前的 base 新鲜度是 Runner 的确定
 （Issue #186，`deliver_pr`）：Runner 在 base-sync 锁下重新 fetch
 `origin/<base_branch>`，用普通 `git merge` 吸收前进的 base（冲突时
 中止，PR 在 agent 的 head 上打开——已有的审查会话在会话内吸收
-base），然后推送 task branch 并创建 PR。
+base），然后推送 task branch 并创建 PR。创建 PR 之前 Runner 会直读
+源票的 state：交付期间被人工关闭的票在此收口——已推送的分支保留工作
+产物，关掉的票上留一条说明评论，不开 PR（Issue #746）。「PR 开出后票
+才被关」的相反时序由每 tick 的孤儿 PR 扫描兜底（见[工作流](/zh/workflow)），
+报告出来由人决定。
 
 ## 故障恢复
 

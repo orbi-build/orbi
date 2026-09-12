@@ -3986,6 +3986,10 @@ def test_process_issue_resumes_existing_run_and_same_progress_comment(
                 return json.dumps([existing_comment])
             return _gh_api(command, posted)
         if command[:3] == ["gh", "issue", "view"]:
+            if command[-1] == "state":
+                # The pre-PR closeout reads the source Issue state
+                # (Issue #746): open in this scene.
+                return json.dumps({"state": "OPEN"})
             return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # The Issue still carries `ai-in-progress` (the runner died).
@@ -4102,7 +4106,10 @@ def test_process_issue_second_tick_behind_the_index_resumes_not_reclaims(
         if command[:3] == ["gh", "issue", "view"]:
             # The strongly-consistent direct read: the label the first
             # tick wrote IS live truth, no matter how stale the index
-            # that delivered the Issue was.
+            # that delivered the Issue was. The pre-PR closeout reads
+            # the state too (Issue #746): open in this scene.
+            if command[-1] == "state":
+                return json.dumps({"state": "OPEN"})
             return json.dumps({"labels": [{"name": "ai-in-progress"}]})
         if command[:2] == ["gh", "issue"]:
             return ""
@@ -5720,6 +5727,10 @@ def test_process_issue_success_records_base_and_run_in_comment(monkeypatch, tmp_
         if command[:2] == ["gh", "api"]:
             return _gh_api(command, posted)
         if command[:3] == ["gh", "issue", "view"]:
+            if command[-1] == "state":
+                # The pre-PR closeout reads the source Issue state
+                # (Issue #746): open in this scene.
+                return json.dumps({"state": "OPEN"})
             return json.dumps({"labels": [{"name": "ai-ready"}]})
         if command[:3] == ["gh", "issue", "list"]:
             # Restart-resume scan (Issue #18): fresh claim, no label.
@@ -19051,8 +19062,141 @@ def test_reconcile_release_milestones_keeps_malformed_or_incomplete_open(monkeyp
         fake_run(["x", "y", "z"])
 
 
+def test_reconcile_orphan_prs_reports_an_open_pr_of_a_closed_issue(monkeypatch, caplog):
+    """Issue #746 (direction B): a delivery PR whose source Issue a human
+    closed is reported ONCE on the PR — every delivery-state scan reads
+    `state=open` Issues only, so nothing else would ever look at that PR
+    again. The merge/close decision stays with the human: the Runner
+    never auto-merges and never auto-closes across a human's close."""
+    caplog.set_level("INFO")
+    pr_comments: list[dict] = []
+    posted = []
+
+    def fake_run(command, **kwargs):
+        if command == ["gh", "pr", "list", "--repo", "o/r", "--state", "open",
+                       "--json", "number,headRefName", "--limit", "200"]:
+            return json.dumps([{"number": 9, "headRefName": "orbi/o-r-issue-4"}])
+        if command == ["gh", "issue", "view", "4", "--repo", "o/r", "--json", "state"]:
+            return json.dumps({"state": "CLOSED"})
+        raise AssertionError(command)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "pr_comments", lambda number, *, repo: pr_comments)
+    monkeypatch.setattr(
+        runner, "comment_pr",
+        lambda number, *, repo, body: posted.append((number, repo, body)),
+    )
+    result = runner.reconcile_orphan_prs("o/r", "abc12345")
+    assert result == ["PR #9 reported: source Issue #4 is closed"]
+    assert len(posted) == 1
+    number, repo, body = posted[0]
+    assert (number, repo) == (9, "o/r")
+    assert "<!-- orbi:orphan-pr -->" in body
+    assert "<!-- orbi:run=abc12345 -->" in body
+    assert "#4" in body
+    assert "orphan_pr_reported pr=9 issue=4 repo=o/r" in caplog.text
+    # Idempotent: the marker on the PR means the next tick reports nothing.
+    pr_comments.append({"body": posted[0][2]})
+    assert runner.reconcile_orphan_prs("o/r", "def67890") == []
+    assert len(posted) == 1
+    with pytest.raises(AssertionError):
+        fake_run(["unexpected"])
+
+
+def test_reconcile_orphan_prs_rejects_malformed_pr_list_and_state(monkeypatch):
+    """A non-array `pr list` answer and a malformed Issue state fail fast
+    inside the sweep — the per-tick try/except turns that into the
+    `orphan_pr_reconcile_failed` bypass log, never a broken delivery."""
+    def pr_list_run(command, **kwargs):
+        if command[:3] == ["gh", "pr", "list"]:
+            return json.dumps({"comments": []})
+        raise AssertionError(command)
+
+    monkeypatch.setattr(runner, "run_command", pr_list_run)
+    with pytest.raises(ValueError, match="pr list must return a JSON array"):
+        runner.reconcile_orphan_prs("o/r", "abc12345")
+    with pytest.raises(AssertionError):
+        pr_list_run(["unexpected"])
+
+    def weird_state_run(command, **kwargs):
+        if command[:3] == ["gh", "pr", "list"]:
+            return json.dumps([{"number": 9, "headRefName": "orbi/o-r-issue-4"}])
+        if command[-1] == "state":
+            return json.dumps({"state": "WEIRD"})
+        raise AssertionError(command)
+
+    monkeypatch.setattr(runner, "run_command", weird_state_run)
+    with pytest.raises(ValueError, match="state must be OPEN or CLOSED"):
+        runner.reconcile_orphan_prs("o/r", "abc12345")
+    with pytest.raises(AssertionError):
+        weird_state_run(["unexpected"])
+
+
+def test_pr_comments_reads_and_validates(monkeypatch):
+    """`pr_comments` is the PR-side twin of `issue_comments`: same JSON
+    shape contract, same fail-fast on a malformed answer."""
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda command, **kwargs: json.dumps({"comments": [{"body": "x"}]}),
+    )
+    assert runner.pr_comments(9, repo="o/r") == [{"body": "x"}]
+    monkeypatch.setattr(
+        runner, "run_command", lambda *a, **k: json.dumps([{"comments": []}]),
+    )
+    with pytest.raises(ValueError, match="pr view must be a JSON object"):
+        runner.pr_comments(9, repo="o/r")
+    monkeypatch.setattr(
+        runner, "run_command",
+        lambda *a, **k: json.dumps({"comments": "bad"}),
+    )
+    with pytest.raises(ValueError, match="pr comments must be a JSON array"):
+        runner.pr_comments(9, repo="o/r")
+
+
+def test_reconcile_orphan_prs_skips_open_issues_and_non_delivery_branches(monkeypatch):
+    """An open source Issue is the normal delivery flow (no report); a
+    head branch outside the stable delivery naming (a human or external
+    PR) is never the Runner's business — no issue state is even read."""
+    read_issues = []
+
+    def fake_run(command, **kwargs):
+        if command[:3] == ["gh", "pr", "list"]:
+            return json.dumps([
+                "garbage",
+                {"number": 9, "headRefName": "orbi/o-r-issue-4"},
+                {"number": 10, "headRefName": "feature/human-branch"},
+                {"number": 11, "headRefName": None},
+            ])
+        if command == ["gh", "issue", "view", "4", "--repo", "o/r", "--json", "state"]:
+            read_issues.append(4)
+            return json.dumps({"state": "OPEN"})
+        raise AssertionError(command)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    monkeypatch.setattr(runner, "comment_pr", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no comment")))
+    assert runner.reconcile_orphan_prs("o/r", "abc12345") == []
+    assert read_issues == [4]
+    with pytest.raises(AssertionError):
+        fake_run(["unexpected"])
+
+
+def test_reconcile_orphan_prs_failure_is_fail_open(monkeypatch, caplog):
+    monkeypatch.setattr(runner, "reconcile_open_epics", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "reconcile_release_milestones", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "reconcile_orphan_prs", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
+    monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "pick_issue", lambda *args: {"number": 1})
+    monkeypatch.setattr(runner, "_CURRENT_RUN_ID", "abc12345")
+    result = runner.pick_next_delivery(["o/r"], Path("/tmp/slots"), 1)
+    assert result == ("o/r", {"number": 1}, None)
+    assert "orphan_pr_reconcile_failed repo=o/r" in caplog.text
+
+
 def test_reconcile_open_epics_failure_is_fail_open(monkeypatch, caplog):
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("API down")))
+    monkeypatch.setattr(runner, "reconcile_release_milestones", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "reconcile_orphan_prs", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_issue", lambda *args: {"number": 1})
@@ -19067,6 +19211,8 @@ def test_reconcile_open_epics_runs_on_a_fresh_tick(monkeypatch):
     monkeypatch.setattr(runner, "_CURRENT_RUN_ID", None)
     monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
     monkeypatch.setattr(runner, "reconcile_open_epics", lambda repo, run_id: calls.append((repo, run_id)))
+    monkeypatch.setattr(runner, "reconcile_release_milestones", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "reconcile_orphan_prs", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_resumable_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_in_progress_issue", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "pick_issue", lambda *args, **kwargs: None)
@@ -20297,6 +20443,10 @@ def fake_deliver_run(command, **kwargs):
         return ""
     if command[:3] == ["git", "rev-parse", f"origin/{DELIVER_BRANCH}"]:
         return FAKE_HEAD_SHA
+    if command[:3] == ["gh", "issue", "view"] and command[-1] == "state":
+        # Issue #746: the pre-PR closeout reads the source Issue state;
+        # the default scene is an open Issue.
+        return json.dumps({"state": "OPEN"})
     if command[:2] == ["gh", "pr"]:
         return fake_verify_pr_payload()
     raise AssertionError(f"unexpected command: {command}")
@@ -20316,7 +20466,7 @@ def test_deliver_pr_rejects_wrong_branch(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="Pi changed branch"):
         runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", FAKE_HEAD_SHA, FAKE_RUN_ID,
-            issue=4, issue_title="t", repo_dir=tmp_path,
+            issue=4, issue_title="t", repo_dir=tmp_path, source_repo="o/r",
         )
 
 
@@ -20330,7 +20480,7 @@ def test_deliver_pr_rejects_uncommitted_changes(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="uncommitted changes"):
         runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
-            issue=4, issue_title="t", repo_dir=tmp_path,
+            issue=4, issue_title="t", repo_dir=tmp_path, source_repo="o/r",
         )
 
 
@@ -20347,7 +20497,7 @@ def test_deliver_pr_rejects_delivery_without_a_commit(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="no commit"):
         runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", base_sha, FAKE_RUN_ID,
-            issue=4, issue_title="t", repo_dir=tmp_path,
+            issue=4, issue_title="t", repo_dir=tmp_path, source_repo="o/r",
         )
 
 
@@ -20363,7 +20513,7 @@ def test_deliver_pr_completes_the_closeout(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.deliver_pr(
         tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
-        issue=4, issue_title="t", repo_dir=tmp_path,
+        issue=4, issue_title="t", repo_dir=tmp_path, source_repo="o/r",
     ) == FAKE_PR_URL
     # The closeout order: commit boundary, locked base fetch, ancestry,
     # plain push, remote-head verification, PR list.
@@ -20412,7 +20562,7 @@ def test_deliver_pr_rolls_back_a_conflicting_base_absorb(
     with caplog.at_level("INFO"):
         assert runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
-            issue=4, issue_title="t", repo_dir=tmp_path,
+            issue=4, issue_title="t", repo_dir=tmp_path, source_repo="o/r",
         ) == FAKE_PR_URL
     assert ["git", "merge", "origin/main"] in calls
     assert ["git", "merge", "--abort"] in calls
@@ -20441,7 +20591,7 @@ def test_deliver_pr_absorbs_an_advanced_base(monkeypatch, tmp_path, caplog):
     with caplog.at_level("INFO"):
         assert runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
-            issue=4, issue_title="t", repo_dir=tmp_path,
+            issue=4, issue_title="t", repo_dir=tmp_path, source_repo="o/r",
         ) == FAKE_PR_URL
     assert calls.index(["git", "merge", "origin/main"]) < calls.index(
         ["git", "push", "origin", f"HEAD:{DELIVER_BRANCH}"],
@@ -20479,7 +20629,7 @@ def test_deliver_pr_creates_the_pr_when_absent(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_command", fake_run)
     assert runner.deliver_pr(
         tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
-        issue=4, issue_title="Closeout title", repo_dir=tmp_path,
+        issue=4, issue_title="Closeout title", repo_dir=tmp_path, source_repo="o/r",
     ) == FAKE_PR_URL
     create = [
         command for command in calls
@@ -20509,7 +20659,7 @@ def test_deliver_pr_fails_fast_when_pr_create_fails(monkeypatch, tmp_path):
     with pytest.raises(subprocess.CalledProcessError):
         runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
-            issue=4, issue_title="t", repo_dir=tmp_path,
+            issue=4, issue_title="t", repo_dir=tmp_path, source_repo="o/r",
         )
 
 
@@ -20525,7 +20675,7 @@ def test_deliver_pr_rejects_remote_head_mismatch_after_push(
     with pytest.raises(RuntimeError, match="remote head"):
         runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
-            issue=4, issue_title="t", repo_dir=tmp_path,
+            issue=4, issue_title="t", repo_dir=tmp_path, source_repo="o/r",
         )
 
 
@@ -20550,7 +20700,7 @@ def test_deliver_pr_verifies_the_pr_with_the_latest_base_check_skipped(
     monkeypatch.setattr(runner, "run_command", fake_run)
     runner.deliver_pr(
         tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
-        issue=4, issue_title="t", repo_dir=tmp_path,
+        issue=4, issue_title="t", repo_dir=tmp_path, source_repo="o/r",
     )
     fetches = [
         index for index, command in enumerate(calls)
@@ -20560,6 +20710,109 @@ def test_deliver_pr_verifies_the_pr_with_the_latest_base_check_skipped(
     # Exactly one fetch (the deliver fetch); nothing after the push.
     assert len(fetches) == 1
     assert fetches[0] < push
+
+
+def test_deliver_pr_reports_a_closed_issue_and_skips_the_pr(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #746 (direction A): the Issue was closed while the delivery
+    was in flight — the pushed branch keeps the work, the closed Issue
+    gets one explanatory comment, and NO PR is created (nothing dangles
+    behind a closed Issue)."""
+    caplog.set_level("INFO")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command[:3] == ["gh", "issue", "view"] and command[-1] == "state":
+            return json.dumps({"state": "CLOSED"})
+        return fake_deliver_run(command, **kwargs)
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    comments = []
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda number, *, repo, body: comments.append((number, repo, body)),
+    )
+    monkeypatch.setattr(
+        runner, "verify_pr",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("verify_pr must not run for a closed Issue")),
+    )
+    assert runner.deliver_pr(
+        tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
+        issue=4, issue_title="t", repo_dir=tmp_path, source_repo="o/r",
+    ) is None
+    # The Issue state is read AFTER the push: the work stays on origin.
+    assert calls.index(
+        ["gh", "issue", "view", "4", "--repo", "o/r", "--json", "state"],
+    ) > calls.index(["git", "push", "origin", f"HEAD:{DELIVER_BRANCH}"])
+    assert not any(command[:2] == ["gh", "pr"] for command in calls)
+    assert len(comments) == 1
+    number, repo, body = comments[0]
+    assert (number, repo) == (4, "o/r")
+    assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in body
+    assert DELIVER_BRANCH in body
+    assert "delivery_issue_closed branch=" in caplog.text
+
+
+def test_process_issue_closed_issue_ends_without_pr_ceremony(
+    monkeypatch, tmp_path, caplog,
+):
+    """Issue #746: `deliver_pr` returns None for an Issue closed during
+    delivery — no `ai-pr-opened` label patch, no `Orbi opened PR:` scene
+    comment; the run ends `issue_closed` and the result kind ends the
+    tick before the delivery wait."""
+    monkeypatch.setattr(runner, "freeze_base",
+                        lambda repo_dir, base_branch: "abc123def456")
+    monkeypatch.setattr(runner, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(runner, "create_worktree",
+                        lambda *args, **kwargs: tmp_path / "wt")
+    monkeypatch.setattr(runner, "run_pi", lambda *args, **kwargs: "done")
+    monkeypatch.setattr(runner, "deliver_pr", lambda *args, **kwargs: None)
+    edits: list[tuple] = []
+    monkeypatch.setattr(
+        runner, "edit_issue",
+        lambda *args, **kwargs: edits.append((args, kwargs)),
+    )
+    comments = []
+    monkeypatch.setattr(
+        runner, "comment_issue",
+        lambda number, *, repo, body: comments.append(body),
+    )
+    gh_calls, posted = make_fake_gh(monkeypatch)
+
+    def fake_run(command, **kwargs):
+        if command[:2] == ["gh", "api"]:
+            return _gh_api(command, posted)
+        if command[:3] == ["gh", "issue", "view"]:
+            return json.dumps({"labels": [{"name": "ai-ready"}]})
+        return "0123456789abcdef0123456789abcdef01234567"
+
+    monkeypatch.setattr(runner, "run_command", fake_run)
+    # Issue #266: the health record is a pure bypass — a failed record
+    # never changes the issue-closed outcome (the except branch runs).
+    def dead_health(*args, **kwargs):
+        raise RuntimeError("health state unwritable")
+
+    monkeypatch.setattr(runner.runner_health, "record_run_attempt", dead_health)
+    with caplog.at_level("INFO"):
+        result = runner.process_issue(
+            {"number": 4, "title": "Fix", "body": "Body"},
+            {"repo_dir": tmp_path, "prompt": tmp_path / "prompt.md",
+             "base_branch": "main"},
+            "xqliu/orbi-backlog",
+        )
+    assert result == ("issue-closed", None)
+    assert "health_success_record_failed" in caplog.text
+    assert not any(
+        "ai-pr-opened" in str(args) + str(kwargs) for args, kwargs in edits
+    ), "no ai-pr-opened label patch for a closed Issue"
+    assert not any("Orbi opened PR" in body for body in comments)
+    ends = [line for line in caplog.text.splitlines() if " run_end " in line]
+    assert len(ends) == 1
+    assert "result=issue_closed" in ends[0]
+    assert "pr=-" in ends[0]
 
 
 # --- Issue #256: Runner-owned runtime state isolation ----------------------
@@ -20720,7 +20973,7 @@ def test_deliver_pr_repairs_runner_runtime_leftovers(monkeypatch, tmp_path,
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
         url = runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
-            issue=4, issue_title="t", repo_dir=tmp_path,
+            issue=4, issue_title="t", repo_dir=tmp_path, source_repo="o/r",
         )
     assert url == FAKE_PR_URL
     assert "runner_runtime_exclude_repaired" in caplog.text
@@ -20744,7 +20997,7 @@ def test_deliver_pr_repairs_the_renamed_state_dir_too(monkeypatch, tmp_path,
     with caplog.at_level(logging.INFO, logger="orbi.bootstrap"):
         url = runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
-            issue=4, issue_title="t", repo_dir=tmp_path,
+            issue=4, issue_title="t", repo_dir=tmp_path, source_repo="o/r",
         )
     assert url == FAKE_PR_URL
     assert "runner_runtime_exclude_repaired" in caplog.text
@@ -20765,7 +21018,7 @@ def test_deliver_pr_still_fails_on_agent_leftovers_alongside_runner_state(
     with pytest.raises(RuntimeError, match="uncommitted changes"):
         runner.deliver_pr(
             tmp_path, DELIVER_BRANCH, "main", "9" * 40, FAKE_RUN_ID,
-            issue=4, issue_title="t", repo_dir=tmp_path,
+            issue=4, issue_title="t", repo_dir=tmp_path, source_repo="o/r",
         )
 
 

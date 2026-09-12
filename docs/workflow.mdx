@@ -211,7 +211,13 @@ DAG, no priority numbers, no separate queues:
   final child Issue instead (for example, a browser acceptance ticket). The
   same tick then reconciles open Milestones: an exact-title published Release
   (draft excluded) plus zero open Issues closes the Milestone; all other cases
-  remain open.
+  remain open. The same tick finally sweeps open PRs (Issue #746): a
+  stable-delivery PR (`orbi/<repo>-issue-<N>` head branch) whose source Issue
+  a human closed is reported ONCE on the PR with an idempotent comment —
+  every resumable scan reads `state=open` Issues only, so without this sweep
+  the PR would dangle forever. The merge/close decision stays with the
+  human: the Runner never auto-merges and never auto-closes across a human's
+  close.
 - **Release task**: an `ai-ready` Issue additionally marked with the
   `ai-release` label (Issue #98). It is NOT a development task: the
   Runner picks it up through the normal ready scan, but `process_issue`

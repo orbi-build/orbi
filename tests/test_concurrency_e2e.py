@@ -126,7 +126,13 @@ elif args[:2] == ["issue", "comment"]:
     save()
 elif args[:2] == ["issue", "view"]:
     num = args[2]
-    if args[-1] == "body":
+    if args[-1] == "state":
+        # The pre-PR closeout reads the source Issue state (Issue
+        # #746): open in these scenes.
+        print(json.dumps(
+            {"state": state["issues"][num].get("state", "OPEN")}
+        ))
+    elif args[-1] == "body":
         print(json.dumps(
             {"body": state["issues"][num].get("body", "")}
         ))
