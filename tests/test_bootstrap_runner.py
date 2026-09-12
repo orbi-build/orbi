@@ -230,6 +230,17 @@ def test_load_config_accepts_the_engine_source_track_forms(tmp_path, track):
     assert runner.load_config(config_path)["engine_source_track"] == track
 
 
+def test_load_config_normalizes_stable_to_release(tmp_path):
+    """Issue #756: `stable` loads as the plain `release` track — the
+    stored config carries the canonical value only."""
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nengine_source_track = "stable"\n',
+        encoding="utf-8",
+    )
+    assert runner.load_config(config_path)["engine_source_track"] == "release"
+
+
 def test_load_config_rejects_an_invalid_engine_source_track(tmp_path):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text(

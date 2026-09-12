@@ -99,10 +99,15 @@ host/deploy-only 配置键 `engine_source_track` 位于 deploy home 的
 | --- | --- |
 | 缺省 / `main` | `origin/main`，fast-forward——#535 之前 dogfood 的精确行为 |
 | `branch:<name>` | `origin/<name>`，fast-forward（会 checkout 该分支） |
-| `release` | 最新的正式 semver tag（`vX.Y.Z`；`vX.Y.Z-rc.1` 之类的 pre-release 和非 semver tag 被排除），detached checkout |
+| `release`（别名 `stable`） | 最新的正式 semver tag（`vX.Y.Z`；`vX.Y.Z-rc.1` 之类的 pre-release 和非 semver tag 被排除），detached checkout |
 | `tag:<name>` | 精确锁定该 tag（annotated tag 解引用到其 commit），detached checkout |
 | `sha:<40-hex>` | 精确锁定该 commit，detached checkout |
 
+- **`release` 与 `tag:`——跟随与锁定**：`release`（别名 `stable`）跟随
+  最新已发布版本，新 tag 发布后自动跟进——只在发版时变化（`main` 每次
+  提交都变）。`tag:<name>` 锁死一个精确版本，不改值就永不移动——版本
+  变更永远是一次有意操作；要求部署保持可复现时用它锁定，回滚就是把
+  上一个 tag 改回去。
 - **安装与更新**：`install.sh` 新安装复制 `.orbi.example.toml`，其中
   携带 `engine_source_track = "release"`——新部署跟随最新 release，而
   不是 main 的中间态。Orbi 自有 dogfood 部署显式固定 `main` 通道。
