@@ -10196,8 +10196,7 @@ def make_timeout_tool_pi(tmp_path, *, tool_seconds: float = 0.6,
     return [sys.executable, "-c", script]
 
 
-def make_timeout_tool_pi_release_gated(tmp_path, *, release: Path,
-                                       guard_seconds: float = 60.0) -> list[str]:
+def make_timeout_tool_pi_release_gated(tmp_path, *, release: Path) -> list[str]:
     """A `timeout 300 sleep 300` tool whose death the TEST gates
     (Issue #741). The wrapper is the REAL coreutils `timeout` (exec'd by
     `bash -c`, so the /proc cmdline is `timeout 300 sleep 300` — exactly
@@ -10212,8 +10211,8 @@ def make_timeout_tool_pi_release_gated(tmp_path, *, release: Path,
     #741 flake: under load one poll-loop stall skipped the whole
     real-time detection window, the wait decision never fired and the
     test failed on healthy code). The fake Pi self-terminates after
-    `guard_seconds`: a broken release path fails the assertions fast,
-    it never hangs."""
+    60 s: a broken release path fails the assertions fast, it never
+    hangs."""
     session_dir = tmp_path / ".pi-session"
     session_dir.mkdir(exist_ok=True)
     script = (
@@ -10221,7 +10220,7 @@ def make_timeout_tool_pi_release_gated(tmp_path, *, release: Path,
         "from datetime import datetime, timezone\n"
         f"session = {str(session_dir / 'sess.jsonl')!r}\n"
         f"release = {str(release)!r}\n"
-        f"guard = {guard_seconds!r}\n"
+        "guard = 60.0\n"
         "def ts():\n"
         "    return datetime.now(timezone.utc).isoformat()\n"
         "def write(record):\n"
