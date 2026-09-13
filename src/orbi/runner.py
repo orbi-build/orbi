@@ -91,6 +91,14 @@ from orbi.delivery_labels import (
     needs_human_intervention,
 )
 from orbi import human_review
+from orbi.delivery_scene import (
+    EXTERNAL_PR_RE,
+    DeliveryContext,
+    DeliveryFacts,
+    DeliveryScene,
+    body_markers,
+    classify,
+)
 from orbi.repo_config import (
     REPO_CONFIG_PATH,
     RepoConfigError,
@@ -1824,6 +1832,19 @@ def release_fallback_search(active_milestone: str | None = None,
     )
 
 
+def _issue_label_set(issue: dict) -> frozenset[str]:
+    """The Issue's label names (the scans fetch `labels`).
+
+    The fact shape the scene classification (`orbi.delivery_scene`)
+    reads; a missing or malformed `labels` field yields the empty set —
+    the classification then sees an unlabelled ticket, never a crash.
+    """
+    return frozenset(
+        label.get("name") for label in issue.get("labels", [])
+        if isinstance(label, dict) and isinstance(label.get("name"), str)
+    )
+
+
 def is_epic(issue: dict) -> bool:
     """Return True when one issue carries the `ai-epic` label (Issue #93).
 
@@ -2022,9 +2043,29 @@ def reconcile_orphan_prs(repo: str, run_id: str) -> list[str]:
     return evidence
 
 
+# The scenes the ready scans claim: the fresh-claim family of the
+# delivery-scene classification (Issue #787). A release candidate is
+# claimable only through the release fallback scan's `allow_release`
+# gate above; the classification still names its scene. A candidate
+# that classifies elsewhere is skipped — a terminal state the query's
+# index lagged behind, or an in-flight/opened-PR state another scan
+# owns — and a candidate carrying NO readable labels fails open (the
+# is_epic/is_release convention): the query is the claim authority.
+_FRESH_CLAIM_SCENES = frozenset({
+    DeliveryScene.FRESH_CLAIM,
+    DeliveryScene.RELEASE,
+    DeliveryScene.CONTENT_ONLY,
+    DeliveryScene.OPS,
+})
+_SCAN_CLAIMABLE_SCENES = _FRESH_CLAIM_SCENES | {
+    DeliveryScene.RESTART_IN_FLIGHT,
+}
+
+
 def _pick_from_scan(
     issues: list[dict], repo: str, allow_release: bool = False,
     active_milestone: str | None = None,
+    ready_label: str = READY_LABEL,
 ) -> dict | None:
     """Return the first claimable Issue of one scan result, else None.
 
@@ -2051,6 +2092,12 @@ def _pick_from_scan(
     `ai-blocked`. A Milestone query that cannot be evaluated skips the
     release too (`release_milestone_check_failed`): a bad release is
     irreversible, so the check fails safe and the next tick retries.
+
+    The last guard is the delivery-scene classification itself (Issue
+    #787): the ready scans claim only the fresh-claim family, decided
+    by the same pure `classify` the dispatch layer runs, so a stale
+    index handing over a ticket that no longer carries the queue label
+    is skipped, never claimed into a scene it is no longer in.
     """
     for issue in issues:
         if is_epic(issue):
@@ -2093,6 +2140,20 @@ def _pick_from_scan(
                 blockers=",".join(str(number) for number in blockers),
             )
             continue
+        current_labels = _issue_label_set(issue)
+        if current_labels:
+            scene_value = classify(
+                labels=current_labels, scene=None, pr_state=None,
+                worktree_present=False, branch_present=False,
+                body_markers=body_markers(issue.get("body")),
+                ready_label=ready_label,
+            )
+            if scene_value not in _SCAN_CLAIMABLE_SCENES:
+                event(
+                    "claim_yield", issue=issue.get("number"),
+                    reason=f"scene_{scene_value.value}",
+                )
+                continue
         event(
             "picked", issue=issue.get("number"), repo=repo,
             priority=issue_priority(issue),
@@ -2143,7 +2204,9 @@ def pick_issue(repo: str, active_milestone: str | None = None,
                 repo=repo, error=exc,
             )
             return None
-        picked = _pick_from_scan(issues, repo)
+        picked = _pick_from_scan(
+            issues, repo, ready_label=dispatch_label,
+        )
         if picked is not None:
             return picked
     # Release fallback (Issue #255): only when no ordinary delivery
@@ -2169,6 +2232,7 @@ def pick_issue(repo: str, active_milestone: str | None = None,
     return _pick_from_scan(
         issues, repo, allow_release=True,
         active_milestone=active_milestone,
+        ready_label=dispatch_label,
     )
 
 
@@ -2229,7 +2293,28 @@ def pick_in_progress_issue(
         ),
         json_fields="number,title,body,labels,milestone", limit=1,
     )
-    return issues[0] if issues else None
+    candidate = issues[0] if issues else None
+    if candidate is not None:
+        # Issue #787: the same pure classification the dispatch runs.
+        # This scan hands the candidate to `process_issue`, whose full
+        # fact set decides the handler, so the scan skips only a
+        # candidate that left EVERY claimable state (a relabel inside
+        # the query's staleness window); a candidate with no readable
+        # labels fails open (the is_epic/is_release convention).
+        current_labels = _issue_label_set(candidate)
+        if current_labels:
+            scene_value = classify(
+                labels=current_labels, scene=None, pr_state=None,
+                worktree_present=False, branch_present=False,
+                body_markers=body_markers(candidate.get("body")),
+            )
+            if scene_value not in _SCAN_CLAIMABLE_SCENES:
+                event(
+                    "claim_yield", issue=int(candidate["number"]),
+                    reason=f"scene_{scene_value.value}",
+                )
+                return None
+    return candidate
 
 
 def pick_next_issue(
@@ -2259,14 +2344,6 @@ def claim_route(labels: set[str], *, branch_exists: bool,
     # An existing branch without an open PR is resumed by implementation;
     # a missing branch is the same implementation path.
     return "implement"
-
-
-# Issue #608: the triage workflow embeds this hidden marker in the bug
-# Issue it files for an EXTERNAL contributor PR's CI failure (head branch
-# outside the stable delivery naming). The claim scan parses it and takes
-# the external PR over for review FIRST — an external PR is never
-# silently redone while it is open.
-EXTERNAL_PR_RE = re.compile(r"<!--\s*orbi:external-pr:(\d+)\s*-->")
 
 
 def external_takeover_pr(repo_dir: Path, body: str | None,
@@ -2553,13 +2630,17 @@ def pick_resumable_delivery(
     # already keeps implement-phase Issues out.
     # `labels` (Issue #101): a resumed P0 delivery keeps its
     # priority in the progress comment through review/merge.
+    # `body` (Issue #787): the scene classification reads the
+    # delivery markers — without it the #726 external routing of a
+    # marker ticket with no trusted scene comment is unreachable in
+    # production (the probe read a body the query never fetched).
     issues = list_issues(
         repo, state="open",
         search=(
             f"label:{FIX_NEEDED_LABEL},{PR_OPENED_LABEL} "
             f"-label:{BLOCKED_LABEL} -label:{MERGED_LABEL}"
         ),
-        json_fields="number,title,state,url,labels", limit=1,
+        json_fields="number,title,state,url,labels,body", limit=1,
     )
     if not issues:
         return None
@@ -2612,6 +2693,25 @@ def pick_resumable_delivery(
         except Exception:
             LOGGER.exception("issue=%s failure reporting failed", number)
         return None
+    # Issue #787: the scan and the dispatch classify with the same pure
+    # function. This scan owns the resumable route only: a candidate
+    # that classifies elsewhere left the opened-PR state between the
+    # query and this read (a relabel race) — claim nothing this tick.
+    # A candidate with no readable labels fails open (the is_epic /
+    # is_release convention): the trusted scene is the authority.
+    current_labels = _issue_label_set(issue)
+    if current_labels:
+        found_scene = classify(
+            labels=current_labels, scene=found, pr_state=None,
+            worktree_present=False, branch_present=False,
+            body_markers=body_markers(issue.get("body")),
+        )
+        if found_scene is not DeliveryScene.RESUME_REVIEW:
+            event(
+                "claim_yield", issue=int(issue["number"]),
+                reason=f"scene_{found_scene.value}",
+            )
+            return None
     return issue, found
 
 
@@ -6136,56 +6236,71 @@ class IssueResult(NamedTuple):
     url: str | None
 
 
-def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
-                  repo_policy: RepoPolicy | None = None) -> IssueResult:
+def _dispatch_release(issue: dict, config: RunnerConfig,
+                      source_repo: str) -> IssueResult:
+    """Deliver a RELEASE-scene ticket through the deterministic release
+    state machine (Issue #98): a first-class task type that NEVER enters
+    the normal `run_pi` development path (scope verification, gates,
+    tests, tag, GitHub Release)."""
     number = int(issue["number"])
-    # Issue #100: the progress comment's issue line shows the number
-    # AND the title in every scene. The scanned issue dict always
-    # carries the GitHub title (every scan fetches `title`); a missing
-    # or non-string title fails fast here (KeyError / ValueError in
-    # `progress.issue_field`) — it is never fabricated.
-    title = issue["title"]
-    # Release task (Issue #98): a first-class task type that NEVER
-    # enters the normal `run_pi` development path. The Runner executes
-    # its own deterministic release state machine instead (scope
-    # verification, gates, tests, tag, GitHub Release).
-    if is_release(issue):
-        # `orbi.release` imports the runner primitives back, so the
-        # dispatch imports it lazily here — a module-level import would
-        # be circular (Issue #286).
-        #
-        # Issue #708: the ready scan's stale snapshot can hand an
-        # already-claimed release ticket to a second live runner. The
-        # dev path got the direct-read yield in #658; the release path
-        # needs the same semantics — an in-progress release owned by a
-        # LIVE co-runner is yielded this tick (never run the state
-        # machine concurrently); an orphaned one (this runner is alone)
-        # still resumes inside process_release (#98 restart resume).
-        # The millisecond truly-simultaneous window remains, exactly as
-        # documented for #658 — the label write is not a CAS.
-        if has_in_progress_label(number, source_repo):
-            slot_dir = config.slot_dir
-            max_concurrency = config.max_concurrency
-            if (slot_dir is not None and max_concurrency is not None
-                    and _another_live_runner(slot_dir, max_concurrency)):
-                event(
-                    "claim_yield",
-                    issue=number,
-                    reason="release_in_progress_live_runner",
-                )
-                return IssueResult("claim-yielded", None)
-        from orbi import release
+    # `orbi.release` imports the runner primitives back, so the
+    # dispatch imports it lazily here — a module-level import would
+    # be circular (Issue #286).
+    #
+    # Issue #708: the ready scan's stale snapshot can hand an
+    # already-claimed release ticket to a second live runner. The
+    # dev path got the direct-read yield in #658; the release path
+    # needs the same semantics — an in-progress release owned by a
+    # LIVE co-runner is yielded this tick (never run the state
+    # machine concurrently); an orphaned one (this runner is alone)
+    # still resumes inside process_release (#98 restart resume).
+    # The millisecond truly-simultaneous window remains, exactly as
+    # documented for #658 — the label write is not a CAS.
+    if has_in_progress_label(number, source_repo):
+        slot_dir = config.slot_dir
+        max_concurrency = config.max_concurrency
+        if (slot_dir is not None and max_concurrency is not None
+                and _another_live_runner(slot_dir, max_concurrency)):
+            event(
+                "claim_yield",
+                issue=number,
+                reason="release_in_progress_live_runner",
+            )
+            return IssueResult("claim-yielded", None)
+    from orbi import release
 
-        return IssueResult("release", release.process_release(issue, config, source_repo))
-    if is_content_only(issue):
-        process_ticket_only(issue, config, source_repo)
-        return IssueResult("ticket-only", None)
-    # Ops task (Issue #537): a full-execution session — the SAME claim,
-    # worktree and run machinery as the dev path below (no command
-    # whitelist exists anywhere), with the ops playbook instead of the
-    # dev one and an evidence-on-the-Issue closeout when the session
-    # delivers no commit.
-    ops = is_ops(issue)
+    return IssueResult(
+        "release", release.process_release(issue, config, source_repo),
+    )
+
+
+def _dispatch_content_only(issue: dict, config: RunnerConfig,
+                           source_repo: str) -> IssueResult:
+    """Deliver a CONTENT_ONLY-scene ticket through the ticket-only
+    content agent: no execution, the deliverable posted to the Issue."""
+    process_ticket_only(issue, config, source_repo)
+    return IssueResult("ticket-only", None)
+
+
+def _gather_claim_facts(issue: dict, config: RunnerConfig,
+                        source_repo: str,
+                        repo_policy: RepoPolicy | None) -> DeliveryFacts:
+    """Gather the claim facts of one attempt (the dispatch's first step).
+
+    The probe sequence is `process_issue`'s prologue, order unchanged:
+    the attempt binds its run id before any other step is logged
+    (Issue #41), the repository policy applies, the live
+    `ai-in-progress` state is read directly (Issue #658), then the
+    fresh-claim probes (the stable branch's open PR, the branch
+    existence, the external takeover of a marker ticket) or the
+    in-flight probes (the external takeover, the resume worktree) run.
+
+    A resume worktree that cannot be verified is RECORDED as
+    `resume_error`, not raised here: the handler reports it after its
+    claim-yield guard, so a live co-runner's claim is never blocked
+    from under it — the order the classification refactor inherited.
+    """
+    number = int(issue["number"])
     # The run id is generated once per attempt and bound BEFORE any
     # other step is logged, so every journal line of the attempt
     # carries it — including the claim-time lines of the restart resume
@@ -6224,23 +6339,15 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
     # The claim label is a delivery-policy key (Issue #527); the lifecycle
     # labels stay host constants.
     dispatch_label = (config.dispatch_label or READY_LABEL)
-    # Restart resume (Issue #18): a killed runner leaves the task
-    # worktree and the `ai-in-progress` label behind. Only in that state
-    # the newest worktree's run id is reused, so the same hidden-marker
-    # progress comment is found and kept instead of a second one.
-    # Completed runs keep their worktrees as evidence but lose the
-    # label, so re-claiming an issue always starts a fresh run.
-    existing_worktree: Path | None = None
+    claim_labels = _issue_label_set(issue)
+    stable_branch = task_branch(source_repo, number)
+    in_progress = has_in_progress_label(number, source_repo)
     takeover_pr: dict | None = None
     external_takeover = False
     stable_branch_present = False
-    claim_labels = {
-        label.get("name") for label in issue.get("labels", [])
-        if isinstance(label, dict) and isinstance(label.get("name"), str)
-    }
-    in_progress = has_in_progress_label(number, source_repo)
+    resume_scene: tuple[str, Path] | None = None
+    resume_error: Exception | None = None
     if not in_progress and dispatch_label in claim_labels:
-        stable_branch = task_branch(source_repo, number)
         takeover_pr = open_pr_for_branch(config.repo_dir, stable_branch)
         stable_branch_present = stable_branch_exists(
             config.repo_dir, stable_branch,
@@ -6269,6 +6376,85 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
             event("delivery_takeover", issue=number, branch=stable_branch,
                   pr=takeover_pr.get("url"))
     if in_progress:
+        # Issue #608: an in-flight external takeover (the run died between
+        # the worktree creation and the opened-PR transition) must NOT
+        # resume into `run_pi` on the contributor's branch — the external
+        # PR, when still open, is the takeover delivery.
+        takeover_pr = external_takeover_pr(
+            config.repo_dir, issue.get("body"), source_repo, base_branch,
+        )
+        external_takeover = takeover_pr is not None
+        try:
+            resume_scene = worktree_resume_scene(
+                config.repo_dir, source_repo, number,
+            )
+        except Exception as exc:
+            # Issue #219: the worktree of this issue exists but its run
+            # state is missing or corrupt: the same run cannot be
+            # verified. Recorded here; the handler fails fast through
+            # the terminal failure path (`ai-blocked` + the reason
+            # comment) after its yield guard — never a silent fresh
+            # redo on top of unknown work.
+            LOGGER.exception(
+                "issue=%s resume_continue_failed", number,
+            )
+            resume_error = exc
+    return DeliveryFacts(
+        # The classification merges the direct read into the query-time
+        # labels: a claim that landed in the scan window classifies as
+        # RESTART_IN_FLIGHT and the handler's yield guard decides.
+        labels=claim_labels
+        | ({IN_PROGRESS_LABEL} if in_progress else frozenset()),
+        pr_state="OPEN" if takeover_pr is not None else None,
+        worktree_present=resume_scene is not None,
+        branch_present=stable_branch_present,
+        body_markers=body_markers(issue.get("body")),
+        ready_label=dispatch_label,
+        config=config,
+        repo_policy=repo_policy,
+        run_id=run_id,
+        base_branch=base_branch,
+        dispatch_label=dispatch_label,
+        claim_labels=claim_labels,
+        in_progress=in_progress,
+        stable_branch=stable_branch,
+        takeover_pr=takeover_pr,
+        external_takeover=external_takeover,
+        resume_scene=resume_scene,
+        resume_error=resume_error,
+        repo_config_fields=repo_config_fields,
+    )
+
+
+def _dispatch_implementation(issue: dict, source_repo: str,
+                             facts: DeliveryFacts,
+                             *, ops: bool) -> IssueResult:
+    """Run one implementation scene to its delivery outcome.
+
+    The handler of FRESH_CLAIM (the normal dev delivery),
+    RESTART_IN_FLIGHT (the Issue #18 restart resume), EXTERNAL_TAKEOVER
+    (the Issue #608 contributor-PR takeover) and OPS (the Issue #537
+    full-execution ops session: the same claim, worktree and run
+    machinery — no command whitelist exists anywhere — with the ops
+    playbook instead of the dev one and an evidence-on-the-Issue
+    closeout when the session delivers no commit). `facts` carries the
+    gathered probe results; the classified scene chose this handler.
+    """
+    number = int(issue["number"])
+    title = issue["title"]
+    config = facts.config
+    run_id = facts.run_id
+    base_branch = facts.base_branch
+    dispatch_label = facts.dispatch_label
+    claim_labels = facts.claim_labels
+    in_progress = facts.in_progress
+    stable_branch = facts.stable_branch
+    stable_branch_present = facts.stable_branch_present
+    takeover_pr = facts.takeover_pr
+    external_takeover = facts.external_takeover
+    existing_worktree = facts.resume_scene[1] if facts.resume_scene else None
+    repo_config_fields = facts.repo_config_fields
+    if in_progress:
         # Issue #724: the claim-race window has two halves. The scan
         # snapshot lacking the label while THIS direct read sees it
         # means the claim landed between the scan and the read. Whether
@@ -6291,34 +6477,19 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
                 reason="label_landed_in_scan_window",
             )
             return IssueResult("claim-yielded", None)
-        # Issue #608: an in-flight external takeover (the run died between
-        # the worktree creation and the opened-PR transition) must NOT
-        # resume into `run_pi` on the contributor's branch — the external
-        # PR, when still open, is the takeover delivery.
-        takeover_pr = external_takeover_pr(
-            config.repo_dir, issue.get("body"), source_repo, base_branch,
-        )
-        external_takeover = takeover_pr is not None
-        try:
-            scene = worktree_resume_scene(
-                config.repo_dir, source_repo, number,
-            )
-        except Exception as exc:
+        if facts.resume_error is not None:
             # Issue #219: the worktree of this issue exists but its run
             # state is missing or corrupt: the same run cannot be
             # verified. Fail fast through the terminal failure path
             # (`ai-blocked` + the reason comment) — never a silent
             # fresh redo on top of unknown work.
-            LOGGER.exception(
-                "issue=%s resume_continue_failed", number,
-            )
             _report_resume_failure(
                 number=number, source_repo=source_repo, run_id=run_id,
-                error=exc,
+                error=facts.resume_error,
             )
-            raise
-        if scene is not None:
-            run_id, existing_worktree = scene
+            raise facts.resume_error
+        if facts.resume_scene is not None:
+            run_id = facts.resume_scene[0]
             # The attempt continues the dead run: re-bind the reused
             # id so every later line (including resuming_run) carries
             # it.
@@ -6352,11 +6523,11 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
     )
     if ops:
         run_info += " task_type=ops"
-    if repo_policy is not None and repo_policy.sha is not None:
+    if facts.repo_policy is not None and facts.repo_policy.sha is not None:
         # Issue #527 D4: the run comment carries the repository config sha
         # (the file blob at the default branch tip) so a policy change is
         # always visible on the run.
-        run_info += f" repo_config={repo_policy.sha}"
+        run_info += f" repo_config={facts.repo_policy.sha}"
     LOGGER.info(
         "issue=%s %s", number, run_info,
     )
@@ -6387,9 +6558,7 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
             return IssueResult("claim-yielded", None)
     apply_label_patch(
         number, repo=source_repo, event=EVENT_CLAIM,
-        current_labels={label.get("name") for label in issue.get(
-            "labels", []) if isinstance(label, dict)
-            and isinstance(label.get("name"), str)},
+        current_labels=claim_labels,
     )
     # Issue #266: the successful pickup resets the stale-pickup clock in
     # the health state file (bypass — a state-write failure never fails
@@ -6402,15 +6571,21 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
     # scene (Issue #48) so a SIGTERM during this tick logs the active
     # Issue context, not only systemd's generic "Stopped" line. The
     # branch and worktree path are the same derived values the
-    # worktree creation below uses (bound before the worktree exists).
+    # worktree creation below uses (bound before the worktree exists);
+    # the run identity is bound once as a frozen DeliveryContext and
+    # the failure/finish paths unpack it from there.
+    ctx = DeliveryContext(
+        run_id=run_id, issue=number, branch=branch,
+        worktree=existing_worktree or worktree_path(
+            config.repo_dir, source_repo, number, run_id,
+        ),
+    )
     set_active_run(
         number, title, branch,
         # The verified resume scene keeps its own path (after a repo
         # rename it carries the OLD slug — Issue #219); otherwise the
         # derived path (the same value the worktree creation uses).
-        str(existing_worktree or worktree_path(
-            config.repo_dir, source_repo, number, run_id,
-        )),
+        str(ctx.worktree),
     )
     publisher = ProgressPublisher(
         number, source_repo, run_id, run_command=run_command,
@@ -6452,6 +6627,7 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
             worktree, run_id=run_id, issue=number,
             source_repo=source_repo, branch=branch,
         )
+        ctx = replace(ctx, worktree=worktree)
         # Issue #219: the new session starts from the existing work —
         # the uncommitted changes and the previous session's progress —
         # instead of a fresh redo. A clean worktree without a previous
@@ -6593,6 +6769,7 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
                 repo_dir=config.repo_dir, source_repo=source_repo,
             )
         )
+        ctx = replace(ctx, pr=pr_url)
         commit = run_command(
             ["git", "rev-parse", "HEAD"], cwd=worktree,
         )
@@ -6715,7 +6892,7 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
         # merge (the external PR body carries no `Fixes #N` for this
         # Issue, so GitHub never closes it natively).
         return IssueResult(
-            "external-pr" if external_takeover else "pr", pr_url,
+            "external-pr" if external_takeover else "pr", ctx.pr,
         )
     except (ModelWaitDeadError, RecoverablePiFailure) as exc:
         # Issue #227/#325: classified Pi/model infrastructure failures are
@@ -6844,8 +7021,8 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
             # same-run resume.
             if worktree is not None:
                 cleanup_task_worktree(
-                    worktree, config.repo_dir, run_id=run_id,
-                    issue=number,
+                    ctx.worktree, config.repo_dir, run_id=ctx.run_id,
+                    issue=ctx.issue,
                 )
         # Issue #239: the failure is terminal — the Issue is `ai-blocked`
         # and the `Orbi failed` comment is posted above. Returning
@@ -6858,6 +7035,66 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
         # the next tick's restart-resume scan recovers it — no crash
         # needed for either outcome.
         return IssueResult("failed", None)
+
+
+# The scene dispatch tables (Issue #787). Phase one routes the
+# task-type scenes off the ticket-face facts alone — before any attempt
+# state is bound: a release or content ticket never binds a run id and
+# never applies the repository policy, exactly as before. Phase two
+# routes the implementation family off the gathered facts.
+_TASK_TYPE_DISPATCH: dict[DeliveryScene, Callable[..., IssueResult]] = {
+    DeliveryScene.RELEASE: _dispatch_release,
+    DeliveryScene.CONTENT_ONLY: _dispatch_content_only,
+}
+_DELIVERY_DISPATCH: dict[DeliveryScene, Callable[..., IssueResult]] = {
+    DeliveryScene.FRESH_CLAIM: _dispatch_implementation,
+    DeliveryScene.RESTART_IN_FLIGHT: _dispatch_implementation,
+    DeliveryScene.EXTERNAL_TAKEOVER: _dispatch_implementation,
+    DeliveryScene.OPS: _dispatch_implementation,
+}
+
+
+def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
+                  repo_policy: RepoPolicy | None = None) -> IssueResult:
+    """Deliver one claimed Issue by its explicit delivery scene.
+
+    Three steps, at two fact depths (Issue #787): the ticket-face facts
+    classify first — the task-type scenes dispatch immediately — then
+    the probes gather the claim facts, the classification runs again on
+    the full fact set, and the scene's handler is looked up and run.
+    The classification is the same pure `classify` the scans run, so
+    the pickup and the dispatch cannot disagree about the scene (the
+    #726 class of two-layer inconsistency).
+
+    A classified scene outside the dispatch tables means the ticket's
+    state is one only a scan can own (the opened-PR resumes, or a
+    terminal state the pickup guards exclude): the implementation
+    handler is the fallthrough, exactly the flow the pre-classification
+    code ran for every non-task-type ticket — the claim decision itself
+    stays with the scans.
+    """
+    number = int(issue["number"])
+    # Issue #100: the progress comment's issue line shows the number
+    # AND the title in every scene. The scanned issue dict always
+    # carries the GitHub title (every scan fetches `title`); a missing
+    # or non-string title fails fast here (KeyError / ValueError in
+    # `progress.issue_field`) — it is never fabricated.
+    title = issue["title"]
+    ticket_scene = classify(
+        labels=_issue_label_set(issue), scene=None, pr_state=None,
+        worktree_present=False, branch_present=False,
+        body_markers=body_markers(issue.get("body")),
+    )
+    task_handler = _TASK_TYPE_DISPATCH.get(ticket_scene)
+    if task_handler is not None:
+        return task_handler(issue, config, source_repo)
+    facts = _gather_claim_facts(issue, config, source_repo, repo_policy)
+    delivery = facts.classify_scene()
+    handler = _DELIVERY_DISPATCH.get(delivery)
+    if handler is None:
+        handler = _dispatch_implementation
+    return handler(issue, source_repo, facts,
+                   ops=delivery is DeliveryScene.OPS)
 
 
 def _finish_progress_body(*, number: int, title: str, run_id: str,
