@@ -556,7 +556,10 @@ def test_pick_resumable_delivery_returns_newest_issue_with_scene(
         "-label:ai-blocked -label:ai-merged",
         # `labels` (Issue #101): a resumed P0 delivery keeps its
         # priority in the progress comment through review/merge.
-        "--json", "number,title,state,url,labels", "--limit", "1",
+        # `body` (Issue #787): the scene classification reads the
+        # delivery markers, so the #726 external routing of a marker
+        # ticket with no trusted scene comment is reachable.
+        "--json", "number,title,state,url,labels,body", "--limit", "1",
     ]
     assert calls[1] == [
         "gh", "issue", "view", "9", "--repo", "owner/repo",
@@ -594,7 +597,10 @@ def test_pick_resumable_delivery_scans_fix_needed_and_awaiting_review(
         "-label:ai-blocked -label:ai-merged",
         # `labels` (Issue #101): a resumed P0 delivery keeps its
         # priority in the progress comment through review/merge.
-        "--json", "number,title,state,url,labels", "--limit", "1",
+        # `body` (Issue #787): the scene classification reads the
+        # delivery markers, so the #726 external routing of a marker
+        # ticket with no trusted scene comment is reachable.
+        "--json", "number,title,state,url,labels,body", "--limit", "1",
     ]]
 
 
