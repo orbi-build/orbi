@@ -120,6 +120,11 @@ def _parse_block(payload: str) -> Scene:
         raise SceneError(
             f"orbi:scene:v1 block is not valid JSON: {exc}"
         ) from exc
+    if not isinstance(data, dict):
+        # A scalar payload (`42`, `null`, `true`) is present but
+        # corrupted: it must raise `SceneError`, never a `TypeError`
+        # from the field-set diff below.
+        raise SceneError("orbi:scene:v1 block payload must be a JSON object")
     unknown = sorted(set(data) - set(_SCENE_FIELDS))
     if unknown:
         raise SceneError(

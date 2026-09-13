@@ -144,6 +144,15 @@ def test_parse_fails_fast_on_a_block_with_invalid_json():
         scene.parse("<!-- orbi:scene:v1 {not json} -->")
 
 
+@pytest.mark.parametrize("payload", ["42", "null", "true", '"text"'])
+def test_parse_fails_fast_on_a_non_object_json_payload(payload: str):
+    # A decodable-but-non-object payload is present but corrupted: it
+    # must raise `SceneError` (the corrupted branch), never the
+    # `TypeError` a scalar would cause in the field-set diff.
+    with pytest.raises(scene.SceneError, match="JSON object"):
+        scene.parse(f"<!-- orbi:scene:v1 {payload} -->")
+
+
 def test_parse_fails_fast_on_a_block_missing_a_required_field():
     payload = block_payload(block_for())
     del payload["base_sha"]
