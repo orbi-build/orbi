@@ -148,7 +148,7 @@ from orbi.pi_process import (
 # data-access layer, the git operations layer, and the CLI-install domain.
 # `runner` consumes them like any other caller; only `cli` and
 # `pilot_setup` import `runner` itself.
-from orbi import github, gitops, journal, release
+from orbi import github, gitops, journal, release, scene
 from orbi.cli_source import CliInstallError, refresh_cli_install
 from orbi.github import (
     RESUME_PR_STATE_TIMEOUT_SECONDS,
@@ -169,6 +169,7 @@ from orbi.github import (
     issue_labels,
     issue_priority,
     issue_view,
+    latest_run_marker,
     list_issues,
     list_milestones,
     milestone_issues,
@@ -2355,62 +2356,50 @@ def opened_pr_comment_body(run_id: str, run_info: str, pr_url: str,
     the contributor's own (no run marker, no `Fixes` keyword in its
     body), and the delivery branch is the PR's head branch — derived
     from the takeover worktree, never from the comment.
+
+    The machine-readable record is the single hidden `orbi:scene:v1`
+    block rendered from the `Scene` (Issue #786); the field lines below
+    the headline stay for humans only.
     """
     fields = _run_info_fields(run_info)
     if external:
         fields["external"] = "true"
     headline = "Orbi opened PR: " + pr_url
-    return field_block(run_id, headline, fields)
-
-
-OPENED_PR_PREFIX = "Orbi opened PR: "
+    scene_record = scene.Scene(
+        run_id=validate_run_id(run_id),
+        base_branch=fields["base_branch"],
+        base_sha=fields["base_sha"],
+        pr_url=pr_url,
+        external="true" if external else "",
+    )
+    body = field_block(run_id, headline, fields)
+    lines = body.splitlines()
+    lines.insert(1, scene.render(scene_record))
+    return "\n".join(lines)
 
 
 def parse_pr_comment(body: str) -> dict | None:
     """Parse one `Orbi opened PR:` comment into a resume scene.
 
-    Returns None when the body is not an opened-PR comment. Fails fast
-    when the comment is malformed: resuming must recover the exact run
-    (run id, base, PR URL), never a guess (Issue #45). Branch and
-    worktree are not parsed: the runner derives them from its own
-    config, the Issue number and the run id, so a comment can never
-    name an arbitrary local path.
+    The v1 scene block (orbi.scene) is the machine protocol; the
+    human-readable text is the legacy fallback kept for one transition
+    version (Issue #786). Returns None when the body is not an
+    opened-PR comment. Fails fast when the comment is malformed:
+    resuming must recover the exact run (run id, base, PR URL), never a
+    guess (Issue #45). Branch and worktree are not parsed: the runner
+    derives them from its own config, the Issue number and the run id,
+    so a comment can never name an arbitrary local path.
     """
-    if not isinstance(body, str) or OPENED_PR_PREFIX not in body:
+    found = scene.parse(body)
+    if found is None:
         return None
-    head = body.split(OPENED_PR_PREFIX, 1)[1]
-    pr_head = head.partition(" (")[0].splitlines()
-    pr_url = pr_head[0].strip() if pr_head else ""
-    fields: dict[str, str] = {}
-    # New comments use `- key: value`; existing comments use a
-    # parenthesized `key=value` block. Accept both during recovery.
-    for line in head.splitlines()[1:]:
-        match = re.match(
-            r"\s*-\s*([A-Za-z_][\w-]*)(?::\s*|=)(.*)\s*$", line,
-        )
-        if match:
-            fields[match.group(1)] = match.group(2)
-    legacy = head.partition(" (")[2].rstrip(")")
-    for part in legacy.split():
-        key, _, value = part.partition("=")
-        if key:
-            fields[key] = value
-    scene = {
-        "pr_url": pr_url.strip(),
-        "base_branch": fields.get("base_branch", ""),
-        "base_sha": fields.get("base_sha", ""),
-        "run_id": fields.get("run_id", ""),
+    return {
+        "run_id": found.run_id,
+        "base_branch": found.base_branch,
+        "base_sha": found.base_sha,
+        "pr_url": found.pr_url,
+        "external": found.external,
     }
-    for key, value in scene.items():
-        if not value:
-            raise ValueError(f"opened PR comment is missing {key}")
-    scene["run_id"] = validate_run_id(scene["run_id"])
-    # Issue #608: the optional external-takeover marker. Legacy scenes
-    # (and the Runner's own PRs) carry no `external` field — the scene
-    # then delivers the stable branch as before. It is added AFTER the
-    # required-field check: its absence is normal, never an error.
-    scene["external"] = fields.get("external", "")
-    return scene
 
 
 def resume_scene(comments: list[dict]) -> dict:
@@ -2418,17 +2407,19 @@ def resume_scene(comments: list[dict]) -> dict:
 
     Only comments posted by a trusted maintainer (OWNER, MAINTAINER,
     MEMBER or COLLABORATOR) are considered: a public comment can never
-    become the recovery scene (Issue #45 review, BLOCKER). Fails fast
-    when no trusted comment carries the scene: such an Issue cannot be
-    resumed and must not be guessed at.
+    become the recovery scene (Issue #45 review, BLOCKER). The two
+    failure shapes stay distinct for the caller (Issue #786):
+    `scene.SceneError` when a trusted scene comment is corrupted,
+    `scene.SceneMissingError` when no trusted comment carries a scene
+    at all. Neither may be guessed at.
     """
     for comment in reversed(comments):
         if not _comment_is_trusted(comment):
             continue
-        scene = parse_pr_comment(comment.get("body"))
-        if scene is not None:
-            return scene
-    raise ValueError(
+        found = parse_pr_comment(comment.get("body"))
+        if found is not None:
+            return found
+    raise scene.SceneMissingError(
         "no 'Orbi opened PR' comment from a trusted author; the "
         "Issue cannot be resumed"
     )
@@ -2578,24 +2569,51 @@ def pick_resumable_delivery(
         return None
     comments = issue_comments(int(issue["number"]), repo=repo)
     try:
-        scene = resume_scene(comments)
-    except ValueError as exc:
-        # Issue #726: a ticket whose body carries the external-PR marker
-        # belongs to the #608 integration flow, not the scene-recovery
-        # flow — route it (requeue / close-as-delivered) instead of
-        # burning it to ai-blocked.
+        found = resume_scene(comments)
+    except scene.SceneError as exc:
+        # A trusted scene comment exists but is corrupted (Issue #786):
+        # probe the #726 external route first; otherwise this is the
+        # ONLY trigger of `block_scene_failure` — a present-but-broken
+        # scene is a writer bug or tampering and needs a human.
         if _route_external_pr_ticket(issue, repo):
             return None
-        # Issue #672: a malformed scene is scoped to this one Issue. The
-        # Issue is marked `ai-blocked` with the concrete reason, then the
-        # scan reports "no resumable delivery" so `pick_next_delivery`
-        # keeps scanning the in-flight restart and ready queues in the
-        # SAME tick (and exits 0) instead of letting the `ValueError`
-        # bubble out of `main` and kill the whole tick — the incident
-        # where one corrupted Issue stalled the entire queue every round.
         block_scene_failure(issue, exc, repo, comments)
         return None
-    return issue, scene
+    except scene.SceneMissingError as exc:
+        # No trusted comment carries a scene at all — a distinct branch
+        # from corruption (Issue #786). The original #726 incident was
+        # exactly this shape, so the external route is probed first;
+        # un-routed, the same Issue #50 terminal contract applies
+        # through its OWN reporting (explicit reason + human next
+        # step), never `block_scene_failure`. The failure is scoped to
+        # this one Issue (Issue #672): the tick continues.
+        if _route_external_pr_ticket(issue, repo):
+            return None
+        number = int(issue["number"])
+        LOGGER.error("issue=%s resume scene is missing: %s", number, exc)
+        marker = latest_run_marker(comments)
+        try:
+            apply_label_patch(
+                number, repo=repo, event=EVENT_BLOCKED,
+                current_labels={FIX_NEEDED_LABEL},
+            )
+            comment_issue(
+                number, repo=repo,
+                body=(f"{marker}\n" if marker else "") + (
+                    f"Orbi failed: {exc}; no trusted 'Orbi opened PR' "
+                    "scene comment exists on this Issue, so the "
+                    "opened-PR delivery cannot be resumed — this is an "
+                    "external precondition the AI cannot safely judge "
+                    "or fix, so it cannot be recovered automatically "
+                    "(the Issue stays ai-blocked until a human "
+                    "decides) — restore the trusted 'Orbi opened PR' "
+                    "scene comment or relabel the Issue ai-fix-needed"
+                ),
+            )
+        except Exception:
+            LOGGER.exception("issue=%s failure reporting failed", number)
+        return None
+    return issue, found
 
 
 def block_scene_failure(issue: dict, error: ValueError, repo: str,
@@ -2615,17 +2633,7 @@ def block_scene_failure(issue: dict, error: ValueError, repo: str,
     LOGGER.error(
         "issue=%s resume scene is malformed: %s", number, error,
     )
-    marker = ""
-    for comment in reversed(comments):
-        if not _comment_is_trusted(comment):
-            continue
-        body = comment.get("body")
-        if not isinstance(body, str):
-            continue
-        match = RUN_MARKER_PATTERN.search(body)
-        if match:
-            marker = run_marker(match.group(1))
-            break
+    marker = latest_run_marker(comments)
     try:
         apply_label_patch(
             number, repo=repo, event=EVENT_BLOCKED,

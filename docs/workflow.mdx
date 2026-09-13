@@ -230,6 +230,10 @@ same Issue generates a new one. The same id appears in:
   them — the executing checkout's HEAD, the package version for a
   non-editable install, or `unknown` when the probe fails (the live
   progress comment and PR comments do not carry it);
+- the `Orbi opened PR` scene comment carries the hidden versioned run
+  scene `<!-- orbi:scene:v1 {json} -->` (`src/orbi/scene.py`): the
+  machine-readable recovery record the resume scan parses — a corrupted
+  scene and a missing scene are distinct failure branches (Issue #786);
 - the stable Issue-based feature branch (`orbi/<owner>-<repo>-issue-<N>`);
 - the worktree name (`.worktrees/orbi-<owner>-<repo>-issue-<n>-e07383c2`), plus
   the Pi session directory and run artifacts;

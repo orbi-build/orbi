@@ -50,6 +50,7 @@ update in the same PR; a silent change is a defect even when all tests pass.
 | Session files | `<worktree>/.pi-session/*.jsonl` |
 | Naming | Branch `orbi/<owner>-<repo>-issue-<N>`; worktree `.worktrees/orbi-<owner>-<repo>-issue-<N>-<run_id>` |
 | GitHub markers | `<!-- orbi:run=<run_id> -->` in every run-scoped comment and PR body; `Fixes #<N>` in the PR body |
+| Run scene | the hidden versioned block `<!-- orbi:scene:v1 {json} -->` in the trusted `Orbi opened PR` comment, rendered and parsed by `src/orbi/scene.py`; the only machine-readable recovery record of a delivery (the human-readable text beside it is display only) |
 
 Anything not in this table is internal and may change without notice.
 Adding a row is an amendment.

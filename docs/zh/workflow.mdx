@@ -180,6 +180,10 @@ attempt 的每一步复用同一个值；同一 Issue 的 retry 生成新的。�
 - 里程碑与场景评论还携带隐藏的 runner marker `<!-- runner=1a2b3c4d -->`：
   写出评论的部署指纹——执行 checkout 的 HEAD；非 editable 安装为包版本；
   探测失败为 `unknown`（live progress 评论与 PR 评论不带它）；
+- `Orbi opened PR` 场景评论携带隐藏的带版本 run 现场
+  `<!-- orbi:scene:v1 {json} -->`（`src/orbi/scene.py`）：这是 resume
+  扫描解析的机器可读恢复记录——现场损坏与现场缺失是两个不同的失败
+  分支（Issue #786）；
 - 稳定的按 Issue 命名的 feature branch（`orbi/<owner>-<repo>-issue-<N>`）；
 - worktree 名（`.worktrees/orbi-<owner>-<repo>-issue-<n>-e07383c2`），以及 Pi
   session 目录和 run 产物；

@@ -16,6 +16,7 @@ import subprocess
 import pytest
 
 import orbi.runner as runner
+from orbi import scene
 from seam import seam
 import orbi.journal as journal
 
@@ -949,13 +950,15 @@ def test_finish_progress_fix_needed_without_run_id_is_noop(monkeypatch):
 def test_block_scene_failure_states_why_not_auto_recoverable(
         monkeypatch, caplog,
 ):
-    """Issue #50 + #672: a scene that cannot be recovered (no trusted
-    `Orbi opened PR:` comment) is an external precondition the
-    AI cannot fix by itself (the runner cannot derive run_id/branch/
-    worktree/PR without it and cannot start a review session): the
-    Issue is marked ai-blocked, the comment states the EXPLICIT
-    reason why automatic recovery is impossible plus the human
-    next step, and the function returns so the tick continues."""
+    """Issue #50 + #672 + #786: a CORRUPTED scene (a trusted
+    `Orbi opened PR:` comment exists but cannot be parsed) is an
+    external precondition the AI cannot fix by itself (the runner
+    cannot derive run_id/branch/worktree/PR without it and cannot
+    start a review session): the Issue is marked ai-blocked, the
+    comment states the EXPLICIT reason why automatic recovery is
+    impossible plus the human next step, and the function returns so
+    the tick continues. `block_scene_failure` is the ONLY trigger of
+    this path — a missing scene goes through its own branch."""
     issue = {"number": 39, "title": "task", "body": ""}
     comments = [
         {"body": "public comment", "authorAssociation": "NONE"},
@@ -969,7 +972,7 @@ def test_block_scene_failure_states_why_not_auto_recoverable(
         lambda *args, **kwargs: posted.append(kwargs["body"]),
     )
     runner.block_scene_failure(
-        issue, ValueError("no trusted opened PR scene comment"),
+        issue, scene.SceneError("opened PR comment is missing run_id"),
         "owner/repo", comments,
     )
     assert edits == [

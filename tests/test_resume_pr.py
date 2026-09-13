@@ -18,6 +18,7 @@ import pytest
 
 import orbi.runner as runner
 from orbi import progress
+from orbi import scene as scene_mod
 from tests.test_progress_wiring import make_fake_gh
 from seam import seam
 import orbi.journal as journal
@@ -75,8 +76,18 @@ def test_parse_pr_comment_returns_scene_for_multiline_opened_pr_comment():
     )
     scene = runner.parse_pr_comment(body)
     assert scene == scene_for()
+    # Issue #786: the machine-readable record is the hidden
+    # `orbi:scene:v1` block right under the run marker; the field lines
+    # stay for humans only.
+    scene_block = scene_mod.render(scene_mod.Scene(
+        run_id=FAKE_RUN_ID,
+        base_branch="main",
+        base_sha="abc123def456",
+        pr_url=FAKE_PR_URL,
+    ))
     assert body.splitlines() == [
         f"<!-- orbi:run={FAKE_RUN_ID} -->",
+        scene_block,
         f"Orbi opened PR: {FAKE_PR_URL}",
         "- base_branch: main",
         "- base_sha: abc123def456",
@@ -650,8 +661,10 @@ def test_pick_resumable_delivery_blocks_issue_without_scene_comment(
     monkeypatch, caplog, tmp_path,
 ):
     """An `ai-fix-needed` Issue whose comment history carries no trusted
-    opened-PR comment at all cannot be resumed: it is blocked and the
-    scan returns None so the tick continues (Issue #672)."""
+    opened-PR comment at all cannot be resumed: it is blocked through
+    the DISTINCT missing-scene branch (Issue #786 — never
+    `block_scene_failure`, which only fires on a corrupted scene) and
+    the scan returns None so the tick continues (Issue #672)."""
     edits: list[list[str]] = []
     comments: list[str] = []
     monkeypatch.setattr(seam, "run_command",
@@ -671,7 +684,8 @@ def test_pick_resumable_delivery_blocks_issue_without_scene_comment(
         "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
     ]]
     assert "Orbi failed:" in comments[0]
-    assert "issue=9 resume scene is malformed" in caplog.text
+    assert "no trusted 'Orbi opened PR'" in comments[0]
+    assert "issue=9 resume scene is missing" in caplog.text
 
 
 def test_pick_resumable_delivery_blocks_pr_opened_issue_without_scene(
@@ -704,7 +718,7 @@ def test_pick_resumable_delivery_blocks_pr_opened_issue_without_scene(
     # The erroneous ai-pr-opened label is NOT auto-cleaned (Issue #672).
     assert "ai-pr-opened" not in edits[0]
     assert "Orbi failed:" in comments[0]
-    assert "issue=9 resume scene is malformed" in caplog.text
+    assert "issue=9 resume scene is missing" in caplog.text
 
 
 def test_pick_resumable_delivery_skips_closed_issue(monkeypatch, tmp_path):
@@ -761,11 +775,62 @@ def test_pick_resumable_delivery_blocks_issue_when_scene_is_malformed(
     assert "issue=9 resume scene is malformed" in caplog.text
 
 
+def test_pick_resumable_delivery_resumes_from_the_v1_scene_block(
+    monkeypatch, tmp_path,
+):
+    """Issue #786: a production opened-PR comment carries the hidden
+    `orbi:scene:v1` block, and the scan resumes the delivery from the
+    block — the legacy text fallback stays for one transition version
+    so older comments keep resuming."""
+    body = runner.opened_pr_comment_body(
+        FAKE_RUN_ID,
+        "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4",
+        FAKE_PR_URL,
+    )
+    monkeypatch.setattr(seam, "run_command", make_pick_fake(
+        issue_payload(), gh_comments_payload([body]),
+    ))
+    issue, scene = runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+    )
+    assert issue["number"] == 9
+    assert scene == scene_for()
+
+
+def test_pick_resumable_delivery_blocks_on_a_corrupted_v1_block(
+    monkeypatch, tmp_path,
+):
+    """Issue #786: a corrupted `orbi:scene:v1` block is 损坏 — the
+    corrupted branch fires `block_scene_failure` (its only trigger)
+    and never falls back to the legacy text beside the block."""
+    body = (
+        f"<!-- orbi:run={FAKE_RUN_ID} -->\n"
+        "<!-- orbi:scene:v1 {broken -->\n"
+        f"Orbi opened PR: {FAKE_PR_URL} "
+        "(base_branch=main base_sha=abc123def456 run_id=a1b2c3d4)"
+    )
+    blocked = []
+    monkeypatch.setattr(
+        runner, "block_scene_failure",
+        lambda issue, error, repo, comments: blocked.append(
+            issue["number"],
+        ),
+    )
+    monkeypatch.setattr(seam, "run_command", make_pick_fake(
+        issue_payload(), gh_comments_payload([body]),
+    ))
+    assert runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+    ) is None
+    assert blocked == [9]
+
+
 def test_pick_resumable_delivery_blocks_issue_when_no_trusted_scene(
     monkeypatch, caplog, tmp_path,
 ):
     """An `ai-fix-needed` Issue whose comment history carries no trusted
-    opened-PR comment cannot be resumed: blocked, not skipped."""
+    opened-PR comment cannot be resumed: blocked, not skipped — through
+    the missing-scene branch (Issue #786), never `block_scene_failure`."""
     calls = []
     edits: list[list[str]] = []
     comments: list[str] = []
@@ -790,7 +855,51 @@ def test_pick_resumable_delivery_blocks_issue_when_no_trusted_scene(
         "--add-label", "ai-blocked", "--remove-label", "ai-fix-needed",
     ]]
     assert "Orbi failed:" in comments[0]
-    assert "issue=9 resume scene is malformed" in caplog.text
+    assert "issue=9 resume scene is missing" in caplog.text
+
+
+def test_pick_resumable_delivery_missing_scene_names_the_run_marker(
+    monkeypatch, tmp_path,
+):
+    """The missing-scene block names the run when some OTHER trusted
+    comment (e.g. the progress comment) still carries its marker — the
+    same run id, never a new one."""
+    comments: list[str] = []
+    monkeypatch.setattr(seam, "run_command", make_pick_fake(
+        issue_payload(),
+        gh_comments_payload([
+            f"<!-- orbi:run={FAKE_RUN_ID} -->\n\n**Orbi progress**\n"
+            "- phase: review",
+        ]),
+        edits=[],
+        comments=comments,
+    ))
+    assert runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+    ) is None
+    assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in comments[0]
+    assert "no trusted 'Orbi opened PR'" in comments[0]
+
+
+def test_pick_resumable_delivery_missing_scene_reporting_failure_is_bypass(
+    monkeypatch, caplog, tmp_path,
+):
+    """A failure of the missing-scene REPORTING itself is logged, never
+    raised (the same bypass contract as the corrupted path): the scan
+    returns None so the tick continues."""
+    monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
+    monkeypatch.setattr(seam, "run_command",
+                        make_pick_fake(issue_payload()))
+
+    def failing_edit(*args, **kwargs):
+        raise RuntimeError("gh down")
+
+    monkeypatch.setattr(seam, "edit_issue", failing_edit)
+    caplog.set_level("ERROR")
+    assert runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1,
+    ) is None
+    assert "failure reporting failed" in caplog.text
 
 
 def test_pick_resumable_delivery_scene_failure_carries_marker_when_present(

@@ -28,7 +28,11 @@ from orbi.delivery_labels import (
     label_patch,
 )
 from orbi.journal import LOGGER, run_command, single_line
-from orbi.progress import format_status_comment
+from orbi.progress import (
+    RUN_MARKER_PATTERN,
+    format_status_comment,
+    run_marker,
+)
 
 GH_READ_MAX_ATTEMPTS = 3
 GH_READ_BACKOFF_SECONDS = 1
@@ -695,6 +699,25 @@ def _comment_is_trusted(comment: object) -> bool:
     return _strip_bot_suffix(login) == _strip_bot_suffix(
         _authenticated_github_login()
     )
+
+
+def latest_run_marker(comments: list[dict]) -> str:
+    """The latest trusted comment's rendered run marker, or "".
+
+    Recovery reports name the run they failed for when any trusted
+    comment of the Issue still carries the marker; an empty string when
+    none does. A pure scan over the already-fetched comment list.
+    """
+    for comment in reversed(comments):
+        if not _comment_is_trusted(comment):
+            continue
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        match = RUN_MARKER_PATTERN.search(body)
+        if match:
+            return run_marker(match.group(1))
+    return ""
 
 
 def open_pr_for_branch(repo_dir: Path, branch: str) -> dict | None:

@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 import orbi.runner as runner
+from orbi import scene as scene_mod
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 README = REPO_ROOT / "README.md"
@@ -119,8 +120,9 @@ def test_security_documents_recovery_scene_contract():
         assert "derived" in text or "推导" in text, (
             f"docs/{slug} must say branch/worktree are derived"
         )
-    # The scene comment prefix is the real code contract.
-    assert runner.OPENED_PR_PREFIX == "Orbi opened PR: "
+    # The scene comment prefix is the real code contract (orbi.scene
+    # owns it since Issue #786).
+    assert scene_mod.OPENED_PR_PREFIX == "Orbi opened PR: "
     # The PR body run marker is part of the documented contract.
     assert "orbi:run=" in docs_page("workflow")
 

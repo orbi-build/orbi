@@ -29,7 +29,10 @@ the delivery contract, local-only secrets, and no remote state store.
   scene is only read from comments posted by a trusted maintainer
   (OWNER/MAINTAINER/MEMBER/COLLABORATOR), and branch/worktree paths are
   derived from the configured repo, Issue number and run id — a public
-  comment can never steer the Runner into an arbitrary local path.
+  comment can never steer the Runner into an arbitrary local path. The
+  machine-readable record is the hidden versioned `orbi:scene:v1` block
+  rendered and parsed by `src/orbi/scene.py`; the readable text beside
+  it is display only.
 
 ## GitHub token (API) and SSH (git data) — two channels
 
