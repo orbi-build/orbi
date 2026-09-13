@@ -701,7 +701,7 @@ def test_sync_drifted_units_still_drifted_after_sync_fails_fast(
                 repo, installed, run_command=lambda command, **kwargs: "",
             )
     assert "unit_drift unit=orbi@.timer" in caplog.text
-    assert "fix=orbi install-units" in caplog.text
+    assert 'fix="orbi install-units"' in caplog.text
     assert "unit_drift auto_synced" not in caplog.text
 
 

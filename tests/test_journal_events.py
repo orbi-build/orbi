@@ -282,6 +282,7 @@ def test_detector_flags_kind_lines_and_ignores_prose():
         "other.info('run_end run=x')\n"           # not the LOGGER name
         "LOGGER.log(logging.INFO, 'new_event x=1')\n"  # log form
         "LOGGER.info()\n"                          # no format: skipped
+        "LOGGER.info(fmt_variable)\n"              # non-constant format: outside the net
     )
     assert _direct_logger_kind_lines(source) == [
         (1, "run_end", "run_end run=x"),

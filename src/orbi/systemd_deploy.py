@@ -31,9 +31,6 @@ import re
 from pathlib import Path
 
 from orbi.progress import quote_value
-
-LOGGER = logging.getLogger("orbi.systemd_deploy")
-
 from orbi.journal import event
 
 SERVICE_UNIT = "orbi@.service"
@@ -260,12 +257,14 @@ def unit_status(repo_dir: Path, installed_dir: Path,
 
 
 def drift_lines(status: list[dict]) -> list[str]:
-    """One structured ``unit_drift`` line per drifted unit.
+    """One ``unit_drift`` report line per drifted unit.
 
-    Every line carries the repo path, the installed path, both hashes
-    and the idempotent fix command (Issue #103). Values containing
-    spaces are quoted (the progress.quote_value convention) so the
-    line stays parseable.
+    Builds the lines carried by the ``UnitDriftError`` message: the
+    repo path, the installed path, both hashes and the idempotent fix
+    command (Issue #103). Values containing spaces are quoted (the
+    progress.quote_value convention) so the line stays parseable.
+    This helper never logs — the journal emission goes through
+    ``event()`` (`_log_drifted_units`, Issue #791).
     """
     lines: list[str] = []
     for entry in status:
@@ -281,6 +280,22 @@ def drift_lines(status: list[dict]) -> list[str]:
             f"fix={FIX_COMMAND}"
         )
     return lines
+
+
+def _log_drifted_units(status: list[dict]) -> None:
+    """Emit one structured ``unit_drift`` failure line per drifted unit
+    through the single journal emission point (Issue #791): same fields
+    as ``drift_lines``, minus the report-only message role."""
+    for entry in status:
+        if not entry["drifted"]:
+            continue
+        event(
+            "unit_drift", level=logging.ERROR, unit=entry["unit"],
+            repo=entry["repo_path"], installed=entry["installed_path"],
+            repo_sha256=entry["repo_sha256"] or "-",
+            installed_sha256=entry["installed_sha256"] or "-",
+            fix=FIX_COMMAND,
+        )
 
 
 def check_unit_drift(repo_dir: Path,
@@ -301,8 +316,7 @@ def check_unit_drift(repo_dir: Path,
     if not lines:
         event("unit_drift", result="clean", installed_dir=installed_dir)
         return
-    for line in lines:
-        LOGGER.error(line)
+    _log_drifted_units(status)
     raise UnitDriftError(
         "installed systemd units have drifted from the repo templates; "
         f"sync with: {FIX_COMMAND}\n" + "\n".join(lines)
@@ -343,8 +357,7 @@ def sync_drifted_units(repo_dir: Path,
     after = unit_status(repo_dir, installed_dir, unit_name)
     lines = drift_lines(after)
     if lines:
-        for line in lines:
-            LOGGER.error(line)
+        _log_drifted_units(after)
         raise UnitDriftError(
             "installed systemd units still drift after the pre-start "
             f"sync; sync with: {FIX_COMMAND}\n" + "\n".join(lines)

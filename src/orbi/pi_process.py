@@ -1307,7 +1307,8 @@ def _stream_pi_once(
                     state="model_wait" if activity["model_wait"]
                     else "resumed",
                 )
-                last_model_wait = activity["model_wait"]                # Leaving model_wait (the next session event arrived):
+                last_model_wait = activity["model_wait"]
+                # Leaving model_wait (the next session event arrived):
                 # the swallow-probe window is over — reset it so a later
                 # model_wait starts a fresh window (Issue #233).
                 if not activity["model_wait"]:

@@ -1356,6 +1356,25 @@ def test_sync_active_milestone_variable_removes_stale_value():
     ]
 
 
+def test_sync_active_milestone_variable_absent_on_404(caplog):
+    """Removing an already-absent variable is a scene, not a failure:
+    the read's 404 emits the structured `absent` line and stops."""
+    calls = []
+
+    def command(args, **kwargs):
+        calls.append(args)
+        raise subprocess.CalledProcessError(1, args, stderr="HTTP 404")
+
+    with caplog.at_level("INFO"):
+        runner.sync_active_milestone_variable(
+            "owner/repo", None, run_command=command,
+        )
+    assert calls == [
+        ["gh", "api", "repos/owner/repo/actions/variables/ORBI_ACTIVE_MILESTONE"],
+    ]
+    assert "active_milestone_variable_absent repo=owner/repo" in caplog.text
+
+
 def test_sync_active_milestone_variable_failure_is_bypass(caplog):
     def command(args, **kwargs):
         raise RuntimeError("offline")
@@ -11948,7 +11967,7 @@ def test_main_unit_drift_blocks_claim_before_slot(monkeypatch, tmp_path,
     assert f"installed={installed / 'orbi@.timer'}" in caplog.text
     assert "repo_sha256=" in caplog.text
     assert "installed_sha256=" in caplog.text
-    assert "fix=orbi install-units" in caplog.text
+    assert 'fix="orbi install-units"' in caplog.text
     # No slot was taken and nothing was claimed.
     assert not (repo / ".orbi" / "slots").exists()
 

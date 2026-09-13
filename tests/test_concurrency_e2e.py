@@ -1635,7 +1635,7 @@ def test_unit_drift_unresolvable_blocks_the_start_without_claiming(
     assert f"installed={unit_dir / 'orbi@.timer'}" in err
     assert "repo_sha256=" in err
     assert "installed_sha256=" in err
-    assert "fix=orbi install-units" in err
+    assert 'fix="orbi install-units"' in err
     assert "unit_drift auto_synced" not in err
     # Nothing was claimed: no labels, no comments, no Pi, no slot.
     snap = read_state(state)

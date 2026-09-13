@@ -4934,8 +4934,10 @@ def confirm_merged(worktree: Path, pr: dict, base_branch: str,
     """
     state = pr_view(pr["number"], "state,mergedAt,mergeCommit", cwd=worktree)
     if state.get("state") != "MERGED" or not state.get("mergedAt"):
-        event("confirm_merged_not_merged", level=logging.ERROR,
-          pr=pr["number"], state=state.get("state"))
+        event(
+            "confirm_merged_not_merged", level=logging.ERROR,
+            pr=pr["number"], state=state.get("state"),
+        )
         raise RuntimeError(
             f"PR #{pr['number']} is not merged (state={state.get('state')})"
         )
@@ -5050,9 +5052,9 @@ def log_recovery_ci_status(pr: dict, repo: str) -> None:
         )
         return
     event(
-            "review_recovery_ci_status", pr=pr["number"],
-            checks=",".join(summary) or "none",
-        )
+        "review_recovery_ci_status", pr=pr["number"],
+        checks=",".join(summary) or "none",
+    )
 
 
 # ---------------------------------------------------------------------------
