@@ -143,6 +143,16 @@ jobs:
           python3 tools/coverage_gate.py
           python3 tools/diff_coverage_gate.py origin/main
 
+      # Patch ratchet (Issue #789): the test corpus may only shrink.
+      # tools/patch_ratchet.py counts `monkeypatch.setattr(runner,` and
+      # `command[:N] ==` over tests/ (tests/fakes/ excluded) and fails
+      # the PR when either count rises above the frozen baseline
+      # (tools/patch_ratchet_baseline.json) — the ratchet that lets
+      # runner.py shrink instead of freeze: migrating a test to the
+      # fakes lowers the counts, adding a new patch goes red.
+      - name: Enforce the patch ratchet (contract, Issue #789)
+        run: python3 tools/patch_ratchet.py
+
       # Mintlify docs build smoke (Issue #116): the official `mint` CLI
       # validates the docs/ build (docs.json config, pages, links) in
       # strict mode — non-zero exit on any warning or error. Same single
