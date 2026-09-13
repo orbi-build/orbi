@@ -21024,8 +21024,8 @@ def test_wait_for_delivery_closes_triage_issue_after_auto_merge(
 def test_route_external_pr_probe_failure_falls_through_to_block(
     monkeypatch, tmp_path,
 ):
-    """Issue #726：接管探针自身失败（gh 异常）时绝不瞎猜路由——落回
-    旧的 block 路径，让失败被看见。"""
+    """Issue #726/#786：接管探针自身失败（gh 异常）时绝不瞎猜路由——
+    落回 missing-scene 分支自己的 block 路径，让失败被看见。"""
     monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
     monkeypatch.setattr(seam, "run_command",
@@ -21033,10 +21033,13 @@ def test_route_external_pr_probe_failure_falls_through_to_block(
         if command[:3] == ["gh", "issue", "list"]
         else (_ for _ in ()).throw(RuntimeError("gh down")),
     )
-    blocked = []
-    monkeypatch.setattr(
-        runner, "block_scene_failure",
-        lambda issue, error, repo, comments: blocked.append(issue["number"]),
+    edits = []
+    posted = []
+    monkeypatch.setattr(seam, "edit_issue",
+        lambda *args, **kwargs: edits.append((args, kwargs)),
+    )
+    monkeypatch.setattr(seam, "comment_issue",
+        lambda *args, **kwargs: posted.append(kwargs["body"]),
     )
     issue = {"number": 100, "title": "triage", "state": "OPEN",
              "body": "<!-- orbi:external-pr:55 -->\nfix",
@@ -21045,7 +21048,10 @@ def test_route_external_pr_probe_failure_falls_through_to_block(
         "owner/repo", tmp_path / "slots", 2,
     )
     assert result is None
-    assert blocked == [100]
+    assert edits == [((100,), {"repo": "owner/repo",
+                               "add": "ai-blocked",
+                               "remove": "ai-fix-needed"})]
+    assert "no trusted 'Orbi opened PR'" in posted[0]
 
 
 def test_route_external_pr_unknown_state_falls_through_to_block(
@@ -21062,10 +21068,13 @@ def test_route_external_pr_unknown_state_falls_through_to_block(
         if command[:3] == ["gh", "pr", "view"] else (_ for _ in ()).throw(
             AssertionError(f"unexpected command: {command}"))),
     )
-    blocked = []
-    monkeypatch.setattr(
-        runner, "block_scene_failure",
-        lambda issue, error, repo, comments: blocked.append(issue["number"]),
+    edits = []
+    posted = []
+    monkeypatch.setattr(seam, "edit_issue",
+        lambda *args, **kwargs: edits.append((args, kwargs)),
+    )
+    monkeypatch.setattr(seam, "comment_issue",
+        lambda *args, **kwargs: posted.append(kwargs["body"]),
     )
     issue = {"number": 100, "title": "triage", "state": "OPEN",
              "body": "<!-- orbi:external-pr:55 -->\nfix",
@@ -21074,14 +21083,17 @@ def test_route_external_pr_unknown_state_falls_through_to_block(
         "owner/repo", tmp_path / "slots", 2,
     )
     assert result is None
-    assert blocked == [100]
+    assert edits == [((100,), {"repo": "owner/repo",
+                               "add": "ai-blocked",
+                               "remove": "ai-fix-needed"})]
+    assert "no trusted 'Orbi opened PR'" in posted[0]
 
 
 def test_route_external_pr_ignores_tickets_without_marker(
     monkeypatch, tmp_path,
 ):
-    """Issue #726 的边界：body 没有外部标记的普通场景损坏票照走 block
-    路径——路由器零介入。"""
+    """Issue #726 的边界：body 没有外部标记的普通无现场票照走 block
+    路径——路由器零介入（连 pr view 都不发生）。"""
     monkeypatch.setattr(runner, "slot_occupancy", lambda *a, **k: [])
     monkeypatch.setattr(seam, "issue_comments", lambda number, repo: [])
 
@@ -21091,10 +21103,13 @@ def test_route_external_pr_ignores_tickets_without_marker(
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    blocked = []
-    monkeypatch.setattr(
-        runner, "block_scene_failure",
-        lambda issue, error, repo, comments: blocked.append(issue["number"]),
+    edits = []
+    posted = []
+    monkeypatch.setattr(seam, "edit_issue",
+        lambda *args, **kwargs: edits.append((args, kwargs)),
+    )
+    monkeypatch.setattr(seam, "comment_issue",
+        lambda *args, **kwargs: posted.append(kwargs["body"]),
     )
     issue = {"number": 41, "title": "dev", "state": "OPEN",
              "body": "plain ticket", "labels": [{"name": "ai-pr-opened"}]}
@@ -21102,7 +21117,10 @@ def test_route_external_pr_ignores_tickets_without_marker(
         "owner/repo", tmp_path / "slots", 2,
     )
     assert result is None
-    assert blocked == [41]
+    assert edits == [((41,), {"repo": "owner/repo",
+                              "add": "ai-blocked",
+                              "remove": "ai-fix-needed"})]
+    assert "no trusted 'Orbi opened PR'" in posted[0]
     with pytest.raises(AssertionError, match="unexpected command"):
         fake_run(["gh", "release", "view"])
 
