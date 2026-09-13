@@ -21,7 +21,12 @@ counts — the ONE deliberate command that can lower it.
 
 Scope: every ``*.py`` under ``tests/`` EXCEPT ``tests/fakes/`` — the
 fakes ARE the sanctioned alternative, and their internal command
-dispatch is implementation, not assertion.
+dispatch is implementation, not assertion. The ``command[:N] ==``
+metric also skips the fake-based seam modules
+(``tests/test_*_fakes.py``): at the adapter seam the command line IS
+the contract (Article 5.2), so their argv asserts are sanctioned —
+the ``monkeypatch.setattr(runner,`` metric still counts them, so a
+runner patch dressed as a fake-based test still fails.
 
 Usage:  python3 tools/patch_ratchet.py [--update] [tests_dir]
 """
@@ -45,13 +50,16 @@ METRICS = ("monkeypatch_setattr_runner", "command_shape_asserts")
 
 
 def counts(tests_dir: Path) -> dict[str, int]:
-    """Count both patterns over the test corpus, excluding fakes/."""
+    """Count both patterns over the test corpus, excluding fakes/ and
+    (for the shape metric) the fake-based seam modules."""
     totals = {metric: 0 for metric in METRICS}
     for path in sorted(tests_dir.rglob("*.py")):
         if path.parent.name == "fakes":
             continue
         text = path.read_text(encoding="utf-8")
         totals["monkeypatch_setattr_runner"] += text.count(SETATTR_RUNNER)
+        if path.name.endswith("_fakes.py"):
+            continue
         totals["command_shape_asserts"] += len(
             COMMAND_SHAPE_RE.findall(text)
         )

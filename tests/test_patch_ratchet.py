@@ -61,6 +61,22 @@ def test_counts_both_patterns_and_excludes_fakes(tmp_path):
     }
 
 
+def test_shape_metric_skips_the_fake_based_seam_modules(tmp_path):
+    """The fake-based seam modules (test_*_fakes.py) may assert the argv
+    contract — at the adapter seam the command line IS the contract
+    (Article 5.2). The runner-patch metric still counts them: a runner
+    patch dressed as a fake-based test stays ratcheted shut."""
+    module = load_ratchet()
+    tests = make_corpus(tmp_path, {
+        "test_git_fakes.py": [SHAPE_LINE, SHAPE_LINE, PATCH_LINE],
+        "test_runner.py": [SHAPE_LINE],
+    })
+    assert module.counts(tests) == {
+        "monkeypatch_setattr_runner": 1,
+        "command_shape_asserts": 1,
+    }
+
+
 def test_main_fails_when_a_count_rises_above_the_baseline(tmp_path):
     module = load_ratchet()
     tests = make_corpus(tmp_path, {"test_one.py": [PATCH_LINE]})

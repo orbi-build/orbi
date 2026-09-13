@@ -126,13 +126,29 @@ class FakeGh:
 
     # --- issue verbs -------------------------------------------------------
 
+    # The flags each verb implements; anything else fails fast (real gh
+    # errors on an unknown flag, and silently ignoring a filter would
+    # widen the match set — the same wrong-answer class as an
+    # uninterpreted search qualifier).
+    _ISSUE_FLAGS = {
+        "view": ("--repo", "--json"),
+        "edit": ("--repo", "--add-label", "--remove-label"),
+        "comment": ("--repo", "--body"),
+        "close": ("--repo",),
+    }
+
     def _issue(self, args: list[str]) -> str:
         sub = args[0]
         if sub == "list":
             return self._issue_list(args[1:])
+        if sub not in self._ISSUE_FLAGS:
+            self._unsupported(["gh", "issue", sub])
         number = int(args[1])
         issue = self._issue_or_fail(number)
         flags = self._flags(args[2:])
+        self._known_flags(
+            flags, self._ISSUE_FLAGS[sub], ["gh", "issue", sub]
+        )
         self._repo_or_fail((flags.get("--repo") or [self.repo])[0])
         if sub == "view":
             return json.dumps(
@@ -149,13 +165,18 @@ class FakeGh:
                 "body": flags["--body"][0],
             })
             return ""
-        if sub == "close":
-            issue["state"] = "closed"
-            return ""
-        return self._unsupported(["gh", "issue", sub])
+        # `close` — the last verb `_ISSUE_FLAGS` admits above.
+        issue["state"] = "closed"
+        return ""
 
     def _issue_list(self, args: list[str]) -> str:
         flags = self._flags(args)
+        self._known_flags(
+            flags,
+            ("--repo", "--state", "--label", "--search", "--json",
+             "--limit"),
+            ["gh", "issue", "list"],
+        )
         self._repo_or_fail((flags.get("--repo") or [self.repo])[0])
         state = (flags.get("--state") or ["open"])[0]
         label = (flags.get("--label") or [None])[0]
@@ -273,6 +294,10 @@ class FakeGh:
         sub = args[0]
         if sub == "list":
             flags = self._flags(args[1:])
+            self._known_flags(
+                flags, ("--state", "--head", "--json", "--limit"),
+                ["gh", "pr", "list"],
+            )
             state = (flags.get("--state") or ["open"])[0]
             head = (flags.get("--head") or [None])[0]
             fields = flags["--json"][0].split(",")
@@ -295,6 +320,7 @@ class FakeGh:
                 f"number of {number}."
             )
         flags = self._flags(args[2:])
+        self._known_flags(flags, ("--repo", "--json"), ["gh", "pr", "view"])
         self._repo_or_fail((flags.get("--repo") or [self.repo])[0])
         fields = flags["--json"][0].split(",")
         rendered = {}
@@ -345,6 +371,12 @@ class FakeGh:
             self._fail(
                 1, f"fake-gh: repository mismatch: {repo} != {self.repo}"
             )
+
+    def _known_flags(self, flags: dict[str, list[str]], known,
+                     context: list[str]) -> None:
+        unknown = sorted(set(flags) - set(known))
+        if unknown:
+            self._unsupported([*context, *unknown])
 
     def _flags(self, args: list[str]) -> dict[str, list[str]]:
         """Group `--flag value...` argv segments. A value that itself

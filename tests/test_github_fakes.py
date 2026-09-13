@@ -424,6 +424,19 @@ def test_fake_fails_fast_on_unsupported_field_requests(fake_gh):
     )
 
 
+def test_fake_fails_fast_on_unimplemented_list_flags(fake_gh):
+    fake_gh.add_issue(1, labels=(READY_LABEL,))
+    # `--milestone` is a real gh filter the fake does not implement:
+    # silently ignoring it would match issues the real scan excludes.
+    assert_fails_with(
+        lambda: github.list_issues(
+            "owner/repo", state="open", milestone="v1",
+            json_fields="number", limit=200,
+        ),
+        "unsupported command: gh issue list --milestone",
+    )
+
+
 def test_fake_fails_fast_on_bad_search_qualifiers(fake_gh):
     fake_gh.add_issue(1, labels=(READY_LABEL,))
     assert_fails_with(
