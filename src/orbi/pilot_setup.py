@@ -63,6 +63,7 @@ from orbi.delivery_labels import (
 from orbi import git_transport
 from orbi import systemd_deploy
 from orbi.progress import quote_value
+from orbi.journal import event
 
 # Bumped whenever the setup output contract changes shape.
 # Issue #152 added the `cli=` line (the editable install step).
@@ -753,7 +754,7 @@ def ensure_worktrees_ignored(repo_dir: Path, *, run_command) -> bool:
                 existing + ("\n" if existing and not existing.endswith("\n") else "")
                 + ".worktrees/\n", encoding="utf-8",
             )
-        LOGGER.info("worktrees_exclude_added repo=%s path=%s", repo_dir, exclude)
+        event("worktrees_exclude_added", repo=repo_dir, path=exclude)
         return True
 
 

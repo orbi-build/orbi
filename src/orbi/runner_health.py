@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orbi.delivery_labels import READY_LABEL
-from orbi.journal import RunIdFilter
+from orbi.journal import RunIdFilter, event
 from orbi.progress import format_status_comment, run_marker
 from orbi.systemd_deploy import service_instances
 
@@ -170,10 +170,10 @@ def load_health_state(path: Path) -> dict:
         # No state file yet: the normal first-tick case, not an error.
         return fresh_state()
     except (OSError, ValueError):
-        LOGGER.warning("health_state_unreadable path=%s", path)
+        event("health_state_unreadable", level=logging.WARNING, path=path)
         return fresh_state()
     if not isinstance(data, dict):
-        LOGGER.warning("health_state_unreadable path=%s", path)
+        event("health_state_unreadable", level=logging.WARNING, path=path)
         return fresh_state()
     state = fresh_state()
     runs = data.get("runs")
@@ -597,7 +597,7 @@ def run_health_check(config: RunnerConfig, *, run_command) -> list[str]:
     state_path = health_state_path(config.repo_dir)
     lock_fd = _acquire_health_lock(state_path, blocking=False)
     if lock_fd is None:
-        LOGGER.info("health_check_skipped reason=health_lock_busy")
+        event("health_check_skipped", reason="health_lock_busy")
         return []
     try:
         return _run_health_check_locked(config, run_command=run_command)
@@ -631,16 +631,15 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
                 run_command, unit_name=unit_name,
             )
             kind, reason_line = classify_crash(journal_lines)
-            LOGGER.info(
-                "health_degraded check=crash_loop crashes=%s "
-                "window_minutes=%s kind=%s", crashes, CRASH_WINDOW_MINUTES,
-                kind,
+            event(
+                "health_degraded", check="crash_loop", crashes=crashes,
+                window_minutes=CRASH_WINDOW_MINUTES, kind=kind,
             )
             if not alert_repo:
-                LOGGER.warning(
-                    "health_alert_repo_undetermined check=crash_loop "
-                    "crashes=%s",
-                    crashes,
+                event(
+                    "health_alert_repo_undetermined",
+                    level=logging.WARNING, check="crash_loop",
+                    crashes=crashes,
                 )
             else:
                 detail = (
@@ -668,11 +667,11 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
             if key in state["alerted"]:
                 continue
             state["alerted"].append(key)
-            LOGGER.info(
-                "health_degraded check=repeated_failure issue=%s count=%s "
-                "fingerprint=%s",
-                finding["repo"], finding["issue"],
-                finding["fingerprint"],
+            event(
+                "health_degraded", check="repeated_failure",
+                issue=f"{finding['repo']}#{finding['issue']}",
+                count=finding["count"],
+                fingerprint=finding["fingerprint"],
             )
             run_command([
                 "timeout", str(GH_TIMEOUT_SECONDS), "gh", "issue",
@@ -694,20 +693,24 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
             except ValueError:
                 ready = []
             if not (isinstance(ready, list) and ready):
-                LOGGER.info(
-                    "health_check_queue_empty since_pickup_seconds=%s",
-                    int(time.time() - state["last_pickup_ts"]),
+                event(
+                    "health_check_queue_empty",
+                    since_pickup_seconds=int(
+                        time.time() - state["last_pickup_ts"],
+                    ),
                 )
             else:
-                LOGGER.info(
-                    "health_degraded check=stale_pickup ready_issues=%s "
-                    "since_pickup_seconds=%s",
-                    len(ready),
-                    int(time.time() - state["last_pickup_ts"]),
+                event(
+                    "health_degraded", check="stale_pickup",
+                    ready_issues=len(ready),
+                    since_pickup_seconds=int(
+                        time.time() - state["last_pickup_ts"],
+                    ),
                 )
                 if not alert_repo:
-                    LOGGER.warning(
-                        "health_alert_repo_undetermined check=stale_pickup",
+                    event(
+                        "health_alert_repo_undetermined",
+                        level=logging.WARNING, check="stale_pickup",
                     )
                 else:
                     create_health_issue(

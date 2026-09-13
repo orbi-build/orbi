@@ -23,6 +23,7 @@ from pathlib import Path
 from orbi.journal import (
     GIT_NETWORK_TIMEOUT_SECONDS,
     LOGGER,
+    event,
     run_command,
     run_git_network_command,
 )
@@ -269,10 +270,10 @@ def acquire_base_sync_lock(
         except (BlockingIOError, InterruptedError, PermissionError):
             if time.monotonic() >= deadline:
                 os.close(fd)
-                LOGGER.error(
-                    "base_sync_lock_timeout repo_dir=%s lock=%s "
-                    "timeout_seconds=%s",
-                    repo_dir, lock_path, lock_timeout_seconds,
+                event(
+                    "base_sync_lock_timeout", level=logging.ERROR,
+                    repo_dir=repo_dir, lock=lock_path,
+                    timeout_seconds=lock_timeout_seconds,
                 )
                 raise BaseSyncLockError(lock_path, lock_timeout_seconds) from None
             time.sleep(0.1)

@@ -1521,7 +1521,7 @@ def test_unit_drift_auto_syncs_and_claims_without_human_intervention(
     timer — never start/stop/restart the service), the re-verify is
     clean, the structured `unit_drift auto_synced` line is logged and
     the tick claims normally — no per-tick drift loop until a human
-    intervenes. A clean deployment still logs `unit_drift clean`."""
+    intervenes. A clean deployment still logs `unit_drift result=clean`."""
     bin_dir = install_fakes(tmp_path)
     state = tmp_path / "gh-state.json"
     write_state(state, {"7": ["ai-ready"]})
@@ -1561,7 +1561,7 @@ def test_unit_drift_auto_syncs_and_claims_without_human_intervention(
     runner_proc.kill()
     out, err = runner_proc.communicate(timeout=30)
     # The self-heal is logged with the structured auto_synced line.
-    assert "unit_drift auto_synced unit=orbi@.timer" in err
+    assert "unit_drift result=auto_synced unit=orbi@.timer" in err
     assert "before_sha256=" in err
     assert "after_sha256=" in err
     assert "commit=" in err
@@ -1583,7 +1583,7 @@ def test_unit_drift_auto_syncs_and_claims_without_human_intervention(
     )
     runner_proc.kill()
     out, err = runner_proc.communicate(timeout=30)
-    assert "unit_drift clean" in err
+    assert "unit_drift result=clean" in err
     assert "unit_drift auto_synced" not in err
     assert "ai-in-progress" in read_state(state)["issues"]["8"]["labels"]
 
@@ -1635,7 +1635,7 @@ def test_unit_drift_unresolvable_blocks_the_start_without_claiming(
     assert f"installed={unit_dir / 'orbi@.timer'}" in err
     assert "repo_sha256=" in err
     assert "installed_sha256=" in err
-    assert "fix=orbi install-units" in err
+    assert 'fix="orbi install-units"' in err
     assert "unit_drift auto_synced" not in err
     # Nothing was claimed: no labels, no comments, no Pi, no slot.
     snap = read_state(state)
