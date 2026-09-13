@@ -16,6 +16,7 @@ pin separately.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 import time
@@ -27,7 +28,7 @@ from orbi.delivery_labels import (
     P0_LABEL,
     label_patch,
 )
-from orbi.journal import LOGGER, run_command, single_line
+from orbi.journal import LOGGER, event, run_command, single_line
 from orbi.progress import (
     RUN_MARKER_PATTERN,
     format_status_comment,
@@ -133,11 +134,11 @@ def run_gh_read_command(
             if attempt >= GH_READ_MAX_ATTEMPTS or not retryable:
                 raise
         delay = GH_READ_BACKOFF_SECONDS * (2 ** (attempt - 1))
-        LOGGER.warning(
-            "gh_read_retry command=%s attempt=%s max_attempts=%s "
-            "delay_seconds=%s stderr=%s",
-            single_line(" ".join(command)), attempt + 1,
-            GH_READ_MAX_ATTEMPTS, delay, single_line(detail),
+        event(
+            "gh_read_retry", level=logging.WARNING,
+            command=single_line(" ".join(command)), attempt=attempt + 1,
+            max_attempts=GH_READ_MAX_ATTEMPTS, delay_seconds=delay,
+            stderr=single_line(detail),
         )
         time.sleep(delay)
 

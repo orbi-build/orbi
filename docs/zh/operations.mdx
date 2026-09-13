@@ -274,7 +274,7 @@ unit 模板（`systemd/orbi@.service` 和 `systemd/orbi@.timer`）
 `unit_drift` 检查自动自愈：用同一个幂等安装（把两个模板复制到用户
 unit 目录、daemon-reload、按 `max_concurrency` enable 或 disable timer
 实例——从不启动、停止或重启运行中的 Runner）、再用同一个哈希检查复核，tick 继续，每个 unit
-记录一行结构化 `unit_drift auto_synced`（before/after sha256、部署
+记录一行结构化 `unit_drift result=auto_synced`（before/after sha256、部署
 commit）。不再出现“每 5 分钟重复同一个 `unit_drift` 错误直到人工
 介入”的循环（#131/#140 实例：每次启动都因 `unit_drift` 失败，直到
 人工运行同步命令）。同一个安装还会**一次性迁移** #149 之前的非模板
@@ -399,6 +399,206 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
   （默认 3）个 idle 窗口保持空闲、Runner 杀掉 Pi，或
   `provider_rate_limited`——provider 429 在本轮全部退避重试后仍失败
   （Issue #321））。
+
+### 事件参考
+
+每个结构化 journal 事件都经由唯一发射点 `src/orbi/journal.py` 的
+`journal.event()` 发出；事件名即该文件中的 `JOURNAL_EVENTS` 注册表。
+本表与注册表完全一致——双向强制（名字只出现在代码或只出现在文档都会
+让 `tests/test_journal_events.py` 变红），Prometheus exporter 的
+`KNOWN_KINDS` 是它的子集：
+
+| 事件 | 含义 |
+| --- | --- |
+| `run_start` | 一个 Pi run 已启动（完整现场） |
+| `run_end` | 一次交付结束（结果、PR、commit） |
+| `run_failed` | 一次 Pi run 失败（完整现场 + 原因） |
+| `run_stopping` | SIGTERM 到达时仍有交付在途 |
+| `run_stopped` | Runner 已停止（空闲，或上面的中断现场） |
+| `picked` | 一个 Issue 已被领取给本 run |
+| `fresh_claim_route` | 产出本次领取的就绪扫描路线 |
+| `claim_yield` | 领取让位给并发的领取者 |
+| `blocked_by` | 跳过该 Issue：存在未关闭的 blockedBy 依赖 |
+| `blocked_by_check_failed` | blockedBy 查询失败（fail open） |
+| `capacity_full` | 所有 slot 均被占用；本 tick 不领取 |
+| `resuming_run` | 被中断的交付以同一 run 恢复 |
+| `resume_continue` | 恢复的 run 继续既有工作 |
+| `resume_continue_failed` | 恢复现场无法验证（fail fast） |
+| `activity` | Pi 实时活动快照（高频） |
+| `heartbeat` | 周期性的 Pi 实时进度行 |
+| `model_wait` | 模型请求在途（无完整 session 事件） |
+| `resumed` | model_wait 之后模型已回复 |
+| `process_spawned` | Pi 进程已拉起（启动里程碑） |
+| `provider_config_loaded` | provider 配置已物化（启动里程碑） |
+| `session_created` | Pi 已创建 session 文件（启动里程碑） |
+| `first_request_started` | 首个模型请求已发出（启动里程碑） |
+| `first_response_received` | 首个模型响应已到达（启动里程碑） |
+| `startup_failed` | run 在首个响应之前失败（已分类原因） |
+| `pi_resumed` | 恢复的 session 重新绑定到其 run |
+| `pi_drain_abandoned` | 输出排空提前放弃：管道写端比 Pi 活得更久 |
+| `pi_idle` | session 空闲超过告警窗口（模型本不应回复） |
+| `pi_idle_wait` | 空闲升级暂停：有界 timeout 包装器仍在自己的期限内 |
+| `pi_idle_term` | 向挂起的空闲后代进程发送 SIGTERM |
+| `pi_idle_kill` | 向 TERM 后仍存活的进程发送 SIGKILL |
+| `model_wait_dead` | 冻结的 model_wait 越过死亡阈值；已杀死 Pi session |
+| `model_wait_swallowed` | /slots 探针证实模型请求被吞；已杀死 Pi session |
+| `pi_retry_429` | provider 429 触发 run 内退避重试 |
+| `pi_429_attempts_reset` | 持久化的 429 重试计数被重置 |
+| `pi_429_attempts_write_failed` | 持久化 429 重试计数失败 |
+| `pi_429_attempts_clear_failed` | 清除 429 重试计数失败 |
+| `progress_publish_failed` | 进度评论发布失败（纯旁路） |
+| `config_invalid` | runner 配置校验失败（不启动） |
+| `transport` | 启动前 git transport 检查通过 |
+| `transport_check_failed` | 启动前 git transport 检查失败（不启动） |
+| `runner_source` | runner 源新鲜度门通过 |
+| `runner_source_stale` | runner 源新鲜度门失败（过期或无法验证） |
+| `engine_source_synced` | 部署 checkout 已同步到 engine 源通道 |
+| `deploy_home_dirty` | 本地有跟踪文件改动，阻塞 engine 源同步（fail closed） |
+| `engine_source_unresolved` | engine 源通道无法解析（fail closed） |
+| `engine_source_not_fast_forwardable` | engine 分支本地分叉（fail closed） |
+| `engine_source_unverified` | checkout head 无法对照解析提交验证（fail closed） |
+| `base_sync_lock_timeout` | 共享 base-sync 锁超时 |
+| `check_failed` | `orbi check` 在首个缺失前置条件处停止 |
+| `cli_source_drift` | 已安装 CLI 的导入源非预期 |
+| `unit_drift` | 已安装单元 vs 仓库模板：clean、已自愈或漂移 |
+| `unit_conflict` | 已安装单元文件与本次部署冲突 |
+| `units_installed` | systemd user 单元已安装或刷新 |
+| `legacy_units_migrated` | pre-#149 非模板单元已被移除 |
+| `health_check_skipped` | 本 tick 跳过周期健康检查 |
+| `health_check_queue_empty` | 健康检查确认队列实际为空 |
+| `health_check_failed` | 周期健康检查崩溃（旁路；从不使交付失败） |
+| `health_degraded` | 一个服务实例呈现事故模式劣化 |
+| `health_alert_repo_undetermined` | 健康告警无法归属到源仓库 |
+| `health_state_unreadable` | 持久化健康状态不可读 |
+| `health_pickup_record_failed` | 记录健康领取现场失败（旁路） |
+| `health_success_record_failed` | 向健康状态记录交付成功失败（旁路） |
+| `health_failure_record_failed` | 向健康状态记录交付失败失败（旁路） |
+| `delivery_takeover` | 接管既有 PR 交付进行评审 |
+| `delivery_awaiting` | 交付等待其 PR 变为可合并 |
+| `delivery_ci` | 观察到 PR CI 状态 |
+| `delivery_auto_merged` | PR 已自动合并（content-only 或琐碎） |
+| `delivery_merged` | PR 已合并；slot 释放 |
+| `delivery_closed_unmerged` | PR 未合并即关闭；Issue 置为 ai-blocked |
+| `delivery_label_inconsistent` | 交付标签与 PR 状态互相矛盾 |
+| `delivery_label_repaired` | 不一致的交付标签已修复 |
+| `delivery_label_repair_failed` | 交付标签修复失败 |
+| `delivery_behind_base` | 任务分支落后于 base 分支 |
+| `delivery_no_commit` | 任务 worktree 没有可交付的提交 |
+| `delivery_uncommitted_changes` | 任务 worktree 存在未提交改动 |
+| `delivery_issue_closed` | 源 Issue 在交付中途被关闭 |
+| `delivery_ci_evidence_publish_failed` | CI 证据评论发布失败（旁路） |
+| `delivery_ci_triage_lookup_failed` | CI 失败分诊 Issue 查询失败 |
+| `delivery_review_failed` | 评审 session 失败 |
+| `external_takeover` | 外部 PR 被接管评审 |
+| `external_takeover_skipped` | 外部 PR 不满足接管条件 |
+| `external_takeover_closed` | 外部 PR 未合并被关闭；Issue 重新入队 |
+| `external_takeover_close_failed` | 关闭接管分诊 Issue 失败 |
+| `external_pr_already_merged` | 被分诊的外部 PR 已经合并 |
+| `external_pr_routed_takeover` | 分诊 Issue 转投外部 PR 接管评审 |
+| `external_pr_state_probe_failed` | 外部 PR 状态探测失败 |
+| `pr_created` | 交付 PR 已创建 |
+| `pr_base_mismatch` | PR base 分支与配置的 base 不一致 |
+| `pr_head_diverged` | PR head 与被评审 head 分叉 |
+| `pr_repo_mismatch` | PR 属于另一个仓库 |
+| `pr_fixes_missing` | PR body 缺少 Fixes #N 关键字 |
+| `pr_run_marker_missing` | PR body 缺少 orbi run 标记 |
+| `pr_url_mismatch` | 记录的 PR URL 与实际 PR 不一致 |
+| `remote_head_mismatch` | 远端任务分支 head 被移动 |
+| `local_head_ahead_of_pr_head` | 本地提交尚未推送到 PR head |
+| `resume_pr_closed` | 被恢复交付的 PR 已关闭 |
+| `resume_pr_handled` | 被恢复交付的 PR 现场已处理 |
+| `resume_pr_missing` | 被恢复交付未找到 PR |
+| `resume_pr_multiple_open` | 同一 Issue 存在多个打开的 PR |
+| `resume_pr_verification_failed` | 被恢复交付未通过 PR 验证 |
+| `resume_scene_pr_state_lookup_failed` | 恢复现场的 PR 状态查询失败 |
+| `review` | 独立评审 session 结束（裁决） |
+| `review_waiting_ci` | 评审等待 PR head 上的 CI |
+| `review_ci_gate_passed` | 评审 head 上 CI 通过 |
+| `review_head_advanced` | 评审 session 推送了修复后的 head |
+| `review_budget_recovered` | 过期的评审轮次预算已恢复 |
+| `review_rounds_exhausted` | 评审轮次预算耗尽（fail fast） |
+| `review_rounds_exhausted_expected_terminal` | 预算耗尽的终止状态已被记录 |
+| `review_findings_unfixed` | 评审发现未修复；Issue 转入 ai-fix-needed |
+| `review_recovery_ci_status` | 观察到用于评审恢复的 CI 状态 |
+| `review_recovery_ci_status_failed` | 评审恢复所需的 CI 状态读取失败 |
+| `merge_gate_waiting_ci` | 合并门等待 CI |
+| `merge_gate_waiting_mergeable` | 合并门等待 GitHub 可合并状态 |
+| `merge_gate_behind_base` | 合并门发现 PR 落后于 base |
+| `merge_gate_head_moved` | PR head 在评审之后被移动 |
+| `merge_gate_not_mergeable` | PR 不可合并（冲突或检查失败） |
+| `merged` | PR 合并精确落在被评审的 head 上 |
+| `confirm_merged_missing_on_base` | 合并提交不在 base 分支上 |
+| `confirm_merged_not_merged` | PR 声称已合并但 GitHub 状态矛盾 |
+| `human_review_waiting` | 交付等待人工评审标签 |
+| `human_review_checklist_failed` | 人工评审清单发布失败（旁路） |
+| `human_review_diff_read_failed` | 人工评审 diff 读取失败 |
+| `base_absorbed` | 前进的 base 分支已被合入任务分支 |
+| `base_merge_conflict` | base 合并冲突；已中止且不自动解决 |
+| `base_checkout_synced` | repo_dir base checkout 已快进到远端 base |
+| `base_checkout_sync_skipped` | base checkout 同步被跳过（已最新） |
+| `base_checkout_sync_failed` | base checkout 同步失败 |
+| `base_checkout_not_fast_forwardable` | base checkout 与远端 base 分叉 |
+| `worktree_cleaned` | 一个任务 worktree 已被清理 |
+| `worktree_cleanup_failed` | 一个任务 worktree 清理失败 |
+| `worktree_reclaimed` | 批量回收了已释放的任务 worktree |
+| `worktree_reclaim_failed` | worktree 回收的一步失败（旁路；扫描继续） |
+| `worktrees_exclude_added` | 一个 worktrees 路径已加入本地 git exclude |
+| `runner_runtime_exclude_skipped` | 运行时 exclude 修复被跳过（已正确） |
+| `runner_runtime_exclude_repaired` | 运行时 exclude 已修复 |
+| `repo_config_invalid` | 仓库配置校验失败 |
+| `repo_config_read_failed` | 仓库配置读取失败 |
+| `repo_config_previous_read_failed` | 上一版仓库配置快照读取失败 |
+| `repo_config_previous_lookup_failed` | 上一版仓库配置快照查询失败 |
+| `repo_config_failure_report_failed` | 报告仓库配置失败时再次失败 |
+| `epic_not_claimed` | ai-epic Issue 被领取扫描跳过 |
+| `epic_kept_open` | Epic 保持打开：完成条件未满足 |
+| `epic_closed` | 完成条件全部满足；Epic Issue 已关闭 |
+| `epic_reconcile_failed` | Epic 对账扫描崩溃（旁路） |
+| `milestone_kept_open` | 发布 Milestone 保持打开（条件未满足） |
+| `milestone_closed` | 发布 Milestone 已关闭 |
+| `milestone_reconcile_failed` | Milestone 对账扫描崩溃（旁路） |
+| `orphan_pr_reported` | 孤儿 PR（源 Issue 已关闭）已上报 |
+| `orphan_pr_reconcile_failed` | 孤儿 PR 对账扫描崩溃（旁路） |
+| `stale_milestone_issue_closed` | 过期的 milestone 确认 Issue 已关闭 |
+| `stale_milestone_issue_close_failed` | 关闭过期 milestone 确认 Issue 失败 |
+| `pending_milestone_issue_failed` | 待确认 milestone Issue 状态未能应用 |
+| `active_milestone_advanced` | active Milestone 已推进到下一个待定版本 |
+| `active_milestone_advance_none` | 没有可推进的待定 Milestone |
+| `active_milestone_advance_pending` | 存在待定的 Milestone 候选在等待 |
+| `active_milestone_advance_failed` | 推进 active Milestone 失败 |
+| `active_milestone_variable_removed` | active_milestone 仓库变量已被移除 |
+| `active_milestone_variable_unchanged` | active_milestone 仓库变量与配置一致 |
+| `active_milestone_variable_updated` | active_milestone 仓库变量已更新 |
+| `active_milestone_variable_absent` | active_milestone 仓库变量不存在 |
+| `active_milestone_variable_created` | active_milestone 仓库变量已创建 |
+| `active_milestone_variable_sync_failed` | active_milestone 仓库变量同步失败 |
+| `release_not_claimed` | 发布状态机未领取该发布 Issue |
+| `release_task` | 发布状态机推进（步骤报告） |
+| `release_resuming_run` | 发布继续被中断的 run |
+| `release_test_command_ignored` | 发布 Issue 的测试命令字段被忽略（测试由 CI 门控） |
+| `release_tag_exists` | 发布 tag 已存在 |
+| `release_tag_pushed` | 发布 tag 已推送 |
+| `release_base_advanced_past_tag` | base 已前进越过发布 tag |
+| `release_waiting_deliveries` | 发布等待打开的交付 PR |
+| `release_waiting_deliveries_returned` | 等待中的交付在预算内返回 |
+| `release_waiting_ci` | 发布等待 tag 提交上的 CI |
+| `release_milestone_open_items` | 发布 Milestone 仍有未关闭条目 |
+| `release_milestone_check_failed` | 发布 Milestone 检查失败 |
+| `release_milestone_incomplete` | 发布 Milestone 未达到发布完备条件 |
+| `release_ticket_armed` | 发布 Issue 进入发布状态机 |
+| `release_ticket_arm_failed` | 发布 Issue 武装失败 |
+| `release_failed` | 发布状态机失败（ai-blocked） |
+| `release_publish_closeout_failed` | 发布收尾失败 |
+| `release_milestone_evidence_failed` | 发布 Milestone 证据发布失败 |
+| `release_success_comment_failed` | 发布成功评论失败（旁路） |
+| `release_changelog_issue_excluded` | 一个 Issue 被排除出发布 changelog |
+| `release_changelog_contributor_skipped` | 一个 changelog 贡献者条目被跳过 |
+| `release_changelog_pr_link_dropped` | 一个 changelog PR 链接被丢弃（未合并 PR） |
+| `command_failed` | 外部命令以非零退出（fail fast） |
+| `command_timeout` | 外部命令超时（fail fast） |
+| `command_spawn_failed` | 外部命令无法启动 |
+| `git_network_retry` | git fetch/push 瞬时网络失败，退避重试 |
+| `gh_read_retry` | `gh` 只读命令瞬时失败，退避重试 |
 
 idle 告警和模型请求挂死 kill 是日志/健康阈值——它们不是每 5 分钟
 调度，也不是业务任务 timeout。

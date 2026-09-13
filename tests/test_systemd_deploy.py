@@ -229,7 +229,7 @@ def test_check_unit_drift_logs_clean_and_returns(tmp_path, caplog):
     installed = make_installed(tmp_path, repo)
     with caplog.at_level("INFO"):
         systemd_deploy.check_unit_drift(repo, installed)
-    assert "unit_drift clean" in caplog.text
+    assert "unit_drift result=clean" in caplog.text
 
 
 def test_check_unit_drift_uses_the_default_installed_dir(monkeypatch,
@@ -634,7 +634,7 @@ def test_sync_drifted_units_installs_and_reverifies_clean(
     )
     assert timer["commit"] == "0123456789abcdef0123456789abcdef01234567"
     # The structured auto_synced line is logged for the synced unit.
-    assert "unit_drift auto_synced unit=orbi@.timer" in caplog.text
+    assert "unit_drift result=auto_synced unit=orbi@.timer" in caplog.text
     assert f"before_sha256={before_sha}" in caplog.text
     assert "after_sha256=" in caplog.text
     assert "commit=0123456789abcdef0123456789abcdef01234567" in caplog.text
@@ -701,7 +701,7 @@ def test_sync_drifted_units_still_drifted_after_sync_fails_fast(
                 repo, installed, run_command=lambda command, **kwargs: "",
             )
     assert "unit_drift unit=orbi@.timer" in caplog.text
-    assert "fix=orbi install-units" in caplog.text
+    assert 'fix="orbi install-units"' in caplog.text
     assert "unit_drift auto_synced" not in caplog.text
 
 

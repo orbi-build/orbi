@@ -204,6 +204,7 @@ from orbi.journal import (
     RunIdFilter,
     clear_active_run,
     current_run_id,
+    event,
     issue_context,
     log_format,
     new_run_id,
@@ -382,7 +383,7 @@ def _stop_delivery(signum: int) -> None:
     """
     run = journal.active_run()
     if run is None:
-        LOGGER.info("run_stopped result=idle")
+        event("run_stopped", result="idle")
     else:
         phase = "-"
         session = "-"
@@ -393,18 +394,16 @@ def _stop_delivery(signum: int) -> None:
                 session = snapshot["session_id"] or "-"
         except Exception:
             LOGGER.exception("stop scene activity snapshot failed")
-        LOGGER.info(
-            "run_stopping issue=%s title=%s signal=%s phase=%s "
-            "branch=%s worktree=%s session=%s",
-            run["issue"], quote_value(run["title"]),
-            signal.Signals(signum).name, quote_value(phase),
-            quote_value(run["branch"]), quote_value(run["worktree"]),
-            quote_value(session),
+        event(
+            "run_stopping", issue=run["issue"], title=run["title"],
+            signal=signal.Signals(signum).name, phase=phase,
+            branch=run["branch"], worktree=run["worktree"],
+            session=session,
         )
         child = run["pi"]
         _shutdown_child(child)
-        LOGGER.info(
-            "run_stopped issue=%s result=interrupted", run["issue"],
+        event(
+            "run_stopped", issue=run["issue"], result="interrupted",
         )
     _die_from_signal(signum)
 
@@ -1638,8 +1637,9 @@ def previous_repo_config_sha(number: int, source_repo: str) -> str | None:
     try:
         comments = issue_comments(number, repo=source_repo)
     except Exception:
-        LOGGER.warning(
-            "issue=%s repo_config_previous_lookup_failed", number,
+        event(
+            "repo_config_previous_lookup_failed", level=logging.WARNING,
+            issue=number,
         )
         return None
     for comment in reversed(comments):
@@ -1721,22 +1721,22 @@ def sync_active_milestone_variable(
             command_runner(
                 ["gh", "api", "-X", "DELETE", endpoint], timeout=30,
             )
-            LOGGER.info("active_milestone_variable_removed repo=%s", repo)
+            event("active_milestone_variable_removed", repo=repo)
             return
         if current.get("value") == milestone:
-            LOGGER.info("active_milestone_variable_unchanged repo=%s", repo)
+            event("active_milestone_variable_unchanged", repo=repo)
             return
         command_runner(
             ["gh", "api", "-X", "PATCH", endpoint, "-f", f"name=ORBI_ACTIVE_MILESTONE",
              "-f", f"value={milestone}"], timeout=30,
         )
-        LOGGER.info("active_milestone_variable_updated repo=%s", repo)
+        event("active_milestone_variable_updated", repo=repo)
     except subprocess.CalledProcessError as exc:
         if exc.returncode != 1 or "404" not in (exc.stderr or ""):
             LOGGER.exception("active_milestone_variable_sync_failed repo=%s", repo)
             return
         if milestone is None:
-            LOGGER.info("active_milestone_variable_absent repo=%s", repo)
+            event("active_milestone_variable_absent", repo=repo)
             return
         try:
             command_runner(
@@ -1744,7 +1744,7 @@ def sync_active_milestone_variable(
                  "-f", "name=ORBI_ACTIVE_MILESTONE", "-f", f"value={milestone}"],
                 timeout=30,
             )
-            LOGGER.info("active_milestone_variable_created repo=%s", repo)
+            event("active_milestone_variable_created", repo=repo)
         except Exception:
             LOGGER.exception("active_milestone_variable_sync_failed repo=%s", repo)
     except Exception:
@@ -1874,7 +1874,7 @@ def reconcile_open_epics(repo: str, run_id: str) -> list[str]:
             child_evidence = _verify_epic_complete(repo, listed_epic)
         except (ValueError, json.JSONDecodeError) as exc:
             reason = str(exc)
-            LOGGER.info("epic_kept_open issue=%s repo=%s reason=%s", number, repo, reason)
+            event("epic_kept_open", issue=number, repo=repo, reason=reason)
             evidence.append(f"Epic #{number} kept open: {reason}")
             continue
         audit = _epic_audit(child_evidence)
@@ -1883,7 +1883,7 @@ def reconcile_open_epics(repo: str, run_id: str) -> list[str]:
             comment_issue(int(number), repo=repo,
                          body=f"<!-- orbi:run={run_id} -->\n{audit}\nrun_id={run_id}")
         close_issue(int(number), repo=repo)
-        LOGGER.info("epic_closed issue=%s repo=%s", number, repo)
+        event("epic_closed", issue=number, repo=repo)
         evidence.append(f"Epic #{number} closed after verification ({'; '.join(child_evidence)})")
     return evidence
 
@@ -1899,8 +1899,11 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
     milestones = [m for m in all_milestones if m.get("state") == "open"]
     for milestone in all_milestones:
         if not isinstance(milestone, dict) or milestone.get("state") not in {"open", "closed"}:
-            LOGGER.info("milestone_kept_open number=%s repo=%s reason=malformed",
-                        milestone.get("number") if isinstance(milestone, dict) else None, repo)
+            event(
+                "milestone_kept_open", number=milestone.get("number")
+                if isinstance(milestone, dict) else None,
+                repo=repo, reason="malformed",
+            )
     releases_raw = run_gh_read_command([
         "gh", "api", f"repos/{repo}/releases?per_page=100",
         "--paginate", "--slurp",
@@ -1916,24 +1919,25 @@ def reconcile_release_milestones(repo: str, run_id: str) -> list[str]:
         number = milestone.get("number")
         title = milestone.get("title")
         if not isinstance(number, int) or isinstance(number, bool) or not isinstance(title, str):
-            LOGGER.info("milestone_kept_open number=%s repo=%s reason=malformed", number, repo)
+            event("milestone_kept_open", number=number, repo=repo, reason="malformed")
             continue
         # Closed duplicates still make the title ambiguous; do not guess
         # which milestone a release belongs to.
         matches = [m for m in all_milestones if m.get("title") == title]
         if len(matches) != 1:
             reason = "ambiguous title" if len(matches) > 1 else "missing title"
-            LOGGER.info("milestone_kept_open number=%s repo=%s reason=%s", number, repo, reason)
+            event("milestone_kept_open", number=number, repo=repo, reason=reason)
             continue
         if title not in published_tags:
-            LOGGER.info("milestone_kept_open number=%s repo=%s reason=no published release", number, repo)
+            event("milestone_kept_open", number=number, repo=repo,
+                  reason="no published release")
             continue
         open_issues = milestone_open_issues(repo, number)
         if open_issues:
-            LOGGER.info("milestone_kept_open number=%s repo=%s reason=open issues", number, repo)
+            event("milestone_kept_open", number=number, repo=repo, reason="open issues")
             continue
         close_milestone(repo, int(number))
-        LOGGER.info("milestone_closed number=%s repo=%s", number, repo)
+        event("milestone_closed", number=number, repo=repo)
         evidence.append(f"Milestone #{number} ({title}) closed")
     return evidence
 
@@ -2008,9 +2012,9 @@ def reconcile_orphan_prs(repo: str, run_id: str) -> list[str]:
                 f"run_id={run_id}"
             ),
         )
-        LOGGER.info(
-            "orphan_pr_reported pr=%s issue=%s repo=%s",
-            pr_number, issue_number, repo,
+        event(
+            "orphan_pr_reported", pr=pr_number, issue=issue_number,
+            repo=repo,
         )
         evidence.append(
             f"PR #{pr_number} reported: source Issue #{issue_number} is closed"
@@ -2050,15 +2054,13 @@ def _pick_from_scan(
     """
     for issue in issues:
         if is_epic(issue):
-            LOGGER.info(
-                "epic_not_claimed issue=%s repo=%s",
-                issue.get("number"), repo,
+            event(
+                "epic_not_claimed", issue=issue.get("number"), repo=repo,
             )
             continue
         if not allow_release and is_release(issue):
-            LOGGER.info(
-                "release_not_claimed issue=%s repo=%s",
-                issue.get("number"), repo,
+            event(
+                "release_not_claimed", issue=issue.get("number"), repo=repo,
             )
             continue
         if allow_release and is_release(issue):
@@ -2071,31 +2073,29 @@ def _pick_from_scan(
                         repo, target_milestone,
                     )
                 except Exception as exc:
-                    LOGGER.error(
-                        "release_milestone_check_failed issue=%s repo=%s "
-                        "milestone=%s error=%s",
-                        issue.get("number"), repo, target_milestone, exc,
+                    event(
+                        "release_milestone_check_failed", level=logging.ERROR,
+                        issue=issue.get("number"), repo=repo,
+                        milestone=target_milestone, error=exc,
                     )
                     return None
                 if open_issues > 1:
-                    LOGGER.info(
-                        "release_milestone_incomplete issue=%s repo=%s "
-                        "milestone=%s open_issues=%d",
-                        issue.get("number"), repo, target_milestone,
-                        open_issues,
+                    event(
+                        "release_milestone_incomplete",
+                        issue=issue.get("number"), repo=repo,
+                        milestone=target_milestone, open_issues=open_issues,
                     )
                     continue
         blockers = open_blocker_numbers(issue)
         if blockers:
-            LOGGER.info(
-                "blocked_by issue=%s repo=%s blockers=%s",
-                issue.get("number"), repo,
-                ",".join(str(number) for number in blockers),
+            event(
+                "blocked_by", issue=issue.get("number"), repo=repo,
+                blockers=",".join(str(number) for number in blockers),
             )
             continue
-        LOGGER.info(
-            "picked issue=%s repo=%s priority=%s",
-            issue.get("number"), repo, issue_priority(issue),
+        event(
+            "picked", issue=issue.get("number"), repo=repo,
+            priority=issue_priority(issue),
         )
         return issue
     return None
@@ -2138,9 +2138,9 @@ def pick_issue(repo: str, active_milestone: str | None = None,
             # never deadlock the queue. This tick claims nothing from
             # this repo and the next tick retries the query; the error
             # is logged, never raised, and no label is touched.
-            LOGGER.error(
-                "blocked_by_check_failed repo=%s error=%s",
-                repo, exc,
+            event(
+                "blocked_by_check_failed", level=logging.ERROR,
+                repo=repo, error=exc,
             )
             return None
         picked = _pick_from_scan(issues, repo)
@@ -2161,9 +2161,9 @@ def pick_issue(repo: str, active_milestone: str | None = None,
             limit=200,
         )
     except Exception as exc:
-        LOGGER.error(
-            "blocked_by_check_failed repo=%s error=%s",
-            repo, exc,
+        event(
+            "blocked_by_check_failed", level=logging.ERROR,
+            repo=repo, error=exc,
         )
         return None
     return _pick_from_scan(
@@ -2301,21 +2301,20 @@ def external_takeover_pr(repo_dir: Path, body: str | None,
     state = pr.get("state")
     base_ref = pr.get("baseRefName")
     if state != "OPEN":
-        LOGGER.info(
-            "external_takeover_skipped pr=%s reason=%s",
-            number, f"pr_state={state}",
+        event(
+            "external_takeover_skipped", pr=number,
+            reason=f"pr_state={state}",
         )
         return None
     if base_ref != base_branch:
-        LOGGER.info(
-            "external_takeover_skipped pr=%s reason=base_mismatch "
-            "pr_base=%s configured_base=%s",
-            number, base_ref, base_branch,
+        event(
+            "external_takeover_skipped", pr=number,
+            reason="base_mismatch", pr_base=base_ref,
+            configured_base=base_branch,
         )
         return None
-    LOGGER.info(
-        "external_takeover pr=%s head=%s",
-        number, pr.get("headRefName"),
+    event(
+        "external_takeover", pr=number, head=pr.get("headRefName"),
     )
     return pr
 
@@ -2469,9 +2468,9 @@ def _route_external_pr_ticket(issue: dict, repo: str) -> bool:
             number, repo, f"https://github.com/{repo}/pull/{pr_number}",
             f"<!-- orbi:external-pr:{pr_number} -->", "external-merge",
         )
-        LOGGER.info(
-            "issue=%s external_pr_already_merged pr=#%s; closing",
-            number, pr_number,
+        event(
+            "external_pr_already_merged", issue=number,
+            pr=f"#{pr_number}",
         )
         return True
     if state in ("OPEN", "CLOSED"):
@@ -2492,9 +2491,9 @@ def _route_external_pr_ticket(issue: dict, repo: str) -> bool:
                 "of blocking it."
             ),
         )
-        LOGGER.info(
-            "issue=%s external_pr_routed_takeover pr=#%s state=%s",
-            number, pr_number, state,
+        event(
+            "external_pr_routed_takeover", issue=number,
+            pr=f"#{pr_number}", state=state,
         )
         return True
     return False
@@ -2744,8 +2743,9 @@ def arm_release_ticket(repo: str, active_milestone: str) -> None:
         "gh", "issue", "edit", str(number), "--repo", repo,
         "--add-label", READY_LABEL,
     ], timeout=30)
-    LOGGER.info(
-        "release_ticket_armed issue=#%s milestone=%s", number, active_milestone,
+    event(
+        "release_ticket_armed", issue=f"#{number}",
+        milestone=active_milestone,
     )
 
 
@@ -2804,9 +2804,9 @@ def _close_stale_milestone_issues(repo: str, active_milestone: str) -> None:
                 f"已收敛：当前配置 active_milestone = `{active_milestone}`。"
             ),
         ], timeout=30)
-        LOGGER.info(
-            "stale_milestone_issue_closed issue=#%s active=%s",
-            issue["number"], active_milestone,
+        event(
+            "stale_milestone_issue_closed", issue=f"#{issue['number']}",
+            active=active_milestone,
         )
 
 
@@ -2857,9 +2857,9 @@ def advance_active_milestone_on_idle(
         if version is not None and current is not None and version > current:
             candidates.append((version, milestone.get("title")))
     if not candidates:
-        LOGGER.info(
-            "active_milestone_advance_none current=%s closed=%s repo=%s",
-            active_milestone, active_milestone, repo,
+        event(
+            "active_milestone_advance_none", current=active_milestone,
+            closed=active_milestone, repo=repo,
         )
         return "closed", None
     candidates.sort()
@@ -2870,10 +2870,10 @@ def advance_active_milestone_on_idle(
     ]
     if not auto_next_milestone:
         candidate_titles = ",".join(title for _, title in candidates)
-        LOGGER.warning(
-            "active_milestone_advance_pending old=%s candidates=%s "
-            "auto_next_milestone=false",
-            active_milestone, candidate_titles,
+        event(
+            "active_milestone_advance_pending", level=logging.WARNING,
+            old=active_milestone, candidates=candidate_titles,
+            auto_next_milestone="false",
         )
         try:
             _pending_milestone_issue(
@@ -2890,9 +2890,9 @@ def advance_active_milestone_on_idle(
         return "closed", None
     new_value = candidates[0][1]
     rewrite_active_milestone_line(config_path, new_value)
-    LOGGER.info(
-        "active_milestone_advanced old=%s new=%s closed=%s repo=%s",
-        active_milestone, new_value, active_milestone, repo,
+    event(
+        "active_milestone_advanced", old=active_milestone, new=new_value,
+        closed=active_milestone, repo=repo,
     )
     return "closed", new_value
 
@@ -2981,8 +2981,9 @@ def _repo_scan_keys(
     try:
         policy = load_repo_policy(config, repo)
     except RepoConfigError as exc:
-        LOGGER.error(
-            "repo_config_invalid repo=%s reason=%s", repo, exc,
+        event(
+            "repo_config_invalid", level=logging.ERROR,
+            repo=repo, reason=exc,
         )
         policy = None
     if policy is None:
@@ -3288,8 +3289,9 @@ def reclaim_released_worktrees(config: RunnerConfig, *,
             ):
                 closed[(repo, int(issue["number"]))] = issue
     except Exception as exc:
-        LOGGER.warning(
-            "worktree_reclaim_failed reason=%s (removing nothing)", exc,
+        event(
+            "worktree_reclaim_failed", level=logging.WARNING,
+            reason=f"{exc} (removing nothing)",
         )
         return
     now = now or datetime.now(timezone.utc)
@@ -3326,14 +3328,15 @@ def reclaim_released_worktrees(config: RunnerConfig, *,
                 cwd=repo_dir,
             )
         except Exception as exc:
-            LOGGER.warning(
-                "worktree_reclaim_failed path=%s reason=%s", path, exc,
+            event(
+                "worktree_reclaim_failed", level=logging.WARNING,
+                path=path, reason=exc,
             )
             continue
         removed += 1
         freed += size
     if removed:
-        LOGGER.info("worktree_reclaimed count=%d freed=%d", removed, freed)
+        event("worktree_reclaimed", count=removed, freed=freed)
 
 
 def _another_live_runner(slot_dir: Path, max_concurrency: int) -> bool:
@@ -3490,9 +3493,11 @@ def process_ticket_only(issue: dict, config: RunnerConfig, source_repo: str) -> 
                 review_round=0, priority=priority,
             ), outcome="**Orbi ticket-only delivered**")),
         )
-        LOGGER.info("run_end run=%s issue=%s role=%s result=ticket_only elapsed=%s",
-                    run_id, issue_context(source_repo, number), ROLE_TICKET,
-                    format_duration(time.monotonic() - started))
+        event(
+            "run_end", run=run_id, issue=issue_context(source_repo, number),
+            role=ROLE_TICKET, result="ticket_only",
+            elapsed=format_duration(time.monotonic() - started),
+        )
         return "ticket-only"
     except Exception as exc:
         LOGGER.exception("issue=%s ticket-only failed", number)
@@ -3704,9 +3709,9 @@ def _single_open_pr(worktree: Path, branch: str, base_branch: str,
     pr = prs[0]
     base_ref = pr.get("baseRefName")
     if base_ref != base_branch:
-        LOGGER.error(
-            "pr_base_mismatch scene=%s expected=%s actual=%s branch=%s",
-            scene, base_branch, base_ref, branch,
+        event(
+            "pr_base_mismatch", level=logging.ERROR, scene=scene,
+            expected=base_branch, actual=base_ref, branch=branch,
         )
         raise RuntimeError(
             f"{scene}: PR base is {base_ref}, expected {base_branch}; "
@@ -3762,9 +3767,9 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
         # the deployment checkout as the lock location.
         fetch_base_ref(repo_dir, base_branch, cwd=worktree)
         if not _is_ancestor(f"origin/{base_branch}", "HEAD", cwd=worktree):
-            LOGGER.error(
-                "delivery_behind_base base_branch=%s branch=%s",
-                base_branch, branch,
+            event(
+                "delivery_behind_base", level=logging.ERROR,
+                base_branch=base_branch, branch=branch,
             )
             raise RuntimeError(
                 f"delivery HEAD is behind latest remote base "
@@ -3806,26 +3811,28 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
             )
             if len(prs) == 0:
                 if scene_state in ("CLOSED", "MERGED"):
-                    LOGGER.error(
-                        "resume_pr_closed issue=%s branch=%s pr=%s state=%s",
-                        issue, branch, expected_url, scene_state,
+                    event(
+                        "resume_pr_closed", level=logging.ERROR,
+                        issue=issue, branch=branch, pr=expected_url,
+                        state=scene_state,
                     )
                     raise UnrecoverableDeliveryError(
                         f"resume PR is {scene_state.lower()} and cannot be "
                         f"resumed or replaced: {evidence}; a human must "
                         "decide whether to reopen or create a new delivery"
                     )
-                LOGGER.error(
-                    "resume_pr_missing issue=%s branch=%s pr=%s state=%s",
-                    issue, branch, expected_url, scene_state,
+                event(
+                    "resume_pr_missing", level=logging.ERROR,
+                    issue=issue, branch=branch, pr=expected_url,
+                    state=scene_state,
                 )
                 raise ResumeVerificationError(
                     f"resume PR is not open and was not found as closed or "
                     f"merged: {evidence}; the scene must be repaired"
                 )
-            LOGGER.error(
-                "resume_pr_multiple_open issue=%s branch=%s count=%s",
-                issue, branch, len(prs),
+            event(
+                "resume_pr_multiple_open", level=logging.ERROR,
+                issue=issue, branch=branch, count=len(prs),
             )
             raise ResumeVerificationError(
                 f"resume has multiple open PRs for the task branch: {evidence}; "
@@ -3840,9 +3847,9 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
     if pr_repo is not None:
         head_repo = _pr_head_repo(pr)
         if head_repo != pr_repo:
-            LOGGER.error(
-                "pr_repo_mismatch expected=%s actual=%s branch=%s",
-                pr_repo, head_repo, branch,
+            event(
+                "pr_repo_mismatch", level=logging.ERROR,
+                expected=pr_repo, actual=head_repo, branch=branch,
             )
             error_type = ResumeVerificationError if expected_url is not None else RuntimeError
             raise error_type(
@@ -3856,10 +3863,10 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
     # the resume keeps its typed failure with the full run evidence.
     base_ref = pr.get("baseRefName")
     if expected_url is not None and base_ref != base_branch:
-        LOGGER.error(
-            "pr_base_mismatch scene=verify_pr_resume expected=%s "
-            "actual=%s branch=%s",
-            base_branch, base_ref, branch,
+        event(
+            "pr_base_mismatch", level=logging.ERROR,
+            scene="verify_pr_resume", expected=base_branch,
+            actual=base_ref, branch=branch,
         )
         raise ResumeVerificationError(
             f"resume PR validation: run_id={run_id} branch={branch} "
@@ -3885,9 +3892,9 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
         # plain push would be rejected and only a force push or a
         # human decision could continue it.
         if not _is_ancestor(head_oid, "HEAD", cwd=worktree):
-            LOGGER.error(
-                "pr_head_diverged pr_head=%s local_head=%s branch=%s",
-                head_oid, local_head, branch,
+            event(
+                "pr_head_diverged", level=logging.ERROR,
+                pr_head=head_oid, local_head=local_head, branch=branch,
             )
             raise RuntimeError(
                 f"PR head {head_oid} is not local HEAD {local_head} "
@@ -3896,20 +3903,18 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
                 "forbidden, so the resume must not continue on this "
                 "branch"
             )
-        LOGGER.info(
-            "local_head_ahead_of_pr_head pr_head=%s local_head=%s "
-            "branch=%s; the unpushed local commit is preserved and the "
-            "next review session pushes the task branch on the same PR "
-            "(Issue #50)",
-            head_oid, local_head, branch,
+        event(
+            "local_head_ahead_of_pr_head", pr_head=head_oid,
+            local_head=local_head, branch=branch,
         )
     marker = run_marker(run_id)
     body = pr.get("body")
     if not external_pr and (
         not isinstance(body, str) or marker not in body
     ):
-        LOGGER.error(
-            "pr_run_marker_missing expected=%s branch=%s", marker, branch,
+        event(
+            "pr_run_marker_missing", level=logging.ERROR,
+            expected=marker, branch=branch,
         )
         raise RuntimeError(
             f"PR body is missing the stable run marker {marker}; the PR "
@@ -3920,8 +3925,9 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
     # The number must match exactly, not as a digit prefix: `Fixes #41`
     # closes Issue 41, not Issue 4 (review F1, Issue #53).
     if not external_pr and not re.search(rf"Fixes #?{issue}(?!\d)", body):
-        LOGGER.error(
-            "pr_fixes_missing issue=%s branch=%s", issue, branch,
+        event(
+            "pr_fixes_missing", level=logging.ERROR,
+            issue=issue, branch=branch,
         )
         raise RuntimeError(
             f"PR body is missing `{fixes}`; the keyword must point at the "
@@ -3929,9 +3935,9 @@ def verify_pr(worktree: Path, branch: str, base_branch: str,
             "into the default branch"
         )
     if expected_url is not None and url != expected_url:
-        LOGGER.error(
-            "pr_url_mismatch expected=%s actual=%s branch=%s",
-            expected_url, url, branch,
+        event(
+            "pr_url_mismatch", level=logging.ERROR,
+            expected=expected_url, actual=url, branch=branch,
         )
         raise ResumeVerificationError(
             f"resume PR validation: run_id={run_id} branch={branch} "
@@ -4015,9 +4021,9 @@ def apply_runner_runtime_excludes(worktree: Path) -> None:
     """
     git_entry = worktree / ".git"
     if not git_entry.exists():
-        LOGGER.debug(
-            "runner_runtime_exclude_skipped worktree=%s (no .git entry)",
-            worktree,
+        event(
+            "runner_runtime_exclude_skipped", level=logging.DEBUG,
+            worktree=worktree, reason="no .git entry",
         )
         return
     exclude_path = runner_runtime_exclude_path(worktree)
@@ -4074,9 +4080,9 @@ def cleanup_task_worktree(worktree: Path, repo_dir: Path, *, run_id: str,
         if worktree.is_dir():
             shutil.rmtree(worktree)
         run_command(["git", "worktree", "prune"], cwd=repo_dir)
-        LOGGER.info(
-            "worktree_cleaned issue=%s run_id=%s worktree=%s",
-            issue, run_id, worktree,
+        event(
+            "worktree_cleaned", issue=issue, run_id=run_id,
+            worktree=worktree,
         )
     except Exception as exc:
         LOGGER.exception(
@@ -4101,9 +4107,9 @@ def _agent_delivery_boundary(worktree: Path) -> tuple[str, str]:
     dirty = run_command(["git", "status", "--porcelain"], cwd=worktree)
     if dirty and _is_runner_runtime_only(dirty):
         apply_runner_runtime_excludes(worktree)
-        LOGGER.info(
-            "runner_runtime_exclude_repaired status=%s",
-            " ".join(dirty.splitlines()),
+        event(
+            "runner_runtime_exclude_repaired",
+            status=" ".join(dirty.splitlines()),
         )
         dirty = run_command(["git", "status", "--porcelain"], cwd=worktree)
     head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
@@ -4157,9 +4163,9 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
     # committed worktree state.
     local_head, dirty = _agent_delivery_boundary(worktree)
     if dirty:
-        LOGGER.error(
-            "delivery_uncommitted_changes branch=%s status=%s",
-            branch, " ".join(dirty.splitlines()),
+        event(
+            "delivery_uncommitted_changes", level=logging.ERROR,
+            branch=branch, status=" ".join(dirty.splitlines()),
         )
         raise RuntimeError(
             f"the agent left uncommitted changes in the worktree "
@@ -4167,9 +4173,9 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
             "changes or expands the agent's commit boundary"
         )
     if local_head == base_sha:
-        LOGGER.error(
-            "delivery_no_commit branch=%s head=%s",
-            branch, local_head,
+        event(
+            "delivery_no_commit", level=logging.ERROR,
+            branch=branch, head=local_head,
         )
         raise RuntimeError(
             f"the agent delivered no commit on the task branch (HEAD "
@@ -4192,19 +4198,16 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
             run_command(
                 ["git", "merge", f"origin/{base_branch}"], cwd=worktree,
             )
-            LOGGER.info(
-                "base_absorbed base_branch=%s branch=%s", base_branch,
-                branch,
+            event(
+                "base_absorbed", base_branch=base_branch, branch=branch,
             )
         except subprocess.CalledProcessError as exc:
             run_command(["git", "merge", "--abort"], cwd=worktree)
-            LOGGER.error(
-                "base_merge_conflict base_branch=%s branch=%s "
-                "returncode=%s stderr=%s; the merge was aborted and the "
-                "PR opens on the agent's head — the review session "
-                "absorbs the base in-session",
-                base_branch, branch, exc.returncode,
-                (exc.stderr or "").strip(),
+            event(
+                "base_merge_conflict", level=logging.ERROR,
+                base_branch=base_branch, branch=branch,
+                returncode=exc.returncode,
+                stderr=(exc.stderr or "").strip(),
             )
     # Plain push of the task branch (never a force push), then verify
     # the remote head: the PR must be created from exactly this head.
@@ -4218,9 +4221,9 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
         ["git", "rev-parse", f"origin/{branch}"], cwd=worktree,
     )
     if remote_head != local_head:
-        LOGGER.error(
-            "remote_head_mismatch expected=%s actual=%s branch=%s",
-            local_head, remote_head, branch,
+        event(
+            "remote_head_mismatch", level=logging.ERROR,
+            expected=local_head, actual=remote_head, branch=branch,
         )
         raise RuntimeError(
             f"remote head {remote_head} does not match the local head "
@@ -4246,9 +4249,9 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
                 f"run_id={run_id}"
             ),
         )
-        LOGGER.info(
-            "delivery_issue_closed branch=%s issue=%s repo=%s",
-            branch, issue, source_repo,
+        event(
+            "delivery_issue_closed", branch=branch, issue=issue,
+            repo=source_repo,
         )
         return None
     # Exactly one open PR of the branch: create it when absent (the PR
@@ -4270,9 +4273,9 @@ def deliver_pr(worktree: Path, branch: str, base_branch: str,
             "gh", "pr", "create", "--base", base_branch, "--head", branch,
             "--title", issue_title, "--body", body,
         ], cwd=worktree)
-        LOGGER.info(
-            "pr_created branch=%s base_branch=%s issue=%s",
-            branch, base_branch, issue,
+        event(
+            "pr_created", branch=branch, base_branch=base_branch,
+            issue=issue,
         )
     return verify_pr(
         worktree, branch, base_branch, run_id, issue=issue,
@@ -4760,9 +4763,9 @@ def check_review_ci(repo: str, commit: str, *, wait_seconds: float) -> str:
         if not pending:
             break
         detail = ", ".join(pending)
-        LOGGER.info(
-            "review_waiting_ci head=%s pending=%s waited=%ds limit=%ds",
-            commit, detail, int(waited), int(wait_seconds),
+        event(
+            "review_waiting_ci", head=commit, pending=detail,
+            waited=f"{int(waited)}s", limit=f"{int(wait_seconds)}s",
         )
         if waited >= wait_seconds:
             raise RuntimeError(
@@ -4819,9 +4822,9 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
     )
     fetch_base_ref(repo_dir, base_branch, cwd=worktree)
     if not _is_ancestor(f"origin/{base_branch}", pr["head_oid"], cwd=worktree):
-        LOGGER.error(
-            "merge_gate_behind_base base_branch=%s pr=%s head=%s",
-            base_branch, pr["number"], pr["head_oid"],
+        event(
+            "merge_gate_behind_base", level=logging.ERROR,
+            base_branch=base_branch, pr=pr["number"], head=pr["head_oid"],
         )
         raise RecoverableMergeGateError(
             f"PR #{pr['number']} head {pr['head_oid']} is behind latest "
@@ -4868,9 +4871,9 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         if not pending:
             break
         detail = ", ".join(pending)
-        LOGGER.info(
-            "merge_gate_waiting_ci pr=%s pending=%s waited=%ds limit=%ds",
-            pr["number"], detail, int(waited), int(ci_wait_seconds),
+        event(
+            "merge_gate_waiting_ci", pr=pr["number"], pending=detail,
+            waited=f"{int(waited)}s", limit=f"{int(ci_wait_seconds)}s",
         )
         if waited >= ci_wait_seconds:
             raise RuntimeError(
@@ -4884,10 +4887,10 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
 
     mergeable_waited = 0.0
     while state.get("mergeable") == "UNKNOWN":
-        LOGGER.info(
-            "merge_gate_waiting_mergeable pr=%s waited=%ds limit=%ds",
-            pr["number"], int(mergeable_waited),
-            int(mergeable_wait_seconds),
+        event(
+            "merge_gate_waiting_mergeable", pr=pr["number"],
+            waited=f"{int(mergeable_waited)}s",
+            limit=f"{int(mergeable_wait_seconds)}s",
         )
         if mergeable_waited >= mergeable_wait_seconds:
             raise RecoverableMergeGateError(
@@ -4902,9 +4905,9 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
 
     mergeable = state.get("mergeable")
     if mergeable != "MERGEABLE":
-        LOGGER.error(
-            "merge_gate_not_mergeable pr=%s mergeable=%s",
-            pr["number"], mergeable,
+        event(
+            "merge_gate_not_mergeable", level=logging.ERROR,
+            pr=pr["number"], mergeable=mergeable,
         )
         raise RecoverableMergeGateError(
             f"PR #{pr['number']} is not mergeable (mergeable={mergeable}); "
@@ -4912,9 +4915,9 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         )
     remote_head = state.get("headRefOid")
     if remote_head != pr["head_oid"]:
-        LOGGER.error(
-            "merge_gate_head_moved pr=%s reviewed=%s remote=%s",
-            pr["number"], pr["head_oid"], remote_head,
+        event(
+            "merge_gate_head_moved", level=logging.ERROR,
+            pr=pr["number"], reviewed=pr["head_oid"], remote=remote_head,
         )
         raise RuntimeError(
             f"PR #{pr['number']} head moved since review "
@@ -4925,7 +4928,7 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
         "gh", "pr", "merge", str(pr["number"]),
         "--match-head-commit", pr["head_oid"], "--merge",
     ], cwd=worktree)
-    LOGGER.info("merged pr=%s head=%s", pr["number"], pr["head_oid"])
+    event("merged", pr=pr["number"], head=pr["head_oid"])
     return {**pr, "merged": True}
 
 
@@ -4939,8 +4942,10 @@ def confirm_merged(worktree: Path, pr: dict, base_branch: str,
     """
     state = pr_view(pr["number"], "state,mergedAt,mergeCommit", cwd=worktree)
     if state.get("state") != "MERGED" or not state.get("mergedAt"):
-        LOGGER.error("confirm_merged_not_merged pr=%s state=%s",
-                     pr["number"], state.get("state"))
+        event(
+            "confirm_merged_not_merged", level=logging.ERROR,
+            pr=pr["number"], state=state.get("state"),
+        )
         raise RuntimeError(
             f"PR #{pr['number']} is not merged (state={state.get('state')})"
         )
@@ -4951,9 +4956,9 @@ def confirm_merged(worktree: Path, pr: dict, base_branch: str,
         )
     fetch_base_ref(repo_dir, base_branch, cwd=worktree)
     if not _is_ancestor(merge_commit, f"origin/{base_branch}", cwd=worktree):
-        LOGGER.error(
-            "confirm_merged_missing_on_base pr=%s merge_commit=%s",
-            pr["number"], merge_commit,
+        event(
+            "confirm_merged_missing_on_base", level=logging.ERROR,
+            pr=pr["number"], merge_commit=merge_commit,
         )
         raise RuntimeError(
             f"merge commit {merge_commit} is not on origin/{base_branch}; "
@@ -5049,11 +5054,15 @@ def log_recovery_ci_status(pr: dict, repo: str) -> None:
             for check in checks if isinstance(check, dict)
         ]
     except Exception as exc:
-        LOGGER.warning("review_recovery_ci_status_failed pr=%s error=%s",
-                       pr.get("number", "?"), quote_value(str(exc)))
+        event(
+            "review_recovery_ci_status_failed", level=logging.WARNING,
+            pr=pr.get("number", "?"), error=str(exc),
+        )
         return
-    LOGGER.info("review_recovery_ci_status pr=%s checks=%s",
-                pr["number"], ",".join(summary) or "none")
+    event(
+        "review_recovery_ci_status", pr=pr["number"],
+        checks=",".join(summary) or "none",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -5324,21 +5333,19 @@ def check_runner_source_freshness(config: RunnerConfig, *, run_command) -> dict:
             stale_reason = "unverifiable_version_state"
 
     if stale_reason is None:
-        LOGGER.info(
-            "runner_source fresh %s",
-            " ".join(
-                f"{key}={quote_value(str(value))}"
-                for key, value in facts.items()
-            ),
-        )
+        event("runner_source", result="fresh", **facts)
         return facts
     allowed = bool(config.allow_stale_runner)
-    line = _runner_source_stale_line(facts, allowed=allowed, fix=fix)
-    if allowed:
-        LOGGER.warning("%s", line)
-        return facts
-    LOGGER.error("%s", line)
-    raise RunnerSourceStaleError(line)
+    event(
+        "runner_source_stale",
+        **facts, allowed=str(allowed).lower(), fix=fix,
+        level=logging.WARNING if allowed else logging.ERROR,
+    )
+    if not allowed:
+        raise RunnerSourceStaleError(
+            _runner_source_stale_line(facts, allowed=allowed, fix=fix),
+        )
+    return facts
 
 
 def sync_base_checkout(repo_dir: Path, base_branch: str,
@@ -5383,10 +5390,10 @@ def _sync_base_checkout_locked(repo_dir: Path, base_branch: str) -> None:
             cwd=repo_dir,
         )
     except subprocess.CalledProcessError:
-        LOGGER.error(
-            "base_checkout_not_fast_forwardable repo_dir=%s base=%s "
-            "local=%s remote=%s",
-            repo_dir, base_branch, local_head, remote_head,
+        event(
+            "base_checkout_not_fast_forwardable", level=logging.ERROR,
+            repo_dir=repo_dir, base=base_branch, local=local_head,
+            remote=remote_head,
         )
         raise RuntimeError(
             f"deployment checkout {repo_dir} cannot fast-forward to "
@@ -5400,9 +5407,9 @@ def _sync_base_checkout_locked(repo_dir: Path, base_branch: str) -> None:
             f"deployment checkout {repo_dir} is at {synced} after the "
             f"sync, expected origin/{base_branch} at {remote_head}"
         )
-    LOGGER.info(
-        "base_checkout_synced repo_dir=%s base=%s head=%s",
-        repo_dir, base_branch, synced,
+    event(
+        "base_checkout_synced", repo_dir=repo_dir, base=base_branch,
+        head=synced,
     )
 
 
@@ -5461,15 +5468,15 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             rounds = review_rounds_so_far(
                 comments, after=recovery_at, run_id=config.run_id,
             )
-            LOGGER.info(
-                "review_budget_recovered issue=%s recovery_at=%s rounds=%s",
-                number, recovery_at, rounds,
+            event(
+                "review_budget_recovered", issue=number,
+                recovery_at=recovery_at, rounds=rounds,
             )
         if rounds >= MAX_REVIEW_ROUNDS:
-            LOGGER.error(
-                "review_rounds_exhausted issue=%s rounds=%s "
-                "terminal=expected_human_decision",
-                number, rounds,
+            event(
+                "review_rounds_exhausted", level=logging.ERROR,
+                issue=number, rounds=rounds,
+                terminal="expected_human_decision",
             )
             # Issue #50: the loop is bounded by MAX_REVIEW_ROUNDS on purpose
             # — after 5 rounds without a clean verdict the remaining findings
@@ -5514,10 +5521,10 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         ),
     )
     verdict = parse_review_verdict(output)
-    LOGGER.info(
-        "review pr=%s round=%s verdict=%s blockers=%s majors=%s",
-        pr["number"], round, verdict["verdict"], verdict["blockers"],
-        verdict["majors"],
+    event(
+        "review", pr=pr["number"], round=round,
+        verdict=verdict["verdict"], blockers=verdict["blockers"],
+        majors=verdict["majors"],
     )
     if review_has_findings(verdict):
         # The reviewer could not make the PR mergeable in this session
@@ -5526,10 +5533,8 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         # session's to decide). The Issue moves to the explicit
         # fix-needed state: the next review session retries the same PR
         # (no cold-start fixer), and the round budget bounds the loop.
-        LOGGER.info(
-            "review_findings_unfixed pr=%s round=%s; the Issue moves to "
-            "ai-fix-needed, the next review session retries the same PR",
-            pr["number"], round,
+        event(
+            "review_findings_unfixed", pr=pr["number"], round=round,
         )
         body = (
             f"{marker}\n"
@@ -5579,9 +5584,9 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     # only that head via --match-head-commit.
     refrozen = freeze_pr(worktree, branch, base_branch)
     if refrozen["head_oid"] != pr["head_oid"]:
-        LOGGER.info(
-            "review_head_advanced pr=%s round=%s frozen=%s reviewed=%s",
-            pr["number"], round, pr["head_oid"], refrozen["head_oid"],
+        event(
+            "review_head_advanced", pr=pr["number"], round=round,
+            frozen=pr["head_oid"], reviewed=refrozen["head_oid"],
         )
     # Issue #591: the clean verdict is bound to the head it covers. The
     # gate below merges exactly `refrozen["head_oid"]`, so a verdict
@@ -5632,9 +5637,9 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             source_repo, refrozen["head_oid"],
             wait_seconds=config.release_ci_wait_seconds,
         )
-        LOGGER.info(
-            "review_ci_gate_passed pr=%s head=%s evidence=%s",
-            refrozen["number"], refrozen["head_oid"], ci_evidence,
+        event(
+            "review_ci_gate_passed", pr=refrozen["number"],
+            head=refrozen["head_oid"], evidence=ci_evidence,
         )
     except RuntimeError as exc:
         handle_gate_failure(str(exc), ci_failure=True)
@@ -5722,11 +5727,10 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             # tracks a non-main branch) — fast-forwarding it to
             # origin/<base_branch> would break the lock. The next tick's
             # ExecStartPre engine sync owns this checkout instead.
-            LOGGER.info(
-                "base_checkout_sync_skipped repo_dir=%s "
-                "engine_source_track=%s base_branch=%s",
-                config.repo_dir, config.engine_source_track,
-                base_branch,
+            event(
+                "base_checkout_sync_skipped", repo_dir=config.repo_dir,
+                engine_source_track=config.engine_source_track,
+                base_branch=base_branch,
             )
         else:
             sync_base_checkout(config.repo_dir, base_branch)
@@ -6164,9 +6168,10 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
             max_concurrency = config.max_concurrency
             if (slot_dir is not None and max_concurrency is not None
                     and _another_live_runner(slot_dir, max_concurrency)):
-                LOGGER.info(
-                    "issue=%s claim_yield "
-                    "reason=release_in_progress_live_runner", number,
+                event(
+                    "claim_yield",
+                    issue=number,
+                    reason="release_in_progress_live_runner",
                 )
                 return IssueResult("claim-yielded", None)
         from orbi import release
@@ -6256,13 +6261,13 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
             open_pr=takeover_pr is not None,
             ready_label=dispatch_label,
         )
-        LOGGER.info(
-            "fresh_claim_route issue=%s branch=%s route=%s open_pr=%s",
-            number, stable_branch, route, takeover_pr is not None,
+        event(
+            "fresh_claim_route", issue=number, branch=stable_branch,
+            route=route, open_pr=takeover_pr is not None,
         )
         if route == "review":
-            LOGGER.info("delivery_takeover issue=%s branch=%s pr=%s",
-                        number, stable_branch, takeover_pr.get("url"))
+            event("delivery_takeover", issue=number, branch=stable_branch,
+                  pr=takeover_pr.get("url"))
     if in_progress:
         # Issue #724: the claim-race window has two halves. The scan
         # snapshot lacking the label while THIS direct read sees it
@@ -6281,9 +6286,9 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
         if (IN_PROGRESS_LABEL not in claim_labels
                 and slot_dir is not None and max_concurrency is not None
                 and _another_live_runner(slot_dir, max_concurrency)):
-            LOGGER.info(
-                "issue=%s claim_yield reason=label_landed_in_scan_window",
-                number,
+            event(
+                "claim_yield", issue=number,
+                reason="label_landed_in_scan_window",
             )
             return IssueResult("claim-yielded", None)
         # Issue #608: an in-flight external takeover (the run died between
@@ -6318,9 +6323,8 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
             # id so every later line (including resuming_run) carries
             # it.
             set_run_id(run_id)
-            LOGGER.info(
-                "issue=%s resuming_run run_id=%s",
-                number, run_id,
+            event(
+                "resuming_run", issue=number, run_id=run_id,
             )
     base_sha = freeze_base(config.repo_dir, base_branch)
     branch = task_branch(source_repo, number, run_id)
@@ -6369,16 +6373,16 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
         # the default constant — a custom-label repository's tickets
         # never carry `ai-ready`, and the guard must guard them too.
         if has_in_progress_label(number, source_repo):
-            LOGGER.info(
-                "issue=%s claim_yield reason=in_progress_label", number,
+            event(
+                "claim_yield", issue=number, reason="in_progress_label",
             )
             return IssueResult("claim-yielded", None)
         if not stable_branch_present and stable_branch_exists(
                 config.repo_dir, stable_branch,
         ):
-            LOGGER.info(
-                "issue=%s claim_yield reason=stable_branch_appeared",
-                number,
+            event(
+                "claim_yield", issue=number,
+                reason="stable_branch_appeared",
             )
             return IssueResult("claim-yielded", None)
     apply_label_patch(
@@ -6461,13 +6465,13 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
                 if session_dir.is_dir() else 0
             )
             snapshot = activity_snapshot(session_dir)
-            LOGGER.info(
-                "issue=%s resume_continue worktree=%s changed_files=%s "
-                "reused_runs=%s previous_session=%s",
-                number, worktree,
-                len(changed_files(worktree)),
-                previous_sessions,
-                (snapshot.get("session_id") if snapshot else None) or "-",
+            event(
+                "resume_continue", issue=number, worktree=worktree,
+                changed_files=len(changed_files(worktree)),
+                reused_runs=previous_sessions,
+                previous_session=(
+                    snapshot.get("session_id") if snapshot else None
+                ) or "-",
             )
         config = replace(config, base_sha=base_sha, run_id=run_id)
         if ops:
@@ -6553,8 +6557,8 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
                         outcome="**Orbi ops delivered**",
                     )),
                 )
-                LOGGER.info(
-                    "run_end %s",
+                event(
+                    "run_end",
                     format_end_scene(
                         run_id=run_id,
                         issue=issue_context(source_repo, number),
@@ -6610,8 +6614,8 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
                     outcome="**Orbi stopped: Issue closed during delivery**",
                 )),
             )
-            LOGGER.info(
-                "run_end %s",
+            event(
+                "run_end",
                 format_end_scene(
                     run_id=run_id, issue=issue_context(source_repo, number),
                     role=ROLE_IMPLEMENT, result="issue_closed",
@@ -6685,8 +6689,8 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
                 pr_url=pr_url, review_round=0, priority=priority,
             ), outcome="**Orbi delivered**")),
         )
-        LOGGER.info(
-            "run_end %s",
+        event(
+            "run_end",
             format_end_scene(
                 run_id=run_id, issue=issue_context(source_repo, number),
                 role=ROLE_IMPLEMENT, result="pr_opened",
@@ -7186,9 +7190,9 @@ def _run_review_round(
     priority = issue_priority(issue)
 
     def block_label_inconsistency(labels: list[str], reason: str) -> None:
-        LOGGER.error(
-            "issue=%s delivery_label_inconsistent pr=%s reason=%s; "
-            "marking ai-blocked", number, pr_url, reason,
+        event(
+            "delivery_label_inconsistent", level=logging.ERROR,
+            issue=number, pr=pr_url, reason=reason,
         )
         apply_label_patch(
             number, repo=source_repo, event=EVENT_BLOCKED,
@@ -7218,9 +7222,9 @@ def _run_review_round(
             return None
         labels = [label for label in labels if label != IN_PROGRESS_LABEL]
         labels.append(PR_OPENED_LABEL)
-        LOGGER.info(
-            "issue=%s delivery_label_repaired pr=%s from=%s to=%s",
-            number, pr_url, IN_PROGRESS_LABEL, PR_OPENED_LABEL,
+        event(
+            "delivery_label_repaired", issue=number, pr=pr_url,
+            **{"from": IN_PROGRESS_LABEL, "to": PR_OPENED_LABEL},
         )
     if not (is_resumable(labels)
             and not needs_human_intervention(labels)
@@ -7255,10 +7259,8 @@ def _run_review_round(
                     event=EVENT_HUMAN_REVIEW_WAITING,
                     current_labels=labels,
                 )
-            LOGGER.info(
-                "issue=%s human_review_waiting pr=%s; releasing the "
-                "slot (one label read per tick, no review session)",
-                number, pr_url,
+            event(
+                "human_review_waiting", issue=number, pr=pr_url,
             )
             return None
     # The PR is in an opened-PR review state: run the
@@ -7379,10 +7381,10 @@ def _run_review_round(
             # The bounded budget is an intentional human decision
             # point, not a Runner bug. Keep the structured event and
             # terminal handling below, but do not emit a traceback.
-            LOGGER.error(
-                "review_rounds_exhausted_expected_terminal issue=%s "
-                "pr=%s reason=%s",
-                number, pr_url, detail,
+            event(
+                "review_rounds_exhausted_expected_terminal",
+                level=logging.ERROR, issue=number, pr=pr_url,
+                reason=detail,
             )
         else:
             # Real delivery failures retain traceback evidence for
@@ -7404,10 +7406,8 @@ def _run_review_round(
         )
         return None
     if merged:
-        LOGGER.info(
-            "issue=%s delivery_auto_merged pr=%s; releasing the "
-            "slot",
-            number, pr_url,
+        event(
+            "delivery_auto_merged", issue=number, pr=pr_url,
         )
         return True
     return False
@@ -7511,10 +7511,8 @@ def wait_for_delivery(pr_url: str, issue: dict, config: RunnerConfig,
     # progress comment of a resumed P0 delivery keeps showing `p0`
     # through review/merge.
     priority = issue_priority(issue)
-    LOGGER.info(
-        "issue=%s delivery_awaiting pr=%s priority=%s; holding the "
-        "slot until the PR is merged or terminally failed",
-        number, pr_url, priority,
+    event(
+        "delivery_awaiting", issue=number, pr=pr_url, priority=priority,
     )
     publish = functools.partial(
         _safe_publish, run_id=run_id, issue=number,
@@ -7524,14 +7522,13 @@ def wait_for_delivery(pr_url: str, issue: dict, config: RunnerConfig,
     while True:
         state, ci_checks = pr_delivery_status(pr_url, source_repo)
         if state == "OPEN":
-            LOGGER.info(
-                "issue=%s delivery_ci pr=%s checks=%s",
-                number, pr_url, ",".join(ci_checks) or "none",
+            event(
+                "delivery_ci", issue=number, pr=pr_url,
+                checks=",".join(ci_checks) or "none",
             )
         if state == "MERGED":
-            LOGGER.info(
-                "issue=%s delivery_merged pr=%s; releasing the slot",
-                number, pr_url,
+            event(
+                "delivery_merged", issue=number, pr=pr_url,
             )
             if external_takeover:
                 # Issue #608: merging the external PR closes the triage
@@ -7553,10 +7550,8 @@ def wait_for_delivery(pr_url: str, issue: dict, config: RunnerConfig,
                 # ready queue and the next claim redoes the fix
                 # internally; the closed PR keeps the supersession story
                 # in its thread.
-                LOGGER.info(
-                    "issue=%s external_takeover_closed pr=%s; requeuing "
-                    "for an internal redo",
-                    number, pr_url,
+                event(
+                    "external_takeover_closed", issue=number, pr=pr_url,
                 )
                 apply_label_patch(
                     number, repo=source_repo, event=EVENT_REQUEUE,
@@ -7575,10 +7570,8 @@ def wait_for_delivery(pr_url: str, issue: dict, config: RunnerConfig,
                 # triage Issue (docs/contributing.mdx, Issue #608).
                 comment_pr(_pr_number(pr_url), repo=source_repo, body=body)
                 return
-            LOGGER.info(
-                "issue=%s delivery_closed_unmerged pr=%s; marking the "
-                "Issue ai-blocked and releasing the slot",
-                number, pr_url,
+            event(
+                "delivery_closed_unmerged", issue=number, pr=pr_url,
             )
             # The blocked patch leaves the terminal state `ai-blocked`
             # alone.
@@ -7764,18 +7757,19 @@ def _preflight(config: RunnerConfig) -> None:
             mode=config.git_transport,
         )
     except TransportError as exc:
-        LOGGER.error(
-            "transport_check_failed repo_dir=%s source_repos=%s "
-            "reason=%s",
-            config.repo_dir, config.source_repos, exc,
+        event(
+            "transport_check_failed", level=logging.ERROR,
+            repo_dir=config.repo_dir, source_repos=config.source_repos,
+            reason=exc,
         )
         raise
-    LOGGER.info(
-        "transport clean remote=%s protocol=%s url=%s "
-        "ssh_reachable=%s transport_reachable=%s",
-        transport.get("remote", "-"), transport.get("protocol", "-"),
-        transport.get("url", "-"), transport.get("ssh_reachable", "-"),
-        transport.get("transport_reachable", "-"),
+    event(
+        "transport", result="clean",
+        remote=transport.get("remote", "-"),
+        protocol=transport.get("protocol", "-"),
+        url=transport.get("url", "-"),
+        ssh_reachable=transport.get("ssh_reachable", "-"),
+        transport_reachable=transport.get("transport_reachable", "-"),
     )
     # Self-health check (Issue #266): BEFORE any slot or claim the Runner
     # actively looks for the incident patterns of 2026-09-04 — a service
@@ -7813,7 +7807,7 @@ def main(argv: list[str] | None = None) -> int:
         validate_config(config)
         validate_execution_source_repos(config.source_repos)
     except ValueError as exc:
-        LOGGER.error("config_invalid reason=%s", exc)
+        event("config_invalid", level=logging.ERROR, reason=exc)
         return 1
     _preflight(config)
     # Concurrency cap (Issue #39): take one slot BEFORE claiming anything.
@@ -7825,9 +7819,9 @@ def main(argv: list[str] | None = None) -> int:
         config.slot_dir, config.max_concurrency, os.getpid(),
     )
     if slot is None:
-        LOGGER.info(
-            "capacity_full max_concurrency=%s slot_dir=%s",
-            config.max_concurrency, config.slot_dir,
+        event(
+            "capacity_full", max_concurrency=config.max_concurrency,
+            slot_dir=config.slot_dir,
         )
         return 0
     try:
@@ -7887,9 +7881,9 @@ def main(argv: list[str] | None = None) -> int:
                 scene["run_id"] if scene is not None
                 else (current_run_id() or new_run_id())
             )
-            LOGGER.error(
-                "repo_config_invalid source_repo=%s reason=%s",
-                source_repo, exc,
+            event(
+                "repo_config_invalid", level=logging.ERROR,
+                source_repo=source_repo, reason=exc,
             )
             block_repo_config_failure(
                 int(issue["number"]), source_repo, exc, run_id,
@@ -7945,9 +7939,10 @@ def main(argv: list[str] | None = None) -> int:
                 # Resume verification has already performed the audited
                 # label/comment transition. This is an expected external
                 # scene condition, not a failed Runner tick (Issue #495).
-                LOGGER.error(
-                    "resume_pr_handled issue=%s scene_pr=%s reason=%s",
-                    issue["number"], scene["pr_url"], exc,
+                event(
+                    "resume_pr_handled", level=logging.ERROR,
+                    issue=issue["number"], scene_pr=scene["pr_url"],
+                    reason=exc,
                 )
                 return 0
         else:

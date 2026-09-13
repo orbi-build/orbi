@@ -360,13 +360,13 @@ def test_operations_documents_the_full_deployment_sequence():
     template change needs NO human step after the merge -> the next
     timer trigger's ExecStartPre fast-forwards the checkout -> the
     pre-start unit_drift check self-heals (same idempotent install +
-    re-verify, `unit_drift auto_synced`) -> the tick continues."""
+    re-verify, `unit_drift result=auto_synced`) -> the tick continues."""
     operations = docs_page("operations.mdx")
     assert "NO human step" in operations
     assert "next timer" in operations
     assert "ExecStartPre" in operations
     assert "unit_drift" in operations
-    assert "unit_drift auto_synced" in operations
+    assert "unit_drift result=auto_synced" in operations
 
 
 def test_agents_md_documents_the_deployment_consistency_contract():
@@ -403,7 +403,7 @@ def test_template_change_pins_the_self_healing_contract():
     change cannot merge and strand the deployment again: the change
     takes effect WITHOUT a human step (the pre-start drift check
     self-heals with the same idempotent install and re-verifies,
-    `unit_drift auto_synced`), `install-units` stays the manual entry,
+    `unit_drift result=auto_synced`), `install-units` stays the manual entry,
     and the fail-fast canary is unchanged for a drift the self-heal
     cannot resolve."""
     def template_change_contract(text: str) -> None:
@@ -412,7 +412,7 @@ def test_template_change_pins_the_self_healing_contract():
         assert "systemd/orbi@.timer" in text
         assert "systemd/orbi@.service" in text
         # The self-heal: the structured auto_synced line.
-        assert "unit_drift auto_synced" in text
+        assert "unit_drift result=auto_synced" in text
         # install-units stays the manual entry (setup, immediate sync).
         assert "install-units" in text
         # The drift check stays fail-fast for an unresolvable drift.
