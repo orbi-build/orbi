@@ -71,6 +71,28 @@ LOGGER.addFilter(RunIdFilter())
 # pyproject.toml, so the two cannot drift.
 
 ISSUE_URL_PATTERN = re.compile(r"/issues/(\d+)$")
+
+DEFAULT_ISSUE_BODY = """## User outcome
+Describe the observable result the user should get.
+
+## Preconditions
+- Configuration, access, or setup required:
+- Real command or interaction:
+
+## Acceptance
+### Success path
+- System action:
+- User sees:
+
+### Failure path
+- Trigger:
+- User sees:
+- Repair action:
+
+## Evidence
+- Real entry point:
+- Test, log, journal, Issue, PR, or UI evidence:
+"""
 # `ai-pr-opened` (awaiting review), `ai-fix-needed` (awaiting the next
 # review session), `ai-merged` (the Runner merged the PR
 # itself) and `ai-blocked` are all result states of an
@@ -95,8 +117,8 @@ def create_issue(repo: str, title: str, body: str) -> str:
 
 
 def dispatch_issue(repo: str, title: str, body: str) -> str:
-    """Create an Issue and mark it `ai-ready`; return the Issue URL."""
-    url = create_issue(repo, title, body)
+    """Create an English-first Issue and mark it `ai-ready`."""
+    url = create_issue(repo, title, body or DEFAULT_ISSUE_BODY)
     run_command([
         "gh", "issue", "edit", str(issue_number(url)), "--repo", repo,
         "--add-label", READY_LABEL,

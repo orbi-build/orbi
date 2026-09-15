@@ -17,6 +17,22 @@ Architectural invariants and the public surface live in [CONSTITUTION.md](CONSTI
 - One Issue is **one runtime outcome** (when X, should Y, actually Z): one observable behavior, a handful of related files, tests included.
 - Open the Issue once the root cause is pinned.
 
+## Language contract
+
+New public delivery text is written for the project's target users, who are not
+limited to the Chinese-speaking world. The public ledger should be directly
+readable by HN readers:
+
+- Issue titles are in English.
+- PR titles are in English.
+- Progress comments are in English.
+- Release notes are in English.
+
+Issue bodies put English first; a Chinese section may follow when useful. This
+contract applies to newly created Issues, PRs, comments, and releases only;
+existing content is not translated. The contract is guidance enforced by this
+file, the Issue templates, and the Runner's own output—not a CI gate.
+
 ## Minimal implementation (KISS/LEAN)
 
 - Implement the smallest complete change that satisfies the Issue's acceptance criteria — no speculative feature, no no-benefit abstraction, no extra framework layer, no fallback, no future-proofing, no scope expansion.
