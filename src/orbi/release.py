@@ -1286,7 +1286,8 @@ def tag_commit_is_ancestor_of_base(tag_commit: str, base_commit: str,
 def publish_release(*, repo: str, tag: str, version: str,
                     release_commit: str, changelog: str,
                     scope_evidence: list[str], gate_evidence: list[str], test_evidence: str,
-                    run_id: str, issue_number: int) -> str:
+                    run_id: str, issue_number: int,
+                    attribution_footer: bool = True) -> str:
     """Create the GitHub Release for the tag — idempotently.
 
     When a Release for the tag already exists (a restart after a
@@ -1324,6 +1325,8 @@ def publish_release(*, repo: str, tag: str, version: str,
         "",
         run_marker(run_id),
         f"run_id={run_id}",
+        *(["", "Released by Orbi · https://github.com/orbi-build/orbi"]
+          if attribution_footer else []),
     ])
     try:
         release = release_view(repo, tag, fields="tagName,url,body")
@@ -2255,6 +2258,7 @@ def process_release(issue: dict, config: RunnerConfig,
             release_commit=release_commit, changelog=changelog,
             scope_evidence=scope_evidence, gate_evidence=gate_evidence,
             test_evidence=test_evidence, run_id=run_id, issue_number=number,
+            attribution_footer=config.attribution_footer,
         )
         publish(
             action=lambda: publisher.milestone(

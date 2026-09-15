@@ -92,6 +92,9 @@ engine_source_track = "release"
 # delivery passes without the label. Default: false (the pipeline runs
 # with humans out of the loop, exactly as before).
 # human_review_gate = false
+# Add a one-line backlink to Orbi on generated PRs and Releases.
+# Default: true; set false to omit the attribution footer.
+# attribution_footer = true
 # Claim scope: the active GitHub Milestone title (e.g.
 # "v0.2.0") that the fresh-claim scans (p0, bug, plain) are restricted
 # to. The milestone:"<title>" qualifier is part of the gh search query,

@@ -88,6 +88,7 @@ def test_load_config_returns_the_frozen_runner_config(tmp_path):
     assert config.auto_next_milestone is True
     assert config.allow_stale_runner is False
     assert config.human_review_gate is False
+    assert config.attribution_footer is True
     assert config.model_wait_dead_seconds == 1800.0
     assert config.issue_comments_limit == 20
     assert config.repositories == ()
@@ -96,6 +97,17 @@ def test_load_config_returns_the_frozen_runner_config(tmp_path):
     assert config.base_sha == ""
     with pytest.raises(dataclasses.FrozenInstanceError):
         config.base_branch = "beta"
+
+
+@pytest.mark.parametrize("value", ["1", '"yes"'])
+def test_load_config_rejects_invalid_attribution_footer(tmp_path, value):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        f'source_repos = ["owner/repo"]\nattribution_footer = {value}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="attribution_footer must be a boolean"):
+        runner.load_config(config_path)
 
 
 def test_load_config_defaults_base_branch_to_main(tmp_path):

@@ -638,6 +638,7 @@ class RunnerConfig:
     max_concurrency: int = 1
     allow_stale_runner: bool = False
     human_review_gate: bool = False
+    attribution_footer: bool = True
     slot_dir: Path | None = None
     pi_provider: str | None = None
     pi_model: str | None = None
@@ -724,6 +725,9 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     human_review_gate = data.get("human_review_gate", False)
     if not isinstance(human_review_gate, bool):
         raise ValueError("human_review_gate must be a boolean")
+    attribution_footer = data.get("attribution_footer", True)
+    if not isinstance(attribution_footer, bool):
+        raise ValueError("attribution_footer must be a boolean")
     # Engine source update channel: what the deploy home
     # checkout follows at the next start — origin/main by default (the
     # exact pre-#535 dogfood behavior), a branch, the newest official
@@ -894,6 +898,7 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         max_concurrency=max_concurrency,
         allow_stale_runner=allow_stale_runner,
         human_review_gate=human_review_gate,
+        attribution_footer=attribution_footer,
         slot_dir=slot_dir_for(repo_dir),
         pi_provider=pi_provider,
         pi_model=pi_model,
@@ -4564,7 +4569,8 @@ def _agent_delivery_boundary(worktree: Path) -> tuple[str, str]:
 
 
 def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
-               issue_title: str, repo_dir: Path) -> str | None:
+               issue_title: str, repo_dir: Path,
+               attribution_footer: bool = True) -> str | None:
     """The Runner completes the deterministic delivery closeout.
 
     The Agent stops at the committed delivery (code, tests,
@@ -4726,6 +4732,11 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
             f"Fixes #{issue}\n\n"
             f"{issue_title} (run_id={run_id})\n"
         )
+        if attribution_footer:
+            body += (
+                "\nBuilt by Orbi from Issue #"
+                f"{issue} · https://github.com/orbi-build/orbi\n"
+            )
         run_command([
             "gh", "pr", "create", "--base", base_branch, "--head", branch,
             "--title", issue_title, "--body", body,
@@ -7599,6 +7610,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             takeover_pr["url"] if takeover_pr is not None else deliver_pr(
                 ctx, base_branch, base_sha,
                 issue_title=title, repo_dir=config.repo_dir,
+                attribution_footer=config.attribution_footer,
             )
         )
         ctx = replace(ctx, pr=pr_url)

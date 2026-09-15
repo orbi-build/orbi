@@ -17507,6 +17507,20 @@ def test_publish_release_creates_when_missing_and_returns_url(monkeypatch):
     assert "<!-- orbi:run=a1b2c3d4 -->" in notes
     assert "run_id=a1b2c3d4" in notes
     assert "Issue #99" in notes
+    assert notes.endswith("Released by Orbi · https://github.com/orbi-build/orbi")
+
+
+def test_publish_release_omits_attribution_when_disabled(monkeypatch):
+    calls = make_release_gh(monkeypatch, release_exists=False)
+    release.publish_release(
+        repo="o/r", tag="v0.3.0", version="v0.3.0",
+        release_commit="abc123", changelog="## Changelog",
+        scope_evidence=[], gate_evidence=[], test_evidence="ok",
+        run_id="a1b2c3d4", issue_number=99, attribution_footer=False,
+    )
+    create = next(c for c in calls if c[:3] == ["gh", "release", "create"])
+    notes = create[create.index("--notes") + 1]
+    assert "Released by Orbi" not in notes
 
 
 def test_publish_release_reuses_the_existing_release(monkeypatch):
@@ -20664,7 +20678,9 @@ def test_deliver_pr_absorbs_an_advanced_base(monkeypatch, tmp_path, caplog):
     assert "base_absorbed" in caplog.text
 
 
-def test_deliver_pr_creates_the_pr_when_absent(monkeypatch, tmp_path):
+@pytest.mark.parametrize("attribution_footer, expected_footer", [(True, True), (False, False)])
+def test_deliver_pr_creates_the_pr_when_absent(monkeypatch, tmp_path,
+                                              attribution_footer, expected_footer):
     """No open PR of the branch: the Runner creates it with the run
     marker and `Fixes #<issue>` in the body (the PR body contract is
     the Runner's obligation now, Issue #186)."""
@@ -20693,7 +20709,7 @@ def test_deliver_pr_creates_the_pr_when_absent(monkeypatch, tmp_path):
         return fake_deliver_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.deliver_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=DELIVER_BRANCH, worktree=tmp_path, source_repo="o/r"), "main", "9" * 40, issue_title="Closeout title", repo_dir=tmp_path) == FAKE_PR_URL
+    assert runner.deliver_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=DELIVER_BRANCH, worktree=tmp_path, source_repo="o/r"), "main", "9" * 40, issue_title="Closeout title", repo_dir=tmp_path, attribution_footer=attribution_footer) == FAKE_PR_URL
     create = [
         command for command in calls
         if command[:3] == ["gh", "pr", "create"]
@@ -20706,6 +20722,7 @@ def test_deliver_pr_creates_the_pr_when_absent(monkeypatch, tmp_path):
     body = command[command.index("--body") + 1]
     assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in body
     assert "Fixes #4" in body
+    assert ("Built by Orbi from Issue #4 · https://github.com/orbi-build/orbi" in body) is expected_footer
 
 
 def test_deliver_pr_fails_fast_when_pr_create_fails(monkeypatch, tmp_path):
