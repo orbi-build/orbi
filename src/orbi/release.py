@@ -404,11 +404,12 @@ def resolve_release_declaration(
             "the `- version:` override"
         )
 
-    base_branch = next(
-        (repo.get("base_branch") for repo in getattr(config, "repositories", ())
-         if repo.get("github") == source_repo),
-        getattr(config, "base_branch", "main"),
-    )
+    # config.base_branch is already the fused value: the [[repositories]]
+    # entry fallback is applied unconditionally at dispatch, then the
+    # repository policy overrides it. Re-reading the raw entry here used
+    # to discard the policy layer and freeze the release on the wrong
+    # branch.
+    base_branch = config.base_branch
     version_file = overrides.get("version_file")
     if version_file is None:
         root_entries = set(run_command(
@@ -2009,11 +2010,9 @@ def process_release(issue: dict, config: RunnerConfig,
     open_milestone_evidence: list[str] = []
     try:
         declaration = parse_release_declaration(issue["body"])
-        base_branch = declaration.get("base_branch") or next(
-            (repo.get("base_branch") for repo in getattr(config, "repositories", ())
-             if repo.get("github") == source_repo),
-            getattr(config, "base_branch", "main"),
-        )
+        # Fused value: entry fallback + policy override (see
+        # resolve_release_declaration — never re-read the raw entry).
+        base_branch = declaration.get("base_branch") or config.base_branch
         # The started milestone below and the failure comment
         # read THIS value — base_branch known, base_sha not yet (the
         # post-gate reassignment further down adds base_sha). The journal
