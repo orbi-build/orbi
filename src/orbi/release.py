@@ -137,6 +137,11 @@ RELEASE_CI_POLL_INTERVAL = 30.0
 # Supported `version_file` declaration values: the ecosystem metadata
 # files (written by `prepare_release_version`) plus `none` — skip version
 # metadata changes and tag the frozen base HEAD directly.
+# The only release tag shape (prepare_release_version has enforced it at
+# execution time since v0.3; resolve enforces it at claim time so a bad
+# Milestone title fails before the gates burn their wait budgets).
+RELEASE_VERSION_TAG_RE = re.compile(r"v([0-9]+(?:\.[0-9]+)+)")
+
 RELEASE_VERSION_FILE_OPTIONS = (
     "pyproject.toml", "package.json", "pom.xml", "build.gradle",
     "build.gradle.kts", "gradle.properties", "Cargo.toml",
@@ -402,6 +407,12 @@ def resolve_release_declaration(
             f"release version {version!r} does not match the Issue Milestone "
             f"title {milestone_title!r}; rename the Milestone or correct "
             "the `- version:` override"
+        )
+    if RELEASE_VERSION_TAG_RE.fullmatch(version) is None:
+        raise ValueError(
+            f"release version {version!r} must be a v-prefixed numeric tag "
+            "(for example `v0.5.8`); rename the Milestone or correct the "
+            "`- version:` override"
         )
 
     base_branch = next(
@@ -1043,7 +1054,7 @@ def prepare_release_version(worktree: Path, tag: str,
     must be structurally recognizable before it is changed; the commit is
     pushed directly to the release base, matching the release docs-sync step.
     """
-    match = re.fullmatch(r"v([0-9]+(?:\.[0-9]+)+)", tag)
+    match = RELEASE_VERSION_TAG_RE.fullmatch(tag)
     if match is None:
         raise ValueError(
             f"release version {tag!r} must be a v-prefixed numeric tag"
