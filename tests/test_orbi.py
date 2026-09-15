@@ -73,6 +73,21 @@ def test_dispatch_issue_creates_issue_and_adds_ai_ready(monkeypatch):
     ]
 
 
+def test_dispatch_issue_uses_english_first_body_when_body_is_omitted(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        orbi, "run_command",
+        lambda command, **kwargs: calls.append(command)
+        or "https://github.com/xqliu/orbi/issues/13",
+    )
+    orbi.dispatch_issue("xqliu/orbi", "English task", "")
+    body = calls[0][-1]
+    assert body.startswith("## User outcome")
+    assert all(section in body for section in (
+        "## Preconditions", "## Acceptance", "## Evidence",
+    ))
+
+
 def test_dispatch_issue_propagates_create_failure(monkeypatch):
     monkeypatch.setattr(
         orbi, "run_command",
