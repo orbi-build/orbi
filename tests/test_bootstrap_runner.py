@@ -2480,6 +2480,32 @@ def test_create_worktree_branch_override_checks_out_the_external_head(
     ]
 
 
+def test_create_worktree_fork_takeover_fetches_pull_head_ref(monkeypatch, tmp_path):
+    path = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-run1"
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[0:3] == ["git", "branch", "--list"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    assert runner.create_worktree(
+        tmp_path, "owner/repo", 3, "run1", "base",
+        existing_branch=True, branch="fix/outer", pr_number=592,
+    ) == path
+    fetch = calls[0]
+    assert fetch[0][0:5] == [
+        "git", "fetch", "origin", "pull/592/head",
+        "refs/remotes/origin/fix/outer",
+    ]
+    assert fetch[1] == {
+        "cwd": tmp_path, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS,
+    }
+    assert calls[-1][0][-1] == "origin/fix/outer"
+
+
 def test_create_worktree_takeover_with_existing_branch_never_exits_255(tmp_path):
     """Real-git acceptance (Issue #608 scenario a): the stable branch
     already exists on origin — the takeover path succeeds where the bare

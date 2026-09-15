@@ -2176,7 +2176,7 @@ def test_verify_resumed_pr_external_scene_recreates_worktree_from_scene_pr(
     fake_gh = FakeGh("owner/repo")
     fake_gh.add_issue(9, title="ship")
     external_head = fake_git.commit([fake_git.base_sha])
-    fake_git.origin["fix/outer"] = external_head
+    fake_git.pull_heads["592"] = external_head
     external_url = "https://github.com/xqliu/orbi/pull/592"
     fake_gh.add_pr(
         592, head="fix/outer", base="main", oid=external_head,

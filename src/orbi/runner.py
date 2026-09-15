@@ -2548,6 +2548,7 @@ def external_takeover_pr(repo_dir: Path, body: str | None,
     event(
         "external_takeover", pr=number, head=pr.get("headRefName"),
     )
+    pr["number"] = int(number)
     return pr
 
 
@@ -4826,7 +4827,9 @@ def verify_resumed_pr(scene: dict, issue: dict, config: RunnerConfig,
                     cwd=config.repo_dir,
                 ))
                 branch = str(head["headRefName"])
-            if not stable_branch_exists(config.repo_dir, branch):
+            if not external and not stable_branch_exists(
+                    config.repo_dir, branch,
+            ):
                 raise ResumeBranchGoneError(
                     f"resume worktree {worktree} is missing and the "
                     f"delivery branch {branch} no longer exists on "
@@ -4836,6 +4839,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: RunnerConfig,
             create_worktree(
                 config.repo_dir, source_repo, number, run_id,
                 scene["base_sha"], existing_branch=True, branch=branch,
+                pr_number=_pr_number(scene["pr_url"]) if external else None,
             )
             event(
                 "worktree_recreated", issue=number, branch=branch,
@@ -7439,6 +7443,9 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             # PR is frozen on.
             branch=(
                 takeover_pr["headRefName"] if external_takeover else None
+            ),
+            pr_number=(
+                takeover_pr["number"] if external_takeover else None
             ),
         )
         # The run state file is the same-run marker —
