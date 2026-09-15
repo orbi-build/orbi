@@ -456,6 +456,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `pi_429_attempts_write_failed` | 持久化 429 重试计数失败 |
 | `pi_429_attempts_clear_failed` | 清除 429 重试计数失败 |
 | `progress_publish_failed` | 进度评论发布失败（纯旁路） |
+| `progress_finish_missing_next_step` | 终态进度场景缺少下一步 |
 | `config_invalid` | runner 配置校验失败（不启动） |
 | `transport` | 启动前 git transport 检查通过 |
 | `transport_check_failed` | 启动前 git transport 检查失败（不启动） |
