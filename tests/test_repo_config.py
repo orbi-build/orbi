@@ -1015,3 +1015,25 @@ def test_policy_diff_compares_policy_fields_and_skips_the_sha():
         repo_config.RepoPolicy(base_branch="beta"),
     )
     assert diff == "base_branch=main->beta"
+
+
+def test_resolve_source_base_branch_fuses_entry_without_a_policy_file():
+    """With NO repository policy file the entry fallback must STILL
+    apply: before this fix the dev path read the host base_branch while
+    the release path re-derived the entry value — two paths, two base
+    branches for the same repository. A policy, when present, still
+    overrides the entry."""
+    config = runner.RunnerConfig(
+        repo_dir=Path("/repo"), source_repos=("o/r",),
+        deploy_home=Path("/repo"), max_concurrency=2,
+        base_branch="main",
+        repositories=[{"github": "o/r", "base_branch": "develop"}],
+    )
+    fused = runner.resolve_source_base_branch(config, "o/r", None)
+    assert fused.base_branch == "develop"
+    other = runner.resolve_source_base_branch(config, "other/repo", None)
+    assert other.base_branch == "main"
+
+    policy = repo_config.RepoPolicy(base_branch="release")
+    overridden = runner.resolve_source_base_branch(config, "o/r", policy)
+    assert overridden.base_branch == "release"
