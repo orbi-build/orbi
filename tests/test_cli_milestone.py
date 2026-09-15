@@ -287,3 +287,72 @@ def test_milestone_set_unwritable_config_fails_without_touching_content(
     assert "fix=" in err
     assert "Traceback" not in err
     assert config_path.read_bytes() == original
+
+
+# --- titles that only survive a real escaping implementation ---------------------
+
+
+def test_milestone_set_title_with_double_quote_writes_valid_toml(
+    tmp_path, monkeypatch,
+):
+    """GitHub Milestone titles are arbitrary; a title containing `"` must
+    still produce a parseable TOML basic string. The old implementation
+    interpolated the raw title and wrote `active_milestone = "say "hi""`
+    — invalid TOML on disk while the command reported success, so the
+    next tick died in load_config."""
+    import tomllib
+
+    config_path = make_world(tmp_path)
+    gh = FakeGh(REPO)
+    gh.add_milestone(1, title='say "hi"', open_issues=1)
+    wire(monkeypatch, gh)
+
+    assert run_set(config_path, 'say "hi"') == 0
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["active_milestone"] == 'say "hi"'
+
+
+def test_milestone_set_title_with_backslash_writes_valid_toml(
+    tmp_path, monkeypatch,
+):
+    """A `\\` in the title used to travel into the re.subn replacement
+    string as an escape sequence and blow up with re.error — an
+    exception type outside the command's failure contract (a raw
+    traceback instead of one structured milestone_set_failed line)."""
+    import tomllib
+
+    config_path = make_world(tmp_path)
+    gh = FakeGh(REPO)
+    gh.add_milestone(1, title=r"back\slash", open_issues=1)
+    wire(monkeypatch, gh)
+
+    assert run_set(config_path, r"back\slash") == 0
+
+    parsed = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    assert parsed["active_milestone"] == r"back\slash"
+
+
+def test_milestone_set_timeout_failure_raises_the_structured_error(
+    tmp_path, monkeypatch, capsys,
+):
+    """The failure contract (docstring: every failure raises
+    MilestoneSetError) covers more than CalledProcessError: a hung gh
+    times out (TimeoutExpired), a missing gh raises OSError, a bad
+    payload raises ValueError — all must collapse into the one
+    structured line instead of leaking a traceback."""
+    import subprocess
+
+    config_path = make_world(tmp_path)
+
+    def hung(command, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="gh", timeout=30)
+
+    monkeypatch.setattr(seam, "run_command", hung)
+
+    exit_code = run_set(config_path, "v0.6.0")
+
+    assert exit_code != 0
+    err = capsys.readouterr().err
+    assert "milestone_set_failed" in err
+    assert "milestone lookup failed" in err
