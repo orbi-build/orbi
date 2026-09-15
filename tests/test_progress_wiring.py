@@ -2233,6 +2233,7 @@ def test_process_issue_claims_external_pr_and_skips_run_pi(
     assert not runner.run_pi.called
     # The worktree was created on the contributor's head branch.
     assert worktree_calls[0]["branch"] == "fix/outer"
+    assert worktree_calls[0]["pr_number"] == 592
     assert worktree_calls[0]["existing_branch"] is True
     # The run state carries the external branch identity.
     state = json.loads(
