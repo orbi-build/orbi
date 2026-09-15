@@ -39,6 +39,7 @@ class FakeGit:
         self.parents: dict[str, list[str]] = {}
         self.local: dict[str, str] = {}
         self.origin: dict[str, str] = {}
+        self.pull_heads: dict[str, str] = {}
         self.worktrees: dict[str, dict] = {}
         self.calls: list[list[str]] = []
         self.base_branch = base_branch
@@ -103,14 +104,26 @@ class FakeGit:
         return f"  {name}\n" if name in self.local else ""
 
     def _fetch(self, args: list[str], cwd) -> str:
-        if len(args) != 2 or args[0] != "origin":
-            self._unsupported(["git", "fetch", *args])
-        name = args[1]
-        if name not in self.origin:
-            self._fail(
-                128, f"fatal: couldn't find remote ref refs/heads/{name}"
-            )
-        return ""
+        if len(args) == 2 and args[0] == "origin":
+            name = args[1]
+            if name not in self.origin:
+                self._fail(
+                    128, f"fatal: couldn't find remote ref refs/heads/{name}"
+                )
+            return ""
+        if (len(args) == 3 and args[0] == "origin"
+                and args[1].startswith("pull/")
+                and args[1].endswith("/head")
+                and args[2].startswith("refs/remotes/origin/")):
+            pr_number = args[1].removeprefix("pull/").removesuffix("/head")
+            if pr_number not in self.pull_heads:
+                self._fail(
+                    128, f"fatal: couldn't find remote ref {args[1]}"
+                )
+            branch = args[2].removeprefix("refs/remotes/origin/")
+            self.origin[branch] = self.pull_heads[pr_number]
+            return ""
+        self._unsupported(["git", "fetch", *args])
 
     def _rev_parse(self, args: list[str], cwd) -> str:
         if args == ["HEAD"]:
