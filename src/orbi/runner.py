@@ -2954,8 +2954,14 @@ def rewrite_active_milestone_line(config_path: Path, new_value: str) -> None:
         raise RuntimeError(
             f"active_milestone line not found in {config_path}"
         )
+    # The value is serialized, never interpolated: a Milestone title is
+    # arbitrary text, and a raw f-string produced invalid TOML for `"`,
+    # or a re replacement escape error for `\`. json.dumps emits a TOML-
+    # compatible basic string; the lambda keeps the replacement text out
+    # of the regex escape layer entirely.
+    serialized = json.dumps(new_value, ensure_ascii=False)
     updated, _ = pattern.subn(
-        f'active_milestone = "{new_value}"', text, count=1,
+        lambda _match: f"active_milestone = {serialized}", text, count=1,
     )
     config_path.write_bytes(updated.encode("utf-8"))
 
