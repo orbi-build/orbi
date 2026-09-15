@@ -2604,8 +2604,10 @@ def parse_pr_comment(body: str) -> dict | None:
 def resume_scene(comments: list[dict]) -> dict:
     """Return the scene of the latest trusted opened-PR comment of one Issue.
 
-    Only comments posted by a trusted maintainer (OWNER, MAINTAINER,
-    MEMBER or COLLABORATOR) are considered: a public comment can never
+    Only trusted comments are considered: a comment is trusted when its
+    author has maintainer association (OWNER, MAINTAINER, MEMBER or
+    COLLABORATOR) or is the account the `gh` credentials resolve to
+    (`_comment_is_trusted`, github.py). A public comment can never
     become the recovery scene. The two
     failure shapes stay distinct for the caller:
     `scene.SceneError` when a trusted scene comment is corrupted,
