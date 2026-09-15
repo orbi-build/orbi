@@ -1,0 +1,58 @@
+# v0.5.8 release (latest)
+
+`v0.5.8` was published 2026-09-15T19:11:05Z as the GitHub Release [v0.5.8](https://github.com/orbi-build/orbi/releases/tag/v0.5.8) (release task: Issue #924).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.5.8` | annotated tag `bd01eac981a7408999e735a6ccfaa2fd45603c4a` | commit `5d37dd356c7f085b79f5c65768fb02882ac64093` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- merge_gate 纯落后且无冲突时就地 absorb，不重跑评审 ([Issue #900](https://github.com/orbi-build/orbi/issues/900); [PR #955](https://github.com/orbi-build/orbi/pull/955))
+- 三处 base 新鲜度检查收敛成一个三态判定 ([Issue #901](https://github.com/orbi-build/orbi/issues/901); [PR #940](https://github.com/orbi-build/orbi/pull/940))
+- base 前进不消耗 review_rounds 预算 ([Issue #902](https://github.com/orbi-build/orbi/issues/902); [PR #958](https://github.com/orbi-build/orbi/pull/958))
+- 评审会话支持独立的 provider/model：implement 与 review 当前共用同一组配置 ([Issue #904](https://github.com/orbi-build/orbi/issues/904); [PR #925](https://github.com/orbi-build/orbi/pull/925))
+- release 契约收敛：milestone 作为唯一事实源，## Release 段退化为可选覆盖 ([Issue #905](https://github.com/orbi-build/orbi/issues/905); [PR #923](https://github.com/orbi-build/orbi/pull/923))
+- src/ 死代码清理：两个无调用函数、不可达分支、无效守卫与不可匹配正则 ([Issue #907](https://github.com/orbi-build/orbi/issues/907); [PR #922](https://github.com/orbi-build/orbi/pull/922))
+- 测试层清理：一个从未执行的测试、三组字节级重复、两处恒真断言 ([Issue #908](https://github.com/orbi-build/orbi/issues/908); [PR #920](https://github.com/orbi-build/orbi/pull/920))
+- 外部 agent 开不出可认领的票：active_milestone 当前值没有机器可读的出处 ([Issue #921](https://github.com/orbi-build/orbi/issues/921))
+- Move monitoring/ into 3rd/ alongside 3rd/docker ([Issue #941](https://github.com/orbi-build/orbi/issues/941); [PR #947](https://github.com/orbi-build/orbi/pull/947))
+
+### Reliability and recovery
+
+- GitHub 写操作无重试：单次 5xx 让已完成的交付被判死，真实用户的 PR 开出来却标成 ai-blocked ([Issue #926](https://github.com/orbi-build/orbi/issues/926); [PR #927](https://github.com/orbi-build/orbi/pull/927))
+- 评审判定「需人决策」时没有终态可表达：撞墙协议被当成普通 findings 喂回同一循环，白烧 3 轮预算后才 ai-blocked ([Issue #946](https://github.com/orbi-build/orbi/issues/946); [PR #949](https://github.com/orbi-build/orbi/pull/949))
+
+### Deployment and operations
+
+- 合并收尾无条件同步 repo_dir：repo_dir≠deploy_home 时该步骤无意义且永久失败（两仓今晚共 24 次 Traceback） ([Issue #954](https://github.com/orbi-build/orbi/issues/954); [PR #956](https://github.com/orbi-build/orbi/pull/956))
+
+### Documentation
+
+- 发版必然红：文档硬编码 10 处版本号，两个测试反向锁死 ([Issue #909](https://github.com/orbi-build/orbi/issues/909); [PR #914](https://github.com/orbi-build/orbi/pull/914))
+- 文档瘦身：release 页裸 SHA、一次性对账记录的 174 行专属测试、五处复制块与推广文案 ([Issue #910](https://github.com/orbi-build/orbi/issues/910); [PR #917](https://github.com/orbi-build/orbi/pull/917))
+- 文档四处指向已下线的 /apply：README 招募 CTA 要约已撤回，provider 文章把定价页称作配置教程 ([Issue #913](https://github.com/orbi-build/orbi/issues/913); [PR #916](https://github.com/orbi-build/orbi/pull/916))
+- New Issue 页面没有引导：缺 ISSUE_TEMPLATE/config.yml，陌生人只能拿内部开票模板提问 ([Issue #918](https://github.com/orbi-build/orbi/issues/918); [PR #919](https://github.com/orbi-build/orbi/pull/919))
+
+### Bug fixes
+
+- 闸门用子串匹配自己抛的异常做控制流；check 名含撇号时回解出错 ([Issue #906](https://github.com/orbi-build/orbi/issues/906); [PR #915](https://github.com/orbi-build/orbi/pull/915))
+- 评审轮评论把 findings 裸 JSON 倒进正文且挤成一行：PR 上无法阅读（#453/#775 同类第三次） ([Issue #953](https://github.com/orbi-build/orbi/issues/953); [PR #957](https://github.com/orbi-build/orbi/pull/957))
+
+## Contributors
+
+<a href="https://github.com/xqliu"><img src="https://avatars.githubusercontent.com/u/22554?v=4&s=48" width="32" height="32" alt="xqliu" /></a>
+
+- tag: `v0.5.8`
+- release commit: `5d37dd356c7f085b79f5c65768fb02882ac64093`
+- release task: Issue #924
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit 5d37dd356c7f085b79f5c65768fb02882ac64093 (the #268 CI-wait gate; no local test execution)
