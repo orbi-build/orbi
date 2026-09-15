@@ -25,6 +25,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from subprocess import CalledProcessError
 
 from orbi import runner
 from orbi import runner_health
@@ -1308,3 +1309,68 @@ def test_run_health_check_skips_when_the_lock_stays_busy(
         probe.assert_not_called()
     finally:
         os.close(lock_fd)
+
+
+def test_repeated_failure_alert_retries_when_the_comment_fails(tmp_path):
+    """The dedup key must be recorded only AFTER the alert comment ships:
+    the state is saved unconditionally in the finally block, so a failed
+    `gh issue comment` (one network blip, one 5xx) would otherwise burn
+    the key and the escalation comment would never be re-sent — the
+    loudest moment (threshold reached) silently loses its only signal."""
+    write_state(tmp_path, {
+        "runs": [
+            run_entry(REPO, 41, "00000001", "fp1"),
+            run_entry(REPO, 41, "00000002", "fp1"),
+            run_entry(REPO, 41, "00000003", "fp1"),
+        ],
+        "last_pickup_ts": time.time(), "alerted": [],
+    })
+    failing = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": "",
+        "journalctl --user -u orbi@2.service": "",
+        "gh issue comment": CalledProcessError(1, "gh"),
+    })
+    with pytest.raises(CalledProcessError):
+        runner_health.run_health_check(
+            make_config(tmp_path), run_command=failing,
+        )
+    persisted = json.loads(
+        runner_health.health_state_path(tmp_path).read_text(
+            encoding="utf-8",
+        ),
+    )
+    assert persisted["alerted"] == [], (
+        "a failed ship must not burn the dedup key"
+    )
+    retrying = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": "",
+        "journalctl --user -u orbi@2.service": "",
+    })
+    alerts = runner_health.run_health_check(
+        make_config(tmp_path), run_command=retrying,
+    )
+    assert alerts == [f"repeated_failure:{REPO}#41"]
+    assert len(retrying.commands("gh issue comment")) == 1
+
+
+def test_repeated_failure_alert_still_dedups_after_a_successful_ship(
+        tmp_path):
+    write_state(tmp_path, {
+        "runs": [
+            run_entry(REPO, 41, "00000001", "fp1"),
+            run_entry(REPO, 41, "00000002", "fp1"),
+            run_entry(REPO, 41, "00000003", "fp1"),
+        ],
+        "last_pickup_ts": time.time(), "alerted": [],
+    })
+    healthy = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": "",
+        "journalctl --user -u orbi@2.service": "",
+    })
+    assert runner_health.run_health_check(
+        make_config(tmp_path), run_command=healthy,
+    ) == [f"repeated_failure:{REPO}#41"]
+    assert runner_health.run_health_check(
+        make_config(tmp_path), run_command=healthy,
+    ) == []
+    assert len(healthy.commands("gh issue comment")) == 1
