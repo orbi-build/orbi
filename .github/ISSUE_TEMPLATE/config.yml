@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
-  - name: 装不上 / 跑不通？
+  - name: Installation or runtime question?
     url: https://github.com/orbi-build/orbi/discussions/new?category=q-a
-    about: 环境、模型接入、工作流的问题在这里问；你踩的坑会变成优先修的 Issue
-  - name: 先看文档
+    about: Ask about environments, model access, or workflows in Discussions.
+  - name: Read the documentation first
     url: https://docs.orbi.build/
-    about: 安装与配置的完整说明，提问前请先查
+    about: Check the complete installation and configuration guide before asking.

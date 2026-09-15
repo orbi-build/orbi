@@ -1,32 +1,33 @@
 ---
 name: Release
-about: 开一张 release 票（## Release 契约段：version / base_branch / scope 或 scope_from_milestone / version_file）
+about: Open a release ticket with the machine-readable Release section
 title: "release vX.Y.Z"
 labels: ai-release, ai-ready
 ---
 
-## 背景
+## Background
 
-vX.Y.Z 收哪些票、为什么这样切版。
+Which tickets vX.Y.Z includes and why this release is being cut.
 
-## 不属于本版
+## Not included in this release
 
-明确列出留在其他里程碑的票，避免混入。
+List tickets left in other milestones so they are not included accidentally.
 
-## 前置条件
+## Preconditions
 
-- milestone vX.Y.Z 除本票外全部关闭
-- release commit CI 全绿
+- All milestone vX.Y.Z Issues except this ticket are closed
+- CI is green for the release commit
 
-任一前置未满足时按 #381 进入可恢复等待，不烧成终态 `ai-blocked`。
+If a precondition is not met, enter the recoverable waiting state described in
+#381; do not burn the ticket into terminal `ai-blocked`.
 
-**本票带 `ai-ready`**：开票即应可被认领，否则是死票。
+**This ticket carries `ai-ready`**: it must be claimable as soon as it is opened.
 
-## 验收
+## Acceptance
 
-- 远端存在 tag `vX.Y.Z` 与对应 GitHub Release
-- Release notes 包含本版范围内的票号
-- 范围内各票状态为 `ai-merged`
+- The remote contains tag `vX.Y.Z` and the corresponding GitHub Release
+- Release notes include the ticket numbers in this release's scope
+- Every ticket in scope has state `ai-merged`
 
 ## Release
 
@@ -34,11 +35,13 @@ vX.Y.Z 收哪些票、为什么这样切版。
 - base_branch: main
 - scope_from_milestone: vX.Y.Z
 
-## Release 段备忘（仅供参考：生效契约只有上一段，开票时删除本节）
+## Release section reference (for maintainers; remove this section when filing)
 
-- `version` 是精确 tag 名、`base_branch` 是 release commit 冻结自的分支，两者不含空格、不得为空。
-- `scope`（手列）与 `scope_from_milestone`（Milestone 标题，不含空格）**恰好二选一**，两个都写或都不写都会被解析器拒绝。
-- 手列 `scope` 的写法（列表项为 `#N`，至少一项）：
+- `version` is the exact tag name and `base_branch` is the branch from which
+the release commit is frozen. Neither may contain spaces or be empty.
+- Choose exactly one of `scope` (a hand-written list) and
+`scope_from_milestone` (a Milestone title). The parser rejects both or neither.
+- A hand-written `scope` contains at least one `#N` item:
 
 ```markdown
 ## Release
@@ -50,7 +53,8 @@ vX.Y.Z 收哪些票、为什么这样切版。
   - #124
 ```
 
-- 非 Python 项目必须显式 `version_file`（缺省按 `pyproject.toml` 改；orbi-build/orbi-cloud#246 因漏写卡住）：
+- Non-Python projects must declare `version_file` (the default is
+`pyproject.toml`; omitting it stalled orbi-build/orbi-cloud#246):
 
 ```markdown
 ## Release
@@ -61,4 +65,6 @@ vX.Y.Z 收哪些票、为什么这样切版。
 - version_file: package.json
 ```
 
-- `version_file` 支持全集：`pyproject.toml`（默认）、`package.json`、`pom.xml`、`build.gradle`、`build.gradle.kts`、`gradle.properties`、`Cargo.toml`、`composer.json`、`pubspec.yaml`、`none`。
+- Supported `version_file` values are `pyproject.toml` (default),
+`package.json`, `pom.xml`, `build.gradle`, `build.gradle.kts`,
+`gradle.properties`, `Cargo.toml`, `composer.json`, `pubspec.yaml`, and `none`.
