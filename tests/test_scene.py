@@ -63,6 +63,7 @@ def test_scene_defaults_cover_the_transition_fields():
     record = scene_for()
     assert record.external == ""
     assert record.review_round == 0
+    assert record.base_advance_round == 0
     assert record.schema == scene.SCHEMA_VERSION == 1
 
 
@@ -72,8 +73,9 @@ def test_scene_defaults_cover_the_transition_fields():
 def test_render_produces_the_single_hidden_v1_block():
     body = block_for()
     assert body == (
-        '<!-- orbi:scene:v1 {"base_branch": "main", '
-        '"base_sha": "abc123def456", "external": "", '
+        '<!-- orbi:scene:v1 {"base_advance_round": 0, '
+        '"base_branch": "main", "base_sha": "abc123def456", '
+        '"external": "", '
         f'"pr_url": "{PR_URL}", "review_round": 0, '
         f'"run_id": "{RUN_ID}", "schema": 1}} -->'
     )
@@ -92,6 +94,7 @@ def test_render_carries_every_field_the_reader_needs():
         "pr_url": PR_URL,
         "external": "true",
         "review_round": 2,
+        "base_advance_round": 0,
         "schema": 1,
     }
 
@@ -132,8 +135,34 @@ def test_parse_prefers_the_block_over_contradicting_legacy_text():
 
 
 def test_parse_external_and_review_round_round_trip():
-    body = block_for(external="true", review_round=3)
-    assert scene.parse(body) == scene_for(external="true", review_round=3)
+    body = block_for(external="true", review_round=3, base_advance_round=2)
+    assert scene.parse(body) == scene_for(
+        external="true", review_round=3, base_advance_round=2,
+    )
+
+
+def test_parse_legacy_scene_defaults_base_advance_round():
+    body = (
+        "Orbi opened PR: https://github.com/owner/repo/pull/9\n"
+        "- base_branch: main\n- base_sha: abc123\n- run_id: a1b2c3d4"
+    )
+    assert scene.parse(body).base_advance_round == 0
+
+
+def test_parse_old_v1_scene_defaults_base_advance_round():
+    record = dataclasses.asdict(scene_for())
+    record.pop("base_advance_round")
+    assert scene.parse(
+        "<!-- orbi:scene:v1 " + json.dumps(record) + " -->"
+    ).base_advance_round == 0
+
+
+@pytest.mark.parametrize("value", ["bad", -1])
+def test_parse_rejects_invalid_base_advance_round(value):
+    record = dataclasses.asdict(scene_for())
+    record["base_advance_round"] = value
+    with pytest.raises(scene.SceneError, match="base_advance_round"):
+        scene.parse("<!-- orbi:scene:v1 " + json.dumps(record) + " -->")
 
 
 # ------------------------------------------- corrupted v1 block (SceneError)

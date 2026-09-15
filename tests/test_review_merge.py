@@ -1824,6 +1824,7 @@ def _scene(**overrides):
     recovered = {
         "run_id": "a1b2c3d4", "base_branch": "main", "base_sha": "b1",
         "pr_url": "u", "external": "", "review_round": 0,
+        "base_advance_round": 0,
         "scene_at": "2026-09-13T00:00:00Z",
     }
     recovered.update(overrides)
@@ -2500,6 +2501,14 @@ def test_review_and_merge_midround_base_advance_is_not_a_violation(
     )
     assert merged is False
     assert "behind latest remote base origin/main (b2)" in calls[0][1]
+    assert "Orbi base advance retry 1 for PR #4" in calls[0][1]
+    assert "Orbi review round" not in calls[0][1]
+    assert '"review_round": 0' in calls[0][1]
+    assert '"base_advance_round": 1' in calls[0][1]
+    assert runner.review_rounds_so_far(
+        [{"body": calls[0][1], "authorAssociation": "OWNER"}],
+        run_id="a1b2c3d4",
+    ) == 0
     assert "Absorb contract violated" not in calls[0][1]
 
 
@@ -2785,6 +2794,36 @@ def test_human_recovery_after_the_scene_resets_the_budget(
         "owner/repo", 4, title="Review task", priority="normal",
         scene=_scene(review_round=runner.MAX_REVIEW_ROUNDS, scene_at=None),
     ) is False
+
+
+def test_base_advance_budget_exhausts_separately(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(seam, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(
+        seam, "merge_gate",
+        lambda *a, **k: (_ for _ in ()).throw(
+            runner.RecoverableMergeGateError(
+                "PR #4 head h1 is behind latest remote base origin/main (b2)"
+            ),
+        ),
+    )
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda *a, **k: calls.append(k.get("body")))
+    monkeypatch.setattr(seam, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    make_fake_gh(monkeypatch)
+    with pytest.raises(runner.UnrecoverableDeliveryError, match="base-advance retry loop exhausted"):
+        runner.review_and_merge_if_clean(
+            tmp_path, "branch", "main", _review_merge_config(tmp_path),
+            "owner/repo", 4, title="Review task", priority="normal",
+            scene=_scene(base_advance_round=runner.MAX_BASE_ADVANCE_ROUNDS),
+        )
+    assert calls
+    assert "base-advance retry budget exhausted" in calls[0]
+    assert '"review_round": 0' in calls[0]
+    assert '"base_advance_round": 5' in calls[0]
 
 
 def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):
