@@ -250,6 +250,7 @@ from orbi.release import (
 # bounded size of the review/fix loop (see review-fix-loop skill: max 5 rounds).
 VERDICT_MARKER = "REVIEW_VERDICT"
 MAX_REVIEW_ROUNDS = 5
+MAX_BASE_ADVANCE_ROUNDS = 5
 
 # Automatic observability: the GitHub progress comment is
 # PATCHed on every activity change and at most every 30 seconds while a
@@ -2632,6 +2633,11 @@ def parse_pr_comment(body: str) -> dict | None:
         # the round comments carry the updated scene block, so the next
         # resume reads the advanced count instead of re-counting text.
         "review_round": found.review_round,
+        # Keep the projection shape of pre-#902 scenes stable when the
+        # counter is still zero. A non-zero value is the persisted state
+        # needed by the next review session.
+        **({"base_advance_round": found.base_advance_round}
+           if found.base_advance_round else {}),
     }
 
 
@@ -6052,7 +6058,8 @@ def _sync_base_checkout_locked(repo_dir: Path, base_branch: str) -> None:
     )
 
 
-def _round_scene_block(resumed: dict, pr_url: str, round: int) -> str:
+def _round_scene_block(resumed: dict, pr_url: str, round: int,
+                       *, base_advance_round: int | None = None) -> str:
     """The updated scene block a completed round carries to the next resume.
 
     The round comment is the budget's write path: embedding
@@ -6067,6 +6074,10 @@ def _round_scene_block(resumed: dict, pr_url: str, round: int) -> str:
         pr_url=pr_url,
         external=resumed.get("external", ""),
         review_round=round,
+        base_advance_round=(
+            resumed.get("base_advance_round", 0)
+            if base_advance_round is None else base_advance_round
+        ),
     ))
 
 
@@ -6134,6 +6145,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     # counts the COMPLETED rounds, each recorded by the round comment
     # that carried the updated scene block.
     rounds = int(scene["review_round"])
+    base_advance_rounds = int(scene.get("base_advance_round", 0))
     recovery_at = None
     if rounds >= MAX_REVIEW_ROUNDS:
         # A maintainer may repair an external prerequisite and
@@ -6146,6 +6158,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             not isinstance(scene_at, str) or recovery_at > scene_at
         ):
             rounds = 0
+            base_advance_rounds = 0
             event(
                 "review_budget_recovered", issue=number,
                 recovery_at=recovery_at, rounds=rounds,
@@ -6381,29 +6394,38 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                 "stating the attempted-and-abandoned absorb with the "
                 "concrete reason, never an unrelated push"
             )
-        body = (
-            f"{marker}\n"
-            # Both gate-failure scenes carry the counted `Orbi review
-            # round` prefix and the updated scene block:
-            # the counted comment is the round budget's
-            # carrier, so a persistently red CI still consumes the
-            # budget and exhausts into the bounded human decision
-            # instead of looping forever.
-            + (f"Orbi review round {round} for PR #{pr['number']}: "
-               "CI merge gate blocked: "
-               f"{message} (run_id={config.run_id})" if ci_failure else
-               # Issue #879: the two recoverable gate scenes are
-               # distinguishable — the exception message names the
-               # concrete state (behind-base with the origin/<base> SHA,
-               # or a conflict with the actual mergeable value), never
-               # one ambiguous sentence for both.
-               f"Orbi review round {round} for PR #{pr['number']}: "
-               f"merge gate blocked: {message} (run_id={config.run_id}); "
-               f"the next review session merges the latest "
-               f"origin/{base_branch} into the branch in-session, resolves "
-               "conflicts, and reruns the full test suite"
-               + violation)
-        ) + "\n" + _round_scene_block(scene, pr["url"], round)
+        next_base_advance_round = base_advance_rounds + (0 if ci_failure else 1)
+        base_advance_exhausted = (
+            not ci_failure and next_base_advance_round > MAX_BASE_ADVANCE_ROUNDS
+        )
+        if ci_failure:
+            gate_text = (
+                f"Orbi review round {round} for PR #{pr['number']}: "
+                "CI merge gate blocked: "
+                f"{message} (run_id={config.run_id})"
+            )
+        else:
+            gate_text = (
+                f"Orbi base advance retry {next_base_advance_round} for "
+                f"PR #{pr['number']}: merge gate blocked: "
+                f"{message} (run_id={config.run_id}); "
+                + ("base-advance retry budget exhausted; a human must "
+                   "resolve the hot base before this PR can continue. "
+                   if base_advance_exhausted else "")
+                + f"the next review session merges the latest "
+                f"origin/{base_branch} into the branch in-session, resolves "
+                "conflicts, and reruns the full test suite"
+                + violation
+            )
+        body = f"{marker}\n{gate_text}\n" + _round_scene_block(
+            scene, pr["url"], round if ci_failure else int(scene["review_round"]),
+            base_advance_round=(
+                scene.get("base_advance_round", 0)
+                if ci_failure else min(
+                    next_base_advance_round, MAX_BASE_ADVANCE_ROUNDS,
+                )
+            ),
+        )
         # CI evidence is best-effort observability.  A GitHub comment
         # outage must not prevent the required ai-fix-needed transition.
         try:
@@ -6418,6 +6440,17 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
             current_labels=issue_labels(number, source_repo),
         )
+        if base_advance_exhausted:
+            event(
+                "base_advance_rounds_exhausted", level=logging.ERROR,
+                issue=number, rounds=next_base_advance_round,
+                terminal="expected_human_decision",
+            )
+            raise UnrecoverableDeliveryError(
+                "base-advance retry loop exhausted after "
+                f"{MAX_BASE_ADVANCE_ROUNDS} base advances; the bounded loop "
+                "is a human decision, so the AI cannot safely continue this PR"
+            )
 
     try:
         merged = merge_gate(

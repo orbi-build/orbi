@@ -623,6 +623,7 @@ registry — in both directions (a name only in code or only in docs fails
 | `pushed_head_unrecorded` | the engine push history could not be recorded; the merge record degrades to unknown (Issue #833) |
 | `review_budget_recovered` | a stale review round counter was recovered |
 | `review_rounds_exhausted` | the review round budget is exhausted (fail fast) |
+| `base_advance_rounds_exhausted` | the base-advance retry budget is exhausted (fail fast) |
 | `review_rounds_exhausted_expected_terminal` | the exhausted budget terminal was already recorded |
 | `review_findings_unfixed` | review findings survive; the Issue goes ai-fix-needed |
 | `review_absorb_abandoned` | a behind-base round emitted pass without absorbing or reporting the abandoned absorb (Issue #877) |
