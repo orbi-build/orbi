@@ -601,7 +601,7 @@ def test_repeated_failure_alerts_once_with_the_latest_run_marker(tmp_path):
     comments = fake.commands("gh issue comment")
     assert len(comments) == 1
     comment = comments[0]
-    assert comment[2:5] == ["gh", "issue", "comment"]
+    assert comment[0:3] == ["gh", "issue", "comment"]
     assert "41" in comment
     assert "--repo" in comment and REPO in comment
     body = comment[comment.index("--body") + 1]

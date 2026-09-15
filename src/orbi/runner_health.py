@@ -450,10 +450,10 @@ def orbi_repo_from_deploy_home(deploy_home: Path, run_command) -> str | None:
     the configured override or skips — never guesses a repo).
     """
     try:
-        output = run_command([
-            "timeout", "30", "git", "-C", str(deploy_home),
-            "remote", "get-url", "origin",
-        ])
+        output = run_command(
+            ["git", "-C", str(deploy_home), "remote", "get-url", "origin"],
+            timeout=30,
+        )
     except Exception:
         return None
     return orbi_repo_from_origin_url(output)
@@ -528,12 +528,14 @@ def create_health_issue(
     config problem only a human can fix — the Runner never picks it up.
     """
     marker = health_marker(check)
-    raw = run_command([
-        "timeout", str(GH_TIMEOUT_SECONDS), "gh", "issue", "list",
-        "--repo", repo, "--state", "all",
-        "--search", f'in:body "{marker}"', "--json", "number,url",
-        "--limit", "1",
-    ])
+    raw = run_command(
+        [
+            "gh", "issue", "list", "--repo", repo, "--state", "all",
+            "--search", f'in:body "{marker}"', "--json", "number,url",
+            "--limit", "1",
+        ],
+        timeout=GH_TIMEOUT_SECONDS,
+    )
     try:
         existing = json.loads(raw) if raw.strip() else []
     except ValueError:
@@ -560,13 +562,13 @@ def create_health_issue(
         closing,
     ])
     command = [
-        "timeout", str(GH_TIMEOUT_SECONDS), "gh", "issue", "create",
+        "gh", "issue", "create",
         "--repo", repo, "--title", f"Runner 健康巡检告警: {check}",
         "--body", body, "--label", "bug",
     ]
     if dispatchable:
         command += ["--label", "ai-ready"]
-    run_command(command)
+    run_command(command, timeout=GH_TIMEOUT_SECONDS)
     return None
 
 
@@ -691,21 +693,28 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
                 count=finding["count"],
                 fingerprint=finding["fingerprint"],
             )
-            run_command([
-                "timeout", str(GH_TIMEOUT_SECONDS), "gh", "issue",
-                "comment", str(finding["issue"]), "--repo", finding["repo"],
-                "--body", format_status_comment(
-                    repeat_failure_comment(finding),
-                ),
-            ])
+            run_command(
+                [
+                    "gh", "issue", "comment", str(finding["issue"]),
+                    "--repo", finding["repo"],
+                    "--body", format_status_comment(
+                        repeat_failure_comment(finding),
+                    ),
+                ],
+                timeout=GH_TIMEOUT_SECONDS,
+            )
             alerts.append(f"repeated_failure:{finding['repo']}#{finding['issue']}")
         # 3. Stale pickup: system stuck vs queue idle.
         if stale_pickup_finding(state):
-            ready_raw = run_command([
-                "timeout", str(GH_TIMEOUT_SECONDS), "gh", "issue", "list",
-                "--repo", config.source_repos[0], "--state", "open",
-                "--label", READY_LABEL, "--json", "number", "--limit", "1",
-            ])
+            ready_raw = run_command(
+                [
+                    "gh", "issue", "list",
+                    "--repo", config.source_repos[0], "--state", "open",
+                    "--label", READY_LABEL, "--json", "number",
+                    "--limit", "1",
+                ],
+                timeout=GH_TIMEOUT_SECONDS,
+            )
             try:
                 ready = json.loads(ready_raw) if ready_raw.strip() else []
             except ValueError:
