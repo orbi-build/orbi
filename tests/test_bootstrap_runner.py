@@ -12723,7 +12723,7 @@ def test_delivery_step_logs_awaiting_without_bound_run_id(monkeypatch, caplog):
 
 def _review_round_env(
     monkeypatch, tmp_path, *, scene_base="main", label="ai-pr-opened",
-    with_worktree=True, review_result=False,
+    with_worktree=True, review_result=False, scene_round=0,
 ):
     """Shared fake GitHub/git scene for one direct `_run_review_round`
     call. Returns (edits, comments, reviews, publishes) capture lists;
@@ -12735,7 +12735,14 @@ def _review_round_env(
             return json.dumps({"comments": [{
                 "body": (
                     "<!-- orbi:run=a1b2c3d4 -->\n"
-                    "Orbi opened PR: "
+                    + ("<!-- orbi:scene:v1 " + json.dumps({
+                        "base_branch": scene_base,
+                        "base_sha": "abc123def456",
+                        "external": "", "pr_url": PR_URL,
+                        "review_round": scene_round,
+                        "run_id": "a1b2c3d4", "schema": 1,
+                    }) + " -->\n" if scene_round else "")
+                    + "Orbi opened PR: "
                     f"{PR_URL} (base_branch={scene_base} "
                     "base_sha=abc123def456 run_id=a1b2c3d4)"
                 ),
@@ -12824,6 +12831,21 @@ def test_run_review_round_returns_false_on_findings(
     assert len(reviews) == 1
     assert edits == []
     assert comments == []
+
+
+def test_run_review_round_passes_prior_comments_after_first_round(
+        monkeypatch, tmp_path,
+):
+    edits, comments, reviews, _ = _review_round_env(
+        monkeypatch, tmp_path, scene_round=1,
+    )
+    issue = {"number": 39, "title": "task", "body": ""}
+    assert runner._run_review_round(
+        PR_URL, issue,
+        runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
+    ) is False
+    assert "previous_comments" in reviews[0][1]
+    assert reviews[0][1]["previous_comments"]
 
 
 def test_run_review_round_returns_none_when_scene_base_differs(

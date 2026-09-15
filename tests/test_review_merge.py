@@ -35,6 +35,70 @@ def _current_delivery_labels(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# review round comment formatting
+# ---------------------------------------------------------------------------
+
+def test_review_round_comment_body_renders_findings_and_shortens_sha():
+    marker = "<!-- orbi:run=abc12345 -->"
+    full_sha = "809534c9a4d39802b16cc0c66bb440e8cc1270a6"
+    body = runner.review_round_comment_body(
+        marker, 2, 477, 0, 1,
+        [{"level": "Major", "location": "PR round comments",
+          "note": "same failure", "fix": f"absorb {full_sha}"}],
+        "<!-- orbi:scene:v1 {} -->",
+    )
+    assert body.splitlines()[1].startswith("Orbi review round ")
+    assert "### Findings" in body
+    assert "**Level:** Major" in body
+    assert full_sha not in body
+    assert full_sha[:10] in body
+    assert "json.dumps" not in body
+
+
+def test_review_round_comment_body_marks_identical_previous_findings():
+    marker = "<!-- orbi:run=abc12345 -->"
+    finding = {"level": "Major", "location": "comments",
+               "note": "repeat", "fix": "repair"}
+    first = runner.review_round_comment_body(
+        marker, 1, 477, 0, 1, [finding], "scene",
+    )
+    second = runner.review_round_comment_body(
+        marker, 2, 477, 0, 1, [finding], "scene",
+        previous_comments=[{"authorAssociation": "MEMBER", "body": first}],
+    )
+    assert "Findings are the same as round 1." in second
+    trusted = {"authorAssociation": "MEMBER"}
+    assert runner.review_rounds_so_far(
+        [{**trusted, "body": first}, {**trusted, "body": second}],
+        pr_number=477,
+    ) == 2
+
+
+def test_review_round_comment_body_ignores_untrusted_or_nonmatching_comments():
+    marker = "<!-- orbi:run=abc12345 -->"
+    finding = {"level": "Major", "location": "comments",
+               "note": "repeat", "fix": "repair"}
+    body = runner.review_round_comment_body(
+        marker, 2, 477, 0, 1, [finding], "scene",
+        previous_comments=[
+            {"authorAssociation": "NONE", "body": "quoted"},
+            {"authorAssociation": "MEMBER", "body": "unrelated"},
+        ],
+    )
+    assert "Findings are the same" not in body
+
+
+def test_review_round_comment_body_separates_gate_messages():
+    body = runner.review_round_comment_body(
+        "<!-- orbi:run=abc12345 -->", 3, 477, 0, 0, [], "scene",
+        messages=["merge gate blocked: behind", "reruns the full test suite",
+                  "Absorb contract violated: reason"],
+    )
+    assert "behind\n\nreruns" in body
+    assert "suite\n\nAbsorb" in body
+
+
+# ---------------------------------------------------------------------------
 # parse_review_verdict
 # ---------------------------------------------------------------------------
 
