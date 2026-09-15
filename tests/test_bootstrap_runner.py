@@ -11388,6 +11388,52 @@ def test_pr_delivery_status_ignores_malformed_check_entry(monkeypatch):
     assert runner.pr_delivery_status(PR_URL, "owner/repo") == ("OPEN", [])
 
 
+def test_finish_progress_body_uses_fixed_sections_for_blocked_error(caplog):
+    body = runner._finish_progress_body(
+        number=39, title="Blocked task", run_id="a1b2c3d4",
+        role=runner.ROLE_REVIEW, branch=None, worktree=None,
+        pr_url="https://github.com/owner/repo/pull/46", review_round=0,
+        priority="normal", detail="Command '['gh']' failed: raw stderr",
+        next_step="", outcome="blocked", source_repo="owner/repo",
+    )
+
+    assert "What happened: Orbi could not complete the delivery" in body
+    assert "What you need to do: Nothing" in body
+    assert "What Orbi will do next:" in body
+    assert "https://github.com/owner/repo/pull/46" in body
+    assert "<details><summary>Raw error</summary>" in body
+    assert "Command '['gh']' failed: raw stderr" in body
+    assert "next step: " not in body
+    assert "progress_finish_missing_next_step" in caplog.text
+    assert "call_point=_finish_progress_body" in caplog.text
+
+
+def test_finish_progress_body_keeps_next_step_in_user_section():
+    body = runner._finish_progress_body(
+        number=39, title="Blocked task", run_id="a1b2c3d4",
+        role=runner.ROLE_REVIEW, branch=None, worktree=None, pr_url=None,
+        review_round=0, priority="normal", detail="failure detail",
+        next_step="relabel the Issue ai-ready", outcome="blocked",
+        source_repo="owner/repo",
+    )
+
+    assert "What you need to do: relabel the Issue ai-ready" in body
+    assert "What Orbi will do next: Orbi will wait for a human" in body
+
+
+def test_finish_progress_body_defaults_orbi_action_when_fix_step_missing(caplog):
+    body = runner._finish_progress_body(
+        number=39, title="Fix task", run_id="a1b2c3d4",
+        role=runner.ROLE_REVIEW, branch=None, worktree=None, pr_url=None,
+        review_round=0, priority="normal", detail="failure detail",
+        next_step="", outcome="fix needed", source_repo="owner/repo",
+    )
+
+    assert "What you need to do: Nothing" in body
+    assert "What Orbi will do next: Orbi will wait for a human" in body
+    assert "progress_finish_missing_next_step" in caplog.text
+
+
 def test_finish_progress_blocked_is_a_noop_without_run_id(monkeypatch):
     """Without a bound run id there is no tracked comment to update
     (the failure comment simply carries no marker)."""
@@ -11532,10 +11578,12 @@ def test_finish_progress_renders_the_fix_needed_scene(monkeypatch):
     assert len(posts) == 1
     body = posts[0][posts[0].index("--field") + 1][len("body="):]
     assert "Orbi fix needed" in body
-    assert "failure: the failure" in body
-    assert ("next step: the next tick resumes the same run, branch, "
-            "worktree and PR automatically (the Issue stays "
+    assert "What happened: Orbi found a problem" in body
+    assert "What you need to do: Nothing" in body
+    assert ("What Orbi will do next: the next tick resumes the same run, "
+            "branch, worktree and PR automatically (the Issue stays "
             "ai-fix-needed)") in body
+    assert "<details><summary>Raw error</summary>\nthe failure\n</details>" in body
     # The role default is the only post-PR role (Issue #82).
     assert "- role: review" in body
     assert "<!-- orbi:run=a1b2c3d4 -->" in body
@@ -11892,7 +11940,7 @@ def test_delivery_step_marks_blocked_when_review_fails(
     blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Orbi blocked" in blocked
     assert "the independent review of" in blocked
-    assert "next step:" in blocked
+    assert "What Orbi will do next:" in blocked
     assert "<!-- orbi:run=a1b2c3d4 -->" in blocked
     # The blocked scene carries the actual role (the failure happened
     # during the independent review) and the completed review rounds
@@ -12115,7 +12163,7 @@ def test_delivery_step_blocks_when_scene_base_differs_from_config(
     assert "Orbi blocked" in blocked
     assert "base_branch=develop" in blocked
     assert "base_branch=main" in blocked
-    assert "next step:" in blocked
+    assert "What Orbi will do next:" in blocked
 
 
 def test_delivery_step_worktree_missing_stays_fix_needed(
@@ -12261,7 +12309,7 @@ def test_delivery_step_worktree_missing_stays_fix_needed(
     fix_needed = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Orbi fix needed" in fix_needed
     assert "orbi-owner-repo-issue-39-a1b2c3d4" in fix_needed
-    assert "next step:" in fix_needed
+    assert "What Orbi will do next:" in fix_needed
 
 
 def test_delivery_step_worktree_missing_while_fix_needed_keeps_label(
@@ -12545,7 +12593,7 @@ def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
     blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Orbi blocked" in blocked
     assert "closed without a merge" in blocked
-    assert "next step:" in blocked
+    assert "What Orbi will do next:" in blocked
     assert "<!-- orbi:run=a1b2c3d4 -->" in blocked
     # The blocked scene carries the actual role (Issue #82: both
     # opened-PR states are review states, so always `review`) and the

@@ -1854,7 +1854,7 @@ def test_delivery_step_closed_unmerged_posts_blocked_milestone(
     blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Orbi blocked" in blocked
     assert "closed without a merge" in blocked
-    assert "next step:" in blocked
+    assert "What Orbi will do next:" in blocked
     assert "<!-- orbi:run=a1b2c3d4 -->" in blocked
     # Issue #100: the wait-loop blocked scene shows the number AND
     # the title, consistent with the other scenes.
@@ -1915,7 +1915,7 @@ def test_delivery_step_review_failure_finishes_progress_comment_with_blocked_sce
     last_body = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Orbi blocked" in last_body
     assert "independent review" in last_body
-    assert "next step:" in last_body
+    assert "What Orbi will do next:" in last_body
     assert "<!-- orbi:run=a1b2c3d4 -->" in last_body
     # The blocked scene carries the actual role (the failure happened
     # during the independent review) and the completed review rounds

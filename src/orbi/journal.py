@@ -160,6 +160,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "pi_429_attempts_clear_failed": "clearing the 429 attempt counter failed",
     # Bypass publishing.
     "progress_publish_failed": "the progress comment could not be published (pure bypass)",
+    "progress_finish_missing_next_step": "a terminal progress scene had no next step",
     # Pre-start checks.
     "config_invalid": "the runner config failed validation (no start)",
     "transport": "the pre-start git transport check passed",

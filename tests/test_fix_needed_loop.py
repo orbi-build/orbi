@@ -305,7 +305,7 @@ def test_delivery_step_recoverable_review_failure_stays_fix_needed(
     assert patches, "the tracked progress comment was not updated"
     finished = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Orbi fix needed" in finished
-    assert "next step:" in finished
+    assert "What Orbi will do next:" in finished
     assert "ai-blocked" not in finished
     # ... and the fix-needed milestone is posted (mobile notification).
     posted = [

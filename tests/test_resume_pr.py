@@ -2359,7 +2359,7 @@ def test_verify_resumed_pr_pr_url_mismatch_stays_fix_needed(
     assert patches, "the tracked progress comment was not updated"
     fix_needed = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Orbi fix needed" in fix_needed
-    assert "next step:" in fix_needed
+    assert "What Orbi will do next:" in fix_needed
     assert "resume_pr_verification_failed" in caplog.text
 
 

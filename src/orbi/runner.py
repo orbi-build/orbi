@@ -7922,6 +7922,54 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
                    ops=delivery is DeliveryScene.OPS)
 
 
+def _finish_outcome_body(*, outcome: str, detail: str,
+                         next_step: str, pr_url: str | None,
+                         number: int, source_repo: str) -> str:
+    """Render the user-facing, three-part terminal outcome.
+
+    ``detail`` remains available verbatim for diagnosis, but it is not a
+    suitable headline: failures often contain Python command reprs and raw
+    stderr.  The next-step argument is deliberately split into the human
+    action and Orbi's action for the two terminal scenes.
+    """
+    if not next_step:
+        event(
+            "progress_finish_missing_next_step", level=logging.WARNING,
+            call_point="_finish_progress_body", issue=number,
+            repo=source_repo, outcome=outcome,
+        )
+    if outcome == "blocked":
+        happened = (
+            "Orbi could not complete the delivery because a required "
+            "operation failed."
+        )
+        user_action = next_step or "Nothing"
+        if pr_url:
+            orbi_action = (
+                "Orbi will wait for the required action; the open PR is "
+                f"{pr_url}."
+            )
+        else:
+            orbi_action = "Orbi will wait for a human to resolve this Issue."
+    else:
+        happened = (
+            "Orbi found a problem that must be fixed before it can continue."
+        )
+        user_action = "Nothing"
+        orbi_action = (
+            next_step or "Orbi will wait for a human to resolve this Issue."
+        )
+    return (
+        f"**Orbi {outcome}**\n\n"
+        f"What happened: {happened}\n"
+        f"What you need to do: {user_action}\n"
+        f"What Orbi will do next: {orbi_action}\n\n"
+        "<details><summary>Raw error</summary>\n"
+        f"{detail}\n"
+        "</details>"
+    )
+
+
 def _finish_progress_body(*, number: int, title: str, run_id: str,
                           role: str, branch: str | None,
                           worktree: Path | None, pr_url: str | None,
@@ -7936,10 +7984,9 @@ def _finish_progress_body(*, number: int, title: str, run_id: str,
         ),
         title=title, role=role, started=time.monotonic(), pr_url=pr_url,
         review_round=review_round, priority=priority,
-    ), outcome=(
-        f"**Orbi {outcome}**\n\n"
-        f"failure: {detail}\n"
-        f"next step: {next_step}"
+    ), outcome=_finish_outcome_body(
+        outcome=outcome, detail=detail, next_step=next_step, pr_url=pr_url,
+        number=number, source_repo=source_repo,
     ))
 
 
