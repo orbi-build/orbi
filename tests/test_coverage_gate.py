@@ -645,7 +645,7 @@ def test_diff_gate_main_passes_when_every_changed_line_is_covered_in_process(
 ALLOWED_PRAGMA_FILES = (
     "src/orbi/runner.py",
     "src/orbi/cli.py",
-    "monitoring/prometheus/orbi-exporter.py",
+    "3rd/monitoring/prometheus/orbi-exporter.py",
     "tools/coverage_gate.py",
     "tools/diff_coverage_gate.py",
     "tools/patch_ratchet.py",

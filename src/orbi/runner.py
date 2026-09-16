@@ -42,6 +42,7 @@ import time
 import tomllib
 import xml.etree.ElementTree as ET
 import uuid
+from enum import Enum
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -168,6 +169,7 @@ from orbi.cli_source import CliInstallError, refresh_cli_install
 from orbi.github import (
     RESUME_PR_STATE_TIMEOUT_SECONDS,
     run_gh_read_command,
+    run_gh_write_command,
     _comment_is_trusted,
     _pr_number,
     _epic_audit,
@@ -248,6 +250,7 @@ from orbi.release import (
 # bounded size of the review/fix loop (see review-fix-loop skill: max 5 rounds).
 VERDICT_MARKER = "REVIEW_VERDICT"
 MAX_REVIEW_ROUNDS = 5
+MAX_BASE_ADVANCE_ROUNDS = 5
 
 # Automatic observability: the GitHub progress comment is
 # PATCHed on every activity change and at most every 30 seconds while a
@@ -297,6 +300,34 @@ _WORKTREE_INFLIGHT_LABELS = frozenset({
 _WORKTREE_NAME_PATTERN = re.compile(
     r"^orbi-(?P<slug>.+)-issue-(?P<number>\d+)-(?P<run_id>[0-9a-f]{8})$",
 )
+
+
+class BaseFreshness(Enum):
+    """Classification shared by delivery and merge freshness checks."""
+
+    FRESH = "fresh"
+    ABSORBABLE = "absorbable"
+    CONFLICTED = "conflicted"
+
+
+def assess_base_freshness(worktree: Path, base_branch: str, *,
+                          head: str = "HEAD",
+                          reviewed_head: str | None = None,
+                          mergeable: str | None = None) -> BaseFreshness:
+    """Classify a delivery head against the fetched base and PR head.
+
+    A moved reviewed head is always conflicted.  Otherwise ancestry is the
+    authoritative base decision; a behind head is absorbable unless the
+    already-read GitHub mergeability says that absorbing it is conflicted.
+    The helper deliberately does not perform a merge or change merge policy.
+    """
+    if reviewed_head is not None and head != reviewed_head:
+        return BaseFreshness.CONFLICTED
+    if _is_ancestor(f"origin/{base_branch}", head, cwd=worktree):
+        return BaseFreshness.FRESH
+    if mergeable is not None and mergeable != "MERGEABLE":
+        return BaseFreshness.CONFLICTED
+    return BaseFreshness.ABSORBABLE
 
 
 class RecoverableMergeGateError(RuntimeError):
@@ -360,6 +391,10 @@ class ReviewRoundsExhausted(UnrecoverableDeliveryError):
     path performs the terminal label/comment transition, but it is not a
     Runner failure and must not be logged with a traceback.
     """
+
+
+class HumanDecisionRequired(UnrecoverableDeliveryError):
+    """The reviewer found a decision that only a maintainer can make."""
 
 
 class ResumePrClosedError(UnrecoverableDeliveryError):
@@ -603,10 +638,14 @@ class RunnerConfig:
     max_concurrency: int = 1
     allow_stale_runner: bool = False
     human_review_gate: bool = False
+    attribution_footer: bool = True
     slot_dir: Path | None = None
     pi_provider: str | None = None
     pi_model: str | None = None
     pi_thinking: str | None = None
+    review_pi_provider: str | None = None
+    review_pi_model: str | None = None
+    review_pi_thinking: str | None = None
     pi_extensions: tuple[dict, ...] = ()
     model_wait_dead_seconds: float = PI_MODEL_WAIT_DEAD_SECONDS
     issue_comments_limit: int = ISSUE_COMMENTS_LIMIT
@@ -686,6 +725,9 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     human_review_gate = data.get("human_review_gate", False)
     if not isinstance(human_review_gate, bool):
         raise ValueError("human_review_gate must be a boolean")
+    attribution_footer = data.get("attribution_footer", True)
+    if not isinstance(attribution_footer, bool):
+        raise ValueError("attribution_footer must be a boolean")
     # Engine source update channel: what the deploy home
     # checkout follows at the next start — origin/main by default (the
     # exact pre-#535 dogfood behavior), a branch, the newest official
@@ -719,6 +761,9 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     pi_provider = _optional_pi_string(data, "pi_provider")
     pi_model = _optional_pi_string(data, "pi_model")
     pi_thinking = _optional_pi_string(data, "pi_thinking")
+    review_pi_provider = _optional_pi_string(data, "review_pi_provider")
+    review_pi_model = _optional_pi_string(data, "review_pi_model")
+    review_pi_thinking = _optional_pi_string(data, "review_pi_thinking")
     pi_extensions = _load_pi_extensions(data.get("pi_extensions"), base)
     # Hung-model-request threshold: the model_wait dead
     # silence is configurable; omitted -> PI_MODEL_WAIT_DEAD_SECONDS
@@ -788,11 +833,21 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     pi_providers_data = None
     if pi_providers_path is not None:
         try:
+            env_file = deploy_home / ".orbi" / "env"
             pi_providers_data = _load_pi_providers(
-                pi_providers_path, pi_provider, pi_model,
-                deploy_home / ".orbi" / "env",
+                pi_providers_path, pi_provider, pi_model, env_file,
                 check_api_key=check_provider_api_keys,
             )
+            try:
+                _load_pi_providers(
+                    pi_providers_path,
+                    review_pi_provider or pi_provider,
+                    review_pi_model or pi_model,
+                    env_file,
+                    check_api_key=check_provider_api_keys,
+                )
+            except ValueError as exc:
+                raise ValueError(f"review provider selection invalid: {exc}") from exc
         except FileNotFoundError:
             # A missing path is the setup/doctor diagnostic case.  Preserve
             # fail-fast behavior for an existing non-file path (for example,
@@ -843,10 +898,14 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         max_concurrency=max_concurrency,
         allow_stale_runner=allow_stale_runner,
         human_review_gate=human_review_gate,
+        attribution_footer=attribution_footer,
         slot_dir=slot_dir_for(repo_dir),
         pi_provider=pi_provider,
         pi_model=pi_model,
         pi_thinking=pi_thinking,
+        review_pi_provider=review_pi_provider,
+        review_pi_model=review_pi_model,
+        review_pi_thinking=review_pi_thinking,
         pi_extensions=tuple(pi_extensions),
         model_wait_dead_seconds=model_wait_dead_seconds,
         issue_comments_limit=issue_comments_limit,
@@ -1346,7 +1405,8 @@ def _expand_pi_api_key_refs(api_key: str) -> str:
     )
 
 
-def prepare_pi_agent_dir(worktree: Path, config: RunnerConfig) -> Path | None:
+def prepare_pi_agent_dir(worktree: Path, config: RunnerConfig,
+                         role: str = ROLE_IMPLEMENT) -> Path | None:
     """Materialize the per-run Pi agent dir.
 
     Returns None when no provider file is configured — the Pi command
@@ -1460,8 +1520,12 @@ def prepare_pi_agent_dir(worktree: Path, config: RunnerConfig) -> Path | None:
             )
         base_settings = loaded
     settings = dict(base_settings)
-    pi_provider = config.pi_provider
-    pi_model = config.pi_model
+    if role == ROLE_REVIEW:
+        pi_provider = config.review_pi_provider or config.pi_provider
+        pi_model = config.review_pi_model or config.pi_model
+    else:
+        pi_provider = config.pi_provider
+        pi_model = config.pi_model
     if pi_provider is not None and pi_model is not None:
         settings["defaultProvider"] = pi_provider
         settings["defaultModel"] = pi_model
@@ -1530,7 +1594,7 @@ def _resolve_enabled_models(patterns: list, providers: dict) -> list:
     return resolved
 
 
-def _pi_model_args(config: RunnerConfig) -> list[str]:
+def _pi_model_args(config: RunnerConfig, role: str = ROLE_IMPLEMENT) -> list[str]:
     """Return the configured Pi model flags.
 
     One `--flag value` pair per configured key, in the fixed order
@@ -1541,12 +1605,15 @@ def _pi_model_args(config: RunnerConfig) -> list[str]:
     `log_command`, so the journal run scene records what was launched.
     """
     args: list[str] = []
+    prefix = "review_" if role == ROLE_REVIEW else ""
     for flag, key in (
         ("--provider", "pi_provider"),
         ("--model", "pi_model"),
         ("--thinking", "pi_thinking"),
     ):
-        value = getattr(config, key)
+        value = getattr(config, f"{prefix}{key}")
+        if prefix and value is None:
+            value = getattr(config, key)
         if value is not None:
             args.extend((flag, value))
     return args
@@ -2486,6 +2553,7 @@ def external_takeover_pr(repo_dir: Path, body: str | None,
     event(
         "external_takeover", pr=number, head=pr.get("headRefName"),
     )
+    pr["number"] = int(number)
     return pr
 
 
@@ -2571,14 +2639,21 @@ def parse_pr_comment(body: str) -> dict | None:
         # the round comments carry the updated scene block, so the next
         # resume reads the advanced count instead of re-counting text.
         "review_round": found.review_round,
+        # Keep the projection shape of pre-#902 scenes stable when the
+        # counter is still zero. A non-zero value is the persisted state
+        # needed by the next review session.
+        **({"base_advance_round": found.base_advance_round}
+           if found.base_advance_round else {}),
     }
 
 
 def resume_scene(comments: list[dict]) -> dict:
     """Return the scene of the latest trusted opened-PR comment of one Issue.
 
-    Only comments posted by a trusted maintainer (OWNER, MAINTAINER,
-    MEMBER or COLLABORATOR) are considered: a public comment can never
+    Only trusted comments are considered: a comment is trusted when its
+    author has maintainer association (OWNER, MAINTAINER, MEMBER or
+    COLLABORATOR) or is the account the `gh` credentials resolve to
+    (`_comment_is_trusted`, github.py). A public comment can never
     become the recovery scene. The two
     failure shapes stay distinct for the caller:
     `scene.SceneError` when a trusted scene comment is corrupted,
@@ -2927,8 +3002,14 @@ def rewrite_active_milestone_line(config_path: Path, new_value: str) -> None:
         raise RuntimeError(
             f"active_milestone line not found in {config_path}"
         )
+    # The value is serialized, never interpolated: a Milestone title is
+    # arbitrary text, and a raw f-string produced invalid TOML for `"`,
+    # or a re replacement escape error for `\`. json.dumps emits a TOML-
+    # compatible basic string; the lambda keeps the replacement text out
+    # of the regex escape layer entirely.
+    serialized = json.dumps(new_value, ensure_ascii=False)
     updated, _ = pattern.subn(
-        f'active_milestone = "{new_value}"', text, count=1,
+        lambda _match: f"active_milestone = {serialized}", text, count=1,
     )
     config_path.write_bytes(updated.encode("utf-8"))
 
@@ -2963,10 +3044,10 @@ def arm_release_ticket(
     number = issues[0].get("number")
     if not isinstance(number, int):
         raise RuntimeError(f"release ticket has invalid issue number: {number!r}")
-    run_command([
+    run_gh_write_command([
         "gh", "issue", "edit", str(number), "--repo", repo,
         "--add-label", dispatch_label,
-    ], timeout=30)
+    ], timeout=30, command_runner=run_command)
     event(
         "release_ticket_armed", issue=f"#{number}",
         milestone=active_milestone,
@@ -3952,7 +4033,7 @@ def run_pi(issue: dict, ctx: RunContext, config: RunnerConfig, *,
     command = [
         "pi", *_pi_extension_args(config),
         *_skill_args(_skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)),
-        *_pi_model_args(config),
+        *_pi_model_args(config, ROLE_IMPLEMENT),
         "--print", "--session-dir",
         str(worktree / ".pi-session"), "--system-prompt", system_prompt, context,
     ]
@@ -3961,7 +4042,7 @@ def run_pi(issue: dict, ctx: RunContext, config: RunnerConfig, *,
     # through the command line or the log (the redacted command keeps
     # only the #119 provider/model/thinking identifiers). Unconfigured
     # -> the stream_pi call keeps its exact pre-#157 shape.
-    agent_dir = prepare_pi_agent_dir(worktree, config)
+    agent_dir = prepare_pi_agent_dir(worktree, config, role=ROLE_IMPLEMENT)
     # Startup phase: the provider config is loaded and
     # materialized for this run (or resolved to Pi's own agent dir when
     # unconfigured) — the first startup line, before the process is
@@ -3983,7 +4064,7 @@ def run_pi(issue: dict, ctx: RunContext, config: RunnerConfig, *,
         ctx=ctx,
         timeout=timeout,
         log_command=[
-            "pi", *_pi_extension_args(config), *_pi_model_args(config),
+            "pi", *_pi_extension_args(config), *_pi_model_args(config, ROLE_IMPLEMENT),
             "--print", "--session-dir", str(worktree / ".pi-session"),
             "--system-prompt", "<redacted>", "<issue-context-redacted>",
         ],
@@ -4121,10 +4202,14 @@ def verify_pr(ctx: RunContext, base_branch: str, *,
         # ref, so it runs under the base-sync lock with
         # the deployment checkout as the lock location.
         fetch_base_ref(repo_dir, base_branch, cwd=worktree)
-        if not _is_ancestor(f"origin/{base_branch}", "HEAD", cwd=worktree):
+        freshness = assess_base_freshness(
+            worktree, base_branch, head="HEAD",
+        )
+        if freshness is not BaseFreshness.FRESH:
             event(
                 "delivery_behind_base", level=logging.ERROR,
                 base_branch=base_branch, branch=branch,
+                freshness=freshness.value,
             )
             raise RuntimeError(
                 f"delivery HEAD is behind latest remote base "
@@ -4492,7 +4577,8 @@ def _agent_delivery_boundary(worktree: Path) -> tuple[str, str]:
 
 
 def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
-               issue_title: str, repo_dir: Path) -> str | None:
+               issue_title: str, repo_dir: Path,
+               attribution_footer: bool = True) -> str | None:
     """The Runner completes the deterministic delivery closeout.
 
     The Agent stops at the committed delivery (code, tests,
@@ -4564,7 +4650,10 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
     # deployment checkout as the lock location. A lock timeout or a
     # fetch error fails fast — no retry, no lock bypass.
     fetch_base_ref(repo_dir, base_branch, cwd=worktree)
-    if not _is_ancestor(f"origin/{base_branch}", "HEAD", cwd=worktree):
+    freshness = assess_base_freshness(
+        worktree, base_branch, head="HEAD",
+    )
+    if freshness is not BaseFreshness.FRESH:
         # The base advanced while the agent worked: absorb it with a
         # plain merge (the same base update the old agent prompt
         # required). A conflict is rolled back: the worktree returns
@@ -4651,6 +4740,11 @@ def deliver_pr(ctx: RunContext, base_branch: str, base_sha: str, *,
             f"Fixes #{issue}\n\n"
             f"{issue_title} (run_id={run_id})\n"
         )
+        if attribution_footer:
+            body += (
+                "\nBuilt by Orbi from Issue #"
+                f"{issue} · https://github.com/orbi-build/orbi\n"
+            )
         run_command([
             "gh", "pr", "create", "--base", base_branch, "--head", branch,
             "--title", issue_title, "--body", body,
@@ -4752,7 +4846,9 @@ def verify_resumed_pr(scene: dict, issue: dict, config: RunnerConfig,
                     cwd=config.repo_dir,
                 ))
                 branch = str(head["headRefName"])
-            if not stable_branch_exists(config.repo_dir, branch):
+            if not external and not stable_branch_exists(
+                    config.repo_dir, branch,
+            ):
                 raise ResumeBranchGoneError(
                     f"resume worktree {worktree} is missing and the "
                     f"delivery branch {branch} no longer exists on "
@@ -4762,6 +4858,7 @@ def verify_resumed_pr(scene: dict, issue: dict, config: RunnerConfig,
             create_worktree(
                 config.repo_dir, source_repo, number, run_id,
                 scene["base_sha"], existing_branch=True, branch=branch,
+                pr_number=_pr_number(scene["pr_url"]) if external else None,
             )
             event(
                 "worktree_recreated", issue=number, branch=branch,
@@ -4914,8 +5011,13 @@ def _json_dict_span(segment: str) -> dict | None:
 
 def _validated_verdict(parsed: dict) -> dict:
     """The semantic checks every verdict payload must pass."""
-    if parsed.get("verdict") not in ("pass", "findings"):
-        raise ValueError("verdict must be 'pass' or 'findings'")
+    if parsed.get("verdict") not in (
+        "pass", "findings", "blocked_on_human_decision",
+    ):
+        raise ValueError(
+            "verdict must be 'pass', 'findings' or "
+            "'blocked_on_human_decision'"
+        )
     head = parsed.get("head")
     if not isinstance(head, str) or not head:
         raise ValueError("head must be the reviewed commit SHA")
@@ -4929,8 +5031,28 @@ def _validated_verdict(parsed: dict) -> dict:
     majors = parsed["majors"]
     if parsed["verdict"] == "pass" and (blockers > 0 or majors > 0):
         raise ValueError("pass verdict cannot have blockers or majors")
-    if parsed["verdict"] == "findings" and blockers == 0 and majors == 0:
-        raise ValueError("findings verdict requires blockers or majors")
+    verdict = parsed["verdict"]
+    if verdict in ("findings", "blocked_on_human_decision") \
+            and blockers == 0 and majors == 0:
+        raise ValueError(f"{verdict} verdict requires blockers or majors")
+    if verdict == "blocked_on_human_decision":
+        findings = parsed["findings"]
+        if blockers != 0 or majors != 1 or len(findings) != 1:
+            raise ValueError(
+                "blocked_on_human_decision verdict requires exactly one "
+                "Major finding and no blockers"
+            )
+        finding = findings[0]
+        if (not isinstance(finding, dict)
+                or finding.get("level") != "Major"
+                or not isinstance(finding.get("note"), str)
+                or not finding["note"].strip()
+                or not isinstance(finding.get("fix"), str)
+                or not finding["fix"].strip()):
+            raise ValueError(
+                "blocked_on_human_decision finding must include a non-empty "
+                "Major note and fix"
+            )
     return parsed
 
 
@@ -5117,14 +5239,14 @@ def run_review(ctx: RunContext, pr: dict, config: RunnerConfig, round: int,
     command = [
         "pi", *_pi_extension_args(config),
         *_skill_args(_skills_for(config, REVIEW_EXCLUDED_SKILLS)),
-        *_pi_model_args(config),
+        *_pi_model_args(config, ROLE_REVIEW),
         "--print", "--session-dir",
         str(worktree / ".pi-session"), "--system-prompt", system_prompt,
         context,
     ]
-    # The review session uses the SAME provider config as
-    # the implementer (one materialized dir per worktree, re-used).
-    agent_dir = prepare_pi_agent_dir(worktree, config)
+    # The review session uses its role-specific provider selection,
+    # falling back to the implementer selection when no override exists.
+    agent_dir = prepare_pi_agent_dir(worktree, config, role=ROLE_REVIEW)
     # Startup phase: the review session's provider config
     # is loaded and materialized too (same line shape, role=review).
     _log_provider_config_loaded(
@@ -5145,7 +5267,7 @@ def run_review(ctx: RunContext, pr: dict, config: RunnerConfig, round: int,
         timeout=timeout,
         role=ROLE_REVIEW,
         log_command=[
-            "pi", *_pi_extension_args(config), *_pi_model_args(config),
+            "pi", *_pi_extension_args(config), *_pi_model_args(config, ROLE_REVIEW),
             "--print", "--session-dir", str(worktree / ".pi-session"),
             "--system-prompt", "<redacted>", "<review-context-redacted>",
         ],
@@ -5267,34 +5389,123 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
 
     Re-fetch the latest remote base, require the PR head to contain it, the PR
     to be mergeable, the remote head to still be the reviewed head, and the
-    exact head's GitHub CI checks to be completed successfully. Every state
-    is read ONCE: a pending check or an UNKNOWN mergeability is
-    not a failure but an intermediate state — the gate raises
-    `DeliveryDeferred`, the caller returns, and the next tick re-reads; a
-    failed check or a not-mergeable PR prevents the merge. Then merge with
-    `--match-head-commit` so only that exact head can land. No force push, no
-    direct push of the protected branch. The base fetch updates the shared
-    remote-tracking ref, so it runs under the base-sync lock
-    with the deployment checkout as the lock location.
+    exact head's GitHub CI checks to be completed successfully. If the base
+    advanced but GitHub reports a conflict-free PR, absorb it with a plain
+    merge and push the task branch, then read only the absorbed head's CI gate
+    again; this does not start another review round. Every state is read once
+    per gate pass: a pending check or an UNKNOWN mergeability is not a failure
+    but an intermediate state — the gate raises `DeliveryDeferred`, the caller
+    returns, and the next tick re-reads. A failed check or a not-mergeable PR
+    prevents the merge. Then merge with `--match-head-commit` so only that
+    exact head can land. No force push, no direct push of the protected branch.
+    The base fetch updates the shared remote-tracking ref, so it runs under the
+    base-sync lock with the deployment checkout as the lock location.
     """
     fetch_base_ref(repo_dir, base_branch, cwd=worktree)
-    if not _is_ancestor(f"origin/{base_branch}", pr["head_oid"], cwd=worktree):
-        base_sha = run_command(
-            ["git", "rev-parse", f"origin/{base_branch}"], cwd=worktree,
-        )
-        event(
-            "merge_gate_behind_base", level=logging.ERROR,
-            base_branch=base_branch, base_sha=base_sha,
-            pr=pr["number"], head=pr["head_oid"],
-        )
-        raise RecoverableMergeGateError(
-            f"PR #{pr['number']} head {pr['head_oid']} is behind latest "
-            f"remote base origin/{base_branch} ({base_sha}); absorb the "
-            "latest base, rerun tests and review, then retry"
-        )
+    # Read GitHub mergeability before rejecting a stale head.  A clean PR can
+    # absorb the base here without changing its reviewed diff; a conflicted
+    # PR still follows the existing fix-needed path below.
     state = pr_view(pr["number"],
                     "state,mergeable,headRefOid,statusCheckRollup",
                     cwd=worktree)
+    mergeable = state.get("mergeable")
+    if mergeable != "MERGEABLE" and mergeable != "UNKNOWN":
+        # Keep the existing mergeability policy and message. The assessment
+        # below still classifies the reviewed-head/base combination, while
+        # GitHub's mergeability remains the source of this recovery action.
+        freshness = assess_base_freshness(
+            worktree, base_branch, head=pr["head_oid"],
+            reviewed_head=state.get("headRefOid"), mergeable=mergeable,
+        )
+        event(
+            "merge_gate_not_mergeable", level=logging.ERROR,
+            pr=pr["number"], mergeable=mergeable,
+        )
+        raise RecoverableMergeGateError(
+            f"PR #{pr['number']} is not mergeable (mergeable={mergeable}); "
+            "resolve conflicts and retry"
+        )
+    freshness = assess_base_freshness(
+        worktree, base_branch, head=pr["head_oid"],
+        reviewed_head=state.get("headRefOid"),
+        # UNKNOWN is transient, not evidence of a merge conflict. It must
+        # reach the normal deferred mergeability path rather than absorb.
+        mergeable=mergeable if mergeable == "MERGEABLE" else None,
+    )
+    if freshness is BaseFreshness.ABSORBABLE and mergeable == "MERGEABLE":
+        base_sha = run_command(
+            ["git", "rev-parse", f"origin/{base_branch}"], cwd=worktree,
+        )
+        try:
+            run_command(["git", "merge", f"origin/{base_branch}"], cwd=worktree)
+        except subprocess.CalledProcessError as exc:
+            run_command(["git", "merge", "--abort"], cwd=worktree)
+            event(
+                "base_merge_conflict", level=logging.ERROR,
+                base_branch=base_branch, base_sha=base_sha,
+                pr=pr["number"], head=pr["head_oid"],
+                returncode=exc.returncode,
+                stderr=(exc.stderr or "").strip(),
+            )
+            raise RecoverableMergeGateError(
+                f"PR #{pr['number']} cannot absorb origin/{base_branch} "
+                f"({base_sha}); resolve the merge conflict and retry"
+            ) from None
+        absorbed_head = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
+        run_git_network_command(
+            ["git", "push", "origin", f"HEAD:{pr['head_ref']}"],
+            cwd=worktree,
+        )
+        remote_head = run_command(
+            ["git", "rev-parse", f"origin/{pr['head_ref']}"], cwd=worktree,
+        )
+        if remote_head != absorbed_head:
+            raise RuntimeError(
+                f"remote head {remote_head} does not match absorbed head "
+                f"{absorbed_head} after push origin {pr['head_ref']}"
+            )
+        event(
+            "base_absorbed", base_branch=base_branch,
+            base_sha=base_sha, pr=pr["number"],
+            old_head=pr["head_oid"], head=absorbed_head,
+        )
+        pr = {**pr, "head_oid": absorbed_head}
+        # The push starts a new CI run. Read the state once more, but do not
+        # start another review round: only the absorbed head's CI gate is
+        # needed before the exact-head merge below.
+        state = pr_view(pr["number"],
+                        "state,mergeable,headRefOid,statusCheckRollup",
+                        cwd=worktree)
+        mergeable = state.get("mergeable")
+        if state.get("headRefOid") != absorbed_head:
+            raise RuntimeError(
+                f"PR #{pr['number']} head moved after base absorb "
+                f"(absorbed={absorbed_head} remote={state.get('headRefOid')})"
+            )
+        if mergeable not in ("MERGEABLE", "UNKNOWN"):
+            event(
+                "merge_gate_not_mergeable", level=logging.ERROR,
+                pr=pr["number"], mergeable=mergeable,
+            )
+            raise RecoverableMergeGateError(
+                f"PR #{pr['number']} is not mergeable (mergeable={mergeable}); "
+                "resolve conflicts and retry"
+            )
+        freshness = assess_base_freshness(
+            worktree, base_branch, head=absorbed_head,
+            reviewed_head=absorbed_head,
+        )
+    if freshness is BaseFreshness.CONFLICTED:
+        event(
+            "merge_gate_head_moved", level=logging.ERROR,
+            pr=pr["number"], reviewed=pr["head_oid"],
+            remote=state.get("headRefOid"),
+        )
+        raise RuntimeError(
+            f"PR #{pr['number']} head moved since review "
+            f"(reviewed={pr['head_oid']} remote={state.get('headRefOid')}); "
+            "re-review before merging"
+        )
     pending, failed = _classify_rollup(state.get("statusCheckRollup") or [])
     if failed:
         failed_names = [entry["name"] for entry in failed]
@@ -5325,26 +5536,9 @@ def merge_gate(worktree: Path, pr: dict, base_branch: str,
             f"PR #{pr['number']} mergeable state is UNKNOWN; "
             "the merge is deferred to the next tick"
         )
-    if mergeable != "MERGEABLE":
-        event(
-            "merge_gate_not_mergeable", level=logging.ERROR,
-            pr=pr["number"], mergeable=mergeable,
-        )
-        raise RecoverableMergeGateError(
-            f"PR #{pr['number']} is not mergeable (mergeable={mergeable}); "
-            "resolve conflicts and retry"
-        )
-    remote_head = state.get("headRefOid")
-    if remote_head != pr["head_oid"]:
-        event(
-            "merge_gate_head_moved", level=logging.ERROR,
-            pr=pr["number"], reviewed=pr["head_oid"], remote=remote_head,
-        )
-        raise RuntimeError(
-            f"PR #{pr['number']} head moved since review "
-            f"(reviewed={pr['head_oid']} remote={remote_head}); re-review "
-            "before merging"
-        )
+    # `assess_base_freshness` has already classified the mergeable and
+    # reviewed-head states above; only a fresh, mergeable head reaches the
+    # actual merge command.
     run_command([
         "gh", "pr", "merge", str(pr["number"]),
         "--match-head-commit", pr["head_oid"], "--merge",
@@ -5887,7 +6081,8 @@ def _sync_base_checkout_locked(repo_dir: Path, base_branch: str) -> None:
     )
 
 
-def _round_scene_block(resumed: dict, pr_url: str, round: int) -> str:
+def _round_scene_block(resumed: dict, pr_url: str, round: int,
+                       *, base_advance_round: int | None = None) -> str:
     """The updated scene block a completed round carries to the next resume.
 
     The round comment is the budget's write path: embedding
@@ -5902,13 +6097,84 @@ def _round_scene_block(resumed: dict, pr_url: str, round: int) -> str:
         pr_url=pr_url,
         external=resumed.get("external", ""),
         review_round=round,
+        base_advance_round=(
+            resumed.get("base_advance_round", 0)
+            if base_advance_round is None else base_advance_round
+        ),
     ))
+
+
+def _shorten_review_shas(text: str) -> str:
+    """Keep full object IDs in the scene, but readable IDs in prose."""
+    return re.sub(
+        r"(?<![0-9a-f])([0-9a-f]{40})(?![0-9a-f])",
+        lambda match: match.group(1)[:10], text, flags=re.IGNORECASE,
+    )
+
+
+def _review_findings_markdown(findings: list[dict]) -> str:
+    """Render the human part of a review verdict, never as JSON."""
+    items = []
+    for finding in findings:
+        items.append(
+            "- **Level:** " + str(finding.get("level", "")) + "\n"
+            "  **Location:** " + str(finding.get("location", "")) + "\n"
+            "  **Note:** " + str(finding.get("note", "")) + "\n"
+            "  **Fix:** " + str(finding.get("fix", ""))
+        )
+    return "\n".join(items)
+
+
+def review_round_comment_body(
+    marker: str, round: int, pr_number: int, blockers: int, majors: int,
+    findings: list[dict], scene_block: str, *,
+    previous_comments: list[dict] | None = None,
+    messages: list[str] | None = None,
+    heading: str | None = None,
+) -> str:
+    """Build a readable, resumable review-round comment.
+
+    The first human line is deliberately stable: ``review_rounds_so_far``
+    counts it. ``scene_block`` is appended untouched because it is the
+    machine-readable recovery protocol.
+    """
+    rendered = _review_findings_markdown(findings)
+    same_as = None
+    if rendered and previous_comments:
+        previous_prefix = f"Orbi review round {round - 1} for PR #{pr_number}:"
+        for comment in previous_comments:
+            if not _comment_is_trusted(comment):
+                continue
+            body = comment.get("body", "")
+            if (marker in body and previous_prefix in body
+                    and rendered in body):
+                same_as = round - 1
+                break
+    lines = [
+        f"{marker}",
+        heading or (
+            f"Orbi review round {round} for PR #{pr_number}: "
+            f"{blockers} blocker(s), {majors} major(s)."
+        ),
+    ]
+    if messages:
+        lines.extend(["", "\n\n".join(
+            _shorten_review_shas(message) for message in messages
+        )])
+    if rendered:
+        lines.extend(["", "### Findings", ""])
+        if same_as is not None:
+            lines.append(f"Findings are the same as round {same_as}.")
+            lines.append("")
+        lines.append(_shorten_review_shas(rendered))
+    return "\n".join(lines) + "\n" + scene_block
 
 
 def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                               config: RunnerConfig, source_repo: str,
                               number: int, title: str, priority: str,
-                              *, scene: dict) -> bool:
+                              *, scene: dict,
+                              previous_comments: list[dict] | None = None) -> bool:
     """Run one independent review round; merge when the verdict is clean.
 
     `title` is the issue's GitHub title: the review
@@ -5943,6 +6209,9 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
       without a comment or a label change: "pending" is a
       state, not a failure — the next tick re-reads it, the round budget
       does not advance; returns False;
+    - `blocked_on_human_decision` -> raise `HumanDecisionRequired` with
+      the finding note and fix direction; the caller marks the Issue
+      `ai-blocked` immediately, without recording another review round;
     - Blocker/Major findings the reviewer could not fix in-session ->
       comment them to Issue and PR (the comment carries the updated
       scene) and label the Issue `ai-fix-needed`; the next tick resumes
@@ -5966,6 +6235,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     # counts the COMPLETED rounds, each recorded by the round comment
     # that carried the updated scene block.
     rounds = int(scene["review_round"])
+    base_advance_rounds = int(scene.get("base_advance_round", 0))
     recovery_at = None
     if rounds >= MAX_REVIEW_ROUNDS:
         # A maintainer may repair an external prerequisite and
@@ -5978,6 +6248,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             not isinstance(scene_at, str) or recovery_at > scene_at
         ):
             rounds = 0
+            base_advance_rounds = 0
             event(
                 "review_budget_recovered", issue=number,
                 recovery_at=recovery_at, rounds=rounds,
@@ -6069,6 +6340,15 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         verdict=verdict["verdict"], blockers=verdict["blockers"],
         majors=verdict["majors"],
     )
+    if verdict["verdict"] == "blocked_on_human_decision":
+        decisions = "; ".join(
+            f"note: {finding.get('note', '')}; "
+            f"fix: {finding.get('fix', '')}"
+            for finding in verdict["findings"]
+        )
+        raise HumanDecisionRequired(
+            "review requires human decision: " + decisions
+        )
     if review_has_findings(verdict):
         # The reviewer could not make the PR mergeable in this session
         # (findings are fixed in the same session; reaching
@@ -6079,15 +6359,11 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         event(
             "review_findings_unfixed", pr=pr["number"], round=round,
         )
-        body = (
-            f"{marker}\n"
-            f"Orbi review round {round} for PR #{pr['number']}: "
-            f"{verdict['blockers']} blocker(s), {verdict['majors']} "
-            "major(s). Findings: "
-            + json.dumps(verdict["findings"], ensure_ascii=False)
-            # The completed round advances the scene's budget counter:
-            # the next resume reads it from this comment.
-            + "\n" + _round_scene_block(scene, pr["url"], round)
+        body = review_round_comment_body(
+            marker, round, pr["number"], verdict["blockers"],
+            verdict["majors"], verdict["findings"],
+            _round_scene_block(scene, pr["url"], round),
+            previous_comments=previous_comments,
         )
         comment_issue(number, repo=source_repo, body=body)
         comment_pr(pr["number"], repo=source_repo, body=body)
@@ -6204,29 +6480,46 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                 "stating the attempted-and-abandoned absorb with the "
                 "concrete reason, never an unrelated push"
             )
-        body = (
-            f"{marker}\n"
-            # Both gate-failure scenes carry the counted `Orbi review
-            # round` prefix and the updated scene block:
-            # the counted comment is the round budget's
-            # carrier, so a persistently red CI still consumes the
-            # budget and exhausts into the bounded human decision
-            # instead of looping forever.
-            + (f"Orbi review round {round} for PR #{pr['number']}: "
-               "CI merge gate blocked: "
-               f"{message} (run_id={config.run_id})" if ci_failure else
-               # Issue #879: the two recoverable gate scenes are
-               # distinguishable — the exception message names the
-               # concrete state (behind-base with the origin/<base> SHA,
-               # or a conflict with the actual mergeable value), never
-               # one ambiguous sentence for both.
-               f"Orbi review round {round} for PR #{pr['number']}: "
-               f"merge gate blocked: {message} (run_id={config.run_id}); "
-               f"the next review session merges the latest "
-               f"origin/{base_branch} into the branch in-session, resolves "
-               "conflicts, and reruns the full test suite"
-               + violation)
-        ) + "\n" + _round_scene_block(scene, pr["url"], round)
+        next_base_advance_round = base_advance_rounds + (0 if ci_failure else 1)
+        base_advance_exhausted = (
+            not ci_failure and next_base_advance_round > MAX_BASE_ADVANCE_ROUNDS
+        )
+        if ci_failure:
+            gate_messages = [
+                f"CI merge gate blocked: {message} (run_id={config.run_id})",
+                f"The next review session merges the latest origin/{base_branch} "
+                "into the branch in-session, resolves conflicts, and reruns "
+                "the full test suite",
+            ]
+        else:
+            gate_messages = [
+                f"Merge gate blocked: {message} (run_id={config.run_id})",
+                ("base-advance retry budget exhausted; a human must resolve "
+                 "the hot base before this PR can continue."
+                 if base_advance_exhausted else
+                 f"The next review session merges the latest origin/{base_branch} "
+                 "into the branch in-session, resolves conflicts, and reruns "
+                 "the full test suite"),
+            ]
+        if violation:
+            gate_messages.append(violation.strip())
+        body = review_round_comment_body(
+            marker, round, pr["number"], 0, 0, [],
+            _round_scene_block(
+                scene, pr["url"],
+                round if ci_failure else int(scene["review_round"]),
+                base_advance_round=(
+                    scene.get("base_advance_round", 0)
+                    if ci_failure else min(
+                        next_base_advance_round, MAX_BASE_ADVANCE_ROUNDS,
+                    )
+                ),
+            ),
+            messages=gate_messages,
+            heading=(None if ci_failure else
+                     f"Orbi base advance retry {next_base_advance_round} for "
+                     f"PR #{pr['number']}:"),
+        )
         # CI evidence is best-effort observability.  A GitHub comment
         # outage must not prevent the required ai-fix-needed transition.
         try:
@@ -6241,6 +6534,17 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             number, repo=source_repo, event=EVENT_FIX_NEEDED,
             current_labels=issue_labels(number, source_repo),
         )
+        if base_advance_exhausted:
+            event(
+                "base_advance_rounds_exhausted", level=logging.ERROR,
+                issue=number, rounds=next_base_advance_round,
+                terminal="expected_human_decision",
+            )
+            raise UnrecoverableDeliveryError(
+                "base-advance retry loop exhausted after "
+                f"{MAX_BASE_ADVANCE_ROUNDS} base advances; the bounded loop "
+                "is a human decision, so the AI cannot safely continue this PR"
+            )
 
     try:
         merged = merge_gate(
@@ -6348,11 +6652,26 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         ),
     )
     try:
-        # A config built by load_config always carries both keys (the
-        # deploy home defaults to the repo dir); a hand-built config
-        # that leaves `engine_source_track` unset keeps the pre-#535
-        # sync behavior (the field default is None).
+        # A config built by load_config always carries both paths (the
+        # deploy home defaults to the repo dir). A split layout does not
+        # use the delivery checkout for the next tick; same-checkout
+        # configs retain the existing engine-channel guard below.
         if (
+            # ``Path(".")`` is the placeholder on hand-built partial
+            # configs; only load_config's resolved path represents an
+            # explicitly configured split deployment.
+            config.deploy_home != Path(".")
+            and config.repo_dir != config.deploy_home
+        ):
+            # The delivery checkout is not the engine source in a split
+            # deployment layout. The next tick loads code from deploy_home,
+            # so syncing this delivery checkout has no runtime effect.
+            event(
+                "base_checkout_sync_skipped", repo_dir=config.repo_dir,
+                base_branch=base_branch,
+                reason="repo_dir_is_not_deploy_home",
+            )
+        elif (
             config.engine_source_track is not None
             and config.deploy_home is not None
             and config.repo_dir == config.deploy_home
@@ -6386,10 +6705,16 @@ def comment_pr(number: int, *, repo: str, body: str) -> None:
     PR-side copy of a round / finding / blocked comment carries the run
     marker and the runner fingerprint like its Issue twin.
     """
-    run_command([
-        "gh", "pr", "comment", str(number), "--repo", repo,
-        "--body", format_status_comment(body),
-    ])
+    rendered = format_status_comment(body)
+    run_gh_write_command(
+        ["gh", "pr", "comment", str(number), "--repo", repo,
+         "--body", rendered],
+        command_runner=run_command,
+        already_applied=lambda: any(
+            comment.get("body") == rendered
+            for comment in pr_comments(number, repo=repo)
+        ),
+    )
 
 
 def _pr_head_repo(pr: dict) -> str:
@@ -7119,13 +7444,10 @@ def _dispatch_implementation(issue: dict, source_repo: str,
     )
     worktree: Path | None = None
     started = time.monotonic()
-    # The `Orbi opened PR:` scene comment is the first
-    # delivery step AFTER the opened-PR label transition that can still
-    # fail; when it does, the failure path below must leave the Issue in
-    # the terminal state `ai-blocked` ALONE (docs/workflow.mdx label
-    # lifecycle: `ai-pr-opened` is removed on terminal failure) — the same
-    # convention as every other terminal failure path (verify_resumed_pr,
-    # delivery_step).
+    # The PR label is authoritative once the PR exists. A scene-comment
+    # notification is recoverable reporting: if GitHub still rejects it
+    # after bounded retries, never replace the real PR-ready state with
+    # ai-blocked.
     pr_opened = False
     try:
         worktree = create_worktree(
@@ -7140,6 +7462,9 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             # PR is frozen on.
             branch=(
                 takeover_pr["headRefName"] if external_takeover else None
+            ),
+            pr_number=(
+                takeover_pr["number"] if external_takeover else None
             ),
         )
         # The run state file is the same-run marker —
@@ -7293,6 +7618,7 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             takeover_pr["url"] if takeover_pr is not None else deliver_pr(
                 ctx, base_branch, base_sha,
                 issue_title=title, repo_dir=config.repo_dir,
+                attribution_footer=config.attribution_footer,
             )
         )
         ctx = replace(ctx, pr=pr_url)
@@ -7345,22 +7671,26 @@ def _dispatch_implementation(issue: dict, source_repo: str,
             number, repo=source_repo, event=EVENT_PR_OPENED,
             current_labels={IN_PROGRESS_LABEL},
         )
+        # The label transition has landed and must remain the state
+        # reported if the following notification write exhausts.
         pr_opened = True
-        # The scene comment is NOT a bypass: the next
-        # tick's resume parses it to recover run_id,
-        # base and PR, so a failure here is a real delivery failure —
-        # it propagates into the failure path below (ai-blocked, the
-        # `Orbi failed` comment, re-raise). The `ProgressPublisher`
-        # steps around it stay bypass: a failure there (it must never
-        # skip the review of a valid PR) is logged as
-        # `progress_publish_failed` and the run continues into the
-        # review/merge wait loop.
-        comment_issue(
-            number, repo=source_repo,
-            body=opened_pr_comment_body(
-                run_id, run_info, pr_url, external=external_takeover,
-            ),
-        )
+        try:
+            comment_issue(
+                number, repo=source_repo,
+                body=opened_pr_comment_body(
+                    run_id, run_info, pr_url, external=external_takeover,
+                ),
+            )
+        except Exception as exc:
+            # Permission/validation errors retain today's fail-fast
+            # behavior. Only an exhausted server-side retry is recoverable.
+            if not isinstance(exc, subprocess.CalledProcessError) \
+                    or not github._is_transient_gh_write_error(exc):
+                raise
+            LOGGER.exception(
+                "issue=%s opened_pr_scene_comment_failed; "
+                "PR remains ai-pr-opened", number,
+            )
         if config.human_review_gate:
             # The human acceptance checklist — the readable
             # face of the gate — posts ONCE per delivery, at the moment
@@ -7612,6 +7942,54 @@ def process_issue(issue: dict, config: RunnerConfig, source_repo: str,
                    ops=delivery is DeliveryScene.OPS)
 
 
+def _finish_outcome_body(*, outcome: str, detail: str,
+                         next_step: str, pr_url: str | None,
+                         number: int, source_repo: str) -> str:
+    """Render the user-facing, three-part terminal outcome.
+
+    ``detail`` remains available verbatim for diagnosis, but it is not a
+    suitable headline: failures often contain Python command reprs and raw
+    stderr.  The next-step argument is deliberately split into the human
+    action and Orbi's action for the two terminal scenes.
+    """
+    if not next_step:
+        event(
+            "progress_finish_missing_next_step", level=logging.WARNING,
+            call_point="_finish_progress_body", issue=number,
+            repo=source_repo, outcome=outcome,
+        )
+    if outcome == "blocked":
+        happened = (
+            "Orbi could not complete the delivery because a required "
+            "operation failed."
+        )
+        user_action = next_step or "Nothing"
+        if pr_url:
+            orbi_action = (
+                "Orbi will wait for the required action; the open PR is "
+                f"{pr_url}."
+            )
+        else:
+            orbi_action = "Orbi will wait for a human to resolve this Issue."
+    else:
+        happened = (
+            "Orbi found a problem that must be fixed before it can continue."
+        )
+        user_action = "Nothing"
+        orbi_action = (
+            next_step or "Orbi will wait for a human to resolve this Issue."
+        )
+    return (
+        f"**Orbi {outcome}**\n\n"
+        f"What happened: {happened}\n"
+        f"What you need to do: {user_action}\n"
+        f"What Orbi will do next: {orbi_action}\n\n"
+        "<details><summary>Raw error</summary>\n"
+        f"{detail}\n"
+        "</details>"
+    )
+
+
 def _finish_progress_body(*, number: int, title: str, run_id: str,
                           role: str, branch: str | None,
                           worktree: Path | None, pr_url: str | None,
@@ -7626,10 +8004,9 @@ def _finish_progress_body(*, number: int, title: str, run_id: str,
         ),
         title=title, role=role, started=time.monotonic(), pr_url=pr_url,
         review_round=review_round, priority=priority,
-    ), outcome=(
-        f"**Orbi {outcome}**\n\n"
-        f"failure: {detail}\n"
-        f"next step: {next_step}"
+    ), outcome=_finish_outcome_body(
+        outcome=outcome, detail=detail, next_step=next_step, pr_url=pr_url,
+        number=number, source_repo=source_repo,
     ))
 
 
@@ -8192,9 +8569,8 @@ def _run_review_round(
     branch = None
     try:
         try:
-            scene = resume_scene(
-                issue_comments(number, repo=source_repo),
-            )
+            comments = issue_comments(number, repo=source_repo)
+            scene = resume_scene(comments)
         except ValueError as scene_exc:
             # Without the trusted scene the runner
             # cannot derive run_id, branch, worktree or PR and
@@ -8270,19 +8646,24 @@ def _run_review_round(
             base_sha=scene["base_sha"],
             run_id=scene["run_id"],
         )
+        review_kwargs = {}
+        if scene["review_round"] > 0:
+            review_kwargs["previous_comments"] = comments
         merged = review_and_merge_if_clean(
             worktree, branch, config.base_branch,
             review_config, source_repo, number,
             title=title, priority=priority, scene=scene,
+            **review_kwargs,
         )
     except Exception as exc:
         detail = _failure_detail(exc)
-        if isinstance(exc, ReviewRoundsExhausted):
-            # The bounded budget is an intentional human decision
-            # point, not a Runner bug. Keep the structured event and
-            # terminal handling below, but do not emit a traceback.
+        if isinstance(exc, (ReviewRoundsExhausted, HumanDecisionRequired)):
+            # These are intentional human decision points, not Runner
+            # bugs. Keep structured evidence without a traceback.
             event(
-                "review_rounds_exhausted_expected_terminal",
+                "review_human_decision_required"
+                if isinstance(exc, HumanDecisionRequired)
+                else "review_rounds_exhausted_expected_terminal",
                 level=logging.ERROR, issue=number, pr=pr_url,
                 reason=detail,
             )

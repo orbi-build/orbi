@@ -456,6 +456,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `pi_429_attempts_write_failed` | 持久化 429 重试计数失败 |
 | `pi_429_attempts_clear_failed` | 清除 429 重试计数失败 |
 | `progress_publish_failed` | 进度评论发布失败（纯旁路） |
+| `progress_finish_missing_next_step` | 终态进度场景缺少下一步 |
 | `config_invalid` | runner 配置校验失败（不启动） |
 | `transport` | 启动前 git transport 检查通过 |
 | `transport_check_failed` | 启动前 git transport 检查失败（不启动） |
@@ -531,6 +532,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `pushed_head_unrecorded` | 引擎推送历史无法记录；合并账本退化为 unknown（Issue #833） |
 | `review_budget_recovered` | 过期的评审轮次预算已恢复 |
 | `review_rounds_exhausted` | 评审轮次预算耗尽（fail fast） |
+| `base_advance_rounds_exhausted` | base 前进重试预算耗尽（fail fast） |
 | `review_rounds_exhausted_expected_terminal` | 预算耗尽的终止状态已被记录 |
 | `review_findings_unfixed` | 评审发现未修复；Issue 转入 ai-fix-needed |
 | `review_absorb_abandoned` | 落后 base 的一轮发出 pass 却未合并 base、也未上报放弃合并（Issue #877） |
@@ -615,6 +617,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `command_spawn_failed` | 外部命令无法启动 |
 | `git_network_retry` | git fetch/push 瞬时网络失败，退避重试 |
 | `gh_read_retry` | `gh` 只读命令瞬时失败，退避重试 |
+| `gh_write_retry` | `gh` 写命令瞬时失败，退避重试 |
 
 idle 告警和模型请求挂死 kill 是日志/健康阈值——它们不是每 5 分钟
 调度，也不是业务任务 timeout。

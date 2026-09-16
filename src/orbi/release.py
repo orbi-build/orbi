@@ -137,6 +137,11 @@ RELEASE_CI_POLL_INTERVAL = 30.0
 # Supported `version_file` declaration values: the ecosystem metadata
 # files (written by `prepare_release_version`) plus `none` — skip version
 # metadata changes and tag the frozen base HEAD directly.
+# The only release tag shape (prepare_release_version has enforced it at
+# execution time since v0.3; resolve enforces it at claim time so a bad
+# Milestone title fails before the gates burn their wait budgets).
+RELEASE_VERSION_TAG_RE = re.compile(r"v([0-9]+(?:\.[0-9]+)+)")
+
 RELEASE_VERSION_FILE_OPTIONS = (
     "pyproject.toml", "package.json", "pom.xml", "build.gradle",
     "build.gradle.kts", "gradle.properties", "Cargo.toml",
@@ -402,6 +407,12 @@ def resolve_release_declaration(
             f"release version {version!r} does not match the Issue Milestone "
             f"title {milestone_title!r}; rename the Milestone or correct "
             "the `- version:` override"
+        )
+    if RELEASE_VERSION_TAG_RE.fullmatch(version) is None:
+        raise ValueError(
+            f"release version {version!r} must be a v-prefixed numeric tag "
+            "(for example `v0.5.8`); rename the Milestone or correct the "
+            "`- version:` override"
         )
 
     base_branch = next(
@@ -1043,7 +1054,7 @@ def prepare_release_version(worktree: Path, tag: str,
     must be structurally recognizable before it is changed; the commit is
     pushed directly to the release base, matching the release docs-sync step.
     """
-    match = re.fullmatch(r"v([0-9]+(?:\.[0-9]+)+)", tag)
+    match = RELEASE_VERSION_TAG_RE.fullmatch(tag)
     if match is None:
         raise ValueError(
             f"release version {tag!r} must be a v-prefixed numeric tag"
@@ -1286,7 +1297,8 @@ def tag_commit_is_ancestor_of_base(tag_commit: str, base_commit: str,
 def publish_release(*, repo: str, tag: str, version: str,
                     release_commit: str, changelog: str,
                     scope_evidence: list[str], gate_evidence: list[str], test_evidence: str,
-                    run_id: str, issue_number: int) -> str:
+                    run_id: str, issue_number: int,
+                    attribution_footer: bool = True) -> str:
     """Create the GitHub Release for the tag — idempotently.
 
     When a Release for the tag already exists (a restart after a
@@ -1324,6 +1336,8 @@ def publish_release(*, repo: str, tag: str, version: str,
         "",
         run_marker(run_id),
         f"run_id={run_id}",
+        *(["", "Released by Orbi · https://github.com/orbi-build/orbi"]
+          if attribution_footer else []),
     ])
     try:
         release = release_view(repo, tag, fields="tagName,url,body")
@@ -2255,6 +2269,7 @@ def process_release(issue: dict, config: RunnerConfig,
             release_commit=release_commit, changelog=changelog,
             scope_evidence=scope_evidence, gate_evidence=gate_evidence,
             test_evidence=test_evidence, run_id=run_id, issue_number=number,
+            attribution_footer=config.attribution_footer,
         )
         publish(
             action=lambda: publisher.milestone(

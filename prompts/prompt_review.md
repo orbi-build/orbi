@@ -55,10 +55,11 @@ immediately, before any other review work, the findings verdict with
 exactly one Major finding: its location is the PR round comments, its
 note names the repetition (`same failure repeated in <N> consecutive
 rounds: <reason>`), and its fix direction hands the decision to a human.
-The verdict covers the untouched head (`{{HEAD_SHA}}`; you push nothing).
-The findings verdict keeps the PR in the existing `ai-fix-needed` loop
-and escalates to human judgment — the runner publishes it; you create
-and close nothing.
+Emit this as `blocked_on_human_decision`, not as `findings`. The verdict
+covers the untouched head (`{{HEAD_SHA}}`; you push nothing). The runner
+will mark the Issue `ai-blocked` immediately and publish the finding's note
+and fix as the decision required; it will not start another review round.
+You create and close nothing.
 
 ## Scope
 
@@ -236,7 +237,7 @@ PR **after** your in-session fixes: `pass` only when the PR is mergeable
 with 0 Blocker and 0 Major.
 
 ```
-REVIEW_VERDICT {"verdict":"pass|findings","head":"<40-hex reviewed head SHA>","blockers":<int>,"majors":<int>,"minors":<int>,"findings":[{"level":"Blocker|Major|Minor","location":"path:line","note":"...","fix":"..."}]}
+REVIEW_VERDICT {"verdict":"pass|findings|blocked_on_human_decision","head":"<40-hex reviewed head SHA>","blockers":<int>,"majors":<int>,"minors":<int>,"findings":[{"level":"Blocker|Major|Minor","location":"path:line","note":"...","fix":"..."}]}
 ```
 
 - `head` is the exact full SHA of the head this verdict covers:

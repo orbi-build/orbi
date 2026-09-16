@@ -500,10 +500,15 @@ def _log_provider_config_loaded(*, issue_ref: str, role: str, config: RunnerConf
     identifiers (the same non-sensitive values already on the redacted
     command line) or `-` when Pi keeps its own defaults.
     """
+    if role == "review":
+        provider = config.review_pi_provider or config.pi_provider
+        model = config.review_pi_model or config.pi_model
+    else:
+        provider = config.pi_provider
+        model = config.pi_model
     _log_startup(
         "provider_config_loaded", issue_ref=issue_ref, role=role,
-        activity={"provider": config.pi_provider,
-                  "model": config.pi_model},
+        activity={"provider": provider, "model": model},
         elapsed=elapsed,
     )
 

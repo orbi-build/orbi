@@ -35,6 +35,70 @@ def _current_delivery_labels(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# review round comment formatting
+# ---------------------------------------------------------------------------
+
+def test_review_round_comment_body_renders_findings_and_shortens_sha():
+    marker = "<!-- orbi:run=abc12345 -->"
+    full_sha = "809534c9a4d39802b16cc0c66bb440e8cc1270a6"
+    body = runner.review_round_comment_body(
+        marker, 2, 477, 0, 1,
+        [{"level": "Major", "location": "PR round comments",
+          "note": "same failure", "fix": f"absorb {full_sha}"}],
+        "<!-- orbi:scene:v1 {} -->",
+    )
+    assert body.splitlines()[1].startswith("Orbi review round ")
+    assert "### Findings" in body
+    assert "**Level:** Major" in body
+    assert full_sha not in body
+    assert full_sha[:10] in body
+    assert "json.dumps" not in body
+
+
+def test_review_round_comment_body_marks_identical_previous_findings():
+    marker = "<!-- orbi:run=abc12345 -->"
+    finding = {"level": "Major", "location": "comments",
+               "note": "repeat", "fix": "repair"}
+    first = runner.review_round_comment_body(
+        marker, 1, 477, 0, 1, [finding], "scene",
+    )
+    second = runner.review_round_comment_body(
+        marker, 2, 477, 0, 1, [finding], "scene",
+        previous_comments=[{"authorAssociation": "MEMBER", "body": first}],
+    )
+    assert "Findings are the same as round 1." in second
+    trusted = {"authorAssociation": "MEMBER"}
+    assert runner.review_rounds_so_far(
+        [{**trusted, "body": first}, {**trusted, "body": second}],
+        pr_number=477,
+    ) == 2
+
+
+def test_review_round_comment_body_ignores_untrusted_or_nonmatching_comments():
+    marker = "<!-- orbi:run=abc12345 -->"
+    finding = {"level": "Major", "location": "comments",
+               "note": "repeat", "fix": "repair"}
+    body = runner.review_round_comment_body(
+        marker, 2, 477, 0, 1, [finding], "scene",
+        previous_comments=[
+            {"authorAssociation": "NONE", "body": "quoted"},
+            {"authorAssociation": "MEMBER", "body": "unrelated"},
+        ],
+    )
+    assert "Findings are the same" not in body
+
+
+def test_review_round_comment_body_separates_gate_messages():
+    body = runner.review_round_comment_body(
+        "<!-- orbi:run=abc12345 -->", 3, 477, 0, 0, [], "scene",
+        messages=["merge gate blocked: behind", "reruns the full test suite",
+                  "Absorb contract violated: reason"],
+    )
+    assert "behind\n\nreruns" in body
+    assert "suite\n\nAbsorb" in body
+
+
+# ---------------------------------------------------------------------------
 # parse_review_verdict
 # ---------------------------------------------------------------------------
 
@@ -61,6 +125,30 @@ def test_parse_review_verdict_findings():
     assert verdict["blockers"] == 1
     assert verdict["majors"] == 2
     assert verdict["findings"][0]["location"] == "a.py:1"
+
+
+def test_parse_review_verdict_human_decision():
+    text = "REVIEW_VERDICT " + json.dumps({
+        "verdict": "blocked_on_human_decision", "head": "h1",
+        "blockers": 0, "majors": 1, "minors": 0,
+        "findings": [{"level": "Major", "location": "PR round comments",
+                      "note": "same failure repeated", "fix": "choose policy"}],
+    })
+    verdict = runner.parse_review_verdict(text)
+    assert verdict["verdict"] == "blocked_on_human_decision"
+
+
+@pytest.mark.parametrize("finding", [[], [{"level": "Major"}],
+                                      [{"level": "Minor", "note": "n",
+                                        "fix": "f"}]])
+def test_parse_review_verdict_human_decision_requires_actionable_single_major(
+        finding):
+    text = "REVIEW_VERDICT " + json.dumps({
+        "verdict": "blocked_on_human_decision", "head": "h1",
+        "blockers": 0, "majors": 1, "minors": 0, "findings": finding,
+    })
+    with pytest.raises(ValueError, match="exactly one|non-empty"):
+        runner.parse_review_verdict(text)
 
 
 def test_parse_review_verdict_last_line_beats_injected_marker():
@@ -573,10 +661,33 @@ def test_run_review_launches_independent_readonly_pi_session(monkeypatch, tmp_pa
 # merge gate
 # ---------------------------------------------------------------------------
 
+
+def test_assess_base_freshness_has_one_typed_three_state_contract(monkeypatch,
+                                                                  tmp_path):
+    outcomes = iter([True, False, False])
+    monkeypatch.setattr(seam, "_is_ancestor", lambda *args, **kwargs: next(outcomes))
+
+    assert runner.assess_base_freshness(tmp_path, "main") is runner.BaseFreshness.FRESH
+    assert runner.assess_base_freshness(
+        tmp_path, "main", mergeable="MERGEABLE",
+    ) is runner.BaseFreshness.ABSORBABLE
+    assert runner.assess_base_freshness(
+        tmp_path, "main", mergeable="DIRTY",
+    ) is runner.BaseFreshness.CONFLICTED
+
+
+def test_assess_base_freshness_moved_reviewed_head_is_conflicted(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(seam, "_is_ancestor", lambda *args, **kwargs: True)
+    assert runner.assess_base_freshness(
+        tmp_path, "main", head="new", reviewed_head="reviewed",
+    ) is runner.BaseFreshness.CONFLICTED
+
+
 def _merge_gate_fake(pr_state="MERGEABLE", head_oid="h1",
                      check_runs=None, base_check_runs=None):
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and "view" in command:
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
             return json.dumps({
                 "number": 4, "url": "u", "state": "OPEN",
                 "mergeable": pr_state, "headRefOid": head_oid,
@@ -612,7 +723,7 @@ def test_merge_gate_rejects_failed_github_ci(monkeypatch, tmp_path):
 def test_merge_gate_rejects_preexisting_failed_ci_as_unrecoverable(
         monkeypatch, tmp_path):
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and "view" in command:
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
             return json.dumps({
                 "state": "OPEN", "mergeable": "MERGEABLE", "headRefOid": "h1",
                 "statusCheckRollup": [{
@@ -770,7 +881,7 @@ def test_merge_gate_reads_the_state_once(monkeypatch, tmp_path):
     views = []
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and "view" in command:
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
             views.append(command)
             return json.dumps({
                 "state": "OPEN", "mergeable": "MERGEABLE", "headRefOid": "h1",
@@ -788,6 +899,95 @@ def test_merge_gate_reads_the_state_once(monkeypatch, tmp_path):
                                      "head_ref": "h", "head_oid": "h1"},
                           "main", repo_dir=tmp_path)
     assert len(views) == 1
+
+
+def _absorb_merge_command_fake(states, remote_head="h2"):
+    """Provide command results for the post-review base-absorb branches."""
+    views = iter(states)
+
+    def fake_run(command, **kwargs):
+        if command[0:3] == ["gh", "pr", "view"]:
+            return json.dumps(next(views))
+        if command[0:3] == ["git", "merge-base", "--is-ancestor"]:
+            raise subprocess.CalledProcessError(1, command, stderr="behind")
+        if command[0:3] == ["git", "rev-parse", "origin/main"]:
+            return "base-2"
+        if command[0:3] == ["git", "merge", "origin/main"]:
+            return ""
+        if command[0:3] == ["git", "rev-parse", "HEAD"]:
+            return "h2"
+        if command[0:2] == ["git", "push"]:
+            return ""
+        if command[0:3] == ["git", "rev-parse", "origin/h"]:
+            return remote_head
+        return ""
+    return fake_run
+
+
+def _absorb_pr_state(head, mergeable="MERGEABLE"):
+    return {"state": "OPEN", "mergeable": mergeable, "headRefOid": head,
+            "statusCheckRollup": []}
+
+
+def test_absorb_fake_dispatch_covers_command_results():
+    fake = _absorb_merge_command_fake([_absorb_pr_state("h1")])
+    assert json.loads(fake(["gh", "pr", "view"]))["headRefOid"] == "h1"
+    with pytest.raises(subprocess.CalledProcessError):
+        fake(["git", "merge-base", "--is-ancestor"])
+    assert fake(["git", "rev-parse", "origin/main"]) == "base-2"
+    assert fake(["git", "merge", "origin/main"]) == ""
+    assert fake(["git", "rev-parse", "HEAD"]) == "h2"
+    assert fake(["git", "push"]) == ""
+    assert fake(["git", "rev-parse", "origin/h"]) == "h2"
+    assert fake(["git", "status"]) == ""
+
+
+def test_merge_gate_absorb_remote_head_mismatch_is_fail_fast(monkeypatch, tmp_path):
+    monkeypatch.setattr("orbi.runner.fetch_base_ref", lambda *args, **kwargs: None)
+    monkeypatch.setattr("orbi.runner.assess_base_freshness",
+                        lambda _w, _b, *, head, **_k:
+                        runner.BaseFreshness.ABSORBABLE if head == "h1"
+                        else runner.BaseFreshness.FRESH)
+    monkeypatch.setattr(seam, "run_command",
+                        _absorb_merge_command_fake([_absorb_pr_state("h1")],
+                                                    remote_head="other"))
+    with pytest.raises(RuntimeError, match="does not match absorbed head"):
+        runner.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
+                                     "head_ref": "h", "base_oid": "b1"},
+                          "main", repo_dir=tmp_path)
+
+
+def test_merge_gate_absorb_detects_head_moved_after_push(monkeypatch, tmp_path):
+    monkeypatch.setattr("orbi.runner.fetch_base_ref", lambda *args, **kwargs: None)
+    monkeypatch.setattr("orbi.runner.assess_base_freshness",
+                        lambda _w, _b, *, head, **_k:
+                        runner.BaseFreshness.ABSORBABLE if head == "h1"
+                        else runner.BaseFreshness.FRESH)
+    monkeypatch.setattr(seam, "run_command",
+                        _absorb_merge_command_fake([
+                            _absorb_pr_state("h1"), _absorb_pr_state("other"),
+                        ]))
+    with pytest.raises(RuntimeError, match="head moved after base absorb"):
+        runner.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
+                                     "head_ref": "h", "base_oid": "b1"},
+                          "main", repo_dir=tmp_path)
+
+
+def test_merge_gate_absorb_rejects_newly_dirty_pr(monkeypatch, tmp_path):
+    monkeypatch.setattr("orbi.runner.fetch_base_ref", lambda *args, **kwargs: None)
+    monkeypatch.setattr("orbi.runner.assess_base_freshness",
+                        lambda _w, _b, *, head, **_k:
+                        runner.BaseFreshness.ABSORBABLE if head == "h1"
+                        else runner.BaseFreshness.FRESH)
+    monkeypatch.setattr(seam, "run_command",
+                        _absorb_merge_command_fake([
+                            _absorb_pr_state("h1"),
+                            _absorb_pr_state("h2", mergeable="DIRTY"),
+                        ]))
+    with pytest.raises(runner.RecoverableMergeGateError, match="not mergeable"):
+        runner.merge_gate(tmp_path, {"number": 4, "head_oid": "h1",
+                                     "head_ref": "h", "base_oid": "b1"},
+                          "main", repo_dir=tmp_path)
 
 
 def test_merge_gate_without_ci_proceeds_to_mergeable_gate(monkeypatch, tmp_path):
@@ -863,6 +1063,11 @@ def test_merge_gate_reraises_merge_base_errors(monkeypatch, tmp_path):
     def fake_run(command, **kwargs):
         if command[:3] == ["git", "merge-base", "--is-ancestor"]:
             raise subprocess.CalledProcessError(128, command, stderr="bad ref")
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
+            return json.dumps({
+                "state": "OPEN", "mergeable": "MERGEABLE",
+                "headRefOid": "h1", "statusCheckRollup": [],
+            })
         return ""
 
     monkeypatch.setattr(seam, "run_command", fake_run)
@@ -874,20 +1079,26 @@ def test_merge_gate_reraises_merge_base_errors(monkeypatch, tmp_path):
     assert excinfo.value.returncode == 128
 
 
-def test_merge_gate_rejects_head_behind_latest_base(monkeypatch, tmp_path, caplog):
+def test_merge_gate_behind_conflicted_pr_remains_recoverable(
+        monkeypatch, tmp_path, caplog):
     def fake_run(command, **kwargs):
         if command[:3] == ["git", "merge-base", "--is-ancestor"]:
             raise subprocess.CalledProcessError(1, command, stderr="not ancestor")
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
+            return json.dumps({
+                "state": "OPEN", "mergeable": "DIRTY", "headRefOid": "h1",
+                "statusCheckRollup": [],
+            })
         return ""
     monkeypatch.setattr(seam, "run_command", fake_run)
     with caplog.at_level("ERROR"), pytest.raises(
-        runner.RecoverableMergeGateError, match="behind latest remote base",
+        runner.RecoverableMergeGateError, match="not mergeable",
     ):
         runner.merge_gate(tmp_path, {"number": 4, "url": "u", "base_ref": "main",
                                      "base_oid": "b1", "head_ref": "h",
                                      "head_oid": "h1"}, "main",
                           repo_dir=tmp_path)
-    assert "base_branch=main" in caplog.text
+    assert "merge_gate_not_mergeable" in caplog.text
 
 
 def test_merge_gate_defers_when_ci_pending(monkeypatch, tmp_path, caplog):
@@ -945,7 +1156,7 @@ def test_merge_gate_rejects_head_that_moved_since_review(monkeypatch, tmp_path):
 
 def test_confirm_merged_accepts_merged_pr_on_origin_main(monkeypatch, tmp_path):
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and "view" in command:
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
             return json.dumps({
                 "number": 4, "url": "u", "state": "MERGED",
                 "mergedAt": "2026-08-25T00:00:00Z",
@@ -989,7 +1200,7 @@ def test_confirm_merged_fetches_under_the_base_sync_lock(
     def fake_run(command, **kwargs):
         if command[:3] == ["git", "fetch", "origin"]:
             return spy(command, **kwargs)
-        if command[:2] == ["gh", "pr"] and "view" in command:
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
             return json.dumps({
                 "number": 4, "url": "u", "state": "MERGED",
                 "mergedAt": "2026-08-25T00:00:00Z",
@@ -1027,7 +1238,7 @@ def test_confirm_merged_rejects_merge_commit_missing_from_origin_main(
     def fake_run(command, **kwargs):
         if command[:3] == ["git", "merge-base", "--is-ancestor"]:
             raise subprocess.CalledProcessError(1, command, stderr="not ancestor")
-        if command[:2] == ["gh", "pr"] and "view" in command:
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
             return json.dumps({
                 "number": 4, "url": "u", "state": "MERGED",
                 "mergedAt": "2026-08-25T00:00:00Z",
@@ -1581,7 +1792,10 @@ def _pr():
 
 
 def _review_merge_config(tmp_path):
-    return runner.RunnerConfig(repo_dir=tmp_path, base_branch="main", base_sha="b1", run_id="a1b2c3d4")
+    return runner.RunnerConfig(
+        repo_dir=tmp_path, deploy_home=tmp_path, base_branch="main",
+        base_sha="b1", run_id="a1b2c3d4",
+    )
 
 
 def _seed_run_state(worktree: Path, **extra) -> None:
@@ -1610,6 +1824,7 @@ def _scene(**overrides):
     recovered = {
         "run_id": "a1b2c3d4", "base_branch": "main", "base_sha": "b1",
         "pr_url": "u", "external": "", "review_round": 0,
+        "base_advance_round": 0,
         "scene_at": "2026-09-13T00:00:00Z",
     }
     recovered.update(overrides)
@@ -1627,6 +1842,31 @@ def budget_review_env(monkeypatch):
                         lambda *a, **k: env["verdict"])
     make_fake_gh(monkeypatch)
     return env
+
+
+def test_review_and_merge_human_decision_stops_without_fix_round(
+        budget_review_env, monkeypatch, tmp_path,
+):
+    calls = []
+    verdict = "REVIEW_VERDICT " + json.dumps({
+        "verdict": "blocked_on_human_decision", "head": "h1",
+        "blockers": 0, "majors": 1, "minors": 0,
+        "findings": [{"level": "Major", "location": "PR round comments",
+                      "note": "same failure repeated in 2 consecutive rounds",
+                      "fix": "decide which address source is authoritative"}],
+    })
+    budget_review_env["verdict"] = verdict
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda *a, **k: calls.append(("issue", k["body"])))
+    with pytest.raises(runner.HumanDecisionRequired) as raised:
+        runner.review_and_merge_if_clean(
+            tmp_path, "branch", "main", _review_merge_config(tmp_path),
+            "owner/repo", 4, title="Review task", priority="normal",
+            scene=_scene(),
+        )
+    assert calls == []
+    assert "same failure repeated" in str(raised.value)
+    assert "decide which address source is authoritative" in str(raised.value)
 
 
 def test_review_and_merge_clean_verdict_merges_and_labels_merged(
@@ -1724,6 +1964,40 @@ def test_review_and_merge_skips_checkout_sync_for_a_locked_engine_source(
     )
     assert merged is True
     assert "sync" not in calls
+
+
+def test_review_and_merge_skips_checkout_sync_for_split_deployment(
+        monkeypatch, tmp_path, caplog):
+    """A delivery checkout separate from deploy_home is not the checkout
+    loaded by the next timer tick, so merge closeout must not sync it."""
+    calls = []
+    caplog.set_level("INFO")
+    monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(seam, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(
+        seam, "merge_gate", lambda *a, **k: {**_pr(), "merged": True},
+    )
+    monkeypatch.setattr(
+        seam, "confirm_merged",
+        lambda *a, **k: {"state": "MERGED", "merge_commit": "m1"},
+    )
+    monkeypatch.setattr(
+        seam, "sync_base_checkout", lambda *a, **k: calls.append("sync"),
+    )
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "comment_issue", lambda *a, **k: None)
+    make_fake_gh(monkeypatch)
+    config = dataclasses.replace(
+        _review_merge_config(tmp_path), deploy_home=tmp_path / "deploy",
+    )
+
+    assert runner.review_and_merge_if_clean(
+        tmp_path, "branch", "main", config, "owner/repo", 4,
+        title="Review task", priority="normal", scene=_scene(),
+    ) is True
+    assert calls == []
+    assert "base_checkout_sync_skipped" in caplog.text
+    assert "reason=repo_dir_is_not_deploy_home" in caplog.text
 
 
 def test_review_and_merge_fix_round_clears_live_delivery_labels(
@@ -2227,6 +2501,14 @@ def test_review_and_merge_midround_base_advance_is_not_a_violation(
     )
     assert merged is False
     assert "behind latest remote base origin/main (b2)" in calls[0][1]
+    assert "Orbi base advance retry 1 for PR #4" in calls[0][1]
+    assert "Orbi review round" not in calls[0][1]
+    assert '"review_round": 0' in calls[0][1]
+    assert '"base_advance_round": 1' in calls[0][1]
+    assert runner.review_rounds_so_far(
+        [{"body": calls[0][1], "authorAssociation": "OWNER"}],
+        run_id="a1b2c3d4",
+    ) == 0
     assert "Absorb contract violated" not in calls[0][1]
 
 
@@ -2512,6 +2794,36 @@ def test_human_recovery_after_the_scene_resets_the_budget(
         "owner/repo", 4, title="Review task", priority="normal",
         scene=_scene(review_round=runner.MAX_REVIEW_ROUNDS, scene_at=None),
     ) is False
+
+
+def test_base_advance_budget_exhausts_separately(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(seam, "run_review", lambda *a, **k: _pass_verdict_text())
+    monkeypatch.setattr(
+        seam, "merge_gate",
+        lambda *a, **k: (_ for _ in ()).throw(
+            runner.RecoverableMergeGateError(
+                "PR #4 head h1 is behind latest remote base origin/main (b2)"
+            ),
+        ),
+    )
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda *a, **k: calls.append(k.get("body")))
+    monkeypatch.setattr(seam, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    make_fake_gh(monkeypatch)
+    with pytest.raises(runner.UnrecoverableDeliveryError, match="base-advance retry loop exhausted"):
+        runner.review_and_merge_if_clean(
+            tmp_path, "branch", "main", _review_merge_config(tmp_path),
+            "owner/repo", 4, title="Review task", priority="normal",
+            scene=_scene(base_advance_round=runner.MAX_BASE_ADVANCE_ROUNDS),
+        )
+    assert calls
+    assert "base-advance retry budget exhausted" in calls[0]
+    assert '"review_round": 0' in calls[0]
+    assert '"base_advance_round": 5' in calls[0]
 
 
 def test_review_and_merge_conflict_labels_fix_needed(monkeypatch, tmp_path):

@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-EXPORTER_PATH = REPO_ROOT / "monitoring" / "prometheus" / "orbi-exporter.py"
+EXPORTER_PATH = REPO_ROOT / "3rd" / "monitoring" / "prometheus" / "orbi-exporter.py"
 EXPORTER_UNIT_PATH = REPO_ROOT / "systemd" / "orbi-exporter.service"
 
 
@@ -68,7 +68,7 @@ def test_exporter_unit_runs_the_deployed_exporter_and_restarts():
     assert "WorkingDirectory=%h/Documents/orbi/orbi" in unit
     assert (
         "ExecStart=/usr/bin/python3 "
-        "%h/Documents/orbi/orbi/monitoring/prometheus/"
+        "%h/Documents/orbi/orbi/3rd/monitoring/prometheus/"
         "orbi-exporter.py"
     ) in unit
     assert "Restart=always" in unit

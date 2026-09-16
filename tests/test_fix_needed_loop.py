@@ -305,7 +305,7 @@ def test_delivery_step_recoverable_review_failure_stays_fix_needed(
     assert patches, "the tracked progress comment was not updated"
     finished = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Orbi fix needed" in finished
-    assert "next step:" in finished
+    assert "What Orbi will do next:" in finished
     assert "ai-blocked" not in finished
     # ... and the fix-needed milestone is posted (mobile notification).
     posted = [
@@ -1566,6 +1566,26 @@ def test_report_failure_history_read_failure_degrades_fail_open(
     assert len(captured["comments"]) == 1
     assert "Orbi needs a fix:" in captured["comments"][0]
     assert "failure_history_read_failed" in caplog.text
+
+
+def test_human_decision_failure_is_terminal_with_decision_details(
+        monkeypatch, tmp_path):
+    captured = make_report_fake(monkeypatch, labels=("ai-pr-opened",))
+    decision = (
+        "review requires human decision: note: same failure repeated; "
+        "fix: choose the authoritative address source"
+    )
+    outcome = runner.report_delivery_failure(
+        runner.HumanDecisionRequired(decision),
+        issue={"number": 39, "title": "task", "body": ""},
+        source_repo="owner/repo", run_id=RUN_ID, pr_url=PR_URL,
+        worktree=Path("/nonexistent"), branch=BRANCH,
+        role=runner.ROLE_REVIEW, cause=decision,
+    )
+    assert outcome == "blocked"
+    assert captured["edits"] == [("ai-blocked", "ai-pr-opened")]
+    assert decision in captured["comments"][0]
+    assert captured["pr_comments"] == []
 
 
 def test_report_failure_without_run_id_keeps_the_plain_path(

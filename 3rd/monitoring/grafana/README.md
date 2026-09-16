@@ -37,7 +37,7 @@
 前台（开发/验证）：
 
 ```bash
-/usr/bin/python3 monitoring/prometheus/orbi-exporter.py \
+/usr/bin/python3 3rd/monitoring/prometheus/orbi-exporter.py \
   --port 9106 --bind 127.0.0.1 --units 'orbi@*' --instances 1,2
 ```
 
@@ -67,7 +67,7 @@ timeout 30s systemctl --user status orbi-exporter.service --no-pager
 ```bash
 timeout 30s systemd-analyze --user verify systemd/orbi-exporter.service
 timeout 15s /usr/bin/test -f \
-  ~/Documents/orbi/orbi/monitoring/prometheus/orbi-exporter.py
+  ~/Documents/orbi/orbi/3rd/monitoring/prometheus/orbi-exporter.py
 ```
 
 参数：`--port`（默认 9106）、`--bind`（默认 127.0.0.1）、`--units`

@@ -92,6 +92,9 @@ engine_source_track = "release"
 # delivery passes without the label. Default: false (the pipeline runs
 # with humans out of the loop, exactly as before).
 # human_review_gate = false
+# Add a one-line backlink to Orbi on generated PRs and Releases.
+# Default: true; set false to omit the attribution footer.
+# attribution_footer = true
 # Claim scope: the active GitHub Milestone title (e.g.
 # "v0.2.0") that the fresh-claim scans (p0, bug, plain) are restricted
 # to. The milestone:"<title>" qualifier is part of the gh search query,
@@ -163,13 +166,18 @@ max_concurrency = 1
 # inspectable for three days before reclamation. Must be a finite
 # positive number of hours; anything else fails the start fast.
 # worktree_retain_hours = 72
-# Optional Pi model selection: passed to EVERY Pi session
-# (implement and review) as --provider/--model/--thinking. Omit a key to
-# keep Pi's own default for that setting; values are passed verbatim and
-# recorded in the journal (non-sensitive model identifiers, never keys).
+# Optional Pi model selection for implementation. Review sessions use
+# these values unless a review_pi_* override is configured below. Omit a
+# key to keep Pi's own default for that setting; values are passed verbatim
+# and recorded in the journal (non-sensitive identifiers, never keys).
 # pi_provider = "openai"
 # pi_model = "gpt-5.6-sol"
 # pi_thinking = "medium"
+# Optional independent review selection; each unset key falls back to its
+# corresponding pi_* value.
+# review_pi_provider = "deepseek"
+# review_pi_model = "deepseek-chat"
+# review_pi_thinking = "high"
 # Optional provider file: path to a JSON file in Pi's
 # models.json shape (providers with baseUrl / api / apiKey / models).
 # The file is the ONLY place a provider endpoint (baseUrl) may be

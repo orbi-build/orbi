@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/Documents/orbi/orbi
-ExecStart=/usr/bin/python3 %h/Documents/orbi/orbi/monitoring/prometheus/orbi-exporter.py
+ExecStart=/usr/bin/python3 %h/Documents/orbi/orbi/3rd/monitoring/prometheus/orbi-exporter.py
 Restart=always
 RestartSec=5
 

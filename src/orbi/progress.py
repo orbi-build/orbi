@@ -236,7 +236,9 @@ def issue_field(issue: int, title: str) -> str:
 
 def format_elapsed(seconds: float) -> str:
     """Format seconds as `45s`, `3m 12s` or `1h 2m 3s` (hours are omitted
-    when zero; once a larger unit renders, zero lower units stay)."""
+    when zero; once a larger unit renders, a zero unit stays — except the
+    seconds at the whole-hour boundary: 3600 renders `1h 0m`, not
+    `1h 0m 0s`)."""
     total = max(0, int(seconds))
     hours, remainder = divmod(total, 3600)
     minutes, secs = divmod(remainder, 60)

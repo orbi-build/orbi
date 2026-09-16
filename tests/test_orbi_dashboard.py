@@ -1,6 +1,6 @@
 """Grafana dashboard structure contract for Issue #162.
 
-The dashboard JSON in `monitoring/grafana/dashboards/` must be importable
+The dashboard JSON in `3rd/monitoring/grafana/dashboards/` must be importable
 into the machine's Grafana (Prometheus datasource uid `eflztqehr89a8c`)
 and must show the Issue's required views: the two Runner services, the
 current Issue/phase/idle per slot, model_wait, idle recovery, run_failed
@@ -15,14 +15,14 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DASHBOARD_PATH = (
-    REPO_ROOT / "monitoring" / "grafana" / "dashboards" / "orbi.json"
+    REPO_ROOT / "3rd" / "monitoring" / "grafana" / "dashboards" / "orbi.json"
 )
 
 # The machine's Prometheus datasource (verified against the running
 # Grafana 13.1.2 data_source table).
 PROMETHEUS_DS = {"type": "prometheus", "uid": "eflztqehr89a8c"}
 
-# The exporter's metric family (monitoring/prometheus/orbi-exporter.py).
+# The exporter's metric family (3rd/monitoring/prometheus/orbi-exporter.py).
 ORBI_METRICS = (
     "orbi_service_active",
     "orbi_run_active",

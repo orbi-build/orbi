@@ -160,6 +160,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "pi_429_attempts_clear_failed": "clearing the 429 attempt counter failed",
     # Bypass publishing.
     "progress_publish_failed": "the progress comment could not be published (pure bypass)",
+    "progress_finish_missing_next_step": "a terminal progress scene had no next step",
     # Pre-start checks.
     "config_invalid": "the runner config failed validation (no start)",
     "transport": "the pre-start git transport check passed",
@@ -242,6 +243,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "pushed_head_unrecorded": "the engine push history could not be recorded; the merge record degrades to unknown (Issue #833)",
     "review_budget_recovered": "a stale review round counter was recovered",
     "review_rounds_exhausted": "the review round budget is exhausted (fail fast)",
+    "base_advance_rounds_exhausted": "the base-advance retry budget is exhausted (fail fast)",
     "review_rounds_exhausted_expected_terminal": "the exhausted budget terminal was already recorded",
     "review_findings_unfixed": "review findings survive; the Issue goes ai-fix-needed",
     "review_absorb_abandoned": "a behind-base round emitted pass without absorbing or reporting the abandoned absorb (Issue #877)",
@@ -333,6 +335,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "command_spawn_failed": "an external command could not be spawned",
     "git_network_retry": "a transient git fetch/push failure is retried with backoff",
     "gh_read_retry": "a transient `gh` read failure is retried with backoff",
+    "gh_write_retry": "a transient `gh` write failure is retried with backoff",
 }
 
 
