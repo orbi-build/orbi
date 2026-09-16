@@ -2496,14 +2496,67 @@ def test_create_worktree_fork_takeover_fetches_pull_head_ref(monkeypatch, tmp_pa
         existing_branch=True, branch="fix/outer", pr_number=592,
     ) == path
     fetch = calls[0]
-    assert fetch[0][0:5] == [
-        "git", "fetch", "origin", "pull/592/head",
-        "refs/remotes/origin/fix/outer",
+    assert fetch[0] == [
+        "git", "fetch", "origin",
+        "+pull/592/head:refs/remotes/origin/fix/outer",
     ]
+    assert len(fetch[0]) == 4
     assert fetch[1] == {
         "cwd": tmp_path, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS,
     }
     assert calls[-1][0][-1] == "origin/fix/outer"
+
+
+def test_create_worktree_fork_takeover_repeats_with_existing_target(tmp_path):
+    """Real-git acceptance: a fork PR refspec can overwrite its existing
+    remote-tracking destination on a repeated takeover."""
+    work, first_head = make_local_remote_pair(tmp_path)
+    remote = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "-C", str(work), "push", "-q", "origin",
+         "HEAD:refs/pull/592/head"],
+        check=True, capture_output=True, timeout=30,
+    )
+    repo_dir = tmp_path / "runner"
+    subprocess.run(
+        ["git", "clone", "-q", str(remote), str(repo_dir)],
+        check=True, capture_output=True, timeout=30,
+    )
+    path = runner.create_worktree(
+        repo_dir, "owner/repo", 3, "first", first_head,
+        existing_branch=True, branch="fix/outer", pr_number=592,
+    )
+    assert path.is_dir()
+
+    (work / "f.txt").write_text("second\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(work), "add", "f.txt"],
+        check=True, capture_output=True, timeout=30,
+    )
+    subprocess.run(
+        ["git", "-C", str(work), "commit", "-q", "-m", "second"],
+        check=True, capture_output=True, timeout=30,
+    )
+    second_head = subprocess.run(
+        ["git", "-C", str(work), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True, timeout=30,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "-C", str(work), "push", "-q", "--force", "origin",
+         "HEAD:refs/pull/592/head"],
+        check=True, capture_output=True, timeout=30,
+    )
+    repeated = runner.create_worktree(
+        repo_dir, "owner/repo", 3, "second", first_head,
+        existing_branch=True, branch="fix/outer", pr_number=592,
+    )
+    assert repeated.is_dir()
+    fetched = subprocess.run(
+        ["git", "-C", str(repo_dir), "rev-parse",
+         "refs/remotes/origin/fix/outer"],
+        check=True, capture_output=True, text=True, timeout=30,
+    ).stdout.strip()
+    assert fetched == second_head
 
 
 def test_create_worktree_takeover_with_existing_branch_never_exits_255(tmp_path):

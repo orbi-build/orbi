@@ -159,12 +159,12 @@ def create_worktree(repo_dir: Path, source_repo: str, number: int,
         # The branch is the delivery identity.  Fetch it, then create the
         # run-isolated worktree from its remote HEAD rather than the base.
         fetch_ref = (
-            f"pull/{pr_number}/head" if pr_number is not None else branch
+            f"+pull/{pr_number}/head:refs/remotes/origin/{branch}"
+            if pr_number is not None else branch
         )
-        fetch_command = ["git", "fetch", "origin", fetch_ref]
-        if pr_number is not None:
-            fetch_command.append(f"refs/remotes/origin/{branch}")
-        run_git_network_command(fetch_command, cwd=repo_dir)
+        run_git_network_command(
+            ["git", "fetch", "origin", fetch_ref], cwd=repo_dir,
+        )
         local = run_command(
             ["git", "branch", "--list", branch], cwd=repo_dir,
         )
