@@ -56,10 +56,12 @@ class FakeRunCommand:
 
     def __init__(self, routes=None):
         self.calls: list[list[str]] = []
+        self.call_kwargs: list[dict] = []
         self.routes = routes or {}
 
     def __call__(self, command, **kwargs):
         self.calls.append(list(command))
+        self.call_kwargs.append(dict(kwargs))
         joined = " ".join(command)
         for needle, answer in self.routes.items():
             if needle in joined:
@@ -70,6 +72,10 @@ class FakeRunCommand:
 
     def commands(self, needle: str) -> list[list[str]]:
         return [c for c in self.calls if needle in " ".join(c)]
+
+    def kwargs_for(self, needle: str) -> list[tuple[list[str], dict]]:
+        return [(c, kw) for c, kw in zip(self.calls, self.call_kwargs)
+                if needle in " ".join(c)]
 
 
 REPO = "owner/repo"
@@ -595,7 +601,7 @@ def test_repeated_failure_alerts_once_with_the_latest_run_marker(tmp_path):
     comments = fake.commands("gh issue comment")
     assert len(comments) == 1
     comment = comments[0]
-    assert comment[2:5] == ["gh", "issue", "comment"]
+    assert comment[0:3] == ["gh", "issue", "comment"]
     assert "41" in comment
     assert "--repo" in comment and REPO in comment
     body = comment[comment.index("--body") + 1]
@@ -1308,3 +1314,64 @@ def test_run_health_check_skips_when_the_lock_stays_busy(
         probe.assert_not_called()
     finally:
         os.close(lock_fd)
+
+
+def test_health_github_calls_pass_timeout_via_run_command(tmp_path):
+    """The gh calls in runner_health must not shell out to the GNU
+    `timeout` binary: macOS (#851/#894) has no such binary (coreutils
+    installs `gtimeout`), so every alert path dies with FileNotFoundError
+    before reaching gh, swallowed as one `health_check_failed` log line.
+    The bound travels through run_command's `timeout=` parameter instead
+    (subprocess-native, portable)."""
+    write_state(tmp_path, {
+        "runs": [
+            run_entry(REPO, 41, "00000001", "fp1"),
+            run_entry(REPO, 41, "00000002", "fp1"),
+            run_entry(REPO, 41, "00000003", "fp1"),
+        ],
+        "last_pickup_ts": time.time(), "alerted": [],
+    })
+    fake = FakeRunCommand({
+        "journalctl --user -u orbi@1.service": "",
+        "journalctl --user -u orbi@2.service": "",
+    })
+    alerts = runner_health.run_health_check(
+        make_config(tmp_path), run_command=fake,
+    )
+    assert alerts == [f"repeated_failure:{REPO}#41"]
+    gh_calls = fake.commands("gh issue")
+    assert gh_calls, "the alert path must reach gh"
+    for call in gh_calls:
+        assert call[0] != "timeout", (
+            "GNU `timeout` is hardcoded as argv[0]; macOS has none"
+        )
+    timed = fake.kwargs_for("gh issue")
+    assert timed
+    for _, kwargs in timed:
+        assert kwargs.get("timeout") == runner_health.GH_TIMEOUT_SECONDS
+
+
+def test_create_health_issue_passes_timeout_via_run_command():
+    fake = FakeRunCommand({
+        "in:body": "[]",
+    })
+    url = runner_health.create_health_issue(
+        ORBI_REPO, "crash_loop", "detail", run_command=fake,
+    )
+    assert url is None
+    commands = fake.commands("gh issue")
+    assert fake.commands("gh issue list")
+    assert fake.commands("gh issue create")
+    for call, kwargs in fake.kwargs_for("gh issue"):
+        assert call[0] != "timeout"
+        assert kwargs.get("timeout") == runner_health.GH_TIMEOUT_SECONDS
+
+
+def test_orbi_repo_from_deploy_home_passes_timeout_via_run_command(tmp_path):
+    fake = FakeRunCommand({})
+    runner_health.orbi_repo_from_deploy_home(tmp_path, run_command=fake)
+    git_calls = fake.commands("git")
+    assert git_calls
+    for call, kwargs in fake.kwargs_for("git"):
+        assert call[0] != "timeout"
+        assert kwargs.get("timeout") == 30
