@@ -237,6 +237,7 @@ JOURNAL_EVENTS: dict[str, str] = {
     "resume_scene_pr_state_lookup_failed": "the resume scene's PR state lookup failed",
     # Review loop.
     "review": "an independent review session finished (verdict)",
+    "review_verdict_head_unknown": "the review verdict names an unknown Git object",
     "delivery_ci_pending": "the PR head's CI is still pending; the delivery defers to the next tick",
     "review_head_advanced": "the review session pushed a fixed head",
     "pushed_head_recorded": "a round-start head adoption recorded an engine-pushed head (Issue #833)",
@@ -367,12 +368,14 @@ def run_command(command: list[str], *, cwd: Path | None = None,
                 timeout: int | None = None,
                 log_command: list[str] | None = None,
                 log_stdout: bool = False,
-                failure_log_level: int = logging.ERROR) -> str:
-    """Run one external command; log context and fail fast on any error.
+                failure_log_level: int = logging.ERROR,
+                check: bool = True) -> str | subprocess.CompletedProcess[str]:
+    """Run one external command; log context and fail fast by default.
 
-    ``failure_log_level`` is INFO for probes whose failure is an expected
-    status result, such as an optional component health check. The command
-    still raises, so callers retain control over whether the failure blocks.
+    ``check=False`` is for callers that need to inspect an expected status
+    result (for example, a Git object-existence probe). The completed
+    process is returned in that mode; normal callers retain the historical
+    stripped stdout return value and fail-fast behavior.
     """
     LOGGER.info(
         "command=%s cwd=%s",
@@ -384,7 +387,7 @@ def run_command(command: list[str], *, cwd: Path | None = None,
             cwd=cwd,
             capture_output=True,
             text=True,
-            check=True,
+            check=check,
             timeout=timeout,
         )
     except subprocess.CalledProcessError as exc:
@@ -409,6 +412,8 @@ def run_command(command: list[str], *, cwd: Path | None = None,
         LOGGER.info("stderr=%s", result.stderr.rstrip())
     if log_stdout and result.stdout:
         LOGGER.info("stdout=%s", result.stdout.rstrip())
+    if not check:
+        return result
     return result.stdout.strip()
 
 

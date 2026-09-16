@@ -526,6 +526,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `resume_pr_verification_failed` | 被恢复交付未通过 PR 验证 |
 | `resume_scene_pr_state_lookup_failed` | 恢复现场的 PR 状态查询失败 |
 | `review` | 独立评审 session 结束（裁决） |
+| `review_verdict_head_unknown` | 评审裁决指向未知的 Git 对象 |
 | `delivery_ci_pending` | PR head 的 CI 仍在 pending；交付顺延到下一 tick |
 | `review_head_advanced` | 评审 session 推送了修复后的 head |
 | `pushed_head_recorded` | 回合开始的采纳记录了一个引擎推送 head（Issue #833） |

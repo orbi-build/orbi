@@ -2094,30 +2094,56 @@ def test_review_and_merge_refreezes_head_after_in_session_fix(
     assert runner.read_pushed_head(tmp_path) == "h2"
 
 
-def test_review_and_merge_verdict_head_mismatch_fails_before_merge(
+def test_review_and_merge_verdict_head_mismatch_real_commit_is_recoverable(
         monkeypatch, tmp_path):
-    """Issue #591: the clean verdict is bound to the reviewed head. A
-    verdict naming a different head than the PR's current head never
-    reaches the merge gate: the merge would otherwise land on a head
-    the verdict does not cover (a replayed/forged clean verdict could
-    merge unreviewed code). The mismatch is a malformed verdict — the
-    recoverable fix loop re-reviews the same PR."""
+    """A mismatched head that is a real commit represents a branch race."""
     gate = Mock()
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(runner, "freeze_pr", lambda *a, **k: _pr())
     monkeypatch.setattr(
         runner, "run_review",
-        lambda *a, **k: _pass_verdict_text(head="forged-head"),
+        lambda *a, **k: _pass_verdict_text(head="other-real-commit"),
     )
     monkeypatch.setattr(runner, "merge_gate", gate)
     make_fake_gh(monkeypatch)
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda *a, **k: subprocess.CompletedProcess(a[0], 0),
+    )
     with pytest.raises(ValueError, match="head"):
         runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
-            "owner/repo", 4, title="Review task",
-            priority="normal",
+            "owner/repo", 4, title="Review task", priority="normal",
             scene=_scene(),
         )
+    assert gate.called is False
+
+
+def test_review_and_merge_unknown_verdict_head_is_terminal(
+        monkeypatch, tmp_path, caplog):
+    """A model-invented object must stop the retry loop."""
+    gate = Mock()
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(
+        seam, "run_review",
+        lambda *a, **k: _pass_verdict_text(head="unknown-object"),
+    )
+    monkeypatch.setattr(seam, "merge_gate", gate)
+    make_fake_gh(monkeypatch)
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda *a, **k: subprocess.CompletedProcess(a[0], 1),
+    )
+    caplog.set_level("WARNING")
+    with pytest.raises(runner.UnrecoverableDeliveryError, match="unknown object"):
+        runner.review_and_merge_if_clean(
+            tmp_path, "branch", "main", _review_merge_config(tmp_path),
+            "owner/repo", 4, title="Review task", priority="normal",
+            scene=_scene(),
+        )
+    assert "review_verdict_head_unknown" in caplog.text
+    assert "verdict_head=unknown-object" in caplog.text
     assert gate.called is False
 
 

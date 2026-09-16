@@ -6243,10 +6243,10 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
       merge conflict, or its CI is red -> label the Issue
       `ai-fix-needed` with the finding (the next review session absorbs
       the latest base in-session or repairs the red CI); returns False;
-    - missing/malformed verdict (including a verdict whose `head` does
-      not match the PR head) -> raise; the caller keeps the
-      Issue in the automatic fix loop (`ai-fix-needed`: the
-      next review session re-runs the same review on the same PR);
+    - missing/malformed verdict -> raise; the caller keeps the Issue in
+      the automatic fix loop (`ai-fix-needed`). A mismatched head is
+      recoverable only when it names another real commit; an unknown
+      object is terminal (`ai-blocked`) because retrying cannot repair it;
     - an exhausted round budget -> raise `UnrecoverableDeliveryError`
       (the bounded loop is a human decision, not a
       recoverable failure); the caller marks the Issue `ai-blocked`
@@ -6434,9 +6434,27 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     # gate below merges exactly `refrozen["head_oid"]`, so a verdict
     # naming any other head (forged by injected text, replayed from an
     # older round, or stale after a fix the reviewer forgot to state)
-    # never merges: it is a malformed verdict — the recoverable loop
-    # re-reviews the same PR.
+    # never merges: it is a malformed verdict. The object probe below
+    # distinguishes a recoverable branch race from a terminal unknown head.
     if verdict["head"] != refrozen["head_oid"]:
+        # A real alternate commit means the branch moved during review and
+        # remains recoverable. An object that is not a commit cannot be a
+        # race: it is a malformed/model-invented verdict and retrying the
+        # same review would only reproduce the dead loop (Issue #988).
+        object_probe = run_command(
+            ["git", "cat-file", "-e", f"{verdict['head']}^{{commit}}"],
+            cwd=worktree, check=False, timeout=10,
+        )
+        if object_probe.returncode != 0:
+            event(
+                "review_verdict_head_unknown", level=logging.WARNING,
+                pr=pr["number"], verdict_head=verdict["head"],
+            )
+            raise UnrecoverableDeliveryError(
+                f"review verdict points to unknown object {verdict['head']}; "
+                "the verdict head is not a commit in the delivery repository; "
+                "human intervention is required"
+            )
         raise ValueError(
             f"review verdict head {verdict['head']} does not match the "
             f"PR head {refrozen['head_oid']}; the merge gate only merges "
