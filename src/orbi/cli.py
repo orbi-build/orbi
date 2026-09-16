@@ -663,8 +663,11 @@ def milestone_set(config: RunnerConfig, config_path: Path,
         )
     try:
         milestones = list_milestones(repo, timeout=30)
-    except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or "").strip() or str(exc)
+    except (subprocess.SubprocessError, OSError, ValueError) as exc:
+        # The docstring promises one structured line for EVERY failure:
+        # a hung gh raises TimeoutExpired, a missing gh raises OSError,
+        # a malformed payload raises ValueError — same collapse.
+        detail = (getattr(exc, "stderr", "") or "").strip() or str(exc)
         raise MilestoneSetError(
             f"milestone_set_failed reason=milestone lookup failed: {detail}; "
             "fix=check `gh auth status` and Milestone read access to "
