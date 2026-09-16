@@ -6,8 +6,8 @@ prove the merge-gate acceptance criteria:
 
 - a PR head that contains the latest ``origin/<base>`` is merged with
   ``--match-head-commit`` and the merge commit lands on ``origin/<base>``;
-- a PR head that is behind the latest ``origin/<base>`` is rejected before any
-  merge, so a stale baseline is never merged.
+- a PR head that is behind the latest ``origin/<base>`` is absorbed and
+  merged when conflict-free, while a real conflict remains recoverable.
 
 ``gh`` is faked: ``gh pr view`` answers the PR state and ``gh pr merge``
 performs a real local merge (``git merge``) so the merge commit is a real git
@@ -75,7 +75,7 @@ def install_fake_gh(monkeypatch, clone: Path, pr_json: str) -> list:
     def fake_run(command, **kwargs):
         if command[:1] == ["gh"]:
             commands.append(command)
-            if command[:2] == ["gh", "pr"] and "view" in command:
+            if command[0] == "gh" and command[1] == "pr" and "view" in command:
                 return pr_json
             # else: `gh pr merge` — perform a real local merge so the merge
             # commit is a genuine git object on origin/<base>.
@@ -115,7 +115,7 @@ def test_merge_gate_merges_head_containing_latest_base(clone, monkeypatch):
         lambda command, **kwargs: (
             make_pr(head_oid, state="MERGED", merged_at="now",
                     merge_commit=merge_commit)
-            if command[:2] == ["gh", "pr"] and "view" in command
+            if command[0] == "gh" and command[1] == "pr" and "view" in command
             else ""
         ),
     )
@@ -124,44 +124,76 @@ def test_merge_gate_merges_head_containing_latest_base(clone, monkeypatch):
     assert confirmed["merge_commit"] == merge_commit
 
 
-def test_merge_gate_rejects_head_behind_latest_base(clone, monkeypatch, caplog):
-    # Delivery branch is based on the first commit only.
+def test_merge_gate_absorbs_clean_behind_base_and_rechecks_ci(
+        clone, monkeypatch, caplog):
+    """A clean stale PR is absorbed and merged without a review restart."""
     git(clone, "checkout", "-b", "orbi/owner-repo-issue-4",
         git(clone, "rev-parse", "origin/main~1"))
     head_oid = commit_file(clone, "delivery.txt", "delivery")
-    # Remote main advances after the delivery was created.
     git(clone, "checkout", "main")
     commit_file(clone, "advance.txt", "main advanced")
     git(clone, "push", "origin", "main")
     git(clone, "checkout", "orbi/owner-repo-issue-4")
-
+    absorbed_head = None
+    views = 0
     real_run = runner.run_command
     commands: list = []
 
     def fake_run(command, **kwargs):
-        # Record every command; the gate must fail at the real git
-        # merge-base check before any `gh` command is issued.
+        nonlocal absorbed_head, views
         commands.append(command)
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
+            views += 1
+            oid = head_oid if views == 1 else absorbed_head
+            return make_pr(oid)
+        if command[0] == "gh" and command[1] == "pr" and "merge" in command:
+            git(clone, "checkout", "main")
+            git(clone, "merge", "--no-ff", command[command.index(
+                "--match-head-commit") + 1])
+            git(clone, "push", "origin", "main")
+            git(clone, "checkout", "-")
+            return ""
+        result = real_run(command, **kwargs)
+        if command[:2] == ["git", "rev-parse"] and command[2] == "HEAD":
+            absorbed_head = result
+        return result
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    pr = {"number": 4, "url": "u", "base_ref": "main",
+          "base_oid": git(clone, "rev-parse", "origin/main~1"),
+          "head_ref": "orbi/owner-repo-issue-4", "head_oid": head_oid}
+    with caplog.at_level("INFO"):
+        merged = runner.merge_gate(clone, pr, "main", repo_dir=clone)
+    assert merged["merged"] is True
+    assert views == 2
+    merge_cmd = [c for c in commands if c[:2] == ["gh", "pr"]
+                 and "merge" in c][0]
+    assert merge_cmd[merge_cmd.index("--match-head-commit") + 1] == absorbed_head
+    assert "base_absorbed" in caplog.text
+
+
+def test_merge_gate_conflicted_absorb_stays_recoverable(clone, monkeypatch):
+    git(clone, "checkout", "-b", "orbi/owner-repo-issue-4",
+        git(clone, "rev-parse", "origin/main~1"))
+    head_oid = commit_file(clone, "shared.txt", "delivery")
+    git(clone, "checkout", "main")
+    commit_file(clone, "shared.txt", "main")
+    git(clone, "push", "origin", "main")
+    git(clone, "checkout", "orbi/owner-repo-issue-4")
+    real_run = runner.run_command
+
+    def fake_run(command, **kwargs):
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
+            return make_pr(head_oid, mergeable="MERGEABLE")
         return real_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
     pr = {"number": 4, "url": "u", "base_ref": "main",
           "base_oid": git(clone, "rev-parse", "origin/main~1"),
-          "head_ref": "orbi/owner-repo-issue-4",
-          "head_oid": head_oid}
-    base_sha = git(clone, "rev-parse", "origin/main")
-    with caplog.at_level("ERROR"), pytest.raises(
-        RuntimeError, match="behind latest remote base",
-    ) as excinfo:
+          "head_ref": "orbi/owner-repo-issue-4", "head_oid": head_oid}
+    with pytest.raises(runner.RecoverableMergeGateError, match="cannot absorb"):
         runner.merge_gate(clone, pr, "main", repo_dir=clone)
-    # The failure names the exact origin/<base> SHA the gate compared
-    # against (Issue #879): the comment distinguishes behind-base from a
-    # merge conflict without re-deriving it from git log.
-    assert base_sha in str(excinfo.value)
-    # No merge was attempted: a stale baseline is never merged.
-    assert not [c for c in commands if c[:2] == ["gh", "pr"]
-               and "merge" in c]
-    assert "merge_gate_behind_base" in caplog.text
+    assert git(clone, "status", "--porcelain", "--untracked-files=no") == ""
 
 
 def test_merge_gate_rejects_conflicting_pr_reports_mergeable(
@@ -219,7 +251,7 @@ def test_deployment_checkout_fast_forwards_after_independent_merge(
     real_run = runner.run_command
 
     def fake_run(command, **kwargs):
-        if command[:2] == ["gh", "pr"] and "view" in command:
+        if command[0] == "gh" and command[1] == "pr" and "view" in command:
             return make_pr(head_oid, state="MERGED", merged_at="now",
                            merge_commit=merge_commit)
         return real_run(command, **kwargs)

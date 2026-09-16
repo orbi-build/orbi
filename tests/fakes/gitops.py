@@ -39,6 +39,7 @@ class FakeGit:
         self.parents: dict[str, list[str]] = {}
         self.local: dict[str, str] = {}
         self.origin: dict[str, str] = {}
+        self.pull_heads: dict[str, str] = {}
         self.worktrees: dict[str, dict] = {}
         self.calls: list[list[str]] = []
         self.base_branch = base_branch
@@ -103,14 +104,46 @@ class FakeGit:
         return f"  {name}\n" if name in self.local else ""
 
     def _fetch(self, args: list[str], cwd) -> str:
-        if len(args) != 2 or args[0] != "origin":
-            self._unsupported(["git", "fetch", *args])
-        name = args[1]
-        if name not in self.origin:
+        if (len(args) == 2 and args[0] == "origin"
+                and not args[1].startswith("+")
+                and ":" not in args[1]):
+            name = args[1]
+            if name not in self.origin:
+                self._fail(
+                    128, f"fatal: couldn't find remote ref refs/heads/{name}"
+                )
+            return ""
+        # A destination is part of the same refspec as its source.  The
+        # historical two-position-argument shape makes Git look for the
+        # destination as another remote source and must fail like real git.
+        if (len(args) == 3 and args[0] == "origin"
+                and args[1].startswith("pull/")
+                and args[1].endswith("/head")
+                and args[2].startswith("refs/remotes/origin/")):
             self._fail(
-                128, f"fatal: couldn't find remote ref refs/heads/{name}"
+                128, f"fatal: couldn't find remote ref {args[2]}"
             )
-        return ""
+        if len(args) == 2 and args[0] == "origin":
+            refspec = args[1]
+            forced = refspec.startswith("+")
+            refspec = refspec.removeprefix("+")
+            source, separator, destination = refspec.partition(":")
+            if (separator and source.startswith("pull/")
+                    and source.endswith("/head")
+                    and destination.startswith("refs/remotes/origin/")):
+                pr_number = source.removeprefix("pull/").removesuffix("/head")
+                if pr_number not in self.pull_heads:
+                    self._fail(
+                        128, f"fatal: couldn't find remote ref {source}"
+                    )
+                branch = destination.removeprefix("refs/remotes/origin/")
+                # `+` permits a repeated takeover to replace a non-FF ref.
+                # The fake has no non-forced update rejection because the
+                # production command always uses the forced form.
+                if forced or branch not in self.origin:
+                    self.origin[branch] = self.pull_heads[pr_number]
+                    return ""
+        self._unsupported(["git", "fetch", *args])
 
     def _rev_parse(self, args: list[str], cwd) -> str:
         if args == ["HEAD"]:

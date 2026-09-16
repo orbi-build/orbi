@@ -7,7 +7,7 @@ consistency nets hold the registry, the docs and the exporter together:
 
 - the docs event tables (`docs/operations.mdx` EN + `docs/zh/operations.mdx`
   ZH) carry exactly the registry set, in both directions;
-- the exporter's `KNOWN_KINDS` (`monitoring/prometheus/orbi-exporter.py`)
+- the exporter's `KNOWN_KINDS` (`3rd/monitoring/prometheus/orbi-exporter.py`)
   are a subset of the registry — the exporter is stdlib-only and cannot
   import the package, so this test IS the shared-registry binding;
 - no module outside `journal.py` (the kernel itself) and `cli.py`
@@ -29,7 +29,7 @@ from orbi import journal
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC = REPO_ROOT / "src" / "orbi"
-EXPORTER_PATH = REPO_ROOT / "monitoring" / "prometheus" / "orbi-exporter.py"
+EXPORTER_PATH = REPO_ROOT / "3rd" / "monitoring" / "prometheus" / "orbi-exporter.py"
 
 # A kind-shaped first token: a lowercase snake word with no `=` (a
 # `key=value` first token, a `%s` placeholder or a prose Sentence never

@@ -37,6 +37,12 @@ from orbi.progress import (
 
 GH_READ_MAX_ATTEMPTS = 3
 GH_READ_BACKOFF_SECONDS = 1
+# Writes are retried only for bounded, server-side failures.  A failed
+# request may have reached GitHub, so callers with a natural idempotency
+# check (comments) can stop before issuing the request again.
+GH_WRITE_MAX_ATTEMPTS = 3
+GH_WRITE_BACKOFF_SECONDS = 1
+GH_WRITE_MAX_SECONDS = 30
 # gh prints its own HTTP failures as `HTTP <code>: <text> (<url>)` — the
 # transient classes are the 401 keyring race, the rate
 # limits (429 / the API's "rate limit" messages) and GitHub-side 5xx.
@@ -141,6 +147,71 @@ def run_gh_read_command(
             stderr=single_line(detail),
         )
         time.sleep(delay)
+
+
+def _is_transient_gh_write_error(exc: subprocess.CalledProcessError) -> bool:
+    """Recognize GitHub server failures, but never client/permission errors."""
+    detail = " ".join(str(part or "") for part in (exc.stderr, exc.stdout))
+    return re.search(
+        r"http 5\d\d|http 429|rate limit|something went wrong while executing your query|internal server error",
+        detail, re.IGNORECASE,
+    ) is not None
+
+
+def run_gh_write_command(
+    command: list[str], *, cwd: Path | None = None,
+    timeout: int | None = None,
+    command_runner: Callable[..., str] | None = None,
+    already_applied: Callable[[], bool] | None = None,
+) -> str:
+    """Run a GitHub write with bounded retries for server-side failures.
+
+    GitHub may execute a mutation and lose the response.  ``already_applied``
+    is therefore checked before each retry; it lets comment callers use the
+    run marker/body as an idempotency key rather than creating duplicates.
+    Permission and validation failures are re-raised immediately.
+    """
+    execute = command_runner or run_command
+    started = time.monotonic()
+    for attempt in range(1, GH_WRITE_MAX_ATTEMPTS + 1):
+        try:
+            kwargs = {}
+            if cwd is not None:
+                kwargs["cwd"] = cwd
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            return execute(command, **kwargs)
+        except subprocess.CalledProcessError as exc:
+            if not _is_transient_gh_write_error(exc):
+                raise
+            if already_applied is not None:
+                try:
+                    if already_applied():
+                        LOGGER.warning(
+                            "gh write response lost after side effect; "
+                            "idempotency check found it already applied",
+                        )
+                        return ""
+                except Exception:
+                    LOGGER.warning(
+                        "gh write idempotency check failed; retrying",
+                        exc_info=True,
+                    )
+            elapsed = time.monotonic() - started
+            if attempt >= GH_WRITE_MAX_ATTEMPTS or elapsed >= GH_WRITE_MAX_SECONDS:
+                raise
+            delay = min(
+                GH_WRITE_BACKOFF_SECONDS * (2 ** (attempt - 1)),
+                max(0, GH_WRITE_MAX_SECONDS - elapsed),
+            )
+            event(
+                "gh_write_retry", level=logging.WARNING,
+                command=single_line(" ".join(command)),
+                attempt=attempt + 1, max_attempts=GH_WRITE_MAX_ATTEMPTS,
+                delay_seconds=delay,
+                stderr=single_line((exc.stderr or "").strip()),
+            )
+            time.sleep(delay)
 
 
 def parse_issue_array(raw: str) -> list[dict]:
@@ -519,7 +590,7 @@ def edit_issue(number: int, *, repo: str, add: str | None = None,
         command += ["--add-label", add]
     if remove:
         command += ["--remove-label", remove]
-    run_command(command)
+    run_gh_write_command(command)
 
 
 def apply_label_patch(number: int, *, repo: str, event: str,
@@ -550,8 +621,17 @@ def apply_label_patch(number: int, *, repo: str, event: str,
 
 
 def comment_issue(number: int, *, repo: str, body: str) -> None:
-    run_command(["gh", "issue", "comment", str(number), "--repo", repo,
-                 "--body", format_status_comment(body)])
+    rendered = format_status_comment(body)
+    command = ["gh", "issue", "comment", str(number), "--repo", repo,
+               "--body", rendered]
+
+    def already_posted() -> bool:
+        return any(
+            isinstance(comment, dict) and comment.get("body") == rendered
+            for comment in issue_comments(number, repo=repo)
+        )
+
+    run_gh_write_command(command, already_applied=already_posted)
 
 
 def update_issue_comment(comment_id: int, *, repo: str, body: str) -> None:
@@ -563,7 +643,7 @@ def update_issue_comment(comment_id: int, *, repo: str, body: str) -> None:
     idempotent for a stored body (the stored shape takes the verbatim
     path and the hidden runner marker is refreshed).
     """
-    run_command([
+    run_gh_write_command([
         "gh", "api", f"repos/{repo}/issues/comments/{comment_id}",
         "--method", "PATCH", "--field", f"body={format_status_comment(body)}",
     ])

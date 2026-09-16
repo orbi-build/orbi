@@ -55,7 +55,7 @@ _UI_SUFFIXES = (
 )
 _UI_DIRS = frozenset({"templates", "static", "frontend", "web", "ui",
                       "assets"})
-_DEPLOY_PREFIXES = (".github/", "systemd/", "monitoring/", "deploy/",
+_DEPLOY_PREFIXES = (".github/", "systemd/", "3rd/monitoring/", "deploy/",
                     "charts/")
 _DEPLOY_NAMES = frozenset({"dockerfile", "docker-compose.yml",
                            "docker-compose.yaml", "install.sh"})

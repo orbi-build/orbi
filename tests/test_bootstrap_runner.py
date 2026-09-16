@@ -2480,6 +2480,85 @@ def test_create_worktree_branch_override_checks_out_the_external_head(
     ]
 
 
+def test_create_worktree_fork_takeover_fetches_pull_head_ref(monkeypatch, tmp_path):
+    path = tmp_path / ".worktrees" / "orbi-owner-repo-issue-3-run1"
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[0:3] == ["git", "branch", "--list"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    assert runner.create_worktree(
+        tmp_path, "owner/repo", 3, "run1", "base",
+        existing_branch=True, branch="fix/outer", pr_number=592,
+    ) == path
+    fetch = calls[0]
+    assert fetch[0] == [
+        "git", "fetch", "origin",
+        "+pull/592/head:refs/remotes/origin/fix/outer",
+    ]
+    assert len(fetch[0]) == 4
+    assert fetch[1] == {
+        "cwd": tmp_path, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS,
+    }
+    assert calls[-1][0][-1] == "origin/fix/outer"
+
+
+def test_create_worktree_fork_takeover_repeats_with_existing_target(tmp_path):
+    """Real-git acceptance: a fork PR refspec can overwrite its existing
+    remote-tracking destination on a repeated takeover."""
+    work, first_head = make_local_remote_pair(tmp_path)
+    remote = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "-C", str(work), "push", "-q", "origin",
+         "HEAD:refs/pull/592/head"],
+        check=True, capture_output=True, timeout=30,
+    )
+    repo_dir = tmp_path / "runner"
+    subprocess.run(
+        ["git", "clone", "-q", str(remote), str(repo_dir)],
+        check=True, capture_output=True, timeout=30,
+    )
+    path = runner.create_worktree(
+        repo_dir, "owner/repo", 3, "first", first_head,
+        existing_branch=True, branch="fix/outer", pr_number=592,
+    )
+    assert path.is_dir()
+
+    (work / "f.txt").write_text("second\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(work), "add", "f.txt"],
+        check=True, capture_output=True, timeout=30,
+    )
+    subprocess.run(
+        ["git", "-C", str(work), "commit", "-q", "-m", "second"],
+        check=True, capture_output=True, timeout=30,
+    )
+    second_head = subprocess.run(
+        ["git", "-C", str(work), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True, timeout=30,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "-C", str(work), "push", "-q", "--force", "origin",
+         "HEAD:refs/pull/592/head"],
+        check=True, capture_output=True, timeout=30,
+    )
+    repeated = runner.create_worktree(
+        repo_dir, "owner/repo", 3, "second", first_head,
+        existing_branch=True, branch="fix/outer", pr_number=592,
+    )
+    assert repeated.is_dir()
+    fetched = subprocess.run(
+        ["git", "-C", str(repo_dir), "rev-parse",
+         "refs/remotes/origin/fix/outer"],
+        check=True, capture_output=True, text=True, timeout=30,
+    ).stdout.strip()
+    assert fetched == second_head
+
+
 def test_create_worktree_takeover_with_existing_branch_never_exits_255(tmp_path):
     """Real-git acceptance (Issue #608 scenario a): the stable branch
     already exists on origin — the takeover path succeeds where the bare
@@ -11362,6 +11441,52 @@ def test_pr_delivery_status_ignores_malformed_check_entry(monkeypatch):
     assert runner.pr_delivery_status(PR_URL, "owner/repo") == ("OPEN", [])
 
 
+def test_finish_progress_body_uses_fixed_sections_for_blocked_error(caplog):
+    body = runner._finish_progress_body(
+        number=39, title="Blocked task", run_id="a1b2c3d4",
+        role=runner.ROLE_REVIEW, branch=None, worktree=None,
+        pr_url="https://github.com/owner/repo/pull/46", review_round=0,
+        priority="normal", detail="Command '['gh']' failed: raw stderr",
+        next_step="", outcome="blocked", source_repo="owner/repo",
+    )
+
+    assert "What happened: Orbi could not complete the delivery" in body
+    assert "What you need to do: Nothing" in body
+    assert "What Orbi will do next:" in body
+    assert "https://github.com/owner/repo/pull/46" in body
+    assert "<details><summary>Raw error</summary>" in body
+    assert "Command '['gh']' failed: raw stderr" in body
+    assert "next step: " not in body
+    assert "progress_finish_missing_next_step" in caplog.text
+    assert "call_point=_finish_progress_body" in caplog.text
+
+
+def test_finish_progress_body_keeps_next_step_in_user_section():
+    body = runner._finish_progress_body(
+        number=39, title="Blocked task", run_id="a1b2c3d4",
+        role=runner.ROLE_REVIEW, branch=None, worktree=None, pr_url=None,
+        review_round=0, priority="normal", detail="failure detail",
+        next_step="relabel the Issue ai-ready", outcome="blocked",
+        source_repo="owner/repo",
+    )
+
+    assert "What you need to do: relabel the Issue ai-ready" in body
+    assert "What Orbi will do next: Orbi will wait for a human" in body
+
+
+def test_finish_progress_body_defaults_orbi_action_when_fix_step_missing(caplog):
+    body = runner._finish_progress_body(
+        number=39, title="Fix task", run_id="a1b2c3d4",
+        role=runner.ROLE_REVIEW, branch=None, worktree=None, pr_url=None,
+        review_round=0, priority="normal", detail="failure detail",
+        next_step="", outcome="fix needed", source_repo="owner/repo",
+    )
+
+    assert "What you need to do: Nothing" in body
+    assert "What Orbi will do next: Orbi will wait for a human" in body
+    assert "progress_finish_missing_next_step" in caplog.text
+
+
 def test_finish_progress_blocked_is_a_noop_without_run_id(monkeypatch):
     """Without a bound run id there is no tracked comment to update
     (the failure comment simply carries no marker)."""
@@ -11506,10 +11631,12 @@ def test_finish_progress_renders_the_fix_needed_scene(monkeypatch):
     assert len(posts) == 1
     body = posts[0][posts[0].index("--field") + 1][len("body="):]
     assert "Orbi fix needed" in body
-    assert "failure: the failure" in body
-    assert ("next step: the next tick resumes the same run, branch, "
-            "worktree and PR automatically (the Issue stays "
+    assert "What happened: Orbi found a problem" in body
+    assert "What you need to do: Nothing" in body
+    assert ("What Orbi will do next: the next tick resumes the same run, "
+            "branch, worktree and PR automatically (the Issue stays "
             "ai-fix-needed)") in body
+    assert "<details><summary>Raw error</summary>\nthe failure\n</details>" in body
     # The role default is the only post-PR role (Issue #82).
     assert "- role: review" in body
     assert "<!-- orbi:run=a1b2c3d4 -->" in body
@@ -11866,7 +11993,7 @@ def test_delivery_step_marks_blocked_when_review_fails(
     blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Orbi blocked" in blocked
     assert "the independent review of" in blocked
-    assert "next step:" in blocked
+    assert "What Orbi will do next:" in blocked
     assert "<!-- orbi:run=a1b2c3d4 -->" in blocked
     # The blocked scene carries the actual role (the failure happened
     # during the independent review) and the completed review rounds
@@ -12089,7 +12216,7 @@ def test_delivery_step_blocks_when_scene_base_differs_from_config(
     assert "Orbi blocked" in blocked
     assert "base_branch=develop" in blocked
     assert "base_branch=main" in blocked
-    assert "next step:" in blocked
+    assert "What Orbi will do next:" in blocked
 
 
 def test_delivery_step_worktree_missing_stays_fix_needed(
@@ -12235,7 +12362,7 @@ def test_delivery_step_worktree_missing_stays_fix_needed(
     fix_needed = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Orbi fix needed" in fix_needed
     assert "orbi-owner-repo-issue-39-a1b2c3d4" in fix_needed
-    assert "next step:" in fix_needed
+    assert "What Orbi will do next:" in fix_needed
 
 
 def test_delivery_step_worktree_missing_while_fix_needed_keeps_label(
@@ -12519,7 +12646,7 @@ def test_delivery_step_marks_blocked_when_pr_closed_unmerged(
     blocked = patches[-1][patches[-1].index("--field") + 1][len("body="):]
     assert "Orbi blocked" in blocked
     assert "closed without a merge" in blocked
-    assert "next step:" in blocked
+    assert "What Orbi will do next:" in blocked
     assert "<!-- orbi:run=a1b2c3d4 -->" in blocked
     # The blocked scene carries the actual role (Issue #82: both
     # opened-PR states are review states, so always `review`) and the
@@ -12723,7 +12850,7 @@ def test_delivery_step_logs_awaiting_without_bound_run_id(monkeypatch, caplog):
 
 def _review_round_env(
     monkeypatch, tmp_path, *, scene_base="main", label="ai-pr-opened",
-    with_worktree=True, review_result=False,
+    with_worktree=True, review_result=False, scene_round=0,
 ):
     """Shared fake GitHub/git scene for one direct `_run_review_round`
     call. Returns (edits, comments, reviews, publishes) capture lists;
@@ -12735,7 +12862,14 @@ def _review_round_env(
             return json.dumps({"comments": [{
                 "body": (
                     "<!-- orbi:run=a1b2c3d4 -->\n"
-                    "Orbi opened PR: "
+                    + ("<!-- orbi:scene:v1 " + json.dumps({
+                        "base_branch": scene_base,
+                        "base_sha": "abc123def456",
+                        "external": "", "pr_url": PR_URL,
+                        "review_round": scene_round,
+                        "run_id": "a1b2c3d4", "schema": 1,
+                    }) + " -->\n" if scene_round else "")
+                    + "Orbi opened PR: "
                     f"{PR_URL} (base_branch={scene_base} "
                     "base_sha=abc123def456 run_id=a1b2c3d4)"
                 ),
@@ -12824,6 +12958,21 @@ def test_run_review_round_returns_false_on_findings(
     assert len(reviews) == 1
     assert edits == []
     assert comments == []
+
+
+def test_run_review_round_passes_prior_comments_after_first_round(
+        monkeypatch, tmp_path,
+):
+    edits, comments, reviews, _ = _review_round_env(
+        monkeypatch, tmp_path, scene_round=1,
+    )
+    issue = {"number": 39, "title": "task", "body": ""}
+    assert runner._run_review_round(
+        PR_URL, issue,
+        runner.RunnerConfig(repo_dir=tmp_path, base_branch="main"), "owner/repo",
+    ) is False
+    assert "previous_comments" in reviews[0][1]
+    assert reviews[0][1]["previous_comments"]
 
 
 def test_run_review_round_returns_none_when_scene_base_differs(
@@ -12939,6 +13088,9 @@ def test_load_config_defaults_pi_model_keys_to_none(tmp_path):
     assert config.pi_provider is None
     assert config.pi_model is None
     assert config.pi_thinking is None
+    assert config.review_pi_provider is None
+    assert config.review_pi_model is None
+    assert config.review_pi_thinking is None
 
 
 def test_load_config_reads_pi_model_keys(tmp_path):
@@ -12947,13 +13099,19 @@ def test_load_config_reads_pi_model_keys(tmp_path):
         'source_repos = ["owner/repo"]\n'
         'pi_provider = "openai"\n'
         'pi_model = "gpt-5.6-sol"\n'
-        'pi_thinking = "medium"\n',
+        'pi_thinking = "medium"\n'
+        'review_pi_provider = "deepseek"\n'
+        'review_pi_model = "deepseek-chat"\n'
+        'review_pi_thinking = "high"\n',
         encoding="utf-8",
     )
     config = runner.load_config(config_path)
     assert config.pi_provider == "openai"
     assert config.pi_model == "gpt-5.6-sol"
     assert config.pi_thinking == "medium"
+    assert config.review_pi_provider == "deepseek"
+    assert config.review_pi_model == "deepseek-chat"
+    assert config.review_pi_thinking == "high"
 
 
 @pytest.mark.parametrize(
@@ -13076,6 +13234,31 @@ def test_run_review_passes_configured_model_args(monkeypatch, tmp_path):
     ]
 
 
+def test_run_review_uses_independent_model_args(monkeypatch, tmp_path):
+    (tmp_path / "prompt_review.md").write_text("REVIEW", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        runner, "stream_pi",
+        lambda command, **kwargs: calls.append((command, kwargs)) or "ok",
+    )
+    config = _model_config(
+        tmp_path, pi_provider="cheap", pi_model="fast",
+        pi_thinking="low", review_pi_provider="strong",
+        review_pi_model="careful", review_pi_thinking="high",
+    )
+    runner.run_review(
+        RunContext(run_id=config.run_id, issue=4, branch="branch",
+                   worktree=tmp_path, source_repo="owner/repo"),
+        {"number": 4, "url": "https://x/pull/4", "base_oid": "b1",
+         "head_oid": "h1", "head_ref": "h"}, config, 1,
+    )
+    command, kwargs = calls[0]
+    expected = [("--provider", "strong"), ("--model", "careful"),
+                ("--thinking", "high")]
+    assert _command_model_args(command) == expected
+    assert _command_model_args(kwargs["log_command"]) == expected
+
+
 def test_run_review_omits_model_args_when_not_configured(monkeypatch, tmp_path):
     """Default compatibility for the review session as well."""
     (tmp_path / "prompt_review.md").write_text("REVIEW", encoding="utf-8")
@@ -13131,6 +13314,20 @@ def _providers_config(tmp_path, providers, **toml_keys):
     config_path = tmp_path / "orbi.toml"
     config_path.write_text(toml, encoding="utf-8")
     return config_path
+
+
+def test_load_config_rejects_unknown_review_provider(tmp_path):
+    providers = {"providers": {"base": {
+        "baseUrl": "https://example.test", "api": "openai-completions",
+        "models": [{"id": "base-model"}],
+    }}}
+    config_path = _providers_config(
+        tmp_path, providers,
+        pi_provider='"base"', pi_model='"base-model"',
+        review_pi_provider='"missing"', review_pi_model='"base-model"',
+    )
+    with pytest.raises(ValueError, match="review provider selection invalid"):
+        runner.load_config(config_path)
 
 
 def test_load_config_pi_providers_absent_defaults_to_none(tmp_path):
@@ -14931,6 +15128,21 @@ def test_resolve_release_declaration_uses_the_fused_base_branch(
         Path("/repo"), "abc123",
     )
     assert declaration["base_branch"] == "develop"
+def test_resolve_release_declaration_rejects_non_version_milestone_titles(
+    monkeypatch,
+):
+    """The version format must fail HERE, before the delivery/CI wait
+    gates burn their budgets: the only format check used to live in
+    prepare_release_version, which runs after two <=1800s waits."""
+    monkeypatch.setattr(
+        release, "run_command", lambda *args, **kwargs: "pyproject.toml\n",
+    )
+    config = Mock(base_branch="main", repositories=[])
+    with pytest.raises(ValueError, match="v-prefixed"):
+        release.resolve_release_declaration(
+            {"milestone": {"title": "Release 5 beta"}}, {}, config, "o/r",
+            Path("/repo"), "abc123",
+        )
 
 
 def test_resolve_release_declaration_rejects_version_mismatch():
@@ -15470,6 +15682,57 @@ def test_process_ticket_only_keeps_original_error_when_failure_reporting_fails(m
     monkeypatch.setattr(seam, "_safe_publish", lambda **kwargs: None)
     with pytest.raises(RuntimeError, match="Pi failed"):
         runner.process_ticket_only(issue, runner.RunnerConfig(repo_dir=Path("/repo")), "o/r")
+
+
+def test_process_issue_keeps_pr_ready_label_when_scene_comment_5xx_exhausts(
+    monkeypatch, tmp_path, caplog,
+):
+    issue = {"number": 99, "title": "Normal", "body": "",
+             "labels": [{"name": "ai-ready"}]}
+    monkeypatch.setattr(seam, "is_release", lambda i: False)
+    monkeypatch.setattr(seam, "new_run_id", lambda: "a1b2c3d4")
+    monkeypatch.setattr(seam, "set_run_id", lambda rid: None)
+    monkeypatch.setattr(seam, "has_in_progress_label", lambda n, r: False)
+    monkeypatch.setattr(seam, "stable_branch_exists", lambda *a: False)
+    monkeypatch.setattr(seam, "freeze_base", lambda r, b: "abc123")
+    edits = []
+    monkeypatch.setattr(seam, "edit_issue",
+                        lambda *args, **kwargs: edits.append((args, kwargs)))
+    monkeypatch.setattr(seam, "set_active_run", lambda *args: None)
+    worktree = tmp_path / "wt"
+    worktree.mkdir()
+    monkeypatch.setattr(seam, "create_worktree", lambda *a, **kwargs: worktree)
+    def comment(number, *, repo, body):
+        if "Orbi opened PR:" in body:
+            raise subprocess.CalledProcessError(
+                1, ["gh", "issue", "comment"],
+                stderr="GraphQL: Something went wrong while executing your query",
+            )
+    monkeypatch.setattr(seam, "comment_issue", comment)
+    monkeypatch.setattr(seam, "ProgressPublisher", Mock())
+    monkeypatch.setattr(seam, "run_pi", lambda *a, **k: "done")
+    monkeypatch.setattr(seam, "deliver_pr", lambda *a, **k: "https://github.com/o/r/pull/1")
+    def run(command, **kwargs):
+        if command[0:3] == ["gh", "pr", "list"]:
+            return "[]"
+        return "abc123"
+    monkeypatch.setattr(seam, "run_command", run)
+    monkeypatch.setattr(seam, "delivery_step", Mock())
+    monkeypatch.setattr(seam, "activity_snapshot", lambda p: None)
+    monkeypatch.setattr(seam, "_safe_publish", lambda **k: None)
+    monkeypatch.setattr(seam, "format_end_scene", lambda **k: "end")
+    monkeypatch.setattr(seam, "issue_context", lambda r, n: "#n")
+    monkeypatch.setattr(seam, "format_run_scene", lambda *a, **k: "scene")
+    monkeypatch.setattr(seam, "_finish_progress", Mock())
+    monkeypatch.setattr(runner.time, "sleep", lambda _: None)
+
+    with caplog.at_level("ERROR"):
+        result = runner.process_issue(
+            issue, runner.RunnerConfig(base_branch="main", repo_dir=tmp_path), "o/r",
+        )
+    assert result == runner.IssueResult("pr", "https://github.com/o/r/pull/1")
+    assert any(kwargs.get("add") == runner.PR_OPENED_LABEL for _, kwargs in edits)
+    assert "PR remains ai-pr-opened" in caplog.text
 
 
 def test_process_issue_keeps_normal_flow_without_release_label(
@@ -17333,6 +17596,20 @@ def test_publish_release_creates_when_missing_and_returns_url(monkeypatch):
     assert "<!-- orbi:run=a1b2c3d4 -->" in notes
     assert "run_id=a1b2c3d4" in notes
     assert "Issue #99" in notes
+    assert notes.endswith("Released by Orbi · https://github.com/orbi-build/orbi")
+
+
+def test_publish_release_omits_attribution_when_disabled(monkeypatch):
+    calls = make_release_gh(monkeypatch, release_exists=False)
+    release.publish_release(
+        repo="o/r", tag="v0.3.0", version="v0.3.0",
+        release_commit="abc123", changelog="## Changelog",
+        scope_evidence=[], gate_evidence=[], test_evidence="ok",
+        run_id="a1b2c3d4", issue_number=99, attribution_footer=False,
+    )
+    create = next(c for c in calls if c[:3] == ["gh", "release", "create"])
+    notes = create[create.index("--notes") + 1]
+    assert "Released by Orbi" not in notes
 
 
 def test_publish_release_reuses_the_existing_release(monkeypatch):
@@ -20490,7 +20767,9 @@ def test_deliver_pr_absorbs_an_advanced_base(monkeypatch, tmp_path, caplog):
     assert "base_absorbed" in caplog.text
 
 
-def test_deliver_pr_creates_the_pr_when_absent(monkeypatch, tmp_path):
+@pytest.mark.parametrize("attribution_footer, expected_footer", [(True, True), (False, False)])
+def test_deliver_pr_creates_the_pr_when_absent(monkeypatch, tmp_path,
+                                              attribution_footer, expected_footer):
     """No open PR of the branch: the Runner creates it with the run
     marker and `Fixes #<issue>` in the body (the PR body contract is
     the Runner's obligation now, Issue #186)."""
@@ -20519,7 +20798,7 @@ def test_deliver_pr_creates_the_pr_when_absent(monkeypatch, tmp_path):
         return fake_deliver_run(command, **kwargs)
 
     monkeypatch.setattr(seam, "run_command", fake_run)
-    assert runner.deliver_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=DELIVER_BRANCH, worktree=tmp_path, source_repo="o/r"), "main", "9" * 40, issue_title="Closeout title", repo_dir=tmp_path) == FAKE_PR_URL
+    assert runner.deliver_pr(RunContext(run_id=FAKE_RUN_ID, issue=4, branch=DELIVER_BRANCH, worktree=tmp_path, source_repo="o/r"), "main", "9" * 40, issue_title="Closeout title", repo_dir=tmp_path, attribution_footer=attribution_footer) == FAKE_PR_URL
     create = [
         command for command in calls
         if command[:3] == ["gh", "pr", "create"]
@@ -20532,6 +20811,7 @@ def test_deliver_pr_creates_the_pr_when_absent(monkeypatch, tmp_path):
     body = command[command.index("--body") + 1]
     assert f"<!-- orbi:run={FAKE_RUN_ID} -->" in body
     assert "Fixes #4" in body
+    assert ("Built by Orbi from Issue #4 · https://github.com/orbi-build/orbi" in body) is expected_footer
 
 
 def test_deliver_pr_fails_fast_when_pr_create_fails(monkeypatch, tmp_path):

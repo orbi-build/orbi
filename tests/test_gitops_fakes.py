@@ -33,6 +33,20 @@ def test_stable_branch_exists_reads_the_remote_head(fake_git):
     assert gitops.stable_branch_exists(
         fake_git.repo_dir, "orbi/owner-repo-issue-7"
     ) is True
+
+
+def test_fake_git_rejects_invalid_pull_fetches(fake_git):
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        fake_git([
+            "git", "fetch", "origin", "pull/592/head",
+            "refs/remotes/origin/fix/outer",
+        ])
+    assert excinfo.value.returncode == 128
+    assert excinfo.value.stderr == (
+        "fatal: couldn't find remote ref refs/remotes/origin/fix/outer"
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        fake_git(["git", "fetch", "origin"])
     assert gitops.stable_branch_exists(
         fake_git.repo_dir, "orbi/owner-repo-issue-8"
     ) is False
@@ -95,6 +109,62 @@ def test_create_worktree_takes_over_an_external_branch(fake_git):
     assert any(
         command[:2] == ["git", "fetch"] for command in fake_git.calls
     )
+
+
+def test_create_worktree_fork_takeover_uses_forced_single_refspec(fake_git):
+    head_branch = "contributor-patch"
+    first_head = fake_git.commit([fake_git.base_sha])
+    second_head = fake_git.commit([fake_git.base_sha])
+    fake_git.pull_heads["592"] = first_head
+    gitops.create_worktree(
+        fake_git.repo_dir, "owner/repo", 7, "first", fake_git.base_sha,
+        existing_branch=True, branch=head_branch, pr_number=592,
+    )
+    fake_git.pull_heads["592"] = second_head
+    gitops.create_worktree(
+        fake_git.repo_dir, "owner/repo", 7, "second", fake_git.base_sha,
+        existing_branch=True, branch=head_branch, pr_number=592,
+    )
+    fetches = [call for call in fake_git.calls if call[:2] == ["git", "fetch"]]
+    assert fetches == [
+        ["git", "fetch", "origin",
+         "+pull/592/head:refs/remotes/origin/contributor-patch"],
+        ["git", "fetch", "origin",
+         "+pull/592/head:refs/remotes/origin/contributor-patch"],
+    ]
+    assert fake_git.origin[head_branch] == second_head
+
+
+def test_fake_git_rejects_missing_pull_head_ref(fake_git):
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        fake_git([
+            "git", "fetch", "origin",
+            "pull/999/head:refs/remotes/origin/contributor-patch",
+        ])
+    assert excinfo.value.returncode == 128
+    assert excinfo.value.stderr == "fatal: couldn't find remote ref pull/999/head"
+
+
+def test_fake_git_rejects_nonforced_overwrite_of_existing_pull_target(fake_git):
+    fake_git.pull_heads["592"] = fake_git.commit([fake_git.base_sha])
+    fake_git.origin["contributor-patch"] = fake_git.base_sha
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        fake_git([
+            "git", "fetch", "origin",
+            "pull/592/head:refs/remotes/origin/contributor-patch",
+        ])
+    assert excinfo.value.returncode == 2
+    assert "unsupported command" in excinfo.value.stderr
+
+
+def test_fake_git_rejects_pull_refspec_with_wrong_destination(fake_git):
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        fake_git([
+            "git", "fetch", "origin",
+            "pull/592/head:refs/heads/contributor-patch",
+        ])
+    assert excinfo.value.returncode == 2
+    assert "unsupported command" in excinfo.value.stderr
 
 
 def test_create_worktree_reuses_a_local_external_branch(fake_git):
