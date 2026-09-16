@@ -1,0 +1,48 @@
+# v0.5.10 发布（最新）
+
+`v0.5.10` 于 2026-09-16T03:11:54Z 发布为 GitHub Release [v0.5.10](https://github.com/orbi-build/orbi/releases/tag/v0.5.10)（release task：Issue #969）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.5.10` | 注解 tag `ad188b850d0bd807c1ca9986c0737333522141c8` | 提交 `f3e4196e064720393e68886763103e4969fae059` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- repeated_failure 告警先写 dedup 记号再发评论，评论失败后记号已落盘，该告警永不重发 ([Issue #929](https://github.com/orbi-build/orbi/issues/929); [PR #936](https://github.com/orbi-build/orbi/pull/936))
+- `milestone set` 对含 `"` 或 `\` 的 Milestone 标题产出无效 TOML 且命令报成功，下个 tick 起Runner 无法启动 ([Issue #930](https://github.com/orbi-build/orbi/issues/930); [PR #937](https://github.com/orbi-build/orbi/pull/937))
+- release 流程内联从 `[[repositories]]` 裸取 base_branch，跳过 `.github/orbi.toml` 策略覆盖；无策略文件时 dev 路径又读不到 entry 值——两条路径对同一仓库解析出不同基准分支 ([Issue #931](https://github.com/orbi-build/orbi/issues/931); [PR #942](https://github.com/orbi-build/orbi/pull/942))
+- milestone-only 发布票的版本格式校验在 `prepare_release_version` 才发生，位于两轮 gates 等待门之后——标题格式错误要白等最多 1 小时 ([Issue #932](https://github.com/orbi-build/orbi/issues/932); [PR #939](https://github.com/orbi-build/orbi/pull/939))
+
+### Reliability and recovery
+
+- runner_health 的 gh/git 调用硬编码 GNU `timeout` 前缀，macOS 部署上健康检查整链失效且失败被吞 ([Issue #928](https://github.com/orbi-build/orbi/issues/928); [PR #935](https://github.com/orbi-build/orbi/pull/935))
+- #945 的 fork PR fetch 只修对一半：目标 ref 被拼成第二个源参数，六张接管票仍全部 ai-blocked ([Issue #963](https://github.com/orbi-build/orbi/issues/963); [PR #965](https://github.com/orbi-build/orbi/pull/965))
+
+### Documentation
+
+- 两处注释与代码行为不符（#864 同族漏网）：resume 信任判定漏了双通道表述、format_elapsed docstring 与整小时边界行为差一档 ([Issue #934](https://github.com/orbi-build/orbi/issues/934); [PR #938](https://github.com/orbi-build/orbi/pull/938))
+
+### Bug fixes
+
+- AGENTS.md 有 11 行未提交的产品定位段落挡住 base 同步，且仓库内无任何副本 ([Issue #948](https://github.com/orbi-build/orbi/issues/948); [PR #970](https://github.com/orbi-build/orbi/pull/970))
+
+## Contributors
+
+<a href="https://github.com/xqliu"><img src="https://avatars.githubusercontent.com/u/22554?v=4&s=48" width="32" height="32" alt="xqliu" /></a> <a href="https://github.com/zzuu080603"><img src="https://avatars.githubusercontent.com/u/225036550?u=e6906b0eff64377c19cd3a6831ae44fbd87afc77&v=4&s=48" width="32" height="32" alt="zzuu080603" /></a>
+
+- tag: `v0.5.10`
+- release commit: `f3e4196e064720393e68886763103e4969fae059`
+- release task: Issue #969
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit f3e4196e064720393e68886763103e4969fae059 (the #268 CI-wait gate; no local test execution)
+
+
+Released by Orbi · https://github.com/orbi-build/orbi
