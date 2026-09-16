@@ -259,14 +259,14 @@ jobs:
         run: |
           version="${release_ref#v}"
           python3 -m venv /tmp/orbi-pypi-smoke
-          timeout 300 bash -c '
-            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+          timeout 960 bash -c '
+            for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
               if "$1" install --quiet "orbi-cli==$2"; then
                 echo "installed orbi-cli==$2 from PyPI"
                 exit 0
               fi
               echo "attempt $attempt: orbi-cli==$2 not on PyPI yet"
-              sleep 20
+              sleep 60
             done
             echo "orbi-cli==$2 did not appear on PyPI within the retry budget" >&2
             exit 1

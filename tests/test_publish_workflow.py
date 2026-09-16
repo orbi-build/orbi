@@ -218,8 +218,14 @@ def test_publish_workflow_publishes_via_trusted_publishing_only():
 
 def test_publish_workflow_verifies_the_published_pypi_version():
     commands = "\n".join(step_commands(steps_of(load_workflow(), "verify-pypi")))
-    assert "timeout 300" in commands, (
+    assert "timeout 960" in commands, (
         "the PyPI propagation wait is bounded (Issue #95), then fails fast"
+    )
+    assert "for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15;" in commands, (
+        "the PyPI propagation retry budget must allow 15 attempts"
+    )
+    assert "sleep 60" in commands, (
+        "the PyPI propagation retry interval must allow index propagation"
     )
     assert 'orbi-cli==$2' in commands or 'orbi-cli=="' in commands or 'orbi-cli==$version' in commands, (
         "the exact published version must be installed from PyPI "
