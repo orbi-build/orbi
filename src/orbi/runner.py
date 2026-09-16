@@ -296,6 +296,9 @@ WORKTREE_RETAIN_HOURS = 72
 _WORKTREE_INFLIGHT_LABELS = frozenset({
     IN_PROGRESS_LABEL, PR_OPENED_LABEL, FIX_NEEDED_LABEL,
 })
+# Terminal state takes precedence over stale in-flight labels when deciding
+# whether a closed Issue's unreachable worktree can be reclaimed.
+_WORKTREE_TERMINAL_LABELS = frozenset({MERGED_LABEL, BLOCKED_LABEL})
 # The task worktree name `worktree_path` derives: orbi-{slug}-issue-{N}-{run_id}.
 _WORKTREE_NAME_PATTERN = re.compile(
     r"^orbi-(?P<slug>.+)-issue-(?P<number>\d+)-(?P<run_id>[0-9a-f]{8})$",
@@ -3674,10 +3677,11 @@ def reclaim_released_worktrees(config: RunnerConfig, *,
       external takeover checks out a head branch whose directory name
       is not run-id-derived);
     - the Issue must be closed (ONE batched `gh issue list` per involved
-      repo), past `worktree_retain_hours` since its `closedAt`, and free
-      of in-flight labels — a human closing an in-flight Issue leaves
-      the label, and the scene survives until the delivery path
-      resolves it.
+      repo), past `worktree_retain_hours` since its `closedAt`, and either
+      have a terminal label or be free of in-flight labels — a human
+      closing an in-flight Issue leaves the label, and the scene survives
+      until the delivery path resolves it. Terminal labels (`ai-merged` or
+      `ai-blocked`) take precedence over stale in-flight labels.
 
     A closed Issue is never resumed (`pick_resumable_delivery` scans
     open Issues only) and nothing reads the task worktree after the
@@ -3755,7 +3759,8 @@ def reclaim_released_worktrees(config: RunnerConfig, *,
             label.get("name") for label in raw_labels
             if isinstance(label, dict)
         } if isinstance(raw_labels, list) else set()
-        if labels & _WORKTREE_INFLIGHT_LABELS:
+        if (not labels & _WORKTREE_TERMINAL_LABELS
+                and labels & _WORKTREE_INFLIGHT_LABELS):
             continue
         reclaimable.append((closed_at, path))
     reclaimable.sort(key=lambda item: item[0])

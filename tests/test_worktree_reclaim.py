@@ -25,8 +25,10 @@ import dataclasses
 from orbi import runner
 import orbi.journal as journal
 from orbi.delivery_labels import (
+    BLOCKED_LABEL,
     FIX_NEEDED_LABEL,
     IN_PROGRESS_LABEL,
+    MERGED_LABEL,
     PR_OPENED_LABEL,
 )
 from seam import seam
@@ -207,6 +209,35 @@ def test_keeps_issue_closed_mid_run_with_inflight_label(
     )
     runner.reclaim_released_worktrees(_config(repo), now=NOW)
     assert str(worktree) in _registered(repo)
+
+
+@pytest.mark.parametrize("terminal", [MERGED_LABEL, BLOCKED_LABEL])
+@pytest.mark.parametrize("inflight", [IN_PROGRESS_LABEL, PR_OPENED_LABEL,
+                                      FIX_NEEDED_LABEL])
+def test_terminal_label_overrides_inflight_protection(
+    tmp_path, monkeypatch, terminal, inflight,
+):
+    """A terminal Issue is reclaimable even when stale in-flight labels
+    remain from the completed delivery."""
+    repo = _git_repo(tmp_path / "repo")
+    worktree = _register(repo, "orbi-owner-repo-issue-15-abcd1234")
+    _stub_closed(
+        monkeypatch, _closed(15, hours_ago=100, labels=[terminal, inflight]),
+    )
+    runner.reclaim_released_worktrees(_config(repo), now=NOW)
+    assert str(worktree) not in _registered(repo)
+
+
+@pytest.mark.parametrize("terminal", [MERGED_LABEL, BLOCKED_LABEL])
+def test_reclaims_closed_issue_with_terminal_label(
+    tmp_path, monkeypatch, terminal,
+):
+    """A closed Issue with only a terminal label is reclaimable."""
+    repo = _git_repo(tmp_path / "repo")
+    worktree = _register(repo, "orbi-owner-repo-issue-16-abcd1234")
+    _stub_closed(monkeypatch, _closed(16, hours_ago=100, labels=[terminal]))
+    runner.reclaim_released_worktrees(_config(repo), now=NOW)
+    assert str(worktree) not in _registered(repo)
 
 
 def test_skips_unrecognized_names_and_unconfigured_slugs(
