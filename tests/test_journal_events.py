@@ -346,15 +346,26 @@ def test_no_module_outside_journal_and_cli_builds_kind_lines():
 
 
 def _unregistered_event_calls(source: str) -> list[tuple[int, str]]:
-    """(lineno, kind) of journal.event calls with an unregistered kind."""
+    """(lineno, kind) of event calls with an unregistered kind.
+
+    `runner.py` imports the emission point directly as ``event``; recognize
+    that form as well as ``journal.event`` so the registry net covers every
+    literal kind in the Runner.
+    """
     tree = ast.parse(source)
     found: list[tuple[int, str]] = []
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "event"
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "journal"):
+        if not isinstance(node, ast.Call):
+            continue
+        is_event_call = (
+            isinstance(node.func, ast.Name) and node.func.id == "event"
+        ) or (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "event"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "journal"
+        )
+        if not is_event_call:
             continue
         if not node.args:
             continue
@@ -372,9 +383,13 @@ def test_event_call_detector_flags_unregistered_kinds_only():
         "journal.event(kind_variable)\n"
         "journal.event()\n"
         "journal.event('definitely_not_registered', x=1)\n"
+        "event('another_unregistered', x=1)\n"
         "other.event('also_unregistered')\n"
     )
-    assert _unregistered_event_calls(source) == [(4, "definitely_not_registered")]
+    assert _unregistered_event_calls(source) == [
+        (4, "definitely_not_registered"),
+        (5, "another_unregistered"),
+    ]
 
 
 def _unregistered_event_offenders(
