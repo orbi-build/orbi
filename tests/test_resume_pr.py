@@ -34,6 +34,48 @@ FAKE_WORKTREE = "/srv/repo/.worktrees/orbi-owner-repo-issue-9-a1b2c3d4"
 FAKE_PR_URL = "https://github.com/owner/repo/pull/9"
 
 
+def test_missing_pr_scene_recovery_republishes_from_run_state(monkeypatch):
+    issue = {"number": 9}
+    worktree = Path("/tmp/delivery")
+    state = {"branch": "orbi/owner-repo-issue-9"}
+    monkeypatch.setitem(
+        runner.__dict__, "worktree_resume_scene",
+        lambda *_args: (FAKE_RUN_ID, worktree),
+    )
+    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: state)
+    monkeypatch.setitem(
+        runner.__dict__, "open_pr_for_branch",
+        lambda *_args: {"baseRefName": "main", "baseRefOid": "a" * 40,
+                        "url": FAKE_PR_URL},
+    )
+    posted = []
+    monkeypatch.setitem(
+        runner.__dict__, "comment_issue", lambda number, **kwargs: posted.append(kwargs["body"]),
+    )
+    found = runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo"))
+    assert found["run_id"] == FAKE_RUN_ID
+    assert found["pr_url"] == FAKE_PR_URL
+    assert posted and "Orbi opened PR:" in posted[0]
+
+
+def test_missing_pr_scene_retry_stays_recoverable_on_write_failure(monkeypatch):
+    issue = {"number": 9}
+    worktree = Path("/tmp/delivery")
+    monkeypatch.setitem(
+        runner.__dict__, "worktree_resume_scene",
+        lambda *_args: (FAKE_RUN_ID, worktree),
+    )
+    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
+    monkeypatch.setitem(
+        runner.__dict__, "open_pr_for_branch",
+        lambda *_args: {"baseRefName": "main", "baseRefOid": "a" * 40,
+                        "url": FAKE_PR_URL},
+    )
+    monkeypatch.setitem(runner.__dict__, "comment_issue", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("down")))
+    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
+    assert runner._has_recoverable_pr_scene(issue, "owner/repo", Path("/tmp/repo"))
+
+
 @pytest.fixture(autouse=True)
 def _reset_run_id(monkeypatch):
     """Each test starts without a bound run id."""

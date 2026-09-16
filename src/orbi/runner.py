@@ -2987,8 +2987,10 @@ def _has_recoverable_pr_scene(
         resume = worktree_resume_scene(repo_dir, repo, int(issue["number"]))
         if resume is None:
             return False
-        state = read_run_state(resume[1])
-        return bool(state and open_pr_for_branch(repo_dir, state["branch"]))
+        # The local run state is enough to defer blocking.  A transient
+        # failure while probing the PR must not turn the recovery retry
+        # itself into a terminal decision.
+        return read_run_state(resume[1]) is not None
     except Exception:
         return False
 
