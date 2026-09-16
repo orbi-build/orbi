@@ -49,6 +49,7 @@
           {
             "group": "Releases",
             "pages": [
+              "release-v0.5.14",
               "release-v0.5.13",
               "release-v0.5.12",
               "release-v0.5.11",
@@ -125,6 +126,7 @@
           {
             "group": "发布",
             "pages": [
+              "zh/release-v0.5.14",
               "zh/release-v0.5.13",
               "zh/release-v0.5.12",
               "zh/release-v0.5.11",
