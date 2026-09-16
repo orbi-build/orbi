@@ -1,0 +1,36 @@
+# v0.5.13 release (latest)
+
+`v0.5.13` was published 2026-09-16T20:33:20Z as the GitHub Release [v0.5.13](https://github.com/orbi-build/orbi/releases/tag/v0.5.13) (release task: Issue #989).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.5.13` | annotated tag `fe03dd0d2b645ea54036db2281d976488a0ba37a` | commit `8773200e2fe5e4f598f17bd07e596bd6248cb69d` |
+
+## Release notes
+
+## Changelog
+
+### Reliability and recovery
+
+- gh 命令的瞬时服务端故障把已成功的交付判成 ai-blocked：PR 已开出仍标失败 ([Issue #983](https://github.com/orbi-build/orbi/issues/983); [PR #991](https://github.com/orbi-build/orbi/pull/991))
+
+### Bug fixes
+
+- 评审给出仓库中不存在的 verdict head 时无限重试，review_round 永不推进 ([Issue #988](https://github.com/orbi-build/orbi/issues/988); [PR #990](https://github.com/orbi-build/orbi/pull/990))
+
+## Contributors
+
+<a href="https://github.com/xqliu"><img src="https://avatars.githubusercontent.com/u/22554?v=4&s=48" width="32" height="32" alt="xqliu" /></a>
+
+- tag: `v0.5.13`
+- release commit: `8773200e2fe5e4f598f17bd07e596bd6248cb69d`
+- release task: Issue #989
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit 8773200e2fe5e4f598f17bd07e596bd6248cb69d (the #268 CI-wait gate; no local test execution)
+
+
+Released by Orbi · https://github.com/orbi-build/orbi
