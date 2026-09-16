@@ -122,6 +122,16 @@ def test_has_recoverable_pr_scene_handles_probe_failure(monkeypatch):
     )
 
 
+def test_has_recoverable_pr_scene_handles_outer_probe_failure(monkeypatch):
+    monkeypatch.setitem(
+        runner.__dict__, "worktree_resume_scene",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("down")),
+    )
+    assert not runner._has_recoverable_pr_scene(
+        {"number": 9}, "owner/repo", Path("/tmp/repo"),
+    )
+
+
 def test_has_recoverable_pr_scene_handles_missing_state(monkeypatch):
     worktree = Path("/tmp/delivery")
     monkeypatch.setitem(
