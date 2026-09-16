@@ -35,6 +35,15 @@ def test_run_command_returns_stdout_and_logs_the_command(caplog):
     assert "out_42" not in caplog.text
 
 
+def test_run_command_check_false_returns_completed_process(caplog):
+    result = journal.run_command(
+        [sys.executable, "-c", "print('probe')"], check=False,
+    )
+    assert isinstance(result, subprocess.CompletedProcess)
+    assert result.returncode == 0
+    assert result.stdout == "probe\n"
+
+
 def test_run_command_fail_fast_logs_and_raises(caplog):
     with caplog.at_level(logging.ERROR, logger="orbi.bootstrap"):
         with pytest.raises(subprocess.CalledProcessError) as excinfo:
