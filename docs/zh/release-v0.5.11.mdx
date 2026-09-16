@@ -1,0 +1,36 @@
+# v0.5.11 发布（最新）
+
+`v0.5.11` 于 2026-09-16T08:23:35Z 发布为 GitHub Release [v0.5.11](https://github.com/orbi-build/orbi/releases/tag/v0.5.11)（release task：Issue #978）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.5.11` | 注解 tag `b7c8fec8b6980e9360908b24b3bfa8328aa1c939` | 提交 `3df4a3beaef6ea0130a78f52551788f162b0e9ac` |
+
+## Release notes
+
+## Changelog
+
+### Observability
+
+- review_human_decision_required 未注册进 JOURNAL_EVENTS，人工决策点反而让整个 tick 崩溃并停摆 ([Issue #975](https://github.com/orbi-build/orbi/issues/975); [PR #976](https://github.com/orbi-build/orbi/pull/976))
+
+### Bug fixes
+
+- macOS CI 上 test_stream_pi_idle_lines_carry_run_id_exactly_once 依赖真实墙钟，间歇失败并卡住发版门 ([Issue #971](https://github.com/orbi-build/orbi/issues/971); [PR #977](https://github.com/orbi-build/orbi/pull/977))
+
+## Contributors
+
+<a href="https://github.com/xqliu"><img src="https://avatars.githubusercontent.com/u/22554?v=4&s=48" width="32" height="32" alt="xqliu" /></a>
+
+- tag: `v0.5.11`
+- release commit: `3df4a3beaef6ea0130a78f52551788f162b0e9ac`
+- release task: Issue #978
+
+## Tests
+
+- release tests gated by GitHub Actions CI on the release commit 3df4a3beaef6ea0130a78f52551788f162b0e9ac (the #268 CI-wait gate; no local test execution)
+
+
+Released by Orbi · https://github.com/orbi-build/orbi
