@@ -15109,6 +15109,23 @@ def test_resolve_release_declaration_requires_explicit_version_file(monkeypatch)
         )
 
 
+def test_resolve_release_declaration_rejects_non_version_milestone_titles(
+    monkeypatch,
+):
+    """The version format must fail HERE, before the delivery/CI wait
+    gates burn their budgets: the only format check used to live in
+    prepare_release_version, which runs after two <=1800s waits."""
+    monkeypatch.setattr(
+        release, "run_command", lambda *args, **kwargs: "pyproject.toml\n",
+    )
+    config = Mock(base_branch="main", repositories=[])
+    with pytest.raises(ValueError, match="v-prefixed"):
+        release.resolve_release_declaration(
+            {"milestone": {"title": "Release 5 beta"}}, {}, config, "o/r",
+            Path("/repo"), "abc123",
+        )
+
+
 def test_resolve_release_declaration_rejects_version_mismatch():
     config = Mock(base_branch="main", repositories=[])
     with pytest.raises(ValueError, match="does not match.*Milestone"):
