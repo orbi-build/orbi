@@ -1709,6 +1709,23 @@ def load_repo_policy(config: RunnerConfig,
     )
 
 
+def resolve_source_base_branch(config: RunnerConfig, source_repo: str,
+                               policy: RepoPolicy | None) -> RunnerConfig:
+    """Fuse one source repo's base branch unconditionally: the
+    `[[repositories]]` entry fallback first, then the repository
+    policy's override when a policy file exists. Every consumer
+    (dev path AND the release state machine) reads `config.base_branch`
+    and must never re-derive it from the raw entry — the raw entry
+    skips the policy layer."""
+    fused = replace(
+        config,
+        base_branch=repository_base_branch(config, source_repo),
+    )
+    if policy is None:
+        return fused
+    return resolve_policy(fused, policy)
+
+
 def apply_repo_policy(config: RunnerConfig, source_repo: str,
                       policy: RepoPolicy) -> RunnerConfig:
     """Resolve one repo's policy over the host fallback."""
@@ -9189,8 +9206,13 @@ def main(argv: list[str] | None = None) -> int:
                 },
             )
             return 0
-        if repo_policy is not None:
-            config = apply_repo_policy(config, source_repo, repo_policy)
+        # Fuse the entry fallback UNCONDITIONALLY: with no policy file
+        # the dev path used to read the host base_branch while the
+        # release path re-derived the entry value — two paths, two base
+        # branches for the same repo.
+        config = resolve_source_base_branch(
+            config, source_repo, repo_policy,
+        )
         if scene is not None:
             # An open PR is a recoverable review state: resume the
             # same run on the same branch, worktree and PR.

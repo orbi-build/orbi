@@ -15109,6 +15109,25 @@ def test_resolve_release_declaration_requires_explicit_version_file(monkeypatch)
         )
 
 
+def test_resolve_release_declaration_uses_the_fused_base_branch(
+        monkeypatch):
+    """The config a release run receives is already fused:
+    repository entry -> .github/orbi.toml policy override. The inline
+    entry lookup re-read the RAW entry, discarding the policy layer:
+    policy=develop + entry=main resolved dev to develop and release to
+    main — freezing and pushing the release onto the wrong branch."""
+    monkeypatch.setattr(
+        release, "run_command", lambda *args, **kwargs: "pyproject.toml\n",
+    )
+    config = Mock(
+        base_branch="develop",
+        repositories=[{"github": "o/r", "base_branch": "main"}],
+    )
+    declaration = release.resolve_release_declaration(
+        {"milestone": {"title": "v0.5.8"}}, {}, config, "o/r",
+        Path("/repo"), "abc123",
+    )
+    assert declaration["base_branch"] == "develop"
 def test_resolve_release_declaration_rejects_non_version_milestone_titles(
     monkeypatch,
 ):
