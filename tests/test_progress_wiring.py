@@ -1150,85 +1150,41 @@ def test_process_issue_pr_opened_scene_has_no_duplicate_milestone(
     assert not any("Orbi: PR opened" in body for body in posted)
 
 
-def test_process_issue_scene_comment_failure_fails_delivery(
+def test_process_issue_post_pr_comment_failure_keeps_delivery_open(
     monkeypatch, tmp_path, caplog,
 ):
-    """Issue #79: the `Orbi opened PR:` scene comment is NOT a
-    bypass — the next tick's resume (Issue #45/#89) parses it to recover
-    run_id, base and PR, so a failure there is a real delivery failure:
-    the Issue is marked `ai-blocked` with a `Orbi failed`
-    comment, and `process_issue` returns `None` so the tick ends cleanly
-    (Issue #239: the handled failure never re-raises to crash the
-    service). The scene comment stays fail-fast (the resume contract is
-    unchanged); only the `ProgressPublisher` steps around it (milestone,
-    delivered finish) are bypasses. The failure happens AFTER the
-    opened-PR transition, so the terminal state is `ai-blocked` ALONE
-    (the docs/workflow.mdx label lifecycle removes `ai-pr-opened` on
-    terminal failure) — never `ai-pr-opened` + `ai-blocked`, which no
-    scan would own."""
+    """A notification failure after PR creation is a pure bypass.
+
+    The PR and ``ai-pr-opened`` label are the delivery result; the
+    notification is observable but must not send the Issue to blocked.
+    """
     calls, posted = make_failing_gh(
         monkeypatch,
         lambda command: (
             command[:2] == ["gh", "issue"]
             and "comment" in command
-            # Only the scene comment POST fails: the `Orbi
-            # failed` comment embeds the scene body in its error
-            # detail, so it must not 404 in the fake.
             and "Orbi opened PR:" in command[-1]
-            and "Orbi failed" not in command[-1]
         ),
     )
     patch_process_deps(monkeypatch, tmp_path)
     edits = []
     monkeypatch.setattr(seam, "edit_issue", lambda number, **kwargs:
                         edits.append(kwargs))
-    caplog.set_level("ERROR")
+    caplog.set_level("WARNING")
 
-    # Issue #239: the failure is terminal — `process_issue` returns
-    # `None` instead of re-raising; the terminal-state assertions below
-    # are unchanged.
-    assert runner.process_issue(make_issue(), make_config(tmp_path),
-                                "xqliu/orbi").kind == "failed"
+    result = runner.process_issue(make_issue(), make_config(tmp_path),
+                                  "xqliu/orbi")
 
-    # The delivery failed: the opened-PR transition is undone and the
-    # Issue is marked ai-blocked ALONE (the failure happened after the
-    # `ai-pr-opened` label was added, so the terminal state removes it
-    # instead of the already-removed claim label)...
+    assert result.url == "https://github.com/xqliu/orbi/pull/40"
     assert edits == [{
         "repo": "xqliu/orbi", "add": "ai-in-progress"},
         {"repo": "xqliu/orbi", "add": "ai-pr-opened",
          "remove": "ai-in-progress"},
-        {"repo": "xqliu/orbi", "add": "ai-blocked",
-         "remove": "ai-pr-opened"},
     ]
-    # ...with a run-marked `Orbi failed` comment naming the
-    # scene-comment failure...
-    comment_bodies = [
-        command[-1] for command in calls
-        if command[:2] == ["gh", "issue"] and "comment" in command
-    ]
-    failed = [body for body in comment_bodies
-              if "Orbi failed" in body]
-    assert failed, comment_bodies
-    assert "Orbi opened PR:" in failed[0]
-    assert "<!-- orbi:run=a1b2c3d4 -->" in failed[0]
-    # ...and the failure is NOT logged as a progress bypass (the scene
-    # comment is delivery, not observability).
-    assert not any("progress_publish_failed" in line
-                   for line in caplog.text.splitlines()), caplog.text
-    # The `PR opened` milestone was never posted: the scene comment is
-    # the first delivery-record step and its failure interrupts the
-    # flow before the bypass steps (a PR without a resumable scene must
-    # not be announced as delivered).
-    assert not any("Orbi: PR opened" in body for body in posted)
-    # The terminal blocked scene landed in the progress comment (the
-    # failure-path publishing, like the rest of the failure report).
-    assert any("Orbi: blocked" in body for body in posted)
-    last_patch = [c for c in calls if _progress_patch_of(c)][-1]
-    last_body = last_patch[last_patch.index("--field") + 1][len("body="):]
-    assert "Orbi blocked" in last_body
-    assert "Orbi opened PR:" in last_body
-
+    assert "progress_comment_failed" in caplog.text
+    assert "pr=https://github.com/xqliu/orbi/pull/40" in caplog.text
+    assert any(command[:2] == ["gh", "issue"] for command in calls)
+    assert not any("Orbi failed" in body for body in posted)
 
 def test_process_issue_publishing_failure_still_logs_run_end(
     monkeypatch, tmp_path, caplog,

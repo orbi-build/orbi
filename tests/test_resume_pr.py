@@ -34,6 +34,172 @@ FAKE_WORKTREE = "/srv/repo/.worktrees/orbi-owner-repo-issue-9-a1b2c3d4"
 FAKE_PR_URL = "https://github.com/owner/repo/pull/9"
 
 
+def test_missing_pr_scene_recovery_republishes_from_run_state(monkeypatch):
+    issue = {"number": 9}
+    worktree = Path("/tmp/delivery")
+    state = {"branch": "orbi/owner-repo-issue-9"}
+    monkeypatch.setitem(
+        runner.__dict__, "worktree_resume_scene",
+        lambda *_args: (FAKE_RUN_ID, worktree),
+    )
+    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: state)
+    monkeypatch.setitem(
+        runner.__dict__, "open_pr_for_branch",
+        lambda *_args: {"baseRefName": "main", "baseRefOid": "a" * 40,
+                        "url": FAKE_PR_URL},
+    )
+    posted = []
+    monkeypatch.setitem(
+        runner.__dict__, "comment_issue", lambda number, **kwargs: posted.append(kwargs["body"]),
+    )
+    found = runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo"))
+    assert found["run_id"] == FAKE_RUN_ID
+    assert found["pr_url"] == FAKE_PR_URL
+    assert posted and "Orbi opened PR:" in posted[0]
+
+
+def test_missing_pr_scene_retry_stays_recoverable_on_write_failure(monkeypatch):
+    issue = {"number": 9}
+    worktree = Path("/tmp/delivery")
+    monkeypatch.setitem(
+        runner.__dict__, "worktree_resume_scene",
+        lambda *_args: (FAKE_RUN_ID, worktree),
+    )
+    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
+    monkeypatch.setitem(
+        runner.__dict__, "open_pr_for_branch",
+        lambda *_args: {"baseRefName": "main", "baseRefOid": "a" * 40,
+                        "url": FAKE_PR_URL},
+    )
+    monkeypatch.setitem(runner.__dict__, "comment_issue", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("down")))
+    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
+    assert runner._has_recoverable_pr_scene(issue, "owner/repo", Path("/tmp/repo"))
+
+
+def test_missing_pr_scene_helper_handles_unavailable_state_pr_and_bad_pr(monkeypatch):
+    issue = {"number": 9}
+    worktree = Path("/tmp/delivery")
+    monkeypatch.setitem(runner.__dict__, "worktree_resume_scene", lambda *_args: (FAKE_RUN_ID, worktree))
+    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: None)
+    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
+    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
+    monkeypatch.setitem(runner.__dict__, "open_pr_for_branch", lambda *_args: None)
+    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
+    monkeypatch.setitem(runner.__dict__, "open_pr_for_branch", lambda *_args: {"url": FAKE_PR_URL})
+    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
+
+
+def test_missing_pr_scene_helper_handles_no_resume_and_unparseable_scene(monkeypatch):
+    issue = {"number": 9}
+    monkeypatch.setitem(runner.__dict__, "worktree_resume_scene", lambda *_args: None)
+    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
+    monkeypatch.setitem(runner.__dict__, "worktree_resume_scene", lambda *_args: (FAKE_RUN_ID, Path("/tmp/delivery")))
+    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
+    monkeypatch.setitem(runner.__dict__, "open_pr_for_branch", lambda *_args: {
+        "baseRefName": "main", "baseRefOid": "a" * 40, "url": FAKE_PR_URL,
+    })
+    monkeypatch.setitem(runner.__dict__, "comment_issue", lambda *_args, **_kwargs: None)
+    monkeypatch.setitem(runner.__dict__, "parse_pr_comment", lambda _body: None)
+    assert runner._recover_missing_pr_scene(issue, "owner/repo", Path("/tmp/repo")) is None
+
+
+def test_has_recoverable_pr_scene_handles_probe_failure(monkeypatch):
+    worktree = Path("/tmp/delivery")
+    monkeypatch.setitem(
+        runner.__dict__, "worktree_resume_scene",
+        lambda *_args: (FAKE_RUN_ID, worktree),
+    )
+    monkeypatch.setitem(
+        runner.__dict__, "read_run_state",
+        lambda _path: {"branch": "branch"},
+    )
+    monkeypatch.setitem(
+        runner.__dict__, "open_pr_for_branch",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("down")),
+    )
+    assert runner._has_recoverable_pr_scene(
+        {"number": 9}, "owner/repo", Path("/tmp/repo"),
+    )
+
+
+def test_has_recoverable_pr_scene_handles_outer_probe_failure(monkeypatch):
+    monkeypatch.setitem(
+        runner.__dict__, "worktree_resume_scene",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("down")),
+    )
+    assert not runner._has_recoverable_pr_scene(
+        {"number": 9}, "owner/repo", Path("/tmp/repo"),
+    )
+
+
+def test_has_recoverable_pr_scene_handles_missing_state(monkeypatch):
+    worktree = Path("/tmp/delivery")
+    monkeypatch.setitem(
+        runner.__dict__, "worktree_resume_scene",
+        lambda *_args: (FAKE_RUN_ID, worktree),
+    )
+    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: None)
+    assert not runner._has_recoverable_pr_scene(
+        {"number": 9}, "owner/repo", Path("/tmp/repo"),
+    )
+
+
+def test_has_recoverable_pr_scene_rejects_missing_pr(monkeypatch):
+    worktree = Path("/tmp/delivery")
+    monkeypatch.setitem(
+        runner.__dict__, "worktree_resume_scene",
+        lambda *_args: (FAKE_RUN_ID, worktree),
+    )
+    monkeypatch.setitem(
+        runner.__dict__, "read_run_state",
+        lambda _path: {"branch": "branch"},
+    )
+    monkeypatch.setitem(
+        runner.__dict__, "open_pr_for_branch", lambda *_args: None,
+    )
+    assert not runner._has_recoverable_pr_scene(
+        {"number": 9}, "owner/repo", Path("/tmp/repo"),
+    )
+
+
+def test_missing_pr_scene_recovery_clears_scene_timestamp(monkeypatch):
+    monkeypatch.setitem(runner.__dict__, "worktree_resume_scene", lambda *_args: (FAKE_RUN_ID, Path("/tmp/delivery")))
+    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: {"branch": "branch"})
+    monkeypatch.setitem(runner.__dict__, "open_pr_for_branch", lambda *_args: {
+        "baseRefName": "main", "baseRefOid": "a" * 40, "url": FAKE_PR_URL,
+    })
+    monkeypatch.setitem(runner.__dict__, "comment_issue", lambda *_args, **_kwargs: None)
+    recovered = {"run_id": FAKE_RUN_ID, "scene_at": "old"}
+    monkeypatch.setitem(runner.__dict__, "parse_pr_comment", lambda _body: recovered)
+    assert runner._recover_missing_pr_scene(
+        {"number": 9}, "owner/repo", Path("/tmp/repo"),
+    ) == {"run_id": FAKE_RUN_ID, "scene_at": None}
+
+
+def test_pick_missing_pr_scene_recovers_or_defers_or_blocks(monkeypatch, tmp_path):
+    issue = {"number": 9, "title": "delivery", "state": "OPEN",
+             "labels": [{"name": "ai-pr-opened"}], "body": ""}
+    monkeypatch.setitem(runner.__dict__, "slot_held_deliveries", lambda *_args: set())
+    monkeypatch.setitem(runner.__dict__, "list_issues", lambda *args, **kwargs: [issue])
+    monkeypatch.setitem(runner.__dict__, "issue_comments", lambda *args, **kwargs: [])
+    monkeypatch.setitem(runner.__dict__, "_route_external_pr_ticket", lambda *_args: False)
+    monkeypatch.setitem(runner.__dict__, "apply_label_patch", lambda *args, **kwargs: None)
+    monkeypatch.setitem(runner.__dict__, "comment_issue", lambda *args, **kwargs: None)
+    monkeypatch.setitem(runner.__dict__, "_recover_missing_pr_scene", lambda *args: {"run_id": FAKE_RUN_ID})
+    assert runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1, tmp_path,
+    )[1]["run_id"] == FAKE_RUN_ID
+    monkeypatch.setitem(runner.__dict__, "_recover_missing_pr_scene", lambda *args: None)
+    monkeypatch.setitem(runner.__dict__, "_has_recoverable_pr_scene", lambda *args: True)
+    assert runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1, tmp_path,
+    ) is None
+    monkeypatch.setitem(runner.__dict__, "_has_recoverable_pr_scene", lambda *args: False)
+    assert runner.pick_resumable_delivery(
+        "owner/repo", tmp_path / "slots", 1, tmp_path,
+    ) is None
+
+
 @pytest.fixture(autouse=True)
 def _reset_run_id(monkeypatch):
     """Each test starts without a bound run id."""

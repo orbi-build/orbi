@@ -2772,6 +2772,7 @@ def _route_external_pr_ticket(issue: dict, repo: str) -> bool:
 
 def pick_resumable_delivery(
     repo: str, slot_dir: Path, max_concurrency: int,
+    repo_dir: Path | None = None,
 ) -> tuple[dict, dict] | None:
     """Return the newest FREE opened-PR delivery and its resume scene.
 
@@ -2876,30 +2877,47 @@ def pick_resumable_delivery(
             # this one Issue: the scan moves on.
             if _route_external_pr_ticket(issue, repo):
                 continue
-            number = int(issue["number"])
-            LOGGER.error("issue=%s resume scene is missing: %s", number, exc)
-            marker = latest_run_marker(comments)
-            try:
-                apply_label_patch(
-                    number, repo=repo, event=EVENT_BLOCKED,
-                    current_labels={FIX_NEEDED_LABEL},
+            # A runner may have created the PR and label, then lost the
+            # scene comment write. Retry it from the durable local run
+            # state; keep ai-pr-opened for another tick if the retry fails.
+            recovered = (
+                _recover_missing_pr_scene(issue, repo, repo_dir)
+                if repo_dir is not None else None
+            )
+            if recovered is not None:
+                found = recovered
+            elif repo_dir is not None and _has_recoverable_pr_scene(
+                    issue, repo, repo_dir):
+                LOGGER.warning(
+                    "issue=%s resume scene recovery pending: %s",
+                    issue["number"], exc,
                 )
-                comment_issue(
-                    number, repo=repo,
-                    body=(f"{marker}\n" if marker else "") + (
-                        f"Orbi failed: {exc}; no trusted 'Orbi opened PR' "
-                        "scene comment exists on this Issue, so the "
-                        "opened-PR delivery cannot be resumed — this is an "
-                        "external precondition the AI cannot safely judge "
-                        "or fix, so it cannot be recovered automatically "
-                        "(the Issue stays ai-blocked until a human "
-                        "decides) — restore the trusted 'Orbi opened PR' "
-                        "scene comment or relabel the Issue ai-fix-needed"
-                    ),
-                )
-            except Exception:
-                LOGGER.exception("issue=%s failure reporting failed", number)
-            continue
+                continue
+            else:
+                number = int(issue["number"])
+                LOGGER.error("issue=%s resume scene is missing: %s", number, exc)
+                marker = latest_run_marker(comments)
+                try:
+                    apply_label_patch(
+                        number, repo=repo, event=EVENT_BLOCKED,
+                        current_labels={FIX_NEEDED_LABEL},
+                    )
+                    comment_issue(
+                        number, repo=repo,
+                        body=(f"{marker}\n" if marker else "") + (
+                            f"Orbi failed: {exc}; no trusted 'Orbi opened PR' "
+                            "scene comment exists on this Issue, so the "
+                            "opened-PR delivery cannot be resumed — this is an "
+                            "external precondition the AI cannot safely judge "
+                            "or fix, so it cannot be recovered automatically "
+                            "(the Issue stays ai-blocked until a human "
+                            "decides) — restore the trusted 'Orbi opened PR' "
+                            "scene comment or relabel the Issue ai-fix-needed"
+                        ),
+                    )
+                except Exception:
+                    LOGGER.exception("issue=%s failure reporting failed", number)
+                continue
         # The scan and the dispatch classify with the same pure
         # function. This scan owns the resumable route only: a candidate
         # that classifies elsewhere left the opened-PR state between the
@@ -2921,6 +2939,71 @@ def pick_resumable_delivery(
                 continue
         return issue, found
     return None
+
+
+def _recover_missing_pr_scene(
+    issue: dict, repo: str, repo_dir: Path,
+) -> dict | None:
+    """Retry a lost opened-PR scene from the durable local run state."""
+    number = int(issue["number"])
+    try:
+        resume = worktree_resume_scene(repo_dir, repo, number)
+        if resume is None:
+            return None
+        run_id, worktree = resume
+        state = read_run_state(worktree)
+        if state is None:
+            return None
+        pr = open_pr_for_branch(repo_dir, state["branch"])
+        if not pr:
+            return None
+        base_branch = pr.get("baseRefName")
+        base_sha = pr.get("baseRefOid")
+        url = pr.get("url")
+        if not all(isinstance(value, str) and value for value in
+                   (base_branch, base_sha, url)):
+            return None
+        body = opened_pr_comment_body(
+            run_id, f"base_branch={base_branch} base_sha={base_sha} "
+            f"run_id={run_id} priority=normal", url,
+        )
+        comment_issue(number, repo=repo, body=body)
+        found = parse_pr_comment(body)
+        if found is not None:
+            found["scene_at"] = None
+        return found
+    except Exception:
+        LOGGER.warning(
+            "issue=%s missing PR scene retry failed", number, exc_info=True,
+        )
+        return None
+
+
+def _has_recoverable_pr_scene(
+    issue: dict, repo: str, repo_dir: Path,
+) -> bool:
+    """Return whether a local run state and open PR anchor a retry.
+
+    A confirmed absence of the PR is not a recoverable notification
+    failure: otherwise a deleted/closed PR would leave the Issue in
+    ``ai-pr-opened`` forever.  Probe failures remain recoverable because
+    they may be transient GitHub/API failures.
+    """
+    try:
+        resume = worktree_resume_scene(repo_dir, repo, int(issue["number"]))
+        if resume is None:
+            return False
+        state = read_run_state(resume[1])
+        if state is None:
+            return False
+        try:
+            return open_pr_for_branch(repo_dir, state["branch"]) is not None
+        except Exception:
+            # A transient failure while probing the PR must not turn the
+            # recovery retry itself into a terminal decision.
+            return True
+    except Exception:
+        return False
 
 
 def block_scene_failure(issue: dict, error: ValueError, repo: str,
@@ -3271,9 +3354,14 @@ def pick_next_delivery(
             reconcile_orphan_prs(repo, tick_run_id)
         except Exception:
             LOGGER.exception("orphan_pr_reconcile_failed repo=%s", repo)
-        selected = pick_resumable_delivery(
-            repo, slot_dir, max_concurrency,
-        )
+        if config is None:
+            selected = pick_resumable_delivery(
+                repo, slot_dir, max_concurrency,
+            )
+        else:
+            selected = pick_resumable_delivery(
+                repo, slot_dir, max_concurrency, config.repo_dir,
+            )
         if selected is not None:
             issue, scene = selected
             return repo, issue, scene
@@ -7722,14 +7810,17 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 ),
             )
         except Exception as exc:
-            # Permission/validation errors retain today's fail-fast
-            # behavior. Only an exhausted server-side retry is recoverable.
-            if not isinstance(exc, subprocess.CalledProcessError) \
-                    or not github._is_transient_gh_write_error(exc):
-                raise
-            LOGGER.exception(
-                "issue=%s opened_pr_scene_comment_failed; "
-                "PR remains ai-pr-opened", number,
+            # The PR is the delivery boundary: notification failure must
+            # never turn an already-open PR into a blocked delivery. The
+            # next tick can retry the notification from the PR scene.
+            LOGGER.warning(
+                "issue=%s post-PR notification failed pr=%s: %s",
+                number, pr_url, exc,
+            )
+            event(
+                "progress_comment_failed", level=logging.WARNING,
+                issue=issue_context(source_repo, number), pr=pr_url,
+                reason=str(exc),
             )
         if config.human_review_gate:
             # The human acceptance checklist — the readable
@@ -7747,9 +7838,15 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                         run_id=run_id, pr_url=pr_url,
                     ),
                 )
-            except Exception:
-                LOGGER.exception(
-                    "issue=%s human_review_checklist_failed", number,
+            except Exception as exc:
+                LOGGER.warning(
+                    "issue=%s post-PR notification failed pr=%s: %s",
+                    number, pr_url, exc,
+                )
+                event(
+                    "progress_comment_failed", level=logging.WARNING,
+                    issue=issue_context(source_repo, number), pr=pr_url,
+                    reason=str(exc),
                 )
         publish(
             action=lambda: publisher.finish(_progress_body(_progress_state(

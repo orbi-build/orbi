@@ -15746,13 +15746,13 @@ def test_process_issue_keeps_pr_ready_label_when_scene_comment_5xx_exhausts(
     monkeypatch.setattr(seam, "_finish_progress", Mock())
     monkeypatch.setattr(runner.time, "sleep", lambda _: None)
 
-    with caplog.at_level("ERROR"):
+    with caplog.at_level("WARNING"):
         result = runner.process_issue(
             issue, runner.RunnerConfig(base_branch="main", repo_dir=tmp_path), "o/r",
         )
     assert result == runner.IssueResult("pr", "https://github.com/o/r/pull/1")
     assert any(kwargs.get("add") == runner.PR_OPENED_LABEL for _, kwargs in edits)
-    assert "PR remains ai-pr-opened" in caplog.text
+    assert "progress_comment_failed" in caplog.text
 
 
 def test_process_issue_keeps_normal_flow_without_release_label(

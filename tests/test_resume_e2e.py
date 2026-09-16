@@ -954,4 +954,4 @@ def test_e2e_human_review_checklist_failure_is_a_bypass(
         body for body in comments
         if human_review.CHECKLIST_MARKER in body
     ]
-    assert "human_review_checklist_failed" in caplog.text
+    assert "progress_comment_failed" in caplog.text
