@@ -7228,19 +7228,30 @@ def test_process_issue_isolates_scene_lookup_failure(monkeypatch, tmp_path, capl
 
 def make_fake_pi(tmp_path: Path, *, session_records: list[tuple[float, dict]],
                  stdout: str = "", stderr: str = "", exit_code: int = 0,
-                 sleep: float = 0.0) -> list[str]:
+                 sleep: float = 0.0, wait_after_record: int | None = None,
+                 release_file: Path | None = None) -> list[str]:
     """Build a command that mimics pi: appends session records over time."""
     session_dir = tmp_path / ".pi-session"
     session_dir.mkdir(exist_ok=True)
     records_literal = repr(session_records)
+    wait = ""
+    if wait_after_record is not None and release_file is not None:
+        wait = (
+            f"    if index == {wait_after_record}:\n"
+            f"        deadline = time.monotonic() + 5\n"
+            f"        while not os.path.exists({str(release_file)!r}):\n"
+            "            if time.monotonic() >= deadline: raise RuntimeError('release timeout')\n"
+            "            time.sleep(0.001)\n"
+        )
     script = (
-        "import json, sys, time\n"
+        "import json, os, sys, time\n"
         f"session = {str(session_dir / 'sess.jsonl')!r}\n"
         f"records = {records_literal}\n"
-        "for delay, record in records:\n"
+        "for index, (delay, record) in enumerate(records):\n"
         "    time.sleep(delay)\n"
         "    with open(session, 'a') as handle:\n"
         "        handle.write(json.dumps(record) + '\\n')\n"
+        f"{wait}"
         f"time.sleep({sleep!r})\n"
         f"sys.stdout.write({stdout!r})\n"
         f"sys.stderr.write({stderr!r})\n"
@@ -7474,10 +7485,11 @@ def test_stream_pi_idle_lines_carry_run_id_exactly_once(
     other high-frequency lines: prefix only, no `run=` field."""
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
     # The injected clock makes staleness deterministic: a1 is ten seconds
-    # stale and a2 is current regardless of how often the parent is polled.
-    # The records are deliberately ordered in separate writes; only their
-    # order, not the wall-clock gap, matters to this test.
+    # stale and a2 is current. The fake Pi waits for the streamer's
+    # progress callback after a1, so a slow CI runner cannot coalesce the
+    # two records into one poll.
     fake_now = lambda: 10.0
+    release_a2 = tmp_path / "release-a2"
     records = [
         (0.0, {"type": "session", "id": "sess-1",
                "timestamp": "1970-01-01T00:00:10+00:00", "cwd": "/w"}),
@@ -7492,9 +7504,15 @@ def test_stream_pi_idle_lines_carry_run_id_exactly_once(
     ]
     command = make_fake_pi(
         tmp_path, session_records=records, stdout="ok",
+        wait_after_record=1, release_file=release_a2,
     )
+
+    def release_after_a1(activity):
+        if activity["action"] == "assistant text" and not release_a2.exists():
+            release_a2.touch()
+
     with caplog.at_level("INFO"):
-        runner.stream_pi(command, ctx=RunContext(run_id="a1b2c3d4", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=10.0, activity_clock=fake_now), cwd=tmp_path)
+        runner.stream_pi(command, ctx=RunContext(run_id="a1b2c3d4", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=10.0, activity_clock=fake_now), cwd=tmp_path, progress=release_after_a1)
     idles = [m for m in caplog.messages if " pi_idle " in m]
     resumed = [m for m in caplog.messages if " pi_resumed " in m]
     assert len(idles) == 1
