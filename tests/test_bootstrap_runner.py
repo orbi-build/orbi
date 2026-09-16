@@ -7473,18 +7473,20 @@ def test_stream_pi_idle_lines_carry_run_id_exactly_once(
     """Issue #57: `pi_idle` / `pi_resumed` repeat the same rule as the
     other high-frequency lines: prefix only, no `run=` field."""
     monkeypatch.setattr(journal, "_CURRENT_RUN_ID", "a1b2c3d4")
-    # a1 is 4s stale when it is polled, so the idle warning fires;
-    # a2 arrives later with a fresh timestamp, so the resume does not
-    # re-trigger the warning.
+    # The injected clock makes staleness deterministic: a1 is ten seconds
+    # stale and a2 is current regardless of how often the parent is polled.
+    # The records are deliberately ordered in separate writes; only their
+    # order, not the wall-clock gap, matters to this test.
+    fake_now = lambda: 10.0
     records = [
         (0.0, {"type": "session", "id": "sess-1",
-               "timestamp": fresh_timestamp(-5), "cwd": "/w"}),
-        (0.1, {"type": "message", "id": "a1",
-               "timestamp": fresh_timestamp(-4),
+               "timestamp": "1970-01-01T00:00:10+00:00", "cwd": "/w"}),
+        (0.05, {"type": "message", "id": "a1",
+               "timestamp": "1970-01-01T00:00:00+00:00",
                "message": {"role": "assistant", "content": [
                    {"type": "text", "text": "one"}]}}),
-        (1.0, {"type": "message", "id": "a2",
-               "timestamp": fresh_timestamp(1.0),
+        (0.3, {"type": "message", "id": "a2",
+               "timestamp": "1970-01-01T00:00:10+00:00",
                "message": {"role": "assistant", "content": [
                    {"type": "text", "text": "two"}]}}),
     ]
@@ -7492,7 +7494,7 @@ def test_stream_pi_idle_lines_carry_run_id_exactly_once(
         tmp_path, session_records=records, stdout="ok",
     )
     with caplog.at_level("INFO"):
-        runner.stream_pi(command, ctx=RunContext(run_id="a1b2c3d4", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=0.5), cwd=tmp_path)
+        runner.stream_pi(command, ctx=RunContext(run_id="a1b2c3d4", issue=24, branch="b", worktree=tmp_path, source_repo="xqliu/orbi"), watch=PiWatchOptions(poll_interval=0.1, idle_warn_seconds=10.0, activity_clock=fake_now), cwd=tmp_path)
     idles = [m for m in caplog.messages if " pi_idle " in m]
     resumed = [m for m in caplog.messages if " pi_resumed " in m]
     assert len(idles) == 1

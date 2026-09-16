@@ -142,6 +142,10 @@ class PiWatchOptions:
     model_wait_dead_seconds: float = PI_MODEL_WAIT_DEAD_SECONDS
     model_wait_probe_url: str | None = None
     model_wait_probe_seconds: float = PI_MODEL_WAIT_PROBE_SECONDS
+    # Session activity timestamps are normally compared with wall clock
+    # time. Tests can provide a deterministic clock without changing the
+    # watcher's production defaults.
+    activity_clock: Callable[[], float] | None = None
 
 
 # Provider rate-limit retry: a Pi session killed by a
@@ -1054,6 +1058,7 @@ def stream_pi(
                 role=role, safe_command=safe_command, progress=progress,
                 pi_env=pi_env, session_dir=session_dir,
                 known_files=known_files,
+                activity_clock=watch.activity_clock,
             )
         except ProviderRateLimitedError as exc:
             if attempt >= PI_RATE_LIMIT_RETRIES:
@@ -1149,6 +1154,7 @@ def _stream_pi_once(
     pi_env: dict[str, str] | None,
     session_dir: Path,
     known_files: set[Path],
+    activity_clock: Callable[[], float] | None,
 ) -> str:
     """Spawn and stream ONE Pi session attempt: the whole
     pre-#321 `stream_pi` body — the `run_start` scene, the live
@@ -1157,7 +1163,11 @@ def _stream_pi_once(
     raises `ProviderRateLimitedError` so the `stream_pi` retry loop can
     back off and re-spawn; every other failure raises exactly as
     before. The full streamer contract lives on `stream_pi`."""
-    watcher = SessionWatcher(session_dir, known_files=known_files)
+    watcher = SessionWatcher(
+        session_dir,
+        now=time.time if activity_clock is None else activity_clock,
+        known_files=known_files,
+    )
     start = time.monotonic()
     # The initial state is what run_start already reported; activity lines
     # are only emitted when the visible fields actually change.
