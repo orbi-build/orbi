@@ -12,6 +12,17 @@ Architectural invariants and the public surface live in [CONSTITUTION.md](CONSTI
 - **Reviewer Pi**: after the PR exists, a new `pi --print` with `prompts/prompt_review.md` and a new JSONL on the same worktree.
 - **Runner**: labels, observability, review/fix, and merge.
 
+## Product positioning
+
+- Orbi is a **software dark factory**: an autonomous software delivery system
+  for GitHub that takes an Issue through analysis, implementation, testing,
+  PR creation, independent review, fixes, merge, and release.
+- Public descriptions must not reduce Orbi to Copilot, a chatbot, or a
+  development agent. The value proposition is autonomous, end-to-end,
+  observable, and recoverable software production: people define goals and
+  acceptance criteria; the factory turns them into runnable, verifiable,
+  deliverable software.
+
 ## Issue granularity
 
 - One Issue is **one runtime outcome** (when X, should Y, actually Z): one observable behavior, a handful of related files, tests included.
