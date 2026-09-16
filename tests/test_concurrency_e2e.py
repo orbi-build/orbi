@@ -1645,9 +1645,15 @@ def test_review_of_free_pr_is_not_starved_by_an_in_flight_delivery(
     # ---- Release issue 7's review: the SAME holder absorbs the base
     # issue 8's merge advanced (in-session, Issue #82) and merges.
     review_gate.write_text("go", encoding="utf-8")
+    # The review holder must absorb issue 8's merge before it can finish.
+    # Under CI's coverage-instrumented, shared-host load this serialized
+    # base-sync path can exceed the earlier three-minute test bound even
+    # though the runner is making progress (the failure that prompted
+    # Issue #980). Keep the bound finite, but allow the real user path
+    # enough time to complete instead of reporting a false starvation.
     wait_for(
         lambda: "ai-merged" in read_state(state)["issues"]["7"]["labels"],
-        timeout=180,
+        timeout=300,
         what="issue 7's review to finish and merge after the gate",
     )
     out, err = reviewer_7.communicate(timeout=120)
