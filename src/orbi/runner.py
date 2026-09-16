@@ -7699,14 +7699,17 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                 ),
             )
         except Exception as exc:
-            # Permission/validation errors retain today's fail-fast
-            # behavior. Only an exhausted server-side retry is recoverable.
-            if not isinstance(exc, subprocess.CalledProcessError) \
-                    or not github._is_transient_gh_write_error(exc):
-                raise
-            LOGGER.exception(
-                "issue=%s opened_pr_scene_comment_failed; "
-                "PR remains ai-pr-opened", number,
+            # The PR is the delivery boundary: notification failure must
+            # never turn an already-open PR into a blocked delivery. The
+            # next tick can retry the notification from the PR scene.
+            LOGGER.warning(
+                "issue=%s post-PR notification failed pr=%s: %s",
+                number, pr_url, exc,
+            )
+            event(
+                "progress_comment_failed", level=logging.WARNING,
+                issue=issue_context(source_repo, number), pr=pr_url,
+                reason=str(exc),
             )
         if config.human_review_gate:
             # The human acceptance checklist — the readable
@@ -7724,9 +7727,15 @@ def _dispatch_implementation(issue: dict, source_repo: str,
                         run_id=run_id, pr_url=pr_url,
                     ),
                 )
-            except Exception:
-                LOGGER.exception(
-                    "issue=%s human_review_checklist_failed", number,
+            except Exception as exc:
+                LOGGER.warning(
+                    "issue=%s post-PR notification failed pr=%s: %s",
+                    number, pr_url, exc,
+                )
+                event(
+                    "progress_comment_failed", level=logging.WARNING,
+                    issue=issue_context(source_repo, number), pr=pr_url,
+                    reason=str(exc),
                 )
         publish(
             action=lambda: publisher.finish(_progress_body(_progress_state(
