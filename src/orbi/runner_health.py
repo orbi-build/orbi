@@ -686,7 +686,6 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
             )
             if key in state["alerted"]:
                 continue
-            state["alerted"].append(key)
             event(
                 "health_degraded", check="repeated_failure",
                 issue=f"{finding['repo']}#{finding['issue']}",
@@ -703,6 +702,14 @@ def _run_health_check_locked(config: RunnerConfig, *, run_command) -> list[str]:
                 ],
                 timeout=GH_TIMEOUT_SECONDS,
             )
+            # Ship-then-record: the comment is the load-bearing channel.
+            # Recording the dedup key before the ship would let one
+            # failed call (network blip, 5xx) burn the key — the finally
+            # below saves the state unconditionally and the escalation
+            # comment would never be re-sent. The `health_degraded`
+            # journal event stays pre-ship on purpose: a retry repeats
+            # it, preserving the failure scene.
+            state["alerted"].append(key)
             alerts.append(f"repeated_failure:{finding['repo']}#{finding['issue']}")
         # 3. Stale pickup: system stuck vs queue idle.
         if stale_pickup_finding(state):
