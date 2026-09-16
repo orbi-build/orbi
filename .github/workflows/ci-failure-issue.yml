@@ -22,13 +22,12 @@
 # Minimal permission set, declared explicitly: `actions: read` (read the
 # completed CI run's jobs and the recorded failure job's log), `contents:
 # read` (check out the triage script),
-# `issues: write` (create/update/close the bug Issue), `pull-requests: read`
+# `issues: write` (create/update/close the bug Issue), `pull-requests: write`
 # (the triage resolves a pull_request run's PR number via
-# `GET commits/{sha}/pulls`, whose documented fine-grained permission is
-# "Pull requests" read — verified against the official REST docs; on this
-# public repo the endpoint would also answer without it via the
-# public-resources clause, but the declared set must match the official
-# requirement, not the visibility exception).
+# `GET commits/{sha}/pulls` and writes the failure/recovery comment on the
+# PR. The lookup needs Pull requests read and the comment needs Pull requests
+# write under the documented fine-grained permissions; the declared set must
+# cover both operations).
 name: CI Failure Issue
 
 on:
@@ -40,7 +39,7 @@ permissions:
   actions: read
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   triage:
