@@ -2982,15 +2982,26 @@ def _recover_missing_pr_scene(
 def _has_recoverable_pr_scene(
     issue: dict, repo: str, repo_dir: Path,
 ) -> bool:
-    """Return whether a local run state and open PR anchor a retry."""
+    """Return whether a local run state and open PR anchor a retry.
+
+    A confirmed absence of the PR is not a recoverable notification
+    failure: otherwise a deleted/closed PR would leave the Issue in
+    ``ai-pr-opened`` forever.  Probe failures remain recoverable because
+    they may be transient GitHub/API failures.
+    """
     try:
         resume = worktree_resume_scene(repo_dir, repo, int(issue["number"]))
         if resume is None:
             return False
-        # The local run state is enough to defer blocking.  A transient
-        # failure while probing the PR must not turn the recovery retry
-        # itself into a terminal decision.
-        return read_run_state(resume[1]) is not None
+        state = read_run_state(resume[1])
+        if state is None:
+            return False
+        try:
+            return open_pr_for_branch(repo_dir, state["branch"]) is not None
+        except Exception:
+            # A transient failure while probing the PR must not turn the
+            # recovery retry itself into a terminal decision.
+            return True
     except Exception:
         return False
 

@@ -104,7 +104,49 @@ def test_missing_pr_scene_helper_handles_no_resume_and_unparseable_scene(monkeyp
 
 
 def test_has_recoverable_pr_scene_handles_probe_failure(monkeypatch):
-    monkeypatch.setitem(runner.__dict__, "worktree_resume_scene", lambda *_args: (_ for _ in ()).throw(RuntimeError("down")))
+    worktree = Path("/tmp/delivery")
+    monkeypatch.setitem(
+        runner.__dict__, "worktree_resume_scene",
+        lambda *_args: (FAKE_RUN_ID, worktree),
+    )
+    monkeypatch.setitem(
+        runner.__dict__, "read_run_state",
+        lambda _path: {"branch": "branch"},
+    )
+    monkeypatch.setitem(
+        runner.__dict__, "open_pr_for_branch",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("down")),
+    )
+    assert runner._has_recoverable_pr_scene(
+        {"number": 9}, "owner/repo", Path("/tmp/repo"),
+    )
+
+
+def test_has_recoverable_pr_scene_handles_missing_state(monkeypatch):
+    worktree = Path("/tmp/delivery")
+    monkeypatch.setitem(
+        runner.__dict__, "worktree_resume_scene",
+        lambda *_args: (FAKE_RUN_ID, worktree),
+    )
+    monkeypatch.setitem(runner.__dict__, "read_run_state", lambda _path: None)
+    assert not runner._has_recoverable_pr_scene(
+        {"number": 9}, "owner/repo", Path("/tmp/repo"),
+    )
+
+
+def test_has_recoverable_pr_scene_rejects_missing_pr(monkeypatch):
+    worktree = Path("/tmp/delivery")
+    monkeypatch.setitem(
+        runner.__dict__, "worktree_resume_scene",
+        lambda *_args: (FAKE_RUN_ID, worktree),
+    )
+    monkeypatch.setitem(
+        runner.__dict__, "read_run_state",
+        lambda _path: {"branch": "branch"},
+    )
+    monkeypatch.setitem(
+        runner.__dict__, "open_pr_for_branch", lambda *_args: None,
+    )
     assert not runner._has_recoverable_pr_scene(
         {"number": 9}, "owner/repo", Path("/tmp/repo"),
     )
