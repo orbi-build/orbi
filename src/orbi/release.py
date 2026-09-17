@@ -1759,16 +1759,16 @@ def promote_release_docs_latest(*, worktree: Path, base_branch: str,
                     break
             break
     new_slug = f"release-{tag}"
+    if old_slug == new_slug:
+        return f"docs release {tag} latest marker already promoted"
     # The pre-publication page is intentionally not latest. Promote it only
     # after the GitHub Release exists, then remove the old marker in the same
     # docs commit.
     for directory, marker in (("docs", RELEASE_DOCS_LATEST_MARKER_EN),
                               ("docs/zh", RELEASE_DOCS_LATEST_MARKER_ZH)):
         path = worktree / directory / f"{new_slug}.mdx"
-        if not path.is_file():
-            raise RuntimeError(f"release docs page {path} is missing")
         lines = path.read_text(encoding="utf-8").splitlines()
-        if not lines or marker in lines[0]:
+        if marker in lines[0]:
             continue
         lines[0] += marker
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
