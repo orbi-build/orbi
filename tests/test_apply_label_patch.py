@@ -44,14 +44,16 @@ def test_apply_label_patch_blocked_with_only_non_delivery_labels_is_add_only(
     monkeypatch.setattr(seam, "edit_issue",
         lambda *args, **kwargs: calls.append((args, kwargs)),
     )
-    # `ai-blocked` is not a delivery-state label, so the remove list is
-    # empty: one add-only call.
+    # The stale `ai-ready` (the #14 loop) is cleared with the blocked
+    # add: the first edit_issue call carries both, the terminal state
+    # is `ai-blocked` ALONE.
     github.apply_label_patch(
         7, repo="o/r", event=EVENT_BLOCKED,
         current_labels={"ai-ready", "ai-blocked"},
     )
     assert calls == [
-        ((7,), {"repo": "o/r", "add": "ai-blocked"}),
+        ((7,), {"repo": "o/r", "add": "ai-blocked",
+                "remove": "ai-ready"}),
     ]
 
 

@@ -132,6 +132,13 @@ def label_patch(event: str, current_labels) -> tuple[list[str], list[str]]:
         to_remove = [
             label for label in _DELIVERY_STATE_LABELS if label in current
         ]
+        # The ready label is the queue entry, not a delivery state: a
+        # blocked terminal must clear it too, or the pickup scan
+        # re-claims the already-terminal Issue every tick (the #14
+        # ai-in-progress add/remove loop, 2026-09-17). The terminal
+        # state is BLOCKED ALONE.
+        if READY_LABEL in current:
+            to_remove.append(READY_LABEL)
         return ([BLOCKED_LABEL], to_remove)
     raise ValueError(f"unknown delivery event: {event!r}")
 

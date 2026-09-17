@@ -178,7 +178,7 @@ def test_label_patch_blocked_clears_every_present_delivery_state_label():
         {"ai-ready", "ai-pr-opened", "ai-fix-needed"},
     )
     assert to_add == ["ai-blocked"]
-    assert to_remove == ["ai-pr-opened", "ai-fix-needed"]
+    assert to_remove == ["ai-pr-opened", "ai-fix-needed", "ai-ready"]
 
 
 def test_label_patch_blocked_clears_in_progress_when_only_claim_present():
@@ -186,7 +186,7 @@ def test_label_patch_blocked_clears_in_progress_when_only_claim_present():
         dl.EVENT_BLOCKED, {"ai-ready", "ai-in-progress"},
     )
     assert to_add == ["ai-blocked"]
-    assert to_remove == ["ai-in-progress"]
+    assert to_remove == ["ai-in-progress", "ai-ready"]
 
 
 # --- label_patch: idempotency ----------------------------------------
@@ -201,12 +201,12 @@ def test_label_patch_is_deterministic_for_repeated_inputs():
 def test_label_patch_blocked_is_idempotent_when_already_blocked():
     # Re-applying the blocked event to an already-blocked Issue produces
     # a no-op remove (no delivery-state label is present) plus the
-    # `ai-blocked` add — never a second remove of an absent label.
+    # `ai-blocked` add — the stale `ai-ready` (the #14 loop) is cleared.
     to_add, to_remove = dl.label_patch(
         dl.EVENT_BLOCKED, {"ai-ready", "ai-blocked"},
     )
     assert to_add == ["ai-blocked"]
-    assert to_remove == []
+    assert to_remove == ["ai-ready"]
 
 
 # --- label_patch: illegal combinations -------------------------------
@@ -219,10 +219,12 @@ def test_label_patch_unknown_event_raises():
 def test_label_patch_blocked_with_no_delivery_state_label_is_add_only():
     # An Issue with no delivery-state label (e.g. a fresh `ai-ready`)
     # gets `ai-blocked` added and nothing removed — the patch must not
-    # invent a remove for an absent label.
+    # invent a remove for an absent label; the stale `ai-ready` IS
+    # present, so it is cleared (the #14 terminal must be ai-blocked
+    # ALONE — no queue-entry residue for the pickup scan).
     to_add, to_remove = dl.label_patch(dl.EVENT_BLOCKED, {"ai-ready"})
     assert to_add == ["ai-blocked"]
-    assert to_remove == []
+    assert to_remove == ["ai-ready"]
 
 
 def test_label_patch_accepts_any_iterable_of_labels():
@@ -230,7 +232,7 @@ def test_label_patch_accepts_any_iterable_of_labels():
         dl.EVENT_BLOCKED, ["ai-ready", "ai-pr-opened"],
     )
     assert to_add == ["ai-blocked"]
-    assert to_remove == ["ai-pr-opened"]
+    assert to_remove == ["ai-pr-opened", "ai-ready"]
 
 
 # --- lifecycle states vs scheduling metadata -------------------------
