@@ -47,17 +47,18 @@ def test_docker_workflow_targets_both_registries_and_required_platforms():
 
 def test_docker_hub_steps_skip_without_both_credentials():
     workflow = load_workflow()
+    docker_job = workflow["jobs"]["docker"]
+    enabled = str(docker_job.get("env", {}).get("DOCKERHUB_ENABLED", ""))
+    assert "secrets.DOCKERHUB_USERNAME != ''" in enabled
+    assert "secrets.DOCKERHUB_TOKEN != ''" in enabled
     dockerhub_steps = [
-        step for step in steps(workflow)
+        step for step in docker_job["steps"]
         if "docker.io/orbibuild/orbi" in str(step)
         or "dockerhub-description" in str(step)
-        or "DOCKERHUB_USERNAME" in str(step)
     ]
     assert dockerhub_steps
     for step in dockerhub_steps:
-        condition = str(step.get("if", ""))
-        assert "secrets.DOCKERHUB_USERNAME != ''" in condition
-        assert "secrets.DOCKERHUB_TOKEN != ''" in condition
+        assert step.get("if") == "env.DOCKERHUB_ENABLED == 'true'"
 
 
 def test_docker_hub_overview_contains_required_links_and_run_command():

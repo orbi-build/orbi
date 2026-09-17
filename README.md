@@ -2,18 +2,15 @@ English | [简体中文](README.zh-CN.md)
 
 # Orbi
 
-Orbi is a local AI development Worker: put work in a GitHub Issue, and it automatically claims the Issue, starts Pi in an isolated worktree to develop and test it, creates a PR, and then passes it through independent review and merge gates. GitHub Issues and labels are the only state store—there is no database, queue, or daemon.
+**GitHub Issues in, tagged releases out.**
 
-- Website <https://orbi.build> ｜ Documentation <https://docs.orbi.build/> (the repository's [`docs/`](docs/) is the single source of truth; the Chinese entry point is [`docs/zh/`](docs/zh/)) ｜ Docker [GHCR](https://ghcr.io/orbi-build/orbi) · [Docker Hub](https://hub.docker.com/r/orbibuild/orbi) ｜ Updates [@xqliu](https://x.com/xqliu)
-- **Stuck on the environment, model integration, or workflow?** Ask in [Discussions](https://github.com/orbi-build/orbi/discussions) — the problems you encounter become Issues to prioritize.
+Orbi claims an Issue from GitHub Issues, develops it in an isolated worktree, runs an independent review session, merges only the reviewed head, and lets a release Issue freeze the SHA and publish the tag. GitHub Issues are the only state store—no database, queue, or daemon.
 
-## Why Orbi
+**Ledger:** [414 merged PRs](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [537 closed Issues](https://github.com/orbi-build/orbi/issues?q=is:closed) · [36 tagged releases](https://github.com/orbi-build/orbi/releases) <!-- ledger: refresh when publishing -->
 
-- **GitHub Issues are the task pool**: the `ai-ready` label dispatches work, and the delivery record (comments, PRs, and CI) is complete by default, with no second task system;
-- **Fully automated**: a user scheduler timer (systemd on Linux, launchd on macOS) triggers a tick every 5 minutes. Normal operation needs no status command, polling, or supervision;
-- **Independent review + merge gates**: after a PR opens, an independent review session reviews it and fixes findings in the same session. Only the reviewed head can merge, and AI never merges or pushes protected branches;
-- **Fail fast**: command errors fail immediately and leave the evidence in the logs. The Issue is marked `ai-blocked` for a human decision, with no silent fallback;
-- **Observable end to end**: every journal log and GitHub progress comment carries the same `run_id`, so the complete timeline can be reconstructed with one grep.
+**Inspect one loop:** [Issue #835](https://github.com/orbi-build/orbi/issues/835) → [PR #843](https://github.com/orbi-build/orbi/pull/843) → [Release v0.5.4](https://github.com/orbi-build/orbi/releases/tag/v0.5.4)
+
+Website <https://orbi.build> ｜ Documentation <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions) ｜ Docker [GHCR](https://ghcr.io/orbi-build/orbi) · [Docker Hub](https://hub.docker.com/r/orbibuild/orbi)
 
 ## Quick start
 
@@ -39,6 +36,14 @@ orbi setup --config orbi.toml  # 4. run one-time setup (checks prior gh auth, la
 PYTHONPATH=src python3 -m orbi.runner --config orbi.toml  # 5. manually run one tick (for initial verification; the timer schedules normal runs)
 orbi doctor --config orbi.toml  # 6. verify deployment health
 ```
+
+## Why Orbi
+
+- **GitHub Issues are the task pool**: the `ai-ready` label dispatches work, and the delivery record (comments, PRs, and CI) is complete by default, with no second task system;
+- **Fully automated**: a user scheduler timer (systemd on Linux, launchd on macOS) triggers a tick every 5 minutes. Normal operation needs no status command, polling, or supervision;
+- **Independent review + merge gates**: after a PR opens, an independent review session reviews it and fixes findings in the same session. Only the reviewed head can merge, and AI never merges or pushes protected branches;
+- **Fail fast**: command errors fail immediately and leave the evidence in the logs. The Issue is marked `ai-blocked` for a human decision, with no silent fallback;
+- **Observable end to end**: every journal log and GitHub progress comment carries the same `run_id`, so the complete timeline can be reconstructed with one grep.
 
 ## What it does
 
