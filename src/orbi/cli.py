@@ -58,7 +58,7 @@ from orbi.runner import (
     validate_execution_source_repos,
 )
 from orbi import pilot_setup
-from orbi.pilot_slots import slot_occupancy
+from orbi.pilot_slots import HELD_PID_UNKNOWN, slot_occupancy
 from orbi.pi_activity import activity_snapshot
 
 LOGGER = logging.getLogger("orbi.cli")
@@ -353,7 +353,8 @@ def slot_lines(state_dir: Path, capacity: int) -> list[str]:
     taken = sum(1 for _, pid in occupancy if pid is not None)
     lines = [f"slots: {taken}/{capacity}"]
     lines.extend(
-        f"  slot-{index}: pid={pid}"
+        f"  slot-{index}: pid="
+        + ("unknown (held)" if pid == HELD_PID_UNKNOWN else str(pid))
         for index, pid in occupancy
         if pid is not None
     )

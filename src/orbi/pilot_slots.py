@@ -41,6 +41,15 @@ from pathlib import Path
 
 SLOT_DIRNAME = ".orbi/slots"
 
+#: Sentinel for a slot whose flock is held while the holder PID is not
+#: readable (a torn rewrite window, a corrupted PID line, or a slot file
+#: that cannot even be opened for probing). The lock is the truth, so
+#: such a slot is reported as held — never as free: every liveness
+#: consumer (`pick_in_progress_issue`, `_another_live_runner`) reads any
+#: non-``None`` foreign holder as a live co-runner, and folding a held
+#: slot into ``None`` would let a second Pi start on a live run (#39).
+HELD_PID_UNKNOWN = -1
+
 
 class Slot:
     """One held slot: the open descriptor owns the exclusive flock lock."""
@@ -104,13 +113,21 @@ def acquire_slot(state_dir: Path, capacity: int, pid: int) -> Slot | None:
 
 
 def slot_occupancy(state_dir: Path, capacity: int) -> list[tuple[int, int | None]]:
-    """Return ``(index, holder_pid)`` per slot; None when the slot is free.
+    """Return ``(index, holder_pid)`` per slot.
+
+    ``None`` means the slot is provably free (the probe took and
+    immediately released the lock). A positive pid means the lock is
+    held by that process. :data:`HELD_PID_UNKNOWN` means the lock is
+    held — or cannot be probed at all — while the holder PID is not
+    readable: the lock is the source of truth, so such a slot is
+    reported as held, never as free (fail closed, mirroring
+    ``acquire_slot``'s fail-closed on the same open error).
 
     Occupancy is probed with a non-blocking ``flock`` on the slot file:
     the lock itself is the source of truth, so a probe that succeeds
-    proves the slot is free (the probe unlocks immediately) and a probe
-    that fails proves a live process holds it. The PID is read from the
-    file only as observational metadata for `status`.
+    proves the slot is free and a probe that fails proves a live
+    process holds it. The PID is read from the file only as
+    observational metadata for `status`.
     """
     state_dir = Path(state_dir)
     occupancy: list[tuple[int, int | None]] = []
@@ -122,13 +139,16 @@ def slot_occupancy(state_dir: Path, capacity: int) -> list[tuple[int, int | None
         try:
             fd = os.open(path, os.O_RDWR)
         except OSError:
-            occupancy.append((index, None))
+            occupancy.append((index, HELD_PID_UNKNOWN))
             continue
         try:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except (BlockingIOError, PermissionError):
-                occupancy.append((index, _read_pid(path)))
+                pid = _read_pid(path)
+                occupancy.append(
+                    (index, HELD_PID_UNKNOWN if pid is None else pid)
+                )
                 continue
             occupancy.append((index, None))
         finally:
