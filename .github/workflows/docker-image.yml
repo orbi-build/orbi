@@ -3,6 +3,12 @@ name: Publish Docker image
 on:
   release:
     types: [published]
+  # The build-only job is the check for the publish configuration; run it on
+  # every PR that touches the image or this workflow (Issue #1040).
+  pull_request:
+    paths:
+      - "3rd/docker/**"
+      - ".github/workflows/docker-image.yml"
   workflow_dispatch:
     inputs:
       tag:
@@ -32,7 +38,13 @@ jobs:
 
       - name: Set release image version
         run: |
-          version="${release_ref#v}"
+          # On pull_request the ref is "<n>/merge", which is not a valid tag;
+          # build under pr-<n> instead (nothing is pushed in this job).
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            version="pr-${{ github.event.pull_request.number }}"
+          else
+            version="${release_ref#v}"
+          fi
           test -n "$version"
           echo "IMAGE_VERSION=$version" >> "$GITHUB_ENV"
 
@@ -40,7 +52,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: 3rd/docker
-          file: Dockerfile
+          file: 3rd/docker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: false
           tags: |
@@ -48,6 +60,8 @@ jobs:
             ghcr.io/orbi-build/orbi:latest
 
   docker:
+    # Publishing never runs for pull_request events; the build-only job is the PR check.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -83,7 +97,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: 3rd/docker
-          file: Dockerfile
+          file: 3rd/docker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
@@ -102,7 +116,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: 3rd/docker
-          file: Dockerfile
+          file: 3rd/docker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |

@@ -58,7 +58,9 @@ def test_build_push_context_matches_dockerfile_directory():
         context = Path(str(step["with"]["context"]))
         dockerfile = Path(str(step["with"]["file"]))
         assert context == dockerfile_directory
-        assert dockerfile.parent == Path(".")
+        # buildx resolves --file against the workspace, not the context (run 35215809993
+        # failed with "open Dockerfile: no such file"), so the path is repo-relative.
+        assert dockerfile == dockerfile_directory / "Dockerfile"
 
 
 def test_build_only_uses_the_publish_build_configuration_without_pushing():
