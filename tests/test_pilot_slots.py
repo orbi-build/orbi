@@ -329,9 +329,11 @@ def test_slot_occupancy_ignores_slot_file_with_corrupted_pid(tmp_path):
     assert pilot_slots.slot_occupancy(state, 1) == [(1, None)]
 
 
-def test_slot_occupancy_reports_none_pid_for_live_holder_without_pid(tmp_path):
+def test_slot_occupancy_reports_held_unknown_for_live_holder_without_pid(tmp_path):
     """A live holder that never wrote a PID (e.g. an old process) is
-    still reported as occupied; the PID is just missing."""
+    still reported as occupied: the flock is the truth, so the slot
+    reports HELD_PID_UNKNOWN — never None, which every liveness
+    consumer reads as "free" (a second Pi could start on a live run)."""
     state = tmp_path / "slots"
     state.mkdir()
     code = (
@@ -348,10 +350,37 @@ def test_slot_occupancy_reports_none_pid_for_live_holder_without_pid(tmp_path):
     holder = run_slot_script(code)
     assert holder.stdout.readline().strip() == "ready"
     try:
-        assert pilot_slots.slot_occupancy(state, 1) == [(1, None)]
+        assert pilot_slots.slot_occupancy(state, 1) == [
+            (1, pilot_slots.HELD_PID_UNKNOWN),
+        ]
     finally:
         holder.terminate()
         holder.wait(timeout=10)
+
+
+def test_slot_occupancy_reports_held_unknown_for_corrupted_pid_under_lock(
+    tmp_path,
+):
+    """A torn rewrite window or a corrupted first line under a HELD
+    lock reports HELD_PID_UNKNOWN (not free), and the delivery
+    identity line — when readable — is still honored by
+    `slot_held_deliveries`: the lock proves a live co-runner is working
+    that delivery."""
+    state = tmp_path / "slots"
+    state.mkdir()
+    path = pilot_slots.slot_path(state, 1)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.write(fd, b"garbage\nowner/repo#807\n")
+        assert pilot_slots.slot_occupancy(state, 1) == [
+            (1, pilot_slots.HELD_PID_UNKNOWN),
+        ]
+        assert pilot_slots.slot_held_deliveries(state, 1) == {
+            ("owner/repo", 807),
+        }
+    finally:
+        os.close(fd)
 
 
 # --- Slot.release -------------------------------------------------------------
@@ -409,9 +438,11 @@ def test_acquire_slot_fails_closed_when_write_fails(monkeypatch, tmp_path):
     assert pilot_slots.acquire_slot(state, 1, os.getpid()) is None
 
 
-def test_slot_occupancy_treats_unopenable_slot_file_as_free(
-    monkeypatch, tmp_path,
-):
+def test_slot_occupancy_fails_closed_when_open_fails(monkeypatch, tmp_path):
+    """An unopenable slot file cannot prove its lock free: report it as
+    held-unknown (fail closed), mirroring ``acquire_slot``'s fail-closed
+    on the same error — never as a free slot a liveness guard would
+    trust."""
     state = tmp_path / "slots"
     state.mkdir()
     (state / "slot-1").write_text(str(os.getpid()), encoding="utf-8")
@@ -420,7 +451,9 @@ def test_slot_occupancy_treats_unopenable_slot_file_as_free(
         raise OSError("permission denied")
 
     monkeypatch.setattr(pilot_slots.os, "open", failing_open)
-    assert pilot_slots.slot_occupancy(state, 1) == [(1, None)]
+    assert pilot_slots.slot_occupancy(state, 1) == [
+        (1, pilot_slots.HELD_PID_UNKNOWN),
+    ]
 
 
 def test_read_pid_returns_none_when_file_unreadable(monkeypatch, tmp_path):
