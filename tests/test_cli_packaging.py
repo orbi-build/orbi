@@ -161,6 +161,16 @@ def test_version_matches_the_packaging_metadata():
     assert orbi.__version__ == load_pyproject()["project"]["version"]
 
 
+def test_pyproject_declares_pypi_project_urls():
+    """Issue #1020: PyPI must expose the four project navigation links."""
+    assert load_pyproject()["project"]["urls"] == {
+        "Homepage": "https://orbi.build",
+        "Repository": "https://github.com/orbi-build/orbi",
+        "Documentation": "https://docs.orbi.build",
+        "Changelog": "https://github.com/orbi-build/orbi/releases",
+    }
+
+
 def test_pyproject_builds_with_the_setuptools_backend():
     data = load_pyproject()
     assert "setuptools" in data["build-system"]["requires"][0]
