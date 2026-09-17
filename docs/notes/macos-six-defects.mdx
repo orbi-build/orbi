@@ -1,0 +1,53 @@
+---
+title: "We merged macOS support. It failed on every real Mac in six places."
+description: "Why did a launchd port that passed CI still fail on a real Mac, and what caught it?"
+date: 2026-09-17
+---
+
+# We merged macOS support. It failed on every real Mac in six places.
+
+Orbi runs itself: every change to the runner is delivered by the runner, reviewed by a second session, merged by a gate, and shipped as a tagged release. On 2026-09-14 that loop delivered macOS support (Issue #849, PR #851): a scheduler layer with a launchd implementation next to the systemd one, a platform-gated `install.sh`, 2,510 lines added, 3,083 tests green.
+
+Nobody had run it on a Mac. The review session had verified the launchd branch through an injected fake, which is what the ticket asked for. The next morning a line-by-line read against `launchctl(1)` and a real `/bin/sh` found six defects that would have failed on any real Mac.
+
+### 1. The secrets never reached the runner
+
+The launchd wrapper sourced the env file and exec'd the CLI:
+
+```sh
+. '<repo>/.orbi/env' 2>/dev/null; exec '<home>/.local/bin/orbi'
+```
+
+The env file is plain `KEY=value` lines, the same file systemd reads through `EnvironmentFile=`. Under POSIX `sh`, assignments in a sourced file stay shell-local unless `set -a` is on, so the exec'd process saw no provider key. Every tick would have failed authentication. A test asserted the broken wrapper string. Fixed in #867: `[ -r env ] && { set -a; . env; set +a; }`.
+
+### 2. `install.sh` died on every stock Mac anyway
+
+The new platform gate correctly required `launchctl` on Darwin. Four lines later the script called `timeout`, which macOS does not ship, and one `sed -i` without a suffix, which BSD sed rejects. The "must fail" the ticket set out to remove had moved from the prerequisite check to the middle of the script, with a worse message. CI could not see it because the test harness symlinked `/usr/bin/timeout` into the stub PATH. Fixed in #868.
+
+### 3. PATH without `/opt/homebrew/bin`
+
+The plist copied the Linux PATH. On Apple Silicon, `gh`, Homebrew's `uv` and `pi` live under `/opt/homebrew/bin`; the first `gh` subprocess would have raised `FileNotFoundError`. Fixed in #869.
+
+### 4. Idle recovery read `/proc/stat`
+
+The idle-session recovery computed boot time from `/proc/stat` with no guard. On macOS the poll loop would have died with an exception instead of escalating a stuck session. Fixed in #870.
+
+### 5. No `sync-engine-source` before the tick
+
+The systemd unit runs `orbi sync-engine-source` as an `ExecStartPre` step so a deployment tracks its configured engine source. The plist only re-installed the CLI; `engine_source_track` was dead configuration on macOS, silently. Fixed in #871.
+
+### 6. The docs still said systemd only
+
+`grep -rin launchd docs README.md` returned nothing. Fixed in #872.
+
+### What this says about the loop
+
+All six are the same failure shape: a contract verified against a fake, never against the platform. The review session did exactly what the acceptance criteria asked and the criteria were wrong. The fix was not a better model. It was six one-outcome tickets, each with an acceptance step a sandbox can actually execute (a real `/bin/sh` sourcing a real file; a PATH without `timeout`), delivered by the same loop the same day, and then a macOS CI job (#896) so the next port cannot pass on a fake alone.
+
+The loop did not catch its own blind spot. A human reading the diff did, in about an hour, and the loop closed all six before the next release.
+
+### Sources
+
+- [Issue #849](https://github.com/orbi-build/orbi/issues/849), [PR #851](https://github.com/orbi-build/orbi/pull/851): the original macOS delivery
+- [#867](https://github.com/orbi-build/orbi/issues/867) env export, [#868](https://github.com/orbi-build/orbi/issues/868) install.sh portability, [#869](https://github.com/orbi-build/orbi/issues/869) PATH, [#870](https://github.com/orbi-build/orbi/issues/870) /proc guard, [#871](https://github.com/orbi-build/orbi/issues/871) sync-engine-source, [#872](https://github.com/orbi-build/orbi/issues/872) docs
+- [#896](https://github.com/orbi-build/orbi/issues/896) macOS CI workflow

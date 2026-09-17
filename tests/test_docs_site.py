@@ -132,8 +132,12 @@ def test_non_release_docs_have_question_metadata_and_answer_opening():
     Keep this check over both language trees so adding a page without the
     question-shaped metadata or direct answer fails close to the edit.
     """
-    pages = sorted(DOCS_DIR.glob("*.mdx")) + sorted((DOCS_DIR / "zh").glob("*.mdx"))
-    pages = [path for path in pages if not path.name.startswith("release-v")]
+    # Include long-form note pages under the language subdirectories too
+    # (Issue #1036); release pages intentionally use their existing metadata.
+    pages = sorted(
+        path for path in DOCS_DIR.rglob("*.mdx")
+        if not path.name.startswith("release-v")
+    )
     assert pages, "no non-release docs pages found"
     for path in pages:
         lines = path.read_text(encoding="utf-8").splitlines()

@@ -40,6 +40,12 @@
             ]
           },
           {
+            "group": "Notes",
+            "pages": [
+              "notes/macos-six-defects"
+            ]
+          },
+          {
             "group": "Optional Components",
             "pages": [
               "optional-kv-cache",
@@ -116,6 +122,12 @@
               "zh/security",
               "zh/testing",
               "zh/contributing"
+            ]
+          },
+          {
+            "group": "笔记",
+            "pages": [
+              "zh/notes/macos-six-defects"
             ]
           },
           {
