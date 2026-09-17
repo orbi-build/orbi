@@ -1,0 +1,53 @@
+---
+title: "我们合并了 macOS 支持，却在每台真实 Mac 上的六个地方失败了"
+description: "一个通过 CI 的 launchd 移植为什么仍会在真实 Mac 上失败，又是什么发现了这些问题?"
+date: 2026-09-17
+---
+
+# 我们合并了 macOS 支持，却在每台真实 Mac 上的六个地方失败了
+
+Orbi 自己运行自己：runner 的每项变更都由 runner 交付，经第二个会话审查，由 gate 合并，并作为带标签的 release 发布。2026-09-14，这个循环交付了 macOS 支持（Issue #849、PR #851）：在 systemd 实现旁增加了 launchd 实现的调度层、按平台限制的 `install.sh`，新增 2,510 行代码，3,083 个测试通过。
+
+没有人曾在 Mac 上运行过它。审查会话通过注入 fake 验证了 launchd 分支，这正是工单要求的内容。第二天早上，逐行对照 `launchctl(1)` 和真实的 `/bin/sh` 阅读后，发现了六个在任何真实 Mac 上都会失败的缺陷。
+
+### 1. 密钥从未到达 runner
+
+launchd 包装器读取了 env 文件，然后 exec CLI：
+
+```sh
+. '<repo>/.orbi/env' 2>/dev/null; exec '<home>/.local/bin/orbi'
+```
+
+env 文件是普通的 `KEY=value` 行，与 systemd 通过 `EnvironmentFile=` 读取的是同一个文件。在 POSIX `sh` 中，除非启用了 `set -a`，被读取文件中的赋值都会留在 shell 本地，因此 exec 出去的进程看不到 provider key。每次 tick 都会因认证失败。一个测试断言了这个错误的包装器字符串。已在 #867 修复：`[ -r env ] && { set -a; . env; set +a; }`。
+
+### 2. `install.sh` 仍会在每台原装 Mac 上退出
+
+新的平台 gate 正确地要求 Darwin 上存在 `launchctl`。但四行之后脚本调用了 macOS 并不自带的 `timeout`，还使用了没有后缀的 `sed -i`，而 BSD sed 会拒绝这种写法。工单原本要移除的“必须失败”，从前置条件检查移到了脚本中间，而且错误信息更糟。CI 看不到这个问题，因为测试工具把 `/usr/bin/timeout` 符号链接进了 stub PATH。已在 #868 修复。
+
+### 3. PATH 没有 `/opt/homebrew/bin`
+
+plist 复制了 Linux 的 PATH。在 Apple Silicon 上，`gh`、Homebrew 的 `uv` 和 `pi` 位于 `/opt/homebrew/bin`；第一次 `gh` 子进程调用就会抛出 `FileNotFoundError`。已在 #869 修复。
+
+### 4. 空闲恢复读取 `/proc/stat`
+
+空闲会话恢复从 `/proc/stat` 计算启动时间，却没有保护。在 macOS 上，轮询循环会因异常退出，而不是升级一个卡住的会话。已在 #870 修复。
+
+### 5. tick 前没有 `sync-engine-source`
+
+systemd unit 将 `orbi sync-engine-source` 作为 `ExecStartPre` 步骤运行，因此 deployment 会跟随配置的 engine source。plist 只重新安装 CLI；`engine_source_track` 在 macOS 上成了无声的无效配置。已在 #871 修复。
+
+### 6. 文档仍然只写 systemd
+
+`grep -rin launchd docs README.md` 没有返回任何结果。已在 #872 修复。
+
+### 这对这个循环说明了什么
+
+六个问题都是同一种失败形态：针对 fake 验证了契约，却从未针对平台验证。审查会话完全按照验收标准执行，而验收标准本身是错的。修复方案不是更好的模型，而是六个单一结果的工单，每个都有 sandbox 能真正执行的验收步骤（真实的 `/bin/sh` 读取真实文件；没有 `timeout` 的 PATH），由同一个循环在当天交付；随后增加 macOS CI job（#896），这样下一次移植就不能只在 fake 上通过。
+
+这个循环没有发现自己的盲点。人类花了大约一小时阅读 diff 才发现它，而这个循环在下一次 release 前就完成了六项修复。
+
+### 来源
+
+- [Issue #849](https://github.com/orbi-build/orbi/issues/849)、[PR #851](https://github.com/orbi-build/orbi/pull/851)：最初的 macOS 交付
+- [#867](https://github.com/orbi-build/orbi/issues/867) env 导出、[#868](https://github.com/orbi-build/orbi/issues/868) install.sh 可移植性、[#869](https://github.com/orbi-build/orbi/issues/869) PATH、[#870](https://github.com/orbi-build/orbi/issues/870) /proc 保护、[#871](https://github.com/orbi-build/orbi/issues/871) sync-engine-source、[#872](https://github.com/orbi-build/orbi/issues/872) 文档
+- [#896](https://github.com/orbi-build/orbi/issues/896) macOS CI workflow
