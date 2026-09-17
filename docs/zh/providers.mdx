@@ -1,4 +1,9 @@
+---
+description: "Orbi 可以运行在哪些模型 provider 上?"
+---
 # Pi Provider 模板
+
+Orbi 可以使用 Pi `models.json` 形状模板所代表的模型 provider 和 OpenAI 兼容端点运行。
 
 Issue #309 在 [`templates/pi-providers`](https://github.com/orbi-build/orbi/tree/main/templates/pi-providers) 提供每家 provider 一份完整的 `pi_providers` 文件。每份文件都是 Pi `models.json` 形状的有效 JSON：可以把整份复制为 `.orbi/pi-providers.json`，也可以把其中唯一条目复制到已有文件的 `providers` 对象中。然后在 `orbi.toml` 中只设置两个选择项：
 

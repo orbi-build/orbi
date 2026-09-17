@@ -1,4 +1,9 @@
+---
+description: "可选的 local-llm-kv-cache proxy 为 Orbi 做什么?"
+---
 # 可选：local-llm-kv-cache proxy
+
+这个可选 proxy 会为本地 llama.cpp 模型复用稳定的 prompt 前缀，同时 Orbi 仍使用同一个 OpenAI 兼容端点。
 
 [local-llm-kv-cache](https://github.com/xqliu/local-llm-kv-cache) proxy
 是本地 llama.cpp 配置的**可选增强**：它加了两级 KV cache（内存热
