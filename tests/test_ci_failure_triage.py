@@ -1616,3 +1616,15 @@ def test_fetch_jobs_reads_past_the_first_page(gh):
     jobs = mod.fetch_jobs("orbi-run", "test-repo", 42)
     assert len(jobs) == 101
     assert jobs[-1]["name"] == "job-100"
+
+
+def test_paged_list_stops_at_the_defensive_ceiling(monkeypatch):
+    """The page ceiling bounds the loop against a pathological endpoint
+    that always answers with a full page: truncation, not a hang."""
+    monkeypatch.setattr(mod, "PAGING_PAGE_CEILING", 2)
+    pages = iter([[{"i": 1}], [{"i": 2}], [{"i": 3}], [{"i": 4}]])
+    monkeypatch.setattr(
+        mod, "gh_api", lambda url: next(pages),
+    )
+    items = mod.paged_list("fake://list", what="x", per_page=1)
+    assert items == [{"i": 1}, {"i": 2}]

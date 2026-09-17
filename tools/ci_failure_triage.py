@@ -68,6 +68,10 @@ CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 GROQ_WORKFLOW_NAME = "Groq docs catalog check"
 GROQ_WORKFLOW_PATH = ".github/workflows/groq-docs-check.yml"
 TRIAGE_WORKFLOW_PATH = ".github/workflows/ci-failure-issue.yml"
+# Defensive ceiling for paged_list: pages walked before giving up
+# (100 pages x 100 items). A module constant so the truncation
+# behavior is testable without a 10,000-item fixture.
+PAGING_PAGE_CEILING = 100
 TARGET_EVENTS = ("pull_request", "push")
 GROQ_TARGET_EVENTS = ("schedule", "workflow_dispatch")
 PUSH_TARGET_BRANCH = "main"
@@ -584,7 +588,7 @@ def paged_list(first_url: str, *, what: str, per_page: int = 100,
         if len(data) < per_page:
             return results
         page += 1
-        if page > 100:  # defensive ceiling: 10,000 items
+        if page > PAGING_PAGE_CEILING:  # defensive ceiling: 10,000 items
             return results
         url = f"{first_url}&page={page}"
 
