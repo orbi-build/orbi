@@ -18,11 +18,10 @@
 #                     so a `pi_providers` file can reference it.
 #   ORBI_BASE_BRANCH  optional. Delivery base branch for the generated
 #                     config (default: main).
-#   ORBI_PI_PROVIDER / ORBI_PI_MODEL / ORBI_PI_BASE_URL  optional together.
-#                     On a fresh start, configure the Pi provider and model.
+#   ORBI_PI_PROVIDER / ORBI_PI_MODEL / ORBI_PI_BASE_URL / ORBI_PI_API_KEY
+#                     optional together. On a fresh start, configure the Pi
+#                     provider and model; the key is written as PI_API_KEY.
 #   ORBI_PI_API      optional API name (default: openai-completions).
-#   ORBI_PI_API_KEY_VAR  optional env-file variable name (default:
-#                     PROVIDER_API_KEY).
 #   ORBI_PI_CONTEXT_WINDOW / ORBI_PI_MAX_TOKENS optional model limits.
 #                     Defaults: 128000 / 16384.
 set -euo pipefail
@@ -49,6 +48,14 @@ esac
 for name in "${!ORBI_ENV_@}"; do
   [[ "${!name}" != *$'\n'* ]] || fail "$name contains a newline (env-file values must be single-line)"
 done
+
+pi_missing=()
+for name in ORBI_PI_PROVIDER ORBI_PI_MODEL ORBI_PI_BASE_URL ORBI_PI_API_KEY; do
+  [[ -n "${!name:-}" ]] || pi_missing+=("$name")
+done
+if (( ${#pi_missing[@]} > 0 && ${#pi_missing[@]} < 4 )); then
+  fail "partial Pi provider configuration; missing ${pi_missing[*]}"
+fi
 
 # ---- 2. The unprivileged runtime user ----------------------------------
 id orbi >/dev/null 2>&1 || useradd --uid 1000 --create-home --shell /bin/bash orbi
@@ -85,7 +92,7 @@ git_transport = "https"
 engine_source_track = "release"
 max_concurrency = 1
 EOF
-  if [ -n "${ORBI_PI_PROVIDER:-}" ] && [ -n "${ORBI_PI_MODEL:-}" ] && [ -n "${ORBI_PI_BASE_URL:-}" ]; then
+  if (( ${#pi_missing[@]} == 0 )); then
     cat >> "$DEPLOY_HOME/orbi.toml" <<EOF
 pi_providers = ".orbi/pi-providers.json"
 pi_provider = "$ORBI_PI_PROVIDER"
@@ -104,14 +111,16 @@ install -d -m 700 -o orbi -g orbi "$DEPLOY_HOME/.orbi"
   for name in "${!ORBI_ENV_@}"; do
     printf '%s=%s\n' "${name#ORBI_ENV_}" "${!name}"
   done
+  if (( ${#pi_missing[@]} == 0 )); then
+    printf 'PI_API_KEY=%s\n' "$ORBI_PI_API_KEY"
+  fi
 } > "$DEPLOY_HOME/.orbi/env"
 chown orbi:orbi "$DEPLOY_HOME/.orbi/env"
 chmod 600 "$DEPLOY_HOME/.orbi/env"
 
-if [ -n "${ORBI_PI_PROVIDER:-}" ] && [ -n "${ORBI_PI_MODEL:-}" ] && [ -n "${ORBI_PI_BASE_URL:-}" ]; then
+if (( ${#pi_missing[@]} == 0 )); then
   if [ ! -e "$DEPLOY_HOME/.orbi/pi-providers.json" ]; then
     api="${ORBI_PI_API:-openai-completions}"
-    api_key_var="${ORBI_PI_API_KEY_VAR:-PROVIDER_API_KEY}"
     context_window="${ORBI_PI_CONTEXT_WINDOW:-128000}"
     max_tokens="${ORBI_PI_MAX_TOKENS:-16384}"
     cat > "$DEPLOY_HOME/.orbi/pi-providers.json" <<EOF
@@ -120,7 +129,7 @@ if [ -n "${ORBI_PI_PROVIDER:-}" ] && [ -n "${ORBI_PI_MODEL:-}" ] && [ -n "${ORBI
     "$ORBI_PI_PROVIDER": {
       "baseUrl": "$ORBI_PI_BASE_URL",
       "api": "$api",
-      "apiKey": "\$$api_key_var",
+      "apiKey": "\$PI_API_KEY",
       "models": [{
         "id": "$ORBI_PI_MODEL",
         "name": "$ORBI_PI_MODEL",

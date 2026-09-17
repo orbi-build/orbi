@@ -1,6 +1,5 @@
 """First-start provider configuration for the Docker entrypoint."""
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -70,7 +69,7 @@ def test_provider_environment_generates_json_and_toml(tmp_path):
         ORBI_PI_PROVIDER="deepseek",
         ORBI_PI_MODEL="deepseek-chat",
         ORBI_PI_BASE_URL="https://api.deepseek.com",
-        ORBI_PI_API_KEY_VAR="DEEPSEEK_API_KEY",
+        ORBI_PI_API_KEY="secret-key",
         ORBI_PI_CONTEXT_WINDOW="64000",
         ORBI_PI_MAX_TOKENS="8192",
     )
@@ -80,7 +79,8 @@ def test_provider_environment_generates_json_and_toml(tmp_path):
     provider = data["providers"]["deepseek"]
     assert provider["baseUrl"] == "https://api.deepseek.com"
     assert provider["api"] == "openai-completions"
-    assert provider["apiKey"] == "$DEEPSEEK_API_KEY"
+    assert provider["apiKey"] == "$PI_API_KEY"
+    assert "PI_API_KEY=secret-key" in (deploy / ".orbi/env").read_text()
     assert provider["models"] == [{
         "id": "deepseek-chat", "name": "deepseek-chat",
         "contextWindow": 64000, "maxTokens": 8192,
@@ -89,6 +89,18 @@ def test_provider_environment_generates_json_and_toml(tmp_path):
     assert 'pi_providers = ".orbi/pi-providers.json"' in toml
     assert 'pi_provider = "deepseek"' in toml
     assert 'pi_model = "deepseek-chat"' in toml
+
+
+def test_partial_provider_environment_fails_with_missing_names(tmp_path):
+    result = run_entrypoint(
+        tmp_path,
+        ORBI_PI_PROVIDER="deepseek",
+        ORBI_PI_MODEL="deepseek-chat",
+    )
+    assert result.returncode != 0
+    assert "ORBI_PI_BASE_URL" in result.stderr
+    assert "ORBI_PI_API_KEY" in result.stderr
+    assert "systemd-started" not in result.stdout
 
 
 def test_missing_provider_environment_prints_hint_and_writes_no_file(tmp_path):
@@ -113,6 +125,7 @@ def test_existing_config_and_provider_are_not_overwritten(tmp_path):
         ORBI_PI_PROVIDER="deepseek",
         ORBI_PI_MODEL="deepseek-chat",
         ORBI_PI_BASE_URL="https://api.deepseek.com",
+        ORBI_PI_API_KEY="secret-key",
     )
     assert result.returncode == 0, result.stderr
     assert {path: path.read_bytes() for path in before} == before
