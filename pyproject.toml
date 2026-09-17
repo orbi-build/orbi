@@ -50,6 +50,12 @@ license = { file = "LICENSE.md" }
 authors = [{ name = "xqliu" }]
 dependencies = []
 
+[project.urls]
+Homepage = "https://orbi.build"
+Repository = "https://github.com/orbi-build/orbi"
+Documentation = "https://docs.orbi.build"
+Changelog = "https://github.com/orbi-build/orbi/releases"
+
 [project.scripts]
 orbi = "orbi.cli:main"
 
