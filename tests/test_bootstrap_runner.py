@@ -18651,6 +18651,42 @@ def test_process_release_closes_milestone_despite_stale_release_ticket(monkeypat
     assert "release ticket #99 excluded" in comment_kwargs["body"]
 
 
+def test_process_release_publish_failure_rolls_back_docs_commit(monkeypatch):
+    state = make_release_process_env(monkeypatch)
+    original_run = seam.run_command
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda command, **kwargs: (
+            "docs-commit\n"
+            if command[:3] == ["git", "rev-parse", "HEAD"]
+            and kwargs.get("cwd") == Path("/wt")
+            else original_run(command, **kwargs)
+        ),
+    )
+    monkeypatch.setattr(release, "sync_release_docs",
+                        lambda **kwargs: "docs committed and pushed")
+    monkeypatch.setattr(
+        release, "publish_release",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("publish down")),
+    )
+    rolled_back = []
+    monkeypatch.setattr(
+        release, "rollback_release_docs",
+        lambda **kwargs: rolled_back.append(kwargs),
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    assert release.process_release(
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"),
+        "o/r",
+    ) == ""
+    assert rolled_back == [{"worktree": Path("/wt"), "base_branch": "main",
+                            "docs_commit": "docs-commit"}]
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+                                       "remove": "ai-in-progress"})
+
+
 def test_process_release_docs_sync_failure_fails_fast_and_blocks(monkeypatch):
     state = make_release_process_env(monkeypatch)
 
@@ -20202,6 +20238,32 @@ def test_sync_release_docs_fails_fast_when_the_base_advanced(
     assert remote_head == git_out(work, "rev-parse", "HEAD")
 
 
+def test_rollback_release_docs_reverts_only_the_docs_commit(tmp_path):
+    work = make_release_docs_repo(tmp_path)
+    path = work / "docs" / "rollback-marker.txt"
+    path.write_text("temporary\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(work), "add", str(path)], check=True,
+                   capture_output=True)
+    subprocess.run(["git", "-C", str(work), "commit", "-m", "temporary docs"],
+                   check=True, capture_output=True)
+    docs_commit = git_out(work, "rev-parse", "HEAD")
+
+    release.rollback_release_docs(
+        worktree=work, base_branch="main", docs_commit=docs_commit,
+    )
+
+    assert git_out(work, "rev-parse", "HEAD^") == docs_commit
+    assert not path.exists()
+
+
+def test_rollback_release_docs_rejects_a_changed_worktree(tmp_path):
+    work = make_release_docs_repo(tmp_path)
+    with pytest.raises(RuntimeError, match="rollback expected"):
+        release.rollback_release_docs(
+            worktree=work, base_branch="main", docs_commit="wrong-head",
+        )
+
+
 def test_sync_release_docs_fails_when_tag_object_is_missing(
         tmp_path, monkeypatch):
     work = make_release_docs_repo(tmp_path)
@@ -20215,6 +20277,23 @@ def test_sync_release_docs_fails_when_tag_object_is_missing(
             issue_number=77,
         )
     assert not (work / "docs" / "release-v0.9.9.mdx").exists()
+
+
+def test_sync_release_docs_refuses_to_fabricate_after_fetch(tmp_path, monkeypatch):
+    work = make_release_docs_repo(tmp_path)
+    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040,
+                         tag="v0.9.9")
+    monkeypatch.setattr(release, "local_release_tag_commit", lambda *a: None)
+    monkeypatch.setattr(release, "run_git_network_command", lambda *a, **k: "")
+    def missing_tag(command, **kwargs):
+        raise subprocess.CalledProcessError(1, command)
+    monkeypatch.setattr(release, "run_command", missing_tag)
+    with pytest.raises(RuntimeError, match="refusing to fabricate"):
+        release.sync_release_docs(
+            source_repo="o/r", repo_dir=work, worktree=work,
+            base_branch="main", tag="v0.9.9", release_commit="c" * 40,
+            issue_number=77,
+        )
 
 
 def test_release_docs_page_rejects_an_unknown_language():
