@@ -194,7 +194,9 @@ def test_english_homepage_keeps_its_existing_title_behavior():
     English index keeps no frontmatter title (the renderer keeps its
     pre-Issue-128 filename fallback "Index")."""
     text = (DOCS_DIR / "index.mdx").read_text(encoding="utf-8")
-    assert not text.startswith("---"), (
+    match = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
+    assert match is not None, "the English index may carry metadata"
+    assert not re.search(r"^title\s*:", match.group(1), re.MULTILINE), (
         "the English index must not gain a frontmatter title "
         "(English behavior stays unchanged)"
     )

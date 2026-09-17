@@ -1,4 +1,9 @@
+---
+description: "可以在 Docker 中运行 Orbi 吗?"
+---
 # Docker（社区维护）
+
+当宿主机无法提供 systemd user session 时，可以使用社区维护的 Docker 封装运行 Orbi。
 
 仓库里的 Docker 部署外挂
 [`3rd/docker/`](https://github.com/orbi-build/orbi/blob/main/3rd/docker/README.md)
@@ -15,6 +20,22 @@ session 的 Linux 主机请始终优先走官方路径
 - 宿主机没有 user systemd session（NAS、容器平台、受限的云主机）但
   能跑 Docker。
 - 想把 runner 与宿主机用户会话隔离。
+
+## 拉取镜像
+
+发布的镜像支持两种 Linux 架构：
+
+```bash
+docker pull ghcr.io/orbi-build/orbi:latest
+```
+
+Docker Hub 是备用镜像仓库：
+
+```bash
+docker pull docker.io/orbibuild/orbi:latest
+```
+
+如果要从源码构建，请继续使用仓库 checkout：
 
 ## 快速开始
 

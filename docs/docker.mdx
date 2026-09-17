@@ -1,4 +1,9 @@
+---
+description: "Can I run Orbi in Docker?"
+---
 # Docker (community-maintained)
+
+You can run Orbi in Docker with the community-maintained wrapper when the host cannot provide a systemd user session.
 
 The Docker deployment under
 [`3rd/docker/` in the repository](https://github.com/orbi-build/orbi/blob/main/3rd/docker/README.md)
@@ -16,6 +21,22 @@ both for the same task pool.
 - The host has no user systemd session (a NAS, a container platform, a
   restricted cloud box) but can run Docker.
 - You want the runner isolated from the host user session.
+
+## Pull the image
+
+The published image is available for both supported Linux architectures:
+
+```bash
+docker pull ghcr.io/orbi-build/orbi:latest
+```
+
+Docker Hub is an alternate registry:
+
+```bash
+docker pull docker.io/orbibuild/orbi:latest
+```
+
+To build from source instead, keep using the repository checkout:
 
 ## Quick start
 
