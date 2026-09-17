@@ -75,7 +75,7 @@ PID 1 身份在容器内运行——默认 private cgroupns 下创建 `/init.sco
 | --- | --- |
 | `ORBI_SOURCE_REPO` | 任务池仓库。首次启动时 entrypoint 把它克隆进 `/work` volume 并写进生成的 `orbi.toml`。替代方案：bind mount 已有 checkout（`-v ~/projects/myrepo:/work`）——宿主机 uid 需与容器内 `orbi` 用户一致（uid 1000），否则 git 报 dubious ownership。 |
 | `GH_TOKEN` | entrypoint 把它写进 `/orbi/.orbi/env`（systemd `EnvironmentFile` 约定，权限 600），每次启动都从注入变量重新生成。tick 时 gh 从那里读取，git 的凭据由 gh credential helper 经 HTTPS 提供——全程无 SSH key；token 绝不进镜像层。它需要对**任务池仓库的写权限**：classic token 带 `repo` scope，或 fine-grained token 带 Issues、Pull requests、Contents 读写（runner 要用它建 label、分支和 PR）。 |
-| `ORBI_PI_PROVIDER`、`ORBI_PI_MODEL`、`ORBI_PI_BASE_URL`、`ORBI_PI_API_KEY` | 四个模型 provider 值（要么全设，要么全不设——只设一部分会启动失败并点名缺失的变量）。首次启动时 entrypoint 把 `PI_API_KEY` 写进 `/orbi/.orbi/env`，生成 `/orbi/.orbi/pi-providers.json`（一个 provider、一个 model，`apiKey` 引用 `$PI_API_KEY`，key 本身不落 JSON）；生成的 `orbi.toml` 带上 `pi_provider`、`pi_model`、`pi_providers`。 |
+| `ORBI_PI_PROVIDER`、`ORBI_PI_MODEL`、`ORBI_PI_BASE_URL`、`ORBI_PI_API_KEY` | 四个模型 provider 值（要么全设，要么全不设——只设一部分会启动失败并点名缺失的变量）。entrypoint 每次启动都从注入变量重新生成 `/orbi/.orbi/env` 并把 `PI_API_KEY` 写进去——改了 `ORBI_PI_API_KEY`，下次 `docker run`/`docker restart` 即生效，无需手动编辑；`/orbi/.orbi/pi-providers.json`（一个 provider、一个 model，`apiKey` 引用 `$PI_API_KEY`，key 本身不落 JSON）和 `orbi.toml` 里的 `pi_provider`、`pi_model`、`pi_providers` 只在首次启动生成，之后绝不覆盖。 |
 | `ORBI_PI_API`、`ORBI_PI_CONTEXT_WINDOW`、`ORBI_PI_MAX_TOKENS` | 生成的 `pi-providers.json` 的可选模型上限；默认 `openai-completions`、`128000`、`16384`。 |
 | `ORBI_BASE_BRANCH` | 可选交付基准分支（默认 `main`）。 |
 | `ORBI_ENV_<NAME>` | 可选、可重复：透传到 `/orbi/.orbi/env` 为 `<NAME>=<value>`（如 `ORBI_ENV_GROQ_API_KEY` 落地为 `GROQ_API_KEY`），供 provider 文件引用——见下文"进阶：多 provider"。 |
