@@ -24,8 +24,28 @@ jobs:
     steps:
       - name: Check out the source
         uses: actions/checkout@v5
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set release image version
+        run: |
+          version="${release_ref#v}"
+          test -n "$version"
+          echo "IMAGE_VERSION=$version" >> "$GITHUB_ENV"
+
       - name: Build the Docker image without pushing
-        run: timeout 1800s docker build --tag orbi-ci 3rd/docker
+        uses: docker/build-push-action@v6
+        with:
+          context: 3rd/docker
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: |
+            ghcr.io/orbi-build/orbi:${{ env.IMAGE_VERSION }}
+            ghcr.io/orbi-build/orbi:latest
 
   docker:
     runs-on: ubuntu-latest
