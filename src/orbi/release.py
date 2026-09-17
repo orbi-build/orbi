@@ -133,6 +133,25 @@ RELEASE_DELIVERIES_WAIT_SECONDS = 1800
 # the live progress heartbeat (PI_HEARTBEAT_SECONDS).
 RELEASE_CI_POLL_INTERVAL = 30.0
 
+# Identity used for every local Git object written by the release state
+# machine. Cloud sandboxes intentionally do not provide a user Git config.
+RELEASE_GIT_IDENTITY = ("Orbi", "orbi@localhost")
+
+
+def run_git_write(
+    args: list[str], cwd: Path,
+) -> str | subprocess.CompletedProcess[str]:
+    """Run a local Git write with the release machine's stable identity."""
+    env = os.environ.copy()
+    name, email = RELEASE_GIT_IDENTITY
+    env.update({
+        "GIT_AUTHOR_NAME": name,
+        "GIT_AUTHOR_EMAIL": email,
+        "GIT_COMMITTER_NAME": name,
+        "GIT_COMMITTER_EMAIL": email,
+    })
+    return run_command(args, cwd=cwd, env=env)
+
 
 # Supported `version_file` declaration values: the ecosystem metadata
 # files (written by `prepare_release_version`) plus `none` — skip version
@@ -1086,7 +1105,7 @@ def prepare_release_version(worktree: Path, tag: str,
                 json.dumps(package_data, indent=2) + "\n", encoding="utf-8",
             )
             run_command(["git", "add", version_file], cwd=worktree)
-            run_command([
+            run_git_write([
                 "git", "commit", "-m", f"chore: prepare release {tag}",
             ], cwd=worktree)
             run_git_network_command(
@@ -1163,7 +1182,7 @@ def prepare_release_version(worktree: Path, tag: str,
         if updated != text:
             source.write_text(updated, encoding="utf-8")
             run_command(["git", "add", version_file], cwd=worktree)
-            run_command([
+            run_git_write([
                 "git", "commit", "-m", f"chore: prepare release {tag}",
             ], cwd=worktree)
             run_git_network_command(
@@ -1204,7 +1223,7 @@ def prepare_release_version(worktree: Path, tag: str,
         run_command([
             "git", "add", version_file, "src/orbi/__init__.py",
         ], cwd=worktree)
-        run_command([
+        run_git_write([
             "git", "commit", "-m", f"chore: prepare release {tag}",
         ], cwd=worktree)
         run_git_network_command(
@@ -1268,7 +1287,7 @@ def ensure_release_tag_created(repo_dir: Path, tag: str,
     """Create the annotated release tag locally, idempotently."""
     local_tag_commit = local_release_tag_commit(repo_dir, tag)
     if local_tag_commit is None:
-        run_command(
+        run_git_write(
             ["git", "tag", "-a", tag, "-m", f"Release {tag}",
              release_commit], cwd=repo_dir,
         )
@@ -1727,7 +1746,7 @@ def rollback_release_docs(*, worktree: Path, base_branch: str,
         raise RuntimeError(
             f"release docs rollback expected {docs_commit}, found {current}"
         )
-    run_command(["git", "revert", "--no-edit", docs_commit], cwd=worktree)
+    run_git_write(["git", "revert", "--no-edit", docs_commit], cwd=worktree)
     run_git_network_command(
         ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
         cwd=worktree,
@@ -1782,8 +1801,8 @@ def promote_release_docs_latest(*, worktree: Path, base_branch: str,
     fd = acquire_base_sync_lock(worktree, 300.0)
     try:
         run_command(["git", "add", *paths], cwd=worktree)
-        run_command(["git", "commit", "-m",
-                     f"docs: promote release {tag} as latest"], cwd=worktree)
+        run_git_write(["git", "commit", "-m",
+                       f"docs: promote release {tag} as latest"], cwd=worktree)
         run_git_network_command(
             ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
             cwd=worktree,
@@ -1951,7 +1970,7 @@ def sync_release_docs(*, source_repo: str, repo_dir: Path,
                 f"docs release notes for {tag} already in sync — "
                 "idempotent no-op, nothing committed"
             )
-        run_command([
+        run_git_write([
             "git", "commit", "-m",
             f"docs: release notes for {tag} (Issue #{issue_number})",
         ], cwd=worktree)
@@ -2416,7 +2435,7 @@ def process_release(issue: dict, config: RunnerConfig,
             # docs push fails; a retry must be able to create the tag for
             # the same release commit without hitting a residue conflict.
             if existing_tag_commit is None:
-                run_command(["git", "tag", "-d", tag], cwd=config.repo_dir)
+                run_git_write(["git", "tag", "-d", tag], cwd=config.repo_dir)
             raise
         docs_commit = (
             run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
