@@ -674,6 +674,20 @@ def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
             evidence = build_reoccurrence_comment(run, item)
             comment_issue(owner, repo, source_number, evidence)
             comment_issue(owner, repo, source_pr, evidence)
+        if external_pr is not None:
+            # An external PR's `Fixes #N` cannot be verified against the
+            # delivery it names (any contributor can reference any open
+            # in-flight Issue): rewriting the delivery state from an
+            # untrusted source would requeue a delivery that may be
+            # alive — the #608 external-integration rule applied to the
+            # routed path (the marker already guards the create path).
+            # The evidence comments stand; a human or the Runner owns
+            # the state.
+            log(
+                f"external_head_no_label_flip source_issue={source_number} "
+                f"pr={source_pr} run_id={run.get('id')}"
+            )
+            return
         # Keep the delivery state canonical: the Runner's lifecycle contract
         # requires ai-fix-needed to replace an older opened/in-flight state,
         # not coexist with it.
