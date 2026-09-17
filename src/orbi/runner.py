@@ -665,6 +665,14 @@ class RunnerConfig:
     repositories: tuple[dict, ...] = ()
 
 
+class ConfigFileMissingError(FileNotFoundError):
+    """The configured ``orbi.toml`` itself does not exist."""
+
+    def __init__(self, path: Path):
+        self.path = path.resolve()
+        super().__init__(self.path)
+
+
 def load_config(path: Path, *, check_provider_api_keys: bool = True,
                 allow_missing_pi_providers: bool = False) -> RunnerConfig:
     """Load the human-maintained TOML config and resolve its paths.
@@ -673,6 +681,8 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     configuration finding instead of being stopped by it.
     """
     base = path.resolve().parent
+    if not path.exists():
+        raise ConfigFileMissingError(path)
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     source_repos = data.get("source_repos")
     if not isinstance(source_repos, list) or not source_repos:
@@ -9256,6 +9266,18 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(args.config)
         validate_config(config)
         validate_execution_source_repos(config.source_repos)
+    except ConfigFileMissingError as exc:
+        LOGGER.error(
+            "config_not_found path=%s; reason=no Orbi config at this path "
+            "(the default is `orbi.toml` in the current directory); "
+            "fix=run from the deployment directory, or point at the config: "
+            "`ORBI_CONFIG=~/orbi-deploy/<dir>/orbi.toml orbi <command>` "
+            "(`--config <path>` also works, after the subcommand). "
+            "The source checkout is not a deployment directory and has no "
+            "orbi.toml.",
+            exc.path,
+        )
+        return 1
     except ValueError as exc:
         event("config_invalid", level=logging.ERROR, reason=exc)
         return 1

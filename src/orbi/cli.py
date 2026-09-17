@@ -45,6 +45,7 @@ from orbi.delivery_labels import (
 
 from orbi.github import list_milestones
 from orbi.runner import (
+    ConfigFileMissingError,
     RunIdFilter,
     RunnerConfig,
     freeze_base,
@@ -705,6 +706,66 @@ def milestone_set(config: RunnerConfig, config_path: Path,
     return config.active_milestone, title
 
 
+def _installed_unit_configs(
+    installed_dir: Path | None = None,
+) -> tuple[tuple[Path, str], ...]:
+    """Return the ORBI_CONFIG values declared by installed units.
+
+    This is deliberately a filesystem read: resolving a missing default must
+    not invoke a scheduler command or mutate the user's installation.
+    """
+    sched = scheduler.detect()
+    installed_dir = installed_dir or sched.installed_unit_dir()
+    if not installed_dir.is_dir():
+        return ()
+    found: dict[Path, list[str]] = {}
+    for unit in sorted(installed_dir.iterdir(), key=lambda path: path.name):
+        # Only inspect files belonging to Orbi's scheduler namespace.  User
+        # unit directories commonly contain unrelated services; accepting an
+        # arbitrary service's ORBI_CONFIG could select the wrong deployment.
+        is_systemd_unit = (
+            unit.name.startswith("orbi")
+            and unit.name.endswith((".service", ".timer"))
+        )
+        is_launchd_unit = (
+            unit.name.startswith("org.orbi.") and unit.name.endswith(".plist")
+        )
+        if not unit.is_file() or not (is_systemd_unit or is_launchd_unit):
+            continue
+        config = sched.unit_config(unit)
+        if config is not None:
+            found.setdefault(config, []).append(unit.name)
+    return tuple(
+        (path, ", ".join(units))
+        for path, units in sorted(found.items(), key=lambda item: str(item[0]))
+    )
+
+
+def _config_was_explicit(argv: list[str] | None) -> bool:
+    values = sys.argv[1:] if argv is None else argv
+    return any(value == "--config" or value.startswith("--config=")
+               for value in values)
+
+
+def _missing_config_message(
+    path: Path, candidates: tuple[tuple[Path, str], ...],
+) -> str:
+    candidate_lines = "".join(
+        f"; candidate={candidate} units={units}"
+        for candidate, units in candidates
+    )
+    return (
+        f"config_not_found path={path.resolve()}; "
+        "reason=no Orbi config at this path "
+        "(the default is `orbi.toml` in the current directory); "
+        "fix=run from the deployment directory, or point at the config: "
+        "`ORBI_CONFIG=~/orbi-deploy/<dir>/orbi.toml orbi <command>` "
+        "(`--config <path>` also works, after the subcommand). "
+        "The source checkout is not a deployment directory and has no "
+        f"orbi.toml.{candidate_lines}"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
@@ -817,6 +878,38 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format=log_format())
 
+    # A missing default in a read-only command can be resolved from the
+    # installed units.  Never do this for an explicit path or a mutating
+    # command: selecting another deployment must remain the user's decision.
+    candidates: tuple[tuple[Path, str], ...] = ()
+    read_only = args.command in {"status", "doctor", "session", "check"}
+    explicit = _config_was_explicit(argv) or "ORBI_CONFIG" in os.environ
+    if read_only and not explicit and not args.config.exists():
+        candidates = _installed_unit_configs(
+            getattr(args, "installed_dir", None),
+        )
+        existing = tuple(item for item in candidates if item[0].is_file())
+        if len(existing) == 1:
+            args.config = existing[0][0]
+            LOGGER.info(
+                "config_resolved_from_unit path=%s unit=%s",
+                existing[0][0], existing[0][1],
+            )
+
+    if args.command == "check" and not args.config.exists():
+        # `check` owns the prerequisite gate, but a missing file must still
+        # use the same actionable diagnostic whether the path was implicit or
+        # explicitly supplied.  Explicit paths are never replaced by a unit
+        # candidate.
+        check_candidates = candidates or _installed_unit_configs(
+            getattr(args, "installed_dir", None),
+        )
+        print(
+            _missing_config_message(args.config, check_candidates),
+            file=sys.stderr,
+        )
+        return 1
+
     if args.command is None:
         # No subcommand = the Runner tick. Delegate to the
         # Runner's own main: it re-parses `--config` and owns the whole
@@ -867,6 +960,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"setup_failed reason={exc}", file=sys.stderr)
         else:
             LOGGER.error("config_invalid reason=%s", exc)
+        return 1
+    except ConfigFileMissingError as exc:
+        if not candidates:
+            candidates = _installed_unit_configs(
+                getattr(args, "installed_dir", None),
+            )
+        message = _missing_config_message(exc.path, candidates)
+        if args.command == "setup":
+            print(f"setup_failed reason={message}", file=sys.stderr)
+        else:
+            LOGGER.error(message)
         return 1
     except FileNotFoundError as exc:
         # A PyPI first run (`orbi setup` in a fresh dir with

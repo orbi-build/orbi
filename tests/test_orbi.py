@@ -1,9 +1,11 @@
 import json
+import logging
 import os
 import subprocess
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import dataclasses
@@ -881,18 +883,216 @@ def test_session_pretty_prints_summaries_instead_of_raw_jsonl(
     assert "sess.jsonl" not in out
 
 
-def test_main_requires_config_file(tmp_path, caplog):
-    """Issue #163: a missing config is the most common missing
-    prerequisite — every named subcommand reports it as the structured
-    `config_invalid reason=required path missing: ...` failure (exit 1),
-    never a bare FileNotFoundError traceback at the user."""
+def test_main_reports_missing_config_with_actionable_location_and_fix(
+    tmp_path, caplog,
+):
+    """Issue #1001: distinguish a missing config from missing paths it names."""
+    import logging
+
+    config_path = tmp_path / "missing.toml"
+    with caplog.at_level(logging.ERROR, logger="orbi.cli"):
+        assert orbi.main(
+            ["status", "--config", str(config_path)],
+        ) == 1
+    assert "config_not_found" in caplog.text
+    assert f"path={config_path.resolve()}" in caplog.text
+    assert "ORBI_CONFIG" in caplog.text
+    assert "fix=" in caplog.text
+    assert "required path missing" not in caplog.text
+
+
+def test_installed_unit_config_scan_ignores_directories_and_unconfigured_units(
+    tmp_path, monkeypatch,
+):
+    installed = tmp_path / "units"
+    installed.mkdir()
+    (installed / "nested").mkdir()
+    (installed / "plain.service").write_text("unit", encoding="utf-8")
+    (installed / "orbi-unconfigured.service").write_text(
+        "unit", encoding="utf-8",
+    )
+    fake = SimpleNamespace(
+        installed_unit_dir=lambda: installed,
+        unit_config=lambda path: None,
+    )
+    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    assert orbi._installed_unit_configs() == ()
+
+
+def test_check_reports_missing_config_when_no_unit_is_available(
+    tmp_path, monkeypatch, capsys,
+):
+    installed = tmp_path / "absent-units"
+    fake = SimpleNamespace(
+        installed_unit_dir=lambda: installed,
+        unit_config=lambda path: None,
+    )
+    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    assert orbi.main(["check"]) == 1
+    assert "config_not_found" in capsys.readouterr().err
+
+
+def test_check_resolves_the_single_existing_installed_unit_config(
+    tmp_path, monkeypatch, capsys,
+):
+    config = tmp_path / "deployment.toml"
+    config.write_text('source_repos = ["owner/repo"]\nrepo_dir = "."\n', encoding="utf-8")
+    _write_prompts(tmp_path)
+    installed = tmp_path / "units"
+    installed.mkdir()
+    unit = installed / "orbi@1.service"
+    unit.write_text("unit", encoding="utf-8")
+    fake = SimpleNamespace(
+        installed_unit_dir=lambda: installed,
+        unit_config=lambda path: config if path == unit else None,
+    )
+    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    monkeypatch.setattr(orbi.pilot_setup, "run_checks", lambda *args, **kwargs: ["ok"])
+    assert orbi.main(["check"]) == 0
+    assert capsys.readouterr().out.strip() == "ok"
+
+
+def test_check_with_explicit_missing_config_keeps_unit_candidate_list(
+    tmp_path, monkeypatch, capsys,
+):
+    installed = tmp_path / "units"
+    installed.mkdir()
+    unit = installed / "orbi@1.service"
+    unit.write_text("unit", encoding="utf-8")
+    candidate = tmp_path / "candidate.toml"
+    candidate.write_text("config", encoding="utf-8")
+    fake = SimpleNamespace(
+        installed_unit_dir=lambda: installed,
+        unit_config=lambda path: candidate if path == unit else None,
+    )
+    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    monkeypatch.setattr(orbi.pilot_setup, "run_checks", lambda *args, **kwargs: ["ok"])
+    missing = tmp_path / "missing.toml"
+    assert orbi.main(["check", "--config", str(missing)]) == 1
+    error = capsys.readouterr().err
+    assert "config_not_found" in error
+    assert str(candidate.resolve()) in error
+
+
+def test_setup_reports_missing_config_with_setup_prefix(
+    tmp_path, monkeypatch, capsys,
+):
+    installed = tmp_path / "units"
+    installed.mkdir()
+    fake = SimpleNamespace(
+        installed_unit_dir=lambda: installed,
+        unit_config=lambda path: None,
+    )
+    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    monkeypatch.setattr(
+        orbi.pilot_setup, "ensure_config",
+        lambda path: (_ for _ in ()).throw(runner.ConfigFileMissingError(path)),
+    )
+    assert orbi.main(["setup"]) == 1
+    assert "setup_failed reason=config_not_found" in capsys.readouterr().err
+
+
+def test_runner_reports_missing_config_without_traceback(tmp_path, caplog):
+    config = tmp_path / "missing.toml"
+    with caplog.at_level(logging.ERROR, logger="orbi.runner"):
+        assert runner.main(["--config", str(config)]) == 1
+    assert "config_not_found" in caplog.text
+
+
+def test_status_resolves_the_single_existing_installed_unit_config(
+    tmp_path, monkeypatch, caplog,
+):
+    config = tmp_path / "deployment.toml"
+    config.write_text('source_repos = ["owner/repo"]\nrepo_dir = "."\n', encoding="utf-8")
+    _write_prompts(tmp_path)
+    installed = tmp_path / "units"
+    installed.mkdir()
+    unit = installed / "orbi@1.service"
+    unit.write_text("unit", encoding="utf-8")
+    fake = SimpleNamespace(
+        installed_unit_dir=lambda: installed,
+        unit_config=lambda path: config if path == unit else None,
+    )
+    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    monkeypatch.setattr(orbi, "status_report", lambda loaded: "ok")
+    with caplog.at_level(logging.INFO, logger="orbi.cli"):
+        assert orbi.main(["status"]) == 0
+    assert "config_resolved_from_unit" in caplog.text
+    assert str(config.resolve()) in caplog.text
+
+
+def test_unit_scan_ignores_unrelated_scheduler_files(
+    tmp_path, monkeypatch,
+):
+    installed = tmp_path / "units"
+    installed.mkdir()
+    unrelated = installed / "backup.service"
+    unrelated.write_text("unit", encoding="utf-8")
+    candidate = tmp_path / "wrong.toml"
+    candidate.write_text("config", encoding="utf-8")
+    fake = SimpleNamespace(
+        installed_unit_dir=lambda: installed,
+        unit_config=lambda path: candidate if path == unrelated else None,
+    )
+    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    assert orbi._installed_unit_configs() == ()
+
+
+def test_status_does_not_guess_between_installed_unit_configs(
+    tmp_path, monkeypatch, caplog,
+):
+    configs = [tmp_path / "one.toml", tmp_path / "two.toml"]
+    for config in configs:
+        config.write_text('source_repos = ["owner/repo"]\nrepo_dir = "."\n', encoding="utf-8")
+    installed = tmp_path / "units"
+    installed.mkdir()
+    units = [installed / "orbi-one.service", installed / "orbi-two.service"]
+    for unit in units:
+        unit.write_text("unit", encoding="utf-8")
+    fake = SimpleNamespace(
+        installed_unit_dir=lambda: installed,
+        unit_config=lambda path: configs[units.index(path)] if path in units else None,
+    )
+    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    with caplog.at_level(logging.ERROR, logger="orbi.cli"):
+        assert orbi.main(["status"]) == 1
+    assert "config_not_found" in caplog.text
+    assert all(str(config.resolve()) in caplog.text for config in configs)
+
+
+def test_mutating_command_lists_a_unit_config_without_using_it(
+    tmp_path, monkeypatch, caplog,
+):
+    config = tmp_path / "deployment.toml"
+    config.write_text('source_repos = ["owner/repo"]\nrepo_dir = "."\n', encoding="utf-8")
+    installed = tmp_path / "units"
+    installed.mkdir()
+    unit = installed / "orbi@1.service"
+    unit.write_text("unit", encoding="utf-8")
+    fake = SimpleNamespace(
+        installed_unit_dir=lambda: installed,
+        unit_config=lambda path: config if path == unit else None,
+    )
+    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    with caplog.at_level(logging.ERROR, logger="orbi.cli"):
+        assert orbi.main(["milestone", "set", "v1"]) == 1
+    assert "config_not_found" in caplog.text
+    assert str(config.resolve()) in caplog.text
+
+
+def test_main_preserves_required_path_missing_for_existing_config(
+    tmp_path, caplog,
+):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "missing-repo"\n',
+        encoding="utf-8",
+    )
     import logging
 
     with caplog.at_level(logging.ERROR, logger="orbi.cli"):
-        assert orbi.main(
-            ["status", "--config", str(tmp_path / "missing.toml")],
-        ) == 1
-    assert "required path missing" in caplog.text
+        assert orbi.main(["status", "--config", str(config_path)]) == 1
+    assert "config_invalid reason=required path missing" in caplog.text
 
 
 def test_latest_task_worktree_returns_none_when_missing(tmp_path):
