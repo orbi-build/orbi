@@ -10,7 +10,7 @@ Orbi claims an Issue from GitHub Issues, develops it in an isolated worktree, ru
 
 **Inspect one loop:** [Issue #835](https://github.com/orbi-build/orbi/issues/835) → [PR #843](https://github.com/orbi-build/orbi/pull/843) → [Release v0.5.4](https://github.com/orbi-build/orbi/releases/tag/v0.5.4)
 
-Website <https://orbi.build> ｜ Documentation <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions)
+Website <https://orbi.build> ｜ Documentation <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions) ｜ Docker [GHCR](https://ghcr.io/orbi-build/orbi) · [Docker Hub](https://hub.docker.com/r/orbibuild/orbi)
 
 ## Quick start
 
