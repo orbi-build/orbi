@@ -188,6 +188,70 @@ def test_frozen_baseline_matches_the_real_corpus():
     assert baseline == module.counts(module.TESTS_DIR)
 
 
+# --- wrapped-form patches, exemption scope, and CLI guards ---------------
+
+# The wrapped-form patch, assembled so this file's own source never
+# matches the ratcheted pattern.
+WRAPPED_PATCH = 'monkeypatch.setattr(' + '\n        runner, "run_command", fake)'
+
+
+def test_counts_wrapped_form_runner_patches(tmp_path):
+    """A patch written with the target on the next line (`setattr(`
+    then `runner, ...`) is the same direct runner patch as the
+    single-line form — the real corpus uses this style in 200+ places
+    (conftest fixtures among them), so the gate must count it or any
+    new wrapped-form patch sails through with the count unchanged."""
+    module = load_ratchet()
+    tests = make_corpus(tmp_path, {
+        "test_wrapped.py": [WRAPPED_PATCH],
+    })
+    assert module.counts(tests)["monkeypatch_setattr_runner"] == 1
+
+
+def test_only_the_top_level_fakes_dir_is_exempt(tmp_path):
+    """The documented scope exempts `tests/fakes/` — not any directory
+    NAMED fakes at any depth: a nested `tests/a/fakes/x.py` is regular
+    corpus and its patches must be counted."""
+    module = load_ratchet()
+    tests = make_corpus(tmp_path, {
+        "a/fakes/test_deep.py": [PATCH_LINE],
+        "fakes/github.py": [PATCH_LINE],
+    })
+    assert module.counts(tests)["monkeypatch_setattr_runner"] == 1
+
+
+def test_main_fails_fast_when_the_corpus_dir_is_missing(tmp_path):
+    """A missing/misspelled corpus directory is 0 files, not 0 patches:
+    the gate must fail fast instead of passing on an empty corpus
+    (mirroring the baseline's own fail-fast on unreadable evidence)."""
+    module = load_ratchet()
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(
+        json.dumps({"monkeypatch_setattr_runner": 1,
+                    "command_shape_asserts": 1}), encoding="utf-8",
+    )
+    assert module.main(
+        ["patch_ratchet.py", str(tmp_path / "no-such-dir")],
+        baseline_file=baseline,
+    ) == 1
+
+
+def test_main_rejects_extra_positional_arguments(tmp_path):
+    """Extra positional arguments are a CLI mistake, not something to
+    silently ignore (only the first is used today)."""
+    module = load_ratchet()
+    tests = make_corpus(tmp_path, {"test_one.py": [PATCH_LINE]})
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(
+        json.dumps({"monkeypatch_setattr_runner": 1,
+                    "command_shape_asserts": 1}), encoding="utf-8",
+    )
+    assert module.main(
+        ["patch_ratchet.py", str(tests), "extra"],
+        baseline_file=baseline,
+    ) == 1
+
+
 def test_ratchet_is_wired_into_ci_next_to_the_coverage_gate():
     """The gate runs in the CI workflow, in the same step sequence as
     the coverage gates (the Issue's wiring requirement)."""
