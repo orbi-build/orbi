@@ -928,6 +928,7 @@ def test_check_reports_missing_config_when_no_unit_is_available(
         unit_config=lambda path: None,
     )
     monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    monkeypatch.setattr(orbi.pilot_setup, "run_machine_checks", lambda **_: ([], []))
     assert orbi.main(["check"]) == 1
     assert "config_not_found" in capsys.readouterr().err
 
@@ -966,6 +967,7 @@ def test_check_with_explicit_missing_config_keeps_unit_candidate_list(
         unit_config=lambda path: candidate if path == unit else None,
     )
     monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    monkeypatch.setattr(orbi.pilot_setup, "run_machine_checks", lambda **_: ([], []))
     monkeypatch.setattr(orbi.pilot_setup, "run_checks", lambda *args, **kwargs: ["ok"])
     missing = tmp_path / "missing.toml"
     assert orbi.main(["check", "--config", str(missing)]) == 1

@@ -182,8 +182,8 @@ def test_publish_workflow_smokes_the_wheel_in_a_clean_venv():
 
 def test_publish_workflow_smokes_the_structured_failure_paths():
     commands = "\n".join(step_commands(steps_of(load_workflow(), "build")))
-    assert 'check_failed check=[^ ]+ ' in commands, (
-        "the prerequisite gate must retain its structured prerequisite shape"
+    assert "check_failed check=(commands|systemd_session|gh_auth|pi|config) " in commands, (
+        "the prerequisite gate must retain its enumerated prerequisite shape"
     )
     assert "config_not_found path=[^;]+; reason=[^;]+; fix=" in commands, (
         "the prerequisite gate must accept the current missing-config shape"
