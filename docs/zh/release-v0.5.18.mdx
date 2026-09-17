@@ -1,0 +1,27 @@
+# v0.5.18 发布
+
+`v0.5.18` 的 GitHub Release 发布说明：[v0.5.18](https://github.com/orbi-build/orbi/releases/tag/v0.5.18)（release task：Issue #1041）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.5.18` | 注解 tag `ad64446b78e2edf4c001143e9ebee6165b6e294b` | 提交 `a5036c9ef3608d2f73b6b0d7dfb184ca2649936d` |
+
+## Release notes
+
+## Changelog
+
+### Documentation
+
+- Docker docs: Quick start on the published image with one copy-paste docker run that reaches a real delivery ([Issue #1049](https://github.com/orbi-build/orbi/issues/1049); [PR #1051](https://github.com/orbi-build/orbi/pull/1051))
+
+### Bug fixes
+
+- docker-image workflow: build-push context is the repo root while the Dockerfile COPYs from 3rd/docker, so no image was ever published ([Issue #1040](https://github.com/orbi-build/orbi/issues/1040); [PR #1042](https://github.com/orbi-build/orbi/pull/1042))
+- Release state machine has no git identity: every Orbi Cloud sandbox fails at git tag -a with "Committer identity unknown" ([Issue #1043](https://github.com/orbi-build/orbi/issues/1043); [PR #1047](https://github.com/orbi-build/orbi/pull/1047))
+- Docker entrypoint: model provider from ORBI_PI_* env vars on first start (with entrypoint tests) ([Issue #1048](https://github.com/orbi-build/orbi/issues/1048); [PR #1050](https://github.com/orbi-build/orbi/pull/1050))
+
+## Contributors
+
+<a href="https://github.com/xqliu"><img src="https://avatars.githubusercontent.com/u/22554?v=4&s=48" width="32" height="32" alt="xqliu" /></a>
