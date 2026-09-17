@@ -1788,24 +1788,6 @@ def sync_release_docs(*, source_repo: str, repo_dir: Path,
     new_slug = f"release-{tag}"
     en_path = worktree / "docs" / f"{new_slug}.mdx"
     zh_path = worktree / "docs" / "zh" / f"{new_slug}.mdx"
-    if changelog is not None and not en_path.is_file():
-        # A prior attempt may have pushed docs and then died before pushing
-        # the tag. The release worktree is reset to release_commit on resume;
-        # restore the already-published docs base instead of creating a
-        # non-fast-forward duplicate commit.
-        try:
-            run_command(
-                ["git", "rev-parse", "--verify",
-                 f"refs/remotes/origin/{base_branch}:{'docs/' + new_slug + '.mdx'}"],
-                cwd=worktree,
-            )
-        except subprocess.CalledProcessError:
-            pass
-        else:
-            run_command(
-                ["git", "reset", "--hard", f"refs/remotes/origin/{base_branch}"],
-                cwd=worktree,
-            )
     en_content = release_docs_page(
         version=tag, tag_object=tag_object, release_commit=release_commit,
         published_at=published_at, release_url=release_url,
