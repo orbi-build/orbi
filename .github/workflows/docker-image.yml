@@ -3,6 +3,12 @@ name: Publish Docker image
 on:
   release:
     types: [published]
+  # The build-only job is the check for the publish configuration; run it on
+  # every PR that touches the image or this workflow (Issue #1040).
+  pull_request:
+    paths:
+      - "3rd/docker/**"
+      - ".github/workflows/docker-image.yml"
   workflow_dispatch:
     inputs:
       tag:
