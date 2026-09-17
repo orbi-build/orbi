@@ -949,6 +949,26 @@ def test_check_resolves_the_single_existing_installed_unit_config(
     assert capsys.readouterr().out.strip() == "ok"
 
 
+def test_check_with_explicit_missing_config_keeps_unit_candidate_list(
+    tmp_path, monkeypatch, capsys,
+):
+    installed = tmp_path / "units"
+    installed.mkdir()
+    unit = installed / "orbi@1.service"
+    unit.write_text("unit", encoding="utf-8")
+    candidate = tmp_path / "candidate.toml"
+    candidate.write_text("config", encoding="utf-8")
+    fake = SimpleNamespace(
+        installed_unit_dir=lambda: installed,
+        unit_config=lambda path: candidate if path == unit else None,
+    )
+    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    monkeypatch.setattr(orbi.pilot_setup, "run_checks", lambda *args, **kwargs: ["ok"])
+    missing = tmp_path / "missing.toml"
+    assert orbi.main(["check", "--config", str(missing)]) == 0
+    assert capsys.readouterr().out.strip() == "ok"
+
+
 def test_setup_reports_missing_config_with_setup_prefix(
     tmp_path, monkeypatch, capsys,
 ):
