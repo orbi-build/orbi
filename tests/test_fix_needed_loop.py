@@ -1400,6 +1400,18 @@ def _report(exc, monkeypatch_unused=None, **kwargs):
     )
 
 
+def test_report_failure_comment_carries_unknown_head_scene(
+        monkeypatch, tmp_path):
+    captured = make_report_fake(monkeypatch)
+    scene_block = scene.render(scene.Scene(
+        run_id=RUN_ID, base_branch="main", base_sha="base", pr_url=PR_URL,
+        verdict_head_unknown_round=2,
+    ))
+    _report(ValueError("unknown head"),
+            review_scene_block=scene_block)
+    assert scene.parse(captured["comments"][0]).verdict_head_unknown_round == 2
+
+
 def test_report_failure_comment_carries_the_fingerprint_marker(
         monkeypatch, tmp_path):
     """Issue #825 (defect 3): every recoverable failure comment carries

@@ -64,6 +64,7 @@ class Scene:
     external: str = ""
     review_round: int = 0
     base_advance_round: int = 0
+    verdict_head_unknown_round: int = 0
     schema: int = SCHEMA_VERSION
 
 
@@ -142,9 +143,11 @@ def _parse_block(payload: str) -> Scene:
         raise SceneError(
             f"orbi:scene:v1 block has unknown fields: {unknown}"
         )
-    # ``base_advance_round`` was added to the v1 payload without changing
-    # the marker version; old v1 opened-PR comments must remain resumable.
-    required_fields = set(_SCENE_FIELDS) - {"base_advance_round"}
+    # These counters were added to the v1 payload without changing the
+    # marker version; old v1 opened-PR comments must remain resumable.
+    required_fields = set(_SCENE_FIELDS) - {
+        "base_advance_round", "verdict_head_unknown_round",
+    }
     missing = sorted(name for name in required_fields if name not in data)
     if missing:
         raise SceneError(
@@ -164,14 +167,14 @@ def _parse_block(payload: str) -> Scene:
             "orbi:scene:v1 field review_round must be a "
             "non-negative integer"
         )
-    if "base_advance_round" in data and (
-        type(data["base_advance_round"]) is not int
-        or data["base_advance_round"] < 0
-    ):
-        raise SceneError(
-            "orbi:scene:v1 field base_advance_round must be a "
-            "non-negative integer"
-        )
+    for counter in ("base_advance_round", "verdict_head_unknown_round"):
+        if counter in data and (
+            type(data[counter]) is not int or data[counter] < 0
+        ):
+            raise SceneError(
+                f"orbi:scene:v1 field {counter} must be a "
+                "non-negative integer"
+            )
     if type(data["schema"]) is not int or data["schema"] != SCHEMA_VERSION:
         raise SceneError(
             f"orbi:scene:v1 block schema {data['schema']!r} != "
@@ -189,6 +192,7 @@ def _parse_block(payload: str) -> Scene:
         external=data["external"],
         review_round=data["review_round"],
         base_advance_round=data.get("base_advance_round", 0),
+        verdict_head_unknown_round=data.get("verdict_head_unknown_round", 0),
         schema=data["schema"],
     )
 
