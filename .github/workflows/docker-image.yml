@@ -40,7 +40,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: 3rd/docker
-          file: Dockerfile
+          file: 3rd/docker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: false
           tags: |
@@ -83,7 +83,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: 3rd/docker
-          file: Dockerfile
+          file: 3rd/docker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
@@ -102,7 +102,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: 3rd/docker
-          file: Dockerfile
+          file: 3rd/docker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
