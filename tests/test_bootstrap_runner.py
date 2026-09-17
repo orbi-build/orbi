@@ -18139,6 +18139,49 @@ def test_process_release_syncs_docs_before_pushing_tag(monkeypatch):
     assert steps == ["tag-created", "docs", "tag-pushed", "release-published"]
 
 
+def test_process_release_resumes_with_local_tag_after_docs_push(monkeypatch):
+    state = make_release_process_env(monkeypatch)
+    steps = []
+    monkeypatch.setattr(release, "local_release_tag_commit",
+                        lambda *args: "release-commit")
+    monkeypatch.setattr(release, "tag_commit_is_ancestor_of_base",
+                        lambda *args: True)
+    monkeypatch.setattr(
+        release, "ensure_release_tag_created",
+        lambda *args: steps.append(("tag-created", args[-1])),
+    )
+    monkeypatch.setattr(
+        release, "sync_release_docs",
+        lambda **kwargs: steps.append(("docs", kwargs["release_commit"]))
+        or "docs synced",
+    )
+    monkeypatch.setattr(
+        release, "ensure_release_tag_pushed",
+        lambda *args: steps.append(("tag-pushed", args[-1])),
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    assert release.process_release(
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
+    ) == "https://github.com/o/r/releases/tag/v0.3.0"
+    assert steps == [
+        ("tag-created", "release-commit"),
+        ("docs", "release-commit"),
+        ("tag-pushed", "release-commit"),
+    ]
+
+
+def test_resume_release_commit_rejects_unrelated_local_tag(monkeypatch):
+    monkeypatch.setattr(release, "tag_commit_is_ancestor_of_base",
+                        lambda *args: False)
+    with pytest.raises(RuntimeError, match="existing tag is never moved"):
+        release.resume_release_commit(
+            local_tag_commit="unrelated-commit", release_commit="base-commit",
+            repo_dir=Path("/r"),
+        )
+
+
 def test_process_release_started_milestone_carries_base_branch(monkeypatch):
     """Issue #811: the `**Orbi release started**` milestone names the
     branch being frozen. The journal refactor deleted the middle
@@ -20289,6 +20332,31 @@ def test_move_latest_marker_fails_fast_on_resume_when_the_new_page_is_missing(
     with pytest.raises(RuntimeError, match=r"does not carry the \(latest\)"):
         release.move_latest_marker(
             work, "release-v0.1.2", "release-v0.4.0", resume=True,
+        )
+
+
+def test_sync_release_docs_uses_prepublication_changelog(tmp_path):
+    work = make_release_docs_repo(tmp_path)
+    head = git_out(work, "rev-parse", "HEAD")
+    evidence = release.sync_release_docs(
+        source_repo="o/r", repo_dir=work, worktree=work,
+        base_branch="main", tag="v0.4.0", release_commit=head,
+        issue_number=77, changelog="## Changelog\n\n- shipped\n",
+    )
+    assert "committed and pushed" in evidence
+    page = (work / "docs" / "release-v0.4.0.mdx").read_text(encoding="utf-8")
+    assert "GitHub Release [v0.4.0]" in page
+    assert "published" not in page.split("\n", 4)[2]
+
+
+def test_sync_release_docs_rejects_empty_prepublication_changelog(tmp_path):
+    work = make_release_docs_repo(tmp_path)
+    head = git_out(work, "rev-parse", "HEAD")
+    with pytest.raises(RuntimeError, match="changelog is empty"):
+        release.sync_release_docs(
+            source_repo="o/r", repo_dir=work, worktree=work,
+            base_branch="main", tag="v0.4.0", release_commit=head,
+            issue_number=77, changelog="  ",
         )
 
 

@@ -1252,16 +1252,21 @@ def release_tag_commit(repo_dir: Path, tag: str) -> str | None:
     return refs.get(f"refs/tags/{tag}")
 
 
-def ensure_release_tag_created(repo_dir: Path, tag: str,
-                               release_commit: str) -> None:
-    """Create the annotated release tag locally, idempotently."""
+def local_release_tag_commit(repo_dir: Path, tag: str) -> str | None:
+    """Return a local tag's peeled commit, or None when it is absent."""
     try:
-        local_tag_commit = run_command(
+        return run_command(
             ["git", "rev-parse", "-q", "--verify",
              f"refs/tags/{tag}^{{commit}}"], cwd=repo_dir,
         ).strip()
     except subprocess.CalledProcessError:
-        local_tag_commit = None
+        return None
+
+
+def ensure_release_tag_created(repo_dir: Path, tag: str,
+                               release_commit: str) -> None:
+    """Create the annotated release tag locally, idempotently."""
+    local_tag_commit = local_release_tag_commit(repo_dir, tag)
     if local_tag_commit is None:
         run_command(
             ["git", "tag", "-a", tag, "-m", f"Release {tag}",
@@ -1288,6 +1293,20 @@ def tag_commit_is_ancestor_of_base(tag_commit: str, base_commit: str,
                                    repo_dir: Path) -> bool:
     """Compatibility wrapper for the release state machine."""
     return _is_ancestor(tag_commit, base_commit, cwd=repo_dir)
+
+
+def resume_release_commit(*, local_tag_commit: str | None,
+                          release_commit: str, repo_dir: Path) -> str:
+    """Keep a resumed release tag on its original commit."""
+    if local_tag_commit is None or local_tag_commit == release_commit:
+        return release_commit
+    if not tag_commit_is_ancestor_of_base(
+            local_tag_commit, release_commit, repo_dir):
+        raise RuntimeError(
+            f"local tag points at {local_tag_commit}, not the release commit "
+            f"{release_commit} — an existing tag is never moved or overwritten"
+        )
+    return local_tag_commit
 
 
 def publish_release(*, repo: str, tag: str, version: str,
@@ -2294,6 +2313,15 @@ def process_release(issue: dict, config: RunnerConfig,
                     f"release commit {release_commit} — an existing "
                     "tag is never moved or overwritten"
                 )
+        else:
+            # A docs push can succeed before the process dies while the tag
+            # is still local. On resume the frozen base is now the docs
+            # commit; the local tag is the only durable identity of the
+            # release commit and must not be retagged onto that docs commit.
+            release_commit = resume_release_commit(
+                local_tag_commit=local_release_tag_commit(config.repo_dir, tag),
+                release_commit=release_commit, repo_dir=config.repo_dir,
+            )
         # Create the annotated object locally, but do not publish the tag
         # until the docs commit is on the base branch. This keeps the docs
         # invariant true at every point visible to CI.
