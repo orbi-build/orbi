@@ -881,18 +881,37 @@ def test_session_pretty_prints_summaries_instead_of_raw_jsonl(
     assert "sess.jsonl" not in out
 
 
-def test_main_requires_config_file(tmp_path, caplog):
-    """Issue #163: a missing config is the most common missing
-    prerequisite — every named subcommand reports it as the structured
-    `config_invalid reason=required path missing: ...` failure (exit 1),
-    never a bare FileNotFoundError traceback at the user."""
+def test_main_reports_missing_config_with_actionable_location_and_fix(
+    tmp_path, caplog,
+):
+    """Issue #1001: distinguish a missing config from missing paths it names."""
+    import logging
+
+    config_path = tmp_path / "missing.toml"
+    with caplog.at_level(logging.ERROR, logger="orbi.cli"):
+        assert orbi.main(
+            ["status", "--config", str(config_path)],
+        ) == 1
+    assert "config_not_found" in caplog.text
+    assert f"path={config_path.resolve()}" in caplog.text
+    assert "ORBI_CONFIG" in caplog.text
+    assert "fix=" in caplog.text
+    assert "required path missing" not in caplog.text
+
+
+def test_main_preserves_required_path_missing_for_existing_config(
+    tmp_path, caplog,
+):
+    config_path = tmp_path / "orbi.toml"
+    config_path.write_text(
+        'source_repos = ["owner/repo"]\nrepo_dir = "missing-repo"\n',
+        encoding="utf-8",
+    )
     import logging
 
     with caplog.at_level(logging.ERROR, logger="orbi.cli"):
-        assert orbi.main(
-            ["status", "--config", str(tmp_path / "missing.toml")],
-        ) == 1
-    assert "required path missing" in caplog.text
+        assert orbi.main(["status", "--config", str(config_path)]) == 1
+    assert "config_invalid reason=required path missing" in caplog.text
 
 
 def test_latest_task_worktree_returns_none_when_missing(tmp_path):

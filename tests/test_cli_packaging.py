@@ -875,9 +875,9 @@ def test_bare_cli_real_call_reaches_the_runner_not_argparse(tmp_path):
         f"argparse instead of starting the Runner: "
         f"{result.stderr.strip()}"
     )
-    assert "FileNotFoundError" in result.stderr, (
-        "the bare CLI must reach the Runner's config loading "
-        f"(fail-fast on the missing config), got: {result.stderr.strip()}"
+    assert "config_not_found" in result.stderr, (
+        "the bare CLI must report the actionable missing-config error, "
+        f"got: {result.stderr.strip()}"
     )
 
 

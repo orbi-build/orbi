@@ -45,6 +45,7 @@ from orbi.delivery_labels import (
 
 from orbi.github import list_milestones
 from orbi.runner import (
+    ConfigFileMissingError,
     RunIdFilter,
     RunnerConfig,
     freeze_base,
@@ -867,6 +868,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"setup_failed reason={exc}", file=sys.stderr)
         else:
             LOGGER.error("config_invalid reason=%s", exc)
+        return 1
+    except ConfigFileMissingError as exc:
+        message = (
+            f"config_not_found path={exc.path}; "
+            "reason=no Orbi config at this path "
+            "(the default is `orbi.toml` in the current directory); "
+            "fix=run from the deployment directory, or point at the config: "
+            "`ORBI_CONFIG=~/orbi-deploy/<dir>/orbi.toml orbi <command>` "
+            "(`--config <path>` also works, after the subcommand). "
+            "The source checkout is not a deployment directory and has no "
+            "orbi.toml."
+        )
+        if args.command == "setup":
+            print(f"setup_failed reason={message}", file=sys.stderr)
+        else:
+            LOGGER.error(message)
         return 1
     except FileNotFoundError as exc:
         # A PyPI first run (`orbi setup` in a fresh dir with
