@@ -138,10 +138,7 @@ def test_non_release_docs_have_question_metadata_and_answer_opening():
     for path in pages:
         lines = path.read_text(encoding="utf-8").splitlines()
         assert lines and lines[0] == "---", f"{path} needs frontmatter"
-        try:
-            end = lines.index("---", 1)
-        except ValueError:
-            raise AssertionError(f"{path} has unterminated frontmatter") from None
+        end = lines.index("---", 1)
         descriptions = [line for line in lines[1:end] if line.startswith("description:")]
         assert len(descriptions) == 1, f"{path} needs one description"
         description = descriptions[0].split(":", 1)[1].strip().strip('"')
