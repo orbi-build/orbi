@@ -373,7 +373,8 @@ def run_command(command: list[str], *, cwd: Path | None = None,
                 log_command: list[str] | None = None,
                 log_stdout: bool = False,
                 failure_log_level: int = logging.ERROR,
-                check: bool = True) -> str | subprocess.CompletedProcess[str]:
+                check: bool = True,
+                env: dict[str, str] | None = None) -> str | subprocess.CompletedProcess[str]:
     """Run one external command; log context and fail fast by default.
 
     ``check=False`` is for callers that need to inspect an expected status
@@ -386,14 +387,16 @@ def run_command(command: list[str], *, cwd: Path | None = None,
         single_line(" ".join(log_command or command)), cwd or Path.cwd(),
     )
     try:
-        result = subprocess.run(
-            command,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=check,
-            timeout=timeout,
-        )
+        run_kwargs = {
+            "cwd": cwd,
+            "capture_output": True,
+            "text": True,
+            "check": check,
+            "timeout": timeout,
+        }
+        if env is not None:
+            run_kwargs["env"] = env
+        result = subprocess.run(command, **run_kwargs)
     except subprocess.CalledProcessError as exc:
         event(
             "command_failed", level=failure_log_level,

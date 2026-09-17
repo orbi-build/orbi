@@ -16864,17 +16864,21 @@ def test_prepare_release_version_updates_sources_and_commits(tmp_path, monkeypat
     ) == "newsha"
     assert 'version = "0.3.0"' in (work / "pyproject.toml").read_text()
     assert '__version__ = "0.3.0"' in (package / "__init__.py").read_text()
-    assert calls == [
-        (["git", "add", "pyproject.toml", "src/orbi/__init__.py"],
-         {"cwd": work}),
-        (["git", "commit", "-m", "chore: prepare release v0.3.0"],
-         {"cwd": work}),
-        (["git", "push", "origin", "HEAD:refs/heads/main"], {
-            "cwd": work,
-            "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS,
-        }),
-        (["git", "rev-parse", "HEAD"], {"cwd": work}),
-    ]
+    assert calls[0] == (["git", "add", "pyproject.toml", "src/orbi/__init__.py"],
+                        {"cwd": work})
+    commit_call = calls[1]
+    assert commit_call[0] == ["git", "commit", "-m", "chore: prepare release v0.3.0"]
+    assert {key: commit_call[1]["env"][key] for key in (
+        "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+    )} == {
+        "GIT_AUTHOR_NAME": "Orbi", "GIT_AUTHOR_EMAIL": "orbi@localhost",
+        "GIT_COMMITTER_NAME": "Orbi", "GIT_COMMITTER_EMAIL": "orbi@localhost",
+    }
+    assert calls[2] == (["git", "push", "origin", "HEAD:refs/heads/main"], {
+        "cwd": work, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS,
+    })
+    assert calls[3] == (["git", "rev-parse", "HEAD"], {"cwd": work})
 
 
 def test_prepare_release_version_updates_package_json(tmp_path, monkeypatch):
@@ -16893,16 +16897,15 @@ def test_prepare_release_version_updates_package_json(tmp_path, monkeypatch):
         work, "v0.3.0", "main", "package.json",
     ) == "newsha"
     assert '"version": "0.3.0"' in (work / "package.json").read_text()
-    assert calls == [
-        (["git", "add", "package.json"], {"cwd": work}),
-        (["git", "commit", "-m", "chore: prepare release v0.3.0"],
-         {"cwd": work}),
-        (["git", "push", "origin", "HEAD:refs/heads/main"], {
-            "cwd": work,
-            "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS,
-        }),
-        (["git", "rev-parse", "HEAD"], {"cwd": work}),
-    ]
+    assert calls[0] == (["git", "add", "package.json"], {"cwd": work})
+    commit_call = calls[1]
+    assert commit_call[0] == ["git", "commit", "-m", "chore: prepare release v0.3.0"]
+    assert commit_call[1]["env"]["GIT_COMMITTER_EMAIL"] == "orbi@localhost"
+    assert commit_call[1]["env"]["GIT_AUTHOR_EMAIL"] == "orbi@localhost"
+    assert calls[2] == (["git", "push", "origin", "HEAD:refs/heads/main"], {
+        "cwd": work, "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS,
+    })
+    assert calls[3] == (["git", "rev-parse", "HEAD"], {"cwd": work})
 
 
 @pytest.mark.parametrize(
@@ -17148,6 +17151,54 @@ def test_release_tag_commit_never_reads_a_network_failure_as_missing_tag(
     monkeypatch.setattr(seam, "run_git_network_command", fail_ls_remote)
     with pytest.raises(subprocess.CalledProcessError):
         release.release_tag_commit(work, "v0.1.0")
+
+
+def test_release_git_writes_use_identity_without_git_config(tmp_path, monkeypatch):
+    """Cloud-like empty Git config still yields attributable tag and commit."""
+    work = tmp_path / "release"
+    work.mkdir()
+    clean_env = {**os.environ, "HOME": str(tmp_path / "empty-home"),
+                 "GIT_CONFIG_GLOBAL": "/dev/null"}
+    (tmp_path / "empty-home").mkdir()
+    subprocess.run(["git", "init", "-b", "main", str(work)],
+                   check=True, capture_output=True, env=clean_env)
+    (work / "pyproject.toml").write_text(
+        '[project]\nname = "orbi"\nversion = "0.2.0"\n', encoding="utf-8",
+    )
+    subprocess.run(["git", "-C", str(work), "add", "pyproject.toml"],
+                   check=True, capture_output=True, env=clean_env)
+    subprocess.run(
+        ["git", "-C", str(work), "-c", "user.name=seed",
+         "-c", "user.email=seed@example.test", "commit", "-m", "seed"],
+        check=True, capture_output=True, env=clean_env,
+    )
+    head = subprocess.run(["git", "-C", str(work), "rev-parse", "HEAD"],
+                          check=True, capture_output=True, text=True,
+                          env=clean_env).stdout.strip()
+    monkeypatch.setenv("HOME", clean_env["HOME"])
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    release.ensure_release_tag_created(work, "v0.1.0", head)
+    tagger = subprocess.run(
+        ["git", "-C", str(work), "for-each-ref", "--format=%(taggername) %(taggeremail)",
+         "refs/tags/v0.1.0"], check=True, capture_output=True, text=True,
+        env=clean_env,
+    ).stdout.strip()
+    assert tagger == "Orbi <orbi@localhost>"
+
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)],
+                   check=True, capture_output=True, env=clean_env)
+    subprocess.run(["git", "-C", str(work), "remote", "add", "origin", str(remote)],
+                   check=True, capture_output=True, env=clean_env)
+    package = work / "src" / "orbi"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text('__version__ = "0.2.0"\n', encoding="utf-8")
+    release.prepare_release_version(work, "v0.3.0", "main")
+    commit_identity = subprocess.run(
+        ["git", "-C", str(work), "show", "-s", "--format=%an <%ae> %cn <%ce>"],
+        check=True, capture_output=True, text=True, env=clean_env,
+    ).stdout.strip()
+    assert commit_identity == "Orbi <orbi@localhost> Orbi <orbi@localhost>"
 
 
 def test_ensure_release_tag_pushed_creates_and_pushes_when_no_local_tag(
@@ -18056,8 +18107,11 @@ def test_process_release_success_end_to_end(monkeypatch):
                                        "remove": "ai-in-progress"})
     # The tag was created at the release commit and pushed plainly.
     commands = [c for c, _ in state["commands"]]
-    assert (["git", "tag", "-a", "v0.3.0", "-m", "Release v0.3.0",
-             "abc123"], {"cwd": Path("/r")}) in state["commands"]
+    tag_calls = [item for item in state["commands"] if item[0][:3] == ["git", "tag", "-a"]]
+    tag_call = next(item for item in tag_calls if item[0][-1] == "abc123")
+    assert tag_call[0] == ["git", "tag", "-a", "v0.3.0", "-m", "Release v0.3.0", "abc123"]
+    assert tag_call[1]["env"]["GIT_AUTHOR_NAME"] == "Orbi"
+    assert tag_call[1]["env"]["GIT_COMMITTER_EMAIL"] == "orbi@localhost"
     assert (["git", "push", "origin", "refs/tags/v0.3.0"], {
         "cwd": Path("/r"),
         "timeout": journal.GIT_NETWORK_TIMEOUT_SECONDS,
