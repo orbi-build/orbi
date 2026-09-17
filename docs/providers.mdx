@@ -1,4 +1,9 @@
+---
+description: "Which model providers can Orbi run on?"
+---
 # Pi provider templates
+
+Orbi can run with the model providers represented by its Pi `models.json`-shaped templates and an OpenAI-compatible endpoint.
 
 Issue #309 ships one complete `pi_providers` file per provider in [`templates/pi-providers`](https://github.com/orbi-build/orbi/tree/main/templates/pi-providers). Each file is valid JSON in Pi's `models.json` shape: copy the whole file to `.orbi/pi-providers.json`, or copy its single entry into the `providers` object of an existing file. Set the two selectors in `orbi.toml`:
 

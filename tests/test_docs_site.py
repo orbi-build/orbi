@@ -126,6 +126,37 @@ def page_text(slug: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def test_non_release_docs_have_question_metadata_and_answer_opening():
+    """Issue #1028: searchable pages open with a question and its answer.
+
+    Keep this check over both language trees so adding a page without the
+    question-shaped metadata or direct answer fails close to the edit.
+    """
+    pages = sorted(DOCS_DIR.glob("*.mdx")) + sorted((DOCS_DIR / "zh").glob("*.mdx"))
+    pages = [path for path in pages if not path.name.startswith("release-v")]
+    assert pages, "no non-release docs pages found"
+    for path in pages:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert lines and lines[0] == "---", f"{path} needs frontmatter"
+        try:
+            end = lines.index("---", 1)
+        except ValueError:
+            raise AssertionError(f"{path} has unterminated frontmatter") from None
+        descriptions = [line for line in lines[1:end] if line.startswith("description:")]
+        assert len(descriptions) == 1, f"{path} needs one description"
+        description = descriptions[0].split(":", 1)[1].strip().strip('"')
+        assert description.endswith("?"), f"{path} description must end with '?': {description}"
+
+        h1 = next((i for i, line in enumerate(lines) if line.startswith("# ")), None)
+        assert h1 is not None, f"{path} needs an H1"
+        opening = next((line.strip() for line in lines[h1 + 1:] if line.strip()), "")
+        assert opening and not opening.startswith("#"), f"{path} needs an answer paragraph"
+        assert opening[-1] in ".。!?！？", f"{path} answer must be one sentence: {opening}"
+        assert not re.search(r"[!?。！？]\\s+", opening), (
+            f"{path} answer must be one sentence: {opening}"
+        )
+
+
 def load_docs_config() -> dict:
     assert DOCS_CONFIG.is_file(), f"missing Mintlify config: {DOCS_CONFIG}"
     config = json.loads(DOCS_CONFIG.read_text(encoding="utf-8"))
