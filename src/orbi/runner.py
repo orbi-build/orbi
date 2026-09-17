@@ -4201,6 +4201,9 @@ def run_pi(issue: dict, ctx: RunContext, config: RunnerConfig, *,
     steering_rounds = 0
     steering_started = time.time()
     steering_limit_logged = False
+    # `resume_context` is also the public parameter name of this function;
+    # keep an unshadowed reference for the restart callback below.
+    build_resume_context = globals()["resume_context"]
 
     def check_steering() -> SteeringRequest | None:
         nonlocal steering_rounds, steering_limit_logged
@@ -4213,9 +4216,22 @@ def run_pi(issue: dict, ctx: RunContext, config: RunnerConfig, *,
                     ), round=steering_rounds,
                 )
             return None
-        comments = issue_comments(int(issue["number"]), repo=source_repo)
+        try:
+            comments = issue_comments(int(issue["number"]), repo=source_repo)
+        except Exception as exc:
+            event(
+                "steering_poll_failed", level=logging.WARNING,
+                issue=issue_context(source_repo, int(issue["number"])),
+                reason=type(exc).__name__,
+            )
+            return None
         fresh: list[dict] = []
-        started_at = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(steering_started))
+        # GitHub exposes comment timestamps only to whole seconds. Round
+        # the boundary up so a comment created in the startup second is not
+        # mistaken for a post-start correction.
+        started_at = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime(math.ceil(steering_started))
+        )
         for comment in comments:
             identifier = str(comment.get("id", ""))
             if not identifier or identifier in steering_seen:
@@ -4234,7 +4250,7 @@ def run_pi(issue: dict, ctx: RunContext, config: RunnerConfig, *,
         for comment in fresh:
             author = comment.get("author")
             authors.append(author.get("login") if isinstance(author, dict) else "unknown")
-        resume = resume_context(worktree, fresh) or ""
+        resume = build_resume_context(worktree, fresh) or ""
         return SteeringRequest(
             context=f"{context}\n{resume}",
             comment_ids=tuple(str(item["id"]) for item in fresh),
