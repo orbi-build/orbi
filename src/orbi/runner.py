@@ -6458,7 +6458,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
     - missing/malformed verdict -> raise; the caller keeps the Issue in
       the automatic fix loop (`ai-fix-needed`). A mismatched head is
       recoverable when it names another real commit, and an unknown
-      object gets two retries per run before becoming terminal
+      object gets two retries per review run before becoming terminal
       (`ai-blocked`);
     - an exhausted round budget -> raise `UnrecoverableDeliveryError`
       (the bounded loop is a human decision, not a
@@ -6597,7 +6597,10 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
         body = review_round_comment_body(
             marker, round, pr["number"], verdict["blockers"],
             verdict["majors"], verdict["findings"],
-            _round_scene_block(scene, pr["url"], round),
+            _round_scene_block(
+                scene, pr["url"], round,
+                verdict_head_unknown_round=0,
+            ),
             previous_comments=previous_comments,
         )
         comment_issue(number, repo=source_repo, body=body)
@@ -6778,6 +6781,7 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
                         next_base_advance_round, MAX_BASE_ADVANCE_ROUNDS,
                     )
                 ),
+                verdict_head_unknown_round=0,
             ),
             messages=gate_messages,
             heading=(None if ci_failure else
