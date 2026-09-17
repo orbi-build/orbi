@@ -45,6 +45,43 @@ def test_docker_workflow_targets_both_registries_and_required_platforms():
     assert any("3rd/docker" in str(step) for step in steps(workflow))
 
 
+def test_build_push_context_matches_dockerfile_directory():
+    workflow = load_workflow()
+    build_push_steps = [
+        step for step in steps(workflow)
+        if str(step.get("uses", "")).startswith("docker/build-push-action@")
+    ]
+
+    assert build_push_steps
+    dockerfile_directory = Path("3rd/docker")
+    for step in build_push_steps:
+        context = Path(str(step["with"]["context"]))
+        dockerfile = Path(str(step["with"]["file"]))
+        assert context == dockerfile_directory
+        assert dockerfile.parent == Path(".")
+
+
+def test_build_only_uses_the_publish_build_configuration_without_pushing():
+    workflow = load_workflow()
+    build_only = workflow["jobs"]["build-only"]
+    build_steps = [
+        step for step in build_only["steps"]
+        if str(step.get("uses", "")).startswith("docker/build-push-action@")
+    ]
+    publish_steps = [
+        step for step in workflow["jobs"]["docker"]["steps"]
+        if str(step.get("uses", "")).startswith("docker/build-push-action@")
+    ]
+
+    assert len(build_steps) == 1
+    assert len(publish_steps) == 2
+    build_with = build_steps[0]["with"]
+    publish_with = publish_steps[0]["with"]
+    for key in ("context", "file", "platforms", "tags"):
+        assert build_with[key] == publish_with[key]
+    assert build_with["push"] is False
+
+
 def test_docker_hub_steps_skip_without_both_credentials():
     workflow = load_workflow()
     docker_job = workflow["jobs"]["docker"]
