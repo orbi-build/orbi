@@ -2674,6 +2674,11 @@ def parse_pr_comment(body: str) -> dict | None:
         # needed by the next review session.
         **({"base_advance_round": found.base_advance_round}
            if found.base_advance_round else {}),
+        # An unknown verdict head is counted across timer ticks. Preserve
+        # the non-zero counter in the projection so the next review cannot
+        # silently restart at attempt 1.
+        **({"verdict_head_unknown_round": found.verdict_head_unknown_round}
+           if found.verdict_head_unknown_round else {}),
     }
 
 

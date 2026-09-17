@@ -271,6 +271,25 @@ def test_parse_pr_comment_returns_scene_for_multiline_opened_pr_comment():
     ]
 
 
+def test_parse_pr_comment_preserves_unknown_head_counter():
+    body = runner.opened_pr_comment_body(
+        FAKE_RUN_ID, "base_branch=main base_sha=abc123def456 run_id=a1b2c3d4",
+        FAKE_PR_URL,
+    )
+    record = scene_mod.Scene(
+        run_id=FAKE_RUN_ID, base_branch="main",
+        base_sha="abc123def456", pr_url=FAKE_PR_URL,
+        verdict_head_unknown_round=2,
+    )
+    parsed = runner.parse_pr_comment(
+        body.split(scene_mod.render(scene_mod.Scene(
+            run_id=FAKE_RUN_ID, base_branch="main",
+            base_sha="abc123def456", pr_url=FAKE_PR_URL,
+        )), 1)[0] + scene_mod.render(record)
+    )
+    assert parsed["verdict_head_unknown_round"] == 2
+
+
 def test_parse_pr_comment_returns_scene_for_legacy_opened_pr_comment():
     scene = runner.parse_pr_comment(opened_pr_comment())
     assert scene == scene_for()
