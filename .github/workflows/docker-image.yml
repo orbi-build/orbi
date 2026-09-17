@@ -54,6 +54,8 @@ jobs:
             ghcr.io/orbi-build/orbi:latest
 
   docker:
+    # Publishing never runs for pull_request events; the build-only job is the PR check.
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
