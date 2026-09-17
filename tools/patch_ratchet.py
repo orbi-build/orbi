@@ -39,9 +39,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTS_DIR = REPO_ROOT / "tests"
 BASELINE_FILE = Path(__file__).resolve().parent / "patch_ratchet_baseline.json"
 
-# The literal the runner patches are written with (monkeypatch's
-# setattr call naming the runner module as the patch target).
-SETATTR_RUNNER = "monkeypatch.setattr(runner,"
+# The runner patch: monkeypatch's setattr call naming the runner module
+# as the patch target. Whitespace-tolerant — the call may wrap the
+# target onto the next line (`setattr(` newline `runner, ...`), the
+# style the corpus itself already uses in 200+ places; a plain
+# single-line literal would let any new wrapped-form patch through
+# with the count unchanged.
+SETATTR_RUNNER_RE = re.compile(r"monkeypatch\.setattr\(\s*runner\s*,")
 # The argv shape assertion: `command[:N] == [...]` (the exact form the
 # Issue names; only `==` — a shape assert, not a shape dispatch).
 COMMAND_SHAPE_RE = re.compile(r"command\[\s*:\s*\d+\s*\]\s*==")
@@ -50,14 +54,19 @@ METRICS = ("monkeypatch_setattr_runner", "command_shape_asserts")
 
 
 def counts(tests_dir: Path) -> dict[str, int]:
-    """Count both patterns over the test corpus, excluding fakes/ and
-    (for the shape metric) the fake-based seam modules."""
+    """Count both patterns over the test corpus, excluding the
+    top-level `tests/fakes/` directory and (for the shape metric) the
+    fake-based seam modules."""
+    tests_dir = Path(tests_dir)
+    fakes_dir = tests_dir / "fakes"
     totals = {metric: 0 for metric in METRICS}
     for path in sorted(tests_dir.rglob("*.py")):
-        if path.parent.name == "fakes":
+        if path.parent == fakes_dir:
             continue
         text = path.read_text(encoding="utf-8")
-        totals["monkeypatch_setattr_runner"] += text.count(SETATTR_RUNNER)
+        totals["monkeypatch_setattr_runner"] += len(
+            SETATTR_RUNNER_RE.findall(text)
+        )
         if path.name.endswith("_fakes.py"):
             continue
         totals["command_shape_asserts"] += len(
@@ -86,7 +95,22 @@ def main(argv: list[str], *, tests_dir: Path | None = None,
          baseline_file: Path = BASELINE_FILE) -> int:
     arguments = [argument for argument in argv[1:] if argument != "--update"]
     update = "--update" in argv[1:]
+    if len(arguments) > 1:
+        print(
+            "patch ratchet: expected at most one tests_dir argument, "
+            f"got {arguments!r}",
+            file=sys.stderr,
+        )
+        return 1
     tests = Path(arguments[0]) if arguments else (tests_dir or TESTS_DIR)
+    if not tests.is_dir():
+        # An empty corpus would count as zero patches and pass; the
+        # gate must fail fast, mirroring the baseline's own fail-fast.
+        print(
+            f"patch ratchet: tests directory not found: {tests}",
+            file=sys.stderr,
+        )
+        return 1
     current = counts(tests)
     if update:
         baseline_file.write_text(
