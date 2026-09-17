@@ -16,7 +16,7 @@
 [[label]]
 name = "ai-ready"
 color = "1d76db"
-description = "Issue is explicitly dispatched to Orbi"
+description = "Ready for unattended delivery · aiready.sh"
 
 [[label]]
 name = "ai-in-progress"
