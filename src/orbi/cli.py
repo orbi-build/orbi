@@ -720,7 +720,17 @@ def _installed_unit_configs(
         return ()
     found: dict[Path, list[str]] = {}
     for unit in sorted(installed_dir.iterdir(), key=lambda path: path.name):
-        if not unit.is_file():
+        # Only inspect files belonging to Orbi's scheduler namespace.  User
+        # unit directories commonly contain unrelated services; accepting an
+        # arbitrary service's ORBI_CONFIG could select the wrong deployment.
+        is_systemd_unit = (
+            unit.name.startswith("orbi")
+            and unit.name.endswith((".service", ".timer"))
+        )
+        is_launchd_unit = (
+            unit.name.startswith("org.orbi.") and unit.name.endswith(".plist")
+        )
+        if not unit.is_file() or not (is_systemd_unit or is_launchd_unit):
             continue
         config = sched.unit_config(unit)
         if config is not None:
@@ -887,15 +897,18 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     if args.command == "check" and not args.config.exists():
+        # `check` owns the prerequisite gate, but a missing file must still
+        # use the same actionable diagnostic whether the path was implicit or
+        # explicitly supplied.  Explicit paths are never replaced by a unit
+        # candidate.
         check_candidates = candidates or _installed_unit_configs(
             getattr(args, "installed_dir", None),
         )
-        if sum(candidate[0].is_file() for candidate in check_candidates) != 1:
-            print(
-                _missing_config_message(args.config, check_candidates),
-                file=sys.stderr,
-            )
-            return 1
+        print(
+            _missing_config_message(args.config, check_candidates),
+            file=sys.stderr,
+        )
+        return 1
 
     if args.command is None:
         # No subcommand = the Runner tick. Delegate to the

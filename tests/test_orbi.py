@@ -908,6 +908,9 @@ def test_installed_unit_config_scan_ignores_directories_and_unconfigured_units(
     installed.mkdir()
     (installed / "nested").mkdir()
     (installed / "plain.service").write_text("unit", encoding="utf-8")
+    (installed / "orbi-unconfigured.service").write_text(
+        "unit", encoding="utf-8",
+    )
     fake = SimpleNamespace(
         installed_unit_dir=lambda: installed,
         unit_config=lambda path: None,
@@ -965,8 +968,10 @@ def test_check_with_explicit_missing_config_keeps_unit_candidate_list(
     monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
     monkeypatch.setattr(orbi.pilot_setup, "run_checks", lambda *args, **kwargs: ["ok"])
     missing = tmp_path / "missing.toml"
-    assert orbi.main(["check", "--config", str(missing)]) == 0
-    assert capsys.readouterr().out.strip() == "ok"
+    assert orbi.main(["check", "--config", str(missing)]) == 1
+    error = capsys.readouterr().err
+    assert "config_not_found" in error
+    assert str(candidate.resolve()) in error
 
 
 def test_setup_reports_missing_config_with_setup_prefix(
@@ -1016,6 +1021,23 @@ def test_status_resolves_the_single_existing_installed_unit_config(
     assert str(config.resolve()) in caplog.text
 
 
+def test_unit_scan_ignores_unrelated_scheduler_files(
+    tmp_path, monkeypatch,
+):
+    installed = tmp_path / "units"
+    installed.mkdir()
+    unrelated = installed / "backup.service"
+    unrelated.write_text("unit", encoding="utf-8")
+    candidate = tmp_path / "wrong.toml"
+    candidate.write_text("config", encoding="utf-8")
+    fake = SimpleNamespace(
+        installed_unit_dir=lambda: installed,
+        unit_config=lambda path: candidate if path == unrelated else None,
+    )
+    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    assert orbi._installed_unit_configs() == ()
+
+
 def test_status_does_not_guess_between_installed_unit_configs(
     tmp_path, monkeypatch, caplog,
 ):
@@ -1024,7 +1046,7 @@ def test_status_does_not_guess_between_installed_unit_configs(
         config.write_text('source_repos = ["owner/repo"]\nrepo_dir = "."\n', encoding="utf-8")
     installed = tmp_path / "units"
     installed.mkdir()
-    units = [installed / "one.service", installed / "two.service"]
+    units = [installed / "orbi-one.service", installed / "orbi-two.service"]
     for unit in units:
         unit.write_text("unit", encoding="utf-8")
     fake = SimpleNamespace(
