@@ -1,4 +1,9 @@
+---
+description: "Orbi 如何防止自主 coding agent 合并不安全的改动?"
+---
 # 安全
+
+Orbi 将密钥保留在本地，把保护分支操作限制给 Runner，并要求先通过审查的 PR 才能合并。
 
 Orbi 在你的机器上运行一个带 GitHub token 的自主 coding agent。
 安全模型刻意简单：交付契约里的硬边界、本地密钥、没有远端状态存储。
