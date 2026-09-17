@@ -1,0 +1,95 @@
+name: Publish Docker image
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish, for example v0.5.17"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  release_ref: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+
+jobs:
+  build-only:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@v5
+      - name: Build the Docker image without pushing
+        run: docker build --tag orbi-ci 3rd/docker
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the release
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.event.release.tag_name || github.ref }}
+
+      - name: Set release image version
+        run: |
+          version="${release_ref#v}"
+          test -n "$version"
+          echo "IMAGE_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: ${{ github.repository == 'orbi-build/orbi' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push to GHCR
+        if: ${{ github.repository == 'orbi-build/orbi' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: 3rd/docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/orbi-build/orbi:${{ env.IMAGE_VERSION }}
+            ghcr.io/orbi-build/orbi:latest
+
+      - name: Log in to Docker Hub
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push to Docker Hub
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: 3rd/docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            docker.io/orbibuild/orbi:${{ env.IMAGE_VERSION }}
+            docker.io/orbibuild/orbi:latest
+
+      - name: Publish Docker Hub overview
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: orbibuild/orbi
+          readme-filepath: 3rd/docker/README.dockerhub.md
