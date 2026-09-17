@@ -18080,16 +18080,19 @@ def test_process_release_success_end_to_end(monkeypatch):
     # the `timeout`-wrapped declared command is gone; test acceptance is
     # the CI-wait gate evidence only.
     assert not [c for c, _ in state["commands"] if c[:1] == ["timeout"]]
-    # Issue #275: the docs sync step runs once, after the GitHub Release
-    # is published and before the Milestone is closed, with the release
-    # identity.
+    # Issue #998: docs sync runs before the tag is pushed, with the
+    # release identity and changelog.
     assert len(state["sync_docs_calls"]) == 1
     sync_call = state["sync_docs_calls"][0]
-    assert sync_call == {
+    assert {key: sync_call[key] for key in (
+        "source_repo", "repo_dir", "worktree", "base_branch", "tag",
+        "release_commit", "issue_number",
+    )} == {
         "source_repo": "o/r", "repo_dir": Path("/r"),
         "worktree": Path("/wt"), "base_branch": "main", "tag": "v0.3.0",
         "release_commit": "abc123", "issue_number": 99,
     }
+    assert sync_call["changelog"].startswith("## Changelog")
     # The success comment carries the run marker and the release URL.
     (comment_number, comment_kwargs), = state["comments"]
     assert comment_number == 99
@@ -18106,6 +18109,77 @@ def test_process_release_success_end_to_end(monkeypatch):
     assert "docs release notes for v0.3.0 synced to base" \
         in comment_kwargs["body"]
     assert state["run_ids"][0] == "a1b2c3d4"
+
+
+def test_process_release_syncs_docs_before_pushing_tag(monkeypatch):
+    state = make_release_process_env(monkeypatch)
+    steps = []
+    monkeypatch.setattr(
+        release, "ensure_release_tag_created",
+        lambda *args: steps.append("tag-created"),
+    )
+    monkeypatch.setattr(
+        release, "sync_release_docs",
+        lambda **kwargs: steps.append("docs") or "docs synced",
+    )
+    monkeypatch.setattr(
+        release, "ensure_release_tag_pushed",
+        lambda *args: steps.append("tag-pushed"),
+    )
+    monkeypatch.setattr(
+        release, "publish_release",
+        lambda **kwargs: steps.append("release-published") or "https://example/release",
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    assert release.process_release(
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
+    ) == "https://example/release"
+    assert steps == ["tag-created", "docs", "tag-pushed", "release-published"]
+
+
+def test_process_release_resumes_with_local_tag_after_docs_push(monkeypatch):
+    state = make_release_process_env(monkeypatch)
+    steps = []
+    monkeypatch.setattr(release, "local_release_tag_commit",
+                        lambda *args: "release-commit")
+    monkeypatch.setattr(release, "tag_commit_is_ancestor_of_base",
+                        lambda *args: True)
+    monkeypatch.setattr(
+        release, "ensure_release_tag_created",
+        lambda *args: steps.append(("tag-created", args[-1])),
+    )
+    monkeypatch.setattr(
+        release, "sync_release_docs",
+        lambda **kwargs: steps.append(("docs", kwargs["release_commit"]))
+        or "docs synced",
+    )
+    monkeypatch.setattr(
+        release, "ensure_release_tag_pushed",
+        lambda *args: steps.append(("tag-pushed", args[-1])),
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    assert release.process_release(
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"), "o/r",
+    ) == "https://github.com/o/r/releases/tag/v0.3.0"
+    assert steps == [
+        ("tag-created", "release-commit"),
+        ("docs", "release-commit"),
+        ("tag-pushed", "release-commit"),
+    ]
+
+
+def test_resume_release_commit_rejects_unrelated_local_tag(monkeypatch):
+    monkeypatch.setattr(release, "tag_commit_is_ancestor_of_base",
+                        lambda *args: False)
+    with pytest.raises(RuntimeError, match="existing tag is never moved"):
+        release.resume_release_commit(
+            local_tag_commit="unrelated-commit", release_commit="base-commit",
+            repo_dir=Path("/r"),
+        )
 
 
 def test_process_release_started_milestone_carries_base_branch(monkeypatch):
@@ -20128,18 +20202,20 @@ def test_sync_release_docs_fails_fast_when_the_base_advanced(
     assert remote_head == git_out(work, "rev-parse", "HEAD")
 
 
-def test_sync_release_docs_fails_fast_when_the_tag_is_missing_locally(
+def test_sync_release_docs_uses_release_commit_when_tag_is_missing_locally(
         tmp_path, monkeypatch):
     work = make_release_docs_repo(tmp_path)
     head = git_out(work, "rev-parse", "HEAD")
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040,
                          tag="v0.9.9")
-    with pytest.raises(subprocess.CalledProcessError):
-        release.sync_release_docs(
-            source_repo="o/r", repo_dir=work, worktree=work,
-            base_branch="main", tag="v0.9.9", release_commit=head,
-            issue_number=77,
-        )
+    evidence = release.sync_release_docs(
+        source_repo="o/r", repo_dir=work, worktree=work,
+        base_branch="main", tag="v0.9.9", release_commit=head,
+        issue_number=77,
+    )
+    assert "committed and pushed" in evidence
+    page = (work / "docs" / "release-v0.9.9.mdx").read_text(encoding="utf-8")
+    assert f"commit `{head}`" in page
 
 
 def test_release_docs_page_rejects_an_unknown_language():
@@ -20256,6 +20332,31 @@ def test_move_latest_marker_fails_fast_on_resume_when_the_new_page_is_missing(
     with pytest.raises(RuntimeError, match=r"does not carry the \(latest\)"):
         release.move_latest_marker(
             work, "release-v0.1.2", "release-v0.4.0", resume=True,
+        )
+
+
+def test_sync_release_docs_uses_prepublication_changelog(tmp_path):
+    work = make_release_docs_repo(tmp_path)
+    head = git_out(work, "rev-parse", "HEAD")
+    evidence = release.sync_release_docs(
+        source_repo="o/r", repo_dir=work, worktree=work,
+        base_branch="main", tag="v0.4.0", release_commit=head,
+        issue_number=77, changelog="## Changelog\n\n- shipped\n",
+    )
+    assert "committed and pushed" in evidence
+    page = (work / "docs" / "release-v0.4.0.mdx").read_text(encoding="utf-8")
+    assert "GitHub Release [v0.4.0]" in page
+    assert "published" not in page.split("\n", 4)[2]
+
+
+def test_sync_release_docs_rejects_empty_prepublication_changelog(tmp_path):
+    work = make_release_docs_repo(tmp_path)
+    head = git_out(work, "rev-parse", "HEAD")
+    with pytest.raises(RuntimeError, match="changelog is empty"):
+        release.sync_release_docs(
+            source_repo="o/r", repo_dir=work, worktree=work,
+            base_branch="main", tag="v0.4.0", release_commit=head,
+            issue_number=77, changelog="  ",
         )
 
 
