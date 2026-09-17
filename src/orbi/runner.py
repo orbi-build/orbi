@@ -151,6 +151,7 @@ from orbi.pi_process import (
     ROLE_IMPLEMENT,
     ModelWaitDeadError,
     PiWatchOptions,
+    SteeringRequest,
     RateLimitExhaustedError,
     RecoverablePiFailure,
     RecoverablePiProcessError,
@@ -655,6 +656,9 @@ class RunnerConfig:
     worktree_retain_hours: float = WORKTREE_RETAIN_HOURS
     model_wait_probe_url: str | None = None
     model_wait_probe_seconds: float = PI_MODEL_WAIT_PROBE_SECONDS
+    steering_enabled: bool = True
+    steering_poll_seconds: float = 60.0
+    steering_max_rounds: int = 3
     release_ci_wait_seconds: float = RELEASE_CI_WAIT_SECONDS
     release_deliveries_wait_seconds: float = RELEASE_DELIVERIES_WAIT_SECONDS
     pi_providers: Path | None = None
@@ -795,6 +799,15 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
     # bounded by model_wait_dead_seconds only).
     model_wait_probe_url = _model_wait_probe_url(data)
     model_wait_probe_seconds = _model_wait_probe_seconds(data)
+    steering_enabled = data.get("steering_enabled", True)
+    if not isinstance(steering_enabled, bool):
+        raise ValueError("steering_enabled must be a boolean")
+    steering_poll_seconds = _positive_seconds(data, "steering_poll_seconds", 60.0)
+    steering_max_rounds = data.get("steering_max_rounds", 3)
+    if (isinstance(steering_max_rounds, bool)
+            or not isinstance(steering_max_rounds, int)
+            or steering_max_rounds < 0):
+        raise ValueError("steering_max_rounds must be a non-negative integer")
     # Release CI wait: the release gate's in-tick upper
     # bound for pending checks on the release commit. The DELIVERY path
     # has no CI wait anymore: a pending check defers the
@@ -925,6 +938,9 @@ def load_config(path: Path, *, check_provider_api_keys: bool = True,
         worktree_retain_hours=worktree_retain_hours,
         model_wait_probe_url=model_wait_probe_url,
         model_wait_probe_seconds=model_wait_probe_seconds,
+        steering_enabled=steering_enabled,
+        steering_poll_seconds=steering_poll_seconds,
+        steering_max_rounds=steering_max_rounds,
         release_ci_wait_seconds=release_ci_wait_seconds,
         release_deliveries_wait_seconds=release_deliveries_wait_seconds,
         pi_providers=pi_providers_path,
@@ -1039,6 +1055,16 @@ def _pi_extension_env(config: RunnerConfig) -> dict[str, str]:
         if extension["enabled"]:
             values.update(extension["env"])
     return values
+
+
+def _positive_seconds(data: dict, key: str, default: float) -> float:
+    value = data.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{key} must be a positive finite number")
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError(f"{key} must be a positive finite number")
+    return number
 
 
 def _model_wait_probe_url(data: dict) -> str | None:
@@ -3641,7 +3667,7 @@ def changed_files(worktree: Path) -> list[str]:
     return files
 
 
-def resume_context(worktree: Path) -> str | None:
+def resume_context(worktree: Path, steering_comments: list[dict] | None = None) -> str | None:
     """The resume context for a continued run, or None.
 
     A worktree without uncommitted changes and without a previous
@@ -3654,7 +3680,7 @@ def resume_context(worktree: Path) -> str | None:
     """
     files = changed_files(worktree)
     snapshot = activity_snapshot(worktree / ".pi-session")
-    if not files and snapshot is None:
+    if not files and snapshot is None and not steering_comments:
         return None
     lines = [
         "Resume context (Issue #219): this worktree already carries "
@@ -3677,6 +3703,22 @@ def resume_context(worktree: Path) -> str | None:
             f"Uncommitted changed files ({len(files)}):"
         )
         lines.extend(f"- {path}" for path in files)
+    if steering_comments:
+        lines.append(
+            f"[方向修正 · 来自 Issue #{steering_comments[0].get('issue', '-') } 的新评论 · "
+            f"{time.strftime('%Y-%m-%d %H:%M:%S')} local time]"
+        )
+        for comment in steering_comments:
+            author = comment.get("author")
+            login = author.get("login") if isinstance(author, dict) else "unknown"
+            lines.append(f"{login}: {str(comment.get('body') or '').rstrip()}")
+        lines.append(
+            "以上是在你开始这轮工作之后补充的说明，你的上一个会话没有看到它。"
+        )
+        lines.append(
+            "如果它与你已完成的改动冲突，以这条为准，修正已有实现；"
+            "如果只是补充信息，按原方向继续。"
+        )
     return "\n".join(lines)
 
 
@@ -4155,6 +4197,49 @@ def run_pi(issue: dict, ctx: RunContext, config: RunnerConfig, *,
     context += "Complete the delivery process in the system prompt."
     if resume_context:
         context += f"\n{resume_context}"
+    steering_seen: set[str] = set()
+    steering_rounds = 0
+    steering_started = time.time()
+    steering_limit_logged = False
+
+    def check_steering() -> SteeringRequest | None:
+        nonlocal steering_rounds, steering_limit_logged
+        if steering_rounds >= config.steering_max_rounds:
+            if not steering_limit_logged:
+                steering_limit_logged = True
+                event(
+                    "steering_limit_reached", issue=issue_context(
+                        source_repo, int(issue["number"]),
+                    ), round=steering_rounds,
+                )
+            return None
+        comments = issue_comments(int(issue["number"]), repo=source_repo)
+        fresh: list[dict] = []
+        started_at = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(steering_started))
+        for comment in comments:
+            identifier = str(comment.get("id", ""))
+            if not identifier or identifier in steering_seen:
+                continue
+            steering_seen.add(identifier)
+            if str(comment.get("createdAt") or "") < started_at:
+                continue
+            if _comment_is_trusted(comment):
+                item = dict(comment)
+                item["issue"] = issue["number"]
+                fresh.append(item)
+        if not fresh:
+            return None
+        steering_rounds += 1
+        authors = []
+        for comment in fresh:
+            author = comment.get("author")
+            authors.append(author.get("login") if isinstance(author, dict) else "unknown")
+        resume = resume_context(worktree, fresh) or ""
+        return SteeringRequest(
+            context=f"{context}\n{resume}",
+            comment_ids=tuple(str(item["id"]) for item in fresh),
+            author=", ".join(authors),
+        )
     command = [
         "pi", *_pi_extension_args(config),
         *_skill_args(_skills_for(config, IMPLEMENT_EXCLUDED_SKILLS)),
@@ -4203,6 +4288,8 @@ def run_pi(issue: dict, ctx: RunContext, config: RunnerConfig, *,
             model_wait_dead_seconds=config.model_wait_dead_seconds,
             model_wait_probe_url=config.model_wait_probe_url,
             model_wait_probe_seconds=config.model_wait_probe_seconds,
+            steering_poll_seconds=config.steering_poll_seconds,
+            steering_check=check_steering if config.steering_enabled else None,
         ),
         **extra,
     )

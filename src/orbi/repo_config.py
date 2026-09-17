@@ -95,6 +95,9 @@ HOST_ONLY_KEYS = frozenset({
     "model_wait_dead_seconds",
     "model_wait_probe_url",
     "model_wait_probe_seconds",
+    "steering_enabled",
+    "steering_poll_seconds",
+    "steering_max_rounds",
     # host scheduling / transport / recovery semantics.
     "max_concurrency",
     "unit_name",

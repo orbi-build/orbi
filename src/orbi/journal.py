@@ -153,6 +153,9 @@ JOURNAL_EVENTS: dict[str, str] = {
     "pi_idle_kill": "SIGKILL sent to a descendant that survived SIGTERM",
     "model_wait_dead": "frozen model_wait crossed the dead threshold; Pi session killed",
     "model_wait_swallowed": "/slots probe confirmed a swallowed model request; Pi session killed",
+    "delivery_steered": "an active delivery was restarted with a trusted Issue correction",
+    "steering_limit_reached": "active delivery steering reached its configured round limit",
+    "steering_poll_failed": "steering comment polling failed (pure bypass)",
     # Provider rate limiting.
     "pi_retry_429": "a provider 429 triggers an in-run backoff retry",
     "pi_429_attempts_reset": "the persisted 429 attempt counter was reset",
