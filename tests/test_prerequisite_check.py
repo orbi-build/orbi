@@ -16,6 +16,7 @@ model_provider_status) so the gate and `orbi setup` can never disagree
 about what a prerequisite is.
 """
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -462,6 +463,22 @@ def test_cli_check_failure_prints_one_structured_line_and_exits_one(
     assert "Traceback" not in err
 
 
+def test_cli_check_missing_config_pins_current_structured_shape(
+    tmp_path, capsys,
+):
+    """The release smoke must track the public missing-config contract."""
+    config_path = tmp_path / "orbi.toml"
+    assert cli.main(["check", "--config", str(config_path)]) == 1
+    err = capsys.readouterr().err
+    assert re.fullmatch(
+        r"config_not_found path=.+; reason=.+; fix=.+(?:; candidate=.*)?",
+        err.strip(),
+    )
+    assert "reason=no Orbi config at this path" in err
+    assert "fix=run from the deployment directory" in err
+    assert "Traceback" not in err
+
+
 def test_cli_setup_missing_deployment_path_fails_structured(
     tmp_path, monkeypatch, capsys,
 ):
@@ -479,5 +496,5 @@ def test_cli_setup_missing_deployment_path_fails_structured(
     ]) == 1
     captured = capsys.readouterr()
     err = captured.err
-    assert err.startswith("setup_failed reason=required path missing: ")
+    assert re.fullmatch(r"setup_failed reason=required path missing: .+", err.strip())
     assert "Traceback" not in err

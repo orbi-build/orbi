@@ -206,8 +206,8 @@ jobs:
           set -e
           cat check.out setup.err
           test "$check_rc" -ne 0 || { echo "orbi check must fail without a config" >&2; exit 1; }
-          grep -qE "^check_failed check=(commands|systemd_user_bus|gh_auth|pi|config) " check.out || {
-            echo "no structured check_failed line" >&2; exit 1; }
+          grep -qE "^(check_failed check=[^ ]+ |config_not_found path=[^;]+; reason=[^;]+; fix=)" check.out || {
+            echo "no structured orbi check failure line" >&2; exit 1; }
           if grep -q "Traceback" check.out; then echo "check leaked a traceback" >&2; exit 1; fi
           test -f setup-orbi.toml || { echo "orbi setup did not create the config from the shipped example" >&2; exit 1; }
           test "$setup_rc" -ne 0 || { echo "orbi setup must fail on the empty deployment layout" >&2; exit 1; }
