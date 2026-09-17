@@ -173,6 +173,59 @@ def test_python_version_fails_fast_with_official_link(monkeypatch):
     assert failure.docs == "https://www.python.org/downloads/"
 
 
+def test_machine_collection_reports_all_independent_failures(monkeypatch):
+    """The missing-config path must not stop at the first machine defect."""
+    from orbi import scheduler
+
+    monkeypatch.setattr(
+        pilot_setup, "check_python_version",
+        lambda: (_ for _ in ()).throw(pilot_setup.CheckError(
+            "python", "old", "upgrade", "https://docs.python.org",
+        )),
+    )
+    monkeypatch.setattr(
+        scheduler, "detect",
+        lambda: (_ for _ in ()).throw(
+            scheduler.UnsupportedPlatformError("unsupported"),
+        ),
+    )
+    monkeypatch.setattr(pilot_setup.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        pilot_setup, "check_auth",
+        lambda _run: (_ for _ in ()).throw(pilot_setup.SetupError("logged out")),
+    )
+
+    _, failures = pilot_setup.run_machine_checks(
+        run_command=lambda *_args, **_kwargs: "", collect_failures=True,
+    )
+
+    assert {failure.check for failure in failures} == {
+        "python", "platform", "commands", "gh_auth", "pi",
+    }
+
+
+def test_machine_collection_reports_scheduler_session_failure(monkeypatch):
+    from types import SimpleNamespace
+    from orbi import scheduler
+
+    sched = SimpleNamespace(
+        name="systemd", display="systemd",
+        probe_args=lambda _unit: ["systemctl"],
+    )
+    monkeypatch.setattr(scheduler, "detect", lambda: sched)
+    monkeypatch.setattr(pilot_setup.shutil, "which", lambda _name: "/bin/tool")
+    monkeypatch.setattr(pilot_setup, "check_auth", lambda _run: None)
+
+    _, failures = pilot_setup.run_machine_checks(
+        run_command=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("user bus unavailable")
+        ),
+        collect_failures=True,
+    )
+
+    assert [failure.check for failure in failures] == ["systemd_session"]
+
+
 def test_missing_command_carries_the_install_hint_and_link(monkeypatch):
     monkeypatch.setattr(
         pilot_setup.shutil, "which", lambda name: None if name == "gh" else "/usr/bin/x",
