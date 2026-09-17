@@ -21,6 +21,22 @@ session 的 Linux 主机请始终优先走官方路径
   能跑 Docker。
 - 想把 runner 与宿主机用户会话隔离。
 
+## 拉取镜像
+
+发布的镜像支持两种 Linux 架构：
+
+```bash
+docker pull ghcr.io/orbi-build/orbi:latest
+```
+
+Docker Hub 是备用镜像仓库：
+
+```bash
+docker pull docker.io/orbibuild/orbi:latest
+```
+
+如果要从源码构建，请继续使用仓库 checkout：
+
 ## 快速开始
 
 ```bash
