@@ -1441,10 +1441,14 @@ def test_report_failure_repeats_bump_the_comment_counter_in_place(
         monkeypatch, history=_failure_history(1, fp),
     )
     caplog.set_level("INFO")
-    _report(exc)
+    retry_scene = "review retry=2"
+    _report(exc, review_scene_block=retry_scene)
     assert captured["comments"] == []
     assert captured["pr_comments"] == []
-    # The counter ride on the EXISTING comment: `:2` after the second
+    # The new retry scene is persisted on the existing comment, rather
+    # than being discarded by the dedup path.
+    assert retry_scene in captured["updates"][0][1]
+    # The counter rides on the EXISTING comment: `:2` after the second
     # failure, same comment id.
     update_id, update_body = captured["updates"][0]
     assert update_id == 900
