@@ -1,0 +1,40 @@
+# v0.5.17 release
+
+`v0.5.17` release notes for the GitHub Release [v0.5.17](https://github.com/orbi-build/orbi/releases/tag/v0.5.17) (release task: Issue #1035).
+
+## Tag state (verified against origin)
+
+| Ref | Object | Points at |
+|---|---|---|
+| `v0.5.17` | annotated tag `9a734542db26f07b5922171b346f913ddb6ffdc2` | commit `fcb23b2372a51a36951147f40ceab760e93aec26` |
+
+## Release notes
+
+## Changelog
+
+### Features
+
+- Repository declares no GitHub topics: set the ten topics for discovery ([Issue #1019](https://github.com/orbi-build/orbi/issues/1019))
+- PyPI page for orbi-cli has no project links: add [project.urls] to pyproject.toml ([Issue #1020](https://github.com/orbi-build/orbi/issues/1020); [PR #1026](https://github.com/orbi-build/orbi/pull/1026))
+- ai-ready label description names no definition: point it at aiready.sh ([Issue #1021](https://github.com/orbi-build/orbi/issues/1021); [PR #1025](https://github.com/orbi-build/orbi/pull/1025))
+
+### Reliability and recovery
+
+- Release ordering change opened three failure windows between local tag and published Release ([Issue #1018](https://github.com/orbi-build/orbi/issues/1018); [PR #1023](https://github.com/orbi-build/orbi/pull/1023))
+
+### Documentation
+
+- README first screen: claim, three-number ledger, one inspectable Issue→PR→Release loop above Quick start ([Issue #1027](https://github.com/orbi-build/orbi/issues/1027); [PR #1030](https://github.com/orbi-build/orbi/pull/1030))
+- Docs pages carry a question-shaped description and a one-sentence answer as the first paragraph ([Issue #1028](https://github.com/orbi-build/orbi/issues/1028); [PR #1029](https://github.com/orbi-build/orbi/pull/1029))
+- Publish the 3rd/docker image to GHCR and Docker Hub on every release, with an overview that links back to the repo and docs ([Issue #1031](https://github.com/orbi-build/orbi/issues/1031); [PR #1033](https://github.com/orbi-build/orbi/pull/1033))
+- Docs: add a Notes group with the first engineering note (macOS port, six defects) as the canonical home for long-form posts ([Issue #1036](https://github.com/orbi-build/orbi/issues/1036); [PR #1037](https://github.com/orbi-build/orbi/pull/1037))
+
+### Bug fixes
+
+- orbi check skips every machine prerequisite when the config file is missing ([Issue #1015](https://github.com/orbi-build/orbi/issues/1015); [PR #1024](https://github.com/orbi-build/orbi/pull/1024))
+- Unknown-verdict-head retry budget is per PR lifetime, not per run as documented ([Issue #1017](https://github.com/orbi-build/orbi/issues/1017); [PR #1022](https://github.com/orbi-build/orbi/pull/1022))
+- CI failure: tests on branch main (push) ([Issue #1032](https://github.com/orbi-build/orbi/issues/1032); [PR #1034](https://github.com/orbi-build/orbi/pull/1034))
+
+## Contributors
+
+<a href="https://github.com/xqliu"><img src="https://avatars.githubusercontent.com/u/22554?v=4&s=48" width="32" height="32" alt="xqliu" /></a>
