@@ -18658,7 +18658,7 @@ def test_process_release_publish_failure_preserves_docs_after_tag_push(monkeypat
         seam, "run_command",
         lambda command, **kwargs: (
             "docs-commit\n"
-            if command[:3] == ["git", "rev-parse", "HEAD"]
+            if command == ["git", "rev-parse", "HEAD"]
             and kwargs.get("cwd") == Path("/wt")
             else original_run(command, **kwargs)
         ),
@@ -18693,7 +18693,7 @@ def test_process_release_tag_push_failure_rolls_back_docs_when_tag_absent(monkey
         seam, "run_command",
         lambda command, **kwargs: (
             "docs-commit\n"
-            if command[:3] == ["git", "rev-parse", "HEAD"]
+            if command == ["git", "rev-parse", "HEAD"]
             and kwargs.get("cwd") == Path("/wt")
             else original_run(command, **kwargs)
         ),
@@ -19920,6 +19920,24 @@ def test_move_latest_marker_fails_fast_when_the_previous_page_is_missing(
         release.move_latest_marker(
             work, "release-v0.1.2", "release-v0.4.0", resume=False,
         )
+
+
+def test_promote_release_docs_latest_after_publication(tmp_path, monkeypatch):
+    work = make_release_docs_repo(tmp_path)
+    head = git_out(work, "rev-parse", "HEAD")
+    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
+                    "-m", "rel", head], check=True, capture_output=True)
+    fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040)
+    release.sync_release_docs(
+        source_repo="o/r", repo_dir=work, worktree=work,
+        base_branch="main", tag="v0.4.0", release_commit=head,
+        issue_number=77, changelog=RELEASE_DOCS_BODY_V040, latest=False,
+    )
+    release.promote_release_docs_latest(
+        worktree=work, base_branch="main", tag="v0.4.0",
+    )
+    assert "(latest)" in (work / "docs" / "release-v0.4.0.mdx").read_text()
+    assert "(latest)" not in (work / "docs" / "release-v0.1.2.mdx").read_text()
 
 
 def test_sync_release_docs_generates_pages_navigation_marker_and_commits(
