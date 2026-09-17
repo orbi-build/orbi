@@ -904,6 +904,15 @@ def main(argv: list[str] | None = None) -> int:
         check_candidates = candidates or _installed_unit_configs(
             getattr(args, "installed_dir", None),
         )
+        # Keep the actionable config hint, but do not let it hide the
+        # independent machine failures on a first run.  The collection
+        # mode deliberately reports every machine prerequisite before the
+        # config diagnostic.
+        _, machine_failures = pilot_setup.run_machine_checks(
+            run_command=run_command, collect_failures=True,
+        )
+        for failure in machine_failures:
+            print(pilot_setup.format_check_failure(failure), file=sys.stderr)
         print(
             _missing_config_message(args.config, check_candidates),
             file=sys.stderr,
