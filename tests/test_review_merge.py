@@ -2123,7 +2123,7 @@ def test_review_and_merge_verdict_head_mismatch_real_commit_is_recoverable(
 
 def test_review_and_merge_unknown_verdict_head_retries_then_is_terminal(
         monkeypatch, tmp_path, caplog):
-    """A model-invented object gets two recovery attempts per run."""
+    """A model-invented object gets two recovery attempts per review run."""
     gate = Mock()
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
@@ -2163,6 +2163,61 @@ def test_review_and_merge_unknown_verdict_head_retries_then_is_terminal(
     assert "review_verdict_head_unknown" in caplog.text
     assert "verdict_head=unknown-object" in caplog.text
     assert gate.called is False
+
+
+def test_unknown_verdict_head_budget_resets_after_clean_review_round(
+        monkeypatch, tmp_path):
+    """A later unknown head starts a fresh budget after findings recover."""
+    calls = []
+    verdict = {"text": _pass_verdict_text(head="unknown-object")}
+    monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
+    monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
+    monkeypatch.setattr(
+        seam, "run_review", lambda *a, **k: verdict["text"],
+    )
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda *a, **k: subprocess.CompletedProcess(a[0], 1),
+    )
+    monkeypatch.setattr(seam, "comment_issue",
+                        lambda *a, **k: calls.append(k["body"]))
+    monkeypatch.setattr(seam, "comment_pr", lambda *a, **k: None)
+    monkeypatch.setattr(seam, "edit_issue", lambda *a, **k: None)
+    make_fake_gh(monkeypatch)
+    # Keep the GitHub fake while making the repository object probe fail.
+    gh_run_command = runner.run_command
+    def fake_run_command(command, **kwargs):
+        if "cat-file" in command:
+            return subprocess.CompletedProcess(command, 1)
+        return gh_run_command(command, **kwargs)
+    monkeypatch.setattr(seam, "run_command", fake_run_command)
+    config = _review_merge_config(tmp_path)
+    recovered_scene = _scene()
+
+    with pytest.raises(ValueError, match="unknown-head attempt 1/3"):
+        runner.review_and_merge_if_clean(
+            tmp_path, "branch", "main", config, "owner/repo", 4,
+            title="Review task", priority="normal", scene=recovered_scene,
+        )
+    assert recovered_scene["verdict_head_unknown_round"] == 1
+
+    verdict["text"] = _findings_verdict_text()
+    assert runner.review_and_merge_if_clean(
+        tmp_path, "branch", "main", config, "owner/repo", 4,
+        title="Review task", priority="normal", scene=recovered_scene,
+    ) is False
+    # The next tick reads the completed round's scene, which resets the
+    # per-review-run unknown-head budget.
+    next_scene = runner.parse_pr_comment(calls[-1])
+    assert next_scene.get("verdict_head_unknown_round", 0) == 0
+
+    verdict["text"] = _pass_verdict_text(head="unknown-object")
+    with pytest.raises(ValueError, match="unknown-head attempt 1/3"):
+        runner.review_and_merge_if_clean(
+            tmp_path, "branch", "main", config, "owner/repo", 4,
+            title="Review task", priority="normal", scene=next_scene,
+        )
+    assert next_scene["verdict_head_unknown_round"] == 1
 
 
 def test_review_and_merge_clean_verdict_without_head_advance_keeps_frozen_head(
