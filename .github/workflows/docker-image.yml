@@ -124,6 +124,9 @@ jobs:
             docker.io/orbibuild/orbi:latest
 
       - name: Publish Docker Hub overview
+        # The overview is documentation; a Docker Hub token without the Delete
+        # scope gets 403 here and must not fail a release whose images are pushed.
+        continue-on-error: true
         if: env.DOCKERHUB_ENABLED == 'true'
         uses: peter-evans/dockerhub-description@v4
         with:
