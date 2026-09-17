@@ -901,6 +901,59 @@ def test_main_reports_missing_config_with_actionable_location_and_fix(
     assert "required path missing" not in caplog.text
 
 
+def test_installed_unit_config_scan_ignores_directories_and_unconfigured_units(
+    tmp_path, monkeypatch,
+):
+    installed = tmp_path / "units"
+    installed.mkdir()
+    (installed / "nested").mkdir()
+    (installed / "plain.service").write_text("unit", encoding="utf-8")
+    fake = SimpleNamespace(
+        installed_unit_dir=lambda: installed,
+        unit_config=lambda path: None,
+    )
+    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    assert orbi._installed_unit_configs() == ()
+
+
+def test_check_reports_missing_config_when_no_unit_is_available(
+    tmp_path, monkeypatch, capsys,
+):
+    installed = tmp_path / "absent-units"
+    fake = SimpleNamespace(
+        installed_unit_dir=lambda: installed,
+        unit_config=lambda path: None,
+    )
+    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    assert orbi.main(["check"]) == 1
+    assert "config_not_found" in capsys.readouterr().err
+
+
+def test_setup_reports_missing_config_with_setup_prefix(
+    tmp_path, monkeypatch, capsys,
+):
+    installed = tmp_path / "units"
+    installed.mkdir()
+    fake = SimpleNamespace(
+        installed_unit_dir=lambda: installed,
+        unit_config=lambda path: None,
+    )
+    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    monkeypatch.setattr(
+        orbi.pilot_setup, "ensure_config",
+        lambda path: (_ for _ in ()).throw(runner.ConfigFileMissingError(path)),
+    )
+    assert orbi.main(["setup"]) == 1
+    assert "setup_failed reason=config_not_found" in capsys.readouterr().err
+
+
+def test_runner_reports_missing_config_without_traceback(tmp_path, caplog):
+    config = tmp_path / "missing.toml"
+    with caplog.at_level(logging.ERROR, logger="orbi.runner"):
+        assert runner.main(["--config", str(config)]) == 1
+    assert "config_not_found" in caplog.text
+
+
 def test_status_resolves_the_single_existing_installed_unit_config(
     tmp_path, monkeypatch, caplog,
 ):
