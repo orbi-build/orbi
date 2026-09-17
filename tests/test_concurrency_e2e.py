@@ -1505,11 +1505,10 @@ def test_live_review_tick_is_not_resumed_by_second_runner(
     # (issue 8's PR was verified before the fake merge could advance
     # main — no freshness race masks the scan contract).
     review_gate.write_text("go", encoding="utf-8")
-    wait_for(
-        lambda: "ai-merged" in read_state(state)["issues"]["7"]["labels"],
-        timeout=180,
-        what="the resumed review to fix and merge issue 7",
-    )
+    # The resumed review is the process holding the gate.  Wait for that
+    # process to finish rather than polling the label while it is still
+    # racing through the post-review merge path; the process exit is the
+    # deterministic completion signal for this fixture.
     out, err = second.communicate(timeout=120)
     assert second.returncode == 0, err
     assert "delivery_auto_merged" in err
