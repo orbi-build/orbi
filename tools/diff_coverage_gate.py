@@ -61,6 +61,12 @@ def changed_python_lines(base_ref: str) -> dict[str, set[int]] | None:
                 current = None
                 expect_target_header = False
                 continue
+            if line.startswith("@@"):
+                # A second hunk of the same file resets the numbering.
+                match = HUNK_RE.match(line)
+                if match:
+                    new_line = int(match.group(1))
+                continue
             if line.startswith("+"):
                 if current is not None:
                     changed.setdefault(current, set()).add(new_line)

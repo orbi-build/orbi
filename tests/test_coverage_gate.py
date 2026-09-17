@@ -408,6 +408,77 @@ def test_diff_gate_main_fails_on_uncovered_change_in_process(tmp_path,
         os.chdir(old_cwd)
 
 
+def test_diff_gate_changed_lines_reset_numbering_per_hunk(tmp_path):
+    """Two separate hunks of ONE file (an insertion in the middle and
+    one at the end): the second `@@` header must reset the new-file
+    numbering, not be consumed as a content line."""
+    module = load_gate_module("diff_coverage_gate")
+    repo = make_git_fixture(tmp_path)
+    (repo / "module.py").write_text(
+        "def existing():\n    # added middle\n    return 1\n"
+        "\n\ndef tail():\n    return 2\n",
+        encoding="utf-8",
+    )
+    git("add", "-A", cwd=repo)
+    git("commit", "-m", "two hunks", cwd=repo)
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(repo)
+        changed = module.changed_python_lines("main")
+    finally:
+        os.chdir(old_cwd)
+    # Hunk 1 adds line 2 (`# added middle`); hunk 2 adds lines 4-7.
+    assert changed == {"module.py": {2, 4, 5, 6, 7}}
+
+
+def test_diff_gate_changed_lines_ignore_no_newline_marker(tmp_path):
+    """A file whose last added line has no trailing newline carries a
+    `\\ No newline at end of file` marker inside the hunk: it is not a
+    content line and must not advance the numbering."""
+    module = load_gate_module("diff_coverage_gate")
+    repo = make_git_fixture(tmp_path)
+    (repo / "module.py").write_text(
+        DIFF_FIXTURE + "\n\ndef tail():\n    return 2",
+        encoding="utf-8",
+    )
+    git("add", "-A", cwd=repo)
+    git("commit", "-m", "no trailing newline", cwd=repo)
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(repo)
+        changed = module.changed_python_lines("main")
+    finally:
+        os.chdir(old_cwd)
+    assert changed == {"module.py": {3, 4, 5, 6}}
+
+
+def test_diff_gate_changed_lines_survive_degenerate_dev_null_hunk(
+        monkeypatch):
+    """Degenerate shapes real git never emits around a /dev/null
+    deletion hunk — a stray '+' line, a '@@'-prefixed line that is not
+    a hunk header, an unrecognized line, a no-newline marker — must
+    neither crash the parser nor invent a file entry: nothing is
+    recorded for the deleted file."""
+    module = load_gate_module("diff_coverage_gate")
+    fake = subprocess.CompletedProcess(
+        args=[], returncode=0,
+        stdout=(
+            "diff --git a/x.py b/x.py\n"
+            "deleted file mode 100644\n"
+            "--- a/x.py\n"
+            "+++ /dev/null\n"
+            "@@ -1,1 +0,0 @@\n"
+            "@@ not a hunk header\n"
+            "+stray\n"
+            " context-looking line\n"
+            "\\ No newline at end of file\n"
+        ),
+        stderr="",
+    )
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: fake)
+    assert module.changed_python_lines("main") == {}
+
+
 def test_diff_gate_changed_lines_count_plus_prefixed_content_lines(tmp_path):
     """Added content lines that themselves start with `+` (a docstring
     that quotes the `+++ b/...` header syntax) are CONTENT lines: git
