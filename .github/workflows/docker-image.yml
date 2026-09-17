@@ -62,8 +62,8 @@ jobs:
         if: ${{ github.repository == 'orbi-build/orbi' }}
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: 3rd/docker/Dockerfile
+          context: 3rd/docker
+          file: Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
@@ -81,8 +81,8 @@ jobs:
         if: env.DOCKERHUB_ENABLED == 'true'
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: 3rd/docker/Dockerfile
+          context: 3rd/docker
+          file: Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |

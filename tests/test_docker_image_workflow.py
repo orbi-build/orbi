@@ -45,6 +45,22 @@ def test_docker_workflow_targets_both_registries_and_required_platforms():
     assert any("3rd/docker" in str(step) for step in steps(workflow))
 
 
+def test_build_push_context_matches_dockerfile_directory():
+    workflow = load_workflow()
+    build_push_steps = [
+        step for step in steps(workflow)
+        if str(step.get("uses", "")).startswith("docker/build-push-action@")
+    ]
+
+    assert build_push_steps
+    dockerfile_directory = Path("3rd/docker")
+    for step in build_push_steps:
+        context = Path(str(step["with"]["context"]))
+        dockerfile = Path(str(step["with"]["file"]))
+        assert context == dockerfile_directory
+        assert dockerfile.parent == Path(".")
+
+
 def test_docker_hub_steps_skip_without_both_credentials():
     workflow = load_workflow()
     docker_job = workflow["jobs"]["docker"]
