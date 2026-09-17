@@ -1562,3 +1562,57 @@ def test_unreadable_event_file_fails_fast(gh, monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as exc:
         mod.main()
     assert exc.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# Pagination: the open queue and comment histories grow past one page
+# ---------------------------------------------------------------------------
+
+
+def test_issue_index_reads_past_the_first_page(gh, monkeypatch, tmp_path):
+    """The queue of open triage Issues is normally deep: the fingerprint
+    index must read every page, or the oldest ticket — the one a
+    repeated failure is looking for — silently drops out of the index
+    and a duplicate ticket is created."""
+    write_event(monkeypatch, tmp_path, run_event())
+    fp = mod.fingerprint("push", "main", "tests")
+    page_one = [
+        triage_issue(number, ["0000000000000000000000000000000000000000"])
+        for number in range(1, 101)
+    ]
+    gh.routes[ep_issues_list()] = page_one
+    gh.routes[f"{ep_issues_list()}&page=2"] = [triage_issue(4242, [fp])]
+    gh.routes[ep_jobs()] = {"total_count": 1, "jobs": [job()]}
+    mod.main()
+    # The match lives on page 2: comment on it, never create a duplicate.
+    assert len(gh.calls_to(ep_comment(4242), "POST")) == 1
+    assert gh.calls_to(ep_create(), "POST") == []
+
+
+def test_issue_comments_read_past_the_first_page(gh):
+    """A chronic ticket's comment history grows past 100: the recorded
+    failures the recovery logic reads must come from every page, not
+    only the oldest 100."""
+    base = (
+        f"repos/{OWNER_REPO}/issues/7/comments"
+        "?per_page=100&sort=created&direction=asc"
+    )
+    gh.routes[base] = [{"body": f"comment {i}"} for i in range(100)]
+    gh.routes[f"{base}&page=2"] = [{"body": "newest failure"}]
+    comments = mod.fetch_issue_comments("orbi-run", "test-repo", 7)
+    assert comments[-1] == "newest failure"
+    assert len(comments) == 101
+
+
+def test_fetch_jobs_reads_past_the_first_page(gh):
+    page_one = [
+        {"name": f"job-{i}", "conclusion": "success"} for i in range(100)
+    ]
+    gh.routes[ep_jobs()] = {"total_count": 101, "jobs": page_one}
+    gh.routes[f"{ep_jobs()}&page=2"] = {
+        "total_count": 101,
+        "jobs": [{"name": "job-100", "conclusion": "failure"}],
+    }
+    jobs = mod.fetch_jobs("orbi-run", "test-repo", 42)
+    assert len(jobs) == 101
+    assert jobs[-1]["name"] == "job-100"
