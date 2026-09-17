@@ -934,6 +934,87 @@ def check_pi_command() -> None:
         )
 
 
+def run_machine_checks(*, run_command, collect_failures: bool = False) -> tuple[list[str], list[CheckError]]:
+    """Run the config-independent checks, optionally collecting failures.
+
+    The normal gate remains fail-fast.  The missing-config CLI path uses the
+    collection mode so independent machine problems can be shown together.
+    """
+    lines: list[str] = []
+    failures: list[CheckError] = []
+
+    def record(check):
+        try:
+            check()
+        except CheckError as exc:
+            if not collect_failures:
+                raise
+            failures.append(exc)
+            return False
+        return True
+
+    if record(check_python_version):
+        lines.append(
+            f"check=python ok version="
+            f"{sys.version_info.major}.{sys.version_info.minor}."
+            f"{sys.version_info.micro}"
+        )
+    try:
+        sched = scheduler.detect()
+    except scheduler.UnsupportedPlatformError as exc:
+        failure = CheckError(
+            "platform", str(exc),
+            "run orbi on Linux (systemd) or macOS (launchd)",
+            scheduler.ISSUE_URL,
+        )
+        if not collect_failures:
+            raise failure from exc
+        failures.append(failure)
+        sched = None
+
+    for name in REQUIRED_COMMANDS:
+        if shutil.which(name) is None:
+            failure = CheckError(
+                "commands",
+                f"required command missing: {name} (not on PATH)",
+                COMMAND_INSTALL_HINTS[name], CHECK_COMMAND_DOCS[name],
+            )
+            if not collect_failures:
+                raise failure
+            failures.append(failure)
+        else:
+            lines.append(f"check=command ok name={name}")
+
+    if sched is not None:
+        def check_session():
+            try:
+                run_command(sched.probe_args(None))
+            except Exception as exc:
+                raise CheckError(
+                    f"{sched.name}_session",
+                    session_unavailable_message(sched, str(exc)),
+                    SESSION_FIX[sched.name], DOCS_LINKS[sched.name],
+                ) from exc
+
+        if record(check_session):
+            lines.append(f"check={sched.name}_session ok")
+
+    def check_gh_auth():
+        try:
+            check_auth(run_command)
+        except SetupError as exc:
+            raise CheckError(
+                "gh_auth", str(exc), "log in with `gh auth login`",
+                DOCS_LINKS["gh_auth"],
+            ) from exc
+
+    if record(check_gh_auth):
+        lines.append("check=gh_auth ok")
+    if record(check_pi_command):
+        lines.append("check=pi ok")
+    return lines, failures
+
+
 def run_checks(config_path: Path, *, run_command) -> list[str]:
     """The `orbi check` gate: every prerequisite, fail fast.
 
@@ -950,54 +1031,7 @@ def run_checks(config_path: Path, *, run_command) -> list[str]:
     ``check=<step> ok ...`` line per step plus the final
     ``prerequisites=ok checks=<n>``.
     """
-    lines: list[str] = []
-    check_python_version()
-    lines.append(
-        f"check=python ok version="
-        f"{sys.version_info.major}.{sys.version_info.minor}."
-        f"{sys.version_info.micro}"
-    )
-    # The platform gate comes before every scheduler-dependent probe:
-    # an unsupported platform is a `platform` finding with the honest
-    # limitation message (Issue #849), never a traceback.
-    try:
-        sched = scheduler.detect()
-    except scheduler.UnsupportedPlatformError as exc:
-        raise CheckError(
-            "platform",
-            str(exc),
-            "run orbi on Linux (systemd) or macOS (launchd)",
-            scheduler.ISSUE_URL,
-        ) from exc
-    for name in REQUIRED_COMMANDS:
-        if shutil.which(name) is None:
-            raise CheckError(
-                "commands",
-                f"required command missing: {name} (not on PATH)",
-                COMMAND_INSTALL_HINTS[name],
-                CHECK_COMMAND_DOCS[name],
-            )
-        lines.append(f"check=command ok name={name}")
-    try:
-        run_command(sched.probe_args(None))
-    except Exception as exc:
-        raise CheckError(
-            f"{sched.name}_session",
-            session_unavailable_message(sched, str(exc)),
-            SESSION_FIX[sched.name],
-            DOCS_LINKS[sched.name],
-        ) from exc
-    lines.append(f"check={sched.name}_session ok")
-    try:
-        check_auth(run_command)
-    except SetupError as exc:
-        raise CheckError(
-            "gh_auth", str(exc), "log in with `gh auth login`",
-            DOCS_LINKS["gh_auth"],
-        ) from exc
-    lines.append("check=gh_auth ok")
-    check_pi_command()
-    lines.append("check=pi ok")
+    lines, _ = run_machine_checks(run_command=run_command)
 
     config_path = Path(config_path)
     if not config_path.is_file():
