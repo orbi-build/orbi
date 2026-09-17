@@ -38,7 +38,13 @@ jobs:
 
       - name: Set release image version
         run: |
-          version="${release_ref#v}"
+          # On pull_request the ref is "<n>/merge", which is not a valid tag;
+          # build under pr-<n> instead (nothing is pushed in this job).
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            version="pr-${{ github.event.pull_request.number }}"
+          else
+            version="${release_ref#v}"
+          fi
           test -n "$version"
           echo "IMAGE_VERSION=$version" >> "$GITHUB_ENV"
 
