@@ -12,6 +12,10 @@ documented in both files — and one table per file explains the three
 wirings (the repository mapping, the GitHub token path, the model
 key/provider path) plus the two volumes and what lives in each; an
 Orbi quick guide section carries the delivery vocabulary on the page.
+The Docker Hub overview (`README.dockerhub.md`, synced by the image
+workflow) mirrors the Quick start `docker run` with only the image
+reference swapped to Docker Hub (Issue #1054) — the pre-#1054 block
+predates #1048 and started a runner with no model provider.
 """
 import re
 from pathlib import Path
@@ -25,10 +29,18 @@ DOC_FILES = (
     REPO_ROOT / "3rd" / "docker" / "README.md",
 )
 DOCS_PAGE = DOC_FILES[0]
+HUB_README = REPO_ROOT / "3rd" / "docker" / "README.dockerhub.md"
 
 # The registries the image publish workflow pushes to; both carry `latest`
 # and the release number without the `v` prefix (e.g. `0.5.17`).
 REGISTRIES = ("ghcr.io/orbi-build/orbi", "docker.io/orbibuild/orbi")
+
+# A standalone image-reference line inside a bash block, e.g. the
+# `  ghcr.io/orbi-build/orbi:latest` a `docker run` ends with.
+IMAGE_REF_LINE = re.compile(
+    r"^[ \t]*(?:%s):[\w.\-]+[ \t]*$" % "|".join(re.escape(r) for r in REGISTRIES),
+    re.MULTILINE,
+)
 
 # The ORBI_PI_* variables the first `docker run` must name: the required
 # four from #1048 (all four must be set together) plus the three optional
@@ -163,6 +175,34 @@ def test_first_run_names_the_delivery_contract():
     for name in ("GH_TOKEN", "ORBI_SOURCE_REPO",
                  *QUICK_START_PI_VARS, *QUICK_START_OPTIONAL_PI_VARS):
         assert name in block, name
+
+
+def with_placeholder_image(block: str) -> str:
+    """The block with its image-reference line replaced by a fixed
+    placeholder, so two blocks compare equal when only the registry
+    differs (Issue #1054)."""
+    replaced, count = IMAGE_REF_LINE.subn("IMAGE", block)
+    assert count == 1, f"expected one image reference line, found {count}"
+    return replaced
+
+
+def test_image_placeholder_fails_fast_without_an_image_line():
+    """A block without a standalone image reference line fails the
+    helper loudly instead of comparing vacuously."""
+    with pytest.raises(AssertionError, match="image reference line"):
+        with_placeholder_image("```bash\ndocker run -d --name orbi\n```")
+
+
+def test_hub_readme_run_block_mirrors_the_quick_start():
+    """The Docker Hub overview's `docker run` is the docs Quick start
+    block with only the image reference swapped to Docker Hub
+    (Issue #1054): the pre-#1054 block predates #1048, named no
+    ORBI_PI_* variable and pointed Docker Hub readers at GHCR. A later
+    Quick start edit fails here until the Hub README follows."""
+    docs = with_placeholder_image(first_run_block(DOCS_PAGE.read_text(encoding="utf-8")))
+    hub_block = first_run_block(HUB_README.read_text(encoding="utf-8"))
+    assert "docker.io/orbibuild/orbi:latest" in hub_block, "the one allowed difference"
+    assert with_placeholder_image(hub_block) == docs
 
 
 def test_entrypoint_and_docs_agree_on_the_variable_surface():
