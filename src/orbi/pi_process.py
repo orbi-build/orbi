@@ -128,6 +128,15 @@ PI_IDLE_RECOVERY_CYCLES = 3
 
 
 @dataclasses.dataclass(frozen=True)
+class SteeringRequest:
+    """A trusted Issue correction discovered during an active session."""
+
+    context: str
+    comment_ids: tuple[str, ...]
+    author: str
+
+
+@dataclasses.dataclass(frozen=True)
 class PiWatchOptions:
     """The `stream_pi` watcher's cadence and threshold knobs.
 
@@ -146,6 +155,20 @@ class PiWatchOptions:
     # time. Tests can provide a deterministic clock without changing the
     # watcher's production defaults.
     activity_clock: Callable[[], float] | None = None
+    steering_poll_seconds: float = 60.0
+    steering_check: Callable[[], SteeringRequest | None] | None = None
+
+
+class SteeringRequested(RuntimeError):
+    """Internal control flow for restarting after a trusted correction."""
+
+    def __init__(self, request: SteeringRequest, round: int, phase: str):
+        super().__init__(request.context)
+        self.context = request.context
+        self.comment_ids = request.comment_ids
+        self.author = request.author
+        self.round = round
+        self.killed_phase = phase
 
 
 # Provider rate-limit retry: a Pi session killed by a
@@ -1036,6 +1059,7 @@ def stream_pi(
     # The counter is the RUN's, not this invocation's — a
     # resumed run continues where the killed process stopped.
     attempt = _load_429_attempts(cwd, run_id)
+    steering_round = 0
     while True:
         # Session files that already exist before this Pi process starts
         # are never followed: a
@@ -1059,7 +1083,19 @@ def stream_pi(
                 pi_env=pi_env, session_dir=session_dir,
                 known_files=known_files,
                 activity_clock=watch.activity_clock,
+                steering_poll_seconds=watch.steering_poll_seconds,
+                steering_check=watch.steering_check,
+                steering_round=steering_round,
             )
+        except SteeringRequested as exc:
+            command[-1] = exc.context
+            steering_round = exc.round
+            event(
+                "delivery_steered", issue=issue_ref, role=role,
+                comment_ids=exc.comment_ids, author=exc.author,
+                round=exc.round, killed_phase=exc.killed_phase,
+            )
+            continue
         except ProviderRateLimitedError as exc:
             if attempt >= PI_RATE_LIMIT_RETRIES:
                 _fail_rate_limited(
@@ -1155,6 +1191,9 @@ def _stream_pi_once(
     session_dir: Path,
     known_files: set[Path],
     activity_clock: Callable[[], float] | None,
+    steering_poll_seconds: float = 60.0,
+    steering_check: Callable[[], SteeringRequest | None] | None = None,
+    steering_round: int = 0,
 ) -> str:
     """Spawn and stream ONE Pi session attempt: the whole
     pre-#321 `stream_pi` body — the `run_start` scene, the live
@@ -1221,6 +1260,7 @@ def _stream_pi_once(
     # is declared swallowed and Pi is killed fast (well before the
     # model_wait_dead_seconds bound).
     probe_first_idle: float | None = None
+    steering_checked_at = time.monotonic()
     model_wait_swallowed = False
     # model_wait transitions: one line when the state is
     # entered and one when it is left; unchanged polls are heartbeats
@@ -1257,6 +1297,23 @@ def _stream_pi_once(
                     else:
                         stderr_chunks.append(data)
             activity = watcher.poll()
+            if (
+                steering_check is not None
+                and time.monotonic() - steering_checked_at >= steering_poll_seconds
+            ):
+                steering_checked_at = time.monotonic()
+                try:
+                    request = steering_check()
+                except Exception as exc:
+                    event(
+                        "steering_poll_failed", level=logging.WARNING,
+                        issue=issue_ref, reason=type(exc).__name__,
+                    )
+                    request = None
+                if request is not None:
+                    phase = "model_wait" if activity["model_wait"] else activity["phase"]
+                    process.terminate()
+                    raise SteeringRequested(request, steering_round + 1, phase)
             # Startup milestones: one line per flip — the
             # session file appeared, the first request went out, the
             # first response arrived. Each carries the provider/model
