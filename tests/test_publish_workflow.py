@@ -182,8 +182,17 @@ def test_publish_workflow_smokes_the_wheel_in_a_clean_venv():
 
 def test_publish_workflow_smokes_the_structured_failure_paths():
     commands = "\n".join(step_commands(steps_of(load_workflow(), "build")))
-    assert "check_failed check=" in commands, (
-        "the prerequisite gate failure must stay a structured line"
+    assert 'check_failed check=[^ ]+ ' in commands, (
+        "the prerequisite gate must retain its structured prerequisite shape"
+    )
+    assert "config_not_found path=[^;]+; reason=[^;]+; fix=" in commands, (
+        "the prerequisite gate must accept the current missing-config shape"
+    )
+    assert "config_not_found path=" in commands, (
+        "the prerequisite gate must accept the current missing-config shape"
+    )
+    assert "reason=" in commands and "fix=" in commands, (
+        "the missing-config shape must retain actionable fields"
     )
     assert "setup_failed reason=" in commands, (
         "the setup failure must stay a structured line"
