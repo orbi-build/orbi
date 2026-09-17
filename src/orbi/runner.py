@@ -2674,6 +2674,11 @@ def parse_pr_comment(body: str) -> dict | None:
         # needed by the next review session.
         **({"base_advance_round": found.base_advance_round}
            if found.base_advance_round else {}),
+        # An unknown verdict head is counted across timer ticks. Preserve
+        # the non-zero counter in the projection so the next review cannot
+        # silently restart at attempt 1.
+        **({"verdict_head_unknown_round": found.verdict_head_unknown_round}
+           if found.verdict_head_unknown_round else {}),
     }
 
 
@@ -6202,7 +6207,8 @@ def _sync_base_checkout_locked(repo_dir: Path, base_branch: str) -> None:
 
 
 def _round_scene_block(resumed: dict, pr_url: str, round: int,
-                       *, base_advance_round: int | None = None) -> str:
+                       *, base_advance_round: int | None = None,
+                       verdict_head_unknown_round: int | None = None) -> str:
     """The updated scene block a completed round carries to the next resume.
 
     The round comment is the budget's write path: embedding
@@ -6220,6 +6226,11 @@ def _round_scene_block(resumed: dict, pr_url: str, round: int,
         base_advance_round=(
             resumed.get("base_advance_round", 0)
             if base_advance_round is None else base_advance_round
+        ),
+        verdict_head_unknown_round=(
+            resumed.get("verdict_head_unknown_round", 0)
+            if verdict_head_unknown_round is None
+            else verdict_head_unknown_round
         ),
     ))
 
@@ -6343,8 +6354,9 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
       the latest base in-session or repairs the red CI); returns False;
     - missing/malformed verdict -> raise; the caller keeps the Issue in
       the automatic fix loop (`ai-fix-needed`). A mismatched head is
-      recoverable only when it names another real commit; an unknown
-      object is terminal (`ai-blocked`) because retrying cannot repair it;
+      recoverable when it names another real commit, and an unknown
+      object gets two retries per run before becoming terminal
+      (`ai-blocked`);
     - an exhausted round budget -> raise `UnrecoverableDeliveryError`
       (the bounded loop is a human decision, not a
       recoverable failure); the caller marks the Issue `ai-blocked`
@@ -6544,14 +6556,25 @@ def review_and_merge_if_clean(worktree: Path, branch: str, base_branch: str,
             cwd=worktree, check=False, timeout=10,
         )
         if object_probe.returncode != 0:
+            unknown_round = (
+                int(scene.get("verdict_head_unknown_round", 0)) + 1
+            )
+            scene["verdict_head_unknown_round"] = unknown_round
             event(
                 "review_verdict_head_unknown", level=logging.WARNING,
                 pr=pr["number"], verdict_head=verdict["head"],
+                round=unknown_round,
             )
-            raise UnrecoverableDeliveryError(
-                f"review verdict points to unknown object {verdict['head']}; "
-                "the verdict head is not a commit in the delivery repository; "
-                "human intervention is required"
+            if unknown_round >= 3:
+                raise UnrecoverableDeliveryError(
+                    f"review verdict points to unknown object {verdict['head']} "
+                    f"on attempt {unknown_round}; the verdict head is not a "
+                    "commit in the delivery repository; human intervention "
+                    "is required"
+                )
+            raise ValueError(
+                f"review verdict points to unknown object {verdict['head']} "
+                f"(unknown-head attempt {unknown_round}/3); retrying review"
             )
         raise ValueError(
             f"review verdict head {verdict['head']} does not match the "
@@ -8313,6 +8336,7 @@ def report_delivery_failure(
     branch: str | None, role: str, cause: str, evidence: bool = False,
     classify: bool = True, current_labels: set[str] | None = None,
     blocked_suffix: str = "", review_round: int | None = None,
+    review_scene_block: str | None = None,
     finish: bool = True, publisher: ProgressPublisher | None = None,
 ) -> str:
     """Report one delivery failure through the classified-failure flow.
@@ -8469,6 +8493,8 @@ def report_delivery_failure(
         # happens after the worktree was derived (a failure before the
         # derivation is unrecoverable and never reaches this branch).
         body += f"\n{scene_line()}"
+        if review_scene_block is not None:
+            body += f"\n{review_scene_block}"
         outcome = "fix needed"
     if evidence:
         body += _failure_evidence(worktree, exc)
@@ -8714,6 +8740,7 @@ def _run_review_round(
     # explicit reason why automatic recovery is impossible.
     worktree = None
     branch = None
+    scene = None
     try:
         try:
             comments = issue_comments(number, repo=source_repo)
@@ -8831,6 +8858,14 @@ def _run_review_round(
             worktree=worktree, branch=branch, role=ROLE_REVIEW,
             cause=f"the independent review of PR {pr_url} failed: {detail}",
             evidence=True,
+            review_scene_block=(
+                _round_scene_block(
+                    scene, pr_url, int(scene["review_round"]),
+                )
+                if isinstance(scene, dict)
+                and scene.get("verdict_head_unknown_round", 0)
+                else None
+            ),
         )
         return None
     if merged:

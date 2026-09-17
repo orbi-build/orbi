@@ -2110,18 +2110,20 @@ def test_review_and_merge_verdict_head_mismatch_real_commit_is_recoverable(
         seam, "run_command",
         lambda *a, **k: subprocess.CompletedProcess(a[0], 0),
     )
+    alternate_scene = _scene()
     with pytest.raises(ValueError, match="head"):
         runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
             "owner/repo", 4, title="Review task", priority="normal",
-            scene=_scene(),
+            scene=alternate_scene,
         )
+    assert alternate_scene.get("verdict_head_unknown_round", 0) == 0
     assert gate.called is False
 
 
-def test_review_and_merge_unknown_verdict_head_is_terminal(
+def test_review_and_merge_unknown_verdict_head_retries_then_is_terminal(
         monkeypatch, tmp_path, caplog):
-    """A model-invented object must stop the retry loop."""
+    """A model-invented object gets two recovery attempts per run."""
     gate = Mock()
     monkeypatch.setattr(seam, "issue_comments", lambda *a, **k: [])
     monkeypatch.setattr(seam, "freeze_pr", lambda *a, **k: _pr())
@@ -2136,12 +2138,28 @@ def test_review_and_merge_unknown_verdict_head_is_terminal(
         lambda *a, **k: subprocess.CompletedProcess(a[0], 1),
     )
     caplog.set_level("WARNING")
+    recovered_scene = _scene()
+    with pytest.raises(ValueError, match="unknown-head attempt 1/3"):
+        runner.review_and_merge_if_clean(
+            tmp_path, "branch", "main", _review_merge_config(tmp_path),
+            "owner/repo", 4, title="Review task", priority="normal",
+            scene=recovered_scene,
+        )
+    assert recovered_scene["verdict_head_unknown_round"] == 1
+    with pytest.raises(ValueError, match="unknown-head attempt 2/3"):
+        runner.review_and_merge_if_clean(
+            tmp_path, "branch", "main", _review_merge_config(tmp_path),
+            "owner/repo", 4, title="Review task", priority="normal",
+            scene=recovered_scene,
+        )
+    assert recovered_scene["verdict_head_unknown_round"] == 2
     with pytest.raises(runner.UnrecoverableDeliveryError, match="unknown object"):
         runner.review_and_merge_if_clean(
             tmp_path, "branch", "main", _review_merge_config(tmp_path),
             "owner/repo", 4, title="Review task", priority="normal",
-            scene=_scene(),
+            scene=recovered_scene,
         )
+    assert recovered_scene["verdict_head_unknown_round"] == 3
     assert "review_verdict_head_unknown" in caplog.text
     assert "verdict_head=unknown-object" in caplog.text
     assert gate.called is False
