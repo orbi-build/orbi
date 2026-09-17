@@ -24,9 +24,19 @@ HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 def changed_python_lines(base_ref: str) -> dict[str, set[int]] | None:
     """Map of repo-relative path -> set of added line numbers, from
-    `git diff -U0 <base>...HEAD -- '*.py'`. Returns None when git fails
-    (unknown base ref, not a repository) — the gate must fail fast,
-    not pass on an unreadable diff."""
+    `git diff -U0 <base_ref>...HEAD -- '*.py'`. Returns None when git
+    fails (unknown base ref, not a repository) — the gate must fail
+    fast, not pass on an unreadable diff.
+
+    The parser is a two-state machine over the diff grammar, because a
+    content line may itself start with `+` (a docstring quoting the
+    `+++ b/...` header syntax renders as `+++ note ...` in the diff):
+    the `--- `/`+++ ` file headers are recognized only in the header
+    region (right after a `--- ` line), and once a `@@` hunk starts
+    every leading `+` is an added content line, never a header. The old
+    prefix matching let one such line drop the rest of the file
+    (silent pass) or credit it to a ghost file.
+    """
     proc = subprocess.run(
         ["git", "diff", "-U0", f"{base_ref}...HEAD", "--", "*.py"],
         capture_output=True, text=True,
@@ -40,26 +50,42 @@ def changed_python_lines(base_ref: str) -> dict[str, set[int]] | None:
         return None
     changed: dict[str, set[int]] = {}
     current: str | None = None
+    expect_target_header = False
+    in_hunk = False
     new_line = 0
     for line in proc.stdout.splitlines():
-        if line.startswith("+++ "):
-            target = line[4:]
-            current = target[2:] if target.startswith("b/") else None
+        if in_hunk:
+            if line.startswith("diff --git"):
+                # The next file's header region starts here.
+                in_hunk = False
+                current = None
+                expect_target_header = False
+                continue
+            if line.startswith("+"):
+                if current is not None:
+                    changed.setdefault(current, set()).add(new_line)
+                new_line += 1
+            elif line.startswith("-"):
+                pass  # removed line: not recorded, does not advance
+            elif line.startswith("\\"):
+                pass  # "\ No newline at end of file"
+            else:
+                new_line += 1  # context line
             continue
         if line.startswith("--- "):
+            expect_target_header = True
             current = None
+            continue
+        if line.startswith("+++ ") and expect_target_header:
+            expect_target_header = False
+            target = line[4:]
+            current = target[2:] if target.startswith("b/") else None
             continue
         match = HUNK_RE.match(line)
         if match:
             new_line = int(match.group(1))
+            in_hunk = True
             continue
-        if current is None:
-            continue
-        if line.startswith("+") and not line.startswith("+++"):
-            changed.setdefault(current, set()).add(new_line)
-            new_line += 1
-        elif not line.startswith("-") and not line.startswith("\\"):
-            new_line += 1
     return changed
 
 
