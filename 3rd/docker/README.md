@@ -132,8 +132,8 @@ pi_model = "deepseek-chat"
 
 1. In the task pool repo, open an Issue stating ONE runtime outcome in
    the shape `when X, should Y, actually Z`.
-2. Add the `ai-ready` label (the first start created the twelve `ai-*`
-   labels).
+2. Add the `ai-ready` label (the first start created the twelve
+   platform labels).
 3. Follow the tick log:
 
 ```bash

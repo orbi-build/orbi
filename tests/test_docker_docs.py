@@ -16,6 +16,8 @@ Orbi quick guide section carries the delivery vocabulary on the page.
 import re
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENTRYPOINT = REPO_ROOT / "3rd" / "docker" / "docker-entrypoint.sh"
 DOC_FILES = (
@@ -80,6 +82,13 @@ def first_run_block(text: str) -> str:
     raise AssertionError("no docker run block found")
 
 
+def test_first_run_block_fails_fast_without_a_run():
+    """A page whose bash blocks never run an image fails the helper
+    loudly instead of letting the contract tests pass vacuously."""
+    with pytest.raises(AssertionError, match="no docker run block found"):
+        first_run_block("```bash\ndocker pull ghcr.io/orbi-build/orbi:latest\n```\n")
+
+
 def doc_variables(text: str) -> set[str]:
     """The ORBI_* variable families a document names. The repeatable
     ORBI_ENV_<NAME> family collapses to its ORBI_ENV_ prefix — the prefix
@@ -107,6 +116,15 @@ def markdown_tables(text: str) -> list[str]:
     if current:
         tables.append("\n".join(current))
     return tables
+
+
+def test_markdown_tables_captures_a_table_at_end_of_file():
+    """A table running to end-of-file is captured by the post-loop
+    flush (the current docs pages end with prose, so only a table at
+    EOF reaches that branch)."""
+    assert markdown_tables("prose\n\n| a | b |\n|---|---|\n| 1 | 2 |\n") == [
+        "| a | b |\n|---|---|\n| 1 | 2 |",
+    ]
 
 
 def test_quick_start_pulls_the_published_image():

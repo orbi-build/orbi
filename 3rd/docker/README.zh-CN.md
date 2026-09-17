@@ -122,7 +122,7 @@ pi_model = "deepseek-chat"
 
 1. 在任务池仓库开一个 Issue，用 `when X, should Y, actually Z` 的形状
    陈述一个可观测的运行时结果。
-2. 打上 `ai-ready` label（首次启动已创建十二个 `ai-*` label）。
+2. 打上 `ai-ready` label（首次启动已创建十二个平台 label）。
 3. 跟踪 tick 日志：
 
 ```bash
