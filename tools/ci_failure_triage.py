@@ -552,21 +552,50 @@ def add_issue_label(owner: str, repo: str, number: int, label: str) -> None:
 
 def fetch_jobs(owner: str, repo: str, run_id: int) -> list:
     """The completed run's jobs (verified shape: `{jobs: [...]}`)."""
-    data = gh_api(f"repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100")
-    jobs = data.get("jobs") if isinstance(data, dict) else None
-    if not isinstance(jobs, list):
-        fail("fetch_jobs", f"jobs API did not return a jobs list: {data!r}")
-    return jobs
+    return paged_list(
+        f"repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100",
+        what="fetch_jobs",
+        key="jobs",
+    )
+
+
+def paged_list(first_url: str, *, what: str, per_page: int = 100,
+               key: str | None = None) -> list:
+    """Every page of a list endpoint.
+
+    The queue of open triage Issues and a chronic ticket's comment
+    history both grow past one page: reading only page 1 would silently
+    drop the oldest tickets (the ones the fingerprint index exists to
+    find) and the newest recorded failures (the recovery logic reads
+    the last one). The first request keeps the original URL — callers
+    and their contract fakes answer exactly that shape — and pages are
+    appended only while the previous page came back full.
+    """
+    results: list = []
+    url = first_url
+    page = 1
+    while True:
+        data = gh_api(url)
+        if key is not None:
+            data = data.get(key) if isinstance(data, dict) else None
+        if not isinstance(data, list):
+            fail(what, f"{what} API did not return a list: {data!r}")
+        results.extend(data)
+        if len(data) < per_page:
+            return results
+        page += 1
+        if page > 100:  # defensive ceiling: 10,000 items
+            return results
+        url = f"{first_url}&page={page}"
 
 
 def index_open_issues(owner: str, repo: str) -> dict[str, dict]:
     """Open triage Issues, including tickets created before the p0 fix."""
-    issues = gh_api(
+    issues = paged_list(
         f"repos/{owner}/{repo}/issues"
-        f"?labels={','.join(ISSUE_INDEX_LABELS)}&state=open&per_page=100"
+        f"?labels={','.join(ISSUE_INDEX_LABELS)}&state=open&per_page=100",
+        what="list_issues",
     )
-    if not isinstance(issues, list):
-        fail("list_issues", f"issues API did not return a list: {issues!r}")
     index: dict[str, dict] = {}
     for item in issues:
         if not isinstance(item, dict) or "pull_request" in item:
@@ -718,13 +747,14 @@ def triage_failure(run: dict, owner: str, repo: str, jobs: list) -> None:
 def fetch_issue_comments(owner: str, repo: str, number: int) -> list[str]:
     """The Issue's comments, their bodies only, oldest first (the explicit
     `sort=created&direction=asc` pins the order `recorded_failures` relies
-    on; verified against the live endpoint)."""
-    data = gh_api(
+    on; verified against the live endpoint). Every page is read: a chronic
+    ticket's history grows past 100 and the newest recorded failure is
+    the last comment of the last page."""
+    data = paged_list(
         f"repos/{owner}/{repo}/issues/{number}/comments"
-        "?per_page=100&sort=created&direction=asc"
+        "?per_page=100&sort=created&direction=asc",
+        what="fetch_issue_comments",
     )
-    if not isinstance(data, list):
-        fail("fetch_issue_comments", f"comments API did not return a list: {data!r}")
     return [
         item["body"]
         for item in data
