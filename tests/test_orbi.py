@@ -929,6 +929,26 @@ def test_check_reports_missing_config_when_no_unit_is_available(
     assert "config_not_found" in capsys.readouterr().err
 
 
+def test_check_resolves_the_single_existing_installed_unit_config(
+    tmp_path, monkeypatch, capsys,
+):
+    config = tmp_path / "deployment.toml"
+    config.write_text('source_repos = ["owner/repo"]\nrepo_dir = "."\n', encoding="utf-8")
+    _write_prompts(tmp_path)
+    installed = tmp_path / "units"
+    installed.mkdir()
+    unit = installed / "orbi@1.service"
+    unit.write_text("unit", encoding="utf-8")
+    fake = SimpleNamespace(
+        installed_unit_dir=lambda: installed,
+        unit_config=lambda path: config if path == unit else None,
+    )
+    monkeypatch.setattr(orbi.scheduler, "detect", lambda: fake)
+    monkeypatch.setattr(orbi.pilot_setup, "run_checks", lambda *args, **kwargs: ["ok"])
+    assert orbi.main(["check"]) == 0
+    assert capsys.readouterr().out.strip() == "ok"
+
+
 def test_setup_reports_missing_config_with_setup_prefix(
     tmp_path, monkeypatch, capsys,
 ):
