@@ -20202,20 +20202,19 @@ def test_sync_release_docs_fails_fast_when_the_base_advanced(
     assert remote_head == git_out(work, "rev-parse", "HEAD")
 
 
-def test_sync_release_docs_uses_release_commit_when_tag_is_missing_locally(
+def test_sync_release_docs_fails_when_tag_object_is_missing(
         tmp_path, monkeypatch):
     work = make_release_docs_repo(tmp_path)
     head = git_out(work, "rev-parse", "HEAD")
     fake_gh_release_view(monkeypatch, body=RELEASE_DOCS_BODY_V040,
                          tag="v0.9.9")
-    evidence = release.sync_release_docs(
-        source_repo="o/r", repo_dir=work, worktree=work,
-        base_branch="main", tag="v0.9.9", release_commit=head,
-        issue_number=77,
-    )
-    assert "committed and pushed" in evidence
-    page = (work / "docs" / "release-v0.9.9.mdx").read_text(encoding="utf-8")
-    assert f"commit `{head}`" in page
+    with pytest.raises(subprocess.CalledProcessError):
+        release.sync_release_docs(
+            source_repo="o/r", repo_dir=work, worktree=work,
+            base_branch="main", tag="v0.9.9", release_commit=head,
+            issue_number=77,
+        )
+    assert not (work / "docs" / "release-v0.9.9.mdx").exists()
 
 
 def test_release_docs_page_rejects_an_unknown_language():
@@ -20338,6 +20337,8 @@ def test_move_latest_marker_fails_fast_on_resume_when_the_new_page_is_missing(
 def test_sync_release_docs_uses_prepublication_changelog(tmp_path):
     work = make_release_docs_repo(tmp_path)
     head = git_out(work, "rev-parse", "HEAD")
+    subprocess.run(["git", "-C", str(work), "tag", "-a", "v0.4.0",
+                    "-m", "rel", head], check=True, capture_output=True)
     evidence = release.sync_release_docs(
         source_repo="o/r", repo_dir=work, worktree=work,
         base_branch="main", tag="v0.4.0", release_commit=head,

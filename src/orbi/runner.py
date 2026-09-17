@@ -8638,9 +8638,10 @@ def report_delivery_failure(
             )
         update_issue_comment(
             comment_id, repo=source_repo,
-            body=bump_failure_repeat(
-                reported_failure["body"], fingerprint,
-            ),
+            # Apply the increment to the newly assembled body, not the
+            # stale first report. This preserves scene/retry fields added
+            # by this attempt while retaining the dedup counter.
+            body=bump_failure_repeat(body, fingerprint),
         )
         event(
             "failure_comment_deduplicated", issue=number,

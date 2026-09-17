@@ -1718,6 +1718,21 @@ def move_latest_marker(worktree: Path, old_slug: str,
     return changed
 
 
+def rollback_release_docs(*, worktree: Path, base_branch: str,
+                          docs_commit: str) -> None:
+    """Remove a pre-publication docs commit when Release creation fails."""
+    current = run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+    if current != docs_commit:
+        raise RuntimeError(
+            f"release docs rollback expected {docs_commit}, found {current}"
+        )
+    run_command(["git", "revert", "--no-edit", docs_commit], cwd=worktree)
+    run_git_network_command(
+        ["git", "push", "origin", f"HEAD:refs/heads/{base_branch}"],
+        cwd=worktree,
+    )
+
+
 def sync_release_docs(*, source_repo: str, repo_dir: Path,
                       worktree: Path, base_branch: str, tag: str,
                       release_commit: str, issue_number: int,
@@ -1775,16 +1790,24 @@ def sync_release_docs(*, source_repo: str, repo_dir: Path,
         body = changelog
         published_at = None
         release_url = f"https://github.com/{source_repo}/releases/tag/{tag}"
-    # The tag is deliberately only local at this point. For a resumed
-    # release whose remote tag is already known, the local checkout may not
-    # have fetched its annotated object; the release commit is the truthful
-    # local identity available in that case.
+    # A resumed release may know the remote tag through ls-remote while the
+    # checkout has no tag object (fresh clone). Fetch the exact tag before
+    # rendering it. Never substitute the commit: the page explicitly says
+    # the tag state was verified against origin.
+    if local_release_tag_commit(repo_dir, tag) is None:
+        run_git_network_command(
+            ["git", "fetch", "origin", f"refs/tags/{tag}:refs/tags/{tag}"],
+            cwd=repo_dir,
+        )
     try:
         tag_object = run_command(
             ["git", "rev-parse", f"refs/tags/{tag}"], cwd=repo_dir,
-        )
-    except subprocess.CalledProcessError:
-        tag_object = release_commit
+        ).strip()
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"release {tag}: remote tag exists but its local tag object "
+            "could not be fetched; refusing to fabricate verified docs"
+        ) from exc
     new_slug = f"release-{tag}"
     en_path = worktree / "docs" / f"{new_slug}.mdx"
     zh_path = worktree / "docs" / "zh" / f"{new_slug}.mdx"
@@ -2311,12 +2334,21 @@ def process_release(issue: dict, config: RunnerConfig,
             ensure_release_tag_created(
                 config.repo_dir, tag, release_commit,
             )
-        docs_evidence = sync_release_docs(
-            source_repo=source_repo, repo_dir=config.repo_dir,
-            worktree=worktree, base_branch=base_branch, tag=tag,
-            release_commit=release_commit, issue_number=number,
-            changelog=changelog,
-        )
+        try:
+            docs_evidence = sync_release_docs(
+                source_repo=source_repo, repo_dir=config.repo_dir,
+                worktree=worktree, base_branch=base_branch, tag=tag,
+                release_commit=release_commit, issue_number=number,
+                changelog=changelog,
+            )
+        except Exception:
+            # The tag is intentionally local until docs are on the base
+            # branch. Do not leave that disposable object behind when the
+            # docs push fails; a retry must be able to create the tag for
+            # the same release commit without hitting a residue conflict.
+            if existing_tag_commit is None:
+                run_command(["git", "tag", "-d", tag], cwd=config.repo_dir)
+            raise
         if existing_tag_commit is None:
             ensure_release_tag_pushed(
                 config.repo_dir, tag, release_commit,
@@ -2325,13 +2357,29 @@ def process_release(issue: dict, config: RunnerConfig,
                 "release_tag_pushed", issue=number, tag=tag,
                 commit=release_commit,
             )
-        release_url = publish_release(
-            repo=source_repo, tag=tag, version=tag,
-            release_commit=release_commit, changelog=changelog,
-            scope_evidence=scope_evidence, gate_evidence=gate_evidence,
-            test_evidence=test_evidence, run_id=run_id, issue_number=number,
-            attribution_footer=config.attribution_footer,
+        docs_commit = (
+            run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
+            if "committed and pushed" in docs_evidence else None
         )
+        try:
+            release_url = publish_release(
+                repo=source_repo, tag=tag, version=tag,
+                release_commit=release_commit, changelog=changelog,
+                scope_evidence=scope_evidence, gate_evidence=gate_evidence,
+                test_evidence=test_evidence, run_id=run_id, issue_number=number,
+                attribution_footer=config.attribution_footer,
+            )
+        except Exception:
+            # The docs commit intentionally precedes publication for the
+            # #998 CI invariant. If Release creation fails, undo that
+            # commit so users never see a new (latest) page linking to a
+            # Release that does not exist.
+            if docs_commit is not None:
+                rollback_release_docs(
+                    worktree=worktree, base_branch=base_branch,
+                    docs_commit=docs_commit,
+                )
+            raise
         publish(
             action=lambda: publisher.milestone(
                 f"**Orbi released**: {release_url}",
