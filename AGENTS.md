@@ -1,12 +1,17 @@
 # AGENTS.md
 
 Development contract for this repository. Every local Pi bootstrap run
-must follow it before changing code. This file carries only the rules
-the agent must obey — the operational explanation of every mechanism
-(timer, unit drift, transport check, journal fields, label lifecycle,
-claim scans) lives in the docs site (`docs/`, <https://docs.orbi.build>);
-each section points at the owning page instead of restating it.
+must follow it before changing code. This file is self-contained: every
+rule an agent must obey to deliver a change here is stated below,
+including the failure that motivated it, so a delivery never depends on
+chasing a reference first. The deeper operational explanation of each
+mechanism (timer instances, unit drift, transport check, journal fields,
+label lifecycle, claim scans) lives in the docs site (`docs/`,
+<https://docs.orbi.build>) and is linked at the end of the owning section
+for when you need the full picture.
 Architectural invariants and the public surface live in [CONSTITUTION.md](CONSTITUTION.md); when this file and the constitution disagree, the constitution wins.
+
+`CLAUDE.md` is a symlink to this file; the two are always identical.
 
 - **Implementer Pi**: plan, TDD, tests, commit the delivery; the Runner pushes the task branch and opens one PR.
 - **Reviewer Pi**: after the PR exists, a new `pi --print` with `prompts/prompt_review.md` and a new JSONL on the same worktree.
@@ -166,7 +171,7 @@ system merely to make an end-to-end claim.
 ## Git
 
 - Work on the task feature branch.
-- Pi (the implementer) does not merge and does not push `main` or `master`. It delivers through exactly one PR linked to the Issue; the Runner is the only merge actor.
+- Pi (the implementer) does not merge and does not push `main` or `master`, and never force-pushes any shared branch. It delivers through exactly one PR linked to the Issue; the Runner is the only merge actor.
 - The PR description must contain `Fixes #<issue-number>` (it may be on the first line), pointing at the source Issue so GitHub closes the Issue natively when the PR merges into the default branch. The keyword works in the PR body and in commit messages, but not in the PR title. The runner rejects a PR whose body is missing it.
 
 ## Scope
