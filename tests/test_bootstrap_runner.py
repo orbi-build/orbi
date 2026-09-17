@@ -18651,7 +18651,7 @@ def test_process_release_closes_milestone_despite_stale_release_ticket(monkeypat
     assert "release ticket #99 excluded" in comment_kwargs["body"]
 
 
-def test_process_release_publish_failure_rolls_back_docs_commit(monkeypatch):
+def test_process_release_publish_failure_preserves_docs_after_tag_push(monkeypatch):
     state = make_release_process_env(monkeypatch)
     original_run = seam.run_command
     monkeypatch.setattr(
@@ -18668,6 +18668,41 @@ def test_process_release_publish_failure_rolls_back_docs_commit(monkeypatch):
     monkeypatch.setattr(
         release, "publish_release",
         lambda **kwargs: (_ for _ in ()).throw(RuntimeError("publish down")),
+    )
+    rolled_back = []
+    monkeypatch.setattr(
+        release, "rollback_release_docs",
+        lambda **kwargs: rolled_back.append(kwargs),
+    )
+    issue = {"number": 99, "title": "Release v0.3.0",
+             "body": RELEASE_DECLARATION_BODY,
+             "labels": [{"name": "ai-ready"}, {"name": "ai-release"}]}
+    assert release.process_release(
+        issue, runner.RunnerConfig(repo_dir=Path("/r"), base_branch="main"),
+        "o/r",
+    ) == ""
+    assert rolled_back == []
+    assert state["edits"][-1] == (99, {"repo": "o/r", "add": "ai-blocked",
+                                       "remove": "ai-in-progress"})
+
+
+def test_process_release_tag_push_failure_rolls_back_docs_when_tag_absent(monkeypatch):
+    state = make_release_process_env(monkeypatch)
+    original_run = seam.run_command
+    monkeypatch.setattr(
+        seam, "run_command",
+        lambda command, **kwargs: (
+            "docs-commit\n"
+            if command[:3] == ["git", "rev-parse", "HEAD"]
+            and kwargs.get("cwd") == Path("/wt")
+            else original_run(command, **kwargs)
+        ),
+    )
+    monkeypatch.setattr(release, "sync_release_docs",
+                        lambda **kwargs: "docs committed and pushed")
+    monkeypatch.setattr(
+        release, "ensure_release_tag_pushed",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("tag push down")),
     )
     rolled_back = []
     monkeypatch.setattr(

@@ -2349,18 +2349,31 @@ def process_release(issue: dict, config: RunnerConfig,
             if existing_tag_commit is None:
                 run_command(["git", "tag", "-d", tag], cwd=config.repo_dir)
             raise
-        if existing_tag_commit is None:
-            ensure_release_tag_pushed(
-                config.repo_dir, tag, release_commit,
-            )
-            event(
-                "release_tag_pushed", issue=number, tag=tag,
-                commit=release_commit,
-            )
         docs_commit = (
             run_command(["git", "rev-parse", "HEAD"], cwd=worktree).strip()
             if "committed and pushed" in docs_evidence else None
         )
+        # A failed tag push is the only pre-publication state in which the
+        # docs commit must be compensated.  The push can be partially
+        # successful, so probe the remote before deciding to revert: once a
+        # tag is visible, preserving the docs is the hard invariant.
+        if existing_tag_commit is None:
+            try:
+                ensure_release_tag_pushed(
+                    config.repo_dir, tag, release_commit,
+                )
+            except Exception:
+                tag_pushed = release_tag_commit(config.repo_dir, tag) is not None
+                if not tag_pushed and docs_commit is not None:
+                    rollback_release_docs(
+                        worktree=worktree, base_branch=base_branch,
+                        docs_commit=docs_commit,
+                    )
+                raise
+            event(
+                "release_tag_pushed", issue=number, tag=tag,
+                commit=release_commit,
+            )
         try:
             release_url = publish_release(
                 repo=source_repo, tag=tag, version=tag,
@@ -2370,15 +2383,11 @@ def process_release(issue: dict, config: RunnerConfig,
                 attribution_footer=config.attribution_footer,
             )
         except Exception:
-            # The docs commit intentionally precedes publication for the
-            # #998 CI invariant. If Release creation fails, undo that
-            # commit so users never see a new (latest) page linking to a
-            # Release that does not exist.
-            if docs_commit is not None:
-                rollback_release_docs(
-                    worktree=worktree, base_branch=base_branch,
-                    docs_commit=docs_commit,
-                )
+            # The tag is already visible before publication is attempted.
+            # Keep the docs commit: a released tag without its docs page is
+            # the irreversible failure, and a retry can finish publication
+            # for this same tag. The tag-push exception path above handles
+            # the only case where compensation is safe.
             raise
         publish(
             action=lambda: publisher.milestone(
