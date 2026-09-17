@@ -1252,40 +1252,35 @@ def release_tag_commit(repo_dir: Path, tag: str) -> str | None:
     return refs.get(f"refs/tags/{tag}")
 
 
-def ensure_release_tag_pushed(repo_dir: Path, tag: str,
-                              release_commit: str) -> None:
-    """Create the annotated release tag and push it — idempotently.
-
-    本地残留收敛：上次 `git tag` 成功但 push 失败会留下本地 tag，重试
-    时远端仍无此 tag，不处理残留的话 `git tag -a` 永远 fatal: tag
-    already exists（发布票死锁）。残留指向本次发布提交 →
-    跳过重建直接重推；指向别的提交 → fail fast——已有的 tag 永不移动
-    或覆盖（与 `release_tag_commit` 的远端侧同一不变量）。
-    """
+def ensure_release_tag_created(repo_dir: Path, tag: str,
+                               release_commit: str) -> None:
+    """Create the annotated release tag locally, idempotently."""
     try:
         local_tag_commit = run_command(
             ["git", "rev-parse", "-q", "--verify",
-             f"refs/tags/{tag}^{{commit}}"],
-            cwd=repo_dir,
+             f"refs/tags/{tag}^{{commit}}"], cwd=repo_dir,
         ).strip()
     except subprocess.CalledProcessError:
         local_tag_commit = None
     if local_tag_commit is None:
         run_command(
             ["git", "tag", "-a", tag, "-m", f"Release {tag}",
-             release_commit],
-            cwd=repo_dir,
+             release_commit], cwd=repo_dir,
         )
     elif local_tag_commit != release_commit:
         raise RuntimeError(
             f"local tag {tag} already exists and points at "
-            f"{local_tag_commit}, not the release commit "
-            f"{release_commit} — an existing tag is never moved or "
-            "overwritten"
+            f"{local_tag_commit}, not the release commit {release_commit} "
+            "— an existing tag is never moved or overwritten"
         )
+
+
+def ensure_release_tag_pushed(repo_dir: Path, tag: str,
+                              release_commit: str) -> None:
+    """Create the annotated release tag and push it — idempotently."""
+    ensure_release_tag_created(repo_dir, tag, release_commit)
     run_git_network_command(
-        ["git", "push", "origin", f"refs/tags/{tag}"],
-        cwd=repo_dir,
+        ["git", "push", "origin", f"refs/tags/{tag}"], cwd=repo_dir,
     )
 
 
@@ -1525,7 +1520,7 @@ def strip_release_audit_sections(notes: str) -> str:
 
 
 def release_docs_page(*, version: str, tag_object: str,
-                      release_commit: str, published_at: str,
+                      release_commit: str, published_at: str | None,
                       release_url: str, issue_number: int,
                       body: str, language: str) -> str:
     """Build one docs-site Release notes page for a published release.
@@ -1556,6 +1551,9 @@ def release_docs_page(*, version: str, tag_object: str,
     if language == "en":
         title = f"# {version} release (latest)"
         intro = (
+            f"`{version}` release notes for the GitHub Release "
+            f"[{version}]({release_url}) (release task: Issue #{issue_number})."
+            if published_at is None else
             f"`{version}` was published {published_at} as the GitHub "
             f"Release [{version}]({release_url}) (release task: "
             f"Issue #{issue_number})."
@@ -1570,6 +1568,9 @@ def release_docs_page(*, version: str, tag_object: str,
     elif language == "zh":
         title = f"# {version} 发布（最新）"
         intro = (
+            f"`{version}` 的 GitHub Release 发布说明："
+            f"[{version}]({release_url})（release task：Issue #{issue_number}）。"
+            if published_at is None else
             f"`{version}` 于 {published_at} 发布为 GitHub Release "
             f"[{version}]({release_url})（release task："
             f"Issue #{issue_number}）。"
@@ -1700,15 +1701,17 @@ def move_latest_marker(worktree: Path, old_slug: str,
 
 def sync_release_docs(*, source_repo: str, repo_dir: Path,
                       worktree: Path, base_branch: str, tag: str,
-                      release_commit: str, issue_number: int) -> str:
+                      release_commit: str, issue_number: int,
+                      changelog: str | None = None) -> str:
     """Sync the docs-site Release notes for one published release.
 
-     Release state machine step 8 — runs AFTER the GitHub
-    Release exists (step 7) and BEFORE the Milestone is closed (step 10):
+     Release state machine step 8 — runs BEFORE the tag is pushed and
+    before the GitHub Release is created, so CI never observes a released
+    tag without its docs page. Direct callers may omit `changelog` to sync
+    an already-published release using its GitHub Release body.
 
-    - fetches the published Release (`gh release view`, the same call
-      `publish_release` uses) — the page content is that body, no
-      changelog re-implementation;
+    - uses the supplied changelog for the pre-publication path; the legacy
+      path fetches the published Release (`gh release view`);
     - generates `docs/release-<tag>.mdx` and
       `docs/zh/release-<tag>.mdx` in the release worktree with the meta
       the existing release pages share (tag/release-commit mapping,
@@ -1732,22 +1735,58 @@ def sync_release_docs(*, source_repo: str, repo_dir: Path,
     if not docs_config.is_file():
         return "docs sync skipped (no Mintlify docs in repo)"
 
-    release = release_view(source_repo, tag,
-                           fields="tagName,publishedAt,url,body")
-    body = release.get("body")
-    if not isinstance(body, str) or not body.strip():
-        raise RuntimeError(
-            f"release {tag}: the GitHub Release body is empty — the "
-            "docs page would be fabricated, refusing"
+    if changelog is None:
+        # Compatibility for callers that sync an already-published release.
+        release = release_view(source_repo, tag,
+                               fields="tagName,publishedAt,url,body")
+        body = release.get("body")
+        if not isinstance(body, str) or not body.strip():
+            raise RuntimeError(
+                f"release {tag}: the GitHub Release body is empty — the "
+                "docs page would be fabricated, refusing"
+            )
+        published_at = release["publishedAt"]
+        release_url = release["url"]
+    else:
+        if not changelog.strip():
+            raise RuntimeError(
+                f"release {tag}: the changelog is empty — the docs page "
+                "would be fabricated, refusing"
+            )
+        body = changelog
+        published_at = None
+        release_url = f"https://github.com/{source_repo}/releases/tag/{tag}"
+    # The tag is deliberately only local at this point. For a resumed
+    # release whose remote tag is already known, the local checkout may not
+    # have fetched its annotated object; the release commit is the truthful
+    # local identity available in that case.
+    try:
+        tag_object = run_command(
+            ["git", "rev-parse", f"refs/tags/{tag}"], cwd=repo_dir,
         )
-    published_at = release["publishedAt"]
-    release_url = release["url"]
-    tag_object = run_command(
-        ["git", "rev-parse", f"refs/tags/{tag}"], cwd=repo_dir,
-    )
+    except subprocess.CalledProcessError:
+        tag_object = release_commit
     new_slug = f"release-{tag}"
     en_path = worktree / "docs" / f"{new_slug}.mdx"
     zh_path = worktree / "docs" / "zh" / f"{new_slug}.mdx"
+    if changelog is not None and not en_path.is_file():
+        # A prior attempt may have pushed docs and then died before pushing
+        # the tag. The release worktree is reset to release_commit on resume;
+        # restore the already-published docs base instead of creating a
+        # non-fast-forward duplicate commit.
+        try:
+            run_command(
+                ["git", "rev-parse", "--verify",
+                 f"refs/remotes/origin/{base_branch}:{'docs/' + new_slug + '.mdx'}"],
+                cwd=worktree,
+            )
+        except subprocess.CalledProcessError:
+            pass
+        else:
+            run_command(
+                ["git", "reset", "--hard", f"refs/remotes/origin/{base_branch}"],
+                cwd=worktree,
+            )
     en_content = release_docs_page(
         version=tag, tag_object=tag_object, release_commit=release_commit,
         published_at=published_at, release_url=release_url,
@@ -2255,7 +2294,20 @@ def process_release(issue: dict, config: RunnerConfig,
                     f"release commit {release_commit} — an existing "
                     "tag is never moved or overwritten"
                 )
-        else:
+        # Create the annotated object locally, but do not publish the tag
+        # until the docs commit is on the base branch. This keeps the docs
+        # invariant true at every point visible to CI.
+        if existing_tag_commit is None:
+            ensure_release_tag_created(
+                config.repo_dir, tag, release_commit,
+            )
+        docs_evidence = sync_release_docs(
+            source_repo=source_repo, repo_dir=config.repo_dir,
+            worktree=worktree, base_branch=base_branch, tag=tag,
+            release_commit=release_commit, issue_number=number,
+            changelog=changelog,
+        )
+        if existing_tag_commit is None:
             ensure_release_tag_pushed(
                 config.repo_dir, tag, release_commit,
             )
@@ -2274,11 +2326,6 @@ def process_release(issue: dict, config: RunnerConfig,
             action=lambda: publisher.milestone(
                 f"**Orbi released**: {release_url}",
             ),
-        )
-        docs_evidence = sync_release_docs(
-            source_repo=source_repo, repo_dir=config.repo_dir,
-            worktree=worktree, base_branch=base_branch, tag=tag,
-            release_commit=release_commit, issue_number=number,
         )
         publish(
             action=lambda: publisher.milestone(
