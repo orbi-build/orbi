@@ -1,0 +1,26 @@
+# v0.5.15 发布（最新）
+
+`v0.5.15` 的 GitHub Release 发布说明：[v0.5.15](https://github.com/orbi-build/orbi/releases/tag/v0.5.15)（release task：Issue #1000）。
+
+## Tag 状态（对 origin 验证）
+
+| Ref | 对象 | 指向 |
+|---|---|---|
+| `v0.5.15` | 注解 tag `c252ec8dcb7345d2452ac34d9b0717e6df42173a` | 提交 `42302fa59e24d1c7127f590d3589a504d04ccfb6` |
+
+## Release notes
+
+## Changelog
+
+### Documentation
+
+- 发版顺序竞态：tag 先于 docs 页推送，每次发版必然产生一次假失败 CI 与一张 p0 噪声票 ([Issue #998](https://github.com/orbi-build/orbi/issues/998); [PR #999](https://github.com/orbi-build/orbi/pull/999))
+
+### Bug fixes
+
+- 配置找不到时既不会自动解析已安装单元的 ORBI_CONFIG，报错也复用了别的场景的文案 ([Issue #1001](https://github.com/orbi-build/orbi/issues/1001); [PR #1003](https://github.com/orbi-build/orbi/pull/1003))
+- 幻觉 head 被判不可恢复：实测下一轮即自愈，#990 的存在性判定引入本不存在的停摆 ([Issue #1005](https://github.com/orbi-build/orbi/issues/1005); [PR #1006](https://github.com/orbi-build/orbi/pull/1006))
+
+## Contributors
+
+<a href="https://github.com/xqliu"><img src="https://avatars.githubusercontent.com/u/22554?v=4&s=48" width="32" height="32" alt="xqliu" /></a>
