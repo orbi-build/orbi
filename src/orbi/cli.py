@@ -737,6 +737,25 @@ def _config_was_explicit(argv: list[str] | None) -> bool:
                for value in values)
 
 
+def _missing_config_message(
+    path: Path, candidates: tuple[tuple[Path, str], ...],
+) -> str:
+    candidate_lines = "".join(
+        f"; candidate={candidate} units={units}"
+        for candidate, units in candidates
+    )
+    return (
+        f"config_not_found path={path.resolve()}; "
+        "reason=no Orbi config at this path "
+        "(the default is `orbi.toml` in the current directory); "
+        "fix=run from the deployment directory, or point at the config: "
+        "`ORBI_CONFIG=~/orbi-deploy/<dir>/orbi.toml orbi <command>` "
+        "(`--config <path>` also works, after the subcommand). "
+        "The source checkout is not a deployment directory and has no "
+        f"orbi.toml.{candidate_lines}"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
@@ -867,6 +886,17 @@ def main(argv: list[str] | None = None) -> int:
                 existing[0][0], existing[0][1],
             )
 
+    if args.command == "check" and not args.config.exists():
+        check_candidates = candidates or _installed_unit_configs(
+            getattr(args, "installed_dir", None),
+        )
+        if sum(candidate[0].is_file() for candidate in check_candidates) != 1:
+            print(
+                _missing_config_message(args.config, check_candidates),
+                file=sys.stderr,
+            )
+            return 1
+
     if args.command is None:
         # No subcommand = the Runner tick. Delegate to the
         # Runner's own main: it re-parses `--config` and owns the whole
@@ -923,20 +953,7 @@ def main(argv: list[str] | None = None) -> int:
             candidates = _installed_unit_configs(
                 getattr(args, "installed_dir", None),
             )
-        candidate_lines = "".join(
-            f"; candidate={path} units={units}"
-            for path, units in candidates
-        )
-        message = (
-            f"config_not_found path={exc.path}; "
-            "reason=no Orbi config at this path "
-            "(the default is `orbi.toml` in the current directory); "
-            "fix=run from the deployment directory, or point at the config: "
-            "`ORBI_CONFIG=~/orbi-deploy/<dir>/orbi.toml orbi <command>` "
-            "(`--config <path>` also works, after the subcommand). "
-            "The source checkout is not a deployment directory and has no "
-            f"orbi.toml.{candidate_lines}"
-        )
+        message = _missing_config_message(exc.path, candidates)
         if args.command == "setup":
             print(f"setup_failed reason={message}", file=sys.stderr)
         else:
