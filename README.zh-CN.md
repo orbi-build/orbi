@@ -2,28 +2,15 @@
 
 # Orbi
 
-Orbi 是一个本地 AI 开发 Worker：把任务放进 GitHub Issue，它自动领取，启动
-Pi 在隔离 worktree 中完成开发、测试并创建 PR，再经过独立审查与合并门禁后
-合入。GitHub Issue 与标签是唯一状态存储——没有数据库、队列或 daemon。
+**GitHub Issues in, tagged releases out.**
 
-- 官网 <https://orbi.build> ｜ 文档 <https://docs.orbi.build/>（仓库内
-  [`docs/`](docs/) 是唯一事实源，中文入口 [`docs/zh/`](docs/zh/)）｜ 进展
-  [@xqliu](https://x.com/xqliu)
-- **卡在环境、模型接入或工作流上？** 到 [Discussions](https://github.com/orbi-build/orbi/discussions)
-  提问，你踩的坑会变成优先修的 Issue。
+Orbi 领取 Issue，在隔离 worktree 中开发，运行独立审查会话，只合并经过审查的 head；发布 Issue 冻结 SHA 并发布 tag。
 
-## 为什么用 Orbi
+**公开账本：** [414 个已合并 PR](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [537 个已关闭 Issue](https://github.com/orbi-build/orbi/issues?q=is:closed) · [36 个 tagged release](https://github.com/orbi-build/orbi/releases) <!-- ledger: refresh when publishing -->
 
-- **GitHub Issue 就是任务池**：`ai-ready` 标签派活，交付记录（评论、PR、CI）
-  天然完整，无需第二套任务系统；
-- **全自动运行**：用户级调度 timer（Linux 为 systemd，macOS 为 launchd）每 5 分钟触发一次 tick，正常运行不需要
-  status 命令、轮询或督工；
-- **独立审查 + 合并门禁**：PR 打开后由独立审查会话审查并在会话内修复，只有被
-  审查的 head 能合并，AI 从不 merge 或 push 保护分支；
-- **fail fast**：命令错误立即失败并在日志留下现场，Issue 标记 `ai-blocked`
-  等待人工决策，不做静默回退；
-- **全程可观测**：每条 journal 日志和 GitHub 进度评论都携带同一个 `run_id`，
-  一条 grep 即可还原完整时间线。
+**查看一条完整链路：** [Issue #835](https://github.com/orbi-build/orbi/issues/835) → [PR #843](https://github.com/orbi-build/orbi/pull/843) → [Release v0.5.4](https://github.com/orbi-build/orbi/releases/tag/v0.5.4)
+
+官网 <https://orbi.build> ｜ 文档 <https://docs.orbi.build/> ｜ [Discussions](https://github.com/orbi-build/orbi/discussions)
 
 ## 快速开始
 
@@ -60,6 +47,19 @@ orbi setup --config orbi.toml  # 4. 一次性 setup（检查既有 gh auth、lab
 PYTHONPATH=src python3 -m orbi.runner --config orbi.toml  # 5. 手动跑一个 tick（首次验证；日常由 timer 调度）
 orbi doctor --config orbi.toml  # 6. 验证部署健康
 ```
+
+## 为什么用 Orbi
+
+- **GitHub Issue 就是任务池**：`ai-ready` 标签派活，交付记录（评论、PR、CI）
+  天然完整，无需第二套任务系统；
+- **全自动运行**：用户级调度 timer（Linux 为 systemd，macOS 为 launchd）每 5 分钟触发一次 tick，正常运行不需要
+  status 命令、轮询或督工；
+- **独立审查 + 合并门禁**：PR 打开后由独立审查会话审查并在会话内修复，只有被
+  审查的 head 能合并，AI 从不 merge 或 push 保护分支；
+- **fail fast**：命令错误立即失败并在日志留下现场，Issue 标记 `ai-blocked`
+  等待人工决策，不做静默回退；
+- **全程可观测**：每条 journal 日志和 GitHub 进度评论都携带同一个 `run_id`，
+  一条 grep 即可还原完整时间线。
 
 ## 它能做什么
 
