@@ -1,42 +1,61 @@
-# Orbi Docker 部署（社区维护，非官方支持）
+# Orbi Docker deployment (community-maintained, unofficial support)
 
-> **Community-maintained / unofficial.** 本目录（`3rd/docker/`）是 Orbi
-> 的 Docker 薄封装外挂，由社区维护，**不属于官方支持范围**。核心部署
-> 路径仍是宿主机 systemd user unit/timer（见
-> [docs/getting-started](https://docs.orbi.build/getting-started)）；
-> 两者**二选一**，不要在同一台机器上并存管理同一个任务池。
-> 遇到问题请先自行排查；官方 Issue 优先处理核心路径。
+English | [简体中文](README.zh-CN.md)
 
-Linux 上一条 `docker run` 启动一个 Orbi runner：容器里跑的是**未改动的
-官方部署流程**——镜像内以 systemd 作为 PID 1，并为 `orbi` 用户拉起真实的
-user manager，官方 `systemd/orbi@.service` + `orbi@.timer` 模板原样安装、
-`orbi setup` 原样执行，`orbi@1.timer` 每 5 分钟触发一个 runner tick。
-认证经环境变量注入，全部状态落在两个 volume 里，容器本身无状态，
-停止/重建不丢数据。
+> **Community-maintained / unofficial.** This directory (`3rd/docker/`) is a
+> thin Docker wrapper around Orbi, maintained by the community and **not
+> part of the officially supported surface**. The core deployment path is
+> the host systemd user unit/timer (see
+> [docs/getting-started](https://docs.orbi.build/getting-started));
+> pick ONE of the two — never manage the same task pool with both on the
+> same machine. Troubleshoot on your own first; official Issues
+> prioritize the core path.
 
-## 前置条件
+One `docker run` on Linux starts an Orbi runner: inside the container
+runs the **unmodified official deployment flow** — systemd as PID 1 with
+a real user manager for the `orbi` user, the official
+`systemd/orbi@.service` + `orbi@.timer` templates installed as-is,
+`orbi setup` executed as-is, and `orbi@1.timer` firing one runner tick
+every 5 minutes. Authentication is injected via environment variables,
+all state lives in two volumes, the container itself is stateless, and
+stop/rebuild loses nothing.
 
-- Linux 宿主机上的 Docker（cgroup v2）；
-- 一个有任务池仓库写权限的 GitHub token（classic token 带 `repo`
-  scope，或 fine-grained token 带 Issues/PR/Contents 读写）；
-- 任务池仓库名（`owner/repo`）。
+## Prerequisites
 
-## 构建镜像
+- Docker on a Linux host (cgroup v2);
+- a GitHub token with write access to the task pool repo (classic token
+  with `repo` scope, or fine-grained token with Issues/PR/Contents
+  read+write);
+- the task pool repo name (`owner/repo`);
+- for a real delivery, one model endpoint API key (the Quick start uses
+  DeepSeek; any OpenAI-compatible endpoint works).
+
+## Quick start
+
+Pull the published image. Both registries carry the same tags: `latest`
+and the release number without the `v` prefix (e.g. `0.5.17`).
 
 ```bash
-git clone https://github.com/orbi-build/orbi.git
-cd orbi
-docker build -t orbi-docker 3rd/docker
+docker pull ghcr.io/orbi-build/orbi:latest
+# the same image on Docker Hub:
+docker pull docker.io/orbibuild/orbi:latest
 ```
 
-镜像内容：`python:3.14-slim` 基础镜像 + Python 3.14 + git + gh CLI +
-uv + systemd（user session）+ Node.js + Pi（官方前提条件表中的开发
-agent，按 pi.dev 文档以 `npm install -g --ignore-scripts` 安装）。
-镜像内**不含任何凭据**。
-
-## 一键启动
+Start the runner with ONE command — token, task pool and model provider
+all come from environment variables; the entrypoint turns them into the
+deploy-home env file, the generated `orbi.toml` and the generated
+`pi-providers.json` on first start (existing files are never
+overwritten). Substitute the three quoted values — token, repo, key; the
+DeepSeek endpoint is an example, any OpenAI-compatible endpoint works
+through the same four variables (`ORBI_PI_PROVIDER`, `ORBI_PI_MODEL`,
+`ORBI_PI_BASE_URL`, `ORBI_PI_API_KEY`):
 
 ```bash
+# Optional model limits with their defaults — add them as -e lines to the
+# command below (before the image reference) only to override:
+#   -e ORBI_PI_API=openai-completions
+#   -e ORBI_PI_CONTEXT_WINDOW=128000
+#   -e ORBI_PI_MAX_TOKENS=16384
 docker run -d --name orbi \
   --stop-signal SIGRTMIN+3 \
   --tmpfs /run --tmpfs /tmp \
@@ -45,39 +64,55 @@ docker run -d --name orbi \
   -v orbi-work:/work \
   -e GH_TOKEN="github_pat_xxx" \
   -e ORBI_SOURCE_REPO="OWNER/REPO" \
-  -e ORBI_ENV_PROVIDER_API_KEY="sk-xxx" \
-  orbi-docker
+  -e ORBI_PI_PROVIDER=deepseek \
+  -e ORBI_PI_MODEL=deepseek-chat \
+  -e ORBI_PI_BASE_URL=https://api.deepseek.com \
+  -e ORBI_PI_API_KEY="sk-xxx" \
+  ghcr.io/orbi-build/orbi:latest
 ```
 
-`--cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw` 让容器内
-systemd（PID 1）能在宿主 cgroup 树上创建自己的 scope——没有它
-systemd 无法启动（实证：private cgroupns 下 `/init.scope` 创建失败；
-无需 `--privileged`）。
+`--cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw` lets the systemd
+inside the container (PID 1) create its own scope on the host cgroup
+tree — without it systemd cannot start (verified: `/init.scope` creation
+fails under the default private cgroup namespace; no `--privileged`
+needed).
 
-一条命令，不需要 docker compose（Orbi 只有一个 runner 服务）。参数：
+One command, no docker compose (Orbi is a single runner service). The
+Docker-level flags:
 
-| 参数 | 必填 | 说明 |
+| Flag | Required | Purpose |
 |---|---|---|
-| `-e GH_TOKEN=...` | 是 | GitHub token。entrypoint 把它写进 `/orbi/.orbi/env`（systemd `EnvironmentFile` 约定），gh 与 git HTTPS credential helper 在 tick 时从那里读取。不进镜像层 |
-| `-e ORBI_SOURCE_REPO=OWNER/REPO` | 是 | 任务池仓库 |
-| `-e ORBI_ENV_<NAME>=...` | 否 | 透传任意 provider API key：写入 `/orbi/.orbi/env` 为 `<NAME>=<value>`，供 `pi_providers` 文件以 `$NAME` 引用 |
-| `-e ORBI_BASE_BRANCH=main` | 否 | 交付基准分支（默认 `main`） |
-| `-v orbi-deploy:/orbi` | 是 | deploy home volume：orbi 源码 checkout、`orbi.toml`、`.orbi/` 状态 |
-| `-v orbi-work:/work` | 是 | 交付 checkout volume：任务 worktree 在 `/work/.worktrees/` |
-| `-v /sys/fs/cgroup:/sys/fs/cgroup:rw` | 是 | systemd（PID 1）需要可写的 cgroup 子树；缺了它无法启动 |
-| `--stop-signal SIGRTMIN+3` | 建议 | systemd 的停机信号；`docker stop -t 30` 给 systemd 足够的收尾时间 |
-| `--tmpfs /run --tmpfs /tmp` | 建议 | systemd 期望的可写运行时目录 |
+| `-v orbi-deploy:/orbi` | yes | the deploy-home volume (what lives in it: the configuration table below) |
+| `-v orbi-work:/work` | yes | the delivery-checkout volume (what lives in it: the configuration table below) |
+| `-v /sys/fs/cgroup:/sys/fs/cgroup:rw` | yes | systemd (PID 1) needs a writable cgroup subtree; without it the container cannot start |
+| `--stop-signal SIGRTMIN+3` | recommended | systemd's shutdown signal; `docker stop -t 30` gives it time to finish |
+| `--tmpfs /run --tmpfs /tmp` | recommended | the writable runtime dirs systemd expects |
 
-首次启动流程：entrypoint 校验注入变量 → 克隆 orbi 源码到 `/orbi`（已
-存在则复用）→ 生成 `/orbi/orbi.toml`（**已存在则绝不覆盖**，可直接
-挂载自己的配置）→ 写 `/orbi/.orbi/env` → 克隆任务池到 `/work`（已
-存在则复用）→ `gh auth setup-git`（HTTPS transport，git 凭据走 gh
-credential helper，全程无 SSH key）→ 官方可编辑安装 `uv tool install
---editable /orbi` → 交给 systemd → oneshot 单元拉起 user manager 并
-执行官方 `orbi setup`（幂等，每次启动都会重跑）→ timer 接管，每
-5 分钟一个 tick。
+## How configuration reaches the runner
 
-生成的 `orbi.toml`：
+| You provide | How it reaches the runner |
+|---|---|
+| `ORBI_SOURCE_REPO` | The task pool repo. On first start the entrypoint clones it into the `/work` volume and writes it into the generated `orbi.toml`. Alternative: bind-mount an existing checkout (`-v ~/projects/myrepo:/work`) — the host uid must match the container's `orbi` user (uid 1000), or git fails with dubious ownership; named volumes avoid the issue. |
+| `GH_TOKEN` | The entrypoint writes it to `/orbi/.orbi/env` (the systemd `EnvironmentFile`, mode 600), regenerated from the injected variables on every start. At tick time gh reads it there and the gh credential helper supplies git over HTTPS — no SSH key anywhere; the token is never baked into an image layer. It needs **write access to the task-pool repo**: a classic token with the `repo` scope, or a fine-grained token with Issues, pull requests and contents read+write (the runner creates labels, branches and PRs with it). |
+| `ORBI_PI_PROVIDER`, `ORBI_PI_MODEL`, `ORBI_PI_BASE_URL`, `ORBI_PI_API_KEY` | The four model-provider values (set all four or none — a partial set fails the start, naming the missing ones). On first start the entrypoint writes `PI_API_KEY` into `/orbi/.orbi/env` and generates `/orbi/.orbi/pi-providers.json` with one provider and one model whose `apiKey` references `$PI_API_KEY` (the key value never lands in the JSON); the generated `orbi.toml` gets `pi_provider`, `pi_model` and `pi_providers`. |
+| `ORBI_PI_API`, `ORBI_PI_CONTEXT_WINDOW`, `ORBI_PI_MAX_TOKENS` | Optional limits for the generated `pi-providers.json`; defaults `openai-completions`, `128000`, `16384`. |
+| `ORBI_BASE_BRANCH` | Optional delivery base branch (default `main`). |
+| `ORBI_ENV_<NAME>` | Optional, repeatable: forwarded to `/orbi/.orbi/env` as `<NAME>=<value>` (e.g. `ORBI_ENV_GROQ_API_KEY` lands as `GROQ_API_KEY`) so a provider file can reference it — see Advanced: several providers. |
+| `orbi-deploy` volume → `/orbi` | The deploy-home volume: the orbi source checkout (`engine_source_track = "release"` follows the latest release automatically), the generated `orbi.toml`, the `.orbi/env` credential file and the `.orbi/` runtime state. |
+| `orbi-work` volume → `/work` | The delivery-checkout volume: the task-pool clone, the task worktrees under `/work/.worktrees/` and the slot locks under `/work/.orbi/`. |
+
+First-start flow: the entrypoint validates the injected variables →
+clones the orbi source into `/orbi` (reused when present) → generates
+`/orbi/orbi.toml` (**never overwrites an existing one** — mount your own
+freely) → writes `/orbi/.orbi/env` → clones the task pool into `/work`
+(reused when present) → `gh auth setup-git` (HTTPS transport, git
+credentials through the gh credential helper, no SSH key anywhere) →
+the official editable CLI install `uv tool install --editable /orbi` →
+hands over to systemd → the oneshot unit starts the user manager and
+runs the official `orbi setup` (idempotent, re-runs on every start) →
+the timer takes over, one tick every 5 minutes.
+
+The generated `orbi.toml` (with the Quick start variables):
 
 ```toml
 source_repos = ["OWNER/REPO"]
@@ -88,100 +123,182 @@ base_branch = "main"
 git_transport = "https"
 engine_source_track = "release"
 max_concurrency = 1
+pi_providers = ".orbi/pi-providers.json"
+pi_provider = "deepseek"
+pi_model = "deepseek-chat"
 ```
 
-## 状态持久化
+## First delivery
 
-全部状态在两个 volume 里，容器重建不丢：
-
-| 路径 | 内容 |
-|---|---|
-| `/orbi` | orbi 源码 checkout（`engine_source_track = "release"` 自动跟随最新发布）、`orbi.toml`、`.orbi/env`（凭据）、`.orbi/` 运行时状态 |
-| `/work` | 任务池交付 checkout、任务 worktree（`/work/.worktrees/`）、slot 锁（`/work/.orbi/slots/`） |
-
-验证方式：`docker stop` → `docker rm` → 用**同样的 volume 和变量**
-再跑一次 `docker run`：`orbi setup` 幂等重跑（`cli=verified`），
-`.orbi/` 状态与 worktree 原样保留，timer 继续工作。容器重启打断的
-in-flight run 与宿主机断电重启语义相同：下一个 tick 的 restart-resume
-扫描自动接续。
-
-bind mount 注意：如果挂载宿主机已有 checkout（如
-`-v ~/projects/myrepo:/work`），宿主机 uid 需与容器内 `orbi` 用户一致
-（默认 1000），否则 git 会报 dubious ownership；建议使用 named volume。
-
-## 配置模型 provider（跑真实任务）
-
-镜像自带 Pi。让 runner 真正派活需要可用的模型端点
-（[providers 文档](https://docs.orbi.build/providers)）。最简单的
-Orbi 原生路径（Path B）：
-
-1. 启动时注入 `-e ORBI_ENV_PROVIDER_API_KEY="sk-xxx"`（或任意
-   `ORBI_ENV_GROQ_API_KEY` 等名字）；
-2. 编辑 `/orbi/.orbi/pi-providers.json`（`orbi setup` 已生成 starter，
-   `apiKey` 写 `"$PROVIDER_API_KEY"` 这样的环境变量引用）；
-3. 在 `/orbi/orbi.toml` 里加 `pi_provider` / `pi_model` / `pi_providers
-   = ".orbi/pi-providers.json"`，重启容器（`docker restart orbi`）。
-
-派活前先验证端点（provider/model 与 `pi-providers.json` 中一致，示例是
-scaffold 的 openai 端点；返回真实 API 回复即端点与 key 可用，401/超时
-就是 key 或网络问题）：
+1. In the task pool repo, open an Issue stating ONE runtime outcome in
+   the shape `when X, should Y, actually Z`.
+2. Add the `ai-ready` label (the first start created the twelve
+   platform labels).
+3. Follow the tick log:
 
 ```bash
-docker exec -u orbi orbi bash -c '. /orbi/.orbi/env && pi --provider openai \
-  --model gpt-4o-mini --api-key "$PROVIDER_API_KEY" \
+docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi \
+  journalctl --user -u orbi@1.service -f
+```
+
+Within two ticks (the timer fires every 5 minutes) the Issue walks
+`ai-ready` → `ai-in-progress` → `ai-pr-opened` and a PR opens; it merges
+(`ai-merged`) after the independent review round. No `docker exec`
+configuration step is needed anywhere in this path — one that is
+required is a docs or entrypoint defect.
+
+## Orbi quick guide
+
+The delivery vocabulary in one place; the full reference lives in the
+[workflow docs](https://docs.orbi.build/workflow).
+
+- **The task** — an Issue stating ONE runtime outcome in the shape
+  `when X, should Y, actually Z`, plus a short acceptance list: the
+  user journey as precondition → command/configuration → the success
+  the user sees → the failure path with its repair.
+- **The labels** — `ai-ready` is the execution switch: the runner only
+  picks up labelled Issues (pickup order: `p0` first, then `bug`, then
+  plain). A claimed Issue walks `ai-in-progress` → `ai-pr-opened` →
+  `ai-merged` (terminal; the PR body's `Fixes #N` closes the Issue) or
+  `ai-fix-needed` (the next review round fixes the finding); `ai-blocked`
+  (terminal) needs a human decision. `ai-epic` marks a coordination-only
+  Issue the runner never claims, and `ai-release` marks a release task
+  (below). The runner manages the delivery states; `ai-ready`, `ai-epic`,
+  `ai-release`, `p0` and `bug` are yours to add and remove.
+- **Watching** — the run keeps exactly one progress comment on the
+  Issue, updated in place at every milestone, and the tick log streams
+  through the `journalctl` command above.
+- **What to expect** — within two ticks the branch and PR exist
+  (`Fixes #N` in the body), an independent review session runs (at most
+  5 rounds), and the merge lands exactly the reviewed head — GitHub
+  then closes the Issue.
+- **Releases** — a release is its own Issue labelled `ai-ready` +
+  `ai-release` whose body declares a `## Release` block: `version`,
+  `base_branch`, and a `scope` (a list of `#N` items) or
+  `scope_from_milestone`. The Runner's release state machine freezes
+  the base, waits for green CI, bumps the version, tags, publishes the
+  GitHub Release and closes the matching Milestone — no PR; any failure
+  stops at `ai-blocked` for a human decision.
+
+## State persistence
+
+All state lives in the two volumes described in the configuration table
+above and survives container rebuilds.
+
+How to verify: `docker stop` → `docker rm` → run the same `docker run`
+again with the **same volumes and variables**: `orbi setup` re-runs
+idempotently (`cli=verified`), the `.orbi/` state and worktrees are
+intact, and the timer keeps working. A run interrupted by a container
+restart has the same semantics as a host power cycle: the next tick's
+restart-resume scan picks it up.
+
+## Build from source
+
+When you need to change the wrapper itself (the entrypoint, the setup
+oneshot, the Dockerfile), build the image from a repository checkout:
+
+```bash
+git clone https://github.com/orbi-build/orbi.git
+cd orbi
+docker build -t orbi-docker 3rd/docker
+```
+
+Image contents: the `python:3.14-slim` base + Python 3.14 + git + the gh
+CLI + uv + systemd (user session) + Node.js + Pi (the development agent
+from the official prerequisites table, installed per the pi.dev docs
+with `npm install -g --ignore-scripts`). The image contains **no
+credentials**.
+
+Then run the same `docker run` as in the Quick start with `orbi-docker`
+as the image name.
+
+## Advanced: several providers
+
+The Quick start configures ONE provider from environment variables. To
+serve several (e.g. deepseek plus groq):
+
+1. Pass the extra keys at `docker run` time via `ORBI_ENV_<NAME>`
+   (repeatable): `-e ORBI_ENV_GROQ_API_KEY="gsk-xxx"` lands in
+   `/orbi/.orbi/env` as `GROQ_API_KEY`.
+2. Edit `/orbi/.orbi/pi-providers.json` — the entrypoint generated it
+   with one provider and never overwrites an existing file — and add the
+   other providers, each `apiKey` referencing its env variable
+   (`"$GROQ_API_KEY"`).
+3. Point `pi_provider` / `pi_model` in `/orbi/orbi.toml` at the provider
+   and model to use, then restart the container: `docker restart orbi`
+   (both files are yours — the entrypoint never overwrites an existing
+   config).
+
+If the first start had no provider variables at all, no
+`pi-providers.json` was generated; `orbi setup` scaffolds a starter file
+to fill in instead. Verify an endpoint before relying on it (provider
+and model as in `pi-providers.json`; a real API reply means endpoint and
+key work, 401 or a timeout is a key or network problem):
+
+```bash
+docker exec -u orbi orbi bash -c '. /orbi/.orbi/env && pi --provider deepseek \
+  --model deepseek-chat --api-key "$PI_API_KEY" \
   --print "reply with the single word: ok"'
 ```
 
-## 日常操作
+## Operations
 
-容器内命令一律以 `-u orbi` 执行（runner 就是以该用户跑的）；
-`systemctl --user` / `journalctl --user` 依赖用户会话总线，`docker exec`
-不会自动带上，需要 `-e XDG_RUNTIME_DIR=/run/user/1000`。orbi CLI 装在
-`/home/orbi/.local/bin/`（不在 root 的 PATH 里）。
+In-container commands always run with `-u orbi` (the user the runner
+runs as); `systemctl --user` / `journalctl --user` depend on the user
+session bus, which `docker exec` does not carry automatically — hence
+`-e XDG_RUNTIME_DIR=/run/user/1000`. The orbi CLI installs to
+`/home/orbi/.local/bin/` (not on root's PATH).
 
 ```bash
-docker logs -f orbi                                   # setup 输出 + systemd 控制台
+docker logs -f orbi                                   # setup output + systemd console
 docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi \
-  journalctl --user -u orbi@1.service -n 50 --no-pager  # tick 日志
-docker exec -u orbi -w /orbi orbi /home/orbi/.local/bin/orbi status  # 队列与当前任务
+  journalctl --user -u orbi@1.service -n 50 --no-pager  # tick logs
+docker exec -u orbi -w /orbi orbi /home/orbi/.local/bin/orbi status  # queue and current task
 docker exec -u orbi -w /orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi \
-  /home/orbi/.local/bin/orbi doctor                   # 部署体检
+  /home/orbi/.local/bin/orbi doctor                   # deployment health check
 docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi \
-  systemctl --user list-timers                        # 下次触发时间
+  systemctl --user list-timers                        # the next tick time
 docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi \
-  systemctl --user start orbi@1.service               # 立即触发一个 tick
-docker stop -t 30 orbi && docker rm orbi              # 停止并删除（volume 保留）
-docker volume rm orbi-deploy orbi-work                # 彻底清除全部状态
+  systemctl --user start orbi@1.service               # trigger a tick immediately
+docker stop -t 30 orbi && docker rm orbi              # stop and remove (volumes kept)
+docker volume rm orbi-deploy orbi-work                # wipe all state
 ```
 
-升级：`docker build` 出新镜像后按上面的命令重建容器即可——配置与
-状态都在 volume 里，entrypoint 与 `orbi setup` 幂等收敛。
+Upgrading: `docker pull` the newer tag and recreate the container with
+the same volumes and variables — state survives in the volumes and the
+entrypoint plus `orbi setup` re-converge. (If you run a self-built
+image, `docker build` the new checkout and recreate the same way.)
 
-## 故障与修复
+## Failure and repair
 
-| 现象 | 原因与修复 |
+| Symptom | Cause and repair |
 |---|---|
-| 容器立即退出，`docker logs` 显示 `GH_TOKEN is required` / `ORBI_SOURCE_REPO is required` | 缺少注入变量。按提示补 `-e` 参数重建容器 |
-| `invalid ORBI_SOURCE_REPO ...` | 值不是 `owner/repo` 形式 |
-| `cloning ... failed` | token 无该仓库读权限，或网络不通。修好后重建 |
-| setup 显示 `repo=... permission=READ` 或权限错误 | token 没有任务池写权限（需要能建 Issue label / 分支 / PR）。换 token 重建 |
-| `orbi setup` 失败（`setup_failed reason=...`） | 按输出里的 reason 修复（多为 token 权限或 transport），`docker restart orbi` 重跑幂等 setup |
-| tick 日志 `transport_unreachable` | HTTPS 凭据失效：确认 `GH_TOKEN` 仍有效后重建容器（entrypoint 会重写 env 文件） |
-| tick 日志 `unit_drift` 后自动 `auto_synced` | 正常自愈：官方模板更新后下一个 tick 自动重装，无需操作 |
-| `docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi systemctl --user is-active` 失败 | 容器内 user manager 异常，`docker restart orbi`；反复出现请到仓库提 Issue（注明 docker 外挂、非官方） |
+| The container exits immediately, `docker logs` shows `GH_TOKEN is required` / `ORBI_SOURCE_REPO is required` | Missing injected variables. Add the `-e` flags from the Quick start and recreate |
+| `partial Pi provider configuration; missing ...` | Some but not all of the four model-provider variables are set. Set all four or none (see the configuration table above) and recreate |
+| `invalid ORBI_SOURCE_REPO ...` | The value is not in `owner/repo` form |
+| `cloning ... failed` | The token cannot read the repo, or the network is down. Fix and recreate |
+| setup shows `repo=... permission=READ` or a permission error | The token lacks write access to the task pool (needs to create Issue labels / branches / PRs). Switch tokens and recreate |
+| `orbi setup` fails (`setup_failed reason=...`) | Fix per the reason in the output (usually token permissions or transport), then `docker restart orbi` to re-run the idempotent setup |
+| tick log `transport_unreachable` | The HTTPS credentials went stale: confirm `GH_TOKEN` is still valid, then recreate the container (the entrypoint rewrites the env file) |
+| tick log `unit_drift` followed by `auto_synced` | Normal self-heal: after an official template update the next tick reinstalls the units; nothing to do |
+| `docker exec -u orbi -e XDG_RUNTIME_DIR=/run/user/1000 orbi systemctl --user is-active` fails | The in-container user manager is unhealthy; `docker restart orbi`. If it recurs, file an Issue in the repository (note: docker wrapper, unofficial) |
 
-## 设计说明（为什么不重写调度）
+## Design notes (why the scheduler is not re-implemented)
 
-Orbi 的执行模型依赖 `systemctl --user` timer 调度：`orbi setup` 启动
-前探测 user bus，tick 前的 unit-drift 自愈要跑 `systemctl --user
-daemon-reload`。因此容器内不是用 cron/supervisor 复刻一个调度器，而是
-直接跑 systemd（PID 1）+ `user@1000.service` 真实 user manager——
-官方模板、`orbi setup`、timer、自愈全部原样工作，本目录只做薄封装：
-准备 volume、注入凭据、装 CLI，然后交给官方流程。
+Orbi's execution model depends on `systemctl --user` timer scheduling:
+`orbi setup` probes the user bus before starting, and the pre-tick
+unit-drift self-heal runs `systemctl --user daemon-reload`. So the
+container does not re-create a scheduler with cron/supervisor — it runs
+systemd (PID 1) plus the real `user@1000.service` user manager, and the
+official templates, `orbi setup`, the timer and the self-heals all work
+as-is. This directory stays a thin wrapper: prepare the volumes, inject
+the credentials, install the CLI, hand over to the official flow.
 
-## 与核心 systemd 部署的关系
+## Relationship with the core systemd deployment
 
-**二选一。** Docker 外挂面向"没有 user systemd 的平台/环境快速部署"
-（NAS、云主机容器平台等）；有 systemd user session 的 Linux 主机请走
-[官方部署路径](https://docs.orbi.build/getting-started)。不要让两条
-路径指向同一个任务池仓库（双 runner 会互相抢票）。
+**Pick one.** The Docker wrapper targets "fast deployment on platforms
+without a user systemd" (NAS, container cloud platforms, etc.); on a
+Linux host with a systemd user session, use the
+[official deployment path](https://docs.orbi.build/getting-started).
+Never point both paths at the same task pool repo (two runners would
+compete for the same tickets).
