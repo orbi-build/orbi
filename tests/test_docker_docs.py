@@ -251,6 +251,48 @@ def test_one_wiring_table_explains_the_three_paths():
         assert "worktrees" in table, "delivery-checkout volume contents"
 
 
+def table_row(text: str, first_cell: str) -> str:
+    """The table row whose first cell starts with `first_cell`."""
+    for line in text.splitlines():
+        if line.lstrip().startswith(f"| {first_cell}"):
+            return line
+    raise AssertionError(f"no table row starting with '| {first_cell}'")
+
+
+# Issue #1052: the ORBI_PI_* row must describe the env file the way the
+# GH_TOKEN row already does — regenerated from the injected variables on
+# every start (entrypoint step 5); only pi-providers.json and orbi.toml
+# are first-start-only. One tuple per docs file: page, the stale
+# first-start sentence in that page's language, the required statement.
+PI_ROW_FILES = (
+    (REPO_ROOT / "docs" / "docker.mdx",
+     "On first start the entrypoint writes `PI_API_KEY`", "every start"),
+    (REPO_ROOT / "3rd" / "docker" / "README.md",
+     "On first start the entrypoint writes `PI_API_KEY`", "every start"),
+    (REPO_ROOT / "docs" / "zh" / "docker.mdx",
+     "首次启动时 entrypoint 把 `PI_API_KEY` 写进", "每次启动"),
+)
+
+
+def test_pi_row_states_the_every_start_env_regeneration():
+    """The ORBI_PI_* row says the env file (with `PI_API_KEY`) is
+    regenerated on every start — a changed key takes effect on the next
+    start — while `pi-providers.json` and `orbi.toml` are first-start-
+    only (Issue #1052): not the stale sentence that froze the key at
+    first start, contradicting the GH_TOKEN row on the same table."""
+    for doc, stale, every_start in PI_ROW_FILES:
+        row = table_row(doc.read_text(encoding="utf-8"), "`ORBI_PI_PROVIDER`")
+        assert stale not in row, f"{doc.name}: stale first-start sentence"
+        assert every_start in row, f"{doc.name}: no every-start statement"
+
+
+def test_table_row_fails_fast_without_a_match():
+    """A page without the wanted row fails the helper loudly instead of
+    returning None (same helper contract as first_run_block)."""
+    with pytest.raises(AssertionError, match="no table row starting"):
+        table_row("prose only, no tables\n", "`ORBI_PI_PROVIDER`")
+
+
 GUIDE_LABELS = (
     "ai-ready",
     "ai-in-progress",
