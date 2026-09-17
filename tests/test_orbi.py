@@ -906,6 +906,7 @@ def test_status_resolves_the_single_existing_installed_unit_config(
 ):
     config = tmp_path / "deployment.toml"
     config.write_text('source_repos = ["owner/repo"]\nrepo_dir = "."\n', encoding="utf-8")
+    _write_prompts(tmp_path)
     installed = tmp_path / "units"
     installed.mkdir()
     unit = installed / "orbi@1.service"
