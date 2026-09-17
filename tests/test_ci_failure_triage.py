@@ -693,6 +693,49 @@ def test_cancelled_run_updates_the_existing_issue_with_the_run_evidence(
     assert "- failed steps: (none reported by the jobs API)" in body
 
 
+def test_cancelled_run_without_prior_issue_creates_nothing(
+    gh, monkeypatch, tmp_path, capsys
+):
+    """Cancelling a run that would have gone green (re-run management,
+    branch cleanup) is a human action, not a CI failure: with no prior
+    Issue to update and no job that actually failed (failure/timed_out),
+    the triage must not create a `bug`+`p0`+`ai-ready` ticket — such a
+    ticket can never be auto-closed (a cancelled log has no failed test
+    files for the recovery relevance check) and every later green run
+    only appends another not-closing comment."""
+    write_event(monkeypatch, tmp_path, run_event(conclusion="cancelled"))
+    gh.routes[ep_jobs()] = {
+        "total_count": 1,
+        "jobs": [job(conclusion="cancelled")],
+    }
+    gh.routes[ep_issues_list()] = []
+    mod.main()
+    assert len(gh.calls_to(ep_create(), "POST")) == 0
+    assert len(gh.calls_to(ep_comment(7), "POST")) == 0
+    assert "cancelled_no_failure" in capsys.readouterr().err
+
+
+def test_cancelled_run_with_a_real_failure_job_still_creates(
+    gh, monkeypatch, tmp_path
+):
+    """Cancelling a run whose other job already failed is NOT noise: the
+    genuinely failed job must still open its ticket (only the pure
+    cancellation symptom is suppressed)."""
+    write_event(monkeypatch, tmp_path, run_event(conclusion="cancelled"))
+    gh.routes[ep_jobs()] = {
+        "total_count": 2,
+        "jobs": [
+            job(name="docs", conclusion="cancelled"),
+            job(name="tests", conclusion="failure"),
+        ],
+    }
+    gh.routes[ep_issues_list()] = []
+    mod.main()
+    creates = gh.calls_to(ep_create(), "POST")
+    assert len(creates) == 1
+    assert creates[0]["payload"]["title"].startswith("CI failure: tests")
+
+
 # ---------------------------------------------------------------------------
 # Failure flow: only auto-created open Issues are matches
 # ---------------------------------------------------------------------------
