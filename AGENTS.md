@@ -13,6 +13,13 @@ Architectural invariants and the public surface live in [CONSTITUTION.md](CONSTI
 
 `CLAUDE.md` is a symlink to this file; the two are always identical.
 
+**Code is the source of truth, not documentation.** This file, `docs/`, the README
+and every comment describe what the code is meant to do; the code decides what it
+actually does. When a document and the code disagree, trust the code, and say so:
+report the mismatch in the Issue or PR (which file, which line, what the code
+actually does) instead of silently following either one. A stale document is a
+defect worth its own Issue, not something to work around quietly.
+
 - **Implementer Pi**: plan, TDD, tests, commit the delivery; the Runner pushes the task branch and opens one PR.
 - **Reviewer Pi**: after the PR exists, a new `pi --print` with `prompts/prompt_review.md` and a new JSONL on the same worktree.
 - **Runner**: labels, observability, review/fix, and merge.
