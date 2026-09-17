@@ -4,7 +4,7 @@
 
 **GitHub Issues in, tagged releases out.**
 
-Orbi 领取 Issue，在隔离 worktree 中开发，运行独立审查会话，只合并经过审查的 head；发布 Issue 冻结 SHA 并发布 tag。
+Orbi 从 GitHub Issue 领取任务，在隔离 worktree 中开发，运行独立审查会话，只合并经过审查的 head；发布 Issue 冻结 SHA 并发布 tag。GitHub Issue 是唯一状态存储——没有数据库、队列或 daemon。
 
 **公开账本：** [414 个已合并 PR](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [537 个已关闭 Issue](https://github.com/orbi-build/orbi/issues?q=is:closed) · [36 个 tagged release](https://github.com/orbi-build/orbi/releases) <!-- ledger: refresh when publishing -->
 

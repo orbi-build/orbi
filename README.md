@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 **GitHub Issues in, tagged releases out.**
 
-Orbi claims an Issue, develops it in an isolated worktree, runs an independent review session, merges only the reviewed head, and lets a release Issue freeze the SHA and publish the tag.
+Orbi claims an Issue from GitHub Issues, develops it in an isolated worktree, runs an independent review session, merges only the reviewed head, and lets a release Issue freeze the SHA and publish the tag. GitHub Issues are the only state store—no database, queue, or daemon.
 
 **Ledger:** [414 merged PRs](https://github.com/orbi-build/orbi/pulls?q=is:merged) · [537 closed Issues](https://github.com/orbi-build/orbi/issues?q=is:closed) · [36 tagged releases](https://github.com/orbi-build/orbi/releases) <!-- ledger: refresh when publishing -->
 
