@@ -596,6 +596,7 @@ journalctl --user -u orbi@1.service -u orbi@2.service | grep e07383c2
 | `stale_milestone_issue_closed` | 过期的 milestone 确认 Issue 已关闭 |
 | `stale_milestone_issue_close_failed` | 关闭过期 milestone 确认 Issue 失败 |
 | `pending_milestone_issue_failed` | 待确认 milestone Issue 状态未能应用 |
+| `pending_milestone_issue_deduplicated` | 重复的待确认 milestone Issue 已关闭 |
 | `active_milestone_advanced` | active Milestone 已推进到下一个待定版本 |
 | `active_milestone_advance_none` | 没有可推进的待定 Milestone |
 | `active_milestone_advance_pending` | 存在待定的 Milestone 候选在等待 |

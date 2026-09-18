@@ -3205,39 +3205,71 @@ def arm_release_ticket(
 
 
 def _pending_milestone_issue(
-    repo: str, old: str, candidates: list[dict],
+    repo: str, old: str, candidates: list[dict], repo_dir: Path,
 ) -> None:
-    """Create one idempotent human-confirmation issue for a milestone advance."""
+    """Create one idempotent human-confirmation issue for a milestone advance.
+
+    The fingerprint check and create share the deployment checkout's lock.
+    GitHub search can lag a create, so the open-issue search is repeated and
+    any duplicate is closed in favour of the lowest issue number.
+    """
     titles = [str(candidate["title"]) for candidate in candidates]
     fingerprint = f"orbi-milestone-advance old={old} candidates={','.join(titles)}"
-    existing = list_issues(
-        repo, state="all", search=f'in:body "{fingerprint}"',
-        json_fields="number", limit=1, timeout=30,
-    )
-    if existing:
-        return
-    lines = [
-        "## Milestone 自动推进待人工确认",
-        "",
-        fingerprint,
-        "",
-        f"当前 milestone `{old}` 已完成，等待确认推进到以下候选版本：",
-        "",
-    ]
-    lines.extend(
-        f"- `{candidate['title']}`：{candidate.get('open_issues', 0)} open issues"
-        for candidate in candidates
-    )
-    lines.extend([
-        "",
-        "请人工运行 `orbi milestone set <目标版本>` 推进 `active_milestone`"
-        "（或恢复自动推进），然后关闭本 Issue。",
-    ])
-    run_command([
-        "gh", "issue", "create", "--repo", repo,
-        "--title", f"Milestone {old} 已完成，等待确认推进到 {titles[0]}",
-        "--body", "\n".join(lines),
-    ], timeout=30)
+    fd = acquire_base_sync_lock(repo_dir, 300.0)
+    try:
+        existing = list_issues(
+            repo, state="all", search=f'in:body "{fingerprint}"',
+            json_fields="number", limit=1, timeout=30,
+        )
+        if existing:
+            return
+        lines = [
+            "## Milestone 自动推进待人工确认",
+            "",
+            fingerprint,
+            "",
+            f"当前 milestone `{old}` 已完成，等待确认推进到以下候选版本：",
+            "",
+        ]
+        lines.extend(
+            f"- `{candidate['title']}`：{candidate.get('open_issues', 0)} open issues"
+            for candidate in candidates
+        )
+        lines.extend([
+            "",
+            "请人工运行 `orbi milestone set <目标版本>` 推进 `active_milestone`"
+            "（或恢复自动推进），然后关闭本 Issue。",
+        ])
+        run_command([
+            "gh", "issue", "create", "--repo", repo,
+            "--title", f"Milestone {old} 已完成，等待确认推进到 {titles[0]}",
+            "--body", "\n".join(lines),
+        ], timeout=30)
+        open_issues = list_issues(
+            repo, state="open", search=f'in:body "{fingerprint}"',
+            json_fields="number", limit=200, timeout=30,
+        )
+        numbered = sorted(
+            issue["number"] for issue in open_issues
+            if isinstance(issue, dict) and isinstance(issue.get("number"), int)
+        )
+        if len(numbered) <= 1:
+            return
+        winner = numbered[0]
+        for duplicate in numbered[1:]:
+            run_command([
+                "gh", "issue", "close", str(duplicate), "--repo", repo,
+                "--comment", f"duplicate of #{winner}",
+            ], timeout=30)
+        event(
+            "pending_milestone_issue_deduplicated",
+            issue=f"#{winner}", duplicates=",".join(
+                f"#{number}" for number in numbered[1:]
+            ),
+        )
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def _close_stale_milestone_issues(repo: str, active_milestone: str) -> None:
@@ -3268,6 +3300,7 @@ def _close_stale_milestone_issues(repo: str, active_milestone: str) -> None:
 
 def advance_active_milestone_on_idle(
     repo: str, active_milestone: str, config_path: Path,
+    repo_dir: Path | None = None,
     *, auto_next_milestone: bool = True,
 ) -> tuple[str, str | None]:
     """Check and advance a configured milestone after no_ready_issue."""
@@ -3334,6 +3367,7 @@ def advance_active_milestone_on_idle(
         try:
             _pending_milestone_issue(
                 repo, active_milestone, candidate_details,
+                repo_dir if repo_dir is not None else config_path.parent,
             )
         except Exception:
             # The confirmation Issue is an idle-path notification. Its
@@ -9498,6 +9532,7 @@ def main(argv: list[str] | None = None) -> int:
                         config.source_repos[0],
                         config.active_milestone,
                         config.config_path,
+                        config.repo_dir,
                         auto_next_milestone=config.auto_next_milestone,
                     )
                 except Exception:

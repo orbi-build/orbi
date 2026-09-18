@@ -6220,6 +6220,98 @@ def test_advance_active_milestone_pending_issue_failure_is_bypassed(
     assert config.read_text() == 'active_milestone = "v0.3.0"\n'
 
 
+def test_pending_milestone_issue_serializes_concurrent_search_and_create(
+    monkeypatch, tmp_path,
+):
+    candidates = [{"title": "v0.3.1", "open_issues": 2}]
+    open_issues = []
+    created = []
+    first_search_entered = threading.Event()
+    second_call_started = threading.Event()
+
+    def fake_list(repo, *, state, **kwargs):
+        snapshot = [{"number": number} for number in open_issues]
+        if state == "all" and not first_search_entered.is_set():
+            first_search_entered.set()
+            assert second_call_started.wait(timeout=1)
+            # Give an unlocked second call time to take the same empty
+            # snapshot before this first search returns.
+            time.sleep(0.05)
+        return snapshot
+
+    def fake_run(command, **kwargs):
+        assert (command[0], command[1], command[2]) == ("gh", "issue", "create")
+        number = 100 + len(created)
+        created.append(number)
+        open_issues.append(number)
+        return f"https://github.com/owner/repo/issues/{number}"
+
+    def call_pending():
+        runner._pending_milestone_issue(
+            "owner/repo", "v0.3.0", candidates, tmp_path,
+        )
+
+    monkeypatch.setattr(seam, "list_issues", fake_list)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    first = threading.Thread(target=call_pending, daemon=True)
+    second = threading.Thread(
+        target=lambda: (second_call_started.set(), call_pending()), daemon=True,
+    )
+    first.start()
+    assert first_search_entered.wait(timeout=1)
+    second.start()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert created == [100]
+    assert open_issues == [100]
+
+
+def test_pending_milestone_issue_deduplicates_after_search_lag(
+    monkeypatch, tmp_path, caplog,
+):
+    candidates = [{"title": "v0.3.1", "open_issues": 2}]
+    created = []
+    open_issues = []
+    closed = []
+
+    def fake_list(repo, *, state, **kwargs):
+        if state == "all":
+            # Model GitHub's search lag: neither initial check sees a
+            # just-created Issue, while the post-create check sees both.
+            return []
+        return [{"number": number} for number in open_issues]
+
+    def fake_run(command, **kwargs):
+        if (command[0], command[1], command[2]) == ("gh", "issue", "create"):
+            number = 100 + len(created)
+            created.append(number)
+            open_issues.append(number)
+            return f"https://github.com/owner/repo/issues/{number}"
+        assert (command[0], command[1], command[2]) == ("gh", "issue", "close")
+        closed.append(command)
+        open_issues.remove(int(command[3]))
+        return ""
+
+    monkeypatch.setattr(seam, "list_issues", fake_list)
+    monkeypatch.setattr(seam, "run_command", fake_run)
+    with caplog.at_level(logging.INFO):
+        runner._pending_milestone_issue(
+            "owner/repo", "v0.3.0", candidates, tmp_path,
+        )
+        runner._pending_milestone_issue(
+            "owner/repo", "v0.3.0", candidates, tmp_path,
+        )
+
+    assert created == [100, 101]
+    assert open_issues == [100]
+    assert len(closed) == 1
+    assert closed[0][-1] == "duplicate of #100"
+    assert caplog.text.count("pending_milestone_issue_deduplicated") == 1
+
+
 def test_advance_active_milestone_pending_is_idempotent(
     monkeypatch, tmp_path,
 ):
@@ -6570,7 +6662,7 @@ def test_main_advances_milestone_only_after_no_ready_issue(
     )
     assert runner.main(["--config", str(config)]) == 0
     assert calls == [
-        (("owner/repo", "v0.3.0", config.resolve()),
+        (("owner/repo", "v0.3.0", config.resolve(), tmp_path.resolve()),
          {"auto_next_milestone": True}),
     ]
 
