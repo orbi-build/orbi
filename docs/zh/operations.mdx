@@ -742,17 +742,13 @@ orbi milestone set v0.9.9 --config orbi.toml
 中声明，以便下游自动化有计划地迁移：
 
 - **CLI：**裸 `orbi` tick，以及 `add`、`status`、`doctor`、`setup`、
-  `install-units`、`session`、`milestone set` 子命令，包括
-  `--config` 和 `ORBI_CONFIG` 环境变量。
-- **配置：**`orbi.toml` 字段（`source_repos`、`repo_dir`、`deploy_home`、
-  `workspace_root`、`prompt`、`prompt_review`、`base_branch`、
-  `git_transport`、`active_milestone`、`max_concurrency`、
-  `allow_stale_runner`、`model_wait_dead_seconds`、`model_wait_probe_url`、
-  `model_wait_probe_seconds`、`skills`、`context_files`、`pi_provider`、
-  `pi_model`、`pi_thinking`、`pi_providers`），以及由 systemd
-  `EnvironmentFile` 加载的 gitignored `.orbi/env` 文件。
+  `install-units`、`session`、`milestone set`、`check`、
+  `sync-engine-source` 子命令，包括 `--config` 和 `ORBI_CONFIG` 环境变量。
+- **配置：**[配置参考](/zh/configuration)中的每个 key 都是公开表面，
+  另加由 systemd `EnvironmentFile` 加载的 gitignored `.orbi/env` 文件。
 - **部署：**`systemd/orbi@.service` 和 `systemd/orbi@.timer` 模板，及其
-  `orbi@1`/`orbi@2` 实例。
+  `orbi@1..N` 实例（N = `max_concurrency`，上限为
+  `MAX_RUNNER_INSTANCES = 5`）。
 - **标签和生命周期：**`labels.toml` 与 `src/orbi/delivery_labels.py`，
   以及 `ai-ready`、`ai-in-progress`、`ai-pr-opened`、`ai-fix-needed`、
   `ai-merged`、`ai-blocked` 状态机。
@@ -870,5 +866,5 @@ ls -la <任务 worktree>/.pi-session/      # 空
 进程无论如何退出，内核都会释放它。拿不到 slot 的 Runner 记录
 `capacity_full` 后退出，不领取 Issue。`max_concurrency = 2` 时两个 timer
 实例可能在同一 tick 启动两个 Runner 实例；为 `1` 时只启用 `@1.timer`。
-它们竞争同一组 slot——容量和启用的 timer 数都由 `max_concurrency` 决定
-（固定模板只允许 `1` 或 `2`）。
+它们竞争同一组 slot。`max_concurrency` 的范围是 `1` 到
+`MAX_RUNNER_INSTANCES = 5`；容量和启用的 timer 数都由 `max_concurrency` 决定。

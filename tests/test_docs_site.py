@@ -857,18 +857,42 @@ def test_docs_document_operations_commands():
         "operations must document the timer template"
     )
     assert "orbi@1.timer" in text, (
-        "operations must document the two timer instances (Issue #149)"
+        "operations must document the configured timer instances"
     )
     assert "OnCalendar=*-*-* *:00/5" in text, (
         "operations must document the 5-minute idle polling interval"
     )
     assert "journalctl" in text, "operations must show the journal command"
     assert "orbi" in text, "operations must name the CLI"
-    for command in ("status", "session", "add"):
+    for command in (
+        "status", "session", "add", "check", "sync-engine-source"
+    ):
         assert command in text, f"operations must document the {command} command"
     assert "worktree" in text.lower(), "operations must explain the task worktree"
     assert "ai-blocked" in text, "operations must document failure recovery (ai-blocked)"
     assert "ExecStartPre" in text, "operations must document the code-update preflight"
+
+
+def test_operations_public_surface_matches_cli_config_and_concurrency():
+    """The localized public-surface summaries must not repeat stale limits."""
+    for slug, heading, config_link in (
+        ("operations", "Public surface", "/configuration"),
+        ("zh/operations", "公开表面", "/zh/configuration"),
+    ):
+        text = page_text(slug)
+        section = re.search(
+            rf"^## {heading}$.*?(?=^## )", text, re.MULTILINE | re.DOTALL,
+        )
+        assert section, f"{slug} must have a {heading} section"
+        public_surface = section.group()
+        for command in ("check", "sync-engine-source"):
+            assert command in public_surface, (
+                f"{slug} public surface must list {command}"
+            )
+        assert f"]({config_link})" in public_surface
+        assert "MAX_RUNNER_INSTANCES = 5" in public_surface
+        assert "permits `1` or `2`" not in text
+        assert "只允许 `1` 或 `2`" not in text
 
 
 def test_docs_document_the_security_boundary():
